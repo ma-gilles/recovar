@@ -127,6 +127,66 @@ def _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm):
     return y_norm_btr, t_mx, nu_mm_btr, g_zx, h_zm_btr, Hzz_btr
 
 
+def _add_pose_log_prior(score: jax.Array, pose_log_prior: jax.Array | None) -> jax.Array:
+    """Add ``pose_log_prior[B, R, T]`` to ``score[B, T, R]``, swapping axes
+    so the prior matches the score's translation-then-rotation convention.
+    Returns ``score`` unchanged when no prior is supplied."""
+    if pose_log_prior is None:
+        return score
+    return score + jnp.swapaxes(pose_log_prior, -1, -2)
+
+
+def _score_and_diagnostics(
+    yn,
+    tm,
+    num,
+    g,
+    hz,
+    Hz,
+    pose_log_prior,
+    *,
+    significance_threshold: float,
+    return_moments: bool,
+) -> tuple[jax.Array, jax.Array, PosteriorDiagnostics, jax.Array | None, jax.Array | None]:
+    """Single source of truth for both dense engines. Returns
+    ``(score_with_prior, gamma, diagnostics, alpha, G_tri)``.
+
+    ``alpha`` and ``G_tri`` are ``None`` when ``return_moments=False``.
+    """
+    score_pre, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
+        yn,
+        tm,
+        num,
+        g,
+        hz,
+        Hz,
+        return_moments=return_moments,
+    )
+    score = _add_pose_log_prior(score_pre, pose_log_prior)
+    B = score.shape[0]
+    T = score.shape[1]
+    R = score.shape[2]
+
+    score_flat = score.reshape(B, T * R)
+    logZ = jax.scipy.special.logsumexp(score_flat, axis=-1)
+    gamma = jnp.exp(score - logZ[:, None, None])
+
+    best_flat = jnp.argmax(score_flat, axis=-1)
+    pmax = jnp.max(gamma.reshape(B, T * R), axis=-1)
+    diag = PosteriorDiagnostics(
+        logZ=logZ,
+        pmax=pmax,
+        best_rotation_idx=(best_flat % R).astype(jnp.int32),
+        best_translation_idx=(best_flat // R).astype(jnp.int32),
+        n_significant_per_image=jnp.sum(gamma > significance_threshold, axis=(-1, -2)).astype(jnp.int32),
+        omitted_log_mass=jnp.zeros((B,), dtype=jnp.float32),  # dense: full support
+        best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
+        rotation_posterior_sums=jnp.sum(gamma, axis=(0, 1)).astype(jnp.float32),
+        max_posterior_per_image=pmax,
+    )
+    return score, gamma, diag, alpha, G_tri
+
+
 def dense_pose_ppca_E_step_blocked(
     Y1: jax.Array,
     proj_aug: jax.Array,
@@ -191,108 +251,41 @@ def dense_pose_ppca_E_step_blocked(
         raise ValueError(f"ctf2_over_noise shape {ctf2_over_noise.shape} != (B={B}, F={F})")
     if y_norm.shape != (B,):
         raise ValueError(f"y_norm shape {y_norm.shape} != (B={B},)")
+    if pose_log_prior is not None and pose_log_prior.shape != (B, R, T):
+        raise ValueError(f"pose_log_prior shape {pose_log_prior.shape} != (B={B}, R={R}, T={T})")
 
-    # ---- Pass 1: per-(b, t, r) score, logZ, best pose ----------------------
     yn, tm, num, g, hz, Hz = _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm)
-    score, _, _ = compute_ppca_pose_scores_and_moments_no_contrast(
+    _, gamma, diag, alpha, G_tri = _score_and_diagnostics(
         yn,
         tm,
         num,
         g,
         hz,
         Hz,
-        return_moments=False,
-    )  # [B, T, R]
-    if pose_log_prior is not None:
-        if pose_log_prior.shape != (B, R, T):
-            raise ValueError(f"pose_log_prior shape {pose_log_prior.shape} != (B={B}, R={R}, T={T})")
-        # Reshape from [B, R, T] to [B, T, R] to match score axis order.
-        score = score + jnp.swapaxes(pose_log_prior, -1, -2)
+        pose_log_prior,
+        significance_threshold=significance_threshold,
+        return_moments=(q > 0),
+    )
 
-    score_flat = score.reshape(B, T * R)  # [B, T·R]
-    logZ = jax.scipy.special.logsumexp(score_flat, axis=-1)  # [B]
-
-    best_flat = jnp.argmax(score_flat, axis=-1)  # [B]
-    best_t = (best_flat // R).astype(jnp.int32)
-    best_r = (best_flat % R).astype(jnp.int32)
-
-    # γ for diagnostics-only at this stage.
-    gamma_pass1 = jnp.exp(score - logZ[:, None, None])  # [B, T, R]
-    pmax = jnp.max(gamma_pass1.reshape(B, T * R), axis=-1)  # [B]
-    n_sig = jnp.sum(gamma_pass1 > significance_threshold, axis=(-1, -2)).astype(jnp.int32)
-    omitted_log_mass = jnp.zeros((B,), dtype=jnp.float32)  # dense engine: full support
-    # D12: richer RelionStats diagnostics.
-    best_log_score_per_image = jnp.max(score_flat, axis=-1).astype(jnp.float32)
-    rotation_posterior_sums = jnp.sum(gamma_pass1, axis=(0, 1)).astype(jnp.float32)  # [R]
-
-    # ---- Pass 2: recompute and accumulate moments --------------------------
     if q == 0:
-        # No latent — α_aug ≡ [1] and G_aug_tri ≡ [1] regardless of (r, t).
-        # The accumulator collapses to "sum of γ" = 1 per image times [1, 1].
-        ones_complex = jnp.ones((B, 1), dtype=jnp.complex64)
-        image_stats = DenseImageStats(
-            alpha_aug_acc=ones_complex,
-            G_aug_tri_acc=ones_complex,
-            log_evidence=logZ,
-        )
-        return image_stats, PosteriorDiagnostics(
-            logZ=logZ,
-            pmax=pmax,
-            best_rotation_idx=best_r,
-            best_translation_idx=best_t,
-            n_significant_per_image=n_sig,
-            omitted_log_mass=omitted_log_mass,
-            best_log_score_per_image=best_log_score_per_image,
-            rotation_posterior_sums=rotation_posterior_sums,
-            max_posterior_per_image=pmax,
-        )
+        # α_aug ≡ [1], G_aug_tri ≡ [1] regardless of (r, t); per-image
+        # accumulators collapse to constant 1.
+        ones = jnp.ones((B, 1), dtype=jnp.complex64)
+        return DenseImageStats(alpha_aug_acc=ones, G_aug_tri_acc=ones, log_evidence=diag.logZ), diag
 
-    score2, alpha_brt, G_tri_brt = compute_ppca_pose_scores_and_moments_no_contrast(
-        yn,
-        tm,
-        num,
-        g,
-        hz,
-        Hz,
-        return_moments=True,
-    )  # alpha [B,T,R,P], G [B,T,R,tri(P)]
-    if pose_log_prior is not None:
-        score2 = score2 + jnp.swapaxes(pose_log_prior, -1, -2)
-    gamma = jnp.exp(score2 - logZ[:, None, None])  # [B, T, R]
-
-    # D7: optional significance masking — zero γ below threshold so
-    # negligibly-weighted poses don't contribute to the M-step.
     if apply_significance_mask:
         gamma = jnp.where(gamma > significance_threshold, gamma, 0.0)
 
-    # Accumulate γ·α and γ·G_tri across (T, R) per image.
-    # Broadcast γ over the trailing P / tri(P) axis.
-    alpha_aug_acc = jnp.einsum(
-        "btr, btrp -> bp",
-        gamma.astype(alpha_brt.dtype),
-        alpha_brt,
-    )  # [B, P] complex
-    G_aug_tri_acc = jnp.einsum(
-        "btr, btrk -> bk",
-        gamma.astype(G_tri_brt.dtype),
-        G_tri_brt,
-    )  # [B, tri(P)] complex
-
-    image_stats = DenseImageStats(
-        alpha_aug_acc=alpha_aug_acc,
-        G_aug_tri_acc=G_aug_tri_acc,
-        log_evidence=logZ,
-    )
-    return image_stats, PosteriorDiagnostics(
-        logZ=logZ,
-        pmax=pmax,
-        best_rotation_idx=best_r,
-        best_translation_idx=best_t,
-        n_significant_per_image=n_sig,
-        omitted_log_mass=omitted_log_mass,
-        best_log_score_per_image=best_log_score_per_image,
-        rotation_posterior_sums=rotation_posterior_sums,
-        max_posterior_per_image=pmax,
+    # Per-image moments: γ-weighted sum over (T, R) of α and G_tri.
+    alpha_aug_acc = jnp.einsum("btr, btrp -> bp", gamma.astype(alpha.dtype), alpha)
+    G_aug_tri_acc = jnp.einsum("btr, btrk -> bk", gamma.astype(G_tri.dtype), G_tri)
+    return (
+        DenseImageStats(
+            alpha_aug_acc=alpha_aug_acc,
+            G_aug_tri_acc=G_aug_tri_acc,
+            log_evidence=diag.logZ,
+        ),
+        diag,
     )
 
 
@@ -374,7 +367,6 @@ def fused_dense_pose_ppca_block(
 
     B, T, F = Y1.shape
     R, P, _ = proj_aug.shape
-    q = P - 1
     if rotations_block.shape != (R, 3, 3):
         raise ValueError(f"rotations_block shape {rotations_block.shape} != ({R}, 3, 3)")
     if rhs_volume.shape[0] != P:
@@ -382,80 +374,39 @@ def fused_dense_pose_ppca_block(
     tri_size = P * (P + 1) // 2
     if lhs_tri_volume.shape[0] != tri_size:
         raise ValueError(f"lhs_tri_volume shape {lhs_tri_volume.shape} not compatible with tri({P})={tri_size}")
+    if pose_log_prior is not None and pose_log_prior.shape != (B, R, T):
+        raise ValueError(f"pose_log_prior shape {pose_log_prior.shape} != (B={B}, R={R}, T={T})")
 
-    # ---- Pass 1 -------------------------------------------------------------
     yn, tm, num, g, hz, Hz = _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm)
-    score, _, _ = compute_ppca_pose_scores_and_moments_no_contrast(
+    _, gamma, diag, alpha, G_tri = _score_and_diagnostics(
         yn,
         tm,
         num,
         g,
         hz,
         Hz,
-        return_moments=False,
-    )
-    if pose_log_prior is not None:
-        if pose_log_prior.shape != (B, R, T):
-            raise ValueError(f"pose_log_prior shape {pose_log_prior.shape} != (B={B}, R={R}, T={T})")
-        score = score + jnp.swapaxes(pose_log_prior, -1, -2)
-
-    score_flat = score.reshape(B, T * R)
-    logZ = jax.scipy.special.logsumexp(score_flat, axis=-1)
-    best_flat = jnp.argmax(score_flat, axis=-1)
-    best_t = (best_flat // R).astype(jnp.int32)
-    best_r = (best_flat % R).astype(jnp.int32)
-
-    gamma_for_diag = jnp.exp(score - logZ[:, None, None])
-    pmax = jnp.max(gamma_for_diag.reshape(B, T * R), axis=-1)
-    n_sig = jnp.sum(gamma_for_diag > significance_threshold, axis=(-1, -2)).astype(jnp.int32)
-    omitted_log_mass = jnp.zeros((B,), dtype=jnp.float32)
-    # D12: richer RelionStats diagnostics.
-    best_log_score_per_image = jnp.max(score_flat, axis=-1).astype(jnp.float32)
-    rotation_posterior_sums = jnp.sum(gamma_for_diag, axis=(0, 1)).astype(jnp.float32)  # [R]
-
-    # ---- Pass 2 + per-rotation backprojection -------------------------------
-    score2, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
-        yn,
-        tm,
-        num,
-        g,
-        hz,
-        Hz,
+        pose_log_prior,
+        significance_threshold=significance_threshold,
         return_moments=True,
     )
-    if pose_log_prior is not None:
-        score2 = score2 + jnp.swapaxes(pose_log_prior, -1, -2)
-    gamma = jnp.exp(score2 - logZ[:, None, None])  # [B, T, R]
-
-    # D7: optional significance masking — zero γ below threshold so
-    # negligibly-weighted poses don't contribute to backprojection.
     if apply_significance_mask:
         gamma = jnp.where(gamma > significance_threshold, gamma, 0.0)
 
     rhs_dtype = rhs_volume.dtype
     lhs_dtype = lhs_tri_volume.dtype
-    ctf2_c = ctf2_over_noise.astype(rhs_dtype)
 
-    # Loop over rotations in the block, applying backprojection immediately.
-    # JAX-static loop via Python (ok for production block sizes ~ 10² rotations
-    # per block; the legacy K-class engine uses the same pattern).
+    # Per-rotation backprojection. The Python loop is fine because each
+    # iteration JIT-compiles to a single batched adjoint kernel; loop
+    # bodies are static-shape so XLA caches the compile.
     for r_idx in range(R):
         gamma_r = gamma[:, :, r_idx]  # [B, T]
-        alpha_r = alpha[:, :, r_idx, :]  # [B, T, P]
-        G_tri_r = G_tri[:, :, r_idx, :]  # [B, T, tri(P)]
-        rotation = rotations_block[r_idx]  # [3, 3]
-        rotations_per_image = jnp.broadcast_to(rotation[None, :, :], (B, 3, 3))
+        rotations_per_image = jnp.broadcast_to(rotations_block[r_idx][None, :, :], (B, 3, 3))
 
-        # RHS: Z_rp[B, P, F] = sum_t γ_brt α_brt,p · Y1[b, t]
-        Z_rp = jnp.einsum(
-            "bt, btp, btf -> bpf",
-            gamma_r.astype(rhs_dtype),
-            alpha_r,
-            Y1,
-        )  # [B, P, F]
-        # batch_adjoint_slice_volume_half wants [n_volumes, n_images, half_F]
-        # with one accumulator per volume. n_volumes = P, n_images = B.
-        Z_pbf = jnp.transpose(Z_rp, (1, 0, 2)).astype(rhs_dtype)  # [P, B, F]
+        # RHS contribution: Σ_t γ_brt · α_brt · Y1[b, t]   shape [B, P, F].
+        Z_pbf = jnp.transpose(
+            jnp.einsum("bt, btp, btf -> bpf", gamma_r.astype(rhs_dtype), alpha[:, :, r_idx, :], Y1),
+            (1, 0, 2),
+        ).astype(rhs_dtype)
         rhs_volume = batch_adjoint_slice_volume_half(
             Z_pbf,
             rotations_per_image,
@@ -467,18 +418,17 @@ def fused_dense_pose_ppca_block(
             half_volume=True,
         )
 
-        # LHS: w_rs[B, tri(P)] = sum_t γ_brt G_aug_tri_brt,rs
-        # Project to real per the legacy lhs_tri convention.
-        w_rs = jnp.einsum(
-            "bt, btk -> bk",
-            gamma_r,
-            G_tri_r,
-        ).real.astype(lhs_dtype)  # [B, tri(P)]
-        # weighted_ctf2[B, tri(P), F] = w_rs[..., None] * ctf2_over_noise[:, None, :]
-        weighted_ctf2 = w_rs[:, :, None] * ctf2_over_noise[:, None, :]  # [B, tri(P), F]
-        weighted_ctf2_sbf = jnp.transpose(weighted_ctf2, (1, 0, 2))  # [tri(P), B, F]
+        # LHS contribution: γ-weighted Σ_t G_tri broadcast over the per-image
+        # CTF² / σ² weights. Project to real to match the legacy lhs_tri
+        # convention (the symmetric upper-triangle pack consumed by
+        # ``recovar.ppca.ppca._pcg_hard_mstep``).
+        w_btk = jnp.einsum("bt, btk -> bk", gamma_r, G_tri[:, :, r_idx, :]).real.astype(lhs_dtype)
+        weighted_kbf = jnp.transpose(
+            w_btk[:, :, None] * ctf2_over_noise[:, None, :],
+            (1, 0, 2),
+        ).astype(lhs_dtype)
         lhs_tri_volume = batch_adjoint_slice_volume_half(
-            weighted_ctf2_sbf.astype(lhs_dtype),
+            weighted_kbf,
             rotations_per_image,
             lhs_tri_volume,
             image_shape,
@@ -488,15 +438,4 @@ def fused_dense_pose_ppca_block(
             half_volume=True,
         )
 
-    diagnostics = PosteriorDiagnostics(
-        logZ=logZ,
-        pmax=pmax,
-        best_rotation_idx=best_r,
-        best_translation_idx=best_t,
-        n_significant_per_image=n_sig,
-        omitted_log_mass=omitted_log_mass,
-        best_log_score_per_image=best_log_score_per_image,
-        rotation_posterior_sums=rotation_posterior_sums,
-        max_posterior_per_image=pmax,
-    )
-    return rhs_volume, lhs_tri_volume, diagnostics
+    return rhs_volume, lhs_tri_volume, diag

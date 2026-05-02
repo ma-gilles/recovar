@@ -127,6 +127,77 @@ def _segmented_logsumexp(scores, image_id, n_images):
     return jnp.log(seg_sum) + seg_max  # [n_images]
 
 
+def _sparse_per_hyp_stats(layout: SparseHypothesisLayout):
+    """Compute the per-hypothesis sufficient statistics shared by both
+    sparse engines: ``(y_norm, t_mx, nu_mm, g_zx, h_zm, Hzz)``.
+
+    The per-hypothesis ``y_norm`` comes directly from the layout because
+    it is image-level (constant in pose); it just needs replication onto
+    each ``Nh`` slot upstream when the layout is built.
+    """
+    K_aug = jnp.einsum(
+        "hf, hpf, hqf -> hpq",
+        layout.ctf2_over_noise.astype(layout.proj_aug.dtype),
+        jnp.conj(layout.proj_aug),
+        layout.proj_aug,
+    )
+    nu_mm = K_aug[..., 0, 0].real
+    h_zm = K_aug[..., 1:, 0]
+    Hzz = K_aug[..., 1:, 1:]
+    D = jnp.einsum("hf, hpf -> hp", jnp.conj(layout.Y1), layout.proj_aug)
+    return layout.y_norm, D[..., 0].real, nu_mm, D[..., 1:], h_zm, Hzz
+
+
+def _sparse_score_and_diagnostics(
+    layout: SparseHypothesisLayout,
+    *,
+    significance_threshold: float,
+    return_moments: bool,
+):
+    """Single source of truth for both sparse engines.
+
+    Returns ``(gamma, diag, alpha, G_tri)`` where ``alpha`` / ``G_tri``
+    are ``None`` when ``return_moments=False``.
+    """
+    yn, tm, num, gzx, hzm, Hzz = _sparse_per_hyp_stats(layout)
+    score_pre, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
+        yn,
+        tm,
+        num,
+        gzx,
+        hzm,
+        Hzz,
+        return_moments=return_moments,
+    )
+    score = score_pre if layout.pose_log_prior is None else score_pre + layout.pose_log_prior
+
+    n_images = layout.n_images
+    logZ = _segmented_logsumexp(score, layout.image_id, n_images)
+    gamma = jnp.exp(score - logZ[layout.image_id])
+
+    seg_max_score = jax.ops.segment_max(score, layout.image_id, num_segments=n_images)
+    pmax = jax.ops.segment_max(gamma, layout.image_id, num_segments=n_images)
+
+    diag = SparsePosteriorDiagnostics(
+        logZ=logZ,
+        pmax=pmax,
+        n_significant_per_image=jax.ops.segment_sum(
+            (gamma > significance_threshold).astype(jnp.int32),
+            layout.image_id,
+            num_segments=n_images,
+        ),
+        omitted_log_mass=jnp.zeros((n_images,), dtype=jnp.float32),
+        best_hypothesis_idx=_segment_first_true(
+            score >= seg_max_score[layout.image_id] - 1e-12,
+            layout.image_id,
+            n_images,
+        ),
+        best_log_score_per_image=seg_max_score.astype(jnp.float32),
+        max_posterior_per_image=pmax,
+    )
+    return gamma, diag, alpha, G_tri
+
+
 def sparse_pose_ppca_E_step_flat(
     layout: SparseHypothesisLayout,
     *,
@@ -149,131 +220,30 @@ def sparse_pose_ppca_E_step_flat(
         omitted mass when constructing the layout), and the best
         hypothesis flat index per image.
     """
-    Nh, F = layout.Y1.shape
     P = layout.proj_aug.shape[1]
     q = P - 1
     n_images = layout.n_images
 
-    # K_aug per hypothesis: [Nh, P, P].
-    K_aug = jnp.einsum(
-        "hf, hpf, hqf -> hpq",
-        layout.ctf2_over_noise.astype(layout.proj_aug.dtype),
-        jnp.conj(layout.proj_aug),
-        layout.proj_aug,
+    gamma, diag, alpha, G_tri = _sparse_score_and_diagnostics(
+        layout,
+        significance_threshold=significance_threshold,
+        return_moments=(q > 0),
     )
-    nu_mm = K_aug[..., 0, 0].real  # [Nh]
-    h_zm = K_aug[..., 1:, 0]  # [Nh, q]
-    Hzz = K_aug[..., 1:, 1:]  # [Nh, q, q]
 
-    # First-order: D_h_p = sum_f conj(Y1)_h_f * proj_aug_h_p_f.
-    D = jnp.einsum("hf, hpf -> hp", jnp.conj(layout.Y1), layout.proj_aug)
-    t_mx = D[..., 0].real  # [Nh]
-    g_zx = D[..., 1:]  # [Nh, q]
-
-    # ---- Pass 1: scores + segmented logsumexp + per-image logZ + best ----
-    score, _, _ = compute_ppca_pose_scores_and_moments_no_contrast(
-        layout.y_norm,
-        t_mx,
-        nu_mm,
-        g_zx,
-        h_zm,
-        Hzz,
-        return_moments=False,
-    )  # [Nh]
-    if layout.pose_log_prior is not None:
-        score = score + layout.pose_log_prior
-
-    logZ = _segmented_logsumexp(score, layout.image_id, n_images)  # [n_images]
-    logZ_per_h = logZ[layout.image_id]  # [Nh]
-    gamma_pass1 = jnp.exp(score - logZ_per_h)  # [Nh]
-
-    pmax = jax.ops.segment_max(gamma_pass1, layout.image_id, num_segments=n_images)  # [n_images]
-
-    significant_mask = (gamma_pass1 > significance_threshold).astype(jnp.int32)
-    n_sig = jax.ops.segment_sum(significant_mask, layout.image_id, num_segments=n_images)
-
-    # Argmax per image: implement via segment_argmax surrogate. We use
-    # segment_max on the score, then locate the matching hypothesis per
-    # image. For ties this returns the first match — same convention as
-    # the dense engine's ``jnp.argmax``.
-    seg_max_score = jax.ops.segment_max(score, layout.image_id, num_segments=n_images)
-    seg_max_per_h = seg_max_score[layout.image_id]
-    is_argmax = score >= seg_max_per_h - 1e-12
-    # For each image, the FIRST hypothesis matching the max wins.
-    first_matching_idx = _segment_first_true(is_argmax, layout.image_id, n_images)
-    best_hyp_idx = first_matching_idx  # [n_images]
-
-    # No omitted mass for unpruned layouts; pruners must adjust.
-    omitted_log_mass = jnp.zeros((n_images,), dtype=jnp.float32)
-    # D12: best log score per image = segment_max of (ℓ + log π).
-    best_log_score_per_image = seg_max_score.astype(jnp.float32)
-
-    # ---- Pass 2: recompute moments + accumulate gamma·alpha, gamma·G_tri ----
     if q == 0:
-        # Augmented moments are trivially [1] / tri([1]) = [1] regardless
-        # of pose. After γ-weighted segment_sum (= 1 per image), each
-        # image gets [1] in alpha_aug_acc and G_aug_tri_acc.
         ones = jnp.ones((n_images, 1), dtype=jnp.complex64)
-        image_stats = DenseImageStats(
-            alpha_aug_acc=ones,
-            G_aug_tri_acc=ones,
-            log_evidence=logZ,
-        )
-        return image_stats, SparsePosteriorDiagnostics(
-            logZ=logZ,
-            pmax=pmax,
-            n_significant_per_image=n_sig,
-            omitted_log_mass=omitted_log_mass,
-            best_hypothesis_idx=best_hyp_idx,
-            best_log_score_per_image=best_log_score_per_image,
-            max_posterior_per_image=pmax,
-        )
+        return DenseImageStats(alpha_aug_acc=ones, G_aug_tri_acc=ones, log_evidence=diag.logZ), diag
 
-    score2, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
-        layout.y_norm,
-        t_mx,
-        nu_mm,
-        g_zx,
-        h_zm,
-        Hzz,
-        return_moments=True,
-    )
-    if layout.pose_log_prior is not None:
-        score2 = score2 + layout.pose_log_prior
-    gamma = jnp.exp(score2 - logZ_per_h)  # [Nh]
-
-    # D7: optional significance masking — same convention as the dense engine.
     if apply_significance_mask:
         gamma = jnp.where(gamma > significance_threshold, gamma, 0.0)
 
-    # Weighted segment-sum into per-image accumulators.
-    weight = gamma.astype(alpha.dtype)
-    alpha_weighted = weight[:, None] * alpha  # [Nh, P]
-    G_tri_weighted = weight[:, None] * G_tri  # [Nh, tri(P)]
-    alpha_aug_acc = jax.ops.segment_sum(
-        alpha_weighted,
-        layout.image_id,
-        num_segments=n_images,
-    )  # [n_images, P]
-    G_aug_tri_acc = jax.ops.segment_sum(
-        G_tri_weighted,
-        layout.image_id,
-        num_segments=n_images,
-    )  # [n_images, tri(P)]
-
-    image_stats = DenseImageStats(
-        alpha_aug_acc=alpha_aug_acc,
-        G_aug_tri_acc=G_aug_tri_acc,
-        log_evidence=logZ,
-    )
-    return image_stats, SparsePosteriorDiagnostics(
-        logZ=logZ,
-        pmax=pmax,
-        n_significant_per_image=n_sig,
-        omitted_log_mass=omitted_log_mass,
-        best_hypothesis_idx=best_hyp_idx,
-        best_log_score_per_image=best_log_score_per_image,
-        max_posterior_per_image=pmax,
+    # γ-weighted segment-sum across hypotheses → per-image accumulators.
+    w_alpha = gamma.astype(alpha.dtype)
+    alpha_aug_acc = jax.ops.segment_sum(w_alpha[:, None] * alpha, layout.image_id, num_segments=n_images)
+    G_aug_tri_acc = jax.ops.segment_sum(w_alpha[:, None] * G_tri, layout.image_id, num_segments=n_images)
+    return (
+        DenseImageStats(alpha_aug_acc=alpha_aug_acc, G_aug_tri_acc=G_aug_tri_acc, log_evidence=diag.logZ),
+        diag,
     )
 
 
@@ -333,11 +303,9 @@ def fused_sparse_pose_ppca_block(
         batch_adjoint_slice_volume_half,
     )
 
-    Nh, F = layout.Y1.shape
+    Nh = layout.Y1.shape[0]
     P = layout.proj_aug.shape[1]
-    q = P - 1
     tri_size = _tri_size(P)
-    n_images = layout.n_images
     if rotations_per_hyp.shape != (Nh, 3, 3):
         raise ValueError(f"rotations_per_hyp shape {rotations_per_hyp.shape} != ({Nh}, 3, 3)")
     if rhs_volume.shape[0] != P:
@@ -345,69 +313,19 @@ def fused_sparse_pose_ppca_block(
     if lhs_tri_volume.shape[0] != tri_size:
         raise ValueError(f"lhs_tri_volume shape {lhs_tri_volume.shape} not compatible with tri({P})={tri_size}")
 
-    # Per-hypothesis sufficient stats.
-    K_aug = jnp.einsum(
-        "hf, hpf, hqf -> hpq",
-        layout.ctf2_over_noise.astype(layout.proj_aug.dtype),
-        jnp.conj(layout.proj_aug),
-        layout.proj_aug,
-    )
-    nu_mm = K_aug[..., 0, 0].real
-    h_zm = K_aug[..., 1:, 0]
-    Hzz = K_aug[..., 1:, 1:]
-    D = jnp.einsum("hf, hpf -> hp", jnp.conj(layout.Y1), layout.proj_aug)
-    t_mx = D[..., 0].real
-    g_zx = D[..., 1:]
-
-    # ---- Pass 1: scores + segmented logsumexp + per-image stats ----
-    score, _, _ = compute_ppca_pose_scores_and_moments_no_contrast(
-        layout.y_norm,
-        t_mx,
-        nu_mm,
-        g_zx,
-        h_zm,
-        Hzz,
-        return_moments=False,
-    )
-    if layout.pose_log_prior is not None:
-        score = score + layout.pose_log_prior
-
-    logZ = _segmented_logsumexp(score, layout.image_id, n_images)  # [n_images]
-    logZ_per_h = logZ[layout.image_id]  # [Nh]
-    gamma_pass1 = jnp.exp(score - logZ_per_h)
-    pmax = jax.ops.segment_max(gamma_pass1, layout.image_id, num_segments=n_images)
-    significant_mask = (gamma_pass1 > significance_threshold).astype(jnp.int32)
-    n_sig = jax.ops.segment_sum(significant_mask, layout.image_id, num_segments=n_images)
-    seg_max_score = jax.ops.segment_max(score, layout.image_id, num_segments=n_images)
-    is_argmax = score >= seg_max_score[layout.image_id] - 1e-12
-    best_hyp_idx = _segment_first_true(is_argmax, layout.image_id, n_images)
-    omitted_log_mass = jnp.zeros((n_images,), dtype=jnp.float32)
-    # D12: richer RelionStats diagnostics.
-    best_log_score_per_image = seg_max_score.astype(jnp.float32)
-
-    # ---- Pass 2: moments + batched backprojection ----
-    score2, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
-        layout.y_norm,
-        t_mx,
-        nu_mm,
-        g_zx,
-        h_zm,
-        Hzz,
+    gamma, diag, alpha, G_tri = _sparse_score_and_diagnostics(
+        layout,
+        significance_threshold=significance_threshold,
         return_moments=True,
     )
-    if layout.pose_log_prior is not None:
-        score2 = score2 + layout.pose_log_prior
-    gamma = jnp.exp(score2 - logZ_per_h)  # [Nh]
-
-    # D7: optional significance masking — same convention as the dense engine.
     if apply_significance_mask:
         gamma = jnp.where(gamma > significance_threshold, gamma, 0.0)
 
-    # RHS: Z_h_p = γ_h · α_h,p · Y1[h]   shape [Nh, P, F]
-    weighted_alpha = (gamma[:, None].astype(alpha.dtype)) * alpha  # [Nh, P]
-    Z_hpf = weighted_alpha[:, :, None] * layout.Y1[:, None, :]  # [Nh, P, F]
-    # batch_adjoint_slice_volume_half expects [n_volumes=P, n_images=Nh, F]
-    Z_pHf = jnp.transpose(Z_hpf, (1, 0, 2)).astype(rhs_volume.dtype)
+    # RHS: γ_h · α_h,p · Y1[h]    [Nh, P, F]  → backproject into [P, half_vol].
+    Z_pHf = jnp.transpose(
+        (gamma[:, None].astype(alpha.dtype) * alpha)[:, :, None] * layout.Y1[:, None, :],
+        (1, 0, 2),
+    ).astype(rhs_volume.dtype)
     rhs_volume = batch_adjoint_slice_volume_half(
         Z_pHf,
         rotations_per_hyp,
@@ -419,10 +337,12 @@ def fused_sparse_pose_ppca_block(
         half_volume=True,
     )
 
-    # LHS: w_h_rs = γ_h · G_aug_tri_h,rs · ctf2_over_noise[h, f]
-    w_hk = (gamma[:, None] * G_tri).real.astype(lhs_tri_volume.dtype)  # [Nh, tri(P)]
-    weighted_ctf2 = w_hk[:, :, None] * layout.ctf2_over_noise[:, None, :]  # [Nh, tri(P), F]
-    weighted_kHf = jnp.transpose(weighted_ctf2, (1, 0, 2)).astype(lhs_tri_volume.dtype)
+    # LHS: γ-weighted G_tri broadcast over per-hyp CTF² / σ².
+    w_hk = (gamma[:, None] * G_tri).real.astype(lhs_tri_volume.dtype)
+    weighted_kHf = jnp.transpose(
+        w_hk[:, :, None] * layout.ctf2_over_noise[:, None, :],
+        (1, 0, 2),
+    ).astype(lhs_tri_volume.dtype)
     lhs_tri_volume = batch_adjoint_slice_volume_half(
         weighted_kHf,
         rotations_per_hyp,
@@ -434,13 +354,4 @@ def fused_sparse_pose_ppca_block(
         half_volume=True,
     )
 
-    diagnostics = SparsePosteriorDiagnostics(
-        logZ=logZ,
-        pmax=pmax,
-        n_significant_per_image=n_sig,
-        omitted_log_mass=omitted_log_mass,
-        best_hypothesis_idx=best_hyp_idx,
-        best_log_score_per_image=best_log_score_per_image,
-        max_posterior_per_image=pmax,
-    )
-    return rhs_volume, lhs_tri_volume, diagnostics
+    return rhs_volume, lhs_tri_volume, diag

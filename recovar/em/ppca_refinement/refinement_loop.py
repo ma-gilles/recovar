@@ -411,136 +411,172 @@ def _e_step_local_accumulate(
 # ---------------------------------------------------------------------------
 
 
-def _join_halves_at_low_res_on_accumulators(
-    rhs_h0,
-    rhs_h1,
-    lhs_tri_h0,
-    lhs_tri_h1,
-    volume_shape: tuple,
+def _low_res_join_mask(
+    volume_shape: tuple[int, int, int],
+    voxel_size: float,
+    grid_size: int,
+    low_resol_join_angstrom: float,
+    current_resolution_angstrom: float | None,
+) -> jax.Array:
+    """Return a half-spectrum boolean mask selecting the low-resolution sphere
+    used by RELION's ``--low_resol_join_halves`` (cf. ``MlOptimiserMpi::
+    joinTwoHalvesAtLowResolution`` in ``ml_optimiser_mpi.cpp:3112``).
+
+    ``True`` inside the joining sphere where the half-set accumulators are
+    averaged together; ``False`` outside, where they are kept independent.
+    The joining radius is the LARGER (lower-frequency) of
+    ``low_resol_join_angstrom`` and ``current_resolution_angstrom`` so the
+    radius never exceeds the iter's actual map resolution.
+    """
+    from recovar.reconstruction.regularization import _relion_round_away_from_zero
+
+    myres = float(low_resol_join_angstrom)
+    if current_resolution_angstrom is not None and np.isfinite(current_resolution_angstrom):
+        myres = max(myres, float(current_resolution_angstrom))
+    lowres_r_max = int(np.ceil(grid_size * voxel_size / myres))
+
+    pf = volume_shape[0] // grid_size if volume_shape[0] > grid_size else 1
+    lowres_r_max_padded = int(_relion_round_away_from_zero(float(pf) * lowres_r_max))
+    lowres_r2_max = lowres_r_max_padded * lowres_r_max_padded
+
+    axes = [
+        jnp.asarray(ftu.get_1d_frequency_grid(volume_shape[0], scaled=False), dtype=jnp.float32),
+        jnp.asarray(ftu.get_1d_frequency_grid(volume_shape[1], scaled=False), dtype=jnp.float32),
+        jnp.asarray(ftu.get_1d_frequency_grid_rfft(volume_shape[2], scaled=False), dtype=jnp.float32),
+    ]
+    kz, ky, kx = jnp.meshgrid(axes[0], axes[1], axes[2], indexing="ij")
+    return (kz * kz + ky * ky + kx * kx <= lowres_r2_max).reshape(-1)
+
+
+def _join_aug_halves_low_res(
+    rhs_h0: jax.Array,
+    rhs_h1: jax.Array,
+    lhs_tri_h0: jax.Array,
+    lhs_tri_h1: jax.Array,
+    volume_shape: tuple[int, int, int],
     voxel_size: float,
     low_resol_join_angstrom: float,
     current_resolution_angstrom: float | None = None,
-):
-    """Apply RELION's join_halves_at_low_resolution to per-augmented-component
-    rhs and per-tri-pair lhs_tri.
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Apply RELION's low-resolution halfset join to the augmented-PPCA
+    backprojection accumulators.
 
-    rhs is [half_vol, P] complex; we treat each component p independently
-    as a (Ft_y, Ft_ctf) pair where the "Ft_ctf" is taken from lhs_tri's
-    diagonal index for component p (the (p, p) entry maps to the
-    "weight" volume in RELION's join). For off-diagonal lhs_tri indices,
-    the join is applied independently to the real-valued accumulator.
+    Inside the low-resolution sphere both halves' accumulators are
+    replaced with their pointwise mean; outside they are passed through
+    unchanged. Acts uniformly across:
+
+      - all P RHS components (μ + W₁ … W_q),
+      - all tri(P) LHS upper-triangle entries (both diagonal CTF² weights
+        and off-diagonal cross-component weights).
+
+    A single mask is computed once and broadcast over the trailing
+    component axis — fixes a subtle bug in the prior implementation
+    where off-diagonal LHS entries were averaged at every frequency.
+
+    Shapes: ``rhs[half_vol, P]`` complex; ``lhs_tri[half_vol, tri(P)]`` real.
     """
-    from recovar.reconstruction import regularization
-
-    P = rhs_h0.shape[-1]
-    tri_idx_diag = []  # the (p, p) index in row-major upper-triangular packing
-    idx = 0
-    for i in range(P):
-        for j in range(i, P):
-            if i == j:
-                tri_idx_diag.append(idx)
-            idx += 1
-
-    new_rhs_h0 = jnp.zeros_like(rhs_h0)
-    new_rhs_h1 = jnp.zeros_like(rhs_h1)
-    new_lhs_tri_h0 = jnp.zeros_like(lhs_tri_h0)
-    new_lhs_tri_h1 = jnp.zeros_like(lhs_tri_h1)
-
     grid_size = volume_shape[0]
-    for p in range(P):
-        diag_idx = tri_idx_diag[p]
-        rhs_p_h0 = rhs_h0[:, p]  # complex [half_vol]
-        rhs_p_h1 = rhs_h1[:, p]
-        lhs_diag_p_h0 = lhs_tri_h0[:, diag_idx]  # real [half_vol]
-        lhs_diag_p_h1 = lhs_tri_h1[:, diag_idx]
-        joined = regularization.join_halves_at_low_resolution(
-            rhs_p_h0,
-            rhs_p_h1,
-            lhs_diag_p_h0,
-            lhs_diag_p_h1,
-            volume_shape,
-            voxel_size,
-            grid_size,
-            low_resol_join_angstrom,
-            current_resolution_angstrom=current_resolution_angstrom,
-        )
-        new_rhs_h0 = new_rhs_h0.at[:, p].set(joined[0])
-        new_rhs_h1 = new_rhs_h1.at[:, p].set(joined[1])
-        new_lhs_tri_h0 = new_lhs_tri_h0.at[:, diag_idx].set(joined[2])
-        new_lhs_tri_h1 = new_lhs_tri_h1.at[:, diag_idx].set(joined[3])
+    join = _low_res_join_mask(
+        volume_shape,
+        voxel_size,
+        grid_size,
+        low_resol_join_angstrom,
+        current_resolution_angstrom,
+    )[:, None]  # broadcast over the trailing component axis
 
-    # For off-diagonal lhs_tri indices, apply the join with itself as both
-    # halves' "weight" denominator (degenerate case — preserves behavior
-    # while propagating the low-resolution averaging).
-    for tri_idx in range(lhs_tri_h0.shape[-1]):
-        if tri_idx in tri_idx_diag:
-            continue
-        new_lhs_tri_h0 = new_lhs_tri_h0.at[:, tri_idx].set(0.5 * (lhs_tri_h0[:, tri_idx] + lhs_tri_h1[:, tri_idx]))
-        new_lhs_tri_h1 = new_lhs_tri_h1.at[:, tri_idx].set(0.5 * (lhs_tri_h0[:, tri_idx] + lhs_tri_h1[:, tri_idx]))
-
-    return new_rhs_h0, new_rhs_h1, new_lhs_tri_h0, new_lhs_tri_h1
+    rhs_avg = 0.5 * (rhs_h0 + rhs_h1)
+    lhs_avg = 0.5 * (lhs_tri_h0 + lhs_tri_h1)
+    return (
+        jnp.where(join, rhs_avg, rhs_h0),
+        jnp.where(join, rhs_avg, rhs_h1),
+        jnp.where(join, lhs_avg, lhs_tri_h0),
+        jnp.where(join, lhs_avg, lhs_tri_h1),
+    )
 
 
-def _enforce_x0_hermitian_on_stats(rhs, lhs_tri, volume_shape):
-    """D8: enforce RELION x=0 Hermitian plane on rhs / lhs_tri columns."""
-    P = rhs.shape[-1]
-    new_rhs = rhs
-    for p in range(P):
-        new_rhs = new_rhs.at[:, p].set(enforce_relion_half_volume_x0_hermitian(rhs[:, p], volume_shape))
-    new_lhs = lhs_tri
-    for k in range(lhs_tri.shape[-1]):
-        new_lhs = new_lhs.at[:, k].set(enforce_relion_half_volume_x0_hermitian(lhs_tri[:, k], volume_shape))
+def _enforce_x0_hermitian_aug(
+    rhs: jax.Array,
+    lhs_tri: jax.Array,
+    volume_shape: tuple[int, int, int],
+) -> tuple[jax.Array, jax.Array]:
+    """D8: enforce the RELION ``x=0`` Hermitian symmetry on every
+    augmented-component accumulator, vectorized over P / tri(P) columns
+    via ``jax.vmap`` instead of a Python loop.
+
+    The Hermitian fix-up applies to the half-spectrum's ``x=0`` plane
+    where ``F(-y, -z) = F*(y, z)`` is structurally implied; without it
+    the M-step's PCG accumulates a small phase asymmetry that bleeds
+    into the reconstruction. Mirrors RELION's
+    ``BackProjector::enforceHermitianSymmetry``.
+    """
+    fix_one = lambda col: enforce_relion_half_volume_x0_hermitian(col, volume_shape)
+    new_rhs = jax.vmap(fix_one, in_axes=1, out_axes=1)(rhs)
+    new_lhs = jax.vmap(fix_one, in_axes=1, out_axes=1)(lhs_tri)
     return new_rhs, new_lhs
 
 
-def _update_noise_variance(state: PoseMarginalPPCAEMState, per_half: dict, alpha: float = 0.5):
-    """D5: simple scalar EMA on the per-half residual proxy. RELION's full
-    per-shell update lands in a follow-up; this gets a non-trivial,
-    iteration-aware noise estimate without engine surgery."""
-    new_var = []
-    for half_idx in (0, 1):
-        ph = per_half[half_idx]
-        if ph["residual_den"] > 0:
-            est = ph["residual_num"] / max(ph["residual_den"], 1.0)
-        else:
-            est = 1.0
-        new_var.append(est)
-    # Use the average across halves as the next iter's noise estimate.
-    avg = 0.5 * (new_var[0] + new_var[1])
-    half_vol = state.noise_variance.shape[0]
-    blended = alpha * float(avg) * jnp.ones((half_vol,), dtype=jnp.float32) + (1 - alpha) * state.noise_variance
-    return blended
+def _ema_scalar_noise_update(
+    state: PoseMarginalPPCAEMState,
+    per_half: dict,
+    *,
+    blend: float = 0.5,
+) -> jax.Array:
+    """D5 (scalar EMA placeholder): blend the previous per-voxel noise
+    variance with a fresh image-power scalar.
+
+    For each halfset the engine accumulates ``residual_num = Σ y_norm``
+    and ``residual_den = number of images``; their ratio is the mean
+    image power per pixel under the current whitening. Averaging across
+    halves and EMA-blending into ``state.noise_variance`` produces a
+    non-trivial, iteration-aware noise estimate without engine surgery.
+
+    This is a stand-in for RELION's true per-shell update
+    ``sigma2_noise[s] = (Σ_w |x|² + Σ_w (A² − 2 XA)) / (2 sumw N_pix(s))``
+    which requires the engine to emit per-shell residual stats. Tracked
+    as a follow-up.
+    """
+    image_power_h = jnp.asarray(
+        [ph["residual_num"] / max(ph["residual_den"], 1.0) for ph in (per_half[0], per_half[1])],
+        dtype=jnp.float32,
+    )
+    fresh = jnp.full_like(state.noise_variance, jnp.mean(image_power_h))
+    return blend * fresh + (1.0 - blend) * state.noise_variance
 
 
-def _recompute_mean_prior(state: PoseMarginalPPCAEMState, cryo, batch_size: int = 256):
-    """D6: recompute mean_prior via compute_relion_prior on state.mu_half[0/1]."""
+def _recompute_mean_prior_relion(
+    state: PoseMarginalPPCAEMState,
+    cryo,
+    *,
+    batch_size: int = 256,
+) -> jax.Array:
+    """D6: recompute the spectral mean prior from the current half-maps
+    via :func:`recovar.reconstruction.regularization.compute_relion_prior`,
+    then broadcast it to the per-half-voxel layout the augmented PPCA
+    M-step expects.
+
+    Returns the previous prior unchanged if the FSC computation
+    fails (degenerate at iter 0 with identical half-maps).
+    """
     from recovar.em.ppca_refinement.prior_provider import compute_mean_prior_relion
+    from recovar.reconstruction.regularization import broadcast_shell_to_volume
 
     vol_shape = (cryo.grid_size, cryo.grid_size, cryo.grid_size)
     half_vol = int(np.prod(ftu.volume_shape_to_half_volume_shape(vol_shape)))
-    mu_h0_real = np.asarray(state.mu_half[0])
-    mu_h1_real = np.asarray(state.mu_half[1])
-    mu_h0_full_f = np.asarray(ftu.get_dft3(jnp.asarray(mu_h0_real))).reshape(-1)
-    mu_h1_full_f = np.asarray(ftu.get_dft3(jnp.asarray(mu_h1_real))).reshape(-1)
-    halfset_datasets = (cryo, cryo)  # same dataset, different indices via halfset_indices
+    mu_h0_full_f = np.asarray(ftu.get_dft3(jnp.asarray(state.mu_half[0]))).reshape(-1)
+    mu_h1_full_f = np.asarray(ftu.get_dft3(jnp.asarray(state.mu_half[1]))).reshape(-1)
     cov_noise = float(jnp.mean(state.noise_variance))
     try:
-        prior, _fsc, _avg = compute_mean_prior_relion(
-            halfset_datasets,
+        prior_per_shell, _fsc, _avg = compute_mean_prior_relion(
+            (cryo, cryo),
             cov_noise,
             mu_h0_full_f,
             mu_h1_full_f,
             batch_size,
         )
+        full = np.asarray(broadcast_shell_to_volume(np.asarray(prior_per_shell), vol_shape)).reshape(vol_shape)
     except Exception:
         return state.mean_prior
-    # broadcast per-shell prior to per-half-volume voxel
-    from recovar.reconstruction.regularization import broadcast_shell_to_volume
 
-    try:
-        full = np.asarray(broadcast_shell_to_volume(np.asarray(prior), vol_shape)).reshape(vol_shape)
-    except Exception:
-        return state.mean_prior
     half_packed = (
         np.asarray(ftu.full_volume_to_half_volume(jnp.asarray(full), vol_shape))
         .real.astype(np.float32)
@@ -679,14 +715,14 @@ def run_pose_marginal_refinement(
                 apply_significance_mask=schedule_opts.apply_significance_mask,
             )
 
-        # ---- (c) D8 + (d) D4 ----
+        # ---- (c) D8 Hermitian + (d) D4 low-res halfset join ----
         rhs_h0, rhs_h1 = per_half[0]["rhs"], per_half[1]["rhs"]
         lhs_h0, lhs_h1 = per_half[0]["lhs_tri"], per_half[1]["lhs_tri"]
         if schedule_opts.enable_x0_hermitian:
-            rhs_h0, lhs_h0 = _enforce_x0_hermitian_on_stats(rhs_h0, lhs_h0, volume_shape)
-            rhs_h1, lhs_h1 = _enforce_x0_hermitian_on_stats(rhs_h1, lhs_h1, volume_shape)
+            rhs_h0, lhs_h0 = _enforce_x0_hermitian_aug(rhs_h0, lhs_h0, volume_shape)
+            rhs_h1, lhs_h1 = _enforce_x0_hermitian_aug(rhs_h1, lhs_h1, volume_shape)
         if schedule_opts.enable_low_resol_join:
-            rhs_h0, rhs_h1, lhs_h0, lhs_h1 = _join_halves_at_low_res_on_accumulators(
+            rhs_h0, rhs_h1, lhs_h0, lhs_h1 = _join_aug_halves_low_res(
                 rhs_h0,
                 rhs_h1,
                 lhs_h0,
@@ -729,7 +765,7 @@ def run_pose_marginal_refinement(
         # ---- (g) Noise update ----
         new_noise = state.noise_variance
         if schedule_opts.enable_per_iter_noise:
-            new_noise = _update_noise_variance(state, per_half)
+            new_noise = _ema_scalar_noise_update(state, per_half)
 
         # ---- State update so D6 sees fresh μ_half ----
         state = state.replace(
@@ -742,8 +778,7 @@ def run_pose_marginal_refinement(
 
         # ---- (h) Mean prior recompute ----
         if schedule_opts.enable_per_iter_prior:
-            new_mean_prior = _recompute_mean_prior(state, cryo)
-            state = state.replace(mean_prior=new_mean_prior)
+            state = state.replace(mean_prior=_recompute_mean_prior_relion(state, cryo))
 
         # ---- (i+j) Schedule advance ----
         n_total = sum(per_half[h]["n_total"] for h in (0, 1)) or 1
