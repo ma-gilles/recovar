@@ -26,8 +26,14 @@ CLASS3D_HEALPIX_ORDER="${CLASS3D_HEALPIX_ORDER:-2}"
 CLASS3D_OFFSET_RANGE="${CLASS3D_OFFSET_RANGE:-3}"
 CLASS3D_OFFSET_STEP="${CLASS3D_OFFSET_STEP:-1}"
 CLASS3D_ITER="${CLASS3D_ITER:-1}"
-IMAGE_BATCH_SIZE="${IMAGE_BATCH_SIZE:-50}"
-ROTATION_BLOCK_SIZE="${ROTATION_BLOCK_SIZE:-1000}"
+IMAGE_BATCH_SIZE="${IMAGE_BATCH_SIZE:-16}"
+ROTATION_BLOCK_SIZE="${ROTATION_BLOCK_SIZE:-250}"
+# Projection / reconstruction padding factors. RELION's default is 2.
+# At 256³ × 16 classes, padding=2 stages (16, 512³) ≈ 17 GB of templates
+# which OOMs on H100 alongside rotated-template buffers. Default to 1 here
+# (no padding) for the 256³ benchmark; set to 2 for smaller grids if needed.
+PROJECTION_PADDING_FACTOR="${PROJECTION_PADDING_FACTOR:-1}"
+RECONSTRUCTION_PADDING_FACTOR="${RECONSTRUCTION_PADDING_FACTOR:-1}"
 MEAN_CORR_GATE="${MEAN_CORR_GATE:-0.999}"
 CLASS_ACC_GATE="${CLASS_ACC_GATE:-0.999}"
 PMAX_ABS_MEAN_GATE="${PMAX_ABS_MEAN_GATE:-0.002}"
@@ -136,6 +142,8 @@ if [ ! -f "$REPLAY_DIR/summary.json" ]; then
     --output-dir "$REPLAY_DIR" \
     --image-batch-size "$IMAGE_BATCH_SIZE" \
     --rotation-block-size "$ROTATION_BLOCK_SIZE" \
+    --projection-padding-factor "$PROJECTION_PADDING_FACTOR" \
+    --reconstruction-padding-factor "$RECONSTRUCTION_PADDING_FACTOR" \
     2>&1 | tee "$REPLAY_DIR/run.log"
 else
   echo "Reusing existing RECOVAR replay summary at $REPLAY_DIR/summary.json"
