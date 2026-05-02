@@ -114,26 +114,74 @@ fallback.
 
 ## Testing
 
-For normal EM iteration, use targeted EM tests and focused replay/dump jobs.
-Do not run the full RECOVAR-wide suite unless the user asks, the change crosses
-out of EM/refinement, or you are preparing a PR.
+**Scope for EM/refinement/initial-volume work: never run the full RECOVAR
+project test suite.** It is hours long, dominated by SPA/ET metrics,
+PCS/locres, downstream pipelines, and outlier regressions that have nothing
+to do with the EM engine. Running it on this scope is a waste of time and
+GPU hours.
 
-Default quick guard:
+The following commands are **forbidden** for EM-scoped agents and must not
+appear in any pre-PR checklist:
 
+- `./scripts/run_tests_parallel.sh long-test`
+- `./scripts/run_tests_parallel.sh full`
+- `pixi run test-full`
+- `pytest --long-test` (without an `-m em`-style filter)
+- `pixi run python scripts/extract_regression_tables.py` (those tables are
+  for SPA/ET pipeline regressions, not EM parity)
+
+The "MANDATORY long-test" rule in the root `CLAUDE.md` applies to PRs that
+touch `heterogeneity/`, `reconstruction/` (outside of EM use), `commands/`,
+`output/`, or `data_io/` core paths. **EM-only PRs must use the EM-scoped
+test set defined below**, plus parity-replay and full-refinement smoke
+tests. If a change touches both EM and non-EM code, talk to the user before
+expanding scope.
+
+### EM-scoped test set (the only tests you run for EM work)
+
+Quick guard (login node, no GPU, ~30s):
 ```bash
 pixi run test-em-fast-guard
 ```
 
-Focused tests commonly needed after dense/local helper refactors:
+Focused unit tests for dense/local/helper refactors:
+```bash
+pixi run pytest \
+  tests/unit/test_refine_relion_mode.py \
+  tests/unit/test_dense_big_jit.py \
+  tests/unit/test_fourier_window.py \
+  tests/unit/test_half_spectrum_em.py \
+  tests/unit/test_sparse_pass2_bucketed_perf.py \
+  tests/unit/test_k_class_joint_semantics.py \
+  tests/unit/test_local_parity_analysis.py \
+  tests/unit/test_parse_relion_dump_dir.py \
+  tests/unit/initial_model/
+```
 
-- `tests/unit/test_refine_relion_mode.py::test_tracked_local_engine_todo_ids_are_present`
-- `tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_windowed_path_computes_reconstruction_abs2_without_full_buffer`
-- `tests/unit/test_sparse_pass2_bucketed_perf.py::test_bucketed_call_count_bounded_versus_perimage`
-- touched dense profile/return-shape tests in `tests/unit/test_half_spectrum_em.py`
+Parity replay + full-refinement smoke (require the 5k 128² normalized
+fixture under `/scratch/gpfs/GILLES/mg6942/em_relion_proj/`):
+```bash
+# Fast tier — ~3 min on a single GPU. Run before every push.
+pixi run python scripts/run_multi_iter_parity.py \
+  --relion_dir /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0 \
+  --data_star  /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles.star \
+  --iter 3 --max_iter 1 \
+  --gt_volume /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/reference_gt.mrc \
+  --output_dir /scratch/gpfs/GILLES/mg6942/_agent_scratch/em_parity_check
+```
+Pass criterion: `Final half[12] vs RELION it004 corr ≥ 0.999`. The script
+prints the provenance banner and asserts the parity-fix commits are in
+HEAD's ancestry; if it exits 2, the worktree is on the wrong branch.
+
+When the new EM-parity regression tests land
+(`tests/integration/test_em_parity_fast.py` and
+`tests/long_test/test_em_parity_long.py`), run those via Slurm before
+shipping. They are scoped to EM only — do not pull in `--long-test` flags
+that would sweep the rest of the suite.
 
 Use local GPUs only for short checks after `nvidia-smi` confirms an idle
-device. Use Slurm for long, slow, GPU, integration, or PR-gating jobs. Keep
-scratch roots under `/scratch/gpfs/GILLES/mg6942/`.
+device. Use Slurm for any test ≥ a few minutes or any multi-iter parity
+job. Keep all scratch under `/scratch/gpfs/GILLES/mg6942/`.
 
 ## RELION Conventions
 

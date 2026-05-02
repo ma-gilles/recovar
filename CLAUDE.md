@@ -114,6 +114,20 @@ touches `recovar/em/`.
 
 ## Before Pushing / Creating a PR — MANDATORY
 
+**Scope first. Pick the right rule for your PR:**
+
+- **EM / refinement / initial-volume PRs** (any change confined to
+  `recovar/em/`, the parity scripts, or EM-only tests): follow the EM-scoped
+  test set in `recovar/em/CLAUDE.md`. **Do NOT run the full long-test or
+  `extract_regression_tables.py`** — those measure SPA/ET pipeline metrics
+  that EM-only changes do not move and cost hours of GPU time per run. The
+  EM CLAUDE.md explicitly forbids them for this scope.
+- **Cross-cutting / non-EM PRs** (touching `heterogeneity/`, `commands/`,
+  `output/`, `data_io/`, `reconstruction/` outside EM use, GUI, or CI):
+  follow the long-test rule below.
+
+### Long-test rule (cross-cutting / non-EM PRs only)
+
 1. Rebase on `dev`: `git fetch origin && git rebase origin/dev`
 2. Run the **full long-test suite** via parallel Slurm submission:
    ```bash
@@ -126,10 +140,19 @@ touches `recovar/em/`.
 4. If any test fails → **do not push**. Fix and resubmit.
 5. Only push and create PR after **all tests pass including long-test**.
 
-## PR Description — MANDATORY Format
+If a PR genuinely touches both EM and non-EM code, ask the user whether
+to expand to the long-test before running it. Don't run it speculatively.
 
-Every PR description **must** include quality and performance comparison
-tables extracted from the long-test results. Run:
+## PR Description — MANDATORY Format (cross-cutting / non-EM PRs)
+
+For EM-scoped PRs, paste the EM-parity result table from
+`scripts/run_multi_iter_parity.py` (or the new EM-parity regression test
+ledgers under `tests/baselines/em_parity_*`) instead of the SPA/ET tables.
+The long-test extractor below is for cross-cutting PRs only.
+
+For cross-cutting / non-EM PRs, every PR description **must** include
+quality and performance comparison tables extracted from the long-test
+results. Run:
 ```bash
 pixi run python scripts/extract_regression_tables.py
 ```
