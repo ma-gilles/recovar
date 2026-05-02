@@ -135,6 +135,12 @@ def run_kclass(spec: BenchSpec, cryo, gt_vols: np.ndarray) -> dict:
     t_total0 = time.time()
     for it in range(spec.em_iters):
         t0 = time.time()
+        # The dense k-class engine's defaults (image_batch_size=500,
+        # rotation_block_size=5000) are tuned for 128³; at 256³ × 10
+        # classes they OOM the H100. Use the benchmark spec's smaller
+        # knobs instead. projection_padding=1 disables RELION-style pf=2
+        # gridding correction, which is fine for an apples-to-apples
+        # benchmark run that doesn't compare to RELION directly.
         result = run_dense_k_class_em(
             cryo,
             means,
@@ -143,6 +149,10 @@ def run_kclass(spec: BenchSpec, cryo, gt_vols: np.ndarray) -> dict:
             rotations,
             translations,
             disc_type="linear_interp",
+            image_batch_size=spec.image_batch_size,
+            rotation_block_size=spec.rotation_block_size,
+            projection_padding_factor=1,
+            reconstruction_padding_factor=1,
         )
         means = jnp.asarray(result.new_means)
         per_iter_walls.append(time.time() - t0)
