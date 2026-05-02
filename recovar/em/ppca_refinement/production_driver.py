@@ -72,25 +72,21 @@ def _project_theta_aug_to_block(theta_aug_full, rotations_block, image_shape, vo
     """Project ``theta_aug [P, vol_size]`` onto a rotation block, returning
     ``proj_aug [R, P, F]`` half-spectrum images.
 
-    Loops over P (small) and uses ``core.slice_volume`` for each
-    component. Could be batched via ``vmap``; for simplicity we keep
-    the explicit loop here.
+    Uses ``core.batch_slice_volume`` to vmap slice_volume over the
+    leading P axis (or use the CUDA batched kernel when available) — a
+    single fused kernel call instead of P launches.
     """
-    P = theta_aug_full.shape[0]
-    R = rotations_block.shape[0]
-    proj_per_p = []
-    for p in range(P):
-        proj = core.slice_volume(
-            theta_aug_full[p],
-            rotations_block,
+    return jnp.transpose(
+        core.batch_slice_volume(
+            theta_aug_full,  # [P, vol_size]
+            rotations_block,  # [R, 3, 3]
             image_shape,
             volume_shape,
             disc_type,
             half_image=True,
-        )
-        # proj shape: (R, F)
-        proj_per_p.append(proj)
-    return jnp.stack(proj_per_p, axis=1)  # (R, P, F)
+        ),  # → [P, R, F]
+        (1, 0, 2),  # → [R, P, F]
+    )
 
 
 def _build_Y1_for_block(

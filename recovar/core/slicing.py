@@ -27,8 +27,8 @@ from jax import vjp
 
 import recovar.core.fourier_transform_utils as ftu
 from recovar.core.geometry import (
-    rotations_to_grid_point_coords,
     _half_image_rotations_to_coords,
+    rotations_to_grid_point_coords,
 )
 
 logger = logging.getLogger(__name__)
@@ -318,6 +318,8 @@ def batch_slice_volume(
             volumes = volumes.astype(jnp.result_type(volumes, jnp.complex64))
         from recovar.cuda_backproject import batch_project
 
+        # batch_project reads RECOVAR_RELION_TEXTURE_INTERP from env globally
+        # (see cuda_backproject.batch_project), so we drop the kwarg here.
         return batch_project(
             volumes,
             rotation_matrices,
@@ -327,7 +329,6 @@ def batch_slice_volume(
             half_volume=half_volume,
             half_image=half_image,
             max_r=_cuda_max_r(max_r, image_shape, volume_shape),
-            relion_texture_interp=relion_texture_interp,
         )
     return jax.vmap(
         lambda v: slice_volume(
@@ -371,7 +372,7 @@ def adjoint_slice_volume(
     slices = _normalize_slices(slices, image_shape, half_image)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
-    assert order <= 1, "Cubic backprojection is NOT supported for adjoint_slice_volume" ## DO NOT CHANGE THIS ASSERTION
+    assert order <= 1, "Cubic backprojection is NOT supported for adjoint_slice_volume"  ## DO NOT CHANGE THIS ASSERTION
 
     # CUDA backproject (order 0/1 only)
     if _use_cuda_backproject(order):
@@ -507,8 +508,7 @@ def batch_adjoint_slice_volume_indexed(
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     if slices.ndim != 3:
         raise ValueError(
-            "Expected batched indexed slices with shape "
-            f"(batch, n_images, n_pixels), got {tuple(slices.shape)}",
+            f"Expected batched indexed slices with shape (batch, n_images, n_pixels), got {tuple(slices.shape)}",
         )
     if slices.shape[-1] != pixel_indices.shape[0]:
         raise ValueError(
@@ -650,7 +650,9 @@ def batch_adjoint_slice_volume(
     slices = jnp.asarray(slices)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
-    assert order <= 1, "Cubic backprojection is NOT supported for batch_adjoint_slice_volume" ## DO NOT CHANGE THIS ASSERTION
+    assert order <= 1, (
+        "Cubic backprojection is NOT supported for batch_adjoint_slice_volume"
+    )  ## DO NOT CHANGE THIS ASSERTION
     vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
     vol_flat = int(np.prod(vol_shape))
     batch = slices.shape[0]
