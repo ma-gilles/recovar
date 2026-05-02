@@ -437,6 +437,10 @@ def _run_pose_marginal_full_pipeline(spec: CellSpec, bundle, out_dir: Path):
             with mrcfile.new(str(iter_dir / f"W_{k:02d}_score.mrc"), overwrite=True) as mrc:
                 mrc.set_data(np.asarray(st.W_score[k], dtype=np.float32))
                 mrc.voxel_size = cryo.voxel_size
+        # Persist iter_log incrementally so partial runs (job killed,
+        # OOM, manual cancel) still leave usable diagnostics on disk.
+        with (out_dir / "iter_log.pkl").open("wb") as fh:
+            pickle.dump(iter_log_for_dump, fh)
 
     t0 = time.time()
     final_state, _ = run_pose_marginal_refinement(
