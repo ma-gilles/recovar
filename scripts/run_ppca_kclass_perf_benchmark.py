@@ -60,21 +60,24 @@ class BenchSpec:
 
 
 def load_cryoem_dataset(spec: BenchSpec):
-    """Load the prepared parity dataset as a CryoEMDataset, downsample
-    if the user requests a smaller grid than the on-disk particles."""
+    """Load the prepared parity dataset as a CryoEMDataset.
+
+    The benchmark always uses the on-disk grid (256³); ``spec.grid_size``
+    is read from the dataset rather than passed in. ``downsample_D`` is
+    only used if the caller requests a smaller grid than what's on disk.
+    """
     from recovar.data_io.cryoem_dataset import load_dataset
 
     star = spec.data_dir / "particles.star"
-    cryo = load_dataset(
-        starfile=str(star),
-        ind=None,
-        grid_size=spec.grid_size,
-        padding=0,
-        lazy=True,
-        keep_real_in_memory=False,
+    if not star.exists():
+        raise FileNotFoundError(f"Dataset star not found: {star}")
+    return load_dataset(
+        particles_file=str(star),
         n_images=spec.n_images,
+        ind=None,
+        lazy=True,
+        padding=0,
     )
-    return cryo
 
 
 def load_gt_volumes(spec: BenchSpec) -> np.ndarray:
