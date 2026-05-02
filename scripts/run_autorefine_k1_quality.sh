@@ -143,5 +143,21 @@ with (out / "fsc_vs_gt.json").open("w") as fh:
 print(f"wrote {out/'fsc_vs_gt.json'}")
 PY
 
+echo "=== Comparison vs RELION auto-refine ==="
+RELION_REF_DIR="${RELION_REF_DIR:-$DATA_DIR/relion_ref_full_autorefine}"
+GT_MRC="${GT_MRC:-$DATA_DIR/reference_gt.mrc}"
+if [ -d "$RELION_REF_DIR" ] && [ -f "$GT_MRC" ]; then
+  pixi run python scripts/compare_recovar_relion_autorefine.py \
+    --mode k1 \
+    --recovar-dir "$OUTPUT_DIR" \
+    --relion-dir "$RELION_REF_DIR" \
+    --gt-mrc "$GT_MRC" \
+    --output "$OUTPUT_DIR/comparison.json"
+else
+  echo "Skipping comparison: RELION ref dir or GT mrc missing"
+  echo "  RELION_REF_DIR=$RELION_REF_DIR"
+  echo "  GT_MRC=$GT_MRC"
+fi
+
 echo "=== DONE ==="
 echo "Results: $OUTPUT_DIR"

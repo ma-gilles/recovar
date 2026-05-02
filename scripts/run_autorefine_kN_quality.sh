@@ -70,5 +70,19 @@ pixi run python scripts/run_kclass_autorefine_quality.py \
   --rotation-block-size "$ROTATION_BLOCK_SIZE" \
   $GS_FLAG
 
+echo "=== Comparison vs RELION Class3D auto-refine ==="
+RELION_REF_DIR="${RELION_REF_DIR:-$DATA_DIR/relion_class3d_k${N_CLASSES}_autorefine}"
+if [ -d "$RELION_REF_DIR" ] && [ -n "$(ls -A "$RELION_REF_DIR" 2>/dev/null)" ]; then
+  pixi run python scripts/compare_recovar_relion_autorefine.py \
+    --mode kN \
+    --recovar-dir "$OUTPUT_DIR" \
+    --relion-dir "$RELION_REF_DIR" \
+    --gt-dir "$DATA_DIR" \
+    --output "$OUTPUT_DIR/comparison.json"
+else
+  echo "Skipping comparison: RELION class3d ref missing at $RELION_REF_DIR"
+  echo "Run: sbatch scripts/run_relion_kN_class3d_autorefine.sh"
+fi
+
 echo "=== DONE ==="
 echo "Results: $OUTPUT_DIR/summary.json"
