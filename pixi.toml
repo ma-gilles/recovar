@@ -104,6 +104,9 @@ smoke-import-recovar = "python -c \"import recovar; print('recovar_import_ok')\"
 # Pytest tasks
 test-fast = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py"
 test-em-fast-guard = "bash ./scripts/run_em_fast_guard.sh"
+# EM-parity fast tier: K=1 + K-class 128² 5k replay vs RELION (~5-10 min on GPU).
+# Locks down kernel-level parity. Required before any EM-only PR.
+test-em-parity-fast = "python -m pytest -v -s --run-slow --run-integration --run-gpu tests/integration/test_em_parity_fast.py"
 test-fast-marching-native = "python -m pytest tests/unit/test_fast_marching.py tests/unit/test_fast_marching_native.py -q"
 test-smoke = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run-integration -k smoke"
 test-gpu = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run-gpu"

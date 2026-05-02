@@ -173,11 +173,40 @@ Pass criterion: `Final half[12] vs RELION it004 corr ≥ 0.999`. The script
 prints the provenance banner and asserts the parity-fix commits are in
 HEAD's ancestry; if it exits 2, the worktree is on the wrong branch.
 
-When the new EM-parity regression tests land
-(`tests/integration/test_em_parity_fast.py` and
-`tests/long_test/test_em_parity_long.py`), run those via Slurm before
-shipping. They are scoped to EM only — do not pull in `--long-test` flags
-that would sweep the rest of the suite.
+EM-parity regression tests (locked-down kernel-level RELION parity):
+
+Fast tier (~5–10 min on a single GPU; required before any EM-only PR push):
+```bash
+pixi run test-em-parity-fast
+# Equivalent: pixi run python -m pytest -v -s --run-slow --run-integration \
+#   --run-gpu tests/integration/test_em_parity_fast.py
+```
+Tests `test_em_parity_fast_k1_replay` (5k 128² K=1 iter 3→4 vs RELION
+it004) and `test_em_parity_fast_kclass_replay` (5k 128² K=2 iter 0→1 vs
+RELION Class3D run_it001). Both check the worktree provenance gate first
+via `recovar.utils.parity_provenance.assert_parity_ancestors`. Quality
+ledgers are written to `tests/baselines/em_parity_quality_fast_ledger_*.json`.
+
+EM-long tier (~2–4 hr per case; submit via Slurm only):
+```bash
+./scripts/run_em_parity_long_slurm.sh           # submit and exit
+./scripts/run_em_parity_long_slurm.sh --watch   # submit and tail logs
+```
+This runs `test_em_parity_long_k1_full` (50k 256² K=1 15-iter ab-initio)
+and `test_em_parity_long_kclass_full` (50k 256² K=4 15-iter) on parallel
+GPU jobs and writes the combined report to the Slurm scratch dir.
+
+The EM-long tier uses the dedicated `--em-parity-long` pytest flag and
+the `em_parity_long` marker so it stays disjoint from the project-wide
+`--long-test` (which is forbidden for EM-only PRs).
+
+For PR descriptions on EM-only branches, paste the EM-parity tables:
+```bash
+pixi run python scripts/extract_em_parity_tables.py            # both tiers
+pixi run python scripts/extract_em_parity_tables.py --tier fast
+```
+Do NOT use `scripts/extract_regression_tables.py` (that one is for the
+SPA/ET pipeline regressions — different scope).
 
 Use local GPUs only for short checks after `nvidia-smi` confirms an idle
 device. Use Slurm for any test ≥ a few minutes or any multi-iter parity

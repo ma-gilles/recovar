@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -98,6 +97,17 @@ def pytest_addoption(parser):
             "first run. Set LONG_METRICS_OUTPUT_BASE=/scratch/... to redirect large outputs."
         ),
     )
+    parser.addoption(
+        "--em-parity-long",
+        action="store_true",
+        default=False,
+        help=(
+            "run EM-long parity regression tests (256² 50k full ab-initio K=1 / K=4 "
+            "vs RELION). Disjoint from --long-test by design: those tests measure "
+            "SPA/ET pipeline metrics that EM-only changes do not move, and cost "
+            "hours of GPU time per run. Implies --run-gpu and --run-integration."
+        ),
+    )
 
 
 def pytest_configure(config):
@@ -112,10 +122,16 @@ def pytest_configure(config):
         "long_test: long quality regression tests (cryo-EM SPA, cryo-ET, outliers, "
         "with/without indices); requires --long-test flag; volumes generated synthetically",
     )
+    config.addinivalue_line(
+        "markers",
+        "em_parity_long: EM-long parity regression tests (256² 50k full ab-initio "
+        "K=1 / K=4 vs RELION); requires --em-parity-long flag and a GPU; ~2-4 hr per case",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
     run_long_test = config.getoption("--long-test")
+    run_em_parity_long = config.getoption("--em-parity-long")
     # --long-test implies all the sub-flags so long tests are not doubly skipped
     run_slow = config.getoption("--run-slow") or run_long_test
     # Auto-detect GPU: run gpu-marked tests whenever a GPU is available,
@@ -123,11 +139,12 @@ def pytest_collection_modifyitems(config, items):
     gpu_available = False
     try:
         import jax
+
         gpu_available = any(d.platform == "gpu" for d in jax.devices())
     except Exception:
         pass
-    run_gpu = config.getoption("--run-gpu") or run_long_test or gpu_available
-    run_integration = config.getoption("--run-integration") or run_long_test
+    run_gpu = config.getoption("--run-gpu") or run_long_test or run_em_parity_long or gpu_available
+    run_integration = config.getoption("--run-integration") or run_long_test or run_em_parity_long
     run_tiny_metrics = config.getoption("--run-tiny-metrics")
 
     skip_slow = pytest.mark.skip(reason="need --run-slow to run")
@@ -135,6 +152,7 @@ def pytest_collection_modifyitems(config, items):
     skip_integration = pytest.mark.skip(reason="need --run-integration to run")
     skip_tiny_metrics = pytest.mark.skip(reason="need --run-tiny-metrics to run")
     skip_long_test = pytest.mark.skip(reason="need --long-test to run")
+    skip_em_parity_long = pytest.mark.skip(reason="need --em-parity-long to run")
 
     for item in items:
         if "slow" in item.keywords and not run_slow:
@@ -147,6 +165,8 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_tiny_metrics)
         if "long_test" in item.keywords and not run_long_test:
             item.add_marker(skip_long_test)
+        if "em_parity_long" in item.keywords and not run_em_parity_long:
+            item.add_marker(skip_em_parity_long)
 
 
 @pytest.fixture(autouse=True)
