@@ -153,6 +153,32 @@ If we are above these budgets we adopt **D10 (adaptive oversampling)**
 before re-running — RELION's standard escape valve when high-confidence
 images dominate later iters.
 
+### Measured per-iter wall (Slurm 7581168, dense k-class on 256³ × 100k × 10 cls)
+
+The above estimates were too optimistic. Measured single-iter wall on
+H100 with the OOM-safe knobs (``image_batch_size=16,
+rotation_block_size=64, projection_padding=1``):
+
+| Phase | Wall |
+|---|---:|
+| iter 0 (JIT compile + first per-batch) | **~58 min** |
+| iter 1+ (cache warm — projected) | ~20-30 min |
+| **15-iter total** | **~7-8 h** |
+
+**Per-iter cost breakdown (back-of-envelope):**
+
+  100 000 images / batch_size=16 = 6250 batches
+  × ⌈4608 rotations / 64⌉ = 72 rotation blocks per batch
+  = 450 000 engine calls per iter
+  × ~8 ms / call (256² × 10 classes × 64 rotations on H100, JIT-warm)
+  ≈ **3 600 s ≈ 60 min per iter**
+
+This bounds the realistic budget. **D10 (adaptive oversampling)** is
+the right next perf lever: the engine currently scores all 4608 rotations
+× 29 translations on every image, even ones whose pose is high-confidence
+after iter 2. RELION's `--oversampling 0` plus significance pruning
+typically cuts the iter wall 4-8× on converged images.
+
 ---
 
 ## 3. Execution plan
