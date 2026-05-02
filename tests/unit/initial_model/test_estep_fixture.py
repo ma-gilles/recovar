@@ -40,9 +40,62 @@ requires_fixture = pytest.mark.skipif(
 )
 
 
-def _read_iter0_sigma2(n_shells: int) -> np.ndarray:
+def test_relion_sorted_particle_ids_map_through_natural_micrograph_order():
+    from recovar.em.initial_model.gpu_pipeline import (
+        _split_halfset_particle_ids,
+        relion_sorted_particle_ids_to_dataset_ids,
+    )
+
+    micrograph_names = np.array(["1", "2", "10", "3"])
+    # RELION's dump stores positions in lexicographic micrograph order:
+    # natural STAR rows are [0, 2, 1, 3].
+    relion_sorted = np.array([1, 0, 3, 2])
+
+    mapped = relion_sorted_particle_ids_to_dataset_ids(
+        4,
+        micrograph_names=micrograph_names,
+        sorted_particle_ids=relion_sorted,
+    )
+
+    np.testing.assert_array_equal(mapped, np.array([2, 0, 3, 1]))
+    h0, h1 = _split_halfset_particle_ids(
+        4,
+        micrograph_names=micrograph_names,
+        sorted_particle_ids=relion_sorted,
+    )
+    np.testing.assert_array_equal(h0, np.array([2, 3]))
+    np.testing.assert_array_equal(h1, np.array([0, 1]))
+
+
+def test_bpref_converter_uses_relion_axis_order():
+    from recovar.em.initial_model.gpu_pipeline import bpref_to_run_em_output, run_em_output_to_bpref
+
+    ori = 8
+    r_max = 1
+    half_ps = r_max + 1
+    center = ori // 2
+    ft_y = np.arange(ori**3, dtype=np.float64).reshape(ori, ori, ori).astype(np.complex128)
+    ft_ctf = np.arange(ori**3, dtype=np.float64).reshape(ori, ori, ori)
+
+    bp_data, bp_weight = run_em_output_to_bpref(ft_y, ft_ctf, ori, r_max)
+    relion_slice = (
+        slice(center, center + half_ps + 1),
+        slice(center - half_ps, center + half_ps + 1),
+        slice(center - half_ps, center + half_ps + 1),
+    )
+
+    np.testing.assert_array_equal(bp_data, np.transpose(ft_y[relion_slice], (2, 1, 0)))
+    np.testing.assert_array_equal(bp_weight, np.transpose(ft_ctf[relion_slice], (2, 1, 0)))
+
+    ft_y_rt, ft_ctf_rt = bpref_to_run_em_output(bp_data, bp_weight, ori, r_max)
+    bp_data_rt, bp_weight_rt = run_em_output_to_bpref(ft_y_rt, ft_ctf_rt, ori, r_max)
+    np.testing.assert_array_equal(bp_data_rt, bp_data)
+    np.testing.assert_array_equal(bp_weight_rt, bp_weight)
+
+
+def _read_iter0_sigma2(n_shells: int, run_dir: Path = FIXTURE_DIR) -> np.ndarray:
     """Parse sigma2_noise group 1 from run_it000_model.star."""
-    txt = (FIXTURE_DIR / "run_it000_model.star").read_text()
+    txt = (run_dir / "run_it000_model.star").read_text()
     m = re.search(r"data_model_optics_group_1\n(.*?)(?:\ndata_)", txt, re.DOTALL)
     if not m:
         raise RuntimeError("could not find data_model_optics_group_1")
@@ -55,6 +108,16 @@ def _read_iter0_sigma2(n_shells: int) -> np.ndarray:
             except ValueError:
                 continue
     return values
+
+
+def _read_model_general_scalar(model_star: Path, name: str) -> float:
+    """Parse a scalar from a RELION model.star general table."""
+
+    txt = model_star.read_text()
+    m = re.search(rf"_{name}\s+([-+0-9.eE]+)", txt)
+    if not m:
+        raise RuntimeError(f"could not find _{name} in {model_star}")
+    return float(m.group(1))
 
 
 def _read_iter1_pmax_mean() -> float:
@@ -178,10 +241,14 @@ def test_estep_pmax_matches_relion_iter1():
 import struct as _struct  # noqa: E402
 
 RELION_DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_debug_dump")
+COHERENT_RELION_RUN_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_run_small")
+COHERENT_RELION_ESTEP_DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
 requires_estep_dumps = pytest.mark.skipif(
     not (
         FIXTURE_DIR.exists()
         and PARTICLES_STAR.exists()
+        and COHERENT_RELION_RUN_DIR.exists()
+        and COHERENT_RELION_ESTEP_DUMP_DIR.exists()
         and (RELION_DUMP_DIR / "pipe_it1_c0_bp_data_pre_reweight.bin").exists()
     ),
     reason="iter-1 E-step BPref dumps not present",
@@ -274,14 +341,14 @@ def test_estep_bpref_forward_parity():
     # with the matching kwargs below.
     from recovar.utils.helpers import load_relion_volume
 
-    iref_real = np.asarray(load_relion_volume(str(FIXTURE_DIR / "run_it000_class001.mrc")), dtype=np.float64)
-    sigma2 = _read_iter0_sigma2(ori // 2 + 1)
+    iref_real = np.asarray(load_relion_volume(str(COHERENT_RELION_RUN_DIR / "run_it000_class001.mrc")), dtype=np.float64)
+    sigma2 = _read_iter0_sigma2(ori // 2 + 1, COHERENT_RELION_RUN_DIR)
 
     # Iter-1 sampling: prefer RELION's exact dumped post-perturbation grid;
     # fall back to constructed grid otherwise.
-    sampling_star = FIXTURE_DIR / "run_it001_sampling.star"
+    sampling_star = COHERENT_RELION_RUN_DIR / "run_it001_sampling.star"
     random_perturbation, _perturbation_factor = read_relion_perturbation_from_sampling_star(str(sampling_star))
-    relion_estep_dump = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
+    relion_estep_dump = COHERENT_RELION_ESTEP_DUMP_DIR
     eulers_bin = relion_estep_dump / "p0_oversampled_eulers.bin"
     trans_bin = relion_estep_dump / "p0_oversampled_translations.bin"
     if eulers_bin.exists() and trans_bin.exists():
@@ -322,9 +389,13 @@ def test_estep_bpref_forward_parity():
     # bespoke iter-1 recipe (gridding + /N² + sign-flip): with run_em's
     # internal gridding only firing at projection_padding_factor > 1 and
     # InitialModel/VDAM using `--pad 1`, we need to apply it externally.
-    # The Gaussian translation prior is read from `_rlnSigmaOffsetsAngst` in
-    # run_it001_model.star (≈ 6.4 Å on this fixture).
-    sigma_offset_Ang = 6.398173
+    # Iter-1 scoring uses the previous model's offset sigma. The coherent
+    # RELION dump reports sigma2_offset=100, i.e. sigma_offset=10 Å, from
+    # run_it000_model.star.
+    sigma_offset_Ang = _read_model_general_scalar(
+        COHERENT_RELION_RUN_DIR / "run_it000_model.star",
+        "rlnSigmaOffsetsAngst",
+    )
     iref_for_wrapper = iref_real.copy()
     iref_next, Igrad1, Igrad2, stats_dict = run_iter_gpu_vdam(
         ds,
@@ -347,19 +418,14 @@ def test_estep_bpref_forward_parity():
         sigma_offset_Ang=sigma_offset_Ang,
         accumulate_noise=False,
         sparse_pass2=True,
+        adaptive_random_perturbation=random_perturbation,
         micrograph_names=mic_names,
     )
     intermediates = stats_dict["intermediates"]
 
-    # Apply the BPref-frame correction (`-N²` for bp_data, `N⁴` for bp_weight)
-    # to bring recovar's centered Ft_y / Ft_ctf into RELION's BPref slab frame.
-    n2 = float(ori) ** 2
-    n4 = float(ori) ** 4
-    # `run_iter_gpu_vdam` applies the BPref-frame correction (-N² on
-    # bp_data, N⁴ on bp_weight) before feeding the M-step chain (so the
-    # vdam_* C++ chain receives RELION-native frame inputs that match its
-    # +0.9999 pinned test). The intermediates exposed via stats_dict are
-    # therefore already in RELION-native frame for direct comparison.
+    # RELION-adaptive E-step accumulates directly in RELION's BPref frame.
+    # The intermediates exposed via stats_dict are therefore ready for direct
+    # comparison against RELION's pre-reweight BPref dumps.
     bp_data_h0 = np.asarray(intermediates["bp_data_h0"])
     bp_data_h1 = np.asarray(intermediates["bp_data_h1"])
     bp_weight_h0 = np.asarray(intermediates["bp_weight_h0"])
@@ -385,12 +451,7 @@ def test_estep_bpref_forward_parity():
 
     cc_h0 = _cc(bp_data_h0, target_bp_data_h0)
     cc_h1 = _cc(bp_data_h1, target_bp_data_h1)
-    print(f"\n  near-parity gate cc_h0={cc_h0:+.4f}, cc_h1={cc_h1:+.4f} (gate: > +0.7)")
+    print(f"\n  near-parity gate cc_h0={cc_h0:+.4f}, cc_h1={cc_h1:+.4f} (gate: > +0.99)")
 
-    # Per-kernel near-parity ceiling on this iter-1 small fixture is ~+0.73
-    # (memory `project_initial_model_estep_diag_2026_04_26.md`). Going below
-    # this regress threshold means parameter alignment to standard E-M (gridding,
-    # /N², sign-flip, RELION-sorted halfsets, masked Fimg, gaussian score mode,
-    # Gaussian translation prior) was unintentionally undone.
-    assert cc_h0 > 0.7, f"BPref h0 CC regressed: {cc_h0:.4f} (post-rebase baseline ≈ +0.73)"
-    assert cc_h1 > 0.7, f"BPref h1 CC regressed: {cc_h1:.4f}"
+    assert cc_h0 > 0.99, f"BPref h0 CC regressed: {cc_h0:.4f}"
+    assert cc_h1 > 0.99, f"BPref h1 CC regressed: {cc_h1:.4f}"

@@ -12,16 +12,16 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from recovar import core
 from recovar.core import mask as core_mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.padding as padding
 from recovar.em.dense_single_volume.helpers.adjoint import (
-    batch_adjoint_slice_volume_half as _batch_adjoint_slice_volume_half,
-    batch_adjoint_slice_volume_windowed as _batch_adjoint_slice_volume_windowed,
+    batch_adjoint_slice_volume_maybe_windowed as _batch_adjoint_slice_volume_maybe_windowed,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
+    DEFAULT_PROJECTION_MAX_R,
     compute_noise_block as _compute_noise_block,
+    project_half_spectrum,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.image_shifts import tiled_half_image_phase_factors
@@ -151,10 +151,10 @@ def _score_normalize_mstep(
         n_significant_samples = jnp.where(valid_image_mask, n_significant_samples, 0)
         reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
     else:
-        reconstruction_rotation_mask = rotation_mask & valid_image_mask[:, None]
-        reconstruction_sample_mask = jnp.broadcast_to(reconstruction_rotation_mask[:, :, None], probs.shape)
-        n_significant_samples = jnp.sum(reconstruction_rotation_mask, axis=1).astype(jnp.int32) * probs.shape[-1]
-        reconstruction_probs = probs
+        reconstruction_sample_mask = (rotation_mask[:, :, None] & sample_mask) & valid_image_mask[:, None, None]
+        reconstruction_rotation_mask = jnp.any(reconstruction_sample_mask, axis=-1)
+        n_significant_samples = jnp.sum(reconstruction_sample_mask, axis=(1, 2)).astype(jnp.int32)
+        reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
 
     probs_sum_t = jnp.sum(probs, axis=-1)
     reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
@@ -172,6 +172,102 @@ def _score_normalize_mstep(
         reconstruction_probs_sum_t,
         summed,
         ctf_probs,
+    )
+
+
+def _adjoint_local_mstep_volumes(
+    flat_summed,
+    flat_ctf_probs,
+    recon_window_indices,
+    flat_rotations,
+    Ft_y,
+    Ft_ctf,
+    image_shape,
+    recon_volume_shape,
+    disc_type,
+    *,
+    use_window: bool,
+    max_r,
+    disable_adjoint_y: bool,
+    disable_adjoint_ctf: bool,
+    relion_x_half_mstep: bool,
+):
+    """Apply enabled exact-local M-step adjoints without duplicating window branches."""
+
+    if not disable_adjoint_y and not disable_adjoint_ctf:
+        updated_volumes = _batch_adjoint_slice_volume_maybe_windowed(
+            jnp.stack([flat_summed, flat_ctf_probs], axis=0),
+            recon_window_indices,
+            flat_rotations,
+            jnp.stack([Ft_y, Ft_ctf], axis=0),
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            True,
+            True,
+            use_window=use_window,
+            max_r=max_r,
+            relion_x_half=relion_x_half_mstep,
+        )
+        return updated_volumes[0], updated_volumes[1]
+    if not disable_adjoint_y:
+        Ft_y = _batch_adjoint_slice_volume_maybe_windowed(
+            flat_summed[None, :, :],
+            recon_window_indices,
+            flat_rotations,
+            Ft_y[None, :],
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            True,
+            True,
+            use_window=use_window,
+            max_r=max_r,
+            relion_x_half=relion_x_half_mstep,
+        )[0]
+    if not disable_adjoint_ctf:
+        Ft_ctf = _batch_adjoint_slice_volume_maybe_windowed(
+            flat_ctf_probs[None, :, :],
+            recon_window_indices,
+            flat_rotations,
+            Ft_ctf[None, :],
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            True,
+            True,
+            use_window=use_window,
+            max_r=max_r,
+            relion_x_half=relion_x_half_mstep,
+        )[0]
+    return Ft_y, Ft_ctf
+
+
+def _project_local_half_spectrum(
+    mean_for_proj,
+    flat_rotations,
+    image_shape,
+    proj_volume_shape,
+    disc_type,
+    *,
+    projection_half_volume: bool,
+    projection_max_r,
+    projection_relion_texture_interp: bool,
+    projection_force_jax: bool,
+):
+    """Project local candidates with the requested exact-local interpolation contract."""
+
+    max_r = DEFAULT_PROJECTION_MAX_R if projection_max_r == "auto" else projection_max_r
+    return project_half_spectrum(
+        mean_for_proj,
+        flat_rotations,
+        image_shape,
+        proj_volume_shape,
+        disc_type,
+        half_volume=projection_half_volume,
+        max_r=max_r,
+        relion_texture_interp=projection_relion_texture_interp,
+        force_jax=projection_force_jax,
     )
 
 
@@ -195,6 +291,10 @@ def _score_normalize_mstep(
         "disc_type",
         "projection_half_volume",
         "projection_max_r",
+        "projection_relion_texture_interp",
+        "projection_force_jax",
+        "mstep_subtract_ctf_projection",
+        "mstep_relion_x_half",
         "disable_adjoint_y",
         "disable_adjoint_ctf",
         "accumulate_noise",
@@ -259,6 +359,10 @@ def run_local_bucket_big_jit(
     disc_type: str,
     projection_half_volume: bool,
     projection_max_r,
+    projection_relion_texture_interp: bool,
+    projection_force_jax: bool,
+    mstep_subtract_ctf_projection: bool,
+    mstep_relion_x_half: bool,
     disable_adjoint_y: bool,
     disable_adjoint_ctf: bool,
     accumulate_noise: bool,
@@ -270,8 +374,8 @@ def run_local_bucket_big_jit(
     """Run one exact-local bucket in a single compiled numeric boundary.
 
     The caller only enters this path for raw real-space image batches that can
-    use native half-rFFT preprocessing. Unsupported debug/profiling fallbacks
-    stay in ``local_em_engine``.
+    use native half-rFFT preprocessing. Debug dump paths that need intermediate
+    tensors stay in ``local_em_engine``.
     """
 
     if apply_integer_pre_shift:
@@ -354,27 +458,17 @@ def run_local_bucket_big_jit(
         score_half_weights = half_weights
 
     flat_rotations = local_rotations.reshape(local_rotations.shape[0] * local_rotations.shape[1], 3, 3)
-    if projection_max_r == "auto":
-        proj_half_flat = core.slice_volume(
-            mean_for_proj,
-            flat_rotations,
-            image_shape,
-            proj_volume_shape,
-            disc_type,
-            half_volume=projection_half_volume,
-            half_image=True,
-        )
-    else:
-        proj_half_flat = core.slice_volume(
-            mean_for_proj,
-            flat_rotations,
-            image_shape,
-            proj_volume_shape,
-            disc_type,
-            half_volume=projection_half_volume,
-            half_image=True,
-            max_r=projection_max_r,
-        )
+    proj_half_flat = _project_local_half_spectrum(
+        mean_for_proj,
+        flat_rotations,
+        image_shape,
+        proj_volume_shape,
+        disc_type,
+        projection_half_volume=projection_half_volume,
+        projection_max_r=projection_max_r,
+        projection_relion_texture_interp=projection_relion_texture_interp,
+        projection_force_jax=projection_force_jax,
+    )
     if use_window:
         proj_half = proj_half_flat[:, window_indices].reshape(
             batch_size,
@@ -451,86 +545,30 @@ def run_local_bucket_big_jit(
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
     )
+    if mstep_subtract_ctf_projection:
+        # RELION's VDAM/--grad storeWeightedSums backprojects
+        # (Fimg_shift_nomask - Frefctf) * CTF / sigma2.
+        frefctf_weighted = proj_for_noise * ctf2_over_nv_recon[:, None, :]
+        summed = summed - reconstruction_probs_sum_t[..., None] * frefctf_weighted
 
     flat_summed = summed.reshape(batch_size * local_rotations.shape[1], summed.shape[-1])
     flat_ctf_probs = ctf_probs.reshape(batch_size * local_rotations.shape[1], ctf_probs.shape[-1])
-    if not disable_adjoint_y and not disable_adjoint_ctf:
-        if use_window:
-            updated_volumes = _batch_adjoint_slice_volume_windowed(
-                jnp.stack([flat_summed, flat_ctf_probs], axis=0),
-                recon_window_indices,
-                flat_rotations,
-                jnp.stack([Ft_y, Ft_ctf], axis=0),
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                True,
-                projection_max_r,
-            )
-        else:
-            updated_volumes = _batch_adjoint_slice_volume_half(
-                jnp.stack([flat_summed, flat_ctf_probs], axis=0),
-                flat_rotations,
-                jnp.stack([Ft_y, Ft_ctf], axis=0),
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                True,
-            )
-        Ft_y = updated_volumes[0]
-        Ft_ctf = updated_volumes[1]
-    elif not disable_adjoint_y:
-        if use_window:
-            Ft_y = _batch_adjoint_slice_volume_windowed(
-                flat_summed[None, :, :],
-                recon_window_indices,
-                flat_rotations,
-                Ft_y[None, :],
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                True,
-                projection_max_r,
-            )[0]
-        else:
-            Ft_y = _batch_adjoint_slice_volume_half(
-                flat_summed[None, :, :],
-                flat_rotations,
-                Ft_y[None, :],
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                True,
-            )[0]
-    elif not disable_adjoint_ctf:
-        if use_window:
-            Ft_ctf = _batch_adjoint_slice_volume_windowed(
-                flat_ctf_probs[None, :, :],
-                recon_window_indices,
-                flat_rotations,
-                Ft_ctf[None, :],
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                True,
-                projection_max_r,
-            )[0]
-        else:
-            Ft_ctf = _batch_adjoint_slice_volume_half(
-                flat_ctf_probs[None, :, :],
-                flat_rotations,
-                Ft_ctf[None, :],
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                True,
-            )[0]
+    Ft_y, Ft_ctf = _adjoint_local_mstep_volumes(
+        flat_summed,
+        flat_ctf_probs,
+        recon_window_indices,
+        flat_rotations,
+        Ft_y,
+        Ft_ctf,
+        image_shape,
+        recon_volume_shape,
+        disc_type,
+        use_window=use_window,
+        max_r=projection_max_r,
+        disable_adjoint_y=disable_adjoint_y,
+        disable_adjoint_ctf=disable_adjoint_ctf,
+        relion_x_half_mstep=mstep_relion_x_half,
+    )
 
     if accumulate_noise:
         support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)

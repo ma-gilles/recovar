@@ -50,6 +50,8 @@ def _class_log_priors(n_classes: int, class_log_priors) -> np.ndarray:
     priors = np.asarray(class_log_priors, dtype=np.float64)
     if priors.shape != (n_classes,):
         raise ValueError(f"class_log_priors must have shape ({n_classes},), got {priors.shape}")
+    if not np.all(np.isfinite(priors)):
+        raise ValueError("class_log_priors must be finite")
     return priors
 
 
@@ -67,6 +69,96 @@ def _select_class_value(value, class_index: int, n_classes: int):
     if value_array.ndim >= 2 and int(value_array.shape[0]) == n_classes:
         return value_array[class_index]
     return value
+
+
+def _select_required_class_value(value, class_index: int, n_classes: int, name: str):
+    value_array = jnp.asarray(value)
+    if value_array.ndim < 2 or int(value_array.shape[0]) != n_classes:
+        raise ValueError(f"{name} must have leading class axis of length {n_classes}, got {value_array.shape}")
+    return value_array[class_index]
+
+
+def _dense_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_classes: int) -> dict:
+    kwargs = dict(engine_kwargs)
+    class_rotation_log_prior = kwargs.pop("class_rotation_log_prior", None)
+    if class_rotation_log_prior is not None:
+        if "rotation_log_prior" in kwargs and kwargs["rotation_log_prior"] is not None:
+            raise ValueError("Provide only one of rotation_log_prior or class_rotation_log_prior")
+        kwargs["rotation_log_prior"] = _select_required_class_value(
+            class_rotation_log_prior,
+            class_index,
+            n_classes,
+            "class_rotation_log_prior",
+        )
+    return kwargs
+
+
+def _local_layout_for_class(
+    local_layout: LocalHypothesisLayout,
+    class_local_rotation_log_prior,
+    class_index: int,
+    n_classes: int,
+) -> LocalHypothesisLayout:
+    if class_local_rotation_log_prior is None:
+        return local_layout
+    class_prior = np.asarray(
+        _select_required_class_value(
+            class_local_rotation_log_prior,
+            class_index,
+            n_classes,
+            "class_local_rotation_log_prior",
+        ),
+        dtype=np.float32,
+    ).reshape(-1)
+    if class_prior.shape != local_layout.rotation_log_priors_flat.shape:
+        raise ValueError(
+            "class_local_rotation_log_prior per-class values must have shape "
+            f"{local_layout.rotation_log_priors_flat.shape}, got {class_prior.shape}",
+        )
+    return LocalHypothesisLayout(
+        n_global_rotations=local_layout.n_global_rotations,
+        n_pixels=local_layout.n_pixels,
+        n_psi=local_layout.n_psi,
+        rotation_offsets=local_layout.rotation_offsets,
+        rotation_ids_flat=local_layout.rotation_ids_flat,
+        rotations_flat=local_layout.rotations_flat,
+        rotation_log_priors_flat=class_prior,
+        rotation_counts=local_layout.rotation_counts,
+        translation_grid=local_layout.translation_grid,
+        translation_log_priors=local_layout.translation_log_priors,
+        rotation_posterior_ids_flat=local_layout.rotation_posterior_ids_flat,
+        sample_mask_flat=local_layout.sample_mask_flat,
+    )
+
+
+def _select_local_layout_for_class(
+    local_layout,
+    class_local_rotation_log_prior,
+    class_index: int,
+    n_classes: int,
+) -> LocalHypothesisLayout:
+    if isinstance(local_layout, (list, tuple)):
+        if len(local_layout) != n_classes:
+            raise ValueError(f"local_layout must contain {n_classes} per-class layouts, got {len(local_layout)}")
+        if class_local_rotation_log_prior is not None:
+            raise ValueError("class_local_rotation_log_prior is redundant with per-class local layouts")
+        return local_layout[class_index]
+    return _local_layout_for_class(
+        local_layout,
+        class_local_rotation_log_prior,
+        class_index,
+        n_classes,
+    )
+
+
+def _dataset_image_count(experiment_dataset, fallback: int | None = None) -> int:
+    if hasattr(experiment_dataset, "n_units"):
+        return int(experiment_dataset.n_units)
+    if hasattr(experiment_dataset, "n_images"):
+        return int(experiment_dataset.n_images)
+    if fallback is not None:
+        return int(fallback)
+    raise AttributeError("experiment_dataset must expose n_units or n_images")
 
 
 def _reject_kwargs(kwargs: dict, names: tuple[str, ...], caller: str) -> None:
@@ -168,7 +260,7 @@ def _assemble_result(
         [np.asarray(stats.max_posterior_per_image, dtype=np.float64) for stats in per_class_stats],
         axis=0,
     )
-    class_assignments = np.argmax(class_responsibilities, axis=0).astype(np.int32)
+    class_assignments = np.argmax(best_scores, axis=0).astype(np.int32)
     image_indices = np.arange(class_assignments.shape[0])
     pose_assignments = np.asarray(per_class_hard_assignments)[class_assignments, image_indices]
     rotation_posterior_sums = jnp.sum(
@@ -251,9 +343,11 @@ def run_dense_k_class_em(
     means_array = _as_class_means(means)
     n_classes = int(means_array.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
+    base_engine_kwargs = dict(engine_kwargs)
 
     class_log_evidence = []
     for class_index in range(n_classes):
+        class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
         probe = run_em(
             experiment_dataset,
             means_array[class_index],
@@ -267,7 +361,7 @@ def run_dense_k_class_em(
             class_log_prior=float(log_priors[class_index]),
             disable_adjoint_y=True,
             disable_adjoint_ctf=True,
-            **engine_kwargs,
+            **class_engine_kwargs,
         )
         class_log_evidence.append(np.asarray(probe[4].log_evidence_per_image, dtype=np.float64))
 
@@ -281,6 +375,7 @@ def run_dense_k_class_em(
     per_class_stats = []
     per_class_noise = [] if accumulate_noise else None
     for class_index in range(n_classes):
+        class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
         output = run_em(
             experiment_dataset,
             means_array[class_index],
@@ -293,7 +388,7 @@ def run_dense_k_class_em(
             accumulate_noise=accumulate_noise,
             class_log_prior=float(log_priors[class_index]),
             normalization_log_evidence=global_log_evidence,
-            **engine_kwargs,
+            **class_engine_kwargs,
         )
         new_mean, hard_assignment, class_Ft_y, class_Ft_ctf, stats, noise = _dense_outputs(
             output,
@@ -329,6 +424,8 @@ def run_local_k_class_em(
     class_log_priors=None,
     accumulate_noise: bool = False,
     return_best_pose_details: bool = False,
+    class_log_evidence=None,
+    normalization_log_evidence=None,
     **engine_kwargs,
 ) -> KClassEMResult:
     """Run exact-local K-class EM using ``run_local_em_exact`` for all kernels."""
@@ -338,7 +435,6 @@ def run_local_k_class_em(
         (
             "accumulate_noise",
             "class_log_prior",
-            "normalization_log_evidence",
             "normalization_log_z",
             "disable_adjoint_y",
             "disable_adjoint_ctf",
@@ -349,28 +445,75 @@ def run_local_k_class_em(
     )
     means_array = _as_class_means(means)
     n_classes = int(means_array.shape[0])
+    fallback_n_images = local_layout[0].n_images if isinstance(local_layout, (list, tuple)) else local_layout.n_images
+    n_images = _dataset_image_count(experiment_dataset, fallback=fallback_n_images)
     log_priors = _class_log_priors(n_classes, class_log_priors)
+    base_engine_kwargs = dict(engine_kwargs)
+    class_local_rotation_log_prior = base_engine_kwargs.pop("class_local_rotation_log_prior", None)
 
-    class_log_evidence = []
-    for class_index in range(n_classes):
-        probe = run_local_em_exact(
-            experiment_dataset,
-            means_array[class_index],
-            _select_class_value(mean_variance, class_index, n_classes),
-            _select_class_value(noise_variance, class_index, n_classes),
-            local_layout,
-            disc_type,
-            accumulate_noise=False,
-            return_best_pose_details=False,
-            class_log_prior=float(log_priors[class_index]),
-            disable_adjoint_y=True,
-            disable_adjoint_ctf=True,
-            **engine_kwargs,
-        )
-        class_log_evidence.append(np.asarray(probe[3].log_evidence_per_image, dtype=np.float64))
+    class_log_evidence_np = None
+    if class_log_evidence is not None:
+        class_log_evidence_np = np.asarray(class_log_evidence, dtype=np.float64)
+        if class_log_evidence_np.shape != (n_classes, n_images):
+            raise ValueError(
+                "class_log_evidence must have shape "
+                f"({n_classes}, {n_images}), got {class_log_evidence_np.shape}",
+            )
+    normalization_log_evidence_np = None
+    if normalization_log_evidence is not None:
+        normalization_log_evidence_np = np.asarray(normalization_log_evidence, dtype=np.float64)
+        if normalization_log_evidence_np.shape != (n_images,):
+            raise ValueError(
+                f"normalization_log_evidence must have shape ({n_images},), "
+                f"got {normalization_log_evidence_np.shape}",
+            )
+    if class_log_evidence_np is not None:
+        if normalization_log_evidence_np is None:
+            normalization_log_evidence_np = _logsumexp_np(class_log_evidence_np, axis=0)
+        if class_log_evidence_np.shape[1] != normalization_log_evidence_np.shape[0]:
+            raise ValueError(
+                "class_log_evidence and normalization_log_evidence image axes disagree: "
+                f"{class_log_evidence_np.shape[1]} vs {normalization_log_evidence_np.shape[0]}",
+            )
 
-    class_log_evidence_np = np.stack(class_log_evidence, axis=0)
+    if class_log_evidence_np is None:
+        class_log_evidence = []
+        for class_index in range(n_classes):
+            class_layout = _select_local_layout_for_class(
+                local_layout,
+                class_local_rotation_log_prior,
+                class_index,
+                n_classes,
+            )
+            probe = run_local_em_exact(
+                experiment_dataset,
+                means_array[class_index],
+                _select_class_value(mean_variance, class_index, n_classes),
+                _select_class_value(noise_variance, class_index, n_classes),
+                class_layout,
+                disc_type,
+                accumulate_noise=False,
+                return_best_pose_details=False,
+                class_log_prior=float(log_priors[class_index]),
+                disable_adjoint_y=True,
+                disable_adjoint_ctf=True,
+                **base_engine_kwargs,
+            )
+            class_log_evidence.append(np.asarray(probe[3].log_evidence_per_image, dtype=np.float64))
+        class_log_evidence_np = np.stack(class_log_evidence, axis=0)
+        normalization_log_evidence_np = _logsumexp_np(class_log_evidence_np, axis=0)
+    else:
+        for class_index in range(n_classes):
+            _select_local_layout_for_class(
+                local_layout,
+                class_local_rotation_log_prior,
+                class_index,
+                n_classes,
+            )
+
     global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
+    if normalization_log_evidence_np is not None:
+        global_log_evidence = normalization_log_evidence_np
 
     Ft_y = []
     Ft_ctf = []
@@ -381,18 +524,24 @@ def run_local_k_class_em(
     per_class_best_pose_translations = [] if return_best_pose_details else None
     per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
     for class_index in range(n_classes):
+        class_layout = _select_local_layout_for_class(
+            local_layout,
+            class_local_rotation_log_prior,
+            class_index,
+            n_classes,
+        )
         output = run_local_em_exact(
             experiment_dataset,
             means_array[class_index],
             _select_class_value(mean_variance, class_index, n_classes),
             _select_class_value(noise_variance, class_index, n_classes),
-            local_layout,
+            class_layout,
             disc_type,
             accumulate_noise=accumulate_noise,
             return_best_pose_details=return_best_pose_details,
             class_log_prior=float(log_priors[class_index]),
             normalization_log_evidence=global_log_evidence,
-            **engine_kwargs,
+            **base_engine_kwargs,
         )
         (
             class_Ft_y,

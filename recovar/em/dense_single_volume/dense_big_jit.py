@@ -16,9 +16,9 @@ import jax.numpy as jnp
 from recovar import core
 from recovar.em.dense_single_volume.helpers.projection import (
     DEFAULT_PROJECTION_MAX_R,
-    compute_noise_block as _compute_noise_block,
     project_half_spectrum,
 )
+from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.score_constraints import apply_dense_score_constraints
 
 
@@ -27,16 +27,24 @@ class DenseBucketResult(NamedTuple):
 
     Ft_y: jax.Array
     Ft_ctf: jax.Array
-    noise_wsum: jax.Array
-    noise_a2: jax.Array
-    noise_xa: jax.Array
-    noise_sigma2_offset: jax.Array
     block_max: jax.Array
     block_sum_exp: jax.Array
     block_best: jax.Array
     block_argmax: jax.Array
     max_posterior: jax.Array
     probs_sum_t: jax.Array
+
+
+class _DenseBucketView(NamedTuple):
+    """Window/full arrays prepared for one dense big-JIT bucket."""
+
+    shifted_score: jax.Array
+    score_weight: jax.Array
+    shifted_recon: jax.Array
+    ctf2_over_nv_recon: jax.Array
+    score_half_weights: jax.Array
+    proj_score: jax.Array
+    adjoint_window_indices: jax.Array
 
 
 def _project_half(
@@ -56,6 +64,65 @@ def _project_half(
         proj_volume_shape,
         disc_type,
         max_r=max_r,
+    )
+
+
+def _dense_bucket_view(
+    *,
+    shifted_score_half,
+    score_weight_half,
+    shifted_recon_half,
+    ctf2_over_nv_recon_half,
+    half_weights,
+    proj_half,
+    window_indices,
+    recon_window_indices,
+    use_window: bool,
+) -> _DenseBucketView:
+    if use_window:
+        return _DenseBucketView(
+            shifted_score=shifted_score_half[:, window_indices],
+            score_weight=score_weight_half[:, window_indices],
+            shifted_recon=shifted_recon_half[:, recon_window_indices],
+            ctf2_over_nv_recon=ctf2_over_nv_recon_half[:, recon_window_indices],
+            score_half_weights=half_weights[window_indices],
+            proj_score=proj_half[:, window_indices],
+            adjoint_window_indices=recon_window_indices,
+        )
+    return _DenseBucketView(
+        shifted_score=shifted_score_half,
+        score_weight=score_weight_half,
+        shifted_recon=shifted_recon_half,
+        ctf2_over_nv_recon=ctf2_over_nv_recon_half,
+        score_half_weights=half_weights,
+        proj_score=proj_half,
+        adjoint_window_indices=recon_window_indices,
+    )
+
+
+def _cast_dense_bucket_view(view: _DenseBucketView, precision_policy: DensePrecisionPolicy) -> _DenseBucketView:
+    (
+        shifted_score,
+        shifted_recon,
+        score_weight,
+        ctf2_over_nv_recon,
+        score_half_weights,
+        proj_score,
+    ) = precision_policy.cast_dense_big_jit_inputs(
+        view.shifted_score,
+        view.shifted_recon,
+        view.score_weight,
+        view.ctf2_over_nv_recon,
+        view.score_half_weights,
+        view.proj_score,
+    )
+    return view._replace(
+        shifted_score=shifted_score,
+        shifted_recon=shifted_recon,
+        score_weight=score_weight,
+        ctf2_over_nv_recon=ctf2_over_nv_recon,
+        score_half_weights=score_half_weights,
+        proj_score=proj_score,
     )
 
 
@@ -124,6 +191,47 @@ def _mstep_half_sums(
     return probs, probs_sum_t, summed_half, ctf_probs_half, block_best, block_argmax, max_posterior
 
 
+def _batch_adjoint_dense_slices(
+    slices,
+    volumes,
+    rotations_block,
+    window_indices,
+    image_shape,
+    recon_volume_shape,
+    disc_type,
+    *,
+    use_window: bool,
+    half_volume: bool,
+    backprojection_max_r,
+):
+    if not use_window:
+        return core.batch_adjoint_slice_volume(
+            slices,
+            rotations_block,
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            volumes=volumes,
+            half_image=True,
+            half_volume=half_volume,
+        )
+    kwargs = {}
+    if backprojection_max_r != "auto":
+        kwargs["max_r"] = backprojection_max_r
+    return core.batch_adjoint_slice_volume_indexed(
+        slices,
+        window_indices,
+        rotations_block,
+        image_shape,
+        recon_volume_shape,
+        disc_type,
+        volumes=volumes,
+        half_image=True,
+        half_volume=half_volume,
+        **kwargs,
+    )
+
+
 def _adjoint_dense_bucket(
     summed_half,
     ctf_probs_half,
@@ -136,6 +244,7 @@ def _adjoint_dense_bucket(
     disc_type,
     *,
     use_window: bool,
+    half_volume: bool,
     disable_adjoint_y: bool,
     disable_adjoint_ctf: bool,
     backprojection_max_r,
@@ -146,112 +255,46 @@ def _adjoint_dense_bucket(
     if not disable_adjoint_y and not disable_adjoint_ctf:
         volumes = jnp.stack([Ft_y, Ft_ctf], axis=0)
         slices = jnp.stack([summed_half, ctf_probs_half], axis=0)
-        if use_window:
-            if backprojection_max_r == "auto":
-                updated = core.batch_adjoint_slice_volume_indexed(
-                    slices,
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=volumes,
-                    half_image=True,
-                )
-            else:
-                updated = core.batch_adjoint_slice_volume_indexed(
-                    slices,
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=volumes,
-                    half_image=True,
-                    max_r=backprojection_max_r,
-                )
-        else:
-            updated = core.batch_adjoint_slice_volume(
-                slices,
-                rotations_block,
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                volumes=volumes,
-                half_image=True,
-            )
+        updated = _batch_adjoint_dense_slices(
+            slices,
+            volumes,
+            rotations_block,
+            window_indices,
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            use_window=use_window,
+            half_volume=half_volume,
+            backprojection_max_r=backprojection_max_r,
+        )
         return updated[0], updated[1]
 
     if not disable_adjoint_y:
-        if use_window:
-            if backprojection_max_r == "auto":
-                Ft_y = core.batch_adjoint_slice_volume_indexed(
-                    summed_half[None, :, :],
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=Ft_y[None, :],
-                    half_image=True,
-                )[0]
-            else:
-                Ft_y = core.batch_adjoint_slice_volume_indexed(
-                    summed_half[None, :, :],
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=Ft_y[None, :],
-                    half_image=True,
-                    max_r=backprojection_max_r,
-                )[0]
-        else:
-            Ft_y = core.batch_adjoint_slice_volume(
-                summed_half[None, :, :],
-                rotations_block,
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                volumes=Ft_y[None, :],
-                half_image=True,
-            )[0]
-    else:
-        if use_window:
-            if backprojection_max_r == "auto":
-                Ft_ctf = core.batch_adjoint_slice_volume_indexed(
-                    ctf_probs_half[None, :, :],
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=Ft_ctf[None, :],
-                    half_image=True,
-                )[0]
-            else:
-                Ft_ctf = core.batch_adjoint_slice_volume_indexed(
-                    ctf_probs_half[None, :, :],
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=Ft_ctf[None, :],
-                    half_image=True,
-                    max_r=backprojection_max_r,
-                )[0]
-        else:
-            Ft_ctf = core.batch_adjoint_slice_volume(
-                ctf_probs_half[None, :, :],
-                rotations_block,
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                volumes=Ft_ctf[None, :],
-                half_image=True,
-            )[0]
+        Ft_y = _batch_adjoint_dense_slices(
+            summed_half[None, :, :],
+            Ft_y[None, :],
+            rotations_block,
+            window_indices,
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            use_window=use_window,
+            half_volume=half_volume,
+            backprojection_max_r=backprojection_max_r,
+        )[0]
+    elif not disable_adjoint_ctf:
+        Ft_ctf = _batch_adjoint_dense_slices(
+            ctf_probs_half[None, :, :],
+            Ft_ctf[None, :],
+            rotations_block,
+            window_indices,
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            use_window=use_window,
+            half_volume=half_volume,
+            backprojection_max_r=backprojection_max_r,
+        )[0]
     return Ft_y, Ft_ctf
 
 
@@ -264,18 +307,15 @@ def _adjoint_dense_bucket(
         "use_float64_scoring",
         "use_float64_normalization",
         "run_mstep",
-        "accumulate_noise",
-        "return_noise_split",
-        "has_translation_sqdist",
         "image_shape",
         "proj_volume_shape",
         "recon_volume_shape",
         "disc_type",
         "projection_max_r",
         "backprojection_max_r",
+        "mstep_half_volume",
         "disable_adjoint_y",
         "disable_adjoint_ctf",
-        "n_shells",
     ),
 )
 def run_dense_bucket_big_jit(
@@ -295,14 +335,6 @@ def run_dense_bucket_big_jit(
     valid_rotation_mask,
     valid_image_mask,
     log_Z,
-    noise_wsum,
-    noise_a2,
-    noise_xa,
-    noise_sigma2_offset,
-    shifted_masked_half,
-    noise_variance_half,
-    shell_indices_half,
-    translation_sqdist_ang,
     window_indices,
     recon_window_indices,
     *,
@@ -312,25 +344,22 @@ def run_dense_bucket_big_jit(
     use_float64_scoring: bool = False,
     use_float64_normalization: bool = True,
     run_mstep: bool = True,
-    accumulate_noise: bool = False,
-    return_noise_split: bool = False,
-    has_translation_sqdist: bool = False,
     image_shape,
     proj_volume_shape,
     recon_volume_shape,
     disc_type: str,
     projection_max_r="auto",
     backprojection_max_r="auto",
+    mstep_half_volume: bool = False,
     disable_adjoint_y: bool = False,
     disable_adjoint_ctf: bool = False,
-    n_shells: int = 0,
 ) -> DenseBucketResult:
     """Run one dense/global rotation bucket inside one compiled boundary.
 
     Inputs are half-spectrum arrays.  The caller owns batch preprocessing and
     the two-pass schedule: call with ``run_mstep=False`` to get pass-1 block
     logsumexp summaries, then call with ``run_mstep=True`` and the global
-    per-image ``log_Z`` to accumulate M-step/noise for the same bucket.
+    per-image ``log_Z`` to accumulate the M-step for the same bucket.
 
     ``rotation_log_prior_block`` must be shaped ``(batch, rot_block)`` and
     ``translation_log_prior_block`` must be shaped ``(batch, n_trans)``.  Use
@@ -343,9 +372,9 @@ def run_dense_bucket_big_jit(
         raise ValueError(f"score_mode must be 'gaussian' or 'normalized_cc', got {score_mode!r}")
 
     if zero_dc_for_scoring and score_mode != "normalized_cc":
-        dc_mask = shell_indices_half == 0
-        shifted_score_half = jnp.where(dc_mask[None, :], 0.0, shifted_score_half)
-        score_weight_half = jnp.where(dc_mask[None, :], 0.0, score_weight_half)
+        dc_index = (int(image_shape[0]) // 2) * (int(image_shape[1]) // 2 + 1)
+        shifted_score_half = shifted_score_half.at[:, dc_index].set(0.0)
+        score_weight_half = score_weight_half.at[:, dc_index].set(0.0)
 
     proj_half = _project_half(
         mean_for_proj,
@@ -356,56 +385,27 @@ def run_dense_bucket_big_jit(
         projection_max_r=projection_max_r,
     )
 
-    if use_window:
-        shifted_score = shifted_score_half[:, window_indices]
-        score_weight = score_weight_half[:, window_indices]
-        shifted_recon = shifted_recon_half[:, recon_window_indices]
-        ctf2_over_nv_recon = ctf2_over_nv_recon_half[:, recon_window_indices]
-        shifted_noise = shifted_masked_half[:, recon_window_indices]
-        score_half_weights = half_weights[window_indices]
-        proj_score = proj_half[:, window_indices]
-        proj_noise = proj_half[:, recon_window_indices]
-        noise_variance = noise_variance_half[recon_window_indices]
-        shell_indices_noise = shell_indices_half[recon_window_indices]
-        adjoint_window_indices = recon_window_indices
-    else:
-        shifted_score = shifted_score_half
-        score_weight = score_weight_half
-        shifted_recon = shifted_recon_half
-        ctf2_over_nv_recon = ctf2_over_nv_recon_half
-        shifted_noise = shifted_masked_half
-        score_half_weights = half_weights
-        proj_score = proj_half
-        proj_noise = proj_half
-        noise_variance = noise_variance_half
-        shell_indices_noise = shell_indices_half
-        adjoint_window_indices = recon_window_indices
+    bucket_view = _cast_dense_bucket_view(
+        _dense_bucket_view(
+            shifted_score_half=shifted_score_half,
+            score_weight_half=score_weight_half,
+            shifted_recon_half=shifted_recon_half,
+            ctf2_over_nv_recon_half=ctf2_over_nv_recon_half,
+            half_weights=half_weights,
+            proj_half=proj_half,
+            window_indices=window_indices,
+            recon_window_indices=recon_window_indices,
+            use_window=use_window,
+        ),
+        DensePrecisionPolicy(use_float64_scoring=use_float64_scoring),
+    )
 
-    if use_float64_scoring:
-        shifted_score = shifted_score.astype(jnp.complex128)
-        shifted_recon = shifted_recon.astype(jnp.complex128)
-        shifted_noise = shifted_noise.astype(jnp.complex128)
-        score_weight = score_weight.astype(jnp.float64)
-        ctf2_over_nv_recon = ctf2_over_nv_recon.astype(jnp.float64)
-        score_half_weights = score_half_weights.astype(jnp.float64)
-        proj_score = proj_score.astype(jnp.complex128)
-        proj_noise = proj_noise.astype(jnp.complex128)
-    else:
-        shifted_score = shifted_score.astype(jnp.complex64)
-        shifted_recon = shifted_recon.astype(jnp.complex64)
-        shifted_noise = shifted_noise.astype(jnp.complex64)
-        score_weight = score_weight.astype(jnp.float32)
-        ctf2_over_nv_recon = ctf2_over_nv_recon.astype(jnp.float32)
-        score_half_weights = score_half_weights.astype(jnp.float32)
-        proj_score = proj_score.astype(jnp.complex64)
-        proj_noise = proj_noise.astype(jnp.complex64)
-
-    proj_abs2_score = jnp.abs(proj_score) ** 2
-    proj_weighted = proj_score * score_half_weights[None, :]
-    proj_abs2_weighted = proj_abs2_score * score_half_weights[None, :]
+    proj_abs2_score = jnp.abs(bucket_view.proj_score) ** 2
+    proj_weighted = bucket_view.proj_score * bucket_view.score_half_weights[None, :]
+    proj_abs2_weighted = proj_abs2_score * bucket_view.score_half_weights[None, :]
     scores = _score_block(
-        shifted_score,
-        score_weight,
+        bucket_view.shifted_score,
+        bucket_view.score_weight,
         proj_weighted,
         proj_abs2_weighted,
         batch_norm,
@@ -443,8 +443,8 @@ def run_dense_bucket_big_jit(
             block_argmax,
             max_posterior,
         ) = _mstep_half_sums(
-            shifted_recon,
-            ctf2_over_nv_recon,
+            bucket_view.shifted_recon,
+            bucket_view.ctf2_over_nv_recon,
             scores,
             log_Z,
             valid_image_mask.astype(bool),
@@ -455,47 +455,20 @@ def run_dense_bucket_big_jit(
             rotations_block,
             Ft_y,
             Ft_ctf,
-            adjoint_window_indices,
+            bucket_view.adjoint_window_indices,
             image_shape,
             recon_volume_shape,
             disc_type,
             use_window=use_window,
+            half_volume=mstep_half_volume,
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
             backprojection_max_r=backprojection_max_r,
         )
 
-        if accumulate_noise:
-            P_noise = probs.swapaxes(0, 1).reshape(rot_block_size, batch_size * n_trans)
-            summed_masked_noise = P_noise @ shifted_noise
-            proj_abs2_noise = jnp.abs(proj_noise) ** 2
-            block_noise, block_a2, block_xa = _compute_noise_block(
-                proj_noise,
-                proj_abs2_noise,
-                summed_masked_noise,
-                ctf_probs_half,
-                noise_variance,
-                shell_indices_noise,
-                n_shells,
-                return_split=return_noise_split,
-            )
-            noise_wsum = noise_wsum + block_noise
-            if return_noise_split:
-                noise_a2 = noise_a2 + block_a2
-                noise_xa = noise_xa + block_xa
-            if has_translation_sqdist:
-                translation_posterior = jnp.sum(probs, axis=1)
-                noise_sigma2_offset = noise_sigma2_offset + jnp.sum(
-                    translation_posterior * translation_sqdist_ang,
-                )
-
     return DenseBucketResult(
         Ft_y=Ft_y,
         Ft_ctf=Ft_ctf,
-        noise_wsum=noise_wsum,
-        noise_a2=noise_a2,
-        noise_xa=noise_xa,
-        noise_sigma2_offset=noise_sigma2_offset,
         block_max=block_max,
         block_sum_exp=block_sum_exp,
         block_best=block_best,

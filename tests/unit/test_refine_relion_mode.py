@@ -274,6 +274,24 @@ def test_build_pass2_hypothesis_layout_preserves_sparse_rotation_translation_mas
     assert not np.any(buckets[0].local_sample_mask[row_for_image0, 2:])
 
 
+def test_build_pass2_hypothesis_layout_can_keep_empty_class_support():
+    translations = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    layout = build_pass2_hypothesis_layout(
+        [np.array([], dtype=np.int32)],
+        n_coarse_rotations=rotation_grid_size(0),
+        n_coarse_translations=2,
+        nside_level=0,
+        translations=translations,
+        oversampling_order=0,
+        allow_empty=True,
+    )
+
+    assert layout.n_images == 1
+    np.testing.assert_array_equal(layout.rotation_counts, np.array([1], dtype=np.int32))
+    assert layout.sample_mask_flat.shape == (1, 2)
+    assert not np.any(layout.sample_mask_flat)
+
+
 def test_score_local_bucket_honors_rotation_translation_sample_mask():
     scores = score_local_bucket(
         shifted=jnp.zeros((1, 2, 1), dtype=jnp.complex64),
@@ -845,8 +863,6 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
             jnp.asarray(local_layout.translation_grid),
             config,
             half_weights,
-            batch_size=1,
-            n_trans=1,
             score_with_masked_images=True,
         )
     )

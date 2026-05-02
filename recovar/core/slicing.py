@@ -429,6 +429,7 @@ def adjoint_slice_volume_indexed(
     half_image=False,
     half_volume=False,
     max_r=_AUTO,
+    relion_x_half=False,
 ):
     """Adjoint slice extraction from a compact indexed pixel layout.
 
@@ -469,7 +470,11 @@ def adjoint_slice_volume_indexed(
             half_volume=half_volume,
             half_image=half_image,
             max_r=_cuda_max_r(max_r, image_shape, volume_shape),
+            relion_x_half=relion_x_half,
         )
+
+    if relion_x_half:
+        raise NotImplementedError("relion_x_half indexed adjoint requires the CUDA backproject kernel")
 
     H, W = image_shape
     grid_shape = (H, W // 2 + 1) if half_image else (H, W)
@@ -500,6 +505,7 @@ def batch_adjoint_slice_volume_indexed(
     half_image=False,
     half_volume=False,
     max_r=_AUTO,
+    relion_x_half=False,
 ):
     """Batched indexed adjoint slice extraction for shared rotations."""
     slices = jnp.asarray(slices)
@@ -537,7 +543,11 @@ def batch_adjoint_slice_volume_indexed(
             half_volume=half_volume,
             half_image=half_image,
             max_r=_cuda_max_r(max_r, image_shape, volume_shape),
+            relion_x_half=relion_x_half,
         )
+
+    if relion_x_half:
+        raise NotImplementedError("relion_x_half indexed adjoint requires the CUDA backproject kernel")
 
     return jax.vmap(
         lambda sl, vol: adjoint_slice_volume_indexed(
@@ -551,6 +561,7 @@ def batch_adjoint_slice_volume_indexed(
             half_image=half_image,
             half_volume=half_volume,
             max_r=max_r,
+            relion_x_half=relion_x_half,
         )
     )(slices, volumes)
 

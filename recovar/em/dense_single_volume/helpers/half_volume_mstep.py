@@ -34,3 +34,28 @@ def half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape):
         fourier_transform_utils.half_volume_to_full_volume(Ft_y, recon_volume_shape).reshape(-1),
         fourier_transform_utils.half_volume_to_full_volume(Ft_ctf, recon_volume_shape).reshape(-1),
     )
+
+
+def relion_x_half_volume_to_full(volume_flat, recon_volume_shape):
+    """Expand a RELION-layout ``(z, y, xhalf)`` accumulator to RECOVAR full layout.
+
+    RELION's BackProjector packs the Fourier x-axis and stores arrays in
+    public order ``(z, y, xhalf)``. RECOVAR's public full accumulator order is
+    ``(x, y, z)``, so expansion is a last-axis Hermitian unpack in RELION
+    layout followed by a ``(2, 1, 0)`` transpose.
+    """
+
+    relion_full = fourier_transform_utils.half_volume_to_full_volume(
+        volume_flat,
+        recon_volume_shape,
+    ).reshape(recon_volume_shape)
+    return relion_full.transpose(2, 1, 0).reshape(-1)
+
+
+def relion_x_half_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape):
+    """Convert RELION ``(z, y, xhalf)`` accumulators to RECOVAR full volumes."""
+
+    return (
+        relion_x_half_volume_to_full(Ft_y, recon_volume_shape),
+        relion_x_half_volume_to_full(Ft_ctf, recon_volume_shape),
+    )

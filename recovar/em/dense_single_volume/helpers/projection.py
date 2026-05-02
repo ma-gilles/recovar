@@ -12,6 +12,91 @@ from recovar import core
 DEFAULT_PROJECTION_MAX_R = object()
 
 
+@partial(jax.jit, static_argnums=(2, 3, 4))
+def project_relion_projector_half_spectrum(
+    volume_relion_half,
+    rotations_block,
+    image_shape,
+    r_max: int,
+    padding_factor: int = 1,
+):
+    """Forward-project RELION Projector storage into full half-image layout.
+
+    ``volume_relion_half`` is RELION's ``Projector::data`` array, not
+    recovar's centered full Fourier volume. This path is used by InitialModel
+    parity code where RELION's pass-1/pass-2 scores must consume the exact
+    ``PPref`` representation.
+    """
+
+    from recovar.core.relion_project import relion_project_half
+
+    image_size = int(image_shape[0])
+    project_one = lambda R: relion_project_half(
+        volume_relion_half,
+        R,
+        image_size,
+        int(r_max),
+        int(padding_factor),
+    )
+    proj_fftw = jax.vmap(project_one)(rotations_block)
+
+    return proj_fftw.reshape((rotations_block.shape[0], -1))
+
+
+@partial(jax.jit, static_argnums=(2, 3, 4))
+def project_relion_projector_half_spectrum_centered_rows(
+    volume_relion_half,
+    rotations_block,
+    image_shape,
+    r_max: int,
+    padding_factor: int = 1,
+) -> jnp.ndarray:
+    """Project RELION ``PPref`` data and return recovar-centered row order."""
+
+    image_size = int(image_shape[0])
+    proj_fftw = project_relion_projector_half_spectrum(
+        volume_relion_half,
+        rotations_block,
+        image_shape,
+        int(r_max),
+        int(padding_factor),
+    ).reshape((rotations_block.shape[0], image_size, image_size // 2 + 1))
+    row_order = jnp.fft.fftshift(jnp.arange(image_size, dtype=jnp.int32))
+    return proj_fftw[:, row_order, :].reshape((rotations_block.shape[0], -1))
+
+
+def compute_relion_projector_projections_block(
+    volume_relion_half,
+    rotations_block,
+    image_shape,
+    *,
+    r_max: int,
+    padding_factor: int = 1,
+    return_abs2: bool = True,
+    centered_rows: bool = False,
+):
+    """Project precomputed RELION ``PPref`` data for one rotation block."""
+
+    if centered_rows:
+        proj_half = project_relion_projector_half_spectrum_centered_rows(
+            volume_relion_half,
+            rotations_block,
+            image_shape,
+            int(r_max),
+            int(padding_factor),
+        )
+    else:
+        proj_half = project_relion_projector_half_spectrum(
+            volume_relion_half,
+            rotations_block,
+            image_shape,
+            int(r_max),
+            int(padding_factor),
+        )
+    proj_abs2_half = jnp.abs(proj_half) ** 2 if return_abs2 else None
+    return proj_half, proj_abs2_half
+
+
 def project_half_spectrum(
     volume,
     rotations_block,
@@ -22,8 +107,27 @@ def project_half_spectrum(
     half_volume: bool = False,
     max_r=DEFAULT_PROJECTION_MAX_R,
     relion_texture_interp: bool = True,
+    force_jax: bool = False,
 ):
     """Forward-slice one rotation block into half-spectrum image layout."""
+    if force_jax:
+        order = core.decide_order(disc_type)
+        if order > 1:
+            raise ValueError("force_jax projection is only supported for nearest/linear interpolation")
+        from recovar.core import relion_interp
+
+        resolved_max_r = core._default_max_r(image_shape) if max_r is DEFAULT_PROJECTION_MAX_R else max_r
+        return relion_interp.project(
+            volume,
+            rotations_block,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=True,
+            max_r=resolved_max_r,
+        )
+
     kwargs = {
         "half_image": True,
         "relion_texture_interp": relion_texture_interp,
@@ -52,6 +156,7 @@ def compute_projections_block(
     max_r=DEFAULT_PROJECTION_MAX_R,
     return_abs2: bool = True,
     relion_texture_interp: bool = True,
+    force_jax: bool = False,
 ):
     """Forward-slice one rotation block and optionally compute ``|proj|^2``.
 
@@ -67,6 +172,7 @@ def compute_projections_block(
         disc_type,
         max_r=max_r,
         relion_texture_interp=relion_texture_interp,
+        force_jax=force_jax,
     )
     proj_abs2_half = jnp.abs(proj_half) ** 2 if return_abs2 else None
     return proj_half, proj_abs2_half

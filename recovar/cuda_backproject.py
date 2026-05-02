@@ -296,7 +296,7 @@ def backproject(
     )(images, rot6, volume, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9))
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
 def backproject_indexed(
     volume: jax.Array,
     images: jax.Array,
@@ -308,6 +308,7 @@ def backproject_indexed(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    relion_x_half: bool = False,
 ) -> jax.Array:
     """Back-project images whose pixels are stored in a compact indexed layout.
 
@@ -317,8 +318,16 @@ def backproject_indexed(
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    if relion_x_half and not (half_volume and half_image):
+        raise ValueError("relion_x_half requires half_volume=True and half_image=True")
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
-    kw["relion_fold_x"] = np.int64(int(half_volume))
+    kw["relion_fold_x"] = np.int64(int(relion_x_half))
+    if relion_x_half:
+        # The CUDA half-volume scatter packs its last coordinate. RELION's
+        # BackProjector packs the Fourier x-axis, which is RECOVAR axis 0.
+        # Reorder coordinates to kernel layout (z, y, x) so the packed last
+        # axis is the RELION/RECOVAR-x half-axis.
+        rotation_matrices = rotation_matrices[..., [2, 1, 0]]
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
@@ -331,7 +340,7 @@ def backproject_indexed(
     )(images, pixel_indices, rot6, volume, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9))
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
 def batch_backproject_indexed(
     volumes: jax.Array,
     images: jax.Array,
@@ -343,12 +352,17 @@ def batch_backproject_indexed(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    relion_x_half: bool = False,
 ) -> jax.Array:
     """Back-project compact indexed images into a batch of volumes."""
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    if relion_x_half and not (half_volume and half_image):
+        raise ValueError("relion_x_half requires half_volume=True and half_image=True")
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
-    kw["relion_fold_x"] = np.int64(int(half_volume))
+    kw["relion_fold_x"] = np.int64(int(relion_x_half))
+    if relion_x_half:
+        rotation_matrices = rotation_matrices[..., [2, 1, 0]]
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)

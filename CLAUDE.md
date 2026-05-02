@@ -7,6 +7,14 @@ RECOVAR analyzes conformational heterogeneity in cryo-EM/cryo-ET datasets using 
 2. **Performance** — optimize for GPU (speed, memory). Batch sizing, half-spectrum layouts, CUDA FFI.
 3. **Clarity** — simple, readable code. Small targeted diffs. No drive-by formatting.
 
+## Code Readability
+- Prefer the shortest correct implementation that is easy to audit.
+- Do not trade correctness, accuracy, or GPU performance for brevity.
+- Replace large inline blocks, long argument lists, and repeated loop setup with small named helpers or simple data containers.
+- Remove flags and branches when one clear path should exist. If modes are genuinely different, split them into separate helpers instead of threading conditionals through the hot path.
+- Do not add fallbacks or failsafes that hide bugs. Validate assumptions early and fail loudly.
+- Keep TODOs until the issue is actually fixed; when resolving one, remove only that TODO and mention the replacement in the summary or commit.
+
 ## Architecture
 
 ```
@@ -39,7 +47,7 @@ pixi run smoke-import-recovar   # verify import works
 
 **Alternative (pip)** — for end users:
 ```bash
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cuda12]"==0.9.0.1 recovar
+pip install "recovar[gpu]"
 ```
 
 CUDA kernels auto-compile on first use. The Makefile uses the running Python to locate JAX FFI headers — always build/test through pixi or the correct Python.

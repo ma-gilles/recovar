@@ -237,6 +237,49 @@ def maybe_write_debug_noise_component_dump(
     return pending_targets
 
 
+def _child_ordinals_from_parent_ids(parent_ids: np.ndarray) -> np.ndarray:
+    """Return RELION-style child ordinal within each repeated parent id."""
+
+    parent_ids = np.asarray(parent_ids, dtype=np.int32).reshape(-1)
+    child_ordinals = np.zeros(parent_ids.shape[0], dtype=np.int32)
+    seen: dict[int, int] = {}
+    for idx, parent_id in enumerate(parent_ids.tolist()):
+        count = seen.get(int(parent_id), 0)
+        child_ordinals[idx] = count
+        seen[int(parent_id)] = count + 1
+    return child_ordinals
+
+
+def _infer_grouped_child_layout(values: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
+    """Infer parent/child ids for a parent-major oversampled grid.
+
+    The adaptive RELION translation grid is generated parent-major: every
+    coarse translation contributes a fixed child-offset pattern. Inferring the
+    group size here keeps this helper debug-only instead of adding persistent
+    layout fields to the hot path.
+    """
+
+    values = np.asarray(values, dtype=np.float64)
+    n_values = int(values.shape[0])
+    if n_values <= 0:
+        empty = np.zeros(0, dtype=np.int32)
+        return empty, empty, 1
+
+    candidates = [4**order for order in range(1, 6) if n_values % (4**order) == 0]
+    candidates.sort(reverse=True)
+    for child_count in candidates:
+        grouped = values.reshape(n_values // child_count, child_count, values.shape[-1])
+        offsets = grouped - np.mean(grouped, axis=1, keepdims=True)
+        if np.allclose(offsets, offsets[0:1], rtol=1e-5, atol=1e-5):
+            parent = np.repeat(np.arange(n_values // child_count, dtype=np.int32), child_count)
+            child = np.tile(np.arange(child_count, dtype=np.int32), n_values // child_count)
+            return parent, child, int(child_count)
+
+    parent = np.arange(n_values, dtype=np.int32)
+    child = np.zeros(n_values, dtype=np.int32)
+    return parent, child, 1
+
+
 def maybe_write_debug_score_dump(
     *,
     experiment_dataset,
@@ -254,8 +297,11 @@ def maybe_write_debug_score_dump(
     current_size,
     debug_iteration,
     shifted_score_split=None,
+    shifted_recon_split=None,
     ctf2_over_nv_score=None,
+    ctf2_over_nv_recon=None,
     proj_weighted=None,
+    proj_for_noise=None,
     proj_abs2_weighted=None,
     dump_dir: Path | None,
     pending_targets: set[int],
@@ -298,8 +344,11 @@ def maybe_write_debug_score_dump(
         "on",
     }
     shifted_score_np = np.asarray(shifted_score_split) if dump_operands and shifted_score_split is not None else None
+    shifted_recon_np = np.asarray(shifted_recon_split) if dump_operands and shifted_recon_split is not None else None
     ctf2_over_nv_np = np.asarray(ctf2_over_nv_score) if dump_operands and ctf2_over_nv_score is not None else None
+    ctf2_over_nv_recon_np = np.asarray(ctf2_over_nv_recon) if dump_operands and ctf2_over_nv_recon is not None else None
     proj_weighted_np = np.asarray(proj_weighted) if dump_operands and proj_weighted is not None else None
+    proj_for_noise_np = np.asarray(proj_for_noise) if dump_operands and proj_for_noise is not None else None
     proj_abs2_weighted_np = np.asarray(proj_abs2_weighted) if dump_operands and proj_abs2_weighted is not None else None
 
     for row in target_rows:
@@ -307,6 +356,12 @@ def maybe_write_debug_score_dump(
         local_idx = int(bucket.image_indices[row])
         actual_count = int(bucket.actual_rotation_counts[row])
         local_rotation_ids = np.asarray(bucket.local_rotation_ids[row, :actual_count], dtype=np.int32)
+        local_rotation_parent_ids = (
+            np.asarray(bucket.local_rotation_posterior_ids[row, :actual_count], dtype=np.int32)
+            if bucket.local_rotation_posterior_ids is not None
+            else local_rotation_ids
+        )
+        local_rotation_child_indices = _child_ordinals_from_parent_ids(local_rotation_parent_ids)
         local_rotation_matrices = np.asarray(bucket.local_rotations[row, :actual_count], dtype=np.float32)
         local_rotation_eulers = np.asarray(
             utils.R_to_relion(local_rotation_matrices, degrees=True),
@@ -321,6 +376,21 @@ def maybe_write_debug_score_dump(
         posterior = np.asarray(probs_np[row, :actual_count, :], dtype=np.float32)
         n_trans = int(translation_log_prior.shape[0])
         translation_indices = np.arange(n_trans, dtype=np.int32)
+        translation_parent_indices, translation_child_indices, n_trans_over = _infer_grouped_child_layout(
+            np.asarray(local_layout.translation_grid, dtype=np.float32)
+        )
+        n_parent_trans = int(np.max(translation_parent_indices) + 1) if translation_parent_indices.size else n_trans
+        n_rot_over = int(np.max(local_rotation_child_indices) + 1) if local_rotation_child_indices.size else 1
+        n_hidden_over = int(n_rot_over * n_trans_over)
+        candidate_hidden_over_indices = (
+            (
+                local_rotation_parent_ids[:, None].astype(np.int64) * np.int64(n_parent_trans)
+                + translation_parent_indices[None, :].astype(np.int64)
+            )
+            * np.int64(n_hidden_over)
+            + local_rotation_child_indices[:, None].astype(np.int64) * np.int64(n_trans_over)
+            + translation_child_indices[None, :].astype(np.int64)
+        )
         best_score_flat = int(np.argmax(total_scores))
         best_score_rotation_index, best_score_translation_index = np.unravel_index(
             best_score_flat,
@@ -351,16 +421,42 @@ def maybe_write_debug_score_dump(
             "translation_log_prior": translation_log_prior[None, :],
             "rotation_candidate_mask": rotation_mask[None, :],
             "local_rotation_indices": local_rotation_ids,
+            "local_rotation_parent_indices": local_rotation_parent_ids,
+            "local_rotation_child_indices": local_rotation_child_indices,
             "local_rotation_pixel_indices": (local_rotation_ids % int(local_layout.n_pixels)).astype(np.int64),
             "local_rotation_psi_indices": (local_rotation_ids // int(local_layout.n_pixels)).astype(np.int64),
             "local_rotation_eulers": local_rotation_eulers,
             "local_rotation_matrices": local_rotation_matrices,
             "translations": np.asarray(local_layout.translation_grid, dtype=np.float32),
+            "translation_parent_indices": translation_parent_indices,
+            "translation_child_indices": translation_child_indices,
+            "n_translation_children": np.array([int(n_trans_over)], dtype=np.int32),
+            "n_rotation_children": np.array([int(n_rot_over)], dtype=np.int32),
+            "n_hidden_over": np.array([int(n_hidden_over)], dtype=np.int32),
             "candidate_pose_rotation_indices": np.repeat(local_rotation_ids[:, None], n_trans, axis=1),
+            "candidate_pose_parent_rotation_indices": np.repeat(
+                local_rotation_parent_ids[:, None],
+                n_trans,
+                axis=1,
+            ),
+            "candidate_pose_rotation_child_indices": np.repeat(
+                local_rotation_child_indices[:, None],
+                n_trans,
+                axis=1,
+            ),
             "candidate_pose_translation_indices": np.broadcast_to(
                 translation_indices[None, :],
                 (actual_count, n_trans),
             ),
+            "candidate_pose_parent_translation_indices": np.broadcast_to(
+                translation_parent_indices[None, :],
+                (actual_count, n_trans),
+            ),
+            "candidate_pose_translation_child_indices": np.broadcast_to(
+                translation_child_indices[None, :],
+                (actual_count, n_trans),
+            ),
+            "candidate_pose_hidden_over_indices": candidate_hidden_over_indices.astype(np.int64, copy=False),
             "image_pre_shift": (
                 np.asarray(image_pre_shifts[local_idx], dtype=np.float32)
                 if image_pre_shifts is not None
@@ -407,11 +503,20 @@ def maybe_write_debug_score_dump(
         if dump_operands:
             if shifted_score_np is not None:
                 payload["debug_shifted_score"] = np.asarray(shifted_score_np[row], dtype=np.complex64)
+            if shifted_recon_np is not None:
+                payload["debug_shifted_recon"] = np.asarray(shifted_recon_np[row], dtype=np.complex64)
             if ctf2_over_nv_np is not None:
                 payload["debug_ctf2_over_nv"] = np.asarray(ctf2_over_nv_np[row], dtype=np.float32)
+            if ctf2_over_nv_recon_np is not None:
+                payload["debug_ctf2_over_nv_recon"] = np.asarray(ctf2_over_nv_recon_np[row], dtype=np.float32)
             if proj_weighted_np is not None:
                 payload["debug_proj_weighted"] = np.asarray(
                     proj_weighted_np[row, :actual_count, :],
+                    dtype=np.complex64,
+                )
+            if proj_for_noise_np is not None:
+                payload["debug_proj_for_recon"] = np.asarray(
+                    proj_for_noise_np[row, :actual_count, :],
                     dtype=np.complex64,
                 )
             if proj_abs2_weighted_np is not None:

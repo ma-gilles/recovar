@@ -38,7 +38,9 @@ static py::array_t<double> backproject_and_reconstruct(
     int max_iter_preweight,
     RFLOAT tau2_fudge,
     bool skip_gridding,
-    int current_size
+    int current_size,
+    RFLOAT normalise,
+    RFLOAT minres_map
 ) {
     auto img_buf = images.request();
     auto rot_buf = rotations.request();
@@ -96,7 +98,7 @@ static py::array_t<double> backproject_and_reconstruct(
     // Reconstruct
     MultidimArray<RFLOAT> vol_out;
     bp.reconstruct(vol_out, max_iter_preweight, do_map, tau2_arr,
-                   tau2_fudge, 1.0, -1, false);
+                   tau2_fudge, normalise, minres_map, false);
 
     // Copy to numpy
     long nz = ZSIZE(vol_out);
@@ -418,6 +420,8 @@ void init_backprojector_bindings(py::module_ &m) {
           py::arg("tau2_fudge") = 1.0,
           py::arg("skip_gridding") = false,
           py::arg("current_size") = -1,
+          py::arg("normalise") = 1.0,
+          py::arg("minres_map") = -1.0,
           R"doc(
 Backproject 2D Fourier images and reconstruct a 3D volume.
 images: (N, ori_size, ori_size/2+1) complex
@@ -425,6 +429,8 @@ rotations: (N, 3, 3) rotation matrices (RELION convention)
 weights: (N, ori_size, ori_size/2+1) or empty — per-pixel weights (CTF²/σ²)
 tau2: per-shell regularization values
 current_size: optional RELION current image size used for initZeros()
+normalise: RELION reconstruct normalisation argument
+minres_map: RELION reconstruct minimum-resolution shell for solvent masking
 Returns: (ori_size, ori_size, ori_size) real-space volume
 )doc");
 

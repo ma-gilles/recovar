@@ -397,6 +397,8 @@ def build_pass2_hypothesis_layout(
     rotation_log_prior: np.ndarray | None = None,
     translation_log_prior: np.ndarray | None = None,
     random_perturbation: float = 0.0,
+    rotation_index_order: str = "recovar",
+    allow_empty: bool = False,
 ) -> LocalHypothesisLayout:
     """Build exact-local layout for RELION adaptive pass-2 hypotheses.
 
@@ -437,10 +439,15 @@ def build_pass2_hypothesis_layout(
         else:
             sig_samples = np.asarray(sig_samples, dtype=np.int32).reshape(-1)
             if sig_samples.size == 0:
-                raise ValueError(f"Image {image_idx} has no significant coarse samples for sparse pass 2")
-            coarse_rot = sig_samples // int(n_coarse_translations)
-            coarse_trans = sig_samples % int(n_coarse_translations)
-            unique_rot = np.unique(coarse_rot).astype(np.int32, copy=False)
+                if not allow_empty:
+                    raise ValueError(f"Image {image_idx} has no significant coarse samples for sparse pass 2")
+                unique_rot = np.zeros(1, dtype=np.int32)
+                coarse_rot = unique_rot
+                coarse_trans = np.zeros(0, dtype=np.int32)
+            else:
+                coarse_rot = sig_samples // int(n_coarse_translations)
+                coarse_trans = sig_samples % int(n_coarse_translations)
+                unique_rot = np.unique(coarse_rot).astype(np.int32, copy=False)
             use_full_candidate_mask = False
 
         oversampled_rots, parent_map, oversampled_rot_indices = get_oversampled_rotation_grid_from_samples(
@@ -449,6 +456,7 @@ def build_pass2_hypothesis_layout(
             oversampling_order=oversampling_order,
             random_perturbation=random_perturbation,
             return_rotation_indices=True,
+            rotation_index_order=rotation_index_order,
         )
         oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
         parent_map = np.asarray(parent_map, dtype=np.int32)
@@ -464,12 +472,13 @@ def build_pass2_hypothesis_layout(
             sample_mask = np.ones((oversampled_rots.shape[0], n_fine_translations), dtype=bool)
         else:
             sample_mask = np.zeros((oversampled_rots.shape[0], n_fine_translations), dtype=bool)
-            for parent_local_idx, coarse_rot_idx in enumerate(unique_rot.tolist()):
-                valid_coarse_trans = coarse_trans[coarse_rot == coarse_rot_idx]
-                col_mask = np.isin(fine_translation_parent, valid_coarse_trans)
-                sample_mask[parent_map == parent_local_idx, :] = col_mask[None, :]
+            if coarse_trans.size:
+                for parent_local_idx, coarse_rot_idx in enumerate(unique_rot.tolist()):
+                    valid_coarse_trans = coarse_trans[coarse_rot == coarse_rot_idx]
+                    col_mask = np.isin(fine_translation_parent, valid_coarse_trans)
+                    sample_mask[parent_map == parent_local_idx, :] = col_mask[None, :]
 
-        if not np.any(sample_mask):
+        if not np.any(sample_mask) and not allow_empty:
             raise ValueError(f"Image {image_idx} has no valid sparse pass-2 candidates after oversampling")
 
         counts[image_idx] = int(oversampled_rots.shape[0])

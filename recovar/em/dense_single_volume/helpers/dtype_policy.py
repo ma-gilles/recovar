@@ -113,3 +113,27 @@ class DensePrecisionPolicy:
             proj_weighted,
             proj_for_noise,
         )
+
+    def cast_dense_big_jit_inputs(
+        self,
+        shifted_score,
+        shifted_recon,
+        score_weight,
+        recon_weight,
+        score_half_weights,
+        proj_score,
+    ):
+        shifted_score = shifted_score.astype(self.score_complex_dtype)
+        shifted_recon = shifted_recon.astype(self.score_complex_dtype)
+        score_weight = score_weight.astype(self.score_real_dtype)
+        recon_weight = recon_weight.astype(self.score_real_dtype)
+        score_half_weights = score_half_weights.astype(self.score_real_dtype)
+        proj_score = proj_score.astype(self.score_complex_dtype)
+        return (
+            shifted_score,
+            shifted_recon,
+            score_weight,
+            recon_weight,
+            score_half_weights,
+            proj_score,
+        )

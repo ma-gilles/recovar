@@ -49,18 +49,20 @@ from .dense_big_jit import run_dense_bucket_big_jit
 from .helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
     adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
-    batch_adjoint_slice_volume_half as _batch_adjoint_slice_volume_half,
-    batch_adjoint_slice_volume_windowed as _batch_adjoint_slice_volume_windowed,
 )
 from .helpers.dtype_policy import DensePrecisionPolicy
 from .helpers.fourier_window import make_fourier_window_spec
+from .helpers.half_volume_mstep import (
+    enforce_half_volume_x0,
+    half_volume_accumulator_shape,
+    half_volume_accumulators_to_full,
+)
 from .helpers.half_spectrum import (
     bin_shell_values_np,
     half_spectrum_dc_index,
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
-    make_shell_indices_half,
 )
 from .helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
@@ -75,13 +77,10 @@ from .helpers.preprocessing import (
     preprocess_batch_firstiter_cc as _preprocess_batch_firstiter_cc,
 )
 from .helpers.projection import (
-    DEFAULT_PROJECTION_MAX_R as _DEFAULT_PROJECTION_MAX_R,
     compute_noise_block as _compute_noise_block,
     compute_projections_block as _compute_projections_block,
 )
 from .helpers.scoring import (
-    _e_step_block_scores,
-    _e_step_block_scores_windowed,
     _merge_block_logsumexp,
     _m_step_block_compute,
     _m_step_block_windowed,
@@ -241,6 +240,302 @@ class _DenseDebugOptions:
         )
 
 
+@dataclass(frozen=True)
+class _DenseRotationBlock:
+    """Host-side metadata for one padded dense rotation block."""
+
+    index: int
+    r0: int
+    r1: int
+    rotations: np.ndarray
+    actual_rot: int
+
+
+def _iter_dense_rotation_blocks(rotations_padded, n_rot: int, n_blocks: int, rotation_block_size: int, skip_mask=None):
+    """Yield dense rotation-block metadata, optionally skipping pass-2 blocks."""
+
+    for block_index in range(n_blocks):
+        if skip_mask is not None and bool(skip_mask[block_index]):
+            continue
+        r0 = block_index * rotation_block_size
+        r1 = r0 + rotation_block_size
+        yield _DenseRotationBlock(
+            index=block_index,
+            r0=r0,
+            r1=r1,
+            rotations=rotations_padded[r0:r1],
+            actual_rot=max(0, min(rotation_block_size, n_rot - r0)),
+        )
+
+
+@dataclass(frozen=True)
+class _DenseBigJitConstants:
+    """Window metadata shared by dense big-JIT bucket calls."""
+
+    window_indices: object
+    recon_window_indices: object
+    max_r: object
+
+    @classmethod
+    def from_window(cls, window_spec, *, n_half: int):
+        return cls(
+            window_indices=window_spec.score_or_full_indices(n_half),
+            recon_window_indices=window_spec.recon_or_full_indices(n_half),
+            max_r=window_spec.dense_big_jit_max_r(),
+        )
+
+
+@dataclass(frozen=True)
+class _DenseBigJitBatchRunner:
+    """Host-side adapter for one batch's dense big-JIT bucket calls."""
+
+    shifted_score_half: object
+    batch_norm: object
+    score_weight_half: object
+    shifted_recon_half: object
+    ctf2_over_nv_half_with_dc: object
+    mean_for_proj: object
+    half_weights: object
+    valid_image_mask: object
+    constants: _DenseBigJitConstants
+    score_constraint_blocks: object
+    start_idx: int
+    end_idx: int
+    batch_size: int
+    score_mode: str
+    zero_dc_for_scoring: bool
+    use_window: bool
+    use_float64_scoring: bool
+    image_shape: tuple[int, int]
+    proj_volume_shape: tuple[int, int, int]
+    recon_volume_shape: tuple[int, int, int]
+    disc_type: str
+    disable_adjoint_y: bool
+    disable_adjoint_ctf: bool
+    mstep_half_volume: bool
+
+    def run(self, block: _DenseRotationBlock, Ft_y, Ft_ctf, *, run_mstep: bool, log_z):
+        (
+            rotation_prior_block,
+            translation_prior_block,
+            candidate_mask_block,
+            valid_rotation_mask,
+        ) = self.score_constraint_blocks(block.r0, block.r1, self.start_idx, self.end_idx, self.batch_size)
+        return run_dense_bucket_big_jit(
+            self.shifted_score_half,
+            self.batch_norm,
+            self.score_weight_half,
+            self.shifted_recon_half,
+            self.ctf2_over_nv_half_with_dc,
+            self.mean_for_proj,
+            Ft_y,
+            Ft_ctf,
+            jnp.asarray(block.rotations),
+            self.half_weights,
+            rotation_prior_block,
+            translation_prior_block,
+            candidate_mask_block,
+            valid_rotation_mask,
+            self.valid_image_mask,
+            log_z,
+            self.constants.window_indices,
+            self.constants.recon_window_indices,
+            score_mode=self.score_mode,
+            zero_dc_for_scoring=self.zero_dc_for_scoring,
+            use_window=self.use_window,
+            use_float64_scoring=self.use_float64_scoring,
+            use_float64_normalization=True,
+            run_mstep=run_mstep,
+            image_shape=self.image_shape,
+            proj_volume_shape=self.proj_volume_shape,
+            recon_volume_shape=self.recon_volume_shape,
+            disc_type=self.disc_type,
+            projection_max_r=self.constants.max_r,
+            backprojection_max_r=self.constants.max_r,
+            mstep_half_volume=self.mstep_half_volume,
+            disable_adjoint_y=self.disable_adjoint_y,
+            disable_adjoint_ctf=self.disable_adjoint_ctf,
+        )
+
+
+@dataclass(frozen=True)
+class _DenseNoiseBlockView:
+    """Noise-accumulation arrays for the active full/windowed recon support."""
+
+    proj_half: object
+    proj_abs2_half: object
+    ctf2_over_nv: object
+    ctf_probs: object
+    noise_variance: object
+    shell_indices: object
+
+
+@dataclass(frozen=True)
+class _DenseMstepBlock:
+    """Posterior and half-spectrum sums for one dense pass-2 rotation block."""
+
+    probs: object
+    block_best: object
+    block_argmax: object
+    summed_half: object
+    ctf_probs_half: object
+
+
+def _dense_mstep_block(
+    *,
+    use_window: bool,
+    relion_firstiter_winner_take_all: bool,
+    best_score,
+    best_argmax,
+    block: _DenseRotationBlock,
+    rotation_block_size: int,
+    batch_size: int,
+    n_trans: int,
+    scores,
+    log_Z,
+    shifted_recon_windowed,
+    ctf2_over_nv_windowed_mstep,
+    shifted_recon_half,
+    ctf2_over_nv_half_with_dc,
+    n_recon_windowed: int,
+    image_shape,
+    volume_shape,
+) -> _DenseMstepBlock:
+    if use_window:
+        if relion_firstiter_winner_take_all:
+            probs = _winner_take_all_probs_for_block(
+                best_argmax,
+                block.r0,
+                block.actual_rot,
+                rotation_block_size,
+                n_trans,
+                scores.dtype,
+            )
+            P = probs.swapaxes(0, 1).reshape(rotation_block_size, batch_size * n_trans)
+            summed_half = P @ shifted_recon_windowed
+            probs_sum_t = jnp.sum(probs, axis=-1)
+            ctf_probs_half = probs_sum_t.T @ ctf2_over_nv_windowed_mstep
+            block_best = best_score
+            block_argmax = best_argmax - block.r0 * n_trans
+        else:
+            _, _, probs, block_best, block_argmax, summed_half, ctf_probs_half = _m_step_block_windowed(
+                shifted_recon_windowed,
+                scores,
+                log_Z,
+                block.rotations,
+                ctf2_over_nv_windowed_mstep,
+                jnp.zeros(1, dtype=shifted_recon_windowed.real.dtype),
+                jnp.zeros(1, dtype=ctf2_over_nv_windowed_mstep.dtype),
+                batch_size,
+                n_trans,
+                n_recon_windowed,
+                image_shape,
+                volume_shape,
+            )
+    else:
+        if relion_firstiter_winner_take_all:
+            probs = _winner_take_all_probs_for_block(
+                best_argmax,
+                block.r0,
+                block.actual_rot,
+                rotation_block_size,
+                n_trans,
+                scores.dtype,
+            )
+            P = probs.swapaxes(0, 1).reshape(rotation_block_size, batch_size * n_trans)
+            summed_half = P @ shifted_recon_half
+            probs_sum_t = jnp.sum(probs, axis=-1)
+            ctf_probs_half = probs_sum_t.T @ ctf2_over_nv_half_with_dc
+            block_best = best_score
+            block_argmax = best_argmax - block.r0 * n_trans
+        else:
+            probs, block_best, block_argmax, summed_half, ctf_probs_half = _m_step_block_compute(
+                shifted_recon_half,
+                scores,
+                log_Z,
+                block.rotations,
+                ctf2_over_nv_half_with_dc,
+                batch_size,
+                n_trans,
+            )
+    return _DenseMstepBlock(
+        probs=probs,
+        block_best=block_best,
+        block_argmax=block_argmax,
+        summed_half=summed_half,
+        ctf_probs_half=ctf_probs_half,
+    )
+
+
+def _adjoint_dense_mstep_volume(
+    half_block,
+    *,
+    use_window: bool,
+    recon_window_indices,
+    rotations,
+    volume,
+    image_shape,
+    recon_volume_shape,
+    current_size,
+    mstep_half_volume: bool,
+):
+    if use_window:
+        return _adjoint_slice_volume_windowed(
+            half_block,
+            recon_window_indices,
+            rotations,
+            volume,
+            image_shape,
+            recon_volume_shape,
+            "linear_interp",
+            True,
+            mstep_half_volume,
+            float(current_size // 2),
+        )
+    return _adjoint_slice_volume_half(
+        half_block,
+        rotations,
+        volume,
+        image_shape,
+        recon_volume_shape,
+        "linear_interp",
+        True,
+        mstep_half_volume,
+    )
+
+
+def _dense_noise_block_view(
+    *,
+    use_window: bool,
+    recon_window_indices,
+    proj_half,
+    proj_abs2_half,
+    ctf2_over_nv_half_with_dc,
+    probs_sum_t_noise,
+    noise_variance_half,
+    noise_variance_windowed,
+    shell_indices_noise,
+) -> _DenseNoiseBlockView:
+    if use_window:
+        ctf2_over_nv = ctf2_over_nv_half_with_dc[:, recon_window_indices]
+        return _DenseNoiseBlockView(
+            proj_half=proj_half[:, recon_window_indices],
+            proj_abs2_half=proj_abs2_half[:, recon_window_indices],
+            ctf2_over_nv=ctf2_over_nv,
+            ctf_probs=probs_sum_t_noise.T @ ctf2_over_nv,
+            noise_variance=noise_variance_windowed,
+            shell_indices=shell_indices_noise,
+        )
+    return _DenseNoiseBlockView(
+        proj_half=proj_half,
+        proj_abs2_half=proj_abs2_half,
+        ctf2_over_nv=ctf2_over_nv_half_with_dc,
+        ctf_probs=probs_sum_t_noise.T @ ctf2_over_nv_half_with_dc,
+        noise_variance=noise_variance_half,
+        shell_indices=shell_indices_noise,
+    )
+
+
 def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int):
     """Pad dense big-JIT raw batch inputs to a stable image shape class."""
 
@@ -292,6 +587,7 @@ def run_em(
     sparse_pass2: bool = True,
     disable_adjoint_y: bool = False,
     disable_adjoint_ctf: bool = False,
+    relion_half_volume_mstep: bool = False,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -382,6 +678,13 @@ def run_em(
     disable_adjoint_ctf : bool
         Experimental ablation flag. When True, skip the CTF adjoint
         accumulation into ``Ft_ctf``.
+    relion_half_volume_mstep : bool
+        When True, accumulate M-step sufficient statistics in RECOVAR's packed
+        half-volume layout using the RELION half-image fold/conjugation
+        backprojection path, enforce RELION's x=0 Hermitian plane, then expand
+        back to the existing full-volume return contract. This mirrors the
+        exact-local EM M-step convention and is required for InitialModel BPref
+        parity against RELION's ``BackProjector``.
     """
     overall_t0 = time.time()
     n_rot = rotations.shape[0]
@@ -431,10 +734,14 @@ def run_em(
     # trilinear interpolation, matching RELION's --pad flag.
     if reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
-        recon_volume_size = int(np.prod(recon_volume_shape))
     else:
         recon_volume_shape = volume_shape
-        recon_volume_size = int(np.prod(volume_shape))
+    if relion_half_volume_mstep:
+        logger.info("Dense M-step: using native half-volume RELION backprojection")
+        recon_accum_shape = half_volume_accumulator_shape(recon_volume_shape)
+        recon_volume_size = int(np.prod(recon_accum_shape))
+    else:
+        recon_volume_size = int(np.prod(recon_volume_shape))
 
     H, W = image_shape
     n_half = H * (W // 2 + 1)
@@ -599,12 +906,6 @@ def run_em(
         if debug_options.return_noise_split:
             noise_a2 = np.zeros(n_shells, dtype=np.float64)
             noise_xa = np.zeros(n_shells, dtype=np.float64)
-    dense_big_jit_shell_indices_half = (
-        shell_indices_half if accumulate_noise else make_shell_indices_half(image_shape)
-    )
-    dense_big_jit_noise_variance_half = (
-        noise_variance_half if accumulate_noise else jnp.ones(n_half, dtype=jnp.float32)
-    )
     score_dc_index = half_spectrum_dc_index(image_shape)
 
     start_idx = 0
@@ -866,69 +1167,35 @@ def run_em(
                 ready_values.append(shifted_masked_for_noise)
             _block_until_ready(*ready_values)
         timing.score_prep_s += time.time() - score_prep_t0
-
-        dense_big_jit_window_indices = window_spec.score_or_full_indices(n_half)
-        dense_big_jit_recon_window_indices = window_spec.recon_or_full_indices(n_half)
-        dense_big_jit_max_r = window_spec.dense_big_jit_max_r()
-        dense_big_jit_noise_wsum0 = jnp.zeros(1, dtype=jnp.float32)
-        dense_big_jit_noise_a20 = jnp.zeros(1, dtype=jnp.float32)
-        dense_big_jit_noise_xa0 = jnp.zeros(1, dtype=jnp.float32)
-        dense_big_jit_offset0 = jnp.asarray(0.0, dtype=jnp.float32)
-        dense_big_jit_translation_sqdist0 = jnp.zeros((batch_size, n_trans), dtype=jnp.float32)
-
-        def _run_dense_big_jit_bucket(r0: int, r1: int, *, run_mstep: bool, log_z):
-            (
-                rotation_prior_block,
-                translation_prior_block,
-                candidate_mask_block,
-                valid_rotation_mask,
-            ) = _dense_score_constraint_blocks(r0, r1, start_idx, end_idx, batch_size)
-            return run_dense_bucket_big_jit(
-                shifted_score_half,
-                batch_norm,
-                score_weight_half,
-                shifted_recon_half,
-                ctf2_over_nv_half_with_dc,
-                mean_for_proj,
-                Ft_y,
-                Ft_ctf,
-                jnp.asarray(rotations_padded[r0:r1]),
-                half_weights,
-                rotation_prior_block,
-                translation_prior_block,
-                candidate_mask_block,
-                valid_rotation_mask,
-                valid_image_mask,
-                log_z,
-                dense_big_jit_noise_wsum0,
-                dense_big_jit_noise_a20,
-                dense_big_jit_noise_xa0,
-                dense_big_jit_offset0,
-                shifted_half_with_dc,
-                dense_big_jit_noise_variance_half,
-                dense_big_jit_shell_indices_half,
-                dense_big_jit_translation_sqdist0,
-                dense_big_jit_window_indices,
-                dense_big_jit_recon_window_indices,
-                score_mode=relion_firstiter_score_mode,
-                zero_dc_for_scoring=half_spectrum_scoring,
-                use_window=use_window,
-                use_float64_scoring=use_float64_scoring,
-                use_float64_normalization=True,
-                run_mstep=run_mstep,
-                accumulate_noise=False,
-                return_noise_split=False,
-                has_translation_sqdist=False,
-                image_shape=image_shape,
-                proj_volume_shape=proj_volume_shape,
-                recon_volume_shape=recon_volume_shape,
-                disc_type=disc_type,
-                projection_max_r=dense_big_jit_max_r,
-                backprojection_max_r=dense_big_jit_max_r,
-                disable_adjoint_y=disable_adjoint_y,
-                disable_adjoint_ctf=disable_adjoint_ctf,
-                n_shells=1,
-            )
+        dense_big_jit_runner = _DenseBigJitBatchRunner(
+            shifted_score_half=shifted_score_half,
+            batch_norm=batch_norm,
+            score_weight_half=score_weight_half,
+            shifted_recon_half=shifted_recon_half,
+            ctf2_over_nv_half_with_dc=ctf2_over_nv_half_with_dc,
+            mean_for_proj=mean_for_proj,
+            half_weights=half_weights,
+            valid_image_mask=valid_image_mask,
+            constants=_DenseBigJitConstants.from_window(
+                window_spec,
+                n_half=n_half,
+            ),
+            score_constraint_blocks=_dense_score_constraint_blocks,
+            start_idx=start_idx,
+            end_idx=end_idx,
+            batch_size=batch_size,
+            score_mode=relion_firstiter_score_mode,
+            zero_dc_for_scoring=half_spectrum_scoring,
+            use_window=use_window,
+            use_float64_scoring=use_float64_scoring,
+            image_shape=image_shape,
+            proj_volume_shape=proj_volume_shape,
+            recon_volume_shape=recon_volume_shape,
+            disc_type=disc_type,
+            disable_adjoint_y=disable_adjoint_y,
+            disable_adjoint_ctf=disable_adjoint_ctf,
+            mstep_half_volume=relion_half_volume_mstep,
+        )
 
         # -- PASS 1: streaming logsumexp over rotation blocks --
         max_s = jnp.full(batch_size, -jnp.inf)
@@ -936,16 +1203,13 @@ def run_em(
         best_score_pass1 = jnp.full(batch_size, -jnp.inf)
         best_argmax_pass1 = jnp.zeros(batch_size, dtype=jnp.int32)
 
-        for b in range(n_blocks):
-            r0 = b * rotation_block_size
-            r1 = r0 + rotation_block_size
-            rots_b = rotations_padded[r0:r1]
-
+        for block in _iter_dense_rotation_blocks(rotations_padded, n_rot, n_blocks, rotation_block_size):
             if use_dense_big_jit:
                 score_t0 = time.time()
-                dense_result = _run_dense_big_jit_bucket(
-                    r0,
-                    r1,
+                dense_result = dense_big_jit_runner.run(
+                    block,
+                    Ft_y,
+                    Ft_ctf,
                     run_mstep=False,
                     log_z=jnp.zeros(batch_size, dtype=jnp.float32),
                 )
@@ -956,9 +1220,8 @@ def run_em(
                     dense_result.block_sum_exp,
                 )
                 if block_max_per_image is not None:
-                    actual_rot = max(0, min(rotation_block_size, n_rot - r0))
                     block_max_per_image.append(dense_result.block_best)
-                    block_pose_counts.append(actual_rot * n_trans)
+                    block_pose_counts.append(block.actual_rot * n_trans)
                 if sync_timers:
                     _block_until_ready(max_s, sum_exp)
                 timing.pass1_score_s += time.time() - score_t0
@@ -967,7 +1230,7 @@ def run_em(
             proj_t0 = time.time()
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
                 mean_for_proj,
-                rots_b,
+                block.rotations,
                 image_shape,
                 proj_volume_shape,
                 disc_type,
@@ -1004,7 +1267,7 @@ def run_em(
                 request=debug_options.per_pose_score_dump,
                 indices=indices,
                 scores=scores,
-                block_index=b,
+                block_index=block.index,
                 preprior=True,
             )
 
@@ -1014,7 +1277,7 @@ def run_em(
                 translation_prior_block,
                 candidate_mask_block,
                 valid_rotation_mask,
-            ) = _dense_score_constraint_blocks(r0, r1, start_idx, end_idx, batch_size)
+            ) = _dense_score_constraint_blocks(block.r0, block.r1, start_idx, end_idx, batch_size)
             scores = apply_dense_score_constraints(
                 scores,
                 rotation_prior_block,
@@ -1026,15 +1289,14 @@ def run_em(
             )
 
             if block_max_per_image is not None:
-                actual_rot = max(0, min(rotation_block_size, n_rot - r0))
                 block_max_per_image.append(jnp.max(scores, axis=(1, 2)))
-                block_pose_counts.append(actual_rot * n_trans)
+                block_pose_counts.append(block.actual_rot * n_trans)
 
             maybe_write_dense_per_pose_score_dump(
                 request=debug_options.per_pose_score_dump,
                 indices=indices,
                 scores=scores,
-                block_index=b,
+                block_index=block.index,
             )
 
             if sync_timers:
@@ -1046,7 +1308,7 @@ def run_em(
                 block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
                 improved = block_best > best_score_pass1
                 best_score_pass1 = jnp.where(improved, block_best, best_score_pass1)
-                best_argmax_pass1 = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax_pass1)
+                best_argmax_pass1 = jnp.where(improved, block_argmax + block.r0 * n_trans, best_argmax_pass1)
 
             logsumexp_t0 = time.time()
             max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
@@ -1106,20 +1368,22 @@ def run_em(
         else:
             best_score = jnp.full(batch_size, -jnp.inf)
             best_argmax = jnp.zeros(batch_size, dtype=jnp.int32)
-
-        for b in range(n_blocks):
-            if skip_pass2_block[b]:
-                continue
-
-            r0 = b * rotation_block_size
-            r1 = r0 + rotation_block_size
-            rots_b = rotations_padded[r0:r1]
-
+        # Pass 1 and pass 2 intentionally remain separate: pass 1 streams the
+        # logsumexp denominator, and pass 2 normalizes/accumulates without
+        # materializing the full (batch, rotation, translation) posterior.
+        for block in _iter_dense_rotation_blocks(
+            rotations_padded,
+            n_rot,
+            n_blocks,
+            rotation_block_size,
+            skip_mask=skip_pass2_block,
+        ):
             if use_dense_big_jit:
                 score_t0 = time.time()
-                dense_result = _run_dense_big_jit_bucket(
-                    r0,
-                    r1,
+                dense_result = dense_big_jit_runner.run(
+                    block,
+                    Ft_y,
+                    Ft_ctf,
                     run_mstep=True,
                     log_z=log_Z,
                 )
@@ -1140,7 +1404,7 @@ def run_em(
                 best_score = jnp.where(improved, dense_result.block_best, best_score)
                 best_argmax = jnp.where(
                     improved,
-                    dense_result.block_argmax + r0 * n_trans,
+                    dense_result.block_argmax + block.r0 * n_trans,
                     best_argmax,
                 )
                 if sync_timers:
@@ -1149,23 +1413,22 @@ def run_em(
 
                 if return_stats:
                     host_stats_t0 = time.time()
-                    actual_rot = max(0, min(rotation_block_size, n_rot - r0))
-                    if actual_rot > 0:
+                    if block.actual_rot > 0:
                         block_rotation_sums = np.asarray(
-                            jnp.sum(dense_result.probs_sum_t[:, :actual_rot], axis=0),
+                            jnp.sum(dense_result.probs_sum_t[:, : block.actual_rot], axis=0),
                             dtype=np.float64,
                         )
-                        rotation_posterior_sums[r0 : r0 + actual_rot] += block_rotation_sums
+                        rotation_posterior_sums[block.r0 : block.r0 + block.actual_rot] += block_rotation_sums
                     timing.host_stats_s += time.time() - host_stats_t0
                 continue
 
             if projection_cache is not None:
-                proj_half_b, proj_abs2_half_b = projection_cache[b]
+                proj_half_b, proj_abs2_half_b = projection_cache[block.index]
             else:
                 proj_t0 = time.time()
                 proj_half_b, proj_abs2_half_b = _compute_projections_block(
                     mean_for_proj,
-                    rots_b,
+                    block.rotations,
                     image_shape,
                     proj_volume_shape,
                     disc_type,
@@ -1200,7 +1463,7 @@ def run_em(
                 translation_prior_block,
                 candidate_mask_block,
                 valid_rotation_mask,
-            ) = _dense_score_constraint_blocks(r0, r1, start_idx, end_idx, batch_size)
+            ) = _dense_score_constraint_blocks(block.r0, block.r1, start_idx, end_idx, batch_size)
             scores = apply_dense_score_constraints(
                 scores,
                 rotation_prior_block,
@@ -1213,164 +1476,74 @@ def run_em(
             if sync_timers:
                 _block_until_ready(scores)
             timing.pass2_postprocess_s += time.time() - pass2_postprocess_t0
+            mstep_t0 = time.time()
+            mstep_block = _dense_mstep_block(
+                use_window=use_window,
+                relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+                best_score=best_score,
+                best_argmax=best_argmax,
+                block=block,
+                rotation_block_size=rotation_block_size,
+                batch_size=batch_size,
+                n_trans=n_trans,
+                scores=scores,
+                log_Z=log_Z,
+                shifted_recon_windowed=shifted_recon_windowed,
+                ctf2_over_nv_windowed_mstep=ctf2_over_nv_windowed_mstep,
+                shifted_recon_half=shifted_recon_half,
+                ctf2_over_nv_half_with_dc=ctf2_over_nv_half_with_dc,
+                n_recon_windowed=n_recon_windowed,
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+            )
+            probs = mstep_block.probs
+            block_best = mstep_block.block_best
+            block_argmax = mstep_block.block_argmax
+            if sync_timers:
+                _block_until_ready(
+                    Ft_y,
+                    Ft_ctf,
+                    probs,
+                    block_best,
+                    block_argmax,
+                    mstep_block.summed_half,
+                    mstep_block.ctf_probs_half,
+                )
+            timing.mstep_s += time.time() - mstep_t0
 
-            if use_window:
-                # Windowed M-step: GEMM at reduced dimension, then scatter back
-                # Use with-DC ctf2 for M-step accumulation (DC is excluded
-                # from scoring but must be included in reconstruction weights).
-                mstep_t0 = time.time()
-                actual_rot = max(0, min(rotation_block_size, n_rot - r0))
-                if relion_firstiter_winner_take_all:
-                    probs = _winner_take_all_probs_for_block(
-                        best_argmax,
-                        r0,
-                        actual_rot,
-                        rotation_block_size,
-                        n_trans,
-                        scores.dtype,
-                    )
-                    P = probs.swapaxes(0, 1).reshape(rotation_block_size, batch_size * n_trans)
-                    summed_windowed = P @ shifted_recon_windowed
-                    probs_sum_t = jnp.sum(probs, axis=-1)
-                    ctf_probs_windowed = probs_sum_t.T @ ctf2_over_nv_windowed_mstep
-                    block_best = best_score
-                    block_argmax = best_argmax - r0 * n_trans
-                else:
-                    (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed) = (
-                        _m_step_block_windowed(
-                            shifted_recon_windowed,
-                            scores,
-                            log_Z,
-                            rots_b,
-                            ctf2_over_nv_windowed_mstep,
-                            Ft_y,
-                            Ft_ctf,
-                            batch_size,
-                            n_trans,
-                            n_recon_windowed,
-                            image_shape,
-                            volume_shape,
-                        )
-                    )
+            if not disable_adjoint_y:
+                adjoint_y_t0 = time.time()
+                Ft_y = _adjoint_dense_mstep_volume(
+                    mstep_block.summed_half,
+                    use_window=use_window,
+                    recon_window_indices=recon_window_indices,
+                    rotations=block.rotations,
+                    volume=Ft_y,
+                    image_shape=image_shape,
+                    recon_volume_shape=recon_volume_shape,
+                    current_size=current_size,
+                    mstep_half_volume=relion_half_volume_mstep,
+                )
                 if sync_timers:
-                    _block_until_ready(
-                        Ft_y,
-                        Ft_ctf,
-                        probs,
-                        block_best,
-                        block_argmax,
-                        summed_windowed,
-                        ctf_probs_windowed,
-                    )
-                timing.mstep_s += time.time() - mstep_t0
+                    _block_until_ready(Ft_y)
+                timing.adjoint_y_s += time.time() - adjoint_y_t0
 
-                if not disable_adjoint_y:
-                    adjoint_y_t0 = time.time()
-                    Ft_y = _adjoint_slice_volume_windowed(
-                        summed_windowed,
-                        recon_window_indices,
-                        rots_b,
-                        Ft_y,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        True,
-                        False,
-                        float(current_size // 2),
-                    )
-                    if sync_timers:
-                        _block_until_ready(Ft_y)
-                    timing.adjoint_y_s += time.time() - adjoint_y_t0
-
-                if not disable_adjoint_ctf:
-                    adjoint_ctf_t0 = time.time()
-                    Ft_ctf = _adjoint_slice_volume_windowed(
-                        ctf_probs_windowed,
-                        recon_window_indices,
-                        rots_b,
-                        Ft_ctf,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        True,
-                        False,
-                        float(current_size // 2),
-                    )
-                    if sync_timers:
-                        _block_until_ready(Ft_ctf)
-                    timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
-            else:
-                # Non-windowed path: use with-DC ctf2 for M-step accumulation
-                mstep_t0 = time.time()
-                actual_rot = max(0, min(rotation_block_size, n_rot - r0))
-                if relion_firstiter_winner_take_all:
-                    probs = _winner_take_all_probs_for_block(
-                        best_argmax,
-                        r0,
-                        actual_rot,
-                        rotation_block_size,
-                        n_trans,
-                        scores.dtype,
-                    )
-                    P = probs.swapaxes(0, 1).reshape(rotation_block_size, batch_size * n_trans)
-                    summed_half_block = P @ shifted_recon_half
-                    probs_sum_t = jnp.sum(probs, axis=-1)
-                    ctf_probs_half_block = probs_sum_t.T @ ctf2_over_nv_half_with_dc
-                    block_best = best_score
-                    block_argmax = best_argmax - r0 * n_trans
-                else:
-                    (probs, block_best, block_argmax, summed_half_block, ctf_probs_half_block) = (
-                        _m_step_block_compute(
-                            shifted_recon_half,
-                            scores,
-                            log_Z,
-                            rots_b,
-                            ctf2_over_nv_half_with_dc,
-                            batch_size,
-                            n_trans,
-                        )
-                    )
+            if not disable_adjoint_ctf:
+                adjoint_ctf_t0 = time.time()
+                Ft_ctf = _adjoint_dense_mstep_volume(
+                    mstep_block.ctf_probs_half,
+                    use_window=use_window,
+                    recon_window_indices=recon_window_indices,
+                    rotations=block.rotations,
+                    volume=Ft_ctf,
+                    image_shape=image_shape,
+                    recon_volume_shape=recon_volume_shape,
+                    current_size=current_size,
+                    mstep_half_volume=relion_half_volume_mstep,
+                )
                 if sync_timers:
-                    _block_until_ready(
-                        Ft_y,
-                        Ft_ctf,
-                        probs,
-                        block_best,
-                        block_argmax,
-                        summed_half_block,
-                        ctf_probs_half_block,
-                    )
-                timing.mstep_s += time.time() - mstep_t0
-
-                if not disable_adjoint_y:
-                    adjoint_y_t0 = time.time()
-                    Ft_y = _adjoint_slice_volume_half(
-                        summed_half_block,
-                        rots_b,
-                        Ft_y,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        True,
-                    )
-                    if sync_timers:
-                        _block_until_ready(Ft_y)
-                    timing.adjoint_y_s += time.time() - adjoint_y_t0
-
-                if not disable_adjoint_ctf:
-                    adjoint_ctf_t0 = time.time()
-                    Ft_ctf = _adjoint_slice_volume_half(
-                        ctf_probs_half_block,
-                        rots_b,
-                        Ft_ctf,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        True,
-                    )
-                    if sync_timers:
-                        _block_until_ready(Ft_ctf)
-                    timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
+                    _block_until_ready(Ft_ctf)
+                timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
 
             # -- Noise accumulation for this rotation block --
             if accumulate_noise:
@@ -1380,27 +1553,23 @@ def run_em(
                     noise_sigma2_offset += float(
                         np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
                     )
-                rot_block_size_actual = rots_b.shape[0]
+                rot_block_size_actual = block.rotations.shape[0]
                 # Compute masked GEMM: P @ shifted_masked (with DC intact)
                 P_noise = probs.swapaxes(0, 1).reshape(rot_block_size_actual, batch_size * n_trans)
                 summed_masked_noise = P_noise @ shifted_masked_for_noise  # (rot_block, N_noise)
                 # ctf_probs for noise: recompute WITH DC (M-step used DC-zeroed version)
                 probs_sum_t_noise = jnp.sum(probs, axis=-1)  # (n_images, rot_block)
-                if use_window:
-                    proj_recon_windowed_b = proj_half_b[:, recon_window_indices]
-                    proj_abs2_recon_windowed_b = proj_abs2_half_b[:, recon_window_indices]
-                    ctf2_nv_noise = ctf2_over_nv_half_with_dc[:, recon_window_indices]
-                    ctf_probs_for_noise = probs_sum_t_noise.T @ ctf2_nv_noise
-                    nv_for_noise = noise_variance_windowed
-                    si_for_noise = shell_indices_noise
-                    proj_for_noise = proj_recon_windowed_b
-                    proj_abs2_for_noise = proj_abs2_recon_windowed_b
-                else:
-                    ctf_probs_for_noise = probs_sum_t_noise.T @ ctf2_over_nv_half_with_dc
-                    nv_for_noise = noise_variance_half
-                    si_for_noise = shell_indices_noise
-                    proj_for_noise = proj_half_b
-                    proj_abs2_for_noise = proj_abs2_half_b
+                noise_view = _dense_noise_block_view(
+                    use_window=use_window,
+                    recon_window_indices=recon_window_indices,
+                    proj_half=proj_half_b,
+                    proj_abs2_half=proj_abs2_half_b,
+                    ctf2_over_nv_half_with_dc=ctf2_over_nv_half_with_dc,
+                    probs_sum_t_noise=probs_sum_t_noise,
+                    noise_variance_half=noise_variance_half,
+                    noise_variance_windowed=noise_variance_windowed,
+                    shell_indices_noise=shell_indices_noise,
+                )
 
                 if dense_noise_component_acc:
                     for state in dense_noise_component_acc.values():
@@ -1408,23 +1577,23 @@ def run_em(
                         row_probs = probs[row]
                         row_shifted = shifted_masked_for_noise[row * n_trans : (row + 1) * n_trans]
                         row_summed_masked = row_probs @ row_shifted
-                        row_ctf2_nv = ctf2_nv_noise[row] if use_window else ctf2_over_nv_half_with_dc[row]
+                        row_ctf2_nv = noise_view.ctf2_over_nv[row]
                         row_ctf_probs = jnp.sum(row_probs, axis=-1)[:, None] * row_ctf2_nv[None, :]
-                        row_ctf_probs_raw = row_ctf_probs * nv_for_noise[None, :]
-                        row_a2_pixel = jnp.sum(proj_abs2_for_noise * row_ctf_probs_raw, axis=0)
-                        row_xa_pixel = nv_for_noise * jnp.real(
-                            jnp.sum(proj_for_noise * jnp.conj(row_summed_masked), axis=0)
+                        row_ctf_probs_raw = row_ctf_probs * noise_view.noise_variance[None, :]
+                        row_a2_pixel = jnp.sum(noise_view.proj_abs2_half * row_ctf_probs_raw, axis=0)
+                        row_xa_pixel = noise_view.noise_variance * jnp.real(
+                            jnp.sum(noise_view.proj_half * jnp.conj(row_summed_masked), axis=0)
                         )
-                        state["a2_shells"] += bin_shell_values_np(row_a2_pixel, si_for_noise, n_shells)
-                        state["xa_shells"] += bin_shell_values_np(row_xa_pixel, si_for_noise, n_shells)
+                        state["a2_shells"] += bin_shell_values_np(row_a2_pixel, noise_view.shell_indices, n_shells)
+                        state["xa_shells"] += bin_shell_values_np(row_xa_pixel, noise_view.shell_indices, n_shells)
 
                 block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
-                    proj_for_noise,
-                    proj_abs2_for_noise,
+                    noise_view.proj_half,
+                    noise_view.proj_abs2_half,
                     summed_masked_noise,
-                    ctf_probs_for_noise,
-                    nv_for_noise,
-                    si_for_noise,
+                    noise_view.ctf_probs,
+                    noise_view.noise_variance,
+                    noise_view.shell_indices,
                     n_shells,
                     debug_options.return_noise_split,
                 )
@@ -1443,20 +1612,19 @@ def run_em(
                 assignment_t0 = time.time()
                 improved = block_best > best_score
                 best_score = jnp.where(improved, block_best, best_score)
-                best_argmax = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax)
+                best_argmax = jnp.where(improved, block_argmax + block.r0 * n_trans, best_argmax)
                 if sync_timers:
                     _block_until_ready(best_score, best_argmax)
                 timing.assignment_s += time.time() - assignment_t0
 
             if return_stats:
                 host_stats_t0 = time.time()
-                actual_rot = max(0, min(rotation_block_size, n_rot - r0))
-                if actual_rot > 0:
+                if block.actual_rot > 0:
                     block_rotation_sums = np.asarray(
-                        jnp.sum(probs[:, :actual_rot, :], axis=(0, 2)),
+                        jnp.sum(probs[:, : block.actual_rot, :], axis=(0, 2)),
                         dtype=np.float64,
                     )
-                    rotation_posterior_sums[r0 : r0 + actual_rot] += block_rotation_sums
+                    rotation_posterior_sums[block.r0 : block.r0 + block.actual_rot] += block_rotation_sums
                 timing.host_stats_s += time.time() - host_stats_t0
 
         if dense_noise_component_acc:
@@ -1511,6 +1679,16 @@ def run_em(
 
     # -- SOLVE --
     from recovar.reconstruction import relion_functions
+
+    if relion_half_volume_mstep:
+        Ft_y, Ft_ctf = enforce_half_volume_x0(
+            Ft_y,
+            Ft_ctf,
+            recon_volume_shape,
+            logger=logger,
+            label="Dense",
+        )
+        Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
 
     if reconstruction_padding_factor > 1:
         new_mean = None
@@ -1707,12 +1885,7 @@ def compute_e_step_weights(
         n_half,
         include_recon_window=False,
     )
-    use_window = window_spec.use_window
-    window_indices = window_spec.score_indices
-    n_windowed = window_spec.n_score
     projection_kwargs = window_spec.projection_kwargs()
-    if use_window:
-        half_weights_windowed = window_spec.score_values(half_weights)
 
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
     n_rot_padded = n_blocks * rotation_block_size
@@ -1748,68 +1921,41 @@ def compute_e_step_weights(
             score_with_masked_images,
         )
 
-        if use_window:
-            shifted_windowed = shifted_half[:, window_indices]
-            ctf2_over_nv_windowed = ctf2_over_nv_half[:, window_indices]
-        else:
-            shifted_windowed = shifted_half
-            ctf2_over_nv_windowed = ctf2_over_nv_half
+        shifted_windowed = window_spec.score_values(shifted_half)
+        ctf2_over_nv_windowed = window_spec.score_values(ctf2_over_nv_half)
 
         # Pass 1: streaming logsumexp
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size, dtype=precision_policy.normalization_real_dtype)
 
-        for b in range(n_blocks):
-            r0 = b * rotation_block_size
-            r1 = r0 + rotation_block_size
-            rots_b = rotations_padded[r0:r1]
-
+        for block in _iter_dense_rotation_blocks(rotations_padded, n_rot, n_blocks, rotation_block_size):
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
                 mean,
-                rots_b,
+                block.rotations,
                 image_shape,
                 volume_shape,
                 disc_type,
                 **projection_kwargs,
             )
 
-            if use_window:
-                proj_windowed_b = proj_half_b[:, window_indices]
-                proj_abs2_windowed_b = proj_abs2_half_b[:, window_indices]
-                proj_windowed_weighted_b = proj_windowed_b * half_weights_windowed
-                proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
-                scores = _e_step_block_scores_windowed(
-                    shifted_windowed,
-                    batch_norm,
-                    ctf2_over_nv_windowed,
-                    proj_windowed_weighted_b,
-                    proj_abs2_windowed_weighted_b,
-                    half_weights_windowed,
-                    batch_size,
-                    n_trans,
-                    n_windowed,
-                    image_shape,
-                    volume_shape,
-                )
-            else:
-                proj_half_weighted_b = proj_half_b * half_weights
-                proj_abs2_weighted_b = proj_abs2_half_b * half_weights
-                scores = _e_step_block_scores(
-                    shifted_half,
-                    batch_norm,
-                    ctf2_over_nv_half,
-                    proj_half_weighted_b,
-                    proj_abs2_weighted_b,
-                    half_weights,
-                    batch_size,
-                    n_trans,
-                    image_shape,
-                    volume_shape,
-                )
+            scores = _score_rotation_block(
+                window_spec,
+                shifted_score=shifted_windowed,
+                batch_norm=batch_norm,
+                score_weight=ctf2_over_nv_windowed,
+                proj_half=proj_half_b,
+                proj_abs2_half=proj_abs2_half_b,
+                half_weights=half_weights,
+                n_images=batch_size,
+                n_trans=n_trans,
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                score_mode="gaussian",
+                precision_policy=precision_policy,
+            )
 
-            if r1 > n_rot:
-                valid = n_rot - r0
-                mask = jnp.arange(rotation_block_size) < valid
+            if block.actual_rot < rotation_block_size:
+                mask = jnp.arange(rotation_block_size) < block.actual_rot
                 scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
 
             max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
@@ -1821,57 +1967,34 @@ def compute_e_step_weights(
         best_argmax = jnp.zeros(batch_size, dtype=jnp.int32)
         batch_weights_blocks = []
 
-        for b in range(n_blocks):
-            r0 = b * rotation_block_size
-            r1 = r0 + rotation_block_size
-            rots_b = rotations_padded[r0:r1]
-
+        for block in _iter_dense_rotation_blocks(rotations_padded, n_rot, n_blocks, rotation_block_size):
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
                 mean,
-                rots_b,
+                block.rotations,
                 image_shape,
                 volume_shape,
                 disc_type,
                 **projection_kwargs,
             )
 
-            if use_window:
-                proj_windowed_b = proj_half_b[:, window_indices]
-                proj_abs2_windowed_b = proj_abs2_half_b[:, window_indices]
-                proj_windowed_weighted_b = proj_windowed_b * half_weights_windowed
-                proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
-                scores = _e_step_block_scores_windowed(
-                    shifted_windowed,
-                    batch_norm,
-                    ctf2_over_nv_windowed,
-                    proj_windowed_weighted_b,
-                    proj_abs2_windowed_weighted_b,
-                    half_weights_windowed,
-                    batch_size,
-                    n_trans,
-                    n_windowed,
-                    image_shape,
-                    volume_shape,
-                )
-            else:
-                proj_half_weighted_b = proj_half_b * half_weights
-                proj_abs2_weighted_b = proj_abs2_half_b * half_weights
-                scores = _e_step_block_scores(
-                    shifted_half,
-                    batch_norm,
-                    ctf2_over_nv_half,
-                    proj_half_weighted_b,
-                    proj_abs2_weighted_b,
-                    half_weights,
-                    batch_size,
-                    n_trans,
-                    image_shape,
-                    volume_shape,
-                )
+            scores = _score_rotation_block(
+                window_spec,
+                shifted_score=shifted_windowed,
+                batch_norm=batch_norm,
+                score_weight=ctf2_over_nv_windowed,
+                proj_half=proj_half_b,
+                proj_abs2_half=proj_abs2_half_b,
+                half_weights=half_weights,
+                n_images=batch_size,
+                n_trans=n_trans,
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                score_mode="gaussian",
+                precision_policy=precision_policy,
+            )
 
-            if r1 > n_rot:
-                valid = n_rot - r0
-                pmask = jnp.arange(rotation_block_size) < valid
+            if block.actual_rot < rotation_block_size:
+                pmask = jnp.arange(rotation_block_size) < block.actual_rot
                 scores = jnp.where(pmask[None, :, None], scores, -jnp.inf)
 
             # Normalize to probabilities
@@ -1882,11 +2005,10 @@ def compute_e_step_weights(
             block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
             improved = block_best > best_score
             best_score = jnp.where(improved, block_best, best_score)
-            best_argmax = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax)
+            best_argmax = jnp.where(improved, block_argmax + block.r0 * n_trans, best_argmax)
 
             # Trim padding rotations and store block weights
-            actual_rot = min(rotation_block_size, n_rot - r0)
-            block_probs = probs[:, :actual_rot, :]  # (batch, actual_rot, n_trans)
+            block_probs = probs[:, : block.actual_rot, :]
             batch_weights_blocks.append(np.asarray(block_probs.reshape(batch_size, -1)))
 
         # Concatenate blocks -> (batch_size, n_rot * n_trans)

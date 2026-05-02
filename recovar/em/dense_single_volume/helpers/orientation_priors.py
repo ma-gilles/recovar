@@ -152,6 +152,92 @@ def normalize_direction_prior_per_half(direction_prior):
     return [arr.copy(), arr.copy()]
 
 
+def normalize_class_direction_prior(direction_prior, n_classes):
+    """Return per-class conditional RELION direction priors.
+
+    RELION's ``pdf_direction[class]`` rows are joint class-direction masses in
+    the no-orientation-prior branch, so row sums may equal ``pdf_class`` rather
+    than one.  RECOVAR keeps ``class_log_priors`` separate, so K-class callers
+    use row-normalized conditionals here and pass the class prior explicitly.
+    """
+
+    arr = np.asarray(direction_prior, dtype=np.float32)
+    if arr.ndim == 1:
+        arr = np.broadcast_to(arr[None, :], (int(n_classes), arr.shape[0])).copy()
+    elif arr.ndim == 2 and arr.shape[0] == int(n_classes):
+        arr = arr.copy()
+    else:
+        raise ValueError(
+            "class direction prior must have shape (n_dirs,) or "
+            f"({int(n_classes)}, n_dirs), got {arr.shape}",
+        )
+
+    if np.any(arr < 0.0) or not np.all(np.isfinite(arr)):
+        raise ValueError("class direction prior entries must be finite and non-negative")
+    row_sums = arr.sum(axis=1, keepdims=True)
+    if np.any(row_sums <= 0.0):
+        raise ValueError("each class direction prior row must have positive mass")
+    return (arr / row_sums).astype(np.float32)
+
+
+def normalize_class_direction_prior_per_half(direction_prior, n_classes):
+    """Return two per-half arrays with shape ``(n_classes, n_dirs)``."""
+
+    n_classes = int(n_classes)
+    if n_classes < 1:
+        raise ValueError(f"n_classes must be >= 1, got {n_classes}")
+    if direction_prior is None:
+        return [None, None]
+
+    if isinstance(direction_prior, (list, tuple)) and len(direction_prior) == 2:
+        return [
+            None
+            if direction_prior[0] is None
+            else normalize_class_direction_prior(direction_prior[0], n_classes),
+            None
+            if direction_prior[1] is None
+            else normalize_class_direction_prior(direction_prior[1], n_classes),
+        ]
+
+    arr = np.asarray(direction_prior, dtype=np.float32)
+    if arr.ndim == 3 and arr.shape[0] == 2 and arr.shape[1] == n_classes:
+        return [
+            normalize_class_direction_prior(arr[0], n_classes),
+            normalize_class_direction_prior(arr[1], n_classes),
+        ]
+    if arr.ndim == 2 and n_classes == 1 and arr.shape[0] == 2:
+        return [
+            normalize_class_direction_prior(arr[0], n_classes),
+            normalize_class_direction_prior(arr[1], n_classes),
+        ]
+
+    shared = normalize_class_direction_prior(arr, n_classes)
+    return [shared.copy(), shared.copy()]
+
+
+def class_weights_from_direction_prior(direction_prior, n_classes):
+    """Infer RELION class weights from raw per-class ``pdf_direction`` rows."""
+
+    priors = normalize_class_direction_prior_per_half(direction_prior, n_classes)
+    for original, normalized in zip(
+        direction_prior if isinstance(direction_prior, (list, tuple)) and len(direction_prior) == 2 else [direction_prior],
+        priors,
+    ):
+        if normalized is None:
+            continue
+        arr = np.asarray(original, dtype=np.float64)
+        if arr.ndim == 3 and arr.shape[0] == 2:
+            arr = arr[0]
+        if arr.ndim == 1:
+            continue
+        if arr.ndim == 2 and arr.shape[0] == int(n_classes):
+            weights = arr.sum(axis=1)
+            total = float(weights.sum())
+            if total > 0.0 and np.all(np.isfinite(weights)):
+                return (weights / total).astype(np.float64)
+    return None
+
+
 def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order):
     """Remap a RELION direction prior between HEALPix orders."""
     direction_prior = np.asarray(direction_prior, dtype=np.float64).reshape(-1)

@@ -271,14 +271,6 @@ def _run_big_jit(
         s["valid_rotation_mask"],
         jnp.ones(N_IMAGES, dtype=bool) if valid_image_mask is None else valid_image_mask,
         jnp.zeros(N_IMAGES, dtype=jnp.float32) if log_z is None else log_z,
-        jnp.zeros(1, dtype=jnp.float32),
-        jnp.zeros(1, dtype=jnp.float32),
-        jnp.zeros(1, dtype=jnp.float32),
-        jnp.asarray(0.0, dtype=jnp.float32),
-        s["shifted_recon_half"],
-        jnp.ones(N_HALF, dtype=jnp.float32),
-        jnp.zeros(N_HALF, dtype=jnp.int32),
-        jnp.zeros((N_IMAGES, N_TRANS), dtype=jnp.float32),
         window_indices,
         recon_window_indices,
         score_mode=score_mode,
@@ -287,9 +279,6 @@ def _run_big_jit(
         use_float64_scoring=False,
         use_float64_normalization=True,
         run_mstep=run_mstep,
-        accumulate_noise=False,
-        return_noise_split=False,
-        has_translation_sqdist=False,
         image_shape=IMAGE_SHAPE,
         proj_volume_shape=VOLUME_SHAPE,
         recon_volume_shape=VOLUME_SHAPE,
@@ -298,7 +287,6 @@ def _run_big_jit(
         backprojection_max_r=projection_max_r,
         disable_adjoint_y=False,
         disable_adjoint_ctf=False,
-        n_shells=1,
     )
 
 

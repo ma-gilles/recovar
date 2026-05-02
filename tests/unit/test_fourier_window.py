@@ -268,6 +268,26 @@ class TestWindowIndicesSubset:
         assert n == 2834
         assert indices.size == 2834
 
+    def test_initial_model_pass1_radial_support_count(self):
+        """64px box, current_size=10: RELION InitialModel pass1 uses radial Minvsigma2 support."""
+        radial_indices, n_radial = make_fourier_window_indices_np(
+            (64, 64),
+            current_size=10,
+            square=False,
+            include_dc=False,
+        )
+        square_indices, n_square = make_fourier_window_indices_np(
+            (64, 64),
+            current_size=10,
+            square=True,
+            include_dc=False,
+        )
+
+        assert n_radial == 46
+        assert radial_indices.size == 46
+        assert n_square == 59
+        assert square_indices.size == 59
+
     def test_relion_reconstruction_window_keeps_only_dc_extra(self):
         """Reconstruction support should differ from scoring support only by DC."""
         idx_score, n_score = make_fourier_window_indices_np((128, 128), current_size=84, include_dc=False)

@@ -14,8 +14,7 @@ from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import noise as noise_utils
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.adjoint import (
-    adjoint_slice_volume_half as _adjoint_slice_volume_half,
-    adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
+    adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
@@ -23,6 +22,7 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     enforce_half_volume_x0,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
+    relion_x_half_accumulators_to_full,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
@@ -45,6 +45,7 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
     compute_projections_block as _compute_projections_block,
+    compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.local_debug import (
@@ -170,6 +171,12 @@ class _LocalPostprocessBuffers:
     best_pose_rotation_ids: np.ndarray | None = None
 
 
+@dataclass
+class _LocalProjectionBlock:
+    proj_weighted: jnp.ndarray
+    proj_for_noise: jnp.ndarray
+
+
 def _local_em_return_tuple(
     Ft_y,
     Ft_ctf,
@@ -200,6 +207,80 @@ def _local_em_return_tuple(
     if return_profile:
         result.append(profile_summary)
     return tuple(result)
+
+
+def _project_local_bucket(
+    *,
+    mean_for_proj,
+    bucket: LocalBucketSpec,
+    image_shape,
+    proj_volume_shape,
+    disc_type: str,
+    projection_kwargs: dict,
+    window_spec,
+    n_half: int,
+    half_weights,
+    precision_policy: DensePrecisionPolicy,
+    relion_projector_half=None,
+    relion_projector_r_max: int | None = None,
+    projection_padding_factor: int = 1,
+) -> _LocalProjectionBlock:
+    """Project a local bucket and return score/noise projection views."""
+
+    batch_size = int(bucket.image_indices.shape[0])
+    bucket_rotation_count = int(bucket.bucket_rotation_count)
+    # Do not retry per-bucket projection dedupe here unless the real 5k
+    # duplicate factor changes materially. It regressed a measured local run
+    # from ~76.7s to ~126.9s when duplicate factor was only ~1.004-1.005.
+    flat_rotations = flatten_bucket_rotations(jnp.asarray(bucket.local_rotations))
+    if relion_projector_half is not None:
+        if relion_projector_r_max is None:
+            raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
+        proj_half_flat, _ = _compute_relion_projector_projections_block(
+            relion_projector_half,
+            flat_rotations,
+            image_shape,
+            r_max=int(relion_projector_r_max),
+            padding_factor=int(projection_padding_factor),
+            return_abs2=False,
+            centered_rows=True,
+        )
+    else:
+        proj_half_flat, _ = _compute_projections_block(
+            mean_for_proj,
+            flat_rotations,
+            image_shape,
+            proj_volume_shape,
+            disc_type,
+            return_abs2=False,
+            **projection_kwargs,
+        )
+
+    if window_spec.use_window:
+        proj_half = window_spec.score_values(proj_half_flat).reshape(
+            batch_size,
+            bucket_rotation_count,
+            window_spec.n_score,
+        )
+        proj_for_noise = window_spec.recon_values(proj_half_flat).reshape(
+            batch_size,
+            bucket_rotation_count,
+            window_spec.n_recon,
+        )
+        score_half_weights = window_spec.score_values(half_weights)
+    else:
+        proj_half = proj_half_flat.reshape(batch_size, bucket_rotation_count, n_half)
+        proj_for_noise = proj_half
+        score_half_weights = half_weights
+
+    proj_weighted = proj_half * score_half_weights[None, None, :]
+    proj_weighted, proj_for_noise, _, _ = precision_policy.cast_local_projection_scores(
+        proj_weighted,
+        proj_for_noise,
+        None,
+        None,
+    )
+    return _LocalProjectionBlock(proj_weighted=proj_weighted, proj_for_noise=proj_for_noise)
 
 
 def _postprocess_local_bucket(
@@ -449,8 +530,6 @@ def _prepare_local_exact_bucket(
     translation_phases_half,
     config,
     norm_half_weights,
-    batch_size: int,
-    n_trans: int,
     score_with_masked_images: bool,
     image_pre_shifts=None,
     timer: dict[str, float] | None = None,
@@ -622,11 +701,17 @@ def run_local_em_exact(
     use_float64_scoring: bool = False,
     use_float64_normalization: bool = True,
     use_float64_projections: bool = False,
+    projection_relion_texture_interp: bool = False,
+    projection_force_jax: bool = False,
+    relion_projector_half=None,
+    relion_projector_r_max: int | None = None,
     do_gridding_correction: bool = False,
     square_window: bool = False,
     image_corrections: np.ndarray | None = None,
     scale_corrections: np.ndarray | None = None,
     image_pre_shifts: np.ndarray | None = None,
+    mstep_subtract_ctf_projection: bool = False,
+    mstep_relion_x_half: bool = False,
     return_profile: bool = False,
     disable_adjoint_y: bool = False,
     disable_adjoint_ctf: bool = False,
@@ -728,7 +813,10 @@ def run_local_em_exact(
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
     else:
         recon_volume_shape = volume_shape
-    logger.info("Exact local M-step: using native half-volume RELION backprojection")
+    if mstep_relion_x_half:
+        logger.info("Exact local M-step: using RELION x-half BPref-layout backprojection")
+    else:
+        logger.info("Exact local M-step: using native half-volume backprojection")
     recon_accum_shape = half_volume_accumulator_shape(recon_volume_shape)
     recon_volume_size = int(np.prod(recon_accum_shape))
 
@@ -743,8 +831,9 @@ def run_local_em_exact(
     window_indices = window_spec.score_indices
     recon_window_indices = window_spec.recon_indices
     n_windowed = window_spec.n_score
-    n_recon_windowed = window_spec.n_recon
     projection_kwargs = window_spec.projection_kwargs()
+    projection_kwargs["relion_texture_interp"] = bool(projection_relion_texture_interp)
+    projection_kwargs["force_jax"] = bool(projection_force_jax)
 
     half_weights = make_scoring_half_image_weights(
         image_shape,
@@ -880,10 +969,13 @@ def run_local_em_exact(
     disabled_noise_xa = jnp.zeros(1, dtype=jnp.float32)
     disabled_noise_shell_indices = jnp.zeros(n_half, dtype=jnp.int32)
 
-    use_big_jit_buckets = not debug_score_dump_filter_matches and debug_noise_dump_dir is None
+    use_relion_projector = relion_projector_half is not None
+    use_big_jit_buckets = (not use_relion_projector) and not debug_score_dump_filter_matches and not (
+        accumulate_noise and debug_noise_dump_dir is not None
+    )
     mean_for_proj_big_jit = mean_for_proj
     projection_half_volume_big_jit = False
-    if use_big_jit_buckets:
+    if use_big_jit_buckets and not projection_relion_texture_interp:
         mean_for_proj_big_jit = fourier_transform_utils.full_volume_to_half_volume(
             mean_for_proj,
             proj_volume_shape,
@@ -922,11 +1014,9 @@ def run_local_em_exact(
                 experiment_dataset.voxel_size,
             )
 
-        can_use_big_jit_bucket = (
-            use_big_jit_buckets
-            and batch_data is not None
-        )
-        if can_use_big_jit_bucket:
+        if use_big_jit_buckets:
+            if batch_data is None:
+                raise RuntimeError("exact local big-JIT requires fetched native image batches")
             big_jit_t0 = time.time()
             unpadded_bucket = bucket
             unpadded_batch_size = batch_size
@@ -1123,6 +1213,10 @@ def run_local_em_exact(
                 disc_type=disc_type,
                 projection_half_volume=projection_half_volume_big_jit,
                 projection_max_r=projection_max_r_big_jit,
+                projection_relion_texture_interp=bool(projection_relion_texture_interp),
+                projection_force_jax=bool(projection_force_jax),
+                mstep_subtract_ctf_projection=bool(mstep_subtract_ctf_projection),
+                mstep_relion_x_half=bool(mstep_relion_x_half),
                 disable_adjoint_y=disable_adjoint_y,
                 disable_adjoint_ctf=disable_adjoint_ctf,
                 accumulate_noise=accumulate_noise,
@@ -1219,8 +1313,6 @@ def run_local_em_exact(
             translation_phases_half,
             config,
             norm_half_weights,
-            batch_size,
-            n_trans,
             score_with_masked_images,
             image_pre_shifts=image_pre_shifts,
             timer=preprocess_profile if return_profile else None,
@@ -1287,46 +1379,23 @@ def run_local_em_exact(
         timing.preprocess_s += time.time() - preprocess_t0
 
         projection_t0 = time.time()
-        # NOTE(local-projection-dedupe): do not retry per-bucket projection
-        # dedupe here unless the real 5k duplicate factor changes materially.
-        # We tried it repeatedly on the exact-local path and it is a bad trade:
-        # after RELION-style reconstruction gating the measured projection
-        # duplicate factor was only ~1.004-1.005, while the extra gather/shape
-        # churn regressed the real 5k local run from ~76.7s to ~126.9s.
-        flat_rotations = flatten_bucket_rotations(jnp.asarray(bucket.local_rotations))
-        proj_half_flat, _ = _compute_projections_block(
-            mean_for_proj,
-            flat_rotations,
-            image_shape,
-            proj_volume_shape,
-            disc_type,
-            return_abs2=False,
-            **projection_kwargs,
+        projection_block = _project_local_bucket(
+            mean_for_proj=mean_for_proj,
+            bucket=bucket,
+            image_shape=image_shape,
+            proj_volume_shape=proj_volume_shape,
+            disc_type=disc_type,
+            projection_kwargs=projection_kwargs,
+            window_spec=window_spec,
+            n_half=n_half,
+            half_weights=half_weights,
+            precision_policy=precision_policy,
+            relion_projector_half=relion_projector_half,
+            relion_projector_r_max=relion_projector_r_max,
+            projection_padding_factor=projection_padding_factor,
         )
-        if use_window:
-            proj_half = proj_half_flat[:, window_indices].reshape(batch_size, bucket.bucket_rotation_count, n_windowed)
-            proj_weighted = proj_half * half_weights_windowed[None, None, :]
-            proj_recon = proj_half_flat[:, recon_window_indices].reshape(
-                batch_size,
-                bucket.bucket_rotation_count,
-                n_recon_windowed,
-            )
-            proj_for_noise = proj_recon
-        else:
-            proj_half = proj_half_flat.reshape(batch_size, bucket.bucket_rotation_count, n_half)
-            proj_weighted = proj_half * half_weights[None, None, :]
-            proj_for_noise = proj_half
-        (
-            proj_weighted,
-            proj_for_noise,
-            _,
-            _,
-        ) = precision_policy.cast_local_projection_scores(
-            proj_weighted,
-            proj_for_noise,
-            None,
-            None,
-        )
+        proj_weighted = projection_block.proj_weighted
+        proj_for_noise = projection_block.proj_for_noise
         if return_profile:
             _block_until_ready(proj_weighted)
         timing.projection_s += time.time() - projection_t0
@@ -1378,6 +1447,11 @@ def run_local_em_exact(
                 adaptive_fraction=adaptive_fraction,
                 max_significants=max_significants,
             )
+            if mstep_subtract_ctf_projection:
+                # RELION's VDAM/--grad path backprojects the residual image,
+                # not the raw unmasked image: Fimg_store = Fimg - Frefctf.
+                frefctf_weighted = proj_for_noise * ctf2_over_nv_recon[:, None, :]
+                summed = summed - reconstruction_probs_sum_t[..., None] * frefctf_weighted
             if return_profile:
                 _block_until_ready(
                     summed,
@@ -1496,8 +1570,11 @@ def run_local_em_exact(
                 current_size=current_size,
                 debug_iteration=debug_iteration,
                 shifted_score_split=shifted_score.reshape(batch_size, n_trans, -1),
+                shifted_recon_split=shifted_recon_split,
                 ctf2_over_nv_score=ctf2_over_nv_score,
+                ctf2_over_nv_recon=ctf2_over_nv_recon,
                 proj_weighted=proj_weighted,
+                proj_for_noise=proj_for_noise,
                 proj_abs2_weighted=None,
                 dump_dir=debug_score_dump_dir,
                 pending_targets=debug_score_dump_targets,
@@ -1510,6 +1587,11 @@ def run_local_em_exact(
             reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
             summed = compute_local_weighted_sums(reconstruction_probs, shifted_recon_split)
             ctf_probs = compute_local_ctf_sums(reconstruction_probs, ctf2_over_nv_recon)
+            if mstep_subtract_ctf_projection:
+                # RELION's VDAM/--grad path backprojects the residual image,
+                # not the raw unmasked image: Fimg_store = Fimg - Frefctf.
+                frefctf_weighted = proj_for_noise * ctf2_over_nv_recon[:, None, :]
+                summed = summed - reconstruction_probs_sum_t[..., None] * frefctf_weighted
             if return_profile:
                 _block_until_ready(summed, ctf_probs, probs_sum_t, reconstruction_probs_sum_t)
             timing.mstep_s += time.time() - mstep_t0
@@ -1554,60 +1636,40 @@ def run_local_em_exact(
 
         if not disable_adjoint_y:
             adjoint_y_t0 = time.time()
-            if use_window:
-                Ft_y = _adjoint_slice_volume_windowed(
-                    flatten_bucket_rows(packed_summed),
-                    recon_window_indices,
-                    packed_flat_rotations,
-                    Ft_y,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    True,
-                    True,
-                    float(current_size // 2),
-                )
-            else:
-                Ft_y = _adjoint_slice_volume_half(
-                    flatten_bucket_rows(packed_summed),
-                    packed_flat_rotations,
-                    Ft_y,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    True,
-                    True,
-                )
+            Ft_y = _adjoint_slice_volume_maybe_windowed(
+                flatten_bucket_rows(packed_summed),
+                recon_window_indices,
+                packed_flat_rotations,
+                Ft_y,
+                image_shape,
+                recon_volume_shape,
+                "linear_interp",
+                True,
+                True,
+                use_window=use_window,
+                max_r=float(current_size // 2) if use_window else None,
+                relion_x_half=bool(mstep_relion_x_half),
+            )
             if return_profile:
                 _block_until_ready(Ft_y)
             timing.adjoint_y_s += time.time() - adjoint_y_t0
 
         if not disable_adjoint_ctf:
             adjoint_ctf_t0 = time.time()
-            if use_window:
-                Ft_ctf = _adjoint_slice_volume_windowed(
-                    flatten_bucket_rows(packed_ctf_probs),
-                    recon_window_indices,
-                    packed_flat_rotations,
-                    Ft_ctf,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    True,
-                    True,
-                    float(current_size // 2),
-                )
-            else:
-                Ft_ctf = _adjoint_slice_volume_half(
-                    flatten_bucket_rows(packed_ctf_probs),
-                    packed_flat_rotations,
-                    Ft_ctf,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    True,
-                    True,
-                )
+            Ft_ctf = _adjoint_slice_volume_maybe_windowed(
+                flatten_bucket_rows(packed_ctf_probs),
+                recon_window_indices,
+                packed_flat_rotations,
+                Ft_ctf,
+                image_shape,
+                recon_volume_shape,
+                "linear_interp",
+                True,
+                True,
+                use_window=use_window,
+                max_r=float(current_size // 2) if use_window else None,
+                relion_x_half=bool(mstep_relion_x_half),
+            )
             if return_profile:
                 _block_until_ready(Ft_ctf)
             timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
@@ -1743,7 +1805,10 @@ def run_local_em_exact(
         logger=logger,
         label="Exact local",
     )
-    Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
+    if mstep_relion_x_half:
+        Ft_y, Ft_ctf = relion_x_half_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
+    else:
+        Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
 
     if return_profile:
         _block_until_ready(Ft_y, Ft_ctf)

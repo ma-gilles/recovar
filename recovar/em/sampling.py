@@ -208,21 +208,33 @@ def rotation_grid_size(order: int) -> int:
     return hp.nside2npix(nside) * rotation_grid_n_in_planes(order)
 
 
-def _split_rotation_indices(indices, healpix_order):
+def _split_rotation_indices(indices, healpix_order, *, rotation_index_order: str = "recovar"):
     """Split full-grid rotation indices into HEALPix pixel and psi components."""
     indices = np.asarray(indices, dtype=np.int64).reshape(-1)
     n_pixels = hp.nside2npix(2**healpix_order)
-    pixel_idx = indices % n_pixels
-    psi_idx = indices // n_pixels
+    if rotation_index_order == "recovar":
+        pixel_idx = indices % n_pixels
+        psi_idx = indices // n_pixels
+    elif rotation_index_order == "relion":
+        n_psi = rotation_grid_n_in_planes(healpix_order)
+        pixel_idx = indices // n_psi
+        psi_idx = indices % n_psi
+    else:
+        raise ValueError(f"rotation_index_order must be 'recovar' or 'relion', got {rotation_index_order!r}")
     return pixel_idx, psi_idx
 
 
-def _combine_rotation_indices(pixel_idx, psi_idx, healpix_order):
+def _combine_rotation_indices(pixel_idx, psi_idx, healpix_order, *, rotation_index_order: str = "recovar"):
     """Combine HEALPix pixel and psi components into full-grid indices."""
     pixel_idx = np.asarray(pixel_idx, dtype=np.int64).reshape(-1)
     psi_idx = np.asarray(psi_idx, dtype=np.int64).reshape(-1)
     n_pixels = hp.nside2npix(2**healpix_order)
-    return psi_idx * n_pixels + pixel_idx
+    if rotation_index_order == "recovar":
+        return psi_idx * n_pixels + pixel_idx
+    if rotation_index_order == "relion":
+        n_psi = rotation_grid_n_in_planes(healpix_order)
+        return pixel_idx * n_psi + psi_idx
+    raise ValueError(f"rotation_index_order must be 'recovar' or 'relion', got {rotation_index_order!r}")
 
 
 def get_rotation_grid(nside_level, n_in_planes=None, matrices=False):
@@ -272,10 +284,14 @@ def get_translation_grid(max_pixel, pixel_offset):
     return grid
 
 
-def rotation_indices_to_relion_eulers(indices, healpix_order):
+def rotation_indices_to_relion_eulers(indices, healpix_order, *, rotation_index_order: str = "recovar"):
     """Convert ring-order full-grid indices to RELION Euler angles."""
     meta = _get_relion_grid_metadata(int(healpix_order))
-    pixel_idx, psi_idx = _split_rotation_indices(indices, healpix_order)
+    pixel_idx, psi_idx = _split_rotation_indices(
+        indices,
+        healpix_order,
+        rotation_index_order=rotation_index_order,
+    )
     return np.stack(
         [
             np.asarray(meta["rot_deg"], dtype=np.float32)[pixel_idx],
@@ -586,6 +602,40 @@ def read_relion_direction_prior(model_star_path):
     return np.asarray(df["rlnOrientationDistribution"], dtype=np.float32)
 
 
+def read_relion_direction_priors(model_star_path, n_classes=None):
+    """Read all RELION per-class orientation distributions from ``model.star``."""
+    import re
+    import numpy as np
+    import starfile
+
+    data = starfile.read(str(model_star_path))
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected STAR dictionary in {model_star_path}")
+    if n_classes is None:
+        class_keys = sorted(
+            (
+                key
+                for key in data
+                if re.fullmatch(r"model_pdf_orient_class_\d+", str(key))
+            ),
+            key=lambda key: int(str(key).rsplit("_", 1)[1]),
+        )
+    else:
+        class_keys = [f"model_pdf_orient_class_{idx + 1}" for idx in range(int(n_classes))]
+    if not class_keys:
+        raise ValueError(f"Missing model_pdf_orient_class_* tables in {model_star_path}")
+
+    priors = []
+    for key in class_keys:
+        if key not in data:
+            raise ValueError(f"Missing {key} in {model_star_path}")
+        df = data[key]
+        if "rlnOrientationDistribution" not in df.columns:
+            raise ValueError(f"Missing rlnOrientationDistribution in {key} of {model_star_path}")
+        priors.append(np.asarray(df["rlnOrientationDistribution"], dtype=np.float32))
+    return np.stack(priors, axis=0)
+
+
 def get_healpix_children(parent_pixels, parent_nside_level):
     """Return the 4 child HEALPix pixel indices for each parent pixel.
 
@@ -663,6 +713,7 @@ def get_oversampled_rotation_grid_from_samples(
     *,
     random_perturbation=0.0,
     return_rotation_indices=False,
+    rotation_index_order: str = "recovar",
 ):
     """Generate oversampled child orientations from coarse sample indices.
 
@@ -706,9 +757,17 @@ def get_oversampled_rotation_grid_from_samples(
             return empty_rot, empty_map, empty_map.copy()
         return empty_rot, empty_map
 
+    if rotation_index_order not in {"recovar", "relion"}:
+        raise ValueError(f"rotation_index_order must be 'recovar' or 'relion', got {rotation_index_order!r}")
+
     coarse_n_pixels = hp.nside2npix(2**parent_nside_level)
-    parent_pixels = parent_rotation_indices % coarse_n_pixels
-    parent_psi = parent_rotation_indices // coarse_n_pixels
+    coarse_n_in_planes = rotation_grid_n_in_planes(parent_nside_level)
+    if rotation_index_order == "recovar":
+        parent_pixels = parent_rotation_indices % coarse_n_pixels
+        parent_psi = parent_rotation_indices // coarse_n_pixels
+    else:
+        parent_pixels = parent_rotation_indices // coarse_n_in_planes
+        parent_psi = parent_rotation_indices % coarse_n_in_planes
 
     current_pixels = parent_pixels.copy()
     parent_map = np.arange(len(parent_rotation_indices), dtype=np.int64)
@@ -720,7 +779,6 @@ def get_oversampled_rotation_grid_from_samples(
         parent_map = np.repeat(parent_map, 4)
 
     psi_factor = 2**oversampling_order
-    coarse_n_in_planes = rotation_grid_n_in_planes(parent_nside_level)
     coarse_psi_step = 2.0 * np.pi / coarse_n_in_planes
     fine_nside_level = parent_nside_level + oversampling_order
     fine_nside = 2**fine_nside_level
@@ -742,7 +800,10 @@ def get_oversampled_rotation_grid_from_samples(
     )
 
     child_pixels = np.repeat(current_pixels, psi_factor)
-    child_rotation_indices = nearest_child_psi.reshape(-1) * fine_n_pixels + child_pixels
+    if rotation_index_order == "recovar":
+        child_rotation_indices = nearest_child_psi.reshape(-1) * fine_n_pixels + child_pixels
+    else:
+        child_rotation_indices = child_pixels * fine_n_in_planes + nearest_child_psi.reshape(-1)
 
     euler_angles = np.stack(
         [
@@ -847,30 +908,40 @@ def subdivide_healpix_pixels(pixels, nside_level):
 # ---------------------------------------------------------------------------
 
 
-def get_relion_rotation_grid(order):
+def get_relion_rotation_grid(order, *, rotation_index_order: str = "recovar"):
     """Generate the exact RELION HEALPix rotation grid via the C++ binding.
 
     Returns rotation matrices in recovar's frame that correspond to exactly
     the same set of orientations RELION uses at the given healpix_order.
 
-    RELION orders its grid as (direction-slow, psi-fast). This function
-    reorders to recovar's convention (psi-slow, direction-fast) so that
-    ``index % n_pixels`` gives the HEALPix pixel index.
+    RELION orders its grid as (direction-slow, psi-fast). By default this
+    function reorders to recovar's convention (psi-slow, direction-fast) so
+    that ``index % n_pixels`` gives the HEALPix pixel index. Pass
+    ``rotation_index_order="relion"`` to preserve RELION's native flattened
+    order for source-level InitialModel parity.
     """
     from recovar.relion_bind._relion_bind_core import get_coarse_orientations
 
     relion_euler = get_coarse_orientations(order)
     R = utils.R_from_relion(relion_euler, degrees=True)
+    if rotation_index_order == "relion":
+        return R
+    if rotation_index_order != "recovar":
+        raise ValueError(f"rotation_index_order must be 'recovar' or 'relion', got {rotation_index_order!r}")
     n_dir = hp.nside2npix(2**order)
     n_psi = R.shape[0] // n_dir
     return R.reshape(n_dir, n_psi, 3, 3).transpose(1, 0, 2, 3).reshape(-1, 3, 3)
 
 
-def get_relion_rotation_grid_eulers(order):
+def get_relion_rotation_grid_eulers(order, *, rotation_index_order: str = "recovar"):
     """Return RELION Euler angles in the same index order as get_relion_rotation_grid."""
     from recovar.relion_bind._relion_bind_core import get_coarse_orientations
 
     relion_euler = get_coarse_orientations(order)
+    if rotation_index_order == "relion":
+        return relion_euler.astype(np.float32)
+    if rotation_index_order != "recovar":
+        raise ValueError(f"rotation_index_order must be 'recovar' or 'relion', got {rotation_index_order!r}")
     n_dir = hp.nside2npix(2**order)
     n_psi = relion_euler.shape[0] // n_dir
     return relion_euler.reshape(n_dir, n_psi, 3).transpose(1, 0, 2).reshape(-1, 3).astype(np.float32)

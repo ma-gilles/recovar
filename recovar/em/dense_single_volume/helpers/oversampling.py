@@ -27,7 +27,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .types import RelionStats, make_noise_stats, make_relion_stats
+from .types import make_noise_stats, make_relion_stats
 
 logger = logging.getLogger(__name__)
 _FAST_SIGNIFICANCE_TOPK = 64
