@@ -253,6 +253,14 @@ def test_mature_two_iter_log_evidence_progresses(setup_ribosembly):
     assert le0 != le1
     # μ should have moved from initial.
     assert not np.allclose(np.asarray(final_state.mu_score), np.asarray(state.mu_score), atol=1e-6)
+    # Per-iter Δ diagnostics must be present and finite.
+    for rec in log:
+        for key in ("mu_delta_rms", "W_delta_rms", "mu_rms", "W_frob"):
+            assert key in rec, f"missing diagnostic field: {key}"
+            assert np.isfinite(rec[key]), f"{key} is not finite: {rec[key]}"
+        # Δ should be > 0 since state actively updates.
+        assert rec["mu_delta_rms"] > 0
+        assert rec["W_delta_rms"] > 0
 
 
 def test_mature_with_significance_mask_runs(setup_ribosembly):

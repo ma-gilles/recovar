@@ -633,8 +633,14 @@ def run_pose_marginal_refinement(
             translation_grid = np.zeros((1, 2), dtype=np.float32)
 
     iter_log = []
+    prev_mu = None  # for ΔRMS diagnostic
+    prev_W = None
     for it in range(schedule_opts.max_iters):
         use_local = schedule_opts.use_local_search_at_high_order and (healpix_order >= LOCAL_SEARCH_HEALPIX_ORDER)
+
+        # Snapshot pre-iter state for ΔRMS diagnostic.
+        prev_mu = jnp.asarray(state.mu_score)
+        prev_W = jnp.asarray(state.W_score)
 
         # ---- (a) Rotation grid for this iter ----
         rotation_grid = _build_rotation_grid_for_iter(
@@ -767,6 +773,16 @@ def run_pose_marginal_refinement(
                 size_bumped = True
 
         # ---- (k) Log ----
+        # Per-iter Δ diagnostics: state-change RMS / W norm. Useful for
+        # diagnosing convergence (steady decrease ↔ converging) or
+        # oscillation (jumpy values across iters).
+        mu_now = jnp.asarray(state.mu_score)
+        W_now = jnp.asarray(state.W_score)
+        mu_delta_rms = float(jnp.sqrt(jnp.mean((mu_now - prev_mu) ** 2)))
+        W_delta_rms = float(jnp.sqrt(jnp.mean((W_now - prev_W) ** 2)))
+        W_frob = float(jnp.sqrt(jnp.sum(W_now**2)))
+        mu_rms = float(jnp.sqrt(jnp.mean(mu_now**2)))
+
         info = {
             "iteration": it,
             "healpix_order": healpix_order,
@@ -780,6 +796,10 @@ def run_pose_marginal_refinement(
             "size_bumped": size_bumped,
             "noise_var_mean": float(jnp.mean(state.noise_variance)),
             "mean_prior_mean": float(jnp.mean(state.mean_prior)),
+            "mu_delta_rms": mu_delta_rms,
+            "W_delta_rms": W_delta_rms,
+            "mu_rms": mu_rms,
+            "W_frob": W_frob,
         }
         iter_log.append(info)
         if iteration_callback is not None:
