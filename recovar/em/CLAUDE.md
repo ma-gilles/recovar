@@ -17,6 +17,36 @@ Longer parity history and detailed run notes live in
   algorithmic parity, performance-only, or PR preparation. Let that determine
   validation scope.
 
+## Worktree provenance gate — MANDATORY
+
+Before running any parity test, replay, or benchmark, print and verify:
+```bash
+git -C "$WORKDIR" rev-parse HEAD
+git -C "$WORKDIR" symbolic-ref --short HEAD || echo "<detached>"
+git -C "$WORKDIR" status --porcelain
+```
+A worktree directory name does NOT prove which branch is checked out — a
+directory named `recovar_wt_parity_branch_*` may have been switched to an
+unrelated branch by an earlier session. **`recovar_wt_parity_branch_20260502`
+once held `claude/relion-parity-local-search-fix` (which lacks `7834dc0b`)
+and produced "broken parity" results until the worktree was switched to a
+branch that actually contains the parity commits.**
+
+Parity claims must cite the commit hash, not the branch name. Branch tips
+move; commits are immutable. The five commits below are the load-bearing
+parity fixes — any worktree missing one of them in `HEAD`'s ancestry will
+fail the replay test:
+- `7834dc0b` current_size off-by-one + circular Fourier window
+- `5f21574a` float64 scoring + current_size replay from model.star
+- `0650b550` image pre-centering, normcorr, prior sign, float64 logsumexp
+- `b125883f` shell-mapping at pf=2
+- `0903a64c` pf³ tau2 correction + join radius scaling
+
+`scripts/run_multi_iter_parity.py` now prints a provenance banner with
+HEAD/branch/dirty state and asserts the required parity commits are
+ancestors of HEAD. If it exits 2, the broken-looking parity is not a
+regression — it's the wrong branch.
+
 ## Non-Negotiables
 
 - Goal: perfect quality parity with RELION and near RELION speed parity for

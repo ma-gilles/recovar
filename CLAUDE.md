@@ -71,6 +71,47 @@ See `tests/CLAUDE.md` for full testing rules (critical — read before modifying
 - Small targeted diffs. Do not commit large artifacts (checkpoints, datasets, binaries).
 - Never force-push unless explicitly asked.
 
+## Worktree & Branch Hygiene — MANDATORY before running tests
+
+This repo has many parallel worktrees (`/scratch/gpfs/GILLES/mg6942/recovar_wt_*`)
+and parity work that lives on long-lived branches not yet merged to `dev`.
+Worktree directory names lie: a directory named `recovar_wt_parity_branch_*`
+may have been re-checked out to an unrelated branch by a previous session.
+Mixing up branches has cost days of debugging — apply these rules every time:
+
+**Before running ANY test or benchmark in a worktree, always print:**
+```bash
+git -C <worktree> rev-parse HEAD          # commit you're actually on
+git -C <worktree> symbolic-ref --short HEAD || echo "<detached>"
+git -C <worktree> status --porcelain      # uncommitted state
+python -c "import recovar; print(recovar.__file__)"  # confirm import path
+```
+The provenance gate must show: `recovar.__file__` inside the worktree, JAX
+inside `.pixi/envs/default`, and a recognized commit/branch.
+
+**Cite commits, not branches, in memory and reports.** Branch tips move
+constantly; commit hashes are immutable. `claude/relion-parity-flag-audit
+at e120cdfc` is reproducible. `the parity branch` is not.
+
+**For parity work specifically**, `scripts/run_multi_iter_parity.py` now
+prints a provenance banner and asserts known load-bearing parity commits
+are in HEAD's ancestry. If it exits with code 2, the worktree is missing a
+required fix and any "broken parity" result is not a regression — it's the
+wrong branch. Switch branches before debugging deeper.
+
+**Pre-PR parity smoke** (3 minutes, machine-precision check):
+```bash
+pixi run python scripts/run_multi_iter_parity.py \
+  --relion_dir /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0 \
+  --data_star  /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles.star \
+  --iter 3 --max_iter 1 \
+  --gt_volume /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/reference_gt.mrc \
+  --output_dir /tmp/parity_check
+```
+Pass criterion: `Final half1/half2 vs RELION it004 corr ≥ 0.999`. Anything
+below that means kernel parity has regressed. Run before any push that
+touches `recovar/em/`.
+
 ## Before Pushing / Creating a PR — MANDATORY
 
 1. Rebase on `dev`: `git fetch origin && git rebase origin/dev`
