@@ -153,17 +153,23 @@ If we are above these budgets we adopt **D10 (adaptive oversampling)**
 before re-running — RELION's standard escape valve when high-confidence
 images dominate later iters.
 
-### Measured per-iter wall (Slurm 7581168, dense k-class on 256³ × 100k × 10 cls)
+### Measured per-iter wall (Slurm 7583848, dense k-class on 256³ × 100k × 10 cls)
 
 The above estimates were too optimistic. Measured single-iter wall on
 H100 with the OOM-safe knobs (``image_batch_size=16,
 rotation_block_size=64, projection_padding=1``):
 
-| Phase | Wall |
+| Phase | Wall (measured) |
 |---|---:|
-| iter 0 (JIT compile + first per-batch) | **~58 min** |
-| iter 1+ (cache warm — projected) | ~20-30 min |
-| **15-iter total** | **~7-8 h** |
+| iter 0 (JIT compile + first per-batch) | **~6 h** |
+| iter 1+ (cache warm — projected) | TBD |
+| **15-iter total** | **>15 h** (exceeds 12 h sbatch budget) |
+
+The actual iter wall is **~6× the doc's initial 60 min estimate**. The
+gap comes from launch latency: with image_batch_size=16 the engine
+emits 6 250 batches × 72 rotation blocks ≈ **450 k JIT-compiled kernel
+launches per iter**. Even at ~50 ms/launch (kernel dispatch + small
+wave) that's ~6 h.
 
 **Per-iter cost breakdown (back-of-envelope):**
 
