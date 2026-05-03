@@ -500,6 +500,7 @@ def _reconstruct_volume_eager(
     use_spherical_mask=True,
     grid_correct=True,
     minres_map=0,
+    current_size=None,
 ):
     """Eager RELION-style reconstruction from full or half Fourier accumulators.
 
@@ -523,6 +524,7 @@ def _reconstruct_volume_eager(
         tau2_fudge=tau2_fudge,
         gridding_padding_factor=projection_padding_factor,
         minres_map=minres_map,
+        current_size=current_size,
     )
 
 
@@ -3914,6 +3916,7 @@ def _run_relion_iteration_loop(
         for k in range(2):
             Ft_y_k_local = Ft_y_0 if k == 0 else Ft_y_1
             Ft_ctf_k_local = Ft_ctf_0 if k == 0 else Ft_ctf_1
+            cs_int = int(cs) if cs is not None else None
             if k_class_enabled:
                 means[k] = jnp.stack(
                     [
@@ -3926,6 +3929,7 @@ def _run_relion_iteration_loop(
                             tau2_fudge=tau2_fudge,
                             projection_padding_factor=PROJECTION_PADDING_FACTOR,
                             minres_map=RELION_MINRES_MAP,
+                            current_size=cs_int,
                         ).reshape(-1)
                         for class_idx in range(n_classes)
                     ],
@@ -3941,6 +3945,7 @@ def _run_relion_iteration_loop(
                     tau2_fudge=tau2_fudge,
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     minres_map=RELION_MINRES_MAP,
+                    current_size=cs_int,
                 ).reshape(-1)
 
             # Diagnostic: dump pre-mask Wiener output when env var set.

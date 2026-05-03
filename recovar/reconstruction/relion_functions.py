@@ -571,14 +571,11 @@ def adjust_regularization_relion_style(
             inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1.0 / (0.001 * filter_flat), inv_tau)
             inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
             if int(minres_map) > 0:
-                shell = (
-                    fourier_transform_utils.get_grid_of_radial_distances_real(
-                        volume_shape,
-                        scaled=False,
-                        frequency_shift=0,
-                    )
-                    / float(padding_factor)
-                )
+                shell = fourier_transform_utils.get_grid_of_radial_distances_real(
+                    volume_shape,
+                    scaled=False,
+                    frequency_shift=0,
+                ) / float(padding_factor)
                 shell = jnp.round(shell).astype(jnp.int32).reshape(-1)
                 inv_tau = jnp.where(shell >= int(minres_map), inv_tau, 0)
             regularized_filter = filter_flat + inv_tau
@@ -688,7 +685,7 @@ def post_process_from_filter(
     )
 
 
-@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17])
+@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17, 18])
 def post_process_from_filter_v2(
     Ft_ctf,
     F_ty,
@@ -708,6 +705,7 @@ def post_process_from_filter_v2(
     gridding_padding_factor=None,
     gridding_order=None,
     minres_map=0,
+    current_size=None,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -719,26 +717,44 @@ def post_process_from_filter_v2(
     The ``tau2_fudge`` parameter (default 1.0) is forwarded to
     :func:`adjust_regularization_relion_style` and mirrors RELION's
     ``--tau2_fudge`` flag.
+
+    ``current_size`` (when given) limits the Wiener filter's spatial mask
+    to the padded sphere ``r <= padding_factor * (current_size // 2)``,
+    matching RELION's ``BackProjector::reconstruct`` which skips voxels
+    with ``r2 >= max_r2 = ROUND(r_max * padding_factor)^2`` (line 1264).
+    Without this, recovar's Wiener filter operates on every padded voxel
+    up to ``upsampled_volume_shape[0]//2 - 1``, producing residual
+    high-shell content from the regularization floor that RELION omits.
     """
     upsampled_volume_shape = tuple(3 * [og_volume_shape[0] * volume_upsampling_factor])
     if input_half_volume is None:
         input_half_volume = _infer_half_volume_layout(Ft_ctf, upsampled_volume_shape)
+
+    # Wiener spatial mask: match RELION's max_r2 skip when current_size given.
+    if current_size is not None and current_size > 0:
+        wiener_radius = volume_upsampling_factor * (int(current_size) // 2)
+    else:
+        wiener_radius = upsampled_volume_shape[0] // 2 - 1
 
     if input_half_volume:
         packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, packed_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, packed_shape)
         valid_indices = (
-            fourier_transform_utils.full_volume_to_half_volume(
-                mask.get_radial_mask(upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1),
-                upsampled_volume_shape,
+            (
+                fourier_transform_utils.full_volume_to_half_volume(
+                    mask.get_radial_mask(upsampled_volume_shape, radius=wiener_radius),
+                    upsampled_volume_shape,
+                )
             )
-        ).reshape(-1).astype(Ft_ctf_flat.real.dtype)
+            .reshape(-1)
+            .astype(Ft_ctf_flat.real.dtype)
+        )
     else:
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, upsampled_volume_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, upsampled_volume_shape)
         valid_indices = (
-            mask.get_radial_mask(upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1)
+            mask.get_radial_mask(upsampled_volume_shape, radius=wiener_radius)
             .reshape(-1)
             .astype(Ft_ctf_flat.real.dtype)
         )
