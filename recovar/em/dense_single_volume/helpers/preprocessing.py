@@ -136,9 +136,20 @@ def preprocess_batch_firstiter_cc(
         config,
         score_with_masked_images,
     )
-    safe_ctf_half = jnp.where(jnp.abs(ctf_half) > 1e-8, 1.0 / ctf_half, 0.0)
+    # RELION ml_optimiser.cpp:8758-8774 (do_firstiter_cc CC branch) iterates
+    # `Frefctf = CTF * F_proj` against `Fimg_shift = Fimg * shift_phase` directly:
+    #
+    #   diff2 -= Frefctf.real * Fimg_shift.real
+    #   diff2 -= Frefctf.imag * Fimg_shift.imag
+    #
+    # Recovar's score formula has CTF on the image side via `shifted_score =
+    # Fimg * CTF * shift / Xi2`. Previously this was produced via
+    # divide-then-multiply (`Fimg / CTF * shift` then `* ctf^2 / Xi2`). Build
+    # `Fimg * CTF * shift` directly here to match RELION's path and avoid the
+    # 1/CTF inversion at low-CTF pixels (which was thresholded to 0 below
+    # |CTF|<1e-8 and could lose precision near the threshold).
     shifted_half = apply_half_translation_phases(
-        processed_half * safe_ctf_half,
+        processed_half * ctf_half,
         translation_phases_half,
     )
     abs2_half = jnp.abs(processed_half) ** 2

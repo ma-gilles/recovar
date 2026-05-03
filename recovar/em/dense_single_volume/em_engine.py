@@ -1082,8 +1082,15 @@ def run_em(
             shifted_recon_half = shifted_recon_half * phase_expanded
 
         if relion_firstiter_score_mode == "normalized_cc":
-            score_weight_half = ctf2_half_score / jnp.maximum(batch_norm, jnp.asarray(1e-30, dtype=batch_norm.dtype))
-            shifted_score_half = shifted_half * jnp.repeat(score_weight_half, n_trans, axis=0)
+            # CC score = Re(<Fimg_shift, CTF*F_proj>) / (sqrt(Xi2)*sqrt(suma2)).
+            # Recovar splits as cross/sqrt(norms): shifted_score = (Fimg*CTF*shift)/Xi2,
+            # score_weight = CTF^2/Xi2. preprocess_batch_firstiter_cc now
+            # returns shifted_half = Fimg*CTF*shift directly (matches RELION
+            # ml_optimiser.cpp:8758-8774 Frefctf path) — no divide-then-
+            # multiply 1/CTF anywhere. Apply 1/Xi2 here for both terms.
+            inv_xi2 = 1.0 / jnp.maximum(batch_norm, jnp.asarray(1e-30, dtype=batch_norm.dtype))
+            score_weight_half = ctf2_half_score * inv_xi2
+            shifted_score_half = shifted_half * jnp.repeat(inv_xi2, n_trans, axis=0)
         else:
             score_weight_half = ctf2_over_nv_half
             shifted_score_half = shifted_half
