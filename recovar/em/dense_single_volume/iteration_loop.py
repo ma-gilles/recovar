@@ -22,7 +22,6 @@ from recovar.core import fourier_transform_utils
 from recovar.em.core import hard_assignment_idx_to_pose
 from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_local_k_class_em
 from recovar.em.dense_single_volume.helpers.convergence import (
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
@@ -32,6 +31,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
 )
 from recovar.em.dense_single_volume.helpers.env_flags import parse_int_set
 from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
+from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights, make_shell_indices_half
 from recovar.em.dense_single_volume.helpers.local_search import _local_search_engine_rotation_block_size
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
@@ -57,13 +57,13 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     should_skip_adaptive_pass2,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
+from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_local_k_class_em
 from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
 from recovar.em.dense_single_volume.local_layout import (
     _selected_rotation_matrices,
     build_local_hypothesis_layout,
     build_pass2_hypothesis_layout,
 )
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights, make_shell_indices_half
 from recovar.em.sampling import (
     advance_relion_perturbation,
     apply_relion_rotation_perturbation,
@@ -457,6 +457,7 @@ class _RelionHalfInputState:
             ),
         )
 
+
 def _relion_rotation_grid_float32(healpix_order: int):
     """Return RELION rotation matrices/eulers using the loop's float32 policy."""
     order = int(healpix_order)
@@ -842,9 +843,7 @@ def _decode_pass2_local_hard_assignment(
     rotation_ids = np.asarray(pass2_layout.rotation_ids_flat, dtype=np.int64)
     rotations = np.asarray(pass2_layout.rotations_flat, dtype=np.float32)
     sample_mask = (
-        None
-        if pass2_layout.sample_mask_flat is None
-        else np.asarray(pass2_layout.sample_mask_flat, dtype=bool)
+        None if pass2_layout.sample_mask_flat is None else np.asarray(pass2_layout.sample_mask_flat, dtype=bool)
     )
     best_rots = np.asarray(best_pose_rotations, dtype=np.float32)
     best_trans = np.asarray(best_pose_translations, dtype=np.float32)
@@ -884,8 +883,7 @@ def _decode_pass2_local_hard_assignment(
         best_row = int(candidate_rows[int(np.argmin(rot_delta))])
         if best_delta > 1e-5:
             raise RuntimeError(
-                f"Could not decode sparse pass-2 rotation for image {image_idx}: "
-                f"nearest delta={best_delta:.3e}",
+                f"Could not decode sparse pass-2 rotation for image {image_idx}: nearest delta={best_delta:.3e}",
             )
         if sample_mask is not None and not bool(sample_mask[best_row, trans_idx]):
             raise RuntimeError(
@@ -1440,6 +1438,7 @@ def _run_relion_iteration_loop(
     # edge-taper mask (window_mask(D, 0.85, 0.99)) is too tight — it tapers
     # at 54 px vs RELION's 64 px for a 128-px box.
     RELION_WIDTH_MASK_EDGE = 5
+
     def _image_backend(ds):
         return getattr(getattr(ds, "image_source", None), "backend", None)
 
@@ -1737,8 +1736,7 @@ def _run_relion_iteration_loop(
     # Extract per-shell radial profiles from the input pixel-array noise
     # variances for diagnostic logging ("noise update per shell: old=... new=...").
     previous_noise_radial_per_half = [
-        _radial_profile_from_noise_variance(noise_k, cryo.image_shape)
-        for noise_k in noise_variance_per_half
+        _radial_profile_from_noise_variance(noise_k, cryo.image_shape) for noise_k in noise_variance_per_half
     ]
     previous_noise_radial = jnp.asarray(
         np.mean(np.stack(previous_noise_radial_per_half, axis=0), axis=0),
@@ -1941,8 +1939,7 @@ def _run_relion_iteration_loop(
                     or abs(float(state.sigma_psi) - _relion_sigma_rad) > 1e-8
                 ):
                     logger.info(
-                        "Replay override: local prior sigma %.3f/%.3f deg -> %.3f deg "
-                        "(2 * RELION psi_step %.3f deg)",
+                        "Replay override: local prior sigma %.3f/%.3f deg -> %.3f deg (2 * RELION psi_step %.3f deg)",
                         float(np.rad2deg(state.sigma_rot)),
                         float(np.rad2deg(state.sigma_psi)),
                         float(np.rad2deg(_relion_sigma_rad)),
@@ -2525,7 +2522,9 @@ def _run_relion_iteration_loop(
             if experiment_datasets[k].n_units == 0:
                 logger.info("Skipping E-step/M-step accumulation for empty half-%d dataset", k + 1)
                 n_shells = int(cryo.image_shape[0] // 2 + 1)
-                n_rot_for_stats = int(rotation_grid_size(local_search_order) if use_local else effective_rotations.shape[0])
+                n_rot_for_stats = int(
+                    rotation_grid_size(local_search_order) if use_local else effective_rotations.shape[0]
+                )
                 accumulator_shape = (
                     (n_classes, int(np.prod(padded_volume_shape)))
                     if k_class_enabled
@@ -3083,7 +3082,9 @@ def _run_relion_iteration_loop(
                     sparse_pass2_profile_k = None
                     if k_class_enabled:
                         if collect_local_search_profile:
-                            raise NotImplementedError("K-class adaptive sparse pass2 does not emit profile summaries yet")
+                            raise NotImplementedError(
+                                "K-class adaptive sparse pass2 does not emit profile summaries yet"
+                            )
                         k_class_result = _run_k_class_sparse_pass2_local_search_iteration(
                             experiment_datasets[k],
                             means[k],
@@ -3810,6 +3811,27 @@ def _run_relion_iteration_loop(
                 dtype=jnp.float32,
             )
         else:
+            # Optional dump of post-join Ft_y, Ft_ctf for shell-by-shell parity
+            # comparison against RELION's RECOVAR_MSTEP_DUMP_DIR. Activated by
+            # RECOVAR_BPREF_ACCUM_DUMP_DIR. One npz per iteration.
+            _bpref_accum_dir = os.environ.get("RECOVAR_BPREF_ACCUM_DUMP_DIR")
+            if _bpref_accum_dir:
+                import pathlib
+
+                pathlib.Path(_bpref_accum_dir).mkdir(parents=True, exist_ok=True)
+                np.savez(
+                    pathlib.Path(_bpref_accum_dir) / f"recovar_bpref_accum_it{iteration + 1:03d}.npz",
+                    iteration=np.int32(iteration + 1),
+                    current_size=np.int32(cs),
+                    padding_factor=np.int32(PADDING_FACTOR),
+                    grid_size=np.int32(grid_size),
+                    voxel_size=np.float32(cryo.voxel_size),
+                    volume_shape=np.asarray(volume_shape, dtype=np.int32),
+                    Ft_y_0=np.asarray(Ft_y_0, dtype=np.complex64),
+                    Ft_y_1=np.asarray(Ft_y_1, dtype=np.complex64),
+                    Ft_ctf_0=np.asarray(Ft_ctf_0, dtype=np.complex64).real.astype(np.float32),
+                    Ft_ctf_1=np.asarray(Ft_ctf_1, dtype=np.complex64).real.astype(np.float32),
+                )
             current_iter_fsc = regularization.compute_relion_fsc_from_backprojector(
                 Ft_y_0,
                 Ft_y_1,
@@ -4074,7 +4096,9 @@ def _run_relion_iteration_loop(
                     if unreg_classes is not None:
                         unreg_classes.append(-unreg_means[k][class_idx] if sign_flipped else unreg_means[k][class_idx])
                     if sign_flipped:
-                        logger.info("Aligned half-%d class-%d volume sign to the previous reference", k + 1, class_idx + 1)
+                        logger.info(
+                            "Aligned half-%d class-%d volume sign to the previous reference", k + 1, class_idx + 1
+                        )
                 means[k] = jnp.stack(aligned_classes, axis=0)
                 if unreg_classes is not None:
                     unreg_means[k] = jnp.stack(unreg_classes, axis=0)
@@ -4567,7 +4591,9 @@ def _run_relion_iteration_loop(
                         f"{iter_acc_trans:.3f}" if iter_acc_trans is not None else "unset",
                     )
                 except Exception as exc:
-                    logger.warning("Replay override: failed to read optimiser metadata from %s: %s", _optimiser_star, exc)
+                    logger.warning(
+                        "Replay override: failed to read optimiser metadata from %s: %s", _optimiser_star, exc
+                    )
 
         state = update_refinement_state(
             state,
@@ -4715,8 +4741,7 @@ def _run_relion_iteration_loop(
             break
         if state.has_converged and force_max_iter_after_convergence:
             logger.info(
-                "Convergence reached at iteration %d, continuing because "
-                "force_max_iter_after_convergence=True",
+                "Convergence reached at iteration %d, continuing because force_max_iter_after_convergence=True",
                 iteration + 1,
             )
 
@@ -4727,9 +4752,7 @@ def _run_relion_iteration_loop(
     # after plain max_iter exhaustion, and do not synthesize it when
     # convergence is first detected on the last allowed iteration.
     should_run_final_iteration = bool(
-        state.has_converged
-        and not force_max_iter_after_convergence
-        and (iteration + 1) < max_iter
+        state.has_converged and not force_max_iter_after_convergence and (iteration + 1) < max_iter
     )
     if skip_final_iteration or not should_run_final_iteration:
         if not skip_final_iteration and not should_run_final_iteration:
@@ -4964,7 +4987,9 @@ def _run_relion_iteration_loop(
             ],
             axis=0,
         )
-        merged_mean = jnp.sum(jnp.asarray(class_weights, dtype=final_class_means.real.dtype)[:, None] * final_class_means, axis=0)
+        merged_mean = jnp.sum(
+            jnp.asarray(class_weights, dtype=final_class_means.real.dtype)[:, None] * final_class_means, axis=0
+        )
         class_assignments = final_class_assignments
     else:
         final_class_means = None
