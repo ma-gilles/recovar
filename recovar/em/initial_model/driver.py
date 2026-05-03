@@ -552,6 +552,12 @@ def _dense_estep_config(
                 "return_profile": True,
             }
         )
+        # Allow env-override of adaptive_fraction for K-class parity tuning
+        _af_env = os.environ.get("RECOVAR_ADAPTIVE_FRACTION")
+        if _af_env:
+            engine_kwargs["adaptive_fraction"] = float(_af_env)
+    if os.environ.get("RECOVAR_USE_FLOAT64_SCORING"):
+        engine_kwargs["use_float64_scoring"] = True
     if translation_log_prior is not None:
         engine_kwargs["translation_log_prior"] = translation_log_prior
     if coarse_translation_log_prior is not None:
