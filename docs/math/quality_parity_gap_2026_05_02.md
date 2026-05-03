@@ -121,26 +121,52 @@ or the M-step code — it's the iteration-level orchestration in
 `recovar/em/dense_single_volume/iteration_loop.py` and
 `recovar/em/dense_single_volume/helpers/convergence.py`.
 
-## Fixes landed in this branch (commits 9b2c0727, 8d73a014)
+## Fixes landed in this branch (commits 9b2c0727, 8d73a014, b913fd99)
 
 1. **`run_full_refinement.py` mask path resolution** — was silently falling
    back to default 0.85/0.99 window mask because it only searched
    `<data_dir>/relion_ref/`, not `<data_dir>/relion_ref*/` (so the common
    `relion_ref_os0/` fixture was missed). Added explicit
    `--relion_optimiser` CLI arg and broadened the candidate search.
+   Effect: iter-1 sigma2_noise from 0.81× RELION → within 1%.
 2. **`_maybe_apply_relion_image_mask` mode** — was setting only the mask
-   geometry, leaving the dataset in the default `multiply` mode.
-   Switched to `backend.set_relion_image_mask(...)` which sets both
-   geometry and `relion_background_fill` mode (RELION-exact softMaskOutsideMap).
+   geometry, leaving the dataset in the default `multiply` mode (since
+   `refine_single_volume` would later switch to bg-fill internally only
+   when `particle_diameter_ang` was passed correctly through). Switched
+   to `backend.set_relion_image_mask(...)` for safety. Redundant with
+   the internal switch in `refine_single_volume`, but correct.
+3. **`--perturb_replay_relion_dir` not wired** — RELION generates a
+   different `_rlnSamplingPerturbInstance` each iter (iter 1 = -0.12894,
+   iter 2 = +0.37106, …). recovar's `run_full_refinement.py` had its own
+   RNG that produced different values (e.g., iter 1 = +0.44349). Wired
+   the existing replay flag through. **THIS WAS THE MAJOR ITER-1 BUG.**
+   Effect: iter-1 cross-FSC vs RELION jumps from 0.99→0.85 across
+   shells 14→26 to **0.99+ at every shell through 26**. iter-1
+   reconstruction is now at near-machine-precision parity with RELION.
+   `current_size` trajectory matches RELION iter-by-iter (was
+   collapsing 70→48; now stays at 70→82→80→80→80→80→82→82).
 
-### Effect on iter-by-iter Pmax (5k 128² normalized, all on commit 8d73a014):
+### Effect on iter-by-iter Pmax (5k 128² normalized):
 
-| iter | Phase1a Pmax | Phase1c Pmax (mask + bg-fill) | RELION Pmax | gap |
-|-----:|-------------:|-------------------------------:|------------:|-----|
-|  1   | 0.0519       | 0.0402                         | 0.04359     | -8% |
-|  2   | 0.5075       | 0.3866                         | 0.65118     | -41% |
-|  3   | 0.8810       | 0.8758                         | 0.96470     | -9% |
-|  8   | 0.6917       | 0.7427                         | 0.88368     | -16% |
+Across `Phase1a` (no fixes), `Phase1c` (mask + bg-fill, commit 8d73a014),
+and `Phase1h` (mask + perturb-replay, commit b913fd99):
+
+| iter | Phase1a Pmax | Phase1c Pmax | Phase1h Pmax | RELION Pmax |
+|-----:|-------------:|-------------:|-------------:|------------:|
+|  1   | 0.0519       | 0.0402       | 0.0412       | 0.04359     |
+|  2   | 0.5075       | 0.3866       | 0.5229       | 0.65118     |
+|  3   | 0.8810       | 0.8758       | 0.9210       | 0.96470     |
+|  8   | 0.6917       | 0.7427       | 0.5293       | 0.88368     |
+
+`current_size` trajectory:
+
+| iter | Phase1a cs | Phase1h cs | RELION cs |
+|-----:|-----------:|-----------:|----------:|
+|  1   |  56        |  56  ✓     |  56       |
+|  2   |  70        |  70  ✓     |  70       |
+|  3   |  48 ❌     |  82  ✓     |  82       |
+|  4   |  48 ❌     |  80  ✓     |  80       |
+|  8   |  50 ❌     |  82  ✓     |  82       |
 
 Final reconstruction quality vs ground truth (merged):
 
