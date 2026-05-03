@@ -114,8 +114,18 @@ def preprocess_batch_firstiter_cc(
     translations,
     config,
     score_with_masked_images=False,
+    window_indices=None,
 ):
-    """Preprocess one dense image batch for RELION's iter-1 normalized CC scoring."""
+    """Preprocess one dense image batch for RELION's iter-1 normalized CC scoring.
+
+    RELION ml_optimiser.cpp:7967-7978 computes ``exp_local_sqrtXi2`` as
+    ``sqrt(sum(|Fimg|^2))`` over the *windowed* half-image (post
+    ``windowFourierTransform`` to ``current_size``) with NO Hermitian
+    doubling. The CC denominator at ml_optimiser.cpp:8773 then divides by
+    ``sqrt(suma2) * exp_local_sqrtXi2[img_id]`` where both sums use the same
+    windowed pixel set. To match: when ``window_indices`` is supplied, sum
+    only over those pixels; otherwise fall back to the full half-image.
+    """
 
     processed_half, ctf_half, noise_variance_half, translation_phases_half = _dense_batch_half_inputs(
         experiment_dataset,
@@ -131,13 +141,12 @@ def preprocess_batch_firstiter_cc(
         processed_half * safe_ctf_half,
         translation_phases_half,
     )
-    # RELION ml_optimiser.cpp:7967-7978 computes exp_local_sqrtXi2 as
-    # sqrt(sum(|Fimg|^2)) with NO Hermitian doubling
-    # (`FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fimg) sumxi2 += norm(Fimg[n])`).
-    # The CC denominator on line 8773 then divides by sqrt(suma2)*sqrtXi2 where
-    # both sums are over the same windowed half-image without Hermitian weights.
-    # Match RELION exactly: unit weights, no doubling.
-    image_power = jnp.sum(jnp.abs(processed_half) ** 2, axis=-1, keepdims=True).real
+    abs2_half = jnp.abs(processed_half) ** 2
+    if window_indices is not None:
+        windowed_abs2 = abs2_half[:, window_indices]
+        image_power = jnp.sum(windowed_abs2, axis=-1, keepdims=True).real
+    else:
+        image_power = jnp.sum(abs2_half, axis=-1, keepdims=True).real
     ctf2_half = ctf_half**2
     ctf2_over_nv_half = ctf2_half / noise_variance_half
     return shifted_half, image_power, ctf2_half, ctf2_over_nv_half

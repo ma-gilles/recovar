@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
@@ -259,11 +258,14 @@ def _relion_bpref_maps_from_sparse_support(
     import jax
     import jax.numpy as jnp
 
+    from recovar.core.configs import ForwardModelConfig
     from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
     from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
     from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
     from recovar.em.dense_single_volume.helpers.half_spectrum import make_scoring_half_image_weights
-    from recovar.em.dense_single_volume.helpers.projection import compute_projections_block as _compute_projections_block
+    from recovar.em.dense_single_volume.helpers.projection import (
+        compute_projections_block as _compute_projections_block,
+    )
     from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
         _bucket_pass2_inputs,
         _build_bucket_arrays,
@@ -279,7 +281,6 @@ def _relion_bpref_maps_from_sparse_support(
         flatten_bucket_rotations,
     )
     from recovar.em.sampling import get_oversampled_translation_grid, rotation_grid_size
-    from recovar.core.configs import ForwardModelConfig
     from recovar.reconstruction import noise as noise_utils
     from recovar.relion_bind import _relion_bind_core as bind
     from recovar.utils import helpers
@@ -603,8 +604,8 @@ def main() -> None:
     import starfile
 
     from recovar import utils
-    from recovar.core import mask
     from recovar.core import fourier_transform_utils as ftu
+    from recovar.core import mask
     from recovar.data_io.cryoem_dataset import load_dataset
     from recovar.em.dense_single_volume.helpers.orientation_priors import (
         make_relion_direction_log_prior,
@@ -673,21 +674,27 @@ def main() -> None:
     noise_variance = jnp.asarray(recon_noise.make_radial_noise(noise_spectrum * n4, (grid_size, grid_size))).reshape(-1)
     mean_variance_prev = jnp.stack(
         [
-            jnp.asarray(utils.make_radial_image(_tau_spectrum(prev_model, k) * n4, (grid_size, grid_size, grid_size))).reshape(-1)
+            jnp.asarray(
+                utils.make_radial_image(_tau_spectrum(prev_model, k) * n4, (grid_size, grid_size, grid_size))
+            ).reshape(-1)
             for k in range(n_classes)
         ],
         axis=0,
     )
     mean_variance_target = jnp.stack(
         [
-            jnp.asarray(utils.make_radial_image(_tau_spectrum(target_model, k) * n4, (grid_size, grid_size, grid_size))).reshape(-1)
+            jnp.asarray(
+                utils.make_radial_image(_tau_spectrum(target_model, k) * n4, (grid_size, grid_size, grid_size))
+            ).reshape(-1)
             for k in range(n_classes)
         ],
         axis=0,
     )
     means = jnp.stack(
         [
-            jnp.asarray(ftu.get_dft3(jnp.asarray(helpers.load_relion_volume(str(prev_prefix) + f"_class{k + 1:03d}.mrc")))).reshape(-1)
+            jnp.asarray(
+                ftu.get_dft3(jnp.asarray(helpers.load_relion_volume(str(prev_prefix) + f"_class{k + 1:03d}.mrc")))
+            ).reshape(-1)
             for k in range(n_classes)
         ],
         axis=0,
@@ -717,10 +724,7 @@ def main() -> None:
 
     direction_prior = _read_class_direction_priors(prev_model, n_classes)
     class_rotation_log_prior = np.stack(
-        [
-            make_relion_direction_log_prior(direction_prior[k], healpix_order)
-            for k in range(n_classes)
-        ],
+        [make_relion_direction_log_prior(direction_prior[k], healpix_order) for k in range(n_classes)],
         axis=0,
     )
     image_corrections, scale_corrections = _image_and_scale_corrections(prev_model, prev_data_ordered)
@@ -771,6 +775,11 @@ def main() -> None:
         square_window=False,
         sparse_pass2=False,
         relion_firstiter_winner_take_all=args.winner_take_all_mstep,
+        # RELION fixture used --firstiter_cc (run_it000_optimiser.star command);
+        # match CC scoring at iter 1 when winner-take-all is on, per
+        # ml_optimiser.cpp:8758-8774 (do_firstiter_cc branch in
+        # getAllSquaredDifferences).
+        relion_firstiter_score_mode=("normalized_cc" if args.winner_take_all_mstep else "gaussian"),
     )
     elapsed_s = time.time() - t0
     print(f"  RECOVAR K-class E/M step completed in {elapsed_s:.1f}s")
@@ -877,10 +886,7 @@ def main() -> None:
             f"p95={significant_summary['abs_p95']:.3g}, max={significant_summary['abs_max']:.3g}"
         )
 
-    relion_real = [
-        helpers.load_relion_volume(str(target_prefix) + f"_class{k + 1:03d}.mrc")
-        for k in range(n_classes)
-    ]
+    relion_real = [helpers.load_relion_volume(str(target_prefix) + f"_class{k + 1:03d}.mrc") for k in range(n_classes)]
     solvent_mask = mask.raised_cosine_mask(
         ds.volume_shape,
         radius=particle_diameter / (2.0 * ds.voxel_size),
@@ -888,7 +894,9 @@ def main() -> None:
         offset=jnp.zeros(3),
     )
 
-    def reconstruct_variant(tau_by_class, *, use_spherical_mask: bool, apply_solvent_mask: bool, grid_correct: bool, minres_map: int):
+    def reconstruct_variant(
+        tau_by_class, *, use_spherical_mask: bool, apply_solvent_mask: bool, grid_correct: bool, minres_map: int
+    ):
         real_maps = []
         for class_index in range(n_classes):
             class_ft = _reconstruct_volume_eager(
@@ -982,7 +990,9 @@ def main() -> None:
     for class_index, class_real in enumerate(recovar_real):
         write_relion_mrc(output_dir / f"recovar_class{class_index + 1:03d}.mrc", class_real, voxel_size=ds.voxel_size)
     for class_index, class_real in enumerate(variant_maps[best_variant]):
-        write_relion_mrc(output_dir / f"recovar_best_variant_class{class_index + 1:03d}.mrc", class_real, voxel_size=ds.voxel_size)
+        write_relion_mrc(
+            output_dir / f"recovar_best_variant_class{class_index + 1:03d}.mrc", class_real, voxel_size=ds.voxel_size
+        )
 
     best_perm = variant_results[default_variant]
     perm = np.asarray(best_perm["recovar_to_relion"], dtype=np.int64)
@@ -1054,7 +1064,9 @@ def main() -> None:
         "  Pmax abs diff: "
         f"mean={summary['pmax']['abs_mean']:.6g}, p95={summary['pmax']['abs_p95']:.6g}, max={summary['pmax']['abs_max']:.6g}"
     )
-    print(f"  map correlations: {np.round(best_perm['map_correlations'], 6).tolist()} mean={best_perm['mean_corr']:.6f}")
+    print(
+        f"  map correlations: {np.round(best_perm['map_correlations'], 6).tolist()} mean={best_perm['mean_corr']:.6f}"
+    )
     print("  reconstruction variants:")
     for name, values in sorted(variant_results.items()):
         print(f"    {name}: mean={values['mean_corr']:.6f}, corrs={np.round(values['map_correlations'], 6).tolist()}")

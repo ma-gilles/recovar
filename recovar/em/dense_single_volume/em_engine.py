@@ -972,6 +972,12 @@ def run_em(
         # -- PREPROCESS (once per image batch) -- returns half-spectrum --
         preprocess_t0 = time.time()
         if relion_firstiter_score_mode == "normalized_cc":
+            # RELION's exp_local_sqrtXi2 (ml_optimiser.cpp:7967-7978) is summed
+            # over the WINDOWED half-image (post windowFourierTransform to
+            # current_size), matching the suma2 pixel set used in the CC
+            # denominator at ml_optimiser.cpp:8773. Pass windowing in so Xi2
+            # uses the same pixel set as the score's cross+norms terms.
+            cc_window_indices = window_indices if use_window else None
             shifted_half, batch_norm, ctf2_half_score, ctf2_over_nv_half = _preprocess_batch_firstiter_cc(
                 experiment_dataset,
                 batch_data,
@@ -980,6 +986,7 @@ def run_em(
                 translations,
                 config,
                 score_with_masked_images,
+                window_indices=cc_window_indices,
             )
         else:
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
