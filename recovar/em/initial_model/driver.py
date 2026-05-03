@@ -752,12 +752,38 @@ def _initial_state_from_particles(
     if override_path:
         from recovar.utils.helpers import load_relion_volume
 
-        loaded = np.asarray(load_relion_volume(override_path), dtype=np.float64)
-        if loaded.shape != (ori_size, ori_size, ori_size):
-            raise ValueError(
-                f"RECOVAR_INITIAL_IREF_OVERRIDE volume shape {loaded.shape} != ({ori_size}, {ori_size}, {ori_size})"
+        # Comma-separated paths for K-class parity (e.g.
+        # "run_it000_class001.mrc,run_it000_class002.mrc"). When a single
+        # path is provided, broadcast to all classes (back-compat).
+        # If the path contains the literal "{k}" or "{k:03d}" template,
+        # expand for k=1..K.
+        paths = [p.strip() for p in override_path.split(",") if p.strip()]
+        if len(paths) == 1 and ("{k" in paths[0]):
+            template = paths[0]
+            paths = [template.format(k=k + 1) for k in range(int(opts.nr_classes))]
+        K = int(opts.nr_classes)
+        if len(paths) == 1:
+            loaded = np.asarray(load_relion_volume(paths[0]), dtype=np.float64)
+            if loaded.shape != (ori_size, ori_size, ori_size):
+                raise ValueError(
+                    f"RECOVAR_INITIAL_IREF_OVERRIDE volume shape {loaded.shape} != ({ori_size}, {ori_size}, {ori_size})"
+                )
+            state.Iref = np.broadcast_to(loaded, (K, ori_size, ori_size, ori_size)).copy()
+        elif len(paths) == K:
+            stacked = np.stack(
+                [np.asarray(load_relion_volume(p), dtype=np.float64) for p in paths],
+                axis=0,
             )
-        state.Iref = np.broadcast_to(loaded, (int(opts.nr_classes), ori_size, ori_size, ori_size)).copy()
+            if stacked.shape != (K, ori_size, ori_size, ori_size):
+                raise ValueError(
+                    f"RECOVAR_INITIAL_IREF_OVERRIDE stacked shape {stacked.shape} != "
+                    f"({K}, {ori_size}, {ori_size}, {ori_size})"
+                )
+            state.Iref = stacked
+        else:
+            raise ValueError(
+                f"RECOVAR_INITIAL_IREF_OVERRIDE expects 1 or K={K} comma-separated paths, got {len(paths)}"
+            )
     else:
         state.Iref = initial_low_pass_filter_references(
             iref,

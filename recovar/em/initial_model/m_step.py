@@ -119,7 +119,8 @@ def vdam_m_step_single_class(
 
     _dump_dir = _os.environ.get("RECOVAR_MSTEP_DUMP_DIR")
     _dump_iter = int(_os.environ.get("RECOVAR_MSTEP_DUMP_ITER", "1"))
-    _do_dump = _dump_dir is not None and int(getattr(state, "iter", 0)) == _dump_iter and k == 0
+    _do_dump = _dump_dir is not None and int(getattr(state, "iter", 0)) == _dump_iter
+    _dump_prefix = f"c{k}_" if state.K > 1 else ""
 
     def _dump(name, arr):
         if not _do_dump:
@@ -127,7 +128,7 @@ def vdam_m_step_single_class(
         from pathlib import Path as _Path
 
         _Path(_dump_dir).mkdir(parents=True, exist_ok=True)
-        np.save(f"{_dump_dir}/{name}.npy", np.asarray(arr))
+        np.save(f"{_dump_dir}/{_dump_prefix}{name}.npy", np.asarray(arr))
 
     _dump("accum_h0_data", accum_h0.data)
     _dump("accum_h0_weight", accum_h0.weight)
