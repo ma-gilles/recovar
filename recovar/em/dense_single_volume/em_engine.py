@@ -48,21 +48,23 @@ from recovar.reconstruction import noise as noise_utils
 from .dense_big_jit import run_dense_bucket_big_jit
 from .helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
+)
+from .helpers.adjoint import (
     adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
 )
 from .helpers.dtype_policy import DensePrecisionPolicy
 from .helpers.fourier_window import make_fourier_window_spec
-from .helpers.half_volume_mstep import (
-    enforce_half_volume_x0,
-    half_volume_accumulator_shape,
-    half_volume_accumulators_to_full,
-)
 from .helpers.half_spectrum import (
     bin_shell_values_np,
     half_spectrum_dc_index,
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
+)
+from .helpers.half_volume_mstep import (
+    enforce_half_volume_x0,
+    half_volume_accumulator_shape,
+    half_volume_accumulators_to_full,
 )
 from .helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
@@ -72,29 +74,37 @@ from .helpers.image_shifts import (
 from .helpers.jax_runtime import block_until_ready as _block_until_ready
 from .helpers.preprocessing import (
     prepare_reconstruction_batch as _prepare_reconstruction_batch,
-    process_half_image,
+)
+from .helpers.preprocessing import (
     preprocess_batch as _preprocess_batch,
+)
+from .helpers.preprocessing import (
     preprocess_batch_firstiter_cc as _preprocess_batch_firstiter_cc,
+)
+from .helpers.preprocessing import (
+    process_half_image,
 )
 from .helpers.projection import (
     compute_noise_block as _compute_noise_block,
+)
+from .helpers.projection import (
     compute_projections_block as _compute_projections_block,
 )
+from .helpers.score_constraints import DenseScoreConstraints, apply_dense_score_constraints
 from .helpers.scoring import (
-    _merge_block_logsumexp,
     _m_step_block_compute,
     _m_step_block_windowed,
+    _merge_block_logsumexp,
     _score_rotation_block,
     _update_logsumexp,
     _winner_take_all_probs_for_block,
 )
-from .helpers.score_constraints import DenseScoreConstraints, apply_dense_score_constraints
+from .helpers.timing import TimingAccumulator
 from .helpers.translation_prior import (
     translation_prior_centers_for_images,
     translation_sqdist_angstrom,
     validate_translation_prior_centers,
 )
-from .helpers.timing import TimingAccumulator
 from .helpers.types import EMProfileStats, make_noise_stats, make_relion_stats
 from .local_debug import (
     maybe_write_dense_per_pose_score_dump,
@@ -109,8 +119,7 @@ logger = logging.getLogger(__name__)
 def _noise_split_diagnostics_requested() -> bool:
     """Return whether per-shell A2/XA noise split diagnostics are needed."""
     return bool(
-        os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
-        or os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_DIR")
+        os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR") or os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_DIR")
     )
 
 
@@ -539,8 +548,8 @@ def _dense_noise_block_view(
 def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int):
     """Pad dense big-JIT raw batch inputs to a stable image shape class."""
 
-    padded_batch_data, padded_ctf_params, valid_image_mask, actual_batch_size, _ = (
-        pad_batch_data_ctf_and_valid_mask(batch_data, ctf_params, target_batch_size)
+    padded_batch_data, padded_ctf_params, valid_image_mask, actual_batch_size, _ = pad_batch_data_ctf_and_valid_mask(
+        batch_data, ctf_params, target_batch_size
     )
     return (
         padded_batch_data,
@@ -548,6 +557,7 @@ def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int
         valid_image_mask,
         actual_batch_size,
     )
+
 
 def run_em(
     experiment_dataset,
@@ -697,8 +707,7 @@ def run_em(
         normalization_log_evidence_np = np.asarray(normalization_log_evidence, dtype=np.float64)
         if normalization_log_evidence_np.shape != (n_images,):
             raise ValueError(
-                "normalization_log_evidence must have shape "
-                f"({n_images},), got {normalization_log_evidence_np.shape}",
+                f"normalization_log_evidence must have shape ({n_images},), got {normalization_log_evidence_np.shape}",
             )
     if relion_firstiter_score_mode not in {"gaussian", "normalized_cc"}:
         raise ValueError(
@@ -1076,8 +1085,7 @@ def run_em(
                 precision_policy.normalization_real_dtype,
             )
             external_log_Z = (
-                jnp.asarray(batch_log_evidence_np, dtype=precision_policy.normalization_real_dtype)
-                - log_score_offset
+                jnp.asarray(batch_log_evidence_np, dtype=precision_policy.normalization_real_dtype) - log_score_offset
             )
 
         # -- Save pre-DC-exclusion arrays for M-step + noise accumulation --
@@ -1129,7 +1137,9 @@ def run_em(
                 )
                 target_rows = [
                     (row, int(local_idx), int(global_idx))
-                    for row, (local_idx, global_idx) in enumerate(zip(indices_np.tolist(), original_indices_np.tolist()))
+                    for row, (local_idx, global_idx) in enumerate(
+                        zip(indices_np.tolist(), original_indices_np.tolist())
+                    )
                     if int(global_idx) in debug_options.noise_component_dump_targets
                 ]
                 for row, local_idx, global_idx in target_rows:
@@ -1657,7 +1667,14 @@ def run_em(
             log_score_offset = -0.5 * jnp.squeeze(batch_norm[:actual_batch_size], axis=1)
             log_Z_actual = log_Z[:actual_batch_size]
             best_score_actual = best_score[:actual_batch_size]
-            pmax = jnp.exp(best_score - log_Z)
+            if relion_firstiter_winner_take_all:
+                # RELION's --firstiter_cc + winner-take-all assigns 100% probability
+                # to the best (rotation, translation) per image (ml_optimiser.cpp
+                # storeWeightedSums hard branch). Reflect that in stats so K-class
+                # pmax matches RELION's rlnMaxValueProbDistribution=1.0 at iter 1.
+                pmax = jnp.ones_like(best_score)
+            else:
+                pmax = jnp.exp(best_score - log_Z)
             log_evidence_per_image[start_idx:end_idx] = np.asarray(
                 log_Z_actual + log_score_offset,
                 dtype=np.float32,
