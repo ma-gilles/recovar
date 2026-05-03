@@ -186,9 +186,22 @@ high-frequency content is independent between recovar's two halves
 
 Phase 1d (init_mean_variance floor removed) made NO difference to the
 iter-1 FSC — confirming the iter-1 reconstruction's tau2 is computed from
-the iter-1 FSC, not from the init_mean_variance bootstrap. So the
-divergence is in the **iter-1 E-step posteriors** or **iter-1 M-step
-backprojection accumulators (Ft_y, Ft_ctf)**, NOT in the bootstrap prior.
+the iter-1 FSC, not from the init_mean_variance bootstrap.
+
+Phase 1f (tau2_fudge=16 vs default 4, a 4× regularization-strength bump)
+also made NO difference to the iter-1 FSC (within 0.001 at every shell):
+
+| shell | t4 GS FSC | t16 GS FSC | RELION |
+|------:|----------:|-----------:|-------:|
+|   18  | 0.856     | 0.856      | 0.919  |
+|   22  | 0.589     | 0.586      | 0.770  |
+|   26  | 0.136     | 0.127      | 0.476  |
+
+This rules out the entire iter-1 RECONSTRUCTION STEP as the cause —
+neither the bootstrap prior nor the Wiener filter strength move the
+iter-1 GS FSC. So the divergence is in the **iter-1 E-step posteriors**
+(likelihoods / scoring) or **iter-1 M-step backprojection scatter**
+(Ft_y, Ft_ctf accumulators themselves), NOT in the reconstruction step.
 
 ## Next steps (for the iter-1 root cause)
 
