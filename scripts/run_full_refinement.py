@@ -78,6 +78,122 @@ def _load_relion_max_significants(optimiser_star_path):
     return int(match.group(1))
 
 
+def _build_replay_iteration_overrides(
+    relion_dir,
+    half1_idx,
+    half2_idx,
+    max_iter,
+    ds_voxel,
+    ds_grid,
+):
+    """Build per-iter replay overrides keyed on recovar iteration index.
+
+    For each recovar iteration k >= 1 (i.e. iter 2 onwards in RELION terms),
+    reads RELION's run_it{k:03d}_data.star + half1/half2 model.star and
+    builds an override dict containing:
+      * image_corrections: per-image (avg_norm/normcorr) * group_scale
+      * scale_corrections: per-image group_scale alone
+
+    This matches scripts/run_multi_iter_parity.py::_load_relion_iteration_override
+    (the proven replay logic). The recovar iter-k override is read from
+    RELION iter-k's model+data (since recovar iter-k corresponds to RELION
+    iter-(k+1), and the per-image scalings used at the start of RELION
+    iter-(k+1) are the ones written by RELION iter-k's M-step).
+    """
+    import re as _re
+    from pathlib import Path as _Path
+
+    import starfile as _sf
+
+    relion_dir = _Path(relion_dir).resolve()
+
+    def _idx(name):
+        m = _re.match(r"(\d+)@", str(name))
+        return int(m.group(1)) - 1 if m else -1
+
+    overrides = [None] * max_iter
+    for recovar_iter in range(1, max_iter):
+        # recovar iter k uses corrections computed by RELION iter k (which were
+        # written into run_it{k}_data.star). recovar iter 1 (the first iter) has
+        # no upstream RELION normcorr — leave that override as None so the
+        # E-step uses image_corrections=None (=1.0 for all particles, matching
+        # RELION iter-0 nc=1.0).
+        relion_iter = recovar_iter  # recovar iter k <-> RELION iter k for normcorr source
+        data_star = relion_dir / f"run_it{relion_iter:03d}_data.star"
+        model_h1 = relion_dir / f"run_it{relion_iter:03d}_half1_model.star"
+        model_h2 = relion_dir / f"run_it{relion_iter:03d}_half2_model.star"
+        if not data_star.exists() or not model_h1.exists() or not model_h2.exists():
+            logger.warning(
+                "Replay override for recovar iter %d: missing %s — leaving unset", recovar_iter + 1, data_star
+            )
+            continue
+
+        data = _sf.read(str(data_star))
+        parts = data["particles"] if isinstance(data, dict) else data
+        m1 = _sf.read(str(model_h1))
+        m2 = _sf.read(str(model_h2))
+
+        names = list(parts["rlnImageName"])
+        idx_to_pos = {_idx(names[i]): i for i in range(len(names))}
+
+        nc = np.asarray(parts["rlnNormCorrection"], dtype=np.float64)
+
+        def _scalar(table, key):
+            v = table[key]
+            return float(v if isinstance(v, (int, float)) else v.iloc[0] if hasattr(v, "iloc") else v[0])
+
+        avg_norm_h1 = _scalar(m1["model_general"], "rlnNormCorrectionAverage")
+        avg_norm_h2 = _scalar(m2["model_general"], "rlnNormCorrectionAverage")
+
+        groups_h1 = m1.get("model_groups")
+        groups_h2 = m2.get("model_groups")
+        scale_h1 = (
+            np.asarray(groups_h1["rlnGroupScaleCorrection"], dtype=np.float64)
+            if groups_h1 is not None and "rlnGroupScaleCorrection" in groups_h1.columns
+            else np.array([1.0])
+        )
+        scale_h2 = (
+            np.asarray(groups_h2["rlnGroupScaleCorrection"], dtype=np.float64)
+            if groups_h2 is not None and "rlnGroupScaleCorrection" in groups_h2.columns
+            else np.array([1.0])
+        )
+        group_no = (
+            np.asarray(parts["rlnGroupNumber"], dtype=int)
+            if "rlnGroupNumber" in parts.columns
+            else np.ones(len(parts), dtype=int)
+        )
+        pp_scale_h1 = scale_h1[np.clip(group_no - 1, 0, len(scale_h1) - 1)]
+        pp_scale_h2 = scale_h2[np.clip(group_no - 1, 0, len(scale_h2) - 1)]
+        combined_h1 = (avg_norm_h1 / nc) * pp_scale_h1
+        combined_h2 = (avg_norm_h2 / nc) * pp_scale_h2
+
+        # Map RELION particle order to recovar's half1/half2 ordering.
+        # recovar's half1_idx / half2_idx are stack-row indices into the same
+        # particles.star as RELION's data.star.
+        def _to_half(combined, half_idx):
+            return np.asarray([combined[idx_to_pos[int(i)]] for i in half_idx], dtype=np.float32)
+
+        corr_h1 = _to_half(combined_h1, half1_idx)
+        corr_h2 = _to_half(combined_h2, half2_idx)
+        scale_corr_h1 = _to_half(pp_scale_h1, half1_idx)
+        scale_corr_h2 = _to_half(pp_scale_h2, half2_idx)
+
+        overrides[recovar_iter] = {
+            "image_corrections": [corr_h1, corr_h2],
+            "scale_corrections": [scale_corr_h1, scale_corr_h2],
+        }
+        logger.info(
+            "Replay override recovar iter %d: image_corr means=(%.4f, %.4f), scale_corr means=(%.4f, %.4f)",
+            recovar_iter + 1,
+            float(corr_h1.mean()),
+            float(corr_h2.mean()),
+            float(scale_corr_h1.mean()),
+            float(scale_corr_h2.mean()),
+        )
+
+    return overrides
+
+
 def _find_relion_optimiser_star(args):
     """Locate a RELION run_optimiser.star to source mask + max_significants from.
 
@@ -252,6 +368,15 @@ def main():
         "run_it{NNN}_sampling.star in this directory and use that exact value "
         "instead of recovar's RNG. Required for bit-exact ab-initio replay "
         "against a RELION reference run.",
+    )
+    parser.add_argument(
+        "--replay_relion_normcorr",
+        action="store_true",
+        default=False,
+        help="If set together with --perturb_replay_relion_dir, also inject "
+        "RELION's per-iter rlnNormCorrection / rlnGroupScaleCorrection into "
+        "recovar's E-step at iter 2+. Useful for parity diagnostics; not yet "
+        "demonstrated to improve quality on the 5k 128² fixture.",
     )
     parser.add_argument("--init_resolution", type=float, default=30.0, help="Initial resolution (Angstrom)")
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
@@ -466,6 +591,23 @@ def main():
         oracle_current_sizes = [int(x) for x in args.relion_current_sizes.split(",")]
         logger.info("Oracle mode: using RELION current_sizes=%s", oracle_current_sizes)
 
+    # Build per-iter replay overrides (image_corrections, scale_corrections, etc.)
+    # from RELION's per-iter data.star + model.star, when --perturb_replay_relion_dir
+    # is set. This injects RELION's per-iteration computed normCorrection so
+    # recovar's E-step at iter 2+ uses the same per-image scaling RELION uses,
+    # rather than image_corrections=None (=1.0 for all particles, equivalent to
+    # uniform iter-0 normcorr).
+    replay_iteration_overrides = None
+    if args.perturb_replay_relion_dir is not None and args.replay_relion_normcorr:
+        replay_iteration_overrides = _build_replay_iteration_overrides(
+            args.perturb_replay_relion_dir,
+            half1_idx,
+            half2_idx,
+            args.max_iter,
+            ds_voxel=ds.voxel_size,
+            ds_grid=ds.grid_size,
+        )
+
     t_start = time.time()
 
     result = refine_single_volume(
@@ -495,6 +637,7 @@ def main():
         perturb_factor=args.perturb_factor,
         perturb_seed=args.perturb_seed,
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,
+        replay_iteration_overrides=replay_iteration_overrides,
     )
 
     total_time = time.time() - t_start
