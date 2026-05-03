@@ -85,6 +85,8 @@ def _build_replay_iteration_overrides(
     max_iter,
     ds_voxel,
     ds_grid,
+    *,
+    include_normcorr,
 ):
     """Build per-iter replay overrides keyed on recovar iteration index.
 
@@ -145,6 +147,17 @@ def _build_replay_iteration_overrides(
         avg_norm_h1 = _scalar(m1["model_general"], "rlnNormCorrectionAverage")
         avg_norm_h2 = _scalar(m2["model_general"], "rlnNormCorrectionAverage")
 
+        # rlnSigmaOffsetsAngst is RELION's per-iter translation sigma. RELION
+        # iter (k+1) loads it from the iter-k model.star and uses it to build
+        # pdf_offset (acc_ml_optimiser_impl.h::pdf_offset). recovar's iter-1
+        # does not accumulate sigma2_offset moments (no per-image prior centers
+        # exist yet), so without an explicit override the iter-2 E-step uses
+        # the default init sigma (10 Å) instead of the data-driven RELION
+        # value, which is ~6× too wide and depresses iter-2 Pmax by ~22%.
+        sigma_offset_h1 = _scalar(m1["model_general"], "rlnSigmaOffsetsAngst")
+        sigma_offset_h2 = _scalar(m2["model_general"], "rlnSigmaOffsetsAngst")
+        sigma_offset_avg = 0.5 * (float(sigma_offset_h1) + float(sigma_offset_h2))
+
         groups_h1 = m1.get("model_groups")
         groups_h2 = m2.get("model_groups")
         scale_h1 = (
@@ -178,18 +191,27 @@ def _build_replay_iteration_overrides(
         scale_corr_h1 = _to_half(pp_scale_h1, half1_idx)
         scale_corr_h2 = _to_half(pp_scale_h2, half2_idx)
 
-        overrides[recovar_iter] = {
-            "image_corrections": [corr_h1, corr_h2],
-            "scale_corrections": [scale_corr_h1, scale_corr_h2],
-        }
-        logger.info(
-            "Replay override recovar iter %d: image_corr means=(%.4f, %.4f), scale_corr means=(%.4f, %.4f)",
-            recovar_iter + 1,
-            float(corr_h1.mean()),
-            float(corr_h2.mean()),
-            float(scale_corr_h1.mean()),
-            float(scale_corr_h2.mean()),
-        )
+        override_k = {"translation_sigma_angstrom": sigma_offset_avg}
+        if include_normcorr:
+            override_k["image_corrections"] = [corr_h1, corr_h2]
+            override_k["scale_corrections"] = [scale_corr_h1, scale_corr_h2]
+        overrides[recovar_iter] = override_k
+        if include_normcorr:
+            logger.info(
+                "Replay override recovar iter %d: image_corr means=(%.4f, %.4f), scale_corr means=(%.4f, %.4f), sigma_offset=%.4f Å",
+                recovar_iter + 1,
+                float(corr_h1.mean()),
+                float(corr_h2.mean()),
+                float(scale_corr_h1.mean()),
+                float(scale_corr_h2.mean()),
+                sigma_offset_avg,
+            )
+        else:
+            logger.info(
+                "Replay override recovar iter %d: sigma_offset=%.4f Å (normcorr replay disabled)",
+                recovar_iter + 1,
+                sigma_offset_avg,
+            )
 
     return overrides
 
@@ -608,14 +630,15 @@ def main():
         oracle_current_sizes = [int(x) for x in args.relion_current_sizes.split(",")]
         logger.info("Oracle mode: using RELION current_sizes=%s", oracle_current_sizes)
 
-    # Build per-iter replay overrides (image_corrections, scale_corrections, etc.)
-    # from RELION's per-iter data.star + model.star, when --perturb_replay_relion_dir
-    # is set. This injects RELION's per-iteration computed normCorrection so
-    # recovar's E-step at iter 2+ uses the same per-image scaling RELION uses,
-    # rather than image_corrections=None (=1.0 for all particles, equivalent to
-    # uniform iter-0 normcorr).
+    # Build per-iter replay overrides from RELION's per-iter data.star +
+    # model.star when --perturb_replay_relion_dir is set. The override always
+    # injects RELION's per-iter sigma_offset (parity-critical: recovar's iter-1
+    # does not run the C1 sigma_offset update so iter-2 would otherwise use the
+    # 10 Å default — 6× too wide vs RELION ~1.6 Å — depressing iter-2 Pmax by
+    # ~22%). Per-image normCorrection / group scale replay remains opt-in via
+    # --replay_relion_normcorr (it can hurt corr_vs_GT in some configurations).
     replay_iteration_overrides = None
-    if args.perturb_replay_relion_dir is not None and args.replay_relion_normcorr:
+    if args.perturb_replay_relion_dir is not None:
         replay_iteration_overrides = _build_replay_iteration_overrides(
             args.perturb_replay_relion_dir,
             half1_idx,
@@ -623,6 +646,7 @@ def main():
             args.max_iter,
             ds_voxel=ds.voxel_size,
             ds_grid=ds.grid_size,
+            include_normcorr=bool(args.replay_relion_normcorr),
         )
 
     t_start = time.time()
