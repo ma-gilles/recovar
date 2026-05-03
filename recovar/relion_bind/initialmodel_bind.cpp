@@ -30,9 +30,11 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <random>
 #include <stdexcept>
 #include <string>
 
@@ -730,19 +732,14 @@ static py::array_t<long> vdam_randomise_particles_order(
         return out;
     }
 
-    init_random_generator(seed);
-    // Fisher-Yates from the tail, matching exp_model.cpp
-    for (long i = nr_particles - 1; i > 0; i--) {
-        RFLOAT u = rnd_unif();
-        long j = (long)(u * i + 0.5);
-        if (j < 0) j = 0;
-        if (j > i) j = i;
-        if (j != i) {
-            long tmp = order[i];
-            order[i] = order[j];
-            order[j] = tmp;
-        }
-    }
+    // RELION's exp_model.cpp:451 uses `std::shuffle(sorted_idx, std::mt19937(seed))`,
+    // NOT the rnd_unif Fisher-Yates earlier docs claimed. The two algorithms
+    // diverge in how they consume rng state (uniform_int_distribution rejection
+    // sampling vs rnd_unif()*i rounding) and produce wildly different
+    // permutations for the same seed. Use std::shuffle here for byte-exact
+    // parity with RELION's iter-N subset selection.
+    std::mt19937 rng((unsigned int)seed);
+    std::shuffle(order.begin(), order.end(), rng);
 
     py::array_t<long> out((py::ssize_t)nr_particles);
     std::memcpy(out.request().ptr, order.data(), nr_particles * sizeof(long));
