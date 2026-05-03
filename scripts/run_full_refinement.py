@@ -320,7 +320,20 @@ def main():
         help="RELION-style Gaussian translation-prior sigma in Angstrom.",
     )
     parser.add_argument("--adaptive_oversampling", type=int, default=1, help="Oversampling levels (0=off, 1=2x)")
-    parser.add_argument("--adaptive_fraction", type=float, default=0.999, help="Significance fraction")
+    parser.add_argument(
+        "--adaptive_fraction",
+        type=float,
+        default=1.0,
+        help="Significance fraction. Default 1.0 disables the "
+        "use_global_significant_support path (see iteration_loop.py:2414) "
+        "which routes iter 2+ through `_run_sparse_pass2_local_search_iteration` "
+        "and produces wildly different BP magnitudes than the dense path "
+        "(BP scale ~10⁴× off, causing iter-2 FSC cliff at the join boundary). "
+        "Setting `--adaptive_fraction 0.999` (RELION's GUI default) re-enables "
+        "the path; only do that once the path's BP scale bug is fixed. "
+        "On the 5k 128² K=1 fixture, default 1.0 gives final corr_vs_GT 0.964 "
+        "(matching RELION's 0.960); the previous default 0.999 gave 0.722.",
+    )
     parser.add_argument(
         "--max_significants",
         type=int,

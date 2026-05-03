@@ -238,6 +238,36 @@ RELION iter-1 `ave_Pmax = 1.0` with `--firstiter_cc` is a hard winner-take-all
 cross-correlation artifact, not Bayesian inference. Do not add that path to
 RECOVAR merely to match the iter-1 number.
 
+## `use_global_significant_support` path is BROKEN — keep `adaptive_fraction=1.0` for now
+
+`recovar/em/dense_single_volume/iteration_loop.py:2414`'s
+`use_global_significant_support` flag triggers a different M-step path
+at iter 2+ when `state.adaptive_oversampling == 0` and
+`adaptive_fraction < 1.0` and `iteration > 0`. This routes the M-step
+through `_run_sparse_pass2_local_search_iteration` (the local-search
+exact-engine path) instead of the dense engine.
+
+**That path produces backprojection accumulators that are ~10⁴× off-scale
+from the equivalent dense-engine output.** Even though both Ft_y and
+Ft_ctf scale together (so Wiener output partially cancels), mid-shell
+amplitudes drift, and the iter-2 reconstruction develops a catastrophic
+FSC cliff at the low_resol_join_halves boundary. On the 5k 128² K=1
+fixture, this dropped final corr_vs_GT to 0.65-0.72 (vs RELION 0.96).
+
+**Workaround**: pass `--adaptive_fraction 1.0` (default in
+`scripts/run_full_refinement.py` since this commit). Restores corr_vs_GT
+to 0.964, FSC<0.5 = 14.32 Å (matches RELION's 0.960 / 15.11 Å).
+
+**Real fix needed**: trace the BP scale discrepancy in
+`_run_sparse_pass2_local_search_iteration` vs the dense engine. The two
+paths are supposed to be equivalent. Memory note from a previous
+session (`project_use_global_significant_support_path.md`) flagged this
+as a known regression on the rebase branch — confirmed today.
+
+Don't accidentally re-enable this path by setting
+`--adaptive_fraction 0.999` (RELION's GUI default) without first fixing
+the BP scale.
+
 ## RELION GUI defaults for `tau2_fudge` (memorize this — easy to get wrong)
 
 RELION's `--tau2_fudge` default depends on JOB TYPE. The GUI passes
