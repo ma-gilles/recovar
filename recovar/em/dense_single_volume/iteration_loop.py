@@ -3943,6 +3943,23 @@ def _run_relion_iteration_loop(
                     minres_map=RELION_MINRES_MAP,
                 ).reshape(-1)
 
+            # Diagnostic: dump pre-mask Wiener output when env var set.
+            _premask_dump = os.environ.get("RECOVAR_PREMASK_DUMP_DIR")
+            if _premask_dump:
+                import pathlib
+
+                pathlib.Path(_premask_dump).mkdir(parents=True, exist_ok=True)
+                np.savez(
+                    pathlib.Path(_premask_dump) / f"recovar_premask_it{iteration + 1:03d}_half{k + 1}.npz",
+                    iteration=np.int32(iteration + 1),
+                    half=np.int32(k + 1),
+                    current_size=np.int32(cs),
+                    grid_size=np.int32(grid_size),
+                    voxel_size=np.float32(cryo.voxel_size),
+                    volume_shape=np.asarray(volume_shape, dtype=np.int32),
+                    means_premask=np.asarray(means[k], dtype=np.complex64),
+                )
+
             # RELION's solventFlatten (ml_optimiser.cpp:5469): mask the
             # reconstructed reference outside particle_diameter to remove
             # solvent noise before the next E-step's projections.
