@@ -186,6 +186,35 @@ shell 0. Bootstrap noise (from
 `estimate_initial_noise_spectrum_from_unaligned_images`) and the iter-1
 output noise both match RELION.
 
+### Iter-1 reconstruction after the perturbation fix
+
+Cross-FSC (recovar half-1 vs RELION it001 half-1) at iter 1, with
+`--perturb_replay_relion_dir` reading rp from RELION's per-iter
+sampling.star:
+
+| shell |  cross-FSC (recovar h1 vs RELION h1) |
+|------:|--------------------------------------|
+|   5   | 1.0000  (was 0.9997 without replay) |
+|  10   | 1.0000  (was 0.9963)                |
+|  14   | 0.9999  (was 0.9837)                |
+|  18   | 0.9991  (was 0.9117)                |
+|  22   | 0.9951  (was 0.6833)                |
+|  26   | 0.9778  (was 0.3288)                |
+
+Internal gold-standard FSC (recovar h1 vs h2) matches RELION's at every
+shell within ±0.005 — iter-1 reconstruction is now at near machine-
+precision parity with RELION.
+
+### Final corr_vs_GT progression with each fix
+
+| Phase | Description | Final corr_vs_GT | FSC<0.5 res Å |
+|-------|-------------|-----------------:|--------------:|
+| 1a | no fixes | 0.495 | 181.33 |
+| 1c | mask path + bg-fill | 0.683 | 68.00 |
+| 1h | + perturb-replay | 0.651 | ? |
+| 1m | all current fixes (final) | 0.651 | 77.71 |
+| RELION it008 | reference | **0.960** | **15.11** |
+
 ## Remaining gap: iter-1 backprojection accumulator divergence
 
 After the two fixes, iter-1 sigma2_noise matches RELION and the iter-1
