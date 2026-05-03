@@ -199,23 +199,36 @@ def vdam_m_step_single_class(
     # Pass weight from the h0 accumulator and the noise-power spectrum emitted
     # by applyMomenta. This is the RELION pseudo-halfset path; omitting
     # mom1_noise_power silently falls back to the wrong FSC/tau weighting.
+    #
+    # Frame: state.Iref[k] is in recovar's real-space frame (negated &
+    # axis-flipped relative to RELION), but vdam_reconstruct_grad runs
+    # inside RELION's BackProjector — its FFT must see the same volume
+    # RELION's reconstructGrad would. Convert recovar↔RELION on the
+    # boundary so the gradient update is computed in the same frame as
+    # the accumulators (which the iter-1 BPref test verifies are RELION
+    # frame at machine precision).
+    from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
+
+    iref_relion_in = recovar_volume_to_relion(np.asarray(state.Iref[k]))
     new_Iref = state.Iref.copy()
-    new_Iref[k] = np.asarray(
-        bind.vdam_reconstruct_grad(
-            state.Iref[k],
-            _post_data,
-            accum_h0.weight,
-            state.fsc_halves_class[k],
-            grad_current_stepsize,
-            tau2_fudge_factor,
-            ori_size,
-            padding_factor,
-            1,
-            r_max,
-            grad_min_resol_shell,
-            False,
-            True,
-            mom1_noise_power,
+    new_Iref[k] = relion_volume_to_recovar(
+        np.asarray(
+            bind.vdam_reconstruct_grad(
+                iref_relion_in,
+                _post_data,
+                accum_h0.weight,
+                state.fsc_halves_class[k],
+                grad_current_stepsize,
+                tau2_fudge_factor,
+                ori_size,
+                padding_factor,
+                1,
+                r_max,
+                grad_min_resol_shell,
+                False,
+                True,
+                mom1_noise_power,
+            )
         )
     )
 

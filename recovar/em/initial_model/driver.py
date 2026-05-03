@@ -33,7 +33,6 @@ from .schedules import DEFAULT_GRAD_EM_ITERS, DEFAULT_GRAD_MU, default_subset_si
 from .state import InitialModelState
 from .subset import RndUnifFn
 
-
 DEFAULT_WIDTH_MASK_EDGE_PX = 5.0
 DEFAULT_HEALPIX_ORDER = 1
 DEFAULT_OFFSET_RANGE_PX = 6.0
@@ -481,10 +480,14 @@ def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.n
     # RELION stores normalized 2D FFT shell power. The dense engine scores
     # unnormalized particle FFTs, matching the existing InitialModel fixture.
     n4 = int(ori_size) ** 4
-    return np.asarray(make_radial_noise(np.asarray(sigma2_noise)[0] * n4, (ori_size, ori_size))).astype(
-        np.float32,
-        copy=False,
-    ).reshape(-1)
+    return (
+        np.asarray(make_radial_noise(np.asarray(sigma2_noise)[0] * n4, (ori_size, ori_size)))
+        .astype(
+            np.float32,
+            copy=False,
+        )
+        .reshape(-1)
+    )
 
 
 def _dense_estep_config(
@@ -726,12 +729,29 @@ def _initial_state_from_particles(
     )
     state = seed_noise_from_mavg(state, sigma2_per_group)
     state.Mavg = Mavg
-    state.Iref = initial_low_pass_filter_references(
-        iref,
-        ori_size=ori_size,
-        pixel_size=pixel_size,
-        ini_high_ang=float(state.ini_high),
-    )
+    # RECOVAR_INITIAL_IREF_OVERRIDE lets a parity caller swap in RELION's
+    # iter000 ref directly. Recovar's bootstrap currently stops at
+    # `compute_bootstrap_iref_via_cpp + initial_low_pass_filter_references`
+    # — RELION additionally runs SomGraph::make_blobs_3d + a second LP +
+    # softMaskOutsideMap (ml_optimiser.cpp:2942-2980), which we have not
+    # ported. The override bypasses that mismatch for parity tests.
+    override_path = os.environ.get("RECOVAR_INITIAL_IREF_OVERRIDE")
+    if override_path:
+        from recovar.utils.helpers import load_relion_volume
+
+        loaded = np.asarray(load_relion_volume(override_path), dtype=np.float64)
+        if loaded.shape != (ori_size, ori_size, ori_size):
+            raise ValueError(
+                f"RECOVAR_INITIAL_IREF_OVERRIDE volume shape {loaded.shape} != ({ori_size}, {ori_size}, {ori_size})"
+            )
+        state.Iref = np.broadcast_to(loaded, (int(opts.nr_classes), ori_size, ori_size, ori_size)).copy()
+    else:
+        state.Iref = initial_low_pass_filter_references(
+            iref,
+            ori_size=ori_size,
+            pixel_size=pixel_size,
+            ini_high_ang=float(state.ini_high),
+        )
     return state, optics_group_by_particle
 
 

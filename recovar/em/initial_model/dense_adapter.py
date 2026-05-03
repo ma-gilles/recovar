@@ -12,15 +12,15 @@ from __future__ import annotations
 
 import os
 import time
-from pathlib import Path
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
 from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_step
 from recovar.em.dense_single_volume.helpers.resolution import compute_coarse_image_size
+from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
 from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_local_k_class_em
 from recovar.em.dense_single_volume.local_layout import build_pass2_hypothesis_layout
 from recovar.em.sampling import (
@@ -515,8 +515,7 @@ def _initial_model_pass2_layout(layout, *, n_global_rotations: int):
         raise ValueError("n_global_rotations must be non-negative")
     if layout.rotation_ids_flat.size and int(np.max(layout.rotation_ids_flat)) >= n_global_rotations:
         raise ValueError(
-            "InitialModel pass-2 layout contains a fine rotation id outside "
-            f"n_global_rotations={n_global_rotations}"
+            f"InitialModel pass-2 layout contains a fine rotation id outside n_global_rotations={n_global_rotations}"
         )
     if int(layout.n_global_rotations) == n_global_rotations:
         return layout
@@ -634,7 +633,7 @@ def _run_sparse_pass2_initial_model_estep(
 
         t0 = time.time()
         sig_result = _compute_k_class_significance_batched(
-            experiment_dataset,
+            experiment_dataset.subset(packed_image_indices),
             means,
             config.noise_variance,
             coarse_rotations_for_dense,
@@ -1308,9 +1307,7 @@ def run_dense_initial_model_estep(
         packed_image_indices, reconstruction_group_ids, reconstruction_group_count = _pack_image_groups(groups)
         if packed_image_indices.size == 0:
             accumulators = [
-                _empty_accumulator(state, k, halfset_idx)
-                for halfset_idx, _ in sorted(groups)
-                for k in range(state.K)
+                _empty_accumulator(state, k, halfset_idx) for halfset_idx, _ in sorted(groups) for k in range(state.K)
             ]
             return DenseInitialModelEstepResult(
                 accumulators=accumulators,
