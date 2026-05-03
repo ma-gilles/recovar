@@ -893,8 +893,13 @@ def run_em(
     max_posterior_per_image = None
     rotation_posterior_sums = None
     if return_stats:
-        log_evidence_per_image = np.empty(n_images, dtype=np.float32)
-        best_log_score_per_image = np.empty(n_images, dtype=np.float32)
+        # K-class joint argmax over best_log_score relies on the per-class
+        # delta surviving the addition of the (large) image-power log_score_offset.
+        # Float32 rounding at ±5e6 magnitudes quantizes those deltas to 0 and
+        # collapses the CC-mode K=2 class assignment, so keep the per-image
+        # log/score buffers in float64.
+        log_evidence_per_image = np.empty(n_images, dtype=np.float64)
+        best_log_score_per_image = np.empty(n_images, dtype=np.float64)
         max_posterior_per_image = np.empty(n_images, dtype=np.float32)
         rotation_posterior_sums = np.zeros(n_rot, dtype=np.float64)
 
@@ -1682,17 +1687,22 @@ def run_em(
                 pmax = jnp.ones_like(best_score)
             else:
                 pmax = jnp.exp(best_score - log_Z)
+            # Cast the per-image stats sums into the destination buffer dtype
+            # (float64 if the buffer was allocated as float64) so the small
+            # CC-mode delta between best_score values survives the addition of
+            # the much-larger image_power-scaled log_score_offset. Float32
+            # rounding here would quantize per-class K=2 differences to 0.
             log_evidence_per_image[start_idx:end_idx] = np.asarray(
-                log_Z_actual + log_score_offset,
-                dtype=np.float32,
+                (log_Z_actual.astype(jnp.float64) + log_score_offset.astype(jnp.float64)),
+                dtype=log_evidence_per_image.dtype,
             )
             best_log_score_per_image[start_idx:end_idx] = np.asarray(
-                best_score_actual + log_score_offset,
-                dtype=np.float32,
+                (best_score_actual.astype(jnp.float64) + log_score_offset.astype(jnp.float64)),
+                dtype=best_log_score_per_image.dtype,
             )
             max_posterior_per_image[start_idx:end_idx] = np.asarray(
                 pmax[:actual_batch_size],
-                dtype=np.float32,
+                dtype=max_posterior_per_image.dtype,
             )
             if sync_timers:
                 _block_until_ready(log_Z, best_score, pmax)
