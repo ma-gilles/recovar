@@ -238,6 +238,58 @@ RELION iter-1 `ave_Pmax = 1.0` with `--firstiter_cc` is a hard winner-take-all
 cross-correlation artifact, not Bayesian inference. Do not add that path to
 RECOVAR merely to match the iter-1 number.
 
+## Patching RELION for parity dumps — use the shared build, NEVER fork
+
+There is **one** RELION checkout for parity work:
+
+- Source: `/scratch/gpfs/GILLES/mg6942/relion/`
+- Patched build: `/scratch/gpfs/GILLES/mg6942/relion/build_patched/`
+- MPI binary: `/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine_mpi`
+- mpirun: `/usr/local/openmpi/4.1.6/gcc/bin/mpirun`
+
+**Do NOT clone a fresh copy of RELION** to add dump statements. Every fresh
+clone fragments the patch surface, makes it impossible to know which dumps
+exist where, and burns a multi-hour rebuild. Edit the shared source and
+rebuild the shared `build_patched/` instead.
+
+When you need a new dump (e.g. for a new diagnostic):
+
+1. Add the dump to the shared source under `recovar_mstep_dump_*` env-gated
+   blocks (search `RECOVAR_MSTEP_DUMP_DIR` and `recovar_mstep_dump_enabled`
+   in `backprojector.cpp` for the pattern). Keep all dumps env-gated so the
+   default build is unaffected.
+2. Rebuild with `cmake --build /scratch/gpfs/GILLES/mg6942/relion/build_patched -j 16`.
+3. Document the new env var (purpose, when it fires, output format) in
+   `docs/math/relion_parity_agent_notes.md`.
+4. Commit your source-side change in the RELION repo (or note it in your
+   PR description if RELION isn't a git repo for the user).
+
+When activating dumps for a run, ALWAYS write to `~/myscratch/tmp/<run-name>/`
+or `_agent_scratch/<run-name>/` per the global scratch rules — never write
+RELION dumps next to the parity fixtures, and never write them inside the
+RELION source/build tree.
+
+If a previous agent already wired the exact dump you need (check the
+`RECOVAR_*_DUMP_*` env vars in `backprojector.cpp`, `ml_optimiser.cpp`,
+`healpix_sampling.cpp`), reuse it — don't duplicate.
+
+## Reference RELION command for the K=1 5k 128² parity fixture
+
+The deleted-and-regenerated fixture used:
+```bash
+mpirun -np 3 \
+  /scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine_mpi \
+  --i particles.star --ref reference_init_relion.mrc \
+  --o relion_ref_os0/run --auto_refine --split_random_halves \
+  --particle_diameter 544 --ini_high 30 --ctf --flatten_solvent --zero_mask \
+  --low_resol_join_halves 40 --norm --scale --iter 8 --healpix_order 3 \
+  --offset_range 3.0 --offset_step 1.0 --oversampling 0 --pad 2 \
+  --gpu 1 --j 4 --random_seed 1775735620
+```
+`--split_random_halves` requires MPI (`relion_refine_mpi` + ≥3 processes:
+1 master + 1 worker per half). `--random_seed 1775735620` matches the
+seed in the historical fixture so half-set assignments are reproducible.
+
 ## Active EM Pointers
 
 - Dense homogeneous RELION-parity work lives under `dense_single_volume/`.
