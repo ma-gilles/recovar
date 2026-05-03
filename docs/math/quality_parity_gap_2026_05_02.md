@@ -121,6 +121,95 @@ or the M-step code — it's the iteration-level orchestration in
 `recovar/em/dense_single_volume/iteration_loop.py` and
 `recovar/em/dense_single_volume/helpers/convergence.py`.
 
+## Fixes landed in this branch (commits 9b2c0727, 8d73a014)
+
+1. **`run_full_refinement.py` mask path resolution** — was silently falling
+   back to default 0.85/0.99 window mask because it only searched
+   `<data_dir>/relion_ref/`, not `<data_dir>/relion_ref*/` (so the common
+   `relion_ref_os0/` fixture was missed). Added explicit
+   `--relion_optimiser` CLI arg and broadened the candidate search.
+2. **`_maybe_apply_relion_image_mask` mode** — was setting only the mask
+   geometry, leaving the dataset in the default `multiply` mode.
+   Switched to `backend.set_relion_image_mask(...)` which sets both
+   geometry and `relion_background_fill` mode (RELION-exact softMaskOutsideMap).
+
+### Effect on iter-by-iter Pmax (5k 128² normalized, all on commit 8d73a014):
+
+| iter | Phase1a Pmax | Phase1c Pmax (mask + bg-fill) | RELION Pmax | gap |
+|-----:|-------------:|-------------------------------:|------------:|-----|
+|  1   | 0.0519       | 0.0402                         | 0.04359     | -8% |
+|  2   | 0.5075       | 0.3866                         | 0.65118     | -41% |
+|  3   | 0.8810       | 0.8758                         | 0.96470     | -9% |
+|  8   | 0.6917       | 0.7427                         | 0.88368     | -16% |
+
+Final reconstruction quality vs ground truth (merged):
+
+| series | corr_vs_GT | FSC<0.5 res Å |
+|--------|-----------:|--------------:|
+| Phase1a (no fixes)         | 0.495 | 181.33 |
+| Phase1b (mask geometry)    | 0.684 |  68.00 |
+| Phase1c (mask + bg-fill)   | 0.683 |  68.00 |
+| Phase1d (no tau2 floor)    | 0.682 |  68.00 |
+| RELION it008               | 0.960 |  15.11 |
+
+### Iter-1 sigma2_noise after the mask fix
+
+Was 0.75-0.82× RELION's at every shell (causing sharper posterior, noise
+reinforcement). Now within 1% of RELION at every shell ≥ 1, within 3% at
+shell 0. Bootstrap noise (from
+`estimate_initial_noise_spectrum_from_unaligned_images`) and the iter-1
+output noise both match RELION.
+
+## Remaining gap: iter-1 backprojection accumulator divergence
+
+After the two fixes, iter-1 sigma2_noise matches RELION and the iter-1
+ave_Pmax is within 8% of RELION. But iter-1 gold-standard FSC (h1 vs h2
+within recovar) is still systematically lower than RELION's at shells
+18+:
+
+| shell | recovar GS FSC | RELION GS FSC | diff |
+|------:|---------------:|--------------:|------|
+|   14  | 0.984          | 0.988         | -0.004 |
+|   16  | 0.941          | 0.962         | -0.022 |
+|   18  | 0.856          | 0.919         | -0.063 |
+|   20  | 0.778          | 0.879         | -0.101 |
+|   22  | 0.589          | 0.770         | -0.181 |
+|   26  | 0.136          | 0.476         | -0.340 |
+
+Cross-FSC of recovar's iter-1 half maps vs RELION's iter-1 half maps:
+0.99 at shells 5-14, drops to 0.91 at shell 18, 0.87 at shell 20, 0.33 at
+shell 26. Half-map STDs match within 1% (0.00964 vs 0.00976). So both
+engines produce similar-energy half maps, but recovar's contain
+high-frequency content that doesn't correlate with RELION's — and that
+high-frequency content is independent between recovar's two halves
+(low GS FSC at shells 18+).
+
+Phase 1d (init_mean_variance floor removed) made NO difference to the
+iter-1 FSC — confirming the iter-1 reconstruction's tau2 is computed from
+the iter-1 FSC, not from the init_mean_variance bootstrap. So the
+divergence is in the **iter-1 E-step posteriors** or **iter-1 M-step
+backprojection accumulators (Ft_y, Ft_ctf)**, NOT in the bootstrap prior.
+
+## Next steps (for the iter-1 root cause)
+
+1. Dump iter-1 E-step posteriors per particle for recovar and RELION.
+   Compare the per-pose probability distributions; if recovar's are
+   sharper (more concentrated on a few poses), the noise model in the
+   E-step still differs.
+2. Dump iter-1 backprojection accumulators (Ft_y, Ft_ctf) and compare
+   shell-by-shell. If the accumulators differ at shells 18+, the
+   per-pose backprojection weights or the projection convention differ.
+3. Audit `recovar/em/dense_single_volume/em_engine.py` lines 1010-1060
+   (image_corrections, image_pre_shifts) — `run_full_refinement.py`
+   doesn't pass these but they default to None, which should be the same
+   as RELION's iter-1 (no per-image normCorrection yet).
+4. Compare projection regularization at iter 1 — recovar uses
+   ``init_mean_variance`` for E-step projection regularization, RELION
+   uses iter-0 tau2 from model.star. We showed those match within 5%
+   for shells 0-5, but they differ wildly at shells 6+ (recovar floor
+   4e-6 vs RELION ~1e-20). Even though Phase 1d showed this doesn't
+   affect iter-1 FSC, it might affect the E-step likelihoods.
+
 ## Reproduction
 
 ```bash
@@ -141,10 +230,10 @@ pixi run python scripts/run_multi_iter_parity.py \
   --gt_volume  /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/reference_gt.mrc \
   --output_dir /scratch/gpfs/GILLES/mg6942/_agent_scratch/qparity_baseline
 
-# Ab-initio (catastrophic divergence):
+# Ab-initio with all fixes (final corr 0.683):
 pixi run python scripts/run_full_refinement.py \
   --data_dir /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized \
-  --output   /scratch/gpfs/GILLES/mg6942/_agent_scratch/qparity_phase1_abinitio_5k128 \
+  --output   /scratch/gpfs/GILLES/mg6942/_agent_scratch/qparity_phase1c_abinitio_5k128_relion_bgfill \
   --max_iter 8 \
   --healpix_order 3 \
   --offset_range 3.0 --offset_step 1.0 \
@@ -152,5 +241,6 @@ pixi run python scripts/run_full_refinement.py \
   --perturb_factor 0.5 --perturb_seed 42 \
   --init_resolution 30.0 \
   --image_batch_size 500 \
-  --relion_half_sets /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles_with_halfsets.star
+  --relion_half_sets /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles_with_halfsets.star \
+  --relion_optimiser /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it001_optimiser.star
 ```
