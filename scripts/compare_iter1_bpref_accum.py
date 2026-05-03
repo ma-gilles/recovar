@@ -20,7 +20,6 @@ RELION's at any shell.
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -93,9 +92,12 @@ def downsample_recovar_accumulator(Ft, Ft_ctf, volume_shape, padding_factor, r_m
     down_xsize = down_size // 2 + 1
 
     valid = (
-        (dz >= -down_radius) & (dz <= down_radius)
-        & (dy >= -down_radius) & (dy <= down_radius)
-        & (dx >= 0) & (dx < down_xsize)
+        (dz >= -down_radius)
+        & (dz <= down_radius)
+        & (dy >= -down_radius)
+        & (dy <= down_radius)
+        & (dx >= 0)
+        & (dx < down_xsize)
     )
     labels = ((dz[valid] + down_radius) * down_size + (dy[valid] + down_radius)) * down_xsize + dx[valid]
     labels = labels.reshape(-1)
@@ -175,6 +177,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--recovar-npz", required=True, help="RECOVAR_BPREF_ACCUM_DUMP_DIR/recovar_bpref_accum_it001.npz")
     ap.add_argument("--relion-dir", required=True, help="RECOVAR_MSTEP_DUMP_DIR with downsampled_avg_rank?_call?.txt")
+    ap.add_argument(
+        "--relion-call",
+        type=int,
+        default=None,
+        help="RELION call number to compare against (0 for iter-1, 1 for iter-2, ...). "
+        "If unset, auto-detect from recovar npz r_max.",
+    )
     args = ap.parse_args()
 
     npz = np.load(args.recovar_npz)
@@ -186,22 +195,44 @@ def main():
 
     print(f"recovar accumulators: cs={cs}, padding_factor={pf}, grid_size={n}, r_max={r_max}")
 
+    # Auto-detect RELION call number by matching r_max if not provided.
+    if args.relion_call is None:
+        import re as _re
+
+        relion_dir = Path(args.relion_dir)
+        candidates = sorted(relion_dir.glob("downsampled_avg_rank01_call*.txt"))
+        relion_call = 0
+        for c in candidates:
+            with open(c) as f:
+                line = f.readline()
+            m = _re.search(r"r_max\s+(\d+)", line)
+            if m and int(m.group(1)) == r_max:
+                m2 = _re.search(r"call\s+(\d+)", line)
+                if m2:
+                    relion_call = int(m2.group(1))
+                    break
+        print(f"Auto-detected RELION call={relion_call} (matched r_max={r_max})")
+    else:
+        relion_call = args.relion_call
+
     for k_half in (0, 1):
         Ft = npz[f"Ft_y_{k_half}"]
         W = npz[f"Ft_ctf_{k_half}"]
         avg, weight, dr, ds, dx, mr = downsample_recovar_accumulator(Ft, W, vs, pf, r_max)
         p_rec, s_rec = shell_bin(avg, weight, dr, ds, dx, mr)
 
-        rel_path = Path(args.relion_dir) / f"downsampled_avg_rank{k_half + 1:02d}_call0000.txt"
+        rel_path = Path(args.relion_dir) / f"downsampled_avg_rank{k_half + 1:02d}_call{relion_call:04d}.txt"
         rel = load_relion_dump(str(rel_path))
         p_rel, s_rel = shell_bin_relion(rel)
         print(f"\n=== half {k_half + 1} ===")
         print(f"  recovar nshells={len(p_rec)}, RELION nshells={len(p_rel)}")
         n_show = min(len(p_rec), len(p_rel), 35)
-        print(f"  shell  recovar |avg|^2_sum   RELION |avg|^2_sum   ratio_p   recovar w_sum   RELION w_sum   ratio_w")
+        print("  shell  recovar |avg|^2_sum   RELION |avg|^2_sum   ratio_p   recovar w_sum   RELION w_sum   ratio_w")
         for sh in range(n_show):
-            rp = p_rec[sh]; rrp = p_rel[sh]
-            sw = s_rec[sh]; rsw = s_rel[sh]
+            rp = p_rec[sh]
+            rrp = p_rel[sh]
+            sw = s_rec[sh]
+            rsw = s_rel[sh]
             ratio_p = rp / max(rrp, 1e-30)
             ratio_w = sw / max(rsw, 1e-30)
             print(f"  {sh:5d}  {rp:.4e}  {rrp:.4e}  {ratio_p:7.4f}  {sw:.4e}  {rsw:.4e}  {ratio_w:7.4f}")
