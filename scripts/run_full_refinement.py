@@ -79,14 +79,46 @@ def _load_relion_max_significants(optimiser_star_path):
 
 
 def _find_relion_optimiser_star(args):
-    candidates = []
-    if args.relion_half_sets is not None:
-        candidates.append(Path(args.relion_half_sets).resolve().parent / "run_optimiser.star")
-    candidates.append(Path(args.data_dir) / "relion_ref" / "run_optimiser.star")
+    """Locate a RELION run_optimiser.star to source mask + max_significants from.
 
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
+    Searches an explicit ``--relion_optimiser`` arg first, then sibling
+    directories of ``--relion_half_sets``, the ``--data_dir`` itself, and
+    finally any ``relion_ref*/`` subdirectory of ``--data_dir`` (matching
+    fixtures that name their RELION output ``relion_ref_os0/`` or similar).
+    Picks the latest ``run_it{NNN}_optimiser.star`` if no plain
+    ``run_optimiser.star`` is present in a candidate directory.
+    """
+    explicit = getattr(args, "relion_optimiser", None)
+    if explicit:
+        p = Path(explicit).resolve()
+        if p.exists():
+            return p
+
+    search_dirs = []
+    if args.relion_half_sets is not None:
+        search_dirs.append(Path(args.relion_half_sets).resolve().parent)
+    data_dir = Path(args.data_dir).resolve()
+    search_dirs.append(data_dir)
+    search_dirs.append(data_dir / "relion_ref")
+    # Match `relion_ref*/` subdirs (e.g. relion_ref_os0, relion_ref_os1).
+    if data_dir.is_dir():
+        for sub in sorted(data_dir.glob("relion_ref*")):
+            if sub.is_dir():
+                search_dirs.append(sub)
+
+    seen = set()
+    for d in search_dirs:
+        d = d.resolve()
+        if d in seen:
+            continue
+        seen.add(d)
+        plain = d / "run_optimiser.star"
+        if plain.exists():
+            return plain
+        # Fall back to the last per-iter optimiser STAR in the directory.
+        per_iter = sorted(d.glob("run_it*_optimiser.star"))
+        if per_iter:
+            return per_iter[-1]
     return None
 
 
@@ -212,6 +244,14 @@ def main():
         default=None,
         help="Path to a RELION data STAR file with rlnRandomSubset column. "
         "If given, use RELION's half-set assignments instead of random seed.",
+    )
+    parser.add_argument(
+        "--relion_optimiser",
+        default=None,
+        help="Explicit path to a RELION run_optimiser.star (or "
+        "run_it{NNN}_optimiser.star). Used to source the particle-diameter "
+        "mask + max_significants. If unset, searches data_dir and any "
+        "relion_ref*/ subdirectory.",
     )
     parser.add_argument(
         "--relion_current_sizes",
