@@ -131,8 +131,13 @@ def preprocess_batch_firstiter_cc(
         processed_half * safe_ctf_half,
         translation_phases_half,
     )
-    half_weights = make_half_image_weights(config.image_shape)
-    image_power = jnp.sum((jnp.abs(processed_half) ** 2) * half_weights[None, :], axis=-1, keepdims=True).real
+    # RELION ml_optimiser.cpp:7967-7978 computes exp_local_sqrtXi2 as
+    # sqrt(sum(|Fimg|^2)) with NO Hermitian doubling
+    # (`FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fimg) sumxi2 += norm(Fimg[n])`).
+    # The CC denominator on line 8773 then divides by sqrt(suma2)*sqrtXi2 where
+    # both sums are over the same windowed half-image without Hermitian weights.
+    # Match RELION exactly: unit weights, no doubling.
+    image_power = jnp.sum(jnp.abs(processed_half) ** 2, axis=-1, keepdims=True).real
     ctf2_half = ctf_half**2
     ctf2_over_nv_half = ctf2_half / noise_variance_half
     return shifted_half, image_power, ctf2_half, ctf2_over_nv_half
