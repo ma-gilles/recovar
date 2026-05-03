@@ -5,11 +5,20 @@ For each iteration index, loads:
   - RELION:  <relion_dir>/run_it{NNN}_optimiser.star      (scalars)
              <relion_dir>/run_it{NNN}_half1_model.star    (per-shell, half 1)
              <relion_dir>/run_it{NNN}_half2_model.star    (per-shell, half 2)
+             <relion_dir>/run_it{NNN}_data.star           (per-particle, incl.
+                                                          rlnMaxValueProbDistribution)
   - recovar: <recovar_dir>/refinement_results.npz         (all per-iter dumps)
 
 Reports per-iter, side-by-side:
   - current_size (Fourier window radius — RELION's _rlnCurrentImageSize)
-  - ave_Pmax     (RELION's _rlnAveragePmax)
+  - ave_Pmax     (mean of RELION's per-particle rlnMaxValueProbDistribution
+                  from data.star — the apples-to-apples comparison vs
+                  recovar's per-particle E-step Pmax mean)
+  - ave_Pmax_mstep (RELION's _rlnAveragePmax from model.star — this is the
+                    M-step accumulator; differs from the per-particle mean
+                    by ~3% for half-set/full-set accounting reasons. NOT
+                    directly comparable to recovar's ave_Pmax. Kept here
+                    for completeness only.)
   - current_resolution  (RELION's _rlnCurrentResolution)
   - healpix_order
   - changes in angles / offsets / classes (RELION-only; recovar tracks differently)
@@ -136,20 +145,55 @@ def load_relion_iter(relion_dir, it):
 def extract_relion_scalars(relion_iter):
     """Extract per-iter scalar values from RELION's star files.
 
-    Per-iter scalars live in TWO places:
-      - model.star::model_general — current_size, ave_Pmax, current_resolution,
-        sigma_offsets, log_likelihood, norm_correction
+    Per-iter scalars live in THREE places:
+      - model.star::model_general — current_size, current_resolution,
+        sigma_offsets, log_likelihood, norm_correction, _rlnAveragePmax
+        (M-step accumulator — see note on ``ave_Pmax`` below).
+      - data.star — per-particle ``rlnMaxValueProbDistribution`` column.
+        Mean of this column is the apples-to-apples comparison to recovar's
+        per-particle E-step Pmax mean (``ave_Pmax_trajectory[i]``).
       - optimiser.star — smallest_changes (convergence indicators), iter counters
+
+    NOTE on ``ave_Pmax``:
+        ``_rlnAveragePmax`` written into ``run_it{NNN}_half{1,2}_model.star``
+        is RELION's M-step half-set accumulator. It differs from the mean of
+        ``rlnMaxValueProbDistribution`` (per-particle column in
+        ``run_it{NNN}_data.star``) by ~3% for half-set/full-set accounting
+        reasons. recovar's ``ave_Pmax_trajectory`` is the per-particle E-step
+        mean, so the apples-to-apples RELION column is the per-particle one.
+        Setting ``out["ave_Pmax"]`` from the per-particle column closes the
+        spurious 0.0412-vs-0.0436 "iter-1 5.5% gap" that was just two
+        differently-aggregated RELION numbers.
     """
     out = {}
     opt = relion_iter["optimiser"]
     model = relion_iter["model_h1"]
+    data = relion_iter.get("data")
+
+    # Per-particle Pmax mean from data.star — this is the apples-to-apples
+    # comparison versus recovar's ave_Pmax_trajectory entry.
+    relion_data_df = None
+    if data is not None:
+        relion_data_df = data["particles"] if isinstance(data, dict) and "particles" in data else data
+    if relion_data_df is not None and "rlnMaxValueProbDistribution" in relion_data_df:
+        col = np.asarray(relion_data_df["rlnMaxValueProbDistribution"], dtype=np.float64)
+        if col.size:
+            out["ave_Pmax"] = float(col.mean())
 
     # From model_general (the per-iter "state" block)
     if model and "model_general" in model:
         mg = model["model_general"]
         out["current_size"] = int(mg.get("rlnCurrentImageSize", 0) or 0)
-        out["ave_Pmax"] = float(mg.get("rlnAveragePmax", float("nan")))
+        # _rlnAveragePmax is RELION's M-step accumulator. Keep it under a
+        # distinct key so the comparison table can show the discrepancy
+        # without conflating it with the per-particle metric.
+        out["ave_Pmax_mstep"] = float(mg.get("rlnAveragePmax", float("nan")))
+        # Fallback: if data.star did not carry rlnMaxValueProbDistribution
+        # (e.g. iter-0 bootstrap), use the M-step accumulator so downstream
+        # code still has *some* value rather than KeyError. The comparison
+        # row will then trivially be NaN-vs-recovar at that iter.
+        if "ave_Pmax" not in out:
+            out["ave_Pmax"] = out["ave_Pmax_mstep"]
         out["current_resolution"] = float(mg.get("rlnCurrentResolution", float("nan")))
         out["log_likelihood"] = float(mg.get("rlnLogLikelihood", float("nan")))
         out["norm_correction_avg"] = float(mg.get("rlnNormCorrectionAverage", float("nan")))
@@ -317,10 +361,7 @@ def fraction_within(arr, thresholds):
     arr = np.asarray(arr, dtype=np.float64)
     if arr.size == 0:
         return None
-    return {
-        float(thr): float(np.mean(arr <= thr))
-        for thr in thresholds
-    }
+    return {float(thr): float(np.mean(arr <= thr)) for thr in thresholds}
 
 
 def load_saved_gt_metrics(recovar_dir, it):
@@ -338,10 +379,7 @@ def print_metric_block(prefix, pose_npz, metric_specs):
         fractions = fraction_within(pose_npz[key], thresholds)
         if summary is None or fractions is None:
             continue
-        fraction_terms = ", ".join(
-            f"<= {thr:g}: {100.0 * frac:5.1f}%"
-            for thr, frac in fractions.items()
-        )
+        fraction_terms = ", ".join(f"<= {thr:g}: {100.0 * frac:5.1f}%" for thr, frac in fractions.items())
         print(
             f"    {prefix}{label:<14s} "
             f"mean={summary['mean']:.4f}, "
@@ -426,7 +464,9 @@ def main():
 
         relion_half1_particles = None
         if relion_iter.get("data") is not None:
-            relion_df = relion_iter["data"]["particles"] if isinstance(relion_iter["data"], dict) else relion_iter["data"]
+            relion_df = (
+                relion_iter["data"]["particles"] if isinstance(relion_iter["data"], dict) else relion_iter["data"]
+            )
             if "rlnRandomSubset" in relion_df.columns:
                 relion_half1_particles = int(np.sum(np.asarray(relion_df["rlnRandomSubset"]) == 1))
         particle_scale = (
@@ -440,7 +480,16 @@ def main():
 
         scalars_to_compare = [
             ("current_size", rsc.get("current_size"), rec_sc.get("current_size")),
+            # ave_Pmax compares the per-particle mean of
+            # rlnMaxValueProbDistribution from RELION's data.star against
+            # recovar's per-particle E-step Pmax mean. This is the
+            # apples-to-apples row.
             ("ave_Pmax", rsc.get("ave_Pmax"), rec_sc.get("ave_Pmax")),
+            # _rlnAveragePmax from model.star is the M-step accumulator.
+            # It differs from the per-particle mean by ~3% for half-set/
+            # full-set accounting reasons; reported here for completeness
+            # but NOT directly comparable to recovar's ave_Pmax.
+            ("ave_Pmax_mstep (RELION-only)", rsc.get("ave_Pmax_mstep"), None),
             ("sigma_offsets_Å", rsc.get("sigma_offsets_angst"), rec_sc.get("sigma_offsets_angst")),
             ("sigma_offsets_used_Å", None, rec_sc.get("sigma_offsets_used_angst")),
             ("smallest_chg_angles_°", rsc.get("smallest_change_angles"), rec_sc.get("smallest_change_angles")),
@@ -549,10 +598,7 @@ def main():
             gt_metrics = load_saved_gt_metrics(recovar_dir, recovar_iter_index)
             if gt_metrics is not None:
                 print(f"\n  {BOLD}map quality vs GT:{RESET}")
-                print(
-                    f"    {'series':<18s} {'corr_vs_gt':>12s} {'FSC<0.5':>10s} "
-                    f"{'FSC<0.143':>10s}"
-                )
+                print(f"    {'series':<18s} {'corr_vs_gt':>12s} {'FSC<0.5':>10s} {'FSC<0.143':>10s}")
                 gt_rows = [
                     ("recovar_reg", "recovar_reg_merged"),
                     ("RELION", "relion_merged"),
@@ -564,9 +610,7 @@ def main():
                     else None
                 )
                 rel_shell_05 = (
-                    int(gt_metrics["relion_merged_shell_05"])
-                    if "relion_merged_shell_05" in gt_metrics.files
-                    else None
+                    int(gt_metrics["relion_merged_shell_05"]) if "relion_merged_shell_05" in gt_metrics.files else None
                 )
                 rel_shell_0143 = (
                     int(gt_metrics["relion_merged_shell_0143"])
