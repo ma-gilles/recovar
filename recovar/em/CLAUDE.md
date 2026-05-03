@@ -238,6 +238,38 @@ RELION iter-1 `ave_Pmax = 1.0` with `--firstiter_cc` is a hard winner-take-all
 cross-correlation artifact, not Bayesian inference. Do not add that path to
 RECOVAR merely to match the iter-1 number.
 
+## RELION GUI defaults for `tau2_fudge` (memorize this — easy to get wrong)
+
+RELION's `--tau2_fudge` default depends on JOB TYPE. The GUI passes
+different values depending on which job the user clicks. Use these for
+parity defaults in recovar's CLI scripts:
+
+| RELION job | GUI default `T` (`--tau2_fudge`) | When recovar should match |
+|------------|----------------------------------|---------------------------|
+| **3D Auto-refine** (`relion_refine --auto_refine`) | **1.0** — GUI does NOT pass `--tau2_fudge`, so binary default `1.0` (ml_optimiser.cpp:878) is used | K=1 EM refinement, single-volume work |
+| **3D Classification** (`relion_refine --K N`) | **4.0** | K-class EM, multi-class work |
+| **2D Classification** | **2.0** | (n/a here) |
+| **InitialModel (VDAM)** | **4.0** | InitialModel work |
+| **MultiBody** | **4.0** (cryo-EM) / **1.0** (cryo-ET) | MultiBody refinement |
+
+References: `pipeline_jobs.cpp::initialiseClass2DJob` (T=2),
+`initialiseClass3DJob`/`initialiseInimodelJob` (T=4),
+`initialiseMultibodyJob` (`default_T = (is_tomo) ? 1 : 4`),
+`initialiseAutorefineJob` + `getCommandsAutorefineJob` (no
+`--tau2_fudge` line → binary default 1.0).
+
+**This was a real parity bug in `scripts/run_full_refinement.py`** (the
+K=1 EM script): default was 4.0 with a comment claiming it matched
+auto-refine. It did not — auto-refine uses 1.0. The 4× over-regularization
+of `tau2` produced 17% high-shell amplitude excess at shell 18 and 8.4×
+at the cs/2 boundary in iter-1 reconstructions, which compounded into
+the iter-2+ FSC cliff. Fixed in commit (set default=1.0) on
+`claude/em-quality-parity`.
+
+When in doubt: **check RELION's `_rlnTau2FudgeFactor` field in
+`run_it{NNN}_half1_model.star`** — that's the value RELION actually used,
+regardless of what the binary default or your CLI flag says.
+
 ## Patching RELION for parity dumps — use the shared build, NEVER fork
 
 There is **one** RELION checkout for parity work:

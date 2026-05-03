@@ -338,10 +338,14 @@ def main():
     parser.add_argument(
         "--tau2_fudge",
         type=float,
-        default=4.0,
-        help="RELION tau2_fudge regularization strength (default 4.0, "
-        "matching RELION's 3D auto-refine default at "
-        "ml_optimiser.cpp:~1070 `tau2_fudge_factor = 4`). "
+        default=1.0,
+        help="RELION tau2_fudge regularization strength (default 1.0, "
+        "matching RELION GUI 3D Auto-refine default — pipeline_jobs.cpp's "
+        "getCommandsAutorefineJob() does NOT pass --tau2_fudge, so the "
+        "binary default in ml_optimiser.cpp:878 (=1.0) is used. Class3D's "
+        "GUI default is 4.0; the prior 4.0 default here was wrong for "
+        "auto_refine and inflated iter-1 reconstruction high-shell "
+        "amplitude by 17%% at shell 18 / 8.4× at shell 28 vs RELION. "
         "Higher values produce smoother volumes (stronger prior).",
     )
     parser.add_argument(
