@@ -1300,6 +1300,54 @@ def run_em(
                 preprior=True,
             )
 
+            # Env-gated cross/norms component dump for CC parity bisection.
+            # When RECOVAR_DEBUG_CC_COMPONENT_DUMP_DIR is set, recompute cross
+            # and norms outside the JIT block and dump alongside batch_norm
+            # (Xi2_image) for the target image. Allows decomposing the recovar
+            # vs RELION CC ratio into numerator vs Xi2 vs suma2 contributors.
+            _cc_comp_dir = os.environ.get("RECOVAR_DEBUG_CC_COMPONENT_DUMP_DIR")
+            _cc_comp_target = os.environ.get("RECOVAR_DEBUG_CC_COMPONENT_DUMP_TARGET")
+            if _cc_comp_dir and _cc_comp_target is not None:
+                try:
+                    _target_idx = int(_cc_comp_target)
+                    _hits = np.where(np.asarray(indices, dtype=np.int64) == _target_idx)[0]
+                    if len(_hits) > 0:
+                        _row = int(_hits[0])
+                        from pathlib import Path as _P
+
+                        _dump_path = _P(_cc_comp_dir)
+                        _dump_path.mkdir(parents=True, exist_ok=True)
+                        # shifted_windowed shape (batch*n_trans, n_score)
+                        # ctf2_over_nv_windowed shape (batch, n_score) — already includes ctf²/Xi2 in CC mode
+                        # proj_half_b shape (rot_block, n_half) — full pre-window
+                        # window_spec.score_values selects score pixels.
+                        _proj_score = np.asarray(window_spec.score_values(proj_half_b))
+                        _proj_abs2_score = np.asarray(window_spec.score_values(proj_abs2_half_b))
+                        _shifted = np.asarray(shifted_windowed)
+                        _ctf2_w = np.asarray(ctf2_over_nv_windowed)
+                        _bn = np.asarray(batch_norm)
+                        # Recompute cross and norms for target row.
+                        _b = batch_size
+                        _t = n_trans
+                        _r = _proj_score.shape[0]
+                        _shift_target = _shifted.reshape(_b, _t, -1)[_row]  # (n_trans, n_score)
+                        _ctf2_target = _ctf2_w[_row]  # (n_score,)
+                        _bn_target = float(_bn[_row].squeeze())
+                        # cross[t,r] = -2 Re(sum_n conj(shifted[t,n]) * proj[r,n])
+                        _cross_tr = -2.0 * np.real(np.einsum("tn,rn->tr", np.conj(_shift_target), _proj_score))
+                        # norms[r] = sum_n ctf2_w[n] * |proj[r,n]|^2  (when relion_half_sum, weights=1)
+                        _norms_r = np.einsum("n,rn->r", _ctf2_target, _proj_abs2_score)
+                        np.savez(
+                            _dump_path / f"cc_components_target{_target_idx:06d}_block{int(block.index):04d}.npz",
+                            cross_tr=_cross_tr,
+                            norms_r=_norms_r,
+                            batch_norm=_bn_target,
+                            n_score=int(_proj_score.shape[1]),
+                            score_mode=relion_firstiter_score_mode,
+                        )
+                except Exception as _e:
+                    print(f"[CC component dump] error: {_e}", flush=True)
+
             pass1_postprocess_t0 = time.time()
             (
                 rotation_prior_block,
