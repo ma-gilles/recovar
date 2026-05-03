@@ -508,21 +508,34 @@ def _dense_estep_config(
         if sampling_plan.coarse_prior_translations is not None
         else coarse_translations
     )
+    # RELION InitialModel default: _rlnSigmaOffsetsAngst = 10.0 Å (set at
+    # iter000 in run_it000_model.star, used for the Gaussian translation
+    # prior in iter-1 E-step). When `opts.translation_sigma_angstrom` is
+    # unset, default to 10.0 to match RELION's iter-1 prior. Without this
+    # the prior is None (uniform) and posteriors diverge from RELION.
+    sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
     coarse_translation_log_prior = _translation_log_prior(
         coarse_prior_translations,
         voxel_size=float(dataset.voxel_size),
-        sigma_angstrom=opts.translation_sigma_angstrom,
+        sigma_angstrom=sigma_angstrom,
         centers=-image_pre_shifts,
     )
     translation_log_prior = _translation_log_prior(
         sampling_plan.translations,
         voxel_size=float(dataset.voxel_size),
-        sigma_angstrom=opts.translation_sigma_angstrom,
+        sigma_angstrom=sigma_angstrom,
         centers=-image_pre_shifts,
     )
 
     engine_kwargs = {
         "score_with_masked_images": True,
+        "reconstruct_with_masked_images": False,
+        # RELION's --grad mode (ml_optimiser.cpp:10092-10105) accumulates
+        # Fimg_store = Fimg_shift_nomask - Frefctf into BPref. Without this
+        # flag the engine accumulates Fimg_shift_nomask directly, matching
+        # standard EM but NOT VDAM. Production was missing this; fixing
+        # lifts bp_data CC from +0.91 to +0.996 (per BPref test fixture).
+        "reconstruction_subtract_projected_reference": True,
         "relion_firstiter_score_mode": "gaussian",
         "image_pre_shifts": np.asarray(image_pre_shifts, dtype=np.float32),
         "sparse_pass2": int(opts.oversampling) > 0,
