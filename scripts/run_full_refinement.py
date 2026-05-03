@@ -134,19 +134,34 @@ def _maybe_apply_relion_image_mask(ds, args):
         logger.info("No RELION mask parameters found in %s; keeping dataset image mask", optimiser_star)
         return None
 
-    from recovar.core import mask as core_mask
-
     particle_diameter_ang, width_mask_edge_px = params
-    relion_mask = core_mask.relion_soft_image_mask(
-        image_size=ds.image_shape[0],
-        pixel_size=ds.voxel_size,
-        particle_diameter_ang=particle_diameter_ang,
-        width_mask_edge_px=width_mask_edge_px,
-    )
 
-    ds.image_source.backend.image_mask = relion_mask
+    # Use the backend's set_relion_image_mask hook so we get RELION-exact
+    # softMaskOutsideMap behavior (geometry + bg-fill mode), not just the
+    # mask array overlaid on top of the default "multiply" mode. The
+    # multiply mode silently zeros out pixels outside the mask, while
+    # RELION blends them with the local background mean — which is what
+    # the noise/likelihood downstream expects. See image_backends.py
+    # ::set_relion_image_mask for the bit-exact equivalence note.
+    backend = ds.image_source.backend
+    if hasattr(backend, "set_relion_image_mask"):
+        backend.set_relion_image_mask(
+            pixel_size=ds.voxel_size,
+            particle_diameter_ang=particle_diameter_ang,
+            width_mask_edge_px=width_mask_edge_px,
+        )
+    else:
+        from recovar.core import mask as core_mask
+
+        relion_mask = core_mask.relion_soft_image_mask(
+            image_size=ds.image_shape[0],
+            pixel_size=ds.voxel_size,
+            particle_diameter_ang=particle_diameter_ang,
+            width_mask_edge_px=width_mask_edge_px,
+        )
+        backend.image_mask = relion_mask
     if hasattr(ds.image_source, "image_mask"):
-        ds.image_source.image_mask = relion_mask
+        ds.image_source.image_mask = backend.image_mask
 
     radius_px = particle_diameter_ang / (2.0 * ds.voxel_size)
     logger.info(
