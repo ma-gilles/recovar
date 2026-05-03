@@ -3445,9 +3445,16 @@ def _run_relion_iteration_loop(
                         debug_iteration=iteration,
                         return_profile=collect_local_search_profile,
                         translation_prior_centers=trans_prior_center,
-                        normalization_log_z=(
-                            None if full_coarse_stats is None else full_coarse_stats["normalization_log_z"]
-                        ),
+                        # C3 BP under-scale at af=0.999: pass-1 normalization_log_z
+                        # is at a different score scale than the local-engine pass-2
+                        # scores (empirical 60-90 nat per-image gap → probs_sum
+                        # collapsed to 1e-27..1e-14 instead of expected 0.999;
+                        # iter-2 resolution dropped 21.76 → 38.86 Å). Until the
+                        # cross-path scope mismatch is fully diagnosed, let pass-2
+                        # self-normalize within the significant-subset bucket — same
+                        # convention as the af=1.0 dense path which converges
+                        # correctly. The folded 0.1% missing mass is below noise.
+                        normalization_log_z=None,
                     )
                     if collect_local_search_profile:
                         (
