@@ -245,6 +245,14 @@ def main():
         help="Optional deterministic seed for the SamplingPerturbation RNG. "
         "If unset, uses np.random.default_rng() (non-reproducible).",
     )
+    parser.add_argument(
+        "--perturb_replay_relion_dir",
+        default=None,
+        help="If set, read SamplingPerturbInstance per iteration from RELION's "
+        "run_it{NNN}_sampling.star in this directory and use that exact value "
+        "instead of recovar's RNG. Required for bit-exact ab-initio replay "
+        "against a RELION reference run.",
+    )
     parser.add_argument("--init_resolution", type=float, default=30.0, help="Initial resolution (Angstrom)")
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
     parser.add_argument(
@@ -486,6 +494,7 @@ def main():
         tau2_fudge=args.tau2_fudge,
         perturb_factor=args.perturb_factor,
         perturb_seed=args.perturb_seed,
+        perturb_replay_relion_dir=args.perturb_replay_relion_dir,
     )
 
     total_time = time.time() - t_start
