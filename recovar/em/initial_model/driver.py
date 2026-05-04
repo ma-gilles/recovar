@@ -941,8 +941,8 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         raise ValueError("nr_classes must be >= 1")
     if opts.nr_iter < 1:
         raise ValueError("nr_iter must be >= 1")
-    if opts.padding_factor != 1:
-        raise NotImplementedError("native InitialModel currently supports RELION GUI --pad 1 only")
+    if opts.padding_factor not in (1, 2):
+        raise NotImplementedError("native InitialModel currently supports RELION GUI --pad 1 or 2 only")
     if opts.run_relion_align_symmetry:
         raise NotImplementedError("native post-run relion_align_symmetry execution is not wired yet")
 
