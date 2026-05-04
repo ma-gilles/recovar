@@ -45,7 +45,7 @@ G_ARGS+=("tests/ --ignore=tests/unit/test_gui_app.py --ignore=tests/integration 
 G_NAMES+=(smoke-tiny)
 G_MEM+=(300GB)
 G_TIME+=(02:00:00)
-G_ARGS+=("tests/integration/test_pipeline_smoke.py tests/integration/test_run_test_all_metrics_tiny_integration.py tests/integration/test_run_test_all_metrics_tiny_regression_baseline.py tests/integration/test_run_test_outliers_pipeline_tiny_integration.py tests/integration/test_run_test_outliers_pipeline_tiny_regression_baseline.py --run-integration --run-gpu --run-slow --run-tiny-metrics -v")
+G_ARGS+=("tests/integration/test_pipeline_smoke.py tests/integration/test_run_test_all_metrics_tiny_integration.py tests/integration/test_run_test_all_metrics_tiny_regression_baseline.py tests/integration/test_run_test_outliers_pipeline_tiny_integration.py tests/integration/test_run_test_outliers_pipeline_tiny_regression_baseline.py tests/integration/test_run_test_dataset_e2e.py --run-integration --run-gpu --run-slow --run-tiny-metrics -v")
 
 # Downstream commands (module-scoped fixtures — must stay together)
 G_NAMES+=(downstream)
