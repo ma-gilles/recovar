@@ -612,6 +612,20 @@ def main() -> None:
         default=1,
         help="HEALPix subdivision and translation subdivision passes used by --adaptive-2pass.",
     )
+    parser.add_argument(
+        "--firstiter-cc-ini-high-angstrom",
+        type=float,
+        default=30.0,
+        help=(
+            "Apply RELION's initialLowPassFilterReferences (ml_optimiser.cpp:6348-6378) "
+            "to the iter-1 firstiter_cc M-step output at this resolution. RELION "
+            "always re-applies its --ini_high low-pass filter to the iter-1 "
+            "references before feeding them to iter 2; without it, recovar's "
+            "iter-1 maps retain high-frequency content that biases iter-2 Pmax "
+            "(K=4 chained iter-2 Pmax 0.91 vs RELION 0.77). Set to 0 to disable. "
+            "Only applied with --winner-take-all-mstep."
+        ),
+    )
     args = parser.parse_args()
 
     import jax
@@ -989,6 +1003,14 @@ def main() -> None:
         offset=jnp.zeros(3),
     )
 
+    # RELION ml_optimiser.cpp:6348-6378: at iter 1 with --firstiter_cc, RELION
+    # reapplies the ini_high low-pass filter to all reconstructed references
+    # before they propagate to iter 2. The filter is the same one used at the
+    # very start (initialLowPassFilterReferences). Without it, recovar's iter-1
+    # maps retain high-frequency content that drives iter-2 Pmax sharper than
+    # RELION's (K=4 chained iter-2: recovar Pmax 0.91 vs RELION 0.77).
+    apply_firstiter_lowpass = args.winner_take_all_mstep and float(args.firstiter_cc_ini_high_angstrom) > 0.0
+
     def reconstruct_variant(
         tau_by_class, *, use_spherical_mask: bool, apply_solvent_mask: bool, grid_correct: bool, minres_map: int
     ):
@@ -1013,6 +1035,18 @@ def main() -> None:
                 # RELION omits. Passing current_size matches RELION's max_r2 skip.
                 current_size=current_size,
             ).reshape(-1)
+            if apply_firstiter_lowpass:
+                from recovar.heterogeneity import locres
+
+                class_ft = locres.low_pass_filter_map(
+                    class_ft.reshape(ds.volume_shape),
+                    ds.volume_shape[0],
+                    float(args.firstiter_cc_ini_high_angstrom),
+                    float(ds.voxel_size),
+                    5,
+                    do_highpass_instead=False,
+                    volume_shape=ds.volume_shape,
+                ).reshape(-1)
             class_real = ftu.get_idft3(class_ft.reshape(ds.volume_shape)).real
             if apply_solvent_mask:
                 class_real = class_real * solvent_mask

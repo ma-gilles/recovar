@@ -938,6 +938,23 @@ def run_dense_k_class_em_adaptive(
             n_images=n_images,
         )
         masks_per_class.append(mask)
+    if coarse_class_assignments_for_override is not None:
+        # RELION ml_optimiser.cpp:9181-9207 with K>1: at iter 1 with --firstiter_cc,
+        # binarization sets ONE entry to 1 in the global (class × pose) grid.
+        # Only the globally-winning class accumulates weight=1 from each image;
+        # the K-1 losing classes contribute zero. Without this gate, recovar's
+        # per-class winner-take-all M-step gives every class weight=1 from every
+        # image, which over-mixes images across classes (especially harmful for
+        # the lowest-occupancy class — see K=4 chained iter-1 class-1 corr 0.876
+        # vs RELION class-1, where class 1 receives ~80% off-class images).
+        #
+        # Mask out images where global winner != class_index so class k's M-step
+        # only sees its global-winner images.
+        global_winner = np.asarray(coarse_class_assignments_for_override, dtype=np.int64)
+        for class_index in range(n_classes):
+            losing = global_winner != class_index
+            if np.any(losing):
+                masks_per_class[class_index][losing, :, :] = False
     # Stack into (n_classes, n_images, n_rot_fine, n_trans_fine).
     pass2_kwargs["class_rotation_translation_mask"] = np.stack(masks_per_class, axis=0)
 

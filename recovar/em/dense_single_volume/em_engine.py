@@ -410,6 +410,12 @@ def _dense_mstep_block(
     image_shape,
     volume_shape,
 ) -> _DenseMstepBlock:
+    # When best_score is -inf (e.g., K-class adaptive 2-pass with all poses
+    # masked out for the losing class on this image), winner-take-all weights
+    # at best_argmax=0 would still place 1.0 at an arbitrary pose. Gate the
+    # one-hot weights so masked-out images contribute zero, matching RELION's
+    # binarization where losing classes get weight 0 (ml_optimiser.cpp:9181-9207).
+    valid_image = jnp.isfinite(best_score) if relion_firstiter_winner_take_all else None
     if use_window:
         if relion_firstiter_winner_take_all:
             probs = _winner_take_all_probs_for_block(
@@ -420,6 +426,7 @@ def _dense_mstep_block(
                 n_trans,
                 scores.dtype,
             )
+            probs = probs * valid_image[:, None, None].astype(probs.dtype)
             P = probs.swapaxes(0, 1).reshape(rotation_block_size, batch_size * n_trans)
             summed_half = P @ shifted_recon_windowed
             probs_sum_t = jnp.sum(probs, axis=-1)
@@ -451,6 +458,7 @@ def _dense_mstep_block(
                 n_trans,
                 scores.dtype,
             )
+            probs = probs * valid_image[:, None, None].astype(probs.dtype)
             P = probs.swapaxes(0, 1).reshape(rotation_block_size, batch_size * n_trans)
             summed_half = P @ shifted_recon_half
             probs_sum_t = jnp.sum(probs, axis=-1)
