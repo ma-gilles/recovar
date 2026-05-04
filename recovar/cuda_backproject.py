@@ -101,9 +101,38 @@ def _candidate_lib_paths() -> list[pathlib.Path]:
     return candidates
 
 
+def _lib_is_stale(lib_path: pathlib.Path) -> bool:
+    """Return True if the lib's mtime is older than the source files.
+
+    Catches the case where a user installed before a kernel/Makefile fix
+    landed (e.g. issue #131's Blackwell widening): without this check,
+    `_existing_lib_path()` would happily return the stale cached `.so`
+    forever, and the user would never pick up the new arch coverage.
+    """
+    try:
+        lib_mtime = lib_path.stat().st_mtime
+    except OSError:
+        return False
+    for src_name in ("cuda_backproject.cu", "Makefile"):
+        src = _LIB_DIR / src_name
+        try:
+            if src.stat().st_mtime > lib_mtime:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _existing_lib_path() -> pathlib.Path | None:
     for candidate in _candidate_lib_paths():
         if candidate.exists():
+            if _lib_is_stale(candidate):
+                logger.info(
+                    "RECOVAR CUDA library %s is older than its source — "
+                    "will rebuild (this happens once after a kernel/Makefile update).",
+                    candidate,
+                )
+                continue
             return candidate.resolve()
     return None
 
@@ -139,16 +168,22 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
     global _auto_build_attempted, _auto_build_error, _cuda_ok, _ffi_registered, _lib_handle, _loaded_lib_path
 
     lib_path = pathlib.Path(output_path).expanduser().resolve() if output_path else _default_build_lib_path()
-    if lib_path.exists() and not force:
+    stale = lib_path.exists() and _lib_is_stale(lib_path)
+    if lib_path.exists() and not force and not stale:
         logger.info("Using existing RECOVAR CUDA extension at %s", lib_path)
         _auto_build_attempted = True
         _auto_build_error = None
         return lib_path
+    if stale:
+        logger.info(
+            "RECOVAR CUDA extension at %s is older than its source — rebuilding.",
+            lib_path,
+        )
 
     lib_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Building %s", lib_path)
     make_cmd = ["make"]
-    if force:
+    if force or stale:
         make_cmd.append("-B")
     make_cmd.extend(["-C", str(_LIB_DIR), f"PYTHON={sys.executable}", f"LIB={lib_path}"])
     subprocess.check_call(make_cmd)
@@ -277,7 +312,9 @@ def _detect_gpu_compute_cap() -> tuple[str, str] | None:
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,compute_cap", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0:
             line = result.stdout.strip().split("\n")[0]
@@ -298,10 +335,13 @@ def _detect_so_arches(so_path: pathlib.Path) -> tuple[set[str], set[str]]:
     try:
         result = subprocess.run(
             ["cuobjdump", "--list-elf", str(so_path)],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode == 0:
             import re
+
             for line in result.stdout.splitlines():
                 m = re.search(r"sm_(\d+)", line)
                 if m:
@@ -309,10 +349,13 @@ def _detect_so_arches(so_path: pathlib.Path) -> tuple[set[str], set[str]]:
         # Also check for PTX
         result2 = subprocess.run(
             ["cuobjdump", "--list-ptx", str(so_path)],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result2.returncode == 0:
             import re
+
             for line in result2.stdout.splitlines():
                 m = re.search(r"sm_(\d+)", line)
                 if m:
@@ -326,10 +369,14 @@ def _detect_nvcc_version() -> str | None:
     """Return nvcc version string like '12.8.93' or None."""
     try:
         result = subprocess.run(
-            ["nvcc", "--version"], capture_output=True, text=True, timeout=5,
+            ["nvcc", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0:
             import re
+
             m = re.search(r"release (\d+\.\d+)", result.stdout)
             if m:
                 return m.group(1)
@@ -385,11 +432,7 @@ def _preflight_check(so_path: pathlib.Path) -> None:
     makefile_dir = str(_LIB_DIR)
     makefile_path = str(_LIB_DIR / "Makefile")
     so_arches_str = ", ".join(f"sm_{a}" for a in sorted(sass_arches))
-    ptx_desc = (
-        f"targets {', '.join(f'sm_{p}' for p in sorted(ptx_arches))} or higher only"
-        if ptx_arches
-        else "none"
-    )
+    ptx_desc = f"targets {', '.join(f'sm_{p}' for p in sorted(ptx_arches))} or higher only" if ptx_arches else "none"
 
     msg = f"""\
 recovar's custom CUDA kernel cannot run on your GPU.
