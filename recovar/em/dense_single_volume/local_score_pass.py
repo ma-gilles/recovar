@@ -13,6 +13,15 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
 )
 
 
+def _max_for_softmax_shift(x, axis):
+    # The max here is only used as a numerical-stability shift in `exp(x - max)`;
+    # any constant offset cancels after the softmax sum/log roundtrip. Reduce in
+    # float32 so XLA can pick a kernel — the autotuner can fail to find a config
+    # for f64 reduce_max on certain HLO shapes (JAX 0.9 + H100), and degrading
+    # the shift's precision does not change the final probabilities.
+    return jnp.max(x.astype(jnp.float32), axis=axis).astype(x.dtype)
+
+
 def _local_scores_from_weighted_abs2(
     shifted,
     ctf2_over_nv,
@@ -23,12 +32,15 @@ def _local_scores_from_weighted_abs2(
     rotation_mask,
     sample_mask,
 ):
-    cross = -2.0 * jnp.einsum(
-        "btn,brn->btr",
-        jnp.conj(shifted),
-        proj_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
+    cross = (
+        -2.0
+        * jnp.einsum(
+            "btn,brn->btr",
+            jnp.conj(shifted),
+            proj_weighted,
+            precision=jax.lax.Precision.HIGHEST,
+        ).real
+    )
     cross = cross.swapaxes(1, 2)
     norms = jnp.einsum(
         "bn,brn->br",
@@ -56,12 +68,15 @@ def _local_k_class_scores_from_weighted_abs2(
     rotation_mask,
     sample_mask,
 ):
-    cross = -2.0 * jnp.einsum(
-        "btn,kbrn->bkrt",
-        jnp.conj(shifted),
-        proj_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
+    cross = (
+        -2.0
+        * jnp.einsum(
+            "btn,kbrn->bkrt",
+            jnp.conj(shifted),
+            proj_weighted,
+            precision=jax.lax.Precision.HIGHEST,
+        ).real
+    )
     norms = jnp.einsum(
         "bn,kbrn->bkr",
         ctf2_over_nv,
@@ -240,7 +255,7 @@ def normalize_local_scores(scores):
     """Return exact per-image log normalizer, posterior, and argmax."""
 
     flat_scores = scores.reshape(scores.shape[0], -1)
-    best_log_score = jnp.max(flat_scores, axis=1)
+    best_log_score = _max_for_softmax_shift(flat_scores, axis=1)
     log_shift = best_log_score[:, None, None]
     probs = jnp.exp((scores - log_shift).astype(jnp.float64))
     sum_exp = jnp.sum(probs.reshape(scores.shape[0], -1), axis=1)
@@ -256,7 +271,7 @@ def normalize_local_scores_with_log_z(scores, log_z):
     """Normalize local scores with an externally computed full-grid log-Z."""
 
     flat_scores = scores.reshape(scores.shape[0], -1)
-    best_log_score = jnp.max(flat_scores, axis=1)
+    best_log_score = _max_for_softmax_shift(flat_scores, axis=1)
     probs = jnp.exp(scores - log_z[:, None, None])
     best_argmax = jnp.argmax(flat_scores, axis=1)
     max_posterior = jnp.exp(best_log_score - log_z)
@@ -268,7 +283,7 @@ def normalize_local_scores_float32(scores):
     """Return local posterior statistics without upcasting to float64."""
 
     flat_scores = scores.reshape(scores.shape[0], -1)
-    best_log_score = jnp.max(flat_scores, axis=1)
+    best_log_score = _max_for_softmax_shift(flat_scores, axis=1)
     log_shift = best_log_score[:, None, None]
     probs = jnp.exp(scores - log_shift)
     sum_exp = jnp.sum(probs.reshape(scores.shape[0], -1), axis=1)
@@ -284,7 +299,7 @@ def normalize_local_scores_with_log_z_float32(scores, log_z):
     """Normalize local scores with an externally computed full-grid log-Z without x64."""
 
     flat_scores = scores.reshape(scores.shape[0], -1)
-    best_log_score = jnp.max(flat_scores, axis=1)
+    best_log_score = _max_for_softmax_shift(flat_scores, axis=1)
     probs = jnp.exp(scores - log_z[:, None, None])
     best_argmax = jnp.argmax(flat_scores, axis=1)
     max_posterior = jnp.exp(best_log_score - log_z)
@@ -309,7 +324,7 @@ def normalize_local_k_class_scores(scores, *, use_float64_normalization: bool):
 
     batch_size, n_classes = scores.shape[:2]
     flat_global = scores.reshape(batch_size, -1)
-    best_log_score = jnp.max(flat_global, axis=1)
+    best_log_score = _max_for_softmax_shift(flat_global, axis=1)
     if use_float64_normalization:
         shifted_exp = jnp.exp((scores - best_log_score[:, None, None, None]).astype(jnp.float64))
     else:
@@ -318,7 +333,7 @@ def normalize_local_k_class_scores(scores, *, use_float64_normalization: bool):
     probs = jnp.exp(scores - log_Z[:, None, None, None])
 
     class_scores = scores.reshape(batch_size, n_classes, -1)
-    best_log_score_class = jnp.max(class_scores, axis=2)
+    best_log_score_class = _max_for_softmax_shift(class_scores, axis=2)
     if use_float64_normalization:
         class_shifted_exp = jnp.exp((class_scores - best_log_score_class[:, :, None]).astype(jnp.float64))
     else:
@@ -344,13 +359,13 @@ def normalize_local_k_class_scores_with_log_z(scores, log_z, *, use_float64_norm
 
     batch_size, n_classes = scores.shape[:2]
     flat_global = scores.reshape(batch_size, -1)
-    best_log_score = jnp.max(flat_global, axis=1)
+    best_log_score = _max_for_softmax_shift(flat_global, axis=1)
     normalization_dtype = jnp.float64 if use_float64_normalization else scores.real.dtype
     log_Z = log_z.astype(normalization_dtype)
     probs = jnp.exp(scores - log_Z[:, None, None, None])
 
     class_scores = scores.reshape(batch_size, n_classes, -1)
-    best_log_score_class = jnp.max(class_scores, axis=2)
+    best_log_score_class = _max_for_softmax_shift(class_scores, axis=2)
     if use_float64_normalization:
         class_shifted_exp = jnp.exp((class_scores - best_log_score_class[:, :, None]).astype(jnp.float64))
     else:
@@ -421,11 +436,7 @@ def compute_k_class_reconstruction_support(
     else:
         reconstruction_rotation_mask = jnp.broadcast_to(rotation_mask[:, None, :], probs.shape[:3])
         reconstruction_sample_mask = jnp.broadcast_to(reconstruction_rotation_mask[..., None], probs.shape)
-        n_significant_samples = (
-            jnp.sum(rotation_mask, axis=1).astype(jnp.int32)
-            * probs.shape[1]
-            * probs.shape[-1]
-        )
+        n_significant_samples = jnp.sum(rotation_mask, axis=1).astype(jnp.int32) * probs.shape[1] * probs.shape[-1]
         reconstruction_probs = probs
 
     probs_sum_t = jnp.sum(probs, axis=-1)

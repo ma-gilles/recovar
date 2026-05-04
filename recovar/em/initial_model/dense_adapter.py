@@ -24,7 +24,6 @@ from recovar.em.dense_single_volume.helpers.significance import _compute_k_class
 from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_local_k_class_em
 from recovar.em.dense_single_volume.local_layout import build_pass2_hypothesis_layout
 from recovar.em.sampling import (
-    apply_relion_rotation_perturbation,
     get_translation_grid,
     relion_angular_sampling_deg,
     rotation_grid_size,
@@ -594,7 +593,7 @@ def _run_sparse_pass2_initial_model_estep(
             healpix_order,
             matrices=True,
         ).astype(np.float32)
-        coarse_rotations = apply_relion_rotation_perturbation(
+        coarse_rotations = sampling.apply_relion_rotation_perturbation(
             coarse_rotations,
             random_perturbation,
             relion_angular_sampling_deg(healpix_order),

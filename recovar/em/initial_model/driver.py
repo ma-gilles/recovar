@@ -446,6 +446,9 @@ def _translation_log_prior(
 
 
 def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteration: int) -> float:
+    env_override = os.environ.get("RECOVAR_RANDOM_PERTURBATION")
+    if env_override is not None:
+        return float(env_override)
     if opts.random_perturbation is not None:
         return float(opts.random_perturbation)
     return _random_perturbation_sequence(
@@ -558,6 +561,10 @@ def _dense_estep_config(
             engine_kwargs["adaptive_fraction"] = float(_af_env)
     if os.environ.get("RECOVAR_USE_FLOAT64_SCORING"):
         engine_kwargs["use_float64_scoring"] = True
+    if os.environ.get("RECOVAR_HALF_SPECTRUM_SCORING"):
+        engine_kwargs["half_spectrum_scoring"] = True
+    if os.environ.get("RECOVAR_SQUARE_WINDOW"):
+        engine_kwargs["square_window"] = True
     if translation_log_prior is not None:
         engine_kwargs["translation_log_prior"] = translation_log_prior
     if coarse_translation_log_prior is not None:
