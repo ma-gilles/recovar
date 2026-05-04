@@ -910,6 +910,13 @@ def main() -> None:
                 use_spherical_mask=use_spherical_mask,
                 grid_correct=grid_correct,
                 minres_map=minres_map,
+                # RELION's BackProjector::reconstruct skips voxels with
+                # r2 >= max_r2 = ROUND(r_max * padding_factor)^2 (backprojector.cpp:1264).
+                # Without current_size, recovar's Wiener filter operates on every
+                # padded voxel up to upsampled_volume_shape[0]//2 - 1, producing
+                # residual high-shell content from the regularization floor that
+                # RELION omits. Passing current_size matches RELION's max_r2 skip.
+                current_size=current_size,
             ).reshape(-1)
             class_real = ftu.get_idft3(class_ft.reshape(ds.volume_shape)).real
             if apply_solvent_mask:
