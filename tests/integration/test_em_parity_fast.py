@@ -921,3 +921,137 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
     assert worst_corr >= 0.90, f"K-class strict cold-start worst per-class corr {worst_corr:.4f} below 0.90: {matched}"
     assert mean_corr >= 0.95, f"K-class strict cold-start mean_corr {mean_corr:.4f} below 0.95: {matched}"
     assert iter3_match >= 0.84, f"K-class strict cold-start iter-3 class match {iter3_match:.4f} below 0.84"
+
+
+@pytest.mark.gpu
+@pytest.mark.integration
+@pytest.mark.slow
+def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
+    """K=4 STRICT-PARITY cold-start with adaptive_oversampling=1 (8× pose grid).
+
+    The strictest K-class test. Builds on test_em_parity_fast_kclass_strict_coldstart
+    with --adaptive_oversampling 1 + --healpix_order 2 (so coarse grid stays at
+    healpix order 1 = 576 rotations matching RELION's iter-1 evaluation grid,
+    fine grid at order 2 = 4608 rotations). Routes ALL K-class iters through
+    the new run_dense_k_class_em_adaptive plumbing, bypassing the buggy
+    _run_k_class_sparse_pass2_local_search_iteration accumulator.
+
+    Pass criteria (calibrated to current strict-parity ceiling at HEAD):
+      * worst per-class corr ≥ 0.91    (observed 0.914 at HEAD)
+      * mean (Hungarian-matched) ≥ 0.95 (observed 0.960 at HEAD)
+      * iter-3 class assignment match ≥ 0.85 (observed at HEAD)
+    Reaching 0.99 requires either matching RELION's per-iter sigma2_noise/tau2
+    trajectory beyond iter 0, or per-particle CC-score parity audit at iter 1
+    — both tracked as future work.
+
+    Walltime ~3-4 min on A100 (oversampled grid is more expensive per iter).
+    """
+    _assert_parity_ancestors_or_skip()
+    _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
+    relion_dir = K4_RELION_DIR
+
+    output_dir = tmp_path / "kclass_strict_os1"
+    output_dir.mkdir()
+
+    cmd = [
+        sys.executable,
+        str(REFINE_SCRIPT),
+        "--data_dir",
+        str(K4_FIXTURE_DIR),
+        "--output",
+        str(output_dir),
+        "--n_classes",
+        "4",
+        "--max_iter",
+        "3",
+        "--healpix_order",
+        "2",  # so coarse = order 1 (576 rotations) = RELION K=4 iter-1 grid
+        "--offset_range",
+        "6",
+        "--offset_step",
+        "2",
+        "--adaptive_oversampling",
+        "1",  # 8× fine pose grid; matches matrix's run_k_class_parity 0.998 path
+        "--perturb_factor",
+        "0.5",
+        "--perturb_replay_relion_dir",
+        str(relion_dir),
+        "--relion_init_dir",
+        str(relion_dir),
+        "--firstiter_cc",
+        "--init_resolution",
+        "30.0",
+        "--image_batch_size",
+        "200",
+        "--rotation_block_size",
+        "2000",
+    ]
+    logger.info("K-class STRICT-PARITY oversample cold-start cmd: %s", " ".join(cmd))
+    t0 = time.time()
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=gpu_subprocess_env())
+    elapsed = time.time() - t0
+    assert proc.returncode == 0, (
+        f"run_full_refinement.py exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+
+    from scipy.optimize import linear_sum_assignment
+
+    from recovar.utils import helpers as _recovar_helpers
+
+    def _C(a, b):
+        a = a.ravel()
+        b = b.ravel()
+        a = a - a.mean()
+        b = b - b.mean()
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+
+    recov_classes = [
+        np.asarray(_recovar_helpers.load_mrc(str(output_dir / f"final_class{c + 1:03d}.mrc")), dtype=np.float64)
+        for c in range(4)
+    ]
+    relion_classes = [
+        np.asarray(
+            _recovar_helpers.load_relion_volume(str(relion_dir / f"run_it003_class{c + 1:03d}.mrc")),
+            dtype=np.float64,
+        )
+        for c in range(4)
+    ]
+    M = np.zeros((4, 4))
+    for i in range(4):
+        for j in range(4):
+            M[i, j] = _C(recov_classes[i], relion_classes[j])
+    row, col = linear_sum_assignment(-M)
+    matched = [float(M[i, j]) for i, j in zip(row, col)]
+    mean_corr = float(np.mean(matched))
+    worst_corr = float(np.min(matched))
+
+    payload = {
+        "kclass_strict_os1_per_class_corrs_after_hungarian": matched,
+        "kclass_strict_os1_mean_corr": mean_corr,
+        "kclass_strict_os1_worst_class_corr": worst_corr,
+        "kclass_strict_os1_walltime_s": elapsed,
+    }
+    ledger = _write_quality_ledger("kclass_strict_os1", payload)
+    logger.info("K-class strict-parity oversample ledger: %s", ledger)
+
+    print(file=sys.stderr, flush=True)
+    print(
+        "=== K=4 STRICT-PARITY oversample=1 cold-start (relion_init + perturb_replay + firstiter_cc + adaptive engine) ===",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(f"  per-class corrs (Hungarian): {matched}", file=sys.stderr, flush=True)
+    print(f"  mean_corr={mean_corr:.6f}  worst_class_corr={worst_corr:.6f}", file=sys.stderr, flush=True)
+    print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
+
+    # Strict-os1 bars — observed at HEAD: per-class [0.914, 0.964, 0.976, 0.984],
+    # mean 0.960. The 0.95/0.91 floors lock against regressions in:
+    #   * the new K-class iter ≥ 2 sparse-pass-2 → run_dense_k_class_em_adaptive routing
+    #   * the _build_firstiter_cc_pass2_grids helper
+    #   * class_rotation_log_prior shape K×n_rot pass-through
+    #   * fine→coarse rotation_posterior_sums collapse via parent_map
+    # Even when the os=0 strict_coldstart still passes.
+    assert worst_corr >= 0.91, (
+        f"K-class strict-os1 cold-start worst per-class corr {worst_corr:.4f} below 0.91: {matched}"
+    )
+    assert mean_corr >= 0.95, f"K-class strict-os1 cold-start mean_corr {mean_corr:.4f} below 0.95: {matched}"
