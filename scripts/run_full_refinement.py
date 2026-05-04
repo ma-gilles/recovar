@@ -233,14 +233,26 @@ def _find_relion_optimiser_star(args):
             return p
 
     search_dirs = []
+    # Strict-parity --relion_init_dir / --perturb_replay_relion_dir point
+    # directly at the RELION reference run; check those FIRST so the K=4
+    # fixture (with `relion_pdb_k4_os0_ref/` subdir name that doesn't match
+    # the `relion_ref*` glob) finds its optimiser star and recovar uses
+    # RELION's particle-diameter mask instead of the dataset default.
+    relion_init_dir = getattr(args, "relion_init_dir", None)
+    if relion_init_dir:
+        search_dirs.append(Path(relion_init_dir).resolve())
+    perturb_replay_dir = getattr(args, "perturb_replay_relion_dir", None)
+    if perturb_replay_dir:
+        search_dirs.append(Path(perturb_replay_dir).resolve())
     if args.relion_half_sets is not None:
         search_dirs.append(Path(args.relion_half_sets).resolve().parent)
     data_dir = Path(args.data_dir).resolve()
     search_dirs.append(data_dir)
     search_dirs.append(data_dir / "relion_ref")
-    # Match `relion_ref*/` subdirs (e.g. relion_ref_os0, relion_ref_os1).
+    # Match `relion_*ref*/` subdirs (covers `relion_ref_os0/`,
+    # `relion_pdb_k4_os0_ref/`, `relion_pdb_k2_os0_ref/`, etc.).
     if data_dir.is_dir():
-        for sub in sorted(data_dir.glob("relion_ref*")):
+        for sub in sorted(list(data_dir.glob("relion_ref*")) + list(data_dir.glob("relion_*ref*"))):
             if sub.is_dir():
                 search_dirs.append(sub)
 

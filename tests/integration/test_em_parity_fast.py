@@ -1044,14 +1044,21 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
     print(f"  mean_corr={mean_corr:.6f}  worst_class_corr={worst_corr:.6f}", file=sys.stderr, flush=True)
     print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
 
-    # Strict-os1 bars — observed at HEAD: per-class [0.914, 0.964, 0.976, 0.984],
-    # mean 0.960. The 0.95/0.91 floors lock against regressions in:
+    # Strict-os1 bars — observed at HEAD: per-class [0.948, 0.985, 0.991, 0.999],
+    # mean 0.981 at iter-3 with the RELION particle-diameter mask resolved
+    # via _find_relion_optimiser_star (which now searches --relion_init_dir
+    # + --perturb_replay_relion_dir directories first AND globs the broader
+    # `relion_*ref*/` pattern that catches `relion_pdb_k4_os0_ref/`).
+    # Iter-1 standalone reaches mean_corr 0.997 / per-class [0.996, 0.996,
+    # 0.998, 0.997] — within 0.001 of single-step replay oracle (0.998).
+    # The 0.97/0.94 floors lock against regressions in:
     #   * the new K-class iter ≥ 2 sparse-pass-2 → run_dense_k_class_em_adaptive routing
     #   * the _build_firstiter_cc_pass2_grids helper
     #   * class_rotation_log_prior shape K×n_rot pass-through
     #   * fine→coarse rotation_posterior_sums collapse via parent_map
+    #   * RELION particle-diameter mask resolution from --relion_init_dir
     # Even when the os=0 strict_coldstart still passes.
-    assert worst_corr >= 0.91, (
-        f"K-class strict-os1 cold-start worst per-class corr {worst_corr:.4f} below 0.91: {matched}"
+    assert worst_corr >= 0.94, (
+        f"K-class strict-os1 cold-start worst per-class corr {worst_corr:.4f} below 0.94: {matched}"
     )
-    assert mean_corr >= 0.95, f"K-class strict-os1 cold-start mean_corr {mean_corr:.4f} below 0.95: {matched}"
+    assert mean_corr >= 0.97, f"K-class strict-os1 cold-start mean_corr {mean_corr:.4f} below 0.97: {matched}"
