@@ -14,11 +14,11 @@ import jax
 import jax.numpy as jnp
 
 from recovar import core
+from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.projection import (
     DEFAULT_PROJECTION_MAX_R,
     project_half_spectrum,
 )
-from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.score_constraints import apply_dense_score_constraints
 
 
@@ -138,11 +138,14 @@ def _score_block(
     batch_size = batch_norm.shape[0]
     n_trans = shifted_score_half.shape[0] // batch_size
     rot_block_size = proj_weighted.shape[0]
-    cross = -2.0 * jnp.matmul(
-        jnp.conj(shifted_score_half),
-        proj_weighted.T,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
+    cross = (
+        -2.0
+        * jnp.matmul(
+            jnp.conj(shifted_score_half),
+            proj_weighted.T,
+            precision=jax.lax.Precision.HIGHEST,
+        ).real
+    )
     cross = cross.reshape(batch_size, n_trans, rot_block_size).swapaxes(1, 2)
     norms = jnp.matmul(
         score_weight_half,
@@ -158,10 +161,16 @@ def _score_block(
 def _block_logsumexp_stats(scores, *, use_float64_normalization: bool):
     flat_scores = scores.reshape(scores.shape[0], -1)
     block_max = jnp.max(flat_scores, axis=1)
+    # When every pose is masked out (e.g. K-class adaptive 2-pass for a class
+    # whose pass-1 significance mask is empty for this image), block_max is
+    # -inf and ``flat_scores - block_max`` becomes -inf - (-inf) = NaN.
+    # Use a finite shift in that case; the resulting sum_exp is 0, giving
+    # log_Z = -inf rather than NaN, which the K-class aggregator handles.
+    safe_max = jnp.where(jnp.isfinite(block_max), block_max, jnp.zeros_like(block_max))
     if use_float64_normalization:
-        exp_terms = jnp.exp((flat_scores - block_max[:, None]).astype(jnp.float64))
+        exp_terms = jnp.exp((flat_scores - safe_max[:, None]).astype(jnp.float64))
     else:
-        exp_terms = jnp.exp(flat_scores - block_max[:, None])
+        exp_terms = jnp.exp(flat_scores - safe_max[:, None])
     return block_max, jnp.sum(exp_terms, axis=1)
 
 
@@ -175,7 +184,12 @@ def _mstep_half_sums(
     batch_size = scores.shape[0]
     rot_block_size = scores.shape[1]
     n_trans = scores.shape[2]
-    probs = jnp.exp(scores - log_Z[:, None, None])
+    # Guard probs computation against -inf - (-inf) = NaN: when either the
+    # per-pose score or the per-image normalizer is -inf, the contribution
+    # is mathematically zero. This handles K-class adaptive 2-pass cases
+    # where a class has an empty significance mask for some images.
+    diff = scores - log_Z[:, None, None]
+    probs = jnp.where(jnp.isfinite(diff), jnp.exp(diff), 0.0)
     probs = jnp.where(valid_image_mask[:, None, None], probs, 0.0)
     P = probs.swapaxes(0, 1).reshape(rot_block_size, batch_size * n_trans)
     summed_half = P @ shifted_recon_half
@@ -184,7 +198,8 @@ def _mstep_half_sums(
     flat_scores = scores.reshape(batch_size, -1)
     block_best = jnp.max(flat_scores, axis=1)
     block_argmax = jnp.argmax(flat_scores, axis=1)
-    max_posterior = jnp.exp(block_best - log_Z)
+    best_diff = block_best - log_Z
+    max_posterior = jnp.where(jnp.isfinite(best_diff), jnp.exp(best_diff), 0.0)
     block_best = jnp.where(valid_image_mask, block_best, -jnp.inf)
     block_argmax = jnp.where(valid_image_mask, block_argmax, 0)
     max_posterior = jnp.where(valid_image_mask, max_posterior, 0.0)

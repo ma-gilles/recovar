@@ -88,11 +88,14 @@ def _e_step_block_scores(
     The norm-term similarly uses half-weighted |proj|^2.
     """
     rot_block_size = proj_half_weighted.shape[0]
-    cross = -2.0 * jnp.matmul(
-        jnp.conj(shifted_half),
-        proj_half_weighted.T,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
+    cross = (
+        -2.0
+        * jnp.matmul(
+            jnp.conj(shifted_half),
+            proj_half_weighted.T,
+            precision=jax.lax.Precision.HIGHEST,
+        ).real
+    )
     cross = cross.reshape(n_images, n_trans, rot_block_size)
     cross = cross.swapaxes(1, 2)
     norms = jnp.matmul(
@@ -120,11 +123,14 @@ def _e_step_block_scores_windowed(
 ):
     """E-step for one rotation block using windowed half-spectrum GEMMs."""
     rot_block_size = proj_windowed_weighted.shape[0]
-    cross = -2.0 * jnp.matmul(
-        jnp.conj(shifted_windowed),
-        proj_windowed_weighted.T,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
+    cross = (
+        -2.0
+        * jnp.matmul(
+            jnp.conj(shifted_windowed),
+            proj_windowed_weighted.T,
+            precision=jax.lax.Precision.HIGHEST,
+        ).real
+    )
     cross = cross.reshape(n_images, n_trans, rot_block_size)
     cross = cross.swapaxes(1, 2)
     norms = jnp.matmul(
@@ -151,11 +157,14 @@ def _e_step_block_scores_normalized_cc(
     """RELION iter-1 normalized cross-correlation score."""
     del batch_norm, image_shape, volume_shape
     rot_block_size = proj_half_weighted.shape[0]
-    cross = -2.0 * jnp.matmul(
-        jnp.conj(shifted_half),
-        proj_half_weighted.T,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
+    cross = (
+        -2.0
+        * jnp.matmul(
+            jnp.conj(shifted_half),
+            proj_half_weighted.T,
+            precision=jax.lax.Precision.HIGHEST,
+        ).real
+    )
     cross = cross.reshape(n_images, n_trans, rot_block_size)
     cross = cross.swapaxes(1, 2)
     norms = jnp.matmul(
@@ -183,11 +192,14 @@ def _e_step_block_scores_windowed_normalized_cc(
     """Windowed RELION iter-1 normalized cross-correlation score."""
     del batch_norm, n_windowed, image_shape, volume_shape
     rot_block_size = proj_windowed_weighted.shape[0]
-    cross = -2.0 * jnp.matmul(
-        jnp.conj(shifted_windowed),
-        proj_windowed_weighted.T,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
+    cross = (
+        -2.0
+        * jnp.matmul(
+            jnp.conj(shifted_windowed),
+            proj_windowed_weighted.T,
+            precision=jax.lax.Precision.HIGHEST,
+        ).real
+    )
     cross = cross.reshape(n_images, n_trans, rot_block_size)
     cross = cross.swapaxes(1, 2)
     norms = jnp.matmul(
@@ -231,9 +243,15 @@ def _m_step_block_windowed(
     image_shape,
     volume_shape,
 ):
-    """Normalize scores to probabilities and compute one windowed M-step block."""
+    """Normalize scores to probabilities and compute one windowed M-step block.
+
+    Uses an isfinite-guarded ``exp(scores - log_Z)`` so K-class adaptive 2-pass
+    poses where ``scores = -inf`` and ``log_Z = -inf`` give ``probs = 0`` rather
+    than NaN.
+    """
     rot_block_size = rotations_block.shape[0]
-    probs = jnp.exp(scores_block - log_Z[:, None, None])
+    diff = scores_block - log_Z[:, None, None]
+    probs = jnp.where(jnp.isfinite(diff), jnp.exp(diff), 0.0)
     P = probs.swapaxes(0, 1).reshape(rot_block_size, n_images * n_trans)
     summed_windowed = P @ shifted_windowed
     probs_sum_t = jnp.sum(probs, axis=-1)
@@ -245,29 +263,47 @@ def _m_step_block_windowed(
 
 @partial(jax.jit, static_argnums=())
 def _update_logsumexp(max_s, sum_exp, scores_block):
-    """Streaming logsumexp update from one score block."""
+    """Streaming logsumexp update from one score block.
+
+    Robust to all-(-inf) score blocks (K-class adaptive 2-pass with an
+    empty significance mask): a finite ``safe_new_max`` is used inside the
+    exp so we never form -inf - (-inf) = NaN; ``new_max`` is still returned
+    as -inf so the streaming logsumexp is exactly -inf for empty inputs.
+    """
 
     accumulator_dtype = sum_exp.dtype
     scores_flat = scores_block.reshape(scores_block.shape[0], -1)
     block_max = jnp.max(scores_flat, axis=1)
     new_max = jnp.maximum(max_s, block_max)
+    safe_new_max = jnp.where(jnp.isfinite(new_max), new_max, jnp.zeros_like(new_max))
     exp_terms = jnp.sum(
-        jnp.exp((scores_flat - new_max[:, None]).astype(accumulator_dtype)),
+        jnp.exp((scores_flat - safe_new_max[:, None]).astype(accumulator_dtype)),
         axis=1,
     )
-    sum_exp = sum_exp * jnp.exp((max_s - new_max).astype(accumulator_dtype)) + exp_terms
+    safe_max_s = jnp.where(jnp.isfinite(max_s), max_s, jnp.zeros_like(max_s))
+    sum_exp = sum_exp * jnp.exp((safe_max_s - safe_new_max).astype(accumulator_dtype)) + exp_terms
     return new_max, sum_exp
 
 
 @jax.jit
 def _merge_block_logsumexp(max_s, sum_exp, block_max, block_sum_exp):
-    """Merge one pre-reduced block logsumexp into streaming batch stats."""
+    """Merge one pre-reduced block logsumexp into streaming batch stats.
+
+    See ``_update_logsumexp`` for the all-(-inf) handling. The ``safe_*``
+    shifts here mirror the same pattern: when both ``max_s`` and
+    ``block_max`` are -inf the merge degenerates to 0 + 0 = 0, giving a
+    final ``log_Z = -inf`` that the K-class aggregator treats as "no
+    contribution" rather than NaN.
+    """
 
     accumulator_dtype = sum_exp.dtype
     new_max = jnp.maximum(max_s, block_max)
-    old_term = sum_exp * jnp.exp((max_s - new_max).astype(accumulator_dtype))
+    safe_new_max = jnp.where(jnp.isfinite(new_max), new_max, jnp.zeros_like(new_max))
+    safe_max_s = jnp.where(jnp.isfinite(max_s), max_s, jnp.zeros_like(max_s))
+    safe_block_max = jnp.where(jnp.isfinite(block_max), block_max, jnp.zeros_like(block_max))
+    old_term = sum_exp * jnp.exp((safe_max_s - safe_new_max).astype(accumulator_dtype))
     block_term = block_sum_exp.astype(accumulator_dtype) * jnp.exp(
-        (block_max - new_max).astype(accumulator_dtype),
+        (safe_block_max - safe_new_max).astype(accumulator_dtype),
     )
     return new_max, old_term + block_term
 
@@ -282,9 +318,15 @@ def _m_step_block_compute(
     n_images,
     n_trans,
 ):
-    """Normalize scores to probabilities and compute one non-windowed M-step block."""
+    """Normalize scores to probabilities and compute one non-windowed M-step block.
+
+    Uses an isfinite-guarded ``exp(scores - log_Z)`` so K-class adaptive 2-pass
+    poses where ``scores = -inf`` and ``log_Z = -inf`` give ``probs = 0`` rather
+    than NaN.
+    """
     rot_block_size = rotations_block.shape[0]
-    probs = jnp.exp(scores_block - log_Z[:, None, None])
+    diff = scores_block - log_Z[:, None, None]
+    probs = jnp.where(jnp.isfinite(diff), jnp.exp(diff), 0.0)
     P = probs.swapaxes(0, 1).reshape(rot_block_size, n_images * n_trans)
     summed_half = P @ shifted_half
     probs_sum_t = jnp.sum(probs, axis=-1)
