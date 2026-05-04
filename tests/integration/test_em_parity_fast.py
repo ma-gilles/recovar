@@ -499,6 +499,132 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
 @pytest.mark.gpu
 @pytest.mark.integration
 @pytest.mark.slow
+def test_em_parity_fast_k1_perturbreplay(tmp_path):
+    """K=1 cold-start with --perturb_replay_relion_dir at 5k 128² for 3 iters.
+
+    Stricter companion to test_em_parity_fast_k1_coldstart that pins the
+    perturbation drift component by reading RELION's per-iter
+    SamplingPerturbInstance values from the reference run. recovar still
+    runs its own E/M/sigma_offset/tau2/FSC machinery — only the HEALPix
+    grid jitter is matched to RELION.
+
+    Pass criteria (tighter than coldstart since perturbation drift is
+    eliminated):
+      * half[12] corr ≥ 0.99 vs RELION run_it003 — observed 0.992 at HEAD
+      * |ΔPmax_iter3| < 0.05 vs RELION
+
+    Walltime ~2-3 min on A100.
+    """
+    _assert_parity_ancestors_or_skip()
+    _require_fixture(REFINE_SCRIPT, K1_FIXTURE_DIR, K1_RELION_DIR, K1_DATA_STAR)
+
+    output_dir = tmp_path / "k1_perturbreplay"
+    output_dir.mkdir()
+
+    cmd = [
+        sys.executable,
+        str(REFINE_SCRIPT),
+        "--data_dir",
+        str(K1_FIXTURE_DIR),
+        "--output",
+        str(output_dir),
+        "--max_iter",
+        "3",
+        "--healpix_order",
+        "3",
+        "--offset_range",
+        "3.0",
+        "--offset_step",
+        "1.0",
+        "--adaptive_oversampling",
+        "0",
+        "--tau2_fudge",
+        "1.0",
+        "--perturb_factor",
+        "0.5",
+        "--perturb_replay_relion_dir",
+        str(K1_RELION_DIR),
+        "--init_resolution",
+        "30.0",
+        "--image_batch_size",
+        "200",
+        "--rotation_block_size",
+        "2000",
+        "--relion_half_sets",
+        str(K1_FIXTURE_DIR / "particles_with_halfsets.star"),
+    ]
+    logger.info("K=1 perturb-replay cmd: %s", " ".join(cmd))
+    t0 = time.time()
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=gpu_subprocess_env())
+    elapsed = time.time() - t0
+    assert proc.returncode == 0, (
+        f"run_full_refinement.py exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+
+    npz = np.load(output_dir / "refinement_results.npz")
+    pmax_traj = np.asarray(npz["ave_Pmax_trajectory"], dtype=np.float64)
+
+    from recovar.utils import helpers as _recovar_helpers
+
+    def _C(a, b):
+        a = a.ravel()
+        b = b.ravel()
+        a = a - a.mean()
+        b = b - b.mean()
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+
+    rec_h1 = np.asarray(_recovar_helpers.load_mrc(str(output_dir / "final_half1.mrc")), dtype=np.float64)
+    rec_h2 = np.asarray(_recovar_helpers.load_mrc(str(output_dir / "final_half2.mrc")), dtype=np.float64)
+    rel_h1 = np.asarray(
+        _recovar_helpers.load_relion_volume(str(K1_RELION_DIR / "run_it003_half1_class001.mrc")), dtype=np.float64
+    )
+    rel_h2 = np.asarray(
+        _recovar_helpers.load_relion_volume(str(K1_RELION_DIR / "run_it003_half2_class001.mrc")), dtype=np.float64
+    )
+    h1_corr = _C(rec_h1, rel_h1)
+    h2_corr = _C(rec_h2, rel_h2)
+
+    import starfile
+
+    relion_data = starfile.read(str(K1_RELION_DIR / "run_it003_data.star"))
+    particles = (
+        relion_data["particles"] if isinstance(relion_data, dict) and "particles" in relion_data else relion_data
+    )
+    relion_pmax = float(np.asarray(particles["rlnMaxValueProbDistribution"], dtype=np.float64).mean())
+    pmax_diff = abs(float(pmax_traj[2]) - relion_pmax)
+
+    payload = {
+        "k1_perturbreplay_half1_corr_vs_relion_it003": h1_corr,
+        "k1_perturbreplay_half2_corr_vs_relion_it003": h2_corr,
+        "k1_perturbreplay_pmax_iter3_recovar": float(pmax_traj[2]),
+        "k1_perturbreplay_pmax_iter3_relion": relion_pmax,
+        "k1_perturbreplay_pmax_iter3_abs_diff": pmax_diff,
+        "k1_perturbreplay_walltime_s": elapsed,
+    }
+    ledger = _write_quality_ledger("k1_perturbreplay", payload)
+    logger.info("K=1 perturb-replay ledger: %s", ledger)
+
+    print(file=sys.stderr, flush=True)
+    print("=== K=1 perturb-replay parity (3-iter ab-initio + RELION grid jitter sync) ===", file=sys.stderr, flush=True)
+    print(f"  half1_corr={h1_corr:.6f} half2_corr={h2_corr:.6f}", file=sys.stderr, flush=True)
+    print(
+        f"  pmax_iter3 recovar={pmax_traj[2]:.4f} relion={relion_pmax:.4f} diff={pmax_diff:.4g}",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
+
+    # Tighter than coldstart since perturbation drift is eliminated. Observed
+    # at HEAD: corrs ~0.992. The 0.99 floor catches any iter-1 / iter-2 path
+    # regression that the looser cold-start bar would miss.
+    assert h1_corr >= 0.99, f"K=1 perturb-replay half1 corr {h1_corr:.6f} below 0.99 vs RELION it003."
+    assert h2_corr >= 0.99, f"K=1 perturb-replay half2 corr {h2_corr:.6f} below 0.99 vs RELION it003."
+    assert pmax_diff < 0.05, f"K=1 perturb-replay |ΔPmax| {pmax_diff:.4g} exceeds 0.05 vs RELION it003."
+
+
+@pytest.mark.gpu
+@pytest.mark.integration
+@pytest.mark.slow
 def test_em_parity_fast_kclass_coldstart(tmp_path):
     """K=4 cold-start ab-initio at 5k 128² for 3 iters (Phase E.1).
 

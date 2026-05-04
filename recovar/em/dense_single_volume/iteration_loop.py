@@ -1685,6 +1685,11 @@ def _run_relion_iteration_loop(
     current_sigma_offset_angstrom = float(init_translation_sigma_angstrom)
     sigma_offset_used_trajectory = []
     sigma_offset_trajectory = []
+    # D.2: per-class sigma_offset trajectory. K=1 leaves entries as
+    # [scalar, scalar, ...]; K>1 stores K-vectors. Diagnostic for now —
+    # threading per-class sigma into the engine's translation log_prior
+    # is the next step (requires k_class.py engine signature change).
+    per_class_sigma_offset_trajectory = []
     frac_changed_trajectory = []
     acc_rot_trajectory = []
     smallest_change_angles_trajectory = []
@@ -2474,6 +2479,10 @@ def _run_relion_iteration_loop(
             )
 
         noise_stats_per_half = [None, None]
+        # D.2: per-class noise stats (K-tuple of NoiseStats per half) for the
+        # per-class sigma_offset C1 update at end-of-iter. K=1 paths leave
+        # this None; K-class paths populate from k_class_result.noise_stats.
+        noise_stats_per_half_per_class = [None, None]
 
         for k in range(2):
             noise_variance_k = noise_variance_per_half[k]
@@ -2937,6 +2946,7 @@ def _run_relion_iteration_loop(
                         Ft_ctf_k = k_class_result.Ft_ctf
                         em_stats_k = k_class_result.stats
                         noise_stats_k = k_class_result.aggregate_noise_stats
+                        noise_stats_per_half_per_class[k] = k_class_result.noise_stats
                         class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
                         class_posterior_per_half[k] = np.asarray(
                             k_class_result.class_posterior_sums,
@@ -3019,6 +3029,7 @@ def _run_relion_iteration_loop(
                         ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
                         em_stats_k = k_class_result.stats
                         noise_stats_k = k_class_result.aggregate_noise_stats
+                        noise_stats_per_half_per_class[k] = k_class_result.noise_stats
                         class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
                         class_posterior_per_half[k] = np.asarray(
                             k_class_result.class_posterior_sums,
@@ -3141,6 +3152,7 @@ def _run_relion_iteration_loop(
                         ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
                         em_stats_k = k_class_result.stats
                         noise_stats_k = k_class_result.aggregate_noise_stats
+                        noise_stats_per_half_per_class[k] = k_class_result.noise_stats
                         class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
                         class_posterior_per_half[k] = np.asarray(
                             k_class_result.class_posterior_sums,
@@ -3410,6 +3422,7 @@ def _run_relion_iteration_loop(
                     ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
                     em_stats_k = k_class_result.stats
                     noise_stats_k = k_class_result.aggregate_noise_stats
+                    noise_stats_per_half_per_class[k] = k_class_result.noise_stats
                     class_assignments[k] = np.asarray(full_coarse_stats["class_assignments"], dtype=np.int32)
                     class_responsibilities_k = np.exp(
                         np.asarray(full_coarse_stats["class_log_evidence_per_image"], dtype=np.float64)
@@ -3590,6 +3603,7 @@ def _run_relion_iteration_loop(
                     Ft_ctf_k = k_class_result.Ft_ctf
                     em_stats_k = k_class_result.stats
                     noise_stats_k = k_class_result.aggregate_noise_stats
+                    noise_stats_per_half_per_class[k] = k_class_result.noise_stats
                     class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
                     class_posterior_per_half[k] = np.asarray(
                         k_class_result.class_posterior_sums,
@@ -4681,6 +4695,35 @@ def _run_relion_iteration_loop(
                 continue
             sigma2_offset_wsum += float(getattr(stats_k, "wsum_sigma2_offset", 0.0))
             sigma2_offset_sumw += float(getattr(stats_k, "sumw", 0.0))
+        # D.2: per-class sigma_offset diagnostic. RELION Class3D maintains K
+        # independent sigma_offset values; recovar currently uses the
+        # cross-class aggregate. Compute and log per-class sigmas to gauge
+        # whether the per-class refactor is justified for this fixture.
+        per_class_sigma_offset = None
+        if k_class_enabled:
+            per_class_w = np.zeros(n_classes, dtype=np.float64)
+            per_class_n = np.zeros(n_classes, dtype=np.float64)
+            for half_per_class in noise_stats_per_half_per_class:
+                if half_per_class is None:
+                    continue
+                for c, stats_c in enumerate(half_per_class):
+                    if stats_c is None:
+                        continue
+                    per_class_w[c] += float(getattr(stats_c, "wsum_sigma2_offset", 0.0))
+                    per_class_n[c] += float(getattr(stats_c, "sumw", 0.0))
+            min_sigma2 = 2.0
+            per_class_sigma_offset = np.full(n_classes, current_sigma_offset_angstrom, dtype=np.float64)
+            for c in range(n_classes):
+                if per_class_w[c] > 0.0 and per_class_n[c] > 0.0:
+                    s2 = max(per_class_w[c] / (2.0 * per_class_n[c]), min_sigma2)
+                    per_class_sigma_offset[c] = float(np.sqrt(s2))
+            logger.info(
+                "C1: per-class sigma_offset = [%s] (cross-class aggregate %.3f Å)",
+                ", ".join(f"{s:.3f}" for s in per_class_sigma_offset),
+                float(np.sqrt(max(sigma2_offset_wsum / max(2.0 * sigma2_offset_sumw, 1e-30), min_sigma2)))
+                if sigma2_offset_wsum > 0
+                else current_sigma_offset_angstrom,
+            )
         if sigma2_offset_wsum > 0.0 and sigma2_offset_sumw > 0.0:
             min_sigma2_angstrom2 = 2.0
             sigma2_offset_angstrom2 = max(
@@ -4707,6 +4750,9 @@ def _run_relion_iteration_loop(
                     min_sigma_angstrom,
                 )
         sigma_offset_trajectory.append(float(current_sigma_offset_angstrom))
+        per_class_sigma_offset_trajectory.append(
+            None if per_class_sigma_offset is None else per_class_sigma_offset.tolist()
+        )
         acc_rot_trajectory.append(float(iter_acc_rot) if iter_acc_rot is not None else np.nan)
         smallest_change_angles_trajectory.append(float(state.current_changes_optimal_orientations))
         smallest_change_offsets_trajectory.append(float(state.current_changes_optimal_offsets_angstrom))
@@ -4839,6 +4885,7 @@ def _run_relion_iteration_loop(
             "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
             "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
             "sigma_offset_trajectory": sigma_offset_trajectory,
+            "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
             "frac_changed_trajectory": frac_changed_trajectory,
             "acc_rot_trajectory": acc_rot_trajectory,
             "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
@@ -5083,6 +5130,7 @@ def _run_relion_iteration_loop(
         "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
         "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
         "sigma_offset_trajectory": sigma_offset_trajectory,
+        "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
         "frac_changed_trajectory": frac_changed_trajectory,
         "acc_rot_trajectory": acc_rot_trajectory,
         "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
