@@ -1,11 +1,13 @@
-import recovar.jax_config
+import argparse
 import logging
-import numpy as np
-import warnings
-from recovar.output import output as o
-from recovar.heterogeneity import embedding
+import os
 import pickle
-import os, argparse
+import warnings
+
+import numpy as np
+
+from recovar.heterogeneity import embedding
+from recovar.output import output as o
 
 logger = logging.getLogger(__name__)
 from recovar.utils import parser_args
@@ -244,6 +246,12 @@ def compute_state(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
+
+    if getattr(args, "gpu_memory", None) is not None:
+        from recovar.utils import helpers as _utils
+
+        _utils.set_gpu_memory_limit(args.gpu_memory)
+        logger.info("GPU memory budget set to %.1f GB via --gpu-memory", args.gpu_memory)
 
     from recovar.project.job_context import job_context
 

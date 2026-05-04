@@ -129,4 +129,18 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze=False):
         help="Edge width of FSC mask (in Angstroms). If None, uses 10%% of fsc-mask-radius. Only used if fsc-mask-radius is specified.",
     )
 
+    parser.add_argument(
+        "--gpu-memory",
+        type=float,
+        default=None,
+        dest="gpu_memory",
+        help=(
+            "GPU memory budget in GB used by the auto-batch-size formula. "
+            "Default: detect via JAX. Set lower than your physical VRAM if "
+            "the heterogeneity kernel OOMs (especially under "
+            "RECOVAR_DISABLE_CUDA=1, where the JAX-native fallback path needs "
+            "~3x more memory per image than the custom CUDA kernel)."
+        ),
+    )
+
     return parser

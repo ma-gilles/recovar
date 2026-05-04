@@ -1,6 +1,5 @@
 """Post-pipeline analysis: k-means, trajectories, UMAP, volume generation."""
 
-import recovar.jax_config
 import argparse
 import logging
 import os
@@ -8,8 +7,7 @@ import os
 import numpy as np
 
 from recovar import utils
-from recovar.data_io import cryoem_dataset
-from recovar.heterogeneity import latent_density, embedding
+from recovar.heterogeneity import embedding, latent_density
 from recovar.output import output as o
 from recovar.utils import parser_args
 
@@ -235,6 +233,7 @@ def analyze(
     o.mkdir_safe(data_dir)
 
     import matplotlib.pyplot as plt
+
     from recovar.output import plot_utils
 
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -426,6 +425,12 @@ def pick_pairs(centers, n_pairs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
+
+    if getattr(args, "gpu_memory", None) is not None:
+        from recovar.utils import helpers as _utils
+
+        _utils.set_gpu_memory_limit(args.gpu_memory)
+        logger.info("GPU memory budget set to %.1f GB via --gpu-memory", args.gpu_memory)
 
     from recovar.project.job_context import job_context
 

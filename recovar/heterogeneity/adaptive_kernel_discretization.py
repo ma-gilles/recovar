@@ -6,21 +6,22 @@ neighbor) and triangular (linear-interpolation) kernel precomputation, along
 with residual-based model selection across discretization parameters.
 """
 
-import logging
 import functools
+import logging
+import os
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import core, jax_config, utils
-from recovar.reconstruction import noise, regularization, relion_functions
-from recovar.data_io import cryoem_dataset
-from recovar.core import linalg
-from recovar.core.configs import ForwardModelConfig
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar import core, jax_config, utils
+from recovar.core import linalg
+from recovar.core.configs import ForwardModelConfig
+from recovar.data_io import cryoem_dataset
+from recovar.reconstruction import noise, regularization, relion_functions
 
 logger = logging.getLogger(__name__)
 
@@ -149,9 +150,10 @@ def _process_images_half_fast(images, dataset):
     Falls back to ``process_images_half`` for non-standard image sources
     (e.g. test fixtures) that lack ``data_multiplier`` / ``padding``.
     """
-    src = getattr(dataset, 'image_source', None)
-    if src is not None and hasattr(src, 'data_multiplier') and hasattr(src, 'padding'):
+    src = getattr(dataset, "image_source", None)
+    if src is not None and hasattr(src, "data_multiplier") and hasattr(src, "padding"):
         from recovar.core import padding as pad
+
         images = jnp.asarray(images) * src.data_multiplier
         return pad.padded_rfft(images, dataset.grid_size, src.padding)
     return dataset.process_images_half(images)
@@ -1789,10 +1791,25 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     rhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype)
     lhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype_real)
 
-    # Auto-compute batch size based on GPU memory if not specified
+    # Auto-compute batch size based on GPU memory if not specified.
+    #
+    # The default formula is calibrated for the custom CUDA backproject kernel,
+    # which scatters in place. The JAX-native fallback path (RECOVAR_DISABLE_CUDA=1)
+    # materializes per-image volumes for the whole batch before reducing — peak
+    # working set is roughly 3x larger for the same batch size. Without this
+    # adjustment, the heterogeneity kernel deterministically OOMs on every
+    # GPU when forced through the fallback path (issue #131 follow-up).
     if batch_size is None:
         accum_gb = utils.get_size_in_gb(rhs_all) + utils.get_size_in_gb(lhs_all)
         avail_gb = max(1.0, utils.get_gpu_memory_total() - accum_gb)
+        if os.environ.get("RECOVAR_DISABLE_CUDA", "").strip() in ("1", "true", "True", "TRUE"):
+            avail_gb = max(1.0, avail_gb / 3.0)
+            logger.info(
+                "RECOVAR_DISABLE_CUDA active — scaling heterogeneity-kernel "
+                "memory budget to 1/3 of available (%.1f GB) to account for "
+                "the JAX-native fallback path's higher per-image memory cost.",
+                avail_gb,
+            )
         batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, avail_gb))
     logger.info("batch size in heterogeneity kernel: %s", batch_size)
 
@@ -1819,19 +1836,37 @@ def even_less_naive_heterogeneity_scheme_relion_style(
             noise_half=False,
             indices=image_inds,
         )
-        for raw_images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in raw_batches:
+        for (
+            raw_images,
+            rotation_matrices,
+            translations,
+            ctf_params,
+            noise_variance,
+            _particle_indices,
+            _image_indices,
+        ) in raw_batches:
             if use_fast_rfft:
                 # Pad BEFORE rfft so padded_rfft always sees a fixed batch
                 # shape — avoids JIT recompilation for unique tail-batch sizes.
-                raw_images, rotation_matrices, translations, ctf_params, noise_variance = _pad_heterogeneity_kernel_batch(
-                    raw_images, rotation_matrices, translations, ctf_params, noise_variance,
-                    target_batch_size=batch_size,
+                raw_images, rotation_matrices, translations, ctf_params, noise_variance = (
+                    _pad_heterogeneity_kernel_batch(
+                        raw_images,
+                        rotation_matrices,
+                        translations,
+                        ctf_params,
+                        noise_variance,
+                        target_batch_size=batch_size,
+                    )
                 )
                 images = _process_images_half_fast(raw_images, experiment_dataset)
             else:
                 images = experiment_dataset.process_images_half(raw_images)
                 images, rotation_matrices, translations, ctf_params, noise_variance = _pad_heterogeneity_kernel_batch(
-                    images, rotation_matrices, translations, ctf_params, noise_variance,
+                    images,
+                    rotation_matrices,
+                    translations,
+                    ctf_params,
+                    noise_variance,
                     target_batch_size=batch_size,
                 )
             Ft_y_acc, Ft_ctf_acc = _heterogeneity_kernel_batch_from_fft(
