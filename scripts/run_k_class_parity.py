@@ -57,11 +57,23 @@ def _class_table(model, class_index: int):
 
 
 def _tau_spectrum(model, class_index: int) -> np.ndarray:
+    """Read RELION's per-class signal power spectrum used in BackProjector reconstruction.
+
+    RELION's ``BackProjector::reconstruct(..., tau2, tau2_fudge, ...)`` is
+    invoked at ``ml_optimiser.cpp:6020`` with ``mymodel.tau2_class[iclass]``
+    which is the per-class **signal** power spectrum, written to model.star
+    under the ``rlnReferenceTau2`` column (EMDL_MLMODEL_TAU2_REF).
+    The ``rlnReferenceSigma2`` column is the **noise** power spectrum
+    (EMDL_MLMODEL_SIGMA2_REF), which is roughly 60x smaller and is used
+    only for diagnostics — using it as the Wiener regulariser would
+    over-regularise low-occupancy classes 60x more than RELION does and
+    produces the K=4 chained iter≥2 amplitude-deficit pattern.
+    """
     table = _class_table(model, class_index)
-    if "rlnReferenceSigma2" in table.columns:
-        column = "rlnReferenceSigma2"
-    elif "rlnReferenceTau2" in table.columns:
+    if "rlnReferenceTau2" in table.columns:
         column = "rlnReferenceTau2"
+    elif "rlnReferenceSigma2" in table.columns:
+        column = "rlnReferenceSigma2"
     else:
         raise ValueError(f"Missing reference variance column in model_class_{class_index + 1}")
     return np.asarray(table[column], dtype=np.float64)
