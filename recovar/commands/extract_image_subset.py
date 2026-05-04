@@ -88,16 +88,19 @@ def main():
         type=list_of_ints,
         help="Coordinate in pixel of the feature for which you want images. E.g. 20,30,50",
     )
-    from recovar.utils.parser_args import add_output_name_arg, add_project_arg
+    from recovar.utils.parser_args import add_gpu_memory_arg, add_output_name_arg, add_project_arg, apply_gpu_memory_arg
 
     add_project_arg(parser)
     add_output_name_arg(parser)
+    add_gpu_memory_arg(parser)
 
     args = parser.parse_args()
     if args.subvol_idx is None and args.mask is None and args.coordinate is None:
         raise ValueError("You need to provide either a subvolume index, a mask or a coordinate")
     if args.subvol_idx is not None and (args.mask is not None or args.coordinate is not None):
         raise ValueError("You need to provide only one of subvolume index, mask or coordinate")
+
+    apply_gpu_memory_arg(args, logger=logger)
 
     from recovar.project.job_context import job_context
 

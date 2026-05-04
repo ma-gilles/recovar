@@ -263,11 +263,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
 
-    if getattr(args, "gpu_memory", None) is not None:
-        from recovar.utils import helpers as _utils
-
-        _utils.set_gpu_memory_limit(args.gpu_memory)
-        logger.info("GPU memory budget set to %.1f GB via --gpu-memory", args.gpu_memory)
+    parser_args.apply_gpu_memory_arg(args, logger=logger)
 
     if args.ind is not None:
         z_st_ind = args.ind[0]

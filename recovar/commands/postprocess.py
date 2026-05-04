@@ -112,10 +112,11 @@ def add_args(parser: argparse.ArgumentParser):
         help="Use v2 algorithm for local resolution calculation (faster but may be less accurate)",
     )
 
-    from recovar.utils.parser_args import add_output_name_arg, add_project_arg
+    from recovar.utils.parser_args import add_gpu_memory_arg, add_output_name_arg, add_project_arg
 
     add_project_arg(parser)
     add_output_name_arg(parser)
+    add_gpu_memory_arg(parser)
 
     return parser
 
@@ -1218,6 +1219,10 @@ Examples:
 
     # Setup logging
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    from recovar.utils.parser_args import apply_gpu_memory_arg
+
+    apply_gpu_memory_arg(args, logger=logger)
 
     from recovar.project.job_context import job_context
 
