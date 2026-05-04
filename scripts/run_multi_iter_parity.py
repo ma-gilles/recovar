@@ -518,7 +518,13 @@ def main():
     sigma2_h1 = np.array(model_h1["model_optics_group_1"]["rlnSigma2Noise"])
     sigma2_h2 = np.array(model_h2["model_optics_group_1"]["rlnSigma2Noise"])
     class1 = model_h1["model_class_1"]
-    tau2_col = "rlnReferenceSigma2" if "rlnReferenceSigma2" in class1 else "rlnReferenceTau2"
+    # Prefer rlnReferenceTau2 (signal power, EMDL_MLMODEL_TAU2_REF) which is
+    # what RELION's BackProjector::reconstruct uses for the Wiener prior.
+    # rlnReferenceSigma2 (noise power, EMDL_MLMODEL_SIGMA2_REF) would over-
+    # regularise when used as the prior; safe at iter≥3 K=1 because the
+    # production loop recomputes mean_signal_variance from M-step weights
+    # via compute_relion_tau2_from_weights, but matches RELION's intent.
+    tau2_col = "rlnReferenceTau2" if "rlnReferenceTau2" in class1 else "rlnReferenceSigma2"
     tau2 = np.array(class1[tau2_col])
     fsc_col = "rlnGoldStandardFsc" if "rlnGoldStandardFsc" in class1 else "rlnFourierShellCorrelationCorrected"
     fsc = np.array(class1[fsc_col])
