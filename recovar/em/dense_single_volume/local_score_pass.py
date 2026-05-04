@@ -83,6 +83,19 @@ def _local_k_class_scores_from_weighted_abs2(
         weighted_abs2,
         precision=jax.lax.Precision.HIGHEST,
     )
+    # Diagnostic: env-controlled cross/norm balance correction. The default
+    # proj_weighted = -N² × Fref makes cross scale as -N² (sign-flip + N² scale)
+    # but norms scale as N⁴, biasing per-class score gaps. To recover RELION-
+    # equivalent scores set RECOVAR_K_CLASS_CROSS_DIVISOR=-N² and
+    # RECOVAR_K_CLASS_NORMS_DIVISOR=N⁴ (e.g. -16384 and 268435456 for N=128).
+    import os as _os
+
+    _cross_div = _os.environ.get("RECOVAR_K_CLASS_CROSS_DIVISOR")
+    if _cross_div is not None:
+        cross = cross / float(_cross_div)
+    _norms_div = _os.environ.get("RECOVAR_K_CLASS_NORMS_DIVISOR")
+    if _norms_div is not None:
+        norms = norms / float(_norms_div)
     scores = -0.5 * (cross + norms[..., None])
     scores = scores + rotation_log_prior[:, None, :, None]
     scores = scores + class_log_priors[None, :, None, None]
