@@ -391,7 +391,27 @@ def reference_to_relion_projector_dense_means(
             2,
         )
         dense = _relion_projector_to_dense_volume(np.asarray(projector_data), n)
-        means.append(dense.reshape(-1) * (-(n**2)))
+        # Diagnostic-only env-controlled override of the historical -N^2 scaling.
+        # The -N^2 factor was a per-particle-constant compensation that biases
+        # per-class score gaps (~3 nat) when projections differ in magnitude.
+        # See project_k2_c2_cc_root_cause_2026_05_03 memory.
+        scale_env = os.environ.get("RECOVAR_DENSE_MEANS_SCALE")
+        if scale_env is None:
+            scale = -(n**2)
+        else:
+            # Allow values like "1", "-1", "-N2", "-N", "1/-N2", or a literal float.
+            tok = scale_env.strip()
+            if tok == "-N2":
+                scale = -(n**2)
+            elif tok == "N2":
+                scale = float(n**2)
+            elif tok == "1":
+                scale = 1.0
+            elif tok == "-1":
+                scale = -1.0
+            else:
+                scale = float(tok)
+        means.append(dense.reshape(-1) * scale)
     return np.asarray(means, dtype=np.complex64)
 
 
