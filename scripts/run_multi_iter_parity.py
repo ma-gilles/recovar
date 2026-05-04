@@ -260,6 +260,18 @@ def main():
     parser.add_argument(
         "--save_intermediates_dir", type=str, default=None, help="Directory for manifest NPZ dumps (for replay)"
     )
+    parser.add_argument(
+        "--image_batch_size",
+        type=int,
+        default=500,
+        help="Images per GPU batch in the score+reconstruct passes. Reduce on 256³ to avoid OOM/IMA.",
+    )
+    parser.add_argument(
+        "--rotation_block_size",
+        type=int,
+        default=5000,
+        help="Rotations per dispatch in the score pass. Reduce on 256³ to bound transient peak working set.",
+    )
     parser.add_argument("--max_healpix_order", type=int, default=8)
     parser.add_argument("--skip_final_iteration", action="store_true", help="Skip the final combined-data Nyquist iter")
     parser.add_argument(
@@ -990,8 +1002,8 @@ def main():
         translations=None,
         disc_type="linear_interp",
         max_iter=args.max_iter,
-        image_batch_size=500,
-        rotation_block_size=5000,
+        image_batch_size=args.image_batch_size,
+        rotation_block_size=args.rotation_block_size,
         init_current_size=current_size,
         fsc_threshold=1.0 / 7.0,
         adaptive_oversampling=oversampling,

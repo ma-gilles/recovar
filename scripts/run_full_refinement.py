@@ -446,6 +446,22 @@ def main():
         help="Comma-separated list of per-iteration current_sizes from RELION "
         "(oracle mode). Example: '0,56,30,50,70,98,98,92,88,90'",
     )
+    parser.add_argument(
+        "--n_classes",
+        type=int,
+        default=1,
+        help="Number of K-class references for Class3D-style refinement. K=1 "
+        "is the auto-refine path; K>1 enables joint class×pose EM. With K>1, "
+        "either --init_class_volumes must be provided or "
+        "<data_dir>/reference_init_class00K.mrc must exist for each K.",
+    )
+    parser.add_argument(
+        "--init_class_volumes",
+        default=None,
+        help="Comma-separated paths to K initial reference volumes "
+        "(K must equal --n_classes). Defaults to "
+        "<data_dir>/reference_init_class00{1..K}.mrc when omitted.",
+    )
     args = parser.parse_args()
 
     # Verify GPU
@@ -538,12 +554,40 @@ def main():
     # at low frequencies.
     from recovar.utils.helpers import load_mrc as _load_mrc
 
-    init_mrc_path = os.path.join(args.data_dir, "reference_init.mrc")
-    init_vol_real = _load_mrc(init_mrc_path).astype(np.float32)
-    assert init_vol_real.shape == ds.volume_shape, f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
-    # Convert to centered Fourier space using the proper helper.
-    init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
-    logger.info("Initial volume loaded: shape=%s", init_vol_real.shape)
+    if args.n_classes < 1:
+        raise SystemExit(f"--n_classes must be >= 1, got {args.n_classes}")
+    if args.n_classes == 1:
+        init_mrc_path = os.path.join(args.data_dir, "reference_init.mrc")
+        init_vol_real = _load_mrc(init_mrc_path).astype(np.float32)
+        assert init_vol_real.shape == ds.volume_shape, (
+            f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
+        )
+        init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
+        logger.info("Initial volume loaded: shape=%s", init_vol_real.shape)
+    else:
+        if args.init_class_volumes:
+            class_paths = [p.strip() for p in args.init_class_volumes.split(",")]
+        else:
+            class_paths = [
+                os.path.join(args.data_dir, f"reference_init_class{k + 1:03d}.mrc") for k in range(args.n_classes)
+            ]
+        if len(class_paths) != args.n_classes:
+            raise SystemExit(f"--init_class_volumes count {len(class_paths)} != --n_classes {args.n_classes}")
+        per_class_ft = []
+        for k, p in enumerate(class_paths):
+            vol_real = _load_mrc(p).astype(np.float32)
+            assert vol_real.shape == ds.volume_shape, (
+                f"Class {k + 1} volume shape mismatch at {p}: {vol_real.shape} vs {ds.volume_shape}"
+            )
+            vol_ft = np.array(ftu.get_dft3(jnp.asarray(vol_real))).astype(np.complex64).reshape(-1)
+            per_class_ft.append(vol_ft)
+            logger.info("Class %d initial volume loaded from %s", k + 1, p)
+        # Stack to (K, V); refine_single_volume._normalize_initial_means handles the
+        # per-half broadcast.
+        init_vol_ft = np.stack(per_class_ft, axis=0)
+        # For downstream init_PS estimation, use class-1 as the representative
+        # (K-class noise/prior bootstrap currently uses a single spectrum).
+        init_vol_real = _load_mrc(class_paths[0]).astype(np.float32)
 
     # ---- Set up rotation and translation grids ----
     from recovar.em.sampling import get_rotation_grid, get_translation_grid
@@ -596,10 +640,16 @@ def main():
         float(np.max(np.asarray(initial_noise_radial))),
     )
 
-    # Compute initial signal prior from init volume (weak prior)
+    # Compute initial signal prior from init volume (weak prior). For K>1
+    # use class-1 as the representative volume; the engine derives per-class
+    # tau2 trajectories from the per-class FSCs once the loop starts.
     from recovar.reconstruction.regularization import average_over_shells
 
-    init_PS = average_over_shells(jnp.abs(jnp.asarray(init_vol_ft)) ** 2, ds.volume_shape)
+    if args.n_classes > 1:
+        init_PS_source = jnp.asarray(per_class_ft[0])
+    else:
+        init_PS_source = jnp.asarray(init_vol_ft)
+    init_PS = average_over_shells(jnp.abs(init_PS_source) ** 2, ds.volume_shape)
     from recovar import utils
 
     init_prior = utils.make_radial_image(init_PS, ds.volume_shape, extend_last_frequency=True)
@@ -679,6 +729,7 @@ def main():
         perturb_seed=args.perturb_seed,
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,
         replay_iteration_overrides=replay_iteration_overrides,
+        n_classes=args.n_classes,
     )
 
     total_time = time.time() - t_start
@@ -799,19 +850,51 @@ def main():
     # Use the canonical idiom: get_idft3 + write_mrc (handles axis transpose).
     from recovar.utils.helpers import write_mrc as _write_mrc
 
-    final_mean_ft = np.asarray(result["mean"]).reshape(ds.volume_shape)
-    final_mean_real = np.real(np.array(ftu.get_idft3(jnp.asarray(final_mean_ft)))).astype(np.float32)
-    mrc_path = os.path.join(args.output, "final_merged.mrc")
-    _write_mrc(mrc_path, final_mean_real, voxel_size=ds.voxel_size)
-    logger.info("Final merged volume saved to %s", mrc_path)
+    def _ft_to_real_volume(ft_array):
+        ft_reshape = np.asarray(ft_array).reshape(ds.volume_shape)
+        return np.real(np.array(ftu.get_idft3(jnp.asarray(ft_reshape)))).astype(np.float32)
 
-    # Save per-half volumes as MRC
-    for k in range(2):
-        half_ft = np.asarray(result["means"][k]).reshape(ds.volume_shape)
-        half_real = np.real(np.array(ftu.get_idft3(jnp.asarray(half_ft)))).astype(np.float32)
-        half_mrc_path = os.path.join(args.output, f"final_half{k + 1}.mrc")
-        _write_mrc(half_mrc_path, half_real, voxel_size=ds.voxel_size)
-        logger.info("Half-%d volume saved to %s", k + 1, half_mrc_path)
+    if args.n_classes == 1:
+        final_mean_real = _ft_to_real_volume(result["mean"])
+        _write_mrc(os.path.join(args.output, "final_merged.mrc"), final_mean_real, voxel_size=ds.voxel_size)
+        logger.info("Final merged volume saved to final_merged.mrc")
+        for k in range(2):
+            half_real = _ft_to_real_volume(result["means"][k])
+            _write_mrc(
+                os.path.join(args.output, f"final_half{k + 1}.mrc"),
+                half_real,
+                voxel_size=ds.voxel_size,
+            )
+            logger.info("Half-%d volume saved", k + 1)
+    else:
+        # K-class: result["means"][k] has shape (K, V); result["class_means"]
+        # has shape (K, V) for the merged final iter; result["mean"] is the
+        # class-weighted merged volume.
+        final_mean_real = _ft_to_real_volume(result["mean"])
+        _write_mrc(os.path.join(args.output, "final_merged.mrc"), final_mean_real, voxel_size=ds.voxel_size)
+        if result.get("class_means") is not None:
+            class_means_arr = np.asarray(result["class_means"])
+            for c in range(args.n_classes):
+                vol_real = _ft_to_real_volume(class_means_arr[c])
+                _write_mrc(
+                    os.path.join(args.output, f"final_class{c + 1:03d}.mrc"),
+                    vol_real,
+                    voxel_size=ds.voxel_size,
+                )
+            logger.info("Saved %d per-class merged final volumes", args.n_classes)
+        for k in range(2):
+            per_half_classes = np.asarray(result["means"][k])
+            assert per_half_classes.ndim == 2 and per_half_classes.shape[0] == args.n_classes, (
+                f"K-class expected per-half means shape ({args.n_classes}, V), got {per_half_classes.shape}"
+            )
+            for c in range(args.n_classes):
+                vol_real = _ft_to_real_volume(per_half_classes[c])
+                _write_mrc(
+                    os.path.join(args.output, f"final_half{k + 1}_class{c + 1:03d}.mrc"),
+                    vol_real,
+                    voxel_size=ds.voxel_size,
+                )
+            logger.info("Saved %d per-class halfmaps for half %d", args.n_classes, k + 1)
 
     # ---- Print summary ----
     print("\n" + "=" * 70)
