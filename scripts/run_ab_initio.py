@@ -199,6 +199,12 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--eager_images", action="store_true", help="Load image stack eagerly instead of lazily")
     p.add_argument("--no_iter_artifacts", action="store_true", help="Only write final native output artifacts")
     p.add_argument("--dry_run", action="store_true", help="Only print the assembled command(s)")
+    p.add_argument(
+        "--padding_factor",
+        type=int,
+        default=1,
+        help="K-class M-step BPref padding factor. Use 2 to give the M-step the trilinear-interpolation margin RELION's BackProjector expects (closer parity for c2 CC).",
+    )
     return p.parse_args(argv)
 
 
@@ -257,6 +263,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         strip_prefix=args.strip_prefix,
         translation_sigma_angstrom=args.translation_sigma_angstrom,
         write_iter_artifacts=not args.no_iter_artifacts,
+        padding_factor=int(args.padding_factor),
     )
     result = run_native_initial_model(native_opts)
     print(f"recovar InitialModel complete: {result.final_mrc}")

@@ -17,8 +17,7 @@ def _as_centered_full_volume(values: np.ndarray, ori_size: int) -> np.ndarray:
         return arr
     if arr.size != ori_size**3:
         raise ValueError(
-            f"expected a full centered Fourier volume of size {ori_size**3}, "
-            f"got shape {arr.shape}",
+            f"expected a full centered Fourier volume of size {ori_size**3}, got shape {arr.shape}",
         )
     return arr.reshape(ori_size, ori_size, ori_size)
 
@@ -51,12 +50,14 @@ def run_em_output_to_bpref(
         around DC; for full-resolution ``r_max >= N/2`` this returns the full
         half-complex volume.
     """
-    if padding_factor != 1:
-        raise NotImplementedError("InitialModel BPref conversion currently supports only padding_factor=1")
+    if padding_factor not in (1, 2):
+        raise NotImplementedError(
+            f"InitialModel BPref conversion currently supports padding_factor 1 or 2, got {padding_factor}"
+        )
     if r_max < 0:
         raise ValueError(f"r_max must be non-negative, got {r_max}")
 
-    N = int(ori_size)
+    N = int(ori_size) * int(padding_factor)
     c = N // 2
     Fy = _as_centered_full_volume(Ft_y, N)
     Fc = _as_centered_full_volume(Ft_ctf, N)
