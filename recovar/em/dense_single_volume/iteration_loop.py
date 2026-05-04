@@ -74,6 +74,7 @@ from recovar.em.sampling import (
     apply_relion_rotation_perturbation_to_eulers,
     apply_relion_translation_perturbation,
     build_local_search_grid_metadata,
+    get_oversampled_rotation_grid_from_samples,
     get_oversampled_translation_grid,
     get_relion_rotation_grid,
     get_relion_rotation_grid_eulers,
@@ -323,6 +324,77 @@ def _mean_noise_variance(noise_variance_per_half):
     return jnp.mean(
         jnp.stack([jnp.asarray(noise_k).reshape(-1) for noise_k in noise_variance_per_half], axis=0),
         axis=0,
+    )
+
+
+def _build_firstiter_cc_pass2_grids(
+    coarse_rotations,
+    coarse_translations,
+    base_translations,
+    coarse_healpix_order: int,
+    adaptive_oversampling: int,
+    translation_step_px: float,
+    random_perturbation: float,
+):
+    """Build (coarse, fine, parent_map) pose grids for K-class iter-1 firstiter_cc adaptive engine.
+
+    Mirrors run_k_class_parity.py's adaptive 2-pass grid construction (lines 832-855).
+    With ``adaptive_oversampling==0`` returns identity parent maps + coarse-as-fine
+    so the engine still goes through the firstiter_cc_pass2_only_best_coarse logic
+    but the fine grid is the coarse grid (1 child per parent). With
+    ``adaptive_oversampling>0`` builds the proper HEALPix-subdivided fine rotation
+    grid (8x children per parent at order=1) and oversampled translation grid
+    (4x children per parent at order=1), applies RELION SamplingPerturbation to
+    the fine translation grid, returns parent_maps that index from fine to
+    coarse.
+    """
+    coarse_rot_np = np.asarray(coarse_rotations, dtype=np.float32)
+    coarse_trans_np = np.asarray(coarse_translations, dtype=np.float32)
+    if int(adaptive_oversampling) <= 0:
+        n_rot = int(coarse_rot_np.shape[0])
+        n_trans = int(coarse_trans_np.shape[0])
+        rot_parent_map = np.arange(n_rot, dtype=np.int64)
+        trans_parent_map = np.arange(n_trans, dtype=np.int64)
+        return (
+            coarse_rot_np,
+            coarse_trans_np,
+            coarse_rot_np,
+            coarse_trans_np,
+            rot_parent_map,
+            trans_parent_map,
+        )
+
+    adaptive_os = int(adaptive_oversampling)
+    all_coarse_rot_indices = np.arange(int(coarse_rot_np.shape[0]), dtype=np.int64)
+    fine_rotations, rot_parent_map = get_oversampled_rotation_grid_from_samples(
+        all_coarse_rot_indices,
+        parent_nside_level=int(coarse_healpix_order),
+        oversampling_order=adaptive_os,
+        random_perturbation=float(random_perturbation),
+    )
+    fine_rotations = np.asarray(fine_rotations, dtype=np.float32)
+    rot_parent_map = np.asarray(rot_parent_map, dtype=np.int64)
+
+    fine_base_translations, trans_parent_map = get_oversampled_translation_grid(
+        np.asarray(base_translations, dtype=np.float32),
+        float(translation_step_px),
+        oversampling_order=adaptive_os,
+    )
+    fine_translation_step = float(translation_step_px) / (2**adaptive_os)
+    fine_translations = apply_relion_translation_perturbation(
+        fine_base_translations,
+        float(random_perturbation),
+        fine_translation_step,
+    ).astype(np.float32)
+    trans_parent_map = np.asarray(trans_parent_map, dtype=np.int64)
+
+    return (
+        coarse_rot_np,
+        coarse_trans_np,
+        fine_rotations,
+        fine_translations,
+        rot_parent_map,
+        trans_parent_map,
     )
 
 
@@ -2320,13 +2392,15 @@ def _run_relion_iteration_loop(
                 float(state.translation_step),
             )
             current_translations = jnp.asarray(_perturbed_translations, dtype=jnp.float32)
-        if relion_firstiter_cc_this_iter and current_translations.shape[0] > 1:
-            center_idx = int(current_translations.shape[0] // 2)
-            current_translations = current_translations[center_idx : center_idx + 1]
-            logger.info(
-                "RELION iter-1 CC emulation: restricting translation grid to the perturbed center shift %s",
-                np.asarray(current_translations[0], dtype=np.float32),
-            )
+        # NOTE: previously this branch restricted the translation grid to a single
+        # perturbed shift at iter 1 with --firstiter_cc. That was a misguided
+        # emulation; RELION's ml_optimiser.cpp:9181-9207 evaluates the FULL
+        # translation grid at iter 1 then binarizes exp_Mweight to the single
+        # best (class, pose) afterward. The restriction broke the K-class adaptive
+        # engine's trans_parent_map (oversampled fine→coarse map) because the
+        # restricted grid had length 1 while the parent_map values reached 28.
+        # run_k_class_parity (the working 0.998 single-step path) does NOT
+        # restrict translations either. Keeping the full grid here.
         local_search_order = None
         local_search_rotations = None
         local_search_rotation_eulers = None
@@ -2944,24 +3018,38 @@ def _run_relion_iteration_loop(
                         # soft posteriors, then binarizes only the M-step weights,
                         # which has subtle differences vs RELION's pass2-masked CC.
                         if relion_firstiter_cc_this_iter:
+                            adaptive_os_local = int(state.adaptive_oversampling)
                             logger.info(
-                                "STRICT-PARITY: routing iter-1 K-class through run_dense_k_class_em_adaptive with firstiter_cc_pass2_only_best_coarse=True"
+                                "STRICT-PARITY: routing iter-1 K-class through run_dense_k_class_em_adaptive (oversampling=%d)",
+                                adaptive_os_local,
                             )
-                            n_rot_local = int(effective_rotations.shape[0])
-                            n_trans_local = int(current_translations.shape[0])
-                            _identity_rot_map = np.arange(n_rot_local, dtype=np.int64)
-                            _identity_trans_map = np.arange(n_trans_local, dtype=np.int64)
+                            (
+                                _coarse_rot_2954,
+                                _coarse_trans_2954,
+                                _fine_rot_2954,
+                                _fine_trans_2954,
+                                _rot_pmap_2954,
+                                _trans_pmap_2954,
+                            ) = _build_firstiter_cc_pass2_grids(
+                                effective_rotations,
+                                current_translations,
+                                base_translations,
+                                int(current_healpix_order),
+                                adaptive_os_local,
+                                float(state.translation_step),
+                                random_perturbation,
+                            )
                             k_class_result = run_dense_k_class_em_adaptive(
                                 experiment_datasets[k],
                                 means[k],
                                 mean_variance,
                                 noise_variance_k,
-                                effective_rotations,
-                                current_translations,
-                                effective_rotations,
-                                current_translations,
-                                _identity_rot_map,
-                                _identity_trans_map,
+                                _coarse_rot_2954,
+                                _coarse_trans_2954,
+                                _fine_rot_2954,
+                                _fine_trans_2954,
+                                _rot_pmap_2954,
+                                _trans_pmap_2954,
                                 disc_type,
                                 class_log_priors=class_log_priors,
                                 accumulate_noise=True,
@@ -3151,43 +3239,130 @@ def _run_relion_iteration_loop(
                             raise NotImplementedError(
                                 "K-class adaptive sparse pass2 does not emit profile summaries yet"
                             )
-                        k_class_result = _run_k_class_sparse_pass2_local_search_iteration(
-                            experiment_datasets[k],
-                            means[k],
-                            mean_variance,
-                            noise_variance_k,
-                            current_translations,
-                            sig_sample_indices_by_class,
-                            current_nside_level,
-                            disc_type,
-                            class_log_priors=class_log_priors,
-                            oversampling_order=state.adaptive_oversampling,
-                            current_size=cs_for_engine,
-                            translation_step=state.translation_step,
-                            rotation_log_prior=(
-                                class_rotation_log_prior_k
-                                if class_rotation_log_prior_k is not None
-                                else rotation_log_prior_k
-                            ),
-                            translation_log_prior=translation_log_prior,
-                            score_with_masked_images=True,
-                            accumulate_noise=True,
-                            half_spectrum_scoring=True,
-                            projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                            reconstruction_padding_factor=PADDING_FACTOR,
-                            image_corrections=relion_half_inputs.image_corrections[k],
-                            scale_corrections=relion_half_inputs.scale_corrections[k],
-                            image_pre_shifts=translation_search_base,
-                            use_float64_scoring=False,
-                            do_gridding_correction=True,
-                            square_window=RELION_FOURIER_WINDOW_SQUARE,
-                            random_perturbation=random_perturbation,
-                            image_batch_size=image_batch_size,
-                            rotation_block_size=rotation_block_size,
-                            adaptive_fraction=adaptive_fraction,
-                            debug_iteration=iteration,
-                            translation_prior_centers=trans_prior_center_for_engine,
-                        )
+                        # STRICT-PARITY: route ALL K-class iters through
+                        # run_dense_k_class_em_adaptive instead of the sparse pass-2
+                        # local-search path. The sparse path
+                        # (_run_k_class_sparse_pass2_local_search_iteration via
+                        # run_local_k_class_em) has a known per-class accumulator
+                        # asymmetry at iter >= 2 (per project_phase3_sparse_pass2_diag
+                        # memory: BP under-scales by 1-17% per shell). The
+                        # asymmetry collapses class 0 and class 3 of K=4 cold-start
+                        # to corr 0.31 / 0.58 at iter 3 even when iter 1 lands at 0.97.
+                        # iter 1 with --firstiter_cc adds firstiter_cc_pass2_only_best_coarse=True;
+                        # iter >= 2 uses the standard adaptive 2-pass without that flag.
+                        if k_class_enabled:
+                            adaptive_os_local = int(state.adaptive_oversampling)
+                            _firstiter_route = bool(relion_firstiter_cc_this_iter)
+                            logger.info(
+                                "STRICT-PARITY (sparse-pass2 site): routing iter-%d K-class through run_dense_k_class_em_adaptive (oversampling=%d, firstiter_cc=%s)",
+                                iteration + 1,
+                                adaptive_os_local,
+                                _firstiter_route,
+                            )
+                            (
+                                _coarse_rot_3240,
+                                _coarse_trans_3240,
+                                _fine_rot_3240,
+                                _fine_trans_3240,
+                                _rot_pmap_3240,
+                                _trans_pmap_3240,
+                            ) = _build_firstiter_cc_pass2_grids(
+                                effective_rotations,
+                                current_translations,
+                                base_translations,
+                                int(current_healpix_order),
+                                adaptive_os_local,
+                                float(state.translation_step),
+                                random_perturbation,
+                            )
+                            adaptive_kwargs = dict(
+                                class_log_priors=class_log_priors,
+                                accumulate_noise=True,
+                                coarse_current_size=cs_for_engine,
+                                fine_current_size=cs_for_engine,
+                                current_size=cs_for_engine,
+                                translation_log_prior=translation_log_prior,
+                                score_with_masked_images=True,
+                                half_spectrum_scoring=True,
+                                projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                                reconstruction_padding_factor=PADDING_FACTOR,
+                                image_corrections=relion_half_inputs.image_corrections[k],
+                                scale_corrections=relion_half_inputs.scale_corrections[k],
+                                image_pre_shifts=translation_search_base,
+                                use_float64_scoring=False,
+                                do_gridding_correction=True,
+                                square_window=RELION_FOURIER_WINDOW_SQUARE,
+                                image_batch_size=image_batch_size,
+                                rotation_block_size=rotation_block_size,
+                                adaptive_fraction=adaptive_fraction,
+                                translation_prior_centers=trans_prior_center_for_engine,
+                            )
+                            # K-class direction prior: pass per-class shape (K, n_rot)
+                            # via class_rotation_log_prior (the engine's
+                            # _dense_engine_kwargs_for_class extracts the
+                            # right per-class slice). Pass single shared
+                            # rotation_log_prior only if no per-class prior available.
+                            if class_rotation_log_prior_k is not None:
+                                adaptive_kwargs["class_rotation_log_prior"] = class_rotation_log_prior_k
+                            elif rotation_log_prior_k is not None:
+                                adaptive_kwargs["rotation_log_prior"] = rotation_log_prior_k
+                            if _firstiter_route:
+                                adaptive_kwargs["firstiter_cc_pass2_only_best_coarse"] = True
+                                adaptive_kwargs["skip_significance_pruning"] = True
+                                adaptive_kwargs["relion_firstiter_score_mode"] = "normalized_cc"
+                                adaptive_kwargs["relion_firstiter_winner_take_all"] = True
+                            k_class_result = run_dense_k_class_em_adaptive(
+                                experiment_datasets[k],
+                                means[k],
+                                mean_variance,
+                                noise_variance_k,
+                                _coarse_rot_3240,
+                                _coarse_trans_3240,
+                                _fine_rot_3240,
+                                _fine_trans_3240,
+                                _rot_pmap_3240,
+                                _trans_pmap_3240,
+                                disc_type,
+                                **adaptive_kwargs,
+                            )
+                        else:
+                            k_class_result = _run_k_class_sparse_pass2_local_search_iteration(
+                                experiment_datasets[k],
+                                means[k],
+                                mean_variance,
+                                noise_variance_k,
+                                current_translations,
+                                sig_sample_indices_by_class,
+                                current_nside_level,
+                                disc_type,
+                                class_log_priors=class_log_priors,
+                                oversampling_order=state.adaptive_oversampling,
+                                current_size=cs_for_engine,
+                                translation_step=state.translation_step,
+                                rotation_log_prior=(
+                                    class_rotation_log_prior_k
+                                    if class_rotation_log_prior_k is not None
+                                    else rotation_log_prior_k
+                                ),
+                                translation_log_prior=translation_log_prior,
+                                score_with_masked_images=True,
+                                accumulate_noise=True,
+                                half_spectrum_scoring=True,
+                                projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                                reconstruction_padding_factor=PADDING_FACTOR,
+                                image_corrections=relion_half_inputs.image_corrections[k],
+                                scale_corrections=relion_half_inputs.scale_corrections[k],
+                                image_pre_shifts=translation_search_base,
+                                use_float64_scoring=False,
+                                do_gridding_correction=True,
+                                square_window=RELION_FOURIER_WINDOW_SQUARE,
+                                random_perturbation=random_perturbation,
+                                image_batch_size=image_batch_size,
+                                rotation_block_size=rotation_block_size,
+                                adaptive_fraction=adaptive_fraction,
+                                debug_iteration=iteration,
+                                translation_prior_centers=trans_prior_center_for_engine,
+                            )
                         Ft_y_k = k_class_result.Ft_y
                         Ft_ctf_k = k_class_result.Ft_ctf
                         ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
@@ -3199,15 +3374,33 @@ def _run_relion_iteration_loop(
                             k_class_result.class_posterior_sums,
                             dtype=np.float64,
                         )
-                        class_rotation_posterior_per_half[k] = np.stack(
-                            [
-                                np.asarray(stats.rotation_posterior_sums, dtype=np.float64)
-                                for stats in k_class_result.per_class_stats
-                            ],
-                            axis=0,
-                        )
-                        best_rots_k = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
-                        best_trans_k = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
+                        # Collapse fine-grid rotation_posterior_sums to coarse-grid
+                        # via rot_parent_map (sum children -> parent). Downstream
+                        # direction-prior collapse at line 4324 expects coarse
+                        # (n_coarse,) shape.
+                        _per_class_rot_post_coarse = []
+                        n_coarse_local = int(_coarse_rot_3240.shape[0])
+                        for stats in k_class_result.per_class_stats:
+                            fine_post = np.asarray(stats.rotation_posterior_sums, dtype=np.float64)
+                            if fine_post.shape[0] == n_coarse_local:
+                                _per_class_rot_post_coarse.append(fine_post)
+                            else:
+                                # Fine-grid posterior; accumulate to coarse parents.
+                                coarse_post = np.zeros(n_coarse_local, dtype=np.float64)
+                                np.add.at(coarse_post, np.asarray(_rot_pmap_3240, dtype=np.int64), fine_post)
+                                _per_class_rot_post_coarse.append(coarse_post)
+                        class_rotation_posterior_per_half[k] = np.stack(_per_class_rot_post_coarse, axis=0)
+                        # Strict-parity adaptive engine path may not populate
+                        # best_pose_rotations (return_best_pose_details=False internally);
+                        # fall back to identity placeholders since iter-1 doesn't
+                        # need pose tracking for convergence (no previous iter).
+                        n_images_local = int(experiment_datasets[k].n_units)
+                        if k_class_result.best_pose_rotations is None:
+                            best_rots_k = np.tile(np.eye(3, dtype=np.float32)[None, :, :], (n_images_local, 1, 1))
+                            best_trans_k = np.zeros((n_images_local, 2), dtype=np.float32)
+                        else:
+                            best_rots_k = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
+                            best_trans_k = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
                     else:
                         sparse_outputs = _run_sparse_pass2_local_search_iteration(
                             experiment_datasets[k],
@@ -3636,24 +3829,38 @@ def _run_relion_iteration_loop(
                     # the adaptive_oversampling=0 + K=4 + --firstiter_cc cold-start
                     # lands here.
                     if relion_firstiter_cc_this_iter:
+                        adaptive_os_local = int(state.adaptive_oversampling)
                         logger.info(
-                            "STRICT-PARITY (non-adaptive site): routing iter-1 K-class through run_dense_k_class_em_adaptive"
+                            "STRICT-PARITY (non-adaptive site): routing iter-1 K-class through run_dense_k_class_em_adaptive (oversampling=%d)",
+                            adaptive_os_local,
                         )
-                        n_rot_local = int(effective_rotations.shape[0])
-                        n_trans_local = int(current_translations.shape[0])
-                        _identity_rot_map = np.arange(n_rot_local, dtype=np.int64)
-                        _identity_trans_map = np.arange(n_trans_local, dtype=np.int64)
+                        (
+                            _coarse_rot_3645,
+                            _coarse_trans_3645,
+                            _fine_rot_3645,
+                            _fine_trans_3645,
+                            _rot_pmap_3645,
+                            _trans_pmap_3645,
+                        ) = _build_firstiter_cc_pass2_grids(
+                            effective_rotations,
+                            current_translations,
+                            base_translations,
+                            int(current_healpix_order),
+                            adaptive_os_local,
+                            float(state.translation_step),
+                            random_perturbation,
+                        )
                         k_class_result = run_dense_k_class_em_adaptive(
                             experiment_datasets[k],
                             means[k],
                             mean_variance,
                             noise_variance_k,
-                            effective_rotations,
-                            current_translations,
-                            effective_rotations,
-                            current_translations,
-                            _identity_rot_map,
-                            _identity_trans_map,
+                            _coarse_rot_3645,
+                            _coarse_trans_3645,
+                            _fine_rot_3645,
+                            _fine_trans_3645,
+                            _rot_pmap_3645,
+                            _trans_pmap_3645,
                             disc_type,
                             class_log_priors=class_log_priors,
                             accumulate_noise=True,
