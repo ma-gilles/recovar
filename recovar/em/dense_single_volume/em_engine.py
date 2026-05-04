@@ -1741,7 +1741,13 @@ def run_em(
                 # pmax matches RELION's rlnMaxValueProbDistribution=1.0 at iter 1.
                 pmax = jnp.ones_like(best_score)
             else:
-                pmax = jnp.exp(best_score - log_Z)
+                # Guard against -inf - (-inf) = NaN when an entire image had
+                # every pose masked out (e.g., K-class adaptive 2-pass for
+                # a losing class). Map the indeterminate form to 0, the
+                # mathematically correct limit when both numerator and
+                # denominator collapse to "no valid pose" together.
+                _both_neg_inf = jnp.isneginf(best_score) & jnp.isneginf(log_Z)
+                pmax = jnp.where(_both_neg_inf, 0.0, jnp.exp(best_score - log_Z))
             # Cast the per-image stats sums into the destination buffer dtype
             # (float64 if the buffer was allocated as float64) so the small
             # CC-mode delta between best_score values survives the addition of

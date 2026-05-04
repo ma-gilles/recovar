@@ -597,6 +597,21 @@ def main() -> None:
         default=0.999,
         help="Posterior mass retained when selecting significant class x pose samples.",
     )
+    parser.add_argument(
+        "--adaptive-2pass",
+        action="store_true",
+        help=(
+            "Run RELION-style adaptive 2-pass: pass-1 coarse significance pruning + "
+            "pass-2 oversampled fine grid evaluation with the pass-1 mask broadcast "
+            "to fine children. Mirrors ml_optimiser.cpp::expectationOneParticle line 5022."
+        ),
+    )
+    parser.add_argument(
+        "--adaptive-oversampling",
+        type=int,
+        default=1,
+        help="HEALPix subdivision and translation subdivision passes used by --adaptive-2pass.",
+    )
     args = parser.parse_args()
 
     import jax
@@ -616,7 +631,9 @@ def main() -> None:
     from recovar.em.dense_single_volume.helpers.oversampling import compute_pass2_stats_sparse
     from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
     from recovar.em.dense_single_volume.iteration_loop import RELION_MINRES_MAP, _reconstruct_volume_eager
-    from recovar.em.dense_single_volume.k_class import run_dense_k_class_em
+    from recovar.em.dense_single_volume.k_class import (
+        run_dense_k_class_em,
+    )
     from recovar.em.sampling import (
         apply_relion_rotation_perturbation_to_eulers,
         apply_relion_translation_perturbation,
@@ -747,19 +764,11 @@ def main() -> None:
     )
 
     t0 = time.time()
-    result = run_dense_k_class_em(
-        ds,
-        means,
-        mean_variance_prev,
-        noise_variance,
-        rotations.astype(np.float32),
-        translations.astype(np.float32),
-        args.disc_type,
+    common_em_kwargs = dict(
         class_log_priors=np.zeros(n_classes, dtype=np.float32),
         accumulate_noise=False,
         image_batch_size=args.image_batch_size,
         rotation_block_size=args.rotation_block_size,
-        current_size=current_size,
         class_rotation_log_prior=class_rotation_log_prior,
         translation_log_prior=translation_log_prior,
         score_with_masked_images=True,
@@ -781,6 +790,92 @@ def main() -> None:
         # getAllSquaredDifferences).
         relion_firstiter_score_mode=("normalized_cc" if args.winner_take_all_mstep else "gaussian"),
     )
+    if args.adaptive_2pass:
+        # Build pass-2 fine grid (oversampled) using RELION-parity HEALPix children.
+        # Mirrors ml_optimiser.cpp::expectationOneParticle line 5022 onward where
+        # nr_sampling_passes=2 and exp_current_oversampling=adaptive_oversampling
+        # for pass-2 only. Recovar evaluates the FULL fine grid but masks out
+        # fine poses whose coarse parent did not survive pass-1's
+        # adaptive_fraction pruning.
+        from recovar.em.dense_single_volume.k_class import run_dense_k_class_em_adaptive
+        from recovar.em.sampling import (
+            get_oversampled_rotation_grid_from_samples,
+            get_oversampled_translation_grid,
+        )
+
+        adaptive_os = int(args.adaptive_oversampling)
+        all_coarse_rot_indices = np.arange(int(rotations.shape[0]), dtype=np.int64)
+        fine_rotations, rot_parent_map = get_oversampled_rotation_grid_from_samples(
+            all_coarse_rot_indices,
+            parent_nside_level=int(healpix_order),
+            oversampling_order=adaptive_os,
+            random_perturbation=random_perturbation,
+        )
+        fine_rotations = np.asarray(fine_rotations, dtype=np.float32)
+        rot_parent_map = np.asarray(rot_parent_map, dtype=np.int64)
+        # Translations: oversample base_translations (pre-perturbation) and
+        # apply RELION's per-iteration perturbation to the fine grid the same
+        # way as the coarse path.
+        fine_base_translations, trans_parent_map = get_oversampled_translation_grid(
+            base_translations,
+            offset_step_px,
+            oversampling_order=adaptive_os,
+        )
+        fine_translation_step = offset_step_px / (2**adaptive_os)
+        fine_translations = apply_relion_translation_perturbation(
+            fine_base_translations,
+            random_perturbation,
+            fine_translation_step,
+        ).astype(np.float32)
+        trans_parent_map = np.asarray(trans_parent_map, dtype=np.int64)
+        print(
+            "  adaptive 2-pass: fine grid "
+            f"rotations={fine_rotations.shape[0]} (parents {rotations.shape[0]}, "
+            f"max children/parent={int(np.bincount(rot_parent_map).max())}), "
+            f"translations={fine_translations.shape[0]} (parents {translations.shape[0]}, "
+            f"max children/parent={int(np.bincount(trans_parent_map).max())}), "
+            f"adaptive_fraction={args.significance_adaptive_fraction:.4f}"
+        )
+        # When --winner-take-all-mstep is on (RELION's --firstiter_cc behavior at
+        # iter 1), pass-1 binarizes weights so exp_Mcoarse_significant has a
+        # single True entry per particle (the global best coarse pose). Pass-2
+        # then only evaluates that pose's children. The
+        # ``firstiter_cc_pass2_only_best_coarse`` flag wires this: pass-1 picks
+        # the best coarse pose, pass-2 mask = True only at its 8 rot × 4 trans
+        # children. RELION ml_optimiser.cpp:9181-9207 binarization → 9628
+        # significant flag.
+        firstiter_cc = bool(args.winner_take_all_mstep)
+        result = run_dense_k_class_em_adaptive(
+            ds,
+            means,
+            mean_variance_prev,
+            noise_variance,
+            rotations.astype(np.float32),
+            translations.astype(np.float32),
+            fine_rotations,
+            fine_translations,
+            rot_parent_map,
+            trans_parent_map,
+            args.disc_type,
+            adaptive_fraction=args.significance_adaptive_fraction,
+            coarse_current_size=current_size,
+            fine_current_size=current_size,
+            current_size=current_size,
+            firstiter_cc_pass2_only_best_coarse=firstiter_cc,
+            **common_em_kwargs,
+        )
+    else:
+        result = run_dense_k_class_em(
+            ds,
+            means,
+            mean_variance_prev,
+            noise_variance,
+            rotations.astype(np.float32),
+            translations.astype(np.float32),
+            args.disc_type,
+            current_size=current_size,
+            **common_em_kwargs,
+        )
     elapsed_s = time.time() - t0
     print(f"  RECOVAR K-class E/M step completed in {elapsed_s:.1f}s")
 

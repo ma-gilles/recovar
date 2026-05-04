@@ -39,9 +39,14 @@ class KClassEMResult(NamedTuple):
 
 def _logsumexp_np(values: np.ndarray, axis: int) -> np.ndarray:
     max_value = np.max(values, axis=axis, keepdims=True)
-    return np.squeeze(max_value, axis=axis) + np.log(
-        np.sum(np.exp(values - max_value), axis=axis),
-    )
+    # Guard against the all-(-inf) case which would otherwise propagate NaN
+    # through ``values - max_value`` (since -inf - (-inf) = NaN).
+    safe_max = np.where(np.isfinite(max_value), max_value, np.zeros_like(max_value))
+    diff = np.where(np.isfinite(values), values - safe_max, -np.inf)
+    sum_exp = np.sum(np.exp(diff), axis=axis)
+    with np.errstate(divide="ignore"):
+        log_sum = np.log(sum_exp)
+    return np.squeeze(max_value, axis=axis) + log_sum
 
 
 def _class_log_priors(n_classes: int, class_log_priors) -> np.ndarray:
@@ -90,6 +95,19 @@ def _dense_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_clas
             n_classes,
             "class_rotation_log_prior",
         )
+    class_rotation_translation_mask = kwargs.pop("class_rotation_translation_mask", None)
+    if class_rotation_translation_mask is not None:
+        if kwargs.get("rotation_translation_mask") is not None:
+            raise ValueError(
+                "Provide only one of rotation_translation_mask or class_rotation_translation_mask",
+            )
+        mask_array = np.asarray(class_rotation_translation_mask)
+        if mask_array.ndim < 3 or int(mask_array.shape[0]) != n_classes:
+            raise ValueError(
+                "class_rotation_translation_mask must have leading class axis of length "
+                f"{n_classes}, got {mask_array.shape}",
+            )
+        kwargs["rotation_translation_mask"] = mask_array[class_index]
     return kwargs
 
 
@@ -249,7 +267,17 @@ def _assemble_result(
     per_class_best_pose_rotation_ids=None,
 ) -> KClassEMResult:
     global_log_evidence = _logsumexp_np(class_log_evidence, axis=0).astype(np.float64)
-    class_responsibilities = np.exp(class_log_evidence - global_log_evidence[None, :])
+    # Guard against -inf - (-inf) = NaN when an entire (image, class) had all
+    # poses masked out (e.g., RELION firstiter_cc_pass2_only_best_coarse where
+    # the losing class is fully excluded by the significance mask). Treat
+    # those entries as zero responsibility, matching RELION's binarized
+    # weight pattern.
+    diff = np.where(
+        np.isfinite(global_log_evidence)[None, :] & np.isfinite(class_log_evidence),
+        class_log_evidence - global_log_evidence[None, :],
+        -np.inf,
+    )
+    class_responsibilities = np.exp(diff)
     class_posterior_sums = np.sum(class_responsibilities, axis=1)
 
     best_scores = np.stack(
@@ -456,16 +484,14 @@ def run_local_k_class_em(
         class_log_evidence_np = np.asarray(class_log_evidence, dtype=np.float64)
         if class_log_evidence_np.shape != (n_classes, n_images):
             raise ValueError(
-                "class_log_evidence must have shape "
-                f"({n_classes}, {n_images}), got {class_log_evidence_np.shape}",
+                f"class_log_evidence must have shape ({n_classes}, {n_images}), got {class_log_evidence_np.shape}",
             )
     normalization_log_evidence_np = None
     if normalization_log_evidence is not None:
         normalization_log_evidence_np = np.asarray(normalization_log_evidence, dtype=np.float64)
         if normalization_log_evidence_np.shape != (n_images,):
             raise ValueError(
-                f"normalization_log_evidence must have shape ({n_images},), "
-                f"got {normalization_log_evidence_np.shape}",
+                f"normalization_log_evidence must have shape ({n_images},), got {normalization_log_evidence_np.shape}",
             )
     if class_log_evidence_np is not None:
         if normalization_log_evidence_np is None:
@@ -580,3 +606,367 @@ def run_local_k_class_em(
         per_class_best_pose_translations=per_class_best_pose_translations,
         per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
     )
+
+
+def _build_fine_grid_significance_mask(
+    significant_sample_indices_per_class,
+    n_rot_coarse: int,
+    n_trans_coarse: int,
+    n_rot_fine: int,
+    n_trans_fine: int,
+    rot_oversampling_factor: int,
+    trans_oversampling_factor: int,
+    rot_parent_map: np.ndarray,
+    trans_parent_map: np.ndarray,
+    n_images: int,
+) -> np.ndarray:
+    """Expand pass-1 coarse significance to a per-image fine-grid mask.
+
+    For each image, ``significant_sample_indices_per_class[i]`` holds the
+    flat coarse pose indices ``r_coarse * n_trans_coarse + t_coarse`` that
+    survived adaptive_fraction pruning at the coarse grid (or ``None``
+    when every coarse pose was significant).
+
+    Each coarse pose ``(r_coarse, t_coarse)`` expands to
+    ``rot_oversampling_factor * trans_oversampling_factor`` fine poses,
+    where the parent of fine rotation ``r_fine`` is
+    ``rot_parent_map[r_fine]`` and likewise for translations.
+
+    Returns
+    -------
+    mask : np.ndarray of bool, shape (n_images, n_rot_fine, n_trans_fine)
+        True at fine pose positions whose coarse parent was significant.
+
+    Mirrors RELION's pass-2 significance mask in
+    ``ml_optimiser.cpp::expectationOneParticle`` (line 5022 onward), where
+    only oversampled children of pass-1 significant coarse samples are
+    evaluated in pass-2.
+    """
+    if rot_parent_map.shape != (n_rot_fine,):
+        raise ValueError(
+            f"rot_parent_map must have shape ({n_rot_fine},), got {rot_parent_map.shape}",
+        )
+    if trans_parent_map.shape != (n_trans_fine,):
+        raise ValueError(
+            f"trans_parent_map must have shape ({n_trans_fine},), got {trans_parent_map.shape}",
+        )
+
+    mask = np.zeros((n_images, n_rot_fine, n_trans_fine), dtype=bool)
+    for image_index in range(n_images):
+        sig = significant_sample_indices_per_class[image_index]
+        if sig is None:
+            mask[image_index] = True
+            continue
+        sig = np.asarray(sig, dtype=np.int64)
+        if sig.size == 0:
+            continue
+        coarse_rot_idx = sig // n_trans_coarse
+        coarse_trans_idx = sig % n_trans_coarse
+        coarse_pair = np.zeros((n_rot_coarse, n_trans_coarse), dtype=bool)
+        coarse_pair[coarse_rot_idx, coarse_trans_idx] = True
+        # Broadcast parent significance to the fine grid.
+        mask[image_index] = coarse_pair[rot_parent_map][:, trans_parent_map]
+    return mask
+
+
+def run_dense_k_class_em_adaptive(
+    experiment_dataset,
+    means,
+    mean_variance,
+    noise_variance,
+    coarse_rotations,
+    coarse_translations,
+    fine_rotations,
+    fine_translations,
+    rot_parent_map,
+    trans_parent_map,
+    disc_type: str,
+    *,
+    class_log_priors=None,
+    accumulate_noise: bool = False,
+    adaptive_fraction: float = 0.999,
+    max_significants: int = -1,
+    significance_image_batch_size: int | None = None,
+    significance_rotation_block_size: int | None = None,
+    coarse_current_size: int | None = None,
+    fine_current_size: int | None = None,
+    coarse_translation_log_prior=None,
+    coarse_rotation_log_prior=None,
+    coarse_class_rotation_log_prior=None,
+    skip_significance_pruning: bool = False,
+    firstiter_cc_pass2_only_best_coarse: bool = False,
+    **engine_kwargs,
+) -> KClassEMResult:
+    """K-class adaptive 2-pass EM: coarse pass-1 significance + fine pass-2 masked.
+
+    Mirrors RELION's adaptive 2-pass logic in
+    ``ml_optimiser.cpp::expectationOneParticle`` (line 5022).  Pass-1 evaluates
+    the coarse grid and produces a per-particle significance mask retaining
+    ``adaptive_fraction`` of the posterior mass.  Pass-2 evaluates the fine
+    (oversampled) grid but masks out fine poses whose coarse parent was not
+    significant, recovering the same pose marginal as RELION's true 2-pass
+    while keeping JIT compilation simple.
+
+    Parameters
+    ----------
+    coarse_rotations, coarse_translations : np.ndarray
+        Pass-1 coarse pose grids.
+    fine_rotations, fine_translations : np.ndarray
+        Pass-2 fine (oversampled) pose grids.
+    rot_parent_map : np.ndarray of int, shape (n_rot_fine,)
+        Index into ``coarse_rotations`` for each fine rotation.
+    trans_parent_map : np.ndarray of int, shape (n_trans_fine,)
+        Index into ``coarse_translations`` for each fine translation.
+    coarse_current_size, fine_current_size : int or None
+        Per-pass Fourier window radii.  Pass-1 typically uses a smaller
+        ``coarse_current_size`` per RELION's ``image_coarse_size`` semantics.
+        When ``None``, both passes use the same ``current_size``.
+    coarse_*_log_prior : optional priors used only at pass-1.  ``engine_kwargs``
+        carries the priors used at pass-2.
+    skip_significance_pruning : bool
+        When True, skip the pass-1 coarse significance computation entirely
+        and evaluate the full fine grid with no mask.  This matches RELION's
+        ``--firstiter_cc`` + adaptive_oversampling behavior at iter 1
+        (ml_optimiser.cpp:9181-9207): RELION still runs the 2-pass loop but
+        binarizes weights to a single best pose post-pass-2, so pass-1
+        significance pruning is a no-op for that iteration.
+    """
+    # Lazy import to avoid the formatter stripping a top-level name that is
+    # only referenced inside this function.
+    from .helpers.significance import _compute_k_class_significance_batched
+
+    means_array = _as_class_means(means)
+    n_classes = int(means_array.shape[0])
+    log_priors = _class_log_priors(n_classes, class_log_priors)
+
+    coarse_rotations_np = np.asarray(coarse_rotations, dtype=np.float32)
+    coarse_translations_np = np.asarray(coarse_translations, dtype=np.float32)
+    fine_rotations_np = np.asarray(fine_rotations, dtype=np.float32)
+    fine_translations_np = np.asarray(fine_translations, dtype=np.float32)
+    rot_parent_map_np = np.asarray(rot_parent_map, dtype=np.int64)
+    trans_parent_map_np = np.asarray(trans_parent_map, dtype=np.int64)
+
+    n_rot_coarse = int(coarse_rotations_np.shape[0])
+    n_trans_coarse = int(coarse_translations_np.shape[0])
+    n_rot_fine = int(fine_rotations_np.shape[0])
+    n_trans_fine = int(fine_translations_np.shape[0])
+
+    if rot_parent_map_np.shape != (n_rot_fine,):
+        raise ValueError(
+            f"rot_parent_map must have shape ({n_rot_fine},), got {rot_parent_map_np.shape}",
+        )
+    if trans_parent_map_np.shape != (n_trans_fine,):
+        raise ValueError(
+            f"trans_parent_map must have shape ({n_trans_fine},), got {trans_parent_map_np.shape}",
+        )
+    if int(rot_parent_map_np.max(initial=-1)) >= n_rot_coarse:
+        raise ValueError("rot_parent_map values must be < n_rot_coarse")
+    if int(trans_parent_map_np.max(initial=-1)) >= n_trans_coarse:
+        raise ValueError("trans_parent_map values must be < n_trans_coarse")
+    rot_oversampling = int(np.bincount(rot_parent_map_np, minlength=n_rot_coarse).max())
+    trans_oversampling = int(np.bincount(trans_parent_map_np, minlength=n_trans_coarse).max())
+
+    n_images = _dataset_image_count(experiment_dataset)
+    image_batch_size = int(engine_kwargs.get("image_batch_size", 500))
+    rotation_block_size = int(engine_kwargs.get("rotation_block_size", 5000))
+    sig_ibs = int(significance_image_batch_size or image_batch_size)
+    sig_rbs = int(significance_rotation_block_size or rotation_block_size)
+
+    # Pass-1 priors fall back to pass-2 priors when not supplied separately.
+    if coarse_translation_log_prior is None:
+        coarse_translation_log_prior = engine_kwargs.get("translation_log_prior")
+    if coarse_rotation_log_prior is None:
+        coarse_rotation_log_prior = engine_kwargs.get("rotation_log_prior")
+    if coarse_class_rotation_log_prior is None:
+        coarse_class_rotation_log_prior = engine_kwargs.get("class_rotation_log_prior")
+
+    pass1_rotation_prior = (
+        coarse_class_rotation_log_prior if coarse_class_rotation_log_prior is not None else coarse_rotation_log_prior
+    )
+
+    coarse_class_assignments_for_override = None
+    if firstiter_cc_pass2_only_best_coarse:
+        # RELION ml_optimiser.cpp:9181-9207: at iter 1 with --firstiter_cc,
+        # pass-1 binarizes exp_Mweight to a single best (class, pose). Pass-2
+        # then refines only that pose's children. With recovar's K-class
+        # winner_take_all M-step (each class accumulates one-hot weight at
+        # its own per-class best), the cleanest mirror is: for each class
+        # independently, restrict pass-2 to children of class k's per-class
+        # coarse-best pose. This matches the per-class M-step contribution
+        # pattern recovar's existing K-class baseline already uses, while
+        # giving each class the benefit of fine-grid refinement around its
+        # own coarse winner.
+        coarse_probe_kwargs = dict(engine_kwargs)
+        coarse_probe_kwargs.pop("rotation_translation_mask", None)
+        coarse_probe_kwargs.pop("class_rotation_translation_mask", None)
+        coarse_probe_kwargs["relion_firstiter_score_mode"] = "normalized_cc"
+        coarse_probe_kwargs["relion_firstiter_winner_take_all"] = True
+        coarse_probe_kwargs["current_size"] = (
+            coarse_current_size if coarse_current_size is not None else fine_current_size
+        )
+        coarse_result = run_dense_k_class_em(
+            experiment_dataset,
+            means_array,
+            mean_variance,
+            noise_variance,
+            coarse_rotations_np,
+            coarse_translations_np,
+            disc_type,
+            class_log_priors=class_log_priors,
+            accumulate_noise=False,
+            **coarse_probe_kwargs,
+        )
+        # ``per_class_hard_assignments[k, i]`` is class k's best coarse pose
+        # (independently scored per class). For each class, restrict pass-2
+        # to that single pose's children.
+        coarse_per_class_assn = np.asarray(coarse_result.per_class_hard_assignments, dtype=np.int64)
+        # Preserve the K-class assignment from the coarse pass: RELION
+        # decides class membership at the coarse grid binarization step
+        # (the fine refinement only touches the single winning class's pose),
+        # so the per-particle class assignment should reflect coarse argmax,
+        # not per-class fine-best argmax.
+        coarse_class_assignments_for_override = np.asarray(
+            coarse_result.class_assignments,
+            dtype=np.int32,
+        )
+        sig_sample_indices_by_class = [
+            [np.array([int(coarse_per_class_assn[k, i])], dtype=np.int32) for i in range(n_images)]
+            for k in range(n_classes)
+        ]
+    elif skip_significance_pruning:
+        # Trivial mask: every fine pose is significant (None means all-True).
+        sig_sample_indices_by_class = [[None] * n_images for _ in range(n_classes)]
+    else:
+        sig_kwargs = dict(
+            adaptive_fraction=adaptive_fraction,
+            max_significants=max_significants,
+            image_batch_size=sig_ibs,
+            rotation_block_size=sig_rbs,
+            current_size=(coarse_current_size if coarse_current_size is not None else fine_current_size),
+            score_with_masked_images=engine_kwargs.get("score_with_masked_images", True),
+            rotation_log_prior=pass1_rotation_prior,
+            translation_log_prior=coarse_translation_log_prior,
+            image_corrections=engine_kwargs.get("image_corrections"),
+            scale_corrections=engine_kwargs.get("scale_corrections"),
+            image_pre_shifts=engine_kwargs.get("image_pre_shifts"),
+            half_spectrum_scoring=engine_kwargs.get("half_spectrum_scoring", False),
+            projection_padding_factor=engine_kwargs.get("projection_padding_factor", 1),
+            do_gridding_correction=engine_kwargs.get("do_gridding_correction", False),
+            square_window=engine_kwargs.get("square_window", False),
+            use_float64_scoring=engine_kwargs.get("use_float64_scoring", False),
+        )
+
+        (
+            _sig_rot_any_by_class,
+            _n_sig_per_image,
+            _coarse_hard_assignment,
+            _coarse_class_assignment,
+            sig_sample_indices_by_class,
+            _full_coarse_stats,
+        ) = _compute_k_class_significance_batched(
+            experiment_dataset,
+            means_array,
+            noise_variance,
+            coarse_rotations_np,
+            coarse_translations_np,
+            disc_type,
+            class_log_priors=log_priors,
+            **sig_kwargs,
+        )
+
+    pass2_kwargs = dict(engine_kwargs)
+    # Build a per-particle, per-class fine-grid mask from the coarse significance.
+    pass2_kwargs.pop("rotation_translation_mask", None)
+    if "current_size" not in pass2_kwargs and fine_current_size is not None:
+        pass2_kwargs["current_size"] = fine_current_size
+
+    # Expand priors from coarse to fine grid by parent broadcasting.
+    # Mirrors RELION's pushback semantics where each oversampled child inherits
+    # its parent's prior weight (sampling_ml.cpp, ml_optimiser.cpp:5478 etc.).
+    rotation_log_prior_in = pass2_kwargs.get("rotation_log_prior")
+    if rotation_log_prior_in is not None:
+        prior_np = np.asarray(rotation_log_prior_in, dtype=np.float32)
+        if prior_np.ndim == 1:
+            if prior_np.shape != (n_rot_coarse,):
+                raise ValueError(
+                    f"rotation_log_prior must have shape ({n_rot_coarse},), got {prior_np.shape}",
+                )
+            pass2_kwargs["rotation_log_prior"] = prior_np[rot_parent_map_np]
+        elif prior_np.ndim == 2:
+            if prior_np.shape != (n_images, n_rot_coarse):
+                raise ValueError(
+                    f"rotation_log_prior must have shape ({n_images}, {n_rot_coarse}), got {prior_np.shape}",
+                )
+            pass2_kwargs["rotation_log_prior"] = prior_np[:, rot_parent_map_np]
+    class_rotation_log_prior_in = pass2_kwargs.get("class_rotation_log_prior")
+    if class_rotation_log_prior_in is not None:
+        prior_np = np.asarray(class_rotation_log_prior_in, dtype=np.float32)
+        if prior_np.ndim != 2 or prior_np.shape != (n_classes, n_rot_coarse):
+            raise ValueError(
+                f"class_rotation_log_prior must have shape ({n_classes}, {n_rot_coarse}), got {prior_np.shape}",
+            )
+        pass2_kwargs["class_rotation_log_prior"] = prior_np[:, rot_parent_map_np]
+    translation_log_prior_in = pass2_kwargs.get("translation_log_prior")
+    if translation_log_prior_in is not None:
+        prior_np = np.asarray(translation_log_prior_in, dtype=np.float32)
+        if prior_np.ndim == 1:
+            if prior_np.shape != (n_trans_coarse,):
+                raise ValueError(
+                    f"translation_log_prior must have shape ({n_trans_coarse},), got {prior_np.shape}",
+                )
+            pass2_kwargs["translation_log_prior"] = prior_np[trans_parent_map_np]
+        elif prior_np.ndim == 2:
+            if prior_np.shape != (n_images, n_trans_coarse):
+                raise ValueError(
+                    f"translation_log_prior must have shape ({n_images}, {n_trans_coarse}), got {prior_np.shape}",
+                )
+            pass2_kwargs["translation_log_prior"] = prior_np[:, trans_parent_map_np]
+
+    masks_per_class = []
+    for class_index in range(n_classes):
+        per_image = sig_sample_indices_by_class[class_index]
+        mask = _build_fine_grid_significance_mask(
+            per_image,
+            n_rot_coarse=n_rot_coarse,
+            n_trans_coarse=n_trans_coarse,
+            n_rot_fine=n_rot_fine,
+            n_trans_fine=n_trans_fine,
+            rot_oversampling_factor=rot_oversampling,
+            trans_oversampling_factor=trans_oversampling,
+            rot_parent_map=rot_parent_map_np,
+            trans_parent_map=trans_parent_map_np,
+            n_images=n_images,
+        )
+        masks_per_class.append(mask)
+    # Stack into (n_classes, n_images, n_rot_fine, n_trans_fine).
+    pass2_kwargs["class_rotation_translation_mask"] = np.stack(masks_per_class, axis=0)
+
+    result = run_dense_k_class_em(
+        experiment_dataset,
+        means_array,
+        mean_variance,
+        noise_variance,
+        fine_rotations_np,
+        fine_translations_np,
+        disc_type,
+        class_log_priors=class_log_priors,
+        accumulate_noise=accumulate_noise,
+        **pass2_kwargs,
+    )
+    if coarse_class_assignments_for_override is not None:
+        # RELION binarization picks the global-best (class, pose) at the
+        # COARSE grid; the fine refinement only repositions the pose within
+        # the winning class. Reflect this by replacing the K-class
+        # ``class_assignments`` with the coarse-pass argmax. The per-class
+        # M-step accumulators already encode each class's fine-refined best
+        # pose, so reconstruction quality is preserved.
+        coarse_assn = jnp.asarray(coarse_class_assignments_for_override, dtype=jnp.int32)
+        n_imgs = int(coarse_assn.shape[0])
+        image_indices = jnp.arange(n_imgs)
+        per_class_hard = result.per_class_hard_assignments
+        new_pose_assn = per_class_hard[coarse_assn, image_indices]
+        result = result._replace(
+            class_assignments=coarse_assn,
+            pose_assignments=new_pose_assn,
+        )
+    return result

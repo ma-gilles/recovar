@@ -18,7 +18,17 @@ def _finite_minmax(values) -> tuple[float, float]:
 
 @dataclass(frozen=True)
 class DenseScoreConstraints:
-    """Dense/global score priors and masks normalized to padded bucket shapes."""
+    """Dense/global score priors and masks normalized to padded bucket shapes.
+
+    ``candidate_mask`` may be either a shared 2D mask of shape
+    ``(n_rot_padded, n_trans)`` or a per-image 3D mask of shape
+    ``(n_images, n_rot_padded, n_trans)``.  ``per_image_candidate_mask`` is
+    set when the 3D form is used; ``block_inputs`` slices the appropriate
+    rotation/image block accordingly.  This is the entry point for
+    RELION-style adaptive 2-pass significance pruning: pass-1 produces
+    a per-particle significance mask and pass-2 evaluates the fine
+    grid with masked-out positions forced to ``-inf`` before softmax.
+    """
 
     rotation_log_prior: object | None
     per_image_rotation_prior: bool
@@ -27,6 +37,7 @@ class DenseScoreConstraints:
     per_image_translation_prior: bool
     translation_prior_minmax: tuple[float, float] | None
     candidate_mask: object | None
+    per_image_candidate_mask: bool
     candidate_mask_count: int | None
     candidate_mask_size: int | None
     n_images: int
@@ -95,16 +106,31 @@ class DenseScoreConstraints:
             translation_prior_minmax = _finite_minmax(translation_np)
 
         candidate_mask_jnp = None
+        per_image_candidate_mask = False
         candidate_mask_count = None
         candidate_mask_size = None
         if rotation_translation_mask is not None:
             candidate_mask = np.asarray(rotation_translation_mask, dtype=bool)
-            if candidate_mask.shape != (n_rot, n_trans):
+            if candidate_mask.ndim == 2:
+                if candidate_mask.shape != (n_rot, n_trans):
+                    raise ValueError(
+                        f"rotation_translation_mask must have shape ({n_rot}, {n_trans}), got {candidate_mask.shape}",
+                    )
+                padded_mask = np.zeros((n_rot_padded, n_trans), dtype=bool)
+                padded_mask[:n_rot] = candidate_mask
+            elif candidate_mask.ndim == 3:
+                if candidate_mask.shape != (n_images, n_rot, n_trans):
+                    raise ValueError(
+                        "rotation_translation_mask must have shape "
+                        f"({n_images}, {n_rot}, {n_trans}) when image-specific, got {candidate_mask.shape}",
+                    )
+                padded_mask = np.zeros((n_images, n_rot_padded, n_trans), dtype=bool)
+                padded_mask[:, :n_rot, :] = candidate_mask
+                per_image_candidate_mask = True
+            else:
                 raise ValueError(
-                    f"rotation_translation_mask must have shape ({n_rot}, {n_trans}), got {candidate_mask.shape}",
+                    f"rotation_translation_mask must be 2D or 3D, got {candidate_mask.ndim} dimensions",
                 )
-            padded_mask = np.zeros((n_rot_padded, n_trans), dtype=bool)
-            padded_mask[:n_rot] = candidate_mask
             candidate_mask_jnp = jnp.asarray(padded_mask)
             candidate_mask_count = int(candidate_mask.sum())
             candidate_mask_size = int(candidate_mask.size)
@@ -117,6 +143,7 @@ class DenseScoreConstraints:
             per_image_translation_prior=per_image_translation_prior,
             translation_prior_minmax=translation_prior_minmax,
             candidate_mask=candidate_mask_jnp,
+            per_image_candidate_mask=per_image_candidate_mask,
             candidate_mask_count=candidate_mask_count,
             candidate_mask_size=candidate_mask_size,
             n_images=int(n_images),
@@ -171,6 +198,14 @@ class DenseScoreConstraints:
 
         if self.candidate_mask is None:
             candidate_mask = jnp.ones((rotation_block_size, self.n_trans), dtype=bool)
+        elif self.per_image_candidate_mask:
+            candidate_mask = self.candidate_mask[start:end, r0:r1, :]
+            if batch_count != actual_count:
+                candidate_mask = jnp.pad(
+                    candidate_mask,
+                    ((0, batch_count - actual_count), (0, 0), (0, 0)),
+                    constant_values=False,
+                )
         else:
             candidate_mask = self.candidate_mask[r0:r1]
 
@@ -189,11 +224,20 @@ def apply_dense_score_constraints(
     *,
     score_mode: str,
 ):
-    """Apply priors and validity masks to one dense/global score block."""
+    """Apply priors and validity masks to one dense/global score block.
+
+    ``candidate_mask`` may be 2D ``(rot_block, n_trans)`` (shared across
+    images) or 3D ``(batch, rot_block, n_trans)`` (per-image, e.g. an
+    adaptive 2-pass significance mask).  Both forms broadcast against the
+    score tensor of shape ``(batch, rot_block, n_trans)``.
+    """
 
     if score_mode == "gaussian":
         scores = scores + rotation_prior[:, :, None]
         scores = scores + translation_prior[:, None, :]
-    scores = jnp.where(candidate_mask[None, :, :], scores, -jnp.inf)
+    if candidate_mask.ndim == 3:
+        scores = jnp.where(candidate_mask, scores, -jnp.inf)
+    else:
+        scores = jnp.where(candidate_mask[None, :, :], scores, -jnp.inf)
     scores = jnp.where(valid_rotation_mask[None, :, None], scores, -jnp.inf)
     return jnp.where(valid_image_mask[:, None, None], scores, 0.0)

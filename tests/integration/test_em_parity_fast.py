@@ -262,6 +262,12 @@ def test_em_parity_fast_kclass_replay(tmp_path):
         # hard-assignment semantics for parity; otherwise pmax_abs_mean compares soft (recovar)
         # vs hard 1.0 (RELION) and drifts by ~0.1.
         "--winner-take-all-mstep",
+        # RELION evaluates fine-grid (oversampling=1) poses in pass-2 of every
+        # iteration. Match that here: pass-1 finds each class's best coarse
+        # pose, pass-2 refines around its 8*4=32 children
+        # (ml_optimiser.cpp:5022, 9181-9207). Closes the iter 0->1 mean_corr
+        # gap from 0.984 (coarse-only) to ~0.99.
+        "--adaptive-2pass",
     ]
     logger.info("K-class replay cmd: %s", " ".join(cmd))
     t0 = time.time()
@@ -308,11 +314,12 @@ def test_em_parity_fast_kclass_replay(tmp_path):
     logger.info("K-class replay ledger: %s", ledger)
 
     # K=2 iter 0→1 is the first K-class iteration after class seeds are loaded;
-    # it exercises the joint class × pose posterior. Expect strong but not
-    # machine-precision parity because RELION's first iteration uses
-    # winner-take-all in some configurations.
-    assert mean_corr >= 0.95, (
-        f"K-class replay mean_corr {mean_corr:.6f} below threshold 0.95. K-class kernel parity has regressed."
+    # it exercises the joint class × pose posterior. With adaptive 2-pass
+    # (--adaptive-2pass) recovar matches RELION's fine-grid pose refinement
+    # for the per-class winner_take_all M-step, lifting mean_corr from
+    # 0.984 (coarse-only) to ~0.99.
+    assert mean_corr >= 0.99, (
+        f"K-class replay mean_corr {mean_corr:.6f} below threshold 0.99. K-class kernel parity has regressed."
     )
     assert pmax_abs_mean < 1e-2, f"K-class replay |ΔPmax|.mean {pmax_abs_mean:.6g} exceeds threshold 1e-2."
     assert class_acc >= 0.95, (
