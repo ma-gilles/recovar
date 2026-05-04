@@ -565,6 +565,22 @@ def _dense_estep_config(
         engine_kwargs["half_spectrum_scoring"] = True
     if os.environ.get("RECOVAR_SQUARE_WINDOW"):
         engine_kwargs["square_window"] = True
+    # Independent RECON window override: SCORE uses square_window, RECON uses
+    # recon_square_window. Set this to True to backproject all pixels of the
+    # current_size FFTW half (matching RELION's set2DFourierTransform sweep
+    # without the radial r<=r_max cutoff). Default behavior follows
+    # square_window via dense_adapter group_kwargs.
+    _recon_sq = os.environ.get("RECOVAR_RECON_SQUARE_WINDOW")
+    if _recon_sq is not None:
+        engine_kwargs["recon_square_window"] = bool(int(_recon_sq))
+    # Disable VDAM gradient subtraction (Fimg_store = Fimg - Frefctf). Setting
+    # RECOVAR_DISABLE_SUBTRACT_PROJECTED_REFERENCE=1 makes the M-step accumulate
+    # raw posterior-weighted images (standard EM), bypassing the VDAM gradient
+    # form. Useful for diagnosing whether the Frefctf subtraction is the c2
+    # parity bottleneck (the proj_weighted=-N²×Fref scaling makes the subtraction
+    # add instead of subtract — see m_step.py and dense_adapter.py).
+    if os.environ.get("RECOVAR_DISABLE_SUBTRACT_PROJECTED_REFERENCE"):
+        engine_kwargs["reconstruction_subtract_projected_reference"] = False
     if translation_log_prior is not None:
         engine_kwargs["translation_log_prior"] = translation_log_prior
     if coarse_translation_log_prior is not None:

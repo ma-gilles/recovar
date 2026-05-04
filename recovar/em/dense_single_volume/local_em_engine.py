@@ -11,24 +11,25 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
-from recovar.reconstruction import noise as noise_utils
-from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.backprojection import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
+)
+from recovar.em.dense_single_volume.helpers.backprojection import (
     adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
 )
+from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-    enforce_half_volume_x0,
-    half_volume_accumulator_shape,
-    half_volume_accumulators_to_full,
-)
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
     make_shell_indices_half,
+)
+from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+    enforce_half_volume_x0,
+    half_volume_accumulator_shape,
+    half_volume_accumulators_to_full,
 )
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
@@ -38,22 +39,27 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
 from recovar.em.dense_single_volume.helpers.jax_runtime import block_until_ready as _block_until_ready
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     apply_half_translation_phases as _apply_half_translation_phases,
+)
+from recovar.em.dense_single_volume.helpers.preprocessing import (
     half_translation_phase_table as _half_translation_phase_table,
+)
+from recovar.em.dense_single_volume.helpers.preprocessing import (
     process_half_image,
     resolve_image_mask_for_half_preprocess,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_projections_block as _compute_projections_block,
 )
-from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
-from recovar.em.dense_single_volume.local_debug import (
-    maybe_write_debug_noise_component_dump,
-    maybe_write_debug_score_dump,
-    noise_split_diagnostics_requested,
-    parse_debug_noise_component_dump_request,
-    parse_debug_score_dump_request,
+from recovar.em.dense_single_volume.helpers.timing import TimingAccumulator
+from recovar.em.dense_single_volume.helpers.translation_prior import (
+    translation_prior_centers_for_images,
+    translation_sqdist_angstrom,
+    validate_translation_prior_centers,
 )
+from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
@@ -61,6 +67,13 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.dense_single_volume.local_big_jit import run_local_bucket_big_jit
+from recovar.em.dense_single_volume.local_debug import (
+    maybe_write_debug_noise_component_dump,
+    maybe_write_debug_score_dump,
+    noise_split_diagnostics_requested,
+    parse_debug_noise_component_dump_request,
+    parse_debug_score_dump_request,
+)
 from recovar.em.dense_single_volume.local_layout import (
     LocalBucketSpec,
     LocalHypothesisLayout,
@@ -74,13 +87,8 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket_abs2_on_demand,
     score_local_bucket_abs2_weighted_on_demand,
 )
-from recovar.em.dense_single_volume.helpers.translation_prior import (
-    translation_prior_centers_for_images,
-    translation_sqdist_angstrom,
-    validate_translation_prior_centers,
-)
-from recovar.em.dense_single_volume.helpers.timing import TimingAccumulator
 from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
+from recovar.reconstruction import noise as noise_utils
 
 logger = logging.getLogger(__name__)
 
@@ -230,11 +238,7 @@ def _can_use_fused_score_mstep(
     normalization: _LocalNormalizationState,
     debug_score_dump_filter_matches: bool,
 ) -> bool:
-    return (
-        fused_score_mstep_enabled
-        and not normalization.has_external_values
-        and not debug_score_dump_filter_matches
-    )
+    return fused_score_mstep_enabled and not normalization.has_external_values and not debug_score_dump_filter_matches
 
 
 @dataclass(frozen=True)
@@ -315,7 +319,9 @@ class _LocalProfileCounters:
 
     @classmethod
     def create(cls, collect: bool, n_global_rotations: int) -> "_LocalProfileCounters":
-        seen = np.zeros(int(n_global_rotations), dtype=bool) if collect and n_global_rotations else np.zeros(0, dtype=bool)
+        seen = (
+            np.zeros(int(n_global_rotations), dtype=bool) if collect and n_global_rotations else np.zeros(0, dtype=bool)
+        )
         return cls(
             collect=bool(collect),
             seen_global_rotations=seen,
@@ -392,16 +398,16 @@ class _LocalProfileCounters:
             "sum_significant_samples": np.int64(self.total_significant_samples),
             "unique_global_rotations": np.int64(np.count_nonzero(self.seen_global_rotations)),
             "unique_nonzero_global_rotations": np.int64(np.count_nonzero(self.seen_nonzero_global_rotations)),
-            "unique_reconstruction_global_rotations": np.int64(np.count_nonzero(self.seen_reconstruction_global_rotations)),
+            "unique_reconstruction_global_rotations": np.int64(
+                np.count_nonzero(self.seen_reconstruction_global_rotations)
+            ),
             "duplicate_rotation_factor": self._duplicate_factor(total_local_rotations, self.seen_global_rotations),
             "reconstruction_duplicate_rotation_factor": self._duplicate_factor(
                 self.total_reconstruction_rows,
                 self.seen_reconstruction_global_rotations,
             ),
             "local_total_hypotheses": np.int64(self.local_total_hypotheses),
-            "local_mean_rotations_per_image": np.float64(
-                0.0 if n_images == 0 else total_local_rotations / n_images
-            ),
+            "local_mean_rotations_per_image": np.float64(0.0 if n_images == 0 else total_local_rotations / n_images),
             "local_mean_reconstruction_rows_per_image": np.float64(
                 0.0 if n_images == 0 else self.total_reconstruction_rows / n_images
             ),
@@ -503,9 +509,7 @@ def _postprocess_local_bucket(
 
     transfer_t0 = time.time()
     probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
-    n_significant_samples_np = (
-        np.asarray(n_significant_samples, dtype=np.int32) if collect_profile_stats else None
-    )
+    n_significant_samples_np = np.asarray(n_significant_samples, dtype=np.int32) if collect_profile_stats else None
     buffers.transfer_profile["postprocess_posterior_to_host_s"] += time.time() - transfer_t0
 
     posterior_ids_np = (
@@ -601,6 +605,7 @@ def _exact_local_max_hypotheses_per_microbatch(default: int | None, n_windowed: 
         return value
     value = _LOCAL_MEMORY_POLICY.target_row_pixels // max(1, int(n_windowed))
     return int(max(8192, min(65536, value)))
+
 
 def _make_local_spectrum_setup(
     image_shape,
@@ -713,6 +718,39 @@ def _local_adjoint_one(
     use_window: bool,
     current_size,
 ):
+    # When RECOVAR_BPREF_VIA_BINDING=1, replace the JAX adjoint with RELION's
+    # bit-exact set2DFourierTransform via bind.get_backprojector_data. Used to
+    # diagnose whether the K-class M-step adjoint is the c2 parity bottleneck.
+    import os as _os
+
+    if use_window and _os.environ.get("RECOVAR_BPREF_VIA_BINDING"):
+        from recovar.em.dense_single_volume.helpers.relion_bpref_adjoint import (
+            accumulate_bpref_via_binding,
+            embed_bpref_slab_into_centered,
+        )
+
+        # NOTE: passing `rows` as both summed and (zeros for ctf, but we want only one channel).
+        # Trick: call binding twice — first with rows as image (data accumulator), second with
+        # zeros for the ctf channel. To avoid the double-call cost, we instead call binding
+        # once with rows as image and discard the second output (since this function only
+        # accumulates ONE channel — Ft_y or Ft_ctf, but never both).
+        # Use a dummy second image (rows again) so the API is satisfied; we only use data_y.
+        rows_np = np.asarray(rows)
+        if np.iscomplexobj(rows_np):
+            ctf_dummy = np.abs(rows_np).astype(np.float64)
+        else:
+            ctf_dummy = np.asarray(rows_np, dtype=np.float64)
+            rows_np = rows_np.astype(np.complex128)
+        data_y_slab, _ = accumulate_bpref_via_binding(
+            rows_np,
+            ctf_dummy,
+            np.asarray(rotations, dtype=np.float64),
+            np.asarray(recon_window_indices),
+            tuple(image_shape),
+        )
+        embedded_y, _ = embed_bpref_slab_into_centered(data_y_slab, data_y_slab.real.copy(), int(recon_volume_shape[0]))
+        return volume + jnp.asarray(embedded_y).reshape(-1)
+
     if use_window:
         return _adjoint_slice_volume_windowed(
             rows,
@@ -844,8 +882,7 @@ def _prefixed_timer_profile(prefix: str, timer: dict[str, float]) -> dict[str, n
 
 def _local_timing_profile(timing: _LocalTiming) -> dict[str, np.float64]:
     return {
-        output_key: np.float64(getattr(timing, timing_attr))
-        for output_key, timing_attr in _LOCAL_TIMER_SCHEMA.profile
+        output_key: np.float64(getattr(timing, timing_attr)) for output_key, timing_attr in _LOCAL_TIMER_SCHEMA.profile
     }
 
 
@@ -1148,14 +1185,8 @@ def run_local_em_exact(
     ) = parse_debug_noise_component_dump_request()
     debug_score_dump_filter_matches = (
         debug_score_dump_dir is not None
-        and (
-            debug_score_dump_current_sizes is None
-            or int(current_size or -1) in debug_score_dump_current_sizes
-        )
-        and (
-            debug_score_dump_iterations is None
-            or int(debug_iteration or -1) in debug_score_dump_iterations
-        )
+        and (debug_score_dump_current_sizes is None or int(current_size or -1) in debug_score_dump_current_sizes)
+        and (debug_score_dump_iterations is None or int(debug_iteration or -1) in debug_score_dump_iterations)
     )
     config = ForwardModelConfig.from_dataset(
         experiment_dataset,
@@ -1225,7 +1256,11 @@ def run_local_em_exact(
     max_posterior_per_image = np.empty(n_images, dtype=np.float32)
     rotation_posterior_sums = np.zeros(int(local_layout.n_global_rotations), dtype=np.float64)
     best_pose_rotations = np.empty((n_images, 3, 3), dtype=np.float32) if return_best_pose_details else None
-    best_pose_translations = np.empty((n_images, local_layout.translation_grid.shape[1]), dtype=np.float32) if return_best_pose_details else None
+    best_pose_translations = (
+        np.empty((n_images, local_layout.translation_grid.shape[1]), dtype=np.float32)
+        if return_best_pose_details
+        else None
+    )
     best_pose_rotation_ids = np.empty(n_images, dtype=np.int32) if return_best_pose_details else None
 
     noise_wsum = None
@@ -1245,10 +1280,7 @@ def run_local_em_exact(
         noise_a2 = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_xa = jnp.zeros(n_shells, dtype=jnp.float32)
 
-    default_fused_score_mstep = (
-        (max_significants is None or int(max_significants) <= 0)
-        and not normalization.has_log_z
-    )
+    default_fused_score_mstep = (max_significants is None or int(max_significants) <= 0) and not normalization.has_log_z
     fused_score_mstep_enabled = default_fused_score_mstep
     timing = _LocalTiming()
     raw_cache_enabled = False
@@ -1575,7 +1607,7 @@ def run_local_em_exact(
                     reconstruction_row_count_jax,
                     noise_wsum,
                     noise_img_power,
-            )
+                )
             timing.big_jit_bucket_s += time.time() - big_jit_t0
             big_jit_bucket_count += 1
             pack_t0 = time.time()
@@ -1868,10 +1900,12 @@ def run_local_em_exact(
 
             significance_t0 = time.time()
             if reconstruct_significant_only:
-                reconstruction_sample_mask, reconstruction_rotation_mask, n_significant_samples = compute_reconstruction_support(
-                    probs,
-                    adaptive_fraction=adaptive_fraction,
-                    max_significants=max_significants,
+                reconstruction_sample_mask, reconstruction_rotation_mask, n_significant_samples = (
+                    compute_reconstruction_support(
+                        probs,
+                        adaptive_fraction=adaptive_fraction,
+                        max_significants=max_significants,
+                    )
                 )
                 reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
             else:
@@ -2131,11 +2165,7 @@ def run_local_em_exact(
         )
     timing.stats_finalize_s += time.time() - stats_finalize_t0
 
-    if (
-        debug_score_dump_filter_matches
-        and debug_score_dump_targets
-        and debug_score_dump_iterations is None
-    ):
+    if debug_score_dump_filter_matches and debug_score_dump_targets and debug_score_dump_iterations is None:
         logger.warning(
             "Requested local score dump indices were not observed in this dataset view: %s",
             sorted(debug_score_dump_targets),

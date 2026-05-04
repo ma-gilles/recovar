@@ -37,29 +37,26 @@ import numpy as np
 
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.reconstruction import noise as noise_utils
 from recovar.em.dense_single_volume.helpers.backprojection import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
-    adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
 )
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_noise_block as _compute_noise_block,
-    compute_projections_block as _compute_projections_block,
+from recovar.em.dense_single_volume.helpers.backprojection import (
+    adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-    enforce_half_volume_x0,
-    half_volume_accumulator_shape,
-    half_volume_accumulators_to_full,
-)
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
     make_shell_indices_half,
+)
+from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+    enforce_half_volume_x0,
+    half_volume_accumulator_shape,
+    half_volume_accumulators_to_full,
 )
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
@@ -67,6 +64,12 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
     integer_pre_shifts_or_none,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import process_half_image
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_noise_block as _compute_noise_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_projections_block as _compute_projections_block,
+)
 from recovar.em.dense_single_volume.helpers.translation_prior import (
     translation_prior_centers_for_images,
     translation_sqdist_angstrom,
@@ -80,6 +83,7 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.dense_single_volume.local_layout import _exact_bucket_rotation_size
+from recovar.reconstruction import noise as noise_utils
 
 logger = logging.getLogger(__name__)
 
@@ -472,9 +476,7 @@ def _maybe_dump_pass2_bucket(
     mask_np = np.asarray(candidate_mask, dtype=bool)
     ctf2_np = np.asarray(ctf2_over_nv_score, dtype=np.float64)
     proj_np = np.asarray(proj_half)
-    shifted_corrected_np = (
-        None if shifted_corrected_score_split is None else np.asarray(shifted_corrected_score_split)
-    )
+    shifted_corrected_np = None if shifted_corrected_score_split is None else np.asarray(shifted_corrected_score_split)
 
     for row in wanted_rows:
         image_idx = int(local_indices[row])
@@ -509,7 +511,9 @@ def _maybe_dump_pass2_bucket(
             proj_half=proj_np[row, :cnt, :],
             half_weights=np.asarray(half_weights_used, dtype=np.float64),
             window_indices=(
-                np.asarray(window_indices, dtype=np.int32) if window_indices is not None else np.empty((0,), dtype=np.int32)
+                np.asarray(window_indices, dtype=np.int32)
+                if window_indices is not None
+                else np.empty((0,), dtype=np.int32)
             ),
         )
 
@@ -901,8 +905,7 @@ def compute_pass2_stats_sparse_bucketed(
         normalization_log_z_np = np.asarray(normalization_log_z, dtype=np.float64)
         if normalization_log_z_np.shape != (n_images,):
             raise ValueError(
-                "normalization_log_z must have shape "
-                f"({n_images},), got {normalization_log_z_np.shape}",
+                f"normalization_log_z must have shape ({n_images},), got {normalization_log_z_np.shape}",
             )
 
     overall_t0 = time.time()
@@ -1052,8 +1055,8 @@ def compute_pass2_stats_sparse_bucketed(
             log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = _normalize_pass2_bucket(scores)
         else:
             bucket_log_z = jnp.asarray(normalization_log_z_np[image_indices], dtype=scores.real.dtype)
-            log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
-                _normalize_pass2_bucket_with_log_z(scores, bucket_log_z)
+            log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = _normalize_pass2_bucket_with_log_z(
+                scores, bucket_log_z
             )
 
         _maybe_dump_pass2_bucket(
@@ -1083,7 +1086,28 @@ def compute_pass2_stats_sparse_bucketed(
         # Backproject (use flat_rotations + flat summed/ctf_probs).
         # Padded rotations contribute zero because their probs == 0
         # (candidate_mask=False -> score=-inf -> exp(-inf)=0).
-        if use_window:
+        # When RECOVAR_BPREF_VIA_BINDING=1, the windowed adjoint is replaced by
+        # RELION's bit-exact set2DFourierTransform (via bind.get_backprojector_data)
+        # to test whether the M-step adjoint is the c2 parity bottleneck.
+        if use_window and os.environ.get("RECOVAR_BPREF_VIA_BINDING"):
+            from recovar.em.dense_single_volume.helpers.relion_bpref_adjoint import (
+                accumulate_bpref_via_binding,
+                embed_bpref_slab_into_centered,
+            )
+
+            data_y_slab, data_ctf_slab = accumulate_bpref_via_binding(
+                np.asarray(flatten_bucket_rows(summed)),
+                np.asarray(flatten_bucket_rows(ctf_probs)),
+                np.asarray(flat_backproject_rotations),
+                np.asarray(recon_window_indices),
+                tuple(image_shape),
+            )
+            embedded_y, embedded_ctf = embed_bpref_slab_into_centered(
+                data_y_slab, data_ctf_slab, int(recon_volume_shape[0])
+            )
+            Ft_y_total = Ft_y_total + jnp.asarray(embedded_y).reshape(-1)
+            Ft_ctf_total = Ft_ctf_total + jnp.asarray(embedded_ctf).reshape(-1)
+        elif use_window:
             Ft_y_total = _adjoint_slice_volume_windowed(
                 flatten_bucket_rows(summed),
                 recon_window_indices,
