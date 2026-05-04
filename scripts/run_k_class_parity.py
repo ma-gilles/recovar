@@ -772,7 +772,7 @@ def main() -> None:
         use_float64_scoring=False,
         use_float64_projections=False,
         do_gridding_correction=True,
-        square_window=False,
+        square_window=True,
         sparse_pass2=False,
         relion_firstiter_winner_take_all=args.winner_take_all_mstep,
         # RELION fixture used --firstiter_cc (run_it000_optimiser.star command);
