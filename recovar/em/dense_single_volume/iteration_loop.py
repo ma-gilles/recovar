@@ -57,7 +57,11 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     should_skip_adaptive_pass2,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
-from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_local_k_class_em
+from recovar.em.dense_single_volume.k_class import (
+    run_dense_k_class_em,
+    run_dense_k_class_em_adaptive,
+    run_local_k_class_em,
+)
 from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
 from recovar.em.dense_single_volume.local_layout import (
     _selected_rotation_matrices,
@@ -2929,18 +2933,55 @@ def _run_relion_iteration_loop(
                     if k_class_enabled:
                         if disable_adjoint_y or disable_adjoint_ctf:
                             raise NotImplementedError("K-class refine does not support adjoint ablation flags")
-                        k_class_result = run_dense_k_class_em(
-                            experiment_datasets[k],
-                            means[k],
-                            mean_variance,
-                            noise_variance_k,
-                            effective_rotations,
-                            current_translations,
-                            disc_type,
-                            class_log_priors=class_log_priors,
-                            accumulate_noise=True,
-                            **dense_skip_kwargs,
-                        )
+                        # STRICT-PARITY: at iter 1 with --firstiter_cc, route through
+                        # run_dense_k_class_em_adaptive with
+                        # firstiter_cc_pass2_only_best_coarse=True so the iter-1
+                        # path matches RELION's expectationOneParticle pass-2
+                        # masked-to-best-coarse semantics (ml_optimiser.cpp:9181-9207
+                        # with K>1). This is what run_k_class_parity.py uses to
+                        # achieve mean_corr 0.998 at iter 0->1 with the K=4 5k 128
+                        # fixture; the basic dense engine evaluates all poses with
+                        # soft posteriors, then binarizes only the M-step weights,
+                        # which has subtle differences vs RELION's pass2-masked CC.
+                        if relion_firstiter_cc_this_iter:
+                            logger.info(
+                                "STRICT-PARITY: routing iter-1 K-class through run_dense_k_class_em_adaptive with firstiter_cc_pass2_only_best_coarse=True"
+                            )
+                            n_rot_local = int(effective_rotations.shape[0])
+                            n_trans_local = int(current_translations.shape[0])
+                            _identity_rot_map = np.arange(n_rot_local, dtype=np.int64)
+                            _identity_trans_map = np.arange(n_trans_local, dtype=np.int64)
+                            k_class_result = run_dense_k_class_em_adaptive(
+                                experiment_datasets[k],
+                                means[k],
+                                mean_variance,
+                                noise_variance_k,
+                                effective_rotations,
+                                current_translations,
+                                effective_rotations,
+                                current_translations,
+                                _identity_rot_map,
+                                _identity_trans_map,
+                                disc_type,
+                                class_log_priors=class_log_priors,
+                                accumulate_noise=True,
+                                firstiter_cc_pass2_only_best_coarse=True,
+                                skip_significance_pruning=True,
+                                **dense_skip_kwargs,
+                            )
+                        else:
+                            k_class_result = run_dense_k_class_em(
+                                experiment_datasets[k],
+                                means[k],
+                                mean_variance,
+                                noise_variance_k,
+                                effective_rotations,
+                                current_translations,
+                                disc_type,
+                                class_log_priors=class_log_priors,
+                                accumulate_noise=True,
+                                **dense_skip_kwargs,
+                            )
                         ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
                         Ft_y_k = k_class_result.Ft_y
                         Ft_ctf_k = k_class_result.Ft_ctf
@@ -3586,18 +3627,53 @@ def _run_relion_iteration_loop(
                 if k_class_enabled:
                     if disable_adjoint_y or disable_adjoint_ctf:
                         raise NotImplementedError("K-class refine does not support adjoint ablation flags")
-                    k_class_result = run_dense_k_class_em(
-                        experiment_datasets[k],
-                        means[k],
-                        mean_variance,
-                        noise_variance_k,
-                        effective_rotations,
-                        current_translations,
-                        disc_type,
-                        class_log_priors=class_log_priors,
-                        accumulate_noise=True,
-                        **em_kwargs,
-                    )
+                    # STRICT-PARITY: at iter 1 with --firstiter_cc, route through
+                    # run_dense_k_class_em_adaptive with
+                    # firstiter_cc_pass2_only_best_coarse=True so the iter-1
+                    # path matches RELION's expectationOneParticle pass-2
+                    # masked-to-best-coarse semantics. This is the
+                    # non-adaptive-oversampling K-class path (use_adaptive=False);
+                    # the adaptive_oversampling=0 + K=4 + --firstiter_cc cold-start
+                    # lands here.
+                    if relion_firstiter_cc_this_iter:
+                        logger.info(
+                            "STRICT-PARITY (non-adaptive site): routing iter-1 K-class through run_dense_k_class_em_adaptive"
+                        )
+                        n_rot_local = int(effective_rotations.shape[0])
+                        n_trans_local = int(current_translations.shape[0])
+                        _identity_rot_map = np.arange(n_rot_local, dtype=np.int64)
+                        _identity_trans_map = np.arange(n_trans_local, dtype=np.int64)
+                        k_class_result = run_dense_k_class_em_adaptive(
+                            experiment_datasets[k],
+                            means[k],
+                            mean_variance,
+                            noise_variance_k,
+                            effective_rotations,
+                            current_translations,
+                            effective_rotations,
+                            current_translations,
+                            _identity_rot_map,
+                            _identity_trans_map,
+                            disc_type,
+                            class_log_priors=class_log_priors,
+                            accumulate_noise=True,
+                            firstiter_cc_pass2_only_best_coarse=True,
+                            skip_significance_pruning=True,
+                            **em_kwargs,
+                        )
+                    else:
+                        k_class_result = run_dense_k_class_em(
+                            experiment_datasets[k],
+                            means[k],
+                            mean_variance,
+                            noise_variance_k,
+                            effective_rotations,
+                            current_translations,
+                            disc_type,
+                            class_log_priors=class_log_priors,
+                            accumulate_noise=True,
+                            **em_kwargs,
+                        )
                     ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
                     Ft_y_k = k_class_result.Ft_y
                     Ft_ctf_k = k_class_result.Ft_ctf

@@ -743,3 +743,181 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
     # Tighter bars (≥ 0.999) require Phase D per-class machinery.
     assert worst_corr >= 0.85, f"K-class cold-start worst per-class corr {worst_corr:.4f} below 0.85: {matched}"
     assert mean_corr >= 0.92, f"K-class cold-start mean_corr {mean_corr:.4f} below 0.92: {matched}"
+
+
+@pytest.mark.gpu
+@pytest.mark.integration
+@pytest.mark.slow
+def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
+    """K=4 STRICT-PARITY cold-start at 5k 128² for 3 iters.
+
+    The "strict" path layers on top of the basic cold-start:
+      * --relion_init_dir : recovar uses RELION's exact iter-0 sigma2_noise
+        spectrum + per-class rlnReferenceTau2 + rlnTau2FudgeFactor +
+        rlnSigmaOffsetsAngst instead of bootstrapping from images
+      * --perturb_replay_relion_dir : recovar uses RELION's per-iter
+        SamplingPerturbInstance values for HEALPix grid jitter
+      * --firstiter_cc : recovar's iter-1 uses normalized-CC + winner-take-all,
+        AND iteration_loop.py routes the iter-1 K-class M-step through
+        run_dense_k_class_em_adaptive with firstiter_cc_pass2_only_best_coarse=True
+        (matches the run_k_class_parity.py path that achieves 0.998 single-step).
+
+    This is NOT typical user-facing usage; it's a kernel-level parity test
+    that locks the strictest cold-start parity recovar can achieve at K=4
+    on the 5k 128² fixture, so a regression in any of:
+      * relion_init_dir state-load path in run_full_refinement.py
+      * adaptive K-class engine routing at iter 1 (iteration_loop.py)
+      * --firstiter_cc plumbing (run_full_refinement / iteration_loop)
+      * relion_volume_to_recovar / load_mrc axis conventions
+    will trip this test even when the looser test_em_parity_fast_kclass_coldstart
+    still passes.
+
+    Pass criteria (calibrated to current strict-parity cold-start):
+      * worst per-class corr ≥ 0.90    (observed 0.909 at HEAD)
+      * mean (Hungarian-matched) ≥ 0.95 (observed 0.954 at HEAD)
+      * iter-3 class assignment match ≥ 0.84 (observed 0.865 at HEAD)
+    Reaching the 0.99 ceiling requires further per-particle CC-score parity
+    work; tracked separately.
+
+    Walltime ~2 min on A100.
+    """
+    _assert_parity_ancestors_or_skip()
+    _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
+    relion_dir = K4_RELION_DIR
+
+    output_dir = tmp_path / "kclass_strict"
+    output_dir.mkdir()
+
+    cmd = [
+        sys.executable,
+        str(REFINE_SCRIPT),
+        "--data_dir",
+        str(K4_FIXTURE_DIR),
+        "--output",
+        str(output_dir),
+        "--n_classes",
+        "4",
+        "--max_iter",
+        "3",
+        "--healpix_order",
+        "1",
+        "--offset_range",
+        "6",
+        "--offset_step",
+        "2",
+        "--adaptive_oversampling",
+        "0",
+        "--perturb_factor",
+        "0.5",
+        "--perturb_replay_relion_dir",
+        str(relion_dir),
+        "--relion_init_dir",
+        str(relion_dir),
+        "--firstiter_cc",
+        "--init_resolution",
+        "30.0",
+        "--image_batch_size",
+        "200",
+        "--rotation_block_size",
+        "2000",
+    ]
+    logger.info("K-class STRICT-PARITY cold-start cmd: %s", " ".join(cmd))
+    t0 = time.time()
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=gpu_subprocess_env())
+    elapsed = time.time() - t0
+    assert proc.returncode == 0, (
+        f"run_full_refinement.py exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+
+    from scipy.optimize import linear_sum_assignment
+
+    from recovar.utils import helpers as _recovar_helpers
+
+    def _C(a, b):
+        a = a.ravel()
+        b = b.ravel()
+        a = a - a.mean()
+        b = b - b.mean()
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+
+    recov_classes = [
+        np.asarray(_recovar_helpers.load_mrc(str(output_dir / f"final_class{c + 1:03d}.mrc")), dtype=np.float64)
+        for c in range(4)
+    ]
+    relion_classes = [
+        np.asarray(
+            _recovar_helpers.load_relion_volume(str(relion_dir / f"run_it003_class{c + 1:03d}.mrc")),
+            dtype=np.float64,
+        )
+        for c in range(4)
+    ]
+    M = np.zeros((4, 4))
+    for i in range(4):
+        for j in range(4):
+            M[i, j] = _C(recov_classes[i], relion_classes[j])
+    row, col = linear_sum_assignment(-M)
+    matched = [float(M[i, j]) for i, j in zip(row, col)]
+    mean_corr = float(np.mean(matched))
+    worst_corr = float(np.min(matched))
+
+    # iter-3 class match
+    import re as _re
+
+    import starfile as _starfile
+
+    npz = np.load(output_dir / "refinement_results.npz", allow_pickle=True)
+    rec_h1 = np.asarray(npz["class_assignments_half0"], dtype=np.int32)
+    rec_h2 = np.asarray(npz["class_assignments_half1"], dtype=np.int32)
+    h1_idx = np.asarray(npz["half1_indices"], dtype=np.int64)
+    h2_idx = np.asarray(npz["half2_indices"], dtype=np.int64)
+    rd = _starfile.read(str(relion_dir / "run_it003_data.star"))
+    p = rd["particles"] if isinstance(rd, dict) and "particles" in rd else rd
+    relion_class = np.asarray(p["rlnClassNumber"], dtype=np.int32) - 1
+    relion_names = list(p["rlnImageName"])
+    si = lambda n: int(_re.match(r"(\d+)@", n).group(1)) - 1  # noqa: E731
+    rcb = {si(n): relion_class[i] for i, n in enumerate(relion_names)}
+    rd2 = _starfile.read(str(K4_DATA_STAR))
+    rp = rd2["particles"] if isinstance(rd2, dict) and "particles" in rd2 else rd2
+    recov_names = list(rp["rlnImageName"])
+    n_total = len(recov_names)
+    relion_aligned = np.array([rcb.get(si(s), -1) for s in recov_names], dtype=np.int32)
+    rec_class = np.full(n_total, -1, dtype=np.int32)
+    rec_class[h1_idx] = rec_h1
+    rec_class[h2_idx] = rec_h2
+    mk = (rec_class >= 0) & (relion_aligned >= 0)
+    M2 = np.zeros((4, 4), dtype=np.int64)
+    for r, R in zip(rec_class[mk], relion_aligned[mk]):
+        M2[r, R] += 1
+    row2, col2 = linear_sum_assignment(-M2)
+    iter3_match = float(M2[row2, col2].sum() / mk.sum()) if mk.sum() > 0 else 0.0
+
+    payload = {
+        "kclass_strict_per_class_corrs_after_hungarian": matched,
+        "kclass_strict_mean_corr": mean_corr,
+        "kclass_strict_worst_class_corr": worst_corr,
+        "kclass_strict_iter3_class_match": iter3_match,
+        "kclass_strict_walltime_s": elapsed,
+    }
+    ledger = _write_quality_ledger("kclass_strict", payload)
+    logger.info("K-class strict-parity ledger: %s", ledger)
+
+    print(file=sys.stderr, flush=True)
+    print(
+        "=== K=4 STRICT-PARITY cold-start (relion_init + perturb_replay + firstiter_cc + adaptive engine) ===",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(f"  per-class corrs (Hungarian): {matched}", file=sys.stderr, flush=True)
+    print(f"  mean_corr={mean_corr:.6f}  worst_class_corr={worst_corr:.6f}", file=sys.stderr, flush=True)
+    print(f"  iter-3 class match: {iter3_match:.4f}", file=sys.stderr, flush=True)
+    print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
+
+    # Strict bars — observed at HEAD: per-class [0.909, 0.960, 0.974, 0.972],
+    # mean 0.954, iter-3 class match 0.865. The 0.95/0.90/0.84 floors lock
+    # against regressions in any of the strict-parity machinery (relion_init
+    # state-load, adaptive engine routing, axis conventions). Reaching the
+    # 0.99 ceiling requires deeper per-particle CC-score parity work
+    # (tracked separately as future Phase D' / D" follow-up).
+    assert worst_corr >= 0.90, f"K-class strict cold-start worst per-class corr {worst_corr:.4f} below 0.90: {matched}"
+    assert mean_corr >= 0.95, f"K-class strict cold-start mean_corr {mean_corr:.4f} below 0.95: {matched}"
+    assert iter3_match >= 0.84, f"K-class strict cold-start iter-3 class match {iter3_match:.4f} below 0.84"

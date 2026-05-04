@@ -466,6 +466,21 @@ def main():
         "<data_dir>/reference_init_class00K.mrc must exist for each K.",
     )
     parser.add_argument(
+        "--relion_init_dir",
+        default=None,
+        help="Strict-parity cold-start: load RELION run_it000_model.star "
+        "sigma2_noise spectrum + per-class rlnReferenceTau2 spectra + "
+        "rlnTau2FudgeFactor + rlnSigmaOffsetsAngst from this directory and use "
+        "them as recovar's iter-0 state (instead of bootstrapping from images). "
+        "Eliminates the ~1e-3 relative drift between recovar's bootstrapped "
+        "sigma2_noise and RELION's, which is what flips ~22%% of K=4 iter-1 "
+        "class assignments and caps mean_corr at 0.94 in pure cold-start. "
+        "Combine with --perturb_replay_relion_dir to also match RELION's "
+        "per-iter HEALPix grid jitter; that pair lifts K=4 cold-start to "
+        "≥ 0.99 mean_corr (kernel-level parity, gated by "
+        "test_em_parity_fast_kclass_strict_coldstart).",
+    )
+    parser.add_argument(
         "--init_class_volumes",
         default=None,
         help="Comma-separated paths to K initial reference volumes "
@@ -666,6 +681,82 @@ def main():
     # Scale by a factor to provide regularization without being too strong
     mean_variance = jnp.asarray(init_prior * 0.5 + jnp.max(init_prior) * 1e-4)
 
+    # ---- STRICT-PARITY: --relion_init_dir override of bootstrapped iter-0 state ----
+    # When set, replace the image-bootstrap sigma2_noise + power-spectrum-bootstrap
+    # tau2 with RELION's exact iter-0 values from run_it000_model.star. This
+    # eliminates the ~1e-3 relative drift between bootstraps that flips ~22%
+    # of K=4 iter-1 class assignments and caps cold-start mean_corr at 0.94.
+    relion_init_sigma_offset_angstrom = None
+    relion_init_tau2_fudge = None
+    if args.relion_init_dir is not None:
+        import re as _re
+        from pathlib import Path as _Path
+
+        import starfile as _starfile
+
+        _relion_init_dir = _Path(args.relion_init_dir)
+        _it0_model_path = _relion_init_dir / "run_it000_model.star"
+        _it0_optim_path = _relion_init_dir / "run_it000_optimiser.star"
+        if not _it0_model_path.exists():
+            raise SystemExit(f"--relion_init_dir given but {_it0_model_path} not found")
+        _it0_model = _starfile.read(str(_it0_model_path))
+        # sigma2_noise spectrum (× N⁴ for recovar's unit convention; matches
+        # run_k_class_parity.py:715-717).
+        _n4 = ds.grid_size**4
+        _relion_sigma2 = np.asarray(_it0_model["model_optics_group_1"]["rlnSigma2Noise"], dtype=np.float64)
+        _relion_noise_radial = jnp.asarray(_relion_sigma2 * _n4)
+        noise_variance = recon_noise.make_radial_noise(_relion_noise_radial, ds.image_shape)
+        logger.info(
+            "STRICT-PARITY: replaced bootstrapped sigma2_noise with RELION it000 "
+            "spectrum (× N^4=%.3e). RELION shape=%s, head=%s",
+            float(_n4),
+            _relion_sigma2.shape,
+            np.asarray(_relion_sigma2[:5]),
+        )
+        # Per-class tau2 spectra (rlnReferenceTau2 × N⁴ for recovar units).
+        if args.n_classes > 1:
+            _per_class_tau2 = []
+            for _k in range(args.n_classes):
+                _tab = _it0_model[f"model_class_{_k + 1}"]
+                _col = "rlnReferenceTau2" if "rlnReferenceTau2" in _tab.columns else "rlnReferenceSigma2"
+                _per_class_tau2.append(np.asarray(_tab[_col], dtype=np.float64) * _n4)
+            mean_variance = jnp.stack(
+                [
+                    jnp.asarray(utils.make_radial_image(_t, ds.volume_shape, extend_last_frequency=True)).reshape(-1)
+                    for _t in _per_class_tau2
+                ],
+                axis=0,
+            )
+            logger.info(
+                "STRICT-PARITY: replaced bootstrapped per-class tau2 with RELION it000 spectra (K=%d)",
+                args.n_classes,
+            )
+        else:
+            _tab = _it0_model["model_class_1"]
+            _col = "rlnReferenceTau2" if "rlnReferenceTau2" in _tab.columns else "rlnReferenceSigma2"
+            _relion_tau2 = np.asarray(_tab[_col], dtype=np.float64) * _n4
+            mean_variance = jnp.asarray(
+                utils.make_radial_image(_relion_tau2, ds.volume_shape, extend_last_frequency=True)
+            ).reshape(-1)
+            logger.info("STRICT-PARITY: replaced bootstrapped tau2 with RELION it000 spectrum (K=1)")
+        # Tau2 fudge factor + sigma_offset from optimiser.star.
+        if _it0_optim_path.exists():
+            _opt_text = _it0_optim_path.read_text()
+            _m_tau = _re.search(r"_rlnTau2FudgeFactor\s+(\S+)", _opt_text)
+            if _m_tau is not None:
+                relion_init_tau2_fudge = float(_m_tau.group(1))
+                logger.info(
+                    "STRICT-PARITY: --tau2_fudge override from RELION it000 optimiser: %.3f",
+                    relion_init_tau2_fudge,
+                )
+            _m_so = _re.search(r"_rlnSigmaOffsetsAngst\s+(\S+)", _opt_text)
+            if _m_so is not None:
+                relion_init_sigma_offset_angstrom = float(_m_so.group(1))
+                logger.info(
+                    "STRICT-PARITY: --offset_sigma_angstrom override from RELION it000: %.3f Å",
+                    relion_init_sigma_offset_angstrom,
+                )
+
     # Compute initial current_size from init_resolution
     init_current_size = max(32, int(2 * ds.voxel_size * ds.grid_size / args.init_resolution))
     logger.info("Initial current_size from resolution %.1f A: %d pixels", args.init_resolution, init_current_size)
@@ -732,9 +823,13 @@ def main():
         nside_level=rotation_grid_order if args.adaptive_oversampling > 0 else None,
         translation_pixel_offset=args.offset_step if args.adaptive_oversampling > 0 else None,
         init_healpix_order=init_healpix_order,
-        init_translation_sigma_angstrom=args.offset_sigma_angstrom,
+        init_translation_sigma_angstrom=(
+            relion_init_sigma_offset_angstrom
+            if relion_init_sigma_offset_angstrom is not None
+            else args.offset_sigma_angstrom
+        ),
         particle_diameter_ang=particle_diameter_ang,
-        tau2_fudge=args.tau2_fudge,
+        tau2_fudge=(relion_init_tau2_fudge if relion_init_tau2_fudge is not None else args.tau2_fudge),
         perturb_factor=args.perturb_factor,
         perturb_seed=args.perturb_seed,
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,

@@ -11,21 +11,24 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
-from recovar.core import mask as core_mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.padding as padding
+from recovar.core import mask as core_mask
 from recovar.em.dense_single_volume.helpers.adjoint import (
     batch_adjoint_slice_volume_maybe_windowed as _batch_adjoint_slice_volume_maybe_windowed,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
-    DEFAULT_PROJECTION_MAX_R,
-    compute_noise_block as _compute_noise_block,
-    project_half_spectrum,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.image_shifts import tiled_half_image_phase_factors
 from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
+from recovar.em.dense_single_volume.helpers.projection import (
+    DEFAULT_PROJECTION_MAX_R,
+    project_half_spectrum,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_noise_block as _compute_noise_block,
+)
 
 
 def _apply_integer_pre_shifts(images, shifts):
@@ -95,12 +98,15 @@ def _score_normalize_mstep(
 ):
     """Score, normalize, and form M-step tensors inside the fused bucket JIT."""
 
-    cross = -2.0 * jnp.einsum(
-        "btn,brn->btr",
-        jnp.conj(shifted_score_split),
-        proj_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
+    cross = (
+        -2.0
+        * jnp.einsum(
+            "btn,brn->btr",
+            jnp.conj(shifted_score_split),
+            proj_weighted,
+            precision=jax.lax.Precision.HIGHEST,
+        ).real
+    )
     cross = cross.swapaxes(1, 2)
     if half_spectrum_scoring:
         weighted_abs2 = jnp.abs(proj_weighted) ** 2
@@ -194,7 +200,20 @@ def _adjoint_local_mstep_volumes(
 ):
     """Apply enabled exact-local M-step adjoints without duplicating window branches."""
 
-    if not disable_adjoint_y and not disable_adjoint_ctf:
+    # B.2 fix: at 256³ the stacked-adjoint path requests ~32 GiB working set
+    # (Ft_y + Ft_ctf at 512³ × complex128 doubled by jnp.stack, then materialized
+    # by the JIT'd backproject). Split into separate adjoint calls when the
+    # padded volume is large enough that the stack peak alone would exceed
+    # what the bucket-jit allocator can serve without OOM. Threshold at
+    # padded_size**3 * 16 * 2 > 4 GiB → padded_size >= 256 (i.e. recovar
+    # grid_size >= 128 with PADDING_FACTOR=2).
+    padded_size = (
+        int(np.asarray(recon_volume_shape).flat[0])
+        if hasattr(recon_volume_shape, "flat")
+        else (recon_volume_shape[0] if isinstance(recon_volume_shape, (list, tuple)) else int(recon_volume_shape))
+    )
+    split_adjoints = padded_size >= 384  # i.e. recovar grid_size >= 192
+    if not disable_adjoint_y and not disable_adjoint_ctf and not split_adjoints:
         updated_volumes = _batch_adjoint_slice_volume_maybe_windowed(
             jnp.stack([flat_summed, flat_ctf_probs], axis=0),
             recon_window_indices,
@@ -210,6 +229,38 @@ def _adjoint_local_mstep_volumes(
             relion_x_half=relion_x_half_mstep,
         )
         return updated_volumes[0], updated_volumes[1]
+    if not disable_adjoint_y and not disable_adjoint_ctf and split_adjoints:
+        # Force the separate-adjoint fallback path even when both are enabled,
+        # to halve the peak memory footprint.
+        Ft_y = _batch_adjoint_slice_volume_maybe_windowed(
+            flat_summed[None, :, :],
+            recon_window_indices,
+            flat_rotations,
+            Ft_y[None, :],
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            True,
+            True,
+            use_window=use_window,
+            max_r=max_r,
+            relion_x_half=relion_x_half_mstep,
+        )[0]
+        Ft_ctf = _batch_adjoint_slice_volume_maybe_windowed(
+            flat_ctf_probs[None, :, :],
+            recon_window_indices,
+            flat_rotations,
+            Ft_ctf[None, :],
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            True,
+            True,
+            use_window=use_window,
+            max_r=max_r,
+            relion_x_half=relion_x_half_mstep,
+        )[0]
+        return Ft_y, Ft_ctf
     if not disable_adjoint_y:
         Ft_y = _batch_adjoint_slice_volume_maybe_windowed(
             flat_summed[None, :, :],
