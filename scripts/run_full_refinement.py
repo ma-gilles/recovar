@@ -447,6 +447,16 @@ def main():
         "(oracle mode). Example: '0,56,30,50,70,98,98,92,88,90'",
     )
     parser.add_argument(
+        "--firstiter_cc",
+        action="store_true",
+        default=False,
+        help="Enable RELION --firstiter_cc emulation: iter-1 uses normalized "
+        "cross-correlation scoring + winner-take-all reconstruction + ini_high "
+        "low-pass on the iter-1 reference. Required for parity with RELION "
+        "fixtures that were built with --firstiter_cc (Class3D defaults to it; "
+        "auto_refine 3D-Auto-refine uses Gaussian scoring at iter 1 by default).",
+    )
+    parser.add_argument(
         "--n_classes",
         type=int,
         default=1,
@@ -730,6 +740,7 @@ def main():
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,
         replay_iteration_overrides=replay_iteration_overrides,
         n_classes=args.n_classes,
+        emulate_relion_firstiter_cc=bool(args.firstiter_cc),
     )
 
     total_time = time.time() - t_start
@@ -789,6 +800,21 @@ def main():
         save_dict["convergence_ave_Pmax"] = np.float64(state.ave_Pmax)
         save_dict["convergence_healpix_order"] = np.int32(state.healpix_order)
         save_dict["convergence_has_converged"] = np.bool_(state.has_converged)
+
+    # Save K-class metadata when available (n_classes>1).
+    if result.get("class_weights") is not None:
+        save_dict["class_weights"] = np.asarray(result["class_weights"], dtype=np.float64)
+    if result.get("class_weight_trajectory") is not None:
+        save_dict["class_weight_trajectory"] = np.asarray(result["class_weight_trajectory"], dtype=np.float64)
+    if result.get("class_assignments") is not None and any(c is not None for c in result["class_assignments"]):
+        for k, ca in enumerate(result["class_assignments"]):
+            if ca is not None:
+                save_dict[f"class_assignments_half{k}"] = np.asarray(ca, dtype=np.int32)
+    if result.get("per_class_sigma_offset_trajectory") is not None:
+        # Per-iter K-vector or None; serialize as object array via dtype=object.
+        save_dict["per_class_sigma_offset_trajectory"] = np.asarray(
+            result["per_class_sigma_offset_trajectory"], dtype=object
+        )
 
     # Save FSC curves per iteration
     for i, fsc in enumerate(result["fsc_history"]):
