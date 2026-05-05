@@ -134,6 +134,13 @@ JOB_TYPES = {
         False,
         "Volumes from external embeddings",
     ),
+    "benchmark_kernel_bandwidth_1d": JobType(
+        "KernelBandwidthBenchmark1D",
+        "benchmark_kernel_bandwidth_1d",
+        False,
+        False,
+        "Shellwise kernel bandwidth benchmark",
+    ),
 }
 
 
