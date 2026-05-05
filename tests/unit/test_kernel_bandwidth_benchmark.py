@@ -52,6 +52,7 @@ def test_shellwise_oracle_and_cv_handles_zero_error():
 
 def test_benchmark_command_add_args_parses_expected_flags():
     parser = benchmark_cmd.add_args(argparse.ArgumentParser())
+    default_args = parser.parse_args(["--output-dir", "/tmp/out"])
     args = parser.parse_args(
         [
             "--output-dir",
@@ -67,6 +68,7 @@ def test_benchmark_command_add_args_parses_expected_flags():
 
     assert args.output_dir == "/tmp/out"
     assert args.trajectory_source == "toy"
+    assert default_args.trajectory_source == "pdb5nrl"
     assert args.embedding_source == "gt-pc"
     assert args.pc_project == 1
     assert args.zdim == 1
@@ -132,7 +134,7 @@ def test_run_benchmark_smoke(monkeypatch, tmp_path):
         contrast_std=0.0,
         noise_model="radial1",
         seed=0,
-        trajectory_source="toy",
+        trajectory_source="pdb5nrl",
         pc_project=0,
         volume_distribution="uniform",
         embedding_source="gt-pc",
