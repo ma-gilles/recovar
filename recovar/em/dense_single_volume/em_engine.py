@@ -117,6 +117,23 @@ from .shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 logger = logging.getLogger(__name__)
 
 
+def _relion_image_correction_factors(batch_corr, batch_scale, *, score_mode: str):
+    """Return RELION score/image-norm correction factors.
+
+    ``image_corrections`` carries ``(avg_norm / normcorr) * scale`` and
+    ``scale_corrections`` carries ``scale``.  For RELION's accelerated
+    first-iteration CC path, acc_ml_optimiser_impl.h divides Fimg by CTF and
+    scale, then acc_helper_functions_impl.h::buildCorrImage multiplies the CC
+    image by CTF^2 and scale^2. Net score algebra is therefore the same
+    ``(avg_norm / normcorr) * scale`` cross factor used by Gaussian scoring.
+    """
+
+    image_only_corr = batch_corr / batch_scale
+    if score_mode == "normalized_cc":
+        return batch_corr, image_only_corr
+    return batch_corr, image_only_corr
+
+
 def _noise_split_diagnostics_requested() -> bool:
     """Return whether per-shell A2/XA noise split diagnostics are needed."""
     return bool(
@@ -284,14 +301,16 @@ class _DenseBigJitConstants:
 
     window_indices: object
     recon_window_indices: object
-    max_r: object
+    projection_max_r: object
+    backprojection_max_r: object
 
     @classmethod
     def from_window(cls, window_spec, *, n_half: int):
         return cls(
             window_indices=window_spec.score_or_full_indices(n_half),
             recon_window_indices=window_spec.recon_or_full_indices(n_half),
-            max_r=window_spec.dense_big_jit_max_r(),
+            projection_max_r=window_spec.dense_big_jit_projection_max_r(),
+            backprojection_max_r=window_spec.dense_big_jit_backprojection_max_r(),
         )
 
 
@@ -360,8 +379,8 @@ class _DenseBigJitBatchRunner:
             proj_volume_shape=self.proj_volume_shape,
             recon_volume_shape=self.recon_volume_shape,
             disc_type=self.disc_type,
-            projection_max_r=self.constants.max_r,
-            backprojection_max_r=self.constants.max_r,
+            projection_max_r=self.constants.projection_max_r,
+            backprojection_max_r=self.constants.backprojection_max_r,
             mstep_half_volume=self.mstep_half_volume,
             disable_adjoint_y=self.disable_adjoint_y,
             disable_adjoint_ctf=self.disable_adjoint_ctf,
@@ -776,12 +795,20 @@ def run_em(
         relion_half_sum=half_spectrum_scoring,
     )
 
+    firstiter_cc_rectangular_score = relion_firstiter_score_mode == "normalized_cc"
+    window_spec_kwargs = {}
+    if firstiter_cc_rectangular_score:
+        window_spec_kwargs = {
+            "score_square": True,
+            "score_include_dc": True,
+        }
     window_spec = make_fourier_window_spec(
         image_shape,
         current_size,
         n_half,
         square=square_window,
         include_recon_window=True,
+        **window_spec_kwargs,
     )
     use_window = window_spec.use_window
     window_indices = window_spec.score_indices
@@ -790,7 +817,10 @@ def run_em(
     n_recon_windowed = window_spec.n_recon
     projection_kwargs = window_spec.projection_kwargs()
     if use_window:
-        window_desc = "square" if square_window else "circular"
+        if firstiter_cc_rectangular_score:
+            window_desc = "rectangular-cc-score/circular-recon"
+        else:
+            window_desc = "square" if square_window else "circular"
         logger.info(
             "Fourier windowing (%s): current_size=%d, n_score_windowed=%d, n_recon_windowed=%d / n_half=%d (%.1f%% reduction)",
             window_desc,
@@ -1046,26 +1076,33 @@ def run_em(
         # terms use avg_norm/normcorr, so divide the scale back out below.
         # shifted_half has shape (batch_size * n_trans, N_half) — broadcast
         # the per-image correction across n_trans copies.
+        image_only_corr = None
         if image_corrections is not None:
             batch_corr_np = np.asarray(image_corrections, dtype=np.float32)[batch_indices_np]
             if use_dense_big_jit and batch_size != actual_batch_size:
                 batch_corr_np = pad_axis(batch_corr_np, 0, batch_size, value=1)
             batch_corr = jnp.asarray(batch_corr_np)
-            image_only_corr = batch_corr / batch_scale
-            if relion_firstiter_score_mode == "normalized_cc":
-                score_batch_corr = batch_corr / (batch_scale**2)
-                norm_batch_corr = image_only_corr
-            else:
-                score_batch_corr = batch_corr
-                norm_batch_corr = image_only_corr
+            score_batch_corr, image_only_corr = _relion_image_correction_factors(
+                batch_corr,
+                batch_scale,
+                score_mode=relion_firstiter_score_mode,
+            )
             score_corr_expanded = jnp.repeat(score_batch_corr, n_trans)
             recon_corr_expanded = jnp.repeat(batch_corr, n_trans)
             shifted_half = shifted_half * score_corr_expanded[:, None]
             shifted_recon_half = shifted_recon_half * recon_corr_expanded[:, None]
-            batch_norm = batch_norm * (norm_batch_corr**2)[:, None]
+            batch_norm = batch_norm * (image_only_corr**2)[:, None]
         else:
             batch_corr = None
-            image_only_corr = None
+
+        indices_np_for_debug = None
+        original_indices_np_for_debug = None
+        if debug_options.per_pose_score_dump.enabled or os.environ.get("RECOVAR_DEBUG_CC_COMPONENT_DUMP_DIR"):
+            indices_np_for_debug = np.asarray(indices, dtype=np.int64)
+            original_indices_np_for_debug = np.asarray(
+                experiment_dataset.original_image_indices_from_local(indices_np_for_debug),
+                dtype=np.int64,
+            )
 
         # -- Per-image scale correction on CTF²/σ² (RELION parity) --
         # RELION applies scale_correction to the REFERENCE: Frefctf *= myscale
@@ -1304,6 +1341,7 @@ def run_em(
             maybe_write_dense_per_pose_score_dump(
                 request=debug_options.per_pose_score_dump,
                 indices=indices,
+                original_indices=original_indices_np_for_debug,
                 scores=scores,
                 block_index=block.index,
                 preprior=True,
@@ -1319,7 +1357,12 @@ def run_em(
             if _cc_comp_dir and _cc_comp_target is not None:
                 try:
                     _target_idx = int(_cc_comp_target)
-                    _hits = np.where(np.asarray(indices, dtype=np.int64) == _target_idx)[0]
+                    _match_indices = (
+                        original_indices_np_for_debug
+                        if os.environ.get("RECOVAR_DEBUG_CC_COMPONENT_DUMP_TARGET_IS_ORIGINAL", "0") != "0"
+                        else indices_np_for_debug
+                    )
+                    _hits = np.where(np.asarray(_match_indices, dtype=np.int64) == _target_idx)[0]
                     if len(_hits) > 0:
                         _row = int(_hits[0])
                         from pathlib import Path as _P
@@ -1360,6 +1403,8 @@ def run_em(
                             stored_rotations=int(_proj_score.shape[0]),
                             n_trans=int(n_trans),
                             score_mode=relion_firstiter_score_mode,
+                            local_index=int(indices_np_for_debug[_row]),
+                            original_index=int(original_indices_np_for_debug[_row]),
                         )
                 except Exception as _e:
                     print(f"[CC component dump] error: {_e}", flush=True)
@@ -1388,6 +1433,7 @@ def run_em(
             maybe_write_dense_per_pose_score_dump(
                 request=debug_options.per_pose_score_dump,
                 indices=indices,
+                original_indices=original_indices_np_for_debug,
                 scores=scores,
                 block_index=block.index,
             )

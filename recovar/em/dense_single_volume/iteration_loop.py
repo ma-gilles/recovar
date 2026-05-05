@@ -416,11 +416,10 @@ def _build_firstiter_cc_pass2_grids(
         float(translation_step_px),
         oversampling_order=adaptive_os,
     )
-    fine_translation_step = float(translation_step_px) / (2**adaptive_os)
     fine_translations = apply_relion_translation_perturbation(
         fine_base_translations,
         float(random_perturbation),
-        fine_translation_step,
+        float(translation_step_px),
     ).astype(np.float32)
     trans_parent_map = np.asarray(trans_parent_map, dtype=np.int64)
 
@@ -3296,6 +3295,8 @@ def _run_relion_iteration_loop(
                                 accumulate_noise=True,
                                 firstiter_cc_pass2_only_best_coarse=True,
                                 skip_significance_pruning=True,
+                                coarse_current_size=coarse_cs,
+                                fine_current_size=cs_for_engine,
                                 **dense_skip_kwargs,
                             )
                         else:
@@ -3519,7 +3520,9 @@ def _run_relion_iteration_loop(
                             adaptive_kwargs = dict(
                                 class_log_priors=class_log_priors,
                                 accumulate_noise=True,
-                                coarse_current_size=cs_for_engine,
+                                # RELION windows pass 1 with image_coarse_size
+                                # whenever adaptive_oversampling is active.
+                                coarse_current_size=coarse_cs,
                                 fine_current_size=cs_for_engine,
                                 current_size=cs_for_engine,
                                 translation_log_prior=translation_log_prior,

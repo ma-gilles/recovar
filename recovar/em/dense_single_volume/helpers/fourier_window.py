@@ -28,6 +28,7 @@ import recovar.core.fourier_transform_utils as ftu
 
 # Representative sizes kept for explicit callers that still want a bounded set.
 ALLOWED_CURRENT_SIZES = [16, 24, 32, 48, 64, 80, 96, 104, 112, 120, 128, 160, 192, 224, 256]
+_DEFAULT_PROJECTION_MAX_R = object()
 
 
 @dataclass(frozen=True)
@@ -42,16 +43,23 @@ class FourierWindowSpec:
     n_score: int
     n_recon: int
     max_r: float | None
+    projection_max_r: float | None
 
     def projection_kwargs(self, *, return_abs2=None) -> dict:
         kwargs = {}
         if self.use_window:
-            kwargs["max_r"] = self.max_r
+            kwargs["max_r"] = self.projection_max_r
         if return_abs2 is not None:
             kwargs["return_abs2"] = bool(return_abs2)
         return kwargs
 
     def dense_big_jit_max_r(self):
+        return self.dense_big_jit_projection_max_r()
+
+    def dense_big_jit_projection_max_r(self):
+        return self.projection_max_r if self.use_window else "auto"
+
+    def dense_big_jit_backprojection_max_r(self):
         return self.max_r if self.use_window else "auto"
 
     def score_values(self, values):
@@ -259,6 +267,9 @@ def make_fourier_window_spec(
     n_half: int,
     *,
     square=False,
+    score_square=None,
+    score_include_dc=False,
+    projection_max_r=_DEFAULT_PROJECTION_MAX_R,
     include_recon_window=True,
     dtype=jnp.int32,
 ) -> FourierWindowSpec:
@@ -275,13 +286,24 @@ def make_fourier_window_spec(
             n_score=int(n_half),
             n_recon=int(n_half),
             max_r=None,
+            projection_max_r=None,
         )
+
+    if score_square is None:
+        score_square = square
+    resolved_max_r = float(int(current_size) // 2)
+    if projection_max_r is _DEFAULT_PROJECTION_MAX_R:
+        resolved_projection_max_r = resolved_max_r
+    elif projection_max_r is None:
+        resolved_projection_max_r = None
+    else:
+        resolved_projection_max_r = float(projection_max_r)
 
     score_indices_np, n_score = make_fourier_window_indices_np(
         image_shape,
         int(current_size),
-        square=square,
-        include_dc=False,
+        square=bool(score_square),
+        include_dc=bool(score_include_dc),
     )
     recon_indices_np = None
     recon_indices = None
@@ -304,7 +326,8 @@ def make_fourier_window_spec(
         recon_indices=recon_indices,
         n_score=int(n_score),
         n_recon=int(n_recon),
-        max_r=float(int(current_size) // 2),
+        max_r=resolved_max_r,
+        projection_max_r=resolved_projection_max_r,
     )
 
 

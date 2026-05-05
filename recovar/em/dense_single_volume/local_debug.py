@@ -21,6 +21,7 @@ class DensePerPoseScoreDumpRequest:
     dump_dir: Path | None = None
     target: int | None = None
     dump_preprior: bool = False
+    target_is_original: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -96,10 +97,12 @@ def parse_dense_per_pose_score_dump_request() -> DensePerPoseScoreDumpRequest:
     dump_path = Path(dump_dir)
     dump_path.mkdir(parents=True, exist_ok=True)
     dump_preprior = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_PREPRIOR")
+    target_is_original = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_TARGET_IS_ORIGINAL")
     return DensePerPoseScoreDumpRequest(
         dump_dir=dump_path,
         target=target,
         dump_preprior=bool(dump_preprior and dump_preprior != "0"),
+        target_is_original=bool(target_is_original and target_is_original != "0"),
     )
 
 
@@ -126,6 +129,7 @@ def maybe_write_dense_per_pose_score_dump(
     scores,
     block_index: int,
     preprior: bool = False,
+    original_indices=None,
 ) -> None:
     """Dump one dense/global score block for a targeted input image."""
 
@@ -134,7 +138,8 @@ def maybe_write_dense_per_pose_score_dump(
     if preprior and not request.dump_preprior:
         return
     try:
-        hits = np.where(np.asarray(indices, dtype=np.int64) == int(request.target))[0]
+        match_indices = original_indices if request.target_is_original else indices
+        hits = np.where(np.asarray(match_indices, dtype=np.int64) == int(request.target))[0]
         if len(hits) == 0:
             return
         row = int(hits[0])

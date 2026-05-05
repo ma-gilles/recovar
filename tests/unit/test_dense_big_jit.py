@@ -10,6 +10,7 @@ from recovar.em.dense_single_volume.dense_big_jit import run_dense_bucket_big_ji
 from recovar.em.dense_single_volume.em_engine import (
     _dense_big_jit_disabled_reason,
     _pad_dense_big_jit_image_axis,
+    _relion_image_correction_factors,
 )
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
@@ -27,6 +28,10 @@ from recovar.em.dense_single_volume.helpers.scoring import (
     _update_logsumexp,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
+from recovar.em.dense_single_volume.local_debug import (
+    DensePerPoseScoreDumpRequest,
+    maybe_write_dense_per_pose_score_dump,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -63,6 +68,49 @@ def _complex_grid(rows, cols, *, scale, offset=0.0):
 def _real_grid(rows, cols, *, scale, offset=1.0):
     values = np.arange(rows * cols, dtype=np.float32).reshape(rows, cols)
     return jnp.asarray(offset + scale * values, dtype=jnp.float32)
+
+
+def test_relion_firstiter_cc_keeps_cross_scale_correction():
+    """Pin RELION GPU firstiter-CC scale algebra.
+
+    RELION's accelerated path divides Fimg by scale in
+    acc_ml_optimiser_impl.h, then buildCorrImage multiplies the CC image by
+    scale^2 in acc_helper_functions_impl.h. With RECOVAR's convention
+    image_corrections=(avg_norm/normcorr)*scale, the net cross-term
+    correction remains batch_corr; only image-power terms divide out scale.
+    """
+
+    batch_corr = jnp.asarray([1.2, 0.8], dtype=jnp.float32)
+    batch_scale = jnp.asarray([1.5, 0.5], dtype=jnp.float32)
+
+    score_corr, norm_corr = _relion_image_correction_factors(
+        batch_corr,
+        batch_scale,
+        score_mode="normalized_cc",
+    )
+
+    np.testing.assert_allclose(np.asarray(score_corr), np.asarray(batch_corr))
+    np.testing.assert_allclose(np.asarray(norm_corr), np.asarray(batch_corr / batch_scale))
+
+
+def test_dense_per_pose_score_dump_can_target_original_index(tmp_path):
+    scores = np.arange(3 * 2 * 2, dtype=np.float32).reshape(3, 2, 2)
+    request = DensePerPoseScoreDumpRequest(
+        dump_dir=tmp_path,
+        target=42,
+        target_is_original=True,
+    )
+
+    maybe_write_dense_per_pose_score_dump(
+        request=request,
+        indices=np.asarray([0, 1, 2], dtype=np.int64),
+        original_indices=np.asarray([10, 42, 90], dtype=np.int64),
+        scores=scores,
+        block_index=7,
+    )
+
+    dumped = np.load(tmp_path / "target000042_block0007.npy")
+    np.testing.assert_array_equal(dumped, scores[1])
 
 
 def _inputs():

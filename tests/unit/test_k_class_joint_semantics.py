@@ -10,7 +10,13 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     normalize_class_direction_prior_per_half,
 )
 from recovar.em.dense_single_volume.helpers.types import make_relion_stats
-from recovar.em.dense_single_volume.k_class import _assemble_result, run_dense_k_class_em, run_local_k_class_em
+from recovar.em.dense_single_volume.k_class import (
+    _assemble_result,
+    run_dense_k_class_em,
+    run_dense_k_class_em_adaptive,
+    run_local_k_class_em,
+)
+from recovar.em.dense_single_volume.iteration_loop import _build_firstiter_cc_pass2_grids
 from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 from recovar.em.sampling import read_relion_direction_priors
 
@@ -94,6 +100,114 @@ def test_dense_k_class_selects_class_rotation_log_prior(monkeypatch):
             class_rotation_log_prior[expected_class],
         )
         assert "class_rotation_log_prior" not in calls[call_index]
+
+
+def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypatch):
+    calls = []
+
+    class TinyDataset:
+        n_images = 2
+
+    def fake_run_dense_k_class_em(
+        _dataset,
+        means,
+        _mean_variance,
+        _noise_variance,
+        rotations,
+        _translations,
+        _disc_type,
+        **kwargs,
+    ):
+        calls.append(kwargs)
+        n_images = TinyDataset.n_images
+        n_classes = int(np.asarray(means).shape[0])
+        n_rot = int(np.asarray(rotations).shape[0])
+        stats = tuple(
+            make_relion_stats(
+                log_evidence_per_image=np.zeros(n_images, dtype=np.float32),
+                best_log_score_per_image=np.zeros(n_images, dtype=np.float32),
+                max_posterior_per_image=np.ones(n_images, dtype=np.float32),
+                rotation_posterior_sums=np.zeros(n_rot, dtype=np.float32),
+            )
+            for _ in range(n_classes)
+        )
+        return _assemble_result(
+            class_log_evidence=np.zeros((n_classes, n_images), dtype=np.float64),
+            new_means=[jnp.zeros(4, dtype=jnp.complex64) for _ in range(n_classes)],
+            Ft_y=[jnp.zeros(4, dtype=jnp.complex64) for _ in range(n_classes)],
+            Ft_ctf=[jnp.zeros(4, dtype=jnp.float32) for _ in range(n_classes)],
+            per_class_hard_assignments=np.zeros((n_classes, n_images), dtype=np.int32),
+            per_class_stats=stats,
+            noise_stats=None,
+        )
+
+    monkeypatch.setattr(k_class_module, "run_dense_k_class_em", fake_run_dense_k_class_em)
+
+    run_dense_k_class_em_adaptive(
+        TinyDataset(),
+        jnp.zeros((2, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(1, dtype=jnp.float32),
+        np.zeros((2, 3, 3), dtype=np.float32),
+        np.zeros((1, 2), dtype=np.float32),
+        np.zeros((4, 3, 3), dtype=np.float32),
+        np.zeros((1, 2), dtype=np.float32),
+        np.asarray([0, 0, 1, 1], dtype=np.int64),
+        np.asarray([0], dtype=np.int64),
+        "linear_interp",
+        coarse_current_size=26,
+        fine_current_size=56,
+        current_size=56,
+        firstiter_cc_pass2_only_best_coarse=True,
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["current_size"] == 26
+    assert calls[1]["current_size"] == 56
+
+
+def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
+    """RELION perturbs oversampled translations by random_perturbation * offset_step.
+
+    Source: HealpixSampling::getTranslations first subdivides each translation
+    cell, then adds ``random_perturbation * offset_step / pixel_size`` to every
+    oversampled child. The perturbation does not use the subdivided fine step.
+    """
+
+    coarse_rot = np.eye(3, dtype=np.float32)[None]
+    coarse_trans = np.array([[0.0, 0.0]], dtype=np.float32)
+    random_perturbation = 0.25
+    translation_step_px = 2.0
+
+    (
+        _coarse_rot,
+        _coarse_trans,
+        _fine_rot,
+        fine_trans,
+        _rot_parent_map,
+        trans_parent_map,
+    ) = _build_firstiter_cc_pass2_grids(
+        coarse_rot,
+        coarse_trans,
+        coarse_trans,
+        coarse_healpix_order=0,
+        adaptive_oversampling=1,
+        translation_step_px=translation_step_px,
+        random_perturbation=random_perturbation,
+    )
+
+    expected_shift = random_perturbation * translation_step_px
+    expected = np.array(
+        [
+            [-0.5, -0.5],
+            [-0.5, 0.5],
+            [0.5, -0.5],
+            [0.5, 0.5],
+        ],
+        dtype=np.float32,
+    ) + np.float32(expected_shift)
+    np.testing.assert_allclose(fine_trans, expected, atol=1e-6)
+    np.testing.assert_array_equal(trans_parent_map, np.zeros(4, dtype=np.int64))
 
 
 def test_local_k_class_accepts_per_class_layouts_and_external_evidence(monkeypatch):

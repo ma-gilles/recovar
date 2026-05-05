@@ -77,6 +77,11 @@ def _hermitian_image_2d(image_shape, seed=42):
     return jnp.array(ft, dtype=jnp.complex64)
 
 
+def _raw_real_image_2d(image_shape, seed=42):
+    rng = np.random.default_rng(seed)
+    return rng.standard_normal(image_shape).astype(np.float32)
+
+
 def _hermitian_volume(volume_shape, seed=42):
     rng = np.random.default_rng(seed)
     real_vol = rng.standard_normal(volume_shape).astype(np.float32)
@@ -106,7 +111,24 @@ def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False
 
 def _identity_process(batch, apply_image_mask=False):
     _ = apply_image_mask
-    return batch
+    images = jnp.asarray(batch)
+    return ftu.get_dft2(images).reshape((images.shape[0], -1)).astype(jnp.complex64)
+
+
+def _identity_process_half(batch, apply_image_mask=False):
+    _ = apply_image_mask
+    images = jnp.asarray(batch)
+    return ftu.get_dft2_real(images).reshape((images.shape[0], -1)).astype(jnp.complex64)
+
+
+def _constant_half_noise_variance(noise_variance):
+    noise_variance = jnp.asarray(noise_variance)
+    if noise_variance.shape[-1] == N_HALF:
+        return noise_variance
+    values = np.asarray(noise_variance).reshape(-1)
+    if values.size != IMAGE_SIZE or not np.allclose(values, values[0]):
+        raise ValueError("test helper only supports scalar full-image noise variance")
+    return jnp.full((N_HALF,), values[0], dtype=noise_variance.dtype)
 
 
 class MockDataset:
@@ -123,13 +145,15 @@ class MockDataset:
         self.CTF_params = np.zeros((N_IMAGES, 9), dtype=np.float32)
         self.ctf_evaluator = staticmethod(_identity_ctf)
         self.process_images = staticmethod(_identity_process)
+        self.process_images_half = staticmethod(_identity_process_half)
 
-        self._images = np.zeros((N_IMAGES, IMAGE_SIZE), dtype=np.complex64)
+        self._images = np.zeros((N_IMAGES, *IMAGE_SHAPE), dtype=np.float32)
         for i in range(N_IMAGES):
-            self._images[i] = _hermitian_image_2d(IMAGE_SHAPE, seed=rng.integers(10000)).reshape(-1)
+            self._images[i] = _raw_real_image_2d(IMAGE_SHAPE, seed=rng.integers(10000))
 
         class _ImageSource:
             process_images = staticmethod(_identity_process)
+            process_images_half = staticmethod(_identity_process_half)
 
         self.image_source = _ImageSource()
 
@@ -414,13 +438,12 @@ class TestWindowedEStepMatchesFull:
 
         # Preprocess
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+            ds,
             batch_data,
             ctf_params,
-            noise_variance,
+            _constant_half_noise_variance(noise_variance),
             translations,
             config,
-            n_images,
-            n_trans,
         )
 
         # Projections
@@ -494,6 +517,27 @@ class TestFourierWindowSpec:
             np.asarray(values)[:, np.asarray(spec.recon_indices_np)],
         )
 
+    def test_firstiter_cc_uses_rectangular_score_and_radial_recon_support(self):
+        """RELION firstiter CC scores the cropped FFTW image, but backprojects radially."""
+        shape = (128, 128)
+        n_half = shape[0] * (shape[1] // 2 + 1)
+        spec = make_fourier_window_spec(
+            shape,
+            current_size=26,
+            n_half=n_half,
+            square=False,
+            score_square=True,
+            score_include_dc=True,
+            include_recon_window=True,
+        )
+
+        assert spec.n_score == 26 * (26 // 2 + 1)
+        assert spec.n_recon == 265
+        assert spec.projection_kwargs()["max_r"] == 13.0
+        assert spec.dense_big_jit_projection_max_r() == 13.0
+        assert spec.dense_big_jit_backprojection_max_r() == 13.0
+        assert set(np.asarray(spec.recon_indices_np)).issubset(set(np.asarray(spec.score_indices_np)))
+
 
 # ===========================================================================
 # Test 4: Windowed M-step roundtrip
@@ -523,13 +567,12 @@ class TestWindowedMStepRoundtrip:
 
         # Preprocess
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+            ds,
             batch_data,
             ctf_params,
-            noise_variance,
+            _constant_half_noise_variance(noise_variance),
             translations,
             config,
-            n_images,
-            n_trans,
         )
 
         # Window
