@@ -4284,6 +4284,19 @@ def _run_relion_iteration_loop(
 
         _t_unreg_first = time.time()
         if k_class_enabled:
+            replay_tau2_shells = None
+            if iter_replay_override is not None:
+                _replay_tau2 = iter_replay_override.get("tau2_shells")
+                if _replay_tau2 is not None:
+                    replay_tau2_shells = np.asarray(_replay_tau2, dtype=np.float64)
+                    if replay_tau2_shells.ndim == 1:
+                        replay_tau2_shells = replay_tau2_shells[None, :]
+                    if replay_tau2_shells.shape[0] != n_classes:
+                        raise ValueError(
+                            f"Replay override tau2_shells must have {n_classes} classes, "
+                            f"got shape {replay_tau2_shells.shape}",
+                        )
+                    logger.info("Replay override: Class3D tau2 <- per-class model.star spectra")
             tau2_update_details_per_class = []
             mean_signal_variance_per_class = []
             data_vs_prior_per_class = []
@@ -4294,21 +4307,37 @@ def _run_relion_iteration_loop(
             # bp_weight_frame_scale for the same frame conversion.
             kclass_tau2_frame_scale = float(grid_size) ** 4
             for class_idx in range(n_classes):
-                mean_signal_variance_relion_k, tau2_update_details_k = regularization.compute_relion_tau2_from_iref_power_spectrum(
-                    previous_means[0][class_idx],
-                    volume_shape,
-                    padding_factor=PADDING_FACTOR,
-                    current_size=cs,
-                    return_details=True,
-                )
-                mean_signal_variance_k = mean_signal_variance_relion_k * jnp.asarray(
-                    kclass_tau2_frame_scale,
-                    dtype=mean_signal_variance_relion_k.dtype,
-                )
-                tau2_shells_recovar_frame_k = jnp.asarray(
-                    tau2_update_details_k["tau2_shells"],
-                    dtype=mean_signal_variance_k.dtype,
-                ) * jnp.asarray(kclass_tau2_frame_scale, dtype=mean_signal_variance_k.dtype)
+                if replay_tau2_shells is None:
+                    mean_signal_variance_relion_k, tau2_update_details_k = regularization.compute_relion_tau2_from_iref_power_spectrum(
+                        previous_means[0][class_idx],
+                        volume_shape,
+                        padding_factor=PADDING_FACTOR,
+                        current_size=cs,
+                        return_details=True,
+                    )
+                    mean_signal_variance_k = mean_signal_variance_relion_k * jnp.asarray(
+                        kclass_tau2_frame_scale,
+                        dtype=mean_signal_variance_relion_k.dtype,
+                    )
+                    tau2_shells_recovar_frame_k = jnp.asarray(
+                        tau2_update_details_k["tau2_shells"],
+                        dtype=mean_signal_variance_k.dtype,
+                    ) * jnp.asarray(kclass_tau2_frame_scale, dtype=mean_signal_variance_k.dtype)
+                    tau2_shells_relion_frame_k = jnp.asarray(
+                        tau2_update_details_k["tau2_shells"],
+                        dtype=mean_signal_variance_k.dtype,
+                    )
+                else:
+                    tau2_shells_recovar_frame_k = jnp.asarray(replay_tau2_shells[class_idx], dtype=jnp.float32)
+                    mean_signal_variance_k = utils.make_radial_image(
+                        tau2_shells_recovar_frame_k,
+                        volume_shape,
+                        extend_last_frequency=True,
+                    )
+                    tau2_shells_relion_frame_k = tau2_shells_recovar_frame_k / jnp.asarray(
+                        kclass_tau2_frame_scale,
+                        dtype=tau2_shells_recovar_frame_k.dtype,
+                    )
                 shell_stats_k = regularization._compute_relion_weight_shell_stats(
                     Ft_ctf_combined[class_idx],
                     volume_shape,
@@ -4373,7 +4402,7 @@ def _run_relion_iteration_loop(
                         Ft_ctf_1=np.asarray(Ft_ctf_1[class_idx], dtype=np.complex64),
                         Ft_ctf_combined=np.asarray(Ft_ctf_combined[class_idx], dtype=np.complex64),
                         tau2_shells=np.asarray(tau2_shells_recovar_frame_k, dtype=np.float64),
-                        tau2_shells_relion=np.asarray(tau2_update_details_k["tau2_shells"], dtype=np.float64),
+                        tau2_shells_relion=np.asarray(tau2_shells_relion_frame_k, dtype=np.float64),
                         sigma2_shells=np.asarray(
                             jnp.where(
                                 shell_stats_k["avg_weight_shells"] > 0,
