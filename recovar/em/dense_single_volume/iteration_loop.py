@@ -1306,6 +1306,7 @@ def refine_single_volume(
     force_max_iter_after_convergence=False,
     n_classes=1,
     init_class_log_priors=None,
+    enable_auto_convergence=None,
 ):
     """Multi-iteration RELION-parity EM refinement.
 
@@ -1376,6 +1377,10 @@ def refine_single_volume(
     particle_diameter_ang : float or None
         RELION particle diameter in Angstrom for the adaptive coarse-image-size
         formula. When None, fall back to ``ori_size * pixel_size``.
+    enable_auto_convergence : bool or None
+        Whether to apply RELION auto-refine convergence and angular-refinement
+        checks. ``None`` matches RELION mode selection: enabled for K=1
+        auto-refine, disabled for K>1 Class3D/VDAM fixed-iteration jobs.
 
     Returns
     -------
@@ -1456,6 +1461,7 @@ def refine_single_volume(
         force_max_iter_after_convergence=force_max_iter_after_convergence,
         n_classes=n_classes,
         init_class_log_priors=init_class_log_priors,
+        enable_auto_convergence=enable_auto_convergence,
     )
 
 
@@ -1517,11 +1523,13 @@ def _run_relion_iteration_loop(
     force_max_iter_after_convergence=False,
     n_classes=1,
     init_class_log_priors=None,
+    enable_auto_convergence=None,
 ):
-    """RELION-parity refinement loop with convergence detection.
+    """RELION-parity refinement loop with RELION-mode scheduling.
 
-    This implements the full RELION auto-refine algorithm:
-    1. Convergence-driven iteration (not fixed max_iter)
+    This implements the full RELION auto-refine algorithm for K=1 and the
+    fixed-iteration Class3D/VDAM schedule for K>1:
+    1. Auto-refine convergence only when RELION would set do_auto_refine
     2. data_vs_prior for resolution instead of FSC < 0.143
     3. Angular step refinement (HEALPix order increments)
     4. Local angular search when HEALPix order >= 4
@@ -1538,6 +1546,17 @@ def _run_relion_iteration_loop(
     grid_size = cryo.image_shape[0]  # ori_size in RELION terms
     n_classes = int(n_classes)
     k_class_enabled = n_classes > 1
+    if enable_auto_convergence is None:
+        # RELION's MlOptimiser::iterate() only calls checkConvergence() under
+        # do_auto_refine. K>1 Class3D/VDAM jobs are fixed-nr_iter schedules, so
+        # they must not stop early from auto-refine convergence counters.
+        enable_auto_convergence = not k_class_enabled
+    enable_auto_convergence = bool(enable_auto_convergence)
+    logger.info(
+        "RELION scheduler: auto_convergence=%s (%s)",
+        enable_auto_convergence,
+        "auto-refine" if enable_auto_convergence else "fixed-iteration Class3D/VDAM",
+    )
     class_log_priors = _normalize_class_log_priors(n_classes, init_class_log_priors)
     class_weights = np.exp(class_log_priors)
     if k_class_enabled and init_class_log_priors is None and init_direction_prior is not None:
@@ -1881,7 +1900,11 @@ def _run_relion_iteration_loop(
     random_perturbation = 0.0
     perturb_rng = np.random.default_rng(perturb_seed) if perturb_seed is not None else np.random.default_rng()
     iteration = 0
-    while (force_max_iter_after_convergence or not state.has_converged) and iteration < max_iter:
+    while (
+        (not enable_auto_convergence)
+        or force_max_iter_after_convergence
+        or not state.has_converged
+    ) and iteration < max_iter:
         t0 = time.time()
         _parity_dump.start_iteration(iteration)
         iter_replay_override = None
@@ -5161,10 +5184,15 @@ def _run_relion_iteration_loop(
             cryo.voxel_size,
         )
 
-        # RELION's calculateExpectedAngularErrors (ml_optimiser.cpp:9534)
+        # RELION's calculateExpectedAngularErrors projects the current
+        # reference and searches for the angular/translation perturbation whose
+        # model difference crosses a p=0.01 threshold. The significant-count
+        # proxy below is only retained for the K=1 auto-refine path until that
+        # projector-difference estimator is ported; Class3D/VDAM scheduling is
+        # fixed-iteration and must not consume this proxy.
         iter_acc_rot = None
         iter_acc_trans = None
-        if iter_sig_counts is not None and len(iter_sig_counts) > 0:
+        if (not k_class_enabled) and iter_sig_counts is not None and len(iter_sig_counts) > 0:
             iter_acc_rot, _ = calculate_expected_angular_errors(
                 state.healpix_order,
                 iter_sig_counts,
@@ -5175,6 +5203,12 @@ def _run_relion_iteration_loop(
                 iter_acc_rot,
                 len(iter_sig_counts),
                 float(np.mean(iter_sig_counts)),
+            )
+        elif k_class_enabled and iter_sig_counts is not None and len(iter_sig_counts) > 0:
+            logger.info(
+                "Skipping significant-count acc_rot proxy for K-class scheduling; "
+                "RELION Class3D uses fixed nr_iter plus projector-difference "
+                "accuracy diagnostics",
             )
 
         if perturb_replay_relion_dir is not None:
@@ -5222,6 +5256,7 @@ def _run_relion_iteration_loop(
             current_classes=current_combined_classes,
             previous_classes=previous_combined_classes,
             voxel_size_angstrom=float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
+            enable_auto_convergence=enable_auto_convergence,
         )
 
         # Track frac_changed for local search fallback
@@ -5372,7 +5407,7 @@ def _run_relion_iteration_loop(
             elapsed,
         )
 
-        if state.has_converged and not force_max_iter_after_convergence:
+        if enable_auto_convergence and state.has_converged and not force_max_iter_after_convergence:
             logger.info(
                 "Convergence reached at iteration %d. Final resolution: %.2f A (pixel_res=%.1f)",
                 iteration + 1,
@@ -5380,7 +5415,7 @@ def _run_relion_iteration_loop(
                 pixel_res,
             )
             break
-        if state.has_converged and force_max_iter_after_convergence:
+        if enable_auto_convergence and state.has_converged and force_max_iter_after_convergence:
             logger.info(
                 "Convergence reached at iteration %d, continuing because force_max_iter_after_convergence=True",
                 iteration + 1,
@@ -5393,7 +5428,10 @@ def _run_relion_iteration_loop(
     # after plain max_iter exhaustion, and do not synthesize it when
     # convergence is first detected on the last allowed iteration.
     should_run_final_iteration = bool(
-        state.has_converged and not force_max_iter_after_convergence and (iteration + 1) < max_iter
+        enable_auto_convergence
+        and state.has_converged
+        and not force_max_iter_after_convergence
+        and (iteration + 1) < max_iter
     )
     if skip_final_iteration or not should_run_final_iteration:
         if not skip_final_iteration and not should_run_final_iteration:
