@@ -66,6 +66,10 @@ def _run_recovar_test_dataset(out_dir, env_overrides):
     )
 
 
+def _result_text(result):
+    return result.stdout + result.stderr
+
+
 def test_run_test_dataset_custom_cuda_path(tmp_path):
     """Default path: custom CUDA backproject kernel + JAX autotuner.
 
@@ -85,7 +89,7 @@ def test_run_test_dataset_custom_cuda_path(tmp_path):
         )
 
     # Check the wrapper announced full success.
-    assert "All functions completed successfully!" in result.stdout, (
+    assert "All functions completed successfully!" in _result_text(result), (
         "wrapper did not report all functions as successful — check stdout"
     )
 
@@ -127,13 +131,13 @@ def test_run_test_dataset_jax_fallback_path(tmp_path):
             f"{chr(10).join(result.stderr.splitlines()[-30:])}"
         )
 
-    assert "All functions completed successfully!" in result.stdout, (
+    assert "All functions completed successfully!" in _result_text(result), (
         "wrapper did not report all functions as successful on the JAX-fallback path"
     )
 
     # Verify the scale-down log line actually fired — otherwise the env-var
     # detection is broken and the test is passing for the wrong reason.
-    assert "scaling heterogeneity-kernel memory budget" in result.stdout + result.stderr, (
+    assert "scaling heterogeneity-kernel memory budget" in _result_text(result), (
         "RECOVAR_DISABLE_CUDA=1 was set but the heterogeneity-kernel "
         "scale-down log line did not fire. Either the env-var check in "
         "adaptive_kernel_discretization.py is broken, or some upstream "
