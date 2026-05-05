@@ -927,6 +927,123 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
 @pytest.mark.gpu
 @pytest.mark.integration
 @pytest.mark.slow
+def test_em_parity_fast_kclass_strict_oversample_iter1_coldstart(tmp_path):
+    """K=4 strict cold-start reaches near-perfect RELION parity at iter 1.
+
+    This locks the full ``run_full_refinement.py`` orchestration path, not just
+    the direct ``run_k_class_parity.py`` kernel replay. It specifically guards
+    RELION Class3D post-M-step solvent flattening before the iter-1 references
+    are saved or fed into later iterations.
+    """
+    _assert_parity_ancestors_or_skip()
+    _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
+    relion_dir = K4_RELION_DIR
+
+    output_dir = tmp_path / "kclass_strict_os1_iter1"
+    output_dir.mkdir()
+
+    cmd = [
+        sys.executable,
+        str(REFINE_SCRIPT),
+        "--data_dir",
+        str(K4_FIXTURE_DIR),
+        "--output",
+        str(output_dir),
+        "--n_classes",
+        "4",
+        "--max_iter",
+        "1",
+        "--healpix_order",
+        "2",
+        "--offset_range",
+        "6",
+        "--offset_step",
+        "2",
+        "--adaptive_oversampling",
+        "1",
+        "--perturb_factor",
+        "0.5",
+        "--perturb_replay_relion_dir",
+        str(relion_dir),
+        "--relion_init_dir",
+        str(relion_dir),
+        "--firstiter_cc",
+        "--init_resolution",
+        "30.0",
+        "--image_batch_size",
+        "33",
+        "--rotation_block_size",
+        "522",
+    ]
+    logger.info("K-class STRICT-PARITY oversample iter-1 cold-start cmd: %s", " ".join(cmd))
+    t0 = time.time()
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=gpu_subprocess_env())
+    elapsed = time.time() - t0
+    assert proc.returncode == 0, (
+        f"run_full_refinement.py exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+
+    from scipy.optimize import linear_sum_assignment
+
+    from recovar.utils import helpers as _recovar_helpers
+
+    def _C(a, b):
+        a = a.ravel()
+        b = b.ravel()
+        a = a - a.mean()
+        b = b - b.mean()
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+
+    recov_classes = [
+        np.asarray(_recovar_helpers.load_mrc(str(output_dir / f"final_class{c + 1:03d}.mrc")), dtype=np.float64)
+        for c in range(4)
+    ]
+    relion_classes = [
+        np.asarray(
+            _recovar_helpers.load_relion_volume(str(relion_dir / f"run_it001_class{c + 1:03d}.mrc")),
+            dtype=np.float64,
+        )
+        for c in range(4)
+    ]
+    M = np.zeros((4, 4))
+    for i in range(4):
+        for j in range(4):
+            M[i, j] = _C(recov_classes[i], relion_classes[j])
+    row, col = linear_sum_assignment(-M)
+    matched = [float(M[i, j]) for i, j in zip(row, col)]
+    mean_corr = float(np.mean(matched))
+    worst_corr = float(np.min(matched))
+
+    payload = {
+        "kclass_strict_os1_iter1_per_class_corrs_after_hungarian": matched,
+        "kclass_strict_os1_iter1_mean_corr": mean_corr,
+        "kclass_strict_os1_iter1_worst_class_corr": worst_corr,
+        "kclass_strict_os1_iter1_walltime_s": elapsed,
+    }
+    ledger = _write_quality_ledger("kclass_strict_os1_iter1", payload)
+    logger.info("K-class strict-parity oversample iter-1 ledger: %s", ledger)
+
+    print(file=sys.stderr, flush=True)
+    print(
+        "=== K=4 STRICT-PARITY oversample=1 iter-1 cold-start (full refinement driver) ===",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(f"  per-class corrs (Hungarian): {matched}", file=sys.stderr, flush=True)
+    print(f"  mean_corr={mean_corr:.6f}  worst_class_corr={worst_corr:.6f}", file=sys.stderr, flush=True)
+    print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
+
+    assert worst_corr >= 0.999, (
+        f"K-class strict-os1 iter-1 worst per-class corr {worst_corr:.4f} below 0.999: {matched}"
+    )
+    assert mean_corr >= 0.9994, (
+        f"K-class strict-os1 iter-1 mean_corr {mean_corr:.4f} below 0.9994: {matched}"
+    )
+
+
+@pytest.mark.gpu
+@pytest.mark.integration
+@pytest.mark.slow
 def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
     """K=4 STRICT-PARITY cold-start with adaptive_oversampling=1 (8× pose grid).
 

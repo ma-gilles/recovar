@@ -4491,51 +4491,56 @@ def _run_relion_iteration_loop(
                     current_size=cs_int,
                 ).reshape(-1)
 
-            # Diagnostic: dump pre-mask Wiener output when env var set.
-            _premask_dump = os.environ.get("RECOVAR_PREMASK_DUMP_DIR")
-            if _premask_dump:
-                import pathlib
+        # Diagnostic: dump pre-mask Wiener output when env var set.
+        _premask_dump = os.environ.get("RECOVAR_PREMASK_DUMP_DIR")
+        if _premask_dump:
+            import pathlib
 
-                pathlib.Path(_premask_dump).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(_premask_dump).mkdir(parents=True, exist_ok=True)
+            for mean_idx in range(2):
                 np.savez(
-                    pathlib.Path(_premask_dump) / f"recovar_premask_it{iteration + 1:03d}_half{k + 1}.npz",
+                    pathlib.Path(_premask_dump) / f"recovar_premask_it{iteration + 1:03d}_half{mean_idx + 1}.npz",
                     iteration=np.int32(iteration + 1),
-                    half=np.int32(k + 1),
+                    half=np.int32(mean_idx + 1),
                     current_size=np.int32(cs),
                     grid_size=np.int32(grid_size),
                     voxel_size=np.float32(cryo.voxel_size),
                     volume_shape=np.asarray(volume_shape, dtype=np.int32),
-                    means_premask=np.asarray(means[k], dtype=np.complex64),
+                    means_premask=np.asarray(means[mean_idx], dtype=np.complex64),
                 )
 
-            # RELION's solventFlatten (ml_optimiser.cpp:5469): mask the
-            # reconstructed reference outside particle_diameter to remove
-            # solvent noise before the next E-step's projections.
-            if particle_diameter_ang is not None and particle_diameter_ang > 0:
-                flatten_radius = particle_diameter_ang / (2.0 * cryo.voxel_size)
-                solvent_mask = mask.raised_cosine_mask(
-                    volume_shape,
-                    radius=flatten_radius,
-                    radius_p=flatten_radius + RELION_WIDTH_MASK_EDGE,
-                    offset=jnp.zeros(3),
-                )
+        # RELION's solventFlatten (ml_optimiser.cpp:5469): mask the
+        # reconstructed reference outside particle_diameter to remove
+        # solvent noise before the next E-step's projections.
+        if particle_diameter_ang is not None and particle_diameter_ang > 0:
+            flatten_radius = particle_diameter_ang / (2.0 * cryo.voxel_size)
+            solvent_mask = mask.raised_cosine_mask(
+                volume_shape,
+                radius=flatten_radius,
+                radius_p=flatten_radius + RELION_WIDTH_MASK_EDGE,
+                offset=jnp.zeros(3),
+            )
+            for mean_idx in range(2):
                 if k_class_enabled:
                     flattened_classes = []
                     for class_idx in range(n_classes):
-                        vol_real = fourier_transform_utils.get_idft3(means[k][class_idx].reshape(volume_shape))
+                        vol_real = fourier_transform_utils.get_idft3(
+                            means[mean_idx][class_idx].reshape(volume_shape)
+                        )
                         flattened_classes.append(
                             fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1),
                         )
-                    means[k] = jnp.stack(flattened_classes, axis=0)
+                    means[mean_idx] = jnp.stack(flattened_classes, axis=0)
                 else:
-                    vol_real = fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
-                    means[k] = fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1)
-            if relion_firstiter_cc_this_iter:
+                    vol_real = fourier_transform_utils.get_idft3(means[mean_idx].reshape(volume_shape))
+                    means[mean_idx] = fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1)
+        if relion_firstiter_cc_this_iter:
+            for mean_idx in range(2):
                 if k_class_enabled:
-                    means[k] = jnp.stack(
+                    means[mean_idx] = jnp.stack(
                         [
                             _apply_relion_initial_lowpass_filter(
-                                means[k][class_idx],
+                                means[mean_idx][class_idx],
                                 volume_shape,
                                 cryo.voxel_size,
                                 relion_firstiter_ini_high_angstrom,
@@ -4546,8 +4551,8 @@ def _run_relion_iteration_loop(
                         axis=0,
                     )
                 else:
-                    means[k] = _apply_relion_initial_lowpass_filter(
-                        means[k],
+                    means[mean_idx] = _apply_relion_initial_lowpass_filter(
+                        means[mean_idx],
                         volume_shape,
                         cryo.voxel_size,
                         relion_firstiter_ini_high_angstrom,
