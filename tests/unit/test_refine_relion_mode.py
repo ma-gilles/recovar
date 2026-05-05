@@ -392,6 +392,41 @@ def test_exact_local_fine_grid_precompute_auto_policy():
     assert not iteration_loop_module._precompute_exact_local_fine_grid_enabled(6)
 
 
+def test_firstiter_cc_adaptive_translation_perturbation_uses_coarse_step():
+    """RELION perturbs oversampled translations by the coarse offset step."""
+
+    coarse_rot = np.eye(3, dtype=np.float32)[None, :, :]
+    coarse_trans = np.array([[0.0, 0.0]], dtype=np.float32)
+    (
+        _coarse_rot_out,
+        _coarse_trans_out,
+        _fine_rot,
+        fine_trans,
+        _rot_parent,
+        trans_parent,
+    ) = iteration_loop_module._build_firstiter_cc_pass2_grids(
+        coarse_rot,
+        coarse_trans,
+        coarse_trans,
+        coarse_healpix_order=0,
+        adaptive_oversampling=1,
+        translation_step_px=2.0,
+        random_perturbation=0.5,
+    )
+
+    expected = np.array(
+        [
+            [0.5, 0.5],
+            [0.5, 1.5],
+            [1.5, 0.5],
+            [1.5, 1.5],
+        ],
+        dtype=np.float32,
+    )
+    np.testing.assert_allclose(fine_trans, expected, rtol=0.0, atol=1e-6)
+    np.testing.assert_array_equal(trans_parent, np.zeros(4, dtype=np.int64))
+
+
 def test_firstiter_cc_image_batch_size_clamps_reconstruction_temporary():
     # 128^2 images with 32 translations materialize roughly
     # 200 * 32 * 8320 complex values in prepare_reconstruction_batch().
