@@ -800,6 +800,7 @@ def update_refinement_state(
     current_classes: Optional[np.ndarray] = None,
     previous_classes: Optional[np.ndarray] = None,
     voxel_size_angstrom: float = 1.0,
+    enable_auto_convergence: bool = True,
 ) -> RefinementState:
     """Update RefinementState after one EM iteration.
 
@@ -845,6 +846,11 @@ def update_refinement_state(
         keeps the historical zero class-change behavior.
     voxel_size_angstrom : float, default 1.0
         Pixel size in angstroms. Required for the offset metric.
+    enable_auto_convergence : bool, default True
+        When False, update counters and diagnostics but do not run RELION
+        auto-refine angular refinement or convergence. RELION only calls
+        checkConvergence() for ``do_auto_refine`` jobs; Class3D/VDAM fixed
+        iteration jobs must not terminate early from these counters.
 
     Returns
     -------
@@ -1028,12 +1034,12 @@ def update_refinement_state(
     )
 
     # --- Check if we should refine angular sampling ---
-    if should_refine_angular_sampling(updated):
+    if enable_auto_convergence and should_refine_angular_sampling(updated):
         updated = refine_angular_sampling(updated)
         return updated
 
     # --- Check convergence ---
-    if check_convergence(updated):
+    if enable_auto_convergence and check_convergence(updated):
         updated.has_converged = True
         logger.info(
             "Convergence detected at iteration %d: "

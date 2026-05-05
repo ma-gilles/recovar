@@ -991,8 +991,14 @@ def main():
     )
 
     total_time = time.time() - t_start
+    actual_iterations = len(result.get("current_sizes", []))
     logger.info("=" * 70)
-    logger.info("Refinement complete in %.1fs (%d iterations)", total_time, args.max_iter)
+    logger.info(
+        "Refinement complete in %.1fs (%d/%d iterations)",
+        total_time,
+        actual_iterations,
+        args.max_iter,
+    )
     logger.info("=" * 70)
 
     # ---- Save results ----
@@ -1001,7 +1007,7 @@ def main():
         "pixel_resolutions": np.array(result["pixel_resolutions"]),
         "wall_times": np.array(result["wall_times"]),
         "total_time": total_time,
-        "n_iterations": args.max_iter,
+        "n_iterations": actual_iterations,
         "healpix_order": args.healpix_order,
         "coarse_healpix_order": init_healpix_order,
         "n_rotations": rotations.shape[0],
@@ -1010,6 +1016,7 @@ def main():
         "image_shape": np.array(ds.image_shape),
         "volume_shape": np.array(ds.volume_shape),
         "voxel_size": ds.voxel_size,
+        "max_iter_requested": np.int32(args.max_iter),
         "adaptive_oversampling": args.adaptive_oversampling,
         "adaptive_fraction": args.adaptive_fraction,
         "max_significants": args.max_significants,

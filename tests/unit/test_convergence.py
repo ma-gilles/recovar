@@ -649,6 +649,34 @@ class TestUpdateRefinementState:
         )
         assert updated.has_converged is True
 
+    def test_auto_convergence_can_be_disabled_for_fixed_iter_class3d(self):
+        """Class3D/VDAM fixed-iteration schedules must not auto-stop."""
+        state = RefinementState(
+            healpix_order=1,
+            adaptive_oversampling=1,
+            max_healpix_order=3,
+            current_resolution=20.0,
+            nr_iter_wo_resol_gain=MAX_NR_ITER_WO_RESOL_GAIN,
+            nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+            acc_rot=100.0,
+        )
+        updated = update_refinement_state(
+            state,
+            current_assignments=np.array([0, 0], dtype=np.int32),
+            previous_assignments=np.array([0, 0], dtype=np.int32),
+            n_rotations=1,
+            n_translations=1,
+            translations=np.zeros((1, 2), dtype=np.float32),
+            new_resolution=20.0,
+            max_posterior_per_image=np.ones(2, dtype=np.float32),
+            acc_rot=100.0,
+            enable_auto_convergence=False,
+        )
+
+        assert updated.has_converged is False
+        assert updated.healpix_order == 1
+        assert updated.nr_iter_wo_resol_gain == MAX_NR_ITER_WO_RESOL_GAIN + 1
+
     def test_pmax_tracking(self):
         state = self._make_base_state()
         n_rot, n_trans = 100, 5
