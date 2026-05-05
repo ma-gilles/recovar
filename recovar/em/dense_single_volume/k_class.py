@@ -121,13 +121,43 @@ class _DenseScoreDumpClassLabel:
 
     def __enter__(self):
         self._old = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL")
-        os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"] = self._label
+        os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"] = _append_dense_score_dump_label(
+            self._old,
+            self._label,
+        )
 
     def __exit__(self, exc_type, exc, tb):
         if self._old is None:
             os.environ.pop("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL", None)
         else:
             os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"] = self._old
+
+
+class _DenseScoreDumpPhaseLabel:
+    """Temporarily label env-gated dense score dumps by adaptive pass."""
+
+    def __init__(self, label: str):
+        self._label = label
+        self._old = None
+
+    def __enter__(self):
+        self._old = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL")
+        os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"] = _append_dense_score_dump_label(
+            self._old,
+            self._label,
+        )
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._old is None:
+            os.environ.pop("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL", None)
+        else:
+            os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"] = self._old
+
+
+def _append_dense_score_dump_label(old_label: str | None, suffix: str) -> str:
+    if not old_label:
+        return suffix
+    return f"{old_label}_{suffix}"
 
 
 def _local_layout_for_class(
@@ -825,18 +855,19 @@ def run_dense_k_class_em_adaptive(
         coarse_probe_kwargs["current_size"] = (
             coarse_current_size if coarse_current_size is not None else fine_current_size
         )
-        coarse_result = run_dense_k_class_em(
-            experiment_dataset,
-            means_array,
-            mean_variance,
-            noise_variance,
-            coarse_rotations_np,
-            coarse_translations_np,
-            disc_type,
-            class_log_priors=class_log_priors,
-            accumulate_noise=False,
-            **coarse_probe_kwargs,
-        )
+        with _DenseScoreDumpPhaseLabel("coarse"):
+            coarse_result = run_dense_k_class_em(
+                experiment_dataset,
+                means_array,
+                mean_variance,
+                noise_variance,
+                coarse_rotations_np,
+                coarse_translations_np,
+                disc_type,
+                class_log_priors=class_log_priors,
+                accumulate_noise=False,
+                **coarse_probe_kwargs,
+            )
         # ``per_class_hard_assignments[k, i]`` is class k's best coarse pose
         # (independently scored per class). For each class, restrict pass-2
         # to that single pose's children.
@@ -979,18 +1010,19 @@ def run_dense_k_class_em_adaptive(
     # Stack into (n_classes, n_images, n_rot_fine, n_trans_fine).
     pass2_kwargs["class_rotation_translation_mask"] = np.stack(masks_per_class, axis=0)
 
-    result = run_dense_k_class_em(
-        experiment_dataset,
-        means_array,
-        mean_variance,
-        noise_variance,
-        fine_rotations_np,
-        fine_translations_np,
-        disc_type,
-        class_log_priors=class_log_priors,
-        accumulate_noise=accumulate_noise,
-        **pass2_kwargs,
-    )
+    with _DenseScoreDumpPhaseLabel("fine"):
+        result = run_dense_k_class_em(
+            experiment_dataset,
+            means_array,
+            mean_variance,
+            noise_variance,
+            fine_rotations_np,
+            fine_translations_np,
+            disc_type,
+            class_log_priors=class_log_priors,
+            accumulate_noise=accumulate_noise,
+            **pass2_kwargs,
+        )
     if coarse_class_assignments_for_override is not None:
         # RELION binarization picks the global-best (class, pose) at the
         # COARSE grid; the fine refinement only repositions the pose within
