@@ -2085,7 +2085,6 @@ def _run_relion_iteration_loop(
                 data_vs_prior_iter = np.asarray(
                     fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge),
                 )
-                data_vs_prior_trajectory.append(data_vs_prior_iter)
                 res_shell = resolution_from_data_vs_prior(
                     data_vs_prior_iter,
                     allow_high_res_recovery=True,
@@ -2178,7 +2177,6 @@ def _run_relion_iteration_loop(
                 data_vs_prior_iter = np.asarray(
                     fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge),
                 )
-                data_vs_prior_trajectory.append(data_vs_prior_iter)
                 res_shell = resolution_from_data_vs_prior(
                     data_vs_prior_iter,
                     allow_high_res_recovery=True,
@@ -5190,6 +5188,11 @@ def _run_relion_iteration_loop(
                 best_rots = np.asarray(pose_rotations[k], dtype=np.float32)[rot_idx]
                 best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
                 best_trans = np.asarray(current_translations)[trans_idx]
+            if translation_search_bases[k] is not None:
+                best_trans = np.asarray(best_trans, dtype=np.float32) + np.asarray(
+                    translation_search_bases[k],
+                    dtype=np.float32,
+                )
             new_iter_best_rotations[k] = best_rots
             new_iter_best_rotation_eulers[k] = best_eulers
             new_iter_best_translations[k] = _relion_metadata_translations(
@@ -5198,6 +5201,7 @@ def _run_relion_iteration_loop(
             )
         previous_best_rotations = new_iter_best_rotations
         previous_best_rotation_eulers = new_iter_best_rotation_eulers
+        relion_half_inputs.previous_best_rotation_eulers = new_iter_best_rotation_eulers
         relion_half_inputs.previous_best_translations = new_iter_best_translations
         best_rotation_eulers_history.append([np.asarray(e).copy() if e is not None else None for e in new_iter_best_rotation_eulers])
         best_translations_history.append([np.asarray(t).copy() if t is not None else None for t in new_iter_best_translations])
