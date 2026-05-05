@@ -773,12 +773,12 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
     will trip this test even when the looser test_em_parity_fast_kclass_coldstart
     still passes.
 
-    Pass criteria (calibrated to current strict-parity cold-start):
-      * worst per-class corr ≥ 0.90    (observed 0.909 at HEAD)
-      * mean (Hungarian-matched) ≥ 0.95 (observed 0.954 at HEAD)
+    Pass criteria (calibrated after Class3D M-step + post-mask parity):
+      * worst per-class corr ≥ 0.975   (observed 0.9777)
+      * mean (Hungarian-matched) ≥ 0.982 (observed 0.9829)
       * iter-3 class assignment match ≥ 0.84 (observed 0.865 at HEAD)
-    Reaching the 0.99 ceiling requires further per-particle CC-score parity
-    work; tracked separately.
+    Reaching the 0.99 ceiling requires the remaining per-particle assignment
+    parity work; the M-step no longer uses FSC or split-half Wiener solves.
 
     Walltime ~2 min on A100.
     """
@@ -913,14 +913,16 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
     print(f"  iter-3 class match: {iter3_match:.4f}", file=sys.stderr, flush=True)
     print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
 
-    # Strict bars — observed at HEAD: per-class [0.909, 0.960, 0.974, 0.972],
-    # mean 0.954, iter-3 class match 0.865. The 0.95/0.90/0.84 floors lock
-    # against regressions in any of the strict-parity machinery (relion_init
-    # state-load, adaptive engine routing, axis conventions). Reaching the
-    # 0.99 ceiling requires deeper per-particle CC-score parity work
-    # (tracked separately as future Phase D' / D" follow-up).
-    assert worst_corr >= 0.90, f"K-class strict cold-start worst per-class corr {worst_corr:.4f} below 0.90: {matched}"
-    assert mean_corr >= 0.95, f"K-class strict cold-start mean_corr {mean_corr:.4f} below 0.95: {matched}"
+    # Strict bars — after the RELION Class3D M-step and post-reconstruction
+    # mask/ini_high low-pass parity fixes, the os=0 K=4 fixture reached
+    # per-class [0.9777, 0.9817, 0.9882, 0.9839], mean 0.9829. The
+    # 0.982/0.975/0.84 floors lock against regressions in the source-backed
+    # Class3D path without pretending that the remaining assignment gap is
+    # solved.
+    assert worst_corr >= 0.975, (
+        f"K-class strict cold-start worst per-class corr {worst_corr:.4f} below 0.975: {matched}"
+    )
+    assert mean_corr >= 0.982, f"K-class strict cold-start mean_corr {mean_corr:.4f} below 0.982: {matched}"
     assert iter3_match >= 0.84, f"K-class strict cold-start iter-3 class match {iter3_match:.4f} below 0.84"
 
 
@@ -937,13 +939,11 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
     the new run_dense_k_class_em_adaptive plumbing, bypassing the buggy
     _run_k_class_sparse_pass2_local_search_iteration accumulator.
 
-    Pass criteria (calibrated to current strict-parity ceiling at HEAD):
-      * worst per-class corr ≥ 0.91    (observed 0.914 at HEAD)
-      * mean (Hungarian-matched) ≥ 0.95 (observed 0.960 at HEAD)
-      * iter-3 class assignment match ≥ 0.85 (observed at HEAD)
-    Reaching 0.99 requires either matching RELION's per-iter sigma2_noise/tau2
-    trajectory beyond iter 0, or per-particle CC-score parity audit at iter 1
-    — both tracked as future work.
+    Pass criteria (calibrated after Class3D M-step + post-mask parity):
+      * worst per-class corr ≥ 0.985    (observed 0.9898)
+      * mean (Hungarian-matched) ≥ 0.994 (observed 0.9952)
+    Reaching a stable 0.999 requires the remaining per-particle assignment
+    parity audit rather than further M-step approximation.
 
     Walltime ~3-4 min on A100 (oversampled grid is more expensive per iter).
     """
@@ -1045,21 +1045,16 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
     print(f"  mean_corr={mean_corr:.6f}  worst_class_corr={worst_corr:.6f}", file=sys.stderr, flush=True)
     print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
 
-    # Strict-os1 bars — observed at HEAD: per-class [0.948, 0.985, 0.991, 0.999],
-    # mean 0.981 at iter-3 with the RELION particle-diameter mask resolved
-    # via _find_relion_optimiser_star (which now searches --relion_init_dir
-    # + --perturb_replay_relion_dir directories first AND globs the broader
-    # `relion_*ref*/` pattern that catches `relion_pdb_k4_os0_ref/`).
-    # Iter-1 standalone reaches mean_corr 0.997 / per-class [0.996, 0.996,
-    # 0.998, 0.997] — within 0.001 of single-step replay oracle (0.998).
-    # The 0.97/0.94 floors lock against regressions in:
-    #   * the new K-class iter ≥ 2 sparse-pass-2 → run_dense_k_class_em_adaptive routing
-    #   * the _build_firstiter_cc_pass2_grids helper
-    #   * class_rotation_log_prior shape K×n_rot pass-through
-    #   * fine→coarse rotation_posterior_sums collapse via parent_map
-    #   * RELION particle-diameter mask resolution from --relion_init_dir
+    # Strict-os1 bars — after the RELION Class3D M-step and post-reconstruction
+    # mask/ini_high low-pass parity fixes, the oversampled K=4 fixture reached
+    # per-class [0.9898, 0.9950, 0.9973, 0.9987], mean 0.9952. The floors lock
+    # against regressions in:
+    #   * Class3D combined-accumulator single Wiener reconstruction
+    #   * previous-Iref power-spectrum tau2, no gold-standard FSC
+    #   * post-reconstruction solvent mask and firstiter ini_high low-pass
+    #   * K-class adaptive oversampling and class rotation prior plumbing
     # Even when the os=0 strict_coldstart still passes.
-    assert worst_corr >= 0.94, (
-        f"K-class strict-os1 cold-start worst per-class corr {worst_corr:.4f} below 0.94: {matched}"
+    assert worst_corr >= 0.985, (
+        f"K-class strict-os1 cold-start worst per-class corr {worst_corr:.4f} below 0.985: {matched}"
     )
-    assert mean_corr >= 0.97, f"K-class strict-os1 cold-start mean_corr {mean_corr:.4f} below 0.97: {matched}"
+    assert mean_corr >= 0.994, f"K-class strict-os1 cold-start mean_corr {mean_corr:.4f} below 0.994: {matched}"

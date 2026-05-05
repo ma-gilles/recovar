@@ -1127,6 +1127,32 @@ def main():
     ]:
         if result.get(scalar_name):
             save_dict[scalar_name] = np.array(result[scalar_name], dtype=np.float64)
+    def _save_array_or_half_sequence(key, value, dtype=None):
+        try:
+            arr = np.asarray(value, dtype=dtype) if dtype is not None else np.asarray(value)
+            if arr.dtype != object:
+                save_dict[key] = arr
+                return
+        except (TypeError, ValueError):
+            pass
+        if isinstance(value, (list, tuple)):
+            saved_any = False
+            for half_idx, half_value in enumerate(value):
+                if half_value is None:
+                    continue
+                save_dict[f"{key}_half{half_idx + 1}"] = (
+                    np.asarray(half_value, dtype=dtype) if dtype is not None else np.asarray(half_value)
+                )
+                saved_any = True
+            if saved_any:
+                return
+        save_dict[key] = np.asarray(value, dtype=object)
+
+    def _concat_half_sequence(value, dtype):
+        if isinstance(value, (list, tuple)):
+            return np.concatenate([np.asarray(v, dtype=dtype) for v in value if v is not None], axis=0)
+        return np.asarray(value, dtype=dtype)
+
     for traj_name, prefix_name in [
         ("fsc_history", "fsc_iter"),
         ("data_vs_prior_trajectory", "data_vs_prior_iter"),
@@ -1144,7 +1170,7 @@ def main():
         if result.get(traj_name):
             for i, arr_i in enumerate(result[traj_name]):
                 if arr_i is not None:
-                    save_dict[f"{prefix_name}_{i:03d}"] = np.array(arr_i)
+                    _save_array_or_half_sequence(f"{prefix_name}_{i:03d}", arr_i)
     for traj_name, prefix_name in [
         ("best_rotation_eulers_history", "best_rotation_eulers_iter"),
         ("best_translations_history", "best_translations_iter"),
@@ -1152,7 +1178,7 @@ def main():
         if result.get(traj_name):
             for i, arr_i in enumerate(result[traj_name]):
                 if arr_i is not None:
-                    save_dict[f"{prefix_name}_{i:03d}"] = np.array(arr_i, dtype=np.float32)
+                    _save_array_or_half_sequence(f"{prefix_name}_{i:03d}", arr_i, dtype=np.float32)
 
     final_half1_ft = np.asarray(result["means"][0], dtype=np.complex64).reshape(-1)
     final_half2_ft = np.asarray(result["means"][1], dtype=np.complex64).reshape(-1)
@@ -1469,7 +1495,7 @@ def main():
             best_eulers_hist = result.get("best_rotation_eulers_history")
             best_trans_hist = result.get("best_translations_history")
             if best_eulers_hist and i_iter < len(best_eulers_hist) and best_eulers_hist[i_iter] is not None:
-                best_eulers_arr = np.asarray(best_eulers_hist[i_iter], dtype=np.float64)
+                best_eulers_arr = _concat_half_sequence(best_eulers_hist[i_iter], np.float64)
                 recovar_eulers_orig = np.full((n_total, 3), np.nan, dtype=np.float64)
                 recovar_eulers_orig[half1_indices] = best_eulers_arr[:n_h1]
                 recovar_eulers_orig[half2_indices] = best_eulers_arr[n_h1:]
@@ -1570,7 +1596,7 @@ def main():
                             f"{_format_error_summary(relion_gt_inplane_err_deg, '°', [2, 5, 10])}"
                         )
                 if best_trans_hist and i_iter < len(best_trans_hist) and best_trans_hist[i_iter] is not None:
-                    best_trans_arr = np.asarray(best_trans_hist[i_iter], dtype=np.float64)
+                    best_trans_arr = _concat_half_sequence(best_trans_hist[i_iter], np.float64)
                     recovar_trans_orig = np.full((n_total, 2), np.nan, dtype=np.float64)
                     recovar_trans_orig[half1_indices] = best_trans_arr[:n_h1]
                     recovar_trans_orig[half2_indices] = best_trans_arr[n_h1:]

@@ -18,6 +18,7 @@ import healpy as hp
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
+import recovar.reconstruction.regularization as regularization_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
@@ -61,6 +62,8 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
 )
 from recovar.em.dense_single_volume.iteration_loop import (
     _align_fourier_volume_sign_to_reference,
+    _combined_class_direction_prior_from_halves,
+    _combined_noise_stats,
     _normalize_noise_variance_per_half,
     _replay_control_model_iteration,
     refine_single_volume,
@@ -74,6 +77,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     bootstrap_current_size_from_ini_high_relion,
     clamp_relion_coarse_image_size,
     compute_coarse_image_size,
+    shell_index_to_resolution_angstrom,
     should_skip_adaptive_pass2,
 )
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
@@ -2344,6 +2348,32 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(np.asarray(got[0]), half1)
         np.testing.assert_allclose(np.asarray(got[1]), half2)
 
+    def test_combined_noise_stats_sums_half_sufficient_statistics(self):
+        """Class3D combines half accumulators before one RELION sigma2 update."""
+        stats0 = NoiseStats(
+            wsum_sigma2_noise=jnp.array([1.0, 2.0, 3.0], dtype=jnp.float32),
+            wsum_img_power=jnp.array([4.0, 5.0, 6.0], dtype=jnp.float32),
+            wsum_sigma2_offset=7.0,
+            sumw=11.0,
+            wsum_noise_a2=jnp.array([0.5, 1.0, 1.5], dtype=jnp.float32),
+        )
+        stats1 = NoiseStats(
+            wsum_sigma2_noise=jnp.array([10.0, 20.0, 30.0], dtype=jnp.float32),
+            wsum_img_power=jnp.array([40.0, 50.0, 60.0], dtype=jnp.float32),
+            wsum_sigma2_offset=70.0,
+            sumw=13.0,
+            wsum_noise_xa=jnp.array([2.0, 4.0, 6.0], dtype=jnp.float32),
+        )
+
+        got = _combined_noise_stats([stats0, stats1])
+
+        np.testing.assert_allclose(np.asarray(got.wsum_sigma2_noise), [11.0, 22.0, 33.0])
+        np.testing.assert_allclose(np.asarray(got.wsum_img_power), [44.0, 55.0, 66.0])
+        assert got.wsum_sigma2_offset == pytest.approx(77.0)
+        assert got.sumw == pytest.approx(24.0)
+        np.testing.assert_allclose(np.asarray(got.wsum_noise_a2), [0.5, 1.0, 1.5])
+        np.testing.assert_allclose(np.asarray(got.wsum_noise_xa), [2.0, 4.0, 6.0])
+
     def test_relion_refinement_runs_2_iterations(
         self,
         half_datasets,
@@ -2412,6 +2442,51 @@ class TestRelionModeSmokeTest:
         assert result["convergence_state"].has_converged is False
         assert len(result["wall_times"]) == 1
         assert len(result["current_sizes"]) == 1
+
+    def test_relion_mode_joins_lowres_halves_on_first_iteration(
+        self,
+        half_datasets,
+        init_volume,
+        rotations,
+        translations,
+        monkeypatch,
+    ):
+        """RELION joins low-res half accumulators before the first local output iter."""
+
+        join_calls = []
+        original_join = regularization_module.join_halves_at_low_resolution
+
+        def spy_join(*args, **kwargs):
+            join_calls.append(kwargs.get("current_resolution_angstrom"))
+            return original_join(*args, **kwargs)
+
+        monkeypatch.setattr(
+            regularization_module,
+            "join_halves_at_low_resolution",
+            spy_join,
+        )
+
+        refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations,
+            translations,
+            disc_type="linear_interp",
+            max_iter=1,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            init_current_size=4,
+            init_healpix_order=2,
+            max_healpix_order=2,
+            low_resol_join_halves_angstrom=40.0,
+            relion_firstiter_ini_high_angstrom=30.0,
+        )
+
+        expected_resolution = shell_index_to_resolution_angstrom(1, IMAGE_SHAPE[0], half_datasets[0].voxel_size)
+        assert len(join_calls) == 1
+        assert join_calls[0] == pytest.approx(expected_resolution)
 
     def test_relion_final_iteration_scores_half_maps_after_convergence(
         self,
@@ -2843,6 +2918,36 @@ class TestRelionModeSmokeTest:
 
         np.testing.assert_allclose(collapsed, direction_prior, rtol=1e-6, atol=1e-8)
 
+    def test_kclass_direction_prior_combines_half_posteriors_before_collapsing(self):
+        """Class3D has one pdf_direction update; RECOVAR halves are parallelism only."""
+        healpix_order = 0
+        n_rot = rotation_grid_size(healpix_order)
+        n_dirs = n_rot // rotation_grid_n_in_planes(healpix_order)
+        half0 = np.zeros((2, n_rot), dtype=np.float64)
+        half1 = np.zeros((2, n_rot), dtype=np.float64)
+        half0[0, 0] = 9.0
+        half1[0, 1] = 3.0
+        half0[1, 2] = 2.0
+        half1[1, 3] = 6.0
+
+        combined = _combined_class_direction_prior_from_halves(
+            [half0, half1],
+            n_classes=2,
+            healpix_order=healpix_order,
+        )
+
+        expected = []
+        for class_idx in range(2):
+            expected.append(
+                collapse_rotation_posterior_to_direction_prior(
+                    half0[class_idx] + half1[class_idx],
+                    healpix_order,
+                )
+            )
+        expected = np.stack(expected, axis=0)
+        assert combined.shape == (2, n_dirs)
+        np.testing.assert_allclose(combined, expected, rtol=1e-6, atol=1e-8)
+
     def test_engine_translation_log_prior_changes_pmax(self, half_datasets, init_volume):
         rotations = _make_rotations(1, seed=17)
         translations = jnp.array(
@@ -3048,6 +3153,39 @@ class TestRelionModeSmokeTest:
         )
 
         assert called["tau2"] >= 1
+
+    def test_k1_save_intermediates_reconstructs_unregularized_half_maps(
+        self,
+        half_datasets,
+        init_volume,
+        rotations,
+        translations,
+        tmp_path,
+    ):
+        """K=1 diagnostic unregularized maps use full half accumulators, not class indexing."""
+
+        out_dir = tmp_path / "intermediates"
+        result = refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations,
+            translations,
+            disc_type="linear_interp",
+            max_iter=1,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            init_current_size=16,
+            adaptive_oversampling=0,
+            init_healpix_order=2,
+            max_healpix_order=3,
+            save_intermediates_dir=str(out_dir),
+        )
+
+        assert len(result["current_sizes"]) == 1
+        assert (out_dir / "it000_half1_unreg.mrc").exists()
+        assert (out_dir / "it000_half2_unreg.mrc").exists()
 
     def test_relion_mode_current_size_no_longer_uses_weight_based_data_vs_prior(
         self,

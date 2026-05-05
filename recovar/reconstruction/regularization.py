@@ -164,9 +164,12 @@ def compute_relion_tau2_from_iref_power_spectrum(
         do_gridding=True,
     )
 
-    # RELION's projector power spectrum is reported in a normalized scale.
-    # RECOVAR keeps the historical N^4-convention for tau2 / mean_variance.
-    norm_scale = float(volume_shape[0] ** 4)
+    # RELION stores ReferenceTau2 on the projector's shell-average scale:
+    # getSpectrum(..., POWER_SPECTRUM) is normalized by the padded FFT volume
+    # and then multiplied by the projector's normfft/2 factor. For the
+    # padding/FFT convention RECOVAR uses here, that lands on an
+    # ``ori_size^2 * padding_factor^3 / 8`` scale.
+    norm_scale = float(volume_shape[0] ** 2 * (int(padding_factor) ** 3) / 8.0)
     tau2_shells = (np.asarray(relion_power_spectrum, dtype=np.float64) * norm_scale).astype(jnp.float32)
     radial_distances = (
         fourier_transform_utils.get_grid_of_radial_distances(
@@ -562,7 +565,14 @@ def prior_iteration_relion_style(
     return cov_col0.reshape(-1), prior, fsc
 
 
-def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1, r_max=None):
+def _compute_relion_weight_shell_stats(
+    weight,
+    volume_shape,
+    *,
+    padding_factor=1,
+    r_max=None,
+    shell_rounding="round",
+):
     """Match RELION's shell-wise weight averaging for tau2 diagnostics.
 
     Parameters
@@ -580,6 +590,9 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
         RELION reconstruction support radius in native Fourier pixels.  When
         provided, match ``BackProjector::updateSSNRarrays`` by averaging only
         padded voxels with ``r2 < ROUND(r_max * padding_factor)^2``.
+    shell_rounding : {"round", "floor"}
+        Shell binning rule. RELION's SSNR/tau2 update path uses ``round``
+        while the Wiener reconstruct / current-size path uses ``floor``.
 
     Returns
     -------
@@ -592,10 +605,12 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
     n_shells = ori_half + 1
 
     grid_shape = tuple(d * padding_factor for d in volume_shape) if padding_factor > 1 else volume_shape
+    native_full_size = int(np.prod(volume_shape))
     half_grid_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(grid_shape)
     full_size = int(np.prod(grid_shape))
     half_size = int(np.prod(half_grid_shape))
     weight_arr = jnp.asarray(weight).real.astype(jnp.float64)
+    native_layout = False
     if weight_arr.size == full_size:
         is_half_layout = False
         # Match the RELION logical-axis convention used by
@@ -607,13 +622,26 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
         is_half_layout = True
         weight = weight_arr.reshape(-1)
         relion_grid_shape = grid_shape
+    elif padding_factor > 1 and weight_arr.size == native_full_size:
+        # Some callers still pass native-grid weights while requesting a
+        # padded-shell scaling factor. Treat those as native full-layout input
+        # and only apply the oversampling correction to the output.
+        native_layout = True
+        is_half_layout = False
+        weight = weight_arr.reshape(-1)
+        relion_grid_shape = volume_shape
     else:
         raise ValueError(
             f"Expected full or half Fourier weight with {full_size} or {half_size} voxels for "
             f"volume_shape={volume_shape} and padding_factor={padding_factor}, got {weight_arr.size}"
         )
 
-    if padding_factor > 1:
+    if shell_rounding not in {"round", "floor"}:
+        raise ValueError(f"shell_rounding must be 'round' or 'floor', got {shell_rounding!r}")
+
+    round_fn = jnp.round if shell_rounding == "round" else jnp.floor
+
+    if padding_factor > 1 and not native_layout:
         padded_dist = fourier_transform_utils.get_grid_of_radial_distances(
             relion_grid_shape,
             scaled=False,
@@ -625,7 +653,7 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
         else:
             max_r_pad = int(_relion_round_away_from_zero(np.asarray(float(r_max) * padding_factor)))
             radius_included = (padded_dist * padded_dist < float(max_r_pad * max_r_pad)).astype(jnp.float64)
-        shell_index = jnp.minimum(jnp.floor(padded_dist / padding_factor + 0.5).astype(jnp.int32), ori_half)
+        shell_index = jnp.minimum(round_fn(padded_dist / padding_factor).astype(jnp.int32), ori_half)
         if is_half_layout:
             padded_dist_half = fourier_transform_utils.get_grid_of_radial_distances_real(
                 grid_shape,
@@ -641,9 +669,7 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
                     jnp.float64
                 )
             shell_index = jnp.minimum(
-                jnp.floor(
-                    padded_dist_half / padding_factor + 0.5
-                ).astype(jnp.int32),
+                round_fn(padded_dist_half / padding_factor).astype(jnp.int32),
                 ori_half,
             )
             included = radius_included
@@ -1039,6 +1065,8 @@ def compute_data_vs_prior(
         Ft_ctf,
         volume_shape,
         padding_factor=padding_factor,
+        r_max=current_size // 2 if current_size is not None else None,
+        shell_rounding="round",
     )["avg_weight_shells"].astype(jnp.asarray(tau2).dtype)
     tau2 = jnp.asarray(tau2)
     if tau2.shape[0] != avg_weight.shape[0]:

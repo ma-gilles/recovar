@@ -10,14 +10,20 @@ relative to RELION (cf. iteration_loop.py:4667-4703).
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from scripts.run_full_refinement import _build_replay_iteration_overrides
+from scripts.run_full_refinement import (
+    _build_replay_iteration_overrides,
+    _parse_relion_tau2_fudge,
+    _resolve_tau2_fudge,
+)
 
 FIXTURE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0")
+RUN_FULL_REFINEMENT = Path(__file__).resolve().parents[2] / "scripts" / "run_full_refinement.py"
 
 
 def _read_relion_sigma(model_star: Path) -> float:
@@ -31,6 +37,54 @@ def _read_relion_sigma(model_star: Path) -> float:
     elif hasattr(val, "__len__") and not isinstance(val, str):
         val = val[0]
     return float(val)
+
+
+def test_firstiter_cc_passes_ini_high_to_refinement_loop():
+    """Lock down RELION's firstiter_cc low-pass handoff.
+
+    RELION reapplies ``--ini_high`` to references after the first
+    normalized-CC iteration. The full refinement entry point must forward
+    that value to ``refine_single_volume``; otherwise iter 2 starts from
+    unfiltered class maps even though the direct iter-1 oracle is correct.
+    """
+
+    tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "refine_single_volume"
+    ]
+    assert len(calls) == 1
+    keywords = {kw.arg: kw.value for kw in calls[0].keywords}
+    assert "relion_firstiter_ini_high_angstrom" in keywords
+    value = keywords["relion_firstiter_ini_high_angstrom"]
+    assert isinstance(value, ast.IfExp)
+    assert isinstance(value.test, ast.Attribute)
+    assert value.test.attr == "firstiter_cc"
+    assert isinstance(value.body, ast.Attribute)
+    assert value.body.attr == "init_resolution"
+
+
+def test_relion_tau2_fudge_parser_accepts_class3d_arg_label():
+    text = """
+data_optimiser_general
+
+_rlnDoSplitRandomHalves                                  0
+_rlnTau2FudgeArg                                          4.000000
+"""
+    assert _parse_relion_tau2_fudge(text) == pytest.approx(4.0)
+
+
+def test_relion_tau2_fudge_parser_accepts_factor_label():
+    text = "_rlnTau2FudgeFactor 1.000000\n"
+    assert _parse_relion_tau2_fudge(text) == pytest.approx(1.0)
+
+
+def test_tau2_fudge_resolver_matches_relion_mode_defaults():
+    assert _resolve_tau2_fudge(1, None, None) == (1.0, "RELION auto-refine default")
+    assert _resolve_tau2_fudge(4, None, None) == (4.0, "RELION Class3D default")
+    assert _resolve_tau2_fudge(4, 2.5, None) == (2.5, "explicit CLI")
+    assert _resolve_tau2_fudge(4, 2.5, 4.0) == (4.0, "RELION it000 optimiser")
 
 
 @pytest.mark.skipif(not FIXTURE.exists(), reason=f"fixture missing: {FIXTURE}")
