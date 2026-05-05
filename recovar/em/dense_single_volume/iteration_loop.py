@@ -695,7 +695,7 @@ def _run_sparse_pass2_local_search_iteration(
     translation_step=None,
     rotation_log_prior=None,
     translation_log_prior=None,
-    score_with_masked_images=False,
+    score_with_masked_images=True,
     return_stats=True,
     accumulate_noise=True,
     half_spectrum_scoring=True,
@@ -723,12 +723,7 @@ def _run_sparse_pass2_local_search_iteration(
     normalization_log_z=None,
     translation_prior_centers=None,
 ):
-    """Run RELION adaptive pass 2 via the per-image reference path.
-
-    The exact-local big-JIT path is still available for other call sites, but
-    the sparse pass-2 wrapper needs to preserve the same numerical contract as
-    the per-image reference helper used in the parity tests.
-    """
+    """Run RELION adaptive pass 2 through the exact local-search engine."""
     n_images = int(experiment_dataset.n_units)
     translations_np = np.asarray(translations, dtype=np.float32)
     n_coarse_rot = int(rotation_grid_size(nside_level))
@@ -751,112 +746,84 @@ def _run_sparse_pass2_local_search_iteration(
     dummy_prior_translations = np.zeros((n_images, translations_np.shape[1]), dtype=np.float32)
     dummy_rotation_grid = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], max(n_coarse_rot, 1), axis=0)
 
-    exact_outputs = list(
-        _run_local_search_iteration(
-            experiment_dataset,
-            mean,
-            mean_variance,
-            noise_variance,
-            dummy_prior_rotations,
-            dummy_rotation_grid,
-            None,
-            int(nside_level),
-            0.0,
-            0.0,
-            pass2_layout.translation_grid,
-            dummy_prior_translations,
-            1.0,
-            None,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            accumulate_noise=accumulate_noise,
-            projection_padding_factor=projection_padding_factor,
-            reconstruction_padding_factor=reconstruction_padding_factor,
-            use_float64_scoring=use_float64_scoring,
-            do_gridding_correction=do_gridding_correction,
-            square_window=square_window,
-            half_spectrum_scoring=half_spectrum_scoring,
-            projection_relion_texture_interp=projection_relion_texture_interp,
-            projection_force_jax=projection_force_jax,
-            relion_projector_half=relion_projector_half,
-            relion_projector_r_max=relion_projector_r_max,
-            image_corrections=image_corrections,
-            scale_corrections=scale_corrections,
-            image_pre_shifts=image_pre_shifts,
-            mstep_subtract_ctf_projection=mstep_subtract_ctf_projection,
-            mstep_relion_x_half=mstep_relion_x_half,
-            score_with_masked_images=score_with_masked_images,
-            return_profile=return_profile,
-            adaptive_fraction=adaptive_fraction,
-            max_significants=-1,
-            debug_iteration=debug_iteration,
-            pass2_layout=pass2_layout,
-            return_best_pose_details=True,
-            normalization_log_z=normalization_log_z,
-            translation_prior_centers=translation_prior_centers,
-            # RELION re-thresholds fine pass weights only when adaptive
-            # oversampling is active. With oversampling_order == 0, FPCMasks
-            # already contain the coarse pass-1 significant samples and the
-            # final threshold is the minimum selected weight, so all selected
-            # samples contribute.
-            reconstruct_significant_only=int(oversampling_order) > 0,
-        )
-    )
-
-    reference_outputs = _compute_pass2_stats_sparse_perimage_reference(
+    outputs = _run_local_search_iteration(
         experiment_dataset,
         mean,
         mean_variance,
         noise_variance,
-        translations,
-        significant_sample_indices,
+        dummy_prior_rotations,
+        dummy_rotation_grid,
+        None,
         int(nside_level),
+        0.0,
+        0.0,
+        pass2_layout.translation_grid,
+        dummy_prior_translations,
+        1.0,
+        None,
         disc_type,
-        oversampling_order=int(oversampling_order),
-        current_size=current_size,
-        translation_step=translation_step,
-        rotation_log_prior=rotation_log_prior,
-        score_with_masked_images=score_with_masked_images,
-        return_stats=return_stats,
-        translation_log_prior=translation_log_prior,
+        image_batch_size,
+        rotation_block_size,
+        current_size,
         accumulate_noise=accumulate_noise,
-        half_spectrum_scoring=half_spectrum_scoring,
         projection_padding_factor=projection_padding_factor,
         reconstruction_padding_factor=reconstruction_padding_factor,
-        image_corrections=image_corrections,
-        scale_corrections=scale_corrections,
-        image_pre_shifts=image_pre_shifts,
-        translation_prior_centers=translation_prior_centers,
         use_float64_scoring=use_float64_scoring,
         do_gridding_correction=do_gridding_correction,
         square_window=square_window,
-        random_perturbation=random_perturbation,
+        half_spectrum_scoring=half_spectrum_scoring,
+        projection_relion_texture_interp=projection_relion_texture_interp,
+        projection_force_jax=projection_force_jax,
+        relion_projector_half=relion_projector_half,
+        relion_projector_r_max=relion_projector_r_max,
+        image_corrections=image_corrections,
+        scale_corrections=scale_corrections,
+        image_pre_shifts=image_pre_shifts,
+        mstep_subtract_ctf_projection=mstep_subtract_ctf_projection,
+        mstep_relion_x_half=mstep_relion_x_half,
+        score_with_masked_images=score_with_masked_images,
+        return_profile=return_profile,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=-1,
+        debug_iteration=debug_iteration,
+        pass2_layout=pass2_layout,
+        return_best_pose_details=True,
         normalization_log_z=normalization_log_z,
+        translation_prior_centers=translation_prior_centers,
+        # RELION re-thresholds fine pass weights only when adaptive
+        # oversampling is active. With oversampling_order == 0, FPCMasks already
+        # contain the coarse pass-1 significant samples and the final threshold
+        # is the minimum selected weight, so all selected samples contribute.
+        reconstruct_significant_only=int(oversampling_order) > 0,
     )
 
-    exact_outputs[0] = reference_outputs[0]
-    exact_outputs[1] = reference_outputs[1]
-    if return_stats and accumulate_noise:
-        exact_outputs[6] = reference_outputs[6]
-        exact_outputs[7] = reference_outputs[7]
-    elif return_stats:
-        exact_outputs[6] = reference_outputs[6]
-    elif accumulate_noise:
-        exact_outputs[6] = reference_outputs[6]
+    outputs = list(outputs)
+    outputs[2] = _decode_pass2_local_hard_assignment(
+        pass2_layout,
+        outputs[2],
+        outputs[3],
+        outputs[4],
+        outputs[5],
+    )
 
-    # Preserve the downstream refinement-loop contract: sparse pass-2 should
-    # expose the selected rotation id, not the flattened (rotation, translation)
-    # row.  The exact/local helper still tracks the winning translation through
-    # ``best_pose_translations``.
-    exact_outputs[2] = exact_outputs[5]
-
+    profile_summary = None
     if return_profile:
-        # Keep the profile from the exact-local engine; the reference helper
-        # does not emit one.
-        return tuple(exact_outputs)
-    return tuple(exact_outputs)
+        profile_summary = outputs.pop()
+    if return_profile:
+        if return_stats and accumulate_noise:
+            return tuple(outputs + [profile_summary])
+        if return_stats:
+            return tuple(outputs[:-1] + [profile_summary])
+        if accumulate_noise:
+            return tuple(outputs[:6] + [outputs[-1], profile_summary])
+        return tuple(outputs[:6] + [profile_summary])
+    if return_stats and accumulate_noise:
+        return tuple(outputs)
+    if return_stats:
+        return tuple(outputs[:-1])
+    if accumulate_noise:
+        return tuple(outputs[:6] + [outputs[-1]])
+    return tuple(outputs[:6])
 
 
 def _run_k_class_sparse_pass2_local_search_iteration(
@@ -4246,18 +4213,18 @@ def _run_relion_iteration_loop(
                     grid_size,
                     cryo.voxel_size,
                 )
-            if not k_class_enabled:
-                Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = regularization.join_halves_at_low_resolution(
-                    Ft_y_0,
-                    Ft_y_1,
-                    Ft_ctf_0,
-                    Ft_ctf_1,
-                    padded_volume_shape,
-                    cryo.voxel_size,
-                    grid_size,
-                    low_resol_join_halves_angstrom,
-                    current_resolution_angstrom=prev_res_angstrom,
-                )
+        if not k_class_enabled:
+            Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = regularization.join_halves_at_low_resolution(
+                Ft_y_0,
+                Ft_y_1,
+                Ft_ctf_0,
+                Ft_ctf_1,
+                padded_volume_shape,
+                cryo.voxel_size,
+                grid_size,
+                low_resol_join_halves_angstrom,
+                current_resolution_angstrom=prev_res_angstrom,
+            )
 
         # --- RELION-exact M-step ordering ---
         # K=1 stays on RELION's split-half auto-refine path
@@ -4653,21 +4620,15 @@ def _run_relion_iteration_loop(
                 unreg_means = [unreg_shared, unreg_shared]
             else:
                 unreg_means = [
-                    jnp.stack(
-                        [
-                            _reconstruct_volume_eager(
-                                Ft_ctf_half[class_idx],
-                                Ft_y_half[class_idx],
-                                volume_shape,
-                                PADDING_FACTOR,
-                                tau=None,
-                                tau2_fudge=tau2_fudge,
-                                projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                                minres_map=RELION_MINRES_MAP,
-                            )
-                            for class_idx in range(n_classes)
-                        ],
-                        axis=0,
+                    _reconstruct_volume_eager(
+                        Ft_ctf_half,
+                        Ft_y_half,
+                        volume_shape,
+                        PADDING_FACTOR,
+                        tau=None,
+                        tau2_fudge=tau2_fudge,
+                        projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                        minres_map=RELION_MINRES_MAP,
                     )
                     for Ft_ctf_half, Ft_y_half in ((Ft_ctf_0, Ft_y_0), (Ft_ctf_1, Ft_y_1))
                 ]

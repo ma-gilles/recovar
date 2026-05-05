@@ -1,10 +1,12 @@
 import numpy as np
 
 from scripts.run_multi_iter_parity import (
+    concatenate_half_trajectory_entry,
     map_pose_arrays_to_particle_order,
     parse_relion_optimiser_cli_flags,
     replay_control_relion_iteration,
     replay_previous_relion_iteration,
+    save_float32_trajectory_entry,
     stack_index_from_image_name,
 )
 
@@ -65,3 +67,27 @@ def test_parse_relion_optimiser_cli_flags_defaults_when_flag_is_absent():
     )
     assert parsed["do_firstiter_cc"] is False
     assert parsed["ini_high_angstrom"] == 30.0
+
+
+def test_save_float32_trajectory_entry_preserves_uneven_half_arrays():
+    save_dict = {}
+    half1 = np.ones((2, 3), dtype=np.float64)
+    half2 = np.zeros((3, 3), dtype=np.float64)
+
+    save_float32_trajectory_entry(save_dict, "best_rotation_eulers_iter_000", [half1, half2])
+
+    assert save_dict["best_rotation_eulers_iter_000"].dtype == np.float32
+    assert save_dict["best_rotation_eulers_iter_000"].shape == (5, 3)
+    np.testing.assert_array_equal(save_dict["best_rotation_eulers_iter_000_half1"], half1.astype(np.float32))
+    np.testing.assert_array_equal(save_dict["best_rotation_eulers_iter_000_half2"], half2.astype(np.float32))
+
+
+def test_concatenate_half_trajectory_entry_handles_per_half_history():
+    half1 = np.ones((2, 2), dtype=np.float64)
+    half2 = np.zeros((3, 2), dtype=np.float64)
+
+    combined = concatenate_half_trajectory_entry([half1, half2], dtype=np.float64)
+
+    assert combined.shape == (5, 2)
+    np.testing.assert_array_equal(combined[:2], half1)
+    np.testing.assert_array_equal(combined[2:], half2)

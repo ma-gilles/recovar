@@ -73,6 +73,35 @@ def _count_compile_lines(log_path):
     return sum("Compiling" in line for line in text.splitlines())
 
 
+def concatenate_half_trajectory_entry(value, *, dtype=np.float32):
+    """Return one trajectory entry, concatenating per-half arrays if present."""
+    if isinstance(value, (list, tuple)):
+        arrays = []
+        for half_value in value:
+            if half_value is None:
+                continue
+            arrays.append(np.asarray(half_value, dtype=dtype))
+        if not arrays:
+            return None
+        return np.concatenate(arrays, axis=0)
+    return np.asarray(value, dtype=dtype)
+
+
+def save_float32_trajectory_entry(save_dict, key, value):
+    """Save one trajectory entry, preserving per-half arrays when needed."""
+    if isinstance(value, (list, tuple)):
+        for half_idx, half_value in enumerate(value):
+            if half_value is None:
+                continue
+            half_array = np.asarray(half_value, dtype=np.float32)
+            save_dict[f"{key}_half{half_idx + 1}"] = half_array
+        combined = concatenate_half_trajectory_entry(value, dtype=np.float32)
+        if combined is not None:
+            save_dict[key] = combined
+        return
+    save_dict[key] = np.asarray(value, dtype=np.float32)
+
+
 def _collect_local_profile_rows(save_intermediates_dir):
     rows = []
     scalar_keys = [
@@ -1152,7 +1181,7 @@ def main():
         if result.get(traj_name):
             for i, arr_i in enumerate(result[traj_name]):
                 if arr_i is not None:
-                    save_dict[f"{prefix_name}_{i:03d}"] = np.array(arr_i, dtype=np.float32)
+                    save_float32_trajectory_entry(save_dict, f"{prefix_name}_{i:03d}", arr_i)
 
     final_half1_ft = np.asarray(result["means"][0], dtype=np.complex64).reshape(-1)
     final_half2_ft = np.asarray(result["means"][1], dtype=np.complex64).reshape(-1)
@@ -1469,7 +1498,7 @@ def main():
             best_eulers_hist = result.get("best_rotation_eulers_history")
             best_trans_hist = result.get("best_translations_history")
             if best_eulers_hist and i_iter < len(best_eulers_hist) and best_eulers_hist[i_iter] is not None:
-                best_eulers_arr = np.asarray(best_eulers_hist[i_iter], dtype=np.float64)
+                best_eulers_arr = concatenate_half_trajectory_entry(best_eulers_hist[i_iter], dtype=np.float64)
                 recovar_eulers_orig = np.full((n_total, 3), np.nan, dtype=np.float64)
                 recovar_eulers_orig[half1_indices] = best_eulers_arr[:n_h1]
                 recovar_eulers_orig[half2_indices] = best_eulers_arr[n_h1:]
@@ -1570,7 +1599,7 @@ def main():
                             f"{_format_error_summary(relion_gt_inplane_err_deg, '°', [2, 5, 10])}"
                         )
                 if best_trans_hist and i_iter < len(best_trans_hist) and best_trans_hist[i_iter] is not None:
-                    best_trans_arr = np.asarray(best_trans_hist[i_iter], dtype=np.float64)
+                    best_trans_arr = concatenate_half_trajectory_entry(best_trans_hist[i_iter], dtype=np.float64)
                     recovar_trans_orig = np.full((n_total, 2), np.nan, dtype=np.float64)
                     recovar_trans_orig[half1_indices] = best_trans_arr[:n_h1]
                     recovar_trans_orig[half2_indices] = best_trans_arr[n_h1:]
