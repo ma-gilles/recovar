@@ -8,9 +8,9 @@ import numpy as np
 
 from recovar.heterogeneity import embedding
 from recovar.output import output as o
+from recovar.utils import parser_args
 
 logger = logging.getLogger(__name__)
-from recovar.utils import parser_args
 
 _PATH_REMAP_ATTRS = (
     "particles",

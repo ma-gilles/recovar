@@ -16,10 +16,10 @@ import numpy as np
 
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar.cuda_backproject import custom_cuda_requested
 from recovar import core, jax_config, utils
 from recovar.core import linalg
 from recovar.core.configs import ForwardModelConfig
+from recovar.cuda_backproject import custom_cuda_requested
 from recovar.data_io import cryoem_dataset
 from recovar.reconstruction import noise, regularization, relion_functions
 
@@ -1900,10 +1900,12 @@ def even_less_naive_heterogeneity_scheme_relion_style(
         h_grid = 2 * bins
 
         np_to_use = np
-        if heterogeneity_kernel == "triangle":
-            kernel_fn = lambda dist: np_to_use.where(np_to_use.abs(dist) < 1, 1 - np_to_use.abs(dist), 0)
-        else:
-            kernel_fn = lambda dist: np_to_use.where(np_to_use.abs(dist) < 1, 3 / 4 * (1 - dist**2), 0)
+
+        def kernel_fn(dist):
+            if heterogeneity_kernel == "triangle":
+                return np_to_use.where(np_to_use.abs(dist) < 1, 1 - np_to_use.abs(dist), 0)
+            return np_to_use.where(np_to_use.abs(dist) < 1, 3 / 4 * (1 - dist**2), 0)
+
         weight_matrix = np_to_use.zeros((n_bins, n_bins)).astype(np.float32)
         weight_matrix[0, 0] = 1
         for idx in range(1, n_bins):
@@ -2392,7 +2394,7 @@ def compute_weights_from_precompute(
     # NOTE the 1.0x is a weird hack to make sure that JAX doesn't compile store some arrays when compiling. I don't know why it does that.
     threed_frequencies = core.vec_indices_to_vol_indices(np.arange(volume_size), volume_shape) * 1.0
 
-    if type(h) == float or type(h) == int:
+    if isinstance(h, (float, int)):
         h_max = int(h)
         h_ar = h * np.ones(volume_size)
     else:

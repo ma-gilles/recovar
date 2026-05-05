@@ -1,9 +1,9 @@
 import os
 from types import SimpleNamespace
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
-import matplotlib.pyplot as plt
 
 from recovar.commands import analyze as analyze_cmd
 from recovar.commands import compute_state as compute_state_cmd
