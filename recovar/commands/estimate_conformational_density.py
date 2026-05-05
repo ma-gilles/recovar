@@ -23,11 +23,10 @@ def parse_args():
         default=None,
         help="Directory to save the density estimation results. Default = recovar_result_dir/density/",
     )
-    from recovar.utils.parser_args import add_gpu_memory_arg, add_output_name_arg, add_project_arg
+    from recovar.utils.parser_args import add_output_name_arg, add_project_arg
 
     add_project_arg(parser)
     add_output_name_arg(parser)
-    add_gpu_memory_arg(parser)
     parser.add_argument(
         "--pca_dim",
         type=int,
@@ -172,10 +171,6 @@ def estimate_conformational_density(
 
 def main():
     args = parse_args()
-
-    from recovar.utils.parser_args import apply_gpu_memory_arg
-
-    apply_gpu_memory_arg(args, logger=logger)
 
     from recovar.project.job_context import job_context
 

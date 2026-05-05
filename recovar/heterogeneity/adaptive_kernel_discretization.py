@@ -8,7 +8,6 @@ with residual-based model selection across discretization parameters.
 
 import functools
 import logging
-import os
 
 import equinox as eqx
 import jax
@@ -17,6 +16,7 @@ import numpy as np
 
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar.cuda_backproject import custom_cuda_requested
 from recovar import core, jax_config, utils
 from recovar.core import linalg
 from recovar.core.configs import ForwardModelConfig
@@ -26,6 +26,21 @@ from recovar.reconstruction import noise, regularization, relion_functions
 logger = logging.getLogger(__name__)
 
 _SENTINEL = object()
+
+
+def _effective_heterogeneity_memory_budget(avail_gb):
+    """Apply the fallback-path safety margin to the batch-size budget."""
+    if custom_cuda_requested():
+        return avail_gb
+
+    scaled_gb = max(1.0, avail_gb / 3.0)
+    logger.info(
+        "RECOVAR_DISABLE_CUDA is active - scaling heterogeneity-kernel "
+        "memory budget to 1/3 of available (%.1f GB) to account for the "
+        "JAX-native fallback path's higher per-image memory cost.",
+        scaled_gb,
+    )
+    return scaled_gb
 
 
 def _pad_noise_variance_for_fixed_batch(noise_variance, current_batch_size, target_batch_size):
@@ -1794,22 +1809,12 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     # Auto-compute batch size based on GPU memory if not specified.
     #
     # The default formula is calibrated for the custom CUDA backproject kernel,
-    # which scatters in place. The JAX-native fallback path (RECOVAR_DISABLE_CUDA=1)
-    # materializes per-image volumes for the whole batch before reducing — peak
-    # working set is roughly 3x larger for the same batch size. Without this
-    # adjustment, the heterogeneity kernel deterministically OOMs on every
-    # GPU when forced through the fallback path (issue #131 follow-up).
+    # which scatters in place. The JAX-native fallback path materializes
+    # per-image volumes for the whole batch before reducing, so the working set
+    # is materially larger for the same batch size.
     if batch_size is None:
         accum_gb = utils.get_size_in_gb(rhs_all) + utils.get_size_in_gb(lhs_all)
-        avail_gb = max(1.0, utils.get_gpu_memory_total() - accum_gb)
-        if os.environ.get("RECOVAR_DISABLE_CUDA", "").strip() in ("1", "true", "True", "TRUE"):
-            avail_gb = max(1.0, avail_gb / 3.0)
-            logger.info(
-                "RECOVAR_DISABLE_CUDA active — scaling heterogeneity-kernel "
-                "memory budget to 1/3 of available (%.1f GB) to account for "
-                "the JAX-native fallback path's higher per-image memory cost.",
-                avail_gb,
-            )
+        avail_gb = _effective_heterogeneity_memory_budget(max(1.0, utils.get_gpu_memory_total() - accum_gb))
         batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, avail_gb))
     logger.info("batch size in heterogeneity kernel: %s", batch_size)
 

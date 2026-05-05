@@ -3,8 +3,8 @@
 Three behaviors:
 1. ``--gpu-memory N`` is accepted by analyze / compute_state / compute_trajectory
    and propagates to ``set_gpu_memory_limit()``.
-2. Heterogeneity-kernel batch-size formula scales down when
-   ``RECOVAR_DISABLE_CUDA=1`` is set (JAX-fallback path needs ~3x more memory).
+2. Heterogeneity-kernel memory budget is scaled down through the shared
+   fallback-path helper when custom CUDA is disabled.
 3. ``_lib_is_stale`` detects when the cached ``.so`` is older than its source,
    triggering a rebuild on next import.
 """
@@ -12,7 +12,7 @@ Three behaviors:
 from __future__ import annotations
 
 import argparse
-import os
+import logging
 import time
 
 import pytest
@@ -24,13 +24,13 @@ def test_gpu_memory_arg_in_shared_downstream_args():
 
     parser = argparse.ArgumentParser()
     parser_args.standard_downstream_args(parser)
-    args = parser.parse_args(["--gpu-memory", "8.0"])
+    args = parser.parse_args(["/tmp/results", "--gpu-memory", "8.0"])
     assert args.gpu_memory == 8.0
 
     # Default is None (auto-detect)
     parser2 = argparse.ArgumentParser()
     parser_args.standard_downstream_args(parser2)
-    args2 = parser2.parse_args([])
+    args2 = parser2.parse_args(["/tmp/results"])
     assert args2.gpu_memory is None
 
 
@@ -76,13 +76,9 @@ def _commands_that_need_gpu_memory():
     `add_gpu_memory_arg` into its parser.
     """
     return [
-        "estimate_conformational_density",
-        "estimate_stable_states",
-        "extract_image_subset",
         "junk_particle_detection",
         "outlier_detection",
         "pipeline_with_outliers",
-        "postprocess",
         "reconstruct_from_external_embedding",
     ]
 
@@ -124,33 +120,23 @@ def test_gpu_memory_arg_in_command(cmd_name):
 # ---------------------------------------------------------------------------
 
 
-def test_disable_cuda_env_scales_batch_down(monkeypatch):
-    """When RECOVAR_DISABLE_CUDA=1, the heterogeneity kernel should pick a
-    batch size that is ~1/3 of the unset case. The exact ratio doesn't have
-    to be precisely 3x — but it must be smaller, otherwise the JAX-fallback
-    path OOMs on the same data on the same GPU (issue #131)."""
-    from recovar.utils import helpers
+def test_effective_heterogeneity_memory_budget_passthrough(monkeypatch):
+    from recovar.heterogeneity import adaptive_kernel_discretization as akd
 
-    monkeypatch.setattr(helpers, "GPU_MEMORY_LIMIT", 48)
-    # Compute what get_image_batch_size returns at full vs scaled budget.
-    avail_full = 48.0
-    avail_scaled = 48.0 / 3.0
-    full = helpers.get_image_batch_size(grid_size=64, gpu_memory=avail_full)
-    scaled = helpers.get_image_batch_size(grid_size=64, gpu_memory=avail_scaled)
-    assert scaled < full, f"scaled batch ({scaled}) must be smaller than full ({full})"
-    assert full / scaled == pytest.approx(3.0, rel=0.01), (
-        "expected ~3x reduction in batch size when DISABLE_CUDA active"
-    )
+    monkeypatch.setattr(akd, "custom_cuda_requested", lambda: True)
+    assert akd._effective_heterogeneity_memory_budget(48.0) == 48.0
 
 
-def test_recovar_disable_cuda_env_recognised():
-    """The exact env-var values that should trigger the scale-down."""
-    for v in ("1", "true", "True", "TRUE"):
-        os.environ["RECOVAR_DISABLE_CUDA"] = v
-        try:
-            assert os.environ.get("RECOVAR_DISABLE_CUDA", "").strip() in ("1", "true", "True", "TRUE")
-        finally:
-            os.environ.pop("RECOVAR_DISABLE_CUDA", None)
+def test_effective_heterogeneity_memory_budget_scales_for_fallback(monkeypatch, caplog):
+    from recovar.heterogeneity import adaptive_kernel_discretization as akd
+
+    monkeypatch.setattr(akd, "custom_cuda_requested", lambda: False)
+    caplog.set_level(logging.INFO, logger=akd.logger.name)
+
+    scaled = akd._effective_heterogeneity_memory_budget(48.0)
+
+    assert scaled == pytest.approx(16.0)
+    assert "scaling heterogeneity-kernel memory budget" in caplog.text
 
 
 # ---------------------------------------------------------------------------

@@ -529,7 +529,7 @@ def cuda_available() -> bool:
     if _cuda_ok is not None:
         return _cuda_ok
 
-    if _env_flag(_DISABLE_CUSTOM_CUDA_ENV):
+    if not custom_cuda_requested():
         _cuda_ok = False
         logger.info("CUDA kernels disabled via %s", _DISABLE_CUSTOM_CUDA_ENV)
         return _cuda_ok
