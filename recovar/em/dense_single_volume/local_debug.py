@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,6 +103,16 @@ def parse_dense_per_pose_score_dump_request() -> DensePerPoseScoreDumpRequest:
     )
 
 
+def _dense_score_dump_label_suffix() -> str:
+    """Return a sanitized optional label suffix for dense score dumps."""
+
+    label = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL")
+    if not label:
+        return ""
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label.strip())
+    return f"_{label}" if label else ""
+
+
 def maybe_write_dense_per_pose_score_dump(
     *,
     request: DensePerPoseScoreDumpRequest,
@@ -122,9 +133,10 @@ def maybe_write_dense_per_pose_score_dump(
             return
         row = int(hits[0])
         suffix = "_preprior" if preprior else ""
+        label_suffix = _dense_score_dump_label_suffix()
         scores_target = np.asarray(scores[row], dtype=np.float64)
         np.save(
-            request.dump_dir / f"target{int(request.target):06d}_block{int(block_index):04d}{suffix}.npy",
+            request.dump_dir / f"target{int(request.target):06d}{label_suffix}_block{int(block_index):04d}{suffix}.npy",
             scores_target,
         )
     except Exception:

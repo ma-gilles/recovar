@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import NamedTuple
 
 import jax
@@ -109,6 +110,24 @@ def _dense_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_clas
             )
         kwargs["rotation_translation_mask"] = mask_array[class_index]
     return kwargs
+
+
+class _DenseScoreDumpClassLabel:
+    """Temporarily label env-gated dense score dumps by K-class index."""
+
+    def __init__(self, class_index: int):
+        self._label = f"class{int(class_index):03d}"
+        self._old = None
+
+    def __enter__(self):
+        self._old = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL")
+        os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"] = self._label
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._old is None:
+            os.environ.pop("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL", None)
+        else:
+            os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"] = self._old
 
 
 def _local_layout_for_class(
@@ -376,21 +395,22 @@ def run_dense_k_class_em(
     class_log_evidence = []
     for class_index in range(n_classes):
         class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
-        probe = run_em(
-            experiment_dataset,
-            means_array[class_index],
-            _select_class_value(mean_variance, class_index, n_classes),
-            _select_class_value(noise_variance, class_index, n_classes),
-            rotations,
-            translations,
-            disc_type,
-            return_stats=True,
-            accumulate_noise=False,
-            class_log_prior=float(log_priors[class_index]),
-            disable_adjoint_y=True,
-            disable_adjoint_ctf=True,
-            **class_engine_kwargs,
-        )
+        with _DenseScoreDumpClassLabel(class_index):
+            probe = run_em(
+                experiment_dataset,
+                means_array[class_index],
+                _select_class_value(mean_variance, class_index, n_classes),
+                _select_class_value(noise_variance, class_index, n_classes),
+                rotations,
+                translations,
+                disc_type,
+                return_stats=True,
+                accumulate_noise=False,
+                class_log_prior=float(log_priors[class_index]),
+                disable_adjoint_y=True,
+                disable_adjoint_ctf=True,
+                **class_engine_kwargs,
+            )
         class_log_evidence.append(np.asarray(probe[4].log_evidence_per_image, dtype=np.float64))
 
     class_log_evidence_np = np.stack(class_log_evidence, axis=0)
@@ -404,20 +424,21 @@ def run_dense_k_class_em(
     per_class_noise = [] if accumulate_noise else None
     for class_index in range(n_classes):
         class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
-        output = run_em(
-            experiment_dataset,
-            means_array[class_index],
-            _select_class_value(mean_variance, class_index, n_classes),
-            _select_class_value(noise_variance, class_index, n_classes),
-            rotations,
-            translations,
-            disc_type,
-            return_stats=True,
-            accumulate_noise=accumulate_noise,
-            class_log_prior=float(log_priors[class_index]),
-            normalization_log_evidence=global_log_evidence,
-            **class_engine_kwargs,
-        )
+        with _DenseScoreDumpClassLabel(class_index):
+            output = run_em(
+                experiment_dataset,
+                means_array[class_index],
+                _select_class_value(mean_variance, class_index, n_classes),
+                _select_class_value(noise_variance, class_index, n_classes),
+                rotations,
+                translations,
+                disc_type,
+                return_stats=True,
+                accumulate_noise=accumulate_noise,
+                class_log_prior=float(log_priors[class_index]),
+                normalization_log_evidence=global_log_evidence,
+                **class_engine_kwargs,
+            )
         new_mean, hard_assignment, class_Ft_y, class_Ft_ctf, stats, noise = _dense_outputs(
             output,
             accumulate_noise=accumulate_noise,
