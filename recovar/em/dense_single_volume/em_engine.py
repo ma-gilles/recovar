@@ -107,6 +107,7 @@ from .helpers.translation_prior import (
 )
 from .helpers.types import EMProfileStats, make_noise_stats, make_relion_stats
 from .local_debug import (
+    dense_score_dump_label_suffix,
     maybe_write_dense_per_pose_score_dump,
     parse_dense_noise_component_dump_request,
     parse_dense_per_pose_score_dump_request,
@@ -1325,6 +1326,7 @@ def run_em(
 
                         _dump_path = _P(_cc_comp_dir)
                         _dump_path.mkdir(parents=True, exist_ok=True)
+                        _label_suffix = dense_score_dump_label_suffix()
                         # shifted_windowed shape (batch*n_trans, n_score)
                         # ctf2_over_nv_windowed shape (batch, n_score) — already includes ctf²/Xi2 in CC mode
                         # proj_half_b shape (rot_block, n_half) — full pre-window
@@ -1346,11 +1348,17 @@ def run_em(
                         # norms[r] = sum_n ctf2_w[n] * |proj[r,n]|^2  (when relion_half_sum, weights=1)
                         _norms_r = np.einsum("n,rn->r", _ctf2_target, _proj_abs2_score)
                         np.savez(
-                            _dump_path / f"cc_components_target{_target_idx:06d}_block{int(block.index):04d}.npz",
+                            _dump_path
+                            / f"cc_components_target{_target_idx:06d}{_label_suffix}_block{int(block.index):04d}.npz",
                             cross_tr=_cross_tr,
                             norms_r=_norms_r,
                             batch_norm=_bn_target,
                             n_score=int(_proj_score.shape[1]),
+                            r0=int(block.r0),
+                            r1=int(block.r1),
+                            active_rotations=int(block.r1 - block.r0),
+                            stored_rotations=int(_proj_score.shape[0]),
+                            n_trans=int(n_trans),
                             score_mode=relion_firstiter_score_mode,
                         )
                 except Exception as _e:

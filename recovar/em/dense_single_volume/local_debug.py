@@ -113,6 +113,12 @@ def _dense_score_dump_label_suffix() -> str:
     return f"_{label}" if label else ""
 
 
+def dense_score_dump_label_suffix() -> str:
+    """Return the optional label suffix shared by dense score diagnostics."""
+
+    return _dense_score_dump_label_suffix()
+
+
 def maybe_write_dense_per_pose_score_dump(
     *,
     request: DensePerPoseScoreDumpRequest,
