@@ -145,13 +145,22 @@ def normalize_local_scores(scores):
 
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
-    log_shift = best_log_score[:, None, None]
-    probs = jnp.exp((scores - log_shift).astype(jnp.float64))
+    all_invalid = jnp.isneginf(best_log_score)
+    log_shift = jnp.where(all_invalid, 0.0, best_log_score)[:, None, None]
+    probs = jnp.where(
+        jnp.isfinite(scores - log_shift),
+        jnp.exp((scores - log_shift).astype(jnp.float64)),
+        0.0,
+    )
     sum_exp = jnp.sum(probs.reshape(scores.shape[0], -1), axis=1)
-    log_Z = best_log_score + jnp.log(sum_exp)
-    probs = jnp.exp(scores - log_Z[:, None, None])
+    log_Z = jnp.where(all_invalid, -jnp.inf, best_log_score + jnp.log(sum_exp))
+    probs = jnp.where(
+        jnp.isfinite(scores - log_Z[:, None, None]),
+        jnp.exp(scores - log_Z[:, None, None]),
+        0.0,
+    )
     best_argmax = jnp.argmax(flat_scores, axis=1)
-    max_posterior = jnp.exp(best_log_score - log_Z)
+    max_posterior = jnp.where(all_invalid, 0.0, jnp.exp(best_log_score - log_Z))
     return log_Z, probs, best_log_score, best_argmax, max_posterior
 
 
@@ -161,9 +170,13 @@ def normalize_local_scores_with_log_z(scores, log_z):
 
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
-    probs = jnp.exp(scores - log_z[:, None, None])
+    probs = jnp.where(
+        jnp.isfinite(scores - log_z[:, None, None]),
+        jnp.exp(scores - log_z[:, None, None]),
+        0.0,
+    )
     best_argmax = jnp.argmax(flat_scores, axis=1)
-    max_posterior = jnp.exp(best_log_score - log_z)
+    max_posterior = jnp.where(jnp.isneginf(log_z), 0.0, jnp.exp(best_log_score - log_z))
     return log_z, probs, best_log_score, best_argmax, max_posterior
 
 
@@ -173,13 +186,14 @@ def normalize_local_scores_float32(scores):
 
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
-    log_shift = best_log_score[:, None, None]
-    probs = jnp.exp(scores - log_shift)
+    all_invalid = jnp.isneginf(best_log_score)
+    log_shift = jnp.where(all_invalid, 0.0, best_log_score)[:, None, None]
+    probs = jnp.where(jnp.isfinite(scores - log_shift), jnp.exp(scores - log_shift), 0.0)
     sum_exp = jnp.sum(probs.reshape(scores.shape[0], -1), axis=1)
-    log_Z = best_log_score + jnp.log(sum_exp)
-    probs = jnp.exp(scores - log_Z[:, None, None])
+    log_Z = jnp.where(all_invalid, -jnp.inf, best_log_score + jnp.log(sum_exp))
+    probs = jnp.where(jnp.isfinite(scores - log_Z[:, None, None]), jnp.exp(scores - log_Z[:, None, None]), 0.0)
     best_argmax = jnp.argmax(flat_scores, axis=1)
-    max_posterior = jnp.exp(best_log_score - log_Z)
+    max_posterior = jnp.where(all_invalid, 0.0, jnp.exp(best_log_score - log_Z))
     return log_Z, probs, best_log_score, best_argmax, max_posterior
 
 
@@ -189,9 +203,9 @@ def normalize_local_scores_with_log_z_float32(scores, log_z):
 
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
-    probs = jnp.exp(scores - log_z[:, None, None])
+    probs = jnp.where(jnp.isfinite(scores - log_z[:, None, None]), jnp.exp(scores - log_z[:, None, None]), 0.0)
     best_argmax = jnp.argmax(flat_scores, axis=1)
-    max_posterior = jnp.exp(best_log_score - log_z)
+    max_posterior = jnp.where(jnp.isneginf(log_z), 0.0, jnp.exp(best_log_score - log_z))
     return log_z, probs, best_log_score, best_argmax, max_posterior
 
 
