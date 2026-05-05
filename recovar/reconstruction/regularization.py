@@ -126,6 +126,69 @@ def compute_relion_prior(
     )
 
 
+def compute_relion_tau2_from_iref_power_spectrum(
+    Iref_padded_fourier,
+    volume_shape,
+    *,
+    padding_factor=1,
+    current_size=None,
+    return_details=False,
+):
+    """Compute RELION-style tau2 from a previous Iref Fourier volume.
+
+    Mirrors RELION's ``Projector::computeFourierTransformMap`` path by
+    converting the reference back to real space and delegating the power-
+    spectrum accumulation to the RELION projector binding. The returned
+    spectrum is expanded back into RECOVAR's centered Fourier layout.
+
+    The output is in the same Fourier-amplitude scale RECOVAR uses for
+    ``mean_variance`` / Wiener regularization. ``current_size`` optionally
+    clips the spectrum to the same resolution limit RELION uses when updating
+    the projector map.
+    """
+
+    volume_shape = tuple(int(s) for s in volume_shape)
+    current_size = None if current_size is None else int(current_size)
+    from recovar.core import fourier_transform_utils as _ftu
+    from recovar.relion_bind._relion_bind_core import compute_fourier_transform_map
+    from recovar.utils.helpers import recovar_volume_to_relion
+
+    vol_ft = jnp.asarray(Iref_padded_fourier).reshape(volume_shape)
+    vol_real = np.asarray(_ftu.get_idft3(vol_ft).real, dtype=np.float64)
+    relion_volume = recovar_volume_to_relion(vol_real)
+    _, relion_power_spectrum, *_ = compute_fourier_transform_map(
+        relion_volume,
+        ori_size=volume_shape[0],
+        padding_factor=int(padding_factor),
+        current_size=-1 if current_size is None else current_size,
+        do_gridding=True,
+    )
+
+    # RELION's projector power spectrum is reported in a normalized scale.
+    # RECOVAR keeps the historical N^4-convention for tau2 / mean_variance.
+    norm_scale = float(volume_shape[0] ** 4)
+    tau2_shells = (np.asarray(relion_power_spectrum, dtype=np.float64) * norm_scale).astype(jnp.float32)
+    radial_distances = (
+        fourier_transform_utils.get_grid_of_radial_distances(
+            volume_shape,
+            scaled=False,
+            frequency_shift=0,
+        )
+        .astype(int)
+        .reshape(-1)
+    )
+    radial_distances = jnp.minimum(radial_distances, volume_shape[0] // 2)
+    tau2 = tau2_shells[radial_distances]
+    if not return_details:
+        return tau2
+    details = {
+        "tau2_shells": tau2_shells,
+        "shell_sum": tau2_shells.astype(jnp.float32),
+        "shell_count": jnp.ones_like(tau2_shells, dtype=jnp.float32),
+    }
+    return tau2, details
+
+
 def get_fsc(vol1, vol2, volume_shape, substract_shell_mean=False, frequency_shift=0):
     """Compute the Fourier Shell Correlation between two volumes.
 
@@ -927,7 +990,14 @@ def downsample_from_fsc(array, fsc, volume_shape):
 # ---------------------------------------------------------------------------
 
 
-def compute_data_vs_prior(Ft_ctf, tau2, volume_shape, padding_factor=1, tau2_fudge=1.0):
+def compute_data_vs_prior(
+    Ft_ctf,
+    tau2,
+    volume_shape,
+    padding_factor=1,
+    tau2_fudge=1.0,
+    current_size=None,
+):
     """Compute RELION's data_vs_prior ratio per radial shell.
 
     RELION determines the effective resolution from the shell where
@@ -955,6 +1025,10 @@ def compute_data_vs_prior(Ft_ctf, tau2, volume_shape, padding_factor=1, tau2_fud
         Oversampling / padding factor (1 for no padding).
     tau2_fudge : float
         RELION's ``--tau2_fudge`` parameter (default 1.0).
+    current_size : int or None
+        Optional current image size. When provided, shells beyond
+        ``current_size // 2`` are zeroed to match RELION's current-resolution
+        truncation during growth updates.
 
     Returns
     -------
@@ -966,8 +1040,18 @@ def compute_data_vs_prior(Ft_ctf, tau2, volume_shape, padding_factor=1, tau2_fud
         volume_shape,
         padding_factor=padding_factor,
     )["avg_weight_shells"].astype(jnp.asarray(tau2).dtype)
+    tau2 = jnp.asarray(tau2)
+    if tau2.shape[0] != avg_weight.shape[0]:
+        shell_count = min(int(tau2.shape[0]), int(avg_weight.shape[0]))
+        avg_weight = avg_weight[:shell_count]
+        tau2 = tau2[:shell_count]
     oversampling_correction = padding_factor**3
-    return avg_weight * tau2_fudge * tau2 * oversampling_correction
+    data_vs_prior = avg_weight * tau2_fudge * tau2 * oversampling_correction
+    if current_size is not None:
+        shell_limit = min(int(current_size) // 2, int(data_vs_prior.shape[0]) - 1)
+        if shell_limit + 1 < int(data_vs_prior.shape[0]):
+            data_vs_prior = data_vs_prior.at[shell_limit + 1 :].set(0)
+    return data_vs_prior
 
 
 def resolution_from_data_vs_prior(

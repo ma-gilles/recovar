@@ -687,6 +687,7 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
     assert proc.returncode == 0, (
         f"run_full_refinement.py exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
+    assert not any(output_dir.glob("final_half*_class*.mrc")), "K>1 writer should not emit per-half class MRCs"
 
     # Hungarian-match recovar's per-class output to RELION's per-class it003.
     from scipy.optimize import linear_sum_assignment

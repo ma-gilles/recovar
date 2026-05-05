@@ -1015,19 +1015,6 @@ def main():
                     voxel_size=ds.voxel_size,
                 )
             logger.info("Saved %d per-class merged final volumes", args.n_classes)
-        for k in range(2):
-            per_half_classes = np.asarray(result["means"][k])
-            assert per_half_classes.ndim == 2 and per_half_classes.shape[0] == args.n_classes, (
-                f"K-class expected per-half means shape ({args.n_classes}, V), got {per_half_classes.shape}"
-            )
-            for c in range(args.n_classes):
-                vol_real = _ft_to_real_volume(per_half_classes[c])
-                _write_mrc(
-                    os.path.join(args.output, f"final_half{k + 1}_class{c + 1:03d}.mrc"),
-                    vol_real,
-                    voxel_size=ds.voxel_size,
-                )
-            logger.info("Saved %d per-class halfmaps for half %d", args.n_classes, k + 1)
 
     # ---- Print summary ----
     print("\n" + "=" * 70)
