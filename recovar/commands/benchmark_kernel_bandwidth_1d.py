@@ -138,7 +138,7 @@ def _prepare_trajectory_volumes(args, benchmark_dir: Path, voxel_size: float) ->
     raw_dir = benchmark_dir / "volumes_raw"
     raw_prefix = raw_dir / "vol"
 
-    trajectory_source = "pdb5nrl" if args.trajectory_source == "recovar-default" else args.trajectory_source
+    trajectory_source = "pdb5nrl" if args.trajectory_source in {"recovar-default", "pdb5nrl"} else args.trajectory_source
 
     if trajectory_source == "pdb5nrl":
         generate_trajectory_volumes(
@@ -403,7 +403,7 @@ def add_args(parser: argparse.ArgumentParser):
     parser.add_argument("--contrast-std", type=float, default=0.1)
     parser.add_argument("--noise-model", choices=["radial1", "radial"], default="radial1")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--trajectory-source", choices=["recovar-default", "pdb5nrl", "toy"], default="recovar-default")
+    parser.add_argument("--trajectory-source", choices=["recovar-default", "pdb5nrl", "toy"], default="pdb5nrl")
     parser.add_argument("--pc-project", type=int, default=0, help="0 means no projection; otherwise keep first k PCs")
     parser.add_argument("--volume-distribution", choices=["uniform", "vonmises"], default="uniform")
     parser.add_argument("--embedding-source", choices=["gt-pc", "recovar"], default="gt-pc")
