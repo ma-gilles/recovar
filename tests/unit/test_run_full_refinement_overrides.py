@@ -24,6 +24,7 @@ from scripts.run_full_refinement import (
 
 FIXTURE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0")
 RUN_FULL_REFINEMENT = Path(__file__).resolve().parents[2] / "scripts" / "run_full_refinement.py"
+ITERATION_LOOP = Path(__file__).resolve().parents[2] / "recovar" / "em" / "dense_single_volume" / "iteration_loop.py"
 
 
 def _read_relion_sigma(model_star: Path) -> float:
@@ -63,6 +64,15 @@ def test_firstiter_cc_passes_ini_high_to_refinement_loop():
     assert value.test.attr == "firstiter_cc"
     assert isinstance(value.body, ast.Attribute)
     assert value.body.attr == "init_resolution"
+
+
+def test_class3d_direction_prior_replay_accepts_single_model_star():
+    """Class3D writes one run_itNNN_model.star, not split-half model stars."""
+
+    source = ITERATION_LOOP.read_text()
+    assert "run_it{_prior_iter:03d}_half{_half_idx + 1}_model.star" in source
+    assert "run_it{_prior_iter:03d}_model.star" in source
+    assert "Replay override: class direction prior half-%d <- %s" in source
 
 
 def test_relion_tau2_fudge_parser_accepts_class3d_arg_label():
@@ -173,10 +183,17 @@ def test_replay_overrides_accept_class3d_single_model_star(tmp_path):
         }
     )
     model_groups = pd.DataFrame({"rlnGroupScaleCorrection": [1.0, 0.5]})
+    model_optics_group_1 = pd.DataFrame({"rlnSigma2Noise": [3.0]})
+    model_classes = pd.DataFrame({"rlnClassDistribution": [0.25, 0.75]})
 
     starfile.write({"particles": particles}, tmp_path / "run_it001_data.star", overwrite=True)
     starfile.write(
-        {"model_general": model_general, "model_groups": model_groups},
+        {
+            "model_general": model_general,
+            "model_groups": model_groups,
+            "model_optics_group_1": model_optics_group_1,
+            "model_classes": model_classes,
+        },
         tmp_path / "run_it001_model.star",
         overwrite=True,
     )
@@ -189,6 +206,7 @@ def test_replay_overrides_accept_class3d_single_model_star(tmp_path):
         ds_voxel=4.25,
         ds_grid=128,
         include_normcorr=True,
+        include_noise=True,
     )
 
     assert overrides[0] is None
@@ -199,6 +217,12 @@ def test_replay_overrides_accept_class3d_single_model_star(tmp_path):
     s1, s2 = overrides[1]["scale_corrections"]
     np.testing.assert_allclose(s1, np.asarray([1.0, 1.0], dtype=np.float32))
     np.testing.assert_allclose(s2, np.asarray([0.5, 0.5], dtype=np.float32))
+    n1, n2 = overrides[1]["noise_variance"]
+    assert n1.shape == (128 * 128,)
+    assert n2.shape == (128 * 128,)
+    np.testing.assert_allclose(n1, np.full(128 * 128, 3.0 * 128**4, dtype=np.float32))
+    np.testing.assert_allclose(n2, np.full(128 * 128, 3.0 * 128**4, dtype=np.float32))
+    np.testing.assert_allclose(overrides[1]["class_weights"], np.asarray([0.25, 0.75]))
 
 
 @pytest.mark.skipif(not FIXTURE.exists(), reason=f"fixture missing: {FIXTURE}")

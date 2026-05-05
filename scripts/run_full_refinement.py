@@ -108,6 +108,7 @@ def _build_replay_iteration_overrides(
     ds_grid,
     *,
     include_normcorr,
+    include_noise=False,
 ):
     """Build per-iter replay overrides keyed on recovar iteration index.
 
@@ -117,6 +118,9 @@ def _build_replay_iteration_overrides(
     and builds an override dict containing:
       * image_corrections: per-image (avg_norm/normcorr) * group_scale
       * scale_corrections: per-image group_scale alone
+      * noise_variance: RELION rlnSigma2Noise expanded to recovar's N^4
+        image-shaped noise frame
+      * class_weights: RELION rlnClassDistribution, when present
 
     This matches scripts/run_multi_iter_parity.py::_load_relion_iteration_override
     (the proven replay logic). The recovar iter-k override is read from
@@ -128,6 +132,8 @@ def _build_replay_iteration_overrides(
     from pathlib import Path as _Path
 
     import starfile as _sf
+
+    from recovar.reconstruction import noise as _recovar_noise
 
     relion_dir = _Path(relion_dir).resolve()
 
@@ -182,6 +188,27 @@ def _build_replay_iteration_overrides(
             v = table[key]
             return float(v if isinstance(v, (int, float)) else v.iloc[0] if hasattr(v, "iloc") else v[0])
 
+        def _noise_from_model(model):
+            optics = model.get("model_optics_group_1") if isinstance(model, dict) else None
+            if optics is None or "rlnSigma2Noise" not in optics.columns:
+                return None
+            relion_sigma2 = np.asarray(optics["rlnSigma2Noise"], dtype=np.float64)
+            recovar_radial = relion_sigma2 * (float(ds_grid) ** 4)
+            return np.asarray(
+                _recovar_noise.make_radial_noise(recovar_radial, (int(ds_grid), int(ds_grid))),
+                dtype=np.float32,
+            ).reshape(-1)
+
+        def _class_weights_from_model(model):
+            classes = model.get("model_classes") if isinstance(model, dict) else None
+            if classes is None or "rlnClassDistribution" not in classes.columns:
+                return None
+            weights = np.asarray(classes["rlnClassDistribution"], dtype=np.float64).reshape(-1)
+            total = float(weights.sum())
+            if total <= 0.0 or not np.all(np.isfinite(weights)):
+                return None
+            return weights / total
+
         avg_norm_h1 = _scalar(m1["model_general"], "rlnNormCorrectionAverage")
         avg_norm_h2 = _scalar(m2["model_general"], "rlnNormCorrectionAverage")
 
@@ -230,13 +257,28 @@ def _build_replay_iteration_overrides(
         scale_corr_h2 = _to_half(pp_scale_h2, half2_idx)
 
         override_k = {"translation_sigma_angstrom": sigma_offset_avg}
+        class_weights_h1 = _class_weights_from_model(m1)
+        class_weights_h2 = _class_weights_from_model(m2)
+        if class_weights_h1 is not None and class_weights_h2 is not None:
+            class_weights_avg = 0.5 * (class_weights_h1 + class_weights_h2)
+            override_k["class_weights"] = class_weights_avg / class_weights_avg.sum()
         if include_normcorr:
             override_k["image_corrections"] = [corr_h1, corr_h2]
             override_k["scale_corrections"] = [scale_corr_h1, scale_corr_h2]
+        if include_noise:
+            noise_h1 = _noise_from_model(m1)
+            noise_h2 = _noise_from_model(m2)
+            if noise_h1 is not None and noise_h2 is not None:
+                override_k["noise_variance"] = [noise_h1, noise_h2]
+            else:
+                logger.warning(
+                    "Replay override recovar iter %d: requested sigma2_noise replay, but model source lacks rlnSigma2Noise",
+                    recovar_iter + 1,
+                )
         overrides[recovar_iter] = override_k
         if include_normcorr:
             logger.info(
-                "Replay override recovar iter %d: image_corr means=(%.4f, %.4f), scale_corr means=(%.4f, %.4f), sigma_offset=%.4f Å (%s)",
+                "Replay override recovar iter %d: image_corr means=(%.4f, %.4f), scale_corr means=(%.4f, %.4f), sigma_offset=%.4f Å (%s, noise=%s)",
                 recovar_iter + 1,
                 float(corr_h1.mean()),
                 float(corr_h2.mean()),
@@ -244,13 +286,15 @@ def _build_replay_iteration_overrides(
                 float(scale_corr_h2.mean()),
                 sigma_offset_avg,
                 model_source,
+                "set" if "noise_variance" in override_k else "none",
             )
         else:
             logger.info(
-                "Replay override recovar iter %d: sigma_offset=%.4f Å (%s, normcorr replay disabled)",
+                "Replay override recovar iter %d: sigma_offset=%.4f Å (%s, normcorr replay disabled, noise=%s)",
                 recovar_iter + 1,
                 sigma_offset_avg,
                 model_source,
+                "set" if "noise_variance" in override_k else "none",
             )
 
     return overrides
@@ -465,6 +509,15 @@ def main():
         "RELION's per-iter rlnNormCorrection / rlnGroupScaleCorrection into "
         "recovar's E-step at iter 2+. Useful for parity diagnostics; not yet "
         "demonstrated to improve quality on the 5k 128² fixture.",
+    )
+    parser.add_argument(
+        "--replay_relion_noise",
+        action="store_true",
+        default=False,
+        help="If set together with --perturb_replay_relion_dir, also inject "
+        "RELION's per-iter rlnSigma2Noise from model.star at iter 2+. "
+        "This is a strict parity diagnostic for isolating recovar's "
+        "sigma2_noise update from the E/M-step mechanics.",
     )
     parser.add_argument("--init_resolution", type=float, default=30.0, help="Initial resolution (Angstrom)")
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
@@ -836,7 +889,7 @@ def main():
     # does not run the C1 sigma_offset update so iter-2 would otherwise use the
     # 10 Å default — 6× too wide vs RELION ~1.6 Å — depressing iter-2 Pmax by
     # ~22%). Per-image normCorrection / group scale replay remains opt-in via
-    # --replay_relion_normcorr (it can hurt corr_vs_GT in some configurations).
+    # --replay_relion_normcorr / --replay_relion_noise (strict parity diagnostics).
     replay_iteration_overrides = None
     if args.perturb_replay_relion_dir is not None:
         replay_iteration_overrides = _build_replay_iteration_overrides(
@@ -847,6 +900,7 @@ def main():
             ds_voxel=ds.voxel_size,
             ds_grid=ds.grid_size,
             include_normcorr=bool(args.replay_relion_normcorr),
+            include_noise=bool(args.replay_relion_noise),
         )
 
     effective_tau2_fudge, tau2_fudge_source = _resolve_tau2_fudge(
