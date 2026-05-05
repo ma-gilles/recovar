@@ -112,8 +112,9 @@ def _build_replay_iteration_overrides(
     """Build per-iter replay overrides keyed on recovar iteration index.
 
     For each recovar iteration k >= 1 (i.e. iter 2 onwards in RELION terms),
-    reads RELION's run_it{k:03d}_data.star + half1/half2 model.star and
-    builds an override dict containing:
+    reads RELION's run_it{k:03d}_data.star plus either auto-refine
+    half1/half2 model stars or Class3D's single run_it{k:03d}_model.star
+    and builds an override dict containing:
       * image_corrections: per-image (avg_norm/normcorr) * group_scale
       * scale_corrections: per-image group_scale alone
 
@@ -145,16 +146,32 @@ def _build_replay_iteration_overrides(
         data_star = relion_dir / f"run_it{relion_iter:03d}_data.star"
         model_h1 = relion_dir / f"run_it{relion_iter:03d}_half1_model.star"
         model_h2 = relion_dir / f"run_it{relion_iter:03d}_half2_model.star"
-        if not data_star.exists() or not model_h1.exists() or not model_h2.exists():
+        model_single = relion_dir / f"run_it{relion_iter:03d}_model.star"
+        if not data_star.exists():
             logger.warning(
                 "Replay override for recovar iter %d: missing %s — leaving unset", recovar_iter + 1, data_star
+            )
+            continue
+        if model_h1.exists() and model_h2.exists():
+            model_source = "split-half"
+            m1 = _sf.read(str(model_h1))
+            m2 = _sf.read(str(model_h2))
+        elif model_single.exists():
+            model_source = "single-model"
+            m1 = _sf.read(str(model_single))
+            m2 = m1
+        else:
+            logger.warning(
+                "Replay override for recovar iter %d: missing %s/%s or %s — leaving unset",
+                recovar_iter + 1,
+                model_h1,
+                model_h2,
+                model_single,
             )
             continue
 
         data = _sf.read(str(data_star))
         parts = data["particles"] if isinstance(data, dict) else data
-        m1 = _sf.read(str(model_h1))
-        m2 = _sf.read(str(model_h2))
 
         names = list(parts["rlnImageName"])
         idx_to_pos = {_idx(names[i]): i for i in range(len(names))}
@@ -219,19 +236,21 @@ def _build_replay_iteration_overrides(
         overrides[recovar_iter] = override_k
         if include_normcorr:
             logger.info(
-                "Replay override recovar iter %d: image_corr means=(%.4f, %.4f), scale_corr means=(%.4f, %.4f), sigma_offset=%.4f Å",
+                "Replay override recovar iter %d: image_corr means=(%.4f, %.4f), scale_corr means=(%.4f, %.4f), sigma_offset=%.4f Å (%s)",
                 recovar_iter + 1,
                 float(corr_h1.mean()),
                 float(corr_h2.mean()),
                 float(scale_corr_h1.mean()),
                 float(scale_corr_h2.mean()),
                 sigma_offset_avg,
+                model_source,
             )
         else:
             logger.info(
-                "Replay override recovar iter %d: sigma_offset=%.4f Å (normcorr replay disabled)",
+                "Replay override recovar iter %d: sigma_offset=%.4f Å (%s, normcorr replay disabled)",
                 recovar_iter + 1,
                 sigma_offset_avg,
+                model_source,
             )
 
     return overrides
