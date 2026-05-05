@@ -435,6 +435,10 @@ def _build_firstiter_cc_pass2_grids(
         float(translation_step_px),
         oversampling_order=adaptive_os,
     )
+    # RELION's HealpixSampling::getTranslationsInPixel first builds the
+    # oversampled sub-grid with offset_step / 2**adaptive_os, then adds the
+    # random perturbation as random_perturbation * offset_step.  Do not scale
+    # the perturbation by the fine sub-step.
     fine_translations = apply_relion_translation_perturbation(
         fine_base_translations,
         float(random_perturbation),
