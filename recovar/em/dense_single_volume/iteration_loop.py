@@ -53,6 +53,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     bootstrap_current_size_from_ini_high_relion,
     clamp_relion_coarse_image_size,
     compute_coarse_image_size,
+    relion_ini_high_shell,
     shell_index_to_resolution_angstrom,
     should_skip_adaptive_pass2,
 )
@@ -1813,6 +1814,13 @@ def _run_relion_iteration_loop(
     local_profile_history = []
     relion_incr_size = 10  # RELION default
     relion_has_high_fsc_at_limit = bool(init_has_high_fsc_at_limit) if init_has_high_fsc_at_limit is not None else False
+    relion_firstiter_cc_ini_high_shell = None
+    if init_relion_iteration == 0 and emulate_relion_firstiter_cc:
+        relion_firstiter_cc_ini_high_shell = relion_ini_high_shell(
+            grid_size,
+            float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
+            relion_firstiter_ini_high_angstrom,
+        )
     global_direction_prior_per_half = [None, None]
     global_direction_prior_order_per_half = [None, None]
     class_direction_prior_per_half = [None, None]
@@ -1948,7 +1956,20 @@ def _run_relion_iteration_loop(
                 data_vs_prior_iter = None
         else:
             prev_cs = current_sizes[-1]
-            if k_class_enabled:
+            if relion_firstiter_cc_ini_high_shell is not None and iteration == 1:
+                # RELION keeps ``--ini_high`` as the current resolution for
+                # run_it001 when ``--firstiter_cc`` is active. The first
+                # Class3D M-step still writes data_vs_prior, but it must not
+                # shrink the second E-step current_size.
+                raw_cs = compute_current_size_relion(
+                    int(relion_firstiter_cc_ini_high_shell),
+                    grid_size,
+                    ave_Pmax=state.ave_Pmax,
+                    has_high_fsc_at_limit=False,
+                    incr_size=relion_incr_size,
+                )
+                cs = quantize_current_size(raw_cs, ori_size=grid_size)
+            elif k_class_enabled:
                 data_vs_prior_prev_raw = np.asarray(data_vs_prior_trajectory[-1], dtype=np.float32).copy()
                 data_vs_prior_prev = data_vs_prior_prev_raw.copy()
                 if prev_cs < grid_size:
@@ -4886,7 +4907,16 @@ def _run_relion_iteration_loop(
                 resolution_from_data_vs_prior(dvp_class, allow_high_res_recovery=False)
                 for dvp_class in np.asarray(dvp_iter)
             )
-            pixel_res = float(dvp_res_shell)
+            if relion_firstiter_cc_ini_high_shell is not None and iteration == 0:
+                pixel_res = float(relion_firstiter_cc_ini_high_shell)
+                logger.info(
+                    "RELION iter-1 firstiter_cc: keeping current_resolution at ini_high shell %d "
+                    "(computed Class3D data_vs_prior shell %d)",
+                    int(relion_firstiter_cc_ini_high_shell),
+                    int(dvp_res_shell),
+                )
+            else:
+                pixel_res = float(dvp_res_shell)
         else:
             dvp_iter = np.asarray(fsc, dtype=np.float32).copy()
             if cs < grid_size:
@@ -4898,7 +4928,16 @@ def _run_relion_iteration_loop(
                 dvp_iter,
                 allow_high_res_recovery=True,
             )
-            pixel_res = float(dvp_res_shell)
+            if relion_firstiter_cc_ini_high_shell is not None and iteration == 0:
+                pixel_res = float(relion_firstiter_cc_ini_high_shell)
+                logger.info(
+                    "RELION iter-1 firstiter_cc: keeping current_resolution at ini_high shell %d "
+                    "(computed FSC/data_vs_prior shell %d)",
+                    int(relion_firstiter_cc_ini_high_shell),
+                    int(dvp_res_shell),
+                )
+            else:
+                pixel_res = float(dvp_res_shell)
         pixel_resolutions.append(pixel_res)
 
         # --- Update poses and noise ---

@@ -74,6 +74,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     bootstrap_current_size_from_ini_high_relion,
     clamp_relion_coarse_image_size,
     compute_coarse_image_size,
+    relion_ini_high_shell,
     should_skip_adaptive_pass2,
 )
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
@@ -2192,6 +2193,16 @@ class TestRelionModeSmokeTest:
 
     def test_relion_bootstrap_current_size_from_ini_high_matches_benchmark_case(self):
         assert bootstrap_current_size_from_ini_high_relion(128, 4.25, 30.0) == 56
+
+    def test_relion_firstiter_cc_keeps_ini_high_for_second_current_size(self):
+        ini_shell = relion_ini_high_shell(128, 4.25, 30.0)
+        assert ini_shell == 18
+        assert bootstrap_current_size_from_ini_high_relion(128, 4.25, 30.0) == 56
+        # The K=4 benchmark's first Class3D SSNR would give shell 12, hence
+        # 44 px, but RELION's --firstiter_cc branch keeps the ini_high shell
+        # for run_it001 and therefore the second E-step also uses 56 px.
+        assert _bootstrap_current_size_relion(2 * 12, 128) == 44
+        assert _bootstrap_current_size_relion(2 * ini_shell, 128) == 56
 
     def test_align_fourier_volume_sign_to_reference_flips_negative_overlap(self):
         ref = np.array([1.0 + 0.0j, -2.0 + 0.0j], dtype=np.complex64)

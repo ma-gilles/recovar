@@ -133,10 +133,22 @@ def bootstrap_current_size_from_ini_high_relion(
     incr_size: int = 10,
 ) -> int | None:
     """Bootstrap RELION's first current_size directly from ``--ini_high``."""
+    init_shell = relion_ini_high_shell(ori_size, voxel_size, ini_high_angstrom)
+    if init_shell is None:
+        return None
+    return _bootstrap_current_size_relion(2 * init_shell, ori_size=ori_size, incr_size=incr_size)
+
+
+def relion_ini_high_shell(
+    ori_size: int,
+    voxel_size: float,
+    ini_high_angstrom: float | None,
+) -> int | None:
+    """Return RELION's Fourier shell for ``--ini_high``."""
     if ini_high_angstrom is None or float(ini_high_angstrom) <= 0.0:
         return None
-    init_shell = max(1, int(np.round(float(ori_size) * float(voxel_size) / float(ini_high_angstrom))))
-    return _bootstrap_current_size_relion(2 * init_shell, ori_size=ori_size, incr_size=incr_size)
+    shell = int(np.round(float(ori_size) * float(voxel_size) / float(ini_high_angstrom)))
+    return max(1, min(int(ori_size) // 2, shell))
 
 
 def fsc_to_current_size(fsc, threshold=1.0 / 7.0, min_size=32):
