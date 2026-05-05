@@ -89,6 +89,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     normalize_direction_prior_per_half,
     relion_sigma_offset_prior_center,
     relion_translation_prior_center,
+    relion_translation_sigma_offset_center,
     relion_translation_search_base,
 )
 from recovar.em.dense_single_volume.helpers.image_shifts import (
@@ -3025,7 +3026,7 @@ class TestRelionModeSmokeTest:
 
     def test_relion_translation_prior_center_matches_accelerated_pdf_offset_units(self):
         prev = np.array([[0.0, -1.0], [1.0, 0.0]], dtype=np.float32)
-        expected = np.array([[0.0, 1.0], [-1.0, 0.0]], dtype=np.float32)
+        expected = np.array([[0.0, 1.0 / 4.25], [-1.0 / 4.25, 0.0]], dtype=np.float32)
         np.testing.assert_allclose(
             relion_translation_prior_center(prev, voxel_size=4.25),
             expected,
@@ -3038,6 +3039,16 @@ class TestRelionModeSmokeTest:
         expected = np.array([[0.0, 1.0], [-1.0, 0.0]], dtype=np.float32)
         np.testing.assert_allclose(
             relion_sigma_offset_prior_center(prev),
+            expected,
+            rtol=1e-6,
+            atol=1e-6,
+        )
+
+    def test_relion_translation_sigma_offset_center_matches_store_weighted_sums_units(self):
+        prev = np.array([[0.0, -1.0], [1.0, 0.0]], dtype=np.float32)
+        expected = np.array([[0.0, 1.0], [-1.0, 0.0]], dtype=np.float32)
+        np.testing.assert_allclose(
+            relion_translation_sigma_offset_center(prev, voxel_size=4.25),
             expected,
             rtol=1e-6,
             atol=1e-6,
