@@ -427,6 +427,35 @@ def test_firstiter_cc_adaptive_translation_perturbation_uses_coarse_step():
     np.testing.assert_array_equal(trans_parent, np.zeros(4, dtype=np.int64))
 
 
+def test_k_class_sigma2_offset_sum_weight_uses_class_posterior_mass():
+    """K-class sigma2_offset denominator is total posterior mass, not K engine counts."""
+
+    def stats(sumw):
+        return NoiseStats(
+            wsum_sigma2_noise=jnp.zeros(2, dtype=jnp.float32),
+            wsum_img_power=jnp.zeros(2, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=float(sumw),
+        )
+
+    noise_stats = [stats(8.0), stats(8.0)]
+    class_posterior = [
+        np.array([0.5, 0.7, 0.3, 0.5], dtype=np.float64),
+        np.array([0.6, 0.4, 0.5, 0.5], dtype=np.float64),
+    ]
+
+    assert iteration_loop_module._sigma2_offset_sum_weight(
+        noise_stats,
+        class_posterior,
+        k_class_enabled=True,
+    ) == pytest.approx(4.0)
+    assert iteration_loop_module._sigma2_offset_sum_weight(
+        noise_stats,
+        class_posterior,
+        k_class_enabled=False,
+    ) == pytest.approx(16.0)
+
+
 def test_firstiter_cc_image_batch_size_clamps_reconstruction_temporary():
     # 128^2 images with 32 translations materialize roughly
     # 200 * 32 * 8320 complex values in prepare_reconstruction_batch().

@@ -502,6 +502,38 @@ def _class_weights_from_posterior(class_posterior_per_half, n_classes: int, prev
     return weights / float(np.sum(weights))
 
 
+def _sigma2_offset_sum_weight(noise_stats_per_half, class_posterior_per_half, *, k_class_enabled: bool) -> float:
+    """Return RELION's denominator for the global sigma2_offset update.
+
+    RELION uses ``sum_weight = sum_class wsum_model.pdf_class``.  In the
+    recovar K-class path, each class is evaluated through a separate engine
+    call, and the per-class ``NoiseStats.sumw`` values are engine image counts,
+    not class posterior mass.  Summing them gives roughly ``K * N`` and makes
+    the learned translation variance too small by ``K``.  Use the already
+    computed class posterior masses for K-class updates; keep the engine sumw
+    for the single-class path.
+    """
+
+    if k_class_enabled and class_posterior_per_half is not None:
+        total = 0.0
+        saw_posterior = False
+        for posterior in class_posterior_per_half:
+            if posterior is None:
+                continue
+            posterior_arr = np.asarray(posterior, dtype=np.float64)
+            total += float(np.sum(posterior_arr))
+            saw_posterior = True
+        if saw_posterior and total > 0.0 and np.isfinite(total):
+            return total
+
+    total = 0.0
+    for stats_k in noise_stats_per_half:
+        if stats_k is None:
+            continue
+        total += float(getattr(stats_k, "sumw", 0.0))
+    return total
+
+
 def _merged_mean_from_halves(means, class_weights=None):
     merged = (means[0] + means[1]) / 2
     if class_weights is None:
@@ -2778,8 +2810,8 @@ def _run_relion_iteration_loop(
             # zero prior center, which seeds iter-2's sigma_offset ~ 1.6 Å (vs
             # default 10 Å). Pass a zero-centered prior to the engine so the
             # noise accumulator fires; the log-prior path at line 2517 is
-            # unaffected because make_relion_translation_log_prior(None) and
-            # make_relion_translation_log_prior(zeros(2)) both center at origin.
+        # unaffected because make_relion_translation_log_prior(None) and
+        # make_relion_translation_log_prior(zeros(2)) both center at origin.
             trans_prior_center_for_engine = (
                 np.zeros(2, dtype=np.float32) if trans_prior_center is None else trans_prior_center
             )
@@ -5281,16 +5313,18 @@ def _run_relion_iteration_loop(
         # for 2D single-particle data. Fall back to the older hard-assignment
         # proxy only when a path does not propagate the full posterior moment.
         sigma2_offset_wsum = 0.0
-        sigma2_offset_sumw = 0.0
         for stats_k in noise_stats_per_half:
             if stats_k is None:
                 continue
             sigma2_offset_wsum += float(getattr(stats_k, "wsum_sigma2_offset", 0.0))
-            sigma2_offset_sumw += float(getattr(stats_k, "sumw", 0.0))
-        # D.2: per-class sigma_offset diagnostic. RELION Class3D maintains K
-        # independent sigma_offset values; recovar currently uses the
-        # cross-class aggregate. Compute and log per-class sigmas to gauge
-        # whether the per-class refactor is justified for this fixture.
+        sigma2_offset_sumw = _sigma2_offset_sum_weight(
+            noise_stats_per_half,
+            class_posterior_per_half,
+            k_class_enabled=k_class_enabled,
+        )
+        # D.2: per-class sigma_offset diagnostic. RELION Class3D's model
+        # stores one global sigma2_offset, but per-class diagnostics are useful
+        # for detecting class imbalance in recovar's K-class sufficient stats.
         per_class_sigma_offset = None
         if k_class_enabled:
             per_class_w = np.zeros(n_classes, dtype=np.float64)
@@ -5302,7 +5336,9 @@ def _run_relion_iteration_loop(
                     if stats_c is None:
                         continue
                     per_class_w[c] += float(getattr(stats_c, "wsum_sigma2_offset", 0.0))
-                    per_class_n[c] += float(getattr(stats_c, "sumw", 0.0))
+            for posterior in class_posterior_per_half:
+                if posterior is not None:
+                    per_class_n += np.asarray(posterior, dtype=np.float64)
             min_sigma2 = 2.0
             per_class_sigma_offset = np.full(n_classes, current_sigma_offset_angstrom, dtype=np.float64)
             for c in range(n_classes):
