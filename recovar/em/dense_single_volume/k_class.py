@@ -302,6 +302,37 @@ def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None) -> NoiseStats |
     )
 
 
+def _sum_k_class_noise_stats(
+    noise_stats: tuple[NoiseStats, ...] | None,
+    class_posterior_sums: np.ndarray,
+) -> NoiseStats | None:
+    """Aggregate Class3D noise stats with RELION's single global sum_weight.
+
+    Each per-class ``run_em`` call normalizes posteriors over poses within one
+    class and reports ``sumw == n_images``.  RELION normalizes over the joint
+    class x pose grid, so ``sum_weight`` is the sum of class responsibilities
+    over images, not ``n_classes * n_images``.
+    """
+
+    aggregate = _sum_noise_stats(noise_stats)
+    if aggregate is None:
+        return None
+    responsibilities = np.asarray(class_posterior_sums, dtype=np.float64).reshape(-1)
+    relion_sumw = float(np.sum(responsibilities))
+    raw_sumw = np.asarray([float(stats.sumw) for stats in noise_stats], dtype=np.float64)
+    if responsibilities.shape != raw_sumw.shape:
+        raise ValueError(
+            "class_posterior_sums and noise_stats disagree on class count: "
+            f"{responsibilities.shape[0]} vs {raw_sumw.shape[0]}",
+        )
+    image_power = np.zeros_like(np.asarray(aggregate.wsum_img_power, dtype=np.float64))
+    for stats, responsibility, class_sumw in zip(noise_stats, responsibilities, raw_sumw, strict=True):
+        if class_sumw <= 0.0:
+            continue
+        image_power += np.asarray(stats.wsum_img_power, dtype=np.float64) * (responsibility / class_sumw)
+    return aggregate._replace(wsum_img_power=jnp.asarray(image_power, dtype=aggregate.wsum_img_power.dtype), sumw=relion_sumw)
+
+
 def _assemble_result(
     *,
     class_log_evidence: np.ndarray,
@@ -361,6 +392,8 @@ def _assemble_result(
     else:
         stacked_new_means = jnp.stack([jnp.asarray(mean) for mean in new_means], axis=0)
 
+    aggregate_noise_stats = _sum_k_class_noise_stats(noise_stats, class_posterior_sums)
+
     return KClassEMResult(
         new_means=stacked_new_means,
         Ft_y=jnp.stack([jnp.asarray(value) for value in Ft_y], axis=0),
@@ -373,7 +406,7 @@ def _assemble_result(
         stats=stats,
         per_class_stats=per_class_stats,
         noise_stats=noise_stats,
-        aggregate_noise_stats=_sum_noise_stats(noise_stats),
+        aggregate_noise_stats=aggregate_noise_stats,
         per_class_best_pose_rotations=(
             None if per_class_best_pose_rotations is None else tuple(per_class_best_pose_rotations)
         ),

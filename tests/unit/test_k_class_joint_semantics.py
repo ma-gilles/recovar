@@ -9,7 +9,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     normalize_class_direction_prior_per_half,
 )
-from recovar.em.dense_single_volume.helpers.types import make_relion_stats
+from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.k_class import (
     _assemble_result,
     run_dense_k_class_em,
@@ -48,6 +48,63 @@ def test_k_class_hard_assignment_uses_joint_best_pose_not_marginal_class():
     np.testing.assert_array_equal(np.asarray(result.class_assignments), np.asarray([1], dtype=np.int32))
     np.testing.assert_array_equal(np.asarray(result.pose_assignments), np.asarray([7], dtype=np.int32))
     np.testing.assert_allclose(np.asarray(result.stats.max_posterior_per_image), np.asarray([0.20], dtype=np.float32))
+
+
+def test_k_class_noise_aggregate_uses_joint_relion_sum_weight():
+    """Class3D sigma-offset denominator is RELION's global sum_weight, not K*N.
+
+    RELION accumulates ``wsum_model.sigma2_offset`` over the joint class x pose
+    posterior and updates ``sigma2_offset = wsum / (2 * sum_weight)``.  A
+    per-class RECOVAR engine reports ``sumw == n_images`` for each class, so
+    aggregating those bookkeeping values would over-count by ``n_classes``.
+    """
+
+    noise_stats = (
+        make_noise_stats(
+            wsum_sigma2_noise=np.asarray([1.0], dtype=np.float32),
+            wsum_img_power=np.asarray([2.0], dtype=np.float32),
+            wsum_sigma2_offset=30.0,
+            sumw=2.0,
+        ),
+        make_noise_stats(
+            wsum_sigma2_noise=np.asarray([3.0], dtype=np.float32),
+            wsum_img_power=np.asarray([4.0], dtype=np.float32),
+            wsum_sigma2_offset=50.0,
+            sumw=2.0,
+        ),
+    )
+
+    result = _assemble_result(
+        class_log_evidence=np.asarray(
+            [
+                [np.log(0.25), np.log(0.75)],
+                [np.log(0.75), np.log(0.25)],
+            ],
+            dtype=np.float64,
+        ),
+        new_means=[jnp.zeros(1), jnp.zeros(1)],
+        Ft_y=[jnp.zeros(1), jnp.zeros(1)],
+        Ft_ctf=[jnp.zeros(1), jnp.zeros(1)],
+        per_class_hard_assignments=np.zeros((2, 2), dtype=np.int32),
+        per_class_stats=(
+            _stats([0.0, 0.0], [0.0, 0.0], [0.5, 0.5], n_rot=1),
+            _stats([0.0, 0.0], [0.0, 0.0], [0.5, 0.5], n_rot=1),
+        ),
+        noise_stats=noise_stats,
+    )
+
+    assert result.aggregate_noise_stats is not None
+    assert result.aggregate_noise_stats.wsum_sigma2_offset == pytest.approx(80.0)
+    assert result.aggregate_noise_stats.sumw == pytest.approx(2.0)
+    np.testing.assert_allclose(
+        np.asarray(result.aggregate_noise_stats.wsum_img_power),
+        np.asarray([3.0], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    assert result.aggregate_noise_stats.wsum_sigma2_offset / (2.0 * result.aggregate_noise_stats.sumw) == pytest.approx(
+        20.0,
+    )
 
 
 def test_dense_k_class_selects_class_rotation_log_prior(monkeypatch):
