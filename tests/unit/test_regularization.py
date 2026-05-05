@@ -2,9 +2,11 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
+import jax.numpy as jnp
 
 from recovar.reconstruction import regularization
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar.relion_bind._relion_bind_core import compute_fourier_transform_map
 
 pytestmark = pytest.mark.unit
 
@@ -316,6 +318,36 @@ def test_compute_relion_tau2_from_weights_rejects_wrong_grid_size():
             shape,
             padding_factor=1,
         )
+
+
+def test_compute_relion_tau2_from_iref_power_spectrum_matches_relion_binding_scaling():
+    shape = (16, 16, 16)
+    rng = np.random.default_rng(2)
+    vol_relion = rng.standard_normal(shape).astype(np.float64)
+    vol_recovar = -np.transpose(vol_relion, (2, 1, 0))
+    ft_recovar = np.asarray(fourier_transform_utils.get_dft3(jnp.asarray(vol_recovar)).reshape(-1))
+
+    tau2, details = regularization.compute_relion_tau2_from_iref_power_spectrum(
+        ft_recovar,
+        shape,
+        padding_factor=1,
+        return_details=True,
+    )
+    relion_proj, relion_ps, *_ = compute_fourier_transform_map(
+        vol_relion,
+        ori_size=shape[0],
+        padding_factor=1,
+        do_gridding=True,
+    )
+    _ = relion_proj  # projection data is not needed for this normalization check
+
+    n4 = float(shape[0] ** 4)
+    tau2_shells = np.asarray(details["tau2_shells"], dtype=np.float64) / n4
+    relion_ps = np.asarray(relion_ps, dtype=np.float64)
+
+    assert tau2.shape == (np.prod(shape),)
+    assert tau2_shells.shape == relion_ps.shape
+    np.testing.assert_allclose(tau2_shells, relion_ps, rtol=1e-6, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------

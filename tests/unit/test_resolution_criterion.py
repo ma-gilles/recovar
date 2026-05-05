@@ -87,6 +87,17 @@ class TestComputeDataVsPrior:
         dvp = compute_data_vs_prior(Ft_ctf, tau2, volume_shape)
         assert jnp.all(dvp > 0), "All shells should have positive data_vs_prior"
 
+    def test_current_size_limit_zeroes_high_shells(self):
+        """Shells beyond current_size//2 should be zeroed for RELION growth."""
+        volume_shape = (16, 16, 16)
+        n_voxels = 16 ** 3
+        Ft_ctf = jnp.ones(n_voxels, dtype=jnp.float32) * 5.0
+        n_shells = volume_shape[0] // 2 - 1
+        tau2 = jnp.ones(n_shells, dtype=jnp.float32) * 2.0
+        dvp = compute_data_vs_prior(Ft_ctf, tau2, volume_shape, current_size=8)
+        dvp = np.asarray(dvp)
+        assert np.all(dvp[5:] == 0.0)
+
 
 # ---------------------------------------------------------------------------
 # resolution_from_data_vs_prior

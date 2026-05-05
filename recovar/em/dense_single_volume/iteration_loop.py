@@ -1364,6 +1364,7 @@ def refine_single_volume(
     """
     if relion_current_sizes is not None and len(relion_current_sizes) == 0:
         raise ValueError("relion_current_sizes must be non-empty when provided")
+    n_total_images = int(sum(int(ds.n_units) for ds in experiment_datasets))
 
     return _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
@@ -1498,6 +1499,7 @@ def _run_relion_iteration_loop(
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape
     grid_size = cryo.image_shape[0]  # ori_size in RELION terms
+    n_total_images = int(sum(int(ds.n_units) for ds in experiment_datasets))
     n_classes = int(n_classes)
     k_class_enabled = n_classes > 1
     class_log_priors = _normalize_class_log_priors(n_classes, init_class_log_priors)
@@ -1910,37 +1912,54 @@ def _run_relion_iteration_loop(
                 cs = _bootstrap_current_size_relion(init_current_size, grid_size)
                 data_vs_prior_iter = None
         else:
-            fsc_prev = np.asarray(fsc_history[-1], dtype=np.float32).copy()
             prev_cs = current_sizes[-1]
-            if prev_cs < grid_size:
-                fsc_prev[min(len(fsc_prev), prev_cs // 2) :] = 0.0
+            if k_class_enabled:
+                data_vs_prior_prev = np.asarray(data_vs_prior_trajectory[-1], dtype=np.float32).copy()
+                if prev_cs < grid_size:
+                    data_vs_prior_prev[..., min(data_vs_prior_prev.shape[-1], prev_cs // 2 + 1) :] = 0.0
+                res_shell = max(
+                    resolution_from_data_vs_prior(dvp_class, allow_high_res_recovery=True)
+                    for dvp_class in np.asarray(data_vs_prior_prev)
+                )
+                raw_cs = compute_current_size_relion(
+                    res_shell,
+                    grid_size,
+                    ave_Pmax=state.ave_Pmax,
+                    has_high_fsc_at_limit=False,
+                    incr_size=relion_incr_size,
+                )
+                cs = quantize_current_size(raw_cs, ori_size=grid_size)
+            else:
+                fsc_prev = np.asarray(fsc_history[-1], dtype=np.float32).copy()
+                if prev_cs < grid_size:
+                    fsc_prev[min(len(fsc_prev), prev_cs // 2) :] = 0.0
 
-            # data_vs_prior = tau2_fudge * fsc / (1 - fsc), matching
-            # RELION's updateSSNRarrays at backprojector.cpp:1117-1123
-            # for the gold-standard split-half auto-refine path.
-            data_vs_prior_iter = np.asarray(
-                fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge),
-            )
-            data_vs_prior_trajectory.append(data_vs_prior_iter)
-            res_shell = resolution_from_data_vs_prior(
-                data_vs_prior_iter,
-                allow_high_res_recovery=True,
-            )
-            relion_incr_size, relion_has_high_fsc_at_limit = update_relion_growth_state_from_fsc(
-                fsc_prev,
-                prev_cs,
-                incr_size=relion_incr_size,
-                has_high_fsc_at_limit=relion_has_high_fsc_at_limit,
-            )
+                # data_vs_prior = tau2_fudge * fsc / (1 - fsc), matching
+                # RELION's updateSSNRarrays at backprojector.cpp:1117-1123
+                # for the gold-standard split-half auto-refine path.
+                data_vs_prior_iter = np.asarray(
+                    fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge),
+                )
+                data_vs_prior_trajectory.append(data_vs_prior_iter)
+                res_shell = resolution_from_data_vs_prior(
+                    data_vs_prior_iter,
+                    allow_high_res_recovery=True,
+                )
+                relion_incr_size, relion_has_high_fsc_at_limit = update_relion_growth_state_from_fsc(
+                    fsc_prev,
+                    prev_cs,
+                    incr_size=relion_incr_size,
+                    has_high_fsc_at_limit=relion_has_high_fsc_at_limit,
+                )
 
-            raw_cs = compute_current_size_relion(
-                res_shell,
-                grid_size,
-                ave_Pmax=state.ave_Pmax,
-                has_high_fsc_at_limit=relion_has_high_fsc_at_limit,
-                incr_size=relion_incr_size,
-            )
-            cs = quantize_current_size(raw_cs, ori_size=grid_size)
+                raw_cs = compute_current_size_relion(
+                    res_shell,
+                    grid_size,
+                    ave_Pmax=state.ave_Pmax,
+                    has_high_fsc_at_limit=relion_has_high_fsc_at_limit,
+                    incr_size=relion_incr_size,
+                )
+                cs = quantize_current_size(raw_cs, ori_size=grid_size)
 
         cs = quantize_current_size(cs, ori_size=grid_size)
         if relion_current_sizes is not None:
@@ -4052,24 +4071,8 @@ def _run_relion_iteration_loop(
                     cryo.voxel_size,
                 )
         if k_class_enabled:
-            joined = [
-                regularization.join_halves_at_low_resolution(
-                    Ft_y_0[class_idx],
-                    Ft_y_1[class_idx],
-                    Ft_ctf_0[class_idx],
-                    Ft_ctf_1[class_idx],
-                    padded_volume_shape,
-                    cryo.voxel_size,
-                    grid_size,
-                    low_resol_join_halves_angstrom,
-                    current_resolution_angstrom=prev_res_angstrom,
-                )
-                for class_idx in range(n_classes)
-            ]
-            Ft_y_0 = jnp.stack([item[0] for item in joined], axis=0)
-            Ft_y_1 = jnp.stack([item[1] for item in joined], axis=0)
-            Ft_ctf_0 = jnp.stack([item[2] for item in joined], axis=0)
-            Ft_ctf_1 = jnp.stack([item[3] for item in joined], axis=0)
+            Ft_y_combined = Ft_y_0 + Ft_y_1
+            Ft_ctf_combined = Ft_ctf_0 + Ft_ctf_1
         else:
             Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = regularization.join_halves_at_low_resolution(
                 Ft_y_0,
@@ -4083,50 +4086,89 @@ def _run_relion_iteration_loop(
                 current_resolution_angstrom=prev_res_angstrom,
             )
 
-        # --- RELION-exact M-step ordering (auto-refine, split-half) ---
-        # RELION (ml_optimiser_mpi.cpp:4031, 4091; backprojector.cpp:1044):
-        #   1. compareTwoHalves() -> CURRENT iter's FSC from BPref accumulators
-        #   2. maximization() -> updateSSNRarrays(THIS_ITER_FSC) -> tau2
-        #   3. reconstruct(tau2) -> regularized half-map
+        # --- RELION-exact M-step ordering ---
+        # K=1 stays on RELION's split-half auto-refine path
+        # (compareTwoHalves -> updateSSNRarrays -> reconstruct).
+        # K>1 switches to RELION Class3D semantics:
+        #   1. combine the two half accumulators per class
+        #   2. carry the previous Iref power spectrum forward as tau2
+        #   3. run one Wiener solve per class
         #
-        # Recovar previously called compute_relion_tau2_from_weights with
-        # fsc_history[-1] / init_fsc (PREVIOUS iter's FSC). At cold start
-        # init_fsc is essentially zeros and at iter 2 prev-iter FSC is
-        # poisoned (~0.999) by leakage of the under-regularized iter-1 maps,
-        # which gives ssnr ≈ 999 → tau2 amplifies 1e6× → ave_Pmax collapse.
-        # Algorithm doc: docs/math/relion_updateSSNR_algorithm_2026_04_25.md
-        #
-        # Snapshot the previous-iter means BEFORE the unreg reconstruction so
-        # sign alignment has a reference at iter 1 (where the init volumes
-        # are means[*] before any reconstruction overwrites them).
+        # Snapshot the previous-iter means BEFORE the reconstruction so sign
+        # alignment has a reference at iter 1.
         previous_means = [np.asarray(mean).copy() if mean is not None else None for mean in means]
 
-        # Compute CURRENT iter FSC FIRST, then derive tau2 from that fresh FSC,
-        # then the regularized Wiener solve. RELION computes this FSC from
-        # BackProjector::getDownsampledAverage, not from reconstructed
-        # unregularized maps; using the reconstructed maps underestimates the
-        # joined low-resolution shells and depresses data_vs_prior.
         _t_unreg_first = time.time()
         if k_class_enabled:
-            current_iter_fsc_by_class = [
-                regularization.compute_relion_fsc_from_backprojector(
-                    Ft_y_0[class_idx],
-                    Ft_y_1[class_idx],
-                    Ft_ctf_0[class_idx],
-                    Ft_ctf_1[class_idx],
+            tau2_update_details_per_class = []
+            mean_signal_variance_per_class = []
+            data_vs_prior_per_class = []
+            for class_idx in range(n_classes):
+                mean_signal_variance_k, tau2_update_details_k = regularization.compute_relion_tau2_from_iref_power_spectrum(
+                    previous_means[0][class_idx],
+                    volume_shape,
+                    padding_factor=PADDING_FACTOR,
+                    current_size=cs,
+                    return_details=True,
+                )
+                shell_stats_k = regularization._compute_relion_weight_shell_stats(
+                    Ft_ctf_combined[class_idx],
                     volume_shape,
                     padding_factor=PADDING_FACTOR,
                     r_max=cs // 2,
                 )
-                for class_idx in range(n_classes)
-            ]
-            current_iter_fsc = jnp.asarray(
-                np.sum(
-                    np.asarray(class_weights, dtype=np.float64)[:, None]
-                    * np.stack([np.asarray(fsc_k, dtype=np.float64) for fsc_k in current_iter_fsc_by_class], axis=0),
-                    axis=0,
-                ),
-                dtype=jnp.float32,
+                data_vs_prior_k = regularization.compute_data_vs_prior(
+                    Ft_ctf_combined[class_idx],
+                    tau2_update_details_k["tau2_shells"],
+                    volume_shape,
+                    padding_factor=PADDING_FACTOR,
+                    tau2_fudge=tau2_fudge,
+                    current_size=cs,
+                )
+                class_scale = float(n_total_images) * float(class_weights[class_idx])
+                shell_count_k = np.asarray(shell_stats_k["shell_count"], dtype=np.float32)
+                data_vs_prior_k = data_vs_prior_k * shell_count_k * class_scale
+                mean_signal_variance_per_class.append(mean_signal_variance_k)
+                data_vs_prior_per_class.append(data_vs_prior_k)
+                tau2_update_details_per_class.append(
+                    {
+                        "prior_shells": np.asarray(tau2_update_details_k["tau2_shells"], dtype=np.float64),
+                        "sigma2_shells": np.asarray(
+                            jnp.where(
+                                shell_stats_k["avg_weight_shells"] > 0,
+                                1.0 / (PADDING_FACTOR**3 * shell_stats_k["avg_weight_shells"]),
+                                0.0,
+                            ),
+                            dtype=np.float64,
+                        ),
+                        "avg_weight_shells": np.asarray(shell_stats_k["avg_weight_shells"], dtype=np.float64),
+                        "shell_sum": np.asarray(shell_stats_k["shell_sum"], dtype=np.float64),
+                        "shell_count": np.asarray(shell_stats_k["shell_count"], dtype=np.float64),
+                        "fsc_shells": None,
+                        "ssnr_shells": np.asarray(data_vs_prior_k, dtype=np.float64),
+                    }
+                )
+            mean_signal_variance = jnp.stack(mean_signal_variance_per_class, axis=0)
+            data_vs_prior_iter = np.stack([np.asarray(dvp, dtype=np.float32) for dvp in data_vs_prior_per_class], axis=0)
+            data_vs_prior_trajectory.append(data_vs_prior_iter)
+            tau2_update_details = {
+                key: np.stack([detail[key] for detail in tau2_update_details_per_class], axis=0)
+                if key not in {"fsc_shells"}
+                else None
+                for key in [
+                    "prior_shells",
+                    "sigma2_shells",
+                    "avg_weight_shells",
+                    "shell_sum",
+                    "shell_count",
+                    "fsc_shells",
+                    "ssnr_shells",
+                ]
+            }
+            logger.info(
+                "Computed iter-%d Class3D tau2 from previous Iref power spectra: %.1fs",
+                iteration + 1,
+                time.time() - _t_unreg_first,
             )
         else:
             # Optional dump of post-join Ft_y, Ft_ctf for shell-by-shell parity
@@ -4160,38 +4202,17 @@ def _run_relion_iteration_loop(
                 r_max=cs // 2,
             )
             current_iter_fsc_by_class = [current_iter_fsc]
-        logger.info(
-            "Computed iter-%d FSC for tau2 (RELION backprojector path): %.1fs",
-            iteration + 1,
-            time.time() - _t_unreg_first,
-        )
+            logger.info(
+                "Computed iter-%d FSC for tau2 (RELION backprojector path): %.1fs",
+                iteration + 1,
+                time.time() - _t_unreg_first,
+            )
 
-        # RELION calls BackProjector::updateSSNRarrays independently for each
-        # half-map BPref.  The gold-standard FSC is shared, but sigma2/tau2
-        # come from each half's own Fourier weight outside the joined shells.
-        tau2_update_details_per_half = []
-        mean_signal_variance_per_half = []
-        if k_class_enabled:
-            for Ft_ctf_half in (Ft_ctf_0, Ft_ctf_1):
-                half_variances = []
-                half_details = []
-                for class_idx in range(n_classes):
-                    mean_signal_variance_k, _, tau2_update_details_k = regularization.compute_relion_tau2_from_weights(
-                        Ft_ctf_half[class_idx],
-                        Ft_ctf_half[class_idx],
-                        current_iter_fsc_by_class[class_idx],
-                        volume_shape,
-                        tau2_fudge=tau2_fudge,
-                        padding_factor=PADDING_FACTOR,
-                        r_max=cs // 2,
-                        return_details=True,
-                    )
-                    half_variances.append(mean_signal_variance_k)
-                    half_details.append(tau2_update_details_k)
-                mean_signal_variance_per_half.append(jnp.stack(half_variances, axis=0))
-                tau2_update_details_per_half.append(half_details)
-            mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
-        else:
+            # RELION calls BackProjector::updateSSNRarrays independently for each
+            # half-map BPref.  The gold-standard FSC is shared, but sigma2/tau2
+            # come from each half's own Fourier weight outside the joined shells.
+            tau2_update_details_per_half = []
+            mean_signal_variance_per_half = []
             for Ft_ctf_half in (Ft_ctf_0, Ft_ctf_1):
                 mean_signal_variance_k, _, tau2_update_details_k = regularization.compute_relion_tau2_from_weights(
                     Ft_ctf_half,
@@ -4206,16 +4227,16 @@ def _run_relion_iteration_loop(
                 mean_signal_variance_per_half.append(mean_signal_variance_k)
                 tau2_update_details_per_half.append(tau2_update_details_k)
             mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
-        # Keep the single tau2 diagnostic fields aligned with RELION's half1
-        # model.star, which is what the parity diff script reports.
-        tau2_update_details = tau2_update_details_per_half[0][0] if k_class_enabled else tau2_update_details_per_half[0]
-        logger.info(
-            "tau2 update from THIS-iter FSC: old_max=%.4e new_max=%.4e half_max=(%.4e, %.4e)",
-            float(jnp.max(jnp.abs(mean_variance))),
-            float(jnp.max(jnp.abs(mean_signal_variance))),
-            float(jnp.max(jnp.abs(mean_signal_variance_per_half[0]))),
-            float(jnp.max(jnp.abs(mean_signal_variance_per_half[1]))),
-        )
+            # Keep the single tau2 diagnostic fields aligned with RELION's half1
+            # model.star, which is what the parity diff script reports.
+            tau2_update_details = tau2_update_details_per_half[0][0]
+            logger.info(
+                "tau2 update from THIS-iter FSC: old_max=%.4e new_max=%.4e half_max=(%.4e, %.4e)",
+                float(jnp.max(jnp.abs(mean_variance))),
+                float(jnp.max(jnp.abs(mean_signal_variance))),
+                float(jnp.max(jnp.abs(mean_signal_variance_per_half[0]))),
+                float(jnp.max(jnp.abs(mean_signal_variance_per_half[1]))),
+            )
         mean_variance = mean_signal_variance
 
         # --- Free previous-iteration means to reclaim GPU memory ---
@@ -4223,35 +4244,38 @@ def _run_relion_iteration_loop(
         for k in range(2):
             means[k] = None
 
-        # --- Now reconstruct the regularized per-half means from the
-        # (post-join) Ft_y / Ft_ctf accumulators.  When PADDING_FACTOR > 1,
-        # the engine already backprojected into a (pf*N)³ grid.
+        # --- Now reconstruct the regularized means ---
+        # K=1 reconstructs one volume per half from the joined half accumulators.
+        # K>1 reconstructs one shared volume per class from the combined
+        # accumulators, matching RELION Class3D's single Wiener per class.
         # Use eager (non-JIT) reconstruction to avoid ~30 min XLA compile
         # overhead for the monolithic 256³ graph in post_process_from_filter_v2.
         _t_recon = time.time()
-        for k in range(2):
-            Ft_y_k_local = Ft_y_0 if k == 0 else Ft_y_1
-            Ft_ctf_k_local = Ft_ctf_0 if k == 0 else Ft_ctf_1
-            cs_int = int(cs) if cs is not None else None
-            if k_class_enabled:
-                means[k] = jnp.stack(
-                    [
-                        _reconstruct_volume_eager(
-                            Ft_ctf_k_local[class_idx],
-                            Ft_y_k_local[class_idx],
-                            volume_shape,
-                            PADDING_FACTOR,
-                            tau=mean_signal_variance_per_half[k][class_idx],
-                            tau2_fudge=tau2_fudge,
-                            projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                            minres_map=RELION_MINRES_MAP,
-                            current_size=cs_int,
-                        ).reshape(-1)
-                        for class_idx in range(n_classes)
-                    ],
-                    axis=0,
-                )
-            else:
+        cs_int = int(cs) if cs is not None else None
+        if k_class_enabled:
+            shared_classes = jnp.stack(
+                [
+                    _reconstruct_volume_eager(
+                        Ft_ctf_combined[class_idx],
+                        Ft_y_combined[class_idx],
+                        volume_shape,
+                        PADDING_FACTOR,
+                        tau=mean_signal_variance[class_idx],
+                        tau2_fudge=tau2_fudge,
+                        projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                        minres_map=RELION_MINRES_MAP,
+                        current_size=cs_int,
+                    ).reshape(-1)
+                    for class_idx in range(n_classes)
+                ],
+                axis=0,
+            )
+            means[0] = shared_classes
+            means[1] = shared_classes
+        else:
+            for k in range(2):
+                Ft_y_k_local = Ft_y_0 if k == 0 else Ft_y_1
+                Ft_ctf_k_local = Ft_ctf_0 if k == 0 else Ft_ctf_1
                 means[k] = _reconstruct_volume_eager(
                     Ft_ctf_k_local,
                     Ft_y_k_local,
@@ -4362,20 +4386,36 @@ def _run_relion_iteration_loop(
                     )
                     global_direction_prior_order_per_half[k] = current_healpix_order
 
-        # --- Combined Fourier weights for data_vs_prior at next iteration ---
-        Ft_ctf_combined = Ft_ctf_0 + Ft_ctf_1
-
         # --- Compute unregularized half-maps only when diagnostics need them ---
         #
-        # The FSC used for tau2 and convergence is already computed above
-        # directly from the BackProjector accumulators (`current_iter_fsc`),
-        # matching RELION's ordering. Reconstructing unregularized maps here is
-        # only needed for saved intermediates/parity dumps, so skip it in normal
-        # timing/production paths.
+        # The K=1 FSC path is already computed above directly from the
+        # BackProjector accumulators (`current_iter_fsc`), matching RELION's
+        # ordering. For K>1, the shared class3D prior has already been derived
+        # from the previous Iref power spectrum. Reconstructing unregularized
+        # maps here is only needed for saved intermediates/parity dumps, so
+        # skip it in normal timing/production paths.
         _t_unreg = time.time()
         need_unreg_means = save_intermediates_dir is not None or _parity_dump.is_active()
         if need_unreg_means:
             if k_class_enabled:
+                unreg_shared = jnp.stack(
+                    [
+                        _reconstruct_volume_eager(
+                            Ft_ctf_combined[class_idx],
+                            Ft_y_combined[class_idx],
+                            volume_shape,
+                            PADDING_FACTOR,
+                            tau=None,
+                            tau2_fudge=tau2_fudge,
+                            projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                            minres_map=RELION_MINRES_MAP,
+                        ).reshape(-1)
+                        for class_idx in range(n_classes)
+                    ],
+                    axis=0,
+                )
+                unreg_means = [unreg_shared, unreg_shared]
+            else:
                 unreg_means = [
                     jnp.stack(
                         [
@@ -4395,52 +4435,30 @@ def _run_relion_iteration_loop(
                     )
                     for Ft_ctf_half, Ft_y_half in ((Ft_ctf_0, Ft_y_0), (Ft_ctf_1, Ft_y_1))
                 ]
-            else:
-                unreg_means = [
-                    _reconstruct_volume_eager(
-                        Ft_ctf_0,
-                        Ft_y_0,
-                        volume_shape,
-                        PADDING_FACTOR,
-                        tau=None,
-                        tau2_fudge=tau2_fudge,
-                        projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                        minres_map=RELION_MINRES_MAP,
-                    ),
-                    _reconstruct_volume_eager(
-                        Ft_ctf_1,
-                        Ft_y_1,
-                        volume_shape,
-                        PADDING_FACTOR,
-                        tau=None,
-                        tau2_fudge=tau2_fudge,
-                        projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                        minres_map=RELION_MINRES_MAP,
-                    ),
-                ]
         else:
             unreg_means = [None, None]
-        for k in range(2):
-            if k_class_enabled:
-                aligned_classes = []
-                unreg_classes = [] if unreg_means[k] is not None else None
-                for class_idx in range(n_classes):
-                    aligned_class, sign_flipped = _align_fourier_volume_sign_to_reference(
-                        means[k][class_idx],
-                        previous_means[k][class_idx],
-                        volume_shape,
-                    )
-                    aligned_classes.append(aligned_class)
-                    if unreg_classes is not None:
-                        unreg_classes.append(-unreg_means[k][class_idx] if sign_flipped else unreg_means[k][class_idx])
-                    if sign_flipped:
-                        logger.info(
-                            "Aligned half-%d class-%d volume sign to the previous reference", k + 1, class_idx + 1
-                        )
-                means[k] = jnp.stack(aligned_classes, axis=0)
+        if k_class_enabled:
+            aligned_classes = []
+            unreg_classes = [] if unreg_means[0] is not None else None
+            for class_idx in range(n_classes):
+                aligned_class, sign_flipped = _align_fourier_volume_sign_to_reference(
+                    means[0][class_idx],
+                    previous_means[0][class_idx],
+                    volume_shape,
+                )
+                aligned_classes.append(aligned_class)
                 if unreg_classes is not None:
-                    unreg_means[k] = jnp.stack(unreg_classes, axis=0)
-            else:
+                    unreg_classes.append(-unreg_means[0][class_idx] if sign_flipped else unreg_means[0][class_idx])
+                if sign_flipped:
+                    logger.info("Aligned shared class-%d volume sign to the previous reference", class_idx + 1)
+            shared_aligned = jnp.stack(aligned_classes, axis=0)
+            means[0] = shared_aligned
+            means[1] = shared_aligned
+            if unreg_classes is not None:
+                shared_unreg = jnp.stack(unreg_classes, axis=0)
+                unreg_means = [shared_unreg, shared_unreg]
+        else:
+            for k in range(2):
                 means[k], sign_flipped = _align_fourier_volume_sign_to_reference(
                     means[k],
                     previous_means[k],
@@ -4456,13 +4474,20 @@ def _run_relion_iteration_loop(
             "" if need_unreg_means else " (skipped; diagnostics disabled)",
         )
 
-        # FSC was already computed above in the RELION-exact ordering block
-        # (current_iter_fsc) and used to derive tau2 BEFORE the Wiener solve.
-        # Reuse it here — recomputing would give the same value (same
-        # underlying unreg accumulators).
-        fsc = current_iter_fsc
-        fsc_history.append(fsc)
-        _parity_dump.mark_stage(iteration, "fsc")
+        # K>1 uses the shared per-class data_vs_prior curve to drive growth;
+        # K=1 keeps the split-half FSC history.
+        if k_class_enabled:
+            fsc = None
+            fsc_history.append(fsc)
+            _parity_dump.mark_stage(iteration, "fsc")
+        else:
+            # FSC was already computed above in the RELION-exact ordering block
+            # (current_iter_fsc) and used to derive tau2 BEFORE the Wiener solve.
+            # Reuse it here — recomputing would give the same value (same
+            # underlying unreg accumulators).
+            fsc = current_iter_fsc
+            fsc_history.append(fsc)
+            _parity_dump.mark_stage(iteration, "fsc")
 
         # --- Save intermediate volumes if requested ---
         if save_intermediates_dir is not None:
@@ -4503,7 +4528,7 @@ def _run_relion_iteration_loop(
             # Save FSC and noise/tau2 per iteration
             np.save(
                 os.path.join(save_intermediates_dir, f"it{iteration:03d}_fsc.npy"),
-                np.asarray(fsc),
+                np.asarray(fsc) if fsc is not None else np.array([], dtype=np.float32),
             )
             np.save(
                 os.path.join(save_intermediates_dir, f"it{iteration:03d}_noise.npy"),
@@ -4625,20 +4650,30 @@ def _run_relion_iteration_loop(
         # reconstruct() which calls updateSSNRarrays before the filter).
 
         # --- Resolution from updated FSC-derived SSNR (RELION auto-refine) ---
-        # Matches RELION updateSSNRarrays at backprojector.cpp:1117-1123:
-        # data_vs_prior[i] = tau2_fudge * fsc / (1 - fsc), with fsc clamped
-        # to [0.001, 0.999] inside fsc_to_relion_ssnr.
-        dvp_iter = np.asarray(fsc, dtype=np.float32).copy()
-        if cs < grid_size:
-            dvp_iter[min(len(dvp_iter), cs // 2) :] = 0.0
-        dvp_iter = np.asarray(
-            fsc_to_relion_ssnr(dvp_iter, tau2_fudge=tau2_fudge),
-        )
-        dvp_res_shell = resolution_from_data_vs_prior(
-            dvp_iter,
-            allow_high_res_recovery=True,
-        )
-        pixel_res = float(dvp_res_shell)
+        # K=1: data_vs_prior comes from the half-map FSC.
+        # K>1: data_vs_prior comes from the shared per-class prior and the
+        # combined class accumulators.
+        if k_class_enabled:
+            dvp_iter = np.asarray(data_vs_prior_trajectory[-1], dtype=np.float32).copy()
+            if cs < grid_size:
+                dvp_iter[..., min(dvp_iter.shape[-1], cs // 2 + 1) :] = 0.0
+            dvp_res_shell = max(
+                resolution_from_data_vs_prior(dvp_class, allow_high_res_recovery=True)
+                for dvp_class in np.asarray(dvp_iter)
+            )
+            pixel_res = float(dvp_res_shell)
+        else:
+            dvp_iter = np.asarray(fsc, dtype=np.float32).copy()
+            if cs < grid_size:
+                dvp_iter[min(len(dvp_iter), cs // 2) :] = 0.0
+            dvp_iter = np.asarray(
+                fsc_to_relion_ssnr(dvp_iter, tau2_fudge=tau2_fudge),
+            )
+            dvp_res_shell = resolution_from_data_vs_prior(
+                dvp_iter,
+                allow_high_res_recovery=True,
+            )
+            pixel_res = float(dvp_res_shell)
         pixel_resolutions.append(pixel_res)
 
         # --- Update poses and noise ---
@@ -4686,114 +4721,58 @@ def _run_relion_iteration_loop(
                 best_trans = np.asarray(current_translations)[trans_idx]
             else:
                 # Global search uses the dense grid in pose_rotations[k].
-                rot_idx = hard_assignments[k] // current_translations.shape[0]
-                best_rots, best_trans = hard_assignment_idx_to_pose(
-                    hard_assignments[k],
-                    pose_rotations[k],
-                    pose_translations[k],
-                )
-                if pose_rotation_eulers[k] is not None:
-                    best_eulers = np.asarray(pose_rotation_eulers[k], dtype=np.float32)[rot_idx]
+                # K-class dense engines report a combined rotation/translation
+                # row index here, so decode it before indexing the rotation
+                # table.
+                if k_class_enabled:
+                    rot_idx = hard_assignments[k] // current_translations.shape[0]
+                    trans_idx = hard_assignments[k] % current_translations.shape[0]
                 else:
-                    best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
-            new_iter_best_rotations[k] = np.asarray(best_rots, dtype=np.float32)
-            new_iter_best_rotation_eulers[k] = np.asarray(best_eulers, dtype=np.float32)
-            # When image_pre_shifts is used, best_trans is relative to the
-            # rounded pre-shift base. Store the total (absolute) translation
-            # so the next iteration pre-centers by the updated offset.
-            total_trans = np.asarray(best_trans, dtype=np.float32)
-            if translation_search_bases[k] is not None:
-                total_trans = total_trans + translation_search_bases[k]
-            new_iter_best_translations[k] = total_trans
-            previous_best_rotations[k] = new_iter_best_rotations[k]
-            relion_half_inputs.previous_best_rotation_eulers[k] = new_iter_best_rotation_eulers[k]
-            relion_half_inputs.previous_best_translations[k] = new_iter_best_translations[k]
-            experiment_datasets[k].update_poses(best_rots, total_trans)
+                    rot_idx = hard_assignments[k]
+                    trans_idx = hard_assignments[k] % current_translations.shape[0]
+                best_rots = np.asarray(pose_rotations[k], dtype=np.float32)[rot_idx]
+                best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
+                best_trans = np.asarray(current_translations)[trans_idx]
+            new_iter_best_rotations[k] = best_rots
+            new_iter_best_rotation_eulers[k] = best_eulers
+            new_iter_best_translations[k] = best_trans
+        previous_best_rotations = new_iter_best_rotations
+        previous_best_rotation_eulers = new_iter_best_rotation_eulers
+        relion_half_inputs.previous_best_translations = new_iter_best_translations
+        best_rotation_eulers_history.append([np.asarray(e).copy() if e is not None else None for e in new_iter_best_rotation_eulers])
+        best_translations_history.append([np.asarray(t).copy() if t is not None else None for t in new_iter_best_translations])
 
-        try:
-            best_rotation_eulers_history.append(
-                np.concatenate(new_iter_best_rotation_eulers, axis=0).astype(np.float32)
-            )
-            best_translations_history.append(np.concatenate(new_iter_best_translations, axis=0).astype(np.float32))
-        except (ValueError, TypeError):
-            best_rotation_eulers_history.append(None)
-            best_translations_history.append(None)
-
-        if save_intermediates_dir is not None:
-            for k_half in range(2):
-                np.save(
-                    os.path.join(
-                        save_intermediates_dir,
-                        f"it{iteration:03d}_best_rotation_eulers_half{k_half + 1}.npy",
-                    ),
-                    np.asarray(new_iter_best_rotation_eulers[k_half], dtype=np.float32),
-                )
-                np.save(
-                    os.path.join(
-                        save_intermediates_dir,
-                        f"it{iteration:03d}_best_translations_half{k_half + 1}.npy",
-                    ),
-                    np.asarray(new_iter_best_translations[k_half], dtype=np.float32),
-                )
-                if prior_iter_best_rotations[k_half] is not None:
-                    np.save(
-                        os.path.join(
-                            save_intermediates_dir,
-                            f"it{iteration:03d}_prev_rotation_matrices_half{k_half + 1}.npy",
-                        ),
-                        np.asarray(prior_iter_best_rotations[k_half], dtype=np.float32),
-                    )
-                if prior_iter_best_translations[k_half] is not None:
-                    np.save(
-                        os.path.join(
-                            save_intermediates_dir,
-                            f"it{iteration:03d}_prev_translations_half{k_half + 1}.npy",
-                        ),
-                        np.asarray(prior_iter_best_translations[k_half], dtype=np.float32),
-                    )
-            np.save(
-                os.path.join(save_intermediates_dir, f"it{iteration:03d}_effective_rotations.npy"),
-                np.asarray(effective_rotations, dtype=np.float32),
-            )
-            np.save(
-                os.path.join(save_intermediates_dir, f"it{iteration:03d}_effective_rotation_eulers.npy"),
-                np.asarray(effective_rotation_eulers, dtype=np.float32),
-            )
-
-        # --- RELION-exact change tracking inputs (B3 / B4) ---
-        # Combine both half-sets in the same image order as
-        # current_combined_ha. RELION's monitorHiddenVariableChanges sums
-        # over all particles, so the per-half order is irrelevant for the
-        # mean -- but we keep the half-0-then-half-1 convention for
-        # consistency with the rest of the loop.
-        try:
+        if all(rot is not None for rot in new_iter_best_rotations):
             current_rotation_matrices_combined = np.concatenate(
-                new_iter_best_rotations,
+                [np.asarray(rot, dtype=np.float32) for rot in new_iter_best_rotations],
                 axis=0,
-            ).astype(np.float64)
-            current_translations_pixel_combined = np.concatenate(
-                new_iter_best_translations,
-                axis=0,
-            ).astype(np.float64)
-        except (ValueError, TypeError):
+            )
+        else:
             current_rotation_matrices_combined = None
-            current_translations_pixel_combined = None
         if all(rot is not None for rot in prior_iter_best_rotations):
-            try:
-                previous_rotation_matrices_combined = np.concatenate(
-                    prior_iter_best_rotations,
-                    axis=0,
-                ).astype(np.float64)
-                previous_translations_pixel_combined = np.concatenate(
-                    prior_iter_best_translations,
-                    axis=0,
-                ).astype(np.float64)
-            except (ValueError, TypeError):
-                previous_rotation_matrices_combined = None
-                previous_translations_pixel_combined = None
+            previous_rotation_matrices_combined = np.concatenate(
+                [np.asarray(rot, dtype=np.float32) for rot in prior_iter_best_rotations],
+                axis=0,
+            )
         else:
             previous_rotation_matrices_combined = None
+        if all(trans is not None for trans in new_iter_best_translations):
+            current_translations_pixel_combined = np.concatenate(
+                [np.asarray(trans, dtype=np.float32) for trans in new_iter_best_translations],
+                axis=0,
+            )
+        else:
+            current_translations_pixel_combined = None
+        if all(trans is not None for trans in prior_iter_best_translations):
+            previous_translations_pixel_combined = np.concatenate(
+                [np.asarray(trans, dtype=np.float32) for trans in prior_iter_best_translations],
+                axis=0,
+            )
+        else:
             previous_translations_pixel_combined = None
+
+        if not k_class_enabled:
+            data_vs_prior_trajectory.append(np.asarray(dvp_iter, dtype=np.float32))
 
         # RELION-style posterior-weighted noise update. Sums the wsum/img_power
         # accumulators from both half-sets and normalizes via the M-step formula.
@@ -4861,8 +4840,12 @@ def _run_relion_iteration_loop(
             tau2_avg_weight_trajectory.append(np.asarray(tau2_update_details["avg_weight_shells"], dtype=np.float64))
             tau2_shell_sum_trajectory.append(np.asarray(tau2_update_details["shell_sum"], dtype=np.float64))
             tau2_shell_count_trajectory.append(np.asarray(tau2_update_details["shell_count"], dtype=np.float64))
-            tau2_fsc_used_trajectory.append(np.asarray(tau2_update_details["fsc_shells"], dtype=np.float64))
-            tau2_ssnr_trajectory.append(np.asarray(tau2_update_details["ssnr_shells"], dtype=np.float64))
+            if k_class_enabled:
+                tau2_fsc_used_trajectory.append(None)
+                tau2_ssnr_trajectory.append(np.asarray(tau2_update_details["ssnr_shells"], dtype=np.float64))
+            else:
+                tau2_fsc_used_trajectory.append(np.asarray(tau2_update_details["fsc_shells"], dtype=np.float64))
+                tau2_ssnr_trajectory.append(np.asarray(tau2_update_details["ssnr_shells"], dtype=np.float64))
         else:
             tau2_radial_trajectory.append(None)
             tau2_sigma2_trajectory.append(None)

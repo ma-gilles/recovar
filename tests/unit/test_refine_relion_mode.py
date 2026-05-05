@@ -2577,6 +2577,7 @@ class TestRelionModeSmokeTest:
         assert np.asarray(result["class_means"]).shape == (2, VOLUME_SIZE)
         assert np.asarray(result["means"][0]).shape == (2, VOLUME_SIZE)
         assert np.asarray(result["means"][1]).shape == (2, VOLUME_SIZE)
+        np.testing.assert_allclose(np.asarray(result["means"][0]), np.asarray(result["means"][1]))
         np.testing.assert_allclose(np.sum(result["class_weights"]), 1.0, rtol=1e-6, atol=1e-6)
         assert len(result["class_weight_trajectory"]) == 1
         for half_idx in range(2):
