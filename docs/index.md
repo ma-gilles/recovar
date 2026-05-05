@@ -46,6 +46,14 @@ RECOVAR is a software tool for analyzing conformational heterogeneity in cryo-EM
 
     [:octicons-arrow-right-24: Web GUI](guide/gui.md)
 
+-   :material-robot:{ .lg .middle } **Agent workflow**
+
+    ---
+
+    Compact reload, state, and check-in template for long Codex sessions
+
+    [:octicons-arrow-right-24: Workflow Template](guide/codex-workflow.md)
+
 </div>
 
 ## Key features
