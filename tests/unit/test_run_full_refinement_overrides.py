@@ -155,6 +155,52 @@ def test_replay_overrides_iter2_sigma_matches_relion_iter1():
     )
 
 
+def test_replay_overrides_accept_class3d_single_model_star(tmp_path):
+    import pandas as pd
+    import starfile
+
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": ["1@particles.mrcs", "2@particles.mrcs", "3@particles.mrcs", "4@particles.mrcs"],
+            "rlnNormCorrection": [2.0, 4.0, 5.0, 10.0],
+            "rlnGroupNumber": [1, 2, 1, 2],
+        }
+    )
+    model_general = pd.DataFrame(
+        {
+            "rlnNormCorrectionAverage": [20.0],
+            "rlnSigmaOffsetsAngst": [8.890755],
+        }
+    )
+    model_groups = pd.DataFrame({"rlnGroupScaleCorrection": [1.0, 0.5]})
+
+    starfile.write({"particles": particles}, tmp_path / "run_it001_data.star", overwrite=True)
+    starfile.write(
+        {"model_general": model_general, "model_groups": model_groups},
+        tmp_path / "run_it001_model.star",
+        overwrite=True,
+    )
+
+    overrides = _build_replay_iteration_overrides(
+        tmp_path,
+        half1_idx=np.asarray([0, 2], dtype=np.int64),
+        half2_idx=np.asarray([1, 3], dtype=np.int64),
+        max_iter=2,
+        ds_voxel=4.25,
+        ds_grid=128,
+        include_normcorr=True,
+    )
+
+    assert overrides[0] is None
+    assert overrides[1]["translation_sigma_angstrom"] == pytest.approx(8.890755)
+    h1, h2 = overrides[1]["image_corrections"]
+    np.testing.assert_allclose(h1, np.asarray([10.0, 4.0], dtype=np.float32))
+    np.testing.assert_allclose(h2, np.asarray([2.5, 1.0], dtype=np.float32))
+    s1, s2 = overrides[1]["scale_corrections"]
+    np.testing.assert_allclose(s1, np.asarray([1.0, 1.0], dtype=np.float32))
+    np.testing.assert_allclose(s2, np.asarray([0.5, 0.5], dtype=np.float32))
+
+
 @pytest.mark.skipif(not FIXTURE.exists(), reason=f"fixture missing: {FIXTURE}")
 def test_replay_overrides_include_normcorr_adds_image_corrections():
     half1_idx = np.arange(2515, dtype=np.int64)
