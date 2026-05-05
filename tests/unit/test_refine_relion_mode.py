@@ -2937,7 +2937,7 @@ class TestRelionModeSmokeTest:
 
     def test_relion_translation_prior_center_matches_accelerated_pdf_offset_units(self):
         prev = np.array([[0.0, -1.0], [1.0, 0.0]], dtype=np.float32)
-        expected = np.array([[0.0, 1.0 / 4.25], [-1.0 / 4.25, 0.0]], dtype=np.float32)
+        expected = np.array([[0.0, 1.0], [-1.0, 0.0]], dtype=np.float32)
         np.testing.assert_allclose(
             relion_translation_prior_center(prev, voxel_size=4.25),
             expected,

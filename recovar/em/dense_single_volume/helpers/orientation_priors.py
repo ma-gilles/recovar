@@ -78,23 +78,22 @@ def relion_translation_search_base(previous_best_translations):
 def relion_translation_prior_center(previous_best_translations, voxel_size, prior_offsets=None):
     """Return RELION's offset-prior center in RECOVAR search-grid pixels.
 
-    RELION's accelerated path builds ``pdf_offset`` from
-    ``old_offset + sampling.translations - prior`` where the rounded
-    ``old_offset`` term is in pixel-like metadata units while
-    ``sampling.translations`` is the Angstrom-space grid.  RECOVAR scores
-    shifts after ``getTranslationsInPixel``-style conversion, so the prior
-    center must be divided by the pixel size.  The image pre-shift itself
-    still uses :func:`relion_translation_search_base` unchanged.
+    RELION's accelerated M-step accumulates
+    ``prior_offset - old_offset_px - translation_px`` and multiplies the
+    squared residual by ``pixel_size**2``.  RECOVAR's translation grids are
+    already in pixel units, so only RELION model prior offsets (stored in
+    Angstroms) are divided by the pixel size.  The rounded old offset remains
+    in pixels.
     """
     old_offset = relion_translation_search_base(previous_best_translations)
     if old_offset is None:
         return None
     voxel_size = float(voxel_size if voxel_size > 0 else 1.0)
     if prior_offsets is None:
-        prior = np.zeros_like(old_offset, dtype=np.float32)
+        prior_px = np.zeros_like(old_offset, dtype=np.float32)
     else:
-        prior = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape)
-    return ((prior - old_offset) / voxel_size).astype(np.float32)
+        prior_px = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape) / voxel_size
+    return (prior_px - old_offset).astype(np.float32)
 
 
 def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
