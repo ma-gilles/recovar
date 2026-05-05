@@ -78,6 +78,28 @@ def relion_translation_search_base(previous_best_translations):
 def relion_translation_prior_center(previous_best_translations, voxel_size, prior_offsets=None):
     """Return RELION's offset-prior center in RECOVAR search-grid pixels.
 
+    This is the center for the E-step ``pdf_offset`` term. RELION builds that
+    term from ``old_offset + sampling.translations - prior`` before calling
+    ``getTranslationsInPixel`` on the sampling grid, then multiplies the
+    squared residual by ``pixel_size**2``. RECOVAR scores pixel-space shifts,
+    so the rounded old offset and prior are divided by the pixel size here.
+    Do not reuse this center for ``sigma2_offset`` accumulation; RELION's
+    M-step accumulator uses pixel-space oversampled translations.
+    """
+    old_offset = relion_translation_search_base(previous_best_translations)
+    if old_offset is None:
+        return None
+    voxel_size = float(voxel_size if voxel_size > 0 else 1.0)
+    if prior_offsets is None:
+        prior_px = np.zeros_like(old_offset, dtype=np.float32)
+    else:
+        prior_px = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape) / voxel_size
+    return ((prior_px - old_offset) / voxel_size).astype(np.float32)
+
+
+def relion_translation_sigma_offset_center(previous_best_translations, voxel_size, prior_offsets=None):
+    """Return RELION's ``sigma2_offset`` accumulator center in pixel units.
+
     RELION's accelerated M-step accumulates
     ``prior_offset - old_offset_px - translation_px`` and multiplies the
     squared residual by ``pixel_size**2``.  RECOVAR's translation grids are

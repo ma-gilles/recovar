@@ -43,6 +43,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     normalize_class_direction_prior_per_half,
     normalize_direction_prior_per_half,
     relion_translation_prior_center,
+    relion_translation_sigma_offset_center,
     relion_translation_search_base,
     remap_direction_prior_to_healpix_order,
 )
@@ -2801,8 +2802,12 @@ def _run_relion_iteration_loop(
                 previous_translations_k,
                 cryo.voxel_size,
             )
+            trans_sigma_offset_center = relion_translation_sigma_offset_center(
+                previous_translations_k,
+                cryo.voxel_size,
+            )
             # A.1 fix: at iter 1 cold-start `previous_translations_k` is None, so
-            # `trans_prior_center` is None and em_engine's wsum_sigma2_offset
+            # `trans_sigma_offset_center` is None and em_engine's wsum_sigma2_offset
             # accumulator (em_engine.py:1636) is gated off. RELION still computes
             # wsum_sigma2_offset = sum_i E[||t_i||²] at iter 1 using the implicit
             # zero prior center, which seeds iter-2's sigma_offset ~ 1.6 Å (vs
@@ -2811,7 +2816,7 @@ def _run_relion_iteration_loop(
         # unaffected because make_relion_translation_log_prior(None) and
         # make_relion_translation_log_prior(zeros(2)) both center at origin.
             trans_prior_center_for_engine = (
-                np.zeros(2, dtype=np.float32) if trans_prior_center is None else trans_prior_center
+                np.zeros(2, dtype=np.float32) if trans_sigma_offset_center is None else trans_sigma_offset_center
             )
             translation_prior_translations = np.asarray(base_translations, dtype=np.float32)
             if current_translations.shape[0] != base_translations.shape[0]:
