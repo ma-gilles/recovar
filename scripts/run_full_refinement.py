@@ -78,6 +78,27 @@ def _load_relion_max_significants(optimiser_star_path):
     return int(match.group(1))
 
 
+def _parse_relion_tau2_fudge(text):
+    """Extract RELION's tau2_fudge from an optimiser STAR text block."""
+    match = re.search(r"_(?:rlnTau2FudgeFactor|rlnTau2FudgeArg)\s+(\S+)", text)
+    if match is None:
+        match = re.search(r"(?:rlnTau2FudgeFactor|rlnTau2FudgeArg)\s+(\S+)", text)
+    if match is None:
+        return None
+    return float(match.group(1))
+
+
+def _resolve_tau2_fudge(n_classes, cli_tau2_fudge, relion_init_tau2_fudge):
+    """Return the effective tau2_fudge and a human-readable source label."""
+    if relion_init_tau2_fudge is not None:
+        return float(relion_init_tau2_fudge), "RELION it000 optimiser"
+    if cli_tau2_fudge is not None:
+        return float(cli_tau2_fudge), "explicit CLI"
+    if int(n_classes) > 1:
+        return 4.0, "RELION Class3D default"
+    return 1.0, "RELION auto-refine default"
+
+
 def _build_replay_iteration_overrides(
     relion_dir,
     half1_idx,
@@ -385,15 +406,12 @@ def main():
     parser.add_argument(
         "--tau2_fudge",
         type=float,
-        default=1.0,
-        help="RELION tau2_fudge regularization strength (default 1.0, "
-        "matching RELION GUI 3D Auto-refine default — pipeline_jobs.cpp's "
-        "getCommandsAutorefineJob() does NOT pass --tau2_fudge, so the "
-        "binary default in ml_optimiser.cpp:878 (=1.0) is used. Class3D's "
-        "GUI default is 4.0; the prior 4.0 default here was wrong for "
-        "auto_refine and inflated iter-1 reconstruction high-shell "
-        "amplitude by 17%% at shell 18 / 8.4× at shell 28 vs RELION. "
-        "Higher values produce smoother volumes (stronger prior).",
+        default=None,
+        help="RELION tau2_fudge regularization strength. If omitted, use "
+        "RELION's mode default: 1.0 for K=1 auto-refine and 4.0 for K>1 "
+        "Class3D. If --relion_init_dir has run_it000_optimiser.star, its "
+        "rlnTau2FudgeFactor/rlnTau2FudgeArg value takes precedence. Higher "
+        "values produce smoother volumes (stronger prior).",
     )
     parser.add_argument(
         "--perturb_factor",
@@ -482,8 +500,9 @@ def main():
         default=None,
         help="Strict-parity cold-start: load RELION run_it000_model.star "
         "sigma2_noise spectrum + per-class rlnReferenceTau2 spectra + "
-        "rlnTau2FudgeFactor + rlnSigmaOffsetsAngst from this directory and use "
-        "them as recovar's iter-0 state (instead of bootstrapping from images). "
+        "rlnTau2FudgeFactor/rlnTau2FudgeArg + rlnSigmaOffsetsAngst from this "
+        "directory and use them as recovar's iter-0 state (instead of "
+        "bootstrapping from images). "
         "Eliminates the ~1e-3 relative drift between recovar's bootstrapped "
         "sigma2_noise and RELION's, which is what flips ~22%% of K=4 iter-1 "
         "class assignments and caps mean_corr at 0.94 in pure cold-start. "
@@ -754,9 +773,8 @@ def main():
         # Tau2 fudge factor + sigma_offset from optimiser.star.
         if _it0_optim_path.exists():
             _opt_text = _it0_optim_path.read_text()
-            _m_tau = _re.search(r"_rlnTau2FudgeFactor\s+(\S+)", _opt_text)
-            if _m_tau is not None:
-                relion_init_tau2_fudge = float(_m_tau.group(1))
+            relion_init_tau2_fudge = _parse_relion_tau2_fudge(_opt_text)
+            if relion_init_tau2_fudge is not None:
                 logger.info(
                     "STRICT-PARITY: --tau2_fudge override from RELION it000 optimiser: %.3f",
                     relion_init_tau2_fudge,
@@ -812,6 +830,13 @@ def main():
             include_normcorr=bool(args.replay_relion_normcorr),
         )
 
+    effective_tau2_fudge, tau2_fudge_source = _resolve_tau2_fudge(
+        args.n_classes,
+        args.tau2_fudge,
+        relion_init_tau2_fudge,
+    )
+    logger.info("Using tau2_fudge=%.3f (%s)", float(effective_tau2_fudge), tau2_fudge_source)
+
     t_start = time.time()
 
     result = refine_single_volume(
@@ -841,13 +866,14 @@ def main():
             else args.offset_sigma_angstrom
         ),
         particle_diameter_ang=particle_diameter_ang,
-        tau2_fudge=(relion_init_tau2_fudge if relion_init_tau2_fudge is not None else args.tau2_fudge),
+        tau2_fudge=effective_tau2_fudge,
         perturb_factor=args.perturb_factor,
         perturb_seed=args.perturb_seed,
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,
         replay_iteration_overrides=replay_iteration_overrides,
         n_classes=args.n_classes,
         emulate_relion_firstiter_cc=bool(args.firstiter_cc),
+        relion_firstiter_ini_high_angstrom=(args.init_resolution if args.firstiter_cc else None),
     )
 
     total_time = time.time() - t_start
@@ -875,6 +901,8 @@ def main():
         "max_significants": args.max_significants,
         "adaptive_skip_threshold": args.adaptive_skip_threshold,
         "offset_sigma_angstrom": args.offset_sigma_angstrom,
+        "tau2_fudge": np.float64(effective_tau2_fudge),
+        "tau2_fudge_source": np.asarray(tau2_fudge_source),
         "particle_diameter_ang": (np.float64(particle_diameter_ang) if particle_diameter_ang is not None else np.nan),
         "half1_indices": half1_idx,
         "half2_indices": half2_idx,

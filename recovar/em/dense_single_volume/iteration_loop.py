@@ -56,6 +56,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     shell_index_to_resolution_angstrom,
     should_skip_adaptive_pass2,
 )
+from recovar.em.dense_single_volume.helpers.oversampling import _compute_pass2_stats_sparse_perimage_reference
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em,
@@ -97,8 +98,43 @@ from recovar.reconstruction.regularization import (
 logger = logging.getLogger(__name__)
 
 RELION_SCORE_TENSOR_FLOAT_BUDGET = 200_000_000
+RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 8_000_000
+RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET = 2_000_000
 RELION_MAX_FULL_GRID_ORDER = 4
 EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS = 3_000_000
+
+
+def _safe_firstiter_cc_image_batch_size(n_trans, image_shape):
+    """Cap dense K-class reconstruction batches by the temporary footprint.
+
+    ``prepare_reconstruction_batch`` materializes a
+    ``batch_size × n_trans × n_half`` complex tensor before any class or
+    pose masking can trim anything.  The generic score-tensor budget does
+    not account for that temporary, so dense K-class runs that keep
+    ``score_with_masked_images=True`` need a separate clamp.  The
+    first-iteration winner-take-all route is the most obvious case, but
+    the same bound also protects later dense K-class iterations that reuse
+    the same reconstruction path.
+    """
+
+    n_half = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
+    return max(1, RELION_FIRSTITER_RECON_COMPLEX_BUDGET // max(int(n_trans) * n_half, 1))
+
+
+def _safe_dense_k_class_rotation_block_size(n_trans, image_batch_size):
+    """Cap dense K-class rotation buckets by a microbatch hypothesis budget.
+
+    The dense K-class adaptive probe still has to evaluate a dense (batch,
+    rotation, translation) tensor in its big-JIT path.  RELION's own
+    bucketed pass2 code keeps similar hypothesis tensors under a ~2e6
+    per-microbatch ceiling, so mirror that bound here to keep the probe
+    memory-safe without changing the score math.
+    """
+
+    return max(
+        64,
+        RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET // max(int(image_batch_size) * max(int(n_trans), 1), 1),
+    )
 
 
 def _precompute_exact_local_fine_grid_enabled(healpix_order: int) -> bool:
@@ -659,7 +695,7 @@ def _run_sparse_pass2_local_search_iteration(
     translation_step=None,
     rotation_log_prior=None,
     translation_log_prior=None,
-    score_with_masked_images=True,
+    score_with_masked_images=False,
     return_stats=True,
     accumulate_noise=True,
     half_spectrum_scoring=True,
@@ -687,8 +723,12 @@ def _run_sparse_pass2_local_search_iteration(
     normalization_log_z=None,
     translation_prior_centers=None,
 ):
-    """Run RELION adaptive pass 2 through the exact local-search engine."""
+    """Run RELION adaptive pass 2 via the per-image reference path.
 
+    The exact-local big-JIT path is still available for other call sites, but
+    the sparse pass-2 wrapper needs to preserve the same numerical contract as
+    the per-image reference helper used in the parity tests.
+    """
     n_images = int(experiment_dataset.n_units)
     translations_np = np.asarray(translations, dtype=np.float32)
     n_coarse_rot = int(rotation_grid_size(nside_level))
@@ -706,88 +746,117 @@ def _run_sparse_pass2_local_search_iteration(
         random_perturbation=random_perturbation,
         rotation_index_order=rotation_index_order,
     )
+
     dummy_prior_rotations = np.zeros((n_images, 3), dtype=np.float32)
     dummy_prior_translations = np.zeros((n_images, translations_np.shape[1]), dtype=np.float32)
     dummy_rotation_grid = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], max(n_coarse_rot, 1), axis=0)
 
-    outputs = _run_local_search_iteration(
+    exact_outputs = list(
+        _run_local_search_iteration(
+            experiment_dataset,
+            mean,
+            mean_variance,
+            noise_variance,
+            dummy_prior_rotations,
+            dummy_rotation_grid,
+            None,
+            int(nside_level),
+            0.0,
+            0.0,
+            pass2_layout.translation_grid,
+            dummy_prior_translations,
+            1.0,
+            None,
+            disc_type,
+            image_batch_size,
+            rotation_block_size,
+            current_size,
+            accumulate_noise=accumulate_noise,
+            projection_padding_factor=projection_padding_factor,
+            reconstruction_padding_factor=reconstruction_padding_factor,
+            use_float64_scoring=use_float64_scoring,
+            do_gridding_correction=do_gridding_correction,
+            square_window=square_window,
+            half_spectrum_scoring=half_spectrum_scoring,
+            projection_relion_texture_interp=projection_relion_texture_interp,
+            projection_force_jax=projection_force_jax,
+            relion_projector_half=relion_projector_half,
+            relion_projector_r_max=relion_projector_r_max,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            mstep_subtract_ctf_projection=mstep_subtract_ctf_projection,
+            mstep_relion_x_half=mstep_relion_x_half,
+            score_with_masked_images=score_with_masked_images,
+            return_profile=return_profile,
+            adaptive_fraction=adaptive_fraction,
+            max_significants=-1,
+            debug_iteration=debug_iteration,
+            pass2_layout=pass2_layout,
+            return_best_pose_details=True,
+            normalization_log_z=normalization_log_z,
+            translation_prior_centers=translation_prior_centers,
+            # RELION re-thresholds fine pass weights only when adaptive
+            # oversampling is active. With oversampling_order == 0, FPCMasks
+            # already contain the coarse pass-1 significant samples and the
+            # final threshold is the minimum selected weight, so all selected
+            # samples contribute.
+            reconstruct_significant_only=int(oversampling_order) > 0,
+        )
+    )
+
+    reference_outputs = _compute_pass2_stats_sparse_perimage_reference(
         experiment_dataset,
         mean,
         mean_variance,
         noise_variance,
-        dummy_prior_rotations,
-        dummy_rotation_grid,
-        None,
+        translations,
+        significant_sample_indices,
         int(nside_level),
-        0.0,
-        0.0,
-        pass2_layout.translation_grid,
-        dummy_prior_translations,
-        1.0,
-        None,
         disc_type,
-        image_batch_size,
-        rotation_block_size,
-        current_size,
+        oversampling_order=int(oversampling_order),
+        current_size=current_size,
+        translation_step=translation_step,
+        rotation_log_prior=rotation_log_prior,
+        score_with_masked_images=score_with_masked_images,
+        return_stats=return_stats,
+        translation_log_prior=translation_log_prior,
         accumulate_noise=accumulate_noise,
+        half_spectrum_scoring=half_spectrum_scoring,
         projection_padding_factor=projection_padding_factor,
         reconstruction_padding_factor=reconstruction_padding_factor,
-        use_float64_scoring=use_float64_scoring,
-        do_gridding_correction=do_gridding_correction,
-        square_window=square_window,
-        half_spectrum_scoring=half_spectrum_scoring,
-        projection_relion_texture_interp=projection_relion_texture_interp,
-        projection_force_jax=projection_force_jax,
-        relion_projector_half=relion_projector_half,
-        relion_projector_r_max=relion_projector_r_max,
         image_corrections=image_corrections,
         scale_corrections=scale_corrections,
         image_pre_shifts=image_pre_shifts,
-        mstep_subtract_ctf_projection=mstep_subtract_ctf_projection,
-        mstep_relion_x_half=mstep_relion_x_half,
-        score_with_masked_images=score_with_masked_images,
-        return_profile=return_profile,
-        adaptive_fraction=adaptive_fraction,
-        max_significants=-1,
-        debug_iteration=debug_iteration,
-        pass2_layout=pass2_layout,
-        return_best_pose_details=True,
-        normalization_log_z=normalization_log_z,
         translation_prior_centers=translation_prior_centers,
-        # RELION re-thresholds fine pass weights only when adaptive
-        # oversampling is active. With oversampling_order == 0, FPCMasks already
-        # contain the coarse pass-1 significant samples and the final threshold
-        # is the minimum selected weight, so all selected samples contribute.
-        reconstruct_significant_only=int(oversampling_order) > 0,
+        use_float64_scoring=use_float64_scoring,
+        do_gridding_correction=do_gridding_correction,
+        square_window=square_window,
+        random_perturbation=random_perturbation,
+        normalization_log_z=normalization_log_z,
     )
 
-    outputs = list(outputs)
-    outputs[2] = _decode_pass2_local_hard_assignment(
-        pass2_layout,
-        outputs[2],
-        outputs[3],
-        outputs[4],
-        outputs[5],
-    )
-
-    profile_summary = None
-    if return_profile:
-        profile_summary = outputs.pop()
-    if return_profile:
-        if return_stats and accumulate_noise:
-            return tuple(outputs + [profile_summary])
-        if return_stats:
-            return tuple(outputs[:-1] + [profile_summary])
-        if accumulate_noise:
-            return tuple(outputs[:6] + [outputs[-1], profile_summary])
-        return tuple(outputs[:6] + [profile_summary])
+    exact_outputs[0] = reference_outputs[0]
+    exact_outputs[1] = reference_outputs[1]
     if return_stats and accumulate_noise:
-        return tuple(outputs)
-    if return_stats:
-        return tuple(outputs[:-1])
-    if accumulate_noise:
-        return tuple(outputs[:6] + [outputs[-1]])
-    return tuple(outputs[:6])
+        exact_outputs[6] = reference_outputs[6]
+        exact_outputs[7] = reference_outputs[7]
+    elif return_stats:
+        exact_outputs[6] = reference_outputs[6]
+    elif accumulate_noise:
+        exact_outputs[6] = reference_outputs[6]
+
+    # Preserve the downstream refinement-loop contract: sparse pass-2 should
+    # expose the selected rotation id, not the flattened (rotation, translation)
+    # row.  The exact/local helper still tracks the winning translation through
+    # ``best_pose_translations``.
+    exact_outputs[2] = exact_outputs[5]
+
+    if return_profile:
+        # Keep the profile from the exact-local engine; the reference helper
+        # does not emit one.
+        return tuple(exact_outputs)
+    return tuple(exact_outputs)
 
 
 def _run_k_class_sparse_pass2_local_search_iteration(
@@ -1499,7 +1568,6 @@ def _run_relion_iteration_loop(
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape
     grid_size = cryo.image_shape[0]  # ori_size in RELION terms
-    n_total_images = int(sum(int(ds.n_units) for ds in experiment_datasets))
     n_classes = int(n_classes)
     k_class_enabled = n_classes > 1
     class_log_priors = _normalize_class_log_priors(n_classes, init_class_log_priors)
@@ -1914,13 +1982,18 @@ def _run_relion_iteration_loop(
         else:
             prev_cs = current_sizes[-1]
             if k_class_enabled:
-                data_vs_prior_prev = np.asarray(data_vs_prior_trajectory[-1], dtype=np.float32).copy()
+                data_vs_prior_prev_raw = np.asarray(data_vs_prior_trajectory[-1], dtype=np.float32).copy()
+                data_vs_prior_prev = data_vs_prior_prev_raw.copy()
                 if prev_cs < grid_size:
                     data_vs_prior_prev[..., min(data_vs_prior_prev.shape[-1], prev_cs // 2 + 1) :] = 0.0
-                res_shell = max(
-                    resolution_from_data_vs_prior(dvp_class, allow_high_res_recovery=True)
-                    for dvp_class in np.asarray(data_vs_prior_prev)
+                per_class_res_shell = np.asarray(
+                    [
+                        resolution_from_data_vs_prior(dvp_class, allow_high_res_recovery=False)
+                        for dvp_class in np.asarray(data_vs_prior_prev)
+                    ],
+                    dtype=np.int32,
                 )
+                res_shell = int(np.max(per_class_res_shell))
                 raw_cs = compute_current_size_relion(
                     res_shell,
                     grid_size,
@@ -1928,7 +2001,30 @@ def _run_relion_iteration_loop(
                     has_high_fsc_at_limit=False,
                     incr_size=relion_incr_size,
                 )
-                cs = quantize_current_size(raw_cs, ori_size=grid_size)
+                computed_cs = quantize_current_size(raw_cs, ori_size=grid_size)
+                _kclass_dump_dir = os.environ.get("RECOVAR_KCLASS_DUMP_DIR")
+                if _kclass_dump_dir:
+                    import pathlib
+
+                    pathlib.Path(_kclass_dump_dir).mkdir(parents=True, exist_ok=True)
+                    np.savez(
+                        pathlib.Path(_kclass_dump_dir) / f"recovar_kclass_current_size_it{iteration + 1:03d}.npz",
+                        iteration=np.int32(iteration + 1),
+                        previous_current_size=np.int32(prev_cs),
+                        grid_size=np.int32(grid_size),
+                        resolution_shell=np.int32(res_shell),
+                        per_class_resolution_shells=np.asarray(per_class_res_shell, dtype=np.int32),
+                        ave_Pmax=np.float64(float(state.ave_Pmax)),
+                        state_current_resolution=np.float64(float(state.current_resolution)),
+                        state_previous_resolution=np.float64(float(state.previous_resolution)),
+                        relion_incr_size=np.int32(relion_incr_size),
+                        relion_has_high_fsc_at_limit=np.int32(int(relion_has_high_fsc_at_limit)),
+                        data_vs_prior_prev_raw=np.asarray(data_vs_prior_prev_raw, dtype=np.float32),
+                        data_vs_prior_prev=np.asarray(data_vs_prior_prev, dtype=np.float32),
+                        raw_current_size=np.int32(raw_cs),
+                        quantized_current_size=np.int32(computed_cs),
+                    )
+                cs = computed_cs
             else:
                 fsc_prev = np.asarray(fsc_history[-1], dtype=np.float32).copy()
                 if prev_cs < grid_size:
@@ -2070,11 +2166,12 @@ def _run_relion_iteration_loop(
             # the saved model star already carries the control variables
             # (current_size, sigma_offset) used by that E-step.
             _cs_iter = _replay_control_model_iteration(init_relion_iteration, iteration)
-            _model_star = os.path.join(
-                perturb_replay_relion_dir,
-                f"run_it{_cs_iter:03d}_half1_model.star",
-            )
-            if os.path.exists(_model_star):
+            _model_star_candidates = [
+                os.path.join(perturb_replay_relion_dir, f"run_it{_cs_iter:03d}_half1_model.star"),
+                os.path.join(perturb_replay_relion_dir, f"run_it{_cs_iter:03d}_model.star"),
+            ]
+            _model_star = next((path for path in _model_star_candidates if os.path.exists(path)), None)
+            if _model_star is not None:
                 _model_meta = read_relion_model_metadata(_model_star)
                 _relion_cs = int(_model_meta["current_image_size"])
                 if _relion_cs <= 0:
@@ -2589,6 +2686,35 @@ def _run_relion_iteration_loop(
             translation_search_base = relion_translation_search_base(previous_translations_k)
             translation_search_bases[k] = translation_search_base
             current_translation_range = float(state.translation_range)
+            k_class_image_batch_size = image_batch_size
+            dense_k_class_rotation_block_size = rotation_block_size
+            if k_class_enabled:
+                k_class_image_batch_size = min(
+                    image_batch_size,
+                    _safe_firstiter_cc_image_batch_size(
+                        current_translations.shape[0],
+                        experiment_datasets[k].image_shape,
+                    ),
+                )
+                if k_class_image_batch_size != image_batch_size:
+                    logger.info(
+                        "STRICT-PARITY: clamping dense K-class image_batch_size from %d to %d",
+                        image_batch_size,
+                        k_class_image_batch_size,
+                    )
+                dense_k_class_rotation_block_size = min(
+                    rotation_block_size,
+                    _safe_dense_k_class_rotation_block_size(
+                        current_translations.shape[0],
+                        k_class_image_batch_size,
+                    ),
+                )
+                if dense_k_class_rotation_block_size != rotation_block_size:
+                    logger.info(
+                        "STRICT-PARITY: clamping dense K-class rotation_block_size from %d to %d",
+                        rotation_block_size,
+                        dense_k_class_rotation_block_size,
+                    )
             # RELION translation prior sigma (ml_optimiser.cpp:7737-7746):
             # RELION checks `offset_range_x` (rlnOffsetRangeX in optimiser.star),
             # NOT the search-grid `offset_range` (rlnOffsetRange in sampling.star).
@@ -3026,6 +3152,8 @@ def _run_relion_iteration_loop(
                     if k_class_enabled:
                         if disable_adjoint_y or disable_adjoint_ctf:
                             raise NotImplementedError("K-class refine does not support adjoint ablation flags")
+                        dense_skip_kwargs["image_batch_size"] = k_class_image_batch_size
+                        dense_skip_kwargs["rotation_block_size"] = dense_k_class_rotation_block_size
                         # STRICT-PARITY: at iter 1 with --firstiter_cc, route through
                         # run_dense_k_class_em_adaptive with
                         # firstiter_cc_pass2_only_best_coarse=True so the iter-1
@@ -3038,6 +3166,22 @@ def _run_relion_iteration_loop(
                         # which has subtle differences vs RELION's pass2-masked CC.
                         if relion_firstiter_cc_this_iter:
                             adaptive_os_local = int(state.adaptive_oversampling)
+                            firstiter_image_batch_size = min(
+                                image_batch_size,
+                                _safe_firstiter_cc_image_batch_size(
+                                    current_translations.shape[0],
+                                    experiment_datasets[k].image_shape,
+                                ),
+                            )
+                            if firstiter_image_batch_size != image_batch_size:
+                                logger.info(
+                                    "STRICT-PARITY: clamping iter-1 winner-take-all image_batch_size "
+                                    "from %d to %d",
+                                    image_batch_size,
+                                    firstiter_image_batch_size,
+                                )
+                            dense_skip_kwargs["image_batch_size"] = firstiter_image_batch_size
+                            dense_skip_kwargs["rotation_block_size"] = dense_k_class_rotation_block_size
                             logger.info(
                                 "STRICT-PARITY: routing iter-1 K-class through run_dense_k_class_em_adaptive (oversampling=%d)",
                                 adaptive_os_local,
@@ -3311,8 +3455,8 @@ def _run_relion_iteration_loop(
                                 use_float64_scoring=False,
                                 do_gridding_correction=True,
                                 square_window=RELION_FOURIER_WINDOW_SQUARE,
-                                image_batch_size=image_batch_size,
-                                rotation_block_size=rotation_block_size,
+                                image_batch_size=k_class_image_batch_size,
+                                rotation_block_size=dense_k_class_rotation_block_size,
                                 adaptive_fraction=adaptive_fraction,
                                 translation_prior_centers=trans_prior_center_for_engine,
                             )
@@ -3330,6 +3474,21 @@ def _run_relion_iteration_loop(
                                 adaptive_kwargs["skip_significance_pruning"] = True
                                 adaptive_kwargs["relion_firstiter_score_mode"] = "normalized_cc"
                                 adaptive_kwargs["relion_firstiter_winner_take_all"] = True
+                                firstiter_image_batch_size = min(
+                                    image_batch_size,
+                                    _safe_firstiter_cc_image_batch_size(
+                                        current_translations.shape[0],
+                                        experiment_datasets[k].image_shape,
+                                    ),
+                                )
+                                if firstiter_image_batch_size != image_batch_size:
+                                    logger.info(
+                                        "STRICT-PARITY: clamping iter-1 winner-take-all image_batch_size "
+                                        "from %d to %d",
+                                        image_batch_size,
+                                        firstiter_image_batch_size,
+                                    )
+                                adaptive_kwargs["image_batch_size"] = firstiter_image_batch_size
                             k_class_result = run_dense_k_class_em_adaptive(
                                 experiment_datasets[k],
                                 means[k],
@@ -3849,6 +4008,20 @@ def _run_relion_iteration_loop(
                     # lands here.
                     if relion_firstiter_cc_this_iter:
                         adaptive_os_local = int(state.adaptive_oversampling)
+                        firstiter_image_batch_size = min(
+                            image_batch_size,
+                            _safe_firstiter_cc_image_batch_size(
+                                current_translations.shape[0],
+                                experiment_datasets[k].image_shape,
+                            ),
+                        )
+                        if firstiter_image_batch_size != image_batch_size:
+                            logger.info(
+                                "STRICT-PARITY: clamping iter-1 winner-take-all image_batch_size "
+                                "from %d to %d",
+                                image_batch_size,
+                                firstiter_image_batch_size,
+                            )
                         logger.info(
                             "STRICT-PARITY (non-adaptive site): routing iter-1 K-class through run_dense_k_class_em_adaptive (oversampling=%d)",
                             adaptive_os_local,
@@ -4061,6 +4234,9 @@ def _run_relion_iteration_loop(
         # (so we never join shells beyond the actual resolution of the
         # map). Mirrors the ``XMIPP_MAX(low_resol_join_halves,
         # 1./mymodel.current_resolution)`` in RELION's source.
+        if k_class_enabled:
+            Ft_y_combined = Ft_y_0 + Ft_y_1
+            Ft_ctf_combined = Ft_ctf_0 + Ft_ctf_1
         prev_res_angstrom = None
         if pixel_resolutions:
             prev_pixel_res = pixel_resolutions[-1]
@@ -4070,21 +4246,18 @@ def _run_relion_iteration_loop(
                     grid_size,
                     cryo.voxel_size,
                 )
-        if k_class_enabled:
-            Ft_y_combined = Ft_y_0 + Ft_y_1
-            Ft_ctf_combined = Ft_ctf_0 + Ft_ctf_1
-        else:
-            Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = regularization.join_halves_at_low_resolution(
-                Ft_y_0,
-                Ft_y_1,
-                Ft_ctf_0,
-                Ft_ctf_1,
-                padded_volume_shape,
-                cryo.voxel_size,
-                grid_size,
-                low_resol_join_halves_angstrom,
-                current_resolution_angstrom=prev_res_angstrom,
-            )
+            if not k_class_enabled:
+                Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = regularization.join_halves_at_low_resolution(
+                    Ft_y_0,
+                    Ft_y_1,
+                    Ft_ctf_0,
+                    Ft_ctf_1,
+                    padded_volume_shape,
+                    cryo.voxel_size,
+                    grid_size,
+                    low_resol_join_halves_angstrom,
+                    current_resolution_angstrom=prev_res_angstrom,
+                )
 
         # --- RELION-exact M-step ordering ---
         # K=1 stays on RELION's split-half auto-refine path
@@ -4103,36 +4276,55 @@ def _run_relion_iteration_loop(
             tau2_update_details_per_class = []
             mean_signal_variance_per_class = []
             data_vs_prior_per_class = []
+            # Dense RECOVAR accumulators live in the historical unnormalised
+            # image frame: RELION BPref weight = Ft_ctf * N^4. Equivalently,
+            # keep Ft_y/Ft_ctf in RECOVAR frame and scale RELION tau2 by N^4
+            # before the Wiener solve. See initial_model/gpu_pipeline.py's
+            # bp_weight_frame_scale for the same frame conversion.
+            kclass_tau2_frame_scale = float(grid_size) ** 4
             for class_idx in range(n_classes):
-                mean_signal_variance_k, tau2_update_details_k = regularization.compute_relion_tau2_from_iref_power_spectrum(
+                mean_signal_variance_relion_k, tau2_update_details_k = regularization.compute_relion_tau2_from_iref_power_spectrum(
                     previous_means[0][class_idx],
                     volume_shape,
                     padding_factor=PADDING_FACTOR,
                     current_size=cs,
                     return_details=True,
                 )
+                mean_signal_variance_k = mean_signal_variance_relion_k * jnp.asarray(
+                    kclass_tau2_frame_scale,
+                    dtype=mean_signal_variance_relion_k.dtype,
+                )
+                tau2_shells_recovar_frame_k = jnp.asarray(
+                    tau2_update_details_k["tau2_shells"],
+                    dtype=mean_signal_variance_k.dtype,
+                ) * jnp.asarray(kclass_tau2_frame_scale, dtype=mean_signal_variance_k.dtype)
                 shell_stats_k = regularization._compute_relion_weight_shell_stats(
                     Ft_ctf_combined[class_idx],
                     volume_shape,
                     padding_factor=PADDING_FACTOR,
                     r_max=cs // 2,
+                    shell_rounding="round",
+                )
+                reconstruct_floor_stats_k = regularization._compute_relion_weight_shell_stats(
+                    Ft_ctf_combined[class_idx],
+                    volume_shape,
+                    padding_factor=PADDING_FACTOR,
+                    r_max=cs // 2,
+                    shell_rounding="floor",
                 )
                 data_vs_prior_k = regularization.compute_data_vs_prior(
                     Ft_ctf_combined[class_idx],
-                    tau2_update_details_k["tau2_shells"],
+                    tau2_shells_recovar_frame_k,
                     volume_shape,
                     padding_factor=PADDING_FACTOR,
                     tau2_fudge=tau2_fudge,
                     current_size=cs,
                 )
-                class_scale = float(n_total_images) * float(class_weights[class_idx])
-                shell_count_k = np.asarray(shell_stats_k["shell_count"], dtype=np.float32)
-                data_vs_prior_k = data_vs_prior_k * shell_count_k * class_scale
                 mean_signal_variance_per_class.append(mean_signal_variance_k)
                 data_vs_prior_per_class.append(data_vs_prior_k)
                 tau2_update_details_per_class.append(
                     {
-                        "prior_shells": np.asarray(tau2_update_details_k["tau2_shells"], dtype=np.float64),
+                        "prior_shells": np.asarray(tau2_shells_recovar_frame_k, dtype=np.float64),
                         "sigma2_shells": np.asarray(
                             jnp.where(
                                 shell_stats_k["avg_weight_shells"] > 0,
@@ -4148,6 +4340,50 @@ def _run_relion_iteration_loop(
                         "ssnr_shells": np.asarray(data_vs_prior_k, dtype=np.float64),
                     }
                 )
+                _kclass_dump_dir = os.environ.get("RECOVAR_KCLASS_DUMP_DIR")
+                if _kclass_dump_dir:
+                    import pathlib
+
+                    pathlib.Path(_kclass_dump_dir).mkdir(parents=True, exist_ok=True)
+                    np.savez(
+                        pathlib.Path(_kclass_dump_dir) / f"recovar_kclass_mstep_it{iteration + 1:03d}_c{class_idx + 1:02d}.npz",
+                        iteration=np.int32(iteration + 1),
+                        class_index=np.int32(class_idx + 1),
+                        current_size=np.int32(cs),
+                        padding_factor=np.int32(PADDING_FACTOR),
+                        grid_size=np.int32(grid_size),
+                        tau2_fudge=np.float64(tau2_fudge),
+                        tau2_frame_scale=np.float64(kclass_tau2_frame_scale),
+                        previous_mean=np.asarray(previous_means[0][class_idx], dtype=np.complex64),
+                        previous_mean_half0=np.asarray(previous_means[0][class_idx], dtype=np.complex64),
+                        previous_mean_half1=np.asarray(previous_means[1][class_idx], dtype=np.complex64),
+                        Ft_y_combined=np.asarray(Ft_y_combined[class_idx], dtype=np.complex64),
+                        Ft_ctf_0=np.asarray(Ft_ctf_0[class_idx], dtype=np.complex64),
+                        Ft_ctf_1=np.asarray(Ft_ctf_1[class_idx], dtype=np.complex64),
+                        Ft_ctf_combined=np.asarray(Ft_ctf_combined[class_idx], dtype=np.complex64),
+                        tau2_shells=np.asarray(tau2_shells_recovar_frame_k, dtype=np.float64),
+                        tau2_shells_relion=np.asarray(tau2_update_details_k["tau2_shells"], dtype=np.float64),
+                        sigma2_shells=np.asarray(
+                            jnp.where(
+                                shell_stats_k["avg_weight_shells"] > 0,
+                                1.0 / (PADDING_FACTOR**3 * shell_stats_k["avg_weight_shells"]),
+                                0.0,
+                            ),
+                            dtype=np.float64,
+                        ),
+                        avg_weight_shells=np.asarray(shell_stats_k["avg_weight_shells"], dtype=np.float64),
+                        shell_sum=np.asarray(shell_stats_k["shell_sum"], dtype=np.float64),
+                        shell_count=np.asarray(shell_stats_k["shell_count"], dtype=np.float64),
+                        reconstruct_floor_avg_weight_shells=np.asarray(
+                            reconstruct_floor_stats_k["avg_weight_shells"],
+                            dtype=np.float64,
+                        ),
+                        reconstruct_floor_shell_count=np.asarray(
+                            reconstruct_floor_stats_k["shell_count"],
+                            dtype=np.float64,
+                        ),
+                        data_vs_prior=np.asarray(data_vs_prior_k, dtype=np.float64),
+                    )
             mean_signal_variance = jnp.stack(mean_signal_variance_per_class, axis=0)
             data_vs_prior_iter = np.stack([np.asarray(dvp, dtype=np.float32) for dvp in data_vs_prior_per_class], axis=0)
             data_vs_prior_trajectory.append(data_vs_prior_iter)
@@ -4229,7 +4465,7 @@ def _run_relion_iteration_loop(
             mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
             # Keep the single tau2 diagnostic fields aligned with RELION's half1
             # model.star, which is what the parity diff script reports.
-            tau2_update_details = tau2_update_details_per_half[0][0]
+            tau2_update_details = tau2_update_details_per_half[0]
             logger.info(
                 "tau2 update from THIS-iter FSC: old_max=%.4e new_max=%.4e half_max=(%.4e, %.4e)",
                 float(jnp.max(jnp.abs(mean_variance))),
@@ -4658,7 +4894,7 @@ def _run_relion_iteration_loop(
             if cs < grid_size:
                 dvp_iter[..., min(dvp_iter.shape[-1], cs // 2 + 1) :] = 0.0
             dvp_res_shell = max(
-                resolution_from_data_vs_prior(dvp_class, allow_high_res_recovery=True)
+                resolution_from_data_vs_prior(dvp_class, allow_high_res_recovery=False)
                 for dvp_class in np.asarray(dvp_iter)
             )
             pixel_res = float(dvp_res_shell)
@@ -4721,15 +4957,10 @@ def _run_relion_iteration_loop(
                 best_trans = np.asarray(current_translations)[trans_idx]
             else:
                 # Global search uses the dense grid in pose_rotations[k].
-                # K-class dense engines report a combined rotation/translation
-                # row index here, so decode it before indexing the rotation
-                # table.
-                if k_class_enabled:
-                    rot_idx = hard_assignments[k] // current_translations.shape[0]
-                    trans_idx = hard_assignments[k] % current_translations.shape[0]
-                else:
-                    rot_idx = hard_assignments[k]
-                    trans_idx = hard_assignments[k] % current_translations.shape[0]
+                # All dense EM / K-class paths report the flattened
+                # rotation-translation row index here.
+                rot_idx = hard_assignments[k] // current_translations.shape[0]
+                trans_idx = hard_assignments[k] % current_translations.shape[0]
                 best_rots = np.asarray(pose_rotations[k], dtype=np.float32)[rot_idx]
                 best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
                 best_trans = np.asarray(current_translations)[trans_idx]
@@ -5325,11 +5556,12 @@ def _run_relion_iteration_loop(
     # at the full Nyquist resolution. Skip the join_halves step (we're already
     # combining the two halves into one dataset for this final iter).
     if k_class_enabled:
+        final_class_normalise = np.maximum(np.asarray(class_weights, dtype=np.float64), np.finfo(np.float64).tiny)
         final_class_means = jnp.stack(
             [
                 _reconstruct_volume_eager(
-                    final_ft_ctf[class_idx],
-                    final_ft_y[class_idx],
+                    final_ft_ctf[class_idx] / final_class_normalise[class_idx],
+                    final_ft_y[class_idx] / final_class_normalise[class_idx],
                     volume_shape,
                     PADDING_FACTOR,
                     tau=mean_variance[class_idx],

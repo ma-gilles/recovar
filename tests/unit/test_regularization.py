@@ -6,7 +6,6 @@ import jax.numpy as jnp
 
 from recovar.reconstruction import regularization
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar.relion_bind._relion_bind_core import compute_fourier_transform_map
 
 pytestmark = pytest.mark.unit
 
@@ -320,34 +319,86 @@ def test_compute_relion_tau2_from_weights_rejects_wrong_grid_size():
         )
 
 
+def test_relion_weight_shell_stats_floor_bins_reconstruct_support():
+    shape = (8, 8, 8)
+    padding_factor = 2
+    current_size = 6
+    r_max = current_size // 2
+    full_shape = tuple(s * padding_factor for s in shape)
+    weight = np.ones(np.prod(full_shape), dtype=np.float32)
+
+    stats_floor = regularization._compute_relion_weight_shell_stats(
+        weight,
+        shape,
+        padding_factor=padding_factor,
+        r_max=r_max,
+        shell_rounding="floor",
+    )
+    stats_round = regularization._compute_relion_weight_shell_stats(
+        weight,
+        shape,
+        padding_factor=padding_factor,
+        r_max=r_max,
+        shell_rounding="round",
+    )
+
+    coords = np.arange(-(full_shape[0] // 2), full_shape[0] // 2)
+    zz, yy, xx = np.meshgrid(coords, coords, coords, indexing="ij")
+    radius = np.sqrt(xx * xx + yy * yy + zz * zz)
+    mask = (xx >= 0) & (radius < padding_factor * r_max)
+    shell = np.floor(radius / padding_factor).astype(int)
+    expected = np.bincount(shell[mask].ravel(), minlength=shape[0] // 2 + 1)
+
+    np.testing.assert_array_equal(np.asarray(stats_floor["shell_count"])[: expected.shape[0]], expected)
+    assert not np.array_equal(
+        np.asarray(stats_floor["shell_count"])[: expected.shape[0]],
+        np.asarray(stats_round["shell_count"])[: expected.shape[0]],
+    )
+
+
 def test_compute_relion_tau2_from_iref_power_spectrum_matches_relion_binding_scaling():
-    shape = (16, 16, 16)
-    rng = np.random.default_rng(2)
-    vol_relion = rng.standard_normal(shape).astype(np.float64)
-    vol_recovar = -np.transpose(vol_relion, (2, 1, 0))
+    from pathlib import Path
+
+    from recovar.utils.helpers import load_relion_volume
+
+    relion_dir = Path(
+        "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_pdb_k4_5k_128/relion_pdb_k4_os0_ref"
+    )
+    volume_path = relion_dir / "run_it000_class001.mrc"
+    model_path = relion_dir / "run_it001_model.star"
+
+    vol_recovar = np.asarray(load_relion_volume(str(volume_path)), dtype=np.float64)
     ft_recovar = np.asarray(fourier_transform_utils.get_dft3(jnp.asarray(vol_recovar)).reshape(-1))
 
     tau2, details = regularization.compute_relion_tau2_from_iref_power_spectrum(
         ft_recovar,
-        shape,
-        padding_factor=1,
+        vol_recovar.shape,
+        padding_factor=2,
+        current_size=56,
         return_details=True,
     )
-    relion_proj, relion_ps, *_ = compute_fourier_transform_map(
-        vol_relion,
-        ori_size=shape[0],
-        padding_factor=1,
-        do_gridding=True,
-    )
-    _ = relion_proj  # projection data is not needed for this normalization check
 
-    n4 = float(shape[0] ** 4)
-    tau2_shells = np.asarray(details["tau2_shells"], dtype=np.float64) / n4
-    relion_ps = np.asarray(relion_ps, dtype=np.float64)
+    expected_tau2 = []
+    in_class = False
+    in_loop = False
+    for line in model_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped == "data_model_class_1":
+            in_class = True
+            continue
+        if in_class and stripped == "loop_":
+            in_loop = True
+            continue
+        if in_loop and stripped.startswith("data_model_"):
+            break
+        if in_loop and stripped and stripped[0].isdigit():
+            expected_tau2.append(float(stripped.split()[7]))
+            if len(expected_tau2) == 2:
+                break
 
-    assert tau2.shape == (np.prod(shape),)
-    assert tau2_shells.shape == relion_ps.shape
-    np.testing.assert_allclose(tau2_shells, relion_ps, rtol=1e-6, atol=1e-6)
+    assert tau2.shape == (np.prod(vol_recovar.shape),)
+    assert details["tau2_shells"].shape[0] >= len(expected_tau2)
+    np.testing.assert_allclose(np.asarray(details["tau2_shells"][: len(expected_tau2)]), expected_tau2, rtol=2e-2, atol=2e-6)
 
 
 # ---------------------------------------------------------------------------

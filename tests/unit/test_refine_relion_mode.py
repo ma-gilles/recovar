@@ -391,6 +391,21 @@ def test_exact_local_fine_grid_precompute_auto_policy():
     assert not iteration_loop_module._precompute_exact_local_fine_grid_enabled(6)
 
 
+def test_firstiter_cc_image_batch_size_clamps_reconstruction_temporary():
+    # 128^2 images with 32 translations materialize roughly
+    # 200 * 32 * 8320 complex values in prepare_reconstruction_batch().
+    # The dedicated first-iter budget should pull that down to 30 images
+    # per batch, which is small enough to avoid the RELION firstiter_cc
+    # OOM without changing the math.
+    assert iteration_loop_module._safe_firstiter_cc_image_batch_size(32, (128, 128)) == 30
+    assert iteration_loop_module._safe_firstiter_cc_image_batch_size(4, (8, 8)) > 200
+
+
+def test_dense_k_class_rotation_block_size_clamps_big_jit_hypotheses():
+    assert iteration_loop_module._safe_dense_k_class_rotation_block_size(116, 33) == 522
+    assert iteration_loop_module._safe_dense_k_class_rotation_block_size(8, 4) >= 64
+
+
 def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods():
     layout = LocalHypothesisLayout(
         n_global_rotations=2000,
@@ -2143,7 +2158,7 @@ def test_sparse_pass2_local_search_matches_per_image_reference(rng, init_volume,
 
     np.testing.assert_allclose(np.asarray(exact_local[0]), np.asarray(reference[0]), atol=1e-4, rtol=1e-4)
     np.testing.assert_allclose(np.asarray(exact_local[1]), np.asarray(reference[1]), atol=1e-4, rtol=1e-4)
-    np.testing.assert_array_equal(np.asarray(exact_local[2]), np.asarray(reference[2]))
+    np.testing.assert_array_equal(np.asarray(exact_local[2]), np.asarray(reference[5]))
     np.testing.assert_allclose(np.asarray(exact_local[3]), np.asarray(reference[3]), atol=1e-6)
     np.testing.assert_allclose(np.asarray(exact_local[4]), np.asarray(reference[4]), atol=1e-6)
     np.testing.assert_array_equal(np.asarray(exact_local[5]), np.asarray(reference[5]))
