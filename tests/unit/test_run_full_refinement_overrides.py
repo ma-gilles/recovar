@@ -185,6 +185,8 @@ def test_replay_overrides_accept_class3d_single_model_star(tmp_path):
     model_groups = pd.DataFrame({"rlnGroupScaleCorrection": [1.0, 0.5]})
     model_optics_group_1 = pd.DataFrame({"rlnSigma2Noise": [3.0]})
     model_classes = pd.DataFrame({"rlnClassDistribution": [0.25, 0.75]})
+    model_class_1 = pd.DataFrame({"rlnReferenceTau2": [1.0, 2.0, 3.0]})
+    model_class_2 = pd.DataFrame({"rlnReferenceTau2": [4.0, 5.0, 6.0]})
 
     starfile.write({"particles": particles}, tmp_path / "run_it001_data.star", overwrite=True)
     starfile.write(
@@ -193,6 +195,8 @@ def test_replay_overrides_accept_class3d_single_model_star(tmp_path):
             "model_groups": model_groups,
             "model_optics_group_1": model_optics_group_1,
             "model_classes": model_classes,
+            "model_class_1": model_class_1,
+            "model_class_2": model_class_2,
         },
         tmp_path / "run_it001_model.star",
         overwrite=True,
@@ -207,6 +211,7 @@ def test_replay_overrides_accept_class3d_single_model_star(tmp_path):
         ds_grid=128,
         include_normcorr=True,
         include_noise=True,
+        include_tau2=True,
     )
 
     assert overrides[0] is None
@@ -223,6 +228,10 @@ def test_replay_overrides_accept_class3d_single_model_star(tmp_path):
     np.testing.assert_allclose(n1, np.full(128 * 128, 3.0 * 128**4, dtype=np.float32))
     np.testing.assert_allclose(n2, np.full(128 * 128, 3.0 * 128**4, dtype=np.float32))
     np.testing.assert_allclose(overrides[1]["class_weights"], np.asarray([0.25, 0.75]))
+    np.testing.assert_allclose(
+        overrides[1]["tau2_shells"],
+        np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) * 128**4,
+    )
 
 
 @pytest.mark.skipif(not FIXTURE.exists(), reason=f"fixture missing: {FIXTURE}")
