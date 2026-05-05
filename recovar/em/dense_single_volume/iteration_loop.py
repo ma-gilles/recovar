@@ -2160,11 +2160,18 @@ def _run_relion_iteration_loop(
                 _prior_iter = init_relion_iteration + iteration
                 if iter_replay_override is None or iter_replay_override.get("direction_prior") is None:
                     for _half_idx in range(2):
-                        _prior_star = os.path.join(
-                            perturb_replay_relion_dir,
-                            f"run_it{_prior_iter:03d}_half{_half_idx + 1}_model.star",
-                        )
-                        if not os.path.exists(_prior_star):
+                        _prior_star_candidates = [
+                            os.path.join(
+                                perturb_replay_relion_dir,
+                                f"run_it{_prior_iter:03d}_half{_half_idx + 1}_model.star",
+                            ),
+                            os.path.join(
+                                perturb_replay_relion_dir,
+                                f"run_it{_prior_iter:03d}_model.star",
+                            ),
+                        ]
+                        _prior_star = next((path for path in _prior_star_candidates if os.path.exists(path)), None)
+                        if _prior_star is None:
                             continue
                         _relion_direction_prior = (
                             read_relion_direction_priors(_prior_star, n_classes)
@@ -2274,6 +2281,22 @@ def _run_relion_iteration_loop(
                     "Replay override: scale_corrections <- half1=%s half2=%s",
                     "set" if relion_half_inputs.scale_corrections[0] is not None else "none",
                     "set" if relion_half_inputs.scale_corrections[1] is not None else "none",
+                )
+            _replay_class_weights = iter_replay_override.get("class_weights")
+            if k_class_enabled and _replay_class_weights is not None:
+                replay_weights = np.asarray(_replay_class_weights, dtype=np.float64).reshape(-1)
+                if replay_weights.shape != (n_classes,):
+                    raise ValueError(
+                        f"Replay override class_weights must have shape ({n_classes},), got {replay_weights.shape}",
+                    )
+                if np.any(replay_weights <= 0.0) or not np.all(np.isfinite(replay_weights)):
+                    raise ValueError("Replay override class_weights must be positive and finite")
+                replay_weights = replay_weights / replay_weights.sum()
+                class_weights = replay_weights
+                class_log_priors = np.log(np.maximum(class_weights, np.finfo(np.float64).tiny))
+                logger.info(
+                    "Replay override: class_weights <- [%s]",
+                    ", ".join(f"{float(w):.6f}" for w in class_weights),
                 )
             _replay_noise = iter_replay_override.get("noise_variance")
             if _replay_noise is not None:
