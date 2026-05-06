@@ -46,6 +46,15 @@ class KClassEMResult(NamedTuple):
     best_pose_rotation_ids: jax.Array | None = None
 
 
+class _DenseKClassScoreProbeResult(NamedTuple):
+    """Score-only dense K-class probe output used before class-normalized M-steps."""
+
+    class_log_evidence: np.ndarray
+    per_class_hard_assignments: np.ndarray
+    per_class_stats: tuple[RelionStats, ...]
+    class_assignments: np.ndarray
+
+
 def _logsumexp_np(values: np.ndarray, axis: int) -> np.ndarray:
     max_value = np.max(values, axis=axis, keepdims=True)
     # Guard against the all-(-inf) case which would otherwise propagate NaN
@@ -460,6 +469,73 @@ def _assemble_result(
     )
 
 
+def _run_dense_k_class_score_probe(
+    experiment_dataset,
+    means_array,
+    mean_variance,
+    noise_variance,
+    rotations,
+    translations,
+    disc_type: str,
+    *,
+    class_log_priors=None,
+    **engine_kwargs,
+) -> _DenseKClassScoreProbeResult:
+    """Run the shared dense K-class score-only pass.
+
+    This evaluates each class independently and returns the same coarse
+    hard assignments and best-score class assignments that the full dense
+    K-class wrapper uses before its M-step.  Callers that only need those
+    assignments can avoid the second reconstruction pass.
+    """
+
+    means_array = _as_class_means(means_array)
+    n_classes = int(means_array.shape[0])
+    log_priors = _class_log_priors(n_classes, class_log_priors)
+    base_engine_kwargs = dict(engine_kwargs)
+
+    class_log_evidence = []
+    hard_assignments = []
+    per_class_stats = []
+    for class_index in range(n_classes):
+        class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
+        with _DenseScoreDumpClassLabel(class_index):
+            probe = run_em(
+                experiment_dataset,
+                means_array[class_index],
+                _select_class_value(mean_variance, class_index, n_classes),
+                _select_class_value(noise_variance, class_index, n_classes),
+                rotations,
+                translations,
+                disc_type,
+                return_stats=True,
+                accumulate_noise=False,
+                class_log_prior=float(log_priors[class_index]),
+                disable_adjoint_y=True,
+                disable_adjoint_ctf=True,
+                **class_engine_kwargs,
+            )
+        hard_assignments.append(np.asarray(probe[1], dtype=np.int32))
+        stats = probe[4]
+        per_class_stats.append(stats)
+        class_log_evidence.append(np.asarray(stats.log_evidence_per_image, dtype=np.float64))
+
+    per_class_hard = np.stack(hard_assignments, axis=0)
+    per_class_stats_tuple = tuple(per_class_stats)
+    best_scores = np.stack(
+        [np.asarray(stats.best_log_score_per_image, dtype=np.float64) for stats in per_class_stats_tuple],
+        axis=0,
+    )
+    class_assignments = np.argmax(best_scores, axis=0).astype(np.int32)
+
+    return _DenseKClassScoreProbeResult(
+        class_log_evidence=np.stack(class_log_evidence, axis=0),
+        per_class_hard_assignments=per_class_hard,
+        per_class_stats=per_class_stats_tuple,
+        class_assignments=class_assignments,
+    )
+
+
 @nvtx.annotate("kclass.run_dense_k_class_em", color="cyan", domain=NVTX_DOMAIN_EM)
 def run_dense_k_class_em(
     experiment_dataset,
@@ -498,31 +574,22 @@ def run_dense_k_class_em(
     rotations_np = np.asarray(rotations, dtype=np.float32)
     translations_np = np.asarray(translations, dtype=np.float32)
 
-    class_log_evidence = []
     overall_t0 = time.time()
     probe_t0 = time.time()
-    for class_index in range(n_classes):
-        class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
-        with _DenseScoreDumpClassLabel(class_index):
-            probe = run_em(
-                experiment_dataset,
-                means_array[class_index],
-                _select_class_value(mean_variance, class_index, n_classes),
-                _select_class_value(noise_variance, class_index, n_classes),
-                rotations,
-                translations,
-                disc_type,
-                return_stats=True,
-                accumulate_noise=False,
-                class_log_prior=float(log_priors[class_index]),
-                disable_adjoint_y=True,
-                disable_adjoint_ctf=True,
-                **class_engine_kwargs,
-            )
-        class_log_evidence.append(np.asarray(probe[4].log_evidence_per_image, dtype=np.float64))
+    score_probe = _run_dense_k_class_score_probe(
+        experiment_dataset,
+        means_array,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        disc_type,
+        class_log_priors=log_priors,
+        **base_engine_kwargs,
+    )
     probe_s = time.time() - probe_t0
 
-    class_log_evidence_np = np.stack(class_log_evidence, axis=0)
+    class_log_evidence_np = score_probe.class_log_evidence
     global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
 
     new_means = []
@@ -1055,7 +1122,7 @@ def run_dense_k_class_em_adaptive(
         )
         with _DenseScoreDumpPhaseLabel("coarse"):
             with nvtx.annotate("kclass.adaptive.coarse_probe", color="yellow", domain=NVTX_DOMAIN_EM):
-                coarse_result = run_dense_k_class_em(
+                coarse_result = _run_dense_k_class_score_probe(
                     experiment_dataset,
                     means_array,
                     mean_variance,
@@ -1064,7 +1131,6 @@ def run_dense_k_class_em_adaptive(
                     coarse_translations_np,
                     disc_type,
                     class_log_priors=class_log_priors,
-                    accumulate_noise=False,
                     **coarse_probe_kwargs,
                 )
         # ``per_class_hard_assignments[k, i]`` is class k's best coarse pose

@@ -226,7 +226,8 @@ def test_dense_k_class_decodes_best_pose_details(monkeypatch):
 
 
 def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeypatch):
-    calls = []
+    score_calls = []
+    dense_calls = []
 
     class TinyDataset:
         n_images = 2
@@ -245,6 +246,36 @@ def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeyp
         trans_ids = hard % fine_translations.shape[0]
         return fine_rotations[rot_ids], fine_translations[trans_ids], rot_ids.astype(np.int32)
 
+    def fake_run_em(
+        _dataset,
+        mean,
+        _mean_variance,
+        _noise_variance,
+        rotations_arg,
+        _translations,
+        _disc_type,
+        **kwargs,
+    ):
+        score_calls.append(kwargs)
+        n_images = TinyDataset.n_images
+        n_rot = int(np.asarray(rotations_arg).shape[0])
+        class_index = len(score_calls) - 1
+        hard = (np.asarray([0, 0], dtype=np.int32), np.asarray([1, 1], dtype=np.int32))[class_index]
+        scores = (np.asarray([1.0, 5.0], dtype=np.float32), np.asarray([5.0, 1.0], dtype=np.float32))
+        stats = make_relion_stats(
+            log_evidence_per_image=np.zeros(n_images, dtype=np.float32),
+            best_log_score_per_image=scores[class_index],
+            max_posterior_per_image=np.ones(n_images, dtype=np.float32),
+            rotation_posterior_sums=np.zeros(n_rot, dtype=np.float32),
+        )
+        return (
+            jnp.zeros_like(mean),
+            hard,
+            jnp.zeros_like(mean),
+            jnp.zeros_like(mean),
+            stats,
+        )
+
     def fake_run_dense_k_class_em(
         _dataset,
         means,
@@ -255,32 +286,10 @@ def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeyp
         _disc_type,
         **kwargs,
     ):
-        calls.append(kwargs)
+        dense_calls.append(kwargs)
         n_images = TinyDataset.n_images
         n_classes = int(np.asarray(means).shape[0])
         n_rot = int(np.asarray(rotations_arg).shape[0])
-        is_coarse = len(calls) == 1
-        if is_coarse:
-            hard = np.asarray([[0, 0], [1, 1]], dtype=np.int32)
-            scores = (np.asarray([1.0, 5.0], dtype=np.float32), np.asarray([5.0, 1.0], dtype=np.float32))
-            return _assemble_result(
-                class_log_evidence=np.zeros((n_classes, n_images), dtype=np.float64),
-                new_means=[jnp.zeros(4, dtype=jnp.complex64) for _ in range(n_classes)],
-                Ft_y=[jnp.zeros(4, dtype=jnp.complex64) for _ in range(n_classes)],
-                Ft_ctf=[jnp.zeros(4, dtype=jnp.float32) for _ in range(n_classes)],
-                per_class_hard_assignments=hard,
-                per_class_stats=tuple(
-                    make_relion_stats(
-                        log_evidence_per_image=np.zeros(n_images, dtype=np.float32),
-                        best_log_score_per_image=scores[class_idx],
-                        max_posterior_per_image=np.ones(n_images, dtype=np.float32),
-                        rotation_posterior_sums=np.zeros(n_rot, dtype=np.float32),
-                    )
-                    for class_idx in range(n_classes)
-                ),
-                noise_stats=None,
-            )
-
         hard = np.asarray([[0, 1], [2, 3]], dtype=np.int32)
         scores = (np.asarray([5.0, 1.0], dtype=np.float32), np.asarray([1.0, 5.0], dtype=np.float32))
         best_rots, best_trans, best_rot_ids = zip(*(pose_details(row) for row in hard), strict=True)
@@ -305,6 +314,7 @@ def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeyp
             per_class_best_pose_rotation_ids=best_rot_ids,
         )
 
+    monkeypatch.setattr(k_class_module, "run_em", fake_run_em)
     monkeypatch.setattr(k_class_module, "run_dense_k_class_em", fake_run_dense_k_class_em)
 
     result = run_dense_k_class_em_adaptive(
@@ -324,7 +334,9 @@ def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeyp
         return_best_pose_details=True,
     )
 
-    assert calls[1]["return_best_pose_details"]
+    assert len(score_calls) == 2
+    assert len(dense_calls) == 1
+    assert dense_calls[0]["return_best_pose_details"]
     np.testing.assert_array_equal(np.asarray(result.class_assignments), np.asarray([1, 0], dtype=np.int32))
     np.testing.assert_array_equal(np.asarray(result.pose_assignments), np.asarray([2, 1], dtype=np.int32))
     np.testing.assert_array_equal(np.asarray(result.best_pose_rotation_ids), np.asarray([1, 0], dtype=np.int32))
@@ -332,10 +344,38 @@ def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeyp
 
 
 def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypatch):
-    calls = []
+    score_calls = []
+    dense_calls = []
 
     class TinyDataset:
         n_images = 2
+
+    def fake_run_em(
+        _dataset,
+        mean,
+        _mean_variance,
+        _noise_variance,
+        rotations,
+        _translations,
+        _disc_type,
+        **kwargs,
+    ):
+        n_images = TinyDataset.n_images
+        n_rot = int(np.asarray(rotations).shape[0])
+        score_calls.append(kwargs)
+        stats = make_relion_stats(
+            log_evidence_per_image=np.zeros(n_images, dtype=np.float32),
+            best_log_score_per_image=np.zeros(n_images, dtype=np.float32),
+            max_posterior_per_image=np.ones(n_images, dtype=np.float32),
+            rotation_posterior_sums=np.zeros(n_rot, dtype=np.float32),
+        )
+        return (
+            jnp.zeros_like(mean),
+            np.zeros(n_images, dtype=np.int32),
+            jnp.zeros_like(mean),
+            jnp.zeros_like(mean),
+            stats,
+        )
 
     def fake_run_dense_k_class_em(
         _dataset,
@@ -347,7 +387,7 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
         _disc_type,
         **kwargs,
     ):
-        calls.append(kwargs)
+        dense_calls.append(kwargs)
         n_images = TinyDataset.n_images
         n_classes = int(np.asarray(means).shape[0])
         n_rot = int(np.asarray(rotations).shape[0])
@@ -370,6 +410,7 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
             noise_stats=None,
         )
 
+    monkeypatch.setattr(k_class_module, "run_em", fake_run_em)
     monkeypatch.setattr(k_class_module, "run_dense_k_class_em", fake_run_dense_k_class_em)
 
     run_dense_k_class_em_adaptive(
@@ -390,9 +431,10 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
         firstiter_cc_pass2_only_best_coarse=True,
     )
 
-    assert len(calls) == 2
-    assert calls[0]["current_size"] == 26
-    assert calls[1]["current_size"] == 56
+    assert len(score_calls) == 2
+    assert len(dense_calls) == 1
+    assert {call["current_size"] for call in score_calls} == {26}
+    assert dense_calls[0]["current_size"] == 56
 
 
 def test_lazy_k_class_adaptive_mask_matches_dense_blocks_without_materializing():
