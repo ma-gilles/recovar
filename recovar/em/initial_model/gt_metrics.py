@@ -75,8 +75,29 @@ def rotate_volume_about_center(volume: np.ndarray, rotation_matrix: np.ndarray, 
     )
 
 
-def lowpass_volume_by_shell(volume: np.ndarray, max_shell: int | None) -> np.ndarray:
-    """Low-pass a cubic volume by zeroing Fourier shells above ``max_shell``."""
+def alignment_score_box_size(volume_size: int, max_shell: int | None) -> int:
+    """Return the compact box size needed to score shells up to ``max_shell``."""
+    n = int(volume_size)
+    if n <= 0:
+        raise ValueError(f"volume_size must be positive, got {volume_size}")
+    if max_shell is None or int(max_shell) <= 0:
+        return n
+    return min(n, max(9, 2 * int(max_shell) + 1))
+
+
+def lowpass_volume_by_shell(
+    volume: np.ndarray,
+    max_shell: int | None,
+    *,
+    output_size: int | None = None,
+) -> np.ndarray:
+    """Low-pass a cubic volume by zeroing Fourier shells above ``max_shell``.
+
+    If ``output_size`` is smaller than the input box, the low-frequency Fourier
+    cube is cropped before inverse FFT.  Alignment scoring only uses low shells,
+    so this preserves the information being scored while avoiding thousands of
+    full-box interpolations during high-order rotation searches.
+    """
     vol = np.asarray(volume, dtype=np.float64)
     if vol.ndim != 3 or len(set(vol.shape)) != 1:
         raise ValueError(f"Expected a cubic 3D volume, got shape {vol.shape}")
@@ -87,10 +108,27 @@ def lowpass_volume_by_shell(volume: np.ndarray, max_shell: int | None) -> np.nda
         return vol.copy()
 
     n = int(vol.shape[0])
-    freqs = np.fft.fftfreq(n) * n
+    out_n = n if output_size is None else int(output_size)
+    if out_n <= 0 or out_n > n:
+        raise ValueError(f"output_size must be in [1, {n}], got {output_size}")
+    if out_n != n and out_n % 2 == 0:
+        raise ValueError(f"cropped output_size must be odd, got {out_n}")
+
+    ft = np.fft.fftn(vol)
+    if out_n != n:
+        shifted = np.fft.fftshift(ft)
+        half = out_n // 2
+        center = n // 2
+        cropped = shifted[
+            center - half : center + half + 1,
+            center - half : center + half + 1,
+            center - half : center + half + 1,
+        ]
+        ft = np.fft.ifftshift(cropped)
+
+    freqs = np.fft.fftfreq(out_n) * out_n
     z, y, x = np.meshgrid(freqs, freqs, freqs, indexing="ij")
     shells = np.rint(np.sqrt(x * x + y * y + z * z)).astype(np.int32)
-    ft = np.fft.fftn(vol)
     ft[shells > shell_limit] = 0.0
     return np.real(np.fft.ifftn(ft))
 
@@ -135,8 +173,9 @@ def align_volume_to_reference(
     if rot_grid.shape[0] == 0:
         raise ValueError("rotations must contain at least one matrix")
 
-    ref_score = lowpass_volume_by_shell(ref, score_max_shell)
-    vol_score = lowpass_volume_by_shell(vol, score_max_shell)
+    score_box_size = alignment_score_box_size(vol.shape[0], score_max_shell)
+    ref_score = lowpass_volume_by_shell(ref, score_max_shell, output_size=score_box_size)
+    vol_score = lowpass_volume_by_shell(vol, score_max_shell, output_size=score_box_size)
 
     best_score = -np.inf
     best_corr = -np.inf
