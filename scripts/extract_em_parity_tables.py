@@ -67,14 +67,24 @@ def emit_fast_tier() -> int:
     """Emit the fast-tier table. Returns number of metrics rendered."""
     k1_ledger = _load_json(BASELINES_DIR / "em_parity_quality_fast_ledger_k1_replay.json")
     kclass_ledger = _load_json(BASELINES_DIR / "em_parity_quality_fast_ledger_kclass_replay.json")
+    kclass_coldstart_ledger = _load_json(BASELINES_DIR / "em_parity_quality_fast_ledger_kclass_coldstart.json")
+    kclass_strict_ledger = _load_json(BASELINES_DIR / "em_parity_quality_fast_ledger_kclass_strict.json")
+    kclass_strict_os1_ledger = _load_json(BASELINES_DIR / "em_parity_quality_fast_ledger_kclass_strict_os1.json")
     baseline = _load_json(BASELINES_DIR / "em_parity_quality_fast_baseline.json") or {}
+    ledgers = [
+        k1_ledger,
+        kclass_ledger,
+        kclass_coldstart_ledger,
+        kclass_strict_ledger,
+        kclass_strict_os1_ledger,
+    ]
 
-    if not k1_ledger and not kclass_ledger:
+    if not any(ledgers):
         print("# EM-parity fast tier — no ledger files found.", flush=True)
         print("# Run: pixi run pytest tests/integration/test_em_parity_fast.py", flush=True)
         return 0
 
-    print("### EM-parity Quality Comparison — fast tier (5k 128² replay)\n")
+    print("### EM-parity Quality Comparison — fast tier (5k 128² replay/cold-start)\n")
     print("| Metric | Baseline | Current | Status |")
     print("|--------|----------|---------|--------|")
     rendered = 0
@@ -94,8 +104,44 @@ def emit_fast_tier() -> int:
         rendered += _emit_metric(
             "kclass_replay_class_assignment_accuracy", kclass_ledger, baseline, lower_is_better=False, fmt=".4f"
         )
+    if kclass_coldstart_ledger:
+        rendered += _emit_metric(
+            "kclass_coldstart_mean_corr", kclass_coldstart_ledger, baseline, lower_is_better=False, fmt=".6f"
+        )
+        rendered += _emit_metric(
+            "kclass_coldstart_worst_class_corr",
+            kclass_coldstart_ledger,
+            baseline,
+            lower_is_better=False,
+            fmt=".6f",
+        )
+    if kclass_strict_ledger:
+        rendered += _emit_metric(
+            "kclass_strict_mean_corr", kclass_strict_ledger, baseline, lower_is_better=False, fmt=".6f"
+        )
+        rendered += _emit_metric(
+            "kclass_strict_worst_class_corr", kclass_strict_ledger, baseline, lower_is_better=False, fmt=".6f"
+        )
+        rendered += _emit_metric(
+            "kclass_strict_iter3_class_match",
+            kclass_strict_ledger,
+            baseline,
+            lower_is_better=False,
+            fmt=".4f",
+        )
+    if kclass_strict_os1_ledger:
+        rendered += _emit_metric(
+            "kclass_strict_os1_mean_corr", kclass_strict_os1_ledger, baseline, lower_is_better=False, fmt=".6f"
+        )
+        rendered += _emit_metric(
+            "kclass_strict_os1_worst_class_corr",
+            kclass_strict_os1_ledger,
+            baseline,
+            lower_is_better=False,
+            fmt=".6f",
+        )
 
-    if k1_ledger or kclass_ledger:
+    if any(ledgers):
         print("\n### EM-parity Performance — fast tier")
         print("| Stage | Walltime (s) |")
         print("|-------|-------------:|")
@@ -103,6 +149,18 @@ def emit_fast_tier() -> int:
             print(f"| k1_replay (5k 128²) | {k1_ledger.get('k1_replay_walltime_s', 0):.1f} |")
         if kclass_ledger:
             print(f"| kclass_replay (5k 128² K=2) | {kclass_ledger.get('kclass_replay_walltime_s', 0):.1f} |")
+        if kclass_coldstart_ledger:
+            print(
+                "| kclass_coldstart_relion_like_no_init (5k 128² K=4) | "
+                f"{kclass_coldstart_ledger.get('kclass_coldstart_walltime_s', 0):.1f} |"
+            )
+        if kclass_strict_ledger:
+            print(f"| kclass_strict_os0 (5k 128² K=4) | {kclass_strict_ledger.get('kclass_strict_walltime_s', 0):.1f} |")
+        if kclass_strict_os1_ledger:
+            print(
+                f"| kclass_strict_os1 (5k 128² K=4) | "
+                f"{kclass_strict_os1_ledger.get('kclass_strict_os1_walltime_s', 0):.1f} |"
+            )
     return rendered
 
 

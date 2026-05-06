@@ -23,6 +23,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_ID="em_parity_long_${TIMESTAMP}_${RANDOM}"
 SCRATCH_DIR="/scratch/gpfs/GILLES/mg6942/_agent_scratch/${RUN_ID}"
+ACCOUNT="${SBATCH_ACCOUNT:-gilles}"
 mkdir -p "${SCRATCH_DIR}"
 touch "${SCRATCH_DIR}/SAFE_TO_DELETE"
 
@@ -45,6 +46,7 @@ make_test_script() {
 #SBATCH --output=${SCRATCH_DIR}/${job_name}.out
 #SBATCH --error=${SCRATCH_DIR}/${job_name}.err
 #SBATCH --partition=cryoem
+#SBATCH --account=${ACCOUNT}
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
@@ -54,8 +56,10 @@ set -euo pipefail
 cd "${REPO_ROOT}"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 export PYTHONNOUSERSITE=1
-export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/${RUN_ID}_\${SLURM_JOB_ID}"
-mkdir -p "\${TMPDIR}"
+export TMPDIR="${SCRATCH_DIR}/tmp/${job_name}_\${SLURM_JOB_ID}"
+export PIXI_HOME="${SCRATCH_DIR}/pixi_home/${job_name}_\${SLURM_JOB_ID}"
+export RATTLER_CACHE_DIR="${SCRATCH_DIR}/rattler_cache/${job_name}_\${SLURM_JOB_ID}"
+mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 echo "=== EM-long parity Slurm job ${job_name} ==="
@@ -92,6 +96,7 @@ cat > "${SUMMARY_SCRIPT}" <<EOF
 #SBATCH --output=${SCRATCH_DIR}/summary.out
 #SBATCH --error=${SCRATCH_DIR}/summary.err
 #SBATCH --partition=cryoem
+#SBATCH --account=${ACCOUNT}
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
 #SBATCH --time=00:10:00
@@ -101,6 +106,10 @@ set -euo pipefail
 cd "${REPO_ROOT}"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 export PYTHONNOUSERSITE=1
+export TMPDIR="${SCRATCH_DIR}/tmp/em_parity_long_summary_\${SLURM_JOB_ID}"
+export PIXI_HOME="${SCRATCH_DIR}/pixi_home/em_parity_long_summary_\${SLURM_JOB_ID}"
+export RATTLER_CACHE_DIR="${SCRATCH_DIR}/rattler_cache/em_parity_long_summary_\${SLURM_JOB_ID}"
+mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}"
 
 echo "=== EM-long parity summary ==="
 echo "K=1 job: ${K1_JOB}"
