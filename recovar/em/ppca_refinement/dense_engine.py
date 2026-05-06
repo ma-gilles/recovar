@@ -269,40 +269,39 @@ def fused_dense_pose_ppca_block(
     rhs_dtype = rhs_volume.dtype
     lhs_dtype = lhs_tri_volume.dtype
 
-    for r_idx in range(R):
-        gamma_r = gamma[:, :, r_idx]
-        rotations_per_image = jnp.broadcast_to(rotations_block[r_idx][None, :, :], (B, 3, 3))
+    rhs_images = jnp.einsum(
+        "btr,btrp,btf->prf",
+        gamma.astype(rhs_dtype),
+        alpha.astype(rhs_dtype),
+        Y1_recon.astype(rhs_dtype),
+    ).astype(rhs_dtype)
+    rhs_volume = batch_adjoint_slice_volume_half(
+        rhs_images,
+        rotations_block,
+        rhs_volume,
+        image_shape,
+        volume_shape,
+        disc_type_backproject,
+        True,
+        True,
+    )
 
-        rhs_images = jnp.transpose(
-            jnp.einsum("bt,btp,btf->bpf", gamma_r.astype(rhs_dtype), alpha[:, :, r_idx, :], Y1_recon),
-            (1, 0, 2),
-        ).astype(rhs_dtype)
-        rhs_volume = batch_adjoint_slice_volume_half(
-            rhs_images,
-            rotations_per_image,
-            rhs_volume,
-            image_shape,
-            volume_shape,
-            disc_type_backproject,
-            True,
-            True,
-        )
-
-        lhs_weights = jnp.einsum("bt,btk->bk", gamma_r, G_tri[:, :, r_idx, :]).real.astype(lhs_dtype)
-        lhs_images = jnp.transpose(
-            lhs_weights[:, :, None] * ctf2_over_noise_recon[:, None, :],
-            (1, 0, 2),
-        ).astype(lhs_dtype)
-        lhs_tri_volume = batch_adjoint_slice_volume_half(
-            lhs_images,
-            rotations_per_image,
-            lhs_tri_volume,
-            image_shape,
-            volume_shape,
-            disc_type_backproject,
-            True,
-            True,
-        )
+    lhs_images = jnp.einsum(
+        "btr,btrk,bf->krf",
+        gamma.astype(lhs_dtype),
+        G_tri,
+        ctf2_over_noise_recon.astype(lhs_dtype),
+    ).real.astype(lhs_dtype)
+    lhs_tri_volume = batch_adjoint_slice_volume_half(
+        lhs_images,
+        rotations_block,
+        lhs_tri_volume,
+        image_shape,
+        volume_shape,
+        disc_type_backproject,
+        True,
+        True,
+    )
 
     return rhs_volume, lhs_tri_volume, diagnostics
 
