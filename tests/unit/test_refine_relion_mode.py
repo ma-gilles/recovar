@@ -439,6 +439,35 @@ def test_firstiter_cc_adaptive_translation_perturbation_uses_coarse_step():
     np.testing.assert_array_equal(trans_parent, np.zeros(4, dtype=np.int64))
 
 
+def test_decode_pose_details_from_assignments_uses_translation_axis():
+    rotations = np.stack(
+        [
+            np.eye(3, dtype=np.float32),
+            np.full((3, 3), 2.0, dtype=np.float32),
+        ],
+        axis=0,
+    )
+    translations = np.array(
+        [
+            [-1.0, 0.0],
+            [0.0, 0.0],
+            [1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    best_rots, best_trans = iteration_loop_module._decode_pose_details_from_assignments(
+        np.array([0, 4, 5], dtype=np.int32),
+        rotations,
+        translations,
+    )
+
+    np.testing.assert_allclose(best_rots[0], rotations[0])
+    np.testing.assert_allclose(best_rots[1], rotations[1])
+    np.testing.assert_allclose(best_rots[2], rotations[1])
+    np.testing.assert_allclose(best_trans, translations[[0, 1, 2]])
+
+
 def test_k_class_sigma2_offset_sum_weight_uses_class_posterior_mass():
     """K-class sigma2_offset denominator is total posterior mass, not K engine counts."""
 

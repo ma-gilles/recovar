@@ -439,6 +439,21 @@ def _build_firstiter_cc_pass2_grids(
     )
 
 
+def _decode_pose_details_from_assignments(pose_assignments, rotations, translations):
+    """Decode flattened pose ids into rotation matrices and translation shifts."""
+    pose_ids = np.asarray(pose_assignments, dtype=np.int64).reshape(-1)
+    rotations_np = np.asarray(rotations, dtype=np.float32)
+    translations_np = np.asarray(translations, dtype=np.float32)
+    n_trans = int(translations_np.shape[0])
+    if n_trans <= 0:
+        raise ValueError("translations must be non-empty")
+    rot_idx = pose_ids // n_trans
+    trans_idx = pose_ids % n_trans
+    if int(rot_idx.max(initial=-1)) >= int(rotations_np.shape[0]):
+        raise ValueError("pose assignment rotation index exceeds rotation grid")
+    return rotations_np[rot_idx], translations_np[trans_idx]
+
+
 def _normalize_class_log_priors(n_classes: int, class_log_priors=None) -> np.ndarray:
     """Return normalized log priors for the class axis."""
 
@@ -3640,14 +3655,16 @@ def _run_relion_iteration_loop(
                                 np.add.at(coarse_post, np.asarray(_rot_pmap_3240, dtype=np.int64), fine_post)
                                 _per_class_rot_post_coarse.append(coarse_post)
                         class_rotation_posterior_per_half[k] = np.stack(_per_class_rot_post_coarse, axis=0)
-                        # Strict-parity adaptive engine path may not populate
-                        # best_pose_rotations (return_best_pose_details=False internally);
-                        # fall back to identity placeholders since iter-1 doesn't
-                        # need pose tracking for convergence (no previous iter).
-                        n_images_local = int(experiment_datasets[k].n_units)
+                        # Strict-parity adaptive dense K-class returns only
+                        # flattened pose ids. Decode details from the fine grid
+                        # so RELION-style absolute offsets are carried into the
+                        # next iteration.
                         if k_class_result.best_pose_rotations is None:
-                            best_rots_k = np.tile(np.eye(3, dtype=np.float32)[None, :, :], (n_images_local, 1, 1))
-                            best_trans_k = np.zeros((n_images_local, 2), dtype=np.float32)
+                            best_rots_k, best_trans_k = _decode_pose_details_from_assignments(
+                                np.asarray(k_class_result.pose_assignments, dtype=np.int64),
+                                _fine_rot_3240,
+                                _fine_trans_3240,
+                            )
                         else:
                             best_rots_k = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
                             best_trans_k = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
