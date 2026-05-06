@@ -14,6 +14,10 @@ import numpy as np
 from scipy import ndimage
 
 
+DEFAULT_GT_ALIGN_HEALPIX_ORDER = 2
+DEFAULT_GT_ALIGN_MAX_SHELL = 8
+
+
 @dataclass(frozen=True)
 class VolumeAlignment:
     """Result of aligning a reconstructed volume to a GT reference."""
