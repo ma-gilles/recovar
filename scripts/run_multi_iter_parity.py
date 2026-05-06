@@ -301,6 +301,38 @@ def main():
         help="Optional recovar-frame GT MRC for FSC/correlation checks. Defaults to sibling reference_gt.mrc if present.",
     )
     parser.add_argument(
+        "--gt_align",
+        action="store_true",
+        help="Also compute alignment-aware GT metrics for ab-initio/global-pose ambiguous maps.",
+    )
+    parser.add_argument(
+        "--gt_align_healpix_order",
+        type=int,
+        default=1,
+        help="RELION/RECOVAR rotation-grid order used for GT alignment.",
+    )
+    parser.add_argument(
+        "--gt_align_max_shell",
+        type=int,
+        default=8,
+        help="Maximum Fourier shell used to score coarse GT alignment.",
+    )
+    parser.add_argument(
+        "--gt_align_no_mirror",
+        action="store_true",
+        help="Do not test the x-axis mirror handedness ambiguity during GT alignment.",
+    )
+    parser.add_argument(
+        "--gt_align_allow_sign",
+        action="store_true",
+        help="Allow a global sign flip during GT alignment. Off by default.",
+    )
+    parser.add_argument(
+        "--gt_align_all_series",
+        action="store_true",
+        help="Compute aligned GT metrics for half maps too; default is merged maps only.",
+    )
+    parser.add_argument(
         "--force_oversampling",
         type=int,
         default=None,
@@ -975,10 +1007,22 @@ def main():
             gt_path = candidate_gt
     gt_real = None
     gt_ft = None
+    gt_align_rotations = None
     if gt_path is not None and gt_path.exists():
         gt_real = helpers.load_mrc(str(gt_path))
         gt_ft = np.asarray(ftu.get_dft3(jnp.asarray(gt_real))).reshape(-1)
         print(f"  GT volume: {gt_path}")
+        if args.gt_align:
+            from recovar.em.initial_model.gt_metrics import relion_alignment_rotations
+
+            gt_align_rotations = relion_alignment_rotations(args.gt_align_healpix_order)
+            print(
+                "  GT alignment: "
+                f"healpix_order={args.gt_align_healpix_order}, rotations={gt_align_rotations.shape[0]}, "
+                f"score_shell<={args.gt_align_max_shell}, mirror={not args.gt_align_no_mirror}, "
+                f"allow_sign={args.gt_align_allow_sign}, "
+                f"series={'all' if args.gt_align_all_series else 'merged-only'}"
+            )
     elif args.gt_volume is not None:
         print(f"  GT volume requested but not found: {args.gt_volume}")
 
@@ -1291,8 +1335,11 @@ def main():
             f"{os.path.join(out_dir, 'relion_final_half1.mrc')}, relion_final_half2.mrc, relion_final_merged.mrc"
         )
 
+    gt_ledger_summary = {}
     if gt_ft is not None:
         print("\n=== Final FSC vs GT ===")
+        from recovar.em.initial_model.gt_metrics import align_volume_to_reference
+
         gt_summary = {}
         recovar_final_series = {
             "recovar_half1": final_half1_ft,
@@ -1319,6 +1366,58 @@ def main():
             gt_summary[f"{label}_corr_vs_gt"] = np.float64(corr_vs_gt)
             gt_summary[f"{label}_shell_05"] = np.int32(-1 if shell_05 is None else shell_05)
             gt_summary[f"{label}_shell_0143"] = np.int32(-1 if shell_0143 is None else shell_0143)
+            gt_ledger_summary[f"{label}_corr_vs_gt"] = float(corr_vs_gt)
+            gt_ledger_summary[f"{label}_shell_05"] = int(-1 if shell_05 is None else shell_05)
+            gt_ledger_summary[f"{label}_shell_0143"] = int(-1 if shell_0143 is None else shell_0143)
+            if args.gt_align and (args.gt_align_all_series or label.endswith("_merged")):
+                if gt_align_rotations is None:
+                    raise RuntimeError("--gt_align requested but no GT alignment rotation grid was initialized")
+                alignment = align_volume_to_reference(
+                    real_vol,
+                    gt_real,
+                    gt_align_rotations,
+                    score_max_shell=int(args.gt_align_max_shell),
+                    allow_mirror=not bool(args.gt_align_no_mirror),
+                    allow_sign=bool(args.gt_align_allow_sign),
+                )
+                aligned_ft = np.asarray(ftu.get_dft3(jnp.asarray(alignment.aligned_volume))).reshape(-1)
+                aligned_fsc_vs_gt = _compute_fsc_vs_gt(aligned_ft, gt_ft)
+                aligned_shell_05 = _first_shell_below_threshold(aligned_fsc_vs_gt, 0.5)
+                aligned_shell_0143 = _first_shell_below_threshold(aligned_fsc_vs_gt, 0.143)
+                print(
+                    f"  {label:<14s} aligned_corr={alignment.corr:.6f}, "
+                    f"aligned_FSC<0.5 shell={aligned_shell_05}, "
+                    f"res={_shell_to_resolution_angstrom(aligned_shell_05):.2f} A, "
+                    f"aligned_FSC<0.143 shell={aligned_shell_0143}, "
+                    f"res={_shell_to_resolution_angstrom(aligned_shell_0143):.2f} A, "
+                    f"rot_idx={alignment.rotation_index}, mirror_x={alignment.mirror_x}, sign={alignment.sign}"
+                )
+                gt_summary[f"{label}_aligned_fsc_vs_gt"] = aligned_fsc_vs_gt
+                gt_summary[f"{label}_aligned_corr_vs_gt"] = np.float64(alignment.corr)
+                gt_summary[f"{label}_aligned_score_vs_gt"] = np.float64(alignment.score)
+                gt_summary[f"{label}_aligned_shell_05"] = np.int32(
+                    -1 if aligned_shell_05 is None else aligned_shell_05
+                )
+                gt_summary[f"{label}_aligned_shell_0143"] = np.int32(
+                    -1 if aligned_shell_0143 is None else aligned_shell_0143
+                )
+                gt_summary[f"{label}_gt_align_rotation_index"] = np.int32(alignment.rotation_index)
+                gt_summary[f"{label}_gt_align_rotation_matrix"] = alignment.rotation_matrix
+                gt_summary[f"{label}_gt_align_mirror_x"] = np.bool_(alignment.mirror_x)
+                gt_summary[f"{label}_gt_align_sign"] = np.int32(alignment.sign)
+                gt_summary[f"{label}_gt_align_score_max_shell"] = np.int32(args.gt_align_max_shell)
+                gt_summary[f"{label}_gt_align_healpix_order"] = np.int32(args.gt_align_healpix_order)
+                gt_ledger_summary[f"{label}_aligned_corr_vs_gt"] = float(alignment.corr)
+                gt_ledger_summary[f"{label}_aligned_score_vs_gt"] = float(alignment.score)
+                gt_ledger_summary[f"{label}_aligned_shell_05"] = int(
+                    -1 if aligned_shell_05 is None else aligned_shell_05
+                )
+                gt_ledger_summary[f"{label}_aligned_shell_0143"] = int(
+                    -1 if aligned_shell_0143 is None else aligned_shell_0143
+                )
+                gt_ledger_summary[f"{label}_gt_align_rotation_index"] = int(alignment.rotation_index)
+                gt_ledger_summary[f"{label}_gt_align_mirror_x"] = bool(alignment.mirror_x)
+                gt_ledger_summary[f"{label}_gt_align_sign"] = int(alignment.sign)
 
         save_dict.update(gt_summary)
         gt_npz_path = os.path.join(out_dir, "gt_comparison_final.npz")
@@ -1345,6 +1444,14 @@ def main():
         "iter_start": int(args.iter),
         "max_iter": int(args.max_iter),
         "completed_iterations": int(completed_iters),
+        "gt_volume": str(gt_path) if gt_path is not None else None,
+        "gt_align_enabled": bool(args.gt_align and gt_ft is not None),
+        "gt_align_healpix_order": int(args.gt_align_healpix_order),
+        "gt_align_max_shell": int(args.gt_align_max_shell),
+        "gt_align_allow_mirror": not bool(args.gt_align_no_mirror),
+        "gt_align_allow_sign": bool(args.gt_align_allow_sign),
+        "gt_align_all_series": bool(args.gt_align_all_series),
+        "gt_metrics": gt_ledger_summary,
         "force_max_iter_after_convergence": bool(args.force_max_iter_after_convergence),
         "elapsed_s": float(elapsed),
         "local_search_profile_mode": args.local_search_profile,
@@ -1697,23 +1804,37 @@ def main():
         print("\n=== Postprocessing per-iteration map quality vs GT/RELION ===")
         import subprocess
 
-        subprocess.run(
-            [
-                sys.executable,
-                "scripts/postprocess_multi_iter_gt.py",
-                "--recovar_dir",
-                out_dir,
-                "--relion_dir",
-                str(relion_dir),
-                "--relion_start_iter",
-                str(iteration),
-                "--gt_volume",
-                str(gt_path),
-                "--max_iter",
-                str(args.max_iter),
-            ],
-            check=True,
-        )
+        gt_postprocess_cmd = [
+            sys.executable,
+            "scripts/postprocess_multi_iter_gt.py",
+            "--recovar_dir",
+            out_dir,
+            "--relion_dir",
+            str(relion_dir),
+            "--relion_start_iter",
+            str(iteration),
+            "--gt_volume",
+            str(gt_path),
+            "--max_iter",
+            str(args.max_iter),
+        ]
+        if args.gt_align:
+            gt_postprocess_cmd.extend(
+                [
+                    "--gt_align",
+                    "--gt_align_healpix_order",
+                    str(args.gt_align_healpix_order),
+                    "--gt_align_max_shell",
+                    str(args.gt_align_max_shell),
+                ]
+            )
+            if args.gt_align_no_mirror:
+                gt_postprocess_cmd.append("--gt_align_no_mirror")
+            if args.gt_align_allow_sign:
+                gt_postprocess_cmd.append("--gt_align_allow_sign")
+            if args.gt_align_all_series:
+                gt_postprocess_cmd.append("--gt_align_all_series")
+        subprocess.run(gt_postprocess_cmd, check=True)
 
     # ---- Run diff script ----
     print("\n=== Running diff_relion_recovar_per_iter.py ===")

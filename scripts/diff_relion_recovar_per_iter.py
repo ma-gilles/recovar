@@ -635,6 +635,29 @@ def main():
                         f"{s05col}{shell05_v:10d}{RESET} "
                         f"{s143col}{shell0143_v:10d}{RESET}"
                     )
+                if "recovar_reg_merged_aligned_corr_vs_gt" in gt_metrics.files:
+                    print(
+                        f"\n    {'aligned series':<18s} {'corr_vs_gt':>12s} {'FSC<0.5':>10s} "
+                        f"{'FSC<0.143':>10s} {'rot':>6s} {'mirror':>7s} {'sign':>5s}"
+                    )
+                    for label, prefix in gt_rows:
+                        corr_key = f"{prefix}_aligned_corr_vs_gt"
+                        shell05_key = f"{prefix}_aligned_shell_05"
+                        shell0143_key = f"{prefix}_aligned_shell_0143"
+                        rot_key = f"{prefix}_gt_align_rotation_index"
+                        mirror_key = f"{prefix}_gt_align_mirror_x"
+                        sign_key = f"{prefix}_gt_align_sign"
+                        if corr_key not in gt_metrics.files:
+                            continue
+                        print(
+                            f"    {label:<18s} "
+                            f"{float(gt_metrics[corr_key]):12.6f} "
+                            f"{int(gt_metrics[shell05_key]):10d} "
+                            f"{int(gt_metrics[shell0143_key]):10d} "
+                            f"{int(gt_metrics[rot_key]):6d} "
+                            f"{str(bool(gt_metrics[mirror_key])):>7s} "
+                            f"{int(gt_metrics[sign_key]):5d}"
+                        )
                 if "recovar_reg_merged_corr_vs_relion" in gt_metrics.files:
                     print(
                         f"    {'recovar-vs-RELION':<18s} "
