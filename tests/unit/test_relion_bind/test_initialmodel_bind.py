@@ -9,10 +9,8 @@ Covers:
   - vdam_compute_subset_size    vs schedules.compute_subset_size
   - vdam_compute_stepsize       vs schedules.compute_stepsize
   - vdam_compute_tau2_fudge     vs schedules.compute_tau2_fudge
-  - vdam_randomise_particles_order  vs subset.randomise_particles_order (NOTE:
-        expected to diverge until the Python path uses RELION's rnd_unif;
-        we fall back to checking "uses a valid permutation" + document a
-        known-divergent trajectory test pinned against a C++ reference.)
+  - vdam_randomise_particles_order  — RELION's std::shuffle(mt19937) subset
+        order used by the native parity path.
 
 Moment primitives (reweight_grad, first/second moment, apply_momenta,
 reconstruct_grad) get a roundtrip smoke test only here — full parity
@@ -234,15 +232,10 @@ class TestTau2FudgeParity:
 
 
 class TestRandomiseParticlesOrderBinding:
-    """The C++ binding uses RELION's rnd_unif; the Python version uses NumPy.
-    These are NOT bit-identical. We only assert:
+    """The C++ binding uses RELION's std::shuffle path.
 
-    - The binding always returns a valid permutation.
-    - Repeated calls with the same seed are deterministic.
-    - Different seeds yield different orders.
-
-    Phase 4+ tests will rely on the binding directly for any RELION-fixture
-    parity so the NumPy fallback is never used in parity paths.
+    The Python fallback in subset.py is deterministic but not bit-identical.
+    Parity paths call this binding directly.
     """
 
     def test_is_permutation(self, bind):
@@ -256,6 +249,10 @@ class TestRandomiseParticlesOrderBinding:
         a = np.asarray(bind.vdam_randomise_particles_order(500, 12345))
         b = np.asarray(bind.vdam_randomise_particles_order(500, 12345))
         np.testing.assert_array_equal(a, b)
+
+    def test_matches_relion_std_shuffle_reference(self, bind):
+        order = np.asarray(bind.vdam_randomise_particles_order(10, 1))
+        np.testing.assert_array_equal(order, [9, 0, 2, 5, 7, 4, 6, 3, 1, 8])
 
     def test_different_seeds_differ(self, bind):
         a = np.asarray(bind.vdam_randomise_particles_order(500, 12345))

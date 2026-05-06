@@ -13,14 +13,10 @@ Mirrors the RELION 5.0 sequence:
    `part_id % 2`, matching the BPref accumulation offset in
    `storeWeightedSums` (ml_optimiser.cpp:10349).
 
-RELION's shuffle is not a standard `std::shuffle`; it uses its own
-`init_random_generator` + `ran1` pair (`rnd_unif`). We reproduce the
-sequence via an explicit Fisher-Yates over the RELION generator, exposed
-separately via `relion_bind` in Phase 2 for parity testing. Phase 1 only
-exposes the deterministic *algorithm*, not the generator; the generator
-binding is wired in via `rnd_unif_sequence` argument so tests can feed
-either NumPy randoms (for standalone tests) or a RELION-generator stream
-(for Phase 2 parity).
+RELION's non-halves shuffle uses `std::shuffle(sorted_idx, mt19937(seed))`.
+The native parity path calls the C++ binding directly for byte-exact subset
+selection. The pure-Python Fisher-Yates helper below remains as a deterministic
+fallback and as a small unit-testable subset-selection primitive.
 """
 
 from __future__ import annotations
@@ -54,7 +50,7 @@ class SubsetPlan:
 
 
 # ---------------------------------------------------------------------------
-# Fisher-Yates shuffle via a RELION-compatible rnd_unif source
+# Deterministic Fisher-Yates fallback
 # ---------------------------------------------------------------------------
 
 
@@ -62,12 +58,11 @@ def randomise_particles_order(
     nr_particles: int,
     rnd_unif: RndUnifFn,
 ) -> np.ndarray:
-    """Reproduce `Experiment::randomiseParticlesOrder` (non-halves path).
+    """Fallback shuffle used only when the RELION binding is unavailable.
 
-    RELION's implementation is Fisher-Yates with the swap index drawn from
-    `ROUND(rnd_unif() * (n-1))` for the last element `n` at each step
-    (i.e. classic in-place shuffle, iterating from the end toward the
-    start).
+    The native parity path uses `vdam_randomise_particles_order`, which calls
+    RELION's `std::shuffle` path. This helper keeps standalone tests and
+    binding-free environments deterministic but is not bit-exact to RELION.
 
     Returns the shuffled list of global particle indices as a NumPy int64
     array.
@@ -76,8 +71,7 @@ def randomise_particles_order(
         return np.zeros(0, dtype=np.int64)
 
     order = np.arange(nr_particles, dtype=np.int64)
-    # Fisher-Yates: for i from n-1 down to 1, swap order[i] with order[j]
-    # where j = ROUND(rnd_unif() * i). Matches RELION's MT-based shuffle.
+    # Fisher-Yates: for i from n-1 down to 1, swap order[i] with order[j].
     call_idx = 0
     for i in range(nr_particles - 1, 0, -1):
         u = rnd_unif(call_idx)

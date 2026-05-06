@@ -166,7 +166,13 @@ class TestPaddingParity:
         vol_relion = _make_smooth_volume(N, rng)
 
         # RELION binding
-        proj_data, *_ = compute_fourier_transform_map(vol_relion, ori_size=N, padding_factor=2, do_gridding=False)
+        proj_data, *_ = compute_fourier_transform_map(
+            vol_relion,
+            ori_size=N,
+            padding_factor=2,
+            do_gridding=False,
+            data_dim=3,
+        )
 
         # Numpy reference
         ref_proj, _ = _numpy_compute_fourier_transform_map(vol_relion, N, padding_factor=2)
@@ -190,7 +196,13 @@ class TestPaddingParity:
         rng = np.random.default_rng(42)
         vol_relion = _make_smooth_volume(N, rng)
 
-        proj_data, *_ = compute_fourier_transform_map(vol_relion, ori_size=N, padding_factor=1, do_gridding=False)
+        proj_data, *_ = compute_fourier_transform_map(
+            vol_relion,
+            ori_size=N,
+            padding_factor=1,
+            do_gridding=False,
+            data_dim=3,
+        )
 
         ref_proj, _ = _numpy_compute_fourier_transform_map(vol_relion, N, padding_factor=1)
 
@@ -264,7 +276,11 @@ class TestPaddingParity:
 
         # --- RELION binding ---
         proj_data, *_ = compute_fourier_transform_map(
-            vol_relion, ori_size=N, padding_factor=padding_factor, do_gridding=False
+            vol_relion,
+            ori_size=N,
+            padding_factor=padding_factor,
+            do_gridding=False,
+            data_dim=3,
         )
         pad_size = compute_relion_pad_size(N, padding_factor)
         c = pad_size // 2

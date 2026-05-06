@@ -11,8 +11,8 @@ non-helical C1 SPA path in
 
 These tests compare recovar directly against the analytical RELION formulas on
 the same HEALPix x psi grid.  The RELION binding does not expose the selector
-itself, but it does expose the direction and psi grids needed to reproduce the
-formula exactly.
+itself, but it does expose the NEST-ordered direction and psi grids needed to
+reproduce the formula exactly.
 """
 
 import numpy as np
@@ -72,7 +72,7 @@ def _relion_expected_single_prior(
     sigma_psi_deg,
     sigma_cutoff,
 ):
-    """Analytical C1 RELION local-search selection in recovar's RING indexing."""
+    """Analytical C1 RELION local-search selection in recovar's RELION grid order."""
     relion_dirs = get_healpix_directions(healpix_order)
     prior_dir = _relion_direction_vector(prior_rot_deg, prior_tilt_deg)
     grid_dirs = np.array([_relion_direction_vector(rot, tilt) for rot, tilt in relion_dirs], dtype=np.float64)
@@ -99,12 +99,11 @@ def _relion_expected_single_prior(
         psi_log_prior = _normalized_log_weights(diffpsi[selected_ipsi], sigma_psi_deg)
 
     n_pixels = healpy.nside2npix(2**healpix_order)
-    ring_pixels = healpy.nest2ring(2**healpix_order, selected_idirs)
 
     index_to_log_prior = {}
     for psi_idx, psi_lp in zip(selected_ipsi.tolist(), psi_log_prior.tolist()):
-        for ring_pix, dir_lp in zip(ring_pixels.tolist(), dir_log_prior.tolist()):
-            index_to_log_prior[int(psi_idx * n_pixels + ring_pix)] = float(psi_lp + dir_lp)
+        for nest_pix, dir_lp in zip(selected_idirs.tolist(), dir_log_prior.tolist()):
+            index_to_log_prior[int(psi_idx * n_pixels + nest_pix)] = float(psi_lp + dir_lp)
 
     selected_indices = np.array(sorted(index_to_log_prior), dtype=np.int64)
     log_prior = np.array([index_to_log_prior[int(idx)] for idx in selected_indices], dtype=np.float32)

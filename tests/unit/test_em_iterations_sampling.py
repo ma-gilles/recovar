@@ -150,7 +150,7 @@ def test_local_rotation_grid_fast_uses_exact_prior_rotation_angles():
     n_pixels = hp.nside2npix(2**fine_order)
     M_prior = prior_rotation[0]
 
-    full_grid = em_sampling.get_rotation_grid(fine_order, matrices=True)
+    full_grid = em_sampling.get_relion_rotation_grid(fine_order)
     selected_matrices = full_grid[selected_indices]
     # Axis-angle distance: ||log(M_prior^T @ M_sel)||
     R_diffs = np.einsum("ij,kjl->kil", M_prior.T, selected_matrices)
