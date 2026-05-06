@@ -532,6 +532,16 @@ def main():
         "against a RELION reference run.",
     )
     parser.add_argument(
+        "--no_replay_relion_state",
+        action="store_true",
+        default=False,
+        help="With --perturb_replay_relion_dir, replay only RELION's sampling "
+        "perturbation sequence. Do not inject per-iteration RELION model/data "
+        "state such as sigma_offset, class weights, norm corrections, noise, "
+        "or tau2. This keeps cold-start end-to-end diagnostics from masking "
+        "recovar's own M-step/state-update errors.",
+    )
+    parser.add_argument(
         "--replay_relion_normcorr",
         action="store_true",
         default=False,
@@ -931,7 +941,7 @@ def main():
     # --replay_relion_normcorr / --replay_relion_noise / --replay_relion_tau2
     # (strict parity diagnostics).
     replay_iteration_overrides = None
-    if args.perturb_replay_relion_dir is not None:
+    if args.perturb_replay_relion_dir is not None and not args.no_replay_relion_state:
         replay_iteration_overrides = _build_replay_iteration_overrides(
             args.perturb_replay_relion_dir,
             half1_idx,
