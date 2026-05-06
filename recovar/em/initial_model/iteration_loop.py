@@ -185,28 +185,30 @@ def select_subset_for_iter(
     random_seed: int,
     do_grad: bool,
 ) -> InitialModelState:
-    """Shuffle the full particle list with seed `random_seed + iter`, take
-    the first `subset_size` (or all particles if -1), stable-sort by optics
-    group, and alternate halfset ids.
+    """Select RELION's per-iteration VDAM subset.
 
-    `rnd_unif_factory` is a callable mapping a seed to an `RndUnifFn`; we
-    pass `random_seed + iter` to match RELION's
-    `randomiseParticlesOrder(random_seed + iter, ...)`.
+    RELION skips particle-order randomization entirely when ``random_seed`` is
+    zero. Otherwise it shuffles the full particle list with seed
+    ``random_seed + iter``, takes the first ``subset_size`` (or all particles
+    if ``-1``), stable-sorts by optics group, and alternates pseudo-halfset ids.
     """
-    # RELION's exp_model.cpp:451 uses `std::shuffle(sorted_idx, std::mt19937(seed))`
-    # for non-halves randomisation. The Python rnd_unif Fisher-Yates does NOT
-    # match std::shuffle byte-for-byte, so we route through the C++ binding
-    # `vdam_randomise_particles_order` which calls std::shuffle directly.
-    # Falls back to the Python implementation if the binding is unavailable.
-    try:
-        from recovar.relion_bind import _relion_bind_core as _bind
+    if int(random_seed) == 0:
+        shuffled = np.arange(int(nr_particles), dtype=np.int64)
+    else:
+        # RELION's exp_model.cpp:451 uses `std::shuffle(sorted_idx, std::mt19937(seed))`
+        # for non-halves randomisation. The Python rnd_unif Fisher-Yates does NOT
+        # match std::shuffle byte-for-byte, so we route through the C++ binding
+        # `vdam_randomise_particles_order` which calls std::shuffle directly.
+        # Falls back to the Python implementation if the binding is unavailable.
+        try:
+            from recovar.relion_bind import _relion_bind_core as _bind
 
-        shuffled = np.asarray(
-            _bind.vdam_randomise_particles_order(int(nr_particles), int(random_seed + iter)), dtype=np.int64
-        )
-    except (ImportError, AttributeError):
-        rnd = rnd_unif_factory(random_seed + iter)
-        shuffled = randomise_particles_order(nr_particles, rnd)
+            shuffled = np.asarray(
+                _bind.vdam_randomise_particles_order(int(nr_particles), int(random_seed + iter)), dtype=np.int64
+            )
+        except (ImportError, AttributeError):
+            rnd = rnd_unif_factory(random_seed + iter)
+            shuffled = randomise_particles_order(nr_particles, rnd)
     subset_size = state.subset_size if state.subset_size != -1 else nr_particles
     # `-1` (all particles) still needs to be translated via select_vdam_subset
     pseudo = do_grad and pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=False)

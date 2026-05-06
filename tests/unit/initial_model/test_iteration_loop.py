@@ -12,7 +12,11 @@ import numpy as np
 import pytest
 
 from recovar.em.initial_model import initialise_denovo_state
-from recovar.em.initial_model.iteration_loop import run_vdam_iterations, update_probabilities_from_estep_meta
+from recovar.em.initial_model.iteration_loop import (
+    run_vdam_iterations,
+    select_subset_for_iter,
+    update_probabilities_from_estep_meta,
+)
 from recovar.em.initial_model.m_step import VdamAccumulator
 from recovar.em.initial_model.subset import numpy_rnd_unif_factory
 
@@ -119,6 +123,33 @@ class TestRunVdamIterations:
         )
 
         np.testing.assert_allclose(out.pdf_class, [0.0, 1.0])
+
+    def test_random_seed_zero_skips_particle_shuffle(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.subset_size = 4
+
+        def fail_if_called(seed):
+            raise AssertionError(f"unexpected randomization for seed {seed}")
+
+        out = select_subset_for_iter(
+            state,
+            iter=1,
+            nr_particles=6,
+            optics_group_by_particle=[0, 1, 0, 1, 0, 1],
+            rnd_unif_factory=fail_if_called,
+            random_seed=0,
+            do_grad=True,
+        )
+
+        np.testing.assert_array_equal(out.subset_particle_ids, np.array([0, 2, 1, 3]))
+        np.testing.assert_array_equal(out.subset_halfset_ids, np.array([0, 0, 1, 1], dtype=np.int8))
 
     def test_5_iter_smoke(self, bind):
         ori = 16
