@@ -371,6 +371,18 @@ def _sum_k_class_noise_stats(
     return aggregate._replace(wsum_img_power=jnp.asarray(image_power, dtype=aggregate.wsum_img_power.dtype), sumw=relion_sumw)
 
 
+def _aggregate_k_class_noise_stats(
+    noise_stats: tuple[NoiseStats, ...] | None,
+    class_posterior_sums: np.ndarray | None = None,
+) -> NoiseStats | None:
+    """Compatibility wrapper for the Class3D noise aggregation correction."""
+    if class_posterior_sums is None:
+        if not noise_stats:
+            return None
+        class_posterior_sums = np.asarray([float(stats.sumw) for stats in noise_stats], dtype=np.float64)
+    return _sum_k_class_noise_stats(noise_stats, class_posterior_sums)
+
+
 def _assemble_result(
     *,
     class_log_evidence: np.ndarray,
