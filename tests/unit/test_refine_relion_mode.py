@@ -288,6 +288,28 @@ def test_build_pass2_hypothesis_layout_preserves_sparse_rotation_translation_mas
     assert not np.any(buckets[0].local_sample_mask[row_for_image0, 2:])
 
 
+def test_build_pass2_hypothesis_layout_accepts_fine_translation_log_prior():
+    translations = np.array([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32)
+    fine_prior = np.arange(8, dtype=np.float32)
+
+    layout = build_pass2_hypothesis_layout(
+        [np.array([0], dtype=np.int32), np.array([1], dtype=np.int32)],
+        n_coarse_rotations=rotation_grid_size(0),
+        n_coarse_translations=2,
+        nside_level=0,
+        translations=translations,
+        oversampling_order=1,
+        translation_step=2.0,
+        fine_translation_log_prior=fine_prior,
+    )
+
+    assert layout.translation_grid.shape[0] == fine_prior.shape[0]
+    np.testing.assert_allclose(
+        layout.translation_log_priors,
+        np.broadcast_to(fine_prior[None, :], (2, fine_prior.shape[0])),
+    )
+
+
 def test_build_pass2_hypothesis_layout_can_keep_empty_class_support():
     translations = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
     layout = build_pass2_hypothesis_layout(

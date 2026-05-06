@@ -22,21 +22,21 @@ def _get_relion_grid_metadata(healpix_order: int) -> dict[str, np.ndarray]:
 
     from recovar.relion_bind._relion_bind_core import get_healpix_directions
 
-    directions = np.asarray(get_healpix_directions(healpix_order), dtype=np.float32)
+    directions = np.asarray(get_healpix_directions(healpix_order), dtype=np.float64)
     n_pixels = int(directions.shape[0])
     n_psi = rotation_grid_n_in_planes(healpix_order)
     # Use the actual matrix view directions of the RELION grid rather than a
     # closed-form HEALPix angle formula. This keeps the local-search selector
     # aligned with the trial rotations that are actually scored.
-    rot_deg = np.asarray(directions[:, 0], dtype=np.float32)
-    tilt_deg = np.asarray(directions[:, 1], dtype=np.float32)
+    rot_deg = np.asarray(directions[:, 0], dtype=np.float64)
+    tilt_deg = np.asarray(directions[:, 1], dtype=np.float64)
     psi_step = 360.0 / float(max(1, n_psi))
-    psi_deg = (np.arange(n_psi, dtype=np.float32) * np.float32(psi_step)).astype(np.float32, copy=False)
+    psi_deg = (np.arange(n_psi, dtype=np.float64) * float(psi_step)).astype(np.float64, copy=False)
     # RELION's viewing direction is the third ROW of the rotation matrix,
     # not the third column.
-    dir_eulers = np.column_stack([rot_deg, tilt_deg, np.zeros(n_pixels, dtype=np.float32)])
+    dir_eulers = np.column_stack([rot_deg, tilt_deg, np.zeros(n_pixels, dtype=np.float64)])
     dir_rotations = utils.R_from_relion(dir_eulers, degrees=True)
-    dir_vecs = np.asarray(dir_rotations[:, 2, :], dtype=np.float32)
+    dir_vecs = np.asarray(dir_rotations[:, 2, :], dtype=np.float64)
     dir_norm = np.linalg.norm(dir_vecs, axis=1, keepdims=True)
     dir_norm = np.where(dir_norm > 0.0, dir_norm, 1.0)
     dir_vecs = dir_vecs / dir_norm
@@ -116,10 +116,10 @@ def build_local_search_grid_metadata(
         meta = _get_relion_grid_metadata(healpix_order)
         return {
             "mode": "factorized",
-            "rot_deg": np.asarray(meta["rot_deg"], dtype=np.float32),
-            "tilt_deg": np.asarray(meta["tilt_deg"], dtype=np.float32),
-            "dir_vecs": np.asarray(meta["dir_vecs"], dtype=np.float32),
-            "psi_deg": np.asarray(meta["psi_deg"], dtype=np.float32),
+            "rot_deg": np.asarray(meta["rot_deg"], dtype=np.float64),
+            "tilt_deg": np.asarray(meta["tilt_deg"], dtype=np.float64),
+            "dir_vecs": np.asarray(meta["dir_vecs"], dtype=np.float64),
+            "psi_deg": np.asarray(meta["psi_deg"], dtype=np.float64),
             "n_pixels": np.asarray(meta["n_pixels"], dtype=np.int64),
             "n_psi": np.asarray(meta["n_psi"], dtype=np.int64),
         }
