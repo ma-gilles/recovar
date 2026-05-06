@@ -36,6 +36,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
     run_local_em_exact,
 )
 from recovar.em.dense_single_volume.k_class import (
+    KClassEMResult,
     run_dense_k_class_em,
     run_local_k_class_em,
 )
@@ -85,6 +86,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     make_relion_direction_log_prior,
     make_relion_translation_log_prior,
     normalize_direction_prior_per_half,
+    relion_sigma_offset_prior_center,
     relion_translation_prior_center,
     relion_translation_search_base,
 )
@@ -2902,6 +2904,16 @@ class TestRelionModeSmokeTest:
             atol=1e-6,
         )
 
+    def test_relion_sigma_offset_prior_center_matches_store_weighted_sums_units(self):
+        prev = np.array([[0.0, -1.0], [1.0, 0.0]], dtype=np.float32)
+        expected = np.array([[0.0, 1.0], [-1.0, 0.0]], dtype=np.float32)
+        np.testing.assert_allclose(
+            relion_sigma_offset_prior_center(prev),
+            expected,
+            rtol=1e-6,
+            atol=1e-6,
+        )
+
     def test_direction_prior_round_trip_to_rotation_log_prior(self):
         healpix_order = 1
         n_dirs = 48
@@ -3681,7 +3693,7 @@ class TestRelionModeSmokeTest:
         assert captured["run_em_calls"] == 0
         np.testing.assert_allclose(
             captured["prior_centers"][0],
-            relion_translation_prior_center(prev_h1, half_datasets[0].voxel_size),
+            relion_sigma_offset_prior_center(prev_h1),
             rtol=1e-6,
             atol=1e-6,
         )
@@ -3689,7 +3701,7 @@ class TestRelionModeSmokeTest:
         np.testing.assert_array_equal(captured["normalization_log_z"][1], np.full(prev_h2.shape[0], 7.5))
         np.testing.assert_allclose(
             captured["prior_centers"][1],
-            relion_translation_prior_center(prev_h2, half_datasets[1].voxel_size),
+            relion_sigma_offset_prior_center(prev_h2),
             rtol=1e-6,
             atol=1e-6,
         )
@@ -5463,8 +5475,10 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
     import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     half_datasets = [MockDataset(1, rng), MockDataset(1, rng)]
-    prev_h1 = np.array([[0.5, -0.25]], dtype=np.float32)
-    prev_h2 = np.array([[-0.4, 0.3]], dtype=np.float32)
+    for ds in half_datasets:
+        ds.voxel_size = 4.25
+    prev_h1 = np.array([[1.6, -2.4]], dtype=np.float32)
+    prev_h2 = np.array([[-1.6, 2.4]], dtype=np.float32)
     chosen_trans = np.asarray(translations[1], dtype=np.float32)
 
     def fake_run_em(
@@ -5525,17 +5539,143 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
 
     expected_h1 = relion_translation_search_base(prev_h1) + chosen_trans[None, :]
     expected_h2 = relion_translation_search_base(prev_h2) + chosen_trans[None, :]
-    np.testing.assert_allclose(half_datasets[0].translations, expected_h1, rtol=1e-6, atol=1e-6)
-    np.testing.assert_allclose(half_datasets[1].translations, expected_h2, rtol=1e-6, atol=1e-6)
 
     best_hist = result["best_translations_history"]
     assert len(best_hist) == 1
     np.testing.assert_allclose(
-        best_hist[0],
+        np.concatenate(best_hist[0], axis=0),
         np.concatenate([expected_h1, expected_h2], axis=0),
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_relion_mode_dense_k_class_writes_absolute_translations_from_previous_offset(
+    rng,
+    init_volume,
+    monkeypatch,
+):
+    """Dense K-class RELION-mode writeback should use old_offset + selected delta."""
+    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+
+    half_datasets = [MockDataset(1, rng), MockDataset(1, rng)]
+    for ds in half_datasets:
+        ds.voxel_size = 4.25
+    prev_h1 = np.array([[1.6, -2.4]], dtype=np.float32)
+    prev_h2 = np.array([[-1.6, 2.4]], dtype=np.float32)
+    selected_by_half = [
+        np.array([[0.25, -0.5]], dtype=np.float32),
+        np.array([[-0.75, 1.5]], dtype=np.float32),
+    ]
+    dense_calls = []
+
+    def fake_run_dense_k_class_em(
+        experiment_dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        disc_type,
+        **kwargs,
+    ):
+        _ = (means, mean_variance, noise_variance, translations, disc_type)
+        half_idx = len(dense_calls)
+        dense_calls.append(kwargs)
+        n_classes = int(np.asarray(means).shape[0])
+        n_images = int(experiment_dataset.n_units)
+        n_shells = experiment_dataset.image_shape[0] // 2 + 1
+        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        selected = np.broadcast_to(selected_by_half[half_idx], (n_images, 2)).astype(np.float32)
+        per_class_stats = tuple(
+            RelionStats(
+                log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
+                best_log_score_per_image=jnp.zeros(n_images, dtype=jnp.float32),
+                max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
+                rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
+            )
+            for _ in range(n_classes)
+        )
+        per_class_noise = tuple(
+            NoiseStats(
+                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+                wsum_sigma2_offset=0.0,
+                sumw=float(n_images) / float(n_classes),
+            )
+            for _ in range(n_classes)
+        )
+        aggregate_noise = NoiseStats(
+            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=float(n_images),
+        )
+        return KClassEMResult(
+            new_means=jnp.zeros((n_classes, recon_vol_size), dtype=jnp.complex64),
+            Ft_y=jnp.zeros((n_classes, recon_vol_size), dtype=jnp.complex64),
+            Ft_ctf=jnp.ones((n_classes, recon_vol_size), dtype=jnp.complex64),
+            per_class_hard_assignments=jnp.zeros((n_classes, n_images), dtype=jnp.int32),
+            class_assignments=jnp.zeros(n_images, dtype=jnp.int32),
+            pose_assignments=jnp.zeros(n_images, dtype=jnp.int32),
+            class_responsibilities=jnp.full((n_classes, n_images), 1.0 / n_classes, dtype=jnp.float32),
+            class_posterior_sums=jnp.full(n_classes, n_images / n_classes, dtype=jnp.float32),
+            stats=per_class_stats[0],
+            per_class_stats=per_class_stats,
+            noise_stats=per_class_noise,
+            aggregate_noise_stats=aggregate_noise,
+            best_pose_rotations=jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (n_images, 3, 3)),
+            best_pose_translations=jnp.asarray(selected, dtype=jnp.float32),
+            best_pose_rotation_ids=jnp.zeros(n_images, dtype=jnp.int32),
+        )
+
+    monkeypatch.setattr(refine_mod, "run_dense_k_class_em", fake_run_dense_k_class_em)
+
+    result = refine_single_volume(
+        half_datasets,
+        init_volume,
+        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+        _make_rotations(1, seed=123),
+        jnp.array([[0.0, 0.0]], dtype=jnp.float32),
+        disc_type="linear_interp",
+        max_iter=1,
+        image_batch_size=N_IMAGES,
+        rotation_block_size=1,
+        init_current_size=16,
+        adaptive_oversampling=0,
+        nside_level=1,
+        init_healpix_order=1,
+        max_healpix_order=1,
+        init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
+        n_classes=2,
+        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+        skip_final_iteration=True,
+    )
+
+    expected_h1 = relion_translation_search_base(prev_h1) + selected_by_half[0]
+    expected_h2 = relion_translation_search_base(prev_h2) + selected_by_half[1]
+    np.testing.assert_allclose(
+        dense_calls[0]["translation_prior_centers"],
+        relion_sigma_offset_prior_center(prev_h1),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        dense_calls[1]["translation_prior_centers"],
+        relion_sigma_offset_prior_center(prev_h2),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    assert not np.allclose(
+        dense_calls[0]["translation_prior_centers"],
+        relion_translation_prior_center(prev_h1, half_datasets[0].voxel_size),
+    )
+    best_hist = result["best_translations_history"]
+    assert len(best_hist) == 1
+    np.testing.assert_allclose(best_hist[0][0], expected_h1, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(best_hist[0][1], expected_h2, rtol=1e-6, atol=1e-6)
+    assert len(dense_calls) == 2
 
 
 def test_local_search_decodes_hard_assignments_on_fine_grid(

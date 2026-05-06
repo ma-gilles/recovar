@@ -42,6 +42,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     normalize_class_direction_prior,
     normalize_class_direction_prior_per_half,
     normalize_direction_prior_per_half,
+    relion_sigma_offset_prior_center,
     relion_translation_prior_center,
     relion_translation_search_base,
     remap_direction_prior_to_healpix_order,
@@ -141,6 +142,23 @@ def _precompute_exact_local_fine_grid_enabled(healpix_order: int) -> bool:
     """Return whether exact local search should materialize the fine grid once."""
 
     return rotation_grid_size(int(healpix_order)) <= EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS
+
+
+def _relion_metadata_translations(previous_best_translations, selected_relative_translations):
+    """Return RELION-style metadata offsets after selecting relative shifts.
+
+    RELION applies the rounded previous offset to the image before scoring,
+    evaluates the search grid as a relative sampled translation, then writes
+    ``rounded_old_offset + sampled_translation`` back to metadata.  Keeping
+    that absolute value is required for the next iteration's pre-shift and
+    sigma-offset sufficient statistic.
+    """
+
+    selected = np.asarray(selected_relative_translations, dtype=np.float32)
+    base = relion_translation_search_base(previous_best_translations)
+    if base is None:
+        return selected
+    return (np.asarray(base, dtype=np.float32).reshape(selected.shape) + selected).astype(np.float32)
 
 
 def _relion_half_plane_shell_counts(image_shape):
@@ -2800,19 +2818,17 @@ def _run_relion_iteration_loop(
             # For this dataset, rlnOffsetRangeX = -1 → model sigma is used.
             # We always use current_sigma_offset_angstrom (from model star).
             #
-            # Evaluate the translation prior on RELION's unperturbed coarse
-            # sampling grid. SamplingPerturbation changes the shifts used for
-            # projection, but RELION builds pdf_offset from
-            # sampling.translations_x/y before perturbation. RELION stores
-            # that grid in Angstrom while projection shifts use
-            # getTranslationsInPixel; convert the rounded old-offset center
-            # into the pixel-space search grid used below.
+            # Evaluate scoring and sigma-offset priors with their separate
+            # RELION source formulas. `pdf_offset` scores the unperturbed
+            # coarse sampling grid, while `wsum_sigma2_offset` accumulates
+            # getTranslationsInPixel() shifts in storeWeightedSums.
             trans_prior_center = relion_translation_prior_center(
                 previous_translations_k,
                 cryo.voxel_size,
             )
+            trans_sigma_center = relion_sigma_offset_prior_center(previous_translations_k)
             # A.1 fix: at iter 1 cold-start `previous_translations_k` is None, so
-            # `trans_prior_center` is None and em_engine's wsum_sigma2_offset
+            # `trans_sigma_center` is None and em_engine's wsum_sigma2_offset
             # accumulator (em_engine.py:1636) is gated off. RELION still computes
             # wsum_sigma2_offset = sum_i E[||t_i||²] at iter 1 using the implicit
             # zero prior center, which seeds iter-2's sigma_offset ~ 1.6 Å (vs
@@ -2821,7 +2837,7 @@ def _run_relion_iteration_loop(
             # unaffected because make_relion_translation_log_prior(None) and
             # make_relion_translation_log_prior(zeros(2)) both center at origin.
             trans_prior_center_for_engine = (
-                np.zeros(2, dtype=np.float32) if trans_prior_center is None else trans_prior_center
+                np.zeros(2, dtype=np.float32) if trans_sigma_center is None else trans_sigma_center
             )
             translation_prior_translations = np.asarray(base_translations, dtype=np.float32)
             if current_translations.shape[0] != base_translations.shape[0]:
@@ -5054,7 +5070,10 @@ def _run_relion_iteration_loop(
                 best_trans = np.asarray(current_translations)[trans_idx]
             new_iter_best_rotations[k] = best_rots
             new_iter_best_rotation_eulers[k] = best_eulers
-            new_iter_best_translations[k] = best_trans
+            new_iter_best_translations[k] = _relion_metadata_translations(
+                prior_iter_best_translations[k],
+                best_trans,
+            )
         previous_best_rotations = new_iter_best_rotations
         previous_best_rotation_eulers = new_iter_best_rotation_eulers
         relion_half_inputs.previous_best_translations = new_iter_best_translations

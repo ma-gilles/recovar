@@ -97,6 +97,27 @@ def relion_translation_prior_center(previous_best_translations, voxel_size, prio
     return ((prior - old_offset) / voxel_size).astype(np.float32)
 
 
+def relion_sigma_offset_prior_center(previous_best_translations, prior_offsets=None):
+    """Return RELION's sigma-offset sufficient-statistic center in pixels.
+
+    RELION's ``pdf_offset`` scoring path evaluates the coarse Angstrom
+    sampling grid directly, but ``storeWeightedSums`` accumulates
+    ``wsum_sigma2_offset`` from ``getTranslationsInPixel`` shifts:
+    ``prior - rounded_old_offset - sampled_translation_pixels``.  The EM
+    engines use pixel-space translation grids and convert squared distances to
+    Angstroms themselves, so this center intentionally does not divide by
+    pixel size.
+    """
+    old_offset = relion_translation_search_base(previous_best_translations)
+    if old_offset is None:
+        return None
+    if prior_offsets is None:
+        prior = np.zeros_like(old_offset, dtype=np.float32)
+    else:
+        prior = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape)
+    return (prior - old_offset).astype(np.float32)
+
+
 def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
     """Collapse per-rotation posterior mass onto RELION's HEALPix directions."""
     rotation_posterior_sums = np.asarray(rotation_posterior_sums, dtype=np.float64).reshape(-1)
