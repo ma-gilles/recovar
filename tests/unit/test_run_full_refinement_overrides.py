@@ -66,6 +66,14 @@ def test_firstiter_cc_passes_ini_high_to_refinement_loop():
     assert value.body.attr == "init_resolution"
 
 
+def test_perturb_replay_can_skip_relion_state_overrides():
+    """Cold-start diagnostics may need RELION's perturbations without state replay."""
+
+    source = RUN_FULL_REFINEMENT.read_text()
+    assert "--no_replay_relion_state" in source
+    assert "args.perturb_replay_relion_dir is not None and not args.no_replay_relion_state" in source
+
+
 def test_class3d_direction_prior_replay_accepts_single_model_star():
     """Class3D writes one run_itNNN_model.star, not split-half model stars."""
 
