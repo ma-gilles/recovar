@@ -105,7 +105,8 @@ def pytest_addoption(parser):
             "run EM-long parity regression tests (256² 50k full ab-initio K=1 / K=4 "
             "vs RELION). Disjoint from --long-test by design: those tests measure "
             "SPA/ET pipeline metrics that EM-only changes do not move, and cost "
-            "hours of GPU time per run. Implies --run-gpu and --run-integration."
+            "hours of GPU time per run. Implies --run-slow, --run-gpu, and "
+            "--run-integration."
         ),
     )
 
@@ -133,7 +134,7 @@ def pytest_collection_modifyitems(config, items):
     run_long_test = config.getoption("--long-test")
     run_em_parity_long = config.getoption("--em-parity-long")
     # --long-test implies all the sub-flags so long tests are not doubly skipped
-    run_slow = config.getoption("--run-slow") or run_long_test
+    run_slow = config.getoption("--run-slow") or run_long_test or run_em_parity_long
     # Auto-detect GPU: run gpu-marked tests whenever a GPU is available,
     # even without --run-gpu.  The flag still works as an explicit override.
     gpu_available = False

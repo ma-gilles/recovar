@@ -626,21 +626,24 @@ def test_em_parity_fast_k1_perturbreplay(tmp_path):
 @pytest.mark.integration
 @pytest.mark.slow
 def test_em_parity_fast_kclass_coldstart(tmp_path):
-    """K=4 cold-start ab-initio at 5k 128² for 3 iters (Phase E.1).
+    """K=4 RELION-like cold-start ab-initio at 5k 128² for 3 iters.
 
     Companion to test_em_parity_fast_k1_coldstart; this one exercises the
     full K-class auto-refine path via run_full_refinement.py --n_classes 4.
     Compares per-class halfmaps against RELION's run_it003_class00X.mrc
     using Hungarian matching to absorb class permutations.
 
-    Pass criteria (calibrated to current K-class cold-start drift; tighter
-    bars require Phase D per-class machinery):
-      * worst per-class corr ≥ 0.85
-      * mean (Hungarian-matched) per-class corr ≥ 0.92
-      * effective_iters reached 3 (verifies the K-class loop converged
-        without crashing).
+    This is the non-oracle cold-start parity target: use RELION-like Class3D
+    sampling (firstiter_cc + adaptive_oversampling=1 + perturb replay) but do
+    NOT pass --relion_init_dir. Any remaining gap should come from RECOVAR not
+    reproducing RELION's initial state from first principles, not from testing
+    a deliberately different search grid.
 
-    Walltime ~7 min on A100.
+    Pass criteria:
+      * worst per-class corr ≥ 0.997
+      * mean (Hungarian-matched) per-class corr ≥ 0.9985
+
+    Walltime ~10 min on A100/H100.
     """
     _assert_parity_ancestors_or_skip()
     _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
@@ -660,19 +663,20 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
         "--max_iter",
         "3",
         "--healpix_order",
-        "1",
+        "2",
         "--offset_range",
         "6",
         "--offset_step",
         "2",
         "--adaptive_oversampling",
-        "0",
+        "1",
         "--tau2_fudge",
         "4.0",
         "--perturb_factor",
         "0.5",
-        "--perturb_seed",
-        "42",
+        "--perturb_replay_relion_dir",
+        str(K4_RELION_DIR),
+        "--firstiter_cc",
         "--init_resolution",
         "30.0",
         "--image_batch_size",
@@ -738,12 +742,12 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
     print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
 
     # NEVER widen tolerance to make a test pass. Fix the code instead.
-    # Observed at branch HEAD (commit e4c725e1): per-class [0.89, 0.94, 0.96, 0.96],
-    # mean 0.94. The 0.85 worst-class floor + 0.92 mean floor lock against
-    # regressions in the K-class entry-point or the A.1 sigma_offset fix.
-    # Tighter bars (≥ 0.999) require Phase D per-class machinery.
-    assert worst_corr >= 0.85, f"K-class cold-start worst per-class corr {worst_corr:.4f} below 0.85: {matched}"
-    assert mean_corr >= 0.92, f"K-class cold-start mean_corr {mean_corr:.4f} below 0.92: {matched}"
+    # Observed at 68c00297 with RELION-like sampling but no --relion_init_dir:
+    # per-class [0.99757, 0.99885, 0.99924, 0.99939], mean 0.99876.
+    # These floors lock in near-RELION cold-start parity without relying on
+    # RELION's it000 model/noise/tau/sigma state.
+    assert worst_corr >= 0.997, f"K-class cold-start worst per-class corr {worst_corr:.4f} below 0.997: {matched}"
+    assert mean_corr >= 0.9985, f"K-class cold-start mean_corr {mean_corr:.4f} below 0.9985: {matched}"
 
 
 @pytest.mark.gpu
