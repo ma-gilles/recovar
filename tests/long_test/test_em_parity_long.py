@@ -44,6 +44,7 @@ FIXTURE_BASE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj")
 # 256² 50k K=1 — likely needs to be built via prepare_relion_parity_benchmark.py
 K1_LONG_FIXTURE_DIR = FIXTURE_BASE / "data_noise1_50k_256_normalized"
 K1_LONG_RELION_DIR = K1_LONG_FIXTURE_DIR / "relion_ref_os0"
+K1_LONG_RELION_DATA_STAR = K1_LONG_RELION_DIR / "run_data.star"
 K1_LONG_DATA_STAR = K1_LONG_FIXTURE_DIR / "particles.star"
 K1_LONG_GT_VOLUME = K1_LONG_FIXTURE_DIR / "reference_gt.mrc"
 
@@ -116,7 +117,7 @@ def test_em_parity_long_k1_full(tmp_path):
         (iters 1–2 may diverge during initial cold start)
     """
     _assert_parity_ancestors_or_skip()
-    _require_fixture(REFINE_SCRIPT, K1_LONG_FIXTURE_DIR, K1_LONG_RELION_DIR, K1_LONG_DATA_STAR)
+    _require_fixture(REFINE_SCRIPT, K1_LONG_FIXTURE_DIR, K1_LONG_RELION_DIR, K1_LONG_DATA_STAR, K1_LONG_RELION_DATA_STAR)
 
     output_dir = tmp_path / "k1_long"
     output_dir.mkdir()
@@ -150,7 +151,7 @@ def test_em_parity_long_k1_full(tmp_path):
         "--image_batch_size",
         "200",
         "--relion_half_sets",
-        str(K1_LONG_FIXTURE_DIR / "particles_with_halfsets.star"),
+        str(K1_LONG_RELION_DATA_STAR),
     ]
     logger.info("K=1 long refinement cmd: %s", " ".join(cmd))
 

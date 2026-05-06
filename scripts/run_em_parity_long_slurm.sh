@@ -116,6 +116,16 @@ echo "K=1 job: ${K1_JOB}"
 echo "K=4 job: ${K4_JOB}"
 echo
 
+failed=0
+for job_id in ${K1_JOB} ${K4_JOB}; do
+  state=\$(sacct -j "\${job_id}" -n -X -o State 2>/dev/null | awk 'NR==1{print \$1}')
+  echo "Job \${job_id} state: \${state:-UNKNOWN}"
+  if [[ "\${state:-UNKNOWN}" != COMPLETED ]]; then
+    failed=1
+  fi
+done
+echo
+
 for job_name in em_parity_long_k1 em_parity_long_k4; do
   echo "--- \${job_name} stdout tail ---"
   tail -40 "${SCRATCH_DIR}/\${job_name}.out" 2>/dev/null || echo "(no stdout)"
@@ -129,6 +139,18 @@ echo "=== EM-parity ledgers ==="
 ls -la tests/baselines/em_parity_quality_long_ledger_*.json 2>/dev/null || echo "(no ledgers)"
 echo
 pixi run python scripts/extract_em_parity_tables.py --tier long || true
+
+for ledger in \
+  tests/baselines/em_parity_quality_long_ledger_k1_long.json \
+  tests/baselines/em_parity_quality_long_ledger_kclass_long.json
+do
+  if [[ ! -s "\${ledger}" ]]; then
+    echo "Missing expected EM-long ledger: \${ledger}" >&2
+    failed=1
+  fi
+done
+
+exit "\${failed}"
 EOF
 chmod +x "${SUMMARY_SCRIPT}"
 SUMMARY_JOB=$(sbatch --parsable "${SUMMARY_SCRIPT}")
