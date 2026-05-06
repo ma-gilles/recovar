@@ -3,8 +3,10 @@ import pytest
 
 from recovar.em.initial_model.gt_metrics import (
     align_volume_to_reference,
+    alignment_score_box_size,
     centered_correlation,
     first_shell_below_threshold,
+    lowpass_volume_by_shell,
     rotate_volume_about_center,
 )
 
@@ -80,3 +82,15 @@ def test_align_volume_to_reference_does_not_hide_sign_by_default():
 def test_first_shell_below_threshold_uses_minus_one_sentinel():
     assert first_shell_below_threshold(np.array([1.0, 0.8, 0.2]), 0.5) == 2
     assert first_shell_below_threshold(np.array([1.0, 0.8, 0.7]), 0.5) == -1
+
+
+@pytest.mark.unit
+def test_alignment_score_lowpass_can_crop_to_shell_box():
+    gt = _asymmetric_volume(n=33)
+
+    score_box_size = alignment_score_box_size(gt.shape[0], 4)
+    low = lowpass_volume_by_shell(gt, 4, output_size=score_box_size)
+
+    assert score_box_size == 9
+    assert low.shape == (9, 9, 9)
+    assert centered_correlation(low, low) == pytest.approx(1.0, abs=1e-12)

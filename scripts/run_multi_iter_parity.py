@@ -308,7 +308,7 @@ def main():
     parser.add_argument(
         "--gt_align_healpix_order",
         type=int,
-        default=1,
+        default=2,
         help="RELION/RECOVAR rotation-grid order used for GT alignment.",
     )
     parser.add_argument(
