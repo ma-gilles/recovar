@@ -1,0 +1,156 @@
+# VDAM / InitialModel ab-initio parity status - 2026-05-06
+
+This document records the current ab-initio / VDAM parity checkpoint on branch
+`codex/vdam-abinitio-parity`.  The active goal remains near-perfect RELION
+InitialModel parity, with `0.999` map parity as the short-term target at least
+at iter 1 and then across full end-to-end schedules.
+
+## Current commits
+
+- `23a51dcf` - `em-initialmodel: match relion seed-zero subset order`
+- `8fd73603` - `em-initialmodel: apply relion bootstrap postprocess`
+- `64595e15` - `em-initialmodel: add aligned GT benchmark metrics`
+- `8b4a736f` - `em-initialmodel: use finer aligned GT benchmark search`
+
+## Evaluation convention
+
+InitialModel output MRCs use the RELION output frame.  For ad-hoc direct Python
+comparisons against recovar-frame arrays, load both RELION and native
+InitialModel MRCs with:
+
+```python
+from recovar.utils import helpers
+vol = helpers.load_relion_volume("run_it008_class001.mrc")
+```
+
+Using `helpers.load_mrc()` on these InitialModel MRCs applies the wrong
+frame/sign for this specific output path and flips the direct correlation sign.
+For the 8-iter run below:
+
+- `load_relion_volume(native_it008)` vs `load_relion_volume(RELION_it008)`:
+  `CC = 0.996258`
+- `load_mrc(native_it008)` vs `load_relion_volume(RELION_it008)`:
+  `CC = -0.996258`
+
+## Alignment-aware GT metric
+
+Ab-initio maps have arbitrary global orientation and may require a handedness
+choice before comparing to simulation GT.  The benchmark now has opt-in
+alignment-aware metrics:
+
+```bash
+pixi run python scripts/run_multi_iter_parity.py \
+  --relion_dir <relion_dir> \
+  --data_star <particles.star> \
+  --iter <start_iter> --max_iter <n> \
+  --gt_volume <reference_gt.mrc> \
+  --output_dir <out> \
+  --gt_align
+```
+
+Defaults:
+
+- `--gt_align_healpix_order 2`
+- `--gt_align_max_shell 8`
+- mirror/handedness test enabled
+- global sign flip disabled
+- merged-map alignment only unless `--gt_align_all_series` is set
+
+The order-2 default is intentionally one HEALPix order finer than the native
+InitialModel run that produced the current K=1 maps (`--healpix_order 1`
+with `--oversampling 1`).  The scorer Fourier-crops the low-shell box before
+the rotation sweep, then rotates the full map once for the winning orientation.
+
+## Current K=1 500-particle / 64-pixel end-to-end checkpoint
+
+Fixture:
+
+`/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/.tmp/slurm_7178672/pytest-of-mg6942/pytest-0/test_pipeline_spa_gpu0/gpu_spa/test_dataset/particles.star`
+
+Run outputs:
+
+- native: `/scratch/gpfs/GILLES/mg6942/_agent_scratch/codex_initialmodel_iter8_20260506_021545/recovar`
+- RELION: `/scratch/gpfs/GILLES/mg6942/_agent_scratch/codex_initialmodel_iter8_20260506_021545/relion`
+
+Native-vs-RELION map correlation:
+
+| Iteration | CC vs RELION |
+|---:|---:|
+| 1 | `0.999907707` |
+| 4 | `0.999059067` |
+| 5 | `0.998943858` |
+| 6 | `0.998615233` |
+| 7 | `0.997849287` |
+| 8 | `0.996257990` |
+
+The iter-1 target is effectively met on this fixture.  The full 8-iter
+trajectory still drifts below the `0.999` target, so the remaining parity work
+is multi-iteration state evolution rather than one-step output plumbing.
+
+## Order-2 aligned GT FSC for the same checkpoint
+
+GT target:
+
+- weighted simulation mean with state counts `[104, 103, 193]`
+- outlier count `100`
+- voxel size `8.5 A`
+
+Alignment:
+
+- `healpix_order=2`
+- `4608` rotations
+- score shells `<= 8`
+- mirror enabled
+- sign disabled
+
+| Map | Raw mean FSC 1-8 | Aligned mean FSC 1-8 | Aligned mean FSC 1-16 | Aligned FSC<0.5 | Aligned FSC<0.143 |
+|---|---:|---:|---:|---:|---:|
+| RECOVAR it001 | `0.216041` | `0.332996` | `0.168525` | shell `3` / `181.33 A` | shell `6` / `90.67 A` |
+| RECOVAR it008 | `0.315276` | `0.437997` | `0.216559` | shell `5` / `108.80 A` | shell `7` / `77.71 A` |
+| RELION it008 | `0.334579` | `0.462366` | `0.234475` | shell `5` / `108.80 A` | shell `7` / `77.71 A` |
+
+Interpretation:
+
+- RECOVAR reaches the same aligned `FSC<0.143` shell as RELION by it8 on this
+  small fixture.
+- RECOVAR still trails RELION in low-shell FSC amplitude:
+  `0.024369` lower over shells 1-8 and `0.017916` lower over shells 1-16.
+- This is consistent with the native-vs-RELION map CC drift by it8.
+
+## Regression guards added
+
+The aligned-GT evaluator is covered by unit tests that lock:
+
+- exact recovery for a known grid rotation
+- handedness handling when mirror testing is enabled
+- no hidden global sign flip unless explicitly enabled
+- `-1` sentinel for FSC threshold not crossed
+- low-shell Fourier crop shape and self-correlation
+- default alignment order `2`, max score shell `8`, and order-2 rotation count
+- order-2 alignment materially improves over a too-coarse order-0 grid for a
+  synthetic map rotated by an order-2 grid orientation
+
+Relevant command:
+
+```bash
+JAX_PLATFORMS=cpu CUDA_VISIBLE_DEVICES='' \
+  pixi run python -m pytest -v tests/unit/initial_model/test_gt_metrics.py
+```
+
+## Larger fixture queued next
+
+The available production-scale K=1 fixture is:
+
+`/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_50k_256_normalized`
+
+It contains:
+
+- `particles.star`
+- `particles.256.mrcs`
+- `reference_gt.mrc`
+- `reference_init.mrc`
+- `simulation_info.pkl`
+- RELION reference trajectory under `relion_ref_os0/` through iteration 14
+
+Use Slurm for this tier.  Do not run project-wide `long-test` for EM-only
+changes; use EM-scoped long parity or a dedicated InitialModel job.

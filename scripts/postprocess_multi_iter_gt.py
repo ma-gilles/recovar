@@ -21,6 +21,11 @@ from pathlib import Path
 
 import numpy as np
 
+from recovar.em.initial_model.gt_metrics import (
+    DEFAULT_GT_ALIGN_HEALPIX_ORDER,
+    DEFAULT_GT_ALIGN_MAX_SHELL,
+)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -47,13 +52,13 @@ def main():
     parser.add_argument(
         "--gt_align_healpix_order",
         type=int,
-        default=2,
+        default=DEFAULT_GT_ALIGN_HEALPIX_ORDER,
         help="RELION/RECOVAR rotation-grid order used for GT alignment.",
     )
     parser.add_argument(
         "--gt_align_max_shell",
         type=int,
-        default=8,
+        default=DEFAULT_GT_ALIGN_MAX_SHELL,
         help="Maximum Fourier shell used to score coarse GT alignment.",
     )
     parser.add_argument(
