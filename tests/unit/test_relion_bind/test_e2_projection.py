@@ -100,6 +100,20 @@ class TestComputeFourierTransformMap:
         proj_data, *_ = compute_fourier_transform_map(vol, ori_size=N, padding_factor=1)
         assert np.max(np.abs(proj_data)) > 0
 
+    def test_data_dim_argument_is_exposed_for_initialmodel(self):
+        rng = np.random.default_rng(42)
+        N = 16
+        vol = _make_test_volume(N, rng)
+        proj_data, *_ = compute_fourier_transform_map(
+            vol,
+            ori_size=N,
+            padding_factor=1,
+            current_size=8,
+            data_dim=2,
+        )
+        assert proj_data.ndim == 3
+        assert proj_data.dtype == np.complex128
+
     @pytest.mark.parametrize("N", [16, 32])
     def test_projector_data_matches_numpy(self, N):
         """Verify projector storage matches a numpy reference.
@@ -113,7 +127,13 @@ class TestComputeFourierTransformMap:
         rng = np.random.default_rng(42)
         vol = _make_test_volume(N, rng)
 
-        proj_data, *_ = compute_fourier_transform_map(vol, ori_size=N, padding_factor=1, do_gridding=False)
+        proj_data, *_ = compute_fourier_transform_map(
+            vol,
+            ori_size=N,
+            padding_factor=1,
+            do_gridding=False,
+            data_dim=3,
+        )
         pad_size = proj_data.shape[0]
         half_x = N // 2 + 1
 
@@ -182,3 +202,18 @@ class TestProjectionParity:
         power_id = np.sum(np.abs(p_id) ** 2)
         power_180 = np.sum(np.abs(p_180) ** 2)
         np.testing.assert_allclose(power_id, power_180, rtol=0.005)
+
+    def test_current_size_output_allocates_cropped_image(self):
+        rng = np.random.default_rng(42)
+        N = 16
+        vol = _make_test_volume(N, rng)
+        projected = project_volume(
+            vol,
+            np.eye(3),
+            ori_size=N,
+            padding_factor=1,
+            current_size=8,
+            data_dim=2,
+            current_size_output=True,
+        )
+        assert projected.shape == (8, 5)

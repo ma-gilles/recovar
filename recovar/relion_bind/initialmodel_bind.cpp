@@ -30,9 +30,11 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <random>
 #include <stdexcept>
 #include <string>
 
@@ -730,19 +732,12 @@ static py::array_t<long> vdam_randomise_particles_order(
         return out;
     }
 
-    init_random_generator(seed);
-    // Fisher-Yates from the tail, matching exp_model.cpp
-    for (long i = nr_particles - 1; i > 0; i--) {
-        RFLOAT u = rnd_unif();
-        long j = (long)(u * i + 0.5);
-        if (j < 0) j = 0;
-        if (j > i) j = i;
-        if (j != i) {
-            long tmp = order[i];
-            order[i] = order[j];
-            order[j] = tmp;
-        }
-    }
+    // RELION's exp_model.cpp uses std::shuffle(sorted_idx, std::mt19937(seed))
+    // for non-halves randomisation. That consumes RNG state differently from
+    // rnd_unif() Fisher-Yates, so use the same standard-library path here for
+    // byte-exact VDAM subset parity.
+    std::mt19937 rng((unsigned int)seed);
+    std::shuffle(order.begin(), order.end(), rng);
 
     py::array_t<long> out((py::ssize_t)nr_particles);
     std::memcpy(out.request().ptr, order.data(), nr_particles * sizeof(long));

@@ -385,6 +385,41 @@ def _fine_translation_log_prior(
     raise ValueError(f"translation_log_prior must be 1D or 2D, got {translation_log_prior_np.ndim} dimensions")
 
 
+def _pass2_translation_log_prior(
+    translation_log_prior: np.ndarray | None,
+    fine_translation_log_prior: np.ndarray | None,
+    fine_translation_parent: np.ndarray,
+    n_images: int,
+    n_fine_translations: int,
+) -> np.ndarray:
+    if fine_translation_log_prior is None:
+        return _fine_translation_log_prior(
+            translation_log_prior,
+            fine_translation_parent,
+            n_images,
+            n_fine_translations,
+        )
+    if translation_log_prior is not None:
+        raise ValueError("translation_log_prior and fine_translation_log_prior are mutually exclusive")
+
+    prior_np = np.asarray(fine_translation_log_prior, dtype=np.float32)
+    if prior_np.ndim == 1:
+        if prior_np.shape[0] != n_fine_translations:
+            raise ValueError(
+                "fine_translation_log_prior must have one value per fine translation; "
+                f"got {prior_np.shape[0]} values for {n_fine_translations} translations",
+            )
+        return np.broadcast_to(prior_np[None, :], (n_images, n_fine_translations)).astype(np.float32, copy=False)
+    if prior_np.ndim == 2:
+        if prior_np.shape != (n_images, n_fine_translations):
+            raise ValueError(
+                "fine_translation_log_prior must have shape "
+                f"({n_images}, {n_fine_translations}); got {prior_np.shape}",
+            )
+        return prior_np.astype(np.float32, copy=False)
+    raise ValueError(f"fine_translation_log_prior must be 1D or 2D, got {prior_np.ndim} dimensions")
+
+
 def build_pass2_hypothesis_layout(
     significant_sample_indices,
     n_coarse_rotations: int,
@@ -396,6 +431,7 @@ def build_pass2_hypothesis_layout(
     translation_step: float | None = None,
     rotation_log_prior: np.ndarray | None = None,
     translation_log_prior: np.ndarray | None = None,
+    fine_translation_log_prior: np.ndarray | None = None,
     random_perturbation: float = 0.0,
     rotation_index_order: str = "recovar",
     allow_empty: bool = False,
@@ -514,8 +550,9 @@ def build_pass2_hypothesis_layout(
         rotation_log_priors_flat=rotation_log_priors_flat,
         rotation_counts=counts,
         translation_grid=fine_translations,
-        translation_log_priors=_fine_translation_log_prior(
+        translation_log_priors=_pass2_translation_log_prior(
             translation_log_prior,
+            fine_translation_log_prior,
             fine_translation_parent,
             n_images,
             n_fine_translations,
