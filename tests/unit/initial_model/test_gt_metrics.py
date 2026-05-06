@@ -2,11 +2,14 @@ import numpy as np
 import pytest
 
 from recovar.em.initial_model.gt_metrics import (
+    DEFAULT_GT_ALIGN_HEALPIX_ORDER,
+    DEFAULT_GT_ALIGN_MAX_SHELL,
     align_volume_to_reference,
     alignment_score_box_size,
     centered_correlation,
     first_shell_below_threshold,
     lowpass_volume_by_shell,
+    relion_alignment_rotations,
     rotate_volume_about_center,
 )
 
@@ -94,3 +97,38 @@ def test_alignment_score_lowpass_can_crop_to_shell_box():
     assert score_box_size == 9
     assert low.shape == (9, 9, 9)
     assert centered_correlation(low, low) == pytest.approx(1.0, abs=1e-12)
+
+
+@pytest.mark.unit
+def test_default_alignment_grid_is_one_order_finer_than_initialmodel_grid():
+    assert DEFAULT_GT_ALIGN_HEALPIX_ORDER == 2
+    assert DEFAULT_GT_ALIGN_MAX_SHELL == 8
+    assert relion_alignment_rotations(DEFAULT_GT_ALIGN_HEALPIX_ORDER).shape == (4608, 3, 3)
+
+
+@pytest.mark.unit
+def test_order_two_alignment_improves_over_too_coarse_grid():
+    gt = _asymmetric_volume(n=17)
+    order0_rotations = relion_alignment_rotations(0)
+    order2_rotations = relion_alignment_rotations(2)
+    true_rotation_index = 1838
+    rotated = rotate_volume_about_center(gt, order2_rotations[true_rotation_index].T)
+
+    coarse_alignment = align_volume_to_reference(
+        rotated,
+        gt,
+        order0_rotations,
+        score_max_shell=5,
+        allow_mirror=False,
+    )
+    order2_alignment = align_volume_to_reference(
+        rotated,
+        gt,
+        order2_rotations,
+        score_max_shell=5,
+        allow_mirror=False,
+    )
+
+    assert order2_alignment.rotation_index == true_rotation_index
+    assert order2_alignment.corr > 0.98
+    assert order2_alignment.corr > coarse_alignment.corr + 0.35
