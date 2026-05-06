@@ -7,8 +7,8 @@ Verifies:
 4. data_vs_prior_trajectory and ave_Pmax_trajectory are populated
 """
 
-from pathlib import Path
 import inspect
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -97,6 +97,7 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
 from recovar.em.dense_single_volume.helpers.preprocessing import resolve_image_mask_for_half_preprocess
 from recovar.em.dense_single_volume.helpers.significance import (
     _compute_significance_batched,
+    _compute_k_class_significance_batched,
 )
 from recovar.em.dense_single_volume.helpers.oversampling import (
     _compute_pass2_stats_sparse_perimage_reference,
@@ -129,6 +130,71 @@ N_ROTATIONS = 5
 N_TRANSLATIONS = 3
 N_IMAGES = 4  # tiny: 2 per half-set
 SEED = 42
+
+
+class _RawCacheFakeLoader:
+    def __init__(self, *, n=8, D=16, dtype=np.float32):
+        self.num_images = n
+        self.image_size = D
+        self._dtype = np.dtype(dtype)
+        self._cached = None
+        self.load_count = 0
+
+    def load_all(self):
+        self.load_count += 1
+        self._cached = np.zeros(
+            (self.num_images, self.image_size, self.image_size),
+            dtype=self._dtype,
+        )
+
+
+class _RawCacheFakeBackend:
+    def __init__(self, loader):
+        self.source = loader
+
+
+class _RawCacheFakeImageSource:
+    def __init__(self, loader):
+        self.backend = _RawCacheFakeBackend(loader)
+
+
+class _RawCacheFakeDataset:
+    def __init__(self, loader):
+        self.image_source = _RawCacheFakeImageSource(loader)
+
+
+def test_relion_raw_image_cache_loads_unique_loaders(monkeypatch):
+    loader = _RawCacheFakeLoader()
+    monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "auto")
+    monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "1")
+
+    iteration_loop_module._maybe_cache_raw_image_loaders(
+        [_RawCacheFakeDataset(loader), _RawCacheFakeDataset(loader)]
+    )
+
+    assert loader.load_count == 1
+    assert loader._cached is not None
+
+
+def test_relion_raw_image_cache_respects_memory_guard(monkeypatch):
+    loader = _RawCacheFakeLoader(n=1024, D=1024)
+    monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "auto")
+    monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "0.001")
+
+    iteration_loop_module._maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
+
+    assert loader.load_count == 0
+    assert loader._cached is None
+
+
+def test_relion_raw_image_cache_can_be_disabled(monkeypatch):
+    loader = _RawCacheFakeLoader()
+    monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "off")
+
+    iteration_loop_module._maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
+
+    assert loader.load_count == 0
+    assert loader._cached is None
 
 
 # ---------------------------------------------------------------------------
@@ -2120,9 +2186,15 @@ def translations():
     return jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32)
 
 
-def test_sparse_pass2_local_search_matches_per_image_reference(rng, init_volume, translations):
+def test_sparse_pass2_local_search_reference_mode_matches_per_image_reference(
+    monkeypatch,
+    rng,
+    init_volume,
+    translations,
+):
     """Exact-local sparse pass 2 preserves the per-image pass-2 reference contract."""
 
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_REFERENCE", "1")
     dataset = MockDataset(2, rng)
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
@@ -2171,7 +2243,9 @@ def test_sparse_pass2_local_search_matches_per_image_reference(rng, init_volume,
 
     np.testing.assert_allclose(np.asarray(exact_local[0]), np.asarray(reference[0]), atol=1e-4, rtol=1e-4)
     np.testing.assert_allclose(np.asarray(exact_local[1]), np.asarray(reference[1]), atol=1e-4, rtol=1e-4)
-    np.testing.assert_array_equal(np.asarray(exact_local[2]), np.asarray(reference[2]))
+    # Sparse pass 2 exposes selected rotation ids to the refinement loop, while
+    # the per-image reference reports flattened (rotation, translation) samples.
+    np.testing.assert_array_equal(np.asarray(exact_local[2]), np.asarray(exact_local[5]))
     np.testing.assert_allclose(np.asarray(exact_local[3]), np.asarray(reference[3]), atol=1e-6)
     np.testing.assert_allclose(np.asarray(exact_local[4]), np.asarray(reference[4]), atol=1e-6)
     np.testing.assert_array_equal(np.asarray(exact_local[5]), np.asarray(reference[5]))
@@ -2206,6 +2280,57 @@ def test_sparse_pass2_local_search_matches_per_image_reference(rng, init_volume,
         rtol=1e-5,
     )
     assert exact_local[7].sumw == pytest.approx(reference[7].sumw)
+
+
+def test_sparse_pass2_local_search_default_skips_per_image_reference(
+    monkeypatch,
+    rng,
+    init_volume,
+    translations,
+):
+    """Default sparse pass 2 must not pay the per-image reference fallback cost."""
+
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_REFERENCE", raising=False)
+
+    def _fail_reference(*_args, **_kwargs):
+        raise AssertionError("per-image reference path should be opt-in only")
+
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "_compute_pass2_stats_sparse_perimage_reference",
+        _fail_reference,
+    )
+    dataset = MockDataset(2, rng)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    significant_samples = [
+        np.array([0, 4], dtype=np.int32),
+        np.array([2, 3, 5], dtype=np.int32),
+    ]
+
+    exact_local = iteration_loop_module._run_sparse_pass2_local_search_iteration(
+        dataset,
+        init_volume,
+        mean_variance,
+        noise_variance,
+        translations,
+        significant_samples,
+        1,
+        "linear_interp",
+        oversampling_order=1,
+        current_size=None,
+        translation_step=1.0,
+        return_stats=True,
+        accumulate_noise=True,
+        half_spectrum_scoring=True,
+        use_float64_scoring=True,
+    )
+
+    assert np.asarray(exact_local[0]).shape == (VOLUME_SIZE,)
+    assert np.asarray(exact_local[1]).shape == (VOLUME_SIZE,)
+    assert np.asarray(exact_local[2]).shape == (dataset.n_units,)
+    assert np.all(np.isfinite(np.asarray(exact_local[6].log_evidence_per_image)))
+    assert exact_local[7].sumw == pytest.approx(float(dataset.n_units), rel=1e-4)
 
 
 # ===========================================================================
@@ -3057,6 +3182,7 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
+        monkeypatch,
     ):
         """Adaptive pass 1 must score with the same corrections as the dense engine."""
         dataset = half_datasets[0]
@@ -3092,6 +3218,7 @@ class TestRelionModeSmokeTest:
             use_float64_scoring=True,
         )
 
+        monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "off")
         _, _, actual_ha = _compute_significance_batched(
             dataset,
             init_volume,
@@ -3114,6 +3241,142 @@ class TestRelionModeSmokeTest:
         )
 
         np.testing.assert_array_equal(np.asarray(actual_ha), np.asarray(expected_ha))
+
+        monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "force")
+        cached_result = _compute_significance_batched(
+            dataset,
+            init_volume,
+            init_noise,
+            rotations,
+            translations,
+            "linear_interp",
+            adaptive_fraction=0.999,
+            max_significants=-1,
+            image_batch_size=dataset.n_units,
+            rotation_block_size=2,
+            current_size=current_size,
+            score_with_masked_images=True,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            half_spectrum_scoring=True,
+            projection_padding_factor=2,
+            use_float64_scoring=True,
+            return_significant_sample_indices=True,
+            return_full_stats=True,
+        )
+        monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "off")
+        uncached_result = _compute_significance_batched(
+            dataset,
+            init_volume,
+            init_noise,
+            rotations,
+            translations,
+            "linear_interp",
+            adaptive_fraction=0.999,
+            max_significants=-1,
+            image_batch_size=dataset.n_units,
+            rotation_block_size=2,
+            current_size=current_size,
+            score_with_masked_images=True,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            half_spectrum_scoring=True,
+            projection_padding_factor=2,
+            use_float64_scoring=True,
+            return_significant_sample_indices=True,
+            return_full_stats=True,
+        )
+        for cached, uncached in zip(cached_result[:3], uncached_result[:3]):
+            np.testing.assert_array_equal(np.asarray(cached), np.asarray(uncached))
+        for cached_sig, uncached_sig in zip(cached_result[3], uncached_result[3]):
+            if cached_sig is None or uncached_sig is None:
+                assert cached_sig is uncached_sig
+            else:
+                np.testing.assert_array_equal(cached_sig, uncached_sig)
+        for key, cached in cached_result[4].items():
+            np.testing.assert_allclose(
+                np.asarray(cached),
+                np.asarray(uncached_result[4][key]),
+                rtol=1e-6,
+                atol=1e-6,
+            )
+
+    def test_k_class_significance_score_cache_matches_uncached_path(
+        self,
+        half_datasets,
+        init_volume,
+        monkeypatch,
+    ):
+        """The K-class significance score cache must be exact, not approximate."""
+        dataset = half_datasets[0]
+        means = jnp.stack([init_volume, init_volume * jnp.asarray(1.01, dtype=init_volume.dtype)])
+        rotations = _make_rotations(5, seed=31)
+        translations = jnp.array(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, -1.0]],
+            dtype=jnp.float32,
+        )
+        class_log_priors = np.log(np.array([0.55, 0.45], dtype=np.float64))
+        rotation_log_prior = np.stack(
+            [
+                np.linspace(0.0, -0.2, rotations.shape[0], dtype=np.float32),
+                np.linspace(-0.1, 0.1, rotations.shape[0], dtype=np.float32),
+            ],
+            axis=0,
+        )
+        translation_log_prior = np.array([0.0, -0.05, -0.2], dtype=np.float32)
+        common_kwargs = dict(
+            class_log_priors=class_log_priors,
+            adaptive_fraction=0.999,
+            max_significants=-1,
+            image_batch_size=dataset.n_units,
+            rotation_block_size=2,
+            current_size=6,
+            score_with_masked_images=True,
+            rotation_log_prior=rotation_log_prior,
+            translation_log_prior=translation_log_prior,
+            half_spectrum_scoring=True,
+            projection_padding_factor=2,
+            use_float64_scoring=True,
+        )
+
+        monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "force")
+        cached_result = _compute_k_class_significance_batched(
+            dataset,
+            means,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            **common_kwargs,
+        )
+        monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "off")
+        uncached_result = _compute_k_class_significance_batched(
+            dataset,
+            means,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            **common_kwargs,
+        )
+
+        for cached, uncached in zip(cached_result[:4], uncached_result[:4]):
+            np.testing.assert_array_equal(np.asarray(cached), np.asarray(uncached))
+        for cached_by_class, uncached_by_class in zip(cached_result[4], uncached_result[4]):
+            for cached_sig, uncached_sig in zip(cached_by_class, uncached_by_class):
+                if cached_sig is None or uncached_sig is None:
+                    assert cached_sig is uncached_sig
+                else:
+                    np.testing.assert_array_equal(cached_sig, uncached_sig)
+        for key, cached in cached_result[5].items():
+            np.testing.assert_allclose(
+                np.asarray(cached),
+                np.asarray(uncached_result[5][key]),
+                rtol=1e-6,
+                atol=1e-6,
+            )
 
     def test_relion_mode_convergence_state(
         self,

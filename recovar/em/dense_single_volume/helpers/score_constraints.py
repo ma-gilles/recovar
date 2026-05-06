@@ -16,6 +16,10 @@ def _finite_minmax(values) -> tuple[float, float]:
     return float(finite.min()), float(finite.max())
 
 
+def _is_lazy_candidate_mask(value) -> bool:
+    return hasattr(value, "block_mask") and hasattr(value, "shape")
+
+
 @dataclass(frozen=True)
 class DenseScoreConstraints:
     """Dense/global score priors and masks normalized to padded bucket shapes.
@@ -110,30 +114,41 @@ class DenseScoreConstraints:
         candidate_mask_count = None
         candidate_mask_size = None
         if rotation_translation_mask is not None:
-            candidate_mask = np.asarray(rotation_translation_mask, dtype=bool)
-            if candidate_mask.ndim == 2:
-                if candidate_mask.shape != (n_rot, n_trans):
+            if _is_lazy_candidate_mask(rotation_translation_mask):
+                if tuple(rotation_translation_mask.shape) != (n_images, n_rot, n_trans):
                     raise ValueError(
-                        f"rotation_translation_mask must have shape ({n_rot}, {n_trans}), got {candidate_mask.shape}",
+                        "lazy rotation_translation_mask must have shape "
+                        f"({n_images}, {n_rot}, {n_trans}), got {rotation_translation_mask.shape}",
                     )
-                padded_mask = np.zeros((n_rot_padded, n_trans), dtype=bool)
-                padded_mask[:n_rot] = candidate_mask
-            elif candidate_mask.ndim == 3:
-                if candidate_mask.shape != (n_images, n_rot, n_trans):
-                    raise ValueError(
-                        "rotation_translation_mask must have shape "
-                        f"({n_images}, {n_rot}, {n_trans}) when image-specific, got {candidate_mask.shape}",
-                    )
-                padded_mask = np.zeros((n_images, n_rot_padded, n_trans), dtype=bool)
-                padded_mask[:, :n_rot, :] = candidate_mask
+                candidate_mask_jnp = rotation_translation_mask
                 per_image_candidate_mask = True
+                candidate_mask_count = getattr(rotation_translation_mask, "valid_count", None)
+                candidate_mask_size = getattr(rotation_translation_mask, "size", None)
             else:
-                raise ValueError(
-                    f"rotation_translation_mask must be 2D or 3D, got {candidate_mask.ndim} dimensions",
-                )
-            candidate_mask_jnp = jnp.asarray(padded_mask)
-            candidate_mask_count = int(candidate_mask.sum())
-            candidate_mask_size = int(candidate_mask.size)
+                candidate_mask = np.asarray(rotation_translation_mask, dtype=bool)
+                if candidate_mask.ndim == 2:
+                    if candidate_mask.shape != (n_rot, n_trans):
+                        raise ValueError(
+                            f"rotation_translation_mask must have shape ({n_rot}, {n_trans}), got {candidate_mask.shape}",
+                        )
+                    padded_mask = np.zeros((n_rot_padded, n_trans), dtype=bool)
+                    padded_mask[:n_rot] = candidate_mask
+                elif candidate_mask.ndim == 3:
+                    if candidate_mask.shape != (n_images, n_rot, n_trans):
+                        raise ValueError(
+                            "rotation_translation_mask must have shape "
+                            f"({n_images}, {n_rot}, {n_trans}) when image-specific, got {candidate_mask.shape}",
+                        )
+                    padded_mask = np.zeros((n_images, n_rot_padded, n_trans), dtype=bool)
+                    padded_mask[:, :n_rot, :] = candidate_mask
+                    per_image_candidate_mask = True
+                else:
+                    raise ValueError(
+                        f"rotation_translation_mask must be 2D or 3D, got {candidate_mask.ndim} dimensions",
+                    )
+                candidate_mask_jnp = jnp.asarray(padded_mask)
+                candidate_mask_count = int(candidate_mask.sum())
+                candidate_mask_size = int(candidate_mask.size)
 
         return cls(
             rotation_log_prior=rotation_prior_jnp,
@@ -198,6 +213,15 @@ class DenseScoreConstraints:
 
         if self.candidate_mask is None:
             candidate_mask = jnp.ones((rotation_block_size, self.n_trans), dtype=bool)
+        elif _is_lazy_candidate_mask(self.candidate_mask):
+            candidate_mask = self.candidate_mask.block_mask(
+                r0=r0,
+                r1=r1,
+                start=start,
+                end=end,
+                batch_count=batch_count,
+                rotation_block_size=rotation_block_size,
+            )
         elif self.per_image_candidate_mask:
             candidate_mask = self.candidate_mask[start:end, r0:r1, :]
             if batch_count != actual_count:

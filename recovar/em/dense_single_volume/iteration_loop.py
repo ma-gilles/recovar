@@ -89,6 +89,16 @@ from recovar.em.sampling import (
     relion_angular_sampling_deg,
     rotation_grid_size,
 )
+
+_SPARSE_PASS2_REFERENCE_ENV = "RECOVAR_SPARSE_PASS2_REFERENCE"
+_EM_RAW_IMAGE_CACHE_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE"
+_EM_RAW_IMAGE_CACHE_MAX_GB_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB"
+_EM_RAW_IMAGE_CACHE_DEFAULT_MAX_GB = 16.0
+
+
+def _sparse_pass2_reference_enabled() -> bool:
+    value = os.environ.get(_SPARSE_PASS2_REFERENCE_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 from recovar.reconstruction.regularization import (
     compute_current_size_relion,
     fsc_to_relion_ssnr,
@@ -103,6 +113,98 @@ RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 8_000_000
 RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET = 2_000_000
 RELION_MAX_FULL_GRID_ORDER = 4
 EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS = 3_000_000
+
+
+def _image_backend(ds):
+    return getattr(getattr(ds, "image_source", None), "backend", None)
+
+
+def _dataset_raw_image_loader(ds):
+    backend = _image_backend(ds)
+    loader = getattr(backend, "source", None)
+    if loader is None or not hasattr(loader, "load_all"):
+        return None
+    return loader
+
+
+def _estimate_raw_image_cache_bytes(loader) -> int:
+    n_images = int(getattr(loader, "num_images", getattr(loader, "n", 0)))
+    image_size = int(getattr(loader, "image_size", getattr(loader, "D", 0)))
+    dtype = np.dtype(getattr(loader, "_dtype", np.float32))
+    return int(n_images * image_size * image_size * dtype.itemsize)
+
+
+def _em_raw_image_cache_mode() -> str:
+    return os.environ.get(_EM_RAW_IMAGE_CACHE_ENV, "auto").strip().lower()
+
+
+def _maybe_cache_raw_image_loaders(experiment_datasets) -> None:
+    """Keep file-backed raw particles in host memory across RELION EM passes.
+
+    The coarse significance pass and exact sparse pass both iterate all images.
+    On MRC/STAR-backed datasets this otherwise re-enters MRCLoader for the same
+    raw particles, which showed up as a large duplicate I/O cost in Nsight.  The
+    cache is deliberately below preprocessing/CTF/scoring, so it changes only
+    where the same real-space particles are read from.
+    """
+
+    mode = _em_raw_image_cache_mode()
+    if mode in {"0", "false", "no", "off", "disable", "disabled"}:
+        logger.info("RELION mode raw image cache disabled by %s=%s", _EM_RAW_IMAGE_CACHE_ENV, mode)
+        return
+    force = mode in {"1", "true", "yes", "on", "force", "always"}
+
+    planned = []
+    seen = set()
+    total_bytes = 0
+    for ds in experiment_datasets:
+        loader = _dataset_raw_image_loader(ds)
+        if loader is None:
+            continue
+        loader_id = id(loader)
+        if loader_id in seen:
+            continue
+        seen.add(loader_id)
+        if getattr(loader, "_cached", None) is not None:
+            continue
+        estimated_bytes = _estimate_raw_image_cache_bytes(loader)
+        if estimated_bytes <= 0:
+            continue
+        planned.append((loader, estimated_bytes))
+        total_bytes += estimated_bytes
+
+    if not planned:
+        return
+
+    max_gb = float(os.environ.get(_EM_RAW_IMAGE_CACHE_MAX_GB_ENV, _EM_RAW_IMAGE_CACHE_DEFAULT_MAX_GB))
+    max_bytes = int(max_gb * (1024**3))
+    if not force and total_bytes > max_bytes:
+        logger.info(
+            "RELION mode raw image cache skipped: estimated %.2f GiB exceeds %.2f GiB; "
+            "set %s=force or increase %s to override",
+            total_bytes / (1024**3),
+            max_gb,
+            _EM_RAW_IMAGE_CACHE_ENV,
+            _EM_RAW_IMAGE_CACHE_MAX_GB_ENV,
+        )
+        return
+
+    cache_t0 = time.time()
+    for loader, estimated_bytes in planned:
+        loader_t0 = time.time()
+        loader.load_all()
+        logger.info(
+            "RELION mode raw image cache loaded %.2f GiB for %s in %.1fs",
+            estimated_bytes / (1024**3),
+            type(loader).__name__,
+            time.time() - loader_t0,
+        )
+    logger.info(
+        "RELION mode raw image cache ready: %.2f GiB across %d loader(s) in %.1fs",
+        total_bytes / (1024**3),
+        len(planned),
+        time.time() - cache_t0,
+    )
 
 
 def _safe_firstiter_cc_image_batch_size(n_trans, image_shape):
@@ -1153,46 +1255,47 @@ def _run_sparse_pass2_local_search_iteration(
         )
     )
 
-    reference_outputs = _compute_pass2_stats_sparse_perimage_reference(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        translations,
-        significant_sample_indices,
-        int(nside_level),
-        disc_type,
-        oversampling_order=int(oversampling_order),
-        current_size=current_size,
-        translation_step=translation_step,
-        rotation_log_prior=rotation_log_prior,
-        score_with_masked_images=score_with_masked_images,
-        return_stats=return_stats,
-        translation_log_prior=translation_log_prior,
-        accumulate_noise=accumulate_noise,
-        half_spectrum_scoring=half_spectrum_scoring,
-        projection_padding_factor=projection_padding_factor,
-        reconstruction_padding_factor=reconstruction_padding_factor,
-        image_corrections=image_corrections,
-        scale_corrections=scale_corrections,
-        image_pre_shifts=image_pre_shifts,
-        translation_prior_centers=translation_prior_centers,
-        use_float64_scoring=use_float64_scoring,
-        do_gridding_correction=do_gridding_correction,
-        square_window=square_window,
-        random_perturbation=random_perturbation,
-        normalization_log_z=normalization_log_z,
-    )
+    if _sparse_pass2_reference_enabled():
+        reference_outputs = _compute_pass2_stats_sparse_perimage_reference(
+            experiment_dataset,
+            mean,
+            mean_variance,
+            noise_variance,
+            translations,
+            significant_sample_indices,
+            int(nside_level),
+            disc_type,
+            oversampling_order=int(oversampling_order),
+            current_size=current_size,
+            translation_step=translation_step,
+            rotation_log_prior=rotation_log_prior,
+            score_with_masked_images=score_with_masked_images,
+            return_stats=return_stats,
+            translation_log_prior=translation_log_prior,
+            accumulate_noise=accumulate_noise,
+            half_spectrum_scoring=half_spectrum_scoring,
+            projection_padding_factor=projection_padding_factor,
+            reconstruction_padding_factor=reconstruction_padding_factor,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            translation_prior_centers=translation_prior_centers,
+            use_float64_scoring=use_float64_scoring,
+            do_gridding_correction=do_gridding_correction,
+            square_window=square_window,
+            random_perturbation=random_perturbation,
+            normalization_log_z=normalization_log_z,
+        )
 
-    exact_outputs[0] = reference_outputs[0]
-    exact_outputs[1] = reference_outputs[1]
-    if return_stats and accumulate_noise:
-        exact_outputs[6] = reference_outputs[6]
-        exact_outputs[7] = reference_outputs[7]
-    elif return_stats:
-        exact_outputs[6] = reference_outputs[6]
-    elif accumulate_noise:
-        exact_outputs[6] = reference_outputs[6]
+        exact_outputs[0] = reference_outputs[0]
+        exact_outputs[1] = reference_outputs[1]
+        if return_stats and accumulate_noise:
+            exact_outputs[6] = reference_outputs[6]
+            exact_outputs[7] = reference_outputs[7]
+        elif return_stats:
+            exact_outputs[6] = reference_outputs[6]
+        elif accumulate_noise:
+            exact_outputs[6] = reference_outputs[6]
 
     # Preserve the downstream refinement-loop contract: sparse pass-2 should
     # expose the selected rotation id, not the flattened (rotation, translation)
@@ -1935,9 +2038,6 @@ def _run_relion_iteration_loop(
     # at 54 px vs RELION's 64 px for a 128-px box.
     RELION_WIDTH_MASK_EDGE = 5
 
-    def _image_backend(ds):
-        return getattr(getattr(ds, "image_source", None), "backend", None)
-
     for ds in experiment_datasets:
         backend = _image_backend(ds)
         if backend is not None and hasattr(backend, "image_mask_mode"):
@@ -1965,6 +2065,8 @@ def _run_relion_iteration_loop(
             particle_diameter_ang,
             RELION_WIDTH_MASK_EDGE,
         )
+
+    _maybe_cache_raw_image_loaders(experiment_datasets)
 
     # --- Initialize RefinementState ---
     # Corresponds to RELION's initialiseSamplingVectors + initialLowPassFilterReferences

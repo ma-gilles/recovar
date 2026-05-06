@@ -5,10 +5,41 @@ pairs per image without materializing the full weight matrix.
 Called by ``refine_single_volume`` and ``_run_relion_iteration_loop`` in ``refine.py``.
 """
 
+import os
+
 import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
+from recovar.utils.nvtx_shim import nvtx
+
+_SIGNIFICANCE_SCORE_CACHE_ENV = "RECOVAR_SIGNIFICANCE_SCORE_CACHE"
+_SIGNIFICANCE_SCORE_CACHE_MAX_GB_ENV = "RECOVAR_SIGNIFICANCE_SCORE_CACHE_MAX_GB"
+_SIGNIFICANCE_SCORE_CACHE_DEFAULT_MAX_GB = 2.0
+NVTX_DOMAIN_EM = "recovar_em"
+
+
+def _significance_score_cache_enabled(n_images, n_classes, n_rot, n_trans, *, use_float64_scoring: bool) -> bool:
+    """Whether to keep pass-1 score blocks for reuse in pass 2.
+
+    The cache is exact: it stores the already-prior-adjusted score tensors
+    computed for the streaming logsumexp pass and reuses them when forming
+    posterior weights/significance masks.  If the estimated tensor footprint is
+    too large, callers fall back to the previous recompute path.
+    """
+
+    mode = os.environ.get(_SIGNIFICANCE_SCORE_CACHE_ENV, "auto").strip().lower()
+    if mode in {"0", "false", "no", "off", "disable", "disabled"}:
+        return False
+    force = mode in {"1", "true", "yes", "on", "force", "always"}
+    itemsize = 8 if use_float64_scoring else 4
+    estimated_bytes = int(n_images) * int(n_classes) * int(n_rot) * int(n_trans) * itemsize
+    max_gb = float(os.environ.get(_SIGNIFICANCE_SCORE_CACHE_MAX_GB_ENV, _SIGNIFICANCE_SCORE_CACHE_DEFAULT_MAX_GB))
+    return force or estimated_bytes <= int(max_gb * (1024**3))
+
+
+def _significance_debug_dump_enabled() -> bool:
+    return bool(os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR"))
 
 
 def _maybe_dump_significance_batch(
@@ -169,6 +200,7 @@ def _uses_relion_background_fill(experiment_dataset) -> bool:
     return getattr(backend, "image_mask_mode", None) == "relion_background_fill"
 
 
+@nvtx.annotate("adaptive.pass1_significance", color="orange", domain=NVTX_DOMAIN_EM)
 def _compute_significance_batched(
     experiment_dataset,
     mean,
@@ -402,6 +434,89 @@ def _compute_significance_batched(
     else:
         rotation_log_prior_padded = None
 
+    def _score_rotation_block_for_batch(
+        *,
+        rots_b,
+        r0,
+        r1,
+        shifted_data,
+        batch_norm,
+        ctf2_data,
+        batch_size,
+        batch_translation_log_prior,
+    ):
+        if use_relion_projector:
+            proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
+                relion_projector_half,
+                jnp.asarray(rots_b),
+                image_shape,
+                r_max=int(relion_projector_r_max),
+                padding_factor=int(projection_padding_factor),
+                centered_rows=True,
+            )
+        else:
+            proj_half_b, proj_abs2_half_b = _compute_projections_block(
+                mean_for_proj,
+                rots_b,
+                image_shape,
+                proj_volume_shape,
+                disc_type,
+                **projection_kwargs,
+            )
+
+        if use_window:
+            proj_w = proj_half_b[:, window_indices]
+            proj_abs2_w = proj_abs2_half_b[:, window_indices]
+            if not use_float64_scoring:
+                proj_w = proj_w.astype(jnp.complex64)
+                proj_abs2_w = proj_abs2_w.astype(jnp.float32)
+            scores = _e_step_block_scores_windowed(
+                shifted_data,
+                batch_norm,
+                ctf2_data,
+                proj_w * half_weights_windowed,
+                proj_abs2_w * half_weights_windowed,
+                half_weights_windowed,
+                batch_size,
+                n_trans,
+                n_windowed,
+                image_shape,
+                volume_shape,
+            )
+        else:
+            if not use_float64_scoring:
+                proj_half_b = proj_half_b.astype(jnp.complex64)
+                proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
+            scores = _e_step_block_scores(
+                shifted_data,
+                batch_norm,
+                ctf2_data,
+                proj_half_b * half_weights,
+                proj_abs2_half_b * half_weights,
+                half_weights,
+                batch_size,
+                n_trans,
+                image_shape,
+                volume_shape,
+            )
+
+        if r1 > n_rot:
+            valid = n_rot - r0
+            pmask = jnp.arange(rotation_block_size) < valid
+            scores = jnp.where(pmask[None, :, None], scores, -jnp.inf)
+
+        scores_pre_prior = scores
+        if rotation_log_prior_padded is not None:
+            scores = scores + jnp.asarray(rotation_log_prior_padded[r0:r1])[None, :, None]
+
+        if batch_translation_log_prior is not None:
+            if translation_log_prior.ndim == 1:
+                scores = scores + batch_translation_log_prior[None, None, :]
+            else:
+                scores = scores + batch_translation_log_prior[:, None, :]
+
+        return scores, scores_pre_prior
+
     image_indices = np.arange(n_images)
     start_idx = 0
 
@@ -498,7 +613,8 @@ def _compute_significance_batched(
         dump_target_positions = None
         dump_score_pre_prior_blocks = None
         dump_score_with_prior_blocks = None
-        if __import__("os").environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR"):
+        debug_dump_enabled = _significance_debug_dump_enabled()
+        if debug_dump_enabled:
             target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
             if target_original_indices:
                 local_indices_for_dump = np.asarray(indices, dtype=np.int64)
@@ -519,86 +635,37 @@ def _compute_significance_batched(
         # Pass 1: streaming logsumexp
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size, dtype=jnp.float64)
+        cache_score_blocks = _significance_score_cache_enabled(
+            batch_size,
+            1,
+            n_rot_padded,
+            n_trans,
+            use_float64_scoring=use_float64_scoring,
+        ) and not debug_dump_enabled
+        cached_score_blocks = [] if cache_score_blocks else None
 
         for b in range(n_blocks):
             r0 = b * rotation_block_size
             r1 = r0 + rotation_block_size
             rots_b = rotations_padded[r0:r1]
 
-            if use_relion_projector:
-                proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
-                    relion_projector_half,
-                    jnp.asarray(rots_b),
-                    image_shape,
-                    r_max=int(relion_projector_r_max),
-                    padding_factor=int(projection_padding_factor),
-                    centered_rows=True,
-                )
-            else:
-                proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                    mean_for_proj,
-                    rots_b,
-                    image_shape,
-                    proj_volume_shape,
-                    disc_type,
-                    **projection_kwargs,
-                )
-
-            if use_window:
-                proj_w = proj_half_b[:, window_indices]
-                proj_abs2_w = proj_abs2_half_b[:, window_indices]
-                if not use_float64_scoring:
-                    proj_w = proj_w.astype(jnp.complex64)
-                    proj_abs2_w = proj_abs2_w.astype(jnp.float32)
-                scores = _e_step_block_scores_windowed(
-                    shifted_data,
-                    batch_norm,
-                    ctf2_data,
-                    proj_w * half_weights_windowed,
-                    proj_abs2_w * half_weights_windowed,
-                    half_weights_windowed,
-                    batch_size,
-                    n_trans,
-                    n_windowed,
-                    image_shape,
-                    volume_shape,
-                )
-            else:
-                if not use_float64_scoring:
-                    proj_half_b = proj_half_b.astype(jnp.complex64)
-                    proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
-                scores = _e_step_block_scores(
-                    shifted_data,
-                    batch_norm,
-                    ctf2_data,
-                    proj_half_b * half_weights,
-                    proj_abs2_half_b * half_weights,
-                    half_weights,
-                    batch_size,
-                    n_trans,
-                    image_shape,
-                    volume_shape,
-                )
-
-            if r1 > n_rot:
-                valid = n_rot - r0
-                mask = jnp.arange(rotation_block_size) < valid
-                scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
-
-            if rotation_log_prior_padded is not None:
-                scores = scores + jnp.asarray(rotation_log_prior_padded[r0:r1])[None, :, None]
-
-            if batch_translation_log_prior is not None:
-                if translation_log_prior.ndim == 1:
-                    scores = scores + batch_translation_log_prior[None, None, :]
-                else:
-                    scores = scores + batch_translation_log_prior[:, None, :]
-
+            scores, _ = _score_rotation_block_for_batch(
+                rots_b=rots_b,
+                r0=r0,
+                r1=r1,
+                shifted_data=shifted_data,
+                batch_norm=batch_norm,
+                ctf2_data=ctf2_data,
+                batch_size=batch_size,
+                batch_translation_log_prior=batch_translation_log_prior,
+            )
+            if cached_score_blocks is not None:
+                cached_score_blocks.append(scores)
             max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
 
         log_Z = max_s + jnp.log(sum_exp)
 
-        # Pass 2: recompute scores, normalize -> batch weights
+        # Pass 2: reuse pass-1 scores when memory allows, then normalize.
         best_score = jnp.full(batch_size, -jnp.inf)
         best_argmax = jnp.zeros(batch_size, dtype=jnp.int32)
         batch_weights_blocks = []
@@ -608,75 +675,20 @@ def _compute_significance_batched(
             r1 = r0 + rotation_block_size
             rots_b = rotations_padded[r0:r1]
 
-            if use_relion_projector:
-                proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
-                    relion_projector_half,
-                    jnp.asarray(rots_b),
-                    image_shape,
-                    r_max=int(relion_projector_r_max),
-                    padding_factor=int(projection_padding_factor),
-                    centered_rows=True,
-                )
+            if cached_score_blocks is not None:
+                scores = cached_score_blocks[b]
+                scores_pre_prior = None
             else:
-                proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                    mean_for_proj,
-                    rots_b,
-                    image_shape,
-                    proj_volume_shape,
-                    disc_type,
-                    **projection_kwargs,
+                scores, scores_pre_prior = _score_rotation_block_for_batch(
+                    rots_b=rots_b,
+                    r0=r0,
+                    r1=r1,
+                    shifted_data=shifted_data,
+                    batch_norm=batch_norm,
+                    ctf2_data=ctf2_data,
+                    batch_size=batch_size,
+                    batch_translation_log_prior=batch_translation_log_prior,
                 )
-
-            if use_window:
-                proj_w = proj_half_b[:, window_indices]
-                proj_abs2_w = proj_abs2_half_b[:, window_indices]
-                if not use_float64_scoring:
-                    proj_w = proj_w.astype(jnp.complex64)
-                    proj_abs2_w = proj_abs2_w.astype(jnp.float32)
-                scores = _e_step_block_scores_windowed(
-                    shifted_data,
-                    batch_norm,
-                    ctf2_data,
-                    proj_w * half_weights_windowed,
-                    proj_abs2_w * half_weights_windowed,
-                    half_weights_windowed,
-                    batch_size,
-                    n_trans,
-                    n_windowed,
-                    image_shape,
-                    volume_shape,
-                )
-            else:
-                if not use_float64_scoring:
-                    proj_half_b = proj_half_b.astype(jnp.complex64)
-                    proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
-                scores = _e_step_block_scores(
-                    shifted_data,
-                    batch_norm,
-                    ctf2_data,
-                    proj_half_b * half_weights,
-                    proj_abs2_half_b * half_weights,
-                    half_weights,
-                    batch_size,
-                    n_trans,
-                    image_shape,
-                    volume_shape,
-                )
-
-            if r1 > n_rot:
-                valid = n_rot - r0
-                pmask = jnp.arange(rotation_block_size) < valid
-                scores = jnp.where(pmask[None, :, None], scores, -jnp.inf)
-
-            scores_pre_prior = scores
-            if rotation_log_prior_padded is not None:
-                scores = scores + jnp.asarray(rotation_log_prior_padded[r0:r1])[None, :, None]
-
-            if batch_translation_log_prior is not None:
-                if translation_log_prior.ndim == 1:
-                    scores = scores + batch_translation_log_prior[None, None, :]
-                else:
-                    scores = scores + batch_translation_log_prior[:, None, :]
 
             if dump_score_pre_prior_blocks is not None and dump_target_positions is not None:
                 actual_rot = min(rotation_block_size, n_rot - r0)
@@ -703,7 +715,7 @@ def _compute_significance_batched(
 
             actual_rot = min(rotation_block_size, n_rot - r0)
             block_probs = probs[:, :actual_rot, :]
-            batch_weights_blocks.append(np.asarray(block_probs.reshape(batch_size, -1)))
+            batch_weights_blocks.append(block_probs.reshape(batch_size, -1))
 
         hard_assignment[start_idx:end_idx] = np.asarray(best_argmax)
         if return_full_stats:
@@ -715,8 +727,8 @@ def _compute_significance_batched(
             best_log_score[start_idx:end_idx] = (best_score_np + log_score_offset).astype(np.float32)
             max_posterior[start_idx:end_idx] = np.exp(best_score_np - log_z_np).astype(np.float32)
 
-        # Concatenate this batch's weights -> (batch_size, n_rot * n_trans)
-        batch_weights = np.concatenate(batch_weights_blocks, axis=1)
+        # Concatenate this batch's weights -> (batch_size, n_rot * n_trans).
+        batch_weights = jnp.concatenate(batch_weights_blocks, axis=1)
         dump_scores_pre_prior = (
             np.concatenate(dump_score_pre_prior_blocks, axis=1)
             if dump_score_pre_prior_blocks is not None
@@ -730,7 +742,7 @@ def _compute_significance_batched(
 
         # Find significance for this batch
         batch_sig_mask, batch_sig_rot_mask, batch_n_sig = _find_sig(
-            jnp.asarray(batch_weights),
+            batch_weights,
             n_rot,
             n_trans,
             adaptive_fraction=adaptive_fraction,
@@ -742,13 +754,14 @@ def _compute_significance_batched(
         sig_rot_any |= batch_sig_rot_any
 
         n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig)
-        if __import__("os").environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR"):
+        if debug_dump_enabled:
+            batch_weights_np = np.asarray(batch_weights)
             best_score_np_for_dump = np.asarray(best_score, dtype=np.float64)
             log_z_np_for_dump = np.asarray(log_Z, dtype=np.float64)
             _maybe_dump_significance_batch(
                 experiment_dataset=experiment_dataset,
                 indices=indices,
-                batch_weights=batch_weights,
+                batch_weights=batch_weights_np,
                 batch_sig_mask=np.asarray(batch_sig_mask, dtype=bool),
                 batch_n_sig=np.asarray(batch_n_sig, dtype=np.int64),
                 hard_assignment_batch=np.asarray(best_argmax, dtype=np.int64),
@@ -800,6 +813,7 @@ def _compute_significance_batched(
     return sig_rot_any, n_sig_all, hard_assignment
 
 
+@nvtx.annotate("kclass.adaptive.pass1_significance", color="orange", domain=NVTX_DOMAIN_EM)
 def _compute_k_class_significance_batched(
     experiment_dataset,
     means,
@@ -1136,9 +1150,18 @@ def _compute_k_class_significance_batched(
         global_sum = jnp.zeros(batch_size, dtype=jnp.float64)
         class_max_values = []
         class_sum_values = []
+        cache_score_blocks = _significance_score_cache_enabled(
+            batch_size,
+            n_classes,
+            n_rot_padded,
+            n_trans,
+            use_float64_scoring=use_float64_scoring,
+        )
+        cached_class_score_blocks = [] if cache_score_blocks else None
         for class_index, mean_for_proj in enumerate(means_for_proj):
             class_max = jnp.full(batch_size, -jnp.inf)
             class_sum = jnp.zeros(batch_size, dtype=jnp.float64)
+            cached_score_blocks = [] if cached_class_score_blocks is not None else None
             for block_index in range(n_blocks):
                 r0 = block_index * rotation_block_size
                 r1 = r0 + rotation_block_size
@@ -1154,8 +1177,12 @@ def _compute_k_class_significance_batched(
                     valid = n_rot - r0
                     scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
                 scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
+                if cached_score_blocks is not None:
+                    cached_score_blocks.append(scores)
                 class_max, class_sum = _update_logsumexp(class_max, class_sum, scores)
                 global_max, global_sum = _update_logsumexp(global_max, global_sum, scores)
+            if cached_class_score_blocks is not None:
+                cached_class_score_blocks.append(cached_score_blocks)
             class_max_values.append(class_max)
             class_sum_values.append(class_sum)
 
@@ -1171,18 +1198,21 @@ def _compute_k_class_significance_batched(
             for block_index in range(n_blocks):
                 r0 = block_index * rotation_block_size
                 r1 = r0 + rotation_block_size
-                scores = _score_block(
-                    mean_for_proj,
-                    rotations_padded[r0:r1],
-                    shifted_data,
-                    batch_norm,
-                    ctf2_data,
-                    batch_size,
-                )
-                if r1 > n_rot:
-                    valid = n_rot - r0
-                    scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
-                scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
+                if cached_class_score_blocks is None:
+                    scores = _score_block(
+                        mean_for_proj,
+                        rotations_padded[r0:r1],
+                        shifted_data,
+                        batch_norm,
+                        ctf2_data,
+                        batch_size,
+                    )
+                    if r1 > n_rot:
+                        valid = n_rot - r0
+                        scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
+                    scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
+                else:
+                    scores = cached_class_score_blocks[class_index][block_index]
                 probs = jnp.exp(scores - global_log_z[:, None, None])
 
                 block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
@@ -1193,12 +1223,12 @@ def _compute_k_class_significance_batched(
                 best_class_batch = jnp.where(improved, class_index, best_class_batch)
 
                 actual_rot = min(rotation_block_size, n_rot - r0)
-                class_weight_blocks.append(np.asarray(probs[:, :actual_rot, :].reshape(batch_size, -1)))
-            class_weight_mats.append(np.concatenate(class_weight_blocks, axis=1))
+                class_weight_blocks.append(probs[:, :actual_rot, :].reshape(batch_size, -1))
+            class_weight_mats.append(jnp.concatenate(class_weight_blocks, axis=1))
 
-        batch_weights = np.concatenate(class_weight_mats, axis=1)
+        batch_weights = jnp.concatenate(class_weight_mats, axis=1)
         batch_sig_mask, batch_sig_rot_mask, batch_n_sig = _find_sig(
-            jnp.asarray(batch_weights),
+            batch_weights,
             n_classes * n_rot,
             n_trans,
             adaptive_fraction=adaptive_fraction,

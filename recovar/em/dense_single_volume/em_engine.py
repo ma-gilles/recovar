@@ -44,6 +44,7 @@ import numpy as np
 
 from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import noise as noise_utils
+from recovar.utils.nvtx_shim import nvtx
 
 from .dense_big_jit import run_dense_bucket_big_jit
 from .helpers.adjoint import (
@@ -115,6 +116,7 @@ from .local_debug import (
 from .shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 
 logger = logging.getLogger(__name__)
+NVTX_DOMAIN_EM = "recovar_em"
 
 
 def _relion_image_correction_factors(batch_corr, batch_scale, *, score_mode: str):
@@ -145,6 +147,7 @@ def _dense_big_jit_disabled_reason(
     *,
     relion_firstiter_winner_take_all: bool,
     accumulate_noise: bool,
+    noise_split_diagnostics_enabled: bool,
     dense_noise_component_dump_enabled: bool,
     per_pose_debug_dump_enabled: bool,
 ) -> str | None:
@@ -152,8 +155,8 @@ def _dense_big_jit_disabled_reason(
 
     if relion_firstiter_winner_take_all:
         return "winner_take_all"
-    if accumulate_noise:
-        return "noise_accumulation"
+    if accumulate_noise and noise_split_diagnostics_enabled:
+        return "noise_split_diagnostics"
     if dense_noise_component_dump_enabled:
         return "dense_noise_component_dump"
     if per_pose_debug_dump_enabled:
@@ -342,8 +345,23 @@ class _DenseBigJitBatchRunner:
     disable_adjoint_y: bool
     disable_adjoint_ctf: bool
     mstep_half_volume: bool
+    accumulate_noise: bool
+    return_noise_split: bool
+    n_shells: int
 
-    def run(self, block: _DenseRotationBlock, Ft_y, Ft_ctf, *, run_mstep: bool, log_z):
+    def run(
+        self,
+        block: _DenseRotationBlock,
+        Ft_y,
+        Ft_ctf,
+        *,
+        run_mstep: bool,
+        log_z,
+        shifted_noise_half=None,
+        noise_variance_half=None,
+        shell_indices_noise=None,
+        translation_sqdist_ang=None,
+    ):
         (
             rotation_prior_block,
             translation_prior_block,
@@ -369,6 +387,10 @@ class _DenseBigJitBatchRunner:
             log_z,
             self.constants.window_indices,
             self.constants.recon_window_indices,
+            shifted_noise_half,
+            noise_variance_half,
+            shell_indices_noise,
+            translation_sqdist_ang,
             score_mode=self.score_mode,
             zero_dc_for_scoring=self.zero_dc_for_scoring,
             use_window=self.use_window,
@@ -384,6 +406,9 @@ class _DenseBigJitBatchRunner:
             mstep_half_volume=self.mstep_half_volume,
             disable_adjoint_y=self.disable_adjoint_y,
             disable_adjoint_ctf=self.disable_adjoint_ctf,
+            accumulate_noise=self.accumulate_noise,
+            return_noise_split=self.return_noise_split,
+            n_shells=self.n_shells,
         )
 
 
@@ -587,6 +612,7 @@ def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int
     )
 
 
+@nvtx.annotate("dense.run_em", color="blue", domain=NVTX_DOMAIN_EM)
 def run_em(
     experiment_dataset,
     mean,
@@ -888,6 +914,7 @@ def run_em(
     dense_big_jit_unsupported_reason = _dense_big_jit_disabled_reason(
         relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
         accumulate_noise=accumulate_noise,
+        noise_split_diagnostics_enabled=debug_options.return_noise_split,
         dense_noise_component_dump_enabled=debug_options.noise_component_dump_enabled,
         per_pose_debug_dump_enabled=debug_options.per_pose_score_dump.enabled,
     )
@@ -1189,7 +1216,7 @@ def run_em(
             batch_img_power_shells = jnp.zeros(n_shells, dtype=jnp.float32)
             batch_img_power_shells = batch_img_power_shells.at[shell_indices_half].add(batch_img_power)
             noise_img_power += np.asarray(batch_img_power_shells, dtype=np.float64)
-            noise_sumw += batch_size
+            noise_sumw += actual_batch_size
             # Masked shifted images for the noise GEMM: use WITH-DC versions
             # (RELION includes DC in noise but excludes from scoring)
             shifted_masked_for_noise = window_spec.recon_values(shifted_half_with_dc)
@@ -1270,6 +1297,9 @@ def run_em(
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
             mstep_half_volume=relion_half_volume_mstep,
+            accumulate_noise=accumulate_noise,
+            return_noise_split=False,
+            n_shells=(image_shape[0] // 2 + 1 if accumulate_noise else 0),
         )
 
         # -- PASS 1: streaming logsumexp over rotation blocks --
@@ -1525,17 +1555,31 @@ def run_em(
                     Ft_ctf,
                     run_mstep=True,
                     log_z=log_Z,
+                    shifted_noise_half=(shifted_half_with_dc if accumulate_noise else None),
+                    noise_variance_half=noise_variance_half,
+                    shell_indices_noise=(shell_indices_noise if accumulate_noise else None),
+                    translation_sqdist_ang=(
+                        translation_sqdist_ang
+                        if translation_sqdist_ang is not None
+                        else jnp.zeros((batch_size, n_trans), dtype=jnp.float32)
+                    ),
                 )
                 Ft_y = dense_result.Ft_y
                 Ft_ctf = dense_result.Ft_ctf
+                if accumulate_noise:
+                    noise_wsum += np.asarray(dense_result.noise_wsum, dtype=np.float64)
+                    noise_sigma2_offset += float(np.asarray(dense_result.noise_sigma2_offset, dtype=np.float64))
                 if sync_timers:
-                    _block_until_ready(
+                    ready_values = [
                         Ft_y,
                         Ft_ctf,
                         dense_result.block_best,
                         dense_result.block_argmax,
                         dense_result.probs_sum_t,
-                    )
+                    ]
+                    if accumulate_noise:
+                        ready_values.append(dense_result.noise_wsum)
+                    _block_until_ready(*ready_values)
                 timing.pass2_score_s += time.time() - score_t0
 
                 assignment_t0 = time.time()
@@ -1864,33 +1908,33 @@ def run_em(
 
     noise_stats = None
     if accumulate_noise:
-        # Diagnostic: log per-shell A2, XA, img_power, wsum for the first 6 shells
-        # so we can compare across iterations of refine.
+        # Keep detailed shell diagnostics off the default info path: this block
+        # runs once per dense bucket in RELION replay and can dominate logs.
         try:
             n_log_shells = min(6, len(noise_wsum))
-            logger.info(
+            logger.debug(
                 "[NOISE-DIAG] sumw=%.0f n_rot=%d use_window=%s",
                 float(noise_sumw),
                 int(n_rot),
                 bool(use_window),
             )
             if debug_options.return_noise_split:
-                logger.info(
+                logger.debug(
                     "[NOISE-DIAG] A2 (first %d shells): %s",
                     n_log_shells,
                     ", ".join(f"{noise_a2[i]:.3e}" for i in range(n_log_shells)),
                 )
-                logger.info(
+                logger.debug(
                     "[NOISE-DIAG] XA (first %d shells): %s",
                     n_log_shells,
                     ", ".join(f"{noise_xa[i]:.3e}" for i in range(n_log_shells)),
                 )
-            logger.info(
+            logger.debug(
                 "[NOISE-DIAG] img_power (first %d shells): %s",
                 n_log_shells,
                 ", ".join(f"{noise_img_power[i]:.3e}" for i in range(n_log_shells)),
             )
-            logger.info(
+            logger.debug(
                 "[NOISE-DIAG] wsum=A2-2XA (first %d shells): %s",
                 n_log_shells,
                 ", ".join(f"{noise_wsum[i]:.3e}" for i in range(n_log_shells)),

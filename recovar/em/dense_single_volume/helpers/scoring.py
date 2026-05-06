@@ -281,7 +281,12 @@ def _update_logsumexp(max_s, sum_exp, scores_block):
         axis=1,
     )
     safe_max_s = jnp.where(jnp.isfinite(max_s), max_s, jnp.zeros_like(max_s))
-    sum_exp = sum_exp * jnp.exp((safe_max_s - safe_new_max).astype(accumulator_dtype)) + exp_terms
+    old_term = jnp.where(
+        jnp.isfinite(max_s),
+        sum_exp * jnp.exp((safe_max_s - safe_new_max).astype(accumulator_dtype)),
+        jnp.zeros_like(sum_exp),
+    )
+    sum_exp = old_term + exp_terms
     return new_max, sum_exp
 
 
@@ -301,9 +306,18 @@ def _merge_block_logsumexp(max_s, sum_exp, block_max, block_sum_exp):
     safe_new_max = jnp.where(jnp.isfinite(new_max), new_max, jnp.zeros_like(new_max))
     safe_max_s = jnp.where(jnp.isfinite(max_s), max_s, jnp.zeros_like(max_s))
     safe_block_max = jnp.where(jnp.isfinite(block_max), block_max, jnp.zeros_like(block_max))
-    old_term = sum_exp * jnp.exp((safe_max_s - safe_new_max).astype(accumulator_dtype))
-    block_term = block_sum_exp.astype(accumulator_dtype) * jnp.exp(
-        (safe_block_max - safe_new_max).astype(accumulator_dtype),
+    old_term = jnp.where(
+        jnp.isfinite(max_s),
+        sum_exp * jnp.exp((safe_max_s - safe_new_max).astype(accumulator_dtype)),
+        jnp.zeros_like(sum_exp),
+    )
+    block_term = jnp.where(
+        jnp.isfinite(block_max),
+        block_sum_exp.astype(accumulator_dtype)
+        * jnp.exp(
+            (safe_block_max - safe_new_max).astype(accumulator_dtype),
+        ),
+        jnp.zeros_like(block_sum_exp, dtype=accumulator_dtype),
     )
     return new_max, old_term + block_term
 

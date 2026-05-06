@@ -11,7 +11,10 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.k_class import (
+    _ClassFineGridSignificanceMask,
     _assemble_result,
+    _build_fine_grid_significance_mask,
+    _dense_engine_kwargs_for_class,
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
     run_local_k_class_em,
@@ -390,6 +393,84 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
     assert len(calls) == 2
     assert calls[0]["current_size"] == 26
     assert calls[1]["current_size"] == 56
+
+
+def test_lazy_k_class_adaptive_mask_matches_dense_blocks_without_materializing():
+    n_classes = 2
+    n_images = 3
+    n_rot_coarse = 3
+    n_trans_coarse = 2
+    rot_parent_map = np.asarray([0, 0, 1, 1, 2, 2], dtype=np.int64)
+    trans_parent_map = np.asarray([0, 0, 1], dtype=np.int64)
+    n_rot_fine = int(rot_parent_map.size)
+    n_trans_fine = int(trans_parent_map.size)
+    significant_by_class = [
+        [
+            np.asarray([0, 3], dtype=np.int32),
+            None,
+            np.asarray([5], dtype=np.int32),
+        ],
+        [
+            np.asarray([1], dtype=np.int32),
+            np.asarray([2, 4], dtype=np.int32),
+            None,
+        ],
+    ]
+    global_winner = np.asarray([0, 1, 0], dtype=np.int64)
+    lazy = _ClassFineGridSignificanceMask(
+        significant_sample_indices_by_class=significant_by_class,
+        n_rot_coarse=n_rot_coarse,
+        n_trans_coarse=n_trans_coarse,
+        n_rot_fine=n_rot_fine,
+        n_trans_fine=n_trans_fine,
+        rot_parent_map=rot_parent_map,
+        trans_parent_map=trans_parent_map,
+        n_images=n_images,
+        n_classes=n_classes,
+        global_winner=global_winner,
+    )
+
+    with pytest.raises(TypeError):
+        np.asarray(lazy)
+    selected = _dense_engine_kwargs_for_class(
+        {"class_rotation_translation_mask": lazy},
+        class_index=1,
+        n_classes=n_classes,
+    )["rotation_translation_mask"]
+    with pytest.raises(TypeError):
+        np.asarray(selected)
+
+    for class_index in range(n_classes):
+        dense = _build_fine_grid_significance_mask(
+            significant_by_class[class_index],
+            n_rot_coarse=n_rot_coarse,
+            n_trans_coarse=n_trans_coarse,
+            n_rot_fine=n_rot_fine,
+            n_trans_fine=n_trans_fine,
+            rot_oversampling_factor=2,
+            trans_oversampling_factor=2,
+            rot_parent_map=rot_parent_map,
+            trans_parent_map=trans_parent_map,
+            n_images=n_images,
+        )
+        dense[global_winner != class_index, :, :] = False
+        per_class = lazy.for_class(class_index)
+        for start, end, r0, rotation_block_size, batch_count in (
+            (0, 2, 1, 4, 4),
+            (2, 3, 4, 4, 2),
+        ):
+            actual_rot = max(0, min(rotation_block_size, n_rot_fine - r0))
+            expected = np.zeros((batch_count, rotation_block_size, n_trans_fine), dtype=bool)
+            expected[: end - start, :actual_rot, :] = dense[start:end, r0 : r0 + actual_rot, :]
+            actual = per_class.block_mask(
+                r0=r0,
+                r1=r0 + rotation_block_size,
+                start=start,
+                end=end,
+                batch_count=batch_count,
+                rotation_block_size=rotation_block_size,
+            )
+            np.testing.assert_array_equal(np.asarray(actual), expected)
 
 
 def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():

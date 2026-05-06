@@ -12,6 +12,7 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import noise as noise_utils
+from recovar.utils.nvtx_shim import nvtx
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed,
@@ -87,6 +88,7 @@ from recovar.em.dense_single_volume.helpers.timing import TimingAccumulator
 from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 
 logger = logging.getLogger(__name__)
+NVTX_DOMAIN_EM = "recovar_em"
 
 EXACT_LOCAL_TARGET_ROW_PIXELS = 180_000_000
 EXACT_LOCAL_RAW_CACHE_MAX_GB = 2.0
@@ -682,6 +684,7 @@ def _build_nonzero_reconstruction_pack_indices(
     )
 
 
+@nvtx.annotate("local.run_local_em_exact", color="purple", domain=NVTX_DOMAIN_EM)
 def run_local_em_exact(
     experiment_dataset,
     mean,

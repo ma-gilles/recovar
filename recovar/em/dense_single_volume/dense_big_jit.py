@@ -17,6 +17,7 @@ from recovar import core
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.projection import (
     DEFAULT_PROJECTION_MAX_R,
+    compute_noise_block,
     project_half_spectrum,
 )
 from recovar.em.dense_single_volume.helpers.score_constraints import apply_dense_score_constraints
@@ -27,6 +28,10 @@ class DenseBucketResult(NamedTuple):
 
     Ft_y: jax.Array
     Ft_ctf: jax.Array
+    noise_wsum: jax.Array
+    noise_a2: jax.Array
+    noise_xa: jax.Array
+    noise_sigma2_offset: jax.Array
     block_max: jax.Array
     block_sum_exp: jax.Array
     block_best: jax.Array
@@ -313,6 +318,43 @@ def _adjoint_dense_bucket(
     return Ft_y, Ft_ctf
 
 
+def _noise_half_sums(
+    *,
+    probs,
+    shifted_noise,
+    ctf2_over_nv_recon,
+    proj_for_noise,
+    noise_variance,
+    shell_indices,
+    translation_sqdist_ang,
+    return_noise_split: bool,
+    n_shells: int,
+):
+    """Compute RELION-style per-shell noise sums for one dense bucket."""
+
+    batch_size = probs.shape[0]
+    rot_block_size = probs.shape[1]
+    n_trans = probs.shape[2]
+    P_noise = probs.swapaxes(0, 1).reshape(rot_block_size, batch_size * n_trans)
+    summed_masked_noise = P_noise @ shifted_noise
+    probs_sum_t_noise = jnp.sum(probs, axis=-1)
+    ctf_probs = probs_sum_t_noise.T @ ctf2_over_nv_recon
+    proj_abs2_for_noise = jnp.abs(proj_for_noise) ** 2
+    noise_wsum, noise_a2, noise_xa = compute_noise_block(
+        proj_for_noise,
+        proj_abs2_for_noise,
+        summed_masked_noise,
+        ctf_probs,
+        noise_variance,
+        shell_indices,
+        n_shells,
+        return_noise_split,
+    )
+    translation_posterior = jnp.sum(probs, axis=1)
+    noise_sigma2_offset = jnp.sum(translation_posterior * translation_sqdist_ang)
+    return noise_wsum, noise_a2, noise_xa, noise_sigma2_offset
+
+
 @partial(
     jax.jit,
     static_argnames=(
@@ -331,6 +373,9 @@ def _adjoint_dense_bucket(
         "mstep_half_volume",
         "disable_adjoint_y",
         "disable_adjoint_ctf",
+        "accumulate_noise",
+        "return_noise_split",
+        "n_shells",
     ),
 )
 def run_dense_bucket_big_jit(
@@ -352,6 +397,10 @@ def run_dense_bucket_big_jit(
     log_Z,
     window_indices,
     recon_window_indices,
+    shifted_noise_half=None,
+    noise_variance_half=None,
+    shell_indices_noise=None,
+    translation_sqdist_ang=None,
     *,
     score_mode: str = "gaussian",
     zero_dc_for_scoring: bool = True,
@@ -368,6 +417,9 @@ def run_dense_bucket_big_jit(
     mstep_half_volume: bool = False,
     disable_adjoint_y: bool = False,
     disable_adjoint_ctf: bool = False,
+    accumulate_noise: bool = False,
+    return_noise_split: bool = False,
+    n_shells: int = 0,
 ) -> DenseBucketResult:
     """Run one dense/global rotation bucket inside one compiled boundary.
 
@@ -447,6 +499,10 @@ def run_dense_bucket_big_jit(
     block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
     max_posterior = jnp.zeros(batch_size, dtype=scores.real.dtype)
     probs_sum_t = jnp.zeros((batch_size, rot_block_size), dtype=scores.real.dtype)
+    noise_wsum = jnp.zeros(n_shells, dtype=jnp.float32)
+    noise_a2 = jnp.zeros(n_shells, dtype=jnp.float32)
+    noise_xa = jnp.zeros(n_shells, dtype=jnp.float32)
+    noise_sigma2_offset = jnp.asarray(0.0, dtype=jnp.float32)
 
     if run_mstep:
         (
@@ -464,6 +520,26 @@ def run_dense_bucket_big_jit(
             log_Z,
             valid_image_mask.astype(bool),
         )
+        if accumulate_noise:
+            if use_window:
+                shifted_noise = shifted_noise_half[:, recon_window_indices]
+                proj_for_noise = proj_half[:, recon_window_indices]
+                noise_variance = noise_variance_half[recon_window_indices]
+            else:
+                shifted_noise = shifted_noise_half
+                proj_for_noise = proj_half
+                noise_variance = noise_variance_half
+            noise_wsum, noise_a2, noise_xa, noise_sigma2_offset = _noise_half_sums(
+                probs=probs,
+                shifted_noise=shifted_noise,
+                ctf2_over_nv_recon=bucket_view.ctf2_over_nv_recon,
+                proj_for_noise=proj_for_noise,
+                noise_variance=noise_variance,
+                shell_indices=shell_indices_noise,
+                translation_sqdist_ang=translation_sqdist_ang,
+                return_noise_split=return_noise_split,
+                n_shells=n_shells,
+            )
         Ft_y, Ft_ctf = _adjoint_dense_bucket(
             summed_half,
             ctf_probs_half,
@@ -484,6 +560,10 @@ def run_dense_bucket_big_jit(
     return DenseBucketResult(
         Ft_y=Ft_y,
         Ft_ctf=Ft_ctf,
+        noise_wsum=noise_wsum,
+        noise_a2=noise_a2,
+        noise_xa=noise_xa,
+        noise_sigma2_offset=noise_sigma2_offset,
         block_max=block_max,
         block_sum_exp=block_sum_exp,
         block_best=block_best,

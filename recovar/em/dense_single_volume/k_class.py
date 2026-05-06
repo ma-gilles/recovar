@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import logging
 import os
+import time
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from recovar.utils.nvtx_shim import nvtx
 
 from .em_engine import run_em
 from .helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
 from .local_em_engine import run_local_em_exact
 from .local_layout import LocalHypothesisLayout
+
+
+logger = logging.getLogger(__name__)
+NVTX_DOMAIN_EM = "recovar_em"
 
 
 class KClassEMResult(NamedTuple):
@@ -84,6 +92,10 @@ def _select_required_class_value(value, class_index: int, n_classes: int, name: 
     return value_array[class_index]
 
 
+def _is_class_lazy_mask(value) -> bool:
+    return hasattr(value, "for_class") and hasattr(value, "shape")
+
+
 def _dense_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_classes: int) -> dict:
     kwargs = dict(engine_kwargs)
     class_rotation_log_prior = kwargs.pop("class_rotation_log_prior", None)
@@ -102,13 +114,21 @@ def _dense_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_clas
             raise ValueError(
                 "Provide only one of rotation_translation_mask or class_rotation_translation_mask",
             )
-        mask_array = np.asarray(class_rotation_translation_mask)
-        if mask_array.ndim < 3 or int(mask_array.shape[0]) != n_classes:
-            raise ValueError(
-                "class_rotation_translation_mask must have leading class axis of length "
-                f"{n_classes}, got {mask_array.shape}",
-            )
-        kwargs["rotation_translation_mask"] = mask_array[class_index]
+        if _is_class_lazy_mask(class_rotation_translation_mask):
+            if tuple(class_rotation_translation_mask.shape[:1]) != (n_classes,):
+                raise ValueError(
+                    "class_rotation_translation_mask must have leading class axis of length "
+                    f"{n_classes}, got {class_rotation_translation_mask.shape}",
+                )
+            kwargs["rotation_translation_mask"] = class_rotation_translation_mask.for_class(class_index)
+        else:
+            mask_array = np.asarray(class_rotation_translation_mask)
+            if mask_array.ndim < 3 or int(mask_array.shape[0]) != n_classes:
+                raise ValueError(
+                    "class_rotation_translation_mask must have leading class axis of length "
+                    f"{n_classes}, got {mask_array.shape}",
+                )
+            kwargs["rotation_translation_mask"] = mask_array[class_index]
     return kwargs
 
 
@@ -440,6 +460,7 @@ def _assemble_result(
     )
 
 
+@nvtx.annotate("kclass.run_dense_k_class_em", color="cyan", domain=NVTX_DOMAIN_EM)
 def run_dense_k_class_em(
     experiment_dataset,
     means,
@@ -478,6 +499,8 @@ def run_dense_k_class_em(
     translations_np = np.asarray(translations, dtype=np.float32)
 
     class_log_evidence = []
+    overall_t0 = time.time()
+    probe_t0 = time.time()
     for class_index in range(n_classes):
         class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
         with _DenseScoreDumpClassLabel(class_index):
@@ -497,6 +520,7 @@ def run_dense_k_class_em(
                 **class_engine_kwargs,
             )
         class_log_evidence.append(np.asarray(probe[4].log_evidence_per_image, dtype=np.float64))
+    probe_s = time.time() - probe_t0
 
     class_log_evidence_np = np.stack(class_log_evidence, axis=0)
     global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
@@ -510,6 +534,7 @@ def run_dense_k_class_em(
     per_class_best_pose_rotations = [] if return_best_pose_details else None
     per_class_best_pose_translations = [] if return_best_pose_details else None
     per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
+    mstep_t0 = time.time()
     for class_index in range(n_classes):
         class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
         with _DenseScoreDumpClassLabel(class_index):
@@ -547,6 +572,17 @@ def run_dense_k_class_em(
             per_class_best_pose_rotations.append(best_rots)
             per_class_best_pose_translations.append(best_trans)
             per_class_best_pose_rotation_ids.append(best_rot_ids)
+    mstep_s = time.time() - mstep_t0
+    logger.info(
+        "Dense K-class EM profile: classes=%d images=%d rotations=%d translations=%d probe=%.1fs mstep=%.1fs total=%.1fs",
+        n_classes,
+        _dataset_image_count(experiment_dataset),
+        int(rotations_np.shape[0]),
+        int(translations_np.shape[0]),
+        probe_s,
+        mstep_s,
+        time.time() - overall_t0,
+    )
 
     return _assemble_result(
         class_log_evidence=class_log_evidence_np,
@@ -790,6 +826,98 @@ def _build_fine_grid_significance_mask(
     return mask
 
 
+@dataclass(frozen=True)
+class _PerClassFineGridSignificanceMask:
+    significant_sample_indices: object
+    n_rot_coarse: int
+    n_trans_coarse: int
+    n_rot_fine: int
+    n_trans_fine: int
+    rot_parent_map: np.ndarray
+    trans_parent_map: np.ndarray
+    n_images: int
+    class_index: int
+    global_winner: np.ndarray | None = None
+
+    @property
+    def shape(self):
+        return (self.n_images, self.n_rot_fine, self.n_trans_fine)
+
+    @property
+    def size(self):
+        return int(self.n_images * self.n_rot_fine * self.n_trans_fine)
+
+    def __array__(self, dtype=None):
+        raise TypeError("_PerClassFineGridSignificanceMask is lazy; call block_mask instead")
+
+    def block_mask(self, *, r0: int, r1: int, start: int, end: int, batch_count: int, rotation_block_size: int):
+        actual_count = int(end - start)
+        batch_count = int(batch_count)
+        r0 = int(r0)
+        actual_rot = max(0, min(int(rotation_block_size), self.n_rot_fine - r0))
+        mask = np.zeros((batch_count, int(rotation_block_size), self.n_trans_fine), dtype=bool)
+        if actual_count <= 0 or actual_rot <= 0:
+            return jnp.asarray(mask)
+
+        rot_parent_block = self.rot_parent_map[r0 : r0 + actual_rot]
+        for local_image, image_index in enumerate(range(int(start), int(end))):
+            if self.global_winner is not None and int(self.global_winner[image_index]) != int(self.class_index):
+                continue
+            sig = self.significant_sample_indices[image_index]
+            if sig is None:
+                mask[local_image, :actual_rot, :] = True
+                continue
+            sig = np.asarray(sig, dtype=np.int64).reshape(-1)
+            if sig.size == 0:
+                continue
+            coarse_rot_idx = sig // self.n_trans_coarse
+            coarse_trans_idx = sig % self.n_trans_coarse
+            coarse_pair = np.zeros((self.n_rot_coarse, self.n_trans_coarse), dtype=bool)
+            coarse_pair[coarse_rot_idx, coarse_trans_idx] = True
+            mask[local_image, :actual_rot, :] = coarse_pair[rot_parent_block][:, self.trans_parent_map]
+        return jnp.asarray(mask)
+
+
+@dataclass(frozen=True)
+class _ClassFineGridSignificanceMask:
+    significant_sample_indices_by_class: object
+    n_rot_coarse: int
+    n_trans_coarse: int
+    n_rot_fine: int
+    n_trans_fine: int
+    rot_parent_map: np.ndarray
+    trans_parent_map: np.ndarray
+    n_images: int
+    n_classes: int
+    global_winner: np.ndarray | None = None
+
+    @property
+    def shape(self):
+        return (self.n_classes, self.n_images, self.n_rot_fine, self.n_trans_fine)
+
+    @property
+    def size(self):
+        return int(self.n_classes * self.n_images * self.n_rot_fine * self.n_trans_fine)
+
+    def __array__(self, dtype=None):
+        raise TypeError("_ClassFineGridSignificanceMask is lazy; call for_class instead")
+
+    def for_class(self, class_index: int) -> _PerClassFineGridSignificanceMask:
+        return _PerClassFineGridSignificanceMask(
+            significant_sample_indices=self.significant_sample_indices_by_class[int(class_index)],
+            n_rot_coarse=self.n_rot_coarse,
+            n_trans_coarse=self.n_trans_coarse,
+            n_rot_fine=self.n_rot_fine,
+            n_trans_fine=self.n_trans_fine,
+            rot_parent_map=self.rot_parent_map,
+            trans_parent_map=self.trans_parent_map,
+            n_images=self.n_images,
+            class_index=int(class_index),
+            global_winner=self.global_winner,
+        )
+
+
+@nvtx.annotate("kclass.run_dense_k_class_em_adaptive", color="red", domain=NVTX_DOMAIN_EM)
 def run_dense_k_class_em_adaptive(
     experiment_dataset,
     means,
@@ -857,6 +985,7 @@ def run_dense_k_class_em_adaptive(
     # only referenced inside this function.
     from .helpers.significance import _compute_k_class_significance_batched
 
+    overall_t0 = time.time()
     means_array = _as_class_means(means)
     n_classes = int(means_array.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
@@ -885,9 +1014,6 @@ def run_dense_k_class_em_adaptive(
         raise ValueError("rot_parent_map values must be < n_rot_coarse")
     if int(trans_parent_map_np.max(initial=-1)) >= n_trans_coarse:
         raise ValueError("trans_parent_map values must be < n_trans_coarse")
-    rot_oversampling = int(np.bincount(rot_parent_map_np, minlength=n_rot_coarse).max())
-    trans_oversampling = int(np.bincount(trans_parent_map_np, minlength=n_trans_coarse).max())
-
     n_images = _dataset_image_count(experiment_dataset)
     image_batch_size = int(engine_kwargs.get("image_batch_size", 500))
     rotation_block_size = int(engine_kwargs.get("rotation_block_size", 5000))
@@ -907,6 +1033,7 @@ def run_dense_k_class_em_adaptive(
     )
 
     coarse_class_assignments_for_override = None
+    pass1_t0 = time.time()
     if firstiter_cc_pass2_only_best_coarse:
         # RELION ml_optimiser.cpp:9181-9207: at iter 1 with --firstiter_cc,
         # pass-1 binarizes exp_Mweight to a single best (class, pose). Pass-2
@@ -927,18 +1054,19 @@ def run_dense_k_class_em_adaptive(
             coarse_current_size if coarse_current_size is not None else fine_current_size
         )
         with _DenseScoreDumpPhaseLabel("coarse"):
-            coarse_result = run_dense_k_class_em(
-                experiment_dataset,
-                means_array,
-                mean_variance,
-                noise_variance,
-                coarse_rotations_np,
-                coarse_translations_np,
-                disc_type,
-                class_log_priors=class_log_priors,
-                accumulate_noise=False,
-                **coarse_probe_kwargs,
-            )
+            with nvtx.annotate("kclass.adaptive.coarse_probe", color="yellow", domain=NVTX_DOMAIN_EM):
+                coarse_result = run_dense_k_class_em(
+                    experiment_dataset,
+                    means_array,
+                    mean_variance,
+                    noise_variance,
+                    coarse_rotations_np,
+                    coarse_translations_np,
+                    disc_type,
+                    class_log_priors=class_log_priors,
+                    accumulate_noise=False,
+                    **coarse_probe_kwargs,
+                )
         # ``per_class_hard_assignments[k, i]`` is class k's best coarse pose
         # (independently scored per class). For each class, restrict pass-2
         # to that single pose's children.
@@ -979,24 +1107,27 @@ def run_dense_k_class_em_adaptive(
             use_float64_scoring=engine_kwargs.get("use_float64_scoring", False),
         )
 
-        (
-            _sig_rot_any_by_class,
-            _n_sig_per_image,
-            _coarse_hard_assignment,
-            _coarse_class_assignment,
-            sig_sample_indices_by_class,
-            _full_coarse_stats,
-        ) = _compute_k_class_significance_batched(
-            experiment_dataset,
-            means_array,
-            noise_variance,
-            coarse_rotations_np,
-            coarse_translations_np,
-            disc_type,
-            class_log_priors=log_priors,
-            **sig_kwargs,
-        )
+        with nvtx.annotate("kclass.adaptive.significance", color="orange", domain=NVTX_DOMAIN_EM):
+            (
+                _sig_rot_any_by_class,
+                _n_sig_per_image,
+                _coarse_hard_assignment,
+                _coarse_class_assignment,
+                sig_sample_indices_by_class,
+                _full_coarse_stats,
+            ) = _compute_k_class_significance_batched(
+                experiment_dataset,
+                means_array,
+                noise_variance,
+                coarse_rotations_np,
+                coarse_translations_np,
+                disc_type,
+                class_log_priors=log_priors,
+                **sig_kwargs,
+            )
+    pass1_s = time.time() - pass1_t0
 
+    mask_t0 = time.time()
     pass2_kwargs = dict(engine_kwargs)
     # Build a per-particle, per-class fine-grid mask from the coarse significance.
     pass2_kwargs.pop("rotation_translation_mask", None)
@@ -1045,22 +1176,7 @@ def run_dense_k_class_em_adaptive(
                 )
             pass2_kwargs["translation_log_prior"] = prior_np[:, trans_parent_map_np]
 
-    masks_per_class = []
-    for class_index in range(n_classes):
-        per_image = sig_sample_indices_by_class[class_index]
-        mask = _build_fine_grid_significance_mask(
-            per_image,
-            n_rot_coarse=n_rot_coarse,
-            n_trans_coarse=n_trans_coarse,
-            n_rot_fine=n_rot_fine,
-            n_trans_fine=n_trans_fine,
-            rot_oversampling_factor=rot_oversampling,
-            trans_oversampling_factor=trans_oversampling,
-            rot_parent_map=rot_parent_map_np,
-            trans_parent_map=trans_parent_map_np,
-            n_images=n_images,
-        )
-        masks_per_class.append(mask)
+    global_winner = None
     if coarse_class_assignments_for_override is not None:
         # RELION ml_optimiser.cpp:9181-9207 with K>1: at iter 1 with --firstiter_cc,
         # binarization sets ONE entry to 1 in the global (class × pose) grid.
@@ -1074,27 +1190,38 @@ def run_dense_k_class_em_adaptive(
         # Mask out images where global winner != class_index so class k's M-step
         # only sees its global-winner images.
         global_winner = np.asarray(coarse_class_assignments_for_override, dtype=np.int64)
-        for class_index in range(n_classes):
-            losing = global_winner != class_index
-            if np.any(losing):
-                masks_per_class[class_index][losing, :, :] = False
-    # Stack into (n_classes, n_images, n_rot_fine, n_trans_fine).
-    pass2_kwargs["class_rotation_translation_mask"] = np.stack(masks_per_class, axis=0)
+    if not (skip_significance_pruning and global_winner is None):
+        pass2_kwargs["class_rotation_translation_mask"] = _ClassFineGridSignificanceMask(
+            significant_sample_indices_by_class=sig_sample_indices_by_class,
+            n_rot_coarse=n_rot_coarse,
+            n_trans_coarse=n_trans_coarse,
+            n_rot_fine=n_rot_fine,
+            n_trans_fine=n_trans_fine,
+            rot_parent_map=rot_parent_map_np,
+            trans_parent_map=trans_parent_map_np,
+            n_images=n_images,
+            n_classes=n_classes,
+            global_winner=global_winner,
+        )
+    mask_s = time.time() - mask_t0
 
     with _DenseScoreDumpPhaseLabel("fine"):
-        result = run_dense_k_class_em(
-            experiment_dataset,
-            means_array,
-            mean_variance,
-            noise_variance,
-            fine_rotations_np,
-            fine_translations_np,
-            disc_type,
-            class_log_priors=class_log_priors,
-            accumulate_noise=accumulate_noise,
-            return_best_pose_details=return_best_pose_details,
-            **pass2_kwargs,
-        )
+        with nvtx.annotate("kclass.adaptive.fine_dense_em", color="green", domain=NVTX_DOMAIN_EM):
+            pass2_t0 = time.time()
+            result = run_dense_k_class_em(
+                experiment_dataset,
+                means_array,
+                mean_variance,
+                noise_variance,
+                fine_rotations_np,
+                fine_translations_np,
+                disc_type,
+                class_log_priors=class_log_priors,
+                accumulate_noise=accumulate_noise,
+                return_best_pose_details=return_best_pose_details,
+                **pass2_kwargs,
+            )
+            pass2_s = time.time() - pass2_t0
     if coarse_class_assignments_for_override is not None:
         # RELION binarization picks the global-best (class, pose) at the
         # COARSE grid; the fine refinement only repositions the pose within
@@ -1123,4 +1250,17 @@ def run_dense_k_class_em_adaptive(
                 best_pose_rotation_ids=best_rot_ids,
             )
         result = result._replace(**replace_kwargs)
+    logger.info(
+        "Adaptive K-class EM profile: classes=%d images=%d coarse=(rot=%d,trans=%d) fine=(rot=%d,trans=%d) pass1=%.1fs mask=%.1fs pass2=%.1fs total=%.1fs",
+        n_classes,
+        n_images,
+        n_rot_coarse,
+        n_trans_coarse,
+        n_rot_fine,
+        n_trans_fine,
+        pass1_s,
+        mask_s,
+        pass2_s,
+        time.time() - overall_t0,
+    )
     return result
