@@ -155,6 +155,84 @@ def test_random_perturbation_sequence_matches_relion_initialmodel_fixture():
     assert driver._random_perturbation_for_iteration(opts, 2) == pytest.approx(0.125066, abs=5e-6)
 
 
+def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch):
+    monkeypatch.delenv("RECOVAR_INITIAL_IREF_OVERRIDE", raising=False)
+    raw_iref = np.full((1, 8, 8, 8), 2.0, dtype=np.float64)
+    post_iref = np.full((1, 8, 8, 8), 3.0, dtype=np.float64)
+    calls = []
+
+    def fake_avg(*args, **kwargs):
+        return np.zeros((8, 8), dtype=np.float64), np.ones((1, 5), dtype=np.float64)
+
+    def fake_load_raw_images(dataset, particle_ids, *, batch_size):
+        np.testing.assert_array_equal(particle_ids, np.asarray([1, 0], dtype=np.int64))
+        return np.zeros((2, 8, 8), dtype=np.float64)
+
+    def fake_bootstrap(**kwargs):
+        assert kwargs["ori_size"] == 8
+        assert kwargs["nr_classes"] == 1
+        assert kwargs["particle_diameter_ang"] == 16.0
+        return raw_iref.copy()
+
+    def fake_postprocess(iref, **kwargs):
+        np.testing.assert_array_equal(iref, raw_iref)
+        calls.append(kwargs)
+        return post_iref.copy()
+
+    monkeypatch.setattr(driver, "compute_avg_unaligned_and_sigma2", fake_avg)
+    monkeypatch.setattr(driver, "_load_raw_images", fake_load_raw_images)
+    monkeypatch.setattr(driver, "compute_bootstrap_iref_via_cpp", fake_bootstrap)
+    monkeypatch.setattr(driver, "postprocess_bootstrap_iref_via_cpp", fake_postprocess)
+
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnMicrographName": ["b", "a"],
+            "_rlnOpticsGroup": ["1", "1"],
+            "_rlnDefocusU": ["10000", "10000"],
+            "_rlnDefocusV": ["10000", "10000"],
+            "_rlnDefocusAngle": ["0", "0"],
+        }
+    )
+    optics = pd.DataFrame(
+        {
+            "_rlnVoltage": ["300"],
+            "_rlnSphericalAberration": ["2.7"],
+            "_rlnAmplitudeContrast": ["0.07"],
+        }
+    )
+    dataset = SimpleNamespace(grid_size=8, voxel_size=2.0, n_images=2)
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        nr_classes=1,
+        nr_iter=1,
+        particle_diameter=16.0,
+        image_batch_size=2,
+        bootstrap_min_particles=2,
+    )
+
+    state, optics_groups = driver._initial_state_from_particles(
+        dataset,
+        main,
+        optics,
+        opts,
+        rotations=np.zeros((3, 3, 3), dtype=np.float64),
+    )
+
+    np.testing.assert_array_equal(state.Iref, post_iref)
+    np.testing.assert_array_equal(optics_groups, np.zeros(2, dtype=np.int64))
+    assert calls == [
+        {
+            "pixel_size": 2.0,
+            "ini_high_ang": state.ini_high,
+            "particle_diameter_ang": 16.0,
+            "width_mask_edge_px": float(opts.width_mask_edge_px),
+            "do_init_blobs": True,
+            "is_helical_segment": False,
+        }
+    ]
+
+
 def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
     calls = []
 

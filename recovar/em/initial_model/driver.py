@@ -25,7 +25,7 @@ from recovar.reconstruction.noise import make_radial_noise
 from recovar.utils.helpers import write_relion_mrc
 
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
-from .bootstrap_iref import compute_bootstrap_iref_via_cpp, initial_low_pass_filter_references
+from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
 from .dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
 from .init import initialise_denovo_state, seed_noise_from_mavg
 from .iteration_loop import run_vdam_iterations
@@ -772,11 +772,7 @@ def _initial_state_from_particles(
     state = seed_noise_from_mavg(state, sigma2_per_group)
     state.Mavg = Mavg
     # RECOVAR_INITIAL_IREF_OVERRIDE lets a parity caller swap in RELION's
-    # iter000 ref directly. Recovar's bootstrap currently stops at
-    # `compute_bootstrap_iref_via_cpp + initial_low_pass_filter_references`
-    # — RELION additionally runs SomGraph::make_blobs_3d + a second LP +
-    # softMaskOutsideMap (ml_optimiser.cpp:2942-2980), which we have not
-    # ported. The override bypasses that mismatch for parity tests.
+    # iter000 ref directly when isolating E/M-step behavior from bootstrap.
     override_path = os.environ.get("RECOVAR_INITIAL_IREF_OVERRIDE")
     if override_path:
         from recovar.utils.helpers import load_relion_volume
@@ -814,11 +810,14 @@ def _initial_state_from_particles(
                 f"RECOVAR_INITIAL_IREF_OVERRIDE expects 1 or K={K} comma-separated paths, got {len(paths)}"
             )
     else:
-        state.Iref = initial_low_pass_filter_references(
+        state.Iref = postprocess_bootstrap_iref_via_cpp(
             iref,
-            ori_size=ori_size,
             pixel_size=pixel_size,
             ini_high_ang=float(state.ini_high),
+            particle_diameter_ang=float(opts.particle_diameter),
+            width_mask_edge_px=float(opts.width_mask_edge_px),
+            do_init_blobs=True,
+            is_helical_segment=False,
         )
     return state, optics_group_by_particle
 

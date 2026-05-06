@@ -268,6 +268,56 @@ class TestRandomiseParticlesOrderBinding:
         assert order.size == 0
 
 
+class TestPostprocessInitialIrefBinding:
+    def test_postprocess_is_deterministic_from_relion_rand_state(self, bind):
+        rng = np.random.default_rng(0)
+        iref = rng.standard_normal((1, 16, 16, 16)).astype(np.float64)
+
+        bind.vdam_rnd_unif_sequence(12345, 0)
+        a = np.asarray(
+            bind.vdam_postprocess_initial_iref(
+                iref,
+                pixel_size=1.0,
+                ini_high_ang=8.0,
+                particle_diameter_ang=12.0,
+                width_mask_edge_px=3.0,
+            )
+        )
+        bind.vdam_rnd_unif_sequence(12345, 0)
+        b = np.asarray(
+            bind.vdam_postprocess_initial_iref(
+                iref,
+                pixel_size=1.0,
+                ini_high_ang=8.0,
+                particle_diameter_ang=12.0,
+                width_mask_edge_px=3.0,
+            )
+        )
+
+        np.testing.assert_array_equal(a, b)
+        assert a.shape == iref.shape
+        assert np.all(np.isfinite(a))
+        assert not np.allclose(a, iref)
+
+    def test_postprocess_supports_lowpass_without_blobs(self, bind):
+        iref = np.zeros((1, 16, 16, 16), dtype=np.float64)
+        iref[0, ::2, ::2, ::2] = 1.0
+        out = np.asarray(
+            bind.vdam_postprocess_initial_iref(
+                iref,
+                pixel_size=1.0,
+                ini_high_ang=8.0,
+                particle_diameter_ang=12.0,
+                width_mask_edge_px=3.0,
+                do_init_blobs=False,
+            )
+        )
+
+        assert out.shape == iref.shape
+        assert np.all(np.isfinite(out))
+        assert float(out.std()) < float(iref.std())
+
+
 # ---------------------------------------------------------------------------
 # Moment-primitive smoke tests (full parity lands in Phase 4)
 # ---------------------------------------------------------------------------
