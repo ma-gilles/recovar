@@ -22,6 +22,7 @@ class DensePerPoseScoreDumpRequest:
     target: int | None = None
     dump_preprior: bool = False
     target_is_original: bool = False
+    label: str = ""
 
     @property
     def enabled(self) -> bool:
@@ -98,11 +99,16 @@ def parse_dense_per_pose_score_dump_request() -> DensePerPoseScoreDumpRequest:
     dump_path.mkdir(parents=True, exist_ok=True)
     dump_preprior = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_PREPRIOR")
     target_is_original = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_TARGET_IS_ORIGINAL")
+    label = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL", "")
+    # Keep the label filename-safe; this env var is debug-only but may be set
+    # by K-class loops where we need to avoid per-class dump overwrites.
+    safe_label = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in label)
     return DensePerPoseScoreDumpRequest(
         dump_dir=dump_path,
         target=target,
         dump_preprior=bool(dump_preprior and dump_preprior != "0"),
         target_is_original=bool(target_is_original and target_is_original != "0"),
+        label=safe_label,
     )
 
 
@@ -144,10 +150,10 @@ def maybe_write_dense_per_pose_score_dump(
             return
         row = int(hits[0])
         suffix = "_preprior" if preprior else ""
-        label_suffix = _dense_score_dump_label_suffix()
+        label = f"_{request.label}" if request.label else ""
         scores_target = np.asarray(scores[row], dtype=np.float64)
         np.save(
-            request.dump_dir / f"target{int(request.target):06d}{label_suffix}_block{int(block_index):04d}{suffix}.npy",
+            request.dump_dir / f"target{int(request.target):06d}{label}_block{int(block_index):04d}{suffix}.npy",
             scores_target,
         )
     except Exception:

@@ -76,7 +76,6 @@ def _select_class_value(value, class_index: int, n_classes: int):
         return value_array[class_index]
     return value
 
-
 def _select_required_class_value(value, class_index: int, n_classes: int, name: str):
     value_array = jnp.asarray(value)
     if value_array.ndim < 2 or int(value_array.shape[0]) != n_classes:

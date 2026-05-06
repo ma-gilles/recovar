@@ -4273,6 +4273,8 @@ def _run_relion_iteration_loop(
                             class_log_priors=class_log_priors,
                             accumulate_noise=True,
                             return_best_pose_details=True,
+                            coarse_current_size=cs_for_engine,
+                            fine_current_size=cs_for_engine,
                             firstiter_cc_pass2_only_best_coarse=True,
                             skip_significance_pruning=True,
                             **em_kwargs,
