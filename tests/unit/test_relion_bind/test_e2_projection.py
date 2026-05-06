@@ -114,6 +114,48 @@ class TestComputeFourierTransformMap:
         assert proj_data.ndim == 3
         assert proj_data.dtype == np.complex128
 
+    def test_projector_defaults_preserve_dense_em_data_dim(self):
+        rng = np.random.default_rng(42)
+        N = 16
+        vol = _make_test_volume(N, rng)
+        A = np.eye(3)
+
+        default_map, *_ = compute_fourier_transform_map(
+            vol,
+            ori_size=N,
+            padding_factor=1,
+            current_size=8,
+            do_gridding=False,
+        )
+        dense_em_map, *_ = compute_fourier_transform_map(
+            vol,
+            ori_size=N,
+            padding_factor=1,
+            current_size=8,
+            do_gridding=False,
+            data_dim=3,
+        )
+        np.testing.assert_array_equal(default_map, dense_em_map)
+
+        default_projection = project_volume(
+            vol,
+            A,
+            ori_size=N,
+            padding_factor=1,
+            current_size=8,
+            do_gridding=False,
+        )
+        dense_em_projection = project_volume(
+            vol,
+            A,
+            ori_size=N,
+            padding_factor=1,
+            current_size=8,
+            do_gridding=False,
+            data_dim=3,
+        )
+        np.testing.assert_array_equal(default_projection, dense_em_projection)
+
     @pytest.mark.parametrize("N", [16, 32])
     def test_projector_data_matches_numpy(self, N):
         """Verify projector storage matches a numpy reference.
