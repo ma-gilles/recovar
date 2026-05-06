@@ -280,6 +280,24 @@ def _selected_by_class(per_class_values, class_assignments: np.ndarray):
     return stacked[jnp.asarray(class_assignments, dtype=jnp.int32), image_indices]
 
 
+def _decode_dense_best_pose_details(hard_assignment, rotations: np.ndarray, translations: np.ndarray):
+    """Decode dense flat pose IDs into the pose fields expected by RELION state."""
+
+    hard_np = np.asarray(hard_assignment, dtype=np.int64)
+    n_trans = int(np.asarray(translations).shape[0])
+    if n_trans <= 0:
+        raise ValueError("translations must contain at least one pose")
+    rot_idx = hard_np // n_trans
+    trans_idx = hard_np % n_trans
+    rotations_np = np.asarray(rotations, dtype=np.float32)
+    translations_np = np.asarray(translations, dtype=np.float32)
+    return (
+        jnp.asarray(rotations_np[rot_idx], dtype=jnp.float32),
+        jnp.asarray(translations_np[trans_idx], dtype=jnp.float32),
+        jnp.asarray(rot_idx, dtype=jnp.int32),
+    )
+
+
 def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None) -> NoiseStats | None:
     if not noise_stats:
         return None
@@ -433,6 +451,7 @@ def run_dense_k_class_em(
     *,
     class_log_priors=None,
     accumulate_noise: bool = False,
+    return_best_pose_details: bool = False,
     **engine_kwargs,
 ) -> KClassEMResult:
     """Run dense K-class EM using ``run_em`` as the only scoring/M-step kernel."""
@@ -447,6 +466,7 @@ def run_dense_k_class_em(
             "disable_adjoint_y",
             "disable_adjoint_ctf",
             "return_profile",
+            "return_best_pose_details",
         ),
         "run_dense_k_class_em",
     )
@@ -454,6 +474,8 @@ def run_dense_k_class_em(
     n_classes = int(means_array.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
     base_engine_kwargs = dict(engine_kwargs)
+    rotations_np = np.asarray(rotations, dtype=np.float32)
+    translations_np = np.asarray(translations, dtype=np.float32)
 
     class_log_evidence = []
     for class_index in range(n_classes):
@@ -485,6 +507,9 @@ def run_dense_k_class_em(
     hard_assignments = []
     per_class_stats = []
     per_class_noise = [] if accumulate_noise else None
+    per_class_best_pose_rotations = [] if return_best_pose_details else None
+    per_class_best_pose_translations = [] if return_best_pose_details else None
+    per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
     for class_index in range(n_classes):
         class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
         with _DenseScoreDumpClassLabel(class_index):
@@ -513,6 +538,15 @@ def run_dense_k_class_em(
         per_class_stats.append(stats)
         if per_class_noise is not None:
             per_class_noise.append(noise)
+        if return_best_pose_details:
+            best_rots, best_trans, best_rot_ids = _decode_dense_best_pose_details(
+                hard_assignment,
+                rotations_np,
+                translations_np,
+            )
+            per_class_best_pose_rotations.append(best_rots)
+            per_class_best_pose_translations.append(best_trans)
+            per_class_best_pose_rotation_ids.append(best_rot_ids)
 
     return _assemble_result(
         class_log_evidence=class_log_evidence_np,
@@ -522,6 +556,9 @@ def run_dense_k_class_em(
         per_class_hard_assignments=np.stack(hard_assignments, axis=0),
         per_class_stats=tuple(per_class_stats),
         noise_stats=None if per_class_noise is None else tuple(per_class_noise),
+        per_class_best_pose_rotations=per_class_best_pose_rotations,
+        per_class_best_pose_translations=per_class_best_pose_translations,
+        per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
     )
 
 
@@ -779,6 +816,7 @@ def run_dense_k_class_em_adaptive(
     coarse_class_rotation_log_prior=None,
     skip_significance_pruning: bool = False,
     firstiter_cc_pass2_only_best_coarse: bool = False,
+    return_best_pose_details: bool = False,
     **engine_kwargs,
 ) -> KClassEMResult:
     """K-class adaptive 2-pass EM: coarse pass-1 significance + fine pass-2 masked.
@@ -1054,6 +1092,7 @@ def run_dense_k_class_em_adaptive(
             disc_type,
             class_log_priors=class_log_priors,
             accumulate_noise=accumulate_noise,
+            return_best_pose_details=return_best_pose_details,
             **pass2_kwargs,
         )
     if coarse_class_assignments_for_override is not None:
@@ -1068,8 +1107,20 @@ def run_dense_k_class_em_adaptive(
         image_indices = jnp.arange(n_imgs)
         per_class_hard = result.per_class_hard_assignments
         new_pose_assn = per_class_hard[coarse_assn, image_indices]
-        result = result._replace(
+        replace_kwargs = dict(
             class_assignments=coarse_assn,
             pose_assignments=new_pose_assn,
         )
+        if return_best_pose_details:
+            best_rots, best_trans, best_rot_ids = _decode_dense_best_pose_details(
+                np.asarray(new_pose_assn, dtype=np.int64),
+                fine_rotations_np,
+                fine_translations_np,
+            )
+            replace_kwargs.update(
+                best_pose_rotations=best_rots,
+                best_pose_translations=best_trans,
+                best_pose_rotation_ids=best_rot_ids,
+            )
+        result = result._replace(**replace_kwargs)
     return result

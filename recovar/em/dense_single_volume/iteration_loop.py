@@ -3293,6 +3293,7 @@ def _run_relion_iteration_loop(
                                 disc_type,
                                 class_log_priors=class_log_priors,
                                 accumulate_noise=True,
+                                return_best_pose_details=True,
                                 firstiter_cc_pass2_only_best_coarse=True,
                                 skip_significance_pruning=True,
                                 coarse_current_size=coarse_cs,
@@ -3310,6 +3311,7 @@ def _run_relion_iteration_loop(
                                 disc_type,
                                 class_log_priors=class_log_priors,
                                 accumulate_noise=True,
+                                return_best_pose_details=True,
                                 **dense_skip_kwargs,
                             )
                         ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
@@ -3330,6 +3332,14 @@ def _run_relion_iteration_loop(
                             ],
                             axis=0,
                         )
+                        if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
+                            raise RuntimeError("Dense K-class path did not return best pose details")
+                        best_pose_rotations[k] = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
+                        best_pose_rotation_eulers[k] = utils.R_to_relion(
+                            np.asarray(k_class_result.best_pose_rotations),
+                            degrees=True,
+                        ).astype(np.float32)
+                        best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
                     else:
                         _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
                             experiment_datasets[k],
@@ -3520,6 +3530,7 @@ def _run_relion_iteration_loop(
                             adaptive_kwargs = dict(
                                 class_log_priors=class_log_priors,
                                 accumulate_noise=True,
+                                return_best_pose_details=True,
                                 # RELION windows pass 1 with image_coarse_size
                                 # whenever adaptive_oversampling is active.
                                 coarse_current_size=coarse_cs,
@@ -3649,17 +3660,10 @@ def _run_relion_iteration_loop(
                                 np.add.at(coarse_post, np.asarray(_rot_pmap_3240, dtype=np.int64), fine_post)
                                 _per_class_rot_post_coarse.append(coarse_post)
                         class_rotation_posterior_per_half[k] = np.stack(_per_class_rot_post_coarse, axis=0)
-                        # Strict-parity adaptive engine path may not populate
-                        # best_pose_rotations (return_best_pose_details=False internally);
-                        # fall back to identity placeholders since iter-1 doesn't
-                        # need pose tracking for convergence (no previous iter).
-                        n_images_local = int(experiment_datasets[k].n_units)
-                        if k_class_result.best_pose_rotations is None:
-                            best_rots_k = np.tile(np.eye(3, dtype=np.float32)[None, :, :], (n_images_local, 1, 1))
-                            best_trans_k = np.zeros((n_images_local, 2), dtype=np.float32)
-                        else:
-                            best_rots_k = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
-                            best_trans_k = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
+                        if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
+                            raise RuntimeError("Dense adaptive K-class path did not return best pose details")
+                        best_rots_k = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
+                        best_trans_k = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
                     else:
                         sparse_outputs = _run_sparse_pass2_local_search_iteration(
                             experiment_datasets[k],
@@ -4137,6 +4141,7 @@ def _run_relion_iteration_loop(
                             disc_type,
                             class_log_priors=class_log_priors,
                             accumulate_noise=True,
+                            return_best_pose_details=True,
                             firstiter_cc_pass2_only_best_coarse=True,
                             skip_significance_pruning=True,
                             **em_kwargs,
@@ -4152,6 +4157,7 @@ def _run_relion_iteration_loop(
                             disc_type,
                             class_log_priors=class_log_priors,
                             accumulate_noise=True,
+                            return_best_pose_details=True,
                             **em_kwargs,
                         )
                     ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
@@ -4172,6 +4178,14 @@ def _run_relion_iteration_loop(
                         ],
                         axis=0,
                     )
+                    if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
+                        raise RuntimeError("Dense K-class path did not return best pose details")
+                    best_pose_rotations[k] = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
+                    best_pose_rotation_eulers[k] = utils.R_to_relion(
+                        np.asarray(k_class_result.best_pose_rotations),
+                        degrees=True,
+                    ).astype(np.float32)
+                    best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
                 else:
                     _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
                         experiment_datasets[k],
