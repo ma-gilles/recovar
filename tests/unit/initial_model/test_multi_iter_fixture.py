@@ -64,7 +64,7 @@ def test_ten_iter_vdam_smoke():
         compute_stepsize,
         compute_tau2_fudge,
     )
-    from recovar.em.sampling import get_rotation_grid, get_translation_grid
+    from recovar.em.sampling import get_relion_hidden_rotation_grid, get_translation_grid
     from recovar.reconstruction.noise import make_radial_noise
     from recovar.utils.helpers import load_relion_volume
 
@@ -84,7 +84,7 @@ def test_ten_iter_vdam_smoke():
     n4 = ori_size**4
     noise_variance = np.asarray(make_radial_noise(sigma2 * n4, (ori_size, ori_size))).astype(np.float32).reshape(-1)
 
-    rots = get_rotation_grid(nside_level=1, n_in_planes=12, matrices=True).astype(np.float32)
+    rots = get_relion_hidden_rotation_grid(1, matrices=True).astype(np.float32)
     trans = get_translation_grid(max_pixel=6, pixel_offset=2).astype(np.float32)
 
     # Seed with iter0

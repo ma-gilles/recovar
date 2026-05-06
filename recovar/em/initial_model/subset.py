@@ -9,8 +9,9 @@ Mirrors the RELION 5.0 sequence:
 3. Stable-sort the selected prefix by optics-group id
    (ml_optimiser.cpp:4907) so particles from the same optics group are
    processed together.
-4. For `grad_pseudo_halfsets=true`, alternate halfset ids along the
-   stable-sorted prefix (ml_optimiser.cpp:5139).
+4. For `grad_pseudo_halfsets=true`, route each particle to pseudo-halfset
+   `part_id % 2`, matching the BPref accumulation offset in
+   `storeWeightedSums` (ml_optimiser.cpp:10349).
 
 RELION's shuffle is not a standard `std::shuffle`; it uses its own
 `init_random_generator` + `ran1` pair (`rnd_unif`). We reproduce the
@@ -126,16 +127,22 @@ def pseudo_halfsets_active(gradient_refine: bool, do_split_random_halves: bool) 
 
 
 def assign_pseudo_halfsets(n: int) -> np.ndarray:
-    """Assign halfset ids 0/1 along a stable-sorted prefix.
+    """Assign legacy alternating halfset ids for standalone callers.
 
-    RELION alternates ids across consecutive particles in the subset
-    (ml_optimiser.cpp:5139). With a stable-sorted-by-optics-group prefix
-    this means each optics group gets particles split roughly evenly
-    between the two pseudo-halves.
+    InitialModel reconstruction routing should use
+    :func:`assign_pseudo_halfsets_for_particle_ids` instead.  RELION routes
+    BPref pseudo-halfsets by global ``part_id % 2`` at accumulation time.
     """
     if n <= 0:
         return np.zeros(0, dtype=np.int8)
     return (np.arange(n, dtype=np.int64) % 2).astype(np.int8)
+
+
+def assign_pseudo_halfsets_for_particle_ids(particle_ids: np.ndarray) -> np.ndarray:
+    """Return RELION BPref pseudo-halfset ids for global particle indices."""
+
+    ids = np.asarray(particle_ids, dtype=np.int64)
+    return (ids % 2).astype(np.int8, copy=False)
 
 
 def select_vdam_subset(
@@ -151,8 +158,8 @@ def select_vdam_subset(
     value from `compute_subset_size` (caller is responsible for translating
     `-1` into `nr_particles`).
 
-    RELION source: ml_optimiser.cpp:4907 (stable-sort) + 5139 (halfset
-    alternation).
+    RELION source: ml_optimiser.cpp:4907 (stable-sort) and
+    ml_optimiser.cpp:10349 (BPRef pseudo-halfset offset uses ``part_id % 2``).
     """
     if subset_size < 0 or subset_size > shuffled_particle_ids.size:
         raise ValueError(
@@ -164,7 +171,7 @@ def select_vdam_subset(
     sorted_prefix = _stable_sort_by_optics_group(prefix, optics_group_by_particle)
 
     if pseudo_halfsets:
-        halfsets = assign_pseudo_halfsets(sorted_prefix.size)
+        halfsets = assign_pseudo_halfsets_for_particle_ids(sorted_prefix)
     else:
         halfsets = np.zeros(sorted_prefix.size, dtype=np.int8)
 

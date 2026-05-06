@@ -483,7 +483,7 @@ def test_layout_converter_roundtrip():
     embed into a zero-filled centered full (N, N, N) spectrum, then crop
     back: must match byte-for-byte.
     """
-    from recovar.em.initial_model.gpu_pipeline import bpref_to_run_em_output, run_em_output_to_bpref
+    from recovar.em.initial_model.layout import bpref_to_run_em_output, run_em_output_to_bpref
 
     bp_data = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_data_pre_reweight.bin")
     bp_weight = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_weight.bin")
@@ -498,16 +498,16 @@ def test_layout_converter_roundtrip():
 
 
 @requires_big_fixture
-def test_gpu_pipeline_vdam_mstep_chain_via_converter():
+def test_layout_converter_vdam_mstep_chain():
     """Cross-validate: feed RELION's BPref dumps through `run_em_output_to_bpref`
-    round-trip, then run the entire gpu_pipeline.run_iter_gpu_vdam M-step
-    chain (minus the GPU E-step), comparing final Iref to RELION's iter-1.
+    round-trip, then run the VDAM M-step chain, comparing final Iref to
+    RELION's iter-1.
 
-    This pins the bit-exact M-step wiring used by the GPU iter path. If
-    the GPU E-step ever reaches machine-precision parity against RELION,
+    This pins the bit-exact M-step wiring used by the dense InitialModel
+    adapter. If the E-step reaches machine-precision parity against RELION,
     this same chain produces the final iter-1 Iref to machine precision.
     """
-    from recovar.em.initial_model.gpu_pipeline import bpref_to_run_em_output, run_em_output_to_bpref
+    from recovar.em.initial_model.layout import bpref_to_run_em_output, run_em_output_to_bpref
     from recovar.relion_bind import _relion_bind_core as bind
 
     # Load RELION's per-halfset BP data (pre-reweight)
