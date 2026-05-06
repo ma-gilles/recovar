@@ -11,6 +11,7 @@ at iter 1 and then across full end-to-end schedules.
 - `8fd73603` - `em-initialmodel: apply relion bootstrap postprocess`
 - `64595e15` - `em-initialmodel: add aligned GT benchmark metrics`
 - `8b4a736f` - `em-initialmodel: use finer aligned GT benchmark search`
+- `58bedd35` - `em-initialmodel: document vdam parity state`
 
 ## Evaluation convention
 
@@ -60,6 +61,23 @@ The order-2 default is intentionally one HEALPix order finer than the native
 InitialModel run that produced the current K=1 maps (`--healpix_order 1`
 with `--oversampling 1`).  The scorer Fourier-crops the low-shell box before
 the rotation sweep, then rotates the full map once for the winning orientation.
+
+Standalone InitialModel MRCs can be evaluated with:
+
+```bash
+pixi run python scripts/evaluate_ab_initio_gt.py \
+  --volume <run_itNNN_class001.mrc> \
+  --label run_itNNN_class001 \
+  --gt_volume <reference_gt.mrc> \
+  --volume_frame relion \
+  --gt_frame recovar \
+  --gt_align \
+  --output_npz <out>/abinitio_gt_metrics.npz \
+  --output_json <out>/abinitio_gt_metrics.json
+```
+
+Use `--volume_frame relion` for native `scripts/run_ab_initio.py` outputs,
+because those MRCs are intentionally written through `write_relion_mrc()`.
 
 ## Current K=1 500-particle / 64-pixel end-to-end checkpoint
 
@@ -154,3 +172,30 @@ It contains:
 
 Use Slurm for this tier.  Do not run project-wide `long-test` for EM-only
 changes; use EM-scoped long parity or a dedicated InitialModel job.
+
+The immediate larger stress case is a short VDAM InitialModel run on the full
+50k / 256-pixel stack:
+
+```bash
+pixi run python scripts/run_ab_initio.py \
+  --i /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_50k_256_normalized/particles.star \
+  --o <scratch>/recovar/run \
+  --nr_iter 3 \
+  --K 1 \
+  --sym C1 \
+  --particle_diameter 200 \
+  --tau2_fudge 4 \
+  --random_seed 0 \
+  --healpix_order 1 \
+  --oversampling 1 \
+  --offset_range 6 \
+  --offset_step 2 \
+  --image_batch_size 128 \
+  --rotation_block_size 5000 \
+  --padding_factor 1
+```
+
+Then evaluate all saved classes with `scripts/evaluate_ab_initio_gt.py` using
+the command pattern above.  This tests more images and higher resolution than
+the current 500-particle / 64-pixel checkpoint while staying focused on the
+ab-initio VDAM path.
