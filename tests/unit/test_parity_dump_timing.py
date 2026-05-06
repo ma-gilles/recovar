@@ -130,3 +130,15 @@ def test_dump_iteration_falls_back_to_iteration_start_arg(parity_env):
     assert float(npz["wall_time_s"]) >= 0.02
     # No stage_seconds_* expected.
     assert not any(k.startswith("stage_seconds_") for k in npz.files)
+
+
+def test_downsample_volume_real_handles_k_class_leading_axis(monkeypatch):
+    from recovar.em.dense_single_volume import parity_dump as p
+
+    monkeypatch.setenv("RECOVAR_PARITY_DUMP_VOLUME_DOWNSAMPLE", "2")
+    volume_shape = (8, 8, 8)
+    volumes = np.zeros((2, np.prod(volume_shape)), dtype=np.complex64)
+
+    downsampled = p._downsample_volume_real(volumes, volume_shape)
+
+    assert downsampled.shape == (2, 64)
