@@ -94,6 +94,7 @@ target_include_directories(_relion_bind_core PRIVATE
     "${RELION_SRC_DIR}/.."
     "${RELION_SRC_DIR}/Healpix_2.15a"
     "${FFTW3_INCLUDE_DIR}"
+    "${PIXI_PREFIX}/include"
 )
 
 # Suppress CUDA/HIP via compiler flags (in case macros.h checks these)

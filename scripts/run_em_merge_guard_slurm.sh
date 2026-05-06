@@ -68,19 +68,24 @@ git rev-parse HEAD
 git symbolic-ref --short HEAD || echo '<detached>'
 git status --porcelain
 flock "${REPO_ROOT}/.pixi/install-recovar.lock" pixi run install-recovar
+flock "${SCRATCH_DIR}/relion_bind_build.lock" bash -lc 'rm -rf recovar/relion_bind/build && pixi run python recovar/relion_bind/build.py'
 pixi run python - <<'PY'
 import pathlib
 import jax
 import recovar
+from recovar.relion_bind import _relion_bind_core as relion_bind
 
 repo = pathlib.Path.cwd().resolve()
 recovar_file = pathlib.Path(recovar.__file__).resolve()
 jax_file = pathlib.Path(jax.__file__).resolve()
+relion_bind_file = pathlib.Path(relion_bind.__file__).resolve()
 print(recovar_file)
 print(jax_file)
 print(jax.devices())
+print(relion_bind_file)
 assert str(recovar_file).startswith(str(repo) + "/"), recovar_file
 assert ".pixi/envs/default/" in str(jax_file), jax_file
+assert str(relion_bind_file).startswith(str(repo) + "/"), relion_bind_file
 PY
 EOF
 }
