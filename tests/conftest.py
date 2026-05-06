@@ -156,6 +156,10 @@ def pytest_collection_modifyitems(config, items):
     skip_em_parity_long = pytest.mark.skip(reason="need --em-parity-long to run")
 
     for item in items:
+        # item.keywords also contains package/path names like tests/long_test;
+        # use explicit marks so EM-long parity remains disjoint from --long-test.
+        has_long_test_marker = item.get_closest_marker("long_test") is not None
+        has_em_parity_long_marker = item.get_closest_marker("em_parity_long") is not None
         if "slow" in item.keywords and not run_slow:
             item.add_marker(skip_slow)
         if "gpu" in item.keywords and not run_gpu:
@@ -164,9 +168,9 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_integration)
         if "tiny_metrics" in item.keywords and not run_tiny_metrics:
             item.add_marker(skip_tiny_metrics)
-        if "long_test" in item.keywords and not run_long_test:
+        if has_long_test_marker and not run_long_test:
             item.add_marker(skip_long_test)
-        if "em_parity_long" in item.keywords and not run_em_parity_long:
+        if has_em_parity_long_marker and not run_em_parity_long:
             item.add_marker(skip_em_parity_long)
 
 
