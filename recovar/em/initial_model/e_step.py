@@ -12,10 +12,10 @@ InitialModel-specific corrections before scoring:
      pixels (including redundant conjugate pairs). We match that for
      parity; see `project_relion_hermitian_weight_debt.md`.
 
-This module exposes only the three helpers used by the adapter path plus
-an E-step posterior container. The full E-step wiring (dense kernel call,
-posterior normalisation, Pmax / significant-sample extraction) lands in
-Phase 4 where it can be tested against a RELION single-particle fixture.
+This module exposes the small RELION-convention helpers and a posterior
+summary container used by tests/debugging. The production InitialModel
+E-step wiring lives in `dense_adapter.py`, which calls the native dense
+K-class engine jointly over classes and poses.
 """
 
 from __future__ import annotations
@@ -135,8 +135,8 @@ class VdamPosterior:
     `_rlnMaxValueProbDistribution` / `_rlnNrOfSignificantSamples` in
     RELION's `run_itNNN_data.star`.
 
-    Arrays are kept as NumPy here; Phase 4+ wiring into the dense-kernel
-    JIT boundary will convert these to JAX arrays before the M-step.
+    Arrays are kept as NumPy here because this container is used outside
+    the dense-kernel JIT boundary for diagnostics.
     """
 
     # (N_img, K, n_rot, n_trans) for debugging; (N_img, M) where
@@ -165,8 +165,9 @@ def build_posterior_summary(
 ) -> VdamPosterior:
     """Construct a `VdamPosterior` from a `(N, K, n_rot, n_trans)` weight
     tensor by extracting per-image Pmax, nr_significant, and argmax
-    indices. The euler / trans conversions are stubs; Phase 4 fills them
-    from the actual sampling grid.
+    indices. The euler / trans outputs are index summaries; callers that
+    need physical Euler angles or pixel offsets should convert them with
+    the sampling grid they used for scoring.
     """
     if weights.ndim != 4:
         raise ValueError(f"weights must be 4D (N, K, n_rot, n_trans), got {weights.shape}")

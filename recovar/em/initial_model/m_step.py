@@ -115,6 +115,33 @@ def vdam_m_step_single_class(
     mu_first = 0.9
     mu_second = 0.999
 
+    import os as _os
+
+    _dump_dir = _os.environ.get("RECOVAR_MSTEP_DUMP_DIR")
+    _dump_iter = int(_os.environ.get("RECOVAR_MSTEP_DUMP_ITER", "1"))
+    _do_dump = _dump_dir is not None and int(getattr(state, "iter", 0)) == _dump_iter
+    _dump_prefix = f"c{k}_" if state.K > 1 else ""
+
+    def _dump(name, arr):
+        if not _do_dump:
+            return
+        from pathlib import Path as _Path
+
+        _Path(_dump_dir).mkdir(parents=True, exist_ok=True)
+        np.save(f"{_dump_dir}/{_dump_prefix}{name}.npy", np.asarray(arr))
+
+    _dump("accum_h0_data", accum_h0.data)
+    _dump("accum_h0_weight", accum_h0.weight)
+    if state.pseudo_halfsets:
+        _dump("accum_h1_data", accum_h1.data)
+        _dump("accum_h1_weight", accum_h1.weight)
+    _dump("iref_in", state.Iref[k])
+    _dump("Igrad1_in_h0", state.Igrad1[half_slot_index(k, 0, state.K, state.pseudo_halfsets)])
+    if state.pseudo_halfsets:
+        _dump("Igrad1_in_h1", state.Igrad1[half_slot_index(k, 1, state.K, state.pseudo_halfsets)])
+    _dump("Igrad2_in", state.Igrad2[k])
+    _dump("fsc_halves_in", state.fsc_halves_class[k])
+
     # Step 2. reweightGrad per halfset
     data_h0 = np.asarray(bind.vdam_reweight_grad(accum_h0.data, accum_h0.weight, ori_size, padding_factor, 1, r_max))
     if state.pseudo_halfsets:
@@ -123,6 +150,9 @@ def vdam_m_step_single_class(
         )
     else:
         data_h1 = None
+    _dump("data_h0_post_reweight", data_h0)
+    if data_h1 is not None:
+        _dump("data_h1_post_reweight", data_h1)
 
     # Step 3. getFristMoment per halfset
     slot_h0 = half_slot_index(k, 0, state.K, state.pseudo_halfsets)
@@ -152,6 +182,9 @@ def vdam_m_step_single_class(
                 **{"lambda": mu_first},
             )
         )
+    _dump("m1_h0_post", new_Igrad1[slot_h0])
+    if state.pseudo_halfsets:
+        _dump("m1_h1_post", new_Igrad1[slot_h1])
 
     # Step 4. getSecondMoment (uses both halfset accumulators)
     new_Igrad2 = state.Igrad2.copy()
@@ -168,6 +201,7 @@ def vdam_m_step_single_class(
                 **{"lambda": mu_second},
             )
         )
+        _dump("m2_post", new_Igrad2[k])
 
     # Step 5. applyMomenta — returns (post_apply_data, mom1_noise_power)
     # For the non-halfset case, mom1_noise_power stays empty; pass data twice
@@ -194,31 +228,48 @@ def vdam_m_step_single_class(
     _post_data, mom1_noise_power = post_data_tuple
     mom1_noise_power = np.asarray(mom1_noise_power)
     _post_data = np.asarray(_post_data)
+    _dump("post_apply_data", _post_data)
+    _dump("mom1_noise_power", mom1_noise_power)
 
-    # Step 6. reconstructGrad updates Iref[k]
-    # Pass weight from the h0 accumulator (RELION uses the latest-accumulated
-    # buffer; Phase 4 fixture parity will verify this is what RELION does).
+    # Step 6. reconstructGrad updates Iref[k].
+    # Pass weight from the h0 accumulator and the noise-power spectrum emitted
+    # by applyMomenta. This is the RELION pseudo-halfset path; omitting
+    # mom1_noise_power silently falls back to the wrong FSC/tau weighting.
+    #
+    # Frame: state.Iref[k] is in recovar's real-space frame (negated &
+    # axis-flipped relative to RELION), but vdam_reconstruct_grad runs
+    # inside RELION's BackProjector — its FFT must see the same volume
+    # RELION's reconstructGrad would. Convert recovar↔RELION on the
+    # boundary so the gradient update is computed in the same frame as
+    # the accumulators (which the iter-1 BPref test verifies are RELION
+    # frame at machine precision).
+    from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
+
+    iref_relion_in = recovar_volume_to_relion(np.asarray(state.Iref[k]))
+    _dump("iref_relion_in", iref_relion_in)
     new_Iref = state.Iref.copy()
-    new_Iref[k] = np.asarray(
-        bind.vdam_reconstruct_grad(
-            state.Iref[k],
-            _post_data,
-            accum_h0.weight,
-            state.fsc_halves_class[k],
-            grad_current_stepsize,
-            tau2_fudge_factor,
-            ori_size,
-            padding_factor,
-            1,
-            r_max,
-            grad_min_resol_shell,
-            False,
-            False,  # skip_gridding; stub tests feed random weights which NaN
-            # under the skip_gridding=True path used for RELION parity.
-            # Fixture parity (F8b) uses skip_gridding=True; see
-            # test_reconstruct_grad_fixture.
+    new_Iref[k] = relion_volume_to_recovar(
+        np.asarray(
+            bind.vdam_reconstruct_grad(
+                iref_relion_in,
+                _post_data,
+                accum_h0.weight,
+                state.fsc_halves_class[k],
+                grad_current_stepsize,
+                tau2_fudge_factor,
+                ori_size,
+                padding_factor,
+                1,
+                r_max,
+                grad_min_resol_shell,
+                False,
+                True,
+                mom1_noise_power,
+            )
         )
     )
+    _dump("iref_out_recovar_frame", new_Iref[k])
+    _dump("iref_out_relion_frame", recovar_volume_to_relion(new_Iref[k]))
 
     new_state = replace(state)
     new_state.Iref = new_Iref

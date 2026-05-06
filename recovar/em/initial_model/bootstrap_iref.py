@@ -202,7 +202,7 @@ def compute_bootstrap_iref_via_cpp(
     do_zero_mask: bool,
     do_ctf_correction: bool,
     random_seed: int,
-    padding_factor: int = 2,  # RELION's internal BPref uses pad=2 for bootstrap
+    padding_factor: int = 1,
     current_size: int = -1,
     minimum_nr_particles: int = 1000,
 ) -> np.ndarray:
@@ -213,17 +213,18 @@ def compute_bootstrap_iref_via_cpp(
     (softMaskOutsideMap, FourierTransformer, CenterFFTbySign,
     windowFourierTransform, CTF::getFftwImage, BackProjector).
 
-    Default `padding_factor=2` gives the best amplitude parity against
-    run_it000_class001.mrc (std within ~6%, CC > 0.78). Despite the GUI
-    command using `--pad 1` for `_rlnPaddingFactor`, the BPref accumulator
-    appears to use pad=2 internally along a code path we haven't fully
-    isolated; `padding_factor=1` gives CC ~0.67 (matches prior handoff).
+    RELION GUI InitialModel uses ``--pad 1`` for this bootstrap path. Fresh
+    same-build RELION dumps match at |CC| > 0.998 with ``padding_factor=1``
+    and the RELION bootstrap current size ``round(0.07 * ori_size)``.
 
     Returns an Iref array of shape `(nr_classes, ori_size, ori_size, ori_size)`
-    in the raw BackProjector output frame. Caller may need to convert
-    via `recovar_volume_to_relion` depending on downstream use.
+    in recovar's real-space frame, suitable for ``InitialModelState.Iref`` and
+    ``write_relion_mrc``. The C++ binding returns RELION's raw BackProjector
+    frame; this wrapper applies the established ``relion_volume_to_recovar``
+    axis/sign conversion.
     """
     from recovar.relion_bind import _relion_bind_core as bind
+    from recovar.utils.helpers import relion_volume_to_recovar
 
     if current_size <= 0:
         # RELION's wsum_model.current_size for bootstrap goes through
@@ -235,7 +236,7 @@ def compute_bootstrap_iref_via_cpp(
         # r_max=2, pad_size=7, skip_gridding=1 for the BPref accumulator.
         current_size = int(np.floor(0.07 * ori_size + 0.5))
 
-    Iref = np.asarray(
+    iref_relion = np.asarray(
         bind.vdam_bootstrap_iref(
             np.ascontiguousarray(images.astype(np.float64)),
             np.ascontiguousarray(defU.astype(np.float64)),
@@ -259,7 +260,7 @@ def compute_bootstrap_iref_via_cpp(
             minimum_nr_particles,
         )
     )
-    return Iref
+    return np.asarray([relion_volume_to_recovar(vol) for vol in iref_relion], dtype=np.float64)
 
 
 def compute_bootstrap_iref(
@@ -431,7 +432,7 @@ def initial_low_pass_filter_references(
     for k in range(K):
         vol = Iref[k]
         # Forward FFT with RELION normalisation (divide by N^3)
-        F = np.fft.rfftn(vol, norm=None) / vol.size
+        F = np.fft.rfftn(vol, axes=(0, 1, 2), norm=None) / vol.size
         # Shell indices
         N = vol.shape[0]
         kz = np.fft.fftfreq(N, d=1.0) * N
@@ -448,5 +449,5 @@ def initial_low_pass_filter_references(
         # outer -> mask stays 0
         F_filt = F * mask
         # Inverse FFT
-        out[k] = np.fft.irfftn(F_filt * vol.size, s=vol.shape, norm=None)
+        out[k] = np.fft.irfftn(F_filt * vol.size, s=vol.shape, axes=(0, 1, 2), norm=None)
     return out

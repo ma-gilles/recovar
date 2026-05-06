@@ -28,6 +28,7 @@ import numpy as np
 from .m_step import vdam_m_step
 from .schedules import (
     DEFAULT_GRAD_EM_ITERS,
+    DEFAULT_GRAD_MU,
     VdamPhaseLengths,
     compute_phase_lengths,
     compute_stepsize,
@@ -55,6 +56,79 @@ halfset-1) and meta is a free-form dict written into per-iter STAR output
 """
 
 IterArtifactSink = Callable[[InitialModelState, int, dict], None]
+
+
+def _posterior_sums_from_meta(meta: dict, key: str) -> np.ndarray | None:
+    value = meta.get(key)
+    if value is not None:
+        return np.asarray(value, dtype=np.float64)
+
+    prefix = "halfset_"
+    suffix = f"_{key}"
+    values = [
+        np.asarray(meta[name], dtype=np.float64)
+        for name in sorted(meta)
+        if name.startswith(prefix) and name.endswith(suffix)
+    ]
+    if not values:
+        return None
+    total = values[0].copy()
+    for value in values[1:]:
+        total += value
+    return total
+
+
+def update_probabilities_from_estep_meta(
+    state: InitialModelState,
+    meta: dict,
+    *,
+    do_grad: bool,
+    mu: float = DEFAULT_GRAD_MU,
+) -> InitialModelState:
+    """Update class and direction priors from E-step posterior masses.
+
+    Mirrors ``MlOptimiser::maximizationOtherParameters`` for ``pdf_class``
+    and ``pdf_direction``. Subset gradient iterations use momentum ``mu``;
+    all-particle or EM-tail iterations use ``my_mu = 0`` and replace priors by
+    the current weighted sums.
+    """
+    class_sums = _posterior_sums_from_meta(meta, "class_posterior_sums")
+    if class_sums is None:
+        return state
+    class_sums = np.asarray(class_sums, dtype=np.float64)
+    if class_sums.shape != (state.K,):
+        raise ValueError(f"class_posterior_sums must have shape ({state.K},), got {class_sums.shape}")
+    if not np.all(np.isfinite(class_sums)) or np.any(class_sums < 0.0):
+        raise ValueError("class_posterior_sums must be non-negative and finite")
+    sum_weight = float(np.sum(class_sums))
+    if sum_weight <= 0.0:
+        return state
+
+    my_mu = float(mu) if do_grad and state.subset_size != -1 else 0.0
+    if my_mu < 0.0 or my_mu > 1.0:
+        raise ValueError(f"mu must be in [0, 1], got {mu}")
+
+    new_state = replace(state)
+    new_pdf_class = np.asarray(state.pdf_class, dtype=np.float64) * my_mu
+    new_pdf_class += (1.0 - my_mu) * class_sums / sum_weight
+    pdf_class_sum = float(np.sum(new_pdf_class))
+    if pdf_class_sum > 0.0:
+        new_pdf_class /= pdf_class_sum
+    new_state.pdf_class = new_pdf_class
+
+    direction_sums = _posterior_sums_from_meta(meta, "class_direction_posterior_sums")
+    if direction_sums is not None and state.pdf_direction is not None:
+        direction_sums = np.asarray(direction_sums, dtype=np.float64)
+        expected = np.asarray(state.pdf_direction).shape
+        if direction_sums.shape != expected:
+            raise ValueError(f"class_direction_posterior_sums must have shape {expected}, got {direction_sums.shape}")
+        if not np.all(np.isfinite(direction_sums)) or np.any(direction_sums < 0.0):
+            raise ValueError("class_direction_posterior_sums must be non-negative and finite")
+        new_pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64) * my_mu
+        new_pdf_direction += (1.0 - my_mu) * direction_sums / sum_weight
+        new_state.pdf_direction = new_pdf_direction
+
+    return new_state
 
 
 def default_schedule_update(
@@ -119,8 +193,20 @@ def select_subset_for_iter(
     pass `random_seed + iter` to match RELION's
     `randomiseParticlesOrder(random_seed + iter, ...)`.
     """
-    rnd = rnd_unif_factory(random_seed + iter)
-    shuffled = randomise_particles_order(nr_particles, rnd)
+    # RELION's exp_model.cpp:451 uses `std::shuffle(sorted_idx, std::mt19937(seed))`
+    # for non-halves randomisation. The Python rnd_unif Fisher-Yates does NOT
+    # match std::shuffle byte-for-byte, so we route through the C++ binding
+    # `vdam_randomise_particles_order` which calls std::shuffle directly.
+    # Falls back to the Python implementation if the binding is unavailable.
+    try:
+        from recovar.relion_bind import _relion_bind_core as _bind
+
+        shuffled = np.asarray(
+            _bind.vdam_randomise_particles_order(int(nr_particles), int(random_seed + iter)), dtype=np.int64
+        )
+    except (ImportError, AttributeError):
+        rnd = rnd_unif_factory(random_seed + iter)
+        shuffled = randomise_particles_order(nr_particles, rnd)
     subset_size = state.subset_size if state.subset_size != -1 else nr_particles
     # `-1` (all particles) still needs to be translated via select_vdam_subset
     pseudo = do_grad and pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=False)
@@ -152,6 +238,7 @@ def run_vdam_iterations(
     iter_artifact_sink: IterArtifactSink = lambda *args, **kw: None,
     grad_ini_frac: float = 0.3,
     grad_fin_frac: float = 0.2,
+    mu: float = DEFAULT_GRAD_MU,
 ) -> InitialModelState:
     """Run the full VDAM iteration loop.
 
@@ -199,6 +286,7 @@ def run_vdam_iterations(
             grad_current_stepsize=current.grad_current_stepsize,
             tau2_fudge_factor=current.tau2_fudge_factor,
         )
+        current = update_probabilities_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
 
         iter_artifact_sink(current, it, meta)
 

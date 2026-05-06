@@ -757,8 +757,13 @@ def get_oversampled_rotation_grid_from_samples(
             return empty_rot, empty_map, empty_map.copy()
         return empty_rot, empty_map
 
+    if rotation_index_order == "relion_hidden":
+        rotation_index_order = "relion"
     if rotation_index_order not in {"recovar", "relion"}:
-        raise ValueError(f"rotation_index_order must be 'recovar' or 'relion', got {rotation_index_order!r}")
+        raise ValueError(
+            "rotation_index_order must be 'recovar', 'relion', or "
+            f"'relion_hidden', got {rotation_index_order!r}"
+        )
 
     coarse_n_pixels = hp.nside2npix(2**parent_nside_level)
     coarse_n_in_planes = rotation_grid_n_in_planes(parent_nside_level)
@@ -933,6 +938,14 @@ def get_relion_rotation_grid(order, *, rotation_index_order: str = "recovar"):
     return R.reshape(n_dir, n_psi, 3, 3).transpose(1, 0, 2, 3).reshape(-1, 3, 3)
 
 
+def get_relion_hidden_rotation_grid(order: int, *, matrices: bool = True) -> np.ndarray:
+    """Return RELION's native hidden-variable rotation order."""
+
+    if matrices:
+        return get_relion_rotation_grid(order, rotation_index_order="relion")
+    return get_relion_rotation_grid_eulers(order, rotation_index_order="relion")
+
+
 def get_relion_rotation_grid_eulers(order, *, rotation_index_order: str = "recovar"):
     """Return RELION Euler angles in the same index order as get_relion_rotation_grid."""
     from recovar.relion_bind._relion_bind_core import get_coarse_orientations
@@ -945,6 +958,26 @@ def get_relion_rotation_grid_eulers(order, *, rotation_index_order: str = "recov
     n_dir = hp.nside2npix(2**order)
     n_psi = relion_euler.shape[0] // n_dir
     return relion_euler.reshape(n_dir, n_psi, 3).transpose(1, 0, 2).reshape(-1, 3).astype(np.float32)
+
+
+def get_oversampled_relion_hidden_rotation_grid_from_samples(
+    parent_rotation_indices,
+    parent_nside_level,
+    oversampling_order=1,
+    *,
+    random_perturbation=0.0,
+    return_rotation_indices=False,
+):
+    """Generate RELION hidden-order oversampled children from coarse samples."""
+
+    return get_oversampled_rotation_grid_from_samples(
+        parent_rotation_indices,
+        parent_nside_level,
+        oversampling_order=oversampling_order,
+        random_perturbation=random_perturbation,
+        return_rotation_indices=return_rotation_indices,
+        rotation_index_order="relion",
+    )
 
 
 def get_rotation_grid_at_order(order, n_in_planes=None, matrices=True):

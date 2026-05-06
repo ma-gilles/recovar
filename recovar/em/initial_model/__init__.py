@@ -11,6 +11,15 @@ binding tests in Phase 2.
 
 from .align_symmetry import AlignSymmetrySpec, build_align_symmetry_tokens
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
+from .dense_adapter import (
+    DenseInitialModelEstepConfig,
+    DenseInitialModelEstepResult,
+    class_log_priors_from_state,
+    dense_initial_model_expectation_step,
+    reference_to_dense_means,
+    run_dense_initial_model_estep,
+    split_pseudo_halfset_particle_ids,
+)
 from .e_step import (
     VdamPosterior,
     build_posterior_summary,
@@ -26,6 +35,7 @@ from .init import (
     initialise_denovo_state,
     seed_noise_from_mavg,
 )
+from .layout import bpref_to_run_em_output, relion_bpref_frame_scales, run_em_output_to_bpref
 from .schedules import (
     DEFAULT_GRAD_FIN_FRAC,
     DEFAULT_GRAD_INI_FRAC,
@@ -47,6 +57,7 @@ from .state import (
 )
 from .subset import (
     assign_pseudo_halfsets,
+    assign_pseudo_halfsets_for_particle_ids,
     pseudo_halfsets_active,
     randomise_particles_order,
     select_vdam_subset,
@@ -67,6 +78,7 @@ __all__ = [
     "randomise_particles_order",
     "select_vdam_subset",
     "assign_pseudo_halfsets",
+    "assign_pseudo_halfsets_for_particle_ids",
     "pseudo_halfsets_active",
     "InitialModelState",
     "MOM2_INIT_CONSTANT",
@@ -86,4 +98,14 @@ __all__ = [
     "AlignSymmetrySpec",
     "build_align_symmetry_tokens",
     "compute_avg_unaligned_and_sigma2",
+    "DenseInitialModelEstepConfig",
+    "DenseInitialModelEstepResult",
+    "class_log_priors_from_state",
+    "dense_initial_model_expectation_step",
+    "reference_to_dense_means",
+    "run_dense_initial_model_estep",
+    "split_pseudo_halfset_particle_ids",
+    "run_em_output_to_bpref",
+    "bpref_to_run_em_output",
+    "relion_bpref_frame_scales",
 ]

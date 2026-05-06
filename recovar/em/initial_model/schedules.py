@@ -49,6 +49,9 @@ DEFAULT_GRAD_FIN_FRAC: float = 0.2
 # From parseInitial (ml_optimiser.cpp:978): grad_em_iters = 0 when --grad_em_iters unset
 DEFAULT_GRAD_EM_ITERS: int = 0
 
+# From parseInitial (ml_optimiser.cpp:1098): --mu default for gradient refinement
+DEFAULT_GRAD_MU: float = 0.9
+
 # From pipeline_jobs.cpp:3376-3385: GUI defaults for the InitialModel job
 GUI_DEFAULT_NR_ITER: int = 200
 GUI_DEFAULT_NR_CLASSES: int = 1
@@ -72,8 +75,7 @@ class GuiInitialModelDefaults:
     grad_fin_frac: float = DEFAULT_GRAD_FIN_FRAC
     grad_em_iters: int = DEFAULT_GRAD_EM_ITERS
     stepsize: float = DEFAULT_STEPSIZE_3D_INITIAL_MODEL
-    # mu default: ml_optimiser.cpp:1009 parses --mu default "0.9"
-    mu: float = 0.9
+    mu: float = DEFAULT_GRAD_MU
 
 
 @dataclass(frozen=True)

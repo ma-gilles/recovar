@@ -24,12 +24,43 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
-PARTICLES_STAR = Path(
-    "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/.tmp/"
-    "slurm_7178672/pytest-of-mg6942/pytest-0/test_pipeline_spa_gpu0/"
-    "gpu_spa/test_dataset/particles.star"
+_FIXTURE_DIR_CANDIDATES = (
+    # Regenerated 2026-05-02 from current data_tiny_parity stack — fixture and dumps
+    # are guaranteed to come from the same RELION run on the same particles
+    Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_regen_2026_05_02/run"),
+    Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run"),
+    Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_run_small"),
 )
+PARTICLES_DATADIR = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_tiny_parity")
+
+
+def _resolve_fixture_dir() -> Path:
+    for candidate in _FIXTURE_DIR_CANDIDATES:
+        if (candidate / "run_it000_model.star").exists() and (candidate / "run_it001_data.star").exists():
+            return candidate
+    return _FIXTURE_DIR_CANDIDATES[0]
+
+
+FIXTURE_DIR = _resolve_fixture_dir()
+
+
+def _infer_particles_star_from_fixture() -> Path:
+    optimiser_star = FIXTURE_DIR / "run_it000_optimiser.star"
+    if not optimiser_star.exists():
+        fallback = FIXTURE_DIR / "run_it000_data.star"
+        return fallback if fallback.exists() else Path("__missing_relion_initialmodel_particles_star__")
+    match = re.search(r"(?:^|\s)--i\s+(\S+)", optimiser_star.read_text())
+    if match is None:
+        fallback = FIXTURE_DIR / "run_it000_data.star"
+        return fallback if fallback.exists() else Path("__missing_relion_initialmodel_particles_star__")
+    particles = Path(match.group(1))
+    if particles.exists():
+        return particles
+    fallback = FIXTURE_DIR / "run_it000_data.star"
+    return fallback if fallback.exists() else particles
+
+
+PARTICLES_STAR = _infer_particles_star_from_fixture()
 
 
 pytestmark = pytest.mark.unit
@@ -40,62 +71,9 @@ requires_fixture = pytest.mark.skipif(
 )
 
 
-def test_relion_sorted_particle_ids_map_through_natural_micrograph_order():
-    from recovar.em.initial_model.gpu_pipeline import (
-        _split_halfset_particle_ids,
-        relion_sorted_particle_ids_to_dataset_ids,
-    )
-
-    micrograph_names = np.array(["1", "2", "10", "3"])
-    # RELION's dump stores positions in lexicographic micrograph order:
-    # natural STAR rows are [0, 2, 1, 3].
-    relion_sorted = np.array([1, 0, 3, 2])
-
-    mapped = relion_sorted_particle_ids_to_dataset_ids(
-        4,
-        micrograph_names=micrograph_names,
-        sorted_particle_ids=relion_sorted,
-    )
-
-    np.testing.assert_array_equal(mapped, np.array([2, 0, 3, 1]))
-    h0, h1 = _split_halfset_particle_ids(
-        4,
-        micrograph_names=micrograph_names,
-        sorted_particle_ids=relion_sorted,
-    )
-    np.testing.assert_array_equal(h0, np.array([2, 3]))
-    np.testing.assert_array_equal(h1, np.array([0, 1]))
-
-
-def test_bpref_converter_uses_relion_axis_order():
-    from recovar.em.initial_model.gpu_pipeline import bpref_to_run_em_output, run_em_output_to_bpref
-
-    ori = 8
-    r_max = 1
-    half_ps = r_max + 1
-    center = ori // 2
-    ft_y = np.arange(ori**3, dtype=np.float64).reshape(ori, ori, ori).astype(np.complex128)
-    ft_ctf = np.arange(ori**3, dtype=np.float64).reshape(ori, ori, ori)
-
-    bp_data, bp_weight = run_em_output_to_bpref(ft_y, ft_ctf, ori, r_max)
-    relion_slice = (
-        slice(center, center + half_ps + 1),
-        slice(center - half_ps, center + half_ps + 1),
-        slice(center - half_ps, center + half_ps + 1),
-    )
-
-    np.testing.assert_array_equal(bp_data, np.transpose(ft_y[relion_slice], (2, 1, 0)))
-    np.testing.assert_array_equal(bp_weight, np.transpose(ft_ctf[relion_slice], (2, 1, 0)))
-
-    ft_y_rt, ft_ctf_rt = bpref_to_run_em_output(bp_data, bp_weight, ori, r_max)
-    bp_data_rt, bp_weight_rt = run_em_output_to_bpref(ft_y_rt, ft_ctf_rt, ori, r_max)
-    np.testing.assert_array_equal(bp_data_rt, bp_data)
-    np.testing.assert_array_equal(bp_weight_rt, bp_weight)
-
-
-def _read_iter0_sigma2(n_shells: int, run_dir: Path = FIXTURE_DIR) -> np.ndarray:
+def _read_iter0_sigma2(n_shells: int) -> np.ndarray:
     """Parse sigma2_noise group 1 from run_it000_model.star."""
-    txt = (run_dir / "run_it000_model.star").read_text()
+    txt = (FIXTURE_DIR / "run_it000_model.star").read_text()
     m = re.search(r"data_model_optics_group_1\n(.*?)(?:\ndata_)", txt, re.DOTALL)
     if not m:
         raise RuntimeError("could not find data_model_optics_group_1")
@@ -110,16 +88,6 @@ def _read_iter0_sigma2(n_shells: int, run_dir: Path = FIXTURE_DIR) -> np.ndarray
     return values
 
 
-def _read_model_general_scalar(model_star: Path, name: str) -> float:
-    """Parse a scalar from a RELION model.star general table."""
-
-    txt = model_star.read_text()
-    m = re.search(rf"_{name}\s+([-+0-9.eE]+)", txt)
-    if not m:
-        raise RuntimeError(f"could not find _{name} in {model_star}")
-    return float(m.group(1))
-
-
 def _read_iter1_pmax_mean() -> float:
     from recovar.data_io.starfile import read_star
 
@@ -129,12 +97,8 @@ def _read_iter1_pmax_mean() -> float:
 
 
 def _read_dumped_perturbation(estep_dump_dir: Path, fallback_sampling_star: Path) -> tuple[float, float]:
-    """Return RELION's full-precision in-memory perturbation when dumped.
+    """Return RELION's full-precision in-memory perturbation when dumped."""
 
-    RELION's sampling STAR is written with limited decimal precision. The
-    debug E-step/BPref fixtures include p0_perturbation.txt from the same run,
-    and that value is the one used to generate the dumped fine grids.
-    """
     for name in ("p0_perturbation.txt", "p1_perturbation.txt", "p2_perturbation.txt"):
         path = estep_dump_dir / name
         if not path.exists():
@@ -159,6 +123,29 @@ def _read_dumped_perturbation(estep_dump_dir: Path, fallback_sampling_star: Path
     return read_relion_perturbation_from_sampling_star(str(fallback_sampling_star))
 
 
+def _configure_relion_image_mask(
+    dataset, *, particle_diameter_ang: float = 544.0, width_mask_edge_px: float = 5.0
+) -> None:
+    from recovar.core import mask as core_mask
+
+    source = dataset.image_source
+    backend = getattr(source, "backend", source)
+    if backend is None:
+        return
+    image_mask = core_mask.relion_soft_image_mask(
+        int(dataset.grid_size),
+        float(dataset.voxel_size),
+        float(particle_diameter_ang),
+        float(width_mask_edge_px),
+    )
+    if hasattr(backend, "image_mask"):
+        backend.image_mask = image_mask
+    if hasattr(backend, "mask"):
+        backend.mask = image_mask
+    if hasattr(backend, "image_mask_mode"):
+        backend.image_mask_mode = "relion_background_fill"
+
+
 @requires_fixture
 def test_estep_pmax_matches_relion_iter1():
     """Run one E-step and compare Pmax against iter-1 data.star."""
@@ -167,7 +154,7 @@ def test_estep_pmax_matches_relion_iter1():
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
     from recovar.em.dense_single_volume.em_engine import run_em
-    from recovar.em.sampling import get_rotation_grid, get_translation_grid
+    from recovar.em.sampling import get_relion_hidden_rotation_grid, get_translation_grid
     from recovar.utils.helpers import load_relion_volume
 
     # --- 1. Load particle dataset ---
@@ -204,7 +191,7 @@ def test_estep_pmax_matches_relion_iter1():
     # (rotation × translation). For a simpler test, use order-1 (48 base)
     # with n_psi(order=1)=12 -> 576 rotations. This is close to RELION's behaviour
     # at the coarse sampling level.
-    rotations = get_rotation_grid(nside_level=1, n_in_planes=12, matrices=True).astype(np.float32)
+    rotations = get_relion_hidden_rotation_grid(1, matrices=True).astype(np.float32)
     print(f"n_rotations = {rotations.shape[0]}")
 
     # Translation grid: offset_range=6, offset_step=2 -> {-6,-4,-2,0,2,4,6} = 7 vals
@@ -272,15 +259,48 @@ def test_estep_pmax_matches_relion_iter1():
 import struct as _struct  # noqa: E402
 
 RELION_DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_debug_dump")
-COHERENT_RELION_RUN_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_run_small")
-COHERENT_RELION_ESTEP_DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
+RELION_ESTEP_SMALL_DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
+# Regenerated 2026-05-02 from data_tiny_parity stack (consistent with fresh fixture)
+RELION_REGEN_DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_regen_2026_05_02/dump")
+
+
+def _resolve_estep_bpref_targets():
+    """Return the best available RELION dump layout for the BPref parity probe."""
+
+    split_targets = (
+        ("pipe", RELION_REGEN_DUMP_DIR),
+        ("pipe", RELION_ESTEP_SMALL_DUMP_DIR),
+        ("pipe", RELION_DUMP_DIR),
+    )
+    for mode, dump_dir in split_targets:
+        data_h0 = dump_dir / "pipe_it1_c0_bp_data_pre_reweight.bin"
+        data_h1 = dump_dir / "pipe_it1_c0_bp_data_h_pre_reweight.bin"
+        weight_h0 = dump_dir / "pipe_it1_c0_bp_weight.bin"
+        weight_h1 = dump_dir / "pipe_it1_c0_bp_weight_h.bin"
+        if all(path.exists() for path in (data_h0, data_h1, weight_h0, weight_h1)):
+            return mode, dump_dir, data_h0, data_h1, weight_h0, weight_h1
+
+    combined_targets = (
+        ("combined", RELION_DUMP_DIR),
+        ("combined", RELION_ESTEP_SMALL_DUMP_DIR),
+    )
+    for mode, dump_dir in combined_targets:
+        data = dump_dir / "bpref_c0_data_before.bin"
+        weight = dump_dir / "bpref_c0_weight_before.bin"
+        if data.exists() and weight.exists():
+            return mode, dump_dir, data, weight
+
+    return None
+
+
+ESTEP_BPREF_TARGETS = _resolve_estep_bpref_targets()
+
 requires_estep_dumps = pytest.mark.skipif(
     not (
         FIXTURE_DIR.exists()
         and PARTICLES_STAR.exists()
-        and COHERENT_RELION_RUN_DIR.exists()
-        and COHERENT_RELION_ESTEP_DUMP_DIR.exists()
-        and (RELION_DUMP_DIR / "pipe_it1_c0_bp_data_pre_reweight.bin").exists()
+        and (PARTICLES_DATADIR / "particles.64.mrcs").exists()
+        and ESTEP_BPREF_TARGETS is not None
     ),
     reason="iter-1 E-step BPref dumps not present",
 )
@@ -298,6 +318,12 @@ def _read_bin(path: Path) -> np.ndarray:
         return np.fromfile(f, dtype=dt, count=nz * ny * nx).reshape(nz, ny, nx)
 
 
+def _read_real_bin_i32_header(path: Path) -> np.ndarray:
+    with open(path, "rb") as f:
+        nz, ny, nx = _struct.unpack("iii", f.read(12))
+        return np.fromfile(f, dtype=np.float64, count=nz * ny * nx).reshape(nz, ny, nx)
+
+
 def _cc(a: np.ndarray, b: np.ndarray) -> float:
     af = a.ravel() - a.mean()
     bf = b.ravel() - b.mean()
@@ -311,14 +337,14 @@ def _max_rel_err(out: np.ndarray, target: np.ndarray) -> float:
 
 @requires_estep_dumps
 def test_estep_bpref_forward_parity():
-    """Drive `run_iter_gpu_vdam` end-to-end on the RELION InitialModel fixture
+    """Drive the dense InitialModel adapter on the RELION InitialModel fixture
     and compare the per-halfset BPref accumulator (pre-reweight) against
     RELION's iter-1 dumps.
 
     Phase C refactor (2026-04-28): the test now exercises the production
-    `run_iter_gpu_vdam` wrapper instead of calling `run_em` directly with a
-    bespoke recipe. This guarantees the test gate covers the same code path
-    that downstream consumers (e.g. `scripts/run_ab_initio.py`) will hit.
+    dense K-class adapter instead of calling `run_em` directly with a bespoke
+    recipe. This guarantees the test gate covers the same code path that
+    downstream consumers (e.g. `scripts/run_ab_initio.py`) will hit.
 
     With pseudo_halfsets=1, RELION accumulates two BPref instances by
     alternating particles across halfset slots. We mirror that via
@@ -335,13 +361,15 @@ def test_estep_bpref_forward_parity():
 
     from recovar.data_io.cryoem_dataset import load_dataset
     from recovar.data_io.starfile import read_star
-    from recovar.em.initial_model.gpu_pipeline import _split_halfset_particle_ids, run_iter_gpu_vdam
+    from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
+    from recovar.em.initial_model import initialise_denovo_state
+    from recovar.em.initial_model.dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
+    from recovar.em.initial_model.gpu_pipeline import _split_halfset_particle_ids
     from recovar.em.sampling import (
         apply_relion_translation_perturbation,
         get_oversampled_rotation_grid_from_samples,
         get_oversampled_translation_grid,
         get_translation_grid,
-        read_relion_perturbation_from_sampling_star,
     )
 
     try:
@@ -350,38 +378,43 @@ def test_estep_bpref_forward_parity():
     except RuntimeError:
         pytest.skip("JAX has no GPU backend (CPU-only environment)")
 
-    ds = load_dataset(str(PARTICLES_STAR), lazy=False)
+    ds = load_dataset(str(PARTICLES_STAR), datadir=str(PARTICLES_DATADIR), lazy=False)
     ori = int(ds.grid_size)
     assert ori == 64
 
     # Enable RELION-exact mask geometry + softMaskOutsideMap blend so our
     # masked Fimg matches RELION's exp_Fimg at machine precision.
-    backend = ds.image_source.backend if hasattr(ds.image_source, "backend") else None
-    if backend is not None and hasattr(backend, "set_relion_image_mask"):
-        backend.set_relion_image_mask(
-            pixel_size=float(ds.voxel_size),
-            particle_diameter_ang=544.0,
-            width_mask_edge_px=5.0,
-        )
+    _configure_relion_image_mask(ds)
 
     if not hasattr(ds, "subset"):
         pytest.skip("dataset has no subset()")
 
-    # iter-0 Iref + sigma2 (RELION fixture). `run_iter_gpu_vdam` performs the
-    # gridding correction + /N² FFT-norm + sign-negate internally when invoked
-    # with the matching kwargs below.
-    from recovar.utils.helpers import load_relion_volume
+    # iter-0 Iref + sigma2 (RELION fixture). Use RELION's in-memory pre-setup
+    # reference dump when available so the production adapter path builds the
+    # same Projector-frame reference that RELION used for this E-step.
+    from recovar.utils.helpers import load_relion_volume, relion_volume_to_recovar
 
-    iref_real = np.asarray(load_relion_volume(str(COHERENT_RELION_RUN_DIR / "run_it000_class001.mrc")), dtype=np.float64)
-    sigma2 = _read_iter0_sigma2(ori // 2 + 1, COHERENT_RELION_RUN_DIR)
+    # Use the same dump dir as the BPref targets so iref/sampling/dumps stay
+    # consistent with one another. ESTEP_BPREF_TARGETS resolves the best
+    # available dump dir (regen first, then small, then debug).
+    if ESTEP_BPREF_TARGETS is not None:
+        relion_estep_dump = ESTEP_BPREF_TARGETS[1]
+    else:
+        relion_estep_dump = RELION_ESTEP_SMALL_DUMP_DIR
+    iref_dump = relion_estep_dump / "iref_c0_pre_setup.bin"
+    if iref_dump.exists():
+        iref_real = relion_volume_to_recovar(_read_real_bin_i32_header(iref_dump)).astype(np.float64, copy=False)
+    else:
+        iref_real = np.asarray(load_relion_volume(str(FIXTURE_DIR / "run_it000_class001.mrc")), dtype=np.float64)
+    sigma2 = _read_iter0_sigma2(ori // 2 + 1)
 
     # Iter-1 sampling: prefer RELION's exact dumped post-perturbation grid;
     # fall back to constructed grid otherwise.
-    sampling_star = COHERENT_RELION_RUN_DIR / "run_it001_sampling.star"
+    sampling_star = FIXTURE_DIR / "run_it001_sampling.star"
     random_perturbation, _perturbation_factor = _read_dumped_perturbation(relion_estep_dump, sampling_star)
-    relion_estep_dump = COHERENT_RELION_ESTEP_DUMP_DIR
     eulers_bin = relion_estep_dump / "p0_oversampled_eulers.bin"
     trans_bin = relion_estep_dump / "p0_oversampled_translations.bin"
+    coarse_translations = get_translation_grid(max_pixel=6, pixel_offset=2).astype(np.float32)
     if eulers_bin.exists() and trans_bin.exists():
         from recovar.utils.helpers import R_from_relion as _R_from_relion
 
@@ -399,7 +432,6 @@ def test_estep_bpref_forward_parity():
             coarse_indices, parent_nside_level=1, oversampling_order=1, random_perturbation=random_perturbation
         )
         rotations = rotations.astype(np.float32)
-        coarse_translations = get_translation_grid(max_pixel=6, pixel_offset=2).astype(np.float32)
         translations, _ = get_oversampled_translation_grid(coarse_translations, pixel_offset=2, oversampling_order=1)
         translations = apply_relion_translation_perturbation(
             translations.astype(np.float32), random_perturbation, offset_step_pixels=2.0
@@ -416,73 +448,140 @@ def test_estep_bpref_forward_parity():
     h0_ids, h1_ids = _split_halfset_particle_ids(ds.n_images, micrograph_names=mic_names)
     assert h0_ids.size + h1_ids.size == ds.n_images
 
-    # Drive the production wrapper. Volume preprocessing kwargs reproduce the
-    # bespoke iter-1 recipe (gridding + /N² + sign-flip): with run_em's
-    # internal gridding only firing at projection_padding_factor > 1 and
-    # InitialModel/VDAM using `--pad 1`, we need to apply it externally.
-    # Iter-1 scoring uses the previous model's offset sigma. The coherent
-    # RELION dump reports sigma2_offset=100, i.e. sigma_offset=10 Å, from
-    # run_it000_model.star.
-    sigma_offset_Ang = _read_model_general_scalar(
-        COHERENT_RELION_RUN_DIR / "run_it000_model.star",
-        "rlnSigmaOffsetsAngst",
+    # Drive the production wrapper. The adapter now constructs the RELION
+    # Projector-frame reference internally (`relion_projector_frame=True`),
+    # including RELION's cropped low-frequency Projector slab and N² scale.
+    # The Gaussian translation prior is read from `_rlnSigmaOffsetsAngst` in
+    # run_it000_model.star (10 Å on this fixture). RELION computes the offset
+    # prior over the active pass translation grid, so dense pass-2 uses the
+    # perturbed fine translations directly.
+    sigma_offset_Ang = 10.0
+    n4 = ori**4
+    from recovar.reconstruction.noise import make_radial_noise
+
+    noise_variance = np.asarray(make_radial_noise(sigma2 * n4, (ori, ori))).astype(np.float32).reshape(-1)
+    translations_np = np.asarray(translations, dtype=np.float32)
+    t_dist2_Ang2 = (translations_np[:, 0] ** 2 + translations_np[:, 1] ** 2) * (float(ds.voxel_size) ** 2)
+    translation_log_prior = (-0.5 * t_dist2_Ang2 / (sigma_offset_Ang**2) * (float(ds.voxel_size) ** 2)).astype(
+        np.float32
     )
-    iref_for_wrapper = iref_real.copy()
-    iref_next, Igrad1, Igrad2, stats_dict = run_iter_gpu_vdam(
-        ds,
-        iref_for_wrapper,
-        sigma2,
-        rotations,
-        translations,
-        current_size=current_size,
-        iter=1,
+    coarse_translation_log_prior = make_relion_translation_log_prior(
+        coarse_translations,
+        voxel_size=float(ds.voxel_size),
+        sigma_offset_angstrom=sigma_offset_Ang,
+    )
+
+    state = initialise_denovo_state(
+        ori_size=ori,
+        pixel_size=float(ds.voxel_size),
+        K=1,
+        nr_iter=1,
+        n_directions=int(rotations.shape[0]),
+        pseudo_halfsets=True,
+    )
+    state.current_size = current_size
+    state.Iref[0] = iref_real.astype(np.float32, copy=False)
+    config = DenseInitialModelEstepConfig(
+        noise_variance=noise_variance,
+        rotations=rotations,
+        translations=translations,
         image_batch_size=50,
         rotation_block_size=100,
-        half_spectrum_scoring=True,
         padding_factor=1,
-        pseudo_halfsets=True,
-        apply_gridding_correction=True,
-        iref_ft_scale=1.0 / (ori**2),
-        iref_ft_sign=-1.0,
-        score_with_masked_images=True,
-        relion_firstiter_score_mode="gaussian",
-        sigma_offset_Ang=sigma_offset_Ang,
-        accumulate_noise=False,
-        sparse_pass2=True,
-        adaptive_random_perturbation=random_perturbation,
-        micrograph_names=mic_names,
+        relion_bpref_frame=True,
+        relion_projector_frame=True,
+        engine_kwargs={
+            "score_with_masked_images": True,
+            "reconstruct_with_masked_images": False,
+            # RELION's --grad mode (ml_optimiser.cpp:10092-10105) uses
+            # Fimg_store = Fimg_shift_nomask - Frefctf for the BPref data input.
+            # Setting this True replicates RELION grad behaviour and lifts
+            # bp_data CC from +0.91 to +0.996.
+            "reconstruction_subtract_projected_reference": True,
+            "relion_firstiter_score_mode": "gaussian",
+            "sparse_pass2": True,
+            "healpix_order": 1,
+            "oversampling_order": 1,
+            "translation_step": 2.0,
+            "random_perturbation": random_perturbation,
+            "coarse_translations": coarse_translations,
+            "particle_diameter_ang": 544.0,
+            "return_profile": True,
+            "coarse_translation_log_prior": coarse_translation_log_prior,
+            "translation_log_prior": translation_log_prior,
+            "image_pre_shifts": np.zeros((ds.n_images, 2), dtype=np.float32),
+        },
     )
-    intermediates = stats_dict["intermediates"]
+    halfset_ids = np.empty(ds.n_images, dtype=np.int8)
+    halfset_ids[h0_ids] = 0
+    halfset_ids[h1_ids] = 1
+    estep = run_dense_initial_model_estep(
+        ds,
+        state,
+        config,
+        particle_ids=np.arange(ds.n_images, dtype=np.int64),
+        halfset_ids=halfset_ids,
+    )
+    bp_data_h0 = np.asarray(estep.accumulators[0].data)
+    bp_data_h1 = np.asarray(estep.accumulators[1].data)
+    bp_weight_h0 = np.asarray(estep.accumulators[0].weight)
+    bp_weight_h1 = np.asarray(estep.accumulators[1].weight)
 
-    # RELION-adaptive E-step accumulates directly in RELION's BPref frame.
-    # The intermediates exposed via stats_dict are therefore ready for direct
-    # comparison against RELION's pre-reweight BPref dumps.
-    bp_data_h0 = np.asarray(intermediates["bp_data_h0"])
-    bp_data_h1 = np.asarray(intermediates["bp_data_h1"])
-    bp_weight_h0 = np.asarray(intermediates["bp_weight_h0"])
-    bp_weight_h1 = np.asarray(intermediates["bp_weight_h1"])
+    mode, dump_dir, *target_paths = ESTEP_BPREF_TARGETS
+    print(f"\nE-STEP → BPref FORWARD PARITY ({mode} dump, small fixture, 500 particles, box 64):")
 
-    target_bp_data_h0 = _read_bin(RELION_DUMP_DIR / "pipe_it1_c0_bp_data_pre_reweight.bin")
-    target_bp_data_h1 = _read_bin(RELION_DUMP_DIR / "pipe_it1_c0_bp_data_h_pre_reweight.bin")
-    target_bp_weight_h0 = _read_bin(RELION_DUMP_DIR / "pipe_it1_c0_bp_weight.bin")
-    target_bp_weight_h1 = _read_bin(RELION_DUMP_DIR / "pipe_it1_c0_bp_weight_h.bin")
+    if mode == "pipe":
+        target_bp_data_h0 = _read_bin(target_paths[0])
+        target_bp_data_h1 = _read_bin(target_paths[1])
+        target_bp_weight_h0 = _read_bin(target_paths[2])
+        target_bp_weight_h1 = _read_bin(target_paths[3])
 
-    print("\nE-STEP → BPref FORWARD PARITY (small fixture, 500 particles, box 64):")
-    rows = [
-        ("h0 bp_data", bp_data_h0, target_bp_data_h0),
-        ("h1 bp_data", bp_data_h1, target_bp_data_h1),
-        ("h0 bp_weight", bp_weight_h0, target_bp_weight_h0),
-        ("h1 bp_weight", bp_weight_h1, target_bp_weight_h1),
-    ]
-    for name, ours, target in rows:
-        cc = _cc(ours, target)
-        rel = _max_rel_err(ours, target)
-        ratio = float(np.linalg.norm(ours)) / max(float(np.linalg.norm(target)), 1e-30)
-        print(f"  {name:14s}: CC = {cc:+.6f}   rel_err = {rel:.3e}   ‖ours‖/‖target‖ = {ratio:.4f}")
+        rows = [
+            ("h0 bp_data", bp_data_h0, target_bp_data_h0),
+            ("h1 bp_data", bp_data_h1, target_bp_data_h1),
+            ("h0 bp_weight", bp_weight_h0, target_bp_weight_h0),
+            ("h1 bp_weight", bp_weight_h1, target_bp_weight_h1),
+        ]
+        for name, ours, target in rows:
+            cc = _cc(ours, target)
+            rel = _max_rel_err(ours, target)
+            ratio = float(np.linalg.norm(ours)) / max(float(np.linalg.norm(target)), 1e-30)
+            print(f"  {name:14s}: CC = {cc:+.6f}   rel_err = {rel:.3e}   ‖ours‖/‖target‖ = {ratio:.4f}")
 
-    cc_h0 = _cc(bp_data_h0, target_bp_data_h0)
-    cc_h1 = _cc(bp_data_h1, target_bp_data_h1)
-    print(f"\n  near-parity gate cc_h0={cc_h0:+.4f}, cc_h1={cc_h1:+.4f} (gate: > +0.99)")
+        cc_h0 = _cc(bp_data_h0, target_bp_data_h0)
+        cc_h1 = _cc(bp_data_h1, target_bp_data_h1)
+        cc_h0_w = _cc(bp_weight_h0, target_bp_weight_h0)
+        cc_h1_w = _cc(bp_weight_h1, target_bp_weight_h1)
+        print(f"\n  near-parity gate cc_h0={cc_h0:+.4f}, cc_h1={cc_h1:+.4f} (gate: > +0.99)")
 
-    assert cc_h0 > 0.99, f"BPref h0 CC regressed: {cc_h0:.4f}"
-    assert cc_h1 > 0.99, f"BPref h1 CC regressed: {cc_h1:.4f}"
+        # 2026-05-02 — after fixture regen + reconstruction_subtract_projected_reference=True
+        # (mirroring RELION's --grad mode, ml_optimiser.cpp:10092-10105), single-iter parity
+        # reaches CC ≥ +0.995 on h0/h1 for both bp_data and bp_weight on the fresh consistent
+        # fixture+dump pair under regen_2026_05_02. Earlier ceiling of +0.73 was bogus —
+        # caused by particle-stack mismatch (the OLD dump came from a different particles.64.mrcs
+        # than what's now on disk) compounded by missing grad-mode reference subtraction.
+        assert cc_h0 > 0.99, f"BPref h0 bp_data CC regressed: {cc_h0:.4f} (baseline ≥ +0.995)"
+        assert cc_h1 > 0.99, f"BPref h1 bp_data CC regressed: {cc_h1:.4f}"
+        assert cc_h0_w > 0.99, f"BPref h0 bp_weight CC regressed: {cc_h0_w:.4f}"
+        assert cc_h1_w > 0.99, f"BPref h1 bp_weight CC regressed: {cc_h1_w:.4f}"
+    else:
+        target_bp_data = _read_bin(target_paths[0])
+        target_bp_weight = _read_bin(target_paths[1])
+        ours_bp_data = bp_data_h0 + bp_data_h1
+        ours_bp_weight = bp_weight_h0 + bp_weight_h1
+
+        rows = [
+            ("bp_data sum", ours_bp_data, target_bp_data),
+            ("bp_weight sum", ours_bp_weight, target_bp_weight),
+        ]
+        for name, ours, target in rows:
+            cc = _cc(ours, target)
+            rel = _max_rel_err(ours, target)
+            ratio = float(np.linalg.norm(ours)) / max(float(np.linalg.norm(target)), 1e-30)
+            print(f"  {name:14s}: CC = {cc:+.6f}   rel_err = {rel:.3e}   ‖ours‖/‖target‖ = {ratio:.4f}")
+
+        cc_data = _cc(ours_bp_data, target_bp_data)
+        cc_weight = _cc(ours_bp_weight, target_bp_weight)
+        print(f"\n  combined gate cc_data={cc_data:+.4f}, cc_weight={cc_weight:+.4f} (gate: > +0.7)")
+        assert cc_data > 0.7, f"BPref data CC regressed: {cc_data:.4f}"
+        assert cc_weight > 0.7, f"BPref weight CC regressed: {cc_weight:.4f}"

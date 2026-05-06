@@ -37,6 +37,8 @@ def bind():
         from recovar.relion_bind import _relion_bind_core as m
     except ImportError:
         pytest.skip("relion_bind not built")
+    if not hasattr(m, "vdam_reweight_grad"):
+        pytest.skip("relion_bind built without InitialModel VDAM primitives; rebuild recovar/relion_bind")
     return m
 
 
