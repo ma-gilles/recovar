@@ -263,6 +263,55 @@ def compute_bootstrap_iref_via_cpp(
     return np.asarray([relion_volume_to_recovar(vol) for vol in iref_relion], dtype=np.float64)
 
 
+def postprocess_bootstrap_iref_via_cpp(
+    Iref: np.ndarray,
+    *,
+    pixel_size: float,
+    ini_high_ang: float,
+    particle_diameter_ang: float,
+    width_mask_edge_px: float,
+    do_init_blobs: bool = True,
+    is_helical_segment: bool = False,
+) -> np.ndarray:
+    """Apply RELION's post-bootstrap InitialModel reference processing.
+
+    This wraps the real RELION C++ primitives used by
+    ``ml_optimiser.cpp:2940-2980``:
+
+      1. ``initialLowPassFilterReferences``
+      2. ``SomGraph::make_blobs_3d`` for positive and negative blobs
+      3. standard-deviation-preserving ``Iref = blobs_pos - blobs_neg / 2``
+      4. a second ``initialLowPassFilterReferences``
+      5. ``softMaskOutsideMap``
+
+    ``compute_bootstrap_iref_via_cpp`` leaves RELION's global ``rand()``
+    state exactly where the bootstrap loop leaves it. Calling this wrapper
+    immediately afterwards preserves that state for the blob draws, matching
+    RELION's denovo InitialModel sequence.
+    """
+    from recovar.relion_bind import _relion_bind_core as bind
+    from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
+
+    arr = np.asarray(Iref, dtype=np.float64)
+    if arr.ndim != 4 or arr.shape[1] != arr.shape[2] or arr.shape[2] != arr.shape[3]:
+        raise ValueError(f"Iref must have shape (K, N, N, N), got {arr.shape}")
+
+    iref_relion = np.asarray([recovar_volume_to_relion(vol) for vol in arr], dtype=np.float64)
+    post_relion = np.asarray(
+        bind.vdam_postprocess_initial_iref(
+            np.ascontiguousarray(iref_relion),
+            float(pixel_size),
+            float(ini_high_ang),
+            float(particle_diameter_ang),
+            float(width_mask_edge_px),
+            bool(do_init_blobs),
+            bool(is_helical_segment),
+        ),
+        dtype=np.float64,
+    )
+    return np.asarray([relion_volume_to_recovar(vol) for vol in post_relion], dtype=np.float64)
+
+
 def compute_bootstrap_iref(
     *,
     images: np.ndarray,  # (N, H, W) real-space particles in stack order

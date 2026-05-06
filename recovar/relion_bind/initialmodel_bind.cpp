@@ -43,6 +43,7 @@
 #include <src/euler.h>
 #include <src/fftw.h>
 #include <src/funcs.h>       // for init_random_generator / rnd_unif
+#include <src/gradient_optimisation.h>  // for SomGraph::make_blobs_3d
 #include <src/mask.h>        // for softMaskOutsideMap
 
 namespace py = pybind11;
@@ -105,6 +106,38 @@ static py::array_t<double> real_1d_to_numpy(const MultidimArray<RFLOAT> &arr) {
     py::array_t<double> out(n);
     std::memcpy(out.request().ptr, arr.data, n * sizeof(RFLOAT));
     return out;
+}
+
+
+static void initial_low_pass_filter_reference(
+    MultidimArray<RFLOAT> &vol,
+    int ori_size,
+    double pixel_size,
+    double ini_high_ang
+) {
+    if (ini_high_ang <= 0.0)
+        return;
+
+    RFLOAT radius = (RFLOAT)ori_size * (RFLOAT)pixel_size / (RFLOAT)ini_high_ang;
+    const RFLOAT width_fmask_edge = (RFLOAT)2.0;  // ml_optimiser.h: WIDTH_FMASK_EDGE
+    radius -= width_fmask_edge / (RFLOAT)2.0;
+    RFLOAT radius_p = radius + width_fmask_edge;
+
+    FourierTransformer transformer;
+    MultidimArray<Complex> Faux;
+    transformer.FourierTransform(vol, Faux);
+    FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(Faux) {
+        RFLOAT r = sqrt((RFLOAT)(kp * kp + ip * ip + jp * jp));
+        if (r < radius) {
+            continue;
+        } else if (r > radius_p) {
+            DIRECT_A3D_ELEM(Faux, k, i, j) = 0.;
+        } else {
+            DIRECT_A3D_ELEM(Faux, k, i, j) *=
+                (RFLOAT)0.5 - (RFLOAT)0.5 * cos(PI * (radius_p - r) / width_fmask_edge);
+        }
+    }
+    transformer.inverseFourierTransform(Faux, vol);
 }
 
 
@@ -694,6 +727,85 @@ static py::array_t<double> vdam_bootstrap_iref(
 
 
 /**
+ * Apply RELION's post-bootstrap InitialModel reference processing.
+ *
+ * This mirrors ml_optimiser.cpp:2940-2980 after the raw random-orientation
+ * bootstrap reconstruction:
+ *   1. initialLowPassFilterReferences()
+ *   2. SomGraph::make_blobs_3d(pos), SomGraph::make_blobs_3d(neg)
+ *   3. Iref = pos - neg / 2, rescaled to the original standard deviation
+ *   4. initialLowPassFilterReferences()
+ *   5. softMaskOutsideMap(Iref, diameter/2, width_mask_edge)
+ *
+ * The function intentionally does not seed rand(). In RELION, make_blobs_3d
+ * consumes the C rand() state left by the bootstrap loop's final
+ * init_random_generator(random_seed + part_id) + Euler draws.
+ */
+static py::array_t<double> vdam_postprocess_initial_iref(
+    py::array_t<double, py::array::c_style | py::array::forcecast> iref_in,
+    double pixel_size,
+    double ini_high_ang,
+    double particle_diameter_ang,
+    double width_mask_edge_px,
+    bool do_init_blobs,
+    bool is_helical_segment
+) {
+    auto buf = iref_in.request();
+    if (buf.ndim != 4)
+        throw std::runtime_error("iref must have shape (K, Z, Y, X)");
+    long K = buf.shape[0];
+    long zdim = buf.shape[1];
+    long ydim = buf.shape[2];
+    long xdim = buf.shape[3];
+    if (zdim != ydim || ydim != xdim)
+        throw std::runtime_error("iref volumes must be cubic");
+
+    int ori_size = (int)xdim;
+    double diameter_px = particle_diameter_ang / pixel_size;
+    const double* in_ptr = (const double*)buf.ptr;
+    py::array_t<double> out({K, zdim, ydim, xdim});
+    double* out_ptr = (double*)out.request().ptr;
+    long nvox = zdim * ydim * xdim;
+
+    for (long kclass = 0; kclass < K; kclass++) {
+        MultidimArray<RFLOAT> vol(zdim, ydim, xdim);
+        for (long n = 0; n < nvox; n++)
+            DIRECT_MULTIDIM_ELEM(vol, n) = (RFLOAT)in_ptr[kclass * nvox + n];
+        vol.setXmippOrigin();
+
+        initial_low_pass_filter_reference(vol, ori_size, pixel_size, ini_high_ang);
+
+        if (do_init_blobs) {
+            MultidimArray<RFLOAT> blobs_pos(vol), blobs_neg(vol);
+            SomGraph::make_blobs_3d(blobs_pos, vol, 40, (RFLOAT)diameter_px, is_helical_segment);
+            SomGraph::make_blobs_3d(blobs_neg, vol, 40, (RFLOAT)diameter_px, is_helical_segment);
+            RFLOAT old_std = SomGraph::std(vol);
+
+            FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(vol) {
+                DIRECT_MULTIDIM_ELEM(vol, n) =
+                    DIRECT_MULTIDIM_ELEM(blobs_pos, n) - DIRECT_MULTIDIM_ELEM(blobs_neg, n) / (RFLOAT)2.0;
+            }
+
+            RFLOAT new_std = SomGraph::std(vol);
+            if (new_std > 0.) {
+                vol *= old_std / new_std;
+            }
+        }
+
+        if (do_init_blobs) {
+            initial_low_pass_filter_reference(vol, ori_size, pixel_size, ini_high_ang);
+            softMaskOutsideMap(vol, (RFLOAT)(diameter_px / 2.0), (RFLOAT)width_mask_edge_px, NULL);
+        }
+
+        for (long n = 0; n < nvox; n++)
+            out_ptr[kclass * nvox + n] = (double)DIRECT_MULTIDIM_ELEM(vol, n);
+    }
+
+    return out;
+}
+
+
+/**
  * Return the first `n_draws` values of RELION's `rnd_unif()` after
  * `init_random_generator(seed)`. Useful for reproducing per-particle
  * random orientation draws during the InitialModel bootstrap
@@ -869,5 +981,21 @@ Run the RELION InitialModel bootstrap (ml_optimiser.cpp:3127-3205 +
 reconstruct at :3265) end-to-end in C++. Returns the reconstructed
 Iref of shape (nr_classes, ori, ori, ori). Caller applies fftshift to
 put the origin at the array centre.
+)doc");
+
+    m.def("vdam_postprocess_initial_iref", &vdam_postprocess_initial_iref,
+          py::arg("iref"),
+          py::arg("pixel_size"),
+          py::arg("ini_high_ang"),
+          py::arg("particle_diameter_ang"),
+          py::arg("width_mask_edge_px"),
+          py::arg("do_init_blobs") = true,
+          py::arg("is_helical_segment") = false,
+          R"doc(
+Apply RELION's post-bootstrap InitialModel reference processing
+(initialLowPassFilterReferences + SomGraph::make_blobs_3d + second
+low-pass + softMaskOutsideMap). Input/output are RELION-frame real-space
+volumes of shape (K, ori, ori, ori). The function intentionally preserves
+the existing C rand() state, matching RELION's bootstrap-to-blob sequence.
 )doc");
 }
