@@ -100,6 +100,9 @@ def collect_e_step(
     best_pose_translations,
     translation_search_base,
     original_image_indices=None,
+    class_assignments=None,
+    class_responsibilities=None,
+    class_posterior_sums=None,
 ) -> None:
     """Snapshot per-half E-step outputs. Called once per half inside the iter."""
 
@@ -136,6 +139,17 @@ def collect_e_step(
         ),
         "original_image_indices": (
             np.asarray(original_image_indices, dtype=np.int64) if original_image_indices is not None else None
+        ),
+        "class_assignments": (
+            np.asarray(class_assignments, dtype=np.int32) if class_assignments is not None else None
+        ),
+        "class_responsibilities": (
+            np.asarray(class_responsibilities, dtype=np.float32)
+            if class_responsibilities is not None
+            else None
+        ),
+        "class_posterior_sums": (
+            np.asarray(class_posterior_sums, dtype=np.float64) if class_posterior_sums is not None else None
         ),
     }
 

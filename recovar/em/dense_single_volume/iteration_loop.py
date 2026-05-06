@@ -2722,6 +2722,7 @@ def _run_relion_iteration_loop(
         coarse_ha = [None, None]
         adaptive_pass1_diag = [None, None]
         class_posterior_per_half = [None, None]
+        class_responsibilities_per_half = [None, None]
 
         if use_adaptive:
             # --- TWO-PASS ADAPTIVE OVERSAMPLING (RELION parity) ---
@@ -2868,6 +2869,9 @@ def _run_relion_iteration_loop(
                 ha_k = np.zeros(0, dtype=np.int32)
                 class_assignments[k] = np.zeros(0, dtype=np.int32)
                 class_posterior_per_half[k] = np.zeros(n_classes, dtype=np.float32)
+                class_responsibilities_per_half[k] = (
+                    np.zeros((n_classes, 0), dtype=np.float32) if k_class_enabled else None
+                )
                 class_rotation_posterior_per_half[k] = np.zeros((n_classes, n_rot_for_stats), dtype=np.float32)
                 em_stats_k = make_relion_stats(
                     log_evidence_per_image=jnp.zeros(0, dtype=jnp.float32),
@@ -2903,6 +2907,9 @@ def _run_relion_iteration_loop(
                     best_pose_translations=best_pose_translations[k],
                     translation_search_base=translation_search_bases[k],
                     original_image_indices=np.zeros(0, dtype=np.int64),
+                    class_assignments=class_assignments[k],
+                    class_responsibilities=class_responsibilities_per_half[k],
+                    class_posterior_sums=class_posterior_per_half[k],
                 )
                 continue
             if use_local:
@@ -3327,6 +3334,10 @@ def _run_relion_iteration_loop(
                         noise_stats_k = k_class_result.aggregate_noise_stats
                         noise_stats_per_half_per_class[k] = k_class_result.noise_stats
                         class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
+                        class_responsibilities_per_half[k] = np.asarray(
+                            k_class_result.class_responsibilities,
+                            dtype=np.float32,
+                        )
                         class_posterior_per_half[k] = np.asarray(
                             k_class_result.class_posterior_sums,
                             dtype=np.float64,
@@ -3410,6 +3421,10 @@ def _run_relion_iteration_loop(
                         noise_stats_k = k_class_result.aggregate_noise_stats
                         noise_stats_per_half_per_class[k] = k_class_result.noise_stats
                         class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
+                        class_responsibilities_per_half[k] = np.asarray(
+                            k_class_result.class_responsibilities,
+                            dtype=np.float32,
+                        )
                         class_posterior_per_half[k] = np.asarray(
                             k_class_result.class_posterior_sums,
                             dtype=np.float64,
@@ -3635,6 +3650,10 @@ def _run_relion_iteration_loop(
                         noise_stats_k = k_class_result.aggregate_noise_stats
                         noise_stats_per_half_per_class[k] = k_class_result.noise_stats
                         class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
+                        class_responsibilities_per_half[k] = np.asarray(
+                            k_class_result.class_responsibilities,
+                            dtype=np.float32,
+                        )
                         class_posterior_per_half[k] = np.asarray(
                             k_class_result.class_posterior_sums,
                             dtype=np.float64,
@@ -3929,6 +3948,7 @@ def _run_relion_iteration_loop(
                         np.asarray(full_coarse_stats["class_log_evidence_per_image"], dtype=np.float64)
                         - np.asarray(full_coarse_stats["log_evidence_per_image"], dtype=np.float64)[None, :]
                     )
+                    class_responsibilities_per_half[k] = np.asarray(class_responsibilities_k, dtype=np.float32)
                     class_posterior_per_half[k] = np.sum(class_responsibilities_k, axis=1)
                     class_rotation_posterior_per_half[k] = np.stack(
                         [
@@ -4169,6 +4189,10 @@ def _run_relion_iteration_loop(
                     noise_stats_k = k_class_result.aggregate_noise_stats
                     noise_stats_per_half_per_class[k] = k_class_result.noise_stats
                     class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
+                    class_responsibilities_per_half[k] = np.asarray(
+                        k_class_result.class_responsibilities,
+                        dtype=np.float32,
+                    )
                     class_posterior_per_half[k] = np.asarray(
                         k_class_result.class_posterior_sums,
                         dtype=np.float64,
@@ -4289,6 +4313,9 @@ def _run_relion_iteration_loop(
                 best_pose_translations=best_pose_translations[k],
                 translation_search_base=translation_search_bases[k] if "translation_search_bases" in dir() else None,
                 original_image_indices=_half_orig_idx,
+                class_assignments=class_assignments[k] if k_class_enabled else None,
+                class_responsibilities=class_responsibilities_per_half[k] if k_class_enabled else None,
+                class_posterior_sums=class_posterior_per_half[k] if k_class_enabled else None,
             )
 
         # E-step + per-half M-step accumulators are now both populated.

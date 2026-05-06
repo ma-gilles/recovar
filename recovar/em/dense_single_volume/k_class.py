@@ -251,7 +251,19 @@ def _override_result_class_assignments(
     )
 
 
-def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None) -> NoiseStats | None:
+def _aggregate_k_class_noise_stats(
+    noise_stats: tuple[NoiseStats, ...] | None,
+    class_posterior_sums: np.ndarray | None = None,
+) -> NoiseStats | None:
+    """Aggregate per-class residual-noise stats without duplicating image power.
+
+    Each per-class ``run_em`` call sees the same images, so its ``wsum_img_power``
+    and ``sumw`` are image-set terms, not class-specific posterior terms.  The
+    reference-dependent residual term is class-posterior weighted and should be
+    summed over classes; the image-power term should enter once, scaled by the
+    total retained posterior mass when significant-pruning omits any mass.
+    """
+
     if not noise_stats:
         return None
 
@@ -263,11 +275,23 @@ def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None) -> NoiseStats |
             raise ValueError(f"Cannot aggregate mixed missing/present noise field {name}")
         return jnp.sum(jnp.stack([jnp.asarray(value) for value in values], axis=0), axis=0)
 
+    first = noise_stats[0]
+    if class_posterior_sums is None:
+        total_sumw = float(first.sumw)
+    else:
+        total_sumw = float(np.sum(np.asarray(class_posterior_sums, dtype=np.float64)))
+
+    first_sumw = float(first.sumw)
+    if first_sumw > 0.0 and np.isfinite(first_sumw):
+        img_power_scale = total_sumw / first_sumw
+    else:
+        img_power_scale = 0.0
+
     return make_noise_stats(
         wsum_sigma2_noise=_sum_field("wsum_sigma2_noise"),
-        wsum_img_power=_sum_field("wsum_img_power"),
+        wsum_img_power=jnp.asarray(first.wsum_img_power) * img_power_scale,
         wsum_sigma2_offset=sum(float(stats.wsum_sigma2_offset) for stats in noise_stats),
-        sumw=sum(float(stats.sumw) for stats in noise_stats),
+        sumw=total_sumw,
         wsum_noise_a2=_sum_field("wsum_noise_a2"),
         wsum_noise_xa=_sum_field("wsum_noise_xa"),
     )
@@ -344,7 +368,7 @@ def _assemble_result(
         stats=stats,
         per_class_stats=per_class_stats,
         noise_stats=noise_stats,
-        aggregate_noise_stats=_sum_noise_stats(noise_stats),
+        aggregate_noise_stats=_aggregate_k_class_noise_stats(noise_stats, class_posterior_sums),
         per_class_best_pose_rotations=(
             None if per_class_best_pose_rotations is None else tuple(per_class_best_pose_rotations)
         ),

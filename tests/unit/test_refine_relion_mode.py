@@ -35,6 +35,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
     run_local_em_exact,
 )
 from recovar.em.dense_single_volume.k_class import (
+    _aggregate_k_class_noise_stats,
     run_dense_k_class_em,
     run_local_k_class_em,
 )
@@ -97,7 +98,7 @@ from recovar.em.dense_single_volume.helpers.significance import (
 from recovar.em.dense_single_volume.helpers.oversampling import (
     _compute_pass2_stats_sparse_perimage_reference,
 )
-from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
+from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats, make_noise_stats
 from recovar.em.sampling import (
     apply_relion_rotation_perturbation,
     apply_relion_rotation_perturbation_to_eulers,
@@ -1257,6 +1258,65 @@ def test_dense_k_class_identical_means_split_global_posterior(rng):
         rtol=5e-3,
         atol=1e-5,
     )
+
+
+def test_k_class_noise_aggregation_does_not_duplicate_image_power():
+    per_class = (
+        make_noise_stats(
+            wsum_sigma2_noise=jnp.array([-10.0, -20.0], dtype=jnp.float32),
+            wsum_img_power=jnp.array([100.0, 200.0], dtype=jnp.float32),
+            wsum_sigma2_offset=3.0,
+            sumw=8.0,
+            wsum_noise_a2=jnp.array([1.0, 2.0], dtype=jnp.float32),
+            wsum_noise_xa=jnp.array([3.0, 4.0], dtype=jnp.float32),
+        ),
+        make_noise_stats(
+            wsum_sigma2_noise=jnp.array([-30.0, -40.0], dtype=jnp.float32),
+            wsum_img_power=jnp.array([100.0, 200.0], dtype=jnp.float32),
+            wsum_sigma2_offset=5.0,
+            sumw=8.0,
+            wsum_noise_a2=jnp.array([5.0, 6.0], dtype=jnp.float32),
+            wsum_noise_xa=jnp.array([7.0, 8.0], dtype=jnp.float32),
+        ),
+    )
+
+    aggregate = _aggregate_k_class_noise_stats(
+        per_class,
+        class_posterior_sums=np.array([3.0, 5.0], dtype=np.float64),
+    )
+
+    np.testing.assert_allclose(np.asarray(aggregate.wsum_sigma2_noise), np.array([-40.0, -60.0]))
+    np.testing.assert_allclose(np.asarray(aggregate.wsum_img_power), np.array([100.0, 200.0]))
+    assert aggregate.sumw == pytest.approx(8.0)
+    assert aggregate.wsum_sigma2_offset == pytest.approx(8.0)
+    np.testing.assert_allclose(np.asarray(aggregate.wsum_noise_a2), np.array([6.0, 8.0]))
+    np.testing.assert_allclose(np.asarray(aggregate.wsum_noise_xa), np.array([10.0, 12.0]))
+
+
+def test_k_class_noise_aggregation_scales_image_power_by_retained_mass():
+    per_class = (
+        make_noise_stats(
+            wsum_sigma2_noise=jnp.array([1.0], dtype=jnp.float32),
+            wsum_img_power=jnp.array([100.0], dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=10.0,
+        ),
+        make_noise_stats(
+            wsum_sigma2_noise=jnp.array([2.0], dtype=jnp.float32),
+            wsum_img_power=jnp.array([100.0], dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=10.0,
+        ),
+    )
+
+    aggregate = _aggregate_k_class_noise_stats(
+        per_class,
+        class_posterior_sums=np.array([3.0, 2.0], dtype=np.float64),
+    )
+
+    np.testing.assert_allclose(np.asarray(aggregate.wsum_sigma2_noise), np.array([3.0]))
+    np.testing.assert_allclose(np.asarray(aggregate.wsum_img_power), np.array([50.0]))
+    assert aggregate.sumw == pytest.approx(5.0)
 
 
 def test_local_k_class_identical_means_split_global_posterior(rng):
