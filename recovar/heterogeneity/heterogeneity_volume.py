@@ -162,6 +162,11 @@ def make_volumes_kernel_estimate_local(
     vol_paths.ensure_dirs()
     ds = dataset
 
+    if my_distances is None:
+        my_distances = [None, None]
+    if my_cov is None:
+        my_cov = [None, None]
+
     if isinstance(bins, int):
         logger.warning("Picking bins based on number of particles only. n_min_particles = %s", n_min_particles)
         heterogeneity_bins = pick_heterogeneity_bins2(-1, heterogeneity_distances[1], 0.5, n_min_particles, n_bins=bins)

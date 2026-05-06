@@ -237,6 +237,9 @@ def _heterogeneity_kernel_batch_from_fft_explicit(
     )
     half_images = half_images / noise_half
 
+    if kernels is not None:
+        half_images = half_images * kernels.reshape(-1,1)
+
     # Pre-compute CTF once (reused for both image and weight backprojections)
     ctf = config.compute_ctf_half(ctf_params)
     if not config.premultiplied_ctf:
@@ -272,6 +275,10 @@ def _heterogeneity_kernel_batch_from_fft_explicit(
         )
     else:
         ctf_half = ctf**2 / noise_half
+
+    if kernels is not None:
+        ctf_half = ctf_half * kernels.reshape(-1,1)
+
 
     Ft_ctf = core.adjoint_slice_volume(
         ctf_half,
@@ -1792,6 +1799,10 @@ def even_less_naive_heterogeneity_scheme_relion_style(
 ):
     bins = heterogeneity_bins
 
+    if my_distances is not None and my_cov is not None:
+        # Replace 1D heterogeneity_distances with Mahalanobis distance
+        heterogeneity_distances = np.einsum('ij,ijk,ik->i', my_distances, my_cov, my_distances)
+
     # For tilt-series datasets, distances may be per-particle while the kernel
     # iterates per-image.  Expand to per-image so bin assignments match image indices.
     if (
@@ -1827,8 +1838,6 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     # Accumulate on CPU to avoid OOM from JAX immutable-array copies at large
     # grid sizes (256^3 × 50 bins ≈ 5 GB; .at[].set() would double that).
     # Transferred to GPU only for the final matmul below.
-    rhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype)
-    lhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype_real)
 
     # Auto-compute batch size based on GPU memory if not specified.
     #
@@ -1842,8 +1851,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     #>>LH 001
 
     if batch_size is None:
-        accum_gb = utils.get_size_in_gb(rhs_all) + utils.get_size_in_gb(lhs_all)
-        avail_gb = _effective_heterogeneity_memory_budget(max(1.0, utils.get_gpu_memory_total() - accum_gb))
+        accum_gb = utils.get_size_in_gb(my_rhs) + utils.get_size_in_gb(my_lhs)
+        avail_gb = max(1.0, utils.get_gpu_memory_total() - accum_gb)
         batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, avail_gb))
     logger.info("batch size in heterogeneity kernel: %s", batch_size)
 
@@ -1856,7 +1865,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(
 
     image_inds_by_bin = [np.flatnonzero(inds == bin_idx).astype(np.int32) for bin_idx in range(n_bins)]
     #<<LH 001
-    my_all_indices = np.arange(my_cov.shape[0])
+    my_all_indices = np.arange(len(heterogeneity_distances))
 
     # Pre-allocate accumulators once (reused across bins)
     Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
@@ -1876,8 +1885,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(
             
             if kernel_batch.shape[0] < batch_size:
                 pad_size = batch_size - kernel_batch.shape[0]
-                padding = jnp.zeros((pad_size,))
-                kernel_batch = jnp.concatenate([kernel_batch, padding])
+                padding = np.zeros((pad_size,))
+                kernel_batch = np.concatenate([kernel_batch, padding])
 
             if use_fast_rfft:
                 # Pad BEFORE rfft so padded_rfft always sees a fixed batch
@@ -1908,114 +1917,13 @@ def even_less_naive_heterogeneity_scheme_relion_style(
         my_rhs[h_idx] = np.asarray(Ft_y_acc)
         my_lhs[h_idx] = np.asarray(Ft_ctf_acc)
 
-
-
-
-
-
-    # Pre-allocate accumulators once (reused across bins)
-    Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
-    Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
-    for bin_idx, image_inds in enumerate(image_inds_by_bin):
-        if image_inds.size == 0:
-            continue
-
-        Ft_y_acc = jnp.zeros_like(Ft_y_acc)
-        Ft_ctf_acc = jnp.zeros_like(Ft_ctf_acc)
-        raw_batches = experiment_dataset.iter_batches(
-            batch_size,
-            noise_model=experiment_dataset.noise,
-            noise_half=False,
-            indices=image_inds,
-        )
-        for (
-            raw_images,
-            rotation_matrices,
-            translations,
-            ctf_params,
-            noise_variance,
-            _particle_indices,
-            _image_indices,
-        ) in raw_batches:
-            if use_fast_rfft:
-                # Pad BEFORE rfft so padded_rfft always sees a fixed batch
-                # shape — avoids JIT recompilation for unique tail-batch sizes.
-                raw_images, rotation_matrices, translations, ctf_params, noise_variance = (
-                    _pad_heterogeneity_kernel_batch(
-                        raw_images,
-                        rotation_matrices,
-                        translations,
-                        ctf_params,
-                        noise_variance,
-                        target_batch_size=batch_size,
-                    )
-                )
-                images = _process_images_half_fast(raw_images, experiment_dataset)
-            else:
-                images = experiment_dataset.process_images_half(raw_images)
-                images, rotation_matrices, translations, ctf_params, noise_variance = _pad_heterogeneity_kernel_batch(
-                    images,
-                    rotation_matrices,
-                    translations,
-                    ctf_params,
-                    noise_variance,
-                    target_batch_size=batch_size,
-                )
-            Ft_y_acc, Ft_ctf_acc = _heterogeneity_kernel_batch_from_fft(
-                config,
-                images,
-                ctf_params,
-                rotation_matrices,
-                translations,
-                noise_variance,
-                Ft_y=Ft_y_acc,
-                Ft_ctf=Ft_ctf_acc,
-            )
-
-        rhs_all[bin_idx] = np.asarray(Ft_y_acc)
-        lhs_all[bin_idx] = np.asarray(Ft_ctf_acc)
-
-    # A slight improvement is an almost triangular kernel/ pyramid kernel
-    #    _
-    #  _| |_
-    # _|     |_
-    # or almost epachenikov
-    #
-    # heterogeneity_kernel
-    if heterogeneity_kernel == "parabola" or heterogeneity_kernel == "triangle":
-        distances = bins
-        h_grid = 2 * bins
-
-        np_to_use = np
-
-        def kernel_fn(dist):
-            if heterogeneity_kernel == "triangle":
-                return np_to_use.where(np_to_use.abs(dist) < 1, 1 - np_to_use.abs(dist), 0)
-            return np_to_use.where(np_to_use.abs(dist) < 1, 3 / 4 * (1 - dist**2), 0)
-
-        weight_matrix = np_to_use.zeros((n_bins, n_bins)).astype(np.float32)
-        weight_matrix[0, 0] = 1
-        for idx in range(1, n_bins):
-            weights = kernel_fn(np_to_use.sqrt(distances / h_grid[idx]))
-            weight_matrix[:, idx] = weights
-        # Matmul on CPU: (50,50) @ (50, half_vol) — fast and avoids GPU OOM.
-        # Downstream post_process_from_filter_v2 transfers each row individually.
-        rhs_all = np.asarray(weight_matrix.T.astype(rhs_all.real.dtype) @ rhs_all)
-        lhs_all = np.asarray(weight_matrix.T @ lhs_all)
-
-    elif heterogeneity_kernel == "square":
-        rhs_all = np.cumsum(rhs_all, axis=0)
-        lhs_all = np.cumsum(lhs_all, axis=0)
-    else:
-        raise NotImplementedError
-
     kernel_type = "triangular" if disc_type == "linear_interp" else "square"
     vol_upsample = upsampling_factor if upsampling_factor is not None else 1
     estimate_bins = []
     for idx in range(heterogeneity_bins.size):
         estimate = relion_functions.post_process_from_filter_v2(
-            lhs_all[idx],
-            rhs_all[idx],
+            my_lhs[idx],
+            my_rhs[idx],
             experiment_dataset.volume_shape,
             vol_upsample,
             tau=tau,
@@ -2031,7 +1939,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(
 
     estimates = np.asarray(jnp.stack(estimate_bins, axis=0))
     if return_lhs_rhs:
-        return estimates, np.asarray(lhs_all), np.asarray(rhs_all)
+        return estimates, np.asarray(my_lhs), np.asarray(my_rhs)
 
     return estimates
 
