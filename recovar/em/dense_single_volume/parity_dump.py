@@ -256,14 +256,30 @@ def _downsample_volume_real(volume_ft_flat, volume_shape) -> np.ndarray:
     factor = max(1, factor)
     from recovar.core import fourier_transform_utils as ftu
 
-    arr = np.asarray(volume_ft_flat).reshape(volume_shape)
+    arr = np.asarray(volume_ft_flat)
+    n_voxels = int(np.prod(volume_shape))
+    if arr.size != n_voxels:
+        if arr.size % n_voxels != 0:
+            raise ValueError(
+                f"volume has {arr.size} coefficients, not a multiple of {volume_shape}",
+            )
+        leading = int(arr.size // n_voxels)
+        return np.stack(
+            [
+                _downsample_volume_real(arr.reshape(leading, n_voxels)[i], volume_shape)
+                for i in range(leading)
+            ],
+            axis=0,
+        )
+
+    arr = arr.reshape(volume_shape)
     if factor == 1:
-        return np.asarray(ftu.get_idft3(arr), dtype=np.float32).reshape(-1)
+        return np.real(np.asarray(ftu.get_idft3(arr))).astype(np.float32).reshape(-1)
     nz = volume_shape[0]
     crop = nz // factor
     if crop < 4:
-        return np.asarray(ftu.get_idft3(arr), dtype=np.float32).reshape(-1)
-    real = np.asarray(ftu.get_idft3(arr), dtype=np.float32)
+        return np.real(np.asarray(ftu.get_idft3(arr))).astype(np.float32).reshape(-1)
+    real = np.real(np.asarray(ftu.get_idft3(arr))).astype(np.float32)
     start = (nz - crop) // 2
     end = start + crop
     return real[start:end, start:end, start:end].reshape(-1)
