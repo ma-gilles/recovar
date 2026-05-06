@@ -8,10 +8,13 @@ the cross-cutting SPA/ET pipeline regression suite, which is forbidden
 for EM-only PRs per ``recovar/em/CLAUDE.md``).
 
 Tests:
-1. K=1 256² 50k full ab-initio (15 iters) — assert per-iter Pmax within
+1. K=1 256² 50k full auto-refine parity (15 iters) — assert per-iter Pmax within
    ``1e-3`` of RELION at every iteration AND final FSC@0.5 vs GT within
    ``±0.5 Å`` of RELION.
-2. K=4 256² 50k full ab-initio (15 iters) — same per-class.
+2. K=1 256² 50k native InitialModel/VDAM cold-start (8 iters) — run the
+   GUI-facing ``scripts/run_ab_initio.py`` path and assert GT quality is close
+   to a RELION ``--grad --denovo_3dref`` iter-8 reference.
+3. K=4 256² 50k full ab-initio (15 iters) — same per-class.
 
 Skipped by default. Enable with the ``--em-parity-long`` pytest flag.
 The flag deliberately does NOT alias ``--long-test`` to keep this tier
@@ -37,16 +40,27 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PARITY_SCRIPT = REPO_ROOT / "scripts" / "run_multi_iter_parity.py"
 KCLASS_SCRIPT = REPO_ROOT / "scripts" / "run_k_class_parity.py"
 REFINE_SCRIPT = REPO_ROOT / "scripts" / "run_full_refinement.py"
+ABINITIO_SCRIPT = REPO_ROOT / "scripts" / "run_ab_initio.py"
 BASELINES_DIR = REPO_ROOT / "tests" / "baselines"
 
 FIXTURE_BASE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj")
 
-# 256² 50k K=1 — likely needs to be built via prepare_relion_parity_benchmark.py
+# 256² 50k K=1 auto-refine fixture — built via prepare_relion_parity_benchmark.py.
 K1_LONG_FIXTURE_DIR = FIXTURE_BASE / "data_noise1_50k_256_normalized"
 K1_LONG_RELION_DIR = K1_LONG_FIXTURE_DIR / "relion_ref_os0"
 K1_LONG_RELION_DATA_STAR = K1_LONG_RELION_DIR / "run_data.star"
 K1_LONG_DATA_STAR = K1_LONG_FIXTURE_DIR / "particles.star"
 K1_LONG_GT_VOLUME = K1_LONG_FIXTURE_DIR / "reference_gt.mrc"
+
+# 256² 50k K=1 native InitialModel reference. This must be generated with
+# RELION's GUI-facing InitialModel command shape, not auto-refine:
+#
+#   relion_refine --grad --denovo_3dref --iter 8 --K 1 --pad 1 ...
+#
+# The Slurm wrapper creates/reuses this fixture before running the native VDAM
+# quality test. Keeping it separate from K1_LONG_RELION_DIR prevents the guard
+# from accidentally comparing native VDAM against an auto-refine trajectory.
+K1_NATIVE_RELION_DIR = K1_LONG_FIXTURE_DIR / "relion_initialmodel_k1_it008"
 
 # 256² 50k K=4 — likely needs to be built via prepare_relion_multiclass_parity_benchmark.py
 K4_LONG_FIXTURE_DIR = FIXTURE_BASE / "data_pdb_k4_50k_256"
@@ -102,14 +116,69 @@ def _read_relion_fsc_resolution(relion_dir: Path, iter_num: int, voxel_size: flo
     return float(grid_size) * float(voxel_size) / max(1, shell_05)
 
 
+def _relion_iter_walltimes_s(relion_dir: Path) -> list[float]:
+    """Approximate RELION per-iteration walltimes from optimizer file mtimes."""
+    from datetime import datetime
+
+    prev_time = None
+    out: list[float] = []
+    for path in sorted(relion_dir.glob("run_it*_optimiser.star")):
+        current = datetime.fromtimestamp(path.stat().st_mtime)
+        if prev_time is not None:
+            out.append(float((current - prev_time).total_seconds()))
+        prev_time = current
+    return out
+
+
+def _read_relion_star_scalar(path: Path, key: str) -> str:
+    prefix = f"{key} "
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped.split()[-1]
+    raise AssertionError(f"{path} does not contain {key}")
+
+
+def _assert_relion_initialmodel_reference(relion_dir: Path, *, expected_iter: int) -> None:
+    """Hard-fail if the native reference is not a RELION InitialModel run.
+
+    A previous version of this guard accidentally compared native VDAM against
+    ``relion_ref_os0``, which is an auto-refine fixture. That makes the quality
+    result ambiguous and hides regressions in the GUI InitialModel path.
+    """
+    optimiser = relion_dir / f"run_it{expected_iter:03d}_optimiser.star"
+    _require_fixture(optimiser)
+    text = optimiser.read_text()
+    header = "\n".join(text.splitlines()[:3])
+    required_tokens = ("--grad", "--denovo_3dref", f"--iter {expected_iter}", "--pad 1", "--auto_sampling")
+    missing = [token for token in required_tokens if token not in header]
+    if missing:
+        raise AssertionError(
+            f"{relion_dir} is not the required RELION InitialModel reference; "
+            f"missing command token(s): {missing}. Header:\n{header}"
+        )
+
+    do_grad = int(float(_read_relion_star_scalar(optimiser, "_rlnDoGradientRefine")))
+    do_auto_refine = int(float(_read_relion_star_scalar(optimiser, "_rlnDoAutoRefine")))
+    do_split_halves = int(float(_read_relion_star_scalar(optimiser, "_rlnDoSplitRandomHalves")))
+    current_iter = int(float(_read_relion_star_scalar(optimiser, "_rlnCurrentIteration")))
+    n_iters = int(float(_read_relion_star_scalar(optimiser, "_rlnNumberOfIterations")))
+    if (do_grad, do_auto_refine, do_split_halves, current_iter, n_iters) != (1, 0, 0, expected_iter, expected_iter):
+        raise AssertionError(
+            f"{relion_dir} is not a K=1 RELION InitialModel iter-{expected_iter} reference: "
+            f"do_grad={do_grad}, do_auto_refine={do_auto_refine}, split_halves={do_split_halves}, "
+            f"current_iter={current_iter}, n_iters={n_iters}"
+        )
+
+
 @pytest.mark.em_parity_long
 @pytest.mark.gpu
 @pytest.mark.integration
 def test_em_parity_long_k1_full(tmp_path):
-    """K=1 256² 50k full ab-initio (~3.5 hr on A100).
+    """K=1 256² 50k full auto-refine replay (~3.5 hr on A100).
 
     Runs ``run_full_refinement.py --max_iter 15`` and compares iter-by-iter
-    Pmax to RELION's ``rlnAveragePmax`` plus final FSC@0.5 vs GT.
+    Pmax to RELION auto-refine's ``rlnAveragePmax`` plus final FSC@0.5 vs GT.
 
     Pass criteria:
       * Final reconstruction FSC@0.5 vs GT within ±0.5 Å of RELION
@@ -241,6 +310,196 @@ def test_em_parity_long_k1_full(tmp_path):
     )
     assert not bad_iters, f"K=1 long per-iter Pmax exceeds 1e-3 at iters {bad_iters}: " + ", ".join(
         f"iter{i + 1}={pmax_diff[i]:.3g}" for i in bad_iters
+    )
+
+
+@pytest.mark.em_parity_long
+@pytest.mark.gpu
+@pytest.mark.integration
+def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
+    """K=1 256² 50k native InitialModel quality gate.
+
+    This is intentionally separate from ``test_em_parity_long_k1_full``.
+    ``run_full_refinement.py`` and replay-style tests can pass while the
+    GUI-facing native InitialModel path in ``scripts/run_ab_initio.py`` stalls
+    after the first few VDAM iterations. This test guards the exact production
+    command shape users get from RELION InitialModel parity work.
+
+    Pass criteria:
+      * The reference trajectory is verified as RELION InitialModel
+        (``--grad --denovo_3dref``), not auto-refine.
+      * Native VDAM iter-8 reaches within 0.05 mean FSC(1..16) of RELION
+        InitialModel iter-8.
+      * Native VDAM iter-8 reaches within 0.05 corr-vs-GT of RELION
+        InitialModel iter-8.
+
+    The thresholds are relative to the configured RELION fixture, not a magic
+    absolute score, so fixture or preprocessing changes keep this guard useful.
+    """
+    _assert_parity_ancestors_or_skip()
+    _require_fixture(
+        ABINITIO_SCRIPT,
+        K1_LONG_FIXTURE_DIR,
+        K1_NATIVE_RELION_DIR,
+        K1_LONG_DATA_STAR,
+        K1_LONG_GT_VOLUME,
+        K1_NATIVE_RELION_DIR / "run_it001_class001.mrc",
+        K1_NATIVE_RELION_DIR / "run_it002_class001.mrc",
+        K1_NATIVE_RELION_DIR / "run_it008_class001.mrc",
+    )
+    _assert_relion_initialmodel_reference(K1_NATIVE_RELION_DIR, expected_iter=8)
+
+    output_dir = tmp_path / "k1_native_initialmodel"
+    output_dir.mkdir()
+
+    cmd = [
+        sys.executable,
+        str(ABINITIO_SCRIPT),
+        "--i",
+        str(K1_LONG_DATA_STAR),
+        "--datadir",
+        str(K1_LONG_FIXTURE_DIR),
+        "--o",
+        str(output_dir / "run"),
+        "--nr_iter",
+        "8",
+        "--K",
+        "1",
+        "--sym",
+        "C1",
+        "--particle_diameter",
+        "200",
+        "--tau2_fudge",
+        "4",
+        "--random_seed",
+        "0",
+        "--healpix_order",
+        "1",
+        "--oversampling",
+        "1",
+        "--offset_range",
+        "6",
+        "--offset_step",
+        "2",
+        "--image_batch_size",
+        "16",
+        "--rotation_block_size",
+        "256",
+        "--padding_factor",
+        "1",
+        "--eager_images",
+    ]
+    logger.info("K=1 native InitialModel cmd: %s", " ".join(cmd))
+
+    t0 = time.time()
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=gpu_subprocess_env())
+    elapsed = time.time() - t0
+    assert proc.returncode == 0, (
+        f"run_ab_initio.py exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+
+    from scripts.evaluate_ab_initio_gt import evaluate
+
+    volume_paths = [
+        output_dir / "run_it001_class001.mrc",
+        output_dir / "run_it002_class001.mrc",
+        output_dir / "run_it008_class001.mrc",
+        K1_NATIVE_RELION_DIR / "run_it001_class001.mrc",
+        K1_NATIVE_RELION_DIR / "run_it002_class001.mrc",
+        K1_NATIVE_RELION_DIR / "run_it008_class001.mrc",
+    ]
+    labels = [
+        "vdam_it001",
+        "vdam_it002",
+        "vdam_it008",
+        "relion_initialmodel_it001",
+        "relion_initialmodel_it002",
+        "relion_initialmodel_it008",
+    ]
+    _npz_payload, summary = evaluate(
+        volume_paths=[str(path) for path in volume_paths],
+        labels=labels,
+        gt_volume_path=str(K1_LONG_GT_VOLUME),
+        volume_frame="relion",
+        gt_frame="recovar",
+        voxel_size_override=2.125,
+        gt_align=False,
+        gt_align_healpix_order=2,
+        gt_align_max_shell=8,
+        gt_align_allow_mirror=True,
+        gt_align_allow_sign=False,
+    )
+    metrics = {item["label"]: item for item in summary["volumes"]}
+
+    vdam_it008 = metrics["vdam_it008"]
+    relion_it008 = metrics["relion_initialmodel_it008"]
+    fsc_gap_1_16 = float(relion_it008["mean_fsc_1_16"] - vdam_it008["mean_fsc_1_16"])
+    corr_gap = float(relion_it008["corr_vs_gt"] - vdam_it008["corr_vs_gt"])
+
+    payload = {
+        "k1_native_initialmodel_relion_dir": str(K1_NATIVE_RELION_DIR),
+        "k1_native_initialmodel_walltime_s": elapsed,
+        "k1_native_initialmodel_vdam_it001_corr_vs_gt": float(metrics["vdam_it001"]["corr_vs_gt"]),
+        "k1_native_initialmodel_vdam_it001_mean_fsc_1_16": float(metrics["vdam_it001"]["mean_fsc_1_16"]),
+        "k1_native_initialmodel_vdam_it002_corr_vs_gt": float(metrics["vdam_it002"]["corr_vs_gt"]),
+        "k1_native_initialmodel_vdam_it002_mean_fsc_1_16": float(metrics["vdam_it002"]["mean_fsc_1_16"]),
+        "k1_native_initialmodel_vdam_it008_corr_vs_gt": float(vdam_it008["corr_vs_gt"]),
+        "k1_native_initialmodel_vdam_it008_mean_fsc_1_16": float(vdam_it008["mean_fsc_1_16"]),
+        "k1_native_initialmodel_relion_it001_corr_vs_gt": float(metrics["relion_initialmodel_it001"]["corr_vs_gt"]),
+        "k1_native_initialmodel_relion_it001_mean_fsc_1_16": float(
+            metrics["relion_initialmodel_it001"]["mean_fsc_1_16"]
+        ),
+        "k1_native_initialmodel_relion_it002_corr_vs_gt": float(metrics["relion_initialmodel_it002"]["corr_vs_gt"]),
+        "k1_native_initialmodel_relion_it002_mean_fsc_1_16": float(
+            metrics["relion_initialmodel_it002"]["mean_fsc_1_16"]
+        ),
+        "k1_native_initialmodel_relion_it008_corr_vs_gt": float(relion_it008["corr_vs_gt"]),
+        "k1_native_initialmodel_relion_it008_mean_fsc_1_16": float(relion_it008["mean_fsc_1_16"]),
+        "k1_native_initialmodel_fsc_1_16_gap_vs_relion_it008": fsc_gap_1_16,
+        "k1_native_initialmodel_corr_gap_vs_relion_it008": corr_gap,
+        "k1_native_initialmodel_relion_iter_walltimes_s": _relion_iter_walltimes_s(K1_NATIVE_RELION_DIR),
+    }
+    ledger = _write_quality_ledger("k1_native_initialmodel", payload)
+    logger.info("K=1 native InitialModel ledger: %s", ledger)
+
+    print(file=sys.stderr, flush=True)
+    print("=== K=1 native InitialModel quality (256² 50k 8-iter ab-initio) ===", file=sys.stderr, flush=True)
+    print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
+    print(
+        "  vdam_it008: "
+        f"corr={vdam_it008['corr_vs_gt']:.6f} "
+        f"fsc1-16={vdam_it008['mean_fsc_1_16']:.6f} "
+        f"shell0143={vdam_it008['shell_0143']}",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(
+        "  relion_initialmodel_it008: "
+        f"corr={relion_it008['corr_vs_gt']:.6f} "
+        f"fsc1-16={relion_it008['mean_fsc_1_16']:.6f} "
+        f"shell0143={relion_it008['shell_0143']}",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(
+        f"  gaps vs RELION InitialModel iter8: corr={corr_gap:.6f} fsc1-16={fsc_gap_1_16:.6f}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    assert relion_it008["mean_fsc_1_16"] >= 0.20, (
+        "RELION iter-8 fixture quality is unexpectedly low; fixture or GT convention may have changed: "
+        f"{relion_it008}"
+    )
+    assert fsc_gap_1_16 <= 0.05, (
+        "Native InitialModel VDAM iter-8 FSC quality is not close to RELION InitialModel iter-8. "
+        f"VDAM fsc1-16={vdam_it008['mean_fsc_1_16']:.6f}, "
+        f"RELION fsc1-16={relion_it008['mean_fsc_1_16']:.6f}, gap={fsc_gap_1_16:.6f}."
+    )
+    assert corr_gap <= 0.05, (
+        "Native InitialModel VDAM iter-8 corr-vs-GT is not close to RELION InitialModel iter-8. "
+        f"VDAM corr={vdam_it008['corr_vs_gt']:.6f}, "
+        f"RELION corr={relion_it008['corr_vs_gt']:.6f}, gap={corr_gap:.6f}."
     )
 
 
