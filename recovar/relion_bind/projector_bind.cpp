@@ -222,7 +222,7 @@ ndarray, shape (N, N, N), float64
           py::arg("interpolator") = 1,
           py::arg("current_size") = -1,
           py::arg("do_gridding") = true,
-          py::arg("data_dim") = 2,
+          py::arg("data_dim") = 3,
           R"doc(
 Initialize RELION Projector from a real-space volume.
 
@@ -242,7 +242,7 @@ shape (pad_size, pad_size, pad_size//2+1) complex128.
           py::arg("interpolator") = 1,
           py::arg("current_size") = -1,
           py::arg("do_gridding") = true,
-          py::arg("data_dim") = 2,
+          py::arg("data_dim") = 3,
           py::arg("current_size_output") = false,
           R"doc(
 Project a volume using RELION's Projector::project.
@@ -264,8 +264,9 @@ current_size : int
 do_gridding : bool
     Apply gridding correction before FFT.
 data_dim : int
-    Projection data dimensionality. Use 2 for SPA 3D-reference-to-2D-image
-    scoring; RELION changes projector normalisation based on this value.
+    Projection data dimensionality. Existing EM parity callers default to
+    RELION's historical binding value 3; VDAM InitialModel paths pass 2
+    explicitly for SPA 3D-reference-to-2D-image scoring.
 current_size_output : bool
     If true, allocate the output Fourier image as
     (current_size, current_size//2+1), matching RELION E-step buffers.
