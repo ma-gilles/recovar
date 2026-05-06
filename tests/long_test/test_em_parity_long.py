@@ -149,7 +149,7 @@ def test_em_parity_long_k1_full(tmp_path):
         "--init_resolution",
         "30.0",
         "--image_batch_size",
-        "200",
+        "64",
         "--relion_half_sets",
         str(K1_LONG_RELION_DATA_STAR),
     ]

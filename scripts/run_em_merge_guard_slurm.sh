@@ -67,7 +67,7 @@ echo
 git rev-parse HEAD
 git symbolic-ref --short HEAD || echo '<detached>'
 git status --porcelain
-pixi run install-recovar
+flock "${REPO_ROOT}/.pixi/install-recovar.lock" pixi run install-recovar
 pixi run python - <<'PY'
 import pathlib
 import jax
