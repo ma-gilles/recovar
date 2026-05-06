@@ -48,9 +48,10 @@ make_test_script() {
 #SBATCH --partition=cryoem
 #SBATCH --account=${ACCOUNT}
 #SBATCH --gres=gpu:1
+#SBATCH --exclusive
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=05:00:00
+#SBATCH --mem=500G
+#SBATCH --time=12:00:00
 
 set -euo pipefail
 cd "${REPO_ROOT}"
