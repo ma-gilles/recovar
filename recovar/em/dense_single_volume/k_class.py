@@ -298,6 +298,26 @@ def _decode_dense_best_pose_details(hard_assignment, rotations: np.ndarray, tran
     )
 
 
+def _override_result_class_assignments(
+    result: KClassEMResult,
+    class_assignments: np.ndarray,
+) -> KClassEMResult:
+    """Apply an externally chosen class assignment consistently to pose details."""
+    assignments_np = np.asarray(class_assignments, dtype=np.int32)
+    n_images = int(assignments_np.shape[0])
+    image_indices = jnp.arange(n_images)
+    assignments_jnp = jnp.asarray(assignments_np, dtype=jnp.int32)
+    per_class_hard = result.per_class_hard_assignments
+    pose_assignments = per_class_hard[assignments_jnp, image_indices]
+    return result._replace(
+        class_assignments=assignments_jnp,
+        pose_assignments=pose_assignments,
+        best_pose_rotations=_selected_by_class(result.per_class_best_pose_rotations, assignments_np),
+        best_pose_translations=_selected_by_class(result.per_class_best_pose_translations, assignments_np),
+        best_pose_rotation_ids=_selected_by_class(result.per_class_best_pose_rotation_ids, assignments_np),
+    )
+
+
 def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None) -> NoiseStats | None:
     if not noise_stats:
         return None
@@ -1102,25 +1122,20 @@ def run_dense_k_class_em_adaptive(
         # ``class_assignments`` with the coarse-pass argmax. The per-class
         # M-step accumulators already encode each class's fine-refined best
         # pose, so reconstruction quality is preserved.
-        coarse_assn = jnp.asarray(coarse_class_assignments_for_override, dtype=jnp.int32)
-        n_imgs = int(coarse_assn.shape[0])
-        image_indices = jnp.arange(n_imgs)
-        per_class_hard = result.per_class_hard_assignments
-        new_pose_assn = per_class_hard[coarse_assn, image_indices]
-        replace_kwargs = dict(
-            class_assignments=coarse_assn,
-            pose_assignments=new_pose_assn,
+        result = _override_result_class_assignments(
+            result,
+            coarse_class_assignments_for_override,
         )
         if return_best_pose_details:
+            new_pose_assn = np.asarray(result.pose_assignments, dtype=np.int64)
             best_rots, best_trans, best_rot_ids = _decode_dense_best_pose_details(
-                np.asarray(new_pose_assn, dtype=np.int64),
+                new_pose_assn,
                 fine_rotations_np,
                 fine_translations_np,
             )
-            replace_kwargs.update(
+            result = result._replace(
                 best_pose_rotations=best_rots,
                 best_pose_translations=best_trans,
                 best_pose_rotation_ids=best_rot_ids,
             )
-        result = result._replace(**replace_kwargs)
     return result

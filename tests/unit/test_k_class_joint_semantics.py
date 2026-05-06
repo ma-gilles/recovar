@@ -12,6 +12,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.k_class import (
     _assemble_result,
+    _override_result_class_assignments,
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
     run_local_k_class_em,
@@ -105,6 +106,41 @@ def test_k_class_noise_aggregate_uses_joint_relion_sum_weight():
     assert result.aggregate_noise_stats.wsum_sigma2_offset / (2.0 * result.aggregate_noise_stats.sumw) == pytest.approx(
         20.0,
     )
+
+
+def test_class_assignment_override_updates_pose_details():
+    result = _assemble_result(
+        class_log_evidence=np.asarray([[0.0], [-0.2]], dtype=np.float64),
+        new_means=[jnp.zeros(2), jnp.zeros(2)],
+        Ft_y=[jnp.zeros(2), jnp.zeros(2)],
+        Ft_ctf=[jnp.zeros(2), jnp.zeros(2)],
+        per_class_hard_assignments=np.asarray([[3], [7]], dtype=np.int32),
+        per_class_stats=(
+            _stats([0.0], [-5.0], [0.01]),
+            _stats([-0.2], [-1.0], [0.20]),
+        ),
+        noise_stats=None,
+        per_class_best_pose_rotations=[
+            jnp.ones((1, 3, 3), dtype=jnp.float32),
+            jnp.full((1, 3, 3), 2.0, dtype=jnp.float32),
+        ],
+        per_class_best_pose_translations=[
+            jnp.asarray([[1.0, 2.0]], dtype=jnp.float32),
+            jnp.asarray([[9.0, 9.0]], dtype=jnp.float32),
+        ],
+        per_class_best_pose_rotation_ids=[
+            jnp.asarray([11], dtype=jnp.int32),
+            jnp.asarray([22], dtype=jnp.int32),
+        ],
+    )
+
+    overridden = _override_result_class_assignments(result, np.asarray([0], dtype=np.int32))
+
+    np.testing.assert_array_equal(np.asarray(overridden.class_assignments), np.asarray([0], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(overridden.pose_assignments), np.asarray([3], dtype=np.int32))
+    np.testing.assert_allclose(np.asarray(overridden.best_pose_translations), np.asarray([[1.0, 2.0]], dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(overridden.best_pose_rotation_ids), np.asarray([11], dtype=np.int32))
+    np.testing.assert_allclose(np.asarray(overridden.best_pose_rotations), np.ones((1, 3, 3), dtype=np.float32))
 
 
 def test_dense_k_class_selects_class_rotation_log_prior(monkeypatch):
