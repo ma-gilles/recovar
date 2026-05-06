@@ -39,12 +39,48 @@ def main():
         help="Optional recovar-frame GT MRC. Defaults to <relion_dir>/../reference_gt.mrc if present.",
     )
     parser.add_argument("--max_iter", type=int, default=None, help="Optional cap on recovar iteration count")
+    parser.add_argument(
+        "--gt_align",
+        action="store_true",
+        help="Also compute alignment-aware GT metrics for merged maps.",
+    )
+    parser.add_argument(
+        "--gt_align_healpix_order",
+        type=int,
+        default=1,
+        help="RELION/RECOVAR rotation-grid order used for GT alignment.",
+    )
+    parser.add_argument(
+        "--gt_align_max_shell",
+        type=int,
+        default=8,
+        help="Maximum Fourier shell used to score coarse GT alignment.",
+    )
+    parser.add_argument(
+        "--gt_align_no_mirror",
+        action="store_true",
+        help="Do not test the x-axis mirror handedness ambiguity during GT alignment.",
+    )
+    parser.add_argument(
+        "--gt_align_allow_sign",
+        action="store_true",
+        help="Allow a global sign flip during GT alignment. Off by default.",
+    )
+    parser.add_argument(
+        "--gt_align_all_series",
+        action="store_true",
+        help="Compute aligned GT metrics for half maps and unregularized maps too; default is merged maps only.",
+    )
     args = parser.parse_args()
 
     import jax.numpy as jnp
     import mrcfile
 
     from recovar.core import fourier_transform_utils as ftu
+    from recovar.em.initial_model.gt_metrics import (
+        align_volume_to_reference,
+        relion_alignment_rotations,
+    )
     from recovar.reconstruction import regularization
     from recovar.utils import helpers
 
@@ -79,6 +115,16 @@ def main():
 
     gt_real = helpers.load_mrc(str(gt_path))
     gt_ft = np.asarray(ftu.get_dft3(jnp.asarray(gt_real))).reshape(-1)
+    align_rotations = None
+    if args.gt_align:
+        align_rotations = relion_alignment_rotations(args.gt_align_healpix_order)
+        print(
+            "GT alignment enabled: "
+            f"healpix_order={args.gt_align_healpix_order}, rotations={align_rotations.shape[0]}, "
+            f"score_shell<={args.gt_align_max_shell}, mirror={not args.gt_align_no_mirror}, "
+            f"allow_sign={args.gt_align_allow_sign}, "
+            f"series={'all' if args.gt_align_all_series else 'merged-only'}"
+        )
 
     def _first_shell_below_threshold(fsc_values, threshold):
         below = np.where(np.asarray(fsc_values, dtype=np.float64) < float(threshold))[0]
@@ -105,6 +151,9 @@ def main():
     def _corr(a, b):
         return float(np.corrcoef(np.asarray(a).ravel(), np.asarray(b).ravel())[0, 1])
 
+    def _should_align(prefix):
+        return bool(args.gt_align and (args.gt_align_all_series or prefix.endswith("_merged")))
+
     def _add_metrics(store, prefix, real_vol, vol_ft):
         fsc_vs_gt = _fsc_vs_gt(vol_ft)
         shell_05 = _first_shell_below_threshold(fsc_vs_gt, 0.5)
@@ -113,6 +162,31 @@ def main():
         store[f"{prefix}_fsc_vs_gt"] = fsc_vs_gt
         store[f"{prefix}_shell_05"] = np.int32(shell_05)
         store[f"{prefix}_shell_0143"] = np.int32(shell_0143)
+        if _should_align(prefix):
+            assert align_rotations is not None
+            alignment = align_volume_to_reference(
+                real_vol,
+                gt_real,
+                align_rotations,
+                score_max_shell=int(args.gt_align_max_shell),
+                allow_mirror=not bool(args.gt_align_no_mirror),
+                allow_sign=bool(args.gt_align_allow_sign),
+            )
+            aligned_ft = _real_to_ft(alignment.aligned_volume)
+            aligned_fsc_vs_gt = _fsc_vs_gt(aligned_ft)
+            aligned_shell_05 = _first_shell_below_threshold(aligned_fsc_vs_gt, 0.5)
+            aligned_shell_0143 = _first_shell_below_threshold(aligned_fsc_vs_gt, 0.143)
+            store[f"{prefix}_aligned_corr_vs_gt"] = np.float64(alignment.corr)
+            store[f"{prefix}_aligned_score_vs_gt"] = np.float64(alignment.score)
+            store[f"{prefix}_aligned_fsc_vs_gt"] = aligned_fsc_vs_gt
+            store[f"{prefix}_aligned_shell_05"] = np.int32(aligned_shell_05)
+            store[f"{prefix}_aligned_shell_0143"] = np.int32(aligned_shell_0143)
+            store[f"{prefix}_gt_align_rotation_index"] = np.int32(alignment.rotation_index)
+            store[f"{prefix}_gt_align_rotation_matrix"] = alignment.rotation_matrix
+            store[f"{prefix}_gt_align_mirror_x"] = np.bool_(alignment.mirror_x)
+            store[f"{prefix}_gt_align_sign"] = np.int32(alignment.sign)
+            store[f"{prefix}_gt_align_score_max_shell"] = np.int32(args.gt_align_max_shell)
+            store[f"{prefix}_gt_align_healpix_order"] = np.int32(args.gt_align_healpix_order)
 
     iter_pattern = re.compile(r"it(\d+)_half1_reg\.mrc$")
     iter_indices = []
@@ -128,11 +202,18 @@ def main():
         print(f"No saved intermediate regularized volumes found in {intermediates_dir}")
         return 0
 
-    print(
-        f"{'iter':>4s} {'REL':>5s} {'rec_reg_corr':>12s} {'rel_corr':>10s} "
-        f"{'rec_unreg':>10s} {'rec-rel':>10s} {'0.143_R':>8s} {'0.143_L':>8s}"
-    )
-    print("-" * 76)
+    if args.gt_align:
+        print(
+            f"{'iter':>4s} {'REL':>5s} {'rec_reg_corr':>12s} {'rec_aln':>10s} "
+            f"{'rel_corr':>10s} {'rel_aln':>10s} {'rec-rel':>10s} {'0.143_Ra':>8s} {'0.143_La':>8s}"
+        )
+        print("-" * 92)
+    else:
+        print(
+            f"{'iter':>4s} {'REL':>5s} {'rec_reg_corr':>12s} {'rel_corr':>10s} "
+            f"{'rec_unreg':>10s} {'rec-rel':>10s} {'0.143_R':>8s} {'0.143_L':>8s}"
+        )
+        print("-" * 76)
 
     for rec_it in iter_indices:
         tag = f"{rec_it:03d}"
@@ -194,10 +275,37 @@ def main():
         rec_rel = float(out["recovar_reg_merged_corr_vs_relion"]) if "recovar_reg_merged_corr_vs_relion" in out else np.nan
         rec_0143 = int(out["recovar_reg_merged_shell_0143"])
         rel_0143 = int(out["relion_merged_shell_0143"]) if "relion_merged_shell_0143" in out else -1
-        print(
-            f"{rec_it + 1:4d} {relion_it:5d} {rec_corr:12.6f} {rel_corr:10.6f} "
-            f"{rec_unreg:10.6f} {rec_rel:10.6f} {rec_0143:8d} {rel_0143:8d}"
-        )
+        if args.gt_align:
+            rec_aligned_corr = (
+                float(out["recovar_reg_merged_aligned_corr_vs_gt"])
+                if "recovar_reg_merged_aligned_corr_vs_gt" in out
+                else np.nan
+            )
+            rel_aligned_corr = (
+                float(out["relion_merged_aligned_corr_vs_gt"])
+                if "relion_merged_aligned_corr_vs_gt" in out
+                else np.nan
+            )
+            rec_aligned_0143 = (
+                int(out["recovar_reg_merged_aligned_shell_0143"])
+                if "recovar_reg_merged_aligned_shell_0143" in out
+                else -1
+            )
+            rel_aligned_0143 = (
+                int(out["relion_merged_aligned_shell_0143"])
+                if "relion_merged_aligned_shell_0143" in out
+                else -1
+            )
+            print(
+                f"{rec_it + 1:4d} {relion_it:5d} {rec_corr:12.6f} {rec_aligned_corr:10.6f} "
+                f"{rel_corr:10.6f} {rel_aligned_corr:10.6f} {rec_rel:10.6f} "
+                f"{rec_aligned_0143:8d} {rel_aligned_0143:8d}"
+            )
+        else:
+            print(
+                f"{rec_it + 1:4d} {relion_it:5d} {rec_corr:12.6f} {rel_corr:10.6f} "
+                f"{rec_unreg:10.6f} {rec_rel:10.6f} {rec_0143:8d} {rel_0143:8d}"
+            )
 
     print(f"\nSaved per-iteration GT comparison files in {recovar_dir}")
     print(f"GT volume: {gt_path}")
