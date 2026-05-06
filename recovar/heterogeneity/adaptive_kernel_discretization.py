@@ -173,7 +173,10 @@ def _process_images_half_fast(images, dataset):
         return pad.padded_rfft(images, dataset.grid_size, src.padding)
     return dataset.process_images_half(images)
 
-
+# TODO
+#<<LH Here we will need to scale the CTF and the images accordingly
+# Even though it is less efficient, we will probably just do a loop over 
+# the previous function. As we can not reuse the computations in this step easily.
 def _heterogeneity_kernel_batch_from_fft(
     config: ForwardModelConfig,
     images,
@@ -184,6 +187,7 @@ def _heterogeneity_kernel_batch_from_fft(
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
     upsample_ctf: bool = True,
+    kernels = None,
 ):
     """Backproject half-spectrum images into heterogeneity kernel accumulators.
 
@@ -207,6 +211,7 @@ def _heterogeneity_kernel_batch_from_fft(
         Ft_y=Ft_y,
         Ft_ctf=Ft_ctf,
         upsample_ctf=upsample_ctf,
+        kernels=kernels
     )
 
 
@@ -221,6 +226,7 @@ def _heterogeneity_kernel_batch_from_fft_explicit(
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
     upsample_ctf: bool = False,
+    kernels = None,
 ):
     from recovar.core.geometry import translate_images
     from recovar.reconstruction import noise as noise_mod
@@ -1759,7 +1765,12 @@ def less_naive_heterogeneity_scheme_relion_style(
 
     return estimates
 
-
+# TODO
+#<<LH Here we will work the most. We should calculate
+# the weigths within this function. Therefore, we 
+# also need to define our kernel function here. We 
+# then need to check that our kernel weights are 
+# divided into the right batch logic
 def even_less_naive_heterogeneity_scheme_relion_style(
     experiment_dataset,
     signal_variance,
@@ -1776,6 +1787,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     upsampling_factor=None,
     return_real_space=False,
     use_fast_rfft=False,
+    my_distances=None,
+    my_cov=None, #<<LH 001
 ):
     bins = heterogeneity_bins
 
@@ -1793,6 +1806,17 @@ def even_less_naive_heterogeneity_scheme_relion_style(
 
     inds = np.digitize(heterogeneity_distances, bins, right=True).astype(np.int32)
     n_bins = bins.size
+
+    #<<LH 001
+    my_inds = np.digitize(heterogeneity_distances, bins, right=True).astype(np.int32)
+    my_inds = np.clip(my_inds, 0, n_bins - 1)
+    discretized_distances = bins[my_inds]
+    my_kernel_fn = lambda dist: np.where(np.abs(dist) < 1, 3 / 4 * (1 - dist**2), 0)
+    my_h_grid = 2 * bins
+    my_kernels = np.zeros((n_bins, discretized_distances.size))
+    for idx, h in enumerate(my_h_grid):
+        my_kernels[idx] = my_kernel_fn(discretized_distances/h)#*1/h
+    #>>LH 001
 
     if upsampling_factor is not None:
         upsampled_vol_shape = tuple(3 * [experiment_dataset.grid_size * upsampling_factor])
@@ -1812,6 +1836,11 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     # which scatters in place. The JAX-native fallback path materializes
     # per-image volumes for the whole batch before reducing, so the working set
     # is materially larger for the same batch size.
+    #<<LH 001
+    my_rhs = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype)
+    my_lhs = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype_real)
+    #>>LH 001
+
     if batch_size is None:
         accum_gb = utils.get_size_in_gb(rhs_all) + utils.get_size_in_gb(lhs_all)
         avail_gb = _effective_heterogeneity_memory_budget(max(1.0, utils.get_gpu_memory_total() - accum_gb))
@@ -1826,6 +1855,64 @@ def even_less_naive_heterogeneity_scheme_relion_style(
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=2)
 
     image_inds_by_bin = [np.flatnonzero(inds == bin_idx).astype(np.int32) for bin_idx in range(n_bins)]
+    #<<LH 001
+    my_all_indices = np.arange(my_cov.shape[0])
+
+    # Pre-allocate accumulators once (reused across bins)
+    Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
+    Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
+    for h_idx, h in enumerate(my_h_grid):
+
+        Ft_y_acc = jnp.zeros_like(Ft_y_acc)
+        Ft_ctf_acc = jnp.zeros_like(Ft_ctf_acc)
+        raw_batches = experiment_dataset.iter_batches(
+            batch_size,
+            noise_model=experiment_dataset.noise,
+            noise_half=False,
+            indices=my_all_indices,
+        )
+        for raw_images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in raw_batches:
+            kernel_batch = my_kernels[h_idx,_image_indices]
+            
+            if kernel_batch.shape[0] < batch_size:
+                pad_size = batch_size - kernel_batch.shape[0]
+                padding = jnp.zeros((pad_size,))
+                kernel_batch = jnp.concatenate([kernel_batch, padding])
+
+            if use_fast_rfft:
+                # Pad BEFORE rfft so padded_rfft always sees a fixed batch
+                # shape — avoids JIT recompilation for unique tail-batch sizes.
+                raw_images, rotation_matrices, translations, ctf_params, noise_variance = _pad_heterogeneity_kernel_batch(
+                    raw_images, rotation_matrices, translations, ctf_params, noise_variance,
+                    target_batch_size=batch_size,
+                )
+                images = _process_images_half_fast(raw_images, experiment_dataset)
+            else:
+                images = experiment_dataset.process_images_half(raw_images)
+                images, rotation_matrices, translations, ctf_params, noise_variance = _pad_heterogeneity_kernel_batch(
+                    images, rotation_matrices, translations, ctf_params, noise_variance,
+                    target_batch_size=batch_size,
+                )
+            Ft_y_acc, Ft_ctf_acc = _heterogeneity_kernel_batch_from_fft(
+                config,
+                images,
+                ctf_params,
+                rotation_matrices,
+                translations,
+                noise_variance,
+                Ft_y=Ft_y_acc,
+                Ft_ctf=Ft_ctf_acc,
+                kernels = kernel_batch,
+            )
+
+        my_rhs[h_idx] = np.asarray(Ft_y_acc)
+        my_lhs[h_idx] = np.asarray(Ft_ctf_acc)
+
+
+
+
+
+
     # Pre-allocate accumulators once (reused across bins)
     Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
     Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
