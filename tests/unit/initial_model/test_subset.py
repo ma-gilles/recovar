@@ -5,8 +5,8 @@ The RELION-generator binding lands in Phase 2. Here we cover:
   - `randomise_particles_order` is a bijection (permutation) and reproduces
     Fisher-Yates semantics against a deterministic `rnd_unif` stream.
   - `select_vdam_subset` stable-sorts the prefix by optics group and emits
-    halfset ids of length `subset_size`.
-  - `assign_pseudo_halfsets` produces alternating 0/1 ids.
+    RELION BPref pseudo-halfset ids of length `subset_size`.
+  - `assign_pseudo_halfsets_for_particle_ids` produces `part_id % 2` ids.
   - `pseudo_halfsets_active` matches RELION's activation logic
     (ml_optimiser.cpp:1920).
 """
@@ -18,6 +18,7 @@ import pytest
 
 from recovar.em.initial_model.subset import (
     assign_pseudo_halfsets,
+    assign_pseudo_halfsets_for_particle_ids,
     numpy_rnd_unif_factory,
     pseudo_halfsets_active,
     randomise_particles_order,
@@ -119,11 +120,12 @@ class TestSelectVdamSubset:
         #   group 1 (in shuffled order): 5, 3, 1  -> [5, 3, 1]
         assert plan.particle_ids.tolist() == [0, 4, 2, 5, 3, 1]
 
-    def test_halfsets_alternate_0_1(self):
-        shuffled = np.array([0, 1, 2, 3, 4, 5], dtype=np.int64)
+    def test_halfsets_follow_global_particle_id_parity(self):
+        shuffled = np.array([5, 0, 3, 4, 1, 2], dtype=np.int64)
         og = [0] * 6
         plan = select_vdam_subset(shuffled, subset_size=6, optics_group_by_particle=og, pseudo_halfsets=True)
-        assert plan.halfset_ids.tolist() == [0, 1, 0, 1, 0, 1]
+        assert plan.particle_ids.tolist() == [5, 0, 3, 4, 1, 2]
+        assert plan.halfset_ids.tolist() == [1, 0, 1, 0, 1, 0]
 
     def test_halfsets_all_zero_when_not_pseudo(self):
         shuffled = np.array([0, 1, 2, 3], dtype=np.int64)
@@ -163,9 +165,8 @@ class TestSelectVdamSubset:
         boundaries = np.where(np.diff(og_keys) != 0)[0]
         assert boundaries.size <= 1, "more than one group-boundary - stable sort broken"
 
-        # Halfset counts are balanced within ±1
-        counts = np.bincount(plan.halfset_ids, minlength=2)
-        assert abs(int(counts[0]) - int(counts[1])) <= 1
+        # RELION's BPref pseudo-halfsets route by global particle id parity.
+        np.testing.assert_array_equal(plan.halfset_ids, plan.particle_ids % 2)
 
 
 # ---------------------------------------------------------------------------
@@ -203,4 +204,15 @@ class TestAssignPseudoHalfsets:
 
     def test_dtype(self):
         out = assign_pseudo_halfsets(3)
+        assert out.dtype == np.int8
+
+
+class TestAssignPseudoHalfsetsForParticleIds:
+    def test_global_particle_id_parity(self):
+        ids = np.asarray([5, 0, 3, 4, 1, 2], dtype=np.int64)
+        assert assign_pseudo_halfsets_for_particle_ids(ids).tolist() == [1, 0, 1, 0, 1, 0]
+
+    def test_empty(self):
+        out = assign_pseudo_halfsets_for_particle_ids(np.asarray([], dtype=np.int64))
+        assert out.tolist() == []
         assert out.dtype == np.int8

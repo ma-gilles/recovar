@@ -14,16 +14,15 @@ Use:
         --nr_iter 200 --K 1 --sym C1 \\
         --particle_diameter 200 --tau2_fudge 4
 
-This script handles argument parsing + command composition + writing the
-assembled command to stdout. Connecting the E-step callback to
-`recovar.em.dense_single_volume` kernels is the remaining Phase 5 wiring
-against the RELION fixture.
+This script handles argument parsing + RELION command composition. Non-dry
+runs execute the native recovar InitialModel path implemented in
+`recovar.em.initial_model.driver`, which uses the dense K-class E-step adapter
+with the VDAM iteration loop.
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -183,7 +182,29 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--nr_mpi", type=int, default=1, help="Rejected at > 1 (RELION behaviour for --grad).")
     p.add_argument("--gpu", dest="gpu_ids", default="", help="If non-empty, --gpu <gpu_ids> is appended")
     p.add_argument("--scratch_dir", default="")
+    p.add_argument("--datadir", default=None, help="Directory used to resolve relative STAR image paths")
+    p.add_argument("--strip_prefix", default=None, help="Prefix to strip from STAR image paths before --datadir")
+    p.add_argument("--random_seed", type=int, default=0, help="Native path seed for bootstrap and VDAM subsets")
+    p.add_argument("--healpix_order", type=int, default=1, help="Native path base Healpix order")
+    p.add_argument("--oversampling", type=int, default=1, help="Native path adaptive oversampling level")
+    p.add_argument("--offset_range", type=float, default=6.0, help="Native path translation search range in pixels")
+    p.add_argument("--offset_step", type=float, default=2.0, help="Native path translation search step in pixels")
+    p.add_argument("--perturbation_factor", type=float, default=0.5)
+    p.add_argument("--random_perturbation", type=float, default=None)
+    p.add_argument("--image_batch_size", type=int, default=500)
+    p.add_argument("--rotation_block_size", type=int, default=5000)
+    p.add_argument("--bootstrap_min_particles", type=int, default=1000)
+    p.add_argument("--sigma2_min_particles", type=int, default=1000)
+    p.add_argument("--translation_sigma_angstrom", type=float, default=None)
+    p.add_argument("--eager_images", action="store_true", help="Load image stack eagerly instead of lazily")
+    p.add_argument("--no_iter_artifacts", action="store_true", help="Only write final native output artifacts")
     p.add_argument("--dry_run", action="store_true", help="Only print the assembled command(s)")
+    p.add_argument(
+        "--padding_factor",
+        type=int,
+        default=1,
+        help="K-class M-step BPref padding factor. Use 2 to give the M-step the trilinear-interpolation margin RELION's BackProjector expects (closer parity for c2 CC).",
+    )
     return p.parse_args(argv)
 
 
@@ -213,20 +234,41 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(" ".join(align_cmd))
         return 0
 
-    # Real execution path: the recovar VDAM iteration loop driven by
-    # `recovar.em.initial_model.iteration_loop.run_vdam_iterations`. This is
-    # connected to the dense-path E-step adapter in a follow-up Phase-5
-    # commit once the RELION fixture has been wired to the data loader.
-    print(
-        "recovar run_ab_initio: real-execution path not yet wired; "
-        "use --dry_run to see the RELION-equivalent command assembly.",
-        file=sys.stderr,
+    from recovar.em.initial_model.driver import NativeInitialModelOptions, run_native_initial_model
+
+    native_opts = NativeInitialModelOptions(
+        fn_img=opts.fn_img,
+        outputname=opts.outputname,
+        nr_iter=opts.nr_iter,
+        nr_classes=opts.nr_classes,
+        tau2_fudge=opts.tau2_fudge,
+        sym_name=opts.sym_name,
+        do_run_C1=opts.do_run_C1,
+        particle_diameter=opts.particle_diameter,
+        do_zero_mask=True,
+        do_ctf_correction=opts.do_ctf_correction,
+        random_seed=args.random_seed,
+        healpix_order=args.healpix_order,
+        oversampling=args.oversampling,
+        offset_range_px=args.offset_range,
+        offset_step_px=args.offset_step,
+        perturbation_factor=args.perturbation_factor,
+        random_perturbation=args.random_perturbation,
+        image_batch_size=args.image_batch_size,
+        rotation_block_size=args.rotation_block_size,
+        bootstrap_min_particles=args.bootstrap_min_particles,
+        sigma2_min_particles=args.sigma2_min_particles,
+        lazy=not args.eager_images,
+        datadir=args.datadir,
+        strip_prefix=args.strip_prefix,
+        translation_sigma_angstrom=args.translation_sigma_angstrom,
+        write_iter_artifacts=not args.no_iter_artifacts,
+        padding_factor=int(args.padding_factor),
     )
-    print("Assembled relion_refine command:")
-    print(" ".join(cmd))
-    print("Assembled relion_align_symmetry command:")
-    print(" ".join(align_cmd))
-    return 1
+    result = run_native_initial_model(native_opts)
+    print(f"recovar InitialModel complete: {result.final_mrc}")
+    print(f"Final model STAR: {result.final_model_star}")
+    return 0
 
 
 if __name__ == "__main__":
