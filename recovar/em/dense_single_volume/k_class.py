@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import os
 from typing import NamedTuple
 
 import jax
@@ -74,6 +76,47 @@ def _select_class_value(value, class_index: int, n_classes: int):
     if value_array.ndim >= 2 and int(value_array.shape[0]) == n_classes:
         return value_array[class_index]
     return value
+
+
+@contextmanager
+def _debug_per_pose_class_label(label: str):
+    """Attach a class label to env-gated per-pose score dumps.
+
+    The dense debug dump filenames are otherwise shared across K-class
+    ``run_em`` calls and each class overwrites the previous one.  This keeps
+    the production path unchanged unless the dump env is active.
+    """
+
+    if not os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_DIR"):
+        yield
+        return
+    context = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_CONTEXT")
+    full_label = f"{context}_{label}" if context else label
+    old = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL")
+    os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"] = full_label
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL", None)
+        else:
+            os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"] = old
+
+
+@contextmanager
+def _debug_per_pose_context(label: str):
+    if not os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_DIR"):
+        yield
+        return
+    old = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_CONTEXT")
+    os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_CONTEXT"] = label
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("RECOVAR_DEBUG_PER_POSE_DUMP_CONTEXT", None)
+        else:
+            os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_CONTEXT"] = old
 
 
 def _select_required_class_value(value, class_index: int, n_classes: int, name: str):
@@ -420,21 +463,22 @@ def run_dense_k_class_em(
     class_log_evidence = []
     for class_index in range(n_classes):
         class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
-        probe = run_em(
-            experiment_dataset,
-            means_array[class_index],
-            _select_class_value(mean_variance, class_index, n_classes),
-            _select_class_value(noise_variance, class_index, n_classes),
-            rotations,
-            translations,
-            disc_type,
-            return_stats=True,
-            accumulate_noise=False,
-            class_log_prior=float(log_priors[class_index]),
-            disable_adjoint_y=True,
-            disable_adjoint_ctf=True,
-            **class_engine_kwargs,
-        )
+        with _debug_per_pose_class_label(f"probe_class{class_index:02d}"):
+            probe = run_em(
+                experiment_dataset,
+                means_array[class_index],
+                _select_class_value(mean_variance, class_index, n_classes),
+                _select_class_value(noise_variance, class_index, n_classes),
+                rotations,
+                translations,
+                disc_type,
+                return_stats=True,
+                accumulate_noise=False,
+                class_log_prior=float(log_priors[class_index]),
+                disable_adjoint_y=True,
+                disable_adjoint_ctf=True,
+                **class_engine_kwargs,
+            )
         class_log_evidence.append(np.asarray(probe[4].log_evidence_per_image, dtype=np.float64))
 
     class_log_evidence_np = np.stack(class_log_evidence, axis=0)
@@ -448,20 +492,21 @@ def run_dense_k_class_em(
     per_class_noise = [] if accumulate_noise else None
     for class_index in range(n_classes):
         class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
-        output = run_em(
-            experiment_dataset,
-            means_array[class_index],
-            _select_class_value(mean_variance, class_index, n_classes),
-            _select_class_value(noise_variance, class_index, n_classes),
-            rotations,
-            translations,
-            disc_type,
-            return_stats=True,
-            accumulate_noise=accumulate_noise,
-            class_log_prior=float(log_priors[class_index]),
-            normalization_log_evidence=global_log_evidence,
-            **class_engine_kwargs,
-        )
+        with _debug_per_pose_class_label(f"class{class_index:02d}"):
+            output = run_em(
+                experiment_dataset,
+                means_array[class_index],
+                _select_class_value(mean_variance, class_index, n_classes),
+                _select_class_value(noise_variance, class_index, n_classes),
+                rotations,
+                translations,
+                disc_type,
+                return_stats=True,
+                accumulate_noise=accumulate_noise,
+                class_log_prior=float(log_priors[class_index]),
+                normalization_log_evidence=global_log_evidence,
+                **class_engine_kwargs,
+            )
         new_mean, hard_assignment, class_Ft_y, class_Ft_ctf, stats, noise = _dense_outputs(
             output,
             accumulate_noise=accumulate_noise,
@@ -848,18 +893,19 @@ def run_dense_k_class_em_adaptive(
         coarse_probe_kwargs["current_size"] = (
             coarse_current_size if coarse_current_size is not None else fine_current_size
         )
-        coarse_result = run_dense_k_class_em(
-            experiment_dataset,
-            means_array,
-            mean_variance,
-            noise_variance,
-            coarse_rotations_np,
-            coarse_translations_np,
-            disc_type,
-            class_log_priors=class_log_priors,
-            accumulate_noise=False,
-            **coarse_probe_kwargs,
-        )
+        with _debug_per_pose_context("coarse"):
+            coarse_result = run_dense_k_class_em(
+                experiment_dataset,
+                means_array,
+                mean_variance,
+                noise_variance,
+                coarse_rotations_np,
+                coarse_translations_np,
+                disc_type,
+                class_log_priors=class_log_priors,
+                accumulate_noise=False,
+                **coarse_probe_kwargs,
+            )
         # ``per_class_hard_assignments[k, i]`` is class k's best coarse pose
         # (independently scored per class). For each class, restrict pass-2
         # to that single pose's children.
@@ -1002,18 +1048,19 @@ def run_dense_k_class_em_adaptive(
     # Stack into (n_classes, n_images, n_rot_fine, n_trans_fine).
     pass2_kwargs["class_rotation_translation_mask"] = np.stack(masks_per_class, axis=0)
 
-    result = run_dense_k_class_em(
-        experiment_dataset,
-        means_array,
-        mean_variance,
-        noise_variance,
-        fine_rotations_np,
-        fine_translations_np,
-        disc_type,
-        class_log_priors=class_log_priors,
-        accumulate_noise=accumulate_noise,
-        **pass2_kwargs,
-    )
+    with _debug_per_pose_context("fine"):
+        result = run_dense_k_class_em(
+            experiment_dataset,
+            means_array,
+            mean_variance,
+            noise_variance,
+            fine_rotations_np,
+            fine_translations_np,
+            disc_type,
+            class_log_priors=class_log_priors,
+            accumulate_noise=accumulate_noise,
+            **pass2_kwargs,
+        )
     if coarse_class_assignments_for_override is not None:
         # RELION binarization picks the global-best (class, pose) at the
         # COARSE grid; the fine refinement only repositions the pose within

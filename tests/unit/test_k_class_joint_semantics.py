@@ -14,6 +14,7 @@ from recovar.em.dense_single_volume.k_class import (
     _assemble_result,
     _override_result_class_assignments,
     run_dense_k_class_em,
+    run_dense_k_class_em_adaptive,
     run_local_k_class_em,
 )
 from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
@@ -134,6 +135,71 @@ def test_dense_k_class_selects_class_rotation_log_prior(monkeypatch):
             class_rotation_log_prior[expected_class],
         )
         assert "class_rotation_log_prior" not in calls[call_index]
+
+
+def test_firstiter_adaptive_uses_coarse_current_size_for_coarse_probe(monkeypatch):
+    calls = []
+
+    class TinyDataset:
+        n_images = 1
+
+    def fake_run_dense_k_class_em(
+        _dataset,
+        means,
+        _mean_variance,
+        _noise_variance,
+        rotations,
+        _translations,
+        _disc_type,
+        *,
+        accumulate_noise=False,
+        **kwargs,
+    ):
+        del accumulate_noise
+        calls.append(kwargs)
+        n_classes = int(means.shape[0])
+        n_images = TinyDataset.n_images
+        per_class_stats = tuple(
+            _stats(
+                [0.0],
+                [float(n_classes - class_index)],
+                [1.0],
+                n_rot=int(rotations.shape[0]),
+            )
+            for class_index in range(n_classes)
+        )
+        return _assemble_result(
+            class_log_evidence=np.zeros((n_classes, n_images), dtype=np.float64),
+            new_means=[jnp.zeros_like(means[class_index]) for class_index in range(n_classes)],
+            Ft_y=[jnp.zeros_like(means[class_index]) for class_index in range(n_classes)],
+            Ft_ctf=[jnp.zeros_like(means[class_index]) for class_index in range(n_classes)],
+            per_class_hard_assignments=np.zeros((n_classes, n_images), dtype=np.int32),
+            per_class_stats=per_class_stats,
+            noise_stats=None,
+        )
+
+    monkeypatch.setattr(k_class_module, "run_dense_k_class_em", fake_run_dense_k_class_em)
+
+    run_dense_k_class_em_adaptive(
+        TinyDataset(),
+        jnp.zeros((2, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(4, dtype=jnp.float32),
+        coarse_rotations=np.zeros((2, 3, 3), dtype=np.float32),
+        coarse_translations=np.zeros((2, 2), dtype=np.float32),
+        fine_rotations=np.zeros((2, 3, 3), dtype=np.float32),
+        fine_translations=np.zeros((2, 2), dtype=np.float32),
+        rot_parent_map=np.array([0, 1], dtype=np.int64),
+        trans_parent_map=np.array([0, 1], dtype=np.int64),
+        disc_type="linear_interp",
+        coarse_current_size=11,
+        fine_current_size=17,
+        current_size=17,
+        firstiter_cc_pass2_only_best_coarse=True,
+    )
+
+    assert calls[0]["current_size"] == 11
+    assert calls[1]["current_size"] == 17
 
 
 def test_local_k_class_accepts_per_class_layouts_and_external_evidence(monkeypatch):
