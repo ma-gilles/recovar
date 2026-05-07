@@ -1126,7 +1126,8 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
     zs = zs[:,:basis_size]
     cov_zs = cov_zs[:,:basis_size,:basis_size]
 
-    mkdir_safe(output_folder + 'density/')
+    density_dir = os.path.join(output_folder, 'density') 
+    mkdir_safe(density_dir)
     if basis_size >1:
         if not use_input_density:
             path_z = trajectory.compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim=density,
@@ -1139,7 +1140,7 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
 
         logger.info("after path %.1fs", time.time() - st_time)
         inp_dens = density if use_input_density else None
-        plot_over_density(inp_dens, [path_z],latent_space_bounds,  subsampled = [path_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = output_folder + 'density/', cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
+        plot_over_density(inp_dens, [path_z],latent_space_bounds,  subsampled = [path_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = density_dir, cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
     else:
         path_z = np.linspace(z_st, z_end, n_vols_along_path)[...,0]
         path_subsampled = path_z
