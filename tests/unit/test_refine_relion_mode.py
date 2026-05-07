@@ -1924,6 +1924,62 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
     assert noise_big.sumw == pytest.approx(noise_split.sumw, abs=1e-5)
 
 
+def test_run_local_em_exact_significant_support_uses_packed_split_path(monkeypatch, rng):
+    dataset = RawRealImageDataset(3, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=571)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    all_rotations = _make_rotations(6, seed=573)
+    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
+    rotation_ids = [
+        np.array([0, 1, 2, 3], dtype=np.int32),
+        np.array([1, 2, 3, 4], dtype=np.int32),
+        np.array([0, 2, 4, 5], dtype=np.int32),
+    ]
+    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
+    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
+    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=all_rotations.shape[0],
+        n_pixels=6,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=rotation_ids_flat,
+        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
+        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=translations,
+        translation_log_priors=np.array(
+            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
+            dtype=np.float32,
+        ),
+    )
+
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", raising=False)
+    outputs = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=3,
+        rotation_block_size=8,
+        current_size=6,
+        accumulate_noise=True,
+        reconstruct_significant_only=True,
+        return_profile=True,
+        score_with_masked_images=False,
+        half_spectrum_scoring=False,
+        max_significants=-1,
+    )
+
+    profile = outputs[-1]
+    assert int(profile["big_jit_bucket_count"]) == 0
+    assert int(profile["sum_reconstruction_rows"]) < int(profile["sum_padded_rows"])
+
+
 def test_compute_reconstruction_support_matches_relion_style_threshold():
     probs = jnp.asarray(
         [

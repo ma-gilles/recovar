@@ -92,6 +92,7 @@ NVTX_DOMAIN_EM = "recovar_em"
 
 EXACT_LOCAL_TARGET_ROW_PIXELS = 180_000_000
 EXACT_LOCAL_RAW_CACHE_MAX_GB = 2.0
+EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION = 0.25
 
 _LOCAL_PREPROCESS_TIMER_KEYS = (
     "integer_shift_s",
@@ -972,10 +973,19 @@ def run_local_em_exact(
     disabled_noise_xa = jnp.zeros(1, dtype=jnp.float32)
     disabled_noise_shell_indices = jnp.zeros(n_half, dtype=jnp.int32)
 
+    local_support_rows = int(np.sum(local_layout.rotation_counts))
+    significant_backprojection_candidate = (
+        reconstruct_significant_only
+        and n_images > 0
+        and local_support_rows
+        >= int(np.ceil(max(n_images, 1) / EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION))
+    )
     use_relion_projector = relion_projector_half is not None
     use_big_jit_buckets = (not use_relion_projector) and not debug_score_dump_filter_matches and not (
         accumulate_noise and debug_noise_dump_dir is not None
     )
+    if significant_backprojection_candidate:
+        use_big_jit_buckets = False
     mean_for_proj_big_jit = mean_for_proj
     projection_half_volume_big_jit = False
     if use_big_jit_buckets and not projection_relion_texture_interp:
