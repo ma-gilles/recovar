@@ -90,7 +90,9 @@ from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_dat
 logger = logging.getLogger(__name__)
 NVTX_DOMAIN_EM = "recovar_em"
 
-EXACT_LOCAL_TARGET_ROW_PIXELS = 180_000_000
+# Keeps common 256^2 local-search buckets at two images without entering the
+# three-image working set that previously exceeded memory.
+EXACT_LOCAL_TARGET_ROW_PIXELS = 190_000_000
 EXACT_LOCAL_RAW_CACHE_MAX_GB = 2.0
 EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION = 0.25
 
