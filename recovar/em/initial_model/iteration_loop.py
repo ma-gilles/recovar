@@ -21,6 +21,7 @@ module is the pure orchestrator.
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import Callable, Sequence
 
@@ -176,6 +177,92 @@ def default_schedule_update(
     new_state.grad_current_stepsize = stepsize
     new_state.tau2_fudge_factor = tau2_fudge
     return new_state
+
+
+def _relion_round(x: float) -> int:
+    """Match RELION's positive-valued ROUND macro."""
+    if x >= 0.0:
+        return int(math.floor(float(x) + 0.5))
+    return -int(math.floor(-float(x) + 0.5))
+
+
+def _resolution_shell_from_data_vs_prior(data_vs_prior: np.ndarray, ori_size: int) -> int:
+    """RELION updateCurrentResolution shell scan for one class."""
+    dvp = np.asarray(data_vs_prior, dtype=np.float64)
+    limit = min(int(ori_size) // 2, int(dvp.size))
+    ires = 1
+    while ires < limit:
+        if float(dvp[ires]) < 1.0:
+            break
+        ires += 1
+    return max(0, ires - 1)
+
+
+def update_current_resolution_from_data_vs_prior(
+    state: InitialModelState,
+    *,
+    minres_map: int = 5,
+) -> InitialModelState:
+    """Mirror RELION ``updateCurrentResolution`` for InitialModel/VDAM.
+
+    Gradient InitialModel uses ``data_vs_prior_class`` produced by
+    ``BackProjector::updateSSNRarrays``. The resulting ``current_resolution``
+    is written in this iteration and converted to the next iteration's
+    ``current_size`` when expectation setup calls
+    ``updateImageSizeAndResolutionPointers``.
+    """
+    maxres = 0
+    for k in range(int(state.K)):
+        maxres = max(maxres, _resolution_shell_from_data_vs_prior(state.data_vs_prior_class[k], state.ori_size))
+    maxres = max(maxres, int(minres_map))
+
+    new_state = replace(state)
+    new_state.current_resolution_shell = int(maxres)
+    new_state.current_resolution = float(maxres) / (float(state.pixel_size) * float(state.ori_size))
+    return new_state
+
+
+def update_image_size_and_resolution_pointers(state: InitialModelState) -> InitialModelState:
+    """Mirror the current-size part of RELION ``updateImageSizeAndResolutionPointers``."""
+    maxres = _relion_round(float(state.current_resolution) * float(state.pixel_size) * float(state.ori_size))
+    if float(state.ave_Pmax) > 0.1 and bool(state.has_high_fsc_at_limit):
+        maxres += _relion_round(0.25 * float(state.ori_size) / 2.0)
+    else:
+        maxres += int(state.incr_size)
+    current_size = min(2 * maxres, int(state.ori_size))
+    if current_size < 2:
+        current_size = 2
+    if current_size % 2:
+        current_size += 1
+    current_size = min(current_size, int(state.ori_size))
+
+    new_state = replace(state)
+    new_state.current_size = int(current_size)
+    return new_state
+
+
+def _ave_pmax_from_meta(meta: dict) -> float | None:
+    pmax = meta.get("max_posterior_per_image")
+    if pmax is not None:
+        arr = np.asarray(pmax, dtype=np.float64)
+        if arr.size:
+            return float(np.mean(arr))
+
+    weighted_sum = 0.0
+    count = 0
+    for key, value in meta.items():
+        if key.endswith("_pmax_mean"):
+            prefix = key[: -len("_pmax_mean")]
+            n_key = f"{prefix}_n_images"
+            n = int(meta.get(n_key, 1))
+            weighted_sum += float(value) * n
+            count += n
+    if count:
+        return weighted_sum / float(count)
+
+    if "pmax_mean" in meta:
+        return float(meta["pmax_mean"])
+    return None
 
 
 def select_subset_for_iter(
@@ -372,6 +459,8 @@ def run_vdam_iterations(
             particle_order=particle_order,
         )
 
+        current = update_image_size_and_resolution_pointers(current)
+
         # E-step: caller-supplied closure over the data loader + dense kernels
         accumulators, meta = expectation_step(
             current,
@@ -387,9 +476,22 @@ def run_vdam_iterations(
             tau2_fudge_factor=current.tau2_fudge_factor,
         )
         current = update_probabilities_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
+        ave_pmax = _ave_pmax_from_meta(meta)
+        if ave_pmax is not None:
+            current = replace(current, ave_Pmax=float(ave_pmax))
         if post_mstep_update is not None and not current.has_converged:
             current = post_mstep_update(current, it, meta)
 
+        current = update_current_resolution_from_data_vs_prior(current)
+        meta = dict(meta)
+        meta.update(
+            {
+                "current_size": int(current.current_size),
+                "current_resolution": float(current.current_resolution),
+                "current_resolution_shell": int(current.current_resolution_shell),
+                "ave_Pmax": float(current.ave_Pmax),
+            }
+        )
         iter_artifact_sink(current, it, meta)
 
     return current

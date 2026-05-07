@@ -103,6 +103,7 @@ class TestMstepSingleClass:
         assert mask_updated.any(), "getSecondMoment did not update any cells"
         np.testing.assert_array_equal(new_state.Igrad2[0].imag[mask_updated], 0.0)
         assert np.all(new_state.Igrad2[0].real[mask_updated] >= 0.0)
+        assert np.any(new_state.data_vs_prior_class[0] > 1.0)
 
     def test_input_state_unchanged(self, bind):
         ori = 16
@@ -113,6 +114,8 @@ class TestMstepSingleClass:
         iref_before = state.Iref.copy()
         igrad1_before = state.Igrad1.copy()
         igrad2_before = state.Igrad2.copy()
+        tau2_before = state.tau2_class.copy()
+        data_vs_prior_before = state.data_vs_prior_class.copy()
 
         vdam_m_step_single_class(
             state,
@@ -125,6 +128,8 @@ class TestMstepSingleClass:
         np.testing.assert_array_equal(state.Iref, iref_before)
         np.testing.assert_array_equal(state.Igrad1, igrad1_before)
         np.testing.assert_array_equal(state.Igrad2, igrad2_before)
+        np.testing.assert_array_equal(state.tau2_class, tau2_before)
+        np.testing.assert_array_equal(state.data_vs_prior_class, data_vs_prior_before)
 
     def test_pseudo_halfsets_mismatch_raises(self, bind):
         state = initialise_denovo_state(

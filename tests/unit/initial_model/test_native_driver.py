@@ -372,13 +372,24 @@ def test_driver_output_mrc_path_matches_relion_snapshot():
 def test_model_star_uses_relion_model_blocks(tmp_path):
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=2, nr_iter=1, n_directions=12)
     state.pdf_class = np.asarray([0.25, 0.75], dtype=np.float64)
+    state.iter = 3
+    state.current_size = 6
+    state.current_resolution = 0.375
+    state.tau2_fudge_factor = 3.5
+    state.ave_Pmax = 0.625
     out = tmp_path / "run_it001_model.star"
 
     driver._write_model_star(str(out), state, ("run_it001_class001.mrc", "run_it001_class002.mrc"))
 
     text = out.read_text()
+    assert "data_model_general" in text
     assert "data_model_classes" in text
     assert "data_model_optics_group_1" in text
+    assert "_rlnCurrentImageSize 6" in text
+    assert "_rlnCurrentResolution 0.375" in text
+    assert "_rlnCurrentIteration 3" in text
+    assert "_rlnTau2FudgeFactor 3.5" in text
+    assert "_rlnAveragePmax 0.625" in text
     assert "_rlnReferenceImage" in text
     assert "run_it001_class001.mrc 0.25 0" in text
     assert "run_it001_class002.mrc 0.75 0" in text

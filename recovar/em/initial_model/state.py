@@ -76,6 +76,9 @@ class InitialModelState:
     current_resolution: float = 0.0
     current_resolution_shell: int = 0
     current_size: int = 0
+    incr_size: int = 10
+    ave_Pmax: float = 0.0
+    has_high_fsc_at_limit: bool = False
 
     # Noise averaged image (from calculateSumOfPowerSpectraAndAverageImage).
     # Kept for reproducibility / debug; not used after iter 0.

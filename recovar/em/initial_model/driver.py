@@ -832,6 +832,14 @@ def _class_mrc_paths(output_prefix: str, iteration: int, K: int) -> tuple[str, .
 def _write_model_star(path: str, state: InitialModelState, class_mrcs: tuple[str, ...]) -> None:
     with open(path, "w") as f:
         f.write("# Created by recovar native InitialModel\n\n")
+        f.write("data_model_general\n\n")
+        f.write(f"_rlnCurrentResolution {float(state.current_resolution):.12g}\n")
+        f.write(f"_rlnCurrentImageSize {int(state.current_size)}\n")
+        f.write(f"_rlnCurrentIteration {int(state.iter)}\n")
+        f.write(f"_rlnNrClasses {int(state.K)}\n")
+        f.write(f"_rlnTau2FudgeFactor {float(state.tau2_fudge_factor):.12g}\n")
+        f.write(f"_rlnAveragePmax {float(state.ave_Pmax):.12g}\n\n")
+
         f.write("data_model_classes\n\n")
         f.write("loop_\n")
         f.write("_rlnReferenceImage #1\n")

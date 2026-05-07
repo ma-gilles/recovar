@@ -109,6 +109,23 @@ static py::array_t<double> real_1d_to_numpy(const MultidimArray<RFLOAT> &arr) {
 }
 
 
+static MultidimArray<RFLOAT> numpy_to_real_3d(
+    py::array_t<double, py::array::c_style | py::array::forcecast> arr
+) {
+    auto buf = arr.request();
+    if (buf.ndim != 3)
+        throw std::runtime_error("expected 3D real array (k, i, j)");
+    long kdim = buf.shape[0];
+    long idim = buf.shape[1];
+    long jdim = buf.shape[2];
+    MultidimArray<RFLOAT> out(kdim, idim, jdim);
+    std::memcpy(out.data, buf.ptr, kdim * idim * jdim * sizeof(RFLOAT));
+    out.setXmippOrigin();
+    out.xinit = 0;
+    return out;
+}
+
+
 static void initial_low_pass_filter_reference(
     MultidimArray<RFLOAT> &vol,
     int ori_size,
@@ -344,6 +361,79 @@ static py::array_t<double> vdam_reconstruct_grad(
     std::memcpy(out.request().ptr, vol.data,
                 ZSIZE(vol) * YSIZE(vol) * XSIZE(vol) * sizeof(RFLOAT));
     return out;
+}
+
+
+/**
+ * Wrap `BackProjector::updateSSNRarrays` for an already-accumulated BPref.
+ *
+ * Source: ml_optimiser.cpp::maximization calls updateSSNRarrays on
+ * wsum_model.BPref[iclass] after maximizationGradientParameters has already
+ * run reweightGrad/getFristMoment/getSecondMoment/applyMomenta.  The VDAM
+ * native path therefore must use the BPref weight buffer directly rather than
+ * rebuilding a BackProjector from images and rotations.
+ */
+static py::tuple vdam_update_ssnr_arrays_from_bpref(
+    py::array_t<double, py::array::c_style | py::array::forcecast> weight_in,
+    py::array_t<double, py::array::c_style | py::array::forcecast> fsc_in,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tau2_in,
+    double tau2_fudge,
+    int ori_size,
+    int padding_factor,
+    int interpolator,
+    int r_max,
+    bool update_tau2_with_fsc,
+    bool is_whole_instead_of_half,
+    bool correct_tau2_by_avgctf2
+) {
+    BackProjector bp = make_empty_backprojector(ori_size, padding_factor, "C1", interpolator);
+    bp.weight = numpy_to_real_3d(weight_in);
+    if (r_max > 0)
+        bp.r_max = r_max;
+
+    long n_shells = ori_size / 2 + 1;
+
+    MultidimArray<RFLOAT> fsc(n_shells);
+    fsc.initZeros();
+    auto fsc_buf = fsc_in.request();
+    double* fsc_ptr = (double*)fsc_buf.ptr;
+    long fsc_n = fsc_buf.size;
+    for (long s = 0; s < n_shells && s < fsc_n; s++)
+        DIRECT_A1D_ELEM(fsc, s) = (RFLOAT)fsc_ptr[s];
+
+    MultidimArray<RFLOAT> tau2(n_shells);
+    tau2.initZeros();
+    auto tau2_buf = tau2_in.request();
+    double* tau2_ptr = (double*)tau2_buf.ptr;
+    long tau2_n = tau2_buf.size;
+    for (long s = 0; s < n_shells && s < tau2_n; s++)
+        DIRECT_A1D_ELEM(tau2, s) = (RFLOAT)tau2_ptr[s];
+
+    MultidimArray<RFLOAT> sigma2(n_shells);
+    MultidimArray<RFLOAT> data_vs_prior(n_shells);
+    MultidimArray<RFLOAT> fourier_coverage(n_shells);
+    MultidimArray<RFLOAT> avgctf2(n_shells);
+    avgctf2.initConstant(1.0);
+
+    bp.updateSSNRarrays(
+        (RFLOAT)tau2_fudge,
+        tau2,
+        sigma2,
+        data_vs_prior,
+        fourier_coverage,
+        fsc,
+        avgctf2,
+        update_tau2_with_fsc,
+        is_whole_instead_of_half,
+        correct_tau2_by_avgctf2
+    );
+
+    return py::make_tuple(
+        real_1d_to_numpy(tau2),
+        real_1d_to_numpy(sigma2),
+        real_1d_to_numpy(data_vs_prior),
+        real_1d_to_numpy(fourier_coverage)
+    );
 }
 
 
@@ -921,6 +1011,19 @@ mom1_noise_power: optional per-shell noise power. When provided (as
 produced by applyMomenta in the pseudo-halfsets pipeline) reconstructGrad
 uses the SNR-weighted fsc_estimate path; otherwise it defaults to
 fsc_estimate=1.
+)doc");
+
+    m.def("vdam_update_ssnr_arrays_from_bpref", &vdam_update_ssnr_arrays_from_bpref,
+          py::arg("weight"), py::arg("fsc"), py::arg("tau2"),
+          py::arg("tau2_fudge"),
+          py::arg("ori_size"), py::arg("padding_factor") = 1,
+          py::arg("interpolator") = TRILINEAR, py::arg("r_max") = -1,
+          py::arg("update_tau2_with_fsc") = false,
+          py::arg("is_whole_instead_of_half") = false,
+          py::arg("correct_tau2_by_avgctf2") = false,
+          R"doc(
+BackProjector::updateSSNRarrays for an already-accumulated VDAM BPref.
+Returns (tau2, sigma2, data_vs_prior, fourier_coverage).
 )doc");
 
     // ----- Scheduler free functions -----

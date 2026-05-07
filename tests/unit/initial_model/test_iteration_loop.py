@@ -17,6 +17,8 @@ from recovar.em.initial_model.iteration_loop import (
     relion_solvent_flatten_state,
     run_vdam_iterations,
     select_subset_for_iter,
+    update_current_resolution_from_data_vs_prior,
+    update_image_size_and_resolution_pointers,
     update_probabilities_from_estep_meta,
 )
 from recovar.em.initial_model.m_step import VdamAccumulator
@@ -71,6 +73,86 @@ def _stub_estep_factory(ori_size: int):
 
 
 class TestRunVdamIterations:
+    def test_current_resolution_uses_relion_data_vs_prior_scan(self):
+        state = initialise_denovo_state(
+            ori_size=64,
+            pixel_size=2.0,
+            K=2,
+            nr_iter=1,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        state.data_vs_prior_class[0, 1:8] = 2.0
+        state.data_vs_prior_class[0, 8] = 0.5
+        state.data_vs_prior_class[1, 1:13] = 2.0
+        state.data_vs_prior_class[1, 13] = 0.5
+
+        out = update_current_resolution_from_data_vs_prior(state)
+
+        assert out.current_resolution_shell == 12
+        assert out.current_resolution == pytest.approx(12.0 / (64.0 * 2.0))
+        assert out.current_size == state.current_size
+
+    def test_current_size_update_uses_previous_resolution_for_next_estep(self):
+        state = initialise_denovo_state(
+            ori_size=64,
+            pixel_size=2.0,
+            K=1,
+            nr_iter=1,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        state.current_resolution_shell = 20
+        state.current_resolution = 20.0 / (64.0 * 2.0)
+        state.ave_Pmax = 0.0
+
+        out = update_image_size_and_resolution_pointers(state)
+
+        assert out.current_size == 60
+        assert out.current_resolution_shell == 20
+
+    def test_iteration_loop_feeds_updated_current_size_to_next_estep(self, monkeypatch):
+        import recovar.em.initial_model.iteration_loop as loop
+
+        state = initialise_denovo_state(
+            ori_size=64,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=2,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        seen_current_sizes = []
+
+        def estep(current, particle_ids, halfset_ids):
+            seen_current_sizes.append(int(current.current_size))
+            return [], {"max_posterior_per_image": np.asarray([0.2, 0.3], dtype=np.float32)}
+
+        def fake_m_step(current, accumulators, **kwargs):
+            out = current
+            out.data_vs_prior_class = np.zeros_like(current.data_vs_prior_class)
+            out.data_vs_prior_class[:, 1:21] = 2.0
+            out.data_vs_prior_class[:, 21:] = 0.5
+            return out
+
+        monkeypatch.setattr(loop, "vdam_m_step", fake_m_step)
+
+        final = run_vdam_iterations(
+            state,
+            nr_particles=200,
+            optics_group_by_particle=[0] * 200,
+            grad_ini_subset_size=50,
+            grad_fin_subset_size=100,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=0,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=estep,
+        )
+
+        assert seen_current_sizes == [28, 60]
+        assert final.current_resolution_shell == 20
+
     def test_relion_solvent_flatten_state_matches_centered_spherical_mask(self):
         state = initialise_denovo_state(
             ori_size=8,
