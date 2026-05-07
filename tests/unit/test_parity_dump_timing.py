@@ -26,10 +26,12 @@ def parity_env(tmp_path, monkeypatch):
 
 def test_inactive_when_env_unset(monkeypatch):
     monkeypatch.delenv("RECOVAR_PARITY_DUMP_DIR", raising=False)
+    monkeypatch.delenv("RECOVAR_PARITY_TIMING_DIR", raising=False)
     from recovar.em.dense_single_volume import parity_dump as p
 
     p._ITER_TIMERS.clear()
     assert not p.is_active()
+    assert not p.timing_is_active()
     p.start_iteration(0)
     p.mark_stage(0, "e_step")
     wall, stages = p.get_iteration_timing(0)
@@ -130,3 +132,67 @@ def test_dump_iteration_falls_back_to_iteration_start_arg(parity_env):
     assert float(npz["wall_time_s"]) >= 0.02
     # No stage_seconds_* expected.
     assert not any(k.startswith("stage_seconds_") for k in npz.files)
+
+
+def test_timing_only_dump_does_not_require_full_parity_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("RECOVAR_PARITY_DUMP_DIR", raising=False)
+    timing = tmp_path / "timing"
+    monkeypatch.setenv("RECOVAR_PARITY_TIMING_DIR", str(timing))
+
+    from recovar.em.dense_single_volume import parity_dump as p
+
+    p._ITER_TIMERS.clear()
+    p._E_STEP.clear()
+    assert not p.is_active()
+    assert p.timing_is_active()
+
+    p.start_iteration(2)
+    time.sleep(0.02)
+    p.mark_stage(2, "e_step")
+    p.dump_timing_iteration(iteration=2, init_relion_iteration=3)
+
+    files = sorted(timing.glob("iter_*.npz"))
+    assert len(files) == 1
+    assert files[0].name == "iter_006.npz"
+    npz = np.load(files[0], allow_pickle=False)
+    assert set(npz.files) == {
+        "init_relion_iteration",
+        "iteration",
+        "relion_iteration",
+        "stage_seconds_e_step",
+        "wall_time_s",
+    }
+    assert float(npz["wall_time_s"]) > 0.02
+    assert float(npz["stage_seconds_e_step"]) > 0.0
+    assert 2 not in p._ITER_TIMERS
+
+
+def test_run_full_refinement_timing_summary_deltas(tmp_path):
+    from scripts.run_full_refinement import _collect_timing_rows, _summarize_timing_rows
+
+    timing = tmp_path / "timing"
+    timing.mkdir()
+    np.savez_compressed(
+        timing / "iter_004.npz",
+        iteration=np.int32(0),
+        init_relion_iteration=np.int32(3),
+        relion_iteration=np.int32(4),
+        wall_time_s=np.float64(10.0),
+        stage_seconds_e_step=np.float64(7.0),
+        stage_seconds_recon=np.float64(8.5),
+        stage_seconds_fsc=np.float64(9.0),
+        stage_seconds_noise_update=np.float64(9.5),
+        stage_seconds_convergence=np.float64(10.0),
+    )
+
+    rows = _collect_timing_rows(timing)
+    summary = _summarize_timing_rows(rows)
+
+    assert summary["n_rows"] == 1
+    assert summary["sum_wall_time_s"] == pytest.approx(10.0)
+    assert summary["stage_delta_by_relion_iter"]["4"]["e_step"] == pytest.approx(7.0)
+    assert summary["stage_delta_by_relion_iter"]["4"]["recon"] == pytest.approx(1.5)
+    assert summary["stage_delta_by_relion_iter"]["4"]["fsc"] == pytest.approx(0.5)
+    assert summary["stage_delta_by_relion_iter"]["4"]["noise_update"] == pytest.approx(0.5)
+    assert summary["stage_delta_by_relion_iter"]["4"]["convergence"] == pytest.approx(0.5)
+    assert summary["sum_stage_delta_s"]["e_step"] == pytest.approx(7.0)

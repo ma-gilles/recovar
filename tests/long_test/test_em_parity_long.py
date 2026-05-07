@@ -121,6 +121,8 @@ def test_em_parity_long_k1_full(tmp_path):
 
     output_dir = tmp_path / "k1_long"
     output_dir.mkdir()
+    timing_dir = output_dir / "timing"
+    perf_ledger_path = output_dir / "benchmark_ledger.json"
 
     # Match the RELION command in K1_LONG_RELION_DIR/run_it001_optimiser.star header.
     cmd = [
@@ -154,6 +156,10 @@ def test_em_parity_long_k1_full(tmp_path):
         "8192",
         "--relion_half_sets",
         str(K1_LONG_RELION_DATA_STAR),
+        "--timing_dir",
+        str(timing_dir),
+        "--benchmark_ledger_json",
+        str(perf_ledger_path),
     ]
     logger.info("K=1 long refinement cmd: %s", " ".join(cmd))
 
@@ -168,6 +174,7 @@ def test_em_parity_long_k1_full(tmp_path):
     npz_path = output_dir / "refinement_results.npz"
     assert npz_path.exists(), f"Missing refinement_results.npz at {npz_path}"
     npz = np.load(npz_path)
+    perf_ledger = json.loads(perf_ledger_path.read_text()) if perf_ledger_path.exists() else {}
 
     pmax_traj = np.asarray(npz["ave_Pmax_trajectory"], dtype=np.float64)
     voxel_size = float(npz["voxel_size"])
@@ -217,6 +224,11 @@ def test_em_parity_long_k1_full(tmp_path):
         "k1_long_fsc05_resolution_diff_A": res_diff_angstrom,
         "k1_long_walltime_s": elapsed,
         "k1_long_n_iters": int(pmax_traj.size),
+        "k1_long_recovar_wall_times_trajectory": perf_ledger.get("wall_times_trajectory", []),
+        "k1_long_recovar_setup_phase_seconds": perf_ledger.get("setup_phase_seconds", {}),
+        "k1_long_recovar_timing_summary": perf_ledger.get("timing_summary", {}),
+        "k1_long_recovar_perf_ledger_path": str(perf_ledger_path),
+        "k1_long_recovar_timing_dir": str(timing_dir),
     }
     ledger = _write_quality_ledger("k1_long", payload)
     logger.info("K=1 long ledger: %s", ledger)

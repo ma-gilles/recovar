@@ -7,6 +7,9 @@ no-op so the dump has zero behavioral effect. Optional env vars:
   global indices (default: empty).
 - ``RECOVAR_PARITY_DUMP_VOLUME_DOWNSAMPLE`` — int factor to shrink half volumes
   before saving (default 2 → 64³ for 128³ box).
+- ``RECOVAR_PARITY_TIMING_DIR`` — lightweight per-iteration timing-only NPZs.
+  Unlike ``RECOVAR_PARITY_DUMP_DIR``, this does not collect E-step tensors or
+  downsampled volumes, so it is suitable for performance guardrails.
 """
 
 from __future__ import annotations
@@ -31,12 +34,16 @@ def is_active() -> bool:
     return bool(os.environ.get("RECOVAR_PARITY_DUMP_DIR"))
 
 
+def timing_is_active() -> bool:
+    return is_active() or bool(os.environ.get("RECOVAR_PARITY_TIMING_DIR"))
+
+
 def start_iteration(iteration: int) -> None:
     """Stamp the start of an iteration so ``mark_stage`` can record cumulative time.
 
-    No-op when the parity dump is not active.
+    No-op unless either full parity dumps or lightweight timing dumps are active.
     """
-    if not is_active():
+    if not timing_is_active():
         return
     _ITER_TIMERS[int(iteration)] = {"t0": time.time(), "stages": {}}
 
@@ -50,7 +57,7 @@ def mark_stage(iteration: int, stage: str) -> None:
     semantics make this safe — later calls dominate. No-op when inactive or when
     ``start_iteration`` was never called for that iteration.
     """
-    if not is_active():
+    if not timing_is_active():
         return
     timer = _ITER_TIMERS.get(int(iteration))
     if timer is None:
@@ -75,6 +82,15 @@ def reset_iteration_timer(iteration: int) -> None:
 
 def dump_dir() -> Path | None:
     raw = os.environ.get("RECOVAR_PARITY_DUMP_DIR")
+    if not raw:
+        return None
+    p = Path(raw)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def timing_dir() -> Path | None:
+    raw = os.environ.get("RECOVAR_PARITY_TIMING_DIR")
     if not raw:
         return None
     p = Path(raw)
@@ -247,6 +263,42 @@ def dump_iteration(
     relion_iter = int(init_relion_iteration) + int(iteration) + 1
     np.savez_compressed(out / f"iter_{relion_iter:03d}.npz", **payload)
     reset_iteration()
+    reset_iteration_timer(iteration)
+
+
+def dump_timing_iteration(
+    *,
+    iteration: int,
+    init_relion_iteration: int,
+    iteration_start: float | None = None,
+) -> None:
+    """Write a lightweight timing-only NPZ for one iteration.
+
+    This is intentionally separate from :func:`dump_iteration`: performance
+    guardrails need stage timings without the large tensor/volume payloads that
+    full parity debugging records.
+    """
+
+    out = timing_dir()
+    if out is None:
+        return
+
+    wall_time_s, stage_seconds = get_iteration_timing(iteration)
+    if wall_time_s is None and iteration_start is not None:
+        wall_time_s = float(time.time() - iteration_start)
+
+    relion_iter = int(init_relion_iteration) + int(iteration) + 1
+    payload: dict[str, Any] = {
+        "iteration": np.int32(iteration),
+        "init_relion_iteration": np.int32(init_relion_iteration),
+        "relion_iteration": np.int32(relion_iter),
+    }
+    if wall_time_s is not None:
+        payload["wall_time_s"] = np.float64(wall_time_s)
+    for stage_name, stage_t in stage_seconds.items():
+        payload[f"stage_seconds_{stage_name}"] = np.float64(stage_t)
+
+    np.savez_compressed(out / f"iter_{relion_iter:03d}.npz", **payload)
     reset_iteration_timer(iteration)
 
 

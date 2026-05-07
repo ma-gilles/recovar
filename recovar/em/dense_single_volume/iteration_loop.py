@@ -1029,6 +1029,17 @@ def _relion_rotation_grid_float32(healpix_order: int):
     )
 
 
+def _rotation_eulers_for_canonical_or_custom_grid(rotations: np.ndarray, healpix_order: int) -> np.ndarray:
+    """Avoid expensive matrix->Euler conversion for canonical RELION grids."""
+    rotations = np.asarray(rotations, dtype=np.float32)
+    order = int(healpix_order)
+    if rotations.shape[0] == rotation_grid_size(order):
+        canonical_rotations, canonical_eulers = _relion_rotation_grid_float32(order)
+        if np.allclose(rotations, canonical_rotations, rtol=0.0, atol=1e-6):
+            return canonical_eulers
+    return utils.R_to_relion(np.asarray(rotations), degrees=True).astype(np.float32)
+
+
 def _radial_profile_from_noise_variance(noise_variance, image_shape):
     """Average an image-shaped noise vector into integer radial shells."""
     n_shells = image_shape[0] // 2 + 1
@@ -2016,6 +2027,12 @@ def _run_relion_iteration_loop(
     """
     from recovar.reconstruction import noise, regularization
 
+    setup_t0 = time.time()
+    setup_phase_seconds = {}
+
+    def _mark_setup_phase(name: str) -> None:
+        setup_phase_seconds[name] = time.time() - setup_t0
+
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape
     grid_size = cryo.image_shape[0]  # ori_size in RELION terms
@@ -2067,6 +2084,7 @@ def _run_relion_iteration_loop(
         )
 
     _maybe_cache_raw_image_loaders(experiment_datasets)
+    _mark_setup_phase("mask_and_image_cache")
 
     # --- Initialize RefinementState ---
     # Corresponds to RELION's initialiseSamplingVectors + initialLowPassFilterReferences
@@ -2150,6 +2168,7 @@ def _run_relion_iteration_loop(
         _init_res_angstrom = shell_index_to_resolution_angstrom(_init_shell, grid_size, _px)
         state.current_resolution = float(_init_res_angstrom)
         state.previous_resolution = float(_init_res_angstrom)
+    _mark_setup_phase("state_init")
 
     # RELION mode owns the coarse HEALPix grid. When coarse-grid metadata is
     # provided, regenerate the matching coarse grid here instead of inheriting
@@ -2166,7 +2185,10 @@ def _run_relion_iteration_loop(
         current_nside_level = current_healpix_order
     elif rotations is not None:
         current_rotations = np.asarray(rotations, dtype=np.float32)
-        current_rotation_eulers = utils.R_to_relion(np.asarray(current_rotations), degrees=True).astype(np.float32)
+        current_rotation_eulers = _rotation_eulers_for_canonical_or_custom_grid(
+            current_rotations,
+            current_healpix_order,
+        )
         current_nside_level = current_healpix_order
     else:
         current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
@@ -2190,6 +2212,7 @@ def _run_relion_iteration_loop(
     collect_local_search_profile = (
         save_intermediates_dir is not None if local_search_profile_mode == "auto" else local_search_profile_mode == "on"
     )
+    _mark_setup_phase("sampling_grid")
 
     # RELION uses pf=2 for both projection and reconstruction (--pad 2).
     # Projection: real-space zero-pad N³→(2N)³, DFT, then trilinear slice.
@@ -2231,6 +2254,7 @@ def _run_relion_iteration_loop(
     )
     noise_variance = _mean_noise_variance(noise_variance_per_half)
     mean_variance = jnp.array(init_mean_variance)
+    _mark_setup_phase("initial_arrays")
 
     # History tracking. Keep these plain lists because intermediate outputs
     # serialize them directly.
@@ -2335,6 +2359,7 @@ def _run_relion_iteration_loop(
                 prior_k.max(),
                 int(np.sum(prior_k == 0)),
             )
+    _mark_setup_phase("direction_prior")
 
     # Extract per-shell radial profiles from the input pixel-array noise
     # variances for diagnostic logging ("noise update per shell: old=... new=...").
@@ -2345,6 +2370,7 @@ def _run_relion_iteration_loop(
         np.mean(np.stack(previous_noise_radial_per_half, axis=0), axis=0),
         dtype=jnp.float32,
     )
+    _mark_setup_phase("noise_radial_init")
 
     # --- RELION SamplingPerturbation state (healpix_sampling.cpp:167-174) ---
     # RELION applies a random rigid rotation of the entire SO(3) trial grid at
@@ -2356,6 +2382,11 @@ def _run_relion_iteration_loop(
     random_perturbation = 0.0
     perturb_rng = np.random.default_rng(perturb_seed) if perturb_seed is not None else np.random.default_rng()
     iteration = 0
+    _mark_setup_phase("before_iterations")
+    logger.info(
+        "RELION mode setup timing before iteration loop: %s",
+        ", ".join(f"{key}={value:.1f}s" for key, value in setup_phase_seconds.items()),
+    )
     while (force_max_iter_after_convergence or not state.has_converged) and iteration < max_iter:
         t0 = time.time()
         _parity_dump.start_iteration(iteration)
@@ -5770,6 +5801,15 @@ def _run_relion_iteration_loop(
                 )
             except Exception as exc:
                 logger.warning("parity_dump.dump_iteration failed at iter %d: %s", iteration, exc)
+        elif _parity_dump.timing_is_active():
+            try:
+                _parity_dump.dump_timing_iteration(
+                    iteration=iteration,
+                    init_relion_iteration=int(init_relion_iteration),
+                    iteration_start=t0,
+                )
+            except Exception as exc:
+                logger.warning("parity_dump.dump_timing_iteration failed at iter %d: %s", iteration, exc)
 
         # --- Timing ---
         elapsed = time.time() - t0
@@ -5869,6 +5909,7 @@ def _run_relion_iteration_loop(
             "best_rotation_eulers_history": best_rotation_eulers_history,
             "best_translations_history": best_translations_history,
             "local_profile_history": local_profile_history,
+            "setup_phase_seconds": setup_phase_seconds,
         }
     # --- RELION's final iteration: do_join_random_halves + do_use_all_data ---
     # After convergence, RELION runs ONE more iter with:
@@ -6115,4 +6156,5 @@ def _run_relion_iteration_loop(
         "best_rotation_eulers_history": best_rotation_eulers_history,
         "best_translations_history": best_translations_history,
         "local_profile_history": local_profile_history,
+        "setup_phase_seconds": setup_phase_seconds,
     }

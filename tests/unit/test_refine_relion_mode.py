@@ -67,6 +67,7 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _combined_noise_stats,
     _normalize_noise_variance_per_half,
     _replay_control_model_iteration,
+    _rotation_eulers_for_canonical_or_custom_grid,
     refine_single_volume,
 )
 from recovar.em.dense_single_volume.helpers.convergence import RefinementState
@@ -4245,6 +4246,20 @@ class TestRelionDefault:
 
         assert result is sentinel
         assert called == {"ran_relion": True}
+
+    def test_canonical_rotation_grid_reuses_relion_euler_table(self, monkeypatch):
+        """The auto-refine setup path must not convert canonical grids via SciPy."""
+        order = 1
+        canonical_rotations = np.asarray(get_relion_rotation_grid(order), dtype=np.float32)
+        expected_eulers = np.asarray(get_relion_rotation_grid_eulers(order), dtype=np.float32)
+
+        def fail_r_to_relion(*_args, **_kwargs):
+            raise AssertionError("generic R_to_relion should not be called for canonical grids")
+
+        monkeypatch.setattr(iteration_loop_module.utils, "R_to_relion", fail_r_to_relion)
+
+        got = _rotation_eulers_for_canonical_or_custom_grid(canonical_rotations, order)
+        np.testing.assert_allclose(got, expected_eulers, rtol=0.0, atol=0.0)
 
 
 # ===========================================================================

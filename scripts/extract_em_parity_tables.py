@@ -63,6 +63,54 @@ def _row(
     return f"| {metric} | {base_str} | {cur_str} | {status} |"
 
 
+def _get_nested(mapping: dict, path: tuple[str, ...]) -> float | None:
+    cur = mapping
+    for key in path:
+        if not isinstance(cur, dict) or key not in cur:
+            return None
+        cur = cur[key]
+    if isinstance(cur, (int, float)):
+        return float(cur)
+    return None
+
+
+def _emit_perf_rows(prefix: str, ledger: dict, baseline: dict) -> int:
+    rendered = 0
+    metrics: list[tuple[str, float | None, float | None]] = [
+        (f"{prefix}_walltime_s", baseline.get(f"{prefix}_walltime_s"), ledger.get(f"{prefix}_walltime_s")),
+    ]
+    setup_phases = ledger.get(f"{prefix}_recovar_setup_phase_seconds", {}) or ledger.get("setup_phase_seconds", {})
+    baseline_setup_phases = (
+        baseline.get(f"{prefix}_recovar_setup_phase_seconds", {}) or baseline.get("setup_phase_seconds", {})
+    )
+    for phase_name in (
+        "mask_and_image_cache",
+        "state_init",
+        "sampling_grid",
+        "initial_arrays",
+        "direction_prior",
+        "noise_radial_init",
+        "before_iterations",
+    ):
+        cur = setup_phases.get(phase_name) if isinstance(setup_phases, dict) else None
+        base = baseline_setup_phases.get(phase_name) if isinstance(baseline_setup_phases, dict) else None
+        metrics.append((f"{prefix}_setup_{phase_name}_s", base, cur))
+
+    timing_summary = ledger.get(f"{prefix}_recovar_timing_summary", {}) or ledger.get("timing_summary", {})
+    baseline_timing = baseline.get(f"{prefix}_recovar_timing_summary", {}) or baseline.get("timing_summary", {})
+    for stage_name in ("e_step", "recon", "fsc", "noise_update", "convergence"):
+        cur = _get_nested(timing_summary, ("sum_stage_delta_s", stage_name))
+        base = _get_nested(baseline_timing, ("sum_stage_delta_s", stage_name))
+        metrics.append((f"{prefix}_{stage_name}_s", base, cur))
+
+    for metric, base, cur in metrics:
+        if cur is None:
+            continue
+        print(_row(metric, base, cur, lower_is_better=True, fmt=".1f"))
+        rendered += 1
+    return rendered
+
+
 def emit_fast_tier() -> int:
     """Emit the fast-tier table. Returns number of metrics rendered."""
     k1_ledger = _load_json(BASELINES_DIR / "em_parity_quality_fast_ledger_k1_replay.json")
@@ -200,12 +248,12 @@ def emit_long_tier() -> int:
 
     if k1_ledger or kclass_ledger:
         print("\n### EM-parity Performance — long tier")
-        print("| Stage | Walltime (s) |")
-        print("|-------|-------------:|")
+        print("| Metric | Baseline | Current | Status |")
+        print("|--------|----------|---------|--------|")
         if k1_ledger:
-            print(f"| k1_long (50k 256² 15-iter) | {k1_ledger.get('k1_long_walltime_s', 0):.1f} |")
+            _emit_perf_rows("k1_long", k1_ledger, baseline)
         if kclass_ledger:
-            print(f"| kclass_long (50k 256² K=4 15-iter) | {kclass_ledger.get('kclass_long_walltime_s', 0):.1f} |")
+            _emit_perf_rows("kclass_long", kclass_ledger, baseline)
     return rendered
 
 

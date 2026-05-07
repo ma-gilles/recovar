@@ -18,18 +18,22 @@ Environment variables:
 """
 
 import argparse
+import json
 import logging
 import os
+import platform
 import re
 import sys
 import time
 from pathlib import Path
 
 import jax
+import jaxlib
 import jax.numpy as jnp
 import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
+from recovar.utils.parity_provenance import _safe_git_commit
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +50,80 @@ def _shell_index_to_resolution_angstrom(shell_index, grid_size, voxel_size):
     if shell_index <= 0:
         return float("inf")
     return float(grid_size) * float(voxel_size) / shell_index
+
+
+def _npz_scalar_to_float(npz, key):
+    if key not in npz.files:
+        return None
+    return float(np.asarray(npz[key]))
+
+
+def _read_timing_npz(npz_path: Path) -> dict:
+    with np.load(npz_path, allow_pickle=False) as npz:
+        row = {
+            "path": str(npz_path),
+            "iteration": int(np.asarray(npz["iteration"])) if "iteration" in npz.files else None,
+            "relion_iteration": int(np.asarray(npz["relion_iteration"])) if "relion_iteration" in npz.files else None,
+            "wall_time_s": _npz_scalar_to_float(npz, "wall_time_s"),
+            "stages": {},
+        }
+        for name in npz.files:
+            if name.startswith("stage_seconds_"):
+                row["stages"][name[len("stage_seconds_") :]] = float(np.asarray(npz[name]))
+    return row
+
+
+def _collect_timing_rows(timing_dir):
+    if timing_dir is None:
+        return []
+    timing_path = Path(timing_dir)
+    if not timing_path.exists():
+        return []
+    return [_read_timing_npz(path) for path in sorted(timing_path.glob("iter_*.npz"))]
+
+
+def _stage_deltas_from_cumulative(stages: dict[str, float]) -> dict[str, float]:
+    if not stages:
+        return {}
+    ordered_names = ["e_step", "recon", "fsc", "noise_update", "convergence"]
+    deltas: dict[str, float] = {}
+    prev = 0.0
+    for name in ordered_names:
+        value = stages.get(name)
+        if value is None:
+            continue
+        deltas[name] = max(0.0, float(value) - prev)
+        prev = float(value)
+    for name, value in sorted(stages.items()):
+        if name in deltas:
+            continue
+        deltas[name] = float(value)
+    return deltas
+
+
+def _summarize_timing_rows(rows):
+    summary = {
+        "n_rows": len(rows),
+        "sum_wall_time_s": float(
+            np.sum([row["wall_time_s"] for row in rows if row.get("wall_time_s") is not None], dtype=np.float64)
+        )
+        if rows
+        else 0.0,
+        "stage_cumulative_by_relion_iter": {},
+        "stage_delta_by_relion_iter": {},
+        "sum_stage_delta_s": {},
+    }
+    for row in rows:
+        relion_iter = row.get("relion_iteration")
+        if relion_iter is None:
+            continue
+        stages = {key: float(value) for key, value in row.get("stages", {}).items()}
+        deltas = _stage_deltas_from_cumulative(stages)
+        summary["stage_cumulative_by_relion_iter"][str(relion_iter)] = stages
+        summary["stage_delta_by_relion_iter"][str(relion_iter)] = deltas
+        for key, value in deltas.items():
+            summary["sum_stage_delta_s"][key] = float(summary["sum_stage_delta_s"].get(key, 0.0) + value)
+    return summary
 
 
 def _load_relion_mask_params(optimiser_star_path):
@@ -518,7 +596,28 @@ def main():
         "(K must equal --n_classes). Defaults to "
         "<data_dir>/reference_init_class00{1..K}.mrc when omitted.",
     )
+    parser.add_argument(
+        "--timing_dir",
+        default=None,
+        help=(
+            "Optional directory for lightweight per-iteration timing NPZs. "
+            "This uses RECOVAR_PARITY_TIMING_DIR internally and does not "
+            "write full parity tensor/volume dumps."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark_ledger_json",
+        default=None,
+        help="Optional JSON path for an auto-refine quality/performance ledger.",
+    )
     args = parser.parse_args()
+
+    if args.timing_dir:
+        timing_dir_path = Path(args.timing_dir)
+        timing_dir_path.mkdir(parents=True, exist_ok=True)
+        os.environ["RECOVAR_PARITY_TIMING_DIR"] = str(timing_dir_path)
+    else:
+        timing_dir_path = None
 
     # Verify GPU
     devices = jax.devices()
@@ -646,7 +745,7 @@ def main():
         init_vol_real = _load_mrc(class_paths[0]).astype(np.float32)
 
     # ---- Set up rotation and translation grids ----
-    from recovar.em.sampling import get_rotation_grid, get_translation_grid
+    from recovar.em.sampling import get_relion_rotation_grid, get_translation_grid
 
     init_healpix_order = max(args.healpix_order - args.adaptive_oversampling, 0)
     rotation_grid_order = init_healpix_order
@@ -657,7 +756,7 @@ def main():
         args.adaptive_oversampling,
     )
 
-    rotations = get_rotation_grid(rotation_grid_order, matrices=True).astype(np.float32)
+    rotations = get_relion_rotation_grid(rotation_grid_order).astype(np.float32)
     translations = get_translation_grid(args.offset_range, args.offset_step).astype(np.float32)
     logger.info("Rotation grid: %d rotations (healpix_order=%d)", rotations.shape[0], rotation_grid_order)
     logger.info(
@@ -950,6 +1049,21 @@ def main():
         save_dict["per_class_sigma_offset_trajectory"] = np.asarray(
             result["per_class_sigma_offset_trajectory"], dtype=object
         )
+    local_profile_rows = [
+        {
+            key: (
+                np.asarray(value).item()
+                if np.asarray(value).ndim == 0
+                else np.asarray(value).tolist()
+            )
+            for key, value in row.items()
+        }
+        for row in result.get("local_profile_history", [])
+    ]
+    setup_phase_seconds = {
+        str(key): float(value)
+        for key, value in result.get("setup_phase_seconds", {}).items()
+    }
 
     # Save FSC curves per iteration
     for i, fsc in enumerate(result["fsc_history"]):
@@ -993,6 +1107,9 @@ def main():
 
     # Save final merged volume (Fourier space)
     save_dict["final_mean_ft"] = np.asarray(result["mean"])
+    if setup_phase_seconds:
+        save_dict["setup_phase_names"] = np.asarray(list(setup_phase_seconds.keys()))
+        save_dict["setup_phase_cumulative_s"] = np.asarray(list(setup_phase_seconds.values()), dtype=np.float64)
 
     # Save per-half-set means
     for k in range(2):
@@ -1006,6 +1123,50 @@ def main():
     out_path = os.path.join(args.output, "refinement_results.npz")
     np.savez_compressed(out_path, **save_dict)
     logger.info("Results saved to %s", out_path)
+
+    timing_rows = _collect_timing_rows(timing_dir_path)
+    timing_summary = _summarize_timing_rows(timing_rows)
+    if args.benchmark_ledger_json:
+        ledger_path = Path(args.benchmark_ledger_json)
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger = {
+            "git_commit": _safe_git_commit(),
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "numpy_version": np.__version__,
+            "jax_version": getattr(jax, "__version__", None),
+            "jaxlib_version": getattr(jaxlib, "__version__", None),
+            "jax_devices": [str(device) for device in jax.devices()],
+            "data_dir": str(Path(args.data_dir).resolve()),
+            "output_dir": str(Path(args.output).resolve()),
+            "timing_dir": str(timing_dir_path.resolve()) if timing_dir_path is not None else None,
+            "max_iter": int(args.max_iter),
+            "n_iterations_emitted": int(len(result.get("current_sizes", []))),
+            "n_wall_times": int(len(result.get("wall_times", []))),
+            "total_time_s": float(total_time),
+            "wall_times_trajectory": [float(x) for x in result.get("wall_times", [])],
+            "current_sizes": [int(x) for x in result.get("current_sizes", [])],
+            "pixel_resolutions": [float(x) for x in result.get("pixel_resolutions", [])],
+            "ave_Pmax_trajectory": [float(x) for x in result.get("ave_Pmax_trajectory", [])],
+            "n_images": int(n_images),
+            "image_shape": [int(x) for x in ds.image_shape],
+            "volume_shape": [int(x) for x in ds.volume_shape],
+            "voxel_size": float(ds.voxel_size),
+            "n_rotations": int(rotations.shape[0]),
+            "n_translations": int(translations.shape[0]),
+            "healpix_order": int(args.healpix_order),
+            "coarse_healpix_order": int(init_healpix_order),
+            "adaptive_oversampling": int(args.adaptive_oversampling),
+            "adaptive_fraction": float(args.adaptive_fraction),
+            "max_significants": int(args.max_significants),
+            "setup_phase_seconds": setup_phase_seconds,
+            "local_profile_rows": local_profile_rows,
+            "timing_rows": timing_rows,
+            "timing_summary": timing_summary,
+        }
+        with ledger_path.open("w", encoding="utf-8") as f:
+            json.dump(ledger, f, indent=2, sort_keys=True)
+        logger.info("Benchmark ledger saved to %s", ledger_path)
 
     # Also save final merged volume as MRC for visual inspection.
     # Use the canonical idiom: get_idft3 + write_mrc (handles axis transpose).

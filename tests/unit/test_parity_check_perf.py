@@ -104,3 +104,50 @@ def test_single_iter_only_checks_requested_iter(tmp_path):
     assert rc == 0
     assert "iter 5" in out
     assert "iter 4" not in out
+
+
+def test_extract_em_parity_tables_reports_long_stage_perf(capsys):
+    import scripts.extract_em_parity_tables as tables
+
+    ledger = {
+        "k1_long_walltime_s": 100.0,
+        "k1_long_recovar_setup_phase_seconds": {
+            "mask_and_image_cache": 1.0,
+            "before_iterations": 20.0,
+        },
+        "k1_long_recovar_timing_summary": {
+            "sum_stage_delta_s": {
+                "e_step": 80.0,
+                "recon": 10.0,
+                "fsc": 5.0,
+                "noise_update": 3.0,
+                "convergence": 2.0,
+            }
+        },
+    }
+    baseline = {
+        "k1_long_walltime_s": 90.0,
+        "k1_long_recovar_setup_phase_seconds": {
+            "mask_and_image_cache": 1.0,
+            "before_iterations": 10.0,
+        },
+        "k1_long_recovar_timing_summary": {
+            "sum_stage_delta_s": {
+                "e_step": 70.0,
+                "recon": 10.0,
+                "fsc": 5.0,
+                "noise_update": 3.0,
+                "convergence": 2.0,
+            }
+        },
+    }
+
+    rendered = tables._emit_perf_rows("k1_long", ledger, baseline)
+    out = capsys.readouterr().out
+
+    assert rendered == 8
+    assert "k1_long_walltime_s" in out
+    assert "k1_long_setup_mask_and_image_cache_s" in out
+    assert "k1_long_setup_before_iterations_s" in out
+    assert "k1_long_e_step_s" in out
+    assert "k1_long_convergence_s" in out
