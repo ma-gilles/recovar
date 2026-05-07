@@ -131,6 +131,40 @@ Or use the interactive wizard: `recovar quickstart`
 
 See the [quick start guide](https://ma-gilles.github.io/recovar/getting-started/quickstart/) for more examples.
 
+## GPU memory
+
+Every heavy-GPU command (`pipeline`, `analyze`, `compute_state`, `compute_trajectory`, `pipeline_with_outliers`, `reconstruct_from_external_embedding`, `junk_particle_detection`, `outlier_detection`, `run_test_dataset`) accepts the same memory-planning flags:
+
+```bash
+# Tell the planner you want a 40 GB budget; pick batch sizes accordingly.
+recovar pipeline ... --gpu-gb 40
+
+# --gpu-memory is an alias kept for backward compatibility.
+recovar pipeline ... --gpu-memory 40
+
+# Adapt n_pcs to the largest value that fits the budget (reproducible:
+# same flags + same dataset = same n_pcs).
+recovar pipeline ... --gpu-gb 24 --adaptive-n-pcs
+
+# Tighten batch sizes further for tight budgets.
+recovar pipeline ... --gpu-gb 12 --low-memory-option
+recovar pipeline ... --gpu-gb 8  --very-low-memory-option
+
+# Write memory_plan.json + memory_trace.jsonl into the output directory.
+recovar pipeline ... --gpu-gb 40 --memory-diagnostics
+
+# Real cap (sets XLA_PYTHON_CLIENT_MEM_FRACTION before jax init):
+recovar pipeline ... --gpu-gb 40 --hard-gpu-memory-limit
+```
+
+The planner never refuses to launch. If it predicts the run will exceed the budget (based on a calibrated peak-memory table), it logs a loud WARNING and launches anyway. If the run actually OOMs, the error message is followed by an actionable hint suggesting `--gpu-gb`, `--adaptive-n-pcs`, `--low-memory-option`, etc. — the hint is the **last** thing on stderr so it doesn't get lost above the JAX traceback.
+
+The peak-memory table at `recovar/utils/memory_calibration_data.json` is committed to the repo and was produced by `scripts/submit_calibrate_memory_planner.sh` on H100 hardware. Re-run that script if you want to regenerate or extend it.
+
+`run_test_dataset --gpu-gb N` automatically forwards `--adaptive-n-pcs` to its inner pipeline calls so the install-sanity test always finishes. Pass `--full-memory-test` if you specifically want the default 200-PC configuration.
+
+The canonical CUDA-fallback env var is `RECOVAR_DISABLE_CUDA=1`. The common typo `RECOVAR_CUDA_DISABLE` is treated as an alias for the duration of the run, with a one-time warning telling you to rename it in your shell init.
+
 ## Documentation
 
 Full documentation is available at **[ma-gilles.github.io/recovar](https://ma-gilles.github.io/recovar)**:
