@@ -83,8 +83,12 @@ def test_merge_guard_plan_contains_cpu_and_gpu_gates():
     assert "em_fast_guard" in quick_names
 
     all_names = [command.name for command in build_guard_commands("all", quick=True)]
+    assert "native_initialmodel_k2_smoke_gpu" in all_names
     assert "em_parity_fast_gpu" in all_names
     assert "extract_em_parity_fast_tables" in all_names
+
+    gpu_names = [command.name for command in build_guard_commands("gpu")]
+    assert gpu_names[0] == "native_initialmodel_k2_smoke_gpu"
 
 
 def test_long_native_quality_guard_uses_relion_initialmodel_reference():
