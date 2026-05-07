@@ -129,6 +129,11 @@ def pytest_configure(config):
         "long_test: long quality regression tests (cryo-EM SPA, cryo-ET, outliers, "
         "with/without indices); requires --long-test flag; volumes generated synthetically",
     )
+    config.addinivalue_line(
+        "markers",
+        "gpu_memory_matrix: 14-cell GPU memory matrix (7 budgets x 2 backends); "
+        "runs under --long-test or via scripts/run_gpu_memory_matrix.sh",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
