@@ -1772,6 +1772,47 @@ def less_naive_heterogeneity_scheme_relion_style(
 
     return estimates
 
+
+#<<LH 002
+# Here, we implement our own kernel
+from scipy.special import wofz, comb
+# lambda_val = h/sigma
+def kernel_one_dimensional(x, lambda_val):
+    # Calculate the complex argument for the Faddeeva function w(z)
+    # z = (i * lambda * |x| - 1/lambda) / sqrt(2)
+    z = (1j * lambda_val * np.abs(x) - (1 / lambda_val)) / np.sqrt(2)
+
+    # Evaluate the Faddeeva function (efficient numerical implementation)
+    w_z = wofz(z)
+
+    # Combine with the exponential term: exp(-i|x|) * w(z)
+    term_to_extract = np.exp(-1j * np.abs(x)) * w_z
+    imag_part = np.imag(term_to_extract)
+
+    constant = (-lambda_val / np.sqrt(2 * np.pi)) * np.exp(1 / (2 * lambda_val**2))
+
+    return constant * imag_part
+
+def calculate_kernel(diff, cov, h):
+  diff = diff/h
+  # 1. Compute all eigenbases at once
+  # eigenvalues shape: (n, d), eigenvectors shape: (n, d, d)
+  eigenvalues, eigenvectors = np.linalg.eigh(cov)
+  lambdas = h/np.sqrt(np.maximum(eigenvalues, 1e-12))
+
+  # 2. Project points onto the eigenbasis
+  # We want the dot product for each pair: (d, d) @ (d, 1)
+  # Using np.einsum for a clean, vectorized batch operation:
+  # 'nij' represents the (n, d, d) eigenvectors (Q)
+  # 'ni' represents the (n, d) points (x)
+  # We use 'nji' to effectively transpose Q to Q^T for the projection
+  diff_new_basis = np.einsum('nji,ni->nj', eigenvectors, diff)
+
+  one_dimensional_kernel = kernel_one_dimensional(diff_new_basis, lambdas)
+
+  return np.prod(one_dimensional_kernel, axis=1)
+
+
 # TODO
 #<<LH Here we will work the most. We should calculate
 # the weigths within this function. Therefore, we 
@@ -1819,14 +1860,19 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     n_bins = bins.size
 
     #<<LH 001
-    my_inds = np.digitize(heterogeneity_distances, bins, right=True).astype(np.int32)
-    my_inds = np.clip(my_inds, 0, n_bins - 1)
-    discretized_distances = bins[my_inds]
-    my_kernel_fn = lambda dist: np.where(np.abs(dist) < 1, 3 / 4 * (1 - dist**2), 0)
+    #my_inds = np.digitize(heterogeneity_distances, bins, right=True).astype(np.int32)
+    #my_inds = np.clip(my_inds, 0, n_bins - 1)
+    #discretized_distances = bins[my_inds]
+    #my_kernel_fn = lambda dist: np.where(np.abs(dist) < 1, 3 / 4 * (1 - dist**2), 0)
     my_h_grid = 2 * bins
-    my_kernels = np.zeros((n_bins, discretized_distances.size))
+    my_kernels = np.zeros((n_bins, my_distances.shape[0]))
+    
     for idx, h in enumerate(my_h_grid):
-        my_kernels[idx] = my_kernel_fn(discretized_distances/h)#*1/h
+        my_kernels[idx] = calculate_kernel(my_distances, my_cov, h)
+    np.savetxt("my_kernels.txt", my_kernels)
+    np.savetxt("my_h_grid.txt", my_h_grid)
+    np.savetxt("my_cov.txt", my_cov.reshape(my_cov.shape[0], -1))
+    np.savetxt("my_distances.txt", my_distances)
     #>>LH 001
 
     if upsampling_factor is not None:
