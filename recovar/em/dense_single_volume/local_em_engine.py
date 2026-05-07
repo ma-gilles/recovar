@@ -190,7 +190,7 @@ class _LocalPostprocessBuffers:
 @dataclass
 class _LocalProjectionBlock:
     proj_weighted: jnp.ndarray
-    proj_for_noise: jnp.ndarray
+    proj_for_noise: jnp.ndarray | None
 
 
 @dataclass(frozen=True)
@@ -248,6 +248,7 @@ def _project_local_bucket(
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
     projection_padding_factor: int = 1,
+    materialize_recon_projection: bool = True,
 ) -> _LocalProjectionBlock:
     """Project a local bucket and return score/noise projection views."""
 
@@ -275,25 +276,30 @@ def _project_local_bucket(
         and not bool(projection_kwargs.get("force_jax", False))
         and _indexed_projection_available()
     ):
+        projection_indices = window_spec.projection_indices if materialize_recon_projection else window_spec.score_indices
         proj_window_flat = _project_indexed_half_spectrum(
             mean_for_proj,
-            window_spec.projection_indices,
+            projection_indices,
             flat_rotations,
             image_shape,
             proj_volume_shape,
             disc_type,
             max_r=projection_kwargs.get("max_r"),
         )
-        proj_half = proj_window_flat[..., window_spec.score_projection_take].reshape(
-            batch_size,
-            bucket_rotation_count,
-            window_spec.n_score,
-        )
-        proj_for_noise = proj_window_flat[..., window_spec.recon_projection_take].reshape(
-            batch_size,
-            bucket_rotation_count,
-            window_spec.n_recon,
-        )
+        if materialize_recon_projection:
+            proj_half = proj_window_flat[..., window_spec.score_projection_take].reshape(
+                batch_size,
+                bucket_rotation_count,
+                window_spec.n_score,
+            )
+            proj_for_noise = proj_window_flat[..., window_spec.recon_projection_take].reshape(
+                batch_size,
+                bucket_rotation_count,
+                window_spec.n_recon,
+            )
+        else:
+            proj_half = proj_window_flat.reshape(batch_size, bucket_rotation_count, window_spec.n_score)
+            proj_for_noise = None
         score_half_weights = window_spec.score_values(half_weights)
         proj_weighted = proj_half * score_half_weights[None, None, :]
         proj_weighted, proj_for_noise, _, _ = precision_policy.cast_local_projection_scores(
@@ -320,15 +326,19 @@ def _project_local_bucket(
             bucket_rotation_count,
             window_spec.n_score,
         )
-        proj_for_noise = window_spec.recon_values(proj_half_flat).reshape(
-            batch_size,
-            bucket_rotation_count,
-            window_spec.n_recon,
+        proj_for_noise = (
+            window_spec.recon_values(proj_half_flat).reshape(
+                batch_size,
+                bucket_rotation_count,
+                window_spec.n_recon,
+            )
+            if materialize_recon_projection
+            else None
         )
         score_half_weights = window_spec.score_values(half_weights)
     else:
         proj_half = proj_half_flat.reshape(batch_size, bucket_rotation_count, n_half)
-        proj_for_noise = proj_half
+        proj_for_noise = proj_half if materialize_recon_projection else None
         score_half_weights = half_weights
 
     proj_weighted = proj_half * score_half_weights[None, None, :]
@@ -339,6 +349,67 @@ def _project_local_bucket(
         None,
     )
     return _LocalProjectionBlock(proj_weighted=proj_weighted, proj_for_noise=proj_for_noise)
+
+
+def _project_packed_noise_rows(
+    *,
+    mean_for_proj,
+    packed_flat_rotations,
+    packed_rotation_count: int,
+    batch_size: int,
+    image_shape,
+    proj_volume_shape,
+    disc_type: str,
+    projection_kwargs: dict,
+    window_spec,
+    n_half: int,
+    precision_policy: DensePrecisionPolicy,
+    reconstruction_pack_mask_jnp,
+) -> jnp.ndarray:
+    """Project only packed reconstruction rows for local noise accumulation."""
+
+    if (
+        window_spec.use_window
+        and not bool(projection_kwargs.get("relion_texture_interp", False))
+        and not bool(projection_kwargs.get("force_jax", False))
+        and _indexed_projection_available()
+    ):
+        flat_proj_for_noise = _project_indexed_half_spectrum(
+            mean_for_proj,
+            window_spec.recon_or_full_indices(n_half),
+            packed_flat_rotations,
+            image_shape,
+            proj_volume_shape,
+            disc_type,
+            max_r=projection_kwargs.get("max_r"),
+        )
+    else:
+        proj_half_flat, _ = _compute_projections_block(
+            mean_for_proj,
+            packed_flat_rotations,
+            image_shape,
+            proj_volume_shape,
+            disc_type,
+            return_abs2=False,
+            **projection_kwargs,
+        )
+        flat_proj_for_noise = window_spec.recon_values(proj_half_flat) if window_spec.use_window else proj_half_flat
+
+    packed_proj_for_noise = flat_proj_for_noise.reshape(
+        int(batch_size),
+        int(packed_rotation_count),
+        window_spec.n_recon if window_spec.use_window else int(n_half),
+    )
+    packed_proj_for_noise = jnp.where(
+        reconstruction_pack_mask_jnp[:, :, None],
+        packed_proj_for_noise,
+        0.0,
+    )
+    packed_proj_for_noise, _ = precision_policy.cast_local_noise_projection_scores(
+        packed_proj_for_noise,
+        None,
+    )
+    return packed_proj_for_noise
 
 
 def _local_projection_mode(window_spec, projection_kwargs: dict, relion_projector_half=None) -> str:
@@ -972,6 +1043,17 @@ def run_local_em_exact(
             or int(debug_iteration or -1) in debug_score_dump_iterations
         )
     )
+    debug_noise_dump_filter_matches = (
+        debug_noise_dump_dir is not None
+        and (
+            debug_noise_dump_current_sizes is None
+            or int(current_size or -1) in debug_noise_dump_current_sizes
+        )
+        and (
+            debug_noise_dump_iterations is None
+            or int(debug_iteration or -1) in debug_noise_dump_iterations
+        )
+    )
     config = ForwardModelConfig.from_dataset(
         experiment_dataset,
         disc_type=disc_type,
@@ -1052,6 +1134,20 @@ def run_local_em_exact(
     noise_sigma2_offset = jnp.asarray(0.0, dtype=jnp.float32)
     noise_sumw = jnp.asarray(0.0, dtype=jnp.float32)
     return_noise_split = noise_split_diagnostics_requested()
+    require_materialized_recon_projection = bool(
+        mstep_subtract_ctf_projection
+        or debug_score_dump_filter_matches
+        or debug_noise_dump_filter_matches
+        or return_noise_split
+    )
+    defer_local_noise_projection = (
+        not require_materialized_recon_projection
+        and window_spec.use_window
+        and relion_projector_half is None
+        and not bool(projection_kwargs.get("relion_texture_interp", False))
+        and not bool(projection_kwargs.get("force_jax", False))
+        and _indexed_projection_available()
+    )
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
@@ -1629,6 +1725,7 @@ def run_local_em_exact(
             relion_projector_half=relion_projector_half,
             relion_projector_r_max=relion_projector_r_max,
             projection_padding_factor=projection_padding_factor,
+            materialize_recon_projection=not defer_local_noise_projection,
         )
         proj_weighted = projection_block.proj_weighted
         proj_for_noise = projection_block.proj_for_noise
@@ -1686,6 +1783,8 @@ def run_local_em_exact(
             if mstep_subtract_ctf_projection:
                 # RELION's VDAM/--grad path backprojects the residual image,
                 # not the raw unmasked image: Fimg_store = Fimg - Frefctf.
+                if proj_for_noise is None:
+                    raise RuntimeError("Residual local M-step requires materialized recon projections")
                 frefctf_weighted = proj_for_noise * ctf2_over_nv_recon[:, None, :]
                 summed = summed - reconstruction_probs_sum_t[..., None] * frefctf_weighted
             if return_profile:
@@ -1826,6 +1925,8 @@ def run_local_em_exact(
             if mstep_subtract_ctf_projection:
                 # RELION's VDAM/--grad path backprojects the residual image,
                 # not the raw unmasked image: Fimg_store = Fimg - Frefctf.
+                if proj_for_noise is None:
+                    raise RuntimeError("Residual local M-step requires materialized recon projections")
                 frefctf_weighted = proj_for_noise * ctf2_over_nv_recon[:, None, :]
                 summed = summed - reconstruction_probs_sum_t[..., None] * frefctf_weighted
             if return_profile:
@@ -1866,7 +1967,7 @@ def run_local_em_exact(
         packed_ctf_probs = jnp.take_along_axis(ctf_probs, reconstruction_take_indices_jnp[:, :, None], axis=1)
         packed_ctf_probs = jnp.where(reconstruction_pack_mask_jnp[:, :, None], packed_ctf_probs, 0.0)
         packed_flat_rotations = None
-        if not disable_adjoint_y or not disable_adjoint_ctf:
+        if not disable_adjoint_y or not disable_adjoint_ctf or (accumulate_noise and proj_for_noise is None):
             packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_rotations_np))
         timing.pack_s += time.time() - pack_t0
 
@@ -1966,16 +2067,32 @@ def run_local_em_exact(
                 packed_summed_masked_noise,
                 0.0,
             )
-            packed_proj_for_noise = jnp.take_along_axis(
-                proj_for_noise,
-                reconstruction_take_indices_jnp[:, :, None],
-                axis=1,
-            )
-            packed_proj_for_noise = jnp.where(
-                reconstruction_pack_mask_jnp[:, :, None],
-                packed_proj_for_noise,
-                0.0,
-            )
+            if proj_for_noise is None:
+                packed_proj_for_noise = _project_packed_noise_rows(
+                    mean_for_proj=mean_for_proj,
+                    packed_flat_rotations=packed_flat_rotations,
+                    packed_rotation_count=packed_rotations_np.shape[1],
+                    batch_size=batch_size,
+                    image_shape=image_shape,
+                    proj_volume_shape=proj_volume_shape,
+                    disc_type=disc_type,
+                    projection_kwargs=projection_kwargs,
+                    window_spec=window_spec,
+                    n_half=n_half,
+                    precision_policy=precision_policy,
+                    reconstruction_pack_mask_jnp=reconstruction_pack_mask_jnp,
+                )
+            else:
+                packed_proj_for_noise = jnp.take_along_axis(
+                    proj_for_noise,
+                    reconstruction_take_indices_jnp[:, :, None],
+                    axis=1,
+                )
+                packed_proj_for_noise = jnp.where(
+                    reconstruction_pack_mask_jnp[:, :, None],
+                    packed_proj_for_noise,
+                    0.0,
+                )
             flat_proj_for_noise = flatten_bucket_rows(packed_proj_for_noise)
             flat_proj_abs2_for_noise = jnp.abs(flat_proj_for_noise) ** 2
             block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
@@ -2103,6 +2220,7 @@ def run_local_em_exact(
     profile_summary = {
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
+        "defer_local_noise_projection": np.asarray(defer_local_noise_projection),
         "bucket_build_time_s": np.float64(timing.bucket_build_s),
         "raw_cache_build_time_s": np.float64(timing.raw_cache_build_s),
         "raw_cache_enabled": np.asarray(raw_cache_enabled),

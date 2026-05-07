@@ -71,7 +71,7 @@ class DensePrecisionPolicy:
         proj_abs2_for_noise=None,
     ):
         proj_weighted = proj_weighted.astype(self.score_complex_dtype)
-        if self.use_float64_scoring:
+        if proj_for_noise is not None and self.use_float64_scoring:
             proj_for_noise = proj_for_noise.astype(self.score_complex_dtype)
         if proj_abs2_weighted is not None:
             proj_abs2_weighted = proj_abs2_weighted.astype(self.score_real_dtype)
@@ -82,6 +82,8 @@ class DensePrecisionPolicy:
     def cast_local_noise_projection_scores(self, proj_for_noise, proj_abs2_for_noise):
         if not self.use_float64_scoring:
             return proj_for_noise, proj_abs2_for_noise
+        if proj_abs2_for_noise is None:
+            return proj_for_noise.astype(self.score_complex_dtype), None
         return (
             proj_for_noise.astype(self.score_complex_dtype),
             proj_abs2_for_noise.astype(self.score_real_dtype),
