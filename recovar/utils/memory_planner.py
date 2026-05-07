@@ -273,11 +273,13 @@ def _assemble_budget(
             logger.debug("Physical memory probe failed: %s", exc)
 
     # JAX-reported limit (may include the XLA_PYTHON_CLIENT_MEM_FRACTION
-    # cap). Best effort.
+    # cap). Best effort. Imported via the package so tests that
+    # monkeypatch ``recovar.utils.get_gpu_memory_total`` are still
+    # honored.
     jax_limit = None
     if backend != "cpu":
         try:
-            from recovar.utils import helpers as _helpers
+            from recovar import utils as _helpers
 
             jax_limit = float(_helpers.get_gpu_memory_total())
         except Exception as exc:
@@ -286,7 +288,7 @@ def _assemble_budget(
     # CPU branch: pick something sensible from the existing helper.
     if backend == "cpu":
         try:
-            from recovar.utils import helpers as _helpers
+            from recovar import utils as _helpers
 
             cpu_limit = float(_helpers.get_gpu_memory_total())  # CPU branch in helper
         except Exception:
@@ -352,8 +354,11 @@ def make_memory_plan(
 ) -> MemoryPlan:
     """Top-level planner used by every heavy-GPU command."""
 
+    # Import via the ``recovar.utils`` package (not ``recovar.utils.helpers``)
+    # so that monkeypatches like ``setattr(pipeline_cmd.utils, "get_image_batch_size", ...)``
+    # in existing tests still reach the lookup site.
+    from recovar import utils as _helpers
     from recovar.utils import cuda_env
-    from recovar.utils import helpers as _helpers
 
     backend = cuda_env.detect_backend()
     custom_cuda_disabled, cuda_warnings = cuda_env.custom_cuda_disabled_from_env()
@@ -499,7 +504,7 @@ class MemoryTraceWriter:
 
         # JAX peak / current
         try:
-            from recovar.utils import helpers as _helpers
+            from recovar import utils as _helpers
 
             row["jax_in_use_gb"] = float(_helpers.get_gpu_memory_used())
             row["jax_peak_gb"] = float(_helpers.get_peak_gpu_memory_used())
