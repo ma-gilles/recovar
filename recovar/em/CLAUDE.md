@@ -192,9 +192,12 @@ EM-long tier (~2–4 hr per case; submit via Slurm only):
 ./scripts/run_em_parity_long_slurm.sh           # submit and exit
 ./scripts/run_em_parity_long_slurm.sh --watch   # submit and tail logs
 ```
-This runs `test_em_parity_long_k1_full` (50k 256² K=1 15-iter ab-initio)
-and `test_em_parity_long_kclass_full` (50k 256² K=4 15-iter) on parallel
-GPU jobs and writes the combined report to the Slurm scratch dir.
+This runs `test_em_parity_long_k1_full` (50k 256² K=1 15-iter auto-refine
+parity), prepares/reuses the RELION `--grad --denovo_3dref` K=1 InitialModel
+reference, runs `test_em_parity_long_k1_native_initialmodel_quality`
+(50k 256² K=1 8-iter native VDAM cold-start quality), and runs
+`test_em_parity_long_kclass_full` (50k 256² K=4 15-iter) on parallel GPU jobs.
+It writes the combined report to the Slurm scratch dir.
 
 The EM-long tier uses the dedicated `--em-parity-long` pytest flag and
 the `em_parity_long` marker so it stays disjoint from the project-wide

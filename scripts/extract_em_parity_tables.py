@@ -215,10 +215,11 @@ def emit_fast_tier() -> int:
 def emit_long_tier() -> int:
     """Emit the long-tier table. Returns number of metrics rendered."""
     k1_ledger = _load_json(BASELINES_DIR / "em_parity_quality_long_ledger_k1_long.json")
+    k1_native_ledger = _load_json(BASELINES_DIR / "em_parity_quality_long_ledger_k1_native_initialmodel.json")
     kclass_ledger = _load_json(BASELINES_DIR / "em_parity_quality_long_ledger_kclass_long.json")
     baseline = _load_json(BASELINES_DIR / "em_parity_quality_long_baseline.json") or {}
 
-    if not k1_ledger and not kclass_ledger:
+    if not k1_ledger and not k1_native_ledger and not kclass_ledger:
         print("# EM-parity long tier — no ledger files found.", flush=True)
         print("# Run: ./scripts/run_em_parity_long_slurm.sh", flush=True)
         return 0
@@ -240,18 +241,63 @@ def emit_long_tier() -> int:
         rendered += _emit_metric(
             "k1_long_pmax_diff_max_iter3plus", k1_ledger, baseline, lower_is_better=True, fmt=".4g"
         )
+    if k1_native_ledger:
+        rendered += _emit_metric(
+            "k1_native_initialmodel_vdam_it008_corr_vs_gt",
+            k1_native_ledger,
+            baseline,
+            lower_is_better=False,
+            fmt=".6f",
+        )
+        rendered += _emit_metric(
+            "k1_native_initialmodel_relion_it008_corr_vs_gt",
+            k1_native_ledger,
+            baseline,
+            lower_is_better=False,
+            fmt=".6f",
+        )
+        rendered += _emit_metric(
+            "k1_native_initialmodel_corr_gap_vs_relion_it008",
+            k1_native_ledger,
+            baseline,
+            lower_is_better=True,
+            fmt=".6f",
+        )
+        rendered += _emit_metric(
+            "k1_native_initialmodel_vdam_it008_mean_fsc_1_16",
+            k1_native_ledger,
+            baseline,
+            lower_is_better=False,
+            fmt=".6f",
+        )
+        rendered += _emit_metric(
+            "k1_native_initialmodel_relion_it008_mean_fsc_1_16",
+            k1_native_ledger,
+            baseline,
+            lower_is_better=False,
+            fmt=".6f",
+        )
+        rendered += _emit_metric(
+            "k1_native_initialmodel_fsc_1_16_gap_vs_relion_it008",
+            k1_native_ledger,
+            baseline,
+            lower_is_better=True,
+            fmt=".6f",
+        )
     if kclass_ledger:
         rendered += _emit_metric("kclass_long_mean_corr", kclass_ledger, baseline, lower_is_better=False, fmt=".6f")
         rendered += _emit_metric(
             "kclass_long_class_assignment_accuracy", kclass_ledger, baseline, lower_is_better=False, fmt=".4f"
         )
 
-    if k1_ledger or kclass_ledger:
+    if k1_ledger or k1_native_ledger or kclass_ledger:
         print("\n### EM-parity Performance — long tier")
         print("| Metric | Baseline | Current | Status |")
         print("|--------|----------|---------|--------|")
         if k1_ledger:
             _emit_perf_rows("k1_long", k1_ledger, baseline)
+        if k1_native_ledger:
+            _emit_perf_rows("k1_native_initialmodel", k1_native_ledger, baseline)
         if kclass_ledger:
             _emit_perf_rows("kclass_long", kclass_ledger, baseline)
     return rendered

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
 from recovar.em.initial_model.gt_metrics import (
@@ -12,6 +14,16 @@ from scripts.run_vdam_abinitio_merge_guard import build_guard_commands, run_guar
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _load_long_guard_module():
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+    module_path = REPO_ROOT / "tests/long_test/test_em_parity_long.py"
+    spec = importlib.util.spec_from_file_location("em_parity_long_guard_for_unit_test", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_vdam_alignment_defaults_are_merge_guarded():
@@ -73,6 +85,134 @@ def test_merge_guard_plan_contains_cpu_and_gpu_gates():
     all_names = [command.name for command in build_guard_commands("all", quick=True)]
     assert "em_parity_fast_gpu" in all_names
     assert "extract_em_parity_fast_tables" in all_names
+
+
+def test_long_native_quality_guard_uses_relion_initialmodel_reference():
+    long_test = (REPO_ROOT / "tests/long_test/test_em_parity_long.py").read_text()
+    slurm_launcher = (REPO_ROOT / "scripts/run_em_parity_long_slurm.sh").read_text()
+
+    expected_long_tokens = [
+        "K1_NATIVE_RELION_DIR",
+        "relion_initialmodel_k1_it008",
+        "_assert_relion_initialmodel_reference",
+        "--grad",
+        "--denovo_3dref",
+        "_rlnDoGradientRefine",
+        "_rlnDoAutoRefine",
+        "run_it008_class001.mrc",
+        "relion_initialmodel_it008",
+        "_relion_frame_map_similarity",
+        "k1_native_initialmodel_vdam_vs_relion_it008_corr",
+        ">= 0.999",
+        "direct VDAM vs RELION it008",
+    ]
+    missing = [token for token in expected_long_tokens if token not in long_test]
+    assert not missing, f"native InitialModel long guard lost RELION --grad reference checks: {missing}"
+
+    expected_launcher_tokens = [
+        "em_parity_long_k1_native_ref",
+        "relion_initialmodel_k1_it008",
+        "--grad",
+        "--denovo_3dref",
+        "--dependency=afterok:${K1_NATIVE_REF_JOB}",
+        "_rlnDoGradientRefine[[:space:]]*1",
+        "_rlnDoAutoRefine[[:space:]]*0",
+    ]
+    missing = [token for token in expected_launcher_tokens if token not in slurm_launcher]
+    assert not missing, f"EM-long launcher no longer prepares the RELION InitialModel reference: {missing}"
+
+
+def test_native_vdam_subset_order_uses_relion_sorted_idx_base_order():
+    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    iteration_loop = (REPO_ROOT / "recovar/em/initial_model/iteration_loop.py").read_text()
+
+    expected_driver_tokens = [
+        "_micrograph_sort_order(main_star)",
+        "particle_order=particle_order",
+    ]
+    missing = [token for token in expected_driver_tokens if token not in driver]
+    assert not missing, f"native InitialModel driver lost RELION sorted_idx base-order wiring: {missing}"
+
+    expected_loop_tokens = [
+        "particle_order: Sequence[int] | None = None",
+        "base_order = np.asarray(particle_order",
+        "shuffled = base_order.copy()",
+        "shuffled = base_order[permutation]",
+    ]
+    missing = [token for token in expected_loop_tokens if token not in iteration_loop]
+    assert not missing, f"VDAM iteration loop lost RELION sorted_idx base-order handling: {missing}"
+
+
+def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
+    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    iteration_loop = (REPO_ROOT / "recovar/em/initial_model/iteration_loop.py").read_text()
+    run_ab_initio = (REPO_ROOT / "scripts/run_ab_initio.py").read_text()
+
+    expected_tokens = [
+        "do_solvent: bool = True",
+        "if opts.do_solvent",
+        "relion_solvent_mask",
+        "relion_solvent_flatten_state",
+        "do_solvent=opts.do_solvent",
+    ]
+    haystack = "\n".join([driver, iteration_loop, run_ab_initio])
+    missing = [token for token in expected_tokens if token not in haystack]
+    assert not missing, f"native InitialModel lost RELION --flatten_solvent post-M-step wiring: {missing}"
+
+
+def test_relion_initialmodel_reference_checker_rejects_autorefine(tmp_path):
+    mod = _load_long_guard_module()
+
+    initialmodel_dir = tmp_path / "initialmodel"
+    initialmodel_dir.mkdir()
+    (initialmodel_dir / "run_it008_optimiser.star").write_text(
+        "\n".join(
+            [
+                "# RELION optimiser; version test",
+                (
+                    "# --o out/run --iter 8 --grad --denovo_3dref --i particles.star "
+                    "--ctf --K 1 --sym C1 --flatten_solvent --zero_mask "
+                    "--dont_combine_weights_via_disc --pool 3 --pad 1 "
+                    "--particle_diameter 200 --oversampling 1 --healpix_order 1 "
+                    "--offset_range 6 --offset_step 2 --auto_sampling --tau2_fudge 4 "
+                    "--j 4 --random_seed 0"
+                ),
+                "",
+                "data_optimiser_general",
+                "_rlnCurrentIteration 8",
+                "_rlnNumberOfIterations 8",
+                "_rlnDoSplitRandomHalves 0",
+                "_rlnDoGradientRefine 1",
+                "_rlnDoAutoRefine 0",
+            ]
+        )
+    )
+    mod._assert_relion_initialmodel_reference(initialmodel_dir, expected_iter=8)
+
+    autorefine_dir = tmp_path / "autorefine"
+    autorefine_dir.mkdir()
+    (autorefine_dir / "run_it008_optimiser.star").write_text(
+        "\n".join(
+            [
+                "# RELION optimiser; version test",
+                "# --i particles.star --ref reference_init_relion.mrc --o out/run --auto_refine --split_random_halves --pad 2 --iter 8",
+                "",
+                "data_optimiser_general",
+                "_rlnCurrentIteration 8",
+                "_rlnNumberOfIterations 999",
+                "_rlnDoSplitRandomHalves 1",
+                "_rlnDoGradientRefine 0",
+                "_rlnDoAutoRefine 1",
+            ]
+        )
+    )
+    try:
+        mod._assert_relion_initialmodel_reference(autorefine_dir, expected_iter=8)
+    except AssertionError as exc:
+        assert "--grad" in str(exc)
+        assert "--denovo_3dref" in str(exc)
+    else:
+        raise AssertionError("auto-refine fixture was accepted as native InitialModel reference")
 
 
 def test_merge_guard_dry_run_writes_reproducibility_ledger(tmp_path):

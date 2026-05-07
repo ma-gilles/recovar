@@ -28,7 +28,7 @@ from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
 from .dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
 from .init import initialise_denovo_state, seed_noise_from_mavg
-from .iteration_loop import run_vdam_iterations
+from .iteration_loop import relion_solvent_flatten_state, relion_solvent_mask, run_vdam_iterations
 from .schedules import DEFAULT_GRAD_EM_ITERS, DEFAULT_GRAD_MU, default_subset_sizes_for_3d_initial_model
 from .state import InitialModelState
 from .subset import RndUnifFn
@@ -59,6 +59,7 @@ class NativeInitialModelOptions:
     sym_name: str = "C1"
     do_run_C1: bool = True
     particle_diameter: float = 200.0
+    do_solvent: bool = True
     do_zero_mask: bool = True
     do_ctf_correction: bool = True
     random_seed: int = DEFAULT_RANDOM_SEED
@@ -613,8 +614,10 @@ def _native_expectation_step(
         )
 
     def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
-        sampling_plan = _build_sampling_plan(opts, iteration=max(1, int(state.iter)))
+        iteration = max(1, int(state.iter))
+        sampling_plan = _build_sampling_plan(opts, iteration=iteration)
         config = _dense_estep_config(dataset, opts, noise_variance, sampling_plan, particle_state.translation_offsets)
+        config.engine_kwargs["debug_iteration"] = iteration
         result = run_dense_initial_model_estep(
             dataset,
             state,
@@ -962,6 +965,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         raise NotImplementedError("native post-run relion_align_symmetry execution is not wired yet")
 
     main_star, optics_star = read_star(opts.fn_img)
+    particle_order = _micrograph_sort_order(main_star)
     dataset = load_dataset(
         opts.fn_img,
         lazy=bool(opts.lazy),
@@ -1007,6 +1011,18 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         if opts.write_iter_artifacts
         else (lambda *args, **kwargs: None)
     )
+    post_mstep_update = None
+    if opts.do_solvent:
+        solvent_mask = relion_solvent_mask(
+            ori_size=int(state.ori_size),
+            pixel_size=float(state.pixel_size),
+            particle_diameter_ang=float(opts.particle_diameter),
+            width_mask_edge_px=float(opts.width_mask_edge_px),
+        )
+        post_mstep_update = lambda current, _iteration, _meta: relion_solvent_flatten_state(
+            current,
+            mask=solvent_mask,
+        )
 
     final_state = run_vdam_iterations(
         state,
@@ -1020,6 +1036,8 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         rnd_unif_factory=_relion_rnd_unif_factory,
         expectation_step=expectation_step,
         iter_artifact_sink=artifact_sink,
+        post_mstep_update=post_mstep_update,
+        particle_order=particle_order,
         mu=DEFAULT_GRAD_MU,
     )
     final_mrc, class_mrcs = _write_final_outputs(opts.outputname, final_state)

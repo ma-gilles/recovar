@@ -183,6 +183,35 @@ class _DenseScoreDumpPhaseLabel:
             os.environ["RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"] = self._old
 
 
+class _LocalDebugDumpPhaseLabel:
+    """Temporarily label env-gated exact-local debug dumps by K-class phase."""
+
+    _ENV_NAMES = (
+        "RECOVAR_LOCAL_SCORE_DUMP_LABEL",
+        "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL",
+    )
+
+    def __init__(self, label: str):
+        self._label = label
+        self._old: dict[str, str | None] = {}
+
+    def __enter__(self):
+        for name in self._ENV_NAMES:
+            old = os.environ.get(name)
+            self._old[name] = old
+            if old:
+                os.environ[name] = f"{old}_{self._label}"
+            else:
+                os.environ[name] = self._label
+
+    def __exit__(self, exc_type, exc, tb):
+        for name, old in self._old.items():
+            if old is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = old
+
+
 def _append_dense_score_dump_label(old_label: str | None, suffix: str) -> str:
     if not old_label:
         return suffix
@@ -735,20 +764,21 @@ def run_local_k_class_em(
                 class_index,
                 n_classes,
             )
-            probe = run_local_em_exact(
-                experiment_dataset,
-                means_array[class_index],
-                _select_class_value(mean_variance, class_index, n_classes),
-                _select_class_value(noise_variance, class_index, n_classes),
-                class_layout,
-                disc_type,
-                accumulate_noise=False,
-                return_best_pose_details=False,
-                class_log_prior=float(log_priors[class_index]),
-                disable_adjoint_y=True,
-                disable_adjoint_ctf=True,
-                **base_engine_kwargs,
-            )
+            with _LocalDebugDumpPhaseLabel(f"probe_class{class_index:03d}"):
+                probe = run_local_em_exact(
+                    experiment_dataset,
+                    means_array[class_index],
+                    _select_class_value(mean_variance, class_index, n_classes),
+                    _select_class_value(noise_variance, class_index, n_classes),
+                    class_layout,
+                    disc_type,
+                    accumulate_noise=False,
+                    return_best_pose_details=False,
+                    class_log_prior=float(log_priors[class_index]),
+                    disable_adjoint_y=True,
+                    disable_adjoint_ctf=True,
+                    **base_engine_kwargs,
+                )
             class_log_evidence.append(np.asarray(probe[3].log_evidence_per_image, dtype=np.float64))
         class_log_evidence_np = np.stack(class_log_evidence, axis=0)
         normalization_log_evidence_np = _logsumexp_np(class_log_evidence_np, axis=0)
@@ -780,19 +810,20 @@ def run_local_k_class_em(
             class_index,
             n_classes,
         )
-        output = run_local_em_exact(
-            experiment_dataset,
-            means_array[class_index],
-            _select_class_value(mean_variance, class_index, n_classes),
-            _select_class_value(noise_variance, class_index, n_classes),
-            class_layout,
-            disc_type,
-            accumulate_noise=accumulate_noise,
-            return_best_pose_details=return_best_pose_details,
-            class_log_prior=float(log_priors[class_index]),
-            normalization_log_evidence=global_log_evidence,
-            **base_engine_kwargs,
-        )
+        with _LocalDebugDumpPhaseLabel(f"mstep_class{class_index:03d}"):
+            output = run_local_em_exact(
+                experiment_dataset,
+                means_array[class_index],
+                _select_class_value(mean_variance, class_index, n_classes),
+                _select_class_value(noise_variance, class_index, n_classes),
+                class_layout,
+                disc_type,
+                accumulate_noise=accumulate_noise,
+                return_best_pose_details=return_best_pose_details,
+                class_log_prior=float(log_priors[class_index]),
+                normalization_log_evidence=global_log_evidence,
+                **base_engine_kwargs,
+            )
         (
             class_Ft_y,
             class_Ft_ctf,

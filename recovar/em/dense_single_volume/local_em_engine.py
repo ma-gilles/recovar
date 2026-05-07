@@ -53,9 +53,11 @@ from recovar.em.dense_single_volume.helpers.projection import (
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.local_debug import (
+    maybe_write_debug_fused_posterior_dump,
     maybe_write_debug_noise_component_dump,
     maybe_write_debug_score_dump,
     noise_split_diagnostics_requested,
+    parse_debug_fused_posterior_dump_request,
     parse_debug_noise_component_dump_request,
     parse_debug_score_dump_request,
 )
@@ -1027,6 +1029,12 @@ def run_local_em_exact(
         debug_score_dump_iterations,
     ) = parse_debug_score_dump_request()
     (
+        debug_fused_posterior_dump_dir,
+        debug_fused_posterior_dump_targets,
+        debug_fused_posterior_dump_current_sizes,
+        debug_fused_posterior_dump_iterations,
+    ) = parse_debug_fused_posterior_dump_request()
+    (
         debug_noise_dump_dir,
         debug_noise_dump_targets,
         debug_noise_dump_current_sizes,
@@ -1257,8 +1265,17 @@ def run_local_em_exact(
         >= int(np.ceil(max(n_images, 1) / EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION))
     )
     use_relion_projector = relion_projector_half is not None
-    use_big_jit_buckets = (not use_relion_projector) and not debug_score_dump_filter_matches and not (
-        accumulate_noise and debug_noise_dump_dir is not None
+    disable_big_jit_buckets = os.environ.get("RECOVAR_DISABLE_LOCAL_BIG_JIT", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    use_big_jit_buckets = (
+        (not use_relion_projector)
+        and not disable_big_jit_buckets
+        and not debug_score_dump_filter_matches
+        and not (accumulate_noise and debug_noise_dump_dir is not None)
     )
     if significant_backprojection_candidate:
         use_big_jit_buckets = False
@@ -1801,6 +1818,26 @@ def run_local_em_exact(
                     best_log_score,
                     max_posterior,
                 )
+            debug_fused_posterior_dump_targets = maybe_write_debug_fused_posterior_dump(
+                experiment_dataset=experiment_dataset,
+                local_layout=local_layout,
+                bucket=bucket,
+                image_pre_shifts=image_pre_shifts,
+                probs=probs,
+                log_Z=log_Z,
+                best_log_score=best_log_score,
+                best_argmax=best_argmax,
+                max_posterior=max_posterior,
+                reconstruction_sample_mask=reconstruction_sample_mask,
+                reconstruction_rotation_mask=reconstruction_rotation_mask,
+                n_significant_samples=n_significant_samples,
+                current_size=current_size,
+                debug_iteration=debug_iteration,
+                dump_dir=debug_fused_posterior_dump_dir,
+                pending_targets=debug_fused_posterior_dump_targets,
+                requested_current_sizes=debug_fused_posterior_dump_current_sizes,
+                requested_iterations=debug_fused_posterior_dump_iterations,
+            )
             fused_elapsed = time.time() - fused_t0
             timing.fused_score_mstep_s += fused_elapsed
         else:
@@ -2198,6 +2235,15 @@ def run_local_em_exact(
         logger.warning(
             "Requested local score dump indices were not observed in this dataset view: %s",
             sorted(debug_score_dump_targets),
+        )
+    if (
+        debug_fused_posterior_dump_dir is not None
+        and debug_fused_posterior_dump_targets
+        and debug_fused_posterior_dump_iterations is None
+    ):
+        logger.warning(
+            "Requested fused posterior dump indices were not observed in this dataset view: %s",
+            sorted(debug_fused_posterior_dump_targets),
         )
 
     if not return_profile:

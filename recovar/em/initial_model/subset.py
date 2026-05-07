@@ -2,9 +2,12 @@
 
 Mirrors the RELION 5.0 sequence:
 
-1. `Experiment::randomiseParticlesOrder(random_seed + iter, false, false)`
-   shuffles the full particle list using a Mersenne-Twister seeded with
-   `random_seed + iter`. (RELION source: exp_model.cpp.)
+1. RELION starts from its current `sorted_idx` particle list, which InitialModel
+   initialises in stable micrograph-name order. If `random_seed == 0`, RELION
+   leaves this order unchanged. Otherwise
+   `Experiment::randomiseParticlesOrder(random_seed + iter, false, false)`
+   shuffles that list using a Mersenne-Twister seeded with `random_seed + iter`.
+   (RELION source: exp_model.cpp.)
 2. Take the first `subset_size` particles of the shuffled list.
 3. Stable-sort the selected prefix by optics-group id
    (ml_optimiser.cpp:4907) so particles from the same optics group are
