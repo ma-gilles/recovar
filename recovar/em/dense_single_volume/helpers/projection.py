@@ -8,6 +8,8 @@ import jax
 import jax.numpy as jnp
 
 from recovar import core
+from recovar.cuda_backproject import cuda_available as _cuda_projection_available
+from recovar.cuda_backproject import project_indexed
 
 DEFAULT_PROJECTION_MAX_R = object()
 
@@ -144,6 +146,41 @@ def project_half_spectrum(
         disc_type,
         **kwargs,
     )
+
+
+def project_indexed_half_spectrum(
+    volume,
+    pixel_indices,
+    rotations_block,
+    image_shape,
+    volume_shape,
+    disc_type,
+    *,
+    half_volume: bool = False,
+    max_r=DEFAULT_PROJECTION_MAX_R,
+):
+    """Forward-slice selected packed half-spectrum pixels into compact rows."""
+
+    order = core.decide_order(disc_type)
+    if order > 1:
+        raise ValueError("indexed projection is only supported for nearest/linear interpolation")
+    return project_indexed(
+        volume,
+        pixel_indices,
+        rotations_block,
+        image_shape,
+        volume_shape,
+        order=order,
+        half_volume=half_volume,
+        half_image=True,
+        max_r=None if max_r is DEFAULT_PROJECTION_MAX_R else max_r,
+    )
+
+
+def indexed_projection_available() -> bool:
+    """Return whether the CUDA indexed projection path can be used."""
+
+    return _cuda_projection_available()
 
 
 def compute_projections_block(

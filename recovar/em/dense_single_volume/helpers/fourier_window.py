@@ -38,10 +38,17 @@ class FourierWindowSpec:
     use_window: bool
     score_indices_np: np.ndarray | None
     recon_indices_np: np.ndarray | None
+    projection_indices_np: np.ndarray | None
+    score_projection_take_np: np.ndarray | None
+    recon_projection_take_np: np.ndarray | None
     score_indices: Any
     recon_indices: Any
+    projection_indices: Any
+    score_projection_take: Any
+    recon_projection_take: Any
     n_score: int
     n_recon: int
+    n_projection: int
     max_r: float | None
     projection_max_r: float | None
 
@@ -281,10 +288,17 @@ def make_fourier_window_spec(
             use_window=False,
             score_indices_np=None,
             recon_indices_np=None,
+            projection_indices_np=None,
+            score_projection_take_np=None,
+            recon_projection_take_np=None,
             score_indices=None,
             recon_indices=None,
+            projection_indices=None,
+            score_projection_take=None,
+            recon_projection_take=None,
             n_score=int(n_half),
             n_recon=int(n_half),
+            n_projection=int(n_half),
             max_r=None,
             projection_max_r=None,
         )
@@ -317,15 +331,29 @@ def make_fourier_window_spec(
             exact_radius=True,
         )
         recon_indices = jnp.asarray(recon_indices_np, dtype=dtype)
+    projection_recon_indices_np = score_indices_np if recon_indices_np is None else recon_indices_np
+    projection_indices_np = np.union1d(score_indices_np, projection_recon_indices_np).astype(np.int32, copy=False)
+    score_projection_take_np = np.searchsorted(projection_indices_np, score_indices_np).astype(np.int32, copy=False)
+    recon_projection_take_np = np.searchsorted(
+        projection_indices_np,
+        projection_recon_indices_np,
+    ).astype(np.int32, copy=False)
 
     return FourierWindowSpec(
         use_window=True,
         score_indices_np=score_indices_np,
         recon_indices_np=recon_indices_np,
+        projection_indices_np=projection_indices_np,
+        score_projection_take_np=score_projection_take_np,
+        recon_projection_take_np=recon_projection_take_np,
         score_indices=jnp.asarray(score_indices_np, dtype=dtype),
         recon_indices=recon_indices,
+        projection_indices=jnp.asarray(projection_indices_np, dtype=dtype),
+        score_projection_take=jnp.asarray(score_projection_take_np, dtype=dtype),
+        recon_projection_take=jnp.asarray(recon_projection_take_np, dtype=dtype),
         n_score=int(n_score),
         n_recon=int(n_recon),
+        n_projection=int(projection_indices_np.shape[0]),
         max_r=resolved_max_r,
         projection_max_r=resolved_projection_max_r,
     )

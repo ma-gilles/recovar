@@ -944,12 +944,13 @@ batch_backproject_indexed_kernel(
 /*                    Project kernel                                   */
 /* ================================================================== */
 
-template <typename T, int ORDER, bool HALF_VOL, bool HALF_IMG>
+template <typename T, int ORDER, bool HALF_VOL, bool HALF_IMG, bool INDEXED>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 project_kernel(
     const T* __restrict__ vol,
     T*       __restrict__ img,
     const T* __restrict__ rot,
+    const int32_t* __restrict__ pixel_indices,
     int n_pixels, int image_h, int image_w,
     int N0, int N1, int N2_eff,
     T c0, T c1, T c2,
@@ -966,8 +967,9 @@ project_kernel(
     if (pix >= n_pixels) return;
 
     /* Row-major pixel layout */
-    const int k0_idx = pix / image_w;   /* row index */
-    const int k1_idx = pix % image_w;   /* col index */
+    const int orig_pix = INDEXED ? (int)pixel_indices[pix] : pix;
+    const int k0_idx = orig_pix / image_w;   /* row index */
+    const int k1_idx = orig_pix % image_w;   /* col index */
     T k0 = (T)(k0_idx - image_h / 2) * upsampling;
     T k1;
     if (HALF_IMG) {
@@ -1724,8 +1726,8 @@ cudaError_t launch_project(
     dim3 block(BLOCK_SIZE);
 
     #define PJ(O, HV, HI) \
-        project_kernel<T, O, HV, HI><<<grid, block, 0, s>>>( \
-            vol, img, rot, (int)n_pixels, (int)ih, (int)iw, \
+        project_kernel<T, O, HV, HI, false><<<grid, block, 0, s>>>( \
+            vol, img, rot, nullptr, (int)n_pixels, (int)ih, (int)iw, \
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2)
 
     /* order_code: 0→0, 1→1, 3→2.  key = (order_code << 2) | (half_vol << 1) | half_img */
@@ -1747,6 +1749,48 @@ cudaError_t launch_project(
     case 11: PJ(3, true,  true);  break;
     }
     #undef PJ
+    return cudaGetLastError();
+}
+
+template <typename T>
+cudaError_t launch_project_indexed(
+    cudaStream_t s, const T* vol, T* img, const int32_t* pixel_indices, const T* rot,
+    int64_t n_images, int64_t n_pixels,
+    int64_t ih, int64_t iw,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t ups, int64_t order, int64_t half_vol, int64_t half_img,
+    int64_t full_iw, int64_t max_r2_x4 = -1)
+{
+    const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
+    const T c0 = (T)(N0 / 2);
+    const T c1 = (T)(N1 / 2);
+    const T c2 = (T)(N2 / 2);
+    const T max_r2 = max_r2_x4 < 0 ? (T)-1 : (T)max_r2_x4 / (T)4;
+    dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    dim3 block(BLOCK_SIZE);
+
+    #define PJI(O, HV, HI) \
+        project_kernel<T, O, HV, HI, true><<<grid, block, 0, s>>>( \
+            vol, img, rot, pixel_indices, (int)n_pixels, (int)ih, (int)iw, \
+            (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2)
+
+    int order_code = (order == 3) ? 2 : (int)order;
+    int key = (order_code << 2) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
+    switch (key) {
+    case  0: PJI(0, false, false); break;
+    case  1: PJI(0, false, true);  break;
+    case  2: PJI(0, true,  false); break;
+    case  3: PJI(0, true,  true);  break;
+    case  4: PJI(1, false, false); break;
+    case  5: PJI(1, false, true);  break;
+    case  6: PJI(1, true,  false); break;
+    case  7: PJI(1, true,  true);  break;
+    case  8: PJI(3, false, false); break;
+    case  9: PJI(3, false, true);  break;
+    case 10: PJI(3, true,  false); break;
+    case 11: PJI(3, true,  true);  break;
+    }
+    #undef PJI
     return cudaGetLastError();
 }
 
@@ -2890,6 +2934,50 @@ ffi::Error ProjectImpl(
     return ffi::Error::Success();
 }
 
+ffi::Error ProjectIndexedImpl(
+    cudaStream_t stream,
+    int64_t image_h, int64_t image_w,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t upsampling, int64_t order,
+    int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4,
+    ffi::AnyBuffer vol,
+    ffi::AnyBuffer pixel_indices,
+    ffi::AnyBuffer rot,
+    ffi::Result<ffi::AnyBuffer> img_out)
+{
+    if (pixel_indices.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument("project_indexed: pixel_indices must be int32");
+
+    const int64_t n_images = rot.dimensions()[0];
+    const int64_t n_pixels = pixel_indices.dimensions()[0];
+    const void* vol_ptr = vol.untyped_data();
+    const void* pix_ptr = pixel_indices.untyped_data();
+    const void* rot_ptr = rot.untyped_data();
+    void*       img_ptr = img_out->untyped_data();
+
+    cudaError_t err;
+    switch (vol.element_type()) {
+    case ffi::DataType::C64:
+        err = launch_project_indexed<float>(
+            stream, (const float*)vol_ptr, (float*)img_ptr, (const int32_t*)pix_ptr, (const float*)rot_ptr,
+            n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+            order, half_volume, half_image, full_image_w, max_r2_x4);
+        break;
+    case ffi::DataType::C128:
+        err = launch_project_indexed<double>(
+            stream, (const double*)vol_ptr, (double*)img_ptr, (const int32_t*)pix_ptr, (const double*)rot_ptr,
+            n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+            order, half_volume, half_image, full_image_w, max_r2_x4);
+        break;
+    default:
+        return ffi::Error::InvalidArgument("project_indexed: volume must be C64 or C128");
+    }
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     Project, ProjectImpl,
     ffi::Ffi::Bind()
@@ -2909,6 +2997,27 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()           /* vol     */
         .Arg<ffi::AnyBuffer>()           /* rot     */
         .Ret<ffi::AnyBuffer>()           /* img_out */
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    ProjectIndexed, ProjectIndexedImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("N0")
+        .Attr<int64_t>("N1")
+        .Attr<int64_t>("N2")
+        .Attr<int64_t>("upsampling")
+        .Attr<int64_t>("order")
+        .Attr<int64_t>("half_volume")
+        .Attr<int64_t>("half_image")
+        .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
+        .Arg<ffi::AnyBuffer>()           /* vol           */
+        .Arg<ffi::AnyBuffer>()           /* pixel_indices */
+        .Arg<ffi::AnyBuffer>()           /* rot           */
+        .Ret<ffi::AnyBuffer>()           /* img_out       */
 );
 
 

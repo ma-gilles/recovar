@@ -73,6 +73,7 @@ _ffi_lock = threading.Lock()
 _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
 _TARGET_PROJECT = "cuda_project"
+_TARGET_PROJECT_INDEXED = "cuda_project_indexed"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_BACKPROJECT_INDEXED = "cuda_batch_backproject_indexed"
 _TARGET_BATCH_PROJECT = "cuda_batch_project"
@@ -93,6 +94,11 @@ def _ensure_ffi():
             platform="CUDA",
         )
         jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
+        jax.ffi.register_ffi_target(
+            _TARGET_PROJECT_INDEXED,
+            jax.ffi.pycapsule(lib.ProjectIndexed),
+            platform="CUDA",
+        )
         jax.ffi.register_ffi_target(_TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA")
         jax.ffi.register_ffi_target(
             _TARGET_BATCH_BACKPROJECT_INDEXED,
@@ -475,6 +481,39 @@ def project(
         max_r,
         relion_texture_interp,
     )
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
+def project_indexed(
+    volume: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+) -> jax.Array:
+    """Project only the requested flattened image pixels.
+
+    ``pixel_indices`` contains flattened pixel positions in the original full
+    image grid, or the packed half-image grid when ``half_image=True``. The
+    output stores those pixels compactly as ``(n_images, len(pixel_indices))``.
+    """
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    n_images = rotation_matrices.shape[0]
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
+    out_type = jax.ShapeDtypeStruct((n_images, pixel_indices.shape[0]), volume.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_PROJECT_INDEXED,
+        out_type,
+        vmap_method="sequential",
+    )(volume, pixel_indices, rot6, **kw)
 
 
 # ──────────────────────────────────────────────────────────────────────

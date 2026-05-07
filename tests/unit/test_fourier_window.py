@@ -517,6 +517,39 @@ class TestFourierWindowSpec:
             np.asarray(values)[:, np.asarray(spec.recon_indices_np)],
         )
 
+    def test_projection_union_takes_recover_score_and_recon_windows(self):
+        spec = make_fourier_window_spec(IMAGE_SHAPE, 6, N_HALF, include_recon_window=True)
+        values = jnp.arange(3 * N_HALF, dtype=jnp.float32).reshape(3, N_HALF)
+        compact = values[:, spec.projection_indices]
+
+        np.testing.assert_array_equal(
+            np.asarray(compact[:, spec.score_projection_take]),
+            np.asarray(spec.score_values(values)),
+        )
+        np.testing.assert_array_equal(
+            np.asarray(compact[:, spec.recon_projection_take]),
+            np.asarray(spec.recon_values(values)),
+        )
+        assert set(np.asarray(spec.score_indices_np)).issubset(set(np.asarray(spec.projection_indices_np)))
+        assert set(np.asarray(spec.recon_indices_np)).issubset(set(np.asarray(spec.projection_indices_np)))
+
+    def test_projection_union_preserves_no_recon_window_contract(self):
+        spec = make_fourier_window_spec(IMAGE_SHAPE, 6, N_HALF, include_recon_window=False)
+        values = jnp.arange(3 * N_HALF, dtype=jnp.float32).reshape(3, N_HALF)
+        compact = values[:, spec.projection_indices]
+
+        assert spec.recon_indices_np is None
+        assert spec.recon_indices is None
+        np.testing.assert_array_equal(np.asarray(spec.recon_values(values)), np.asarray(values))
+        np.testing.assert_array_equal(
+            np.asarray(compact[:, spec.score_projection_take]),
+            np.asarray(spec.score_values(values)),
+        )
+        np.testing.assert_array_equal(
+            np.asarray(compact[:, spec.recon_projection_take]),
+            np.asarray(spec.score_values(values)),
+        )
+
     def test_firstiter_cc_uses_rectangular_score_and_radial_recon_support(self):
         """RELION firstiter CC scores the cropped FFTW image, but backprojects radially."""
         shape = (128, 128)

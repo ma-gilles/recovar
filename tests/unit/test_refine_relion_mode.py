@@ -30,7 +30,11 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.dense_single_volume.local_em_engine import (
+    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
+    EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
+    _exact_local_max_hypotheses_per_microbatch,
+    _local_processed_half_cache_enabled,
     _pad_local_big_jit_image_axis,
     _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
@@ -210,6 +214,58 @@ def test_exact_local_raw_cache_respects_memory_guard(monkeypatch):
     monkeypatch.setenv(EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV, "1")
 
     assert not _local_raw_cache_enabled(50_000, (256, 256), np.float32)
+
+
+def test_exact_local_processed_half_cache_disabled_by_default(monkeypatch):
+    monkeypatch.delenv(EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV, raising=False)
+
+    assert not _local_processed_half_cache_enabled(
+        25_007,
+        256 * (256 // 2 + 1),
+        np.complex64,
+        store_recon_half=True,
+    )
+
+
+def test_exact_local_processed_half_cache_opt_in_covers_50k_256_halfset(monkeypatch):
+    monkeypatch.setenv(EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV, "16")
+
+    assert _local_processed_half_cache_enabled(
+        25_007,
+        256 * (256 // 2 + 1),
+        np.complex64,
+        store_recon_half=True,
+    )
+
+
+def test_exact_local_processed_half_cache_respects_memory_guard(monkeypatch):
+    monkeypatch.setenv(EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV, "1")
+
+    assert not _local_processed_half_cache_enabled(
+        25_007,
+        256 * (256 // 2 + 1),
+        np.complex64,
+        store_recon_half=True,
+    )
+
+
+def test_exact_local_microbatch_default_matches_profiled_256_window(monkeypatch):
+    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
+
+    assert _exact_local_max_hypotheses_per_microbatch(None, 8018) == 23696
+
+
+def test_exact_local_microbatch_target_row_pixels_override(monkeypatch):
+    monkeypatch.setenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, "380000000")
+
+    assert _exact_local_max_hypotheses_per_microbatch(None, 8018) == 47393
+
+
+def test_exact_local_microbatch_target_row_pixels_rejects_invalid(monkeypatch):
+    monkeypatch.setenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, "0")
+
+    with pytest.raises(ValueError, match=EXACT_LOCAL_TARGET_ROW_PIXELS_ENV):
+        _exact_local_max_hypotheses_per_microbatch(None, 8018)
 
 
 # ---------------------------------------------------------------------------
@@ -1992,6 +2048,100 @@ def test_run_local_em_exact_significant_support_uses_packed_split_path(monkeypat
     profile = outputs[-1]
     assert int(profile["big_jit_bucket_count"]) == 0
     assert int(profile["sum_reconstruction_rows"]) < int(profile["sum_padded_rows"])
+
+
+def test_run_local_em_exact_processed_half_cache_matches_uncached_split(monkeypatch, rng):
+    dataset = MockDataset(3, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=581)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    all_rotations = _make_rotations(6, seed=583)
+    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
+    rotation_ids = [
+        np.array([0, 1, 2, 3], dtype=np.int32),
+        np.array([1, 2, 3, 4], dtype=np.int32),
+        np.array([0, 2, 4, 5], dtype=np.int32),
+    ]
+    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
+    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
+    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=all_rotations.shape[0],
+        n_pixels=6,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=rotation_ids_flat,
+        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
+        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=translations,
+        translation_log_priors=np.array(
+            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
+            dtype=np.float32,
+        ),
+    )
+    common_kwargs = dict(
+        image_batch_size=3,
+        rotation_block_size=8,
+        current_size=6,
+        accumulate_noise=True,
+        reconstruct_significant_only=True,
+        return_profile=True,
+        score_with_masked_images=True,
+        half_spectrum_scoring=False,
+        image_pre_shifts=np.array([[1.0, -1.0], [-1.0, 1.0], [0.0, 0.0]], dtype=np.float32),
+        max_significants=-1,
+    )
+
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", raising=False)
+    monkeypatch.setenv(EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV, "0")
+    uncached = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        **common_kwargs,
+    )
+    monkeypatch.setenv(EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV, "1")
+    cached = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        **common_kwargs,
+    )
+
+    Ft_y_uncached, Ft_ctf_uncached, hard_uncached, stats_uncached, noise_uncached, profile_uncached = uncached
+    Ft_y_cached, Ft_ctf_cached, hard_cached, stats_cached, noise_cached, profile_cached = cached
+    assert bool(profile_uncached["processed_half_cache_enabled"]) is False
+    assert bool(profile_cached["processed_half_cache_enabled"]) is True
+    np.testing.assert_array_equal(hard_uncached, hard_cached)
+    np.testing.assert_allclose(np.asarray(Ft_y_uncached), np.asarray(Ft_y_cached), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_uncached), np.asarray(Ft_ctf_cached), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(stats_uncached.log_evidence_per_image),
+        np.asarray(stats_cached.log_evidence_per_image),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(stats_uncached.rotation_posterior_sums),
+        np.asarray(stats_cached.rotation_posterior_sums),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(noise_uncached.wsum_sigma2_noise),
+        np.asarray(noise_cached.wsum_sigma2_noise),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    assert noise_uncached.sumw == pytest.approx(noise_cached.sumw, abs=1e-5)
 
 
 def test_compute_reconstruction_support_matches_relion_style_threshold():
