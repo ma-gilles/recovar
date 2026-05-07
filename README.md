@@ -163,6 +163,8 @@ The peak-memory table at `recovar/utils/memory_calibration_data.json` is committ
 
 `run_test_dataset --gpu-gb N` automatically forwards `--adaptive-n-pcs` to its inner pipeline calls so the install-sanity test always finishes. Pass `--full-memory-test` if you specifically want the default 200-PC configuration.
 
+**Default behavior**: RECOVAR sets `XLA_PYTHON_CLIENT_PREALLOCATE=false` for you so JAX allocates GPU memory on demand instead of grabbing 90 % of physical VRAM up-front (the historical default that caused issue #135). To opt back into preallocation for a specific run, export `XLA_PYTHON_CLIENT_PREALLOCATE=true` before invoking `recovar`.
+
 The canonical CUDA-fallback env var is `RECOVAR_DISABLE_CUDA=1`. The common typo `RECOVAR_CUDA_DISABLE` is treated as an alias for the duration of the run, with a one-time warning telling you to rename it in your shell init.
 
 ## Documentation

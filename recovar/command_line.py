@@ -150,6 +150,23 @@ def _apply_hard_gpu_memory_limit(argv: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _disable_jax_preallocation_by_default() -> None:
+    """Set ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` before jax imports.
+
+    Without this, JAX honors ``XLA_PYTHON_CLIENT_MEM_FRACTION=.90`` and
+    grabs ~90% of the physical GPU on first allocation regardless of
+    what the user passed via ``--gpu-gb``. That's the proximate cause
+    of issue #135: a workstation with a 48 GB card OOMs on the default
+    pipeline because JAX has already locked up 43 GB before recovar's
+    batch logic runs.
+
+    Setting PREALLOCATE=false makes JAX allocate on demand. The
+    ``setdefault`` lets advanced users opt back in by exporting the
+    variable in their shell.
+    """
+    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
+
 def _print_available_commands(available_cmds, file=None):
     """Print the list of available commands."""
     file = file if file is not None else sys.stderr
@@ -215,8 +232,10 @@ def main_commands() -> None:
         sys.exit(1)
 
     # Pre-import housekeeping that must run before jax_config.py loads:
-    #   1. Apply hard GPU memory limit (sets XLA_PYTHON_CLIENT_MEM_FRACTION).
-    #   2. Surface the RECOVAR_CUDA_DISABLE typo warning eagerly.
+    #   1. Disable JAX preallocation by default (root cause of issue #135).
+    #   2. Apply hard GPU memory limit (sets XLA_PYTHON_CLIENT_MEM_FRACTION).
+    #   3. Surface the RECOVAR_CUDA_DISABLE typo warning eagerly.
+    _disable_jax_preallocation_by_default()
     _apply_hard_gpu_memory_limit(sys.argv[2:])
     _eager_typo_warning()
 

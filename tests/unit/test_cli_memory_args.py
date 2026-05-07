@@ -124,3 +124,64 @@ def test_command_line_bootstrap_scan_helpers():
     # absent
     assert cl._scan_for_flag_value([], ("--gpu-gb",)) is None
     assert cl._scan_for_bool_flag([], ("--hard-gpu-memory-limit",)) is False
+
+
+def test_disable_jax_preallocation_default(monkeypatch):
+    """Issue #135 root cause: JAX preallocates 90% of physical GPU on
+    first use. The bootstrap must set XLA_PYTHON_CLIENT_PREALLOCATE=false
+    by default (with setdefault, so user overrides still win)."""
+    from recovar import command_line as cl
+
+    # Default case: env var unset, bootstrap sets it to false.
+    monkeypatch.delenv("XLA_PYTHON_CLIENT_PREALLOCATE", raising=False)
+    cl._disable_jax_preallocation_by_default()
+    import os
+
+    assert os.environ.get("XLA_PYTHON_CLIENT_PREALLOCATE") == "false"
+
+    # User override case: existing setting wins (setdefault no-op).
+    monkeypatch.setenv("XLA_PYTHON_CLIENT_PREALLOCATE", "true")
+    cl._disable_jax_preallocation_by_default()
+    assert os.environ.get("XLA_PYTHON_CLIENT_PREALLOCATE") == "true"
+
+
+def test_recovar_cli_sets_preallocate_false(monkeypatch):
+    """End-to-end: invoking ``recovar <cmd>`` causes XLA_PYTHON_CLIENT_PREALLOCATE
+    to be set in the subprocess env."""
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in __import__("os").environ.items() if k != "XLA_PYTHON_CLIENT_PREALLOCATE"}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "recovar.command_line",
+            "make_test_dataset",
+            "--help",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    # Run a child that prints the env var after recovar.command_line bootstraps.
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "sys.argv = ['recovar', 'make_test_dataset', '--help']; "
+                "from recovar.command_line import _disable_jax_preallocation_by_default; "
+                "_disable_jax_preallocation_by_default(); "
+                "import os; "
+                "print('PREALLOC=' + os.environ.get('XLA_PYTHON_CLIENT_PREALLOCATE', 'UNSET'))"
+            ),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert "PREALLOC=false" in probe.stdout
