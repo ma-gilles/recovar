@@ -544,6 +544,10 @@ def read_relion_model_metadata(model_star_path):
     model star file.  These are written by ``updateCurrentResolution`` +
     ``updateImageSizeAndResolutionPointers`` at the start of each RELION
     iteration and stored in the ``data_model_general`` table.
+
+    Local-search replay also needs the orientational prior widths from
+    the same table.  Older/minimal fixtures may omit those fields, so the
+    sigma values are optional and returned as ``None`` when absent.
     """
     import re
 
@@ -555,9 +559,19 @@ def read_relion_model_metadata(model_star_path):
             raise ValueError(f"Missing {name} in {model_star_path}")
         return cast(m.group(1))
 
+    def _grab_optional(name, cast=float):
+        m = re.search(rf"_{name}\s+(\S+)", text)
+        if not m:
+            return None
+        return cast(m.group(1))
+
     return dict(
         current_image_size=_grab("rlnCurrentImageSize", int),
         current_resolution=_grab("rlnCurrentResolution"),
+        orientational_prior_mode=_grab_optional("rlnOrientationalPriorMode", int),
+        sigma_prior_rot_angle=_grab_optional("rlnSigmaPriorRotAngle"),
+        sigma_prior_tilt_angle=_grab_optional("rlnSigmaPriorTiltAngle"),
+        sigma_prior_psi_angle=_grab_optional("rlnSigmaPriorPsiAngle"),
     )
 
 

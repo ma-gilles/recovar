@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 
@@ -93,7 +94,8 @@ NVTX_DOMAIN_EM = "recovar_em"
 # Keeps common 256^2 local-search buckets at two images without entering the
 # three-image working set that previously exceeded memory.
 EXACT_LOCAL_TARGET_ROW_PIXELS = 190_000_000
-EXACT_LOCAL_RAW_CACHE_MAX_GB = 2.0
+EXACT_LOCAL_RAW_CACHE_MAX_GB = 16.0
+EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RAW_CACHE_MAX_GB"
 EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION = 0.25
 
 _LOCAL_PREPROCESS_TIMER_KEYS = (
@@ -444,7 +446,8 @@ def _exact_local_max_hypotheses_per_microbatch(default: int | None, n_windowed: 
 def _local_raw_cache_enabled(n_images: int, image_shape, dtype) -> bool:
     bytes_per_pixel = np.dtype(dtype).itemsize if dtype is not None else np.dtype(np.float32).itemsize
     estimated_gb = int(n_images) * int(np.prod(image_shape)) * bytes_per_pixel / 1e9
-    return estimated_gb <= EXACT_LOCAL_RAW_CACHE_MAX_GB
+    max_gb = float(os.environ.get(EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV, EXACT_LOCAL_RAW_CACHE_MAX_GB))
+    return estimated_gb <= max_gb
 
 
 def _validate_native_half_batch(batch, image_shape):

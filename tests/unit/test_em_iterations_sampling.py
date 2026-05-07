@@ -39,6 +39,32 @@ def test_read_relion_sampling_metadata_includes_psi_step(tmp_path):
     assert meta["offset_step"] == pytest.approx(1.237)
 
 
+def test_read_relion_model_metadata_includes_local_prior_sigmas(tmp_path):
+    model_star = tmp_path / "run_it010_half1_model.star"
+    model_star.write_text(
+        "\n".join(
+            [
+                "_rlnCurrentImageSize 128",
+                "_rlnCurrentResolution 4.250000",
+                "_rlnOrientationalPriorMode 1",
+                "_rlnSigmaPriorRotAngle 3.750000",
+                "_rlnSigmaPriorTiltAngle 3.750000",
+                "_rlnSigmaPriorPsiAngle 1.875000",
+                "",
+            ]
+        )
+    )
+
+    meta = em_sampling.read_relion_model_metadata(model_star)
+
+    assert meta["current_image_size"] == 128
+    assert meta["current_resolution"] == pytest.approx(4.25)
+    assert meta["orientational_prior_mode"] == 1
+    assert meta["sigma_prior_rot_angle"] == pytest.approx(3.75)
+    assert meta["sigma_prior_tilt_angle"] == pytest.approx(3.75)
+    assert meta["sigma_prior_psi_angle"] == pytest.approx(1.875)
+
+
 def test_read_relion_optimiser_metadata_reads_replay_accuracies(tmp_path):
     optimiser_star = tmp_path / "run_it010_optimiser.star"
     optimiser_star.write_text(

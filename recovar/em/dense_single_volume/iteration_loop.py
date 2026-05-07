@@ -2562,6 +2562,8 @@ def _run_relion_iteration_loop(
         # is on the correct base grid.
         _replay_meta = None
         _replay_prior_translations = None
+        _model_star = None
+        _model_meta = None
         if perturb_replay_relion_dir is not None:
             _star = os.path.join(
                 perturb_replay_relion_dir,
@@ -2611,21 +2613,56 @@ def _run_relion_iteration_loop(
                 if _replay_do_local:
                     state.sigma_rot = 0.0
                     state.sigma_psi = 0.0
+            # The model star records the control state for the replayed E-step.
+            # Reuse it for both current_size and local-prior sigmas.
+            _cs_iter = _replay_control_model_iteration(init_relion_iteration, iteration)
+            _model_star_candidates = [
+                os.path.join(perturb_replay_relion_dir, f"run_it{_cs_iter:03d}_half1_model.star"),
+                os.path.join(perturb_replay_relion_dir, f"run_it{_cs_iter:03d}_model.star"),
+            ]
+            _model_star = next((path for path in _model_star_candidates if os.path.exists(path)), None)
+            if _model_star is not None:
+                _model_meta = read_relion_model_metadata(_model_star)
             if _replay_do_local:
-                _relion_sigma_rad = np.deg2rad(2.0 * _relion_psi_step_deg)
-                if (
-                    abs(float(state.sigma_rot) - _relion_sigma_rad) > 1e-8
-                    or abs(float(state.sigma_psi) - _relion_sigma_rad) > 1e-8
-                ):
+                _relion_sigma_rot_deg = None
+                _relion_sigma_psi_deg = None
+                if _model_meta is not None:
+                    _sigma_rot_deg = _model_meta.get("sigma_prior_rot_angle")
+                    _sigma_tilt_deg = _model_meta.get("sigma_prior_tilt_angle")
+                    _sigma_psi_deg = _model_meta.get("sigma_prior_psi_angle")
+                    _dir_candidates = [
+                        float(value)
+                        for value in (_sigma_rot_deg, _sigma_tilt_deg)
+                        if value is not None and float(value) > 0.0
+                    ]
+                    if _dir_candidates:
+                        _relion_sigma_rot_deg = max(_dir_candidates)
+                    if _sigma_psi_deg is not None and float(_sigma_psi_deg) > 0.0:
+                        _relion_sigma_psi_deg = float(_sigma_psi_deg)
+                if _relion_sigma_rot_deg is None:
+                    _relion_sigma_rot_deg = _relion_psi_step_deg
                     logger.info(
-                        "Replay override: local prior sigma %.3f/%.3f deg -> %.3f deg (2 * RELION psi_step %.3f deg)",
-                        float(np.rad2deg(state.sigma_rot)),
-                        float(np.rad2deg(state.sigma_psi)),
-                        float(np.rad2deg(_relion_sigma_rad)),
+                        "Replay override: model local prior sigma missing; falling back to RELION psi_step %.3f deg",
                         _relion_psi_step_deg,
                     )
-                state.sigma_rot = _relion_sigma_rad
-                state.sigma_psi = _relion_sigma_rad
+                if _relion_sigma_psi_deg is None:
+                    _relion_sigma_psi_deg = _relion_sigma_rot_deg
+                _relion_sigma_rot_rad = np.deg2rad(_relion_sigma_rot_deg)
+                _relion_sigma_psi_rad = np.deg2rad(_relion_sigma_psi_deg)
+                if (
+                    abs(float(state.sigma_rot) - _relion_sigma_rot_rad) > 1e-8
+                    or abs(float(state.sigma_psi) - _relion_sigma_psi_rad) > 1e-8
+                ):
+                    logger.info(
+                        "Replay override: local prior sigma %.3f/%.3f deg -> %.3f/%.3f deg (from %s)",
+                        float(np.rad2deg(state.sigma_rot)),
+                        float(np.rad2deg(state.sigma_psi)),
+                        _relion_sigma_rot_deg,
+                        _relion_sigma_psi_deg,
+                        _model_star if _model_star is not None else _star,
+                    )
+                state.sigma_rot = _relion_sigma_rot_rad
+                state.sigma_psi = _relion_sigma_psi_rad
             if (
                 abs(float(state.translation_range) - _relion_offset_range) > 1e-6
                 or abs(float(state.translation_step) - _relion_offset_step) > 1e-6
@@ -2646,14 +2683,7 @@ def _run_relion_iteration_loop(
             # reading run_it{N+1}_model.star, not run_it{N}_model.star:
             # the saved model star already carries the control variables
             # (current_size, sigma_offset) used by that E-step.
-            _cs_iter = _replay_control_model_iteration(init_relion_iteration, iteration)
-            _model_star_candidates = [
-                os.path.join(perturb_replay_relion_dir, f"run_it{_cs_iter:03d}_half1_model.star"),
-                os.path.join(perturb_replay_relion_dir, f"run_it{_cs_iter:03d}_model.star"),
-            ]
-            _model_star = next((path for path in _model_star_candidates if os.path.exists(path)), None)
-            if _model_star is not None:
-                _model_meta = read_relion_model_metadata(_model_star)
+            if _model_meta is not None:
                 _relion_cs = int(_model_meta["current_image_size"])
                 if _relion_cs <= 0:
                     logger.info(

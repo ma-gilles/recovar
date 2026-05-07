@@ -30,9 +30,11 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.dense_single_volume.local_em_engine import (
+    EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
     _pad_local_big_jit_image_axis,
     _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
+    _local_raw_cache_enabled,
     run_local_em_exact,
 )
 from recovar.em.dense_single_volume.k_class import (
@@ -196,6 +198,18 @@ def test_relion_raw_image_cache_can_be_disabled(monkeypatch):
 
     assert loader.load_count == 0
     assert loader._cached is None
+
+
+def test_exact_local_raw_cache_default_covers_50k_256_float32(monkeypatch):
+    monkeypatch.delenv(EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV, raising=False)
+
+    assert _local_raw_cache_enabled(50_000, (256, 256), np.float32)
+
+
+def test_exact_local_raw_cache_respects_memory_guard(monkeypatch):
+    monkeypatch.setenv(EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV, "1")
+
+    assert not _local_raw_cache_enabled(50_000, (256, 256), np.float32)
 
 
 # ---------------------------------------------------------------------------
