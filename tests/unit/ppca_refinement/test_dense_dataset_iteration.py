@@ -184,6 +184,58 @@ def test_dataset_backed_dense_ppca_iteration_returns_finite_update(tiny_inputs):
     assert np.all(np.isfinite(np.asarray(result.W_half)))
 
 
+def test_dataset_backed_dense_ppca_iteration_is_invariant_to_rotation_blocking(tiny_inputs):
+    dataset, mu, W, rotations, translations = tiny_inputs
+    mean_prior = jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0
+    W_prior = jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0
+    common_kwargs = dict(
+        mean_prior=mean_prior,
+        W_prior=W_prior,
+        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
+        rotations=rotations,
+        translations=translations,
+        image_batch_size=2,
+        current_size=4,
+        volume_domain="fourier_half",
+        enforce_x0=False,
+        mstep_chunk_size=8,
+    )
+
+    unsplit = run_dense_ppca_fused_em_iteration(
+        dataset,
+        mu,
+        W,
+        rotation_block_size=rotations.shape[0],
+        **common_kwargs,
+    )
+    split = run_dense_ppca_fused_em_iteration(
+        dataset,
+        mu,
+        W,
+        rotation_block_size=1,
+        **common_kwargs,
+    )
+
+    np.testing.assert_allclose(split.stats.log_likelihood, unsplit.stats.log_likelihood, rtol=5e-4, atol=0.25)
+    np.testing.assert_allclose(np.asarray(split.stats.rhs), np.asarray(unsplit.stats.rhs), rtol=3e-3, atol=2e-3)
+    np.testing.assert_allclose(
+        np.asarray(split.stats.lhs_tri),
+        np.asarray(unsplit.stats.lhs_tri),
+        rtol=3e-3,
+        atol=2e-3,
+    )
+    np.testing.assert_allclose(np.asarray(split.mu_half), np.asarray(unsplit.mu_half), rtol=3e-3, atol=2e-3)
+    np.testing.assert_allclose(np.asarray(split.W_half), np.asarray(unsplit.W_half), rtol=3e-3, atol=2e-3)
+    np.testing.assert_array_equal(
+        np.asarray(split.diagnostics["best_rotation_idx"]),
+        np.asarray(unsplit.diagnostics["best_rotation_idx"]),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(split.diagnostics["best_translation_idx"]),
+        np.asarray(unsplit.diagnostics["best_translation_idx"]),
+    )
+
+
 def test_halfset_dense_ppca_iteration_updates_scoring_state(tiny_inputs):
     dataset, mu, W, rotations, translations = tiny_inputs
     state = PoseMarginalPPCAEMState(

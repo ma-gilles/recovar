@@ -37,7 +37,7 @@ def _tiny_block(q=1):
     return image_shape, volume_shape, Y1, proj_aug, ctf2_over_noise, y_norm, rotations
 
 
-def test_fused_dense_block_matches_explicit_per_rotation_backprojection():
+def test_fused_dense_block_matches_block_presummed_backprojection():
     image_shape, volume_shape, Y1, proj_aug, ctf2_over_noise, y_norm, rotations = _tiny_block(q=1)
     P = proj_aug.shape[1]
     tri = _tri_size(P)
@@ -65,40 +65,120 @@ def test_fused_dense_block_matches_explicit_per_rotation_backprojection():
         None,
         1e-3,
     )
-    rhs_manual = rhs0
-    lhs_manual = lhs0
-    for r_idx in range(rotations.shape[0]):
-        rotations_per_image = jnp.broadcast_to(jnp.asarray(rotations[r_idx])[None], (Y1.shape[0], 3, 3))
-        rhs_images = jnp.transpose(
-            jnp.einsum("bt,btp,btf->bpf", gamma[:, :, r_idx], alpha[:, :, r_idx, :], jnp.asarray(Y1)),
-            (1, 0, 2),
-        ).astype(jnp.complex64)
-        rhs_manual = batch_adjoint_slice_volume_half(
-            rhs_images,
-            rotations_per_image,
-            rhs_manual,
-            image_shape,
-            volume_shape,
-            "linear_interp",
-            True,
-            True,
-        )
-        lhs_weights = jnp.einsum("bt,btk->bk", gamma[:, :, r_idx], G_tri[:, :, r_idx, :]).real
-        lhs_images = jnp.transpose(lhs_weights[:, :, None] * jnp.asarray(ctf2_over_noise)[:, None, :], (1, 0, 2))
-        lhs_manual = batch_adjoint_slice_volume_half(
-            lhs_images.astype(jnp.float32),
-            rotations_per_image,
-            lhs_manual,
-            image_shape,
-            volume_shape,
-            "linear_interp",
-            True,
-            True,
-        )
+    rhs_images = jnp.einsum(
+        "btr,btrp,btf->prf",
+        gamma.astype(jnp.complex64),
+        alpha.astype(jnp.complex64),
+        jnp.asarray(Y1).astype(jnp.complex64),
+    ).astype(jnp.complex64)
+    rhs_manual = batch_adjoint_slice_volume_half(
+        rhs_images,
+        jnp.asarray(rotations),
+        rhs0,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        True,
+        True,
+    )
+
+    lhs_images = jnp.einsum(
+        "btr,btrk,bf->krf",
+        gamma.astype(jnp.float32),
+        G_tri,
+        jnp.asarray(ctf2_over_noise).astype(jnp.float32),
+    ).real.astype(jnp.float32)
+    lhs_manual = batch_adjoint_slice_volume_half(
+        lhs_images,
+        jnp.asarray(rotations),
+        lhs0,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        True,
+        True,
+    )
 
     np.testing.assert_allclose(np.asarray(rhs_fused), np.asarray(rhs_manual), rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(lhs_fused), np.asarray(lhs_manual), rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(diag_fused.logZ), np.asarray(diag.logZ), rtol=1e-6, atol=1e-6)
+
+
+def test_fused_dense_block_matches_slow_pose_loop_with_reconstruction_inputs():
+    image_shape, volume_shape, Y1, proj_aug, ctf2_over_noise, y_norm, rotations = _tiny_block(q=2)
+    P = proj_aug.shape[1]
+    tri = _tri_size(P)
+    half_vol = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
+    rhs0 = jnp.zeros((P, half_vol), dtype=jnp.complex64)
+    lhs0 = jnp.zeros((tri, half_vol), dtype=jnp.float32)
+    Y1_recon = (Y1 * np.asarray(1.25 - 0.1j, dtype=np.complex64)).astype(np.complex64)
+    ctf2_recon = (ctf2_over_noise * np.asarray([1.1, 0.7], dtype=np.float32)[:, None]).astype(np.float32)
+
+    rhs_fused, lhs_fused, _diag_fused = fused_dense_pose_ppca_block(
+        Y1,
+        proj_aug,
+        ctf2_over_noise,
+        y_norm,
+        rotations,
+        image_shape,
+        volume_shape,
+        rhs0,
+        lhs0,
+        Y1_recon=Y1_recon,
+        ctf2_over_noise_recon=ctf2_recon,
+    )
+
+    gamma, alpha, G_tri, _diag = _score_gamma_and_moments(
+        jnp.asarray(Y1),
+        jnp.asarray(proj_aug),
+        jnp.asarray(ctf2_over_noise),
+        jnp.asarray(y_norm),
+        None,
+        1e-3,
+    )
+    rhs_images = jnp.zeros((P, rotations.shape[0], Y1.shape[-1]), dtype=jnp.complex64)
+    lhs_images = jnp.zeros((tri, rotations.shape[0], Y1.shape[-1]), dtype=jnp.float32)
+    for r in range(rotations.shape[0]):
+        for p in range(P):
+            rhs_img = jnp.sum(
+                gamma[:, :, r].astype(jnp.complex64)[:, :, None]
+                * alpha[:, :, r, p].astype(jnp.complex64)[:, :, None]
+                * jnp.asarray(Y1_recon),
+                axis=(0, 1),
+            )
+            rhs_images = rhs_images.at[p, r].set(rhs_img)
+        for k in range(tri):
+            lhs_img = jnp.sum(
+                gamma[:, :, r].astype(jnp.float32)[:, :, None]
+                * G_tri[:, :, r, k].real.astype(jnp.float32)[:, :, None]
+                * jnp.asarray(ctf2_recon)[:, None, :],
+                axis=(0, 1),
+            )
+            lhs_images = lhs_images.at[k, r].set(lhs_img)
+
+    rhs_manual = batch_adjoint_slice_volume_half(
+        rhs_images,
+        jnp.asarray(rotations),
+        rhs0,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        True,
+        True,
+    )
+    lhs_manual = batch_adjoint_slice_volume_half(
+        lhs_images,
+        jnp.asarray(rotations),
+        lhs0,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        True,
+        True,
+    )
+
+    np.testing.assert_allclose(np.asarray(rhs_fused), np.asarray(rhs_manual), rtol=3e-3, atol=2e-3)
+    np.testing.assert_allclose(np.asarray(lhs_fused), np.asarray(lhs_manual), rtol=3e-3, atol=2e-3)
 
 
 def test_run_dense_ppca_fused_refinement_blocks_returns_augmented_update():
