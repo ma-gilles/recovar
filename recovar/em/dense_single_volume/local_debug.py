@@ -47,6 +47,30 @@ def parse_debug_score_dump_request():
     return dump_path, targets, requested_current_sizes, requested_iterations
 
 
+def parse_debug_fused_posterior_dump_request():
+    """Return optional fused-path posterior dump settings.
+
+    This is intentionally separate from ``RECOVAR_LOCAL_SCORE_DUMP_*``:
+    score dumps need the materialized score tensor and therefore force the
+    non-fused path, while this hook records the actual production fused path.
+    """
+
+    dump_dir = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR")
+    dump_indices = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES")
+    dump_current_size = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_CURRENT_SIZE")
+    dump_iterations = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION")
+    if not dump_dir or not dump_indices:
+        return None, set(), None, None
+    targets = parse_int_set(dump_indices) or set()
+    if not targets:
+        return None, set(), None, None
+    requested_current_sizes = parse_int_set(dump_current_size)
+    requested_iterations = parse_int_set(dump_iterations)
+    dump_path = Path(dump_dir)
+    dump_path.mkdir(parents=True, exist_ok=True)
+    return dump_path, targets, requested_current_sizes, requested_iterations
+
+
 def parse_debug_noise_component_dump_request():
     """Return optional per-particle local noise component dump settings."""
 
@@ -104,6 +128,18 @@ def parse_dense_per_pose_score_dump_request() -> DensePerPoseScoreDumpRequest:
         dump_preprior=bool(dump_preprior and dump_preprior != "0"),
         target_is_original=bool(target_is_original and target_is_original != "0"),
     )
+
+
+def _local_debug_dump_label_suffix() -> str:
+    """Return a sanitized optional label suffix for local score diagnostics."""
+
+    label = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_LABEL") or os.environ.get(
+        "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL",
+    )
+    if not label:
+        return ""
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label.strip())
+    return f"_{label}" if label else ""
 
 
 def _dense_score_dump_label_suffix() -> str:
@@ -303,6 +339,262 @@ def _infer_grouped_child_layout(values: np.ndarray) -> tuple[np.ndarray, np.ndar
     return parent, child, 1
 
 
+def _local_candidate_metadata(
+    *,
+    local_layout,
+    bucket,
+    row: int,
+    actual_count: int,
+):
+    """Return local rotation/translation metadata for one debug row."""
+
+    local_rotation_ids = np.asarray(bucket.local_rotation_ids[row, :actual_count], dtype=np.int32)
+    local_rotation_parent_ids = (
+        np.asarray(bucket.local_rotation_posterior_ids[row, :actual_count], dtype=np.int32)
+        if bucket.local_rotation_posterior_ids is not None
+        else local_rotation_ids
+    )
+    local_rotation_child_indices = _child_ordinals_from_parent_ids(local_rotation_parent_ids)
+    local_rotation_matrices = np.asarray(bucket.local_rotations[row, :actual_count], dtype=np.float32)
+    local_rotation_eulers = np.asarray(
+        utils.R_to_relion(local_rotation_matrices, degrees=True),
+        dtype=np.float32,
+    )
+    rotation_mask = np.asarray(bucket.local_rotation_mask[row, :actual_count], dtype=bool)
+    translation_grid = np.asarray(local_layout.translation_grid, dtype=np.float32)
+    n_trans = int(translation_grid.shape[0])
+    translation_indices = np.arange(n_trans, dtype=np.int32)
+    translation_parent_indices, translation_child_indices, n_trans_over = _infer_grouped_child_layout(
+        translation_grid,
+    )
+    n_parent_trans = int(np.max(translation_parent_indices) + 1) if translation_parent_indices.size else n_trans
+    n_rot_over = int(np.max(local_rotation_child_indices) + 1) if local_rotation_child_indices.size else 1
+    n_hidden_over = int(n_rot_over * n_trans_over)
+    candidate_hidden_over_indices = (
+        (
+            local_rotation_parent_ids[:, None].astype(np.int64) * np.int64(n_parent_trans)
+            + translation_parent_indices[None, :].astype(np.int64)
+        )
+        * np.int64(n_hidden_over)
+        + local_rotation_child_indices[:, None].astype(np.int64) * np.int64(n_trans_over)
+        + translation_child_indices[None, :].astype(np.int64)
+    )
+    return {
+        "local_rotation_ids": local_rotation_ids,
+        "local_rotation_parent_ids": local_rotation_parent_ids,
+        "local_rotation_child_indices": local_rotation_child_indices,
+        "local_rotation_matrices": local_rotation_matrices,
+        "local_rotation_eulers": local_rotation_eulers,
+        "rotation_mask": rotation_mask,
+        "translation_grid": translation_grid,
+        "translation_indices": translation_indices,
+        "translation_parent_indices": translation_parent_indices,
+        "translation_child_indices": translation_child_indices,
+        "n_trans_over": int(n_trans_over),
+        "n_rot_over": int(n_rot_over),
+        "n_hidden_over": int(n_hidden_over),
+        "candidate_hidden_over_indices": candidate_hidden_over_indices,
+    }
+
+
+def maybe_write_debug_fused_posterior_dump(
+    *,
+    experiment_dataset,
+    local_layout,
+    bucket,
+    image_pre_shifts,
+    probs,
+    log_Z,
+    best_log_score,
+    best_argmax,
+    max_posterior,
+    reconstruction_sample_mask,
+    reconstruction_rotation_mask,
+    n_significant_samples,
+    current_size,
+    debug_iteration,
+    dump_dir: Path | None,
+    pending_targets: set[int],
+    requested_current_sizes: set[int] | None = None,
+    requested_iterations: set[int] | None = None,
+):
+    """Dump production fused-path posterior tensors for requested images."""
+
+    if dump_dir is None or not pending_targets:
+        return pending_targets
+    if requested_current_sizes is not None and int(current_size or -1) not in requested_current_sizes:
+        return pending_targets
+    if requested_iterations is not None and int(debug_iteration or -1) not in requested_iterations:
+        return pending_targets
+
+    original_image_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(bucket.image_indices),
+        dtype=np.int64,
+    )
+    target_rows = [
+        row
+        for row, original_idx in enumerate(original_image_indices.tolist())
+        if int(original_idx) in pending_targets
+    ]
+    if not target_rows:
+        return pending_targets
+
+    probs_np = np.asarray(probs, dtype=np.float32)
+    log_Z_np = np.asarray(log_Z, dtype=np.float32)
+    best_log_score_np = np.asarray(best_log_score, dtype=np.float32)
+    best_argmax_np = np.asarray(best_argmax, dtype=np.int64)
+    max_posterior_np = np.asarray(max_posterior, dtype=np.float32)
+    reconstruction_sample_mask_np = np.asarray(reconstruction_sample_mask, dtype=bool)
+    reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)
+    n_significant_samples_np = np.asarray(n_significant_samples, dtype=np.int32)
+
+    for row in target_rows:
+        original_idx = int(original_image_indices[row])
+        local_idx = int(bucket.image_indices[row])
+        actual_count = int(bucket.actual_rotation_counts[row])
+        metadata = _local_candidate_metadata(
+            local_layout=local_layout,
+            bucket=bucket,
+            row=row,
+            actual_count=actual_count,
+        )
+        n_trans = int(metadata["translation_grid"].shape[0])
+        posterior = np.asarray(probs_np[row, :actual_count, :], dtype=np.float32)
+        best_flat = int(best_argmax_np[row])
+        best_rotation_index = best_flat // n_trans
+        best_translation_index = best_flat % n_trans
+        best_in_actual = 0 <= best_rotation_index < actual_count
+        best_global_id = (
+            int(metadata["local_rotation_ids"][best_rotation_index])
+            if best_in_actual
+            else -1
+        )
+        best_translation = (
+            metadata["translation_grid"][best_translation_index : best_translation_index + 1]
+            if best_in_actual
+            else np.empty((0, metadata["translation_grid"].shape[1]), dtype=np.float32)
+        )
+        best_posterior_flat = int(np.argmax(posterior))
+        best_posterior_rotation_index, best_posterior_translation_index = np.unravel_index(
+            best_posterior_flat,
+            posterior.shape,
+        )
+        reconstruction_sample_mask_row = np.asarray(
+            reconstruction_sample_mask_np[row, :actual_count, :],
+            dtype=bool,
+        )
+        reconstruction_rotation_mask_row = np.asarray(
+            reconstruction_rotation_mask_np[row, :actual_count],
+            dtype=bool,
+        )
+        iteration_label = int(debug_iteration or -1)
+        label_suffix = _local_debug_dump_label_suffix()
+        dump_path = (
+            dump_dir
+            / f"local_fused_posterior_it{iteration_label:03d}_image_{original_idx}{label_suffix}.npz"
+        )
+        np.savez_compressed(
+            dump_path,
+            selected_global_image_indices=np.array([original_idx], dtype=np.int64),
+            selected_local_image_indices=np.array([local_idx], dtype=np.int64),
+            local_rotation_indices=metadata["local_rotation_ids"],
+            local_rotation_parent_indices=metadata["local_rotation_parent_ids"],
+            local_rotation_child_indices=metadata["local_rotation_child_indices"],
+            local_rotation_pixel_indices=(
+                metadata["local_rotation_ids"] % int(local_layout.n_pixels)
+            ).astype(np.int64),
+            local_rotation_psi_indices=(
+                metadata["local_rotation_ids"] // int(local_layout.n_pixels)
+            ).astype(np.int64),
+            local_rotation_eulers=metadata["local_rotation_eulers"],
+            local_rotation_matrices=metadata["local_rotation_matrices"],
+            rotation_candidate_mask=metadata["rotation_mask"][None, :],
+            translations=metadata["translation_grid"],
+            translation_parent_indices=metadata["translation_parent_indices"],
+            translation_child_indices=metadata["translation_child_indices"],
+            n_translation_children=np.array([metadata["n_trans_over"]], dtype=np.int32),
+            n_rotation_children=np.array([metadata["n_rot_over"]], dtype=np.int32),
+            n_hidden_over=np.array([metadata["n_hidden_over"]], dtype=np.int32),
+            candidate_pose_rotation_indices=np.repeat(
+                metadata["local_rotation_ids"][:, None],
+                n_trans,
+                axis=1,
+            ),
+            candidate_pose_parent_rotation_indices=np.repeat(
+                metadata["local_rotation_parent_ids"][:, None],
+                n_trans,
+                axis=1,
+            ),
+            candidate_pose_rotation_child_indices=np.repeat(
+                metadata["local_rotation_child_indices"][:, None],
+                n_trans,
+                axis=1,
+            ),
+            candidate_pose_translation_indices=np.broadcast_to(
+                metadata["translation_indices"][None, :],
+                (actual_count, n_trans),
+            ),
+            candidate_pose_parent_translation_indices=np.broadcast_to(
+                metadata["translation_parent_indices"][None, :],
+                (actual_count, n_trans),
+            ),
+            candidate_pose_translation_child_indices=np.broadcast_to(
+                metadata["translation_child_indices"][None, :],
+                (actual_count, n_trans),
+            ),
+            candidate_pose_hidden_over_indices=metadata["candidate_hidden_over_indices"].astype(
+                np.int64,
+                copy=False,
+            ),
+            image_pre_shift=(
+                np.asarray(image_pre_shifts[local_idx], dtype=np.float32)
+                if image_pre_shifts is not None
+                else np.array([], dtype=np.float32)
+            ),
+            posterior=posterior[None, :, :],
+            reconstruction_sample_mask=reconstruction_sample_mask_row[None, :, :],
+            reconstruction_rotation_mask=reconstruction_rotation_mask_row[None, :],
+            n_significant_samples=np.array([int(n_significant_samples_np[row])], dtype=np.int32),
+            max_posterior=np.array([float(max_posterior_np[row])], dtype=np.float32),
+            log_Z=np.array([float(log_Z_np[row])], dtype=np.float32),
+            best_score=np.array([float(best_log_score_np[row])], dtype=np.float32),
+            best_argmax_flat=np.array([best_flat], dtype=np.int64),
+            best_argmax_in_actual=np.array([best_in_actual], dtype=bool),
+            best_score_rotation_local_index=np.array([int(best_rotation_index)], dtype=np.int32),
+            best_score_translation_index=np.array([int(best_translation_index)], dtype=np.int32),
+            best_score_rotation_global_id=np.array([best_global_id], dtype=np.int32),
+            best_score_translation=np.asarray(best_translation, dtype=np.float32),
+            best_posterior_rotation_local_index=np.array(
+                [int(best_posterior_rotation_index)],
+                dtype=np.int32,
+            ),
+            best_posterior_translation_index=np.array(
+                [int(best_posterior_translation_index)],
+                dtype=np.int32,
+            ),
+            best_posterior_rotation_global_id=np.array(
+                [int(metadata["local_rotation_ids"][int(best_posterior_rotation_index)])],
+                dtype=np.int32,
+            ),
+            best_posterior_translation=np.asarray(
+                metadata["translation_grid"][
+                    int(best_posterior_translation_index) : int(best_posterior_translation_index) + 1
+                ],
+                dtype=np.float32,
+            ),
+            current_size=np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
+            debug_iteration=np.array([iteration_label], dtype=np.int32),
+            n_rot=np.array([actual_count], dtype=np.int32),
+            n_trans=np.array([n_trans], dtype=np.int32),
+            grid_n_pixels=np.array([int(local_layout.n_pixels)], dtype=np.int32),
+            grid_n_psi=np.array([int(local_layout.n_psi)], dtype=np.int32),
+        )
+        if requested_iterations is None:
+            pending_targets.remove(original_idx)
+
+    return pending_targets
+
+
 def maybe_write_debug_score_dump(
     *,
     experiment_dataset,
@@ -378,19 +670,18 @@ def maybe_write_debug_score_dump(
         original_idx = int(original_image_indices[row])
         local_idx = int(bucket.image_indices[row])
         actual_count = int(bucket.actual_rotation_counts[row])
-        local_rotation_ids = np.asarray(bucket.local_rotation_ids[row, :actual_count], dtype=np.int32)
-        local_rotation_parent_ids = (
-            np.asarray(bucket.local_rotation_posterior_ids[row, :actual_count], dtype=np.int32)
-            if bucket.local_rotation_posterior_ids is not None
-            else local_rotation_ids
+        metadata = _local_candidate_metadata(
+            local_layout=local_layout,
+            bucket=bucket,
+            row=row,
+            actual_count=actual_count,
         )
-        local_rotation_child_indices = _child_ordinals_from_parent_ids(local_rotation_parent_ids)
-        local_rotation_matrices = np.asarray(bucket.local_rotations[row, :actual_count], dtype=np.float32)
-        local_rotation_eulers = np.asarray(
-            utils.R_to_relion(local_rotation_matrices, degrees=True),
-            dtype=np.float32,
-        )
-        rotation_mask = np.asarray(bucket.local_rotation_mask[row, :actual_count], dtype=bool)
+        local_rotation_ids = metadata["local_rotation_ids"]
+        local_rotation_parent_ids = metadata["local_rotation_parent_ids"]
+        local_rotation_child_indices = metadata["local_rotation_child_indices"]
+        local_rotation_matrices = metadata["local_rotation_matrices"]
+        local_rotation_eulers = metadata["local_rotation_eulers"]
+        rotation_mask = metadata["rotation_mask"]
         rotation_log_prior = np.asarray(bucket.local_rotation_log_prior[row, :actual_count], dtype=np.float32)
         translation_log_prior = np.asarray(bucket.translation_log_prior[row], dtype=np.float32)
         total_scores = np.asarray(scores_np[row, :actual_count, :], dtype=np.float32)
@@ -398,22 +689,13 @@ def maybe_write_debug_score_dump(
         raw_scores = np.where(rotation_mask[:, None], raw_scores, -np.inf)
         posterior = np.asarray(probs_np[row, :actual_count, :], dtype=np.float32)
         n_trans = int(translation_log_prior.shape[0])
-        translation_indices = np.arange(n_trans, dtype=np.int32)
-        translation_parent_indices, translation_child_indices, n_trans_over = _infer_grouped_child_layout(
-            np.asarray(local_layout.translation_grid, dtype=np.float32)
-        )
-        n_parent_trans = int(np.max(translation_parent_indices) + 1) if translation_parent_indices.size else n_trans
-        n_rot_over = int(np.max(local_rotation_child_indices) + 1) if local_rotation_child_indices.size else 1
-        n_hidden_over = int(n_rot_over * n_trans_over)
-        candidate_hidden_over_indices = (
-            (
-                local_rotation_parent_ids[:, None].astype(np.int64) * np.int64(n_parent_trans)
-                + translation_parent_indices[None, :].astype(np.int64)
-            )
-            * np.int64(n_hidden_over)
-            + local_rotation_child_indices[:, None].astype(np.int64) * np.int64(n_trans_over)
-            + translation_child_indices[None, :].astype(np.int64)
-        )
+        translation_indices = metadata["translation_indices"]
+        translation_parent_indices = metadata["translation_parent_indices"]
+        translation_child_indices = metadata["translation_child_indices"]
+        n_trans_over = metadata["n_trans_over"]
+        n_rot_over = metadata["n_rot_over"]
+        n_hidden_over = metadata["n_hidden_over"]
+        candidate_hidden_over_indices = metadata["candidate_hidden_over_indices"]
         best_score_flat = int(np.argmax(total_scores))
         best_score_rotation_index, best_score_translation_index = np.unravel_index(
             best_score_flat,
@@ -434,7 +716,8 @@ def maybe_write_debug_score_dump(
         )
 
         iteration_label = int(debug_iteration or -1)
-        dump_path = dump_dir / f"local_score_it{iteration_label:03d}_image_{original_idx}.npz"
+        label_suffix = _local_debug_dump_label_suffix()
+        dump_path = dump_dir / f"local_score_it{iteration_label:03d}_image_{original_idx}{label_suffix}.npz"
         payload = {
             "selected_global_image_indices": np.array([original_idx], dtype=np.int64),
             "selected_local_image_indices": np.array([local_idx], dtype=np.int64),

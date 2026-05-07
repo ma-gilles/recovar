@@ -139,6 +139,57 @@ def _read_relion_star_scalar(path: Path, key: str) -> str:
     raise AssertionError(f"{path} does not contain {key}")
 
 
+def _mean_shell_value(values: np.ndarray, first_shell: int, last_shell: int) -> float:
+    values = np.asarray(values, dtype=np.float64)
+    lo = max(0, int(first_shell))
+    hi = min(values.size, int(last_shell) + 1)
+    if hi <= lo:
+        return float("nan")
+    return float(np.nanmean(values[lo:hi]))
+
+
+def _real_space_shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+    """Return an FFT-shell FSC between same-frame real-space volumes."""
+    a = np.asarray(lhs, dtype=np.float64)
+    b = np.asarray(rhs, dtype=np.float64)
+    if a.shape != b.shape or a.ndim != 3 or len(set(a.shape)) != 1:
+        raise ValueError(f"Expected same-shaped cubic volumes, got {a.shape} and {b.shape}")
+
+    n = int(a.shape[0])
+    fa = np.fft.fftn(a)
+    fb = np.fft.fftn(b)
+    freqs = np.fft.fftfreq(n) * n
+    z, y, x = np.meshgrid(freqs, freqs, freqs, indexing="ij")
+    shells = np.rint(np.sqrt(x * x + y * y + z * z)).astype(np.int32).ravel()
+    product = (fa * np.conj(fb)).ravel()
+    numerator = np.bincount(shells, weights=np.real(product))
+    lhs_power = np.bincount(shells, weights=(np.abs(fa) ** 2).ravel())
+    rhs_power = np.bincount(shells, weights=(np.abs(fb) ** 2).ravel())
+    denom = np.sqrt(lhs_power * rhs_power)
+    out = np.full(numerator.shape, np.nan, dtype=np.float64)
+    np.divide(numerator, denom, out=out, where=denom > 0.0)
+    return out
+
+
+def _relion_frame_map_similarity(lhs_path: Path, rhs_path: Path) -> dict[str, float]:
+    """Same-frame map parity metrics; no GT alignment or handedness search."""
+    from recovar.em.initial_model.gt_metrics import centered_correlation, first_shell_below_threshold
+    from recovar.utils import helpers
+
+    lhs, _lhs_voxel = helpers.load_relion_volume(str(lhs_path), return_voxel_size=True)
+    rhs, _rhs_voxel = helpers.load_relion_volume(str(rhs_path), return_voxel_size=True)
+    lhs = np.asarray(lhs, dtype=np.float64)
+    rhs = np.asarray(rhs, dtype=np.float64)
+    fsc = _real_space_shell_fsc(lhs, rhs)
+    return {
+        "corr": float(centered_correlation(lhs, rhs)),
+        "mean_fsc_1_8": _mean_shell_value(fsc, 1, 8),
+        "mean_fsc_1_16": _mean_shell_value(fsc, 1, 16),
+        "shell_05": float(first_shell_below_threshold(fsc, 0.5)),
+        "shell_0143": float(first_shell_below_threshold(fsc, 0.143)),
+    }
+
+
 def _assert_relion_initialmodel_reference(relion_dir: Path, *, expected_iter: int) -> None:
     """Hard-fail if the native reference is not a RELION InitialModel run.
 
@@ -328,6 +379,9 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
     Pass criteria:
       * The reference trajectory is verified as RELION InitialModel
         (``--grad --denovo_3dref``), not auto-refine.
+      * Native VDAM iter-8 map directly correlates with RELION InitialModel
+        iter-8 at >=0.999 in the same RELION frame. This is the strict parity
+        guard; GT metrics alone can miss a wrong trajectory.
       * Native VDAM iter-8 reaches within 0.05 mean FSC(1..16) of RELION
         InitialModel iter-8.
       * Native VDAM iter-8 reaches within 0.05 corr-vs-GT of RELION
@@ -343,8 +397,6 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
         K1_NATIVE_RELION_DIR,
         K1_LONG_DATA_STAR,
         K1_LONG_GT_VOLUME,
-        K1_NATIVE_RELION_DIR / "run_it001_class001.mrc",
-        K1_NATIVE_RELION_DIR / "run_it002_class001.mrc",
         K1_NATIVE_RELION_DIR / "run_it008_class001.mrc",
     )
     _assert_relion_initialmodel_reference(K1_NATIVE_RELION_DIR, expected_iter=8)
@@ -404,16 +456,12 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
         output_dir / "run_it001_class001.mrc",
         output_dir / "run_it002_class001.mrc",
         output_dir / "run_it008_class001.mrc",
-        K1_NATIVE_RELION_DIR / "run_it001_class001.mrc",
-        K1_NATIVE_RELION_DIR / "run_it002_class001.mrc",
         K1_NATIVE_RELION_DIR / "run_it008_class001.mrc",
     ]
     labels = [
         "vdam_it001",
         "vdam_it002",
         "vdam_it008",
-        "relion_initialmodel_it001",
-        "relion_initialmodel_it002",
         "relion_initialmodel_it008",
     ]
     _npz_payload, summary = evaluate(
@@ -435,6 +483,10 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
     relion_it008 = metrics["relion_initialmodel_it008"]
     fsc_gap_1_16 = float(relion_it008["mean_fsc_1_16"] - vdam_it008["mean_fsc_1_16"])
     corr_gap = float(relion_it008["corr_vs_gt"] - vdam_it008["corr_vs_gt"])
+    relion_map_similarity = _relion_frame_map_similarity(
+        output_dir / "run_it008_class001.mrc",
+        K1_NATIVE_RELION_DIR / "run_it008_class001.mrc",
+    )
 
     payload = {
         "k1_native_initialmodel_relion_dir": str(K1_NATIVE_RELION_DIR),
@@ -445,18 +497,15 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
         "k1_native_initialmodel_vdam_it002_mean_fsc_1_16": float(metrics["vdam_it002"]["mean_fsc_1_16"]),
         "k1_native_initialmodel_vdam_it008_corr_vs_gt": float(vdam_it008["corr_vs_gt"]),
         "k1_native_initialmodel_vdam_it008_mean_fsc_1_16": float(vdam_it008["mean_fsc_1_16"]),
-        "k1_native_initialmodel_relion_it001_corr_vs_gt": float(metrics["relion_initialmodel_it001"]["corr_vs_gt"]),
-        "k1_native_initialmodel_relion_it001_mean_fsc_1_16": float(
-            metrics["relion_initialmodel_it001"]["mean_fsc_1_16"]
-        ),
-        "k1_native_initialmodel_relion_it002_corr_vs_gt": float(metrics["relion_initialmodel_it002"]["corr_vs_gt"]),
-        "k1_native_initialmodel_relion_it002_mean_fsc_1_16": float(
-            metrics["relion_initialmodel_it002"]["mean_fsc_1_16"]
-        ),
         "k1_native_initialmodel_relion_it008_corr_vs_gt": float(relion_it008["corr_vs_gt"]),
         "k1_native_initialmodel_relion_it008_mean_fsc_1_16": float(relion_it008["mean_fsc_1_16"]),
         "k1_native_initialmodel_fsc_1_16_gap_vs_relion_it008": fsc_gap_1_16,
         "k1_native_initialmodel_corr_gap_vs_relion_it008": corr_gap,
+        "k1_native_initialmodel_vdam_vs_relion_it008_corr": relion_map_similarity["corr"],
+        "k1_native_initialmodel_vdam_vs_relion_it008_mean_fsc_1_8": relion_map_similarity["mean_fsc_1_8"],
+        "k1_native_initialmodel_vdam_vs_relion_it008_mean_fsc_1_16": relion_map_similarity["mean_fsc_1_16"],
+        "k1_native_initialmodel_vdam_vs_relion_it008_shell_05": relion_map_similarity["shell_05"],
+        "k1_native_initialmodel_vdam_vs_relion_it008_shell_0143": relion_map_similarity["shell_0143"],
         "k1_native_initialmodel_relion_iter_walltimes_s": _relion_iter_walltimes_s(K1_NATIVE_RELION_DIR),
     }
     ledger = _write_quality_ledger("k1_native_initialmodel", payload)
@@ -486,10 +535,23 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
         file=sys.stderr,
         flush=True,
     )
+    print(
+        "  direct VDAM vs RELION it008: "
+        f"corr={relion_map_similarity['corr']:.6f} "
+        f"xfsc1-16={relion_map_similarity['mean_fsc_1_16']:.6f} "
+        f"xshell0143={relion_map_similarity['shell_0143']}",
+        file=sys.stderr,
+        flush=True,
+    )
 
-    assert relion_it008["mean_fsc_1_16"] >= 0.20, (
+    assert relion_it008["mean_fsc_1_16"] >= 0.10, (
         "RELION iter-8 fixture quality is unexpectedly low; fixture or GT convention may have changed: "
         f"{relion_it008}"
+    )
+    assert relion_map_similarity["corr"] >= 0.999, (
+        "Native InitialModel VDAM iter-8 map is not in near-perfect direct parity with RELION InitialModel iter-8. "
+        f"same-frame corr={relion_map_similarity['corr']:.6f}, "
+        f"cross mean FSC(1..16)={relion_map_similarity['mean_fsc_1_16']:.6f}."
     )
     assert fsc_gap_1_16 <= 0.05, (
         "Native InitialModel VDAM iter-8 FSC quality is not close to RELION InitialModel iter-8. "

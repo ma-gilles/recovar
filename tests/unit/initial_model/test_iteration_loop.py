@@ -13,6 +13,8 @@ import pytest
 
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.iteration_loop import (
+    relion_solvent_mask,
+    relion_solvent_flatten_state,
     run_vdam_iterations,
     select_subset_for_iter,
     update_probabilities_from_estep_meta,
@@ -69,6 +71,85 @@ def _stub_estep_factory(ori_size: int):
 
 
 class TestRunVdamIterations:
+    def test_relion_solvent_flatten_state_matches_centered_spherical_mask(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.Iref = np.ones((1, 8, 8, 8), dtype=np.float64)
+
+        mask = relion_solvent_mask(
+            ori_size=8,
+            pixel_size=1.0,
+            particle_diameter_ang=6.0,
+            width_mask_edge_px=2.0,
+        )
+        out = relion_solvent_flatten_state(state, mask=mask)
+
+        coords = np.arange(-4, 4, dtype=np.float64)
+        z, y, x = np.meshgrid(coords, coords, coords, indexing="ij")
+        radius = 3.0
+        radius_p = 5.0
+        r = np.sqrt(x * x + y * y + z * z)
+        expected = np.zeros((8, 8, 8), dtype=np.float64)
+        expected[r < radius] = 1.0
+        edge = (r >= radius) & (r <= radius_p)
+        expected[edge] = 0.5 - 0.5 * np.cos(np.pi * (radius_p - r[edge]) / 2.0)
+
+        np.testing.assert_allclose(mask, expected, atol=1e-12)
+        np.testing.assert_allclose(out.Iref[0], expected, atol=1e-12)
+        np.testing.assert_allclose(state.Iref, 1.0)
+
+    def test_post_mstep_update_runs_before_iteration_artifact_sink(self, bind):
+        ori = 16
+        state = initialise_denovo_state(
+            ori_size=ori,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        state.Iref = np.ones((1, ori, ori, ori), dtype=np.float64) * 0.1
+        seen = {}
+
+        def post_update(current, iteration, meta):
+            assert iteration == 1
+            meta["post_update_seen"] = True
+            updated = relion_solvent_flatten_state(
+                current,
+                particle_diameter_ang=8.0,
+                width_mask_edge_px=2.0,
+            )
+            seen["post_sum"] = float(updated.Iref.sum())
+            return updated
+
+        def sink(current, iteration, meta):
+            seen["sink_sum"] = float(current.Iref.sum())
+            seen["meta_seen"] = bool(meta.get("post_update_seen"))
+
+        run_vdam_iterations(
+            state,
+            nr_particles=200,
+            optics_group_by_particle=[0] * 200,
+            grad_ini_subset_size=50,
+            grad_fin_subset_size=100,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=1,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=_stub_estep_factory(ori),
+            iter_artifact_sink=sink,
+            post_mstep_update=post_update,
+        )
+
+        assert seen["meta_seen"] is True
+        assert seen["sink_sum"] == seen["post_sum"]
+
     def test_updates_class_and_direction_priors_from_estep_meta(self):
         state = initialise_denovo_state(
             ori_size=8,
@@ -150,6 +231,57 @@ class TestRunVdamIterations:
 
         np.testing.assert_array_equal(out.subset_particle_ids, np.array([0, 2, 1, 3]))
         np.testing.assert_array_equal(out.subset_halfset_ids, np.array([0, 0, 1, 1], dtype=np.int8))
+
+    def test_random_seed_zero_preserves_relion_sorted_idx_base_order(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.subset_size = 6
+
+        def fail_if_called(seed):
+            raise AssertionError(f"unexpected randomization for seed {seed}")
+
+        out = select_subset_for_iter(
+            state,
+            iter=1,
+            nr_particles=6,
+            optics_group_by_particle=[0, 1, 0, 1, 0, 1],
+            rnd_unif_factory=fail_if_called,
+            random_seed=0,
+            do_grad=True,
+            particle_order=np.array([5, 0, 3, 4, 1, 2], dtype=np.int64),
+        )
+
+        np.testing.assert_array_equal(out.subset_particle_ids, np.array([0, 4, 2, 5, 3, 1]))
+        np.testing.assert_array_equal(out.subset_halfset_ids, np.array([0, 0, 0, 1, 1, 1], dtype=np.int8))
+
+    def test_rejects_invalid_particle_order(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.subset_size = 4
+
+        with pytest.raises(ValueError, match="particle_order must be a permutation"):
+            select_subset_for_iter(
+                state,
+                iter=1,
+                nr_particles=4,
+                optics_group_by_particle=[0, 0, 0, 0],
+                rnd_unif_factory=numpy_rnd_unif_factory,
+                random_seed=0,
+                do_grad=True,
+                particle_order=np.array([0, 1, 1, 3], dtype=np.int64),
+            )
 
     def test_5_iter_smoke(self, bind):
         ori = 16

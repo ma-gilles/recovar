@@ -101,6 +101,10 @@ def test_long_native_quality_guard_uses_relion_initialmodel_reference():
         "_rlnDoAutoRefine",
         "run_it008_class001.mrc",
         "relion_initialmodel_it008",
+        "_relion_frame_map_similarity",
+        "k1_native_initialmodel_vdam_vs_relion_it008_corr",
+        ">= 0.999",
+        "direct VDAM vs RELION it008",
     ]
     missing = [token for token in expected_long_tokens if token not in long_test]
     assert not missing, f"native InitialModel long guard lost RELION --grad reference checks: {missing}"
@@ -116,6 +120,44 @@ def test_long_native_quality_guard_uses_relion_initialmodel_reference():
     ]
     missing = [token for token in expected_launcher_tokens if token not in slurm_launcher]
     assert not missing, f"EM-long launcher no longer prepares the RELION InitialModel reference: {missing}"
+
+
+def test_native_vdam_subset_order_uses_relion_sorted_idx_base_order():
+    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    iteration_loop = (REPO_ROOT / "recovar/em/initial_model/iteration_loop.py").read_text()
+
+    expected_driver_tokens = [
+        "_micrograph_sort_order(main_star)",
+        "particle_order=particle_order",
+    ]
+    missing = [token for token in expected_driver_tokens if token not in driver]
+    assert not missing, f"native InitialModel driver lost RELION sorted_idx base-order wiring: {missing}"
+
+    expected_loop_tokens = [
+        "particle_order: Sequence[int] | None = None",
+        "base_order = np.asarray(particle_order",
+        "shuffled = base_order.copy()",
+        "shuffled = base_order[permutation]",
+    ]
+    missing = [token for token in expected_loop_tokens if token not in iteration_loop]
+    assert not missing, f"VDAM iteration loop lost RELION sorted_idx base-order handling: {missing}"
+
+
+def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
+    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    iteration_loop = (REPO_ROOT / "recovar/em/initial_model/iteration_loop.py").read_text()
+    run_ab_initio = (REPO_ROOT / "scripts/run_ab_initio.py").read_text()
+
+    expected_tokens = [
+        "do_solvent: bool = True",
+        "if opts.do_solvent",
+        "relion_solvent_mask",
+        "relion_solvent_flatten_state",
+        "do_solvent=opts.do_solvent",
+    ]
+    haystack = "\n".join([driver, iteration_loop, run_ab_initio])
+    missing = [token for token in expected_tokens if token not in haystack]
+    assert not missing, f"native InitialModel lost RELION --flatten_solvent post-M-step wiring: {missing}"
 
 
 def test_relion_initialmodel_reference_checker_rejects_autorefine(tmp_path):

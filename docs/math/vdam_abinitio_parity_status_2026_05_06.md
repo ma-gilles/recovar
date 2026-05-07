@@ -1,12 +1,14 @@
 # VDAM / InitialModel ab-initio parity status - 2026-05-06
 
 This document records the current ab-initio / VDAM parity checkpoint on branch
-`codex/vdam-abinitio-parity`.  The active goal remains near-perfect RELION
+`codex/vdam-after-merge-20260506`.  The active goal remains near-perfect RELION
 InitialModel parity, with `0.999` map parity as the short-term target at least
 at iter 1 and then across full end-to-end schedules.
 
 ## Current commits
 
+- `4fc63f1a` - `Add native VDAM InitialModel long guard`
+- `1c8da2ef` - integration base `codex/em-vdam-ppca-integration-final-20260506`
 - `23a51dcf` - `em-initialmodel: match relion seed-zero subset order`
 - `8fd73603` - `em-initialmodel: apply relion bootstrap postprocess`
 - `64595e15` - `em-initialmodel: add aligned GT benchmark metrics`
@@ -26,12 +28,77 @@ vol = helpers.load_relion_volume("run_it008_class001.mrc")
 
 Using `helpers.load_mrc()` on these InitialModel MRCs applies the wrong
 frame/sign for this specific output path and flips the direct correlation sign.
-For the 8-iter run below:
+For older 8-iter runs below:
 
 - `load_relion_volume(native_it008)` vs `load_relion_volume(RELION_it008)`:
   `CC = 0.996258`
 - `load_mrc(native_it008)` vs `load_relion_volume(RELION_it008)`:
   `CC = -0.996258`
+
+## Current K=1 50k / 256-pixel checkpoint after integration merge
+
+This is the current production-scale native VDAM InitialModel status on
+`codex/vdam-after-merge-20260506`, after rebasing on the EM/VDAM/PPCA
+integration branch.
+
+Native run:
+
+`/scratch/gpfs/GILLES/mg6942/_agent_scratch/native_vdam_solventfix_nr8_50k256_20260506_234219_27563`
+
+RELION InitialModel reference:
+
+`/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_50k_256_normalized/relion_initialmodel_k1_it008_write1`
+
+Command shape:
+
+```bash
+pixi run python scripts/run_ab_initio.py \
+  --i /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_50k_256_normalized/particles.star \
+  --datadir /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_50k_256_normalized \
+  --o <scratch>/out/run \
+  --nr_iter 8 \
+  --K 1 \
+  --sym C1 \
+  --particle_diameter 200 \
+  --tau2_fudge 4 \
+  --random_seed 0 \
+  --healpix_order 1 \
+  --oversampling 1 \
+  --offset_range 6 \
+  --offset_step 2 \
+  --image_batch_size 16 \
+  --rotation_block_size 256 \
+  --padding_factor 1 \
+  --eager_images
+```
+
+Direct native-vs-RELION map parity, loading both maps with
+`helpers.load_relion_volume()`:
+
+| Iteration | CC vs RELION | Scale | Residual/std |
+|---:|---:|---:|---:|
+| 1 | `0.997915757` | `1.020716` | `0.064530` |
+| 2 | `0.998998945` | `1.033677` | `0.044734` |
+| 3 | `0.998605486` | `0.983939` | `0.052793` |
+| 4 | `0.998506149` | `0.980544` | `0.054639` |
+| 8 | `0.996815765` | `0.986096` | `0.079739` |
+
+The large 50k/256 iter-1 regression was missing RELION's post-M-step
+`solventFlatten()` before writing iteration artifacts.  A RELION debug dump
+showed that multiplying `mstep_it1_c0_iref_after.bin` by the centered
+spherical raised-cosine solvent mask reproduces RELION's written
+`run_it001_class001.mrc` at `CC=1.0`.  The native driver now applies the same
+post-M-step hook when `do_solvent` / `--flatten_solvent` is enabled.
+
+Before this fix, the schedule-matched direct native-vs-RELION iter-1 map CC on
+the same fixture was approximately `0.902`.  The corrected 8-iteration run
+reaches `0.997916` at iter 1 and `0.998999` at iter 2, but it still misses the
+strict `0.999` direct-map target by iter 8.  The remaining gap is therefore in
+multi-iteration E-step / BPref accumulator evolution, not in the final
+artifact frame or a missing solvent mask.
+
+The long guard intentionally still requires direct native-vs-RELION iter-8 map
+CC `>= 0.999`; do not relax this threshold.  It is the active target.
 
 ## Alignment-aware GT metric
 

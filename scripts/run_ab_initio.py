@@ -245,6 +245,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         sym_name=opts.sym_name,
         do_run_C1=opts.do_run_C1,
         particle_diameter=opts.particle_diameter,
+        do_solvent=opts.do_solvent,
         do_zero_mask=True,
         do_ctf_correction=opts.do_ctf_correction,
         random_seed=args.random_seed,
