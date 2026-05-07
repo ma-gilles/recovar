@@ -8,6 +8,7 @@ projection helpers rather than recreating the stale PPCA branch engine layout.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Iterable, NamedTuple
 
 import jax
@@ -28,6 +29,7 @@ from recovar.em.ppca_refinement.dense_engine import (
     DensePPCAFusedEMResult,
     _enforce_augmented_x0,
     dense_pose_ppca_E_step_blocked,
+    dense_pose_ppca_score_stats_blocked,
     fused_dense_pose_ppca_block,
 )
 from recovar.em.ppca_refinement.initialization import real_volume_to_centered_fourier_half
@@ -47,6 +49,10 @@ class DensePPCADatasetBlockInputs(NamedTuple):
     half_volume_size: int
     score_mask: jax.Array
     recon_mask: jax.Array
+    score_indices: jax.Array | None
+    recon_indices: jax.Array | None
+    use_window: bool
+    backprojection_max_r: float | None
     projection_max_r: float | None
 
 
@@ -206,10 +212,24 @@ def prepare_dense_ppca_dataset_inputs(
         half_volume_size=_half_volume_size(volume_shape),
         score_mask=score_mask.astype(jnp.float32),
         recon_mask=recon_mask.astype(jnp.float32),
+        score_indices=window_spec.score_indices,
+        recon_indices=window_spec.recon_indices,
+        use_window=bool(window_spec.use_window),
+        backprojection_max_r=window_spec.max_r,
         projection_max_r=window_spec.max_r,
     )
 
 
+@partial(
+    jax.jit,
+    static_argnames=(
+        "image_shape",
+        "volume_shape",
+        "disc_type",
+        "max_r",
+        "relion_texture_interp",
+    ),
+)
 def _project_augmented_half_volumes(
     augmented_half_volumes,
     rotations_block,
@@ -291,6 +311,17 @@ def _per_image_pose_prior_block(
     return None if prior is None else jnp.asarray(prior, dtype=jnp.float32)
 
 
+def _pose_mask_block_has_support(rotation_translation_mask, *, batch_start: int, batch_count: int, r0: int, r1: int) -> bool:
+    if rotation_translation_mask is None:
+        return True
+    mask = np.asarray(rotation_translation_mask, dtype=bool)
+    if mask.ndim == 2:
+        return bool(np.any(mask[r0:r1, :]))
+    if mask.ndim == 3:
+        return bool(np.any(mask[batch_start : batch_start + batch_count, r0:r1, :]))
+    raise ValueError("rotation_translation_mask must be 2D or 3D")
+
+
 def iter_dense_ppca_dataset_blocks(
     experiment_dataset,
     mu,
@@ -314,6 +345,7 @@ def iter_dense_ppca_dataset_blocks(
     half_spectrum_scoring: bool = False,
     square_window: bool = False,
     relion_texture_interp: bool = True,
+    skip_empty_pose_blocks: bool = False,
 ) -> Iterable[DensePPCAFusedBlock]:
     """Yield prepared dense PPCA fused blocks directly from a dataset."""
 
@@ -376,14 +408,34 @@ def iter_dense_ppca_dataset_blocks(
             shifted_recon_half = shifted_score_half
 
         F = int(shifted_score_half.shape[-1])
-        Y1_score = shifted_score_half.reshape(batch_count, n_trans, F) * resolved.score_mask[None, None, :]
-        ctf2_score = ctf2_over_nv_half * resolved.score_mask[None, :]
-        Y1_recon = shifted_recon_half.reshape(batch_count, n_trans, F) * resolved.recon_mask[None, None, :]
-        ctf2_recon = ctf2_over_nv_half * resolved.recon_mask[None, :]
+        Y1_score_full = shifted_score_half.reshape(batch_count, n_trans, F) * resolved.score_mask[None, None, :]
+        ctf2_score_full = ctf2_over_nv_half * resolved.score_mask[None, :]
+        Y1_recon_full = shifted_recon_half.reshape(batch_count, n_trans, F) * resolved.recon_mask[None, None, :]
+        ctf2_recon_full = ctf2_over_nv_half * resolved.recon_mask[None, :]
+        if resolved.score_indices is None:
+            Y1_score = Y1_score_full
+            ctf2_score = ctf2_score_full
+        else:
+            Y1_score = Y1_score_full[:, :, resolved.score_indices]
+            ctf2_score = ctf2_score_full[:, resolved.score_indices]
+        if resolved.recon_indices is None:
+            Y1_recon = Y1_recon_full
+            ctf2_recon = ctf2_recon_full
+        else:
+            Y1_recon = Y1_recon_full[:, :, resolved.recon_indices]
+            ctf2_recon = ctf2_recon_full[:, resolved.recon_indices]
         y_norm = jnp.asarray(batch_norm).reshape(batch_count)
 
         for r0 in range(0, n_rot, int(rotation_block_size)):
             r1 = min(r0 + int(rotation_block_size), n_rot)
+            if skip_empty_pose_blocks and not _pose_mask_block_has_support(
+                rotation_translation_mask,
+                batch_start=batch_start,
+                batch_count=batch_count,
+                r0=r0,
+                r1=r1,
+            ):
+                continue
             rotations_block = rotations[r0:r1]
             proj_aug = _project_augmented_half_volumes(
                 resolved.augmented_half_volumes,
@@ -394,6 +446,8 @@ def iter_dense_ppca_dataset_blocks(
                 max_r=resolved.projection_max_r,
                 relion_texture_interp=relion_texture_interp,
             )
+            if resolved.score_indices is not None:
+                proj_aug = proj_aug[:, :, resolved.score_indices]
             pose_log_prior = _per_image_pose_prior_block(
                 batch_start=batch_start,
                 batch_count=batch_count,
@@ -414,6 +468,11 @@ def iter_dense_ppca_dataset_blocks(
                 pose_log_prior=pose_log_prior,
                 Y1_recon=Y1_recon,
                 ctf2_over_noise_recon=ctf2_recon,
+                recon_window_indices=resolved.recon_indices,
+                use_recon_window=bool(resolved.use_window),
+                backprojection_max_r=resolved.backprojection_max_r,
+                batch_start=batch_start,
+                rotation_start=r0,
             )
         batch_start += batch_count
 
@@ -427,14 +486,10 @@ def iter_dense_ppca_dataset_block_groups(
     translations=None,
     **kwargs,
 ) -> Iterable[tuple[DensePPCAFusedBlock, ...]]:
-    """Yield all rotation blocks for one image batch as a normalization group."""
+    """Yield all retained rotation blocks for one image batch as a normalization group."""
 
-    if rotations is None:
-        raise ValueError("rotations are required")
-    rotation_block_size = int(kwargs.get("rotation_block_size", 5000))
-    n_rot = int(np.asarray(rotations).shape[0])
-    n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
     group = []
+    current_batch_start = None
     for block in iter_dense_ppca_dataset_blocks(
         experiment_dataset,
         mu,
@@ -444,10 +499,15 @@ def iter_dense_ppca_dataset_block_groups(
         translations,
         **kwargs,
     ):
-        group.append(block)
-        if len(group) == n_blocks:
-            yield tuple(group)
+        block_batch_start = int(block.batch_start)
+        if current_batch_start is None:
+            current_batch_start = block_batch_start
+        elif block_batch_start != current_batch_start:
+            if group:
+                yield tuple(group)
             group = []
+            current_batch_start = block_batch_start
+        group.append(block)
     if group:
         yield tuple(group)
 
@@ -479,6 +539,9 @@ def run_dense_ppca_fused_em_iteration(
     relion_texture_interp: bool = True,
     enforce_x0: bool = True,
     mstep_chunk_size: int | None = None,
+    skip_empty_pose_blocks: bool = False,
+    sparse_pass2: bool = True,
+    sparse_pass2_log_threshold: float = float(np.log(1.0e-6)),
 ) -> DensePPCAFusedEMResult:
     """Run one dataset-backed dense PPCA EM iteration."""
 
@@ -504,6 +567,7 @@ def run_dense_ppca_fused_em_iteration(
         half_spectrum_scoring=half_spectrum_scoring,
         square_window=square_window,
         relion_texture_interp=relion_texture_interp,
+        skip_empty_pose_blocks=skip_empty_pose_blocks,
     )
     q_resolved = int(jnp.asarray(W_prior).shape[1])
     P = q_resolved + 1
@@ -523,35 +587,97 @@ def run_dense_ppca_fused_em_iteration(
     nsig_values = []
     best_rotations = []
     best_translations = []
+    sparse_pass2_total_blocks = 0
+    sparse_pass2_skipped_blocks = 0
+    sparse_pass2_omitted_mass_upper_sum = 0.0
+    sparse_pass2_omitted_mass_upper_max = 0.0
+    sparse_pass2_omitted_mass_upper_image_count = 0
+    score_fourier_size = None
+    recon_fourier_size = None
 
     for group in block_groups:
         if not group:
             continue
         batch_size = int(group[0].Y1.shape[0])
+        if score_fourier_size is None:
+            score_fourier_size = int(group[0].Y1.shape[-1])
+            recon_fourier_size = int(group[0].Y1_recon.shape[-1]) if group[0].Y1_recon is not None else score_fourier_size
         block_logZ = []
+        block_score_stats = []
+        block_pose_counts = []
         for block in group:
-            _stats, diag = dense_pose_ppca_E_step_blocked(
+            score_stats = dense_pose_ppca_score_stats_blocked(
                 block.Y1,
                 block.proj_aug,
                 block.ctf2_over_noise,
                 block.y_norm,
                 block.pose_log_prior,
             )
-            block_logZ.append(diag.logZ)
+            block_score_stats.append(score_stats)
+            block_logZ.append(score_stats.logZ)
+            block_pose_counts.append(int(block.Y1.shape[1]) * int(block.rotations.shape[0]))
         logZ = block_logZ[0]
         for next_logZ in block_logZ[1:]:
             logZ = jnp.logaddexp(logZ, next_logZ)
 
         log_likelihood += float(jnp.sum(logZ))
         n_images += batch_size
-        batch_pmax = jnp.zeros((batch_size,), dtype=jnp.float32)
         batch_nsig = jnp.zeros((batch_size,), dtype=jnp.int32)
         batch_best_score = jnp.full((batch_size,), -jnp.inf)
         batch_best_rotation = jnp.zeros((batch_size,), dtype=jnp.int32)
         batch_best_translation = jnp.zeros((batch_size,), dtype=jnp.int32)
 
-        rotation_offset = 0
-        for block in group:
+        for block, score_stats in zip(group, block_score_stats, strict=True):
+            rotation_offset = int(block.rotation_start)
+            improve = score_stats.best_log_score_per_image > batch_best_score
+            batch_best_score = jnp.where(improve, score_stats.best_log_score_per_image, batch_best_score)
+            batch_best_rotation = jnp.where(
+                improve,
+                score_stats.best_rotation_idx + jnp.asarray(rotation_offset, dtype=jnp.int32),
+                batch_best_rotation,
+            )
+            batch_best_translation = jnp.where(improve, score_stats.best_translation_idx, batch_best_translation)
+
+        batch_pmax = jnp.exp(batch_best_score - logZ).astype(jnp.float32)
+        retained_group = tuple(group)
+        if sparse_pass2 and len(group) > 1:
+            block_best_matrix = jnp.stack(
+                [stats.best_log_score_per_image for stats in block_score_stats],
+                axis=0,
+            )
+            block_log_pose_counts = jnp.log(jnp.asarray(block_pose_counts, dtype=logZ.dtype))[:, None]
+            finite_log_z = jnp.isfinite(logZ)
+            log_omitted_mass_upper = jnp.where(
+                finite_log_z[None, :],
+                block_log_pose_counts + block_best_matrix.astype(logZ.dtype) - logZ[None, :].astype(logZ.dtype),
+                jnp.inf,
+            )
+            skip_candidate = log_omitted_mass_upper < float(sparse_pass2_log_threshold)
+            skip_pass2_block = np.asarray(jnp.all(skip_candidate, axis=1), dtype=bool)
+            if np.all(skip_pass2_block):
+                best_block_idx = int(np.argmax(np.asarray(jnp.max(block_best_matrix, axis=1))))
+                skip_pass2_block[best_block_idx] = False
+            sparse_pass2_total_blocks += len(group)
+            sparse_pass2_skipped_blocks += int(skip_pass2_block.sum())
+            if np.any(skip_pass2_block):
+                skipped_mass_upper = jnp.sum(
+                    jnp.where(
+                        jnp.asarray(skip_pass2_block)[:, None],
+                        jnp.exp(jnp.minimum(log_omitted_mass_upper, 50.0)),
+                        0.0,
+                    ),
+                    axis=0,
+                )
+                skipped_mass_upper_np = np.asarray(skipped_mass_upper, dtype=np.float64)
+                sparse_pass2_omitted_mass_upper_sum += float(np.sum(skipped_mass_upper_np))
+                sparse_pass2_omitted_mass_upper_max = max(
+                    sparse_pass2_omitted_mass_upper_max,
+                    float(np.max(skipped_mass_upper_np)),
+                )
+                sparse_pass2_omitted_mass_upper_image_count += batch_size
+                retained_group = tuple(block for block, skip in zip(group, skip_pass2_block, strict=True) if not skip)
+
+        for block in retained_group:
             rhs_volume, lhs_tri_volume, diag = fused_dense_pose_ppca_block(
                 block.Y1,
                 block.proj_aug,
@@ -567,19 +693,11 @@ def run_dense_ppca_fused_em_iteration(
                 ctf2_over_noise_recon=block.ctf2_over_noise_recon,
                 normalization_logZ=logZ,
                 disc_type_backproject=disc_type,
+                recon_window_indices=block.recon_window_indices,
+                use_recon_window=block.use_recon_window,
+                backprojection_max_r=block.backprojection_max_r,
             )
-            batch_pmax = jnp.maximum(batch_pmax, diag.pmax)
             batch_nsig = batch_nsig + diag.n_significant_per_image
-            improve = diag.best_log_score_per_image > batch_best_score
-            batch_best_score = jnp.where(improve, diag.best_log_score_per_image, batch_best_score)
-            batch_best_rotation = jnp.where(
-                improve,
-                diag.best_rotation_idx + jnp.asarray(rotation_offset, dtype=jnp.int32),
-                batch_best_rotation,
-            )
-            batch_best_translation = jnp.where(improve, diag.best_translation_idx, batch_best_translation)
-            rotation_offset += int(block.rotations.shape[0])
-
         pmax_values.append(batch_pmax)
         nsig_values.append(batch_nsig)
         best_rotations.append(batch_best_rotation)
@@ -596,6 +714,29 @@ def run_dense_ppca_fused_em_iteration(
         "logZ_mean": float(log_likelihood / n_images) if n_images else float("nan"),
         "best_rotation_idx": jnp.concatenate(best_rotations) if best_rotations else jnp.zeros((0,), dtype=jnp.int32),
         "best_translation_idx": jnp.concatenate(best_translations) if best_translations else jnp.zeros((0,), dtype=jnp.int32),
+        "sparse_pass2_enabled": bool(sparse_pass2),
+        "sparse_pass2_log_threshold": float(sparse_pass2_log_threshold),
+        "sparse_pass2_total_blocks": int(sparse_pass2_total_blocks),
+        "sparse_pass2_skipped_blocks": int(sparse_pass2_skipped_blocks),
+        "sparse_pass2_skipped_fraction": (
+            float(sparse_pass2_skipped_blocks / sparse_pass2_total_blocks)
+            if sparse_pass2_total_blocks
+            else 0.0
+        ),
+        "sparse_pass2_omitted_mass_upper_sum": float(sparse_pass2_omitted_mass_upper_sum),
+        "sparse_pass2_omitted_mass_upper_max": float(sparse_pass2_omitted_mass_upper_max),
+        "sparse_pass2_omitted_mass_upper_mean": (
+            float(sparse_pass2_omitted_mass_upper_sum / sparse_pass2_omitted_mass_upper_image_count)
+            if sparse_pass2_omitted_mass_upper_image_count
+            else 0.0
+        ),
+        "score_fourier_size": int(score_fourier_size) if score_fourier_size is not None else 0,
+        "recon_fourier_size": int(recon_fourier_size) if recon_fourier_size is not None else 0,
+        "full_half_fourier_size": int(image_shape[0] * (image_shape[1] // 2 + 1)),
+        "uses_fourier_window": bool(
+            score_fourier_size is not None
+            and int(score_fourier_size) < int(image_shape[0] * (image_shape[1] // 2 + 1))
+        ),
     }
     stats = AugmentedPPCAStats(
         rhs=jnp.swapaxes(rhs_volume, 0, 1),

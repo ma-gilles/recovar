@@ -51,6 +51,7 @@ def prepare_gt_weighted_ppca_init(
     q: int,
     frame: str,
     write_maps: bool,
+    apply_simulation_scale: bool = False,
 ):
     if not volume_paths:
         raise ValueError("no input volumes matched")
@@ -79,7 +80,14 @@ def prepare_gt_weighted_ppca_init(
         voxel_sizes.append(float(voxel_size.x) if hasattr(voxel_size, "x") else float(voxel_size))
 
     volume_stack = np.stack(volumes, axis=0)
-    init = initialize_ppca_from_gt_volumes(volume_stack, q=int(q), weights=weights, frame="recovar")
+    amplitude_scale = float(simulation_info.get("scale_vol", 1.0)) if apply_simulation_scale else None
+    init = initialize_ppca_from_gt_volumes(
+        volume_stack,
+        q=int(q),
+        weights=weights,
+        frame="recovar",
+        amplitude_scale=amplitude_scale,
+    )
 
     npz_path = output_dir / "ppca_init.npz"
     np.savez_compressed(
@@ -112,6 +120,8 @@ def prepare_gt_weighted_ppca_init(
         "volume_glob_count": len(volume_paths),
         "volume_paths": volume_paths,
         "input_frame": frame,
+        "apply_simulation_scale": bool(apply_simulation_scale),
+        "amplitude_scale": amplitude_scale,
         "input_shapes": input_shapes,
         "input_voxel_sizes": voxel_sizes,
         "n_images_weighted": int(assignments.size),
@@ -140,6 +150,11 @@ def _parse_args():
     parser.add_argument("--q", type=int, default=4)
     parser.add_argument("--frame", choices=("recovar", "relion"), default="recovar")
     parser.add_argument("--no-write-maps", action="store_true")
+    parser.add_argument(
+        "--apply-simulation-scale",
+        action="store_true",
+        help="Apply simulation_info['scale_vol'] so GT volume amplitudes match generated particles.",
+    )
     return parser.parse_args()
 
 
@@ -152,6 +167,7 @@ def main() -> None:
         q=int(args.q),
         frame=args.frame,
         write_maps=not args.no_write_maps,
+        apply_simulation_scale=bool(args.apply_simulation_scale),
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     if not summary["passed"]:

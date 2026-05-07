@@ -11,7 +11,9 @@ Current branch facts:
   `recovar/em/dense_single_volume/local_layout.py`.
 - Parent EM testing rules in `recovar/em/CLAUDE.md` apply. Do not run the full
   RECOVAR long suite for PPCA/EM-only changes.
-- `z ~ N(0, I_q)`. Eigenvalue scale lives in `W`.
+- `z ~ N(0, I_q)` with real latent coordinates. Eigenvalue scale lives in
+  `W`; complex Fourier phases belong to the Hermitian loading volumes, not to
+  complex-valued particle coordinates.
 - `W_prior` is variance-like and separate from mean prior, noise variance, and
   latent prior.
 

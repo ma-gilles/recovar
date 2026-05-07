@@ -5,7 +5,7 @@ import pytest
 from recovar.core.configs import ForwardModelConfig
 from recovar.core.ctf import as_ctf_evaluator
 from recovar.em.ppca_refinement.dense_dataset import _project_augmented_half_volumes, iter_dense_ppca_dataset_blocks
-from recovar.em.ppca_refinement.dense_engine import dense_pose_ppca_E_step_blocked
+from recovar.em.ppca_refinement.dense_engine import dense_pose_ppca_E_step_blocked, dense_pose_ppca_logZ_blocked
 from recovar.em.ppca_refinement.initialization import real_volume_to_centered_fourier_half
 from recovar.em.dense_single_volume.helpers.preprocessing import half_translation_phase_table, preprocess_batch
 from recovar.em.sampling import get_rotation_grid_at_order
@@ -62,9 +62,9 @@ def _numpy_ppca_pose_reference(Y1, proj_aug, ctf2_over_noise, y_norm, pose_log_p
                     G_tri[b, t, r] = np.ones((1,), dtype=np.complex128)
                     continue
 
-                g_zx = np.einsum("f,qf->q", np.conj(Y1[b, t]), W)
-                h_zm = np.einsum("f,qf,f->q", ctf2_over_noise[b], np.conj(W), mu)
-                Hzz = np.einsum("f,qf,pf->qp", ctf2_over_noise[b], np.conj(W), W)
+                g_zx = np.einsum("f,qf->q", Y1[b, t], np.conj(W)).real
+                h_zm = np.einsum("f,qf,f->q", ctf2_over_noise[b], np.conj(W), mu).real
+                Hzz = np.einsum("f,qf,pf->qp", ctf2_over_noise[b], np.conj(W), W).real
                 Hzz = 0.5 * (Hzz + np.swapaxes(np.conj(Hzz), -1, -2))
                 M = np.eye(q, dtype=np.complex128) + Hzz
                 chol = np.linalg.cholesky(M)
@@ -78,9 +78,9 @@ def _numpy_ppca_pose_reference(Y1, proj_aug, ctf2_over_noise, y_norm, pose_log_p
                 alpha[b, t, r] = np.concatenate([np.ones((1,), dtype=np.complex128), z_bar])
                 G = np.empty((n_aug, n_aug), dtype=np.complex128)
                 G[0, 0] = 1.0
-                G[0, 1:] = np.conj(z_bar)
+                G[0, 1:] = z_bar
                 G[1:, 0] = z_bar
-                G[1:, 1:] = S_z + z_bar[:, None] * np.conj(z_bar)[None, :]
+                G[1:, 1:] = S_z + z_bar[:, None] * z_bar[None, :]
                 G_tri[b, t, r] = _pack_upper_tri_numpy(G)
 
     if pose_log_prior is not None:
@@ -122,6 +122,14 @@ def test_dense_ppca_score_moments_and_prior_axes_match_numpy_reference():
     expected = _numpy_ppca_pose_reference(Y1, proj_aug, ctf2_over_noise, y_norm, pose_log_prior)
 
     np.testing.assert_allclose(np.asarray(diagnostics.logZ), expected["logZ"], rtol=2e-5, atol=2e-5)
+    score_only_logZ = dense_pose_ppca_logZ_blocked(
+        jnp.asarray(Y1),
+        jnp.asarray(proj_aug),
+        jnp.asarray(ctf2_over_noise),
+        jnp.asarray(y_norm),
+        pose_log_prior=jnp.asarray(pose_log_prior),
+    )
+    np.testing.assert_allclose(np.asarray(score_only_logZ), expected["logZ"], rtol=2e-5, atol=2e-5)
     np.testing.assert_allclose(np.asarray(diagnostics.pmax), expected["pmax"], rtol=2e-5, atol=2e-5)
     np.testing.assert_array_equal(np.asarray(diagnostics.best_rotation_idx), expected["best_rotation_idx"])
     np.testing.assert_array_equal(np.asarray(diagnostics.best_translation_idx), expected["best_translation_idx"])
@@ -207,6 +215,26 @@ def test_dense_ppca_moments_recover_latent_coordinates_at_identifiable_pose():
         atol=1e-4,
     )
     np.testing.assert_allclose(np.asarray(stats.alpha_aug_acc[:, 1:]).imag, 0.0, atol=1e-6)
+
+
+def test_dense_ppca_complex_fourier_real_latent_posterior_matches_closed_form():
+    mu = np.asarray([0.7 + 0.2j, -0.3 + 0.4j, 0.1 - 0.5j], dtype=np.complex64)
+    W = np.asarray([[0.2 + 0.5j, -0.6 + 0.1j, 0.4 - 0.3j]], dtype=np.complex64)
+    z_true = np.asarray([0.8], dtype=np.float32)
+    precision = np.float32(3.0)
+    observed = mu + z_true[0] * W[0]
+
+    Y1 = jnp.asarray((precision * observed)[None, None, :], dtype=jnp.complex64)
+    ctf2_over_noise = jnp.asarray(np.full((1, observed.size), precision, dtype=np.float32))
+    y_norm = jnp.asarray([precision * np.sum(np.abs(observed) ** 2).real], dtype=jnp.float32)
+    proj_aug = jnp.asarray(np.concatenate([mu[None, None, :], W[None, :, :]], axis=1))
+
+    stats, _diagnostics = dense_pose_ppca_E_step_blocked(Y1, proj_aug, ctf2_over_noise, y_norm)
+
+    H = np.einsum("f,qf,pf->qp", np.asarray(ctf2_over_noise[0]), np.conj(W), W).real
+    b = np.einsum("qf,f->q", np.conj(W), precision * (observed - mu)).real
+    expected_z = np.linalg.solve(np.eye(1, dtype=np.float32) + H, b)
+    np.testing.assert_allclose(np.asarray(stats.alpha_aug_acc[0, 1:]), expected_z, rtol=2e-5, atol=2e-5)
 
 
 def _asymmetric_real_volume_bank(rng, q, volume_shape):

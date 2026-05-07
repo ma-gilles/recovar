@@ -108,13 +108,189 @@ def real_volume_to_centered_fourier(volume: np.ndarray) -> np.ndarray:
     volume = np.asarray(volume)
     if volume.ndim != 3:
         raise ValueError(f"volume must be 3D, got {volume.shape}")
-    return np.fft.fftshift(np.fft.fftn(volume)).astype(np.complex64)
+    return np.asarray(ftu.get_dft3(volume), dtype=np.complex64)
 
 
 def real_volume_to_centered_fourier_half(volume: np.ndarray) -> np.ndarray:
     """Convert a real-space volume to flattened RECOVAR half-Fourier storage."""
     centered = real_volume_to_centered_fourier(volume)
     return np.asarray(ftu.full_volume_to_half_volume(centered, centered.shape), dtype=np.complex64).reshape(-1)
+
+
+def _half_volume_size(volume_shape) -> int:
+    return int(np.prod(ftu.volume_shape_to_half_volume_shape(tuple(volume_shape))))
+
+
+def _coerce_loading_columns_to_fourier_half(
+    W: np.ndarray,
+    *,
+    volume_shape,
+    volume_domain: str,
+    q: int | None = None,
+) -> np.ndarray:
+    """Return loadings as ``[half_size, q]`` in centered half-Fourier storage."""
+    volume_shape = tuple(int(x) for x in volume_shape)
+    half_size = _half_volume_size(volume_shape)
+    full_size = int(np.prod(volume_shape))
+    arr = np.asarray(W)
+    domain = str(volume_domain)
+    if domain == "auto":
+        if arr.ndim == 2 and arr.shape[0] == half_size:
+            domain = "fourier_half"
+        elif arr.ndim == 2 and arr.shape[1] == half_size:
+            domain = "fourier_half"
+        elif arr.ndim >= 2 and tuple(arr.shape[1:]) == volume_shape and np.iscomplexobj(arr):
+            domain = "fourier_full"
+        elif arr.ndim >= 2 and tuple(arr.shape[1:]) == volume_shape:
+            domain = "real"
+        else:
+            raise ValueError("could not infer loading volume_domain")
+
+    if domain == "fourier_half":
+        if arr.ndim == 1:
+            columns = arr.reshape(half_size, 1)
+        elif arr.ndim == 2 and arr.shape[0] == half_size:
+            columns = arr
+        elif arr.ndim == 2 and arr.shape[1] == half_size:
+            columns = arr.T
+        else:
+            raise ValueError(f"fourier_half W must be [half_size, q] or [q, half_size], got {arr.shape}")
+        if q is not None:
+            columns = columns[:, : int(q)]
+        return np.asarray(columns, dtype=np.complex64)
+
+    if domain not in {"real", "fourier_full"}:
+        raise ValueError("volume_domain must be 'auto', 'real', 'fourier_full', or 'fourier_half'")
+    if arr.ndim < 2 or tuple(arr.shape[1:]) != volume_shape:
+        raise ValueError(f"{domain} W must be shaped [q, *volume_shape], got {arr.shape}")
+    if q is not None:
+        arr = arr[: int(q)]
+    columns = []
+    for loading in arr:
+        if domain == "real":
+            columns.append(real_volume_to_centered_fourier_half(loading))
+        else:
+            if loading.size != full_size:
+                raise ValueError(f"fourier_full loading has {loading.size} elements, expected {full_size}")
+            half = ftu.full_volume_to_half_volume(np.asarray(loading).reshape(volume_shape), volume_shape).reshape(-1)
+            columns.append(np.asarray(half, dtype=np.complex64))
+    if not columns:
+        return np.zeros((half_size, 0), dtype=np.complex64)
+    return np.stack(columns, axis=1)
+
+
+def _box_normalization(volume_shape, *, box_size_power: float) -> float:
+    """Return the explicit synthetic-prior DFT normalization factor."""
+    volume_shape = tuple(int(x) for x in volume_shape)
+    if len(set(volume_shape)) != 1:
+        raise ValueError(f"box-size prior normalization expects a cubic volume, got {volume_shape}")
+    return float(volume_shape[0]) ** float(box_size_power)
+
+
+def _half_radial_shell_labels(volume_shape) -> np.ndarray:
+    labels = np.asarray(
+        ftu.get_grid_of_radial_distances_real(tuple(volume_shape), scaled=False, frequency_shift=0),
+        dtype=np.int64,
+    ).reshape(-1)
+    expected_size = _half_volume_size(volume_shape)
+    if labels.size != expected_size:
+        raise AssertionError(f"radial shell labels have {labels.size} entries, expected {expected_size}")
+    return labels
+
+
+def _average_half_values_over_shells(values: np.ndarray, volume_shape) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    labels = _half_radial_shell_labels(volume_shape)
+    if values.shape != labels.shape:
+        raise ValueError(f"values shape {values.shape} does not match half-shell labels {labels.shape}")
+    shell_count = int(labels.max(initial=0)) + 1
+    counts = np.bincount(labels, minlength=shell_count).astype(np.float64)
+    sums = np.bincount(labels, weights=values, minlength=shell_count).astype(np.float64)
+    shell_mean = np.divide(sums, counts, out=np.zeros_like(sums), where=counts > 0)
+    return shell_mean[labels]
+
+
+def loading_row_norm_variance_prior(
+    W: np.ndarray,
+    *,
+    volume_shape,
+    volume_domain: str = "auto",
+    q: int | None = None,
+    box_size_power: float = 2.0,
+    scale: float = 1.0,
+    floor: float = 0.0,
+    shell_average: bool = True,
+    divide_by_q_total: bool = False,
+    q_total: int | None = None,
+) -> np.ndarray:
+    """Build a variance-like W prior from the GT loading row norm.
+
+    The PPCA latent prior remains identity. W stores the eigenvalue/covariance
+    scale, so the per-frequency GT variance is ``sum_k |W[xi, k]|^2`` in the
+    same half-Fourier coordinates used by the dense E/M steps. By default this
+    row-norm-squared curve is averaged over radial shells, matching the
+    no-pose PPCA prior style and avoiding coefficient-wise prior spikes.
+
+    The raw DFT power is divided by ``N**box_size_power`` to match the reconstruction
+    normal-equation scale; this is intentionally explicit for synthetic
+    debugging and should not be confused with RELION InitialModel BPref stats.
+    """
+    columns = _coerce_loading_columns_to_fourier_half(W, volume_shape=volume_shape, volume_domain=volume_domain, q=q)
+    row_norm = np.sum(np.abs(columns) ** 2, axis=1, dtype=np.float64)
+    if shell_average:
+        row_norm = _average_half_values_over_shells(row_norm, volume_shape)
+    if divide_by_q_total and columns.shape[1] > 0:
+        divisor = int(columns.shape[1]) if q_total is None else int(q_total)
+        if divisor <= 0:
+            raise ValueError("q_total must be positive when divide_by_q_total=True")
+        row_norm = row_norm / float(divisor)
+    prior = row_norm * float(scale) / _box_normalization(volume_shape, box_size_power=box_size_power)
+    if floor > 0.0:
+        prior = np.maximum(prior, float(floor))
+    return np.repeat(prior[:, None], columns.shape[1], axis=1).astype(np.float32)
+
+
+def volume_power_variance_prior(
+    volume: np.ndarray,
+    *,
+    volume_shape,
+    volume_domain: str = "auto",
+    box_size_power: float = 2.0,
+    scale: float = 1.0,
+    floor: float = 0.0,
+    shell_average: bool = True,
+) -> np.ndarray:
+    """Build a variance-like mean prior from one volume's half-Fourier power."""
+    volume_shape = tuple(int(x) for x in volume_shape)
+    half_size = _half_volume_size(volume_shape)
+    arr = np.asarray(volume)
+    domain = str(volume_domain)
+    if domain == "auto":
+        if arr.size == half_size:
+            domain = "fourier_half"
+        elif arr.size == int(np.prod(volume_shape)) and np.iscomplexobj(arr):
+            domain = "fourier_full"
+        elif tuple(arr.shape) == volume_shape:
+            domain = "real"
+        else:
+            raise ValueError("could not infer volume_domain")
+    if domain == "fourier_half":
+        if arr.size != half_size:
+            raise ValueError(f"fourier_half volume has {arr.size} elements, expected {half_size}")
+        half = np.asarray(arr.reshape(-1), dtype=np.complex64)
+    elif domain == "fourier_full":
+        half = np.asarray(ftu.full_volume_to_half_volume(arr.reshape(volume_shape), volume_shape), dtype=np.complex64).reshape(-1)
+    elif domain == "real":
+        half = real_volume_to_centered_fourier_half(arr)
+    else:
+        raise ValueError("volume_domain must be 'auto', 'real', 'fourier_full', or 'fourier_half'")
+    prior = np.abs(half).astype(np.float64) ** 2
+    if shell_average:
+        prior = _average_half_values_over_shells(prior, volume_shape)
+    prior = prior * float(scale) / _box_normalization(volume_shape, box_size_power=box_size_power)
+    if floor > 0.0:
+        prior = np.maximum(prior, float(floor))
+    return prior.astype(np.float32)
 
 
 def _weighted_mean_and_loading_pca(

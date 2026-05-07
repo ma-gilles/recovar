@@ -68,7 +68,7 @@ def test_fused_dense_block_matches_block_presummed_backprojection():
     rhs_images = jnp.einsum(
         "btr,btrp,btf->prf",
         gamma.astype(jnp.complex64),
-        alpha.astype(jnp.complex64),
+        jnp.conj(alpha).astype(jnp.complex64),
         jnp.asarray(Y1).astype(jnp.complex64),
     ).astype(jnp.complex64)
     rhs_manual = batch_adjoint_slice_volume_half(
@@ -142,7 +142,7 @@ def test_fused_dense_block_matches_slow_pose_loop_with_reconstruction_inputs():
         for p in range(P):
             rhs_img = jnp.sum(
                 gamma[:, :, r].astype(jnp.complex64)[:, :, None]
-                * alpha[:, :, r, p].astype(jnp.complex64)[:, :, None]
+                * jnp.conj(alpha[:, :, r, p]).astype(jnp.complex64)[:, :, None]
                 * jnp.asarray(Y1_recon),
                 axis=(0, 1),
             )

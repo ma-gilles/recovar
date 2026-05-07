@@ -184,6 +184,126 @@ def test_dataset_backed_dense_ppca_iteration_returns_finite_update(tiny_inputs):
     assert np.all(np.isfinite(np.asarray(result.W_half)))
 
 
+def test_dataset_backed_dense_ppca_iteration_uses_windowed_fourier_support(tiny_inputs):
+    dataset, mu, W, rotations, translations = tiny_inputs
+    block = next(
+        iter(
+            iter_dense_ppca_dataset_blocks(
+                dataset,
+                mu,
+                W,
+                noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
+                rotations=rotations,
+                translations=translations,
+                image_batch_size=2,
+                rotation_block_size=1,
+                current_size=2,
+                volume_domain="fourier_half",
+            )
+        )
+    )
+    assert block.Y1.shape[-1] < N_HALF
+    assert block.proj_aug.shape[-1] == block.Y1.shape[-1]
+    assert block.Y1_recon.shape[-1] < N_HALF
+    assert block.recon_window_indices is not None
+
+    result = run_dense_ppca_fused_em_iteration(
+        dataset,
+        mu,
+        W,
+        mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
+        W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
+        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
+        rotations=rotations,
+        translations=translations,
+        image_batch_size=2,
+        rotation_block_size=1,
+        current_size=2,
+        volume_domain="fourier_half",
+        enforce_x0=False,
+        mstep_chunk_size=8,
+    )
+
+    assert result.mu_half.shape == (HALF_VOL,)
+    assert result.W_half.shape == (HALF_VOL, 1)
+    assert np.isfinite(result.stats.log_likelihood)
+    assert np.all(np.isfinite(np.asarray(result.mu_half)))
+    assert np.all(np.isfinite(np.asarray(result.W_half)))
+
+
+def test_dense_ppca_skip_empty_pose_blocks_matches_masked_full_grid(tiny_inputs):
+    dataset, mu, W, rotations, translations = tiny_inputs
+    mask = np.zeros((dataset.n_images, rotations.shape[0], translations.shape[0]), dtype=bool)
+    rows = np.arange(dataset.n_images)
+    mask[rows, rows % rotations.shape[0], rows % translations.shape[0]] = True
+    kwargs = dict(
+        mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
+        W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
+        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
+        rotations=rotations,
+        translations=translations,
+        image_batch_size=2,
+        rotation_block_size=1,
+        current_size=4,
+        volume_domain="fourier_half",
+        enforce_x0=False,
+        rotation_translation_mask=mask,
+    )
+
+    full = run_dense_ppca_fused_em_iteration(dataset, mu, W, skip_empty_pose_blocks=False, **kwargs)
+    skipped = run_dense_ppca_fused_em_iteration(dataset, mu, W, skip_empty_pose_blocks=True, **kwargs)
+
+    np.testing.assert_allclose(np.asarray(skipped.mu_half), np.asarray(full.mu_half), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(skipped.W_half), np.asarray(full.W_half), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(
+        np.asarray(skipped.diagnostics["best_rotation_idx"]),
+        np.asarray(full.diagnostics["best_rotation_idx"]),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(skipped.diagnostics["best_translation_idx"]),
+        np.asarray(full.diagnostics["best_translation_idx"]),
+    )
+    assert skipped.stats.n_images == dataset.n_images
+    assert np.isfinite(skipped.stats.log_likelihood)
+    assert np.all(np.isfinite(np.asarray(skipped.mu_half)))
+    assert np.all(np.isfinite(np.asarray(skipped.W_half)))
+
+
+def test_dense_ppca_sparse_pass2_matches_full_with_zero_posterior_blocks(tiny_inputs):
+    dataset, mu, W, rotations, translations = tiny_inputs
+    rotations = np.broadcast_to(np.eye(3, dtype=np.float32), (4, 3, 3)).copy()
+    mask = np.zeros((dataset.n_images, rotations.shape[0], translations.shape[0]), dtype=bool)
+    mask[:, 0, 0] = True
+    kwargs = dict(
+        mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
+        W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
+        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
+        rotations=rotations,
+        translations=translations,
+        image_batch_size=2,
+        rotation_block_size=1,
+        current_size=4,
+        volume_domain="fourier_half",
+        enforce_x0=False,
+        rotation_translation_mask=mask,
+        skip_empty_pose_blocks=False,
+    )
+
+    full = run_dense_ppca_fused_em_iteration(dataset, mu, W, sparse_pass2=False, **kwargs)
+    sparse = run_dense_ppca_fused_em_iteration(dataset, mu, W, sparse_pass2=True, **kwargs)
+
+    np.testing.assert_allclose(np.asarray(sparse.stats.rhs), np.asarray(full.stats.rhs), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(sparse.stats.lhs_tri), np.asarray(full.stats.lhs_tri), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(sparse.mu_half), np.asarray(full.mu_half), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(sparse.W_half), np.asarray(full.W_half), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(
+        np.asarray(sparse.diagnostics["best_rotation_idx"]),
+        np.asarray(full.diagnostics["best_rotation_idx"]),
+    )
+    assert sparse.diagnostics["sparse_pass2_skipped_blocks"] > 0
+    assert sparse.diagnostics["sparse_pass2_skipped_fraction"] > 0.0
+
+
 def test_dataset_backed_dense_ppca_iteration_is_invariant_to_rotation_blocking(tiny_inputs):
     dataset, mu, W, rotations, translations = tiny_inputs
     mean_prior = jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0

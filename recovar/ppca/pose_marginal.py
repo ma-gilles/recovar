@@ -23,11 +23,13 @@ def compute_ppca_pose_scores_and_moments_no_contrast(
 
     The model integrates out ``z ~ N(0, I_q)`` analytically:
 
-    ``M = I + Hzz``, ``b = g_zx - h_zm``,
+    ``M = I + Hzz``, ``b = Re(W^H C (y - mu))``,
     ``score = -0.5 * (rho - Re(b* M^-1 b) + logdet(M))``.
 
-    Moment returns use the augmented vector ``[1; z]``. ``q=0`` reduces to
-    homogeneous K=1 scoring exactly.
+    Moment returns keep ``alpha_aug[..., 1:] = E[z]`` for diagnostics, while
+    ``G_aug_tri`` packs the Hermitian normal-equation matrix
+    ``E([1; z] [1; z]^T)`` for real PPCA latent coordinates. ``q=0`` reduces
+    to homogeneous K=1 scoring exactly.
     """
     y_norm = jnp.asarray(y_norm)
     t_mx = jnp.asarray(t_mx)
@@ -77,10 +79,9 @@ def compute_ppca_pose_scores_and_moments_no_contrast(
     one = jnp.ones(leading + (1,), dtype=z_bar.dtype)
     alpha_aug = jnp.concatenate([one, z_bar], axis=-1)
 
-    zz_star = z_bar[..., :, None] * jnp.conj(z_bar)[..., None, :]
-    bottom_right = S_z + zz_star
+    bottom_right = S_z + z_bar[..., :, None] * z_bar[..., None, :]
     top = jnp.concatenate(
-        [jnp.ones(leading + (1, 1), dtype=z_bar.dtype), jnp.conj(z_bar)[..., None, :]],
+        [jnp.ones(leading + (1, 1), dtype=z_bar.dtype), z_bar[..., None, :]],
         axis=-1,
     )
     bottom = jnp.concatenate([z_bar[..., :, None], bottom_right], axis=-1)

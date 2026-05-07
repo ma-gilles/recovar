@@ -6,8 +6,13 @@ from recovar.em.ppca_refinement.initialization import (
     empirical_weighted_covariance,
     initialize_ppca_from_gt_volumes,
     initialize_ppca_from_kclass_volumes,
+    loading_row_norm_variance_prior,
     load_volume_stack,
+    real_volume_to_centered_fourier,
+    real_volume_to_centered_fourier_half,
+    volume_power_variance_prior,
 )
+import recovar.core.fourier_transform_utils as ftu
 from recovar.em.ppca_refinement.schedule import loading_subspace_agreement
 from recovar.utils import helpers as utils
 
@@ -68,3 +73,81 @@ def test_synthetic_known_pcs_recovered_up_to_subspace_rotation():
     init = initialize_ppca_from_gt_volumes(volumes, q=2, frame="recovar")
     agreement = loading_subspace_agreement(init.W, pcs)
     assert agreement > 1.0 - 1e-6
+
+
+def test_real_volume_fourier_conversion_matches_recovar_simulator_convention():
+    rng = np.random.default_rng(20260506)
+    volume = rng.normal(size=(4, 4, 4)).astype(np.float32)
+
+    actual = real_volume_to_centered_fourier(volume)
+    expected = np.asarray(ftu.get_dft3(volume), dtype=np.complex64)
+
+    np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
+
+
+def test_gt_loading_row_norm_prior_uses_scaled_w_without_q_division():
+    W = np.zeros((2, 4, 4, 4), dtype=np.float32)
+    W[0, 0, 0, 0] = 1.25
+    W[0, 1, 2, 3] = -0.5
+    W[1, 2, 1, 0] = 0.75
+    W[1, 3, 3, 1] = -1.5
+
+    W_half = np.stack([real_volume_to_centered_fourier_half(loading) for loading in W], axis=1)
+    expected_row_norm = np.sum(np.abs(W_half) ** 2, axis=1) / (4.0**2)
+    prior = loading_row_norm_variance_prior(
+        W,
+        volume_shape=(4, 4, 4),
+        volume_domain="real",
+        box_size_power=2.0,
+        floor=0.0,
+        shell_average=False,
+    )
+
+    assert prior.shape == (W_half.shape[0], 2)
+    np.testing.assert_allclose(prior[:, 0], expected_row_norm, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(prior[:, 1], expected_row_norm, rtol=1e-6, atol=1e-6)
+    assert not np.allclose(prior[:, 0], expected_row_norm / 2.0)
+
+
+def test_gt_mean_power_prior_uses_same_explicit_box_normalization():
+    volume = np.zeros((4, 4, 4), dtype=np.float32)
+    volume[0, 0, 0] = 2.0
+    volume[1, 2, 3] = -0.25
+    half = real_volume_to_centered_fourier_half(volume)
+
+    prior = volume_power_variance_prior(
+        volume,
+        volume_shape=(4, 4, 4),
+        volume_domain="real",
+        box_size_power=2.0,
+        floor=0.0,
+        shell_average=False,
+    )
+
+    np.testing.assert_allclose(prior, np.abs(half) ** 2 / (4.0**2), rtol=1e-6, atol=1e-6)
+
+
+def test_gt_loading_row_norm_prior_shell_averages_before_broadcasting():
+    W = np.zeros((2, 4, 4, 4), dtype=np.float32)
+    W[0, 0, 0, 0] = 1.0
+    W[0, 1, 1, 0] = 0.25
+    W[1, 2, 0, 1] = -0.75
+    W_half = np.stack([real_volume_to_centered_fourier_half(loading) for loading in W], axis=1)
+    row_norm = np.sum(np.abs(W_half) ** 2, axis=1)
+    labels = np.asarray(ftu.get_grid_of_radial_distances_real((4, 4, 4), scaled=False, frequency_shift=0), dtype=np.int64).reshape(-1)
+    shell_sums = np.bincount(labels, weights=row_norm)
+    shell_counts = np.bincount(labels)
+    shell_avg = shell_sums / shell_counts
+    expected = shell_avg[labels] / (4.0**2)
+
+    prior = loading_row_norm_variance_prior(
+        W,
+        volume_shape=(4, 4, 4),
+        volume_domain="real",
+        box_size_power=2.0,
+        floor=0.0,
+        shell_average=True,
+    )
+
+    np.testing.assert_allclose(prior[:, 0], expected, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(prior[:, 1], expected, rtol=1e-6, atol=1e-6)
