@@ -20,9 +20,12 @@ from recovar.core import mask as core_mask
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star, write_star
 from recovar.em import sampling
-from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
+from recovar.em.dense_single_volume.helpers.orientation_priors import (
+    make_relion_translation_log_prior,
+    relion_sigma_offset_prior_center,
+)
 from recovar.reconstruction.noise import make_radial_noise
-from recovar.utils.helpers import recovar_volume_to_relion, write_relion_mrc
+from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion, write_relion_mrc
 
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
@@ -177,6 +180,8 @@ class NativeParticleState:
     best_pose_rotations: np.ndarray | None = None
     best_pose_translations: np.ndarray | None = None
     best_pose_rotation_ids: np.ndarray | None = None
+    best_pose_rotation_orders: np.ndarray | None = None
+    visited: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -388,6 +393,7 @@ def _particle_state_from_star(main_star, dataset) -> NativeParticleState:
         class_assignments=class_assignments,
         max_posterior=max_posterior,
         pose_assignments=np.full(n_images, -1, dtype=np.int32),
+        visited=max_posterior > 0.0,
     )
 
 
@@ -616,10 +622,19 @@ def _best_eulers_from_particle_state(
     *,
     rotation_grid_order: int,
 ) -> np.ndarray | None:
+    ids = np.asarray(particle_ids, dtype=np.int64).reshape(-1)
+    rotations = particle_state.best_pose_rotations
+    if rotations is not None:
+        rotations_arr = np.asarray(rotations, dtype=np.float64)
+        expected_ndim = 3
+        if rotations_arr.ndim == expected_ndim and rotations_arr.shape[1:] == (3, 3):
+            selected = rotations_arr[ids]
+            if np.all(np.abs(selected.reshape(selected.shape[0], -1)).sum(axis=1) > 0.0):
+                return np.asarray(R_to_relion(selected, degrees=True), dtype=np.float64)
+
     rotation_ids = particle_state.best_pose_rotation_ids
     if rotation_ids is None:
         return None
-    ids = np.asarray(particle_ids, dtype=np.int64).reshape(-1)
     best_ids = np.asarray(rotation_ids, dtype=np.int64)[ids]
     if np.any(best_ids < 0):
         return None
@@ -909,12 +924,38 @@ def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.n
     )
 
 
+def _n_directions_for_healpix_order(healpix_order: int) -> int:
+    return int(sampling.rotation_grid_size(int(healpix_order)) // sampling.rotation_grid_n_in_planes(int(healpix_order)))
+
+
+def _class_direction_rotation_log_prior(state: InitialModelState, healpix_order: int) -> np.ndarray:
+    """Return RELION's class-specific direction prior over coarse rotations."""
+
+    n_psi = int(sampling.rotation_grid_n_in_planes(int(healpix_order)))
+    n_dir = _n_directions_for_healpix_order(int(healpix_order))
+    n_rot = int(n_dir * n_psi)
+    pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
+    if pdf_direction.shape != (int(state.K), n_dir):
+        pdf_direction = np.full((int(state.K), n_dir), 1.0 / float(int(state.K) * n_dir), dtype=np.float64)
+    mean_pdf = float(np.mean(pdf_direction))
+    if mean_pdf <= 0.0 or not np.isfinite(mean_pdf):
+        return np.zeros((int(state.K), n_rot), dtype=np.float32)
+    direction_ids = np.arange(n_rot, dtype=np.int64) // n_psi
+    values = pdf_direction[:, direction_ids]
+    out = np.full(values.shape, -1.0e30, dtype=np.float64)
+    positive = values > 0.0
+    out[positive] = np.log(values[positive] / mean_pdf)
+    return out.astype(np.float32)
+
+
 def _dense_estep_config(
     dataset,
     opts: NativeInitialModelOptions,
     noise_variance: np.ndarray,
     sampling_plan: NativeSamplingPlan,
     translation_offsets: np.ndarray,
+    sigma_offset_angstrom: float | None = None,
+    class_log_priors: np.ndarray | None = None,
 ) -> DenseInitialModelEstepConfig:
     image_pre_shifts = np.rint(np.asarray(translation_offsets, dtype=np.float32)).astype(np.float32)
     coarse_translations = (
@@ -932,7 +973,10 @@ def _dense_estep_config(
     # prior in iter-1 E-step). When `opts.translation_sigma_angstrom` is
     # unset, default to 10.0 to match RELION's iter-1 prior. Without this
     # the prior is None (uniform) and posteriors diverge from RELION.
-    sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
+    if sigma_offset_angstrom is None:
+        sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
+    else:
+        sigma_angstrom = float(sigma_offset_angstrom)
     coarse_translation_log_prior = _translation_log_prior(
         coarse_prior_translations,
         voxel_size=float(dataset.voxel_size),
@@ -957,6 +1001,7 @@ def _dense_estep_config(
         "reconstruction_subtract_projected_reference": True,
         "relion_firstiter_score_mode": "gaussian",
         "image_pre_shifts": np.asarray(image_pre_shifts, dtype=np.float32),
+        "translation_prior_centers": relion_sigma_offset_prior_center(translation_offsets),
         "sparse_pass2": int(sampling_plan.oversampling) > 0,
     }
     if int(sampling_plan.oversampling) > 0:
@@ -968,7 +1013,7 @@ def _dense_estep_config(
                 "random_perturbation": float(sampling_plan.random_perturbation),
                 "coarse_translations": coarse_translations,
                 "particle_diameter_ang": float(opts.particle_diameter),
-                "return_profile": True,
+                "return_profile": bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE")),
             }
         )
         # Allow env-override of adaptive_fraction for K-class parity tuning
@@ -1011,6 +1056,7 @@ def _dense_estep_config(
         padding_factor=int(opts.padding_factor),
         relion_bpref_frame=True,
         relion_projector_frame=True,
+        class_log_priors=class_log_priors,
         engine_kwargs=engine_kwargs,
     )
 
@@ -1064,8 +1110,23 @@ def _native_expectation_step(
                 iteration=iteration,
                 sampling_state=sampling_state,
             )
-        config = _dense_estep_config(dataset, opts, noise_variance, sampling_plan, particle_state.translation_offsets)
+        sigma_offset_angstrom = float(np.sqrt(max(float(state.sigma2_offset), 0.0)))
+        current_noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
+        config = _dense_estep_config(
+            dataset,
+            opts,
+            current_noise_variance,
+            sampling_plan,
+            particle_state.translation_offsets,
+            sigma_offset_angstrom=sigma_offset_angstrom,
+            class_log_priors=np.zeros(int(state.K), dtype=np.float64),
+        )
+        config.engine_kwargs["class_rotation_log_prior"] = _class_direction_rotation_log_prior(
+            state,
+            int(sampling_plan.healpix_order),
+        )
         config.engine_kwargs["debug_iteration"] = iteration
+        result_sigma2_offset = float(state.sigma2_offset)
         previous_translations = np.asarray(particle_state.translation_offsets, dtype=np.float32).copy()
         previous_classes = np.asarray(particle_state.class_assignments, dtype=np.int32).copy()
         result = run_dense_initial_model_estep(
@@ -1084,6 +1145,8 @@ def _native_expectation_step(
         result.meta["offset_step_px"] = float(sampling_plan.offset_step_px)
         result.meta["offset_range_angstrom"] = float(sampling_plan.offset_range_angstrom)
         result.meta["offset_step_angstrom"] = float(sampling_plan.offset_step_angstrom)
+        result.meta["sigma_offset_angstrom"] = sigma_offset_angstrom
+        result.meta["sigma2_offset_before"] = result_sigma2_offset
         if sampling_state is not None:
             result.meta["sampling_accuracy_estimated"] = accuracy_meta is not None
             if accuracy_meta is not None:
@@ -1152,6 +1215,8 @@ def _update_particle_state_from_estep_meta(
         return
     if np.any(particle_ids < 0) or np.any(particle_ids >= particle_state.translation_offsets.shape[0]):
         raise ValueError("selected_particle_ids contains entries outside the particle state table")
+    particle_state.visited = np.zeros(particle_state.translation_offsets.shape[0], dtype=bool)
+    particle_state.visited[particle_ids] = True
 
     pose_assignments = meta.get("pose_assignments")
     if pose_assignments is not None:
@@ -1228,6 +1293,16 @@ def _update_particle_state_from_estep_meta(
                 dtype=np.int32,
             )
         particle_state.best_pose_rotation_ids[particle_ids] = rotation_ids
+        rotation_grid_order = int(meta.get("healpix_order", 0)) + int(meta.get("oversampling", 0))
+        if particle_state.best_pose_rotation_orders is None or particle_state.best_pose_rotation_orders.shape != (
+            particle_state.translation_offsets.shape[0],
+        ):
+            particle_state.best_pose_rotation_orders = np.full(
+                particle_state.translation_offsets.shape[0],
+                -1,
+                dtype=np.int32,
+            )
+        particle_state.best_pose_rotation_orders[particle_ids] = rotation_grid_order
 
     class_assignments = meta.get("class_assignments")
     if class_assignments is not None:
@@ -1314,12 +1389,14 @@ def _initial_state_from_particles(
         pixel_size=pixel_size,
         K=int(opts.nr_classes),
         nr_iter=int(opts.nr_iter),
-        n_directions=int(rotations.shape[0]),
+        n_directions=_n_directions_for_healpix_order(int(opts.healpix_order)),
         nr_optics_groups=nr_optics_groups,
         pseudo_halfsets=True,
         padding_factor=int(opts.padding_factor),
     )
     state = seed_noise_from_mavg(state, sigma2_per_group)
+    init_sigma_offset_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
+    state.sigma2_offset = float(init_sigma_offset_angstrom) ** 2
     state.Mavg = Mavg
     # RECOVAR_INITIAL_IREF_OVERRIDE lets a parity caller swap in RELION's
     # iter000 ref directly when isolating E/M-step behavior from bootstrap.
@@ -1393,7 +1470,8 @@ def _write_model_star(path: str, state: InitialModelState, class_mrcs: tuple[str
         f.write(f"_rlnCurrentIteration {int(state.iter)}\n")
         f.write(f"_rlnNrClasses {int(state.K)}\n")
         f.write(f"_rlnTau2FudgeFactor {float(state.tau2_fudge_factor):.12g}\n")
-        f.write(f"_rlnAveragePmax {float(state.ave_Pmax):.12g}\n\n")
+        f.write(f"_rlnAveragePmax {float(state.ave_Pmax):.12g}\n")
+        f.write(f"_rlnSigmaOffsetsAngst {float(np.sqrt(max(float(state.sigma2_offset), 0.0))):.12g}\n\n")
 
         f.write("data_model_classes\n\n")
         f.write("loop_\n")
@@ -1432,6 +1510,14 @@ def _write_model_star(path: str, state: InitialModelState, class_mrcs: tuple[str
                     f"{float(sigma2_class[shell]):.12g} {float(tau2[shell]):.12g}\n"
                 )
 
+            pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
+            if pdf_direction.ndim == 2 and k < pdf_direction.shape[0]:
+                f.write(f"\n\ndata_model_pdf_orient_class_{k + 1}\n\n")
+                f.write("loop_\n")
+                f.write("_rlnOrientationDistribution #1\n")
+                for probability in pdf_direction[k]:
+                    f.write(f"{float(probability):.12g}\n")
+
         f.write("\n\ndata_model_optics_group_1\n\n")
         f.write("loop_\n")
         f.write("_rlnSpectralIndex #1\n")
@@ -1468,7 +1554,18 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     if particle_state.max_posterior.shape != (n_images,):
         raise ValueError(f"max_posterior must have shape ({n_images},), got {particle_state.max_posterior.shape}")
 
+    output_order = _micrograph_sort_order(main_star)
     table = main_star.copy()
+    visited = particle_state.visited
+    if visited is None:
+        if particle_state.pose_assignments is not None:
+            visited = np.asarray(particle_state.pose_assignments, dtype=np.int32) >= 0
+        else:
+            visited = np.ones(n_images, dtype=bool)
+    visited = np.asarray(visited, dtype=bool).reshape(-1)
+    if visited.shape != (n_images,):
+        raise ValueError(f"visited must have shape ({n_images},), got {visited.shape}")
+
     offsets_angstrom = np.asarray(particle_state.translation_offsets, dtype=np.float64) * float(dataset.voxel_size)
     _set_star_column(table, "_rlnOriginXAngst", _format_float_column(offsets_angstrom[:, 0]))
     _set_star_column(table, "_rlnOriginYAngst", _format_float_column(offsets_angstrom[:, 1]))
@@ -1478,9 +1575,74 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
         offsets_pixels = np.asarray(particle_state.translation_offsets, dtype=np.float64)
         _set_star_column(table, "_rlnOriginX", _format_float_column(offsets_pixels[:, 0]))
         _set_star_column(table, "_rlnOriginY", _format_float_column(offsets_pixels[:, 1]))
-    _set_star_column(table, "_rlnClassNumber", (np.asarray(particle_state.class_assignments, dtype=np.int32) + 1))
+    class_numbers = np.zeros(n_images, dtype=np.int32)
+    class_numbers[visited] = np.asarray(particle_state.class_assignments, dtype=np.int32)[visited] + 1
+    _set_star_column(table, "_rlnClassNumber", class_numbers)
     _set_star_column(table, "_rlnMaxValueProbDistribution", _format_float_column(particle_state.max_posterior))
 
+    if particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None:
+        angle_rot = table["_rlnAngleRot"].astype(float).to_numpy(copy=True) if "_rlnAngleRot" in table else np.zeros(n_images)
+        angle_tilt = (
+            table["_rlnAngleTilt"].astype(float).to_numpy(copy=True) if "_rlnAngleTilt" in table else np.zeros(n_images)
+        )
+        angle_psi = table["_rlnAnglePsi"].astype(float).to_numpy(copy=True) if "_rlnAnglePsi" in table else np.zeros(n_images)
+        remaining_rot = visited.copy()
+        if particle_state.best_pose_rotations is not None:
+            rotations = np.asarray(particle_state.best_pose_rotations, dtype=np.float64)
+            expected = (n_images, 3, 3)
+            if rotations.shape != expected:
+                raise ValueError(f"best_pose_rotations must have shape {expected}, got {rotations.shape}")
+            valid_matrix = visited & np.any(np.abs(rotations.reshape(n_images, -1)) > 0.0, axis=1)
+            if np.any(valid_matrix):
+                eulers = np.asarray(R_to_relion(rotations[valid_matrix], degrees=True), dtype=np.float64)
+                angle_rot[valid_matrix] = eulers[:, 0]
+                angle_tilt[valid_matrix] = eulers[:, 1]
+                angle_psi[valid_matrix] = eulers[:, 2]
+                remaining_rot[valid_matrix] = False
+
+    if particle_state.best_pose_rotation_ids is not None:
+        rotation_ids = np.asarray(particle_state.best_pose_rotation_ids, dtype=np.int64).reshape(-1)
+        if rotation_ids.shape != (n_images,):
+            raise ValueError(f"best_pose_rotation_ids must have shape ({n_images},), got {rotation_ids.shape}")
+        valid_rot = remaining_rot & (rotation_ids >= 0)
+        if np.any(valid_rot):
+            rotation_orders = None
+            if particle_state.best_pose_rotation_orders is not None:
+                rotation_orders = np.asarray(particle_state.best_pose_rotation_orders, dtype=np.int32).reshape(-1)
+                if rotation_orders.shape != (n_images,):
+                    raise ValueError(f"best_pose_rotation_orders must have shape ({n_images},), got {rotation_orders.shape}")
+            if rotation_orders is None:
+                max_rotations = int(np.max(rotation_ids[valid_rot])) + 1
+                inferred_order = None
+                for order in range(0, 16):
+                    if sampling.rotation_grid_size(order) >= max_rotations:
+                        inferred_order = order
+                        break
+                if inferred_order is None:
+                    raise ValueError(
+                        f"cannot infer HEALPix order for max rotation id {int(np.max(rotation_ids[valid_rot]))}"
+                    )
+                rotation_orders = np.full(n_images, inferred_order, dtype=np.int32)
+            for order in np.unique(rotation_orders[valid_rot]):
+                order = int(order)
+                order_mask = valid_rot & (rotation_orders == order)
+                if order < 0:
+                    continue
+                eulers = sampling.get_relion_rotation_grid_eulers(order, rotation_index_order="relion")
+                max_id = int(np.max(rotation_ids[order_mask]))
+                if max_id >= eulers.shape[0]:
+                    raise ValueError(
+                        f"best_pose_rotation_ids contains {max_id}, outside order-{order} grid of {eulers.shape[0]} rotations"
+                    )
+                angle_rot[order_mask] = eulers[rotation_ids[order_mask], 0]
+                angle_tilt[order_mask] = eulers[rotation_ids[order_mask], 1]
+                angle_psi[order_mask] = eulers[rotation_ids[order_mask], 2]
+    if particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None:
+        _set_star_column(table, "_rlnAngleRot", _format_float_column(angle_rot))
+        _set_star_column(table, "_rlnAngleTilt", _format_float_column(angle_tilt))
+        _set_star_column(table, "_rlnAnglePsi", _format_float_column(angle_psi))
+
+    table = table.iloc[output_order].reset_index(drop=True)
     out_path = Path(path)
     if str(out_path.parent) not in ("", "."):
         out_path.parent.mkdir(parents=True, exist_ok=True)

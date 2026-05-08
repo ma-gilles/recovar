@@ -45,6 +45,8 @@ from .subset import (
     select_vdam_subset,
 )
 
+MIN_SIGMA2_OFFSET_ANGSTROM2: float = 2.0
+
 # Callback signatures
 ExpectationStepFn = Callable[
     # (state, particle_ids, halfset_ids) -> (posterior_accumulators, posterior_meta)
@@ -116,6 +118,85 @@ def _posterior_sums_from_meta(meta: dict, key: str) -> np.ndarray | None:
     return total
 
 
+def _scalar_sum_from_meta(meta: dict, key: str) -> float | None:
+    value = meta.get(key)
+    if value is not None:
+        return float(value)
+
+    prefix = "halfset_"
+    suffix = f"_{key}"
+    values = [
+        float(meta[name])
+        for name in sorted(meta)
+        if name.startswith(prefix) and name.endswith(suffix)
+    ]
+    if not values:
+        return None
+    return float(sum(values))
+
+
+def update_noise_from_estep_meta(
+    state: InitialModelState,
+    meta: dict,
+    *,
+    do_grad: bool,
+    mu: float = DEFAULT_GRAD_MU,
+) -> InitialModelState:
+    """Update ``sigma2_noise`` from RELION-style E-step noise weighted sums.
+
+    Dense engines accumulate residual noise in the scorer's unnormalised FFT
+    units. ``InitialModelState.sigma2_noise`` is stored in RELION model STAR
+    units, so convert by ``ori_size**4`` before writing it back to state; the
+    next E-step converts it back via ``_noise_variance_from_sigma2``.
+    """
+    wsum_sigma2_noise = _posterior_sums_from_meta(meta, "wsum_sigma2_noise")
+    wsum_img_power = _posterior_sums_from_meta(meta, "wsum_img_power")
+    noise_sumw = _scalar_sum_from_meta(meta, "noise_sumw")
+    if wsum_sigma2_noise is None or wsum_img_power is None or noise_sumw is None:
+        return state
+    if noise_sumw <= 0.0 or not np.isfinite(noise_sumw):
+        return state
+    my_mu = float(mu) if do_grad and state.subset_size != -1 else 0.0
+    if my_mu < 0.0 or my_mu > 1.0:
+        raise ValueError(f"mu must be in [0, 1], got {mu}")
+
+    wsum_sigma2_noise = np.asarray(wsum_sigma2_noise, dtype=np.float64)
+    wsum_img_power = np.asarray(wsum_img_power, dtype=np.float64)
+    if wsum_sigma2_noise.shape != wsum_img_power.shape:
+        raise ValueError(
+            "wsum_sigma2_noise and wsum_img_power must have matching shapes, "
+            f"got {wsum_sigma2_noise.shape} and {wsum_img_power.shape}",
+        )
+    expected_shells = int(state.ori_size) // 2 + 1
+    if wsum_sigma2_noise.shape != (expected_shells,):
+        raise ValueError(
+            f"noise weighted sums must have shape ({expected_shells},), got {wsum_sigma2_noise.shape}"
+        )
+    if not np.all(np.isfinite(wsum_sigma2_noise)) or not np.all(np.isfinite(wsum_img_power)):
+        raise ValueError("noise weighted sums must be finite")
+
+    from recovar.reconstruction import noise
+
+    sigma2_engine_units = noise.normalize_wsum_to_sigma2_noise(
+        wsum_sigma2_noise,
+        wsum_img_power,
+        float(noise_sumw),
+        (int(state.ori_size), int(state.ori_size)),
+    )
+    sigma2_relion_units = np.asarray(sigma2_engine_units, dtype=np.float64) / float(int(state.ori_size) ** 4)
+    if not np.all(np.isfinite(sigma2_relion_units)) or np.any(sigma2_relion_units <= 0.0):
+        raise ValueError("updated sigma2_noise must be positive and finite")
+
+    new_state = replace(state)
+    new_sigma2 = np.asarray(state.sigma2_noise, dtype=np.float64).copy()
+    if new_sigma2.ndim != 2 or new_sigma2.shape[1] != expected_shells:
+        raise ValueError(f"sigma2_noise must have shape (G, {expected_shells}), got {new_sigma2.shape}")
+    new_sigma2 = new_sigma2 * my_mu
+    new_sigma2 += (1.0 - my_mu) * sigma2_relion_units[None, :]
+    new_state.sigma2_noise = new_sigma2
+    return new_state
+
+
 def update_probabilities_from_estep_meta(
     state: InitialModelState,
     meta: dict,
@@ -123,12 +204,12 @@ def update_probabilities_from_estep_meta(
     do_grad: bool,
     mu: float = DEFAULT_GRAD_MU,
 ) -> InitialModelState:
-    """Update class and direction priors from E-step posterior masses.
+    """Update class, direction, and offset priors from E-step posterior masses.
 
     Mirrors ``MlOptimiser::maximizationOtherParameters`` for ``pdf_class``
-    and ``pdf_direction``. Subset gradient iterations use momentum ``mu``;
-    all-particle or EM-tail iterations use ``my_mu = 0`` and replace priors by
-    the current weighted sums.
+    ``pdf_direction``, and ``sigma2_offset``. Subset gradient iterations use
+    momentum ``mu``; all-particle or EM-tail iterations use ``my_mu = 0`` and
+    replace priors by the current weighted sums.
     """
     class_sums = _posterior_sums_from_meta(meta, "class_posterior_sums")
     if class_sums is None:
@@ -172,6 +253,16 @@ def update_probabilities_from_estep_meta(
         new_pdf_direction = pdf_direction * my_mu
         new_pdf_direction += (1.0 - my_mu) * direction_sums / sum_weight
         new_state.pdf_direction = new_pdf_direction
+
+    wsum_sigma2_offset = meta.get("wsum_sigma2_offset")
+    if wsum_sigma2_offset is not None:
+        wsum_sigma2_offset = float(wsum_sigma2_offset)
+        if not np.isfinite(wsum_sigma2_offset) or wsum_sigma2_offset < 0.0:
+            raise ValueError("wsum_sigma2_offset must be non-negative and finite")
+        sigma2_offset = float(state.sigma2_offset) * my_mu
+        # RELION divides by 2*sum_weight for 2D particle translations.
+        sigma2_offset += (1.0 - my_mu) * wsum_sigma2_offset / (2.0 * sum_weight)
+        new_state.sigma2_offset = max(float(sigma2_offset), MIN_SIGMA2_OFFSET_ANGSTROM2)
 
     return new_state
 
@@ -527,6 +618,7 @@ def run_vdam_iterations(
             tau2_fudge_factor=current.tau2_fudge_factor,
         )
         current = update_probabilities_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
+        current = update_noise_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
         ave_pmax = _ave_pmax_from_meta(meta)
         if ave_pmax is not None:
             current = replace(current, ave_Pmax=float(ave_pmax))

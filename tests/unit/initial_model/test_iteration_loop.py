@@ -20,6 +20,7 @@ from recovar.em.initial_model.iteration_loop import (
     select_subset_for_iter,
     update_current_resolution_from_data_vs_prior,
     update_image_size_and_resolution_pointers,
+    update_noise_from_estep_meta,
     update_probabilities_from_estep_meta,
 )
 from recovar.em.initial_model.m_step import VdamAccumulator
@@ -329,6 +330,7 @@ class TestRunVdamIterations:
                     [20.0, 30.0, 20.0],
                 ]
             ),
+            "wsum_sigma2_offset": 500.0,
         }
 
         out = update_probabilities_from_estep_meta(state, meta, do_grad=True, mu=0.9)
@@ -338,7 +340,115 @@ class TestRunVdamIterations:
             out.pdf_direction,
             state.pdf_direction * 0.9 + 0.1 * meta["class_direction_posterior_sums"] / 100.0,
         )
+        assert out.sigma2_offset == pytest.approx(90.25)
         np.testing.assert_allclose(state.pdf_class, [0.5, 0.5])
+
+    def test_updates_sigma2_noise_from_estep_meta_in_relion_units(self):
+        from recovar.reconstruction import noise
+
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.sigma2_noise[:] = 0.01
+        meta = {
+            "wsum_sigma2_noise": np.asarray([10.0, 12.0, 14.0, 16.0, 18.0], dtype=np.float64),
+            "wsum_img_power": np.asarray([5.0, 6.0, 7.0, 8.0, 9.0], dtype=np.float64),
+            "noise_sumw": 4.0,
+        }
+
+        out = update_noise_from_estep_meta(state, meta, do_grad=False)
+
+        expected_engine_units = noise.normalize_wsum_to_sigma2_noise(
+            meta["wsum_sigma2_noise"],
+            meta["wsum_img_power"],
+            meta["noise_sumw"],
+            (8, 8),
+        )
+        expected_relion_units = np.asarray(expected_engine_units, dtype=np.float64) / float(8**4)
+        np.testing.assert_allclose(out.sigma2_noise[0], expected_relion_units, rtol=1.0e-6)
+        np.testing.assert_allclose(state.sigma2_noise, 0.01)
+
+    def test_updates_sigma2_noise_with_vdam_momentum_on_subset_iterations(self):
+        from recovar.reconstruction import noise
+
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.sigma2_noise[:] = 0.01
+        state.subset_size = 10
+        meta = {
+            "wsum_sigma2_noise": np.asarray([10.0, 12.0, 14.0, 16.0, 18.0], dtype=np.float64),
+            "wsum_img_power": np.asarray([5.0, 6.0, 7.0, 8.0, 9.0], dtype=np.float64),
+            "noise_sumw": 4.0,
+        }
+
+        out = update_noise_from_estep_meta(state, meta, do_grad=True, mu=0.9)
+
+        expected_engine_units = noise.normalize_wsum_to_sigma2_noise(
+            meta["wsum_sigma2_noise"],
+            meta["wsum_img_power"],
+            meta["noise_sumw"],
+            (8, 8),
+        )
+        expected_relion_units = np.asarray(expected_engine_units, dtype=np.float64) / float(8**4)
+        np.testing.assert_allclose(out.sigma2_noise[0], 0.9 * 0.01 + 0.1 * expected_relion_units, rtol=1.0e-6)
+
+    def test_iteration_loop_feeds_updated_sigma2_noise_to_next_estep(self, monkeypatch):
+        import recovar.em.initial_model.iteration_loop as loop
+
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=2,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.sigma2_noise[:] = 0.01
+        seen_noise = []
+        meta = {
+            "wsum_sigma2_noise": np.asarray([10.0, 12.0, 14.0, 16.0, 18.0], dtype=np.float64),
+            "wsum_img_power": np.asarray([5.0, 6.0, 7.0, 8.0, 9.0], dtype=np.float64),
+            "noise_sumw": 4.0,
+            "max_posterior_per_image": np.asarray([0.5, 0.6], dtype=np.float32),
+        }
+
+        def estep(current, particle_ids, halfset_ids):
+            seen_noise.append(np.asarray(current.sigma2_noise, dtype=np.float64).copy())
+            return [], dict(meta)
+
+        monkeypatch.setattr(loop, "vdam_m_step", lambda current, accumulators, **kwargs: current)
+
+        run_vdam_iterations(
+            state,
+            nr_particles=20,
+            optics_group_by_particle=[0] * 20,
+            grad_ini_subset_size=10,
+            grad_fin_subset_size=10,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=0,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=estep,
+            refresh_tau2_from_projector=False,
+        )
+
+        assert len(seen_noise) == 2
+        np.testing.assert_allclose(seen_noise[0], 0.01)
+        state_for_expected = state
+        state_for_expected.subset_size = 10
+        expected = update_noise_from_estep_meta(state_for_expected, meta, do_grad=True, mu=0.9).sigma2_noise
+        np.testing.assert_allclose(seen_noise[1], expected)
 
     def test_direction_prior_resizes_uniformly_when_sampling_changes(self):
         state = initialise_denovo_state(

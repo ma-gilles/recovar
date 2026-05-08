@@ -441,6 +441,8 @@ def test_update_particle_state_preserves_best_pose_metadata():
             "best_pose_rotations": rotations,
             "best_pose_translations": np.asarray([[3.0, -1.0], [0.0, 2.0]], dtype=np.float32),
             "best_pose_rotation_ids": np.asarray([11, 7], dtype=np.int32),
+            "healpix_order": 1,
+            "oversampling": 1,
         },
         np.asarray([[0.0, 2.0], [3.0, -1.0]], dtype=np.float32),
     )
@@ -452,6 +454,36 @@ def test_update_particle_state_preserves_best_pose_metadata():
         np.asarray([[0.0, 2.0], [0.0, 0.0], [3.0, -1.0]], dtype=np.float32),
     )
     np.testing.assert_array_equal(particle_state.best_pose_rotation_ids, [7, -1, 11])
+    np.testing.assert_array_equal(particle_state.best_pose_rotation_orders, [2, -1, 2])
+    np.testing.assert_array_equal(particle_state.visited, [True, False, True])
+
+
+def test_best_eulers_from_particle_state_prefers_stored_rotation_matrices():
+    grid_eulers = driver.sampling.get_relion_rotation_grid_eulers(1, rotation_index_order="relion")
+    grid_rotations = driver.sampling.get_relion_rotation_grid(1, rotation_index_order="relion")
+    perturbed_euler = np.asarray([[33.0, 44.0, 55.0]], dtype=np.float64)
+    perturbed_rotation = driver.sampling._relion_euler_angles_to_matrix(perturbed_euler)[0].astype(np.float32)
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((2, 2), dtype=np.float32),
+        class_assignments=np.zeros(2, dtype=np.int32),
+        max_posterior=np.ones(2, dtype=np.float32),
+        best_pose_rotations=np.stack([perturbed_rotation, grid_rotations[7]], axis=0),
+        best_pose_rotation_ids=np.asarray([5, 7], dtype=np.int32),
+    )
+
+    eulers = driver._best_eulers_from_particle_state(
+        particle_state,
+        np.asarray([0, 1], dtype=np.int64),
+        rotation_grid_order=1,
+    )
+
+    assert eulers is not None
+    assert not np.allclose(eulers[0], grid_eulers[5])
+    np.testing.assert_allclose(
+        driver.sampling._relion_euler_angles_to_matrix(eulers),
+        np.stack([perturbed_rotation, grid_rotations[7]], axis=0),
+        atol=1e-5,
+    )
 
 
 def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkeypatch):
@@ -724,6 +756,7 @@ def test_model_star_uses_relion_model_blocks(tmp_path):
     state.current_resolution = 0.375
     state.tau2_fudge_factor = 3.5
     state.ave_Pmax = 0.625
+    state.sigma2_offset = 49.0
     state.tau2_class[:] = np.asarray([[1.0, 2.0, 3.0, 4.0, 5.0], [5.0, 4.0, 3.0, 2.0, 1.0]])
     state.data_vs_prior_class[:] = np.asarray([[10.0, 9.0, 8.0, 7.0, 6.0], [1.0, 2.0, 3.0, 4.0, 5.0]])
     state.sigma2_class[:] = np.asarray([[0.1, 0.2, 0.3, 0.4, 0.5], [0.5, 0.4, 0.3, 0.2, 0.1]])
@@ -739,12 +772,15 @@ def test_model_star_uses_relion_model_blocks(tmp_path):
     assert "data_model_classes" in text
     assert "data_model_class_1" in text
     assert "data_model_class_2" in text
+    assert "data_model_pdf_orient_class_1" in text
+    assert "data_model_pdf_orient_class_2" in text
     assert "data_model_optics_group_1" in text
     assert "_rlnCurrentImageSize 6" in text
     assert "_rlnCurrentResolution 2.66666666667" in text
     assert "_rlnCurrentIteration 3" in text
     assert "_rlnTau2FudgeFactor 3.5" in text
     assert "_rlnAveragePmax 0.625" in text
+    assert "_rlnSigmaOffsetsAngst 7" in text
     assert "_rlnSsnrMap" in text
     assert "_rlnReferenceTau2" in text
     assert "_rlnReferenceSigma2" in text
@@ -754,12 +790,14 @@ def test_model_star_uses_relion_model_blocks(tmp_path):
     assert "run_it001_class002.mrc 0.75 2.66666666667" in text
     assert "1 0.125 8 9 0 0.8 0.2 2" in text
     assert "1 0.125 8 2 0 0.2 0.4 4" in text
+    assert "_rlnOrientationDistribution" in text
 
 
 def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):
     main = pd.DataFrame(
         {
-            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnImageName": ["2@stack.mrcs", "1@stack.mrcs"],
+            "_rlnMicrographName": ["2", "1"],
             "_rlnOpticsGroup": ["1", "1"],
             "_rlnOriginXAngst": ["0.0", "0.0"],
             "_rlnOriginYAngst": ["0.0", "0.0"],
@@ -786,12 +824,59 @@ def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):
     data, data_optics = read_star(str(out))
     assert data_optics is not None
     assert data_optics["_rlnImageSize"].tolist() == ["8"]
-    np.testing.assert_allclose(data["_rlnOriginXAngst"].astype(float).to_numpy(), [3.0, 0.75])
-    np.testing.assert_allclose(data["_rlnOriginYAngst"].astype(float).to_numpy(), [-1.5, 1.875])
-    np.testing.assert_allclose(data["_rlnOriginX"].astype(float).to_numpy(), [2.0, 0.5])
-    np.testing.assert_allclose(data["_rlnOriginY"].astype(float).to_numpy(), [-1.0, 1.25])
-    np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [2, 1])
-    np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.875, 0.25])
+    assert data["_rlnImageName"].tolist() == ["1@stack.mrcs", "2@stack.mrcs"]
+    np.testing.assert_allclose(data["_rlnOriginXAngst"].astype(float).to_numpy(), [0.75, 3.0])
+    np.testing.assert_allclose(data["_rlnOriginYAngst"].astype(float).to_numpy(), [1.875, -1.5])
+    np.testing.assert_allclose(data["_rlnOriginX"].astype(float).to_numpy(), [0.5, 2.0])
+    np.testing.assert_allclose(data["_rlnOriginY"].astype(float).to_numpy(), [1.25, -1.0])
+    np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [1, 2])
+    np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.25, 0.875])
+
+
+def test_data_star_zeros_unvisited_rows_and_writes_best_pose_eulers(tmp_path):
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["3@stack.mrcs", "1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnMicrographName": ["3", "1", "2"],
+            "_rlnOpticsGroup": ["1", "1", "1"],
+            "_rlnAngleRot": ["10.0", "20.0", "30.0"],
+            "_rlnAngleTilt": ["11.0", "21.0", "31.0"],
+            "_rlnAnglePsi": ["12.0", "22.0", "32.0"],
+            "_rlnOriginXAngst": ["0.0", "0.0", "0.0"],
+            "_rlnOriginYAngst": ["0.0", "0.0", "0.0"],
+            "_rlnClassNumber": ["1", "0", "0"],
+            "_rlnMaxValueProbDistribution": ["0.5", "0.0", "0.0"],
+        }
+    )
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((3, 2), dtype=np.float32),
+        class_assignments=np.asarray([0, 0, 0], dtype=np.int32),
+        max_posterior=np.asarray([0.75, 0.0, 0.625], dtype=np.float32),
+        best_pose_rotation_ids=np.asarray([5, -1, 9], dtype=np.int32),
+        best_pose_rotation_orders=np.asarray([1, -1, 1], dtype=np.int32),
+        visited=np.asarray([True, False, True]),
+    )
+    out = tmp_path / "run_it010_data.star"
+
+    driver._write_data_star(
+        str(out),
+        main,
+        None,
+        SimpleNamespace(voxel_size=1.0, n_images=3),
+        particle_state,
+    )
+
+    data, _ = read_star(str(out))
+    expected_eulers = driver.sampling.get_relion_rotation_grid_eulers(1, rotation_index_order="relion")
+    assert data["_rlnImageName"].tolist() == ["1@stack.mrcs", "2@stack.mrcs", "3@stack.mrcs"]
+    np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [0, 1, 1])
+    np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.0, 0.625, 0.75])
+    np.testing.assert_allclose(data["_rlnAngleRot"].astype(float).to_numpy()[[1, 2]], expected_eulers[[9, 5], 0])
+    np.testing.assert_allclose(data["_rlnAngleTilt"].astype(float).to_numpy()[[1, 2]], expected_eulers[[9, 5], 1])
+    np.testing.assert_allclose(data["_rlnAnglePsi"].astype(float).to_numpy()[[1, 2]], expected_eulers[[9, 5], 2])
+    np.testing.assert_allclose(data["_rlnAngleRot"].astype(float).to_numpy()[0], 20.0)
+    np.testing.assert_allclose(data["_rlnAngleTilt"].astype(float).to_numpy()[0], 21.0)
+    np.testing.assert_allclose(data["_rlnAnglePsi"].astype(float).to_numpy()[0], 22.0)
 
 
 def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):

@@ -22,6 +22,7 @@ Arrays:
     data_vs_prior_class:  (K, S)
     pdf_class:     (K,)                          class mixing weights
     pdf_direction: (K, n_directions)             class-conditional pdf
+    sigma2_offset: scalar                         translation-prior variance in A^2
 """
 
 from __future__ import annotations
@@ -74,6 +75,7 @@ class InitialModelState:
     # Class/direction weights
     pdf_class: np.ndarray = field(default_factory=lambda: np.ones(1))
     pdf_direction: Optional[np.ndarray] = None  # (K, n_directions) — filled in by init
+    sigma2_offset: float = 100.0
 
     # Resolution pointers
     ini_high: float = -1.0

@@ -91,6 +91,7 @@ class TestInitialiseDenovoState:
         assert state.current_resolution_shell == 4
         assert state.current_size == 28
         assert abs(state.ini_high - 136.0) < 1e-9
+        assert state.sigma2_offset == pytest.approx(100.0)
 
     def test_iref_is_zero(self):
         state = initialise_denovo_state(ori_size=16, pixel_size=1.0, K=2, nr_iter=50, n_directions=48)

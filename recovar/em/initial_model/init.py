@@ -190,6 +190,7 @@ def initialise_denovo_state(
         data_vs_prior_class=data_vs_prior_class,
         pdf_class=pdf_class,
         pdf_direction=pdf_direction,
+        sigma2_offset=100.0,
         ini_high=ini_high_A,
         current_resolution=current_resolution,
         current_resolution_shell=current_resolution_shell,

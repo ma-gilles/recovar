@@ -702,9 +702,9 @@ static py::array_t<double> vdam_bootstrap_iref(
     if (todo < nr_classes * 5) todo = nr_classes * 5;  // fn_ref == None floor
     if (todo > N) todo = N;
 
-    for (long part_id = 0; part_id < todo; part_id++) {
-        // 1. Per-particle RNG reset
-        init_random_generator(random_seed + (int)part_id);
+    for (long part_id_sorted = 0; part_id_sorted < todo; part_id_sorted++) {
+        // 1. Per-particle RNG reset.
+        init_random_generator(random_seed + (int)part_id_sorted);
 
         // 2-4. Random Euler draws
         RFLOAT rot  = rnd_unif() * 360.0;
@@ -714,12 +714,12 @@ static py::array_t<double> vdam_bootstrap_iref(
         Matrix2D<RFLOAT> A;
         Euler_angles2matrix(rot, tilt, psi, A, false);
 
-        int iclass = (int)(part_id % nr_classes);
+        int iclass = (int)(part_id_sorted % nr_classes);
 
         // Load image into MultidimArray
         Image<RFLOAT> img;
         img().initZeros(ori_size, ori_size);
-        const double* row = (const double*)img_buf.ptr + part_id * H * W;
+        const double* row = (const double*)img_buf.ptr + part_id_sorted * H * W;
         for (long i = 0; i < H * W; i++)
             img.data.data[i] = (RFLOAT)row[i];
         img().setXmippOrigin();
@@ -733,12 +733,12 @@ static py::array_t<double> vdam_bootstrap_iref(
         MultidimArray<Complex> Faux;
         transformer.FourierTransform(img(), Faux, false);
 
-        // 9. CenterFFTbySign
-        CenterFFTbySign(Faux);
-
-        // 10. windowFourierTransform to current_size
+        // 9-10. RELION windows first, then applies CenterFFTbySign to the
+        // windowed transform. The order matters for odd bootstrap sizes such
+        // as current_size=9.
         MultidimArray<Complex> Fimg;
         windowFourierTransform(Faux, Fimg, current_size > 0 ? current_size : ori_size);
+        CenterFFTbySign(Fimg);
 
         // 11. Compute CTF
         MultidimArray<RFLOAT> Fctf;
@@ -746,9 +746,9 @@ static py::array_t<double> vdam_bootstrap_iref(
         Fctf.initConstant(1.0);
         if (do_ctf_correction) {
             CTF ctf;
-            ctf.setValues(du[part_id], dv[part_id], da[part_id],
+            ctf.setValues(du[part_id_sorted], dv[part_id_sorted], da[part_id_sorted],
                           voltage, Cs, Q0, 0.0 /* Bfac */, 1.0 /* scale */,
-                          dp[part_id]);
+                          dp[part_id_sorted]);
             ctf.getFftwImage(Fctf, ori_size, ori_size, pixel_size,
                              false,  // ctf_phase_flipped
                              false,  // only_flip_phases
@@ -759,19 +759,19 @@ static py::array_t<double> vdam_bootstrap_iref(
             // ---- RECOVAR DEBUG: dump first 3 particles' Fimg+Fctf+A ----
             {
                 const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR_OURS");
-                if (dbg_dir != NULL && part_id < 3) {
+                if (dbg_dir != NULL && part_id_sorted < 3) {
                     char p[1024]; FILE* f;
-                    snprintf(p, sizeof(p), "%s/p%ld_Fimg_preCTF.bin", dbg_dir, part_id);
+                    snprintf(p, sizeof(p), "%s/p%ld_Fimg_preCTF.bin", dbg_dir, part_id_sorted);
                     f = fopen(p, "wb");
                     if (f) { long nz=1, ny=YSIZE(Fimg), nx=XSIZE(Fimg);
                       fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
                       fwrite(Fimg.data, sizeof(Complex), ny*nx, f); fclose(f); }
-                    snprintf(p, sizeof(p), "%s/p%ld_Fctf.bin", dbg_dir, part_id);
+                    snprintf(p, sizeof(p), "%s/p%ld_Fctf.bin", dbg_dir, part_id_sorted);
                     f = fopen(p, "wb");
                     if (f) { long nz=1, ny=YSIZE(Fctf), nx=XSIZE(Fctf);
                       fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
                       fwrite(Fctf.data, sizeof(RFLOAT), ny*nx, f); fclose(f); }
-                    snprintf(p, sizeof(p), "%s/p%ld_A_euler.txt", dbg_dir, part_id);
+                    snprintf(p, sizeof(p), "%s/p%ld_A_euler.txt", dbg_dir, part_id_sorted);
                     f = fopen(p, "w");
                     if (f) {
                         for (int ri=0; ri<3; ri++)
@@ -1441,8 +1441,8 @@ per-class arrays.
           R"doc(
 Run the RELION InitialModel bootstrap (ml_optimiser.cpp:3127-3205 +
 reconstruct at :3265) end-to-end in C++. Returns the reconstructed
-Iref of shape (nr_classes, ori, ori, ori). Caller applies fftshift to
-put the origin at the array centre.
+Iref of shape (nr_classes, ori, ori, ori). Caller applies fftshift to put the
+origin at the array centre.
 )doc");
 
     m.def("vdam_postprocess_initial_iref", &vdam_postprocess_initial_iref,
