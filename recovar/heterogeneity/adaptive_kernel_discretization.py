@@ -8,6 +8,7 @@ with residual-based model selection across discretization parameters.
 
 import functools
 import logging
+import os
 
 import equinox as eqx
 import jax
@@ -1869,10 +1870,11 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     
     for idx, h in enumerate(my_h_grid):
         my_kernels[idx] = calculate_kernel(my_distances, my_cov, h)
-    np.savetxt("my_kernels.txt", my_kernels)
-    np.savetxt("my_h_grid.txt", my_h_grid)
-    np.savetxt("my_cov.txt", my_cov.reshape(my_cov.shape[0], -1))
-    np.savetxt("my_distances.txt", my_distances)
+    os.makedirs("output", exist_ok=True)
+    np.savetxt(os.path.join("output", "my_kernels.txt"), my_kernels)
+    np.savetxt(os.path.join("output", "my_h_grid.txt"), my_h_grid)
+    np.savetxt(os.path.join("output", "my_cov.txt"), my_cov.reshape(my_cov.shape[0], -1))
+    np.savetxt(os.path.join("output", "my_distances.txt"), my_distances)
     #>>LH 001
 
     if upsampling_factor is not None:
