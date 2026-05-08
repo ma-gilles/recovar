@@ -34,6 +34,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     healpix_angular_step,
     refine_angular_sampling,
     resolution_required_angular_sampling,
+    resolution_triggers_angular_refinement,
     should_refine_angular_sampling,
     update_refinement_state,
 )
@@ -420,6 +421,46 @@ class TestShouldRefineAngularSampling:
 
         assert should_refine_angular_sampling(state) is True
 
+    def test_resolution_based_trigger_requires_relion_auto_resol_angles_flag(self):
+        state = RefinementState(
+            healpix_order=2,
+            adaptive_oversampling=1,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=0,
+            nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+            acc_rot=12.247,
+            current_resolution=4.86,
+            particle_diameter_angstrom=544.0,
+            auto_resolution_based_angles=False,
+        )
+
+        assert resolution_triggers_angular_refinement(state) is False
+        assert should_refine_angular_sampling(state) is False
+
+        state.auto_resolution_based_angles = True
+        assert resolution_triggers_angular_refinement(state) is True
+        assert should_refine_angular_sampling(state) is True
+
+    def test_resolution_based_trigger_does_not_enter_local_search_directly(self):
+        state = RefinementState(
+            healpix_order=3,
+            adaptive_oversampling=1,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            nr_iter_wo_resol_gain=0,
+            nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+            acc_rot=12.247,
+            current_resolution=4.86,
+            particle_diameter_angstrom=544.0,
+            auto_resolution_based_angles=True,
+        )
+
+        assert resolution_triggers_angular_refinement(state) is False
+        assert should_refine_angular_sampling(state) is False
+
+        state.nr_iter_wo_resol_gain = MAX_NR_ITER_WO_RESOL_GAIN
+        assert should_refine_angular_sampling(state) is True
+
 
 class TestRefineAngularSampling:
     def test_order_increments_by_one(self):
@@ -463,31 +504,50 @@ class TestRefineAngularSampling:
             healpix_order=3,
             acc_trans=2.0,
             adaptive_oversampling=1,
+            current_changes_optimal_offsets_angstrom=2.0,
+            voxel_size_angstrom=4.25,
         )
         new_state = refine_angular_sampling(state)
-        expected = min(1.5, 0.75 * 2.0) * (2**1)
+        expected = min(1.5, 0.75 * 2.0) * (2**1) / 4.25
         assert abs(new_state.translation_step - expected) < 1e-10
 
     def test_translation_range_from_offset_changes(self):
         state = RefinementState(
             healpix_order=3,
-            changes_optimal_offsets=1.5,
+            current_changes_optimal_offsets_angstrom=1.5,
             translation_range=10.0,
+            voxel_size_angstrom=4.25,
         )
         new_state = refine_angular_sampling(state)
-        expected = min(5.0 * 1.5, 1.3 * 10.0)
+        expected = min(5.0 * 1.5, 1.3 * 10.0 * 4.25) / 4.25
         assert abs(new_state.translation_range - expected) < 1e-10
 
     def test_translation_range_capped_at_1_3x(self):
         """Range is capped at 1.3x previous when 5 * changes is larger."""
         state = RefinementState(
             healpix_order=3,
-            changes_optimal_offsets=10.0,
+            current_changes_optimal_offsets_angstrom=100.0,
             translation_range=5.0,
+            voxel_size_angstrom=4.25,
         )
         new_state = refine_angular_sampling(state)
         expected = 1.3 * 5.0
         assert abs(new_state.translation_range - expected) < 1e-10
+
+    def test_relion_width_guard_coarsens_missing_acc_trans_fallback(self):
+        state = RefinementState(
+            healpix_order=2,
+            adaptive_oversampling=1,
+            translation_range=3.0,
+            translation_step=1.0,
+            current_changes_optimal_offsets_angstrom=5.0,
+            voxel_size_angstrom=4.25,
+        )
+
+        new_state = refine_angular_sampling(state)
+
+        assert new_state.translation_range == pytest.approx(3.0 * 1.3)
+        assert new_state.translation_step == pytest.approx(new_state.translation_range / 4.0)
 
     def test_sigma_rot_formula(self):
         """sigma2_rot = 2 * 2 * step^2 (RELION convention)."""
@@ -743,6 +803,47 @@ class TestUpdateRefinementState:
             new_resolution=4.0,
         )
         assert updated.current_changes_optimal_classes == 0.0
+
+    def test_hidden_variable_translation_ratio_uses_effective_oversampled_step(self):
+        state = self._make_base_state(
+            healpix_order=2,
+            adaptive_oversampling=1,
+            current_resolution=10.0,
+            translation_step=1.0,
+            smallest_changes_optimal_classes=0.0,
+            smallest_changes_optimal_orientations=999.0,
+            smallest_changes_optimal_offsets_angstrom=999.0,
+            nr_iter_wo_large_hidden_variable_changes=0,
+        )
+        n_rot, n_trans = 100, 1
+        assignments = np.zeros(5, dtype=np.int32)
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+        rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 5, axis=0)
+        previous_trans = np.zeros((5, 2), dtype=np.float32)
+        current_trans = np.column_stack(
+            [
+                np.full(5, 0.55, dtype=np.float32),
+                np.zeros(5, dtype=np.float32),
+            ]
+        )
+
+        updated = update_refinement_state(
+            state,
+            assignments,
+            assignments,
+            n_rot,
+            n_trans,
+            translations,
+            new_resolution=9.0,
+            current_rotation_matrices=rotations,
+            previous_rotation_matrices=rotations,
+            current_translations_pixel=current_trans,
+            previous_translations_pixel=previous_trans,
+            voxel_size_angstrom=1.0,
+        )
+
+        assert updated.current_changes_optimal_offsets_angstrom == pytest.approx(0.55 / np.sqrt(2.0))
+        assert updated.nr_iter_wo_large_hidden_variable_changes == 0
 
 
 # =========================================================================

@@ -134,6 +134,27 @@ def convergence_sampling_diagnostics(state: "RefinementState") -> dict[str, floa
     }
 
 
+def resolution_triggers_angular_refinement(state: "RefinementState") -> bool:
+    """Return RELION's resolution-based auto-angular trigger.
+
+    RELION advances angular sampling when the resolution-implied angular step
+    is finer than the current effective step, but explicitly avoids using this
+    shortcut for the transition that would enter local searches. That last
+    exhaustive grid must first satisfy the regular stall criteria.
+    """
+    if not state.auto_resolution_based_angles:
+        return False
+    required_step = resolution_required_angular_sampling(
+        state.current_resolution,
+        state.particle_diameter_angstrom,
+    )
+    if not np.isfinite(required_step):
+        return False
+    if required_step >= state.effective_step:
+        return False
+    return state.healpix_order + 1 != state.auto_local_healpix_order
+
+
 @dataclass
 class RefinementState:
     """Tracks refinement progress for convergence detection and angular stepping.
@@ -179,12 +200,19 @@ class RefinementState:
     acc_rot : float
         Estimated angular accuracy in degrees.
     acc_trans : float
-        Estimated translational accuracy in pixels.
+        Estimated translational accuracy in Angstroms, matching RELION's
+        ``acc_trans`` and ``_rlnOverallAccuracyTranslationsAngst``.
+    voxel_size_angstrom : float
+        Pixel size used to convert the stored pixel translation grid to the
+        Angstrom units used by RELION's sampling scheduler.
     max_healpix_order : int
         Maximum allowed HEALPix order (finest angular sampling).
     auto_local_healpix_order : int
         RELION ``--auto_local_healpix_order`` threshold. Local searches are
         enabled when ``healpix_order >= auto_local_healpix_order``.
+    auto_resolution_based_angles : bool
+        RELION ``--auto_resol_angles`` flag. Standard auto-refine leaves this
+        off; gradient-driven auto-refine enables it.
     previous_resolution : float
         Resolution from the previous iteration (for stall detection).
     fraction_changed : float
@@ -225,6 +253,7 @@ class RefinementState:
     ave_Pmax: float = 0.0
     acc_rot: float = float("inf")
     acc_trans: float = float("inf")
+    voxel_size_angstrom: float = 1.0
     # Particle diameter in Å (used for the resolution-based acc_rot proxy
     # in should_refine_angular_sampling). Set by the caller via
     # update_refinement_state(..., particle_diameter_angstrom=...).
@@ -233,6 +262,7 @@ class RefinementState:
     # Limits
     max_healpix_order: int = 7
     auto_local_healpix_order: int = LOCAL_SEARCH_HEALPIX_ORDER
+    auto_resolution_based_angles: bool = False
 
     # Change tracking
     fraction_changed: float = 1.0
@@ -705,10 +735,14 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
         )
         return False
 
-    # Resolution stalls are required.  RELION uses the strict
-    # `nr_iter_wo_resol_gain >= MAX_NR_ITER_WO_RESOL_GAIN` check; we keep
-    # the same threshold (==1).
-    if state.nr_iter_wo_resol_gain < MAX_NR_ITER_WO_RESOL_GAIN:
+    # RELION can proceed either because resolution stalled, or because the
+    # current resolution requires finer angular sampling. The resolution-based
+    # shortcut is disabled for the direct transition into local search.
+    do_proceed_resolution = (
+        resolution_triggers_angular_refinement(state)
+        or state.nr_iter_wo_resol_gain >= MAX_NR_ITER_WO_RESOL_GAIN
+    )
+    if not do_proceed_resolution:
         return False
 
     # Hidden-variable stalls: prefer the RELION-exact B3+B4 counter
@@ -741,6 +775,66 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
     return True
 
 
+def _finite_positive(value: float) -> bool:
+    return bool(np.isfinite(value) and value > 0.0)
+
+
+def _translation_change_for_range_angstrom(state: RefinementState, voxel_size: float) -> float:
+    """Return RELION's offset-change statistic in Angstroms for range update."""
+    if _finite_positive(state.current_changes_optimal_offsets_angstrom):
+        return float(state.current_changes_optimal_offsets_angstrom)
+    if _finite_positive(state.changes_optimal_offsets):
+        return float(state.changes_optimal_offsets) * voxel_size
+    return float("inf")
+
+
+def _relion_next_translation_sampling_pixels(state: RefinementState) -> tuple[float, float]:
+    """Return RELION auto-refine translation ``(range_px, step_px)``.
+
+    RELION keeps ``offset_range`` and ``offset_step`` in Angstroms and then
+    builds a 2D circular grid from those values. RECOVAR stores the grid in
+    pixels, so this helper applies RELION's exact scheduler in Angstroms and
+    converts the result back to pixels.
+    """
+    voxel_size = float(state.voxel_size_angstrom if state.voxel_size_angstrom > 0.0 else 1.0)
+    old_step_ang = float(state.translation_step) * voxel_size
+    old_range_ang = float(state.translation_range) * voxel_size
+
+    if _finite_positive(state.acc_trans):
+        new_step_ang = min(1.5, 0.75 * float(state.acc_trans)) * (2**state.adaptive_oversampling)
+    else:
+        # Native RECOVAR currently lacks RELION's expensive projection-based
+        # acc_trans estimate. Start from a deliberately fine provisional step;
+        # RELION's width guard below will coarsen it to range/4 when needed.
+        new_step_ang = 0.0
+
+    offset_change_ang = _translation_change_for_range_angstrom(state, voxel_size)
+    if _finite_positive(offset_change_ang):
+        new_range_ang = 5.0 * offset_change_ang
+        if _finite_positive(old_range_ang):
+            new_range_ang = min(new_range_ang, 1.3 * old_range_ang)
+    else:
+        new_range_ang = old_range_ang
+
+    if _finite_positive(new_step_ang):
+        new_range_ang = max(new_range_ang, 1.5 * new_step_ang)
+        if new_range_ang > 4.0 * new_step_ang:
+            new_range_ang /= 2.0
+        if new_range_ang > 4.0 * new_step_ang:
+            new_step_ang = new_range_ang / 4.0
+    else:
+        if _finite_positive(new_range_ang):
+            new_step_ang = new_range_ang / 4.0
+        else:
+            new_step_ang = old_step_ang / 2.0 if _finite_positive(old_step_ang) else voxel_size
+
+    if _finite_positive(old_step_ang) and new_step_ang > old_step_ang:
+        new_step_ang = old_step_ang
+        new_range_ang = old_range_ang
+
+    return new_range_ang / voxel_size, new_step_ang / voxel_size
+
+
 def refine_angular_sampling(state: RefinementState) -> RefinementState:
     """Increment HEALPix order and update translation parameters.
 
@@ -766,22 +860,7 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
     new_order = state.healpix_order + 1
     new_angular_step = healpix_angular_step(new_order)
 
-    # Update translation step: RELION formula
-    if state.acc_trans < float("inf"):
-        new_trans_step = min(1.5, 0.75 * state.acc_trans) * (2**state.adaptive_oversampling)
-    else:
-        # Fall back to halving the current step
-        new_trans_step = state.translation_step / 2.0
-
-    # Update translation range: 5 * changes_optimal_offsets, capped at 1.3x previous
-    if state.changes_optimal_offsets < float("inf"):
-        new_trans_range = 5.0 * state.changes_optimal_offsets
-        new_trans_range = min(new_trans_range, 1.3 * state.translation_range)
-    else:
-        new_trans_range = state.translation_range
-
-    # Ensure translation range is at least a few steps
-    new_trans_range = max(new_trans_range, 3.0 * new_trans_step)
+    new_trans_range, new_trans_step = _relion_next_translation_sampling_pixels(state)
 
     # Determine local search activation
     do_local = new_order >= state.auto_local_healpix_order
@@ -834,9 +913,11 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
         ave_Pmax=state.ave_Pmax,
         acc_rot=state.acc_rot,
         acc_trans=state.acc_trans,
+        voxel_size_angstrom=state.voxel_size_angstrom,
         particle_diameter_angstrom=state.particle_diameter_angstrom,
         max_healpix_order=state.max_healpix_order,
         auto_local_healpix_order=state.auto_local_healpix_order,
+        auto_resolution_based_angles=state.auto_resolution_based_angles,
         fraction_changed=state.fraction_changed,
         changes_optimal_offsets=state.changes_optimal_offsets,
         # RELION-exact reset (B4):
@@ -901,7 +982,7 @@ def update_refinement_state(
     acc_rot : float or None
         Estimated angular accuracy in degrees.  If None, unchanged.
     acc_trans : float or None
-        Estimated translation accuracy in pixels.  If None, unchanged.
+        Estimated translation accuracy in Angstroms. If None, unchanged.
     current_rotation_matrices, previous_rotation_matrices : np.ndarray, optional
         Per-particle rotation matrices for the current and previous
         iterations, shape ``(n_images, 3, 3)``. When both provided, the
@@ -1013,8 +1094,8 @@ def update_refinement_state(
     if np.isfinite(current_changes_orientations) and np.isfinite(current_changes_offsets_angstrom):
         # Sampling steps used as the "small enough" denominator. RELION uses
         # the ANGULAR SAMPLING STEP (in degrees, after oversampling) for the
-        # orientation ratio and the TRANSLATION SAMPLING STEP (in pixels)
-        # for the offset ratio. Convert offsets to pixels for the ratio.
+        # orientation ratio and the TRANSLATION SAMPLING STEP (in pixels,
+        # after oversampling) for the offset ratio. Convert offsets to pixels.
         rot_step_deg = effective_angular_step(
             state.healpix_order,
             state.adaptive_oversampling,
@@ -1025,7 +1106,7 @@ def update_refinement_state(
             offsets_pixels = current_changes_offsets_angstrom / voxel_size_angstrom
         else:
             offsets_pixels = current_changes_offsets_angstrom
-        trans_step = state.translation_step
+        trans_step = state.translation_step / (2**state.adaptive_oversampling)
         ratio_orient_changes = current_changes_orientations / rot_step_deg if rot_step_deg > 0 else float("inf")
         ratio_trans_changes = offsets_pixels / trans_step if trans_step > 0 else float("inf")
 
@@ -1071,9 +1152,11 @@ def update_refinement_state(
         ave_Pmax=ave_pmax,
         acc_rot=new_acc_rot,
         acc_trans=new_acc_trans,
+        voxel_size_angstrom=float(voxel_size_angstrom if voxel_size_angstrom > 0 else 1.0),
         particle_diameter_angstrom=state.particle_diameter_angstrom,
         max_healpix_order=state.max_healpix_order,
         auto_local_healpix_order=state.auto_local_healpix_order,
+        auto_resolution_based_angles=state.auto_resolution_based_angles,
         fraction_changed=frac_changed,
         changes_optimal_offsets=trans_changes,
         current_changes_optimal_orientations=current_changes_orientations,

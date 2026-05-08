@@ -72,6 +72,7 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _combined_class_direction_prior_from_halves,
     _combined_noise_stats,
     _estimate_relion_em_batch_sizes,
+    _exhaustive_grid_order_for_state,
     _normalize_noise_variance_per_half,
     _replay_control_model_iteration,
     _rotation_eulers_for_canonical_or_custom_grid,
@@ -3942,6 +3943,16 @@ class TestRelionModeSmokeTest:
         assert refined.sigma_rot > 0.0
         assert refined.sigma_psi > 0.0
 
+    def test_local_search_keeps_exhaustive_grid_at_last_prelocal_order(self):
+        state = RefinementState(healpix_order=4, auto_local_healpix_order=4)
+
+        assert state.do_local_search
+        assert _exhaustive_grid_order_for_state(state) == 3
+
+        nonlocal_state = RefinementState(healpix_order=4, auto_local_healpix_order=5)
+        assert not nonlocal_state.do_local_search
+        assert _exhaustive_grid_order_for_state(nonlocal_state) == 4
+
     def test_relion_mode_uses_tau2_from_weights_for_prior(
         self,
         half_datasets,
@@ -4498,6 +4509,7 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=len(rotations_many),
             init_current_size=16,
+            init_relion_iteration=1,
             adaptive_oversampling=0,
             adaptive_fraction=0.97,
             nside_level=1,
@@ -4515,8 +4527,8 @@ class TestRelionModeSmokeTest:
             rtol=1e-6,
             atol=1e-6,
         )
-        np.testing.assert_array_equal(captured["normalization_log_z"][0], np.full(prev_h1.shape[0], 7.5))
-        np.testing.assert_array_equal(captured["normalization_log_z"][1], np.full(prev_h2.shape[0], 7.5))
+        assert np.isnan(captured["normalization_log_z"][0])
+        assert np.isnan(captured["normalization_log_z"][1])
         np.testing.assert_allclose(
             captured["prior_centers"][1],
             relion_sigma_offset_prior_center(prev_h2),
@@ -4986,6 +4998,7 @@ def test_local_search_uses_selected_only_fine_rotation_grid_when_oversampling_is
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
+    monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
         refine_mod,
@@ -5172,6 +5185,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         fake_apply_relion_rotation_perturbation_to_eulers,
     )
     monkeypatch.setattr(refine_mod.utils, "R_to_relion", fake_r_to_relion)
+    monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
         refine_mod,
@@ -5319,6 +5333,9 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         return (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
+            np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
             RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
@@ -5491,6 +5508,9 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         return (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
+            np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
             RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
@@ -5897,6 +5917,9 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
+            np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
+            np.zeros(experiment_dataset.n_units, dtype=np.int32),
             RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
@@ -6084,6 +6107,9 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
+            np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
+            np.zeros(experiment_dataset.n_units, dtype=np.int32),
             RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
@@ -6241,6 +6267,9 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
         return (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
+            np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
             RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
@@ -6617,10 +6646,24 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
             fine_idx * np.asarray(translations).shape[0] + trans_idx,
             dtype=np.int32,
         )
+        best_rots = _selected_rotation_matrices(
+            np.full(experiment_dataset.n_units, fine_idx, dtype=np.int32),
+            None,
+            build_local_search_grid_metadata(int(healpix_order)),
+        ).astype(np.float32)
+        best_trans = np.repeat(
+            np.asarray(translations, dtype=np.float32)[trans_idx : trans_idx + 1],
+            experiment_dataset.n_units,
+            axis=0,
+        )
+        best_rot_ids = np.full(experiment_dataset.n_units, fine_idx, dtype=np.int32)
         return (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
             assignment,
+            best_rots,
+            best_trans,
+            best_rot_ids,
             RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
@@ -6677,11 +6720,14 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         build_local_search_grid_metadata(5),
     )
     expected_euler = iteration_loop_module.utils.R_to_relion(expected_rotation, degrees=True)[0].astype(np.float32)
-    observed = np.asarray(result["best_rotation_eulers_history"][1], dtype=np.float32)
-    assert observed.shape[0] == N_IMAGES
-    np.testing.assert_allclose(
-        observed,
-        np.repeat(expected_euler[None, :], N_IMAGES, axis=0),
-        rtol=1e-6,
-        atol=1e-6,
-    )
+    observed_by_half = result["best_rotation_eulers_history"][1]
+    assert len(observed_by_half) == 2
+    for observed, dataset in zip(observed_by_half, half_datasets):
+        observed = np.asarray(observed, dtype=np.float32)
+        assert observed.shape[0] == dataset.n_units
+        np.testing.assert_allclose(
+            observed,
+            np.repeat(expected_euler[None, :], dataset.n_units, axis=0),
+            rtol=1e-6,
+            atol=1e-6,
+        )

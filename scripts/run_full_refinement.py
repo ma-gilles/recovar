@@ -193,6 +193,17 @@ def _resolve_tau2_fudge(n_classes, cli_tau2_fudge, relion_init_tau2_fudge):
     return 1.0, "RELION auto-refine default"
 
 
+def _refine_sampling_kwargs(args, init_healpix_order):
+    """Return sampling kwargs forwarded from the CLI into ``refine_single_volume``."""
+    return {
+        "translation_pixel_offset": args.offset_step if args.adaptive_oversampling > 0 else None,
+        "init_healpix_order": init_healpix_order,
+        "auto_local_healpix_order": args.auto_local_healpix_order,
+        "init_translation_range": args.offset_range,
+        "init_translation_step": args.offset_step,
+    }
+
+
 def _build_replay_iteration_overrides(
     relion_dir,
     half1_idx,
@@ -1008,9 +1019,7 @@ def main():
         max_significants=args.max_significants,
         adaptive_pass2_skip_threshold=args.adaptive_skip_threshold,
         nside_level=rotation_grid_order if args.adaptive_oversampling > 0 else None,
-        translation_pixel_offset=args.offset_step if args.adaptive_oversampling > 0 else None,
-        init_healpix_order=init_healpix_order,
-        auto_local_healpix_order=args.auto_local_healpix_order,
+        **_refine_sampling_kwargs(args, init_healpix_order),
         init_translation_sigma_angstrom=(
             relion_init_sigma_offset_angstrom
             if relion_init_sigma_offset_angstrom is not None

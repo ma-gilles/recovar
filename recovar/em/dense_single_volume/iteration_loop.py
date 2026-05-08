@@ -129,6 +129,22 @@ _RELION_EM_BATCH_MIN_TRANSLATION_TILE_GB = 0.5
 _RELION_EM_BATCH_RUNTIME_FREE_FRACTION = 0.80
 
 
+def _exhaustive_grid_order_for_state(state: RefinementState) -> int:
+    """Return the global exhaustive HEALPix order for the current state.
+
+    Once RELION enables local angular searches, it no longer scores the full
+    HEALPix grid for that order. Keep the global base at the last exhaustive
+    order and let the local-search path build image-specific neighborhoods.
+    """
+    if state.do_local_search:
+        return min(
+            state.healpix_order,
+            max(0, state.auto_local_healpix_order - 1),
+            RELION_MAX_FULL_GRID_ORDER,
+        )
+    return min(state.healpix_order, RELION_MAX_FULL_GRID_ORDER)
+
+
 @dataclass(frozen=True)
 class _RelionEMBatchPlan:
     image_batch_size: int
@@ -623,6 +639,7 @@ class PPCAKClassScheduleBridge:
                 translation_step=float(init_translation_step),
                 max_healpix_order=int(max_healpix_order),
                 auto_local_healpix_order=int(auto_local_healpix_order),
+                voxel_size_angstrom=self.voxel_size_angstrom,
                 particle_diameter_angstrom=float(particle_diameter_angstrom),
             )
         self.state = refinement_state
@@ -2343,6 +2360,7 @@ def _run_relion_iteration_loop(
         max_healpix_order=max_healpix_order,
         auto_local_healpix_order=auto_local_healpix_order,
         current_resolution=float("inf"),
+        voxel_size_angstrom=float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
         particle_diameter_angstrom=float(particle_diameter_ang or 0.0),
     )
     # RELION's convergence counters are not initialized against an infinite
@@ -2372,8 +2390,7 @@ def _run_relion_iteration_loop(
             if _init_opt_meta.get("overall_accuracy_rotations") is not None:
                 state.acc_rot = float(_init_opt_meta["overall_accuracy_rotations"])
             if _init_opt_meta.get("overall_accuracy_translations_angst") is not None:
-                _px = float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0)
-                state.acc_trans = float(_init_opt_meta["overall_accuracy_translations_angst"]) / _px
+                state.acc_trans = float(_init_opt_meta["overall_accuracy_translations_angst"])
             if _init_opt_meta.get("smallest_changes_orientations") is not None:
                 state.smallest_changes_optimal_orientations = float(_init_opt_meta["smallest_changes_orientations"])
             if _init_opt_meta.get("smallest_changes_offsets") is not None:
@@ -2540,6 +2557,7 @@ def _run_relion_iteration_loop(
     class_rotation_posterior_per_half = [None, None]
     significant_counts = []
     data_vs_prior_trajectory = []
+    previous_data_vs_prior_for_scheduling = None
     healpix_order_trajectory = []
     ave_Pmax_trajectory = []
     pmax_per_image_history = []
@@ -2699,7 +2717,7 @@ def _run_relion_iteration_loop(
                 data_vs_prior_iter = np.asarray(
                     fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge),
                 )
-                data_vs_prior_trajectory.append(data_vs_prior_iter)
+                previous_data_vs_prior_for_scheduling = data_vs_prior_iter
                 res_shell = resolution_from_data_vs_prior(
                     data_vs_prior_iter,
                     allow_high_res_recovery=True,
@@ -2725,7 +2743,9 @@ def _run_relion_iteration_loop(
         else:
             prev_cs = current_sizes[-1]
             if k_class_enabled:
-                data_vs_prior_prev_raw = np.asarray(data_vs_prior_trajectory[-1], dtype=np.float32).copy()
+                if previous_data_vs_prior_for_scheduling is None:
+                    raise RuntimeError("K-class current-size scheduling requires a previous data_vs_prior curve")
+                data_vs_prior_prev_raw = np.asarray(previous_data_vs_prior_for_scheduling, dtype=np.float32).copy()
                 data_vs_prior_prev = data_vs_prior_prev_raw.copy()
                 if prev_cs < grid_size:
                     data_vs_prior_prev[..., min(data_vs_prior_prev.shape[-1], prev_cs // 2 + 1) :] = 0.0
@@ -2779,7 +2799,7 @@ def _run_relion_iteration_loop(
                 data_vs_prior_iter = np.asarray(
                     fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge),
                 )
-                data_vs_prior_trajectory.append(data_vs_prior_iter)
+                previous_data_vs_prior_for_scheduling = data_vs_prior_iter
                 res_shell = resolution_from_data_vs_prior(
                     data_vs_prior_iter,
                     allow_high_res_recovery=True,
@@ -3174,7 +3194,7 @@ def _run_relion_iteration_loop(
         # rely on local search + oversampling to achieve finer angular steps.
         # The order is still tracked for sigma calculation.
         if state.healpix_order != current_healpix_order:
-            new_order = min(state.healpix_order, RELION_MAX_FULL_GRID_ORDER)
+            new_order = _exhaustive_grid_order_for_state(state)
             if new_order != current_healpix_order:
                 logger.info(
                     "Regenerating rotation grid: order %d -> %d",
@@ -3187,10 +3207,14 @@ def _run_relion_iteration_loop(
                 global_direction_prior_order_per_half = [None, None]
             else:
                 logger.info(
-                    "Angular step refined to order %d (grid stays at order %d — local search handles finer sampling)",
+                    "Angular step refined to order %d (exhaustive grid stays at order %d — local search handles finer sampling)",
                     state.healpix_order,
                     current_healpix_order,
                 )
+                global_direction_prior_per_half = [None, None]
+                global_direction_prior_order_per_half = [None, None]
+                class_direction_prior_per_half = [None, None]
+                class_direction_prior_order_per_half = [None, None]
             current_nside_level = current_healpix_order
 
             # Regenerate translation grid based on updated parameters
@@ -5187,6 +5211,7 @@ def _run_relion_iteration_loop(
             mean_signal_variance = jnp.stack(mean_signal_variance_per_class, axis=0)
             data_vs_prior_iter = np.stack([np.asarray(dvp, dtype=np.float32) for dvp in data_vs_prior_per_class], axis=0)
             data_vs_prior_trajectory.append(data_vs_prior_iter)
+            previous_data_vs_prior_for_scheduling = data_vs_prior_iter
             tau2_update_details = {
                 key: np.stack([detail[key] for detail in tau2_update_details_per_class], axis=0)
                 if key not in {"fsc_shells"}
@@ -5763,6 +5788,7 @@ def _run_relion_iteration_loop(
             )
         previous_best_rotations = new_iter_best_rotations
         previous_best_rotation_eulers = new_iter_best_rotation_eulers
+        relion_half_inputs.previous_best_rotation_eulers = new_iter_best_rotation_eulers
         relion_half_inputs.previous_best_translations = new_iter_best_translations
         best_rotation_eulers_history.append([np.asarray(e).copy() if e is not None else None for e in new_iter_best_rotation_eulers])
         best_translations_history.append([np.asarray(t).copy() if t is not None else None for t in new_iter_best_translations])
@@ -5798,6 +5824,7 @@ def _run_relion_iteration_loop(
 
         if not k_class_enabled:
             data_vs_prior_trajectory.append(np.asarray(dvp_iter, dtype=np.float32))
+            previous_data_vs_prior_for_scheduling = np.asarray(dvp_iter, dtype=np.float32)
 
         # RELION-style posterior-weighted noise update. Sums the wsum/img_power
         # accumulators from both half-sets and normalizes via the M-step formula.
@@ -5945,10 +5972,9 @@ def _run_relion_iteration_loop(
                     if _relion_acc_rot is not None and np.isfinite(float(_relion_acc_rot)):
                         iter_acc_rot = float(_relion_acc_rot)
                     if _relion_acc_trans_angst is not None and np.isfinite(float(_relion_acc_trans_angst)):
-                        _px = float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0)
-                        iter_acc_trans = float(_relion_acc_trans_angst) / _px
+                        iter_acc_trans = float(_relion_acc_trans_angst)
                     logger.info(
-                        "Replay override: optimiser accuracy <- %s (acc_rot=%.3f deg, acc_trans=%s px)",
+                        "Replay override: optimiser accuracy <- %s (acc_rot=%.3f deg, acc_trans=%s Å)",
                         _optimiser_star,
                         float(iter_acc_rot) if iter_acc_rot is not None else float("nan"),
                         f"{iter_acc_trans:.3f}" if iter_acc_trans is not None else "unset",
