@@ -214,6 +214,9 @@ def _maybe_dump_k_class_significance_batch(
     current_size,
     adaptive_fraction,
     max_significants,
+    target_local_positions=None,
+    target_scores_pre_prior_per_class=None,
+    target_scores_with_prior_per_class=None,
 ):
     """Env-gated debug dump for the K-class significance pass.
 
@@ -263,6 +266,13 @@ def _maybe_dump_k_class_significance_batch(
     rot_indices_flat = ((flat_indices % (n_rot * n_trans)) // n_trans).astype(np.int32)
     trans_indices_flat = (flat_indices % n_trans).astype(np.int32)
 
+    # Build a map from local_pos to dump-target index (row in
+    # target_scores_pre_prior_per_class[c]) so we can pick the right
+    # per-class raw-score slab for each saved particle.
+    target_pos_to_dump_row = None
+    if target_local_positions is not None:
+        target_pos_to_dump_row = {int(p): row for row, p in enumerate(np.asarray(target_local_positions).tolist())}
+
     for local_pos, original_idx in enumerate(original_indices):
         if int(original_idx) not in target_original_indices:
             continue
@@ -279,12 +289,27 @@ def _maybe_dump_k_class_significance_batch(
             else None
         )
 
+        # Per-class raw scores (pre-prior and with-prior) for this image,
+        # if the engine collected them. Shape per class: (n_rot, n_trans).
+        scores_pre_prior_per_class = None
+        scores_with_prior_per_class = None
+        if target_pos_to_dump_row is not None and target_scores_pre_prior_per_class is not None:
+            dump_row = target_pos_to_dump_row.get(int(local_pos))
+            if dump_row is not None:
+                scores_pre_prior_per_class = np.stack(
+                    [np.asarray(arr[dump_row], dtype=np.float64) for arr in target_scores_pre_prior_per_class],
+                    axis=0,
+                )
+                scores_with_prior_per_class = np.stack(
+                    [np.asarray(arr[dump_row], dtype=np.float64) for arr in target_scores_with_prior_per_class],
+                    axis=0,
+                )
+
         out_path = os.path.join(
             dump_dir,
             f"significance_orig{int(original_idx):06d}_cs{(-1 if current_size is None else int(current_size)):03d}.npz",
         )
-        np.savez_compressed(
-            out_path,
+        save_kwargs = dict(
             original_index=np.int64(original_idx),
             local_index=np.int64(local_indices[local_pos]),
             current_size=np.int64(-1 if current_size is None else int(current_size)),
@@ -317,6 +342,14 @@ def _maybe_dump_k_class_significance_batch(
                 else np.empty((0,), dtype=np.float64)
             ),
         )
+        if scores_pre_prior_per_class is not None:
+            # Per-class raw recovar score (= -0.5 * residual in
+            # `_e_step_block_scores`; differs from RELION's diff2 by the
+            # per-image Xi2/2 constant which cancels in relative pose
+            # comparisons). Shape (n_classes, n_rot, n_trans).
+            save_kwargs["scores_pre_prior_per_class"] = scores_pre_prior_per_class
+            save_kwargs["scores_with_prior_per_class"] = scores_with_prior_per_class
+        np.savez_compressed(out_path, **save_kwargs)
 
 
 def _uses_relion_background_fill(experiment_dataset) -> bool:
@@ -1273,6 +1306,29 @@ def _compute_k_class_significance_batched(
             shifted_data = shifted_data.astype(jnp.complex64)
             ctf2_data = ctf2_data.astype(jnp.float32)
 
+        # Identify per-batch dump target rows so we can record raw scores
+        # (pre-prior) for each target image inside the per-class block loop.
+        # This enables direct diff against RELION's exp_Mweight_diff2
+        # without needing the full (batch, n_classes, n_rot*n_trans) cache.
+        dump_target_local_positions = None
+        if _significance_debug_dump_enabled():
+            _dump_targets = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
+            if _dump_targets:
+                _local_for_dump = np.asarray(indices, dtype=np.int64)
+                _orig_all = getattr(experiment_dataset, "dataset_indices", None)
+                _orig = _local_for_dump if _orig_all is None else np.asarray(_orig_all, dtype=np.int64)[_local_for_dump]
+                _positions = np.flatnonzero(np.isin(_orig, np.fromiter(_dump_targets, dtype=np.int64)))
+                if _positions.size:
+                    dump_target_local_positions = _positions.astype(np.int64)
+        # Per-class collectors for raw (pre-prior) score blocks at target rows.
+        # Shape after concat per class: (n_targets, n_rot, n_trans)
+        dump_target_pre_prior_blocks_per_class = (
+            [[] for _ in range(n_classes)] if dump_target_local_positions is not None else None
+        )
+        dump_target_with_prior_blocks_per_class = (
+            [[] for _ in range(n_classes)] if dump_target_local_positions is not None else None
+        )
+
         global_max = jnp.full(batch_size, -jnp.inf)
         global_sum = jnp.zeros(batch_size, dtype=jnp.float64)
         class_max_values = []
@@ -1303,7 +1359,30 @@ def _compute_k_class_significance_batched(
                 if r1 > n_rot:
                     valid = n_rot - r0
                     scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
+                # Capture pre-prior raw scores for dump targets BEFORE _add_priors.
+                # scores shape: (batch_size, rotation_block_size, n_trans).
+                # For comparison vs RELION exp_Mweight_diff2, recovar's score is
+                # -0.5 * residual where residual = sum_pixel((proj*ctf - shifted_img)² - |img|²)
+                # / sigma² × half_weights. RELION's diff2 has the same core term
+                # plus the per-image Xi2/2 constant. Per-pose RELATIVE differences
+                # cancel the constant, so direct diff is meaningful.
+                if dump_target_pre_prior_blocks_per_class is not None:
+                    actual_rot = min(rotation_block_size, n_rot - r0)
+                    dump_target_pre_prior_blocks_per_class[class_index].append(
+                        np.asarray(
+                            scores[dump_target_local_positions, :actual_rot, :],
+                            dtype=np.float64,
+                        )
+                    )
                 scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
+                if dump_target_with_prior_blocks_per_class is not None:
+                    actual_rot = min(rotation_block_size, n_rot - r0)
+                    dump_target_with_prior_blocks_per_class[class_index].append(
+                        np.asarray(
+                            scores[dump_target_local_positions, :actual_rot, :],
+                            dtype=np.float64,
+                        )
+                    )
                 if cached_score_blocks is not None:
                     cached_score_blocks.append(scores)
                 class_max, class_sum = _update_logsumexp(class_max, class_sum, scores)
@@ -1384,6 +1463,21 @@ def _compute_k_class_significance_batched(
             )
 
         if _significance_debug_dump_enabled():
+            # Concatenate per-class per-block raw scores for the dump targets
+            # into per-class arrays of shape (n_targets, n_rot, n_trans).
+            target_scores_pre_prior_per_class = None
+            target_scores_with_prior_per_class = None
+            target_local_positions_for_dump = None
+            if dump_target_pre_prior_blocks_per_class is not None:
+                target_scores_pre_prior_per_class = [
+                    np.concatenate(blocks, axis=1) if blocks else None
+                    for blocks in dump_target_pre_prior_blocks_per_class
+                ]
+                target_scores_with_prior_per_class = [
+                    np.concatenate(blocks, axis=1) if blocks else None
+                    for blocks in dump_target_with_prior_blocks_per_class
+                ]
+                target_local_positions_for_dump = dump_target_local_positions
             _maybe_dump_k_class_significance_batch(
                 experiment_dataset=experiment_dataset,
                 indices=indices,
@@ -1405,6 +1499,9 @@ def _compute_k_class_significance_batched(
                 current_size=current_size,
                 adaptive_fraction=adaptive_fraction,
                 max_significants=max_significants,
+                target_local_positions=target_local_positions_for_dump,
+                target_scores_pre_prior_per_class=target_scores_pre_prior_per_class,
+                target_scores_with_prior_per_class=target_scores_with_prior_per_class,
             )
 
         samples_per_class = n_rot * n_trans
