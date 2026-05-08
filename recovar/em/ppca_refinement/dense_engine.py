@@ -15,7 +15,12 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from recovar.ppca import AugmentedPPCAStats, solve_augmented_ppca_mstep
+from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
+from recovar.em.ppca_refinement.mean_regularization import (
+    KCLASS_RELION_MINRES_MAP,
+    relion_style_mean_precision_from_stats,
+)
+from recovar.em.ppca_refinement.postprocess import postprocess_ppca_half_volumes
 from recovar.ppca.pose_marginal import compute_ppca_pose_scores_and_moments_no_contrast
 from recovar.ppca.triangular import _tri_size
 
@@ -411,9 +416,20 @@ def run_dense_ppca_fused_refinement_blocks(
     volume_shape,
     mean_prior,
     W_prior,
+    mean_regularization_style: str = "relion_tau",
+    mean_tau2_fudge: float = 1.0,
+    mean_minres_map: int = KCLASS_RELION_MINRES_MAP,
+    postprocess_strategy: str = "mean_and_w_mask",
+    postprocess_mask_radius_px: float | None = None,
+    postprocess_cosine_width_px: float = 3.0,
+    postprocess_grid_correct: bool = True,
+    postprocess_gridding_padding_factor: float = 1.0,
+    postprocess_gridding_order: int = 1,
+    postprocess_gridding_correct: str = "radial",
     disc_type_backproject: str = "linear_interp",
     enforce_x0: bool = True,
     mstep_chunk_size: int | None = None,
+    fixed_mean_half=None,
 ):
     """Run one dense PPCA EM update over prepared fused blocks.
 
@@ -438,8 +454,11 @@ def run_dense_ppca_fused_refinement_blocks(
     nsig_values = []
     best_rotations = []
     best_translations = []
+    postprocess_bandlimit_max_r = None
 
     for block in blocks:
+        if postprocess_bandlimit_max_r is None and bool(block.use_recon_window):
+            postprocess_bandlimit_max_r = block.backprojection_max_r
         rhs_volume, lhs_tri_volume, diag = fused_dense_pose_ppca_block(
             block.Y1,
             block.proj_aug,
@@ -474,6 +493,9 @@ def run_dense_ppca_fused_refinement_blocks(
         "nsig_mean": float(jnp.mean(jnp.concatenate(nsig_values))) if nsig_values else float("nan"),
         "best_rotation_idx": jnp.concatenate(best_rotations) if best_rotations else jnp.zeros((0,), dtype=jnp.int32),
         "best_translation_idx": jnp.concatenate(best_translations) if best_translations else jnp.zeros((0,), dtype=jnp.int32),
+        "mean_regularization_style": str(mean_regularization_style),
+        "mean_tau2_fudge": float(mean_tau2_fudge),
+        "mean_minres_map": int(mean_minres_map),
     }
     stats = AugmentedPPCAStats(
         rhs=jnp.swapaxes(rhs_volume, 0, 1),
@@ -482,10 +504,72 @@ def run_dense_ppca_fused_refinement_blocks(
         n_images=n_images,
         diagnostics=diagnostics,
     )
+    if mean_regularization_style == "variance":
+        mean_precision = None
+    elif mean_regularization_style == "relion_tau":
+        mean_precision = relion_style_mean_precision_from_stats(
+            stats,
+            mean_prior,
+            volume_shape,
+            tau2_fudge=float(mean_tau2_fudge),
+            minres_map=int(mean_minres_map),
+        )
+    else:
+        raise ValueError(
+            "mean_regularization_style must be 'variance' or 'relion_tau', "
+            f"got {mean_regularization_style!r}"
+        )
     mu_half, W_half = solve_augmented_ppca_mstep(
         stats,
         mean_prior=mean_prior,
         W_prior=W_prior,
+        mean_precision=mean_precision,
+        fixed_mean=fixed_mean_half,
         chunk_size=mstep_chunk_size,
     )
+    solved_objective = augmented_ppca_mstep_objective(
+        stats,
+        mu_half,
+        W_half,
+        mean_prior=mean_prior,
+        W_prior=W_prior,
+        mean_precision=mean_precision,
+        chunk_size=mstep_chunk_size,
+    )
+    postprocessed = postprocess_ppca_half_volumes(
+        mu_half,
+        W_half,
+        volume_shape,
+        strategy=postprocess_strategy,
+        mask_radius_px=postprocess_mask_radius_px,
+        cosine_width_px=postprocess_cosine_width_px,
+        grid_correct=postprocess_grid_correct,
+        gridding_padding_factor=postprocess_gridding_padding_factor,
+        gridding_order=postprocess_gridding_order,
+        gridding_correct=postprocess_gridding_correct,
+        bandlimit_max_r=postprocess_bandlimit_max_r,
+    )
+    diagnostics.update(postprocessed.diagnostics)
+    mu_half, W_half = postprocessed.mu_half, postprocessed.W_half
+    diagnostics["mean_frozen"] = fixed_mean_half is not None
+    diagnostics["mstep_mode"] = "fixed_mean_conditional_W" if fixed_mean_half is not None else "joint_mu_W"
+    if fixed_mean_half is not None:
+        mu_half = jnp.asarray(fixed_mean_half)
+    output_objective = augmented_ppca_mstep_objective(
+        stats,
+        mu_half,
+        W_half,
+        mean_prior=mean_prior,
+        W_prior=W_prior,
+        mean_precision=mean_precision,
+        chunk_size=mstep_chunk_size,
+    )
+    diagnostics.update(solved_objective.diagnostics("mstep_objective_solved", n_images=n_images))
+    diagnostics.update(output_objective.diagnostics("mstep_objective_output", n_images=n_images))
+    diagnostics["mstep_objective_postprocess_delta"] = float(output_objective.total - solved_objective.total)
+    diagnostics["mstep_objective_postprocess_delta_per_image"] = (
+        float((output_objective.total - solved_objective.total) / n_images) if n_images else float("nan")
+    )
+    diagnostics["mstep_objective_scope"] = "fixed_e_step_augmented_quadratic_without_constants"
+    diagnostics["mstep_objective_postprocess_in_objective"] = False
     return DensePPCAFusedEMResult(mu_half=mu_half, W_half=W_half, stats=stats, diagnostics=diagnostics)

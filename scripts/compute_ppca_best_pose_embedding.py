@@ -57,6 +57,32 @@ def _load_noise_variance(simulation_info: dict[str, Any] | None, image_shape) ->
     return np.asarray(noise_utils.make_radial_noise(radial, tuple(image_shape)), dtype=np.float32).reshape(-1)
 
 
+def _candidate_rotations_from_source(
+    *,
+    rotation_source: str,
+    simulation_info: dict[str, Any] | None,
+    healpix_order: int,
+    n_total: int,
+) -> np.ndarray:
+    if rotation_source == "simulation-info":
+        if simulation_info is None:
+            raise ValueError("--rotation-source=simulation-info requires --simulation-info")
+        return np.asarray(simulation_info["rots"], dtype=np.float32)[:n_total]
+    if rotation_source == "simulation-info-plus-healpix":
+        if simulation_info is None:
+            raise ValueError("--rotation-source=simulation-info-plus-healpix requires --simulation-info")
+        return np.concatenate(
+            [
+                np.asarray(simulation_info["rots"], dtype=np.float32)[:n_total],
+                np.asarray(get_rotation_grid_at_order(int(healpix_order)), dtype=np.float32),
+            ],
+            axis=0,
+        )
+    if rotation_source == "healpix":
+        return np.asarray(get_rotation_grid_at_order(int(healpix_order)), dtype=np.float32)
+    raise ValueError("rotation_source must be 'healpix', 'simulation-info', or 'simulation-info-plus-healpix'")
+
+
 def _best_pose_z_mean(Y_best, ctf2_over_noise, proj_aug):
     """Return ``E[z | image, best pose]`` for paired image/projection rows."""
 
@@ -89,6 +115,7 @@ def compute_best_pose_embedding(
     image_batch_size: int,
     n_images: int | None,
     relion_texture_interp: bool,
+    image_scale_source: str = "none",
 ) -> dict[str, Any]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -97,35 +124,59 @@ def compute_best_pose_embedding(
     W_half = np.asarray(result["W_half"])
     best_rotation_idx = np.asarray(result["best_rotation_idx"], dtype=np.int64)
     best_translation_idx = np.asarray(result["best_translation_idx"], dtype=np.int64)
+    if rotation_source == "result-matrices":
+        if "best_rotation_matrix" not in result:
+            raise ValueError("--rotation-source=result-matrices requires best_rotation_matrix in result npz")
+        result_rotations = np.asarray(result["best_rotation_matrix"], dtype=np.float32)
+        best_rotation_idx = np.arange(result_rotations.shape[0], dtype=np.int64)
+    else:
+        result_rotations = None
+    if translation_source == "result-vectors":
+        if "best_translation" not in result:
+            raise ValueError("--translation-source=result-vectors requires best_translation in result npz")
+        result_translations = np.asarray(result["best_translation"], dtype=np.float32)
+        best_translation_idx = np.arange(result_translations.shape[0], dtype=np.int64)
+    else:
+        result_translations = None
 
     dataset = load_dataset(str(data_star))
     n_total = int(dataset.n_images if n_images is None else min(int(n_images), int(dataset.n_images)))
     n_total = min(n_total, int(best_rotation_idx.shape[0]), int(best_translation_idx.shape[0]))
     image_indices = np.arange(n_total, dtype=np.int64)
     simulation_info = _load_simulation_info(simulation_info_path)
-    if rotation_source == "simulation-info":
-        if simulation_info is None:
-            raise ValueError("--rotation-source=simulation-info requires --simulation-info")
-        rotations = np.asarray(simulation_info["rots"], dtype=np.float32)[:n_total]
-    elif rotation_source == "healpix":
-        rotations = np.asarray(get_rotation_grid_at_order(int(healpix_order)), dtype=np.float32)
+    if result_rotations is None:
+        rotations = _candidate_rotations_from_source(
+            rotation_source=rotation_source,
+            simulation_info=simulation_info,
+            healpix_order=int(healpix_order),
+            n_total=int(n_total),
+        )
     else:
-        raise ValueError("rotation_source must be 'healpix' or 'simulation-info'")
+        rotations = result_rotations[:n_total]
 
-    if translation_source == "simulation-info-unique":
+    if result_translations is not None:
+        translations = result_translations[:n_total]
+    elif translation_source == "simulation-info-unique":
         if simulation_info is None:
             raise ValueError("--translation-source=simulation-info-unique requires --simulation-info")
         translations = np.unique(np.asarray(simulation_info["trans"], dtype=np.float32)[:n_total], axis=0)
     elif translation_source == "grid":
         translations = np.asarray(get_translation_grid(float(offset_range_px), float(offset_step_px)), dtype=np.float32)
     else:
-        raise ValueError("translation_source must be 'grid' or 'simulation-info-unique'")
+        raise ValueError("translation_source must be 'grid', 'simulation-info-unique', or 'result-vectors'")
     if int(best_rotation_idx[:n_total].max(initial=0)) >= int(rotations.shape[0]):
         raise ValueError("best_rotation_idx exceeds rotation candidate count for the requested rotation source")
     if int(best_translation_idx[:n_total].max(initial=0)) >= int(translations.shape[0]):
         raise ValueError("best_translation_idx exceeds translation candidate count for the requested translation source")
 
     noise_variance = _load_noise_variance(simulation_info, dataset.image_shape)
+    image_scale_corrections = None
+    if image_scale_source == "simulation-info-contrast":
+        if simulation_info is None or "per_image_contrast" not in simulation_info:
+            raise ValueError("--image-scale-source=simulation-info-contrast requires simulation_info['per_image_contrast']")
+        image_scale_corrections = np.asarray(simulation_info["per_image_contrast"], dtype=np.float32)
+    elif image_scale_source != "none":
+        raise ValueError("image_scale_source must be 'none' or 'simulation-info-contrast'")
     resolved = prepare_dense_ppca_dataset_inputs(
         dataset,
         mu_half,
@@ -155,8 +206,19 @@ def compute_best_pose_embedding(
             score_with_masked_images=False,
         )
         F = int(shifted_half.shape[-1])
-        Y1 = shifted_half.reshape(batch_count, int(translations.shape[0]), F) * resolved.score_mask[None, None, :]
-        ctf2_score = ctf2_over_nv_half * resolved.score_mask[None, :]
+        if image_scale_corrections is None:
+            batch_scale = jnp.ones((batch_count,), dtype=shifted_half.real.dtype)
+        else:
+            batch_scale = jnp.asarray(
+                image_scale_corrections[indices_np],
+                dtype=shifted_half.real.dtype,
+            )
+        Y1 = (
+            shifted_half.reshape(batch_count, int(translations.shape[0]), F)
+            * batch_scale[:, None, None]
+            * resolved.score_mask[None, None, :]
+        )
+        ctf2_score = ctf2_over_nv_half * (batch_scale[:, None] ** 2) * resolved.score_mask[None, :]
         best_t = jnp.asarray(best_translation_idx[indices_np], dtype=jnp.int32)
         Y_best = Y1[jnp.arange(batch_count), best_t, :]
 
@@ -235,6 +297,8 @@ def compute_best_pose_embedding(
         "n_translations": int(translations.shape[0]),
         "current_size": int(current_size),
         "relion_texture_interp": bool(relion_texture_interp),
+        "image_scale_source": str(image_scale_source),
+        "uses_image_scale_corrections": bool(image_scale_corrections is not None),
         "z_mean": np.mean(z_real, axis=0) if z_real.size else [],
         "z_std": np.std(z_real, axis=0) if z_real.size else [],
         "z_abs_max": float(np.max(np.abs(z_real))) if z_real.size else 0.0,
@@ -256,15 +320,24 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--simulation-info")
     parser.add_argument("--ppca-result-npz", required=True)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--rotation-source", choices=("healpix", "simulation-info"), default="healpix")
-    parser.add_argument("--translation-source", choices=("grid", "simulation-info-unique"), default="grid")
-    parser.add_argument("--healpix-order", type=int, required=True)
+    parser.add_argument(
+        "--rotation-source",
+        choices=("healpix", "simulation-info", "simulation-info-plus-healpix", "result-matrices"),
+        default="healpix",
+    )
+    parser.add_argument("--translation-source", choices=("grid", "simulation-info-unique", "result-vectors"), default="grid")
+    parser.add_argument("--healpix-order", type=int, default=3)
     parser.add_argument("--offset-range-px", type=float, default=6.0)
     parser.add_argument("--offset-step-px", type=float, default=2.0)
     parser.add_argument("--current-size", type=int, required=True)
     parser.add_argument("--image-batch-size", type=int, default=100)
     parser.add_argument("--n-images", type=int, default=None)
     parser.add_argument("--relion-texture-interp", action="store_true")
+    parser.add_argument(
+        "--image-scale-source",
+        choices=("none", "simulation-info-contrast"),
+        default="none",
+    )
     return parser.parse_args()
 
 
@@ -284,6 +357,7 @@ def main() -> None:
         image_batch_size=int(args.image_batch_size),
         n_images=args.n_images,
         relion_texture_interp=bool(args.relion_texture_interp),
+        image_scale_source=str(args.image_scale_source),
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     if not summary["passed"]:

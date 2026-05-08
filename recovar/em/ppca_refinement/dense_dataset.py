@@ -33,8 +33,13 @@ from recovar.em.ppca_refinement.dense_engine import (
     fused_dense_pose_ppca_block,
 )
 from recovar.em.ppca_refinement.initialization import real_volume_to_centered_fourier_half
+from recovar.em.ppca_refinement.mean_regularization import (
+    KCLASS_RELION_MINRES_MAP,
+    relion_style_mean_precision_from_stats,
+)
+from recovar.em.ppca_refinement.postprocess import postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
-from recovar.ppca import AugmentedPPCAStats, solve_augmented_ppca_mstep
+from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
 from recovar.ppca.triangular import _tri_size
 from recovar.reconstruction import noise as noise_utils
 
@@ -177,6 +182,7 @@ def prepare_dense_ppca_dataset_inputs(
     current_size: int | None = None,
     half_spectrum_scoring: bool = False,
     square_window: bool = False,
+    score_W_scale: float = 1.0,
 ) -> DensePPCADatasetBlockInputs:
     """Resolve augmented volumes and Fourier-window masks for dense PPCA."""
 
@@ -191,6 +197,9 @@ def prepare_dense_ppca_dataset_inputs(
         q=q,
         volume_domain=volume_domain,
     )
+    score_W_scale = float(score_W_scale)
+    if q and score_W_scale != 1.0:
+        augmented_half = augmented_half.at[1:].multiply(jnp.asarray(score_W_scale, dtype=augmented_half.real.dtype))
     window_spec = make_fourier_window_spec(
         image_shape,
         current_size,
@@ -340,10 +349,12 @@ def iter_dense_ppca_dataset_blocks(
     rotation_log_prior: np.ndarray | None = None,
     translation_log_prior: np.ndarray | None = None,
     rotation_translation_mask: np.ndarray | None = None,
+    image_scale_corrections: np.ndarray | None = None,
     class_log_prior: float = 0.0,
     score_with_masked_images: bool = False,
     half_spectrum_scoring: bool = False,
     square_window: bool = False,
+    score_W_scale: float = 1.0,
     relion_texture_interp: bool = True,
     skip_empty_pose_blocks: bool = False,
 ) -> Iterable[DensePPCAFusedBlock]:
@@ -369,6 +380,7 @@ def iter_dense_ppca_dataset_blocks(
         current_size=current_size,
         half_spectrum_scoring=half_spectrum_scoring,
         square_window=square_window,
+        score_W_scale=score_W_scale,
     )
     config = ForwardModelConfig.from_dataset(
         experiment_dataset,
@@ -408,10 +420,24 @@ def iter_dense_ppca_dataset_blocks(
             shifted_recon_half = shifted_score_half
 
         F = int(shifted_score_half.shape[-1])
-        Y1_score_full = shifted_score_half.reshape(batch_count, n_trans, F) * resolved.score_mask[None, None, :]
-        ctf2_score_full = ctf2_over_nv_half * resolved.score_mask[None, :]
-        Y1_recon_full = shifted_recon_half.reshape(batch_count, n_trans, F) * resolved.recon_mask[None, None, :]
-        ctf2_recon_full = ctf2_over_nv_half * resolved.recon_mask[None, :]
+        if image_scale_corrections is None:
+            batch_scale = jnp.ones((batch_count,), dtype=shifted_score_half.real.dtype)
+        else:
+            scale_arr = np.asarray(image_scale_corrections, dtype=np.float32)
+            batch_scale = jnp.asarray(scale_arr[np.asarray(indices, dtype=np.int64)], dtype=shifted_score_half.real.dtype)
+        batch_scale_sq = batch_scale**2
+        Y1_score_full = (
+            shifted_score_half.reshape(batch_count, n_trans, F)
+            * batch_scale[:, None, None]
+            * resolved.score_mask[None, None, :]
+        )
+        ctf2_score_full = ctf2_over_nv_half * batch_scale_sq[:, None] * resolved.score_mask[None, :]
+        Y1_recon_full = (
+            shifted_recon_half.reshape(batch_count, n_trans, F)
+            * batch_scale[:, None, None]
+            * resolved.recon_mask[None, None, :]
+        )
+        ctf2_recon_full = ctf2_over_nv_half * batch_scale_sq[:, None] * resolved.recon_mask[None, :]
         if resolved.score_indices is None:
             Y1_score = Y1_score_full
             ctf2_score = ctf2_score_full
@@ -484,6 +510,7 @@ def iter_dense_ppca_dataset_block_groups(
     noise_variance=None,
     rotations=None,
     translations=None,
+    image_scale_corrections=None,
     **kwargs,
 ) -> Iterable[tuple[DensePPCAFusedBlock, ...]]:
     """Yield all retained rotation blocks for one image batch as a normalization group."""
@@ -497,6 +524,7 @@ def iter_dense_ppca_dataset_block_groups(
         noise_variance,
         rotations,
         translations,
+        image_scale_corrections=image_scale_corrections,
         **kwargs,
     ):
         block_batch_start = int(block.batch_start)
@@ -522,6 +550,16 @@ def run_dense_ppca_fused_em_iteration(
     noise_variance,
     rotations,
     translations,
+    mean_regularization_style: str = "relion_tau",
+    mean_tau2_fudge: float = 1.0,
+    mean_minres_map: int = KCLASS_RELION_MINRES_MAP,
+    postprocess_strategy: str = "mean_and_w_mask",
+    postprocess_mask_radius_px: float | None = None,
+    postprocess_cosine_width_px: float = 3.0,
+    postprocess_grid_correct: bool = True,
+    postprocess_gridding_padding_factor: float = 1.0,
+    postprocess_gridding_order: int = 1,
+    postprocess_gridding_correct: str = "radial",
     disc_type: str = "linear_interp",
     image_batch_size: int = 500,
     rotation_block_size: int = 5000,
@@ -532,6 +570,7 @@ def run_dense_ppca_fused_em_iteration(
     rotation_log_prior: np.ndarray | None = None,
     translation_log_prior: np.ndarray | None = None,
     rotation_translation_mask: np.ndarray | None = None,
+    image_scale_corrections: np.ndarray | None = None,
     class_log_prior: float = 0.0,
     score_with_masked_images: bool = False,
     half_spectrum_scoring: bool = False,
@@ -539,12 +578,15 @@ def run_dense_ppca_fused_em_iteration(
     relion_texture_interp: bool = True,
     enforce_x0: bool = True,
     mstep_chunk_size: int | None = None,
+    freeze_mean: bool = False,
     skip_empty_pose_blocks: bool = False,
     sparse_pass2: bool = True,
     sparse_pass2_log_threshold: float = float(np.log(1.0e-6)),
+    score_W_scale: float = 1.0,
 ) -> DensePPCAFusedEMResult:
     """Run one dataset-backed dense PPCA EM iteration."""
 
+    score_W_scale = float(score_W_scale)
     block_groups = iter_dense_ppca_dataset_block_groups(
         experiment_dataset,
         mu,
@@ -562,10 +604,12 @@ def run_dense_ppca_fused_em_iteration(
         rotation_log_prior=rotation_log_prior,
         translation_log_prior=translation_log_prior,
         rotation_translation_mask=rotation_translation_mask,
+        image_scale_corrections=image_scale_corrections,
         class_log_prior=class_log_prior,
         score_with_masked_images=score_with_masked_images,
         half_spectrum_scoring=half_spectrum_scoring,
         square_window=square_window,
+        score_W_scale=score_W_scale,
         relion_texture_interp=relion_texture_interp,
         skip_empty_pose_blocks=skip_empty_pose_blocks,
     )
@@ -574,6 +618,14 @@ def run_dense_ppca_fused_em_iteration(
     tri = _tri_size(P)
     image_shape = tuple(int(x) for x in experiment_dataset.image_shape)
     volume_shape = tuple(int(x) for x in experiment_dataset.volume_shape)
+    if image_scale_corrections is not None:
+        scale_arr = np.asarray(image_scale_corrections, dtype=np.float32)
+        selected_scale = scale_arr if image_indices is None else scale_arr[np.asarray(image_indices, dtype=np.int64)]
+        image_scale_min = float(np.min(selected_scale)) if selected_scale.size else float("nan")
+        image_scale_max = float(np.max(selected_scale)) if selected_scale.size else float("nan")
+    else:
+        image_scale_min = 1.0
+        image_scale_max = 1.0
     mean_prior = jnp.asarray(mean_prior)
     W_prior = jnp.asarray(W_prior)
     if W_prior.shape != (mean_prior.shape[0], q_resolved):
@@ -594,11 +646,14 @@ def run_dense_ppca_fused_em_iteration(
     sparse_pass2_omitted_mass_upper_image_count = 0
     score_fourier_size = None
     recon_fourier_size = None
+    postprocess_bandlimit_max_r = None
 
     for group in block_groups:
         if not group:
             continue
         batch_size = int(group[0].Y1.shape[0])
+        if postprocess_bandlimit_max_r is None and bool(group[0].use_recon_window):
+            postprocess_bandlimit_max_r = group[0].backprojection_max_r
         if score_fourier_size is None:
             score_fourier_size = int(group[0].Y1.shape[-1])
             recon_fourier_size = int(group[0].Y1_recon.shape[-1]) if group[0].Y1_recon is not None else score_fourier_size
@@ -737,6 +792,14 @@ def run_dense_ppca_fused_em_iteration(
             score_fourier_size is not None
             and int(score_fourier_size) < int(image_shape[0] * (image_shape[1] // 2 + 1))
         ),
+        "mean_regularization_style": str(mean_regularization_style),
+        "mean_tau2_fudge": float(mean_tau2_fudge),
+        "mean_minres_map": int(mean_minres_map),
+        "score_W_scale": float(score_W_scale),
+        "score_W_tempered": bool(score_W_scale != 1.0),
+        "uses_image_scale_corrections": bool(image_scale_corrections is not None),
+        "image_scale_min": float(image_scale_min),
+        "image_scale_max": float(image_scale_max),
     }
     stats = AugmentedPPCAStats(
         rhs=jnp.swapaxes(rhs_volume, 0, 1),
@@ -745,12 +808,109 @@ def run_dense_ppca_fused_em_iteration(
         n_images=n_images,
         diagnostics=diagnostics,
     )
+    if mean_regularization_style == "variance":
+        mean_precision = None
+    elif mean_regularization_style == "relion_tau":
+        mean_precision = relion_style_mean_precision_from_stats(
+            stats,
+            mean_prior,
+            volume_shape,
+            tau2_fudge=float(mean_tau2_fudge),
+            minres_map=int(mean_minres_map),
+        )
+    else:
+        raise ValueError(
+            "mean_regularization_style must be 'variance' or 'relion_tau', "
+            f"got {mean_regularization_style!r}"
+        )
+    input_augmented_half, _input_q = coerce_augmented_half_volumes(
+        mu,
+        W,
+        volume_shape=volume_shape,
+        q=q_resolved,
+        volume_domain=volume_domain,
+    )
+    input_mu_half = input_augmented_half[0]
+    input_W_half = (
+        jnp.swapaxes(input_augmented_half[1:], 0, 1)
+        if q_resolved
+        else jnp.zeros((mean_prior.shape[0], 0), dtype=input_mu_half.dtype)
+    )
+    scoring_input_W_half = input_W_half * jnp.asarray(score_W_scale, dtype=input_W_half.real.dtype)
+    input_objective = augmented_ppca_mstep_objective(
+        stats,
+        input_mu_half,
+        scoring_input_W_half,
+        mean_prior=mean_prior,
+        W_prior=W_prior,
+        mean_precision=mean_precision,
+        chunk_size=mstep_chunk_size,
+    )
+    fixed_mean_half = None
+    if freeze_mean:
+        fixed_mean_half = input_mu_half
     mu_half, W_half = solve_augmented_ppca_mstep(
         stats,
         mean_prior=mean_prior,
         W_prior=W_prior,
+        mean_precision=mean_precision,
+        fixed_mean=fixed_mean_half,
         chunk_size=mstep_chunk_size,
     )
+    solved_objective = augmented_ppca_mstep_objective(
+        stats,
+        mu_half,
+        W_half,
+        mean_prior=mean_prior,
+        W_prior=W_prior,
+        mean_precision=mean_precision,
+        chunk_size=mstep_chunk_size,
+    )
+    postprocessed = postprocess_ppca_half_volumes(
+        mu_half,
+        W_half,
+        volume_shape,
+        strategy=postprocess_strategy,
+        mask_radius_px=postprocess_mask_radius_px,
+        cosine_width_px=postprocess_cosine_width_px,
+        grid_correct=postprocess_grid_correct,
+        gridding_padding_factor=postprocess_gridding_padding_factor,
+        gridding_order=postprocess_gridding_order,
+        gridding_correct=postprocess_gridding_correct,
+        bandlimit_max_r=postprocess_bandlimit_max_r,
+    )
+    diagnostics.update(postprocessed.diagnostics)
+    mu_half, W_half = postprocessed.mu_half, postprocessed.W_half
+    diagnostics["mean_frozen"] = bool(freeze_mean)
+    diagnostics["mstep_mode"] = "fixed_mean_conditional_W" if freeze_mean else "joint_mu_W"
+    if freeze_mean:
+        mu_half = fixed_mean_half
+    output_objective = augmented_ppca_mstep_objective(
+        stats,
+        mu_half,
+        W_half,
+        mean_prior=mean_prior,
+        W_prior=W_prior,
+        mean_precision=mean_precision,
+        chunk_size=mstep_chunk_size,
+    )
+    diagnostics.update(input_objective.diagnostics("mstep_objective_input", n_images=n_images))
+    diagnostics.update(solved_objective.diagnostics("mstep_objective_solved", n_images=n_images))
+    diagnostics.update(output_objective.diagnostics("mstep_objective_output", n_images=n_images))
+    diagnostics["mstep_objective_solved_delta"] = float(solved_objective.total - input_objective.total)
+    diagnostics["mstep_objective_solved_delta_per_image"] = (
+        float((solved_objective.total - input_objective.total) / n_images) if n_images else float("nan")
+    )
+    diagnostics["mstep_objective_output_delta"] = float(output_objective.total - input_objective.total)
+    diagnostics["mstep_objective_output_delta_per_image"] = (
+        float((output_objective.total - input_objective.total) / n_images) if n_images else float("nan")
+    )
+    diagnostics["mstep_objective_postprocess_delta"] = float(output_objective.total - solved_objective.total)
+    diagnostics["mstep_objective_postprocess_delta_per_image"] = (
+        float((output_objective.total - solved_objective.total) / n_images) if n_images else float("nan")
+    )
+    diagnostics["mstep_objective_scope"] = "fixed_e_step_augmented_quadratic_without_constants"
+    diagnostics["mstep_objective_postprocess_in_objective"] = False
     return DensePPCAFusedEMResult(mu_half=mu_half, W_half=W_half, stats=stats, diagnostics=diagnostics)
 
 
@@ -784,6 +944,18 @@ def run_dense_ppca_halfset_fused_em_iteration(
     score_with_masked_images: bool = False,
     half_spectrum_scoring: bool = False,
     square_window: bool = False,
+    score_W_scale: float = 1.0,
+    image_scale_corrections: np.ndarray | None = None,
+    mean_regularization_style: str = "relion_tau",
+    mean_tau2_fudge: float = 1.0,
+    mean_minres_map: int = KCLASS_RELION_MINRES_MAP,
+    postprocess_strategy: str = "mean_and_w_mask",
+    postprocess_mask_radius_px: float | None = None,
+    postprocess_cosine_width_px: float = 3.0,
+    postprocess_grid_correct: bool = True,
+    postprocess_gridding_padding_factor: float = 1.0,
+    postprocess_gridding_order: int = 1,
+    postprocess_gridding_correct: str = "radial",
     mstep_chunk_size: int | None = None,
 ) -> PoseMarginalPPCAEMState:
     """Run one gold-standard halfset dense PPCA iteration and update state."""
@@ -809,6 +981,18 @@ def run_dense_ppca_halfset_fused_em_iteration(
                 score_with_masked_images=score_with_masked_images,
                 half_spectrum_scoring=half_spectrum_scoring,
                 square_window=square_window,
+                score_W_scale=score_W_scale,
+                image_scale_corrections=image_scale_corrections,
+                mean_regularization_style=mean_regularization_style,
+                mean_tau2_fudge=mean_tau2_fudge,
+                mean_minres_map=mean_minres_map,
+                postprocess_strategy=postprocess_strategy,
+                postprocess_mask_radius_px=postprocess_mask_radius_px,
+                postprocess_cosine_width_px=postprocess_cosine_width_px,
+                postprocess_grid_correct=postprocess_grid_correct,
+                postprocess_gridding_padding_factor=postprocess_gridding_padding_factor,
+                postprocess_gridding_order=postprocess_gridding_order,
+                postprocess_gridding_correct=postprocess_gridding_correct,
                 mstep_chunk_size=mstep_chunk_size,
             )
         )
