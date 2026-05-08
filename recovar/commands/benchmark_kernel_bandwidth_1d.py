@@ -63,7 +63,7 @@ def _uniform_state_distribution(n_states: int) -> np.ndarray:
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
+        json.dump(payload, f, indent=2, sort_keys=True, default=str)
 
 
 def _write_raw_pdb_volumes(args, out: Path, voxel_size: float) -> tuple[Path, np.ndarray]:
