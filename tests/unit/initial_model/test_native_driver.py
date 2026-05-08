@@ -461,6 +461,7 @@ def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkey
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=2.125, K=1, nr_iter=200, n_directions=1)
     state.iter = 10
+    sampling_state.last_current_resolution = float(state.current_resolution)
 
     expectation_step = driver._native_expectation_step(
         SimpleNamespace(voxel_size=2.125, n_images=1),

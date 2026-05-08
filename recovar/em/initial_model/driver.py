@@ -42,6 +42,7 @@ DEFAULT_OVERSAMPLING = 1
 DEFAULT_PERTURBATION_FACTOR = 0.5
 RELION_INITIALMODEL_LOCAL_SEARCH_HEALPIX_ORDER = 4
 RELION_INITIALMODEL_MIN_TRANSLATION_STEP_ANGSTROM = 1.5
+RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN = 1
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_ORIENTATIONS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES = 9999999.0
@@ -552,9 +553,8 @@ def _prepare_native_sampling_for_iteration(
     _record_resolution_stall_for_sampling(sampling_state, state, iteration=iteration)
     if not _should_update_native_sampling(iteration=iteration, nr_iter=int(state.nr_iter), do_grad=do_grad):
         return False
-    # RELION InitialModel uses --auto_sampling without autorefine. In that
-    # branch updateAngularSampling proceeds on the cadence above; resolution
-    # stalls are tracked for metadata but do not block the update.
+    if sampling_state.nr_iter_wo_resol_gain < RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN:
+        return False
     return _relion_update_native_sampling_state(sampling_state, do_grad=do_grad)
 
 
