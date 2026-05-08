@@ -28,67 +28,59 @@ def add_output_name_arg(parser: argparse.ArgumentParser):
 
 
 def add_gpu_memory_arg(parser: argparse.ArgumentParser):
-    """Add ``--gpu-gb`` / ``--gpu-memory`` to any heavy-GPU command.
+    """Add ``--gpu-gb`` to any heavy-GPU command.
 
-    The flag overrides the auto-detected GPU memory used by recovar's
-    auto-batch-size formulas. Lower it if the heterogeneity / kernel-
-    regression / backproject step OOMs on your GPU — particularly when
-    running with ``RECOVAR_DISABLE_CUDA=1`` (the JAX-native fallback uses
-    ~3x more memory per image than the custom CUDA kernel).
-
-    ``--gpu-gb`` is the canonical name (used by ``recovar pipeline``);
-    ``--gpu-memory`` is accepted as an alias for backward compatibility
-    across downstream commands.
+    Lowers the GPU budget used by recovar's auto-batch-size formulas
+    AND caps JAX's actual allocation via
+    ``XLA_PYTHON_CLIENT_MEM_FRACTION`` (the latter happens in
+    ``recovar.command_line._apply_gpu_memory_cap`` before jax
+    initializes). Lower it if the heterogeneity / kernel-regression /
+    backproject step OOMs on your GPU.
     """
     parser.add_argument(
         "--gpu-gb",
-        "--gpu-memory",
         type=float,
         default=None,
         dest="gpu_memory",
         help=(
-            "GPU memory budget in GB used by the auto-batch-size formula. "
-            "Default: detect via JAX. Lower than your physical VRAM if you "
-            "OOM (especially under RECOVAR_DISABLE_CUDA=1, where the "
-            "JAX-native fallback path needs ~3x more memory per image)."
+            "GPU memory budget in GB. Caps JAX allocation AND the "
+            "auto-batch-size formula. Default: full physical VRAM via "
+            "JAX. Lower this on a constrained or shared GPU."
         ),
     )
     return parser
 
 
 def apply_gpu_memory_arg(args, logger=None) -> None:
-    """If ``--gpu-gb`` / ``--gpu-memory`` was given, propagate to ``set_gpu_memory_limit``."""
+    """If ``--gpu-gb`` was given, propagate to ``set_gpu_memory_limit``."""
     if getattr(args, "gpu_memory", None) is not None:
         from recovar.utils import helpers as _utils
 
         _utils.set_gpu_memory_limit(args.gpu_memory)
         if logger is not None:
             logger.info(
-                "GPU memory budget set to %.1f GB via --gpu-gb/--gpu-memory",
+                "GPU memory budget set to %.1f GB via --gpu-gb",
                 args.gpu_memory,
             )
 
 
 def add_memory_planning_args(parser: argparse.ArgumentParser):
-    """Add the full robust-GPU-memory flag set.
+    """Add the full GPU-memory flag set for any heavy-GPU command.
 
-    Heavy-GPU commands call this in addition to (or instead of)
-    ``add_gpu_memory_arg`` to expose the calibrated planner, the
-    diagnostic outputs, and the hard-limit knob.
-
-    Adds (or aliases) all of:
-      - ``--gpu-gb`` / ``--gpu-memory``     soft budget for batch-size formulas
+    Adds:
+      - ``--gpu-gb``                        budget (caps JAX + batch formulas)
       - ``--low-memory-option``             halve batch sizes
       - ``--very-low-memory-option``        quarter batch sizes
-      - ``--adaptive-memory``               (legacy) reduce n_pcs to fit budget
-      - ``--adaptive-n-pcs`` / ``--n-adaptive-pcs``
-                                            preferred aliases for ``--adaptive-memory``
+      - ``--adaptive-n-pcs``                pick n_pcs to fit the budget
+                                            (reproducible: same flags +
+                                            dataset = same n_pcs)
       - ``--memory-diagnostics``            write memory_trace.jsonl per phase
       - ``--fail-on-memory-exceed``         test-only end-of-run assertion
-      - ``--memory-safety-fraction``        multiplier on top of calibrated peaks
-      - ``--hard-gpu-memory-limit``         set XLA_PYTHON_CLIENT_MEM_FRACTION
-                                            from --gpu-gb (hard cap; bootstrap
-                                            parser in command_line.py honors it)
+      - ``--memory-safety-fraction``        advanced multiplier (testing)
+
+    Hidden / test-only:
+      - ``--debug-fail-on-memory-exceed``   alias of --fail-on-memory-exceed
+        (reserved for the unit-test override env var)
     """
     if not any(a.dest == "gpu_memory" for a in parser._actions):
         add_gpu_memory_arg(parser)
@@ -113,9 +105,7 @@ def add_memory_planning_args(parser: argparse.ArgumentParser):
         help="Quarter image/volume/column batch sizes (more aggressive).",
     )
     group.add_argument(
-        "--adaptive-memory",
         "--adaptive-n-pcs",
-        "--n-adaptive-pcs",
         dest="adaptive_memory",
         action="store_true",
         help=(
@@ -152,24 +142,7 @@ def add_memory_planning_args(parser: argparse.ArgumentParser):
         dest="memory_safety_fraction",
         type=float,
         default=None,
-        help=(
-            "Optional advanced multiplier on top of the calibrated peak "
-            "predictions. Default: 1.0 (use the table verbatim). The "
-            "planner already applies a 1.2x slack to absorb GPU-arch "
-            "variation; this flag is for testing tighter / looser margins."
-        ),
-    )
-    group.add_argument(
-        "--hard-gpu-memory-limit",
-        dest="hard_gpu_memory_limit",
-        action="store_true",
-        help=(
-            "Convert --gpu-gb into XLA_PYTHON_CLIENT_MEM_FRACTION via the "
-            "command_line.py bootstrap parser BEFORE jax initializes. "
-            "Required for tests that want a real cap (not just a planning "
-            "budget). Silently downgrades to a soft budget if jax is "
-            "already imported or NVML is unavailable."
-        ),
+        help=argparse.SUPPRESS,
     )
     return parser
 

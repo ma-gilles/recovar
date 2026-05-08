@@ -270,7 +270,7 @@ def add_args(parser: argparse.ArgumentParser):
     # Memory planning flags: --gpu-gb / --gpu-memory, --low-memory-option,
     # --very-low-memory-option, --adaptive-memory / --adaptive-n-pcs /
     # --n-adaptive-pcs, --memory-diagnostics, --fail-on-memory-exceed,
-    # --memory-safety-fraction, --hard-gpu-memory-limit. Defined centrally
+    # --memory-safety-fraction. Defined centrally
     # so every heavy-GPU command exposes the same surface.
     from recovar.utils.parser_args import add_memory_planning_args as _add_mem_args
 

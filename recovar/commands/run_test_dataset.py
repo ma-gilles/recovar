@@ -1,18 +1,24 @@
 """Smoke-test the recovar install end-to-end on a tiny synthetic dataset.
 
-Two design contracts:
+Three design contracts:
 
 1. Arguments are forwarded to inner ``recovar pipeline ...`` etc. calls
    as ``argv`` lists, never shell strings. This makes logging / quoting
    reliable and lets us cleanly capture stderr+stdout for the
    error-hints classifier on failure.
 
-2. When the user passes ``--gpu-gb`` to constrain the smoke test (e.g.
-   to verify the install on a smaller GPU), we automatically splice
-   ``--adaptive-n-pcs`` into every inner pipeline call so the run
-   finishes. This wrapper exists to answer "is your install correct?",
-   not to act as a science test — robustness wins. Pass
-   ``--full-memory-test`` to force the default 200-PC configuration.
+2. ``--adaptive-n-pcs`` is ALWAYS spliced into every inner pipeline /
+   downstream call by default. This wrapper exists to answer "is your
+   install correct?", not to act as a science test — it has to finish
+   even on a small or shared GPU. Pass ``--full-memory-test`` to opt
+   out and exercise the default 200-PC configuration.
+
+3. The set of subcommands that accept memory-planning flags is the
+   single source of truth (``_COMMANDS_WITH_MEMORY_ARGS``). The
+   ``_recovar_argv`` helper consults that set to decide whether to
+   splice memory flags, and is the only way this module builds
+   subprocess invocations. Adding a new heavy-GPU command anywhere
+   in the codebase only requires updating that set here.
 """
 
 from __future__ import annotations
@@ -32,16 +38,25 @@ from recovar.output import output
 logger = logging.getLogger(__name__)
 
 
-# Flags this wrapper consumes; everything else is forwarded.
-_WRAPPER_OPTS = {
-    "--output-dir",
-    "-o",
-    "--all-tests",
-    "--tilt-series-only",
-    "--no-delete",
-    "--cpu",
-    "--full-memory-test",
-}
+# Subcommands that accept the full memory-planning flag surface
+# (``--gpu-gb``, ``--low-memory-option``, ``--adaptive-n-pcs``, …).
+# Single source of truth: tests and the splicer below both read this.
+_COMMANDS_WITH_MEMORY_ARGS = frozenset(
+    {
+        "pipeline",
+        "pipeline_with_outliers",
+        "analyze",
+        "compute_state",
+        "compute_trajectory",
+        "reconstruct_from_external_embedding",
+        "junk_particle_detection",
+        "outlier_detection",
+    }
+)
+
+# Subcommands that accept ``--accept-cpu``. Today only the pipeline
+# entry points; everything else honors JAX_PLATFORMS=cpu via env var.
+_COMMANDS_WITH_ACCEPT_CPU = frozenset({"pipeline", "pipeline_with_outliers"})
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -73,9 +88,9 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    # Memory-planning surface: --gpu-gb / --gpu-memory + low/very-low-memory +
-    # adaptive aliases + diagnostics + fail-on-memory-exceed +
-    # memory-safety-fraction + hard-gpu-memory-limit.
+    # Memory-planning flag set: --gpu-gb, --low-memory-option,
+    # --very-low-memory-option, --adaptive-n-pcs, --memory-diagnostics,
+    # --fail-on-memory-exceed, --memory-safety-fraction.
     from recovar.utils.parser_args import add_memory_planning_args
 
     add_memory_planning_args(parser)
@@ -83,11 +98,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _build_forward_argv(args: argparse.Namespace) -> list[str]:
-    """Return the list of argv tokens to splice into every inner pipeline call.
+    """Return the list of argv tokens spliced into memory-aware subcommands.
 
-    Handles the auto-adaptive default: when --gpu-gb is set and
-    --full-memory-test is NOT, splice in --adaptive-n-pcs so the smoke
-    test always finishes.
+    ``--adaptive-n-pcs`` is included BY DEFAULT (the smoke test must
+    finish on small / shared GPUs). ``--full-memory-test`` is the
+    explicit opt-out for users who want the default 200-PC config.
     """
     fwd: list[str] = []
     if args.gpu_memory is not None:
@@ -97,15 +112,19 @@ def _build_forward_argv(args: argparse.Namespace) -> list[str]:
     if args.very_low_memory_option:
         fwd.append("--very-low-memory-option")
 
-    auto_adaptive = args.gpu_memory is not None and not args.full_memory_test and not args.adaptive_memory
-    if args.adaptive_memory or auto_adaptive:
-        fwd.append("--adaptive-n-pcs")
-        if auto_adaptive:
+    if args.full_memory_test:
+        if args.adaptive_memory:
+            # User said both. Honor --adaptive-n-pcs, log the conflict.
+            fwd.append("--adaptive-n-pcs")
+            logger.warning("Both --adaptive-n-pcs and --full-memory-test were passed; --adaptive-n-pcs wins.")
+        else:
             logger.info(
-                "run_test_dataset: enabling --adaptive-n-pcs for inner pipeline "
-                "calls because --gpu-gb was supplied. Pass --full-memory-test to "
-                "force the default 200-PC configuration."
+                "run_test_dataset: --full-memory-test set, NOT splicing "
+                "--adaptive-n-pcs into inner calls. Smoke test will use "
+                "the default 200-PC configuration."
             )
+    else:
+        fwd.append("--adaptive-n-pcs")
 
     if args.memory_diagnostics:
         fwd.append("--memory-diagnostics")
@@ -113,8 +132,6 @@ def _build_forward_argv(args: argparse.Namespace) -> list[str]:
         fwd.append("--fail-on-memory-exceed")
     if args.memory_safety_fraction is not None:
         fwd += ["--memory-safety-fraction", str(args.memory_safety_fraction)]
-    if args.hard_gpu_memory_limit:
-        fwd.append("--hard-gpu-memory-limit")
     return fwd
 
 
@@ -138,7 +155,6 @@ def main():
         os.environ["JAX_PLATFORMS"] = "cpu"
 
     base_argv = [sys.executable, "-m", "recovar.command_line"]
-    cpu_extra = ["--accept-cpu"] if run_on_cpu else []
 
     passed_functions: list[str] = []
     failed_functions: list[str] = []
@@ -222,24 +238,39 @@ def main():
     def _p(*parts):
         return os.path.join(dataset_dir, *parts)
 
+    def _recovar_argv(cmd: str, *tokens: str) -> list[str]:
+        """Build a ``recovar <cmd> <tokens>`` argv with memory-flag
+        forwarding driven by ``_COMMANDS_WITH_MEMORY_ARGS``.
+
+        Centralizing this is the answer to #135 reliability: any new
+        heavy-GPU command is wired up by adding its name to that set,
+        and every subprocess call here goes through this single entry
+        point so we cannot forget to splice the flags.
+        """
+        argv = [*base_argv, cmd, *tokens]
+        if cmd in _COMMANDS_WITH_MEMORY_ARGS:
+            argv.extend(forward_argv)
+        if run_on_cpu and cmd in _COMMANDS_WITH_ACCEPT_CPU:
+            argv.append("--accept-cpu")
+        return argv
+
     def pipeline_argv(*pos: str, output_path: str, extras: list[str]) -> list[str]:
-        return [
-            *base_argv,
-            "pipeline",
-            *pos,
-            "-o",
-            output_path,
-            *extras,
-            *cpu_extra,
-            *forward_argv,
-        ]
+        # Thin wrapper that injects ``-o <output_path>`` so the legacy
+        # call sites below stay readable.
+        return _recovar_argv("pipeline", *pos, "-o", output_path, *extras)
 
     if tilt_series_only:
         logger.info("Running tilt series tests only...")
         cleanup_paths.append(os.path.join(dataset_dir, "tilt_test"))
 
         run_command(
-            [*base_argv, "make_test_dataset", _p("tilt_test"), "--n-images", "10000", "--tilt-series"],
+            _recovar_argv(
+                "make_test_dataset",
+                _p("tilt_test"),
+                "--n-images",
+                "10000",
+                "--tilt-series",
+            ),
             "Generate a test dataset for tilt series",
             "make_test_dataset_tilt",
         )
@@ -265,15 +296,14 @@ def main():
         )
 
         run_command(
-            [
-                *base_argv,
+            _recovar_argv(
                 "analyze",
                 _p("tilt_test", "test_dataset", "pipeline_tilt_output"),
                 "--zdim=2",
                 "--no-z-regularization",
                 "--n-clusters=3",
                 "--n-trajectories=0",
-            ],
+            ),
             "Run analyze with tilt series",
             "analyze_tilt",
         )
@@ -295,8 +325,7 @@ def main():
             )
 
         run_command(
-            [
-                *base_argv,
+            _recovar_argv(
                 "reconstruct_from_external_embedding",
                 _p("tilt_test", "test_dataset", "particles.star"),
                 "--poses",
@@ -310,8 +339,7 @@ def main():
                 target_path,
                 "-o",
                 _p("tilt_test", "test_dataset", "reconstruct_tilt_output"),
-                *forward_argv,
-            ],
+            ),
             "Test reconstruct_from_external_embedding with tilt series",
             "reconstruct_tilt",
         )
@@ -319,7 +347,7 @@ def main():
     else:
         cleanup_paths.append(os.path.join(dataset_dir, "test_dataset"))
         run_command(
-            [*base_argv, "make_test_dataset", dataset_dir],
+            _recovar_argv("make_test_dataset", dataset_dir),
             "Generate a small test dataset",
             "make_test_dataset",
         )
@@ -360,28 +388,25 @@ def main():
         )
 
         run_command(
-            [
-                *base_argv,
+            _recovar_argv(
                 "analyze",
                 _p("test_dataset", "pipeline_output"),
                 "--zdim=2",
                 "--no-z-regularization",
                 "--n-clusters=3",
                 "--n-trajectories=0",
-                *forward_argv,
-            ],
+            ),
             "Run analyze",
             "analyze",
         )
 
         run_command(
-            [
-                *base_argv,
+            _recovar_argv(
                 "estimate_conformational_density",
                 _p("test_dataset", "pipeline_output"),
                 "--pca_dim",
                 "2",
-            ],
+            ),
             "Estimate conformational density",
             "estimate_conformational_density",
         )
@@ -390,8 +415,7 @@ def main():
             K = 2
 
             run_command(
-                [
-                    *base_argv,
+                _recovar_argv(
                     "pipeline_with_outliers",
                     *common_pos,
                     "--correct-contrast",
@@ -403,15 +427,13 @@ def main():
                     "4",
                     "--k-rounds",
                     str(K),
-                    *forward_argv,
-                ],
+                ),
                 f"Run pipeline_with_outliers for {K} rounds",
                 "pipeline_with_outliers",
             )
 
             run_command(
-                [
-                    *base_argv,
+                _recovar_argv(
                     "analyze",
                     _p("test_dataset", "pipeline_output"),
                     "--zdim=2",
@@ -421,15 +443,13 @@ def main():
                     "--density",
                     _p("test_dataset", "pipeline_output", "density", "data", "deconv_density_knee.pkl"),
                     "--skip-centers",
-                    *forward_argv,
-                ],
+                ),
                 "Run analyze with density",
                 "analyze",
             )
 
             run_command(
-                [
-                    *base_argv,
+                _recovar_argv(
                     "compute_trajectory",
                     _p("test_dataset", "pipeline_output"),
                     "-o",
@@ -441,15 +461,13 @@ def main():
                     _p("test_dataset", "pipeline_output", "density", "data", "deconv_density_knee.pkl"),
                     "--zdim=2",
                     "--n-vols-along-path=3",
-                    *forward_argv,
-                ],
+                ),
                 "Compute trajectory (option 1)",
                 "compute_trajectory (option 1)",
             )
 
             run_command(
-                [
-                    *base_argv,
+                _recovar_argv(
                     "compute_trajectory",
                     _p("test_dataset", "pipeline_output"),
                     "-o",
@@ -478,15 +496,13 @@ def main():
                     _p("test_dataset", "pipeline_output", "density", "data", "deconv_density_knee.pkl"),
                     "--zdim=2",
                     "--n-vols-along-path=0",
-                    *forward_argv,
-                ],
+                ),
                 "Compute trajectory (option 2)",
                 "compute_trajectory (option 2)",
             )
 
             run_command(
-                [
-                    *base_argv,
+                _recovar_argv(
                     "estimate_stable_states",
                     _p(
                         "test_dataset",
@@ -500,7 +516,7 @@ def main():
                     "--n_local_maxs=-1",
                     "-o",
                     _p("test_dataset", "pipeline_output", "stable_states"),
-                ],
+                ),
                 "Estimate stable states",
                 "estimate_stable_states",
             )
@@ -534,8 +550,7 @@ def main():
                     failed_functions.append("prepare_embedding_for_reconstruct")
                 else:
                     run_command(
-                        [
-                            *base_argv,
+                        _recovar_argv(
                             "reconstruct_from_external_embedding",
                             _p("test_dataset", "particles.64.mrcs"),
                             "--poses",
@@ -548,8 +563,7 @@ def main():
                             target_path,
                             "-o",
                             _p("test_dataset", "reconstruct_output"),
-                            *forward_argv,
-                        ],
+                        ),
                         "Test reconstruct_from_external_embedding",
                         "reconstruct",
                     )

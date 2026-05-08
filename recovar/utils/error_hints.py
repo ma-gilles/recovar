@@ -226,9 +226,6 @@ def _hint_gpu_oom(ctx: DiagnosticContext) -> ErrorHint:
         "recovar pipeline ... --gpu-gb <smaller-N> --adaptive-n-pcs",
         "recovar pipeline ... --gpu-gb <smaller-N> --low-memory-option",
         "recovar pipeline ... --gpu-gb <smaller-N> --very-low-memory-option",
-        "export XLA_PYTHON_CLIENT_PREALLOCATE=false   "
-        "(disables JAX's default 90% preallocation; recovar sets this by "
-        "default but a stale shell env may override it)",
     ]
     cause = "Peak GPU memory exceeded the available budget during a JAX/XLA allocation."
 

@@ -10,9 +10,9 @@ entry that invokes :func:`main_commands`.
 Two responsibilities live here that have to run BEFORE the subcommand
 module is imported (i.e. before any ``import jax`` happens):
 
-1. Memory bootstrap: a tiny tolerant scan of ``sys.argv`` for
-   ``--hard-gpu-memory-limit`` + ``--gpu-gb`` so we can set
-   ``XLA_PYTHON_CLIENT_MEM_FRACTION`` before jax initializes.
+1. Memory bootstrap: when ``--gpu-gb N`` is on the command line, scan
+   for it and set ``XLA_PYTHON_CLIENT_MEM_FRACTION = N / physical_total``
+   before jax initializes — the actual fix for #135.
 2. CUDA env-var typo detection: emit the warning eagerly so the user
    sees it before any error.
 
@@ -64,53 +64,45 @@ def _scan_for_bool_flag(argv: list[str], names: tuple[str, ...]) -> bool:
     return False
 
 
-def _apply_hard_gpu_memory_limit(argv: list[str]) -> None:
-    """If ``--hard-gpu-memory-limit`` is set, configure XLA before jax import.
+def _apply_gpu_memory_cap(argv: list[str]) -> None:
+    """When ``--gpu-gb N`` is set, cap JAX's GPU allocation to N GB.
 
-    We compute the fraction from the user's ``--gpu-gb`` (or
-    ``--gpu-memory``) divided by the physical GPU total, clamp into
-    ``[0.05, 0.95]``, and export ``XLA_PYTHON_CLIENT_MEM_FRACTION``.
+    This is the actual fix for issue #135: the original ``--gpu-gb``
+    flag only affected RECOVAR's batch-size formulas, while JAX
+    independently allocated up to ``XLA_PYTHON_CLIENT_MEM_FRACTION=.90``
+    of physical VRAM (the default in ``recovar/jax_config.py``). On a
+    48 GB workstation with no flag, JAX would lock up 43 GB before
+    RECOVAR's planner ran. Now ``--gpu-gb 24`` translates to
+    ``XLA_PYTHON_CLIENT_MEM_FRACTION = 24 / physical_total`` and JAX
+    actually honors it.
+
+    Done by a tolerant pre-import scan of argv (NOT argparse) so the
+    real subcommand parser still sees ``--gpu-gb`` and feeds it to the
+    planner for batch-size computation.
 
     No-ops gracefully when:
-      - the flag is absent
-      - no budget was given
+      - ``--gpu-gb`` is absent (default JAX behavior)
+      - jax is somehow already imported (too late)
       - NVML/nvidia-smi can't report the physical total
-      - jax is somehow already imported (would be too late)
     """
-    if not _scan_for_bool_flag(argv, ("--hard-gpu-memory-limit",)):
+    raw = _scan_for_flag_value(argv, ("--gpu-gb",))
+    if raw is None:
         return
 
     if "jax" in sys.modules:
         logger.warning(
-            "Hard GPU memory limiting could not be applied because jax was "
-            "already imported before command_line.py ran. RECOVAR will still "
-            "use --gpu-gb as a soft planning budget."
-        )
-        return
-
-    raw = _scan_for_flag_value(argv, ("--gpu-gb", "--gpu-memory"))
-    if raw is None:
-        logger.warning(
-            "--hard-gpu-memory-limit was passed without --gpu-gb / --gpu-memory; no XLA memory cap will be applied."
+            "GPU memory cap could not be applied because jax was already "
+            "imported before command_line.py ran. RECOVAR will still use "
+            "--gpu-gb as a soft planning budget for batch sizes, but JAX's "
+            "memory allocation is no longer constrained."
         )
         return
 
     try:
         gpu_gb = float(raw)
     except ValueError:
-        logger.warning("Could not parse --gpu-gb=%r as float; skipping hard limit.", raw)
+        logger.warning("Could not parse --gpu-gb=%r as float; skipping memory cap.", raw)
         return
-
-    safety_raw = _scan_for_flag_value(argv, ("--memory-safety-fraction",))
-    safety = 1.0
-    if safety_raw is not None:
-        try:
-            safety = float(safety_raw)
-        except ValueError:
-            logger.warning(
-                "Could not parse --memory-safety-fraction=%r as float; using 1.0.",
-                safety_raw,
-            )
 
     physical_total: float | None = None
     try:
@@ -124,47 +116,36 @@ def _apply_hard_gpu_memory_limit(argv: list[str]) -> None:
 
     if physical_total is None or physical_total <= 0:
         logger.warning(
-            "Hard GPU memory limit requested but the physical GPU total is "
-            "unknown (no pynvml/nvidia-smi). Falling back to a soft budget."
+            "--gpu-gb=%.1f was supplied but the physical GPU total could "
+            "not be determined (no pynvml/nvidia-smi). Falling back to a "
+            "soft planning budget; JAX may still allocate up to its "
+            "default fraction of physical VRAM.",
+            gpu_gb,
         )
         return
 
-    fraction = (gpu_gb * safety) / physical_total
+    if gpu_gb > physical_total:
+        logger.warning(
+            "--gpu-gb=%.1f exceeds physical GPU total %.1f; capping at 0.95 of physical.",
+            gpu_gb,
+            physical_total,
+        )
+
+    fraction = gpu_gb / physical_total
     fraction = max(0.05, min(0.95, fraction))
 
     os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = f"{fraction:.4f}"
-    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     logger.info(
-        "Hard GPU memory limit applied: XLA_PYTHON_CLIENT_MEM_FRACTION=%.4f "
-        "(--gpu-gb=%.1f, physical_total=%.1f GB, safety=%.2f, "
-        "XLA_PYTHON_CLIENT_PREALLOCATE=false)",
+        "GPU memory cap applied: XLA_PYTHON_CLIENT_MEM_FRACTION=%.4f (--gpu-gb=%.1f, physical_total=%.1f GB)",
         fraction,
         gpu_gb,
         physical_total,
-        safety,
     )
 
 
 # ---------------------------------------------------------------------------
 # Subcommand dispatch
 # ---------------------------------------------------------------------------
-
-
-def _disable_jax_preallocation_by_default() -> None:
-    """Set ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` before jax imports.
-
-    Without this, JAX honors ``XLA_PYTHON_CLIENT_MEM_FRACTION=.90`` and
-    grabs ~90% of the physical GPU on first allocation regardless of
-    what the user passed via ``--gpu-gb``. That's the proximate cause
-    of issue #135: a workstation with a 48 GB card OOMs on the default
-    pipeline because JAX has already locked up 43 GB before recovar's
-    batch logic runs.
-
-    Setting PREALLOCATE=false makes JAX allocate on demand. The
-    ``setdefault`` lets advanced users opt back in by exporting the
-    variable in their shell.
-    """
-    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 
 def _print_available_commands(available_cmds, file=None):
@@ -232,11 +213,10 @@ def main_commands() -> None:
         sys.exit(1)
 
     # Pre-import housekeeping that must run before jax_config.py loads:
-    #   1. Disable JAX preallocation by default (root cause of issue #135).
-    #   2. Apply hard GPU memory limit (sets XLA_PYTHON_CLIENT_MEM_FRACTION).
-    #   3. Surface the RECOVAR_CUDA_DISABLE typo warning eagerly.
-    _disable_jax_preallocation_by_default()
-    _apply_hard_gpu_memory_limit(sys.argv[2:])
+    #   1. When --gpu-gb is set, cap JAX's allocation to that budget
+    #      via XLA_PYTHON_CLIENT_MEM_FRACTION (the actual fix for #135).
+    #   2. Surface the RECOVAR_CUDA_DISABLE typo warning eagerly.
+    _apply_gpu_memory_cap(sys.argv[2:])
     _eager_typo_warning()
 
     # Remove the subcommand from sys.argv so the subcommand's parser
