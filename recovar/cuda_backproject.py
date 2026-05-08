@@ -24,6 +24,7 @@ import logging
 import os
 import pathlib
 import subprocess
+import tempfile
 import threading
 from contextlib import contextmanager
 from types import ModuleType
@@ -67,16 +68,87 @@ def custom_cuda_requested() -> bool:
     return not _env_flag(_DISABLE_CUSTOM_CUDA_ENV)
 
 
+_CACHE_ROOT_FALLBACK_WARNED = False
+
+
+def _path_is_writable(path: pathlib.Path) -> bool:
+    """Return True iff *path* exists or can be created and a tiny file
+    written and unlinked there.
+
+    Used to gate fallbacks in :func:`_cache_root` when the user's
+    ``XDG_CACHE_HOME`` (or ``$HOME``) points at a directory that exists
+    but cannot be written to — e.g. issue #136 where ``XDG_CACHE_HOME``
+    resolves to ``/home/levans`` but the real home is ``/mnt/home/levans``.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except (PermissionError, OSError):
+        return False
+    probe = path / ".recovar_write_test"
+    try:
+        probe.write_text("ok")
+    except (PermissionError, OSError):
+        return False
+    try:
+        probe.unlink()
+    except (PermissionError, OSError):
+        return False
+    return True
+
+
+def _warn_cache_root_fallback(rejected: list[tuple[str, pathlib.Path]], chosen: pathlib.Path) -> None:
+    parts = ", ".join(f"{label}={path}" for label, path in rejected)
+    logger.warning(
+        "RECOVAR cuda cache: %s is not writable, falling back to %s. Set %s to silence this warning.",
+        parts,
+        chosen,
+        _CUDA_CACHE_DIR_ENV,
+    )
+
+
 def _cache_root() -> pathlib.Path:
+    """Pick a writable cache directory for the CUDA shared library.
+
+    Resolution order, each step gated on writability (except the
+    explicit override):
+
+    1. ``RECOVAR_CUDA_CACHE_DIR`` — explicit override, returned as-is.
+    2. ``$XDG_CACHE_HOME/recovar/cuda``
+    3. ``~/.cache/recovar/cuda``
+    4. ``tempfile.gettempdir()/recovar_cuda_cache/cuda`` — last-resort
+       fallback when neither of the above is writable. Logs a WARNING.
+
+    Steps 2 and 3 each attempt ``mkdir(parents=True, exist_ok=True)``
+    plus a tiny probe-file write and delete. ``PermissionError`` and
+    ``OSError`` are caught and trigger a fall-through to the next
+    candidate.
+    """
+    global _CACHE_ROOT_FALLBACK_WARNED
+
     override = os.environ.get(_CUDA_CACHE_DIR_ENV)
     if override:
         return pathlib.Path(override).expanduser()
 
+    candidates: list[tuple[str, pathlib.Path]] = []
     xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
     if xdg_cache_home:
-        return pathlib.Path(xdg_cache_home).expanduser() / "recovar" / "cuda"
+        candidates.append(("XDG_CACHE_HOME", pathlib.Path(xdg_cache_home).expanduser() / "recovar" / "cuda"))
+    candidates.append(("HOME", pathlib.Path.home().expanduser() / ".cache" / "recovar" / "cuda"))
 
-    return pathlib.Path.home().expanduser() / ".cache" / "recovar" / "cuda"
+    rejected: list[tuple[str, pathlib.Path]] = []
+    for label, path in candidates:
+        if _path_is_writable(path):
+            if rejected and not _CACHE_ROOT_FALLBACK_WARNED:
+                _warn_cache_root_fallback(rejected, path)
+                _CACHE_ROOT_FALLBACK_WARNED = True
+            return path
+        rejected.append((label, path))
+
+    fallback = pathlib.Path(tempfile.gettempdir()) / "recovar_cuda_cache" / "cuda"
+    if not _CACHE_ROOT_FALLBACK_WARNED:
+        _warn_cache_root_fallback(rejected, fallback)
+        _CACHE_ROOT_FALLBACK_WARNED = True
+    return fallback
 
 
 def _cached_lib_path() -> pathlib.Path:
