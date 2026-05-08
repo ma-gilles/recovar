@@ -38,10 +38,19 @@ from recovar.output import metrics
 from recovar.output import output as o
 from recovar.project.job_context import job_context
 from recovar.simulation import oracle_pipeline, simulator, synthetic_dataset
+from recovar.simulation import trajectory_generation as trajgen
 from recovar.simulation.trajectory_generation import generate_trajectory_volumes
 from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
 
 logger = logging.getLogger(__name__)
+
+_TRAJECTORY_PATHS = {
+    "symmetric": trajgen.path_symmetric,
+    "arm_only": trajgen.path_arm_only,
+    "head_only": trajgen.path_head_only,
+    "left_right": trajgen.path_left_right,
+    "asymmetric": trajgen.path_asymmetric,
+}
 
 
 def _load_volume_stack(prefix: Path, n_states: int) -> np.ndarray:
@@ -80,6 +89,7 @@ def _write_raw_pdb_volumes(args, out: Path, voxel_size: float) -> tuple[Path, np
             voxel_size=voxel_size,
             Bfactor=args.bfactor,
             max_rotation_degrees=args.max_rotation_degrees,
+            path_fn=_TRAJECTORY_PATHS[args.path],
             pdb_path=args.pdb_path,
             prefix_name="vol",
             output_prefix=str(raw_prefix),
@@ -376,6 +386,8 @@ def run_walkthrough(args, out: Path) -> dict:
         "raw_volume_prefix": str(raw_prefix),
         "active_volume_prefix": str(active_prefix),
         "use_oracle_pipeline": bool(args.use_oracle_pipeline),
+        "path": str(args.path),
+        "max_rotation_degrees": float(args.max_rotation_degrees),
     }
     _write_json(out / "config.json", {"args": vars(args), "summary": summary})
     _write_readme(out, summary)
@@ -409,6 +421,8 @@ Key settings:
 - pc_project: {summary["pc_project"]}
 - target_state: {summary["target_state"]}
 - use_oracle_pipeline: {summary["use_oracle_pipeline"]}
+- path: {summary["path"]}
+- max_rotation_degrees: {summary["max_rotation_degrees"]}
 """
     (out / "README.md").write_text(text)
 
@@ -446,6 +460,16 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--premultiplied-ctf", action="store_true")
     parser.add_argument("--bfactor", type=float, default=80.0)
     parser.add_argument("--max-rotation-degrees", type=float, default=5.0)
+    parser.add_argument(
+        "--path",
+        choices=sorted(_TRAJECTORY_PATHS.keys()),
+        default="symmetric",
+        help=(
+            "Which 5nrl rigid-body trajectory to use. 'symmetric' (default) rotates the "
+            "right arm + head together. 'arm_only' rotates just the right arm — smaller "
+            "moving region; useful with a larger --max-rotation-degrees."
+        ),
+    )
     parser.add_argument("--pdb-path", type=str, default=None)
     parser.add_argument("--overwrite", action="store_true", help="Regenerate cached dataset/pipeline outputs.")
     parser.add_argument(
