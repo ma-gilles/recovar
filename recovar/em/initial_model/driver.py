@@ -27,7 +27,7 @@ from recovar.utils.helpers import write_relion_mrc
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
 from .dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
-from .init import initialise_denovo_state, seed_noise_from_mavg
+from .init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
 from .iteration_loop import relion_solvent_flatten_state, relion_solvent_mask, run_vdam_iterations
 from .schedules import DEFAULT_GRAD_EM_ITERS, DEFAULT_GRAD_MU, default_subset_sizes_for_3d_initial_model
 from .state import InitialModelState
@@ -822,6 +822,11 @@ def _initial_state_from_particles(
             do_init_blobs=True,
             is_helical_segment=False,
         )
+    state = initialise_data_vs_prior_from_references(
+        state,
+        nr_particles=len(main_star),
+        fix_tau=False,
+    )
     return state, optics_group_by_particle
 
 
@@ -833,7 +838,10 @@ def _write_model_star(path: str, state: InitialModelState, class_mrcs: tuple[str
     with open(path, "w") as f:
         f.write("# Created by recovar native InitialModel\n\n")
         f.write("data_model_general\n\n")
-        f.write(f"_rlnCurrentResolution {float(state.current_resolution):.12g}\n")
+        current_resolution_angstrom = (
+            1.0 / float(state.current_resolution) if float(state.current_resolution) > 0.0 else float("inf")
+        )
+        f.write(f"_rlnCurrentResolution {current_resolution_angstrom:.12g}\n")
         f.write(f"_rlnCurrentImageSize {int(state.current_size)}\n")
         f.write(f"_rlnCurrentIteration {int(state.iter)}\n")
         f.write(f"_rlnNrClasses {int(state.K)}\n")
@@ -846,7 +854,33 @@ def _write_model_star(path: str, state: InitialModelState, class_mrcs: tuple[str
         f.write("_rlnClassDistribution #2\n")
         f.write("_rlnEstimatedResolution #3\n")
         for class_mrc, probability in zip(class_mrcs, np.asarray(state.pdf_class)):
-            f.write(f"{class_mrc} {float(probability):.12g} 0\n")
+            f.write(f"{class_mrc} {float(probability):.12g} {current_resolution_angstrom:.12g}\n")
+
+        for k in range(int(state.K)):
+            f.write(f"\n\ndata_model_class_{k + 1}\n\n")
+            f.write("loop_\n")
+            f.write("_rlnSpectralIndex #1\n")
+            f.write("_rlnResolution #2\n")
+            f.write("_rlnAngstromResolution #3\n")
+            f.write("_rlnSsnrMap #4\n")
+            f.write("_rlnGoldStandardFsc #5\n")
+            f.write("_rlnFourierCompleteness #6\n")
+            f.write("_rlnReferenceSigma2 #7\n")
+            f.write("_rlnReferenceTau2 #8\n")
+            tau2 = np.asarray(state.tau2_class[k], dtype=np.float64)
+            dvp = np.asarray(state.data_vs_prior_class[k], dtype=np.float64)
+            fsc = np.asarray(state.fsc_halves_class[k], dtype=np.float64)
+            n_shells = int(state.ori_size) // 2 + 1
+            for shell in range(n_shells):
+                resolution = float(shell) / (float(state.pixel_size) * float(state.ori_size))
+                resolution_angstrom = (
+                    float(state.pixel_size) * float(state.ori_size) / float(shell) if shell > 0 else 999.0
+                )
+                f.write(
+                    f"{int(shell)} {resolution:.12g} {resolution_angstrom:.12g} "
+                    f"{float(dvp[shell]):.12g} {float(fsc[shell]):.12g} 0 "
+                    f"0 {float(tau2[shell]):.12g}\n"
+                )
 
         f.write("\n\ndata_model_optics_group_1\n\n")
         f.write("loop_\n")

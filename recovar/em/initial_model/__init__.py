@@ -32,6 +32,7 @@ from .init import (
     compute_current_size_for_denovo,
     compute_ini_high_angstrom,
     compute_ini_high_shell,
+    initialise_data_vs_prior_from_references,
     initialise_denovo_state,
     seed_noise_from_mavg,
 )
@@ -88,6 +89,7 @@ __all__ = [
     "compute_current_size_for_denovo",
     "compute_ini_high_angstrom",
     "compute_ini_high_shell",
+    "initialise_data_vs_prior_from_references",
     "initialise_denovo_state",
     "seed_noise_from_mavg",
     "VdamPosterior",

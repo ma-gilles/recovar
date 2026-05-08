@@ -377,6 +377,8 @@ def test_model_star_uses_relion_model_blocks(tmp_path):
     state.current_resolution = 0.375
     state.tau2_fudge_factor = 3.5
     state.ave_Pmax = 0.625
+    state.tau2_class[:] = np.asarray([[1.0, 2.0, 3.0, 4.0, 5.0], [5.0, 4.0, 3.0, 2.0, 1.0]])
+    state.data_vs_prior_class[:] = np.asarray([[10.0, 9.0, 8.0, 7.0, 6.0], [1.0, 2.0, 3.0, 4.0, 5.0]])
     out = tmp_path / "run_it001_model.star"
 
     driver._write_model_star(str(out), state, ("run_it001_class001.mrc", "run_it001_class002.mrc"))
@@ -384,15 +386,19 @@ def test_model_star_uses_relion_model_blocks(tmp_path):
     text = out.read_text()
     assert "data_model_general" in text
     assert "data_model_classes" in text
+    assert "data_model_class_1" in text
+    assert "data_model_class_2" in text
     assert "data_model_optics_group_1" in text
     assert "_rlnCurrentImageSize 6" in text
-    assert "_rlnCurrentResolution 0.375" in text
+    assert "_rlnCurrentResolution 2.66666666667" in text
     assert "_rlnCurrentIteration 3" in text
     assert "_rlnTau2FudgeFactor 3.5" in text
     assert "_rlnAveragePmax 0.625" in text
+    assert "_rlnSsnrMap" in text
+    assert "_rlnReferenceTau2" in text
     assert "_rlnReferenceImage" in text
-    assert "run_it001_class001.mrc 0.25 0" in text
-    assert "run_it001_class002.mrc 0.75 0" in text
+    assert "run_it001_class001.mrc 0.25 2.66666666667" in text
+    assert "run_it001_class002.mrc 0.75 2.66666666667" in text
 
 
 def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):
