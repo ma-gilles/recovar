@@ -6,7 +6,11 @@ The command intentionally does only the basics:
 2. Optionally replace that trajectory by its projection onto PC1/PCk.
 3. Simulate a cryo-EM dataset from the selected volumes.
 4. Save the ground-truth volumes and masks used by the experiment.
-5. Run ``recovar pipeline`` with contrast correction disabled.
+5. Run ``recovar pipeline`` with contrast correction disabled, OR write a
+   fake "oracle" pipeline output where mean / PCs / eigenvalues / noise
+   come straight from the simulator (``--use-oracle-pipeline``). The
+   latter isolates the variance noise puts on ``zs`` from the bias of
+   imperfect mean / basis / noise estimation.
 6. Run ``recovar compute_state`` at the middle state of the trajectory.
 
 It is meant as a clean starting point for students who want to inspect the
@@ -33,7 +37,7 @@ from recovar.heterogeneity import kernel_bandwidth_benchmark as kb
 from recovar.output import metrics
 from recovar.output import output as o
 from recovar.project.job_context import job_context
-from recovar.simulation import simulator, synthetic_dataset
+from recovar.simulation import oracle_pipeline, simulator, synthetic_dataset
 from recovar.simulation.trajectory_generation import generate_trajectory_volumes
 from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
 
@@ -186,7 +190,9 @@ def _write_gt_masks_and_volumes(out: Path, sim_info: dict, grid_size: int, voxel
 
     volume_mask, binary_volume_mask = metrics.make_union_gt_mask_from_hvd(gt, (grid_size, grid_size, grid_size))
     focus_mask, binary_focus_mask = metrics.make_moving_gt_mask_from_hvd(gt, (grid_size, grid_size, grid_size))
-    utils.write_mrc(mask_dir / "volume_mask_union.mrc", np.asarray(volume_mask, dtype=np.float32), voxel_size=voxel_size)
+    utils.write_mrc(
+        mask_dir / "volume_mask_union.mrc", np.asarray(volume_mask, dtype=np.float32), voxel_size=voxel_size
+    )
     utils.write_mrc(mask_dir / "focus_mask_moving.mrc", np.asarray(focus_mask, dtype=np.float32), voxel_size=voxel_size)
     np.save(mask_dir / "volume_mask_union.npy", np.asarray(volume_mask, dtype=np.float32))
     np.save(mask_dir / "focus_mask_moving.npy", np.asarray(focus_mask, dtype=np.float32))
@@ -242,6 +248,44 @@ def _run_pipeline(args, out: Path, mask_paths: dict[str, str]) -> Path:
     logger.info("Running recovar pipeline %s", " ".join(pipeline_cmd))
     parser = pipeline.add_args(argparse.ArgumentParser())
     pipeline.standard_recovar_pipeline(parser.parse_args(pipeline_cmd))
+    return pipeline_dir
+
+
+def _run_oracle_pipeline(
+    args,
+    out: Path,
+    mask_paths: dict[str, str],
+    sim_info: dict,
+    voxel_size: float,
+) -> Path:
+    """Write a synthetic pipeline output using oracle mean / PCs / noise.
+
+    The dataset is real (the simulator's noisy images), but the embedding
+    is computed against the GT mean and PCs, isolating zs noise from
+    estimation bias.
+    """
+    pipeline_dir = out / "06_pipeline"
+    if (pipeline_dir / "model" / "params.pkl").exists() and not args.overwrite:
+        logger.info("Reusing existing oracle pipeline output in %s", pipeline_dir)
+        return pipeline_dir
+
+    volume_mask = np.asarray(utils.load_mrc(mask_paths["volume_mask"]), dtype=np.float32)
+    focus_mask = np.asarray(utils.load_mrc(mask_paths["focus_mask"]), dtype=np.float32)
+    zdims = sorted({int(args.zdim), 1, 2}) if args.zdim is not None else [1, 2]
+
+    summary = oracle_pipeline.write_oracle_pipeline_output(
+        pipeline_dir=pipeline_dir,
+        dataset_dir=out / "03_dataset",
+        voxel_size=voxel_size,
+        volume_mask=volume_mask,
+        sim_info=sim_info,
+        zdims=zdims,
+        gpu_memory=args.pipeline_gpu_memory,
+        focus_mask=focus_mask,
+        premultiplied_ctf=bool(args.premultiplied_ctf),
+        noise_model="radial" if args.noise_model == "radial1" else args.noise_model,
+    )
+    _write_json(pipeline_dir / "oracle_pipeline_info.json", summary)
     return pipeline_dir
 
 
@@ -304,7 +348,10 @@ def run_walkthrough(args, out: Path) -> dict:
     active_prefix, _active_volumes, pca_meta = _write_active_volumes(raw_volumes, args, out, voxel_size)
     _image_stack, sim_info = _simulate_dataset(args, out, active_prefix, voxel_size)
     mask_paths = _write_gt_masks_and_volumes(out, sim_info, args.grid_size, voxel_size)
-    pipeline_dir = _run_pipeline(args, out, mask_paths)
+    if args.use_oracle_pipeline:
+        pipeline_dir = _run_oracle_pipeline(args, out, mask_paths, sim_info, voxel_size)
+    else:
+        pipeline_dir = _run_pipeline(args, out, mask_paths)
     latent_point = _middle_state_latent_point(pipeline_dir, sim_info, target_state, args.zdim)
     compute_state_dir = _run_compute_state(args, out, pipeline_dir, latent_point)
 
@@ -328,6 +375,7 @@ def run_walkthrough(args, out: Path) -> dict:
         "pca_explained_energy_head": np.asarray(pca_meta["explained_energy"])[:10].astype(float).tolist(),
         "raw_volume_prefix": str(raw_prefix),
         "active_volume_prefix": str(active_prefix),
+        "use_oracle_pipeline": bool(args.use_oracle_pipeline),
     }
     _write_json(out / "config.json", {"args": vars(args), "summary": summary})
     _write_readme(out, summary)
@@ -346,17 +394,21 @@ It is intentionally organized as a step-by-step experiment.
 4. `04_ground_truth/`: ground-truth volumes loaded from simulator metadata.
 5. `05_masks/`: `volume_mask_union.mrc` passed as pipeline `--mask`; `focus_mask_moving.mrc` passed as `--focus-mask`.
 6. `06_pipeline/`: RECOVAR pipeline output. Contrast correction was disabled.
+   When `use_oracle_pipeline` is true, this is a fake output written from
+   the simulator's GT mean / PCs / eigenvalues / noise, with per-image zs
+   computed by the standard embedding step on the noisy images.
 7. `07_compute_state/`: RECOVAR compute_state output at the middle trajectory state.
 
 Key settings:
 
-- grid_size: {summary['grid_size']}
-- n_states: {summary['n_states']}
-- n_images: {summary['n_images']}
-- noise_level: {summary['noise_level']}
-- contrast_std: {summary['contrast_std']}
-- pc_project: {summary['pc_project']}
-- target_state: {summary['target_state']}
+- grid_size: {summary["grid_size"]}
+- n_states: {summary["n_states"]}
+- n_images: {summary["n_images"]}
+- noise_level: {summary["noise_level"]}
+- contrast_std: {summary["contrast_std"]}
+- pc_project: {summary["pc_project"]}
+- target_state: {summary["target_state"]}
+- use_oracle_pipeline: {summary["use_oracle_pipeline"]}
 """
     (out / "README.md").write_text(text)
 
@@ -369,9 +421,13 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--noise-level", type=float, default=1.0)
     parser.add_argument("--noise-model", choices=["radial1", "radial"], default="radial1")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--pc-project", type=int, default=0, help="0 uses raw volumes; 1 uses PC1-projected volumes; k uses PCk.")
+    parser.add_argument(
+        "--pc-project", type=int, default=0, help="0 uses raw volumes; 1 uses PC1-projected volumes; k uses PCk."
+    )
     parser.add_argument("--target-state", type=int, default=None, help="Default is the middle state.")
-    parser.add_argument("--zdim", type=int, default=1, help="Pipeline latent dimension used to choose the compute_state point.")
+    parser.add_argument(
+        "--zdim", type=int, default=1, help="Pipeline latent dimension used to choose the compute_state point."
+    )
     parser.add_argument("--n-bins", type=int, default=50, help="Bandwidth bins passed to compute_state.")
     parser.add_argument(
         "--compute-state-maskrad-fraction",
@@ -384,12 +440,23 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--lazy", action="store_true")
     parser.add_argument("--low-memory-option", action="store_true")
     parser.add_argument("--very-low-memory-option", action="store_true")
-    parser.add_argument("--pipeline-gpu-memory", type=float, default=None, help="Optional value passed to pipeline --gpu-gb.")
+    parser.add_argument(
+        "--pipeline-gpu-memory", type=float, default=None, help="Optional value passed to pipeline --gpu-gb."
+    )
     parser.add_argument("--premultiplied-ctf", action="store_true")
     parser.add_argument("--bfactor", type=float, default=80.0)
     parser.add_argument("--max-rotation-degrees", type=float, default=5.0)
     parser.add_argument("--pdb-path", type=str, default=None)
     parser.add_argument("--overwrite", action="store_true", help="Regenerate cached dataset/pipeline outputs.")
+    parser.add_argument(
+        "--use-oracle-pipeline",
+        action="store_true",
+        help=(
+            "Skip recovar pipeline and write a fake pipeline output where mean / PCs / "
+            "eigenvalues / noise come from the simulator. Per-image zs are still computed "
+            "from the noisy images, so compute_state sees only the noise on zs."
+        ),
+    )
     return parser
 
 
