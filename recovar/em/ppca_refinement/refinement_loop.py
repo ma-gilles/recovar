@@ -181,6 +181,8 @@ def run_dense_ppca_refinement_loop(
     half_spectrum_scoring: bool = False,
     square_window: bool = False,
     mstep_chunk_size: int | None = None,
+    image_scale_corrections: np.ndarray | None = None,
+    score_W_scale: float = 1.0,
 ) -> tuple[PoseMarginalPPCAEMState, list[PPCARefinementIterationRecord]]:
     """Run dense halfset PPCA refinement iterations with gold-standard gating."""
 
@@ -213,6 +215,8 @@ def run_dense_ppca_refinement_loop(
             half_spectrum_scoring=half_spectrum_scoring,
             square_window=square_window,
             mstep_chunk_size=mstep_chunk_size,
+            image_scale_corrections=image_scale_corrections,
+            score_W_scale=score_W_scale,
         )
         best_pose_indices = _combined_best_pose_ids(updated.pose_diagnostics, n_trans)
         comparison = (
@@ -300,6 +304,8 @@ def run_local_ppca_refinement_loop(
     half_spectrum_scoring: bool = False,
     square_window: bool = False,
     mstep_chunk_size: int | None = None,
+    image_scale_corrections: np.ndarray | None = None,
+    score_W_scale: float = 1.0,
 ) -> tuple[PoseMarginalPPCAEMState, list[PPCARefinementIterationRecord]]:
     """Run exact-local halfset PPCA refinement iterations behind the same gate."""
 
@@ -332,6 +338,8 @@ def run_local_ppca_refinement_loop(
             half_spectrum_scoring=half_spectrum_scoring,
             square_window=square_window,
             mstep_chunk_size=mstep_chunk_size,
+            image_scale_corrections=image_scale_corrections,
+            score_W_scale=score_W_scale,
         )
         best_pose_indices = _combined_best_pose_ids(updated.pose_diagnostics, n_trans)
         comparison = (

@@ -1,3 +1,5 @@
+import pickle
+
 import numpy as np
 import pytest
 
@@ -14,7 +16,9 @@ from recovar.em.ppca_refinement.initialization import (
 )
 import recovar.core.fourier_transform_utils as ftu
 from recovar.em.ppca_refinement.schedule import loading_subspace_agreement
+from recovar.simulation import synthetic_dataset
 from recovar.utils import helpers as utils
+from scripts.prepare_gt_weighted_ppca_init import prepare_gt_weighted_ppca_init
 
 
 pytestmark = pytest.mark.unit
@@ -68,6 +72,52 @@ def test_gt_initialization_requires_explicit_frame_and_preserves_scale():
     assert init.diagnostics["amplitude_scale"] == 2.5
 
 
+def test_prepare_gt_weighted_init_uses_simulation_scale_and_grid_resize(tmp_path):
+    root = tmp_path / "vol"
+    vol0 = np.zeros((4, 4, 4), dtype=np.float32)
+    vol0[1, 1, 1] = 1.0
+    vol1 = np.zeros((4, 4, 4), dtype=np.float32)
+    vol1[2, 2, 2] = -2.0
+    paths = [tmp_path / "vol0000.mrc", tmp_path / "vol0001.mrc"]
+    for path, volume in zip(paths, (vol0, vol1), strict=True):
+        utils.write_mrc(path, volume, voxel_size=1.5)
+
+    simulation_info = {
+        "volumes_path_root": str(root),
+        "grid_size": 8,
+        "trailing_zero_format_in_vol_name": True,
+        "scale_vol": 0.25,
+        "image_assignment": np.asarray([0, 1, 1, 1], dtype=np.int64),
+        "per_image_contrast": np.ones((4,), dtype=np.float32),
+    }
+    sim_path = tmp_path / "simulation_info.pkl"
+    with sim_path.open("wb") as f:
+        pickle.dump(simulation_info, f)
+    summary = prepare_gt_weighted_ppca_init(
+        volume_paths=paths,
+        simulation_info_path=sim_path,
+        output_dir=tmp_path / "init",
+        q=1,
+        frame="recovar",
+        write_maps=False,
+        apply_simulation_scale=True,
+    )
+
+    heterogeneous = synthetic_dataset.load_heterogeneous_reconstruction(simulation_info)
+    volumes_fourier = np.asarray(heterogeneous.volumes).reshape((-1, 8, 8, 8))
+    volumes_real = np.stack(
+        [np.asarray(ftu.get_idft3(volume.reshape(8, 8, 8)).real, dtype=np.float32) for volume in volumes_fourier],
+        axis=0,
+    )
+    weights = np.asarray([0.25, 0.75], dtype=np.float64)
+    expected_mu = np.sum(weights[:, None, None, None] * volumes_real, axis=0)
+    init = np.load(summary["npz_path"])
+
+    assert tuple(init["mu"].shape) == (8, 8, 8)
+    np.testing.assert_allclose(init["mu"], expected_mu, rtol=1e-6, atol=1e-6)
+    assert summary["amplitude_scale"] == 0.25
+    assert summary["volume_loader"] == "synthetic_dataset.load_heterogeneous_reconstruction"
+
 def test_synthetic_known_pcs_recovered_up_to_subspace_rotation():
     _mu, pcs, volumes = _synthetic_volumes()
     init = initialize_ppca_from_gt_volumes(volumes, q=2, frame="recovar")
@@ -107,6 +157,25 @@ def test_gt_loading_row_norm_prior_uses_scaled_w_without_q_division():
     np.testing.assert_allclose(prior[:, 0], expected_row_norm, rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(prior[:, 1], expected_row_norm, rtol=1e-6, atol=1e-6)
     assert not np.allclose(prior[:, 0], expected_row_norm / 2.0)
+
+
+def test_gt_loading_row_norm_prior_default_preserves_half_fourier_scale():
+    W = np.zeros((2, 4, 4, 4), dtype=np.float32)
+    W[0, 0, 0, 0] = 1.25
+    W[1, 2, 1, 0] = 0.75
+    W_half = np.stack([real_volume_to_centered_fourier_half(loading) for loading in W], axis=1)
+    expected_row_norm = np.sum(np.abs(W_half) ** 2, axis=1)
+
+    prior = loading_row_norm_variance_prior(
+        W,
+        volume_shape=(4, 4, 4),
+        volume_domain="real",
+        floor=0.0,
+        shell_average=False,
+    )
+
+    np.testing.assert_allclose(prior[:, 0], expected_row_norm, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(prior[:, 1], expected_row_norm, rtol=1e-6, atol=1e-6)
 
 
 def test_gt_mean_power_prior_uses_same_explicit_box_normalization():

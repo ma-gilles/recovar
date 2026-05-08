@@ -216,7 +216,7 @@ def loading_row_norm_variance_prior(
     volume_shape,
     volume_domain: str = "auto",
     q: int | None = None,
-    box_size_power: float = 2.0,
+    box_size_power: float = 0.0,
     scale: float = 1.0,
     floor: float = 0.0,
     shell_average: bool = True,
@@ -231,9 +231,11 @@ def loading_row_norm_variance_prior(
     row-norm-squared curve is averaged over radial shells, matching the
     no-pose PPCA prior style and avoiding coefficient-wise prior spikes.
 
-    The raw DFT power is divided by ``N**box_size_power`` to match the reconstruction
-    normal-equation scale; this is intentionally explicit for synthetic
-    debugging and should not be confused with RELION InitialModel BPref stats.
+    By default the prior is the raw half-Fourier row norm, matching the scale
+    of the augmented dense M-step unknowns. ``box_size_power`` is an explicit
+    synthetic/debug knob for legacy experiments that divide DFT power by
+    ``N**box_size_power``; it should not be confused with RELION InitialModel
+    BPref stats.
     """
     columns = _coerce_loading_columns_to_fourier_half(W, volume_shape=volume_shape, volume_domain=volume_domain, q=q)
     row_norm = np.sum(np.abs(columns) ** 2, axis=1, dtype=np.float64)
@@ -255,7 +257,7 @@ def volume_power_variance_prior(
     *,
     volume_shape,
     volume_domain: str = "auto",
-    box_size_power: float = 2.0,
+    box_size_power: float = 0.0,
     scale: float = 1.0,
     floor: float = 0.0,
     shell_average: bool = True,

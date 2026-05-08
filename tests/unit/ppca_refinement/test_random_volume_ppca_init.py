@@ -20,6 +20,16 @@ def _load_script_module():
     return module
 
 
+def _load_random_w_script_module():
+    repo = Path(__file__).resolve().parents[3]
+    script_path = repo / "scripts" / "prepare_gt_mean_random_w_init.py"
+    spec = importlib.util.spec_from_file_location("prepare_gt_mean_random_w_init", script_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_random_volume_ppca_init_downsamples_and_preserves_covariance_trace(tmp_path):
     module = _load_script_module()
     rng = np.random.default_rng(0)
@@ -93,3 +103,29 @@ def test_random_volume_ppca_init_rejects_upsampling(tmp_path):
     module = _load_script_module()
     with pytest.raises(ValueError, match="only downsamples"):
         module._downsample_recovar_volume(np.zeros((4, 4, 4), dtype=np.float32), 8)
+
+
+def test_gt_mean_random_w_init_preserves_source_shell_power(tmp_path):
+    module = _load_random_w_script_module()
+    rng = np.random.default_rng(12)
+    mu = rng.normal(size=(4, 4, 4)).astype(np.float32)
+    W = rng.normal(size=(2, 4, 4, 4)).astype(np.float32)
+    source = tmp_path / "source_init.npz"
+    np.savez_compressed(source, mu=mu, W=W, q=np.asarray(2, dtype=np.int64))
+
+    summary = module.prepare_gt_mean_random_w_init(
+        source_init_npz=source,
+        output_dir=tmp_path / "random_w",
+        q=2,
+        seed=99,
+    )
+
+    assert summary["passed"]
+    assert summary["mu_rms"] == pytest.approx(float(np.sqrt(np.mean(mu**2))))
+    assert summary["source_W_rms"] == pytest.approx(float(np.sqrt(np.mean(W**2))))
+    assert summary["max_relative_shell_power_error"] < 1e-5
+
+    init = np.load(tmp_path / "random_w" / "ppca_init.npz")
+    np.testing.assert_allclose(init["mu"], mu, rtol=0.0, atol=0.0)
+    assert init["W"].shape == W.shape
+    assert not np.allclose(init["W"], W)

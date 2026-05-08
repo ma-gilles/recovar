@@ -220,6 +220,7 @@ def main() -> None:
             skip_empty_pose_blocks=rotation_translation_mask is not None,
             sparse_pass2=bool(args.ppca_sparse_pass2),
             sparse_pass2_log_threshold=float(args.ppca_sparse_pass2_log_threshold),
+            postprocess_strategy=str(args.postprocess_strategy).replace("-", "_"),
             mstep_chunk_size=int(args.mstep_chunk_size),
             **common,
         )
@@ -265,6 +266,7 @@ def main() -> None:
             "ppca_sparse_pass2_log_threshold": float(args.ppca_sparse_pass2_log_threshold),
             "kclass_sparse_pass2": bool(args.kclass_sparse_pass2),
             "kclass_half_volume_mstep": bool(args.kclass_half_volume_mstep),
+            "postprocess_strategy": str(args.postprocess_strategy),
             "exact_pose_support_mask": bool(args.exact_pose_support_mask),
             "prior_init_npz": None if prior_init_npz is None else str(prior_init_npz),
         },
@@ -325,11 +327,12 @@ def _parse_args():
     parser.add_argument("--ppca-prior", choices=("constant", "gt-row-norm"), default="gt-row-norm")
     parser.add_argument("--mean-prior-variance", type=float, default=1.0)
     parser.add_argument("--W-prior-variance", type=float, default=1.0)
-    parser.add_argument("--gt-prior-box-power", type=float, default=2.0)
+    parser.add_argument("--gt-prior-box-power", type=float, default=0.0)
     parser.add_argument("--gt-prior-floor", type=float, default=1.0e-8)
     parser.add_argument("--gt-prior-shell-average", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--ppca-sparse-pass2", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--ppca-sparse-pass2-log-threshold", type=float, default=float(np.log(1.0e-6)))
+    parser.add_argument("--postprocess-strategy", choices=("none", "mean-only", "mean-and-w-mask"), default="none")
     parser.add_argument("--kclass-mean-variance", type=float, default=1.0)
     parser.add_argument("--kclass-sparse-pass2", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--kclass-half-volume-mstep", action=argparse.BooleanOptionalAction, default=True)
