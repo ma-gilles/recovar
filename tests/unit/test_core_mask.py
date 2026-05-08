@@ -7,8 +7,8 @@ from scipy.ndimage import binary_dilation, distance_transform_edt
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-import recovar.core.mask as mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.core.mask as mask
 import recovar.utils as utils
 
 pytestmark = pytest.mark.unit
@@ -523,6 +523,32 @@ class TestMakeUnionGtMask:
         soft, binary = mask.make_union_gt_mask([vol], vol_shape)
         assert soft.shape == vol_shape
 
+    def test_dilation_iters_zero_skips_dilation(self):
+        """``dilation_iters=0`` should skip dilation entirely.
+
+        scipy.ndimage.binary_dilation with ``iterations<1`` iterates until no
+        change (filling everything for a connected mask). The wrapper should
+        treat zero/negative values as "skip dilation" so a tight binary mask
+        is preserved.
+        """
+        from scipy.ndimage import gaussian_filter
+
+        vol_shape = (32, 32, 32)
+        vol = np.zeros(vol_shape, dtype=np.float32)
+        vol[16, 16, 16] = 100.0
+        vol = gaussian_filter(vol, sigma=2.0)
+
+        _, binary_zero = mask.make_union_gt_mask([vol], vol_shape, dilation_iters=0)
+        _, binary_one = mask.make_union_gt_mask([vol], vol_shape, dilation_iters=1)
+
+        # If iter=0 fell through to scipy's "iterate until no change" branch,
+        # the mask would cover ~the whole connected component.
+        assert binary_zero.sum() < vol_shape[0] ** 3 // 2, (
+            f"dilation_iters=0 should be tight, got {binary_zero.sum()} voxels"
+        )
+        # And tight implies smaller than 1-iter dilation.
+        assert binary_zero.sum() < binary_one.sum()
+
 
 class TestMakeMask:
     """Tests for the standalone make_mask function."""
@@ -531,7 +557,7 @@ class TestMakeMask:
         rng = np.random.RandomState(seed)
         vol = np.zeros(shape, dtype=np.float32)
         s = signal_range
-        vol[s[0]:s[1], s[0]:s[1], s[0]:s[1]] = 5.0
+        vol[s[0] : s[1], s[0] : s[1], s[0] : s[1]] = 5.0
         return vol + rng.randn(*shape).astype(np.float32) * noise
 
     def test_output_shape_and_range(self):
@@ -597,6 +623,7 @@ class TestMakeMask:
 
     def test_mask_is_connected_with_cleanup(self):
         from scipy.ndimage import label as scipy_label
+
         vol = self._make_test_volume()
         result = mask.make_mask(vol, cleanup=True)
         binary = result > 0.5

@@ -348,8 +348,13 @@ def make_union_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1, dilation_i
         per_vol_mask = make_mask_from_gt(vol_3d, smax=smax, iter=iter, from_ft=False)
         union_mask |= per_vol_mask > 0.5
 
-    dilated = binary_dilation(union_mask, iterations=dilation_iters)
-    binary_mask = np.asarray(dilated, dtype=bool)
+    # scipy.ndimage.binary_dilation interprets iterations < 1 as "iterate
+    # until no change" (fills the whole box for a connected mask).  Treat
+    # non-positive values as "skip dilation" instead, matching the moving
+    # mask's behavior and giving callers a way to opt out of dilation.
+    if dilation_iters and dilation_iters > 0:
+        union_mask = binary_dilation(union_mask, iterations=dilation_iters)
+    binary_mask = np.asarray(union_mask, dtype=bool)
     soft_mask = soften_volume_mask(binary_mask, kern_rad=kern_rad)
 
     return np.asarray(soft_mask, dtype=np.float32), binary_mask
