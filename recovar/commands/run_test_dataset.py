@@ -279,10 +279,20 @@ def main():
         )
 
         target_path = _p("tilt_test", "test_dataset", "target.txt")
-        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-        with open(target_path, "w", encoding="utf-8") as fh:
-            fh.write("0.0 0.0\n")
-        passed_functions.append("create_target_tilt")
+        target_parent = os.path.dirname(target_path)
+        if os.path.isdir(target_parent):
+            with open(target_path, "w", encoding="utf-8") as fh:
+                fh.write("0.0 0.0\n")
+            passed_functions.append("create_target_tilt")
+        else:
+            # Don't promote this to a failed_function: if the parent
+            # directory is missing, an earlier subprocess (most likely
+            # make_test_dataset_tilt) already failed and is recorded
+            # there. Just log and move on.
+            logger.warning(
+                "Skipping create_target_tilt: parent directory %s does not exist.",
+                target_parent,
+            )
 
         run_command(
             [
@@ -496,9 +506,16 @@ def main():
             )
 
             target_path = _p("test_dataset", "target.txt")
-            with open(target_path, "w", encoding="utf-8") as fh:
-                fh.write("0.0 0.0\n")
-            passed_functions.append("create_target")
+            target_parent = os.path.dirname(target_path)
+            if os.path.isdir(target_parent):
+                with open(target_path, "w", encoding="utf-8") as fh:
+                    fh.write("0.0 0.0\n")
+                passed_functions.append("create_target")
+            else:
+                logger.warning(
+                    "Skipping create_target: parent directory %s does not exist.",
+                    target_parent,
+                )
 
             pipeline_output_path = _p("test_dataset", "pipeline_output")
             embedding_2_path = _p("test_dataset", "embedding_2.pkl")

@@ -1,6 +1,5 @@
 import argparse
 import pickle
-import shlex
 import sys
 from types import SimpleNamespace
 
@@ -402,10 +401,11 @@ def test_compute_trajectory_uses_lazy_dataset_when_requested(monkeypatch, tmp_pa
 def test_run_test_dataset_main_uses_cpu_flag_and_skips_gpu_check(monkeypatch, tmp_path):
     commands = []
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        # New run_test_dataset uses argv lists + capture_output=True;
+        # join into a string so the existing substring assertions still apply.
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(
@@ -423,17 +423,19 @@ def test_run_test_dataset_main_uses_cpu_flag_and_skips_gpu_check(monkeypatch, tm
     run_test_dataset.main()
 
     assert commands
-    assert commands[0].startswith(f"{shlex.quote(run_test_dataset.sys.executable)} -m recovar.command_line ")
+    # argv lists do not shlex-quote; the executable path appears verbatim.
+    assert commands[0].startswith(f"{run_test_dataset.sys.executable} -m recovar.command_line ")
     assert all("--accept-cpu" in cmd for cmd in commands if " pipeline " in cmd)
 
 
 def test_run_test_dataset_tilt_only_emits_tilt_commands(monkeypatch, tmp_path):
     commands = []
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        # New run_test_dataset uses argv lists + capture_output=True;
+        # join into a string so the existing substring assertions still apply.
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(run_test_dataset.jax, "devices", lambda *_args, **_kwargs: ["gpu0"])
@@ -456,10 +458,11 @@ def test_run_test_dataset_deletes_generated_dataset_under_output_dir(monkeypatch
     commands = []
     removed = []
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        # New run_test_dataset uses argv lists + capture_output=True;
+        # join into a string so the existing substring assertions still apply.
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     expected = str(tmp_path / "test_dataset")
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
@@ -486,10 +489,11 @@ def test_run_test_dataset_tilt_only_deletes_tilt_root_under_output_dir(monkeypat
     commands = []
     removed = []
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        # New run_test_dataset uses argv lists + capture_output=True;
+        # join into a string so the existing substring assertions still apply.
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     expected = str(tmp_path / "tilt_test")
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
@@ -511,10 +515,11 @@ def test_run_test_dataset_tilt_only_deletes_tilt_root_under_output_dir(monkeypat
 def test_run_test_dataset_all_tests_emits_extended_commands(monkeypatch, tmp_path):
     commands = []
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        # New run_test_dataset uses argv lists + capture_output=True;
+        # join into a string so the existing substring assertions still apply.
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     # Create per-zdim embedding directory + minimal params.pkl for PipelineOutput
     model_dir = tmp_path / "test_dataset" / "pipeline_output" / "model"
@@ -547,10 +552,11 @@ def test_run_test_dataset_all_tests_emits_extended_commands(monkeypatch, tmp_pat
 def test_run_test_dataset_all_tests_missing_embeddings_file_skips_reconstruct(monkeypatch, tmp_path):
     commands = []
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        # New run_test_dataset uses argv lists + capture_output=True;
+        # join into a string so the existing substring assertions still apply.
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(
@@ -566,7 +572,11 @@ def test_run_test_dataset_all_tests_missing_embeddings_file_skips_reconstruct(mo
         ["run_test_dataset", "--output-dir", str(tmp_path), "--cpu", "--all-tests", "--no-delete"],
     )
 
-    run_test_dataset.main()
+    # The missing pipeline_output causes prepare_embedding_for_reconstruct
+    # to fail, which now triggers a non-zero exit (correct production
+    # behavior for any failed function).
+    with pytest.raises(SystemExit):
+        run_test_dataset.main()
 
     assert any("pipeline_with_outliers" in cmd for cmd in commands)
     assert any("estimate_stable_states" in cmd for cmd in commands)
@@ -576,10 +586,11 @@ def test_run_test_dataset_all_tests_missing_embeddings_file_skips_reconstruct(mo
 def test_run_test_dataset_all_tests_bad_embeddings_payload_skips_reconstruct(monkeypatch, tmp_path):
     commands = []
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        # New run_test_dataset uses argv lists + capture_output=True;
+        # join into a string so the existing substring assertions still apply.
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     embeddings_path = tmp_path / "test_dataset" / "pipeline_output" / "model" / "embeddings.pkl"
     embeddings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -599,7 +610,10 @@ def test_run_test_dataset_all_tests_bad_embeddings_payload_skips_reconstruct(mon
         ["run_test_dataset", "--output-dir", str(tmp_path), "--cpu", "--all-tests", "--no-delete"],
     )
 
-    run_test_dataset.main()
+    # The unparseable embeddings.pkl causes prepare_embedding_for_reconstruct
+    # to fail → non-zero exit (correct behavior).
+    with pytest.raises(SystemExit):
+        run_test_dataset.main()
 
     assert any("pipeline_with_outliers" in cmd for cmd in commands)
     assert not any("reconstruct_from_external_embedding" in cmd for cmd in commands)
@@ -609,10 +623,11 @@ def test_run_test_dataset_no_delete_flag_skips_cleanup(monkeypatch, tmp_path):
     commands = []
     removed = []
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        # New run_test_dataset uses argv lists + capture_output=True;
+        # join into a string so the existing substring assertions still apply.
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(
@@ -638,13 +653,13 @@ def test_run_test_dataset_does_not_cleanup_when_any_command_fails(monkeypatch, t
     commands = []
     removed = []
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
+    def fake_run(command, **_kwargs):
+        joined = " ".join(command) if isinstance(command, list) else command
+        commands.append(joined)
         # Fail one pipeline command to force failed_functions branch.
-        if " pipeline " in command:
-            return SimpleNamespace(returncode=1)
-        return SimpleNamespace(returncode=0)
+        if " pipeline " in joined:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(
@@ -660,7 +675,10 @@ def test_run_test_dataset_does_not_cleanup_when_any_command_fails(monkeypatch, t
         ["run_test_dataset", "--output-dir", str(tmp_path), "--cpu"],
     )
 
-    run_test_dataset.main()
+    # New behavior: exits non-zero when any subprocess failed, so the
+    # cleanup-on-failure path is genuinely "no cleanup AND non-zero exit".
+    with pytest.raises(SystemExit):
+        run_test_dataset.main()
 
     assert commands
     assert removed == []
@@ -669,9 +687,9 @@ def test_run_test_dataset_does_not_cleanup_when_any_command_fails(monkeypatch, t
 def test_run_test_dataset_exits_early_when_no_gpu_and_not_cpu(monkeypatch, tmp_path):
     commands = []
 
-    def fake_run(command, shell):
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(run_test_dataset.jax, "devices", lambda *_args, **_kwargs: [])
@@ -686,16 +704,22 @@ def test_run_test_dataset_exits_early_when_no_gpu_and_not_cpu(monkeypatch, tmp_p
     assert commands == []
 
 
-def test_run_test_dataset_quotes_paths_with_spaces(monkeypatch, tmp_path):
-    import shlex
+def test_run_test_dataset_handles_paths_with_spaces(monkeypatch, tmp_path):
+    """argv lists pass paths verbatim — no shell quoting needed.
 
+    target.txt is now written via Python ``open(..., "w")`` rather than
+    a shell redirect (``echo ... > target.txt``); we pre-create the
+    parent dir so the writer fires (in production, ``make_test_dataset_tilt``
+    creates it) and assert the file lands on disk with the right content.
+    """
     commands = []
     outdir = tmp_path / "with space"
+    target_parent = outdir / "tilt_test" / "test_dataset"
+    target_parent.mkdir(parents=True, exist_ok=True)
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(
@@ -711,23 +735,20 @@ def test_run_test_dataset_quotes_paths_with_spaces(monkeypatch, tmp_path):
 
     run_test_dataset.main()
 
-    assert commands
-    quoted_tilt_root = shlex.quote(str(outdir / "tilt_test"))
-    quoted_target = shlex.quote(str(outdir / "tilt_test" / "test_dataset" / "target.txt"))
-    assert any(f"make_test_dataset {quoted_tilt_root} " in cmd for cmd in commands)
-    assert any(f"> {quoted_target}" in cmd for cmd in commands)
+    tilt_root = str(outdir / "tilt_test")
+    target = target_parent / "target.txt"
+    assert any(f"make_test_dataset {tilt_root} " in cmd for cmd in commands)
+    assert target.exists() and target.read_text().strip() == "0.0 0.0"
 
 
-def test_run_test_dataset_quotes_non_tilt_pipeline_paths_with_spaces(monkeypatch, tmp_path):
-    import shlex
-
+def test_run_test_dataset_non_tilt_pipeline_paths_with_spaces(monkeypatch, tmp_path):
+    """argv lists pass paths verbatim — no shell quoting needed."""
     commands = []
     outdir = tmp_path / "with space"
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(
@@ -745,14 +766,13 @@ def test_run_test_dataset_quotes_non_tilt_pipeline_paths_with_spaces(monkeypatch
     run_test_dataset.main()
 
     assert commands
-    quoted_particles = shlex.quote(str(outdir / "test_dataset" / "particles.64.mrcs"))
-    quoted_pipeline_out = shlex.quote(str(outdir / "test_dataset" / "pipeline_output"))
-    assert any(f"pipeline {quoted_particles} " in cmd for cmd in commands)
-    assert any(f"-o {quoted_pipeline_out} " in cmd for cmd in commands)
+    particles = str(outdir / "test_dataset" / "particles.64.mrcs")
+    pipeline_out = str(outdir / "test_dataset" / "pipeline_output")
+    assert any(f"pipeline {particles} " in cmd for cmd in commands)
+    assert any(f"-o {pipeline_out} " in cmd for cmd in commands)
 
 
 def test_run_test_dataset_all_tests_quotes_reconstruct_paths_with_spaces(monkeypatch, tmp_path):
-    import shlex
 
     commands = []
     outdir = tmp_path / "with space"
@@ -764,10 +784,11 @@ def test_run_test_dataset_all_tests_quotes_reconstruct_paths_with_spaces(monkeyp
     with open(model_dir / "params.pkl", "wb") as f:
         pickle.dump({"input_args": SimpleNamespace(zdim=[2])}, f)
 
-    def fake_run(command, shell):
-        assert shell is True
-        commands.append(command)
-        return SimpleNamespace(returncode=0)
+    def fake_run(command, **_kwargs):
+        # New run_test_dataset uses argv lists + capture_output=True;
+        # join into a string so the existing substring assertions still apply.
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(
@@ -785,7 +806,7 @@ def test_run_test_dataset_all_tests_quotes_reconstruct_paths_with_spaces(monkeyp
 
     reconstruct_cmds = [c for c in commands if "reconstruct_from_external_embedding" in c]
     assert reconstruct_cmds
-    quoted_embedding = shlex.quote(str(outdir / "test_dataset" / "embedding_2.pkl"))
-    quoted_target = shlex.quote(str(outdir / "test_dataset" / "target.txt"))
-    assert any(f"--embedding {quoted_embedding} " in c for c in reconstruct_cmds)
-    assert any(f"--target {quoted_target} " in c for c in reconstruct_cmds)
+    embedding = str(outdir / "test_dataset" / "embedding_2.pkl")
+    target = str(outdir / "test_dataset" / "target.txt")
+    assert any(f"--embedding {embedding} " in c for c in reconstruct_cmds)
+    assert any(f"--target {target} " in c for c in reconstruct_cmds)

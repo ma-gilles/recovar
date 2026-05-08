@@ -131,7 +131,8 @@ def test_low_memory_tightens_batches(monkeypatch):
     assert very.column_batch_size <= low.column_batch_size <= base.column_batch_size
 
 
-def test_effective_budget_is_min_of_inputs(monkeypatch):
+def test_effective_budget_is_min_of_inputs_when_user_asked(monkeypatch):
+    """With a user-supplied --gpu-gb, physical_free-reserve is in the min."""
     _stub_helpers(monkeypatch, gpu_total=72.0)
     _stub_preflight(monkeypatch, total=80.0, free=10.0)  # only 10 GB free
     _stub_backend_custom(monkeypatch)
@@ -147,9 +148,36 @@ def test_effective_budget_is_min_of_inputs(monkeypatch):
         very_low_memory=False,
         adaptive_n_pcs=False,
     )
-    # min(40, 72, 10 - 4_reserve) = 6 GB → effective should equal that
+    # min(40, 72, 10 - 4_reserve=6) = 6 GB → effective should equal that
     assert plan.budget.effective_budget_gb == pytest.approx(10.0 - max(2.0, 0.05 * 80.0))
     assert plan.budget.source == "physical_free_minus_reserve"
+
+
+def test_effective_budget_skips_physical_reserve_when_no_user_request(monkeypatch):
+    """Without --gpu-gb, fall through to jax_limit (matches legacy behavior).
+
+    Subtracting physical_free-reserve unconditionally would shrink
+    batches by ~5% on a quiet GPU and shift quality baselines (caught
+    in long-test outliers regression).
+    """
+    _stub_helpers(monkeypatch, gpu_total=80.0)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)  # quiet GPU
+    _stub_backend_custom(monkeypatch)
+
+    from recovar.utils import memory_planner as mp
+
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=128,
+        n_images=1000,
+        requested_gpu_gb=None,  # no user request
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=False,
+    )
+    # Legacy behavior preserved: effective == jax_limit (80), not 80-reserve.
+    assert plan.budget.effective_budget_gb == pytest.approx(80.0)
+    assert plan.budget.source == "jax_limit_gb"
 
 
 def test_uncalibrated_falls_back_gracefully(monkeypatch):

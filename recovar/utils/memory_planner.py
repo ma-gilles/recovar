@@ -310,7 +310,15 @@ def _assemble_budget(
         candidates.append(("requested_gpu_gb", float(requested_gpu_gb)))
     if jax_limit is not None and jax_limit > 0:
         candidates.append(("jax_limit_gb", jax_limit))
-    if physical_total is not None and physical_free is not None:
+
+    # ``physical_free - reserve`` only enters the min when the user
+    # supplied an explicit ``--gpu-gb`` (i.e. they asked for a budget
+    # we should validate against the GPU's current free space). Without
+    # an explicit request, fall through to the JAX-reported limit
+    # exactly the way the legacy code did — otherwise we silently
+    # shrink batch sizes by ~5-10% on a quiet GPU and shift quality
+    # baselines.
+    if requested_gpu_gb is not None and physical_total is not None and physical_free is not None:
         reserve = _physical_reserve_gb(physical_total)
         candidates.append(("physical_free_minus_reserve", max(1.0, physical_free - reserve)))
 
