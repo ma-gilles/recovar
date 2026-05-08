@@ -74,17 +74,23 @@ def test_merge_guard_plan_contains_cpu_and_gpu_gates():
     assert cpu_names == [
         "py_compile",
         "vdam_abinitio_contracts",
+        "initial_model_vdam_unit_slice",
         "initial_model_unit_suite",
         "em_fast_guard",
     ]
 
     quick_names = [command.name for command in build_guard_commands("cpu", quick=True)]
     assert "initial_model_unit_suite" not in quick_names
+    assert "initial_model_vdam_unit_slice" in quick_names
     assert "em_fast_guard" in quick_names
 
     all_names = [command.name for command in build_guard_commands("all", quick=True)]
+    assert "native_initialmodel_k2_smoke_gpu" in all_names
     assert "em_parity_fast_gpu" in all_names
     assert "extract_em_parity_fast_tables" in all_names
+
+    gpu_names = [command.name for command in build_guard_commands("gpu")]
+    assert gpu_names[0] == "native_initialmodel_k2_smoke_gpu"
 
 
 def test_long_native_quality_guard_uses_relion_initialmodel_reference():
@@ -160,6 +166,119 @@ def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
     assert not missing, f"native InitialModel lost RELION --flatten_solvent post-M-step wiring: {missing}"
 
 
+def test_native_vdam_tau2_refresh_and_ssnr_diagnostics_are_merge_guarded():
+    """Protect the K=1 current-size parity fix.
+
+    RELION refreshes tau2_class from Projector::computeFourierTransformMap
+    before each E-step. Native InitialModel must keep that behavior, and must
+    write sigma2/coverage diagnostics so DVP/current-size regressions are
+    visible in model.star.
+    """
+    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    iteration_loop = (REPO_ROOT / "recovar/em/initial_model/iteration_loop.py").read_text()
+    m_step = (REPO_ROOT / "recovar/em/initial_model/m_step.py").read_text()
+    state = (REPO_ROOT / "recovar/em/initial_model/state.py").read_text()
+    bind = (REPO_ROOT / "recovar/relion_bind/initialmodel_bind.cpp").read_text()
+    tests = (REPO_ROOT / "tests/unit/initial_model/test_iteration_loop.py").read_text()
+
+    haystack = "\n".join([driver, iteration_loop, m_step, state, bind, tests])
+    expected_tokens = [
+        "def refresh_tau2_from_projector_power",
+        "vdam_projector_power_spectrum",
+        "refresh_tau2_from_projector: bool = True",
+        "projector_padding_factor=int(opts.padding_factor)",
+        "current = refresh_tau2_from_projector_power",
+        "sigma2_class:  (K, S)",
+        "fourier_coverage_class: (K, S)",
+        "new_sigma2_class[k] = np.asarray(sigma2",
+        "new_fourier_coverage_class[k] = np.asarray(fourier_coverage",
+        "state.sigma2_class[k]",
+        "state.fourier_coverage_class[k]",
+        "test_iteration_loop_refreshes_tau2_before_estep",
+    ]
+    missing = [token for token in expected_tokens if token not in haystack]
+    assert not missing, f"native InitialModel lost tau2 refresh/SSNR diagnostic wiring: {missing}"
+
+
+def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
+    """Guard the load-bearing parity fixes from codex/vdam-postmerge-20260507.
+
+    These string contracts complement functional unit tests. They make merge
+    conflict mistakes fail early when branches touch the same InitialModel,
+    dense K-class, or RELION binding code.
+    """
+    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    dense_adapter = (REPO_ROOT / "recovar/em/initial_model/dense_adapter.py").read_text()
+    iteration_loop = (REPO_ROOT / "recovar/em/initial_model/iteration_loop.py").read_text()
+    state = (REPO_ROOT / "recovar/em/initial_model/state.py").read_text()
+    init = (REPO_ROOT / "recovar/em/initial_model/init.py").read_text()
+    k_class = (REPO_ROOT / "recovar/em/dense_single_volume/k_class.py").read_text()
+    bind = (REPO_ROOT / "recovar/relion_bind/initialmodel_bind.cpp").read_text()
+    unit_tests = "\n".join(
+        [
+            (REPO_ROOT / "tests/unit/initial_model/test_dense_adapter.py").read_text(),
+            (REPO_ROOT / "tests/unit/initial_model/test_iteration_loop.py").read_text(),
+            (REPO_ROOT / "tests/unit/initial_model/test_native_driver.py").read_text(),
+        ]
+    )
+    guard_scripts = "\n".join(
+        [
+            (REPO_ROOT / "scripts/run_vdam_abinitio_merge_guard.py").read_text(),
+            (REPO_ROOT / "scripts/run_em_merge_guard_slurm.sh").read_text(),
+        ]
+    )
+
+    expected_by_area = {
+        "bootstrap_fft_order": [
+            "windowFourierTransform(Faux, Fimg",
+            "CenterFFTbySign(Fimg)",
+        ],
+        "sigma_offset_and_noise_momentum": [
+            "sigma2_offset: float = 100.0",
+            "sigma2_offset=100.0",
+            "MIN_SIGMA2_OFFSET_ANGSTROM2",
+            "wsum_sigma2_offset / (2.0 * sum_weight)",
+            "def update_noise_from_estep_meta",
+            "normalize_wsum_to_sigma2_noise",
+            "int(state.ori_size) ** 4",
+            "current = update_noise_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)",
+        ],
+        "direction_and_translation_priors": [
+            "relion_sigma_offset_prior_center",
+            "translation_prior_centers",
+            "def _class_direction_rotation_log_prior",
+            "class_rotation_log_prior",
+            "values[positive] / mean_pdf",
+            "class_local_rotation_log_prior=class_local_rotation_log_prior",
+            "rotation_log_prior=group_kwargs.get(\"class_rotation_log_prior\"",
+        ],
+        "relion_model_star_contract": [
+            "data_model_pdf_orient_class_",
+            "_rlnOrientationDistribution #1",
+            "_rlnSigmaOffsetsAngst",
+        ],
+        "kclass_profile_and_unit_guards": [
+            "profile_summary",
+            "return_profile",
+            "initial_model_vdam_unit_slice",
+            "tests/unit/test_k_class_joint_semantics.py",
+        ],
+        "functional_tests": [
+            "test_updates_sigma2_noise_with_vdam_momentum_on_subset_iterations",
+            "test_iteration_loop_feeds_updated_sigma2_noise_to_next_estep",
+            "test_model_star_uses_relion_model_blocks",
+            "test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state",
+        ],
+    }
+    haystack = "\n".join([driver, dense_adapter, iteration_loop, state, init, k_class, bind, unit_tests, guard_scripts])
+    missing = {
+        area: [token for token in tokens if token not in haystack]
+        for area, tokens in expected_by_area.items()
+    }
+    missing = {area: tokens for area, tokens in missing.items() if tokens}
+    assert not missing, f"VDAM post-merge parity guard lost required wiring: {missing}"
+
+
 def test_relion_initialmodel_reference_checker_rejects_autorefine(tmp_path):
     mod = _load_long_guard_module()
 
@@ -225,6 +344,7 @@ def test_merge_guard_dry_run_writes_reproducibility_ledger(tmp_path):
     assert [command["name"] for command in ledger["commands"]] == [
         "py_compile",
         "vdam_abinitio_contracts",
+        "initial_model_vdam_unit_slice",
         "em_fast_guard",
     ]
 

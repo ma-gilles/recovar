@@ -13,10 +13,14 @@ import pytest
 
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.iteration_loop import (
+    refresh_tau2_from_projector_power,
     relion_solvent_mask,
     relion_solvent_flatten_state,
     run_vdam_iterations,
     select_subset_for_iter,
+    update_current_resolution_from_data_vs_prior,
+    update_image_size_and_resolution_pointers,
+    update_noise_from_estep_meta,
     update_probabilities_from_estep_meta,
 )
 from recovar.em.initial_model.m_step import VdamAccumulator
@@ -70,7 +74,163 @@ def _stub_estep_factory(ori_size: int):
     return estep
 
 
+def test_refresh_tau2_from_projector_power_updates_all_classes(bind):
+    ori = 8
+    state = initialise_denovo_state(
+        ori_size=ori,
+        pixel_size=1.0,
+        K=2,
+        nr_iter=1,
+        n_directions=12,
+        pseudo_halfsets=True,
+    )
+    z, y, x = np.indices((ori, ori, ori), dtype=np.float64)
+    state.Iref[0] = np.exp(-((x - 2.0) ** 2 + (y - 3.0) ** 2 + (z - 4.0) ** 2) / 6.0)
+    state.Iref[1] = np.exp(-((x - 5.0) ** 2 + (y - 4.0) ** 2 + (z - 3.0) ** 2) / 4.0)
+    state.tau2_class.fill(123.0)
+    state.current_size = 6
+
+    out = refresh_tau2_from_projector_power(state)
+
+    assert out is not state
+    assert out.tau2_class.shape == (2, ori // 2 + 1)
+    assert np.all(np.isfinite(out.tau2_class))
+    assert np.all(out.tau2_class >= 0.0)
+    assert not np.array_equal(out.tau2_class, state.tau2_class)
+    assert not np.array_equal(out.tau2_class[0], out.tau2_class[1])
+    np.testing.assert_array_equal(state.tau2_class, np.full((2, ori // 2 + 1), 123.0))
+
+
 class TestRunVdamIterations:
+    def test_current_resolution_uses_relion_data_vs_prior_scan(self):
+        state = initialise_denovo_state(
+            ori_size=64,
+            pixel_size=2.0,
+            K=2,
+            nr_iter=1,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        state.data_vs_prior_class[0, 1:8] = 2.0
+        state.data_vs_prior_class[0, 8] = 0.5
+        state.data_vs_prior_class[1, 1:13] = 2.0
+        state.data_vs_prior_class[1, 13] = 0.5
+
+        out = update_current_resolution_from_data_vs_prior(state)
+
+        assert out.current_resolution_shell == 12
+        assert out.current_resolution == pytest.approx(12.0 / (64.0 * 2.0))
+        assert out.current_size == state.current_size
+
+    def test_current_size_update_uses_previous_resolution_for_next_estep(self):
+        state = initialise_denovo_state(
+            ori_size=64,
+            pixel_size=2.0,
+            K=1,
+            nr_iter=1,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        state.current_resolution_shell = 20
+        state.current_resolution = 20.0 / (64.0 * 2.0)
+        state.ave_Pmax = 0.0
+
+        out = update_image_size_and_resolution_pointers(state)
+
+        assert out.current_size == 60
+        assert out.current_resolution_shell == 20
+
+    def test_iteration_loop_feeds_updated_current_size_to_next_estep(self, monkeypatch):
+        import recovar.em.initial_model.iteration_loop as loop
+
+        state = initialise_denovo_state(
+            ori_size=64,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=2,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        seen_current_sizes = []
+
+        def estep(current, particle_ids, halfset_ids):
+            seen_current_sizes.append(int(current.current_size))
+            return [], {"max_posterior_per_image": np.asarray([0.2, 0.3], dtype=np.float32)}
+
+        def fake_m_step(current, accumulators, **kwargs):
+            out = current
+            out.data_vs_prior_class = np.zeros_like(current.data_vs_prior_class)
+            out.data_vs_prior_class[:, 1:21] = 2.0
+            out.data_vs_prior_class[:, 21:] = 0.5
+            return out
+
+        monkeypatch.setattr(loop, "vdam_m_step", fake_m_step)
+
+        final = run_vdam_iterations(
+            state,
+            nr_particles=200,
+            optics_group_by_particle=[0] * 200,
+            grad_ini_subset_size=50,
+            grad_fin_subset_size=100,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=0,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=estep,
+        )
+
+        assert seen_current_sizes == [28, 60]
+        assert final.current_resolution_shell == 20
+
+    def test_iteration_loop_refreshes_tau2_before_estep(self, monkeypatch):
+        import recovar.em.initial_model.iteration_loop as loop
+
+        state = initialise_denovo_state(
+            ori_size=16,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        state.Iref[0, 8, 8, 8] = 1.0
+        state.tau2_class.fill(0.0)
+        seen = {}
+
+        def fake_refresh(current, *, padding_factor, interpolator):
+            assert padding_factor == 1
+            assert interpolator == 1
+            out = current
+            out.tau2_class = np.full_like(current.tau2_class, 7.0)
+            seen["refresh_current_size"] = int(current.current_size)
+            return out
+
+        def estep(current, particle_ids, halfset_ids):
+            seen["estep_tau2"] = current.tau2_class.copy()
+            return [], {}
+
+        def fake_m_step(current, accumulators, **kwargs):
+            return current
+
+        monkeypatch.setattr(loop, "refresh_tau2_from_projector_power", fake_refresh)
+        monkeypatch.setattr(loop, "vdam_m_step", fake_m_step)
+
+        run_vdam_iterations(
+            state,
+            nr_particles=200,
+            optics_group_by_particle=[0] * 200,
+            grad_ini_subset_size=50,
+            grad_fin_subset_size=100,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=0,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=estep,
+        )
+
+        assert seen["refresh_current_size"] == 16
+        np.testing.assert_array_equal(seen["estep_tau2"], np.full((1, 9), 7.0))
+
     def test_relion_solvent_flatten_state_matches_centered_spherical_mask(self):
         state = initialise_denovo_state(
             ori_size=8,
@@ -170,6 +330,7 @@ class TestRunVdamIterations:
                     [20.0, 30.0, 20.0],
                 ]
             ),
+            "wsum_sigma2_offset": 500.0,
         }
 
         out = update_probabilities_from_estep_meta(state, meta, do_grad=True, mu=0.9)
@@ -179,7 +340,144 @@ class TestRunVdamIterations:
             out.pdf_direction,
             state.pdf_direction * 0.9 + 0.1 * meta["class_direction_posterior_sums"] / 100.0,
         )
+        assert out.sigma2_offset == pytest.approx(90.25)
         np.testing.assert_allclose(state.pdf_class, [0.5, 0.5])
+
+    def test_updates_sigma2_noise_from_estep_meta_in_relion_units(self):
+        from recovar.reconstruction import noise
+
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.sigma2_noise[:] = 0.01
+        meta = {
+            "wsum_sigma2_noise": np.asarray([10.0, 12.0, 14.0, 16.0, 18.0], dtype=np.float64),
+            "wsum_img_power": np.asarray([5.0, 6.0, 7.0, 8.0, 9.0], dtype=np.float64),
+            "noise_sumw": 4.0,
+        }
+
+        out = update_noise_from_estep_meta(state, meta, do_grad=False)
+
+        expected_engine_units = noise.normalize_wsum_to_sigma2_noise(
+            meta["wsum_sigma2_noise"],
+            meta["wsum_img_power"],
+            meta["noise_sumw"],
+            (8, 8),
+        )
+        expected_relion_units = np.asarray(expected_engine_units, dtype=np.float64) / float(8**4)
+        np.testing.assert_allclose(out.sigma2_noise[0], expected_relion_units, rtol=1.0e-6)
+        np.testing.assert_allclose(state.sigma2_noise, 0.01)
+
+    def test_updates_sigma2_noise_with_vdam_momentum_on_subset_iterations(self):
+        from recovar.reconstruction import noise
+
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.sigma2_noise[:] = 0.01
+        state.subset_size = 10
+        meta = {
+            "wsum_sigma2_noise": np.asarray([10.0, 12.0, 14.0, 16.0, 18.0], dtype=np.float64),
+            "wsum_img_power": np.asarray([5.0, 6.0, 7.0, 8.0, 9.0], dtype=np.float64),
+            "noise_sumw": 4.0,
+        }
+
+        out = update_noise_from_estep_meta(state, meta, do_grad=True, mu=0.9)
+
+        expected_engine_units = noise.normalize_wsum_to_sigma2_noise(
+            meta["wsum_sigma2_noise"],
+            meta["wsum_img_power"],
+            meta["noise_sumw"],
+            (8, 8),
+        )
+        expected_relion_units = np.asarray(expected_engine_units, dtype=np.float64) / float(8**4)
+        np.testing.assert_allclose(out.sigma2_noise[0], 0.9 * 0.01 + 0.1 * expected_relion_units, rtol=1.0e-6)
+
+    def test_iteration_loop_feeds_updated_sigma2_noise_to_next_estep(self, monkeypatch):
+        import recovar.em.initial_model.iteration_loop as loop
+
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=2,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.sigma2_noise[:] = 0.01
+        seen_noise = []
+        meta = {
+            "wsum_sigma2_noise": np.asarray([10.0, 12.0, 14.0, 16.0, 18.0], dtype=np.float64),
+            "wsum_img_power": np.asarray([5.0, 6.0, 7.0, 8.0, 9.0], dtype=np.float64),
+            "noise_sumw": 4.0,
+            "max_posterior_per_image": np.asarray([0.5, 0.6], dtype=np.float32),
+        }
+
+        def estep(current, particle_ids, halfset_ids):
+            seen_noise.append(np.asarray(current.sigma2_noise, dtype=np.float64).copy())
+            return [], dict(meta)
+
+        monkeypatch.setattr(loop, "vdam_m_step", lambda current, accumulators, **kwargs: current)
+
+        run_vdam_iterations(
+            state,
+            nr_particles=20,
+            optics_group_by_particle=[0] * 20,
+            grad_ini_subset_size=10,
+            grad_fin_subset_size=10,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=0,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=estep,
+            refresh_tau2_from_projector=False,
+        )
+
+        assert len(seen_noise) == 2
+        np.testing.assert_allclose(seen_noise[0], 0.01)
+        state_for_expected = state
+        state_for_expected.subset_size = 10
+        expected = update_noise_from_estep_meta(state_for_expected, meta, do_grad=True, mu=0.9).sigma2_noise
+        np.testing.assert_allclose(seen_noise[1], expected)
+
+    def test_direction_prior_resizes_uniformly_when_sampling_changes(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=2,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.pdf_direction = np.full((2, 3), 1.0 / 6.0, dtype=np.float64)
+        state.subset_size = 50
+        direction_sums = np.asarray(
+            [
+                [4.0, 6.0, 8.0, 10.0, 12.0],
+                [10.0, 10.0, 10.0, 15.0, 15.0],
+            ],
+            dtype=np.float64,
+        )
+        meta = {
+            "class_posterior_sums": np.asarray([40.0, 60.0]),
+            "class_direction_posterior_sums": direction_sums,
+        }
+
+        out = update_probabilities_from_estep_meta(state, meta, do_grad=True, mu=0.9)
+
+        assert out.pdf_direction.shape == (2, 5)
+        expected_uniform = np.full((2, 5), 1.0 / 10.0, dtype=np.float64)
+        np.testing.assert_allclose(out.pdf_direction, expected_uniform * 0.9 + 0.1 * direction_sums / 100.0)
 
     def test_all_particle_probability_update_replaces_priors_and_allows_zero_class(self):
         state = initialise_denovo_state(

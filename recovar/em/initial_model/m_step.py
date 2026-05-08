@@ -18,7 +18,11 @@ Pipeline per class k:
   5. `applyMomenta(Igrad1[h0_k], Igrad1[h1_k], Igrad2[k])` — combine
      momenta + derive mom1_noise_power (backprojector.cpp:2000).
 
-  6. `reconstructGrad(Iref[k], fsc_halves_class[k],
+  6. `updateSSNRarrays(...)` — update tau2/data-vs-prior spectra from the
+     post-momentum BPref weights. RELION uses these spectra to drive the next
+     iteration's current-resolution/current-size pointers.
+
+  7. `reconstructGrad(Iref[k], fsc_halves_class[k],
                       grad_current_stepsize, tau2_fudge_factor,
                       grad_min_resol_shell, use_fsc=False)` —
      apply the gradient update to Iref (backprojector.cpp:2054).
@@ -231,7 +235,39 @@ def vdam_m_step_single_class(
     _dump("post_apply_data", _post_data)
     _dump("mom1_noise_power", mom1_noise_power)
 
-    # Step 6. reconstructGrad updates Iref[k].
+    # Step 6. updateSSNRarrays. RELION calls this on the BPref after the
+    # gradient-momentum pipeline and before reconstructGrad, with
+    # update_tau2_with_fsc=false in gradient mode. The resulting
+    # data_vs_prior_class drives updateCurrentResolution for the next
+    # expectation step.
+    new_tau2_class = state.tau2_class.copy()
+    new_sigma2_class = state.sigma2_class.copy()
+    new_fourier_coverage_class = state.fourier_coverage_class.copy()
+    new_data_vs_prior_class = state.data_vs_prior_class.copy()
+    fsc_for_ssnr = np.asarray(state.fsc_halves_class[0], dtype=np.float64)
+    tau2, sigma2, data_vs_prior, fourier_coverage = bind.vdam_update_ssnr_arrays_from_bpref(
+        accum_h0.weight,
+        fsc_for_ssnr,
+        state.tau2_class[k],
+        tau2_fudge_factor,
+        ori_size,
+        padding_factor,
+        1,
+        r_max,
+        False,
+        False,
+        False,
+    )
+    new_tau2_class[k] = np.asarray(tau2, dtype=np.float64)
+    new_sigma2_class[k] = np.asarray(sigma2, dtype=np.float64)
+    new_data_vs_prior_class[k] = np.asarray(data_vs_prior, dtype=np.float64)
+    new_fourier_coverage_class[k] = np.asarray(fourier_coverage, dtype=np.float64)
+    _dump("tau2_post_ssnr", new_tau2_class[k])
+    _dump("sigma2_post_ssnr", new_sigma2_class[k])
+    _dump("data_vs_prior_post_ssnr", new_data_vs_prior_class[k])
+    _dump("fourier_coverage_post_ssnr", new_fourier_coverage_class[k])
+
+    # Step 7. reconstructGrad updates Iref[k].
     # Pass weight from the h0 accumulator and the noise-power spectrum emitted
     # by applyMomenta. This is the RELION pseudo-halfset path; omitting
     # mom1_noise_power silently falls back to the wrong FSC/tau weighting.
@@ -247,6 +283,10 @@ def vdam_m_step_single_class(
 
     iref_relion_in = recovar_volume_to_relion(np.asarray(state.Iref[k]))
     _dump("iref_relion_in", iref_relion_in)
+    effective_stepsize = float(grad_current_stepsize) * (
+        1.0 - np.exp(-float(3 * state.K + 10) * float(np.asarray(state.pdf_class)[k]))
+    )
+    _dump("effective_stepsize", np.asarray([effective_stepsize], dtype=np.float64))
     new_Iref = state.Iref.copy()
     new_Iref[k] = relion_volume_to_recovar(
         np.asarray(
@@ -255,7 +295,7 @@ def vdam_m_step_single_class(
                 _post_data,
                 accum_h0.weight,
                 state.fsc_halves_class[k],
-                grad_current_stepsize,
+                effective_stepsize,
                 tau2_fudge_factor,
                 ori_size,
                 padding_factor,
@@ -275,6 +315,10 @@ def vdam_m_step_single_class(
     new_state.Iref = new_Iref
     new_state.Igrad1 = new_Igrad1
     new_state.Igrad2 = new_Igrad2
+    new_state.tau2_class = new_tau2_class
+    new_state.sigma2_class = new_sigma2_class
+    new_state.data_vs_prior_class = new_data_vs_prior_class
+    new_state.fourier_coverage_class = new_fourier_coverage_class
     # mom1_noise_power per class -> could be exposed via state if Phase 4
     # needs it for scoring; left internal for now.
     return new_state

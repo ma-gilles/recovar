@@ -97,6 +97,13 @@ UNIT_SCRIPT="${SCRATCH_DIR}/em_merge_guard_units.sh"
 
 pixi run test-em-fast-guard
 
+JAX_PLATFORMS=cpu pixi run python -m pytest -q \
+  tests/unit/initial_model/test_dense_adapter.py \
+  tests/unit/initial_model/test_iteration_loop.py \
+  tests/unit/initial_model/test_init_and_estep.py \
+  tests/unit/initial_model/test_native_driver.py \
+  tests/unit/test_k_class_joint_semantics.py
+
 JAX_PLATFORMS=cpu pixi run python -m pytest -v -s \
   tests/unit/test_refine_relion_mode.py::TestRelionModeSmokeTest::test_relion_sigma_offset_prior_center_matches_store_weighted_sums_units \
   tests/unit/test_refine_relion_mode.py::test_relion_mode_writes_absolute_translations_from_previous_offset \

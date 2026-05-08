@@ -21,6 +21,11 @@ Two callables:
         sigma2_noise. The handoff note confirms this step already matches
         RELION to ~3e-7 on the fixture, so we just wire the transfer.
 
+  - `initialise_data_vs_prior_from_references(state, nr_particles, ...)`
+        Mirrors `MlModel::initialiseDataVersusPrior`, which seeds
+        tau2_class/data_vs_prior_class from the initial denovo references
+        before the first VDAM gradient M-step.
+
 Reference data-dependent steps (reading particle stacks, FFTing them) are
 out of scope here; callers provide `Mavg_per_group` via the existing
 recovar data-io machinery. That lets Phase 3 tests run without touching
@@ -150,7 +155,9 @@ def initialise_denovo_state(
     n_shells = ori_size // 2 + 1
     sigma2_noise = np.zeros((nr_optics_groups, n_shells), dtype=np.float64)
     tau2_class = np.zeros((K, n_shells), dtype=np.float64)
+    sigma2_class = np.zeros((K, n_shells), dtype=np.float64)
     fsc_halves_class = np.zeros((K, n_shells), dtype=np.float64)
+    fourier_coverage_class = np.zeros((K, n_shells), dtype=np.float64)
     data_vs_prior_class = np.zeros((K, n_shells), dtype=np.float64)
 
     # Class mixing weights: uniform (ml_model.cpp::initialise path)
@@ -177,10 +184,13 @@ def initialise_denovo_state(
         Igrad2=Igrad2,
         sigma2_noise=sigma2_noise,
         tau2_class=tau2_class,
+        sigma2_class=sigma2_class,
         fsc_halves_class=fsc_halves_class,
+        fourier_coverage_class=fourier_coverage_class,
         data_vs_prior_class=data_vs_prior_class,
         pdf_class=pdf_class,
         pdf_direction=pdf_direction,
+        sigma2_offset=100.0,
         ini_high=ini_high_A,
         current_resolution=current_resolution,
         current_resolution_shell=current_resolution_shell,
@@ -207,4 +217,93 @@ def seed_noise_from_mavg(
         raise ValueError(f"sigma2_per_group shape {sigma2_per_group.shape} != expected {state.sigma2_noise.shape}")
     new_state = replace(state)
     new_state.sigma2_noise = np.asarray(sigma2_per_group, dtype=np.float64).copy()
+    return new_state
+
+
+def _relion_power_spectrum_3d(volume: np.ndarray, n_shells: int) -> np.ndarray:
+    """Return RELION ``getSpectrum(..., POWER_SPECTRUM)`` shells.
+
+    RELION's ``FourierTransformer::Transform(FFTW_FORWARD)`` normalises the
+    forward FFT by the real-space array size.  ``getSpectrum`` then averages
+    ``norm(F)`` by rounded Fourier radius in FFTW half-complex coordinates.
+    """
+    vol = np.asarray(volume, dtype=np.float64)
+    if vol.ndim != 3 or vol.shape[0] != vol.shape[1] or vol.shape[1] != vol.shape[2]:
+        raise ValueError(f"volume must be cubic 3D, got shape {vol.shape}")
+    n = int(vol.shape[0])
+    if n_shells < 1:
+        raise ValueError(f"n_shells must be positive, got {n_shells}")
+
+    fourier = np.fft.rfftn(vol, axes=(0, 1, 2), norm=None) / float(vol.size)
+    kz = np.fft.fftfreq(n, d=1.0) * n
+    ky = np.fft.fftfreq(n, d=1.0) * n
+    kx = np.arange(n // 2 + 1, dtype=np.float64)
+    radius = np.sqrt(kz[:, None, None] ** 2 + ky[None, :, None] ** 2 + kx[None, None, :] ** 2)
+    shell = np.floor(radius + 0.5).astype(np.int64)
+    valid = shell < int(n_shells)
+    power = np.abs(fourier) ** 2
+    out = np.zeros(int(n_shells), dtype=np.float64)
+    count = np.zeros(int(n_shells), dtype=np.float64)
+    np.add.at(out, shell[valid].ravel(), power[valid].ravel())
+    np.add.at(count, shell[valid].ravel(), 1.0)
+    nz = count > 0.0
+    out[nz] /= count[nz]
+    return out
+
+
+def initialise_data_vs_prior_from_references(
+    state: InitialModelState,
+    *,
+    nr_particles: int,
+    fix_tau: bool = False,
+) -> InitialModelState:
+    """Mirror RELION ``MlModel::initialiseDataVersusPrior``.
+
+    RELION calls this after denovo references and sigma2_noise are initialised
+    and before writing ``it000_model.star``.  Gradient InitialModel later calls
+    ``BackProjector::updateSSNRarrays(update_tau2_with_fsc=false)``; if this
+    prior spectrum is left at zero, RELION falls back to ``0.001 * weight`` as
+    the prior and the current-size schedule races to the edge of the current
+    Fourier window.
+    """
+    if nr_particles <= 0:
+        raise ValueError(f"nr_particles must be positive, got {nr_particles}")
+    sigma2 = np.asarray(state.sigma2_noise, dtype=np.float64)
+    if sigma2.ndim != 2 or sigma2.shape[1] != state.ori_size // 2 + 1:
+        raise ValueError(
+            f"sigma2_noise must have shape (G, {state.ori_size // 2 + 1}), got {sigma2.shape}"
+        )
+    group_has_noise = np.sum(sigma2, axis=1) > 0.0
+    if not np.any(group_has_noise):
+        raise ValueError("cannot initialise data_vs_prior without positive sigma2_noise")
+    avg_sigma2_noise = np.mean(sigma2[group_has_noise], axis=0)
+    if np.any(avg_sigma2_noise <= 0.0):
+        raise ValueError("avg sigma2_noise must be positive in all Fourier shells")
+
+    n_shells = state.ori_size // 2 + 1
+    new_tau2 = np.asarray(state.tau2_class, dtype=np.float64).copy()
+    new_data_vs_prior = np.zeros_like(new_tau2)
+    pdf_class = np.asarray(state.pdf_class, dtype=np.float64)
+    if pdf_class.shape != (state.K,):
+        raise ValueError(f"pdf_class must have shape ({state.K},), got {pdf_class.shape}")
+
+    normfft = float(state.ori_size * state.ori_size)
+    shells = np.arange(n_shells, dtype=np.float64)
+    shell_factor = np.ones(n_shells, dtype=np.float64)
+    shell_factor[1:] = 2.0 * shells[1:]
+
+    for k in range(int(state.K)):
+        if not fix_tau:
+            spectrum = _relion_power_spectrum_3d(np.asarray(state.Iref[k], dtype=np.float64), n_shells)
+            spectrum *= normfft / 2.0
+            new_tau2[k] = float(state.tau2_fudge_factor) * spectrum
+        evidence = float(nr_particles) * float(pdf_class[k]) / avg_sigma2_noise
+        evidence = evidence / shell_factor
+        if np.any(new_tau2[k] < 0.0):
+            raise ValueError("initial tau2_class must be non-negative after reference-spectrum initialisation")
+        new_data_vs_prior[k] = evidence * new_tau2[k]
+
+    new_state = replace(state)
+    new_state.tau2_class = new_tau2
+    new_state.data_vs_prior_class = new_data_vs_prior
     return new_state

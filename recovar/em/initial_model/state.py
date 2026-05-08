@@ -16,10 +16,13 @@ Arrays:
     Igrad2:        (K, N, N, N//2+1)  complex    second-moment slots
     sigma2_noise:  (G, S)                        per-shell noise power
     tau2_class:    (K, S)                        per-shell prior power
+    sigma2_class:  (K, S)                        reconstruction noise estimate
     fsc_halves_class:     (K, S)                 per-shell fsc between mom1 slots
+    fourier_coverage_class: (K, S)               per-shell Fourier coverage
     data_vs_prior_class:  (K, S)
     pdf_class:     (K,)                          class mixing weights
     pdf_direction: (K, n_directions)             class-conditional pdf
+    sigma2_offset: scalar                         translation-prior variance in A^2
 """
 
 from __future__ import annotations
@@ -64,18 +67,24 @@ class InitialModelState:
     # Spectra (per class / optics group)
     sigma2_noise: np.ndarray = field(default_factory=lambda: np.zeros((1, 33)))
     tau2_class: np.ndarray = field(default_factory=lambda: np.zeros((1, 33)))
+    sigma2_class: np.ndarray = field(default_factory=lambda: np.zeros((1, 33)))
     fsc_halves_class: np.ndarray = field(default_factory=lambda: np.zeros((1, 33)))
+    fourier_coverage_class: np.ndarray = field(default_factory=lambda: np.zeros((1, 33)))
     data_vs_prior_class: np.ndarray = field(default_factory=lambda: np.zeros((1, 33)))
 
     # Class/direction weights
     pdf_class: np.ndarray = field(default_factory=lambda: np.ones(1))
     pdf_direction: Optional[np.ndarray] = None  # (K, n_directions) — filled in by init
+    sigma2_offset: float = 100.0
 
     # Resolution pointers
     ini_high: float = -1.0
     current_resolution: float = 0.0
     current_resolution_shell: int = 0
     current_size: int = 0
+    incr_size: int = 10
+    ave_Pmax: float = 0.0
+    has_high_fsc_at_limit: bool = False
 
     # Noise averaged image (from calculateSumOfPowerSpectraAndAverageImage).
     # Kept for reproducibility / debug; not used after iter 0.

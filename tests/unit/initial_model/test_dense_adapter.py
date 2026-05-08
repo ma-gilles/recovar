@@ -11,6 +11,7 @@ from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.dense_adapter import (
     DenseInitialModelEstepConfig,
     class_log_priors_from_state,
+    _estep_meta,
     _initial_model_pass2_layout,
     _relion_projector_to_dense_volume,
     _resolve_sparse_pass1_current_size,
@@ -47,8 +48,20 @@ def _fake_result(n_classes: int, n: int, *, n_images: int = 2, n_groups: int = 2
         class_posterior_sums=np.arange(n_classes, dtype=np.float32),
         class_assignments=np.zeros(n_images, dtype=np.int32),
         pose_assignments=np.arange(n_images, dtype=np.int32),
+        best_pose_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (n_images, 3, 3)).copy(),
+        best_pose_translations=np.arange(n_images * 2, dtype=np.float32).reshape(n_images, 2),
+        best_pose_rotation_ids=np.arange(n_images, dtype=np.int32),
         stats=SimpleNamespace(max_posterior_per_image=np.linspace(0.25, 0.75, n_images, dtype=np.float32)),
         per_class_stats=per_class_stats,
+    )
+
+
+def _fake_noise_stats(offset: float, sumw: float, wsum_noise, img_power):
+    return SimpleNamespace(
+        wsum_sigma2_offset=float(offset),
+        sumw=float(sumw),
+        wsum_sigma2_noise=np.asarray(wsum_noise, dtype=np.float32),
+        wsum_img_power=np.asarray(img_power, dtype=np.float32),
     )
 
 
@@ -157,10 +170,39 @@ def test_dense_initial_model_estep_runs_separate_k_class_calls_for_pseudo_halfse
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [0, 2, 1, 3])
     np.testing.assert_array_equal(result.meta["pose_assignments"], [0, 1, 0, 1])
     np.testing.assert_array_equal(result.meta["class_assignments"], [0, 0, 0, 0])
+    np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1, 0, 1])
+    np.testing.assert_allclose(
+        result.meta["best_pose_translations"],
+        np.asarray([[0, 1], [2, 3], [0, 1], [2, 3]], dtype=np.float32),
+    )
+    assert result.meta["best_pose_rotations"].shape == (4, 3, 3)
     np.testing.assert_allclose(
         result.meta["max_posterior_per_image"],
         np.asarray([0.25, 0.75, 0.25, 0.75], dtype=np.float32),
     )
+
+
+def test_estep_meta_aggregates_noise_stats_for_model_updates():
+    halfset_results = {
+        0: SimpleNamespace(
+            class_posterior_sums=np.asarray([1.0, 2.0], dtype=np.float32),
+            aggregate_noise_stats=_fake_noise_stats(10.0, 3.0, [1.0, 2.0, 3.0], [4.0, 5.0, 6.0]),
+        ),
+        1: SimpleNamespace(
+            class_posterior_sums=np.asarray([3.0, 4.0], dtype=np.float32),
+            aggregate_noise_stats=_fake_noise_stats(20.0, 7.0, [7.0, 8.0, 9.0], [10.0, 11.0, 12.0]),
+        ),
+    }
+
+    meta = _estep_meta(halfset_results)
+
+    assert meta["wsum_sigma2_offset"] == pytest.approx(30.0)
+    assert meta["sigma2_offset_sumw"] == pytest.approx(10.0)
+    assert meta["noise_sumw"] == pytest.approx(10.0)
+    np.testing.assert_allclose(meta["wsum_sigma2_noise"], [8.0, 10.0, 12.0])
+    np.testing.assert_allclose(meta["wsum_img_power"], [14.0, 16.0, 18.0])
+    np.testing.assert_allclose(meta["halfset_0_wsum_sigma2_noise"], [1.0, 2.0, 3.0])
+    np.testing.assert_allclose(meta["halfset_1_wsum_img_power"], [10.0, 11.0, 12.0])
 
 
 def test_dense_initial_model_estep_slices_full_translation_prior_for_pseudo_halfsets(monkeypatch):
@@ -589,7 +631,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     np.testing.assert_allclose(calls["pass2_parent_prior"], coarse_prior[[1, 3]])
     assert calls["fine_prior"] is None
     np.testing.assert_allclose(calls["local_pre_shifts"], pre_shifts[[1, 3]])
-    assert calls["local_n_global_rotations"] == 12
+    assert calls["local_n_global_rotations"] == 1
     assert calls["local_has_reconstruct_with_masked_images"] is False
     assert calls["local_has_reconstruction_subtract_projected_reference"] is False
     assert calls["local_has_recon_square_window"] is False
@@ -598,6 +640,8 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_mstep_relion_x_half"] is False
     assert result.meta["sparse_pass2"] is True
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
+    np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
+    np.testing.assert_allclose(result.meta["best_pose_translations"], [[0, 1], [2, 3]])
 
 
 def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypatch):
@@ -713,6 +757,8 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
     )
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["class_assignments"], [0, 0])
+    np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
+    assert result.meta["best_pose_rotations"].shape == (2, 3, 3)
     assert result.meta["sparse_pass2"] is True
 
 
@@ -851,6 +897,7 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
         },
     ]
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [0, 2, 1, 3])
+    np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1, 0, 1])
     assert "fused_pseudo_halfsets" not in result.meta
 
 
@@ -874,24 +921,24 @@ def test_sparse_pass2_pass1_current_size_matches_relion_fixture_coarse_size():
     assert pass1_current_size == 10
 
 
-def test_initial_model_pass2_layout_uses_relion_parent_child_ids_for_posterior_bins():
+def test_initial_model_pass2_layout_uses_relion_direction_ids_for_posterior_bins():
     layout = LocalHypothesisLayout(
-        n_global_rotations=2,
+        n_global_rotations=4,
         n_pixels=12,
-        n_psi=1,
-        rotation_offsets=np.array([0, 3], dtype=np.int64),
-        rotation_ids_flat=np.array([4, 8, 9], dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(3, dtype=np.float32),
-        rotation_counts=np.array([3], dtype=np.int32),
+        n_psi=2,
+        rotation_offsets=np.array([0, 4], dtype=np.int64),
+        rotation_ids_flat=np.array([4, 8, 9, 10], dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (4, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(4, dtype=np.float32),
+        rotation_counts=np.array([4], dtype=np.int32),
         translation_grid=np.zeros((2, 2), dtype=np.float32),
         translation_log_priors=np.zeros((1, 2), dtype=np.float32),
-        rotation_posterior_ids_flat=np.array([0, 0, 1], dtype=np.int32),
-        sample_mask_flat=np.ones((3, 2), dtype=bool),
+        rotation_posterior_ids_flat=np.array([0, 1, 2, 3], dtype=np.int32),
+        sample_mask_flat=np.ones((4, 2), dtype=bool),
     )
 
-    out = _initial_model_pass2_layout(layout, n_global_rotations=12)
+    out = _initial_model_pass2_layout(layout)
 
-    assert out.n_global_rotations == 12
-    np.testing.assert_array_equal(out.rotation_posterior_ids_flat, np.array([0, 1, 6], dtype=np.int32))
+    assert out.n_global_rotations == 2
+    np.testing.assert_array_equal(out.rotation_posterior_ids_flat, np.array([0, 0, 1, 1], dtype=np.int32))
     np.testing.assert_array_equal(out.rotation_ids_flat, layout.rotation_ids_flat)

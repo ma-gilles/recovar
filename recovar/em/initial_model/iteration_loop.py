@@ -21,6 +21,7 @@ module is the pure orchestrator.
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import Callable, Sequence
 
@@ -44,6 +45,8 @@ from .subset import (
     select_vdam_subset,
 )
 
+MIN_SIGMA2_OFFSET_ANGSTROM2: float = 2.0
+
 # Callback signatures
 ExpectationStepFn = Callable[
     # (state, particle_ids, halfset_ids) -> (posterior_accumulators, posterior_meta)
@@ -58,6 +61,41 @@ halfset-1) and meta is a free-form dict written into per-iter STAR output
 
 IterArtifactSink = Callable[[InitialModelState, int, dict], None]
 PostMstepUpdateFn = Callable[[InitialModelState, int, dict], InitialModelState]
+
+
+def refresh_tau2_from_projector_power(
+    state: InitialModelState,
+    *,
+    padding_factor: int = 1,
+    interpolator: int = 1,
+) -> InitialModelState:
+    """Mirror RELION ``MlModel::setFourierTransformMaps(!fix_tau)``."""
+    try:
+        from recovar.relion_bind import _relion_bind_core as bind
+    except ImportError as e:  # pragma: no cover
+        raise RuntimeError(
+            "VDAM InitialModel tau2 refresh requires the RELION bindings. Run:\n"
+            "  pixi run python recovar/relion_bind/build.py"
+        ) from e
+
+    current_size = int(state.current_size if state.current_size > 0 else state.ori_size)
+    new_tau2 = np.asarray(state.tau2_class, dtype=np.float64).copy()
+    for k in range(int(state.K)):
+        new_tau2[k] = np.asarray(
+            bind.vdam_projector_power_spectrum(
+                np.asarray(state.Iref[k], dtype=np.float64),
+                int(state.ori_size),
+                int(padding_factor),
+                int(interpolator),
+                current_size,
+                True,
+                2,
+            ),
+            dtype=np.float64,
+        )
+    out = replace(state)
+    out.tau2_class = new_tau2
+    return out
 
 
 def _posterior_sums_from_meta(meta: dict, key: str) -> np.ndarray | None:
@@ -80,6 +118,85 @@ def _posterior_sums_from_meta(meta: dict, key: str) -> np.ndarray | None:
     return total
 
 
+def _scalar_sum_from_meta(meta: dict, key: str) -> float | None:
+    value = meta.get(key)
+    if value is not None:
+        return float(value)
+
+    prefix = "halfset_"
+    suffix = f"_{key}"
+    values = [
+        float(meta[name])
+        for name in sorted(meta)
+        if name.startswith(prefix) and name.endswith(suffix)
+    ]
+    if not values:
+        return None
+    return float(sum(values))
+
+
+def update_noise_from_estep_meta(
+    state: InitialModelState,
+    meta: dict,
+    *,
+    do_grad: bool,
+    mu: float = DEFAULT_GRAD_MU,
+) -> InitialModelState:
+    """Update ``sigma2_noise`` from RELION-style E-step noise weighted sums.
+
+    Dense engines accumulate residual noise in the scorer's unnormalised FFT
+    units. ``InitialModelState.sigma2_noise`` is stored in RELION model STAR
+    units, so convert by ``ori_size**4`` before writing it back to state; the
+    next E-step converts it back via ``_noise_variance_from_sigma2``.
+    """
+    wsum_sigma2_noise = _posterior_sums_from_meta(meta, "wsum_sigma2_noise")
+    wsum_img_power = _posterior_sums_from_meta(meta, "wsum_img_power")
+    noise_sumw = _scalar_sum_from_meta(meta, "noise_sumw")
+    if wsum_sigma2_noise is None or wsum_img_power is None or noise_sumw is None:
+        return state
+    if noise_sumw <= 0.0 or not np.isfinite(noise_sumw):
+        return state
+    my_mu = float(mu) if do_grad and state.subset_size != -1 else 0.0
+    if my_mu < 0.0 or my_mu > 1.0:
+        raise ValueError(f"mu must be in [0, 1], got {mu}")
+
+    wsum_sigma2_noise = np.asarray(wsum_sigma2_noise, dtype=np.float64)
+    wsum_img_power = np.asarray(wsum_img_power, dtype=np.float64)
+    if wsum_sigma2_noise.shape != wsum_img_power.shape:
+        raise ValueError(
+            "wsum_sigma2_noise and wsum_img_power must have matching shapes, "
+            f"got {wsum_sigma2_noise.shape} and {wsum_img_power.shape}",
+        )
+    expected_shells = int(state.ori_size) // 2 + 1
+    if wsum_sigma2_noise.shape != (expected_shells,):
+        raise ValueError(
+            f"noise weighted sums must have shape ({expected_shells},), got {wsum_sigma2_noise.shape}"
+        )
+    if not np.all(np.isfinite(wsum_sigma2_noise)) or not np.all(np.isfinite(wsum_img_power)):
+        raise ValueError("noise weighted sums must be finite")
+
+    from recovar.reconstruction import noise
+
+    sigma2_engine_units = noise.normalize_wsum_to_sigma2_noise(
+        wsum_sigma2_noise,
+        wsum_img_power,
+        float(noise_sumw),
+        (int(state.ori_size), int(state.ori_size)),
+    )
+    sigma2_relion_units = np.asarray(sigma2_engine_units, dtype=np.float64) / float(int(state.ori_size) ** 4)
+    if not np.all(np.isfinite(sigma2_relion_units)) or np.any(sigma2_relion_units <= 0.0):
+        raise ValueError("updated sigma2_noise must be positive and finite")
+
+    new_state = replace(state)
+    new_sigma2 = np.asarray(state.sigma2_noise, dtype=np.float64).copy()
+    if new_sigma2.ndim != 2 or new_sigma2.shape[1] != expected_shells:
+        raise ValueError(f"sigma2_noise must have shape (G, {expected_shells}), got {new_sigma2.shape}")
+    new_sigma2 = new_sigma2 * my_mu
+    new_sigma2 += (1.0 - my_mu) * sigma2_relion_units[None, :]
+    new_state.sigma2_noise = new_sigma2
+    return new_state
+
+
 def update_probabilities_from_estep_meta(
     state: InitialModelState,
     meta: dict,
@@ -87,12 +204,12 @@ def update_probabilities_from_estep_meta(
     do_grad: bool,
     mu: float = DEFAULT_GRAD_MU,
 ) -> InitialModelState:
-    """Update class and direction priors from E-step posterior masses.
+    """Update class, direction, and offset priors from E-step posterior masses.
 
     Mirrors ``MlOptimiser::maximizationOtherParameters`` for ``pdf_class``
-    and ``pdf_direction``. Subset gradient iterations use momentum ``mu``;
-    all-particle or EM-tail iterations use ``my_mu = 0`` and replace priors by
-    the current weighted sums.
+    ``pdf_direction``, and ``sigma2_offset``. Subset gradient iterations use
+    momentum ``mu``; all-particle or EM-tail iterations use ``my_mu = 0`` and
+    replace priors by the current weighted sums.
     """
     class_sums = _posterior_sums_from_meta(meta, "class_posterior_sums")
     if class_sums is None:
@@ -121,14 +238,31 @@ def update_probabilities_from_estep_meta(
     direction_sums = _posterior_sums_from_meta(meta, "class_direction_posterior_sums")
     if direction_sums is not None and state.pdf_direction is not None:
         direction_sums = np.asarray(direction_sums, dtype=np.float64)
-        expected = np.asarray(state.pdf_direction).shape
-        if direction_sums.shape != expected:
-            raise ValueError(f"class_direction_posterior_sums must have shape {expected}, got {direction_sums.shape}")
+        if direction_sums.ndim != 2 or direction_sums.shape[0] != state.K:
+            raise ValueError(
+                f"class_direction_posterior_sums must have shape ({state.K}, n_directions), "
+                f"got {direction_sums.shape}"
+            )
         if not np.all(np.isfinite(direction_sums)) or np.any(direction_sums < 0.0):
             raise ValueError("class_direction_posterior_sums must be non-negative and finite")
-        new_pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64) * my_mu
+        pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
+        if pdf_direction.shape != direction_sums.shape:
+            # RELION resizes pdf_direction to the new sampling.NrDirections()
+            # and fills it uniformly when angular sampling changes.
+            pdf_direction = np.full(direction_sums.shape, 1.0 / float(state.K * direction_sums.shape[1]))
+        new_pdf_direction = pdf_direction * my_mu
         new_pdf_direction += (1.0 - my_mu) * direction_sums / sum_weight
         new_state.pdf_direction = new_pdf_direction
+
+    wsum_sigma2_offset = meta.get("wsum_sigma2_offset")
+    if wsum_sigma2_offset is not None:
+        wsum_sigma2_offset = float(wsum_sigma2_offset)
+        if not np.isfinite(wsum_sigma2_offset) or wsum_sigma2_offset < 0.0:
+            raise ValueError("wsum_sigma2_offset must be non-negative and finite")
+        sigma2_offset = float(state.sigma2_offset) * my_mu
+        # RELION divides by 2*sum_weight for 2D particle translations.
+        sigma2_offset += (1.0 - my_mu) * wsum_sigma2_offset / (2.0 * sum_weight)
+        new_state.sigma2_offset = max(float(sigma2_offset), MIN_SIGMA2_OFFSET_ANGSTROM2)
 
     return new_state
 
@@ -176,6 +310,92 @@ def default_schedule_update(
     new_state.grad_current_stepsize = stepsize
     new_state.tau2_fudge_factor = tau2_fudge
     return new_state
+
+
+def _relion_round(x: float) -> int:
+    """Match RELION's positive-valued ROUND macro."""
+    if x >= 0.0:
+        return int(math.floor(float(x) + 0.5))
+    return -int(math.floor(-float(x) + 0.5))
+
+
+def _resolution_shell_from_data_vs_prior(data_vs_prior: np.ndarray, ori_size: int) -> int:
+    """RELION updateCurrentResolution shell scan for one class."""
+    dvp = np.asarray(data_vs_prior, dtype=np.float64)
+    limit = min(int(ori_size) // 2, int(dvp.size))
+    ires = 1
+    while ires < limit:
+        if float(dvp[ires]) < 1.0:
+            break
+        ires += 1
+    return max(0, ires - 1)
+
+
+def update_current_resolution_from_data_vs_prior(
+    state: InitialModelState,
+    *,
+    minres_map: int = 5,
+) -> InitialModelState:
+    """Mirror RELION ``updateCurrentResolution`` for InitialModel/VDAM.
+
+    Gradient InitialModel uses ``data_vs_prior_class`` produced by
+    ``BackProjector::updateSSNRarrays``. The resulting ``current_resolution``
+    is written in this iteration and converted to the next iteration's
+    ``current_size`` when expectation setup calls
+    ``updateImageSizeAndResolutionPointers``.
+    """
+    maxres = 0
+    for k in range(int(state.K)):
+        maxres = max(maxres, _resolution_shell_from_data_vs_prior(state.data_vs_prior_class[k], state.ori_size))
+    maxres = max(maxres, int(minres_map))
+
+    new_state = replace(state)
+    new_state.current_resolution_shell = int(maxres)
+    new_state.current_resolution = float(maxres) / (float(state.pixel_size) * float(state.ori_size))
+    return new_state
+
+
+def update_image_size_and_resolution_pointers(state: InitialModelState) -> InitialModelState:
+    """Mirror the current-size part of RELION ``updateImageSizeAndResolutionPointers``."""
+    maxres = _relion_round(float(state.current_resolution) * float(state.pixel_size) * float(state.ori_size))
+    if float(state.ave_Pmax) > 0.1 and bool(state.has_high_fsc_at_limit):
+        maxres += _relion_round(0.25 * float(state.ori_size) / 2.0)
+    else:
+        maxres += int(state.incr_size)
+    current_size = min(2 * maxres, int(state.ori_size))
+    if current_size < 2:
+        current_size = 2
+    if current_size % 2:
+        current_size += 1
+    current_size = min(current_size, int(state.ori_size))
+
+    new_state = replace(state)
+    new_state.current_size = int(current_size)
+    return new_state
+
+
+def _ave_pmax_from_meta(meta: dict) -> float | None:
+    pmax = meta.get("max_posterior_per_image")
+    if pmax is not None:
+        arr = np.asarray(pmax, dtype=np.float64)
+        if arr.size:
+            return float(np.mean(arr))
+
+    weighted_sum = 0.0
+    count = 0
+    for key, value in meta.items():
+        if key.endswith("_pmax_mean"):
+            prefix = key[: -len("_pmax_mean")]
+            n_key = f"{prefix}_n_images"
+            n = int(meta.get(n_key, 1))
+            weighted_sum += float(value) * n
+            count += n
+    if count:
+        return weighted_sum / float(count)
+
+    if "pmax_mean" in meta:
+        return float(meta["pmax_mean"])
+    return None
 
 
 def select_subset_for_iter(
@@ -338,6 +558,9 @@ def run_vdam_iterations(
     grad_ini_frac: float = 0.3,
     grad_fin_frac: float = 0.2,
     mu: float = DEFAULT_GRAD_MU,
+    refresh_tau2_from_projector: bool = True,
+    projector_padding_factor: int = 1,
+    projector_interpolator: int = 1,
 ) -> InitialModelState:
     """Run the full VDAM iteration loop.
 
@@ -372,6 +595,14 @@ def run_vdam_iterations(
             particle_order=particle_order,
         )
 
+        current = update_image_size_and_resolution_pointers(current)
+        if refresh_tau2_from_projector:
+            current = refresh_tau2_from_projector_power(
+                current,
+                padding_factor=projector_padding_factor,
+                interpolator=projector_interpolator,
+            )
+
         # E-step: caller-supplied closure over the data loader + dense kernels
         accumulators, meta = expectation_step(
             current,
@@ -387,9 +618,23 @@ def run_vdam_iterations(
             tau2_fudge_factor=current.tau2_fudge_factor,
         )
         current = update_probabilities_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
+        current = update_noise_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
+        ave_pmax = _ave_pmax_from_meta(meta)
+        if ave_pmax is not None:
+            current = replace(current, ave_Pmax=float(ave_pmax))
         if post_mstep_update is not None and not current.has_converged:
             current = post_mstep_update(current, it, meta)
 
+        current = update_current_resolution_from_data_vs_prior(current)
+        meta = dict(meta)
+        meta.update(
+            {
+                "current_size": int(current.current_size),
+                "current_resolution": float(current.current_resolution),
+                "current_resolution_shell": int(current.current_resolution_shell),
+                "ave_Pmax": float(current.ave_Pmax),
+            }
+        )
         iter_artifact_sink(current, it, meta)
 
     return current

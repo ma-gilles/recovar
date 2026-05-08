@@ -34,6 +34,7 @@ from recovar.em.initial_model import (
     half_slot_count,
     half_slot_index,
     hermitian_weights_relion,
+    initialise_data_vs_prior_from_references,
     initialise_denovo_state,
     minvsigma2_with_dc_zero,
     seed_noise_from_mavg,
@@ -90,6 +91,7 @@ class TestInitialiseDenovoState:
         assert state.current_resolution_shell == 4
         assert state.current_size == 28
         assert abs(state.ini_high - 136.0) < 1e-9
+        assert state.sigma2_offset == pytest.approx(100.0)
 
     def test_iref_is_zero(self):
         state = initialise_denovo_state(ori_size=16, pixel_size=1.0, K=2, nr_iter=50, n_directions=48)
@@ -212,6 +214,51 @@ class TestSeedNoiseFromMavg:
         )
         with pytest.raises(ValueError):
             seed_noise_from_mavg(state, np.zeros((2, 9)))
+
+
+class TestInitialiseDataVsPrior:
+    def test_seeds_nonzero_tau2_and_relion_data_vs_prior_formula(self):
+        state = initialise_denovo_state(
+            ori_size=16,
+            pixel_size=2.0,
+            K=2,
+            nr_iter=10,
+            n_directions=12,
+            nr_optics_groups=2,
+        )
+        state.Iref[0, 8, 8, 8] = 1.0
+        state.Iref[1, 8, 8, 8] = 2.0
+        state.sigma2_noise[:] = np.asarray(
+            [
+                np.linspace(2.0, 3.0, 9),
+                np.linspace(4.0, 5.0, 9),
+            ],
+            dtype=np.float64,
+        )
+
+        out = initialise_data_vs_prior_from_references(state, nr_particles=200)
+
+        assert np.all(out.tau2_class > 0.0)
+        assert np.all(out.data_vs_prior_class > 0.0)
+        # RELION: spectrum = average(|FFT_norm(Iref)|^2), tau2 = spectrum*N^2/2.
+        # A single centered delta has constant FFT_norm amplitude 1/N^3.
+        n = 16.0
+        expected_tau2_c0 = 1.0 / (2.0 * n**4)
+        expected_tau2_c1 = 4.0 / (2.0 * n**4)
+        np.testing.assert_allclose(out.tau2_class[0], expected_tau2_c0, rtol=1e-12)
+        np.testing.assert_allclose(out.tau2_class[1], expected_tau2_c1, rtol=1e-12)
+        avg_sigma2_shell1 = (state.sigma2_noise[0, 1] + state.sigma2_noise[1, 1]) / 2.0
+        expected_dvp_shell1 = 200.0 * 0.5 / avg_sigma2_shell1 / 2.0 * expected_tau2_c0
+        assert out.data_vs_prior_class[0, 1] == pytest.approx(expected_dvp_shell1, rel=1e-12)
+        np.testing.assert_array_equal(state.tau2_class, 0.0)
+        np.testing.assert_array_equal(state.data_vs_prior_class, 0.0)
+
+    def test_rejects_missing_noise(self):
+        state = initialise_denovo_state(ori_size=16, pixel_size=1.0, K=1, nr_iter=10, n_directions=12)
+        state.Iref[0, 8, 8, 8] = 1.0
+
+        with pytest.raises(ValueError, match="sigma2_noise"):
+            initialise_data_vs_prior_from_references(state, nr_particles=10)
 
 
 # ---------------------------------------------------------------------------

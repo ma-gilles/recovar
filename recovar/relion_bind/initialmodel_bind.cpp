@@ -45,6 +45,7 @@
 #include <src/funcs.h>       // for init_random_generator / rnd_unif
 #include <src/gradient_optimisation.h>  // for SomGraph::make_blobs_3d
 #include <src/mask.h>        // for softMaskOutsideMap
+#include <src/projector.h>
 
 namespace py = pybind11;
 
@@ -105,6 +106,56 @@ static py::array_t<double> real_1d_to_numpy(const MultidimArray<RFLOAT> &arr) {
     long n = XSIZE(arr);
     py::array_t<double> out(n);
     std::memcpy(out.request().ptr, arr.data, n * sizeof(RFLOAT));
+    return out;
+}
+
+
+static py::array_t<double> vdam_projector_power_spectrum(
+    py::array_t<double, py::array::c_style | py::array::forcecast> vol_in,
+    int ori_size,
+    int padding_factor,
+    int interpolator,
+    int current_size,
+    bool do_gridding,
+    int data_dim
+) {
+    auto buf = vol_in.request();
+    if (buf.ndim != 3)
+        throw std::runtime_error("vol_in must be 3D");
+    if (buf.shape[0] != ori_size || buf.shape[1] != ori_size || buf.shape[2] != ori_size)
+        throw std::runtime_error("vol_in shape must equal (ori_size, ori_size, ori_size)");
+
+    MultidimArray<RFLOAT> vol(ori_size, ori_size, ori_size);
+    std::memcpy(vol.data, buf.ptr,
+                (size_t)ori_size * (size_t)ori_size * (size_t)ori_size * sizeof(RFLOAT));
+
+    Projector projector(ori_size, interpolator, (RFLOAT)padding_factor, 10, data_dim);
+    MultidimArray<RFLOAT> power_spectrum;
+    projector.computeFourierTransformMap(
+        vol,
+        power_spectrum,
+        current_size,
+        1,
+        do_gridding,
+        true
+    );
+    return real_1d_to_numpy(power_spectrum);
+}
+
+
+static MultidimArray<RFLOAT> numpy_to_real_3d(
+    py::array_t<double, py::array::c_style | py::array::forcecast> arr
+) {
+    auto buf = arr.request();
+    if (buf.ndim != 3)
+        throw std::runtime_error("expected 3D real array (k, i, j)");
+    long kdim = buf.shape[0];
+    long idim = buf.shape[1];
+    long jdim = buf.shape[2];
+    MultidimArray<RFLOAT> out(kdim, idim, jdim);
+    std::memcpy(out.data, buf.ptr, kdim * idim * jdim * sizeof(RFLOAT));
+    out.setXmippOrigin();
+    out.xinit = 0;
     return out;
 }
 
@@ -347,6 +398,79 @@ static py::array_t<double> vdam_reconstruct_grad(
 }
 
 
+/**
+ * Wrap `BackProjector::updateSSNRarrays` for an already-accumulated BPref.
+ *
+ * Source: ml_optimiser.cpp::maximization calls updateSSNRarrays on
+ * wsum_model.BPref[iclass] after maximizationGradientParameters has already
+ * run reweightGrad/getFristMoment/getSecondMoment/applyMomenta.  The VDAM
+ * native path therefore must use the BPref weight buffer directly rather than
+ * rebuilding a BackProjector from images and rotations.
+ */
+static py::tuple vdam_update_ssnr_arrays_from_bpref(
+    py::array_t<double, py::array::c_style | py::array::forcecast> weight_in,
+    py::array_t<double, py::array::c_style | py::array::forcecast> fsc_in,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tau2_in,
+    double tau2_fudge,
+    int ori_size,
+    int padding_factor,
+    int interpolator,
+    int r_max,
+    bool update_tau2_with_fsc,
+    bool is_whole_instead_of_half,
+    bool correct_tau2_by_avgctf2
+) {
+    BackProjector bp = make_empty_backprojector(ori_size, padding_factor, "C1", interpolator);
+    bp.weight = numpy_to_real_3d(weight_in);
+    if (r_max > 0)
+        bp.r_max = r_max;
+
+    long n_shells = ori_size / 2 + 1;
+
+    MultidimArray<RFLOAT> fsc(n_shells);
+    fsc.initZeros();
+    auto fsc_buf = fsc_in.request();
+    double* fsc_ptr = (double*)fsc_buf.ptr;
+    long fsc_n = fsc_buf.size;
+    for (long s = 0; s < n_shells && s < fsc_n; s++)
+        DIRECT_A1D_ELEM(fsc, s) = (RFLOAT)fsc_ptr[s];
+
+    MultidimArray<RFLOAT> tau2(n_shells);
+    tau2.initZeros();
+    auto tau2_buf = tau2_in.request();
+    double* tau2_ptr = (double*)tau2_buf.ptr;
+    long tau2_n = tau2_buf.size;
+    for (long s = 0; s < n_shells && s < tau2_n; s++)
+        DIRECT_A1D_ELEM(tau2, s) = (RFLOAT)tau2_ptr[s];
+
+    MultidimArray<RFLOAT> sigma2(n_shells);
+    MultidimArray<RFLOAT> data_vs_prior(n_shells);
+    MultidimArray<RFLOAT> fourier_coverage(n_shells);
+    MultidimArray<RFLOAT> avgctf2(n_shells);
+    avgctf2.initConstant(1.0);
+
+    bp.updateSSNRarrays(
+        (RFLOAT)tau2_fudge,
+        tau2,
+        sigma2,
+        data_vs_prior,
+        fourier_coverage,
+        fsc,
+        avgctf2,
+        update_tau2_with_fsc,
+        is_whole_instead_of_half,
+        correct_tau2_by_avgctf2
+    );
+
+    return py::make_tuple(
+        real_1d_to_numpy(tau2),
+        real_1d_to_numpy(sigma2),
+        real_1d_to_numpy(data_vs_prior),
+        real_1d_to_numpy(fourier_coverage)
+    );
+}
+
+
 // ===========================================================================
 //  VDAM scheduler free functions (copy-verbatim from ml_optimiser.cpp)
 // ===========================================================================
@@ -578,9 +702,9 @@ static py::array_t<double> vdam_bootstrap_iref(
     if (todo < nr_classes * 5) todo = nr_classes * 5;  // fn_ref == None floor
     if (todo > N) todo = N;
 
-    for (long part_id = 0; part_id < todo; part_id++) {
-        // 1. Per-particle RNG reset
-        init_random_generator(random_seed + (int)part_id);
+    for (long part_id_sorted = 0; part_id_sorted < todo; part_id_sorted++) {
+        // 1. Per-particle RNG reset.
+        init_random_generator(random_seed + (int)part_id_sorted);
 
         // 2-4. Random Euler draws
         RFLOAT rot  = rnd_unif() * 360.0;
@@ -590,12 +714,12 @@ static py::array_t<double> vdam_bootstrap_iref(
         Matrix2D<RFLOAT> A;
         Euler_angles2matrix(rot, tilt, psi, A, false);
 
-        int iclass = (int)(part_id % nr_classes);
+        int iclass = (int)(part_id_sorted % nr_classes);
 
         // Load image into MultidimArray
         Image<RFLOAT> img;
         img().initZeros(ori_size, ori_size);
-        const double* row = (const double*)img_buf.ptr + part_id * H * W;
+        const double* row = (const double*)img_buf.ptr + part_id_sorted * H * W;
         for (long i = 0; i < H * W; i++)
             img.data.data[i] = (RFLOAT)row[i];
         img().setXmippOrigin();
@@ -609,12 +733,12 @@ static py::array_t<double> vdam_bootstrap_iref(
         MultidimArray<Complex> Faux;
         transformer.FourierTransform(img(), Faux, false);
 
-        // 9. CenterFFTbySign
-        CenterFFTbySign(Faux);
-
-        // 10. windowFourierTransform to current_size
+        // 9-10. RELION windows first, then applies CenterFFTbySign to the
+        // windowed transform. The order matters for odd bootstrap sizes such
+        // as current_size=9.
         MultidimArray<Complex> Fimg;
         windowFourierTransform(Faux, Fimg, current_size > 0 ? current_size : ori_size);
+        CenterFFTbySign(Fimg);
 
         // 11. Compute CTF
         MultidimArray<RFLOAT> Fctf;
@@ -622,9 +746,9 @@ static py::array_t<double> vdam_bootstrap_iref(
         Fctf.initConstant(1.0);
         if (do_ctf_correction) {
             CTF ctf;
-            ctf.setValues(du[part_id], dv[part_id], da[part_id],
+            ctf.setValues(du[part_id_sorted], dv[part_id_sorted], da[part_id_sorted],
                           voltage, Cs, Q0, 0.0 /* Bfac */, 1.0 /* scale */,
-                          dp[part_id]);
+                          dp[part_id_sorted]);
             ctf.getFftwImage(Fctf, ori_size, ori_size, pixel_size,
                              false,  // ctf_phase_flipped
                              false,  // only_flip_phases
@@ -635,19 +759,19 @@ static py::array_t<double> vdam_bootstrap_iref(
             // ---- RECOVAR DEBUG: dump first 3 particles' Fimg+Fctf+A ----
             {
                 const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR_OURS");
-                if (dbg_dir != NULL && part_id < 3) {
+                if (dbg_dir != NULL && part_id_sorted < 3) {
                     char p[1024]; FILE* f;
-                    snprintf(p, sizeof(p), "%s/p%ld_Fimg_preCTF.bin", dbg_dir, part_id);
+                    snprintf(p, sizeof(p), "%s/p%ld_Fimg_preCTF.bin", dbg_dir, part_id_sorted);
                     f = fopen(p, "wb");
                     if (f) { long nz=1, ny=YSIZE(Fimg), nx=XSIZE(Fimg);
                       fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
                       fwrite(Fimg.data, sizeof(Complex), ny*nx, f); fclose(f); }
-                    snprintf(p, sizeof(p), "%s/p%ld_Fctf.bin", dbg_dir, part_id);
+                    snprintf(p, sizeof(p), "%s/p%ld_Fctf.bin", dbg_dir, part_id_sorted);
                     f = fopen(p, "wb");
                     if (f) { long nz=1, ny=YSIZE(Fctf), nx=XSIZE(Fctf);
                       fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
                       fwrite(Fctf.data, sizeof(RFLOAT), ny*nx, f); fclose(f); }
-                    snprintf(p, sizeof(p), "%s/p%ld_A_euler.txt", dbg_dir, part_id);
+                    snprintf(p, sizeof(p), "%s/p%ld_A_euler.txt", dbg_dir, part_id_sorted);
                     f = fopen(p, "w");
                     if (f) {
                         for (int ri=0; ri<3; ri++)
@@ -825,6 +949,292 @@ static py::array_t<double> vdam_rnd_unif_sequence(
 
 
 /**
+ * RELION InitialModel expected angular/translation accuracy estimator.
+ *
+ * This is the SPA 3D-reference-to-2D-image subset loop from
+ * MlOptimiser::calculateExpectedAngularErrors, expressed as a stateless helper
+ * so native InitialModel can feed updateAngularSampling with the same units and
+ * thresholds as RELION without constructing a full MlOptimiser.
+ */
+static py::dict vdam_expected_angular_errors(
+    py::array_t<double, py::array::c_style | py::array::forcecast> references,
+    py::array_t<double, py::array::c_style | py::array::forcecast> eulers_deg,
+    py::array_t<long, py::array::c_style | py::array::forcecast> particle_ids,
+    py::array_t<int, py::array::c_style | py::array::forcecast> class_ids,
+    py::array_t<double, py::array::c_style | py::array::forcecast> pdf_class,
+    py::array_t<double, py::array::c_style | py::array::forcecast> sigma2_noise,
+    py::array_t<double, py::array::c_style | py::array::forcecast> defU,
+    py::array_t<double, py::array::c_style | py::array::forcecast> defV,
+    py::array_t<double, py::array::c_style | py::array::forcecast> defAngle,
+    py::array_t<double, py::array::c_style | py::array::forcecast> phase_shift,
+    double voltage,
+    double Cs,
+    double Q0,
+    double pixel_size,
+    int ori_size,
+    int current_image_size,
+    int padding_factor,
+    int interpolator,
+    double sigma2_fudge,
+    int random_seed,
+    bool do_ctf_correction,
+    bool do_ctf_padding
+) {
+    auto refs_buf = references.request();
+    auto euler_buf = eulers_deg.request();
+    auto particle_buf = particle_ids.request();
+    auto class_buf = class_ids.request();
+    auto pdf_buf = pdf_class.request();
+    auto sigma_buf = sigma2_noise.request();
+    auto defU_buf = defU.request();
+    auto defV_buf = defV.request();
+    auto defA_buf = defAngle.request();
+    auto phase_buf = phase_shift.request();
+
+    if (refs_buf.ndim != 4)
+        throw std::runtime_error("references must have shape (K, N, N, N)");
+    const long K = refs_buf.shape[0];
+    if (refs_buf.shape[1] != ori_size || refs_buf.shape[2] != ori_size || refs_buf.shape[3] != ori_size)
+        throw std::runtime_error("reference volume shape does not match ori_size");
+    if (euler_buf.ndim != 2 || euler_buf.shape[1] != 3)
+        throw std::runtime_error("eulers_deg must have shape (n_trials, 3)");
+    const long n_trials = euler_buf.shape[0];
+    if (particle_buf.ndim != 1 || particle_buf.shape[0] != n_trials)
+        throw std::runtime_error("particle_ids must have shape (n_trials,)");
+    if (class_buf.ndim != 1 || class_buf.shape[0] != n_trials)
+        throw std::runtime_error("class_ids must have shape (n_trials,)");
+    if (pdf_buf.ndim != 1 || pdf_buf.shape[0] != K)
+        throw std::runtime_error("pdf_class must have shape (K,)");
+    if (sigma_buf.ndim != 1)
+        throw std::runtime_error("sigma2_noise must be a 1D shell spectrum");
+    const long n_particles = defU_buf.shape[0];
+    if (defU_buf.ndim != 1 || defV_buf.ndim != 1 || defA_buf.ndim != 1 || phase_buf.ndim != 1)
+        throw std::runtime_error("CTF parameter arrays must be 1D");
+    if (defV_buf.shape[0] != n_particles || defA_buf.shape[0] != n_particles || phase_buf.shape[0] != n_particles)
+        throw std::runtime_error("CTF parameter arrays must have matching lengths");
+    if (current_image_size <= 0 || current_image_size > ori_size || current_image_size % 2 != 0)
+        throw std::runtime_error("current_image_size must be a positive even size <= ori_size");
+    if (pixel_size <= 0.0)
+        throw std::runtime_error("pixel_size must be positive");
+    if (sigma2_fudge <= 0.0)
+        throw std::runtime_error("sigma2_fudge must be positive");
+
+    const double *refs_ptr = static_cast<double*>(refs_buf.ptr);
+    const double *eulers_ptr = static_cast<double*>(euler_buf.ptr);
+    const long *particle_ptr = static_cast<long*>(particle_buf.ptr);
+    const int *class_ptr = static_cast<int*>(class_buf.ptr);
+    const double *pdf_ptr = static_cast<double*>(pdf_buf.ptr);
+    const double *sigma_ptr = static_cast<double*>(sigma_buf.ptr);
+    const double *defU_ptr = static_cast<double*>(defU_buf.ptr);
+    const double *defV_ptr = static_cast<double*>(defV_buf.ptr);
+    const double *defA_ptr = static_cast<double*>(defA_buf.ptr);
+    const double *phase_ptr = static_cast<double*>(phase_buf.ptr);
+
+    std::vector<Projector> projectors;
+    projectors.reserve((size_t)K);
+    const long nvox = (long)ori_size * ori_size * ori_size;
+    for (long k = 0; k < K; k++) {
+        MultidimArray<RFLOAT> vol(ori_size, ori_size, ori_size);
+        std::memcpy(vol.data, refs_ptr + k * nvox, nvox * sizeof(RFLOAT));
+        Projector projector(ori_size, interpolator, (RFLOAT)padding_factor, 10, 2);
+        MultidimArray<RFLOAT> power_spectrum;
+        projector.computeFourierTransformMap(vol, power_spectrum, current_image_size, 1, true);
+        projectors.push_back(projector);
+    }
+
+    std::vector<double> acc_rot_class((size_t)K, 999.0);
+    std::vector<double> acc_trans_class((size_t)K, 999.0);
+    std::vector<long> class_counts((size_t)K, 0);
+    double acc_rot = 999.0;
+    double acc_trans = 999.0;
+    const double pvalue = 4.60517;
+
+    for (long k = 0; k < K; k++) {
+        if (pdf_ptr[k] < 0.01)
+            continue;
+
+        double rot_sum = 0.0;
+        double trans_sum = 0.0;
+        long count = 0;
+
+        for (long trial = 0; trial < n_trials; trial++) {
+            if (class_ptr[trial] != k)
+                continue;
+            const long part_id = particle_ptr[trial];
+            if (part_id < 0 || part_id >= n_particles)
+                throw std::runtime_error("particle_ids contains an entry outside the CTF parameter arrays");
+
+            CTF ctf;
+            ctf.setValues(
+                defU_ptr[part_id],
+                defV_ptr[part_id],
+                defA_ptr[part_id],
+                voltage,
+                Cs,
+                Q0,
+                0.0,
+                1.0,
+                phase_ptr[part_id],
+                -1.0
+            );
+            MultidimArray<RFLOAT> Fctf(current_image_size, current_image_size / 2 + 1);
+            Fctf.initConstant(1.0);
+            if (do_ctf_correction) {
+                ctf.getFftwImage(
+                    Fctf,
+                    ori_size,
+                    ori_size,
+                    pixel_size,
+                    false,
+                    false,
+                    false,
+                    true,
+                    do_ctf_padding
+                );
+            }
+
+            for (int imode = 0; imode < 2; imode++) {
+                double ang_error = 0.0;
+                double sh_error = 0.0;
+                double my_snr = 0.0;
+
+                while (my_snr <= pvalue) {
+                    double ang_step;
+                    if (ang_error < 0.2)
+                        ang_step = 0.05;
+                    else if (ang_error < 1.0)
+                        ang_step = 0.1;
+                    else if (ang_error < 2.0)
+                        ang_step = 0.2;
+                    else if (ang_error < 5.0)
+                        ang_step = 0.5;
+                    else if (ang_error < 10.0)
+                        ang_step = 1.0;
+                    else if (ang_error < 20.0)
+                        ang_step = 2.0;
+                    else
+                        ang_step = 5.0;
+
+                    double sh_step;
+                    if (sh_error < 1.0)
+                        sh_step = 0.1;
+                    else if (sh_error < 2.0)
+                        sh_step = 0.2;
+                    else if (sh_error < 5.0)
+                        sh_step = 0.5;
+                    else if (sh_error < 10.0)
+                        sh_step = 1.0;
+                    else
+                        sh_step = 2.0;
+
+                    ang_error += ang_step;
+                    sh_error += sh_step;
+                    if ((imode == 0 && ang_error > 30.0) || (imode == 1 && sh_error > 10.0))
+                        break;
+
+                    init_random_generator(random_seed + (int)part_id);
+
+                    const double rot1 = eulers_ptr[trial * 3 + 0];
+                    const double tilt1 = eulers_ptr[trial * 3 + 1];
+                    const double psi1 = eulers_ptr[trial * 3 + 2];
+                    double rot2 = rot1;
+                    double tilt2 = tilt1;
+                    double psi2 = psi1;
+                    double xshift = 0.0;
+                    double yshift = 0.0;
+
+                    if (imode == 0) {
+                        const double ran = rnd_unif();
+                        if (ran < 0.3333)
+                            rot2 = rot1 + ang_error;
+                        else if (ran < 0.6667)
+                            tilt2 = tilt1 + ang_error;
+                        else
+                            psi2 = psi1 + ang_error;
+                    } else {
+                        const double ran = rnd_unif();
+                        if (ran < 0.5)
+                            xshift = sh_error;
+                        else
+                            yshift = sh_error;
+                    }
+
+                    MultidimArray<Complex> F1(current_image_size, current_image_size / 2 + 1);
+                    MultidimArray<Complex> F2(current_image_size, current_image_size / 2 + 1);
+                    F1.initZeros();
+                    F2.initZeros();
+                    Matrix2D<RFLOAT> A1(3, 3), A2(3, 3);
+                    Euler_angles2matrix(rot1, tilt1, psi1, A1, false);
+                    projectors[(size_t)k].get2DFourierTransform(F1, A1);
+
+                    if (imode == 0) {
+                        Euler_angles2matrix(rot2, tilt2, psi2, A2, false);
+                        projectors[(size_t)k].get2DFourierTransform(F2, A2);
+                    } else {
+                        shiftImageInFourierTransform(F1, F2, (RFLOAT)ori_size, (RFLOAT)(-xshift), (RFLOAT)(-yshift), (RFLOAT)0.0);
+                    }
+
+                    if (do_ctf_correction) {
+                        FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(F1) {
+                            DIRECT_MULTIDIM_ELEM(F1, n) *= DIRECT_MULTIDIM_ELEM(Fctf, n);
+                            DIRECT_MULTIDIM_ELEM(F2, n) *= DIRECT_MULTIDIM_ELEM(Fctf, n);
+                        }
+                    }
+
+                    my_snr = 0.0;
+                    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(F1) {
+                        const long idx = n;
+                        const long ix = idx % XSIZE(F1);
+                        const long iy_linear = idx / XSIZE(F1);
+                        const long iy = (iy_linear < current_image_size / 2 + 1)
+                            ? iy_linear
+                            : (iy_linear - current_image_size);
+                        const int ires = ROUND(std::sqrt((double)(iy * iy + ix * ix)));
+                        if (ires > 0 && ires < sigma_buf.shape[0]) {
+                            const double sigma = sigma_ptr[ires];
+                            if (sigma > 0.0) {
+                                const Complex diff = DIRECT_MULTIDIM_ELEM(F1, n) - DIRECT_MULTIDIM_ELEM(F2, n);
+                                my_snr += norm(diff) / (2.0 * sigma2_fudge * sigma);
+                            }
+                        }
+                    }
+                }
+
+                if (imode == 0)
+                    rot_sum += ang_error;
+                else
+                    trans_sum += pixel_size * sh_error;
+            }
+            count++;
+        }
+
+        if (count > 0) {
+            acc_rot_class[(size_t)k] = rot_sum / (double)count;
+            acc_trans_class[(size_t)k] = trans_sum / (double)count;
+            class_counts[(size_t)k] = count;
+            acc_rot = std::min(acc_rot, acc_rot_class[(size_t)k]);
+            acc_trans = std::min(acc_trans, acc_trans_class[(size_t)k]);
+        }
+    }
+
+    py::array_t<double> rot_out((py::ssize_t)K);
+    py::array_t<double> trans_out((py::ssize_t)K);
+    py::array_t<long> counts_out((py::ssize_t)K);
+    std::memcpy(rot_out.request().ptr, acc_rot_class.data(), K * sizeof(double));
+    std::memcpy(trans_out.request().ptr, acc_trans_class.data(), K * sizeof(double));
+    std::memcpy(counts_out.request().ptr, class_counts.data(), K * sizeof(long));
+
+    py::dict out;
+    out["acc_rot"] = acc_rot;
+    out["acc_trans"] = acc_trans;
+    out["acc_rot_class"] = rot_out;
+    out["acc_trans_class"] = trans_out;
+    out["class_counts"] = counts_out;
+    return out;
+}
+
+
+/**
  * Replicates Experiment::randomiseParticlesOrder's non-halves Fisher-Yates
  * path, using RELION's own Mersenne-Twister + ran1 pair (via `rnd_unif`).
  *
@@ -923,6 +1333,34 @@ uses the SNR-weighted fsc_estimate path; otherwise it defaults to
 fsc_estimate=1.
 )doc");
 
+    m.def("vdam_update_ssnr_arrays_from_bpref", &vdam_update_ssnr_arrays_from_bpref,
+          py::arg("weight"), py::arg("fsc"), py::arg("tau2"),
+          py::arg("tau2_fudge"),
+          py::arg("ori_size"), py::arg("padding_factor") = 1,
+          py::arg("interpolator") = TRILINEAR, py::arg("r_max") = -1,
+          py::arg("update_tau2_with_fsc") = false,
+          py::arg("is_whole_instead_of_half") = false,
+          py::arg("correct_tau2_by_avgctf2") = false,
+          R"doc(
+BackProjector::updateSSNRarrays for an already-accumulated VDAM BPref.
+Returns (tau2, sigma2, data_vs_prior, fourier_coverage).
+)doc");
+
+    m.def("vdam_projector_power_spectrum", &vdam_projector_power_spectrum,
+          py::arg("vol_in"),
+          py::arg("ori_size"),
+          py::arg("padding_factor") = 1,
+          py::arg("interpolator") = TRILINEAR,
+          py::arg("current_size") = -1,
+          py::arg("do_gridding") = true,
+          py::arg("data_dim") = 2,
+          R"doc(
+Projector::computeFourierTransformMap power_spectrum for InitialModel.
+
+This mirrors MlModel::setFourierTransformMaps(!fix_tau), which refreshes
+tau2_class from the current real-space reference at E-step setup.
+)doc");
+
     // ----- Scheduler free functions -----
 
     m.def("vdam_compute_subset_size", &vdam_compute_subset_size,
@@ -962,6 +1400,30 @@ Returns -1 when subset should span all particles.
           py::arg("seed"), py::arg("n_draws"),
           "Return the first n_draws of rnd_unif() after init_random_generator(seed).");
 
+    m.def("vdam_expected_angular_errors", &vdam_expected_angular_errors,
+          py::arg("references"),
+          py::arg("eulers_deg"),
+          py::arg("particle_ids"),
+          py::arg("class_ids"),
+          py::arg("pdf_class"),
+          py::arg("sigma2_noise"),
+          py::arg("defU"), py::arg("defV"), py::arg("defAngle"),
+          py::arg("phase_shift"),
+          py::arg("voltage"), py::arg("Cs"), py::arg("Q0"),
+          py::arg("pixel_size"), py::arg("ori_size"),
+          py::arg("current_image_size"),
+          py::arg("padding_factor") = 1,
+          py::arg("interpolator") = TRILINEAR,
+          py::arg("sigma2_fudge") = 1.0,
+          py::arg("random_seed") = 0,
+          py::arg("do_ctf_correction") = true,
+          py::arg("do_ctf_padding") = false,
+          R"doc(
+SPA 3D InitialModel accuracy estimator from
+MlOptimiser::calculateExpectedAngularErrors. Returns acc_rot/acc_trans plus
+per-class arrays.
+)doc");
+
     m.def("vdam_bootstrap_iref", &vdam_bootstrap_iref,
           py::arg("images"),
           py::arg("defU"), py::arg("defV"), py::arg("defAngle"),
@@ -979,8 +1441,8 @@ Returns -1 when subset should span all particles.
           R"doc(
 Run the RELION InitialModel bootstrap (ml_optimiser.cpp:3127-3205 +
 reconstruct at :3265) end-to-end in C++. Returns the reconstructed
-Iref of shape (nr_classes, ori, ori, ori). Caller applies fftshift to
-put the origin at the array centre.
+Iref of shape (nr_classes, ori, ori, ori). Caller applies fftshift to put the
+origin at the array centre.
 )doc");
 
     m.def("vdam_postprocess_initial_iref", &vdam_postprocess_initial_iref,

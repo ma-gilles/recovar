@@ -485,6 +485,21 @@ def _sparse_pass2_result_to_accumulators(
     )
 
 
+def _append_sigma2_offset_meta(meta: dict[str, Any], result: Any, *, prefix: str | None = None) -> None:
+    noise_stats = getattr(result, "aggregate_noise_stats", None)
+    if noise_stats is None:
+        return
+    key_prefix = "" if prefix is None else f"{prefix}_"
+    meta[f"{key_prefix}wsum_sigma2_offset"] = float(getattr(noise_stats, "wsum_sigma2_offset"))
+    meta[f"{key_prefix}sigma2_offset_sumw"] = float(getattr(noise_stats, "sumw"))
+    meta[f"{key_prefix}wsum_sigma2_noise"] = np.asarray(
+        getattr(noise_stats, "wsum_sigma2_noise"),
+        dtype=np.float64,
+    )
+    meta[f"{key_prefix}wsum_img_power"] = np.asarray(getattr(noise_stats, "wsum_img_power"), dtype=np.float64)
+    meta[f"{key_prefix}noise_sumw"] = float(getattr(noise_stats, "sumw"))
+
+
 def _sparse_pass2_estep_meta(
     halfset_results: dict[int, Any],
     selected_particle_ids_by_halfset: dict[int, np.ndarray],
@@ -496,6 +511,9 @@ def _sparse_pass2_estep_meta(
     pose_assignments = []
     class_assignments = []
     max_posterior = []
+    best_pose_rotations = []
+    best_pose_translations = []
+    best_pose_rotation_ids = []
 
     for halfset_idx, result in sorted(halfset_results.items()):
         image_ids = np.asarray(selected_particle_ids_by_halfset[int(halfset_idx)], dtype=np.int64)
@@ -504,6 +522,12 @@ def _sparse_pass2_estep_meta(
             pose_assignments.append(np.asarray(result.pose_assignments, dtype=np.int32))
         if getattr(result, "class_assignments", None) is not None:
             class_assignments.append(np.asarray(result.class_assignments, dtype=np.int32))
+        if getattr(result, "best_pose_rotations", None) is not None:
+            best_pose_rotations.append(np.asarray(result.best_pose_rotations, dtype=np.float32))
+        if getattr(result, "best_pose_translations", None) is not None:
+            best_pose_translations.append(np.asarray(result.best_pose_translations, dtype=np.float32))
+        if getattr(result, "best_pose_rotation_ids", None) is not None:
+            best_pose_rotation_ids.append(np.asarray(result.best_pose_rotation_ids, dtype=np.int32))
         stats = getattr(result, "stats", None)
         if stats is not None and getattr(stats, "max_posterior_per_image", None) is not None:
             max_posterior.append(np.asarray(stats.max_posterior_per_image, dtype=np.float32))
@@ -519,6 +543,12 @@ def _sparse_pass2_estep_meta(
         meta["class_assignments"] = np.concatenate(class_assignments).astype(np.int32, copy=False)
     if max_posterior:
         meta["max_posterior_per_image"] = np.concatenate(max_posterior).astype(np.float32, copy=False)
+    if best_pose_rotations:
+        meta["best_pose_rotations"] = np.concatenate(best_pose_rotations).astype(np.float32, copy=False)
+    if best_pose_translations:
+        meta["best_pose_translations"] = np.concatenate(best_pose_translations).astype(np.float32, copy=False)
+    if best_pose_rotation_ids:
+        meta["best_pose_rotation_ids"] = np.concatenate(best_pose_rotation_ids).astype(np.int32, copy=False)
     meta["sparse_pass2"] = True
     return meta
 
@@ -547,60 +577,44 @@ def _sparse_pass2_profile_summary(
     }
 
 
-def _initial_model_pass2_layout(layout, *, n_global_rotations: int):
-    """Use RELION pass-2 fine-order ids for direction posterior updates.
-
-    The shared adaptive refinement path tracks posterior mass on coarse parent
-    rotations for direction-prior updates. InitialModel initializes
-    ``pdf_direction`` on the dense oversampled grid, but RELION's pass-2 hidden
-    axis is parent-major oversampled-child order, not nearest global fine-grid
-    order. Keep the scored/backprojected fine rotation ids unchanged and scatter
-    posterior stats into RELION's parent-child fine namespace.
-    """
-
-    n_global_rotations = int(n_global_rotations)
-    if n_global_rotations < 0:
-        raise ValueError("n_global_rotations must be non-negative")
-    if layout.rotation_ids_flat.size and int(np.max(layout.rotation_ids_flat)) >= n_global_rotations:
-        raise ValueError(
-            f"InitialModel pass-2 layout contains a fine rotation id outside n_global_rotations={n_global_rotations}"
-        )
-    if int(layout.n_global_rotations) == n_global_rotations:
-        return layout
+def _initial_model_pass2_layout(layout):
+    """Scatter pass-2 posterior mass into RELION coarse direction bins."""
 
     parent_ids = getattr(layout, "rotation_posterior_ids_flat", None)
     if parent_ids is None:
-        return replace(layout, n_global_rotations=n_global_rotations, rotation_posterior_ids_flat=None)
+        return layout
 
     n_parent_rotations = int(layout.n_global_rotations)
-    if n_parent_rotations <= 0 or n_global_rotations % n_parent_rotations != 0:
+    n_psi = int(getattr(layout, "n_psi", 0))
+    if n_parent_rotations <= 0 or n_psi <= 0 or n_parent_rotations % n_psi != 0:
         raise ValueError(
-            "InitialModel pass-2 posterior grid must be an integer oversampling "
-            f"of parent grid, got n_global_rotations={n_global_rotations} "
-            f"and parent rotations={n_parent_rotations}"
+            "InitialModel pass-2 posterior grid expects parent rotations "
+            f"to be direction-major with n_psi={n_psi}, got {n_parent_rotations} rotations",
         )
-    children_per_parent = n_global_rotations // n_parent_rotations
     parent_ids = np.asarray(parent_ids, dtype=np.int32)
     if np.any(parent_ids < 0) or np.any(parent_ids >= n_parent_rotations):
         raise ValueError("InitialModel pass-2 layout contains an invalid parent posterior id")
+    direction_ids = (parent_ids // n_psi).astype(np.int32, copy=False)
+    return replace(
+        layout,
+        n_global_rotations=n_parent_rotations // n_psi,
+        rotation_posterior_ids_flat=direction_ids,
+    )
 
-    posterior_ids = np.empty_like(parent_ids, dtype=np.int32)
-    for image_idx in range(int(layout.rotation_counts.shape[0])):
-        start = int(layout.rotation_offsets[image_idx])
-        end = int(layout.rotation_offsets[image_idx + 1])
-        child_counts: dict[int, int] = {}
-        for pos in range(start, end):
-            parent = int(parent_ids[pos])
-            child = child_counts.get(parent, 0)
-            if child >= children_per_parent:
-                raise ValueError(
-                    "InitialModel pass-2 layout has more oversampled children "
-                    f"than expected for parent {parent}: {child + 1} > {children_per_parent}"
-                )
-            posterior_ids[pos] = parent * children_per_parent + child
-            child_counts[parent] = child + 1
 
-    return replace(layout, n_global_rotations=n_global_rotations, rotation_posterior_ids_flat=posterior_ids)
+def _class_local_rotation_log_prior(class_rotation_log_prior, layout) -> np.ndarray | None:
+    if class_rotation_log_prior is None:
+        return None
+    prior = np.asarray(class_rotation_log_prior, dtype=np.float32)
+    parent_ids = np.asarray(getattr(layout, "rotation_posterior_ids_flat", None), dtype=np.int64)
+    if parent_ids.size != int(layout.rotation_log_priors_flat.shape[0]):
+        raise ValueError("local layout is missing coarse parent rotation ids for class priors")
+    if prior.ndim != 2 or prior.shape[1] <= int(np.max(parent_ids, initial=-1)):
+        raise ValueError(
+            "class_rotation_log_prior must have shape (n_classes, n_coarse_rotations), "
+            f"got {prior.shape}",
+        )
+    return prior[:, parent_ids]
 
 
 def _run_sparse_pass2_initial_model_estep(
@@ -693,7 +707,7 @@ def _run_sparse_pass2_initial_model_estep(
             rotation_block_size=config.rotation_block_size,
             current_size=pass1_current_size,
             score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
-            rotation_log_prior=group_kwargs.get("rotation_log_prior"),
+            rotation_log_prior=group_kwargs.get("class_rotation_log_prior", group_kwargs.get("rotation_log_prior")),
             translation_log_prior=pass1_translation_log_prior,
             image_corrections=group_kwargs.get("image_corrections"),
             scale_corrections=group_kwargs.get("scale_corrections"),
@@ -758,15 +772,16 @@ def _run_sparse_pass2_initial_model_estep(
             random_perturbation=random_perturbation,
             rotation_index_order="relion_hidden",
         )
+        class_local_rotation_log_prior = _class_local_rotation_log_prior(
+            group_kwargs.get("class_rotation_log_prior"),
+            local_layout,
+        )
         if config.relion_projector_frame:
             local_layout = replace(
                 local_layout,
                 rotations_flat=_relion_projector_dense_rotations(local_layout.rotations_flat),
             )
-        local_layout = _initial_model_pass2_layout(
-            local_layout,
-            n_global_rotations=int(np.asarray(config.rotations).shape[0]),
-        )
+        local_layout = _initial_model_pass2_layout(local_layout)
 
         t0 = time.time()
         result = run_local_k_class_em(
@@ -780,7 +795,7 @@ def _run_sparse_pass2_initial_model_estep(
             image_batch_size=config.image_batch_size,
             rotation_block_size=config.rotation_block_size,
             current_size=group_kwargs.get("current_size"),
-            accumulate_noise=False,
+            accumulate_noise=True,
             projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
             reconstruction_padding_factor=int(group_kwargs.get("reconstruction_padding_factor", 1)),
             score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
@@ -800,8 +815,10 @@ def _run_sparse_pass2_initial_model_estep(
             reconstruct_significant_only=True,
             adaptive_fraction=adaptive_fraction,
             max_significants=max_significants,
+            return_profile=return_profile,
             return_best_pose_details=True,
             translation_prior_centers=group_kwargs.get("translation_prior_centers"),
+            class_local_rotation_log_prior=class_local_rotation_log_prior,
         )
         pass2_time_s += time.time() - t0
         halfset_results = {int(halfset_idx): result for halfset_idx, _ in groups}
@@ -872,7 +889,7 @@ def _run_sparse_pass2_initial_model_estep(
             rotation_block_size=config.rotation_block_size,
             current_size=pass1_current_size,
             score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
-            rotation_log_prior=group_kwargs.get("rotation_log_prior"),
+            rotation_log_prior=group_kwargs.get("class_rotation_log_prior", group_kwargs.get("rotation_log_prior")),
             translation_log_prior=pass1_translation_log_prior,
             image_corrections=group_kwargs.get("image_corrections"),
             scale_corrections=group_kwargs.get("scale_corrections"),
@@ -939,15 +956,16 @@ def _run_sparse_pass2_initial_model_estep(
             random_perturbation=random_perturbation,
             rotation_index_order="relion_hidden",
         )
+        class_local_rotation_log_prior = _class_local_rotation_log_prior(
+            group_kwargs.get("class_rotation_log_prior"),
+            local_layout,
+        )
         if config.relion_projector_frame:
             local_layout = replace(
                 local_layout,
                 rotations_flat=_relion_projector_dense_rotations(local_layout.rotations_flat),
             )
-        local_layout = _initial_model_pass2_layout(
-            local_layout,
-            n_global_rotations=int(np.asarray(config.rotations).shape[0]),
-        )
+        local_layout = _initial_model_pass2_layout(local_layout)
 
         t0 = time.time()
         result = run_local_k_class_em(
@@ -961,7 +979,7 @@ def _run_sparse_pass2_initial_model_estep(
             image_batch_size=config.image_batch_size,
             rotation_block_size=config.rotation_block_size,
             current_size=group_kwargs.get("current_size"),
-            accumulate_noise=False,
+            accumulate_noise=True,
             projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
             reconstruction_padding_factor=int(group_kwargs.get("reconstruction_padding_factor", 1)),
             score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
@@ -981,8 +999,10 @@ def _run_sparse_pass2_initial_model_estep(
             reconstruct_significant_only=True,
             adaptive_fraction=adaptive_fraction,
             max_significants=max_significants,
+            return_profile=return_profile,
             return_best_pose_details=True,
             translation_prior_centers=group_kwargs.get("translation_prior_centers"),
+            class_local_rotation_log_prior=class_local_rotation_log_prior,
         )
         pass2_time_s += time.time() - t0
         halfset_results[int(halfset_idx)] = result
@@ -1193,6 +1213,13 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
     meta: dict[str, Any] = {"halfset_ids": tuple(sorted(halfset_results))}
     class_posterior_sums = None
     class_direction_posterior_sums = None
+    wsum_sigma2_offset = 0.0
+    sigma2_offset_sumw = 0.0
+    wsum_sigma2_noise = None
+    wsum_img_power = None
+    noise_sumw = 0.0
+    have_sigma2_offset = False
+    have_noise = False
     for h, result in halfset_results.items():
         if getattr(result, "class_posterior_sums", None) is not None:
             sums = np.asarray(result.class_posterior_sums, dtype=np.float64)
@@ -1206,6 +1233,26 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
         profile_summary = getattr(result, "profile_summary", None)
         if profile_summary is not None:
             meta[f"halfset_{h}_profile_summary"] = dict(profile_summary)
+        noise_stats = getattr(result, "aggregate_noise_stats", None)
+        if noise_stats is not None:
+            half_wsum = float(getattr(noise_stats, "wsum_sigma2_offset"))
+            half_sumw = float(getattr(noise_stats, "sumw"))
+            half_wsum_noise = np.asarray(getattr(noise_stats, "wsum_sigma2_noise"), dtype=np.float64)
+            half_img_power = np.asarray(getattr(noise_stats, "wsum_img_power"), dtype=np.float64)
+            meta[f"halfset_{h}_wsum_sigma2_offset"] = half_wsum
+            meta[f"halfset_{h}_sigma2_offset_sumw"] = half_sumw
+            meta[f"halfset_{h}_wsum_sigma2_noise"] = half_wsum_noise
+            meta[f"halfset_{h}_wsum_img_power"] = half_img_power
+            meta[f"halfset_{h}_noise_sumw"] = half_sumw
+            wsum_sigma2_offset += half_wsum
+            sigma2_offset_sumw += half_sumw
+            wsum_sigma2_noise = (
+                half_wsum_noise if wsum_sigma2_noise is None else wsum_sigma2_noise + half_wsum_noise
+            )
+            wsum_img_power = half_img_power if wsum_img_power is None else wsum_img_power + half_img_power
+            noise_sumw += half_sumw
+            have_sigma2_offset = True
+            have_noise = True
         per_class_stats = getattr(result, "per_class_stats", None)
         if per_class_stats is not None:
             direction_sums = np.stack(
@@ -1221,6 +1268,13 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
         meta["class_posterior_sums"] = class_posterior_sums
     if class_direction_posterior_sums is not None:
         meta["class_direction_posterior_sums"] = class_direction_posterior_sums
+    if have_sigma2_offset:
+        meta["wsum_sigma2_offset"] = wsum_sigma2_offset
+        meta["sigma2_offset_sumw"] = sigma2_offset_sumw
+    if have_noise:
+        meta["wsum_sigma2_noise"] = wsum_sigma2_noise
+        meta["wsum_img_power"] = wsum_img_power
+        meta["noise_sumw"] = noise_sumw
     return meta
 
 
@@ -1236,6 +1290,7 @@ def _grouped_estep_meta(result, groups: list[tuple[int, np.ndarray]]) -> dict[st
     pmax = None if stats is None else getattr(stats, "max_posterior_per_image", None)
     if getattr(result, "class_posterior_sums", None) is not None:
         meta["class_posterior_sums"] = np.asarray(result.class_posterior_sums, dtype=np.float64)
+    _append_sigma2_offset_meta(meta, result)
     per_class_stats = getattr(result, "per_class_stats", None)
     if per_class_stats is not None:
         meta["class_direction_posterior_sums"] = np.stack(
@@ -1345,6 +1400,7 @@ def run_dense_initial_model_estep(
             rotation_block_size=config.rotation_block_size,
             reconstruction_group_ids=reconstruction_group_ids,
             reconstruction_group_count=reconstruction_group_count,
+            accumulate_noise=True,
             **_dense_run_em_kwargs(
                 _engine_kwargs_for_image_indices(
                     engine_kwargs,
@@ -1384,6 +1440,7 @@ def run_dense_initial_model_estep(
             image_batch_size=config.image_batch_size,
             rotation_block_size=config.rotation_block_size,
             image_indices=image_indices,
+            accumulate_noise=True,
             **_dense_run_em_kwargs(
                 _engine_kwargs_for_image_indices(
                     engine_kwargs,
@@ -1409,15 +1466,28 @@ def run_dense_initial_model_estep(
     pose_assignments = []
     class_assignments = []
     max_posterior = []
+    best_pose_rotations = []
+    best_pose_translations = []
+    best_pose_rotation_ids = []
     for halfset_idx, image_indices in groups:
         result = halfset_results.get(halfset_idx)
         if result is None:
             continue
         result_pose_assignments = getattr(result, "pose_assignments", None)
         result_class_assignments = getattr(result, "class_assignments", None)
+        result_best_pose_rotations = getattr(result, "best_pose_rotations", None)
+        result_best_pose_translations = getattr(result, "best_pose_translations", None)
+        result_best_pose_rotation_ids = getattr(result, "best_pose_rotation_ids", None)
         result_stats = getattr(result, "stats", None)
         result_pmax = None if result_stats is None else getattr(result_stats, "max_posterior_per_image", None)
-        if result_pose_assignments is None and result_class_assignments is None and result_pmax is None:
+        if (
+            result_pose_assignments is None
+            and result_class_assignments is None
+            and result_pmax is None
+            and result_best_pose_rotations is None
+            and result_best_pose_translations is None
+            and result_best_pose_rotation_ids is None
+        ):
             continue
         selected_particle_ids.append(np.asarray(image_indices, dtype=np.int64))
         if result_pose_assignments is not None:
@@ -1426,6 +1496,12 @@ def run_dense_initial_model_estep(
             class_assignments.append(np.asarray(result_class_assignments, dtype=np.int32))
         if result_pmax is not None:
             max_posterior.append(np.asarray(result_pmax, dtype=np.float32))
+        if result_best_pose_rotations is not None:
+            best_pose_rotations.append(np.asarray(result_best_pose_rotations, dtype=np.float32))
+        if result_best_pose_translations is not None:
+            best_pose_translations.append(np.asarray(result_best_pose_translations, dtype=np.float32))
+        if result_best_pose_rotation_ids is not None:
+            best_pose_rotation_ids.append(np.asarray(result_best_pose_rotation_ids, dtype=np.int32))
     meta = _estep_meta(halfset_results)
     if selected_particle_ids:
         meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
@@ -1435,6 +1511,12 @@ def run_dense_initial_model_estep(
         meta["class_assignments"] = np.concatenate(class_assignments).astype(np.int32, copy=False)
     if max_posterior:
         meta["max_posterior_per_image"] = np.concatenate(max_posterior).astype(np.float32, copy=False)
+    if best_pose_rotations:
+        meta["best_pose_rotations"] = np.concatenate(best_pose_rotations).astype(np.float32, copy=False)
+    if best_pose_translations:
+        meta["best_pose_translations"] = np.concatenate(best_pose_translations).astype(np.float32, copy=False)
+    if best_pose_rotation_ids:
+        meta["best_pose_rotation_ids"] = np.concatenate(best_pose_rotation_ids).astype(np.int32, copy=False)
     return DenseInitialModelEstepResult(
         accumulators=accumulators,
         meta=meta,

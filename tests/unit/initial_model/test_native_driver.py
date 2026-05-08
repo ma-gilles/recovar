@@ -117,6 +117,7 @@ def test_particle_state_from_star_preserves_class_and_pmax_columns():
     np.testing.assert_array_equal(state.translation_offsets, np.zeros((2, 2), dtype=np.float32))
     np.testing.assert_array_equal(state.class_assignments, [1, 0])
     np.testing.assert_allclose(state.max_posterior, [0.9, 0.25])
+    np.testing.assert_array_equal(state.pose_assignments, [-1, -1])
 
 
 def test_sampling_plan_oversamples_relion_grid():
@@ -132,6 +133,87 @@ def test_sampling_plan_oversamples_relion_grid():
     assert plan.rotations.shape == (4608, 3, 3)
     assert plan.translations.shape == (116, 2)
     assert plan.random_perturbation == 0.0
+
+
+def test_initial_sampling_state_uses_relion_angstrom_internal_units():
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        healpix_order=1,
+        oversampling=1,
+        offset_range_px=6.0,
+        offset_step_px=2.0,
+        random_perturbation=0.0,
+    )
+
+    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    plan = driver._build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
+
+    assert sampling_state.offset_range_angstrom == pytest.approx(12.75)
+    assert sampling_state.offset_step_angstrom == pytest.approx(4.25)
+    assert sampling_state.offset_range_px == pytest.approx(6.0)
+    assert sampling_state.offset_step_px == pytest.approx(2.0)
+    assert sampling_state.effective_offset_step_angstrom == pytest.approx(2.125)
+    assert plan.offset_range_angstrom == pytest.approx(12.75)
+    assert plan.offset_step_angstrom == pytest.approx(4.25)
+    assert plan.rotations.shape == (4608, 3, 3)
+    assert plan.translations.shape == (116, 2)
+
+
+def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        nr_iter=200,
+        healpix_order=1,
+        oversampling=1,
+        offset_range_px=6.0,
+        offset_step_px=2.0,
+    )
+    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    state = initialise_denovo_state(ori_size=256, pixel_size=2.125, K=1, nr_iter=200, n_directions=1)
+    state.current_resolution = 1.0 / 108.8
+
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=9,
+        do_grad=True,
+    ) is False
+    assert sampling_state.healpix_order == 1
+    assert sampling_state.offset_range_angstrom == pytest.approx(12.75)
+    assert sampling_state.offset_step_angstrom == pytest.approx(4.25)
+
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=10,
+        do_grad=True,
+    ) is True
+    assert sampling_state.healpix_order == 2
+    assert sampling_state.offset_range_angstrom == pytest.approx(8.2875)
+    assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
+    assert sampling_state.effective_offset_step_angstrom == pytest.approx(1.5)
+
+    sampling_state.current_changes_optimal_offsets_angstrom = 2.614243
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=20,
+        do_grad=True,
+    ) is True
+    assert sampling_state.healpix_order == 3
+    assert sampling_state.offset_range_angstrom == pytest.approx(10.77375)
+    assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
+
+    sampling_state.current_changes_optimal_offsets_angstrom = 2.0
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=30,
+        do_grad=True,
+    ) is True
+    assert sampling_state.healpix_order == 3
+    assert sampling_state.offset_range_angstrom == pytest.approx(10.0)
+    assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
 
 
 def test_random_perturbation_override_is_fixed():
@@ -333,6 +415,303 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
     )
     np.testing.assert_array_equal(particle_state.class_assignments, [1, 0])
     np.testing.assert_allclose(particle_state.max_posterior, [0.9, 0.8])
+    np.testing.assert_array_equal(particle_state.pose_assignments, [1, 2])
+
+
+def test_update_particle_state_preserves_best_pose_metadata():
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((3, 2), dtype=np.float32),
+        class_assignments=np.zeros(3, dtype=np.int32),
+        max_posterior=np.zeros(3, dtype=np.float32),
+        pose_assignments=np.full(3, -1, dtype=np.int32),
+    )
+    rotations = np.stack(
+        [
+            np.eye(3, dtype=np.float32),
+            np.diag([1.0, -1.0, -1.0]).astype(np.float32),
+        ],
+        axis=0,
+    )
+
+    driver._update_particle_state_from_estep_meta(
+        particle_state,
+        {
+            "selected_particle_ids": np.asarray([2, 0], dtype=np.int64),
+            "pose_assignments": np.asarray([1, 0], dtype=np.int32),
+            "best_pose_rotations": rotations,
+            "best_pose_translations": np.asarray([[3.0, -1.0], [0.0, 2.0]], dtype=np.float32),
+            "best_pose_rotation_ids": np.asarray([11, 7], dtype=np.int32),
+            "healpix_order": 1,
+            "oversampling": 1,
+        },
+        np.asarray([[0.0, 2.0], [3.0, -1.0]], dtype=np.float32),
+    )
+
+    np.testing.assert_array_equal(particle_state.pose_assignments, [0, -1, 1])
+    np.testing.assert_allclose(particle_state.best_pose_rotations[[2, 0]], rotations)
+    np.testing.assert_allclose(
+        particle_state.best_pose_translations,
+        np.asarray([[0.0, 2.0], [0.0, 0.0], [3.0, -1.0]], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(particle_state.best_pose_rotation_ids, [7, -1, 11])
+    np.testing.assert_array_equal(particle_state.best_pose_rotation_orders, [2, -1, 2])
+    np.testing.assert_array_equal(particle_state.visited, [True, False, True])
+
+
+def test_best_eulers_from_particle_state_prefers_stored_rotation_matrices():
+    grid_eulers = driver.sampling.get_relion_rotation_grid_eulers(1, rotation_index_order="relion")
+    grid_rotations = driver.sampling.get_relion_rotation_grid(1, rotation_index_order="relion")
+    perturbed_euler = np.asarray([[33.0, 44.0, 55.0]], dtype=np.float64)
+    perturbed_rotation = driver.sampling._relion_euler_angles_to_matrix(perturbed_euler)[0].astype(np.float32)
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((2, 2), dtype=np.float32),
+        class_assignments=np.zeros(2, dtype=np.int32),
+        max_posterior=np.ones(2, dtype=np.float32),
+        best_pose_rotations=np.stack([perturbed_rotation, grid_rotations[7]], axis=0),
+        best_pose_rotation_ids=np.asarray([5, 7], dtype=np.int32),
+    )
+
+    eulers = driver._best_eulers_from_particle_state(
+        particle_state,
+        np.asarray([0, 1], dtype=np.int64),
+        rotation_grid_order=1,
+    )
+
+    assert eulers is not None
+    assert not np.allclose(eulers[0], grid_eulers[5])
+    np.testing.assert_allclose(
+        driver.sampling._relion_euler_angles_to_matrix(eulers),
+        np.stack([perturbed_rotation, grid_rotations[7]], axis=0),
+        atol=1e-5,
+    )
+
+
+def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkeypatch):
+    build_calls = []
+
+    def fake_build_sampling_plan(opts, *, iteration, sampling_state=None):
+        assert sampling_state is not None
+        build_calls.append((iteration, sampling_state.healpix_order, sampling_state.offset_range_angstrom))
+        return driver.NativeSamplingPlan(
+            rotations=np.zeros((2, 3, 3), dtype=np.float32),
+            translations=np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
+            random_perturbation=0.0,
+            healpix_order=sampling_state.healpix_order,
+            oversampling=sampling_state.adaptive_oversampling,
+            offset_range_px=sampling_state.offset_range_px,
+            offset_step_px=sampling_state.offset_step_px,
+            offset_range_angstrom=sampling_state.offset_range_angstrom,
+            offset_step_angstrom=sampling_state.offset_step_angstrom,
+        )
+
+    def fake_run_dense(dataset, state, config, *, particle_ids, halfset_ids):
+        assert config.engine_kwargs["healpix_order"] == 2
+        return SimpleNamespace(
+            accumulators=[],
+            meta={
+                "selected_particle_ids": np.asarray([0], dtype=np.int64),
+                "pose_assignments": np.asarray([1], dtype=np.int32),
+                "class_assignments": np.asarray([0], dtype=np.int32),
+                "max_posterior_per_image": np.asarray([0.75], dtype=np.float32),
+            },
+        )
+
+    monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
+    monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
+
+    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
+    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((1, 2), dtype=np.float32),
+        class_assignments=np.zeros(1, dtype=np.int32),
+        max_posterior=np.zeros(1, dtype=np.float32),
+        pose_assignments=np.full(1, -1, dtype=np.int32),
+    )
+    state = initialise_denovo_state(ori_size=8, pixel_size=2.125, K=1, nr_iter=200, n_directions=1)
+    state.iter = 10
+    sampling_state.last_current_resolution = float(state.current_resolution)
+
+    expectation_step = driver._native_expectation_step(
+        SimpleNamespace(voxel_size=2.125, n_images=1),
+        opts,
+        np.ones(5, dtype=np.float32),
+        particle_state,
+        sampling_state,
+    )
+    _accumulators, meta = expectation_step(state, np.asarray([0]), np.asarray([0], dtype=np.int8))
+
+    assert build_calls == [(10, 2, pytest.approx(8.2875))]
+    assert meta["sampling_updated"] is True
+    assert meta["healpix_order"] == 2
+    assert meta["offset_range_angstrom"] == pytest.approx(8.2875)
+    assert meta["offset_step_angstrom"] == pytest.approx(3.0)
+    assert meta["current_changes_optimal_offsets_angstrom"] == pytest.approx(2.125 / np.sqrt(2.0))
+
+
+def test_native_expectation_step_estimates_sampling_accuracy_before_update(monkeypatch):
+    build_calls = []
+    estimate_calls = []
+
+    def fake_estimate_sampling_accuracy(
+        sampling_state,
+        state,
+        particle_state,
+        optics_state,
+        *,
+        particle_order,
+        random_seed,
+        padding_factor,
+    ):
+        estimate_calls.append(
+            {
+                "healpix_order": sampling_state.healpix_order,
+                "offset_range_angstrom": sampling_state.offset_range_angstrom,
+                "particle_order": np.asarray(particle_order, dtype=np.int64).copy(),
+                "random_seed": random_seed,
+                "padding_factor": padding_factor,
+            }
+        )
+        sampling_state.acc_rot = 3.666
+        sampling_state.acc_trans_angstrom = 2.125
+        return {"estimated_acc_rot": 3.666, "estimated_acc_trans_angstrom": 2.125}
+
+    def fake_build_sampling_plan(opts, *, iteration, sampling_state=None):
+        assert sampling_state is not None
+        build_calls.append((iteration, sampling_state.healpix_order, sampling_state.offset_range_angstrom))
+        return driver.NativeSamplingPlan(
+            rotations=np.zeros((2, 3, 3), dtype=np.float32),
+            translations=np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
+            random_perturbation=0.0,
+            healpix_order=sampling_state.healpix_order,
+            oversampling=sampling_state.adaptive_oversampling,
+            offset_range_px=sampling_state.offset_range_px,
+            offset_step_px=sampling_state.offset_step_px,
+            offset_range_angstrom=sampling_state.offset_range_angstrom,
+            offset_step_angstrom=sampling_state.offset_step_angstrom,
+        )
+
+    def fake_run_dense(dataset, state, config, *, particle_ids, halfset_ids):
+        assert config.engine_kwargs["healpix_order"] == 2
+        assert config.translations.shape == (2, 2)
+        return SimpleNamespace(
+            accumulators=[],
+            meta={
+                "selected_particle_ids": np.asarray([0, 1], dtype=np.int64),
+                "pose_assignments": np.asarray([0, 1], dtype=np.int32),
+                "class_assignments": np.asarray([0, 0], dtype=np.int32),
+                "max_posterior_per_image": np.asarray([0.8, 0.7], dtype=np.float32),
+            },
+        )
+
+    monkeypatch.setattr(driver, "_estimate_native_sampling_accuracy", fake_estimate_sampling_accuracy)
+    monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
+    monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
+
+    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200, random_seed=17, padding_factor=2)
+    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    sampling_state.current_changes_optimal_offsets_angstrom = 10.366644 / 5.0
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((2, 2), dtype=np.float32),
+        class_assignments=np.zeros(2, dtype=np.int32),
+        max_posterior=np.zeros(2, dtype=np.float32),
+        pose_assignments=np.full(2, -1, dtype=np.int32),
+    )
+    state = initialise_denovo_state(ori_size=8, pixel_size=2.125, K=1, nr_iter=200, n_directions=1)
+    state.iter = 10
+    sampling_state.last_current_resolution = float(state.current_resolution)
+
+    optics_state = driver.NativeOpticsState(
+        voltage=300.0,
+        Cs=2.7,
+        Q0=0.07,
+        pixel_size=2.125,
+        defU=np.full(2, 10000.0, dtype=np.float64),
+        defV=np.full(2, 10000.0, dtype=np.float64),
+        defAngle=np.zeros(2, dtype=np.float64),
+        phase_shift=np.zeros(2, dtype=np.float64),
+    )
+    expectation_step = driver._native_expectation_step(
+        SimpleNamespace(voxel_size=2.125, n_images=2),
+        opts,
+        np.ones(5, dtype=np.float32),
+        particle_state,
+        sampling_state,
+        optics_state,
+    )
+    _accumulators, meta = expectation_step(state, np.asarray([1, 0]), np.asarray([0, 1], dtype=np.int8))
+
+    assert len(estimate_calls) == 1
+    assert estimate_calls[0]["healpix_order"] == 1
+    assert estimate_calls[0]["offset_range_angstrom"] == pytest.approx(12.75)
+    np.testing.assert_array_equal(estimate_calls[0]["particle_order"], np.asarray([1, 0], dtype=np.int64))
+    assert estimate_calls[0]["random_seed"] == 17
+    assert estimate_calls[0]["padding_factor"] == 2
+    assert build_calls == [(10, 2, pytest.approx(10.366644))]
+    assert meta["sampling_accuracy_estimated"] is True
+    assert meta["estimated_acc_rot"] == pytest.approx(3.666)
+    assert meta["estimated_acc_trans_angstrom"] == pytest.approx(2.125)
+    assert meta["sampling_acc_rot"] == pytest.approx(3.666)
+    assert meta["sampling_acc_trans_angstrom"] == pytest.approx(2.125)
+    assert meta["offset_range_angstrom"] == pytest.approx(10.366644)
+    assert meta["offset_step_angstrom"] == pytest.approx(3.0)
+
+
+def test_native_expectation_step_records_sampling_changes_each_gradient_iteration(monkeypatch):
+    build_calls = []
+
+    def fake_build_sampling_plan(opts, *, iteration, sampling_state=None):
+        build_calls.append(iteration)
+        return driver.NativeSamplingPlan(
+            rotations=np.zeros((2, 3, 3), dtype=np.float32),
+            translations=np.asarray([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32),
+            random_perturbation=0.0,
+            healpix_order=1 if sampling_state is None else sampling_state.healpix_order,
+            oversampling=0,
+            offset_range_px=6.0,
+            offset_step_px=2.0,
+            offset_range_angstrom=12.0,
+            offset_step_angstrom=4.0,
+        )
+
+    def fake_run_dense(dataset, state, config, *, particle_ids, halfset_ids):
+        return SimpleNamespace(
+            accumulators=[],
+            meta={
+                "selected_particle_ids": np.asarray([0, 1], dtype=np.int64),
+                "pose_assignments": np.asarray([1, 0], dtype=np.int32),
+                "class_assignments": np.asarray([0, 0], dtype=np.int32),
+                "max_posterior_per_image": np.asarray([0.8, 0.7], dtype=np.float32),
+            },
+        )
+
+    monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
+    monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
+
+    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200, oversampling=0)
+    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.0)
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((2, 2), dtype=np.float32),
+        class_assignments=np.zeros(2, dtype=np.int32),
+        max_posterior=np.zeros(2, dtype=np.float32),
+        pose_assignments=np.full(2, -1, dtype=np.int32),
+    )
+    state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=200, n_directions=1)
+    state.iter = 9
+    sampling_state.last_current_resolution = float(state.current_resolution)
+
+    expectation_step = driver._native_expectation_step(
+        SimpleNamespace(voxel_size=2.0, n_images=2),
+        opts,
+        np.ones(5, dtype=np.float32),
+        particle_state,
+        sampling_state,
+    )
+    _accumulators, meta = expectation_step(state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
+
+    assert build_calls == [9]
+    assert meta["sampling_updated"] is False
+    assert meta["current_changes_optimal_offsets_angstrom"] == pytest.approx(2.0)
+    assert sampling_state.current_changes_optimal_offsets_angstrom == pytest.approx(2.0)
 
 
 def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
@@ -372,22 +751,53 @@ def test_driver_output_mrc_path_matches_relion_snapshot():
 def test_model_star_uses_relion_model_blocks(tmp_path):
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=2, nr_iter=1, n_directions=12)
     state.pdf_class = np.asarray([0.25, 0.75], dtype=np.float64)
+    state.iter = 3
+    state.current_size = 6
+    state.current_resolution = 0.375
+    state.tau2_fudge_factor = 3.5
+    state.ave_Pmax = 0.625
+    state.sigma2_offset = 49.0
+    state.tau2_class[:] = np.asarray([[1.0, 2.0, 3.0, 4.0, 5.0], [5.0, 4.0, 3.0, 2.0, 1.0]])
+    state.data_vs_prior_class[:] = np.asarray([[10.0, 9.0, 8.0, 7.0, 6.0], [1.0, 2.0, 3.0, 4.0, 5.0]])
+    state.sigma2_class[:] = np.asarray([[0.1, 0.2, 0.3, 0.4, 0.5], [0.5, 0.4, 0.3, 0.2, 0.1]])
+    state.fourier_coverage_class[:] = np.asarray(
+        [[0.9, 0.8, 0.7, 0.6, 0.5], [0.1, 0.2, 0.3, 0.4, 0.5]]
+    )
     out = tmp_path / "run_it001_model.star"
 
     driver._write_model_star(str(out), state, ("run_it001_class001.mrc", "run_it001_class002.mrc"))
 
     text = out.read_text()
+    assert "data_model_general" in text
     assert "data_model_classes" in text
+    assert "data_model_class_1" in text
+    assert "data_model_class_2" in text
+    assert "data_model_pdf_orient_class_1" in text
+    assert "data_model_pdf_orient_class_2" in text
     assert "data_model_optics_group_1" in text
+    assert "_rlnCurrentImageSize 6" in text
+    assert "_rlnCurrentResolution 2.66666666667" in text
+    assert "_rlnCurrentIteration 3" in text
+    assert "_rlnTau2FudgeFactor 3.5" in text
+    assert "_rlnAveragePmax 0.625" in text
+    assert "_rlnSigmaOffsetsAngst 7" in text
+    assert "_rlnSsnrMap" in text
+    assert "_rlnReferenceTau2" in text
+    assert "_rlnReferenceSigma2" in text
+    assert "_rlnFourierCompleteness" in text
     assert "_rlnReferenceImage" in text
-    assert "run_it001_class001.mrc 0.25 0" in text
-    assert "run_it001_class002.mrc 0.75 0" in text
+    assert "run_it001_class001.mrc 0.25 2.66666666667" in text
+    assert "run_it001_class002.mrc 0.75 2.66666666667" in text
+    assert "1 0.125 8 9 0 0.8 0.2 2" in text
+    assert "1 0.125 8 2 0 0.2 0.4 4" in text
+    assert "_rlnOrientationDistribution" in text
 
 
 def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):
     main = pd.DataFrame(
         {
-            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnImageName": ["2@stack.mrcs", "1@stack.mrcs"],
+            "_rlnMicrographName": ["2", "1"],
             "_rlnOpticsGroup": ["1", "1"],
             "_rlnOriginXAngst": ["0.0", "0.0"],
             "_rlnOriginYAngst": ["0.0", "0.0"],
@@ -414,12 +824,59 @@ def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):
     data, data_optics = read_star(str(out))
     assert data_optics is not None
     assert data_optics["_rlnImageSize"].tolist() == ["8"]
-    np.testing.assert_allclose(data["_rlnOriginXAngst"].astype(float).to_numpy(), [3.0, 0.75])
-    np.testing.assert_allclose(data["_rlnOriginYAngst"].astype(float).to_numpy(), [-1.5, 1.875])
-    np.testing.assert_allclose(data["_rlnOriginX"].astype(float).to_numpy(), [2.0, 0.5])
-    np.testing.assert_allclose(data["_rlnOriginY"].astype(float).to_numpy(), [-1.0, 1.25])
-    np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [2, 1])
-    np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.875, 0.25])
+    assert data["_rlnImageName"].tolist() == ["1@stack.mrcs", "2@stack.mrcs"]
+    np.testing.assert_allclose(data["_rlnOriginXAngst"].astype(float).to_numpy(), [0.75, 3.0])
+    np.testing.assert_allclose(data["_rlnOriginYAngst"].astype(float).to_numpy(), [1.875, -1.5])
+    np.testing.assert_allclose(data["_rlnOriginX"].astype(float).to_numpy(), [0.5, 2.0])
+    np.testing.assert_allclose(data["_rlnOriginY"].astype(float).to_numpy(), [1.25, -1.0])
+    np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [1, 2])
+    np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.25, 0.875])
+
+
+def test_data_star_zeros_unvisited_rows_and_writes_best_pose_eulers(tmp_path):
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["3@stack.mrcs", "1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnMicrographName": ["3", "1", "2"],
+            "_rlnOpticsGroup": ["1", "1", "1"],
+            "_rlnAngleRot": ["10.0", "20.0", "30.0"],
+            "_rlnAngleTilt": ["11.0", "21.0", "31.0"],
+            "_rlnAnglePsi": ["12.0", "22.0", "32.0"],
+            "_rlnOriginXAngst": ["0.0", "0.0", "0.0"],
+            "_rlnOriginYAngst": ["0.0", "0.0", "0.0"],
+            "_rlnClassNumber": ["1", "0", "0"],
+            "_rlnMaxValueProbDistribution": ["0.5", "0.0", "0.0"],
+        }
+    )
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((3, 2), dtype=np.float32),
+        class_assignments=np.asarray([0, 0, 0], dtype=np.int32),
+        max_posterior=np.asarray([0.75, 0.0, 0.625], dtype=np.float32),
+        best_pose_rotation_ids=np.asarray([5, -1, 9], dtype=np.int32),
+        best_pose_rotation_orders=np.asarray([1, -1, 1], dtype=np.int32),
+        visited=np.asarray([True, False, True]),
+    )
+    out = tmp_path / "run_it010_data.star"
+
+    driver._write_data_star(
+        str(out),
+        main,
+        None,
+        SimpleNamespace(voxel_size=1.0, n_images=3),
+        particle_state,
+    )
+
+    data, _ = read_star(str(out))
+    expected_eulers = driver.sampling.get_relion_rotation_grid_eulers(1, rotation_index_order="relion")
+    assert data["_rlnImageName"].tolist() == ["1@stack.mrcs", "2@stack.mrcs", "3@stack.mrcs"]
+    np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [0, 1, 1])
+    np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.0, 0.625, 0.75])
+    np.testing.assert_allclose(data["_rlnAngleRot"].astype(float).to_numpy()[[1, 2]], expected_eulers[[9, 5], 0])
+    np.testing.assert_allclose(data["_rlnAngleTilt"].astype(float).to_numpy()[[1, 2]], expected_eulers[[9, 5], 1])
+    np.testing.assert_allclose(data["_rlnAnglePsi"].astype(float).to_numpy()[[1, 2]], expected_eulers[[9, 5], 2])
+    np.testing.assert_allclose(data["_rlnAngleRot"].astype(float).to_numpy()[0], 20.0)
+    np.testing.assert_allclose(data["_rlnAngleTilt"].astype(float).to_numpy()[0], 21.0)
+    np.testing.assert_allclose(data["_rlnAnglePsi"].astype(float).to_numpy()[0], 22.0)
 
 
 def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):

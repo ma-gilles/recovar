@@ -22,6 +22,7 @@ import pytest
 from recovar.em.initial_model import (
     initialise_denovo_state,
 )
+from recovar.em.initial_model.init import initialise_data_vs_prior_from_references, seed_noise_from_mavg
 from recovar.em.initial_model.m_step import (
     VdamAccumulator,
     vdam_m_step,
@@ -60,6 +61,63 @@ def _make_accumulator(k: int, h: int, ori_size: int, seed: int, min_weight: floa
 
 
 class TestMstepSingleClass:
+    def test_seeded_tau2_prevents_zero_tau_current_window_runaway(self, bind):
+        ori = 64
+        state = initialise_denovo_state(
+            ori_size=ori,
+            pixel_size=2.0,
+            K=1,
+            nr_iter=10,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        state.Iref[0, ori // 2, ori // 2, ori // 2] = 1.0
+        state = seed_noise_from_mavg(state, np.ones_like(state.sigma2_noise))
+        seeded = initialise_data_vs_prior_from_references(state, nr_particles=1_000_000)
+        r_max = seeded.current_size // 2
+        half_ps = r_max + 1
+        weight = np.full((2 * half_ps + 1, 2 * half_ps + 1, half_ps + 1), 1e5, dtype=np.float64)
+        fsc = np.zeros(ori // 2 + 1, dtype=np.float64)
+        zero_tau = np.zeros(ori // 2 + 1, dtype=np.float64)
+
+        def cutoff(dvp):
+            i = 1
+            while i < ori // 2 and i < len(dvp):
+                if float(dvp[i]) < 1.0:
+                    break
+                i += 1
+            return i - 1
+
+        _tau2, _sigma2, zero_dvp, _coverage = bind.vdam_update_ssnr_arrays_from_bpref(
+            weight,
+            fsc,
+            zero_tau,
+            1.0,
+            ori,
+            1,
+            1,
+            r_max,
+            False,
+            False,
+            False,
+        )
+        _tau2, _sigma2, seeded_dvp, _coverage = bind.vdam_update_ssnr_arrays_from_bpref(
+            weight,
+            fsc,
+            seeded.tau2_class[0],
+            1.0,
+            ori,
+            1,
+            1,
+            r_max,
+            False,
+            False,
+            False,
+        )
+
+        assert cutoff(np.asarray(zero_dvp)) == r_max
+        assert cutoff(np.asarray(seeded_dvp)) < r_max
+
     def test_pseudo_halfsets_on_updates_iref_and_moments(self, bind):
         ori = 16
         state = initialise_denovo_state(
@@ -103,6 +161,7 @@ class TestMstepSingleClass:
         assert mask_updated.any(), "getSecondMoment did not update any cells"
         np.testing.assert_array_equal(new_state.Igrad2[0].imag[mask_updated], 0.0)
         assert np.all(new_state.Igrad2[0].real[mask_updated] >= 0.0)
+        assert np.any(new_state.data_vs_prior_class[0] > 1.0)
 
     def test_input_state_unchanged(self, bind):
         ori = 16
@@ -113,6 +172,8 @@ class TestMstepSingleClass:
         iref_before = state.Iref.copy()
         igrad1_before = state.Igrad1.copy()
         igrad2_before = state.Igrad2.copy()
+        tau2_before = state.tau2_class.copy()
+        data_vs_prior_before = state.data_vs_prior_class.copy()
 
         vdam_m_step_single_class(
             state,
@@ -125,6 +186,8 @@ class TestMstepSingleClass:
         np.testing.assert_array_equal(state.Iref, iref_before)
         np.testing.assert_array_equal(state.Igrad1, igrad1_before)
         np.testing.assert_array_equal(state.Igrad2, igrad2_before)
+        np.testing.assert_array_equal(state.tau2_class, tau2_before)
+        np.testing.assert_array_equal(state.data_vs_prior_class, data_vs_prior_before)
 
     def test_pseudo_halfsets_mismatch_raises(self, bind):
         state = initialise_denovo_state(

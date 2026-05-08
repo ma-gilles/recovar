@@ -53,6 +53,7 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
                         "-m",
                         "py_compile",
                         "scripts/evaluate_ab_initio_gt.py",
+                        "scripts/run_vdam_abinitio_k2_smoke.py",
                         "scripts/run_vdam_abinitio_merge_guard.py",
                         "tests/unit/initial_model/test_evaluate_ab_initio_gt.py",
                         "tests/unit/initial_model/test_gt_metrics.py",
@@ -69,6 +70,20 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
                         "tests/unit/initial_model/test_vdam_abinitio_merge_guard.py",
                         "tests/unit/initial_model/test_gt_metrics.py",
                         "tests/unit/initial_model/test_evaluate_ab_initio_gt.py",
+                    ),
+                ),
+                GuardCommand(
+                    "initial_model_vdam_unit_slice",
+                    (
+                        _python(),
+                        "-m",
+                        "pytest",
+                        "-q",
+                        "tests/unit/initial_model/test_dense_adapter.py",
+                        "tests/unit/initial_model/test_iteration_loop.py",
+                        "tests/unit/initial_model/test_init_and_estep.py",
+                        "tests/unit/initial_model/test_native_driver.py",
+                        "tests/unit/test_k_class_joint_semantics.py",
                     ),
                 ),
             ]
@@ -88,6 +103,13 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
         )
 
     if tier in {"gpu", "all"}:
+        commands.append(
+            GuardCommand(
+                "native_initialmodel_k2_smoke_gpu",
+                (_python(), "scripts/run_vdam_abinitio_k2_smoke.py"),
+                backend="gpu",
+            )
+        )
         commands.append(
             GuardCommand(
                 "em_parity_fast_gpu",
@@ -193,6 +215,7 @@ def _env_for(command: GuardCommand) -> dict[str, str]:
         env.setdefault("CUDA_VISIBLE_DEVICES", "")
     else:
         env.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+        env.setdefault("CUDA_VISIBLE_DEVICES", "0")
     return env
 
 
@@ -239,6 +262,7 @@ def run_guard(
             continue
 
         env = _env_for(command)
+        env["VDAM_ABINITIO_GUARD_OUTPUT_DIR"] = str(output_dir)
         log_path = output_dir / f"{command.name}.log"
         t0 = time.perf_counter()
         proc = subprocess.run(
