@@ -223,6 +223,7 @@ def test_run_walkthrough_smoke(monkeypatch, tmp_path):
         max_rotation_degrees=5.0,
         pdb_path=None,
         overwrite=True,
+        use_oracle_pipeline=False,
     )
 
     summary = walkthrough.run_walkthrough(args, tmp_path)
@@ -231,5 +232,139 @@ def test_run_walkthrough_smoke(monkeypatch, tmp_path):
     assert summary["contrast_std"] == 0.0
     assert calls["target_state"] == 1
     assert np.allclose(calls["latent_point"], [[1.5]])
+    assert summary["use_oracle_pipeline"] is False
     assert (tmp_path / "README.md").exists()
     assert (tmp_path / "config.json").exists()
+
+
+def test_use_oracle_pipeline_flag_dispatches_to_oracle(monkeypatch, tmp_path):
+    calls = {}
+
+    def fake_raw(_args, out, _voxel_size):
+        return out / "01_raw_volumes" / "vol", np.zeros((3, 2, 2, 2), dtype=np.float32)
+
+    def fake_active(raw_volumes, _args, out, _voxel_size):
+        meta = {"explained_energy": np.array([1.0, 0.0, 0.0], dtype=np.float32)}
+        return out / "02_active_volumes" / "vol", raw_volumes, meta
+
+    def fake_dataset(_args, _out, _prefix, _voxel_size):
+        return np.zeros((4, 2, 2, 2), dtype=np.float32), {"image_assignment": np.array([0, 1, 1, 2], dtype=np.int32)}
+
+    def fake_masks(out, _sim_info, _grid_size, _voxel_size):
+        return {"gt_dir": str(out / "04_ground_truth"), "volume_mask": "mask.mrc", "focus_mask": "focus.mrc"}
+
+    def fake_run_pipeline(*_args, **_kwargs):
+        calls["dispatched"] = "real_pipeline"
+        return tmp_path / "06_pipeline"
+
+    def fake_oracle(args, out, mask_paths, sim_info, voxel_size):
+        calls["dispatched"] = "oracle_pipeline"
+        calls["mask_paths"] = mask_paths
+        calls["voxel_size"] = voxel_size
+        calls["sim_info_keys"] = sorted(sim_info.keys())
+        return out / "06_pipeline"
+
+    def fake_latent(_pipeline_dir, _sim_info, _target_state, _zdim):
+        return np.array([[2.5]], dtype=np.float32)
+
+    def fake_compute_state(_args, out, _pipeline_dir, _latent_point):
+        return out / "07_compute_state"
+
+    monkeypatch.setattr(walkthrough, "_write_raw_pdb_volumes", fake_raw)
+    monkeypatch.setattr(walkthrough, "_write_active_volumes", fake_active)
+    monkeypatch.setattr(walkthrough, "_simulate_dataset", fake_dataset)
+    monkeypatch.setattr(walkthrough, "_write_gt_masks_and_volumes", fake_masks)
+    monkeypatch.setattr(walkthrough, "_run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(walkthrough, "_run_oracle_pipeline", fake_oracle)
+    monkeypatch.setattr(walkthrough, "_middle_state_latent_point", fake_latent)
+    monkeypatch.setattr(walkthrough, "_run_compute_state", fake_compute_state)
+
+    args = SimpleNamespace(
+        output_dir=str(tmp_path),
+        grid_size=2,
+        n_states=3,
+        n_images=4,
+        noise_level=1.0,
+        noise_model="radial1",
+        seed=0,
+        pc_project=1,
+        target_state=None,
+        zdim=1,
+        n_bins=3,
+        compute_state_maskrad_fraction=4.0,
+        compute_state_n_min_particles=100,
+        compute_state_save_all_estimates=False,
+        lazy=False,
+        low_memory_option=False,
+        very_low_memory_option=False,
+        pipeline_gpu_memory=None,
+        premultiplied_ctf=False,
+        bfactor=80.0,
+        max_rotation_degrees=5.0,
+        pdb_path=None,
+        overwrite=True,
+        use_oracle_pipeline=True,
+    )
+
+    summary = walkthrough.run_walkthrough(args, tmp_path)
+
+    assert calls["dispatched"] == "oracle_pipeline"
+    assert summary["use_oracle_pipeline"] is True
+    assert "image_assignment" in calls["sim_info_keys"]
+    assert calls["mask_paths"]["volume_mask"] == "mask.mrc"
+
+
+def test_oracle_pipeline_run_oracle_invokes_writer(monkeypatch, tmp_path):
+    """`_run_oracle_pipeline` should call into the oracle writer with the right args."""
+    captured = {}
+
+    def fake_write_oracle(**kwargs):
+        captured.update(kwargs)
+        Path(kwargs["pipeline_dir"]).mkdir(parents=True, exist_ok=True)
+        return {
+            "pipeline_dir": str(kwargs["pipeline_dir"]),
+            "zdims": [1],
+            "n_pcs_available": 1,
+            "n_particles": 4,
+            "halfset_sizes": [2, 2],
+            "noise_variance_length": 1,
+            "voxel_size": 1.0,
+            "volume_shape": [2, 2, 2],
+        }
+
+    monkeypatch.setattr(walkthrough.oracle_pipeline, "write_oracle_pipeline_output", fake_write_oracle)
+
+    mask_path = tmp_path / "mask.mrc"
+    focus_path = tmp_path / "focus.mrc"
+    from recovar import utils as recovar_utils
+
+    recovar_utils.write_mrc(mask_path, np.ones((2, 2, 2), dtype=np.float32), voxel_size=1.0)
+    recovar_utils.write_mrc(focus_path, np.zeros((2, 2, 2), dtype=np.float32), voxel_size=1.0)
+
+    args = SimpleNamespace(
+        overwrite=True,
+        zdim=1,
+        pipeline_gpu_memory=None,
+        premultiplied_ctf=False,
+        noise_model="radial1",
+    )
+    sim_info = {
+        "image_assignment": np.array([0, 1, 1, 2], dtype=np.int32),
+        "noise_variance": np.ones(1, dtype=np.float32),
+    }
+
+    pipeline_dir = walkthrough._run_oracle_pipeline(
+        args,
+        tmp_path,
+        {"volume_mask": str(mask_path), "focus_mask": str(focus_path)},
+        sim_info,
+        voxel_size=1.0,
+    )
+
+    assert pipeline_dir == tmp_path / "06_pipeline"
+    assert captured["pipeline_dir"] == tmp_path / "06_pipeline"
+    assert captured["voxel_size"] == 1.0
+    assert captured["noise_model"] == "radial"  # radial1 is mapped to radial
+    assert captured["premultiplied_ctf"] is False
+    assert captured["focus_mask"].shape == (2, 2, 2)
+    assert (tmp_path / "06_pipeline" / "oracle_pipeline_info.json").exists()
