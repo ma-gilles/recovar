@@ -192,6 +192,133 @@ def _maybe_dump_significance_batch(
         )
 
 
+def _maybe_dump_k_class_significance_batch(
+    *,
+    experiment_dataset,
+    indices,
+    n_classes: int,
+    rotations,
+    translations,
+    class_weight_mats,
+    batch_sig_mask,
+    batch_n_sig,
+    hard_assignment_batch,
+    class_assignment_batch,
+    global_log_z,
+    class_log_z_values,
+    best_score,
+    max_posterior,
+    rotation_log_prior_padded,
+    batch_translation_log_prior,
+    class_log_priors,
+    current_size,
+    adaptive_fraction,
+    max_significants,
+):
+    """Env-gated debug dump for the K-class significance pass.
+
+    File naming matches the single-class dump so existing diff tooling works.
+    The payload extends the K=1 schema with per-class fields and an explicit
+    ``n_classes`` scalar so the user can decode the joint candidate space.
+    """
+
+    dump_dir = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR")
+    if not dump_dir:
+        return
+    target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
+    if not target_original_indices:
+        return
+    target_current_size = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE")
+    if target_current_size:
+        if current_size is None or int(current_size) != int(target_current_size):
+            return
+
+    local_indices = np.asarray(indices, dtype=np.int64)
+    original_indices_all = getattr(experiment_dataset, "dataset_indices", None)
+    if original_indices_all is None:
+        original_indices = local_indices
+    else:
+        original_indices = np.asarray(original_indices_all, dtype=np.int64)[local_indices]
+
+    os.makedirs(dump_dir, exist_ok=True)
+    n_rot = int(rotations.shape[0])
+    n_trans = int(translations.shape[0])
+
+    weights_per_class = np.stack(
+        [np.asarray(mat, dtype=np.float64) for mat in class_weight_mats],
+        axis=1,
+    )
+    sig_mask_full = np.asarray(batch_sig_mask, dtype=bool).reshape(
+        local_indices.shape[0],
+        n_classes,
+        n_rot * n_trans,
+    )
+    class_log_z_stack = np.stack(
+        [np.asarray(class_log_z, dtype=np.float64) for class_log_z in class_log_z_values],
+        axis=1,
+    )
+
+    flat_indices = np.arange(n_classes * n_rot * n_trans, dtype=np.int32)
+    class_indices_flat = (flat_indices // (n_rot * n_trans)).astype(np.int32)
+    rot_indices_flat = ((flat_indices % (n_rot * n_trans)) // n_trans).astype(np.int32)
+    trans_indices_flat = (flat_indices % n_trans).astype(np.int32)
+
+    for local_pos, original_idx in enumerate(original_indices):
+        if int(original_idx) not in target_original_indices:
+            continue
+        weights_full = weights_per_class[local_pos].reshape(-1)
+        sig_mask = sig_mask_full[local_pos].reshape(-1)
+        sig_indices = np.flatnonzero(sig_mask).astype(np.int32)
+        trans_prior = None
+        if batch_translation_log_prior is not None:
+            prior_arr = np.asarray(batch_translation_log_prior)
+            trans_prior = prior_arr if prior_arr.ndim == 1 else prior_arr[local_pos]
+        rot_prior_arr = (
+            np.asarray(rotation_log_prior_padded, dtype=np.float64)[:, :n_rot]
+            if rotation_log_prior_padded is not None
+            else None
+        )
+
+        out_path = os.path.join(
+            dump_dir,
+            f"significance_orig{int(original_idx):06d}_cs{(-1 if current_size is None else int(current_size)):03d}.npz",
+        )
+        np.savez_compressed(
+            out_path,
+            original_index=np.int64(original_idx),
+            local_index=np.int64(local_indices[local_pos]),
+            current_size=np.int64(-1 if current_size is None else int(current_size)),
+            adaptive_fraction=np.float64(adaptive_fraction),
+            max_significants=np.int64(max_significants),
+            n_classes=np.int64(n_classes),
+            n_rot=np.int64(n_rot),
+            n_trans=np.int64(n_trans),
+            weights_full=weights_full,
+            weights_per_class=weights_per_class[local_pos],
+            significant_mask=sig_mask,
+            significant_indices=sig_indices,
+            n_significant=np.int64(batch_n_sig[local_pos]),
+            hard_assignment=np.int64(hard_assignment_batch[local_pos]),
+            class_assignment=np.int64(class_assignment_batch[local_pos]),
+            normalization_log_z=np.float64(global_log_z[local_pos]),
+            class_log_z=class_log_z_stack[local_pos],
+            best_score=np.float64(best_score[local_pos]),
+            max_posterior=np.float64(max_posterior[local_pos]),
+            rotations=np.asarray(rotations, dtype=np.float32),
+            translations=np.asarray(translations, dtype=np.float32),
+            class_indices=class_indices_flat,
+            rot_indices=rot_indices_flat,
+            trans_indices=trans_indices_flat,
+            class_log_priors=np.asarray(class_log_priors, dtype=np.float64),
+            rotation_log_prior=(rot_prior_arr if rot_prior_arr is not None else np.empty((0,), dtype=np.float64)),
+            translation_log_prior=(
+                np.asarray(trans_prior, dtype=np.float64)
+                if trans_prior is not None
+                else np.empty((0,), dtype=np.float64)
+            ),
+        )
+
+
 def _uses_relion_background_fill(experiment_dataset) -> bool:
     image_source = getattr(experiment_dataset, "image_source", None)
     while hasattr(image_source, "parent"):
@@ -257,14 +384,28 @@ def _compute_significance_batched(
         Pmax / weight_norm, while ``significant_weight`` only gates
         reconstruction.
     """
-    from recovar.core.configs import ForwardModelConfig
     from recovar import core
-    from recovar.reconstruction import noise as noise_utils
+    from recovar.core.configs import ForwardModelConfig
+    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.dense_single_volume.helpers.half_spectrum import (
+        make_half_image_weights,
+        make_scoring_half_image_weights,
+    )
+    from recovar.em.dense_single_volume.helpers.image_shifts import (
+        apply_relion_integer_pre_shifts,
+        integer_pre_shifts_or_none,
+        tiled_half_image_phase_factors,
+    )
+    from recovar.em.dense_single_volume.helpers.oversampling import (
+        find_significant_rotations as _find_sig,
+    )
     from recovar.em.dense_single_volume.helpers.preprocessing import (
         preprocess_batch as _preprocess_batch,
     )
     from recovar.em.dense_single_volume.helpers.projection import (
         compute_projections_block as _compute_projections_block,
+    )
+    from recovar.em.dense_single_volume.helpers.projection import (
         compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
     )
     from recovar.em.dense_single_volume.helpers.scoring import (
@@ -272,19 +413,7 @@ def _compute_significance_batched(
         _e_step_block_scores_windowed,
         _update_logsumexp,
     )
-    from recovar.em.dense_single_volume.helpers.half_spectrum import (
-        make_half_image_weights,
-        make_scoring_half_image_weights,
-    )
-    from recovar.em.dense_single_volume.helpers.oversampling import (
-        find_significant_rotations as _find_sig,
-    )
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-    from recovar.em.dense_single_volume.helpers.image_shifts import (
-        apply_relion_integer_pre_shifts,
-        integer_pre_shifts_or_none,
-        tiled_half_image_phase_factors,
-    )
+    from recovar.reconstruction import noise as noise_utils
 
     if projection_padding_factor > 1:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
@@ -622,9 +751,7 @@ def _compute_significance_batched(
                 if original_indices_all is None:
                     original_indices_for_dump = local_indices_for_dump
                 else:
-                    original_indices_for_dump = np.asarray(original_indices_all, dtype=np.int64)[
-                        local_indices_for_dump
-                    ]
+                    original_indices_for_dump = np.asarray(original_indices_all, dtype=np.int64)[local_indices_for_dump]
                 dump_target_positions = np.flatnonzero(
                     np.isin(original_indices_for_dump, np.fromiter(target_original_indices, dtype=np.int64))
                 ).astype(np.int64)
@@ -635,13 +762,16 @@ def _compute_significance_batched(
         # Pass 1: streaming logsumexp
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size, dtype=jnp.float64)
-        cache_score_blocks = _significance_score_cache_enabled(
-            batch_size,
-            1,
-            n_rot_padded,
-            n_trans,
-            use_float64_scoring=use_float64_scoring,
-        ) and not debug_dump_enabled
+        cache_score_blocks = (
+            _significance_score_cache_enabled(
+                batch_size,
+                1,
+                n_rot_padded,
+                n_trans,
+                use_float64_scoring=use_float64_scoring,
+            )
+            and not debug_dump_enabled
+        )
         cached_score_blocks = [] if cache_score_blocks else None
 
         for b in range(n_blocks):
@@ -730,14 +860,10 @@ def _compute_significance_batched(
         # Concatenate this batch's weights -> (batch_size, n_rot * n_trans).
         batch_weights = jnp.concatenate(batch_weights_blocks, axis=1)
         dump_scores_pre_prior = (
-            np.concatenate(dump_score_pre_prior_blocks, axis=1)
-            if dump_score_pre_prior_blocks is not None
-            else None
+            np.concatenate(dump_score_pre_prior_blocks, axis=1) if dump_score_pre_prior_blocks is not None else None
         )
         dump_scores_with_prior = (
-            np.concatenate(dump_score_with_prior_blocks, axis=1)
-            if dump_score_with_prior_blocks is not None
-            else None
+            np.concatenate(dump_score_with_prior_blocks, axis=1) if dump_score_with_prior_blocks is not None else None
         )
 
         # Find significance for this batch
@@ -842,9 +968,21 @@ def _compute_k_class_significance_batched(
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
 
-    from recovar.core.configs import ForwardModelConfig
     from recovar import core
-    from recovar.reconstruction import noise as noise_utils
+    from recovar.core.configs import ForwardModelConfig
+    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.dense_single_volume.helpers.half_spectrum import (
+        make_half_image_weights,
+        make_scoring_half_image_weights,
+    )
+    from recovar.em.dense_single_volume.helpers.image_shifts import (
+        apply_relion_integer_pre_shifts,
+        integer_pre_shifts_or_none,
+        tiled_half_image_phase_factors,
+    )
+    from recovar.em.dense_single_volume.helpers.oversampling import (
+        find_significant_rotations as _find_sig,
+    )
     from recovar.em.dense_single_volume.helpers.preprocessing import (
         preprocess_batch as _preprocess_batch,
     )
@@ -856,19 +994,7 @@ def _compute_k_class_significance_batched(
         _e_step_block_scores_windowed,
         _update_logsumexp,
     )
-    from recovar.em.dense_single_volume.helpers.half_spectrum import (
-        make_half_image_weights,
-        make_scoring_half_image_weights,
-    )
-    from recovar.em.dense_single_volume.helpers.oversampling import (
-        find_significant_rotations as _find_sig,
-    )
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-    from recovar.em.dense_single_volume.helpers.image_shifts import (
-        apply_relion_integer_pre_shifts,
-        integer_pre_shifts_or_none,
-        tiled_half_image_phase_factors,
-    )
+    from recovar.reconstruction import noise as noise_utils
 
     means_array = jnp.asarray(means)
     if means_array.ndim != 2:
@@ -947,8 +1073,7 @@ def _compute_k_class_significance_batched(
             prior = np.broadcast_to(prior[None, :], (n_classes, n_rot)).copy()
         elif prior.shape != (n_classes, n_rot):
             raise ValueError(
-                "rotation_log_prior must have shape "
-                f"({n_rot},) or ({n_classes}, {n_rot}), got {prior.shape}",
+                f"rotation_log_prior must have shape ({n_rot},) or ({n_classes}, {n_rot}), got {prior.shape}",
             )
         if n_rot_padded > n_rot:
             rotation_log_prior_padded = np.pad(
@@ -963,7 +1088,9 @@ def _compute_k_class_significance_batched(
         translation_log_prior = np.asarray(translation_log_prior, dtype=np.float32)
         if translation_log_prior.ndim == 1:
             if translation_log_prior.shape != (n_trans,):
-                raise ValueError(f"translation_log_prior must have shape ({n_trans},), got {translation_log_prior.shape}")
+                raise ValueError(
+                    f"translation_log_prior must have shape ({n_trans},), got {translation_log_prior.shape}"
+                )
         elif translation_log_prior.ndim == 2:
             if translation_log_prior.shape != (n_images, n_trans):
                 raise ValueError(
@@ -1187,7 +1314,9 @@ def _compute_k_class_significance_batched(
             class_sum_values.append(class_sum)
 
         global_log_z = global_max + jnp.log(global_sum)
-        class_log_z_values = [class_max + jnp.log(class_sum) for class_max, class_sum in zip(class_max_values, class_sum_values)]
+        class_log_z_values = [
+            class_max + jnp.log(class_sum) for class_max, class_sum in zip(class_max_values, class_sum_values)
+        ]
 
         best_score_batch = jnp.full(batch_size, -jnp.inf)
         best_argmax_batch = jnp.zeros(batch_size, dtype=jnp.int32)
@@ -1252,6 +1381,30 @@ def _compute_k_class_significance_batched(
         for class_index, class_log_z in enumerate(class_log_z_values):
             class_log_evidence[class_index, start_idx:end_idx] = (
                 np.asarray(class_log_z, dtype=np.float64) + log_score_offset
+            )
+
+        if _significance_debug_dump_enabled():
+            _maybe_dump_k_class_significance_batch(
+                experiment_dataset=experiment_dataset,
+                indices=indices,
+                n_classes=n_classes,
+                rotations=rotations,
+                translations=translations,
+                class_weight_mats=[np.asarray(mat, dtype=np.float64) for mat in class_weight_mats],
+                batch_sig_mask=batch_sig_mask_np,
+                batch_n_sig=np.asarray(batch_n_sig, dtype=np.int64),
+                hard_assignment_batch=np.asarray(best_argmax_batch, dtype=np.int64),
+                class_assignment_batch=np.asarray(best_class_batch, dtype=np.int64),
+                global_log_z=global_log_z_np,
+                class_log_z_values=class_log_z_values,
+                best_score=best_score_np,
+                max_posterior=max_posterior[start_idx:end_idx],
+                rotation_log_prior_padded=rotation_log_prior_padded,
+                batch_translation_log_prior=batch_translation_log_prior,
+                class_log_priors=class_log_priors_np,
+                current_size=current_size,
+                adaptive_fraction=adaptive_fraction,
+                max_significants=max_significants,
             )
 
         samples_per_class = n_rot * n_trans
