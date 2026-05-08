@@ -496,6 +496,9 @@ def _sparse_pass2_estep_meta(
     pose_assignments = []
     class_assignments = []
     max_posterior = []
+    best_pose_rotations = []
+    best_pose_translations = []
+    best_pose_rotation_ids = []
 
     for halfset_idx, result in sorted(halfset_results.items()):
         image_ids = np.asarray(selected_particle_ids_by_halfset[int(halfset_idx)], dtype=np.int64)
@@ -504,6 +507,12 @@ def _sparse_pass2_estep_meta(
             pose_assignments.append(np.asarray(result.pose_assignments, dtype=np.int32))
         if getattr(result, "class_assignments", None) is not None:
             class_assignments.append(np.asarray(result.class_assignments, dtype=np.int32))
+        if getattr(result, "best_pose_rotations", None) is not None:
+            best_pose_rotations.append(np.asarray(result.best_pose_rotations, dtype=np.float32))
+        if getattr(result, "best_pose_translations", None) is not None:
+            best_pose_translations.append(np.asarray(result.best_pose_translations, dtype=np.float32))
+        if getattr(result, "best_pose_rotation_ids", None) is not None:
+            best_pose_rotation_ids.append(np.asarray(result.best_pose_rotation_ids, dtype=np.int32))
         stats = getattr(result, "stats", None)
         if stats is not None and getattr(stats, "max_posterior_per_image", None) is not None:
             max_posterior.append(np.asarray(stats.max_posterior_per_image, dtype=np.float32))
@@ -519,6 +528,12 @@ def _sparse_pass2_estep_meta(
         meta["class_assignments"] = np.concatenate(class_assignments).astype(np.int32, copy=False)
     if max_posterior:
         meta["max_posterior_per_image"] = np.concatenate(max_posterior).astype(np.float32, copy=False)
+    if best_pose_rotations:
+        meta["best_pose_rotations"] = np.concatenate(best_pose_rotations).astype(np.float32, copy=False)
+    if best_pose_translations:
+        meta["best_pose_translations"] = np.concatenate(best_pose_translations).astype(np.float32, copy=False)
+    if best_pose_rotation_ids:
+        meta["best_pose_rotation_ids"] = np.concatenate(best_pose_rotation_ids).astype(np.int32, copy=False)
     meta["sparse_pass2"] = True
     return meta
 
@@ -1409,15 +1424,28 @@ def run_dense_initial_model_estep(
     pose_assignments = []
     class_assignments = []
     max_posterior = []
+    best_pose_rotations = []
+    best_pose_translations = []
+    best_pose_rotation_ids = []
     for halfset_idx, image_indices in groups:
         result = halfset_results.get(halfset_idx)
         if result is None:
             continue
         result_pose_assignments = getattr(result, "pose_assignments", None)
         result_class_assignments = getattr(result, "class_assignments", None)
+        result_best_pose_rotations = getattr(result, "best_pose_rotations", None)
+        result_best_pose_translations = getattr(result, "best_pose_translations", None)
+        result_best_pose_rotation_ids = getattr(result, "best_pose_rotation_ids", None)
         result_stats = getattr(result, "stats", None)
         result_pmax = None if result_stats is None else getattr(result_stats, "max_posterior_per_image", None)
-        if result_pose_assignments is None and result_class_assignments is None and result_pmax is None:
+        if (
+            result_pose_assignments is None
+            and result_class_assignments is None
+            and result_pmax is None
+            and result_best_pose_rotations is None
+            and result_best_pose_translations is None
+            and result_best_pose_rotation_ids is None
+        ):
             continue
         selected_particle_ids.append(np.asarray(image_indices, dtype=np.int64))
         if result_pose_assignments is not None:
@@ -1426,6 +1454,12 @@ def run_dense_initial_model_estep(
             class_assignments.append(np.asarray(result_class_assignments, dtype=np.int32))
         if result_pmax is not None:
             max_posterior.append(np.asarray(result_pmax, dtype=np.float32))
+        if result_best_pose_rotations is not None:
+            best_pose_rotations.append(np.asarray(result_best_pose_rotations, dtype=np.float32))
+        if result_best_pose_translations is not None:
+            best_pose_translations.append(np.asarray(result_best_pose_translations, dtype=np.float32))
+        if result_best_pose_rotation_ids is not None:
+            best_pose_rotation_ids.append(np.asarray(result_best_pose_rotation_ids, dtype=np.int32))
     meta = _estep_meta(halfset_results)
     if selected_particle_ids:
         meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
@@ -1435,6 +1469,12 @@ def run_dense_initial_model_estep(
         meta["class_assignments"] = np.concatenate(class_assignments).astype(np.int32, copy=False)
     if max_posterior:
         meta["max_posterior_per_image"] = np.concatenate(max_posterior).astype(np.float32, copy=False)
+    if best_pose_rotations:
+        meta["best_pose_rotations"] = np.concatenate(best_pose_rotations).astype(np.float32, copy=False)
+    if best_pose_translations:
+        meta["best_pose_translations"] = np.concatenate(best_pose_translations).astype(np.float32, copy=False)
+    if best_pose_rotation_ids:
+        meta["best_pose_rotation_ids"] = np.concatenate(best_pose_rotation_ids).astype(np.int32, copy=False)
     return DenseInitialModelEstepResult(
         accumulators=accumulators,
         meta=meta,

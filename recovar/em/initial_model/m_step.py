@@ -241,9 +241,11 @@ def vdam_m_step_single_class(
     # data_vs_prior_class drives updateCurrentResolution for the next
     # expectation step.
     new_tau2_class = state.tau2_class.copy()
+    new_sigma2_class = state.sigma2_class.copy()
+    new_fourier_coverage_class = state.fourier_coverage_class.copy()
     new_data_vs_prior_class = state.data_vs_prior_class.copy()
     fsc_for_ssnr = np.asarray(state.fsc_halves_class[0], dtype=np.float64)
-    tau2, _sigma2, data_vs_prior, _fourier_coverage = bind.vdam_update_ssnr_arrays_from_bpref(
+    tau2, sigma2, data_vs_prior, fourier_coverage = bind.vdam_update_ssnr_arrays_from_bpref(
         accum_h0.weight,
         fsc_for_ssnr,
         state.tau2_class[k],
@@ -257,9 +259,13 @@ def vdam_m_step_single_class(
         False,
     )
     new_tau2_class[k] = np.asarray(tau2, dtype=np.float64)
+    new_sigma2_class[k] = np.asarray(sigma2, dtype=np.float64)
     new_data_vs_prior_class[k] = np.asarray(data_vs_prior, dtype=np.float64)
+    new_fourier_coverage_class[k] = np.asarray(fourier_coverage, dtype=np.float64)
     _dump("tau2_post_ssnr", new_tau2_class[k])
+    _dump("sigma2_post_ssnr", new_sigma2_class[k])
     _dump("data_vs_prior_post_ssnr", new_data_vs_prior_class[k])
+    _dump("fourier_coverage_post_ssnr", new_fourier_coverage_class[k])
 
     # Step 7. reconstructGrad updates Iref[k].
     # Pass weight from the h0 accumulator and the noise-power spectrum emitted
@@ -310,7 +316,9 @@ def vdam_m_step_single_class(
     new_state.Igrad1 = new_Igrad1
     new_state.Igrad2 = new_Igrad2
     new_state.tau2_class = new_tau2_class
+    new_state.sigma2_class = new_sigma2_class
     new_state.data_vs_prior_class = new_data_vs_prior_class
+    new_state.fourier_coverage_class = new_fourier_coverage_class
     # mom1_noise_power per class -> could be exposed via state if Phase 4
     # needs it for scoring; left internal for now.
     return new_state

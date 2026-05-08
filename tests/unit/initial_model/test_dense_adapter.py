@@ -47,6 +47,9 @@ def _fake_result(n_classes: int, n: int, *, n_images: int = 2, n_groups: int = 2
         class_posterior_sums=np.arange(n_classes, dtype=np.float32),
         class_assignments=np.zeros(n_images, dtype=np.int32),
         pose_assignments=np.arange(n_images, dtype=np.int32),
+        best_pose_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (n_images, 3, 3)).copy(),
+        best_pose_translations=np.arange(n_images * 2, dtype=np.float32).reshape(n_images, 2),
+        best_pose_rotation_ids=np.arange(n_images, dtype=np.int32),
         stats=SimpleNamespace(max_posterior_per_image=np.linspace(0.25, 0.75, n_images, dtype=np.float32)),
         per_class_stats=per_class_stats,
     )
@@ -157,6 +160,12 @@ def test_dense_initial_model_estep_runs_separate_k_class_calls_for_pseudo_halfse
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [0, 2, 1, 3])
     np.testing.assert_array_equal(result.meta["pose_assignments"], [0, 1, 0, 1])
     np.testing.assert_array_equal(result.meta["class_assignments"], [0, 0, 0, 0])
+    np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1, 0, 1])
+    np.testing.assert_allclose(
+        result.meta["best_pose_translations"],
+        np.asarray([[0, 1], [2, 3], [0, 1], [2, 3]], dtype=np.float32),
+    )
+    assert result.meta["best_pose_rotations"].shape == (4, 3, 3)
     np.testing.assert_allclose(
         result.meta["max_posterior_per_image"],
         np.asarray([0.25, 0.75, 0.25, 0.75], dtype=np.float32),
@@ -598,6 +607,8 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_mstep_relion_x_half"] is False
     assert result.meta["sparse_pass2"] is True
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
+    np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
+    np.testing.assert_allclose(result.meta["best_pose_translations"], [[0, 1], [2, 3]])
 
 
 def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypatch):
@@ -713,6 +724,8 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
     )
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["class_assignments"], [0, 0])
+    np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
+    assert result.meta["best_pose_rotations"].shape == (2, 3, 3)
     assert result.meta["sparse_pass2"] is True
 
 
@@ -851,6 +864,7 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
         },
     ]
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [0, 2, 1, 3])
+    np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1, 0, 1])
     assert "fused_pseudo_halfsets" not in result.meta
 
 

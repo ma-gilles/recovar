@@ -155,7 +155,9 @@ def initialise_denovo_state(
     n_shells = ori_size // 2 + 1
     sigma2_noise = np.zeros((nr_optics_groups, n_shells), dtype=np.float64)
     tau2_class = np.zeros((K, n_shells), dtype=np.float64)
+    sigma2_class = np.zeros((K, n_shells), dtype=np.float64)
     fsc_halves_class = np.zeros((K, n_shells), dtype=np.float64)
+    fourier_coverage_class = np.zeros((K, n_shells), dtype=np.float64)
     data_vs_prior_class = np.zeros((K, n_shells), dtype=np.float64)
 
     # Class mixing weights: uniform (ml_model.cpp::initialise path)
@@ -182,7 +184,9 @@ def initialise_denovo_state(
         Igrad2=Igrad2,
         sigma2_noise=sigma2_noise,
         tau2_class=tau2_class,
+        sigma2_class=sigma2_class,
         fsc_halves_class=fsc_halves_class,
+        fourier_coverage_class=fourier_coverage_class,
         data_vs_prior_class=data_vs_prior_class,
         pdf_class=pdf_class,
         pdf_direction=pdf_direction,

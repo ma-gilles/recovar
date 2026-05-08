@@ -164,6 +164,40 @@ def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
     assert not missing, f"native InitialModel lost RELION --flatten_solvent post-M-step wiring: {missing}"
 
 
+def test_native_vdam_tau2_refresh_and_ssnr_diagnostics_are_merge_guarded():
+    """Protect the K=1 current-size parity fix.
+
+    RELION refreshes tau2_class from Projector::computeFourierTransformMap
+    before each E-step. Native InitialModel must keep that behavior, and must
+    write sigma2/coverage diagnostics so DVP/current-size regressions are
+    visible in model.star.
+    """
+    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    iteration_loop = (REPO_ROOT / "recovar/em/initial_model/iteration_loop.py").read_text()
+    m_step = (REPO_ROOT / "recovar/em/initial_model/m_step.py").read_text()
+    state = (REPO_ROOT / "recovar/em/initial_model/state.py").read_text()
+    bind = (REPO_ROOT / "recovar/relion_bind/initialmodel_bind.cpp").read_text()
+    tests = (REPO_ROOT / "tests/unit/initial_model/test_iteration_loop.py").read_text()
+
+    haystack = "\n".join([driver, iteration_loop, m_step, state, bind, tests])
+    expected_tokens = [
+        "def refresh_tau2_from_projector_power",
+        "vdam_projector_power_spectrum",
+        "refresh_tau2_from_projector: bool = True",
+        "projector_padding_factor=int(opts.padding_factor)",
+        "current = refresh_tau2_from_projector_power",
+        "sigma2_class:  (K, S)",
+        "fourier_coverage_class: (K, S)",
+        "new_sigma2_class[k] = np.asarray(sigma2",
+        "new_fourier_coverage_class[k] = np.asarray(fourier_coverage",
+        "state.sigma2_class[k]",
+        "state.fourier_coverage_class[k]",
+        "test_iteration_loop_refreshes_tau2_before_estep",
+    ]
+    missing = [token for token in expected_tokens if token not in haystack]
+    assert not missing, f"native InitialModel lost tau2 refresh/SSNR diagnostic wiring: {missing}"
+
+
 def test_relion_initialmodel_reference_checker_rejects_autorefine(tmp_path):
     mod = _load_long_guard_module()
 

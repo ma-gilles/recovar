@@ -225,6 +225,62 @@ def test_dense_k_class_decodes_best_pose_details(monkeypatch):
     np.testing.assert_allclose(np.asarray(result.best_pose_translations), translations[[1, 1]])
 
 
+def test_dense_k_class_single_class_skips_score_probe(monkeypatch):
+    calls = []
+
+    class TinyDataset:
+        n_images = 2
+
+    rotations = np.asarray(
+        [
+            np.eye(3, dtype=np.float32),
+            np.diag([1.0, -1.0, -1.0]).astype(np.float32),
+        ],
+    )
+    translations = np.asarray([[-2.0, 0.0], [3.0, 4.0]], dtype=np.float32)
+
+    def fake_run_em(_dataset, mean, _mean_variance, _noise_variance, rotations_arg, _translations, _disc_type, **kwargs):
+        calls.append(kwargs)
+        hard_assignment = np.asarray([1, 2], dtype=np.int32)
+        stats = make_relion_stats(
+            log_evidence_per_image=np.asarray([2.0, 3.0], dtype=np.float32),
+            best_log_score_per_image=np.asarray([1.5, 2.5], dtype=np.float32),
+            max_posterior_per_image=np.asarray([0.25, 0.75], dtype=np.float32),
+            rotation_posterior_sums=np.arange(rotations_arg.shape[0], dtype=np.float32),
+        )
+        return (
+            jnp.zeros_like(mean),
+            hard_assignment,
+            jnp.ones_like(mean),
+            jnp.ones_like(mean) * 2,
+            stats,
+        )
+
+    monkeypatch.setattr(k_class_module, "run_em", fake_run_em)
+
+    result = run_dense_k_class_em(
+        TinyDataset(),
+        jnp.zeros((1, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(4, dtype=jnp.float32),
+        rotations,
+        translations,
+        "linear_interp",
+        return_best_pose_details=True,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["return_stats"] is True
+    assert calls[0]["accumulate_noise"] is False
+    assert "normalization_log_evidence" not in calls[0]
+    np.testing.assert_array_equal(np.asarray(result.class_assignments), np.asarray([0, 0], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(result.pose_assignments), np.asarray([1, 2], dtype=np.int32))
+    np.testing.assert_allclose(np.asarray(result.class_responsibilities), np.ones((1, 2), dtype=np.float32))
+    np.testing.assert_allclose(np.asarray(result.class_posterior_sums), np.asarray([2.0], dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(result.best_pose_rotation_ids), np.asarray([0, 1], dtype=np.int32))
+    np.testing.assert_allclose(np.asarray(result.best_pose_translations), translations[[1, 0]])
+
+
 def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeypatch):
     score_calls = []
     dense_calls = []
@@ -557,6 +613,76 @@ def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
     ) + np.float32(expected_shift)
     np.testing.assert_allclose(fine_trans, expected, atol=1e-6)
     np.testing.assert_array_equal(trans_parent_map, np.zeros(4, dtype=np.int64))
+
+
+def test_local_k_class_single_class_skips_score_probe(monkeypatch):
+    calls = []
+
+    class TinyDataset:
+        n_units = 2
+
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=1,
+        n_psi=2,
+        rotation_offsets=np.asarray([0, 1, 2], dtype=np.int64),
+        rotation_ids_flat=np.asarray([0, 1], dtype=np.int32),
+        rotations_flat=np.repeat(np.eye(3, dtype=np.float32)[None], 2, axis=0),
+        rotation_log_priors_flat=np.zeros(2, dtype=np.float32),
+        rotation_counts=np.asarray([1, 1], dtype=np.int32),
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((2, 1), dtype=np.float32),
+        rotation_posterior_ids_flat=np.asarray([0, 1], dtype=np.int32),
+        sample_mask_flat=np.ones((2, 1), dtype=bool),
+    )
+
+    def fake_run_local_em_exact(
+        _dataset,
+        mean,
+        _mean_variance,
+        _noise_variance,
+        _local_layout,
+        _disc_type,
+        **kwargs,
+    ):
+        calls.append(kwargs)
+        stats = make_relion_stats(
+            log_evidence_per_image=np.asarray([4.0, 5.0], dtype=np.float32),
+            best_log_score_per_image=np.asarray([3.0, 4.0], dtype=np.float32),
+            max_posterior_per_image=np.asarray([0.5, 0.8], dtype=np.float32),
+            rotation_posterior_sums=np.asarray([1.0, 2.0], dtype=np.float32),
+        )
+        return (
+            jnp.ones_like(mean),
+            jnp.ones_like(mean) * 2,
+            np.asarray([1, 0], dtype=np.int32),
+            np.repeat(np.eye(3, dtype=np.float32)[None], 2, axis=0),
+            np.zeros((2, 2), dtype=np.float32),
+            np.asarray([1, 0], dtype=np.int32),
+            stats,
+        )
+
+    monkeypatch.setattr(k_class_module, "run_local_em_exact", fake_run_local_em_exact)
+
+    result = run_local_k_class_em(
+        TinyDataset(),
+        jnp.zeros((1, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(4, dtype=jnp.float32),
+        local_layout,
+        "linear_interp",
+        return_best_pose_details=True,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["return_best_pose_details"] is True
+    assert calls[0]["accumulate_noise"] is False
+    assert "normalization_log_evidence" not in calls[0]
+    np.testing.assert_array_equal(np.asarray(result.class_assignments), np.asarray([0, 0], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(result.pose_assignments), np.asarray([1, 0], dtype=np.int32))
+    np.testing.assert_allclose(np.asarray(result.class_responsibilities), np.ones((1, 2), dtype=np.float32))
+    np.testing.assert_allclose(np.asarray(result.class_posterior_sums), np.asarray([2.0], dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(result.best_pose_rotation_ids), np.asarray([1, 0], dtype=np.int32))
 
 
 def test_local_k_class_accepts_per_class_layouts_and_external_evidence(monkeypatch):

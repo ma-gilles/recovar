@@ -604,6 +604,54 @@ def run_dense_k_class_em(
     translations_np = np.asarray(translations, dtype=np.float32)
 
     overall_t0 = time.time()
+    if n_classes == 1:
+        class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, 0, n_classes)
+        output = run_em(
+            experiment_dataset,
+            means_array[0],
+            _select_class_value(mean_variance, 0, n_classes),
+            _select_class_value(noise_variance, 0, n_classes),
+            rotations,
+            translations,
+            disc_type,
+            return_stats=True,
+            accumulate_noise=accumulate_noise,
+            class_log_prior=float(log_priors[0]),
+            **class_engine_kwargs,
+        )
+        new_mean, hard_assignment, class_Ft_y, class_Ft_ctf, stats, noise = _dense_outputs(
+            output,
+            accumulate_noise=accumulate_noise,
+        )
+        best_pose_rotations = None
+        best_pose_translations = None
+        best_pose_rotation_ids = None
+        if return_best_pose_details:
+            best_pose_rotations, best_pose_translations, best_pose_rotation_ids = _decode_dense_best_pose_details(
+                hard_assignment,
+                rotations_np,
+                translations_np,
+            )
+        logger.info(
+            "Dense K-class EM profile: classes=1 images=%d rotations=%d translations=%d single_pass=%.1fs",
+            _dataset_image_count(experiment_dataset),
+            int(rotations_np.shape[0]),
+            int(translations_np.shape[0]),
+            time.time() - overall_t0,
+        )
+        return _assemble_result(
+            class_log_evidence=np.asarray(stats.log_evidence_per_image, dtype=np.float64)[None, :],
+            new_means=[new_mean],
+            Ft_y=[class_Ft_y],
+            Ft_ctf=[class_Ft_ctf],
+            per_class_hard_assignments=np.asarray(hard_assignment, dtype=np.int32)[None, :],
+            per_class_stats=(stats,),
+            noise_stats=None if noise is None else (noise,),
+            per_class_best_pose_rotations=None if best_pose_rotations is None else [best_pose_rotations],
+            per_class_best_pose_translations=None if best_pose_translations is None else [best_pose_translations],
+            per_class_best_pose_rotation_ids=None if best_pose_rotation_ids is None else [best_pose_rotation_ids],
+        )
+
     probe_t0 = time.time()
     score_probe = _run_dense_k_class_score_probe(
         experiment_dataset,
@@ -756,6 +804,53 @@ def run_local_k_class_em(
             )
 
     if class_log_evidence_np is None:
+        if n_classes == 1 and normalization_log_evidence_np is None:
+            class_layout = _select_local_layout_for_class(
+                local_layout,
+                class_local_rotation_log_prior,
+                0,
+                n_classes,
+            )
+            with _LocalDebugDumpPhaseLabel("single_class"):
+                output = run_local_em_exact(
+                    experiment_dataset,
+                    means_array[0],
+                    _select_class_value(mean_variance, 0, n_classes),
+                    _select_class_value(noise_variance, 0, n_classes),
+                    class_layout,
+                    disc_type,
+                    accumulate_noise=accumulate_noise,
+                    return_best_pose_details=return_best_pose_details,
+                    class_log_prior=float(log_priors[0]),
+                    **base_engine_kwargs,
+                )
+            (
+                class_Ft_y,
+                class_Ft_ctf,
+                hard_assignment,
+                best_pose_rotations,
+                best_pose_translations,
+                best_pose_rotation_ids,
+                stats,
+                noise,
+            ) = _local_outputs(
+                output,
+                accumulate_noise=accumulate_noise,
+                return_best_pose_details=return_best_pose_details,
+            )
+            return _assemble_result(
+                class_log_evidence=np.asarray(stats.log_evidence_per_image, dtype=np.float64)[None, :],
+                new_means=None,
+                Ft_y=[class_Ft_y],
+                Ft_ctf=[class_Ft_ctf],
+                per_class_hard_assignments=np.asarray(hard_assignment, dtype=np.int32)[None, :],
+                per_class_stats=(stats,),
+                noise_stats=None if noise is None else (noise,),
+                per_class_best_pose_rotations=None if best_pose_rotations is None else [best_pose_rotations],
+                per_class_best_pose_translations=None if best_pose_translations is None else [best_pose_translations],
+                per_class_best_pose_rotation_ids=None if best_pose_rotation_ids is None else [best_pose_rotation_ids],
+            )
+
         class_log_evidence = []
         for class_index in range(n_classes):
             class_layout = _select_local_layout_for_class(

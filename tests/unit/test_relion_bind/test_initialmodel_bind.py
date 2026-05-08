@@ -140,7 +140,7 @@ class TestStepsizeParity:
                     3,
                     stepsize,
                 )
-                assert abs(py_val - cpp_val) < 1e-12
+            assert abs(py_val - cpp_val) < 1e-12
 
     def test_plain_scheme(self, bind):
         phases = compute_phase_lengths(200, 0.3, 0.2)
@@ -231,6 +231,27 @@ class TestTau2FudgeParity:
             assert abs(py_val - cpp_val) < 1e-12
 
 
+def test_projector_power_spectrum_smoke(bind):
+    ori = 8
+    z, y, x = np.indices((ori, ori, ori), dtype=np.float64)
+    vol = np.exp(-((x - 3.0) ** 2 + (y - 4.0) ** 2 + (z - 2.0) ** 2) / 5.0)
+
+    spectrum = bind.vdam_projector_power_spectrum(
+        vol,
+        ori,
+        1,
+        1,
+        6,
+        True,
+        2,
+    )
+
+    assert spectrum.shape == (ori // 2 + 1,)
+    assert np.all(np.isfinite(spectrum))
+    assert np.all(spectrum >= 0.0)
+    assert np.any(spectrum > 0.0)
+
+
 class TestRandomiseParticlesOrderBinding:
     """The C++ binding uses RELION's std::shuffle path.
 
@@ -316,6 +337,42 @@ class TestPostprocessInitialIrefBinding:
         assert out.shape == iref.shape
         assert np.all(np.isfinite(out))
         assert float(out.std()) < float(iref.std())
+
+
+class TestExpectedAngularErrorsBinding:
+    def test_expected_angular_errors_smoke(self, bind):
+        rng = np.random.default_rng(0)
+        refs = rng.standard_normal((1, 16, 16, 16)).astype(np.float64)
+        out = bind.vdam_expected_angular_errors(
+            refs,
+            np.asarray([[0.0, 90.0, 0.0], [20.0, 80.0, 30.0]], dtype=np.float64),
+            np.asarray([0, 1], dtype=np.int64),
+            np.asarray([0, 0], dtype=np.int32),
+            np.asarray([1.0], dtype=np.float64),
+            np.ones(9, dtype=np.float64),
+            np.asarray([10000.0, 12000.0], dtype=np.float64),
+            np.asarray([10000.0, 12000.0], dtype=np.float64),
+            np.asarray([0.0, 15.0], dtype=np.float64),
+            np.zeros(2, dtype=np.float64),
+            voltage=300.0,
+            Cs=2.7,
+            Q0=0.07,
+            pixel_size=1.5,
+            ori_size=16,
+            current_image_size=8,
+            padding_factor=1,
+            sigma2_fudge=4.0,
+            random_seed=17,
+            do_ctf_correction=True,
+            do_ctf_padding=False,
+        )
+
+        assert float(out["acc_rot"]) > 0.0
+        assert float(out["acc_trans"]) > 0.0
+        assert np.asarray(out["acc_rot_class"]).shape == (1,)
+        assert np.asarray(out["acc_trans_class"]).shape == (1,)
+        np.testing.assert_array_equal(np.asarray(out["class_counts"]), [2])
+        assert np.all(np.isfinite(np.asarray(out["acc_rot_class"])))
 
 
 # ---------------------------------------------------------------------------

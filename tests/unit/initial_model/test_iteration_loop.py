@@ -13,6 +13,7 @@ import pytest
 
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.iteration_loop import (
+    refresh_tau2_from_projector_power,
     relion_solvent_mask,
     relion_solvent_flatten_state,
     run_vdam_iterations,
@@ -70,6 +71,33 @@ def _stub_estep_factory(ori_size: int):
         return accumulators, meta
 
     return estep
+
+
+def test_refresh_tau2_from_projector_power_updates_all_classes(bind):
+    ori = 8
+    state = initialise_denovo_state(
+        ori_size=ori,
+        pixel_size=1.0,
+        K=2,
+        nr_iter=1,
+        n_directions=12,
+        pseudo_halfsets=True,
+    )
+    z, y, x = np.indices((ori, ori, ori), dtype=np.float64)
+    state.Iref[0] = np.exp(-((x - 2.0) ** 2 + (y - 3.0) ** 2 + (z - 4.0) ** 2) / 6.0)
+    state.Iref[1] = np.exp(-((x - 5.0) ** 2 + (y - 4.0) ** 2 + (z - 3.0) ** 2) / 4.0)
+    state.tau2_class.fill(123.0)
+    state.current_size = 6
+
+    out = refresh_tau2_from_projector_power(state)
+
+    assert out is not state
+    assert out.tau2_class.shape == (2, ori // 2 + 1)
+    assert np.all(np.isfinite(out.tau2_class))
+    assert np.all(out.tau2_class >= 0.0)
+    assert not np.array_equal(out.tau2_class, state.tau2_class)
+    assert not np.array_equal(out.tau2_class[0], out.tau2_class[1])
+    np.testing.assert_array_equal(state.tau2_class, np.full((2, ori // 2 + 1), 123.0))
 
 
 class TestRunVdamIterations:
@@ -152,6 +180,55 @@ class TestRunVdamIterations:
 
         assert seen_current_sizes == [28, 60]
         assert final.current_resolution_shell == 20
+
+    def test_iteration_loop_refreshes_tau2_before_estep(self, monkeypatch):
+        import recovar.em.initial_model.iteration_loop as loop
+
+        state = initialise_denovo_state(
+            ori_size=16,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        state.Iref[0, 8, 8, 8] = 1.0
+        state.tau2_class.fill(0.0)
+        seen = {}
+
+        def fake_refresh(current, *, padding_factor, interpolator):
+            assert padding_factor == 1
+            assert interpolator == 1
+            out = current
+            out.tau2_class = np.full_like(current.tau2_class, 7.0)
+            seen["refresh_current_size"] = int(current.current_size)
+            return out
+
+        def estep(current, particle_ids, halfset_ids):
+            seen["estep_tau2"] = current.tau2_class.copy()
+            return [], {}
+
+        def fake_m_step(current, accumulators, **kwargs):
+            return current
+
+        monkeypatch.setattr(loop, "refresh_tau2_from_projector_power", fake_refresh)
+        monkeypatch.setattr(loop, "vdam_m_step", fake_m_step)
+
+        run_vdam_iterations(
+            state,
+            nr_particles=200,
+            optics_group_by_particle=[0] * 200,
+            grad_ini_subset_size=50,
+            grad_fin_subset_size=100,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=0,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=estep,
+        )
+
+        assert seen["refresh_current_size"] == 16
+        np.testing.assert_array_equal(seen["estep_tau2"], np.full((1, 9), 7.0))
 
     def test_relion_solvent_flatten_state_matches_centered_spherical_mask(self):
         state = initialise_denovo_state(

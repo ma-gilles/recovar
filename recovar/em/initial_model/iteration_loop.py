@@ -61,6 +61,41 @@ IterArtifactSink = Callable[[InitialModelState, int, dict], None]
 PostMstepUpdateFn = Callable[[InitialModelState, int, dict], InitialModelState]
 
 
+def refresh_tau2_from_projector_power(
+    state: InitialModelState,
+    *,
+    padding_factor: int = 1,
+    interpolator: int = 1,
+) -> InitialModelState:
+    """Mirror RELION ``MlModel::setFourierTransformMaps(!fix_tau)``."""
+    try:
+        from recovar.relion_bind import _relion_bind_core as bind
+    except ImportError as e:  # pragma: no cover
+        raise RuntimeError(
+            "VDAM InitialModel tau2 refresh requires the RELION bindings. Run:\n"
+            "  pixi run python recovar/relion_bind/build.py"
+        ) from e
+
+    current_size = int(state.current_size if state.current_size > 0 else state.ori_size)
+    new_tau2 = np.asarray(state.tau2_class, dtype=np.float64).copy()
+    for k in range(int(state.K)):
+        new_tau2[k] = np.asarray(
+            bind.vdam_projector_power_spectrum(
+                np.asarray(state.Iref[k], dtype=np.float64),
+                int(state.ori_size),
+                int(padding_factor),
+                int(interpolator),
+                current_size,
+                True,
+                2,
+            ),
+            dtype=np.float64,
+        )
+    out = replace(state)
+    out.tau2_class = new_tau2
+    return out
+
+
 def _posterior_sums_from_meta(meta: dict, key: str) -> np.ndarray | None:
     value = meta.get(key)
     if value is not None:
@@ -432,6 +467,9 @@ def run_vdam_iterations(
     grad_ini_frac: float = 0.3,
     grad_fin_frac: float = 0.2,
     mu: float = DEFAULT_GRAD_MU,
+    refresh_tau2_from_projector: bool = True,
+    projector_padding_factor: int = 1,
+    projector_interpolator: int = 1,
 ) -> InitialModelState:
     """Run the full VDAM iteration loop.
 
@@ -467,6 +505,12 @@ def run_vdam_iterations(
         )
 
         current = update_image_size_and_resolution_pointers(current)
+        if refresh_tau2_from_projector:
+            current = refresh_tau2_from_projector_power(
+                current,
+                padding_factor=projector_padding_factor,
+                interpolator=projector_interpolator,
+            )
 
         # E-step: caller-supplied closure over the data loader + dense kernels
         accumulators, meta = expectation_step(

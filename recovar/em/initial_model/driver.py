@@ -22,7 +22,7 @@ from recovar.data_io.starfile import read_star, write_star
 from recovar.em import sampling
 from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
 from recovar.reconstruction.noise import make_radial_noise
-from recovar.utils.helpers import write_relion_mrc
+from recovar.utils.helpers import recovar_volume_to_relion, write_relion_mrc
 
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
@@ -174,6 +174,23 @@ class NativeParticleState:
     class_assignments: np.ndarray
     max_posterior: np.ndarray
     pose_assignments: np.ndarray | None = None
+    best_pose_rotations: np.ndarray | None = None
+    best_pose_translations: np.ndarray | None = None
+    best_pose_rotation_ids: np.ndarray | None = None
+
+
+@dataclass(frozen=True)
+class NativeOpticsState:
+    """Scalar optics plus per-particle CTF parameters for the SPA InitialModel path."""
+
+    voltage: float
+    Cs: float
+    Q0: float
+    pixel_size: float
+    defU: np.ndarray
+    defV: np.ndarray
+    defAngle: np.ndarray
+    phase_shift: np.ndarray
 
 
 def _relion_rnd_unif_factory(seed: int) -> RndUnifFn:
@@ -267,6 +284,24 @@ def _phase_shift(main_star) -> np.ndarray:
     if "_rlnPhaseShift" not in main_star.columns:
         return np.zeros(len(main_star), dtype=np.float64)
     return np.asarray(main_star["_rlnPhaseShift"].astype(float).to_numpy(), dtype=np.float64)
+
+
+def _native_optics_state(main_star, optics_star, dataset) -> NativeOpticsState:
+    voltage, Cs, Q0, pixel_size = _single_optics_scalars(main_star, optics_star, dataset)
+    required = ("_rlnDefocusU", "_rlnDefocusV", "_rlnDefocusAngle")
+    missing = [name for name in required if name not in main_star.columns]
+    if missing:
+        raise ValueError(f"native InitialModel needs per-particle CTF columns: {', '.join(missing)}")
+    return NativeOpticsState(
+        voltage=float(voltage),
+        Cs=float(Cs),
+        Q0=float(Q0),
+        pixel_size=float(pixel_size),
+        defU=np.asarray(main_star["_rlnDefocusU"].astype(float).to_numpy(), dtype=np.float64),
+        defV=np.asarray(main_star["_rlnDefocusV"].astype(float).to_numpy(), dtype=np.float64),
+        defAngle=np.asarray(main_star["_rlnDefocusAngle"].astype(float).to_numpy(), dtype=np.float64),
+        phase_shift=_phase_shift(main_star),
+    )
 
 
 def _star_column(main_star, name: str):
@@ -441,10 +476,16 @@ def _should_update_native_sampling(*, iteration: int, nr_iter: int, do_grad: boo
 
 
 def _should_record_native_sampling_changes(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
-    """Mirror when RELION refreshes hard-assignment change diagnostics."""
+    """Mirror RELION's per-iteration hidden-variable change diagnostics.
 
-    iteration = int(iteration)
-    return bool(iteration == int(nr_iter) or (not bool(do_grad)) or iteration % 10 == 0)
+    RELION calls ``monitorHiddenVariableChanges`` during every expectation
+    pool, then ``updateOverallChangesInHiddenVariables`` during every
+    maximization. Autosampling reads the value at the start of the next
+    expectation setup, so native must not defer this to 10-iteration sampling
+    checkpoints.
+    """
+
+    return int(iteration) <= int(nr_iter)
 
 
 def _record_resolution_stall_for_sampling(
@@ -556,6 +597,104 @@ def _prepare_native_sampling_for_iteration(
     if sampling_state.nr_iter_wo_resol_gain < RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN:
         return False
     return _relion_update_native_sampling_state(sampling_state, do_grad=do_grad)
+
+
+def _should_estimate_native_sampling_accuracy(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
+    """Mirror RELION's ``calculateExpectedAngularErrors`` cadence."""
+
+    iteration = int(iteration)
+    if iteration <= 1:
+        return True
+    if bool(do_grad) and iteration % 10 != 0:
+        return False
+    return iteration <= int(nr_iter)
+
+
+def _best_eulers_from_particle_state(
+    particle_state: NativeParticleState,
+    particle_ids: np.ndarray,
+    *,
+    rotation_grid_order: int,
+) -> np.ndarray | None:
+    rotation_ids = particle_state.best_pose_rotation_ids
+    if rotation_ids is None:
+        return None
+    ids = np.asarray(particle_ids, dtype=np.int64).reshape(-1)
+    best_ids = np.asarray(rotation_ids, dtype=np.int64)[ids]
+    if np.any(best_ids < 0):
+        return None
+    eulers = sampling.get_relion_rotation_grid_eulers(int(rotation_grid_order), rotation_index_order="relion")
+    if np.max(best_ids) >= eulers.shape[0]:
+        return None
+    return np.asarray(eulers[best_ids], dtype=np.float64)
+
+
+def _estimate_native_sampling_accuracy(
+    sampling_state: NativeSamplingState,
+    state: InitialModelState,
+    particle_state: NativeParticleState,
+    optics_state: NativeOpticsState,
+    *,
+    particle_order: np.ndarray,
+    random_seed: int,
+    padding_factor: int,
+) -> dict[str, object] | None:
+    n_trials = min(100, int(particle_order.size))
+    if n_trials <= 0:
+        return None
+    trial_particle_ids = np.asarray(particle_order[:n_trials], dtype=np.int64)
+    eulers = _best_eulers_from_particle_state(
+        particle_state,
+        trial_particle_ids,
+        rotation_grid_order=int(sampling_state.healpix_order) + int(sampling_state.adaptive_oversampling),
+    )
+    if eulers is None:
+        return None
+    class_ids = np.asarray(particle_state.class_assignments, dtype=np.int32)[trial_particle_ids]
+    if np.any(class_ids < 0) or np.any(class_ids >= int(state.K)):
+        return None
+
+    from recovar.relion_bind import _relion_bind_core as bind
+
+    refs_relion = np.stack(
+        [np.asarray(recovar_volume_to_relion(ref), dtype=np.float64) for ref in np.asarray(state.Iref)],
+        axis=0,
+    )
+    current_image_size = int(state.current_size if state.current_size > 0 else state.ori_size)
+    out = bind.vdam_expected_angular_errors(
+        refs_relion,
+        eulers,
+        trial_particle_ids.astype(np.int64, copy=False),
+        class_ids.astype(np.int32, copy=False),
+        np.asarray(state.pdf_class, dtype=np.float64),
+        np.asarray(state.sigma2_noise[0], dtype=np.float64),
+        np.asarray(optics_state.defU, dtype=np.float64),
+        np.asarray(optics_state.defV, dtype=np.float64),
+        np.asarray(optics_state.defAngle, dtype=np.float64),
+        np.asarray(optics_state.phase_shift, dtype=np.float64),
+        float(optics_state.voltage),
+        float(optics_state.Cs),
+        float(optics_state.Q0),
+        float(optics_state.pixel_size),
+        int(state.ori_size),
+        current_image_size,
+        int(padding_factor),
+        1,
+        float(state.tau2_fudge_factor),
+        int(random_seed),
+        True,
+        False,
+    )
+    sampling_state.acc_rot = float(out["acc_rot"])
+    sampling_state.acc_trans_angstrom = float(out["acc_trans"])
+    return {
+        "estimated_acc_rot": float(out["acc_rot"]),
+        "estimated_acc_trans_angstrom": float(out["acc_trans"]),
+        "estimated_acc_rot_class": np.asarray(out["acc_rot_class"], dtype=np.float64),
+        "estimated_acc_trans_class": np.asarray(out["acc_trans_class"], dtype=np.float64),
+        "estimated_acc_class_counts": np.asarray(out["class_counts"], dtype=np.int64),
+        "estimated_acc_n_trials": int(n_trials),
+    }
 
 
 def _record_native_sampling_assignment_changes(
@@ -882,6 +1021,7 @@ def _native_expectation_step(
     noise_variance: np.ndarray,
     particle_state: NativeParticleState | np.ndarray,
     sampling_state: NativeSamplingState | None = None,
+    optics_state: NativeOpticsState | None = None,
 ):
     if not isinstance(particle_state, NativeParticleState):
         particle_state = NativeParticleState(
@@ -895,9 +1035,24 @@ def _native_expectation_step(
         iteration = max(1, int(state.iter))
         do_grad = _native_initialmodel_do_grad(state, iteration)
         sampling_updated = False
+        accuracy_meta = None
         if sampling_state is None:
             sampling_plan = _build_sampling_plan(opts, iteration=iteration)
         else:
+            if optics_state is not None and _should_estimate_native_sampling_accuracy(
+                iteration=iteration,
+                nr_iter=int(state.nr_iter),
+                do_grad=do_grad,
+            ):
+                accuracy_meta = _estimate_native_sampling_accuracy(
+                    sampling_state,
+                    state,
+                    particle_state,
+                    optics_state,
+                    particle_order=np.asarray(particle_ids, dtype=np.int64),
+                    random_seed=int(opts.random_seed),
+                    padding_factor=int(opts.padding_factor),
+                )
             sampling_updated = _prepare_native_sampling_for_iteration(
                 sampling_state,
                 state,
@@ -930,6 +1085,9 @@ def _native_expectation_step(
         result.meta["offset_range_angstrom"] = float(sampling_plan.offset_range_angstrom)
         result.meta["offset_step_angstrom"] = float(sampling_plan.offset_step_angstrom)
         if sampling_state is not None:
+            result.meta["sampling_accuracy_estimated"] = accuracy_meta is not None
+            if accuracy_meta is not None:
+                result.meta.update(accuracy_meta)
             result.meta["sampling_updated"] = bool(sampling_updated)
             result.meta["effective_offset_step_angstrom"] = float(sampling_state.effective_offset_step_angstrom)
             result.meta["sampling_acc_rot"] = float(sampling_state.acc_rot)
@@ -1019,6 +1177,57 @@ def _update_particle_state_from_estep_meta(
                 dtype=np.int32,
             )
         particle_state.pose_assignments[particle_ids] = assignments.astype(np.int32, copy=False)
+
+    best_pose_rotations = meta.get("best_pose_rotations")
+    if best_pose_rotations is not None:
+        rotations = np.asarray(best_pose_rotations, dtype=np.float32)
+        expected = (particle_ids.size, 3, 3)
+        if rotations.shape != expected:
+            raise ValueError(f"best_pose_rotations must have shape {expected}, got {rotations.shape}")
+        if particle_state.best_pose_rotations is None or particle_state.best_pose_rotations.shape != (
+            particle_state.translation_offsets.shape[0],
+            3,
+            3,
+        ):
+            particle_state.best_pose_rotations = np.zeros(
+                (particle_state.translation_offsets.shape[0], 3, 3),
+                dtype=np.float32,
+            )
+        particle_state.best_pose_rotations[particle_ids] = rotations
+
+    best_pose_translations = meta.get("best_pose_translations")
+    if best_pose_translations is not None:
+        translations_best = np.asarray(best_pose_translations, dtype=np.float32)
+        expected = (particle_ids.size, 2)
+        if translations_best.shape != expected:
+            raise ValueError(f"best_pose_translations must have shape {expected}, got {translations_best.shape}")
+        if particle_state.best_pose_translations is None or particle_state.best_pose_translations.shape != (
+            particle_state.translation_offsets.shape[0],
+            2,
+        ):
+            particle_state.best_pose_translations = np.zeros(
+                (particle_state.translation_offsets.shape[0], 2),
+                dtype=np.float32,
+            )
+        particle_state.best_pose_translations[particle_ids] = translations_best
+
+    best_pose_rotation_ids = meta.get("best_pose_rotation_ids")
+    if best_pose_rotation_ids is not None:
+        rotation_ids = np.asarray(best_pose_rotation_ids, dtype=np.int32).reshape(-1)
+        if rotation_ids.shape != particle_ids.shape:
+            raise ValueError(
+                "best_pose_rotation_ids must match selected_particle_ids shape, "
+                f"got {rotation_ids.shape} and {particle_ids.shape}"
+            )
+        if particle_state.best_pose_rotation_ids is None or particle_state.best_pose_rotation_ids.shape != (
+            particle_state.translation_offsets.shape[0],
+        ):
+            particle_state.best_pose_rotation_ids = np.full(
+                particle_state.translation_offsets.shape[0],
+                -1,
+                dtype=np.int32,
+            )
+        particle_state.best_pose_rotation_ids[particle_ids] = rotation_ids
 
     class_assignments = meta.get("class_assignments")
     if class_assignments is not None:
@@ -1208,6 +1417,8 @@ def _write_model_star(path: str, state: InitialModelState, class_mrcs: tuple[str
             tau2 = np.asarray(state.tau2_class[k], dtype=np.float64)
             dvp = np.asarray(state.data_vs_prior_class[k], dtype=np.float64)
             fsc = np.asarray(state.fsc_halves_class[k], dtype=np.float64)
+            sigma2_class = np.asarray(state.sigma2_class[k], dtype=np.float64)
+            fourier_coverage = np.asarray(state.fourier_coverage_class[k], dtype=np.float64)
             n_shells = int(state.ori_size) // 2 + 1
             for shell in range(n_shells):
                 resolution = float(shell) / (float(state.pixel_size) * float(state.ori_size))
@@ -1216,8 +1427,9 @@ def _write_model_star(path: str, state: InitialModelState, class_mrcs: tuple[str
                 )
                 f.write(
                     f"{int(shell)} {resolution:.12g} {resolution_angstrom:.12g} "
-                    f"{float(dvp[shell]):.12g} {float(fsc[shell]):.12g} 0 "
-                    f"0 {float(tau2[shell]):.12g}\n"
+                    f"{float(dvp[shell]):.12g} {float(fsc[shell]):.12g} "
+                    f"{float(fourier_coverage[shell]):.12g} "
+                    f"{float(sigma2_class[shell]):.12g} {float(tau2[shell]):.12g}\n"
                 )
 
         f.write("\n\ndata_model_optics_group_1\n\n")
@@ -1356,6 +1568,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         raise NotImplementedError("native InitialModel currently supports SPA particle STAR files, not tilt-series")
 
     _configure_relion_image_mask(dataset, opts)
+    optics_state = _native_optics_state(main_star, optics_star, dataset)
     sampling_state = _initial_sampling_state(opts, pixel_size=float(dataset.voxel_size))
     sampling_plan = _build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
     particle_state = _particle_state_from_star(main_star, dataset)
@@ -1367,7 +1580,14 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         sampling_plan.rotations,
     )
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
-    expectation_step = _native_expectation_step(dataset, opts, noise_variance, particle_state, sampling_state)
+    expectation_step = _native_expectation_step(
+        dataset,
+        opts,
+        noise_variance,
+        particle_state,
+        sampling_state,
+        optics_state,
+    )
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(int(dataset.n_images))
 
     if opts.write_iter_artifacts:
@@ -1420,6 +1640,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         post_mstep_update=post_mstep_update,
         particle_order=particle_order,
         mu=DEFAULT_GRAD_MU,
+        projector_padding_factor=int(opts.padding_factor),
     )
     final_mrc, class_mrcs = _write_final_outputs(opts.outputname, final_state)
     final_model_star = f"{opts.outputname}_it{final_state.iter:03d}_model.star"
