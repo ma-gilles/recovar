@@ -23,6 +23,7 @@ from recovar.em import sampling
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     make_relion_translation_log_prior,
     relion_sigma_offset_prior_center,
+    relion_translation_prior_center,
 )
 from recovar.reconstruction.noise import make_radial_noise
 from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion, write_relion_mrc
@@ -166,7 +167,7 @@ class NativeSamplingState:
 
     @property
     def effective_offset_step_angstrom(self) -> float:
-        return float(self.offset_step_angstrom) / (2**int(self.adaptive_oversampling))
+        return float(self.offset_step_angstrom) / (2 ** int(self.adaptive_oversampling))
 
 
 @dataclass
@@ -925,7 +926,9 @@ def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.n
 
 
 def _n_directions_for_healpix_order(healpix_order: int) -> int:
-    return int(sampling.rotation_grid_size(int(healpix_order)) // sampling.rotation_grid_n_in_planes(int(healpix_order)))
+    return int(
+        sampling.rotation_grid_size(int(healpix_order)) // sampling.rotation_grid_n_in_planes(int(healpix_order))
+    )
 
 
 def _class_direction_rotation_log_prior(state: InitialModelState, healpix_order: int) -> np.ndarray:
@@ -977,17 +980,36 @@ def _dense_estep_config(
         sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
     else:
         sigma_angstrom = float(sigma_offset_angstrom)
+    # PARITY FIX 2026-05-08: route the prior centers through
+    # `relion_translation_prior_center`, which returns
+    # ``(prior_PX - rounded_old_offset_PX) / voxel_size``. This matches
+    # ``make_relion_translation_log_prior`` which scales `(translations -
+    # centers) * voxel_size`: dividing centers by voxel here cancels the
+    # multiplication, leaving centers acting as PX-numerics while
+    # translations get converted to Å. That reproduces RELION's
+    # mixed-unit pdf_offset (acc_ml_optimiser_impl.h:2620 +
+    # ml_optimiser.cpp:9249): ``offset = old_offset_PX +
+    # sampling.translations_x_Å`` followed by ``tdiff2 *= pixel_size**2``.
+    # Previously this passed `-image_pre_shifts` (raw PX), which scaled the
+    # centers AND translations symmetrically — making the per-image Gaussian
+    # 18× over-sharp and symmetric around the wrong grid center on axes
+    # where the prior offset was non-zero. This was the K=2 iter-2
+    # pmax_abs_mean=0.056 root cause (per-particle posterior leak to
+    # wrong-class secondary modes). main EM ``iteration_loop.py:3534-3537``
+    # already uses ``relion_translation_prior_center``; InitialModel
+    # was the missing caller.
+    trans_prior_center = relion_translation_prior_center(translation_offsets, float(dataset.voxel_size))
     coarse_translation_log_prior = _translation_log_prior(
         coarse_prior_translations,
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=sigma_angstrom,
-        centers=-image_pre_shifts,
+        centers=trans_prior_center,
     )
     translation_log_prior = _translation_log_prior(
         sampling_plan.translations,
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=sigma_angstrom,
-        centers=-image_pre_shifts,
+        centers=trans_prior_center,
     )
 
     engine_kwargs = {
@@ -1395,7 +1417,9 @@ def _initial_state_from_particles(
         padding_factor=int(opts.padding_factor),
     )
     state = seed_noise_from_mavg(state, sigma2_per_group)
-    init_sigma_offset_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
+    init_sigma_offset_angstrom = (
+        opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
+    )
     state.sigma2_offset = float(init_sigma_offset_angstrom) ** 2
     state.Mavg = Mavg
     # RECOVAR_INITIAL_IREF_OVERRIDE lets a parity caller swap in RELION's
@@ -1581,11 +1605,15 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     _set_star_column(table, "_rlnMaxValueProbDistribution", _format_float_column(particle_state.max_posterior))
 
     if particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None:
-        angle_rot = table["_rlnAngleRot"].astype(float).to_numpy(copy=True) if "_rlnAngleRot" in table else np.zeros(n_images)
+        angle_rot = (
+            table["_rlnAngleRot"].astype(float).to_numpy(copy=True) if "_rlnAngleRot" in table else np.zeros(n_images)
+        )
         angle_tilt = (
             table["_rlnAngleTilt"].astype(float).to_numpy(copy=True) if "_rlnAngleTilt" in table else np.zeros(n_images)
         )
-        angle_psi = table["_rlnAnglePsi"].astype(float).to_numpy(copy=True) if "_rlnAnglePsi" in table else np.zeros(n_images)
+        angle_psi = (
+            table["_rlnAnglePsi"].astype(float).to_numpy(copy=True) if "_rlnAnglePsi" in table else np.zeros(n_images)
+        )
         remaining_rot = visited.copy()
         if particle_state.best_pose_rotations is not None:
             rotations = np.asarray(particle_state.best_pose_rotations, dtype=np.float64)
@@ -1610,7 +1638,9 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
             if particle_state.best_pose_rotation_orders is not None:
                 rotation_orders = np.asarray(particle_state.best_pose_rotation_orders, dtype=np.int32).reshape(-1)
                 if rotation_orders.shape != (n_images,):
-                    raise ValueError(f"best_pose_rotation_orders must have shape ({n_images},), got {rotation_orders.shape}")
+                    raise ValueError(
+                        f"best_pose_rotation_orders must have shape ({n_images},), got {rotation_orders.shape}"
+                    )
             if rotation_orders is None:
                 max_rotations = int(np.max(rotation_ids[valid_rot])) + 1
                 inferred_order = None
