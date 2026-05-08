@@ -373,12 +373,12 @@ def write_oracle_pipeline_output(
 
     summary = {
         "pipeline_dir": str(pipeline_dir),
-        "zdims": list(requested_zdims),
+        "zdims": [int(z) for z in requested_zdims],
         "n_pcs_available": int(n_pcs_available),
         "n_particles": int(valid_indices.size),
         "halfset_sizes": [int(len(h)) for h in halfsets_split],
         "noise_variance_length": int(noise_variance_radial.size),
         "voxel_size": float(voxel_size),
-        "volume_shape": list(volume_shape),
+        "volume_shape": [int(d) for d in volume_shape],
     }
     return summary
