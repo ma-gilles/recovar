@@ -116,8 +116,7 @@ def masking_options(
 # ---------------------------------------------------------------------------
 
 
-def make_mask(volume, *, threshold="auto", lowpass_sigma=None, extend=None,
-              soft_edge=3, cleanup=True):
+def make_mask(volume, *, threshold="auto", lowpass_sigma=None, extend=None, soft_edge=3, cleanup=True):
     """Create a solvent mask from a 3-D real-space volume.
 
     Follows the same conceptual pipeline as RELION's ``relion_mask_create``:
@@ -206,8 +205,9 @@ def make_mask(volume, *, threshold="auto", lowpass_sigma=None, extend=None,
         thresh_val = float(threshold)
 
     binary = (filtered > thresh_val) & radial
-    logger.info("Mask threshold: %.4g  (%.1f%% of voxels inside radial mask)",
-                thresh_val, 100.0 * binary.sum() / radial.sum())
+    logger.info(
+        "Mask threshold: %.4g  (%.1f%% of voxels inside radial mask)", thresh_val, 100.0 * binary.sum() / radial.sum()
+    )
 
     # --- 3. Morphological cleanup ---
     if cleanup:
@@ -260,8 +260,7 @@ def make_mask_from_half_maps(halfmap1, halfmap2, smax=3, method="auto", **kwargs
     """
     if method == "local_correlation":
         soft_edge = kwargs.get("soft_edge", 2)
-        return _make_mask_from_half_maps_local_corr(halfmap1, halfmap2, smax=smax,
-                                                     soft_edge=soft_edge)
+        return _make_mask_from_half_maps_local_corr(halfmap1, halfmap2, smax=smax, soft_edge=soft_edge)
 
     avg = (np.asarray(halfmap1) + np.asarray(halfmap2)) / 2.0
     return make_mask(avg, **kwargs)
@@ -349,8 +348,13 @@ def make_union_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1, dilation_i
         per_vol_mask = make_mask_from_gt(vol_3d, smax=smax, iter=iter, from_ft=False)
         union_mask |= per_vol_mask > 0.5
 
-    dilated = binary_dilation(union_mask, iterations=dilation_iters)
-    binary_mask = np.asarray(dilated, dtype=bool)
+    # scipy.ndimage.binary_dilation interprets iterations < 1 as "iterate
+    # until no change" (fills the whole box for a connected mask).  Treat
+    # non-positive values as "skip dilation" instead, matching the moving
+    # mask's behavior and giving callers a way to opt out of dilation.
+    if dilation_iters and dilation_iters > 0:
+        union_mask = binary_dilation(union_mask, iterations=dilation_iters)
+    binary_mask = np.asarray(union_mask, dtype=bool)
     soft_mask = soften_volume_mask(binary_mask, kern_rad=kern_rad)
 
     return np.asarray(soft_mask, dtype=np.float32), binary_mask

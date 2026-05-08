@@ -34,7 +34,6 @@ from recovar.commands import compute_state as compute_state_cmd
 from recovar.commands import pipeline
 from recovar.core import fourier_transform_utils as ftu
 from recovar.heterogeneity import kernel_bandwidth_benchmark as kb
-from recovar.output import metrics
 from recovar.output import output as o
 from recovar.project.job_context import job_context
 from recovar.simulation import oracle_pipeline, simulator, synthetic_dataset
@@ -183,8 +182,20 @@ def _simulate_dataset(args, out: Path, volume_prefix: Path, voxel_size: float) -
     return np.asarray(image_stack, dtype=np.float32), sim_info
 
 
-def _write_gt_masks_and_volumes(out: Path, sim_info: dict, grid_size: int, voxel_size: float) -> dict[str, str]:
-    """Save the simulator's GT reconstruction plus the pipeline masks."""
+def _write_gt_masks_and_volumes(
+    out: Path, sim_info: dict, grid_size: int, voxel_size: float, mask_dilation_iters: int | None = None
+) -> dict[str, str]:
+    """Save the simulator's GT reconstruction plus the pipeline masks.
+
+    ``mask_dilation_iters`` controls how aggressively both the union and
+    moving masks are grown beyond the molecular envelope; if ``None``, the
+    pipeline default ``ceil(6 * grid_size / 128)`` is used. Set to a small
+    number (or 0) for a tight mask; this is useful when the moving region
+    is small (e.g. arm-only trajectories) and the default dilation would
+    swallow the static body.
+    """
+    from recovar.core import mask as core_mask
+
     gt_dir = out / "04_ground_truth"
     mask_dir = out / "05_masks"
     gt_dir.mkdir(parents=True, exist_ok=True)
@@ -198,8 +209,14 @@ def _write_gt_masks_and_volumes(out: Path, sim_info: dict, grid_size: int, voxel
     np.save(gt_dir / "gt_volumes_used_by_simulator.npy", gt_volumes)
     kb.write_volume_prefix(gt_volumes, gt_dir / "gt_vol", voxel_size)
 
-    volume_mask, binary_volume_mask = metrics.make_union_gt_mask_from_hvd(gt, (grid_size, grid_size, grid_size))
-    focus_mask, binary_focus_mask = metrics.make_moving_gt_mask_from_hvd(gt, (grid_size, grid_size, grid_size))
+    volume_shape = (grid_size, grid_size, grid_size)
+    real_vols = [v.reshape(volume_shape) for v in gt_volumes]
+    volume_mask, binary_volume_mask = core_mask.make_union_gt_mask(
+        real_vols, volume_shape, dilation_iters=mask_dilation_iters
+    )
+    focus_mask, binary_focus_mask = core_mask.make_moving_gt_mask(
+        real_vols, volume_shape, dilation_iters=mask_dilation_iters
+    )
     utils.write_mrc(
         mask_dir / "volume_mask_union.mrc", np.asarray(volume_mask, dtype=np.float32), voxel_size=voxel_size
     )
@@ -212,6 +229,7 @@ def _write_gt_masks_and_volumes(out: Path, sim_info: dict, grid_size: int, voxel
             "description": "Masks passed to the pipeline. volume_mask_union is --mask; focus_mask_moving is --focus-mask.",
             "volume_mask_union_fraction": float(np.mean(binary_volume_mask)),
             "focus_mask_moving_fraction": float(np.mean(binary_focus_mask)),
+            "dilation_iters": mask_dilation_iters,
         },
     )
     return {
@@ -357,7 +375,9 @@ def run_walkthrough(args, out: Path) -> dict:
     raw_prefix, raw_volumes = _write_raw_pdb_volumes(args, out, voxel_size)
     active_prefix, _active_volumes, pca_meta = _write_active_volumes(raw_volumes, args, out, voxel_size)
     _image_stack, sim_info = _simulate_dataset(args, out, active_prefix, voxel_size)
-    mask_paths = _write_gt_masks_and_volumes(out, sim_info, args.grid_size, voxel_size)
+    mask_paths = _write_gt_masks_and_volumes(
+        out, sim_info, args.grid_size, voxel_size, mask_dilation_iters=args.mask_dilation_iters
+    )
     if args.use_oracle_pipeline:
         pipeline_dir = _run_oracle_pipeline(args, out, mask_paths, sim_info, voxel_size)
     else:
@@ -460,6 +480,16 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--premultiplied-ctf", action="store_true")
     parser.add_argument("--bfactor", type=float, default=80.0)
     parser.add_argument("--max-rotation-degrees", type=float, default=5.0)
+    parser.add_argument(
+        "--mask-dilation-iters",
+        type=int,
+        default=None,
+        help=(
+            "How many binary-dilation iterations to grow both the union and moving GT masks. "
+            "If unset, the pipeline default ceil(6 * grid_size / 128) is used (3 at grid 64, "
+            "6 at grid 128). Pass 0 or 1 for tighter masks when the moving region is small."
+        ),
+    )
     parser.add_argument(
         "--path",
         choices=sorted(_TRAJECTORY_PATHS.keys()),

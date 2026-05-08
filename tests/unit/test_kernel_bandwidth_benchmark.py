@@ -95,28 +95,36 @@ def test_simulate_dataset_disables_contrast(tmp_path, monkeypatch):
 
 
 def test_write_gt_masks_and_volumes(tmp_path, monkeypatch):
+    from recovar.core import mask as core_mask
+
     class FakeHVD:
         volumes = np.ones((2, 2, 2, 2), dtype=np.float32)
 
-    def fake_union(_gt, shape):
+    seen = {}
+
+    def fake_union(_real_vols, shape, dilation_iters=None, **_kwargs):
+        seen["union_dilation"] = dilation_iters
         return np.ones(shape, dtype=np.float32), np.ones(shape, dtype=bool)
 
-    def fake_moving(_gt, shape):
+    def fake_moving(_real_vols, shape, dilation_iters=None, **_kwargs):
+        seen["moving_dilation"] = dilation_iters
         mask = np.zeros(shape, dtype=np.float32)
         mask[0, 0, 0] = 1.0
         return mask, mask.astype(bool)
 
     monkeypatch.setattr(walkthrough.synthetic_dataset, "load_heterogeneous_reconstruction", lambda _sim_info: FakeHVD())
-    monkeypatch.setattr(walkthrough.metrics, "make_union_gt_mask_from_hvd", fake_union)
-    monkeypatch.setattr(walkthrough.metrics, "make_moving_gt_mask_from_hvd", fake_moving)
+    monkeypatch.setattr(core_mask, "make_union_gt_mask", fake_union)
+    monkeypatch.setattr(core_mask, "make_moving_gt_mask", fake_moving)
 
-    paths = walkthrough._write_gt_masks_and_volumes(tmp_path, {}, grid_size=2, voxel_size=1.0)
+    paths = walkthrough._write_gt_masks_and_volumes(tmp_path, {}, grid_size=2, voxel_size=1.0, mask_dilation_iters=1)
 
     assert Path(paths["volume_mask"]).name == "volume_mask_union.mrc"
     assert Path(paths["focus_mask"]).name == "focus_mask_moving.mrc"
     assert Path(paths["volume_mask"]).exists()
     assert Path(paths["focus_mask"]).exists()
     assert (tmp_path / "04_ground_truth" / "gt_volumes_used_by_simulator.npy").exists()
+    assert seen["union_dilation"] == 1
+    assert seen["moving_dilation"] == 1
 
 
 def test_run_pipeline_disables_contrast_and_uses_masks(tmp_path, monkeypatch):
@@ -183,7 +191,7 @@ def test_run_walkthrough_smoke(monkeypatch, tmp_path):
     def fake_dataset(_args, _out, _prefix, _voxel_size):
         return np.zeros((4, 2, 2, 2), dtype=np.float32), {"image_assignment": np.array([0, 1, 1, 2], dtype=np.int32)}
 
-    def fake_masks(out, _sim_info, _grid_size, _voxel_size):
+    def fake_masks(out, _sim_info, _grid_size, _voxel_size, **_kwargs):
         return {"gt_dir": str(out / "04_ground_truth"), "volume_mask": "mask.mrc", "focus_mask": "focus.mrc"}
 
     def fake_pipeline(_args, out, _mask_paths):
@@ -232,6 +240,7 @@ def test_run_walkthrough_smoke(monkeypatch, tmp_path):
         overwrite=True,
         use_oracle_pipeline=False,
         path="symmetric",
+        mask_dilation_iters=None,
     )
 
     summary = walkthrough.run_walkthrough(args, tmp_path)
@@ -258,7 +267,7 @@ def test_use_oracle_pipeline_flag_dispatches_to_oracle(monkeypatch, tmp_path):
     def fake_dataset(_args, _out, _prefix, _voxel_size):
         return np.zeros((4, 2, 2, 2), dtype=np.float32), {"image_assignment": np.array([0, 1, 1, 2], dtype=np.int32)}
 
-    def fake_masks(out, _sim_info, _grid_size, _voxel_size):
+    def fake_masks(out, _sim_info, _grid_size, _voxel_size, **_kwargs):
         return {"gt_dir": str(out / "04_ground_truth"), "volume_mask": "mask.mrc", "focus_mask": "focus.mrc"}
 
     def fake_run_pipeline(*_args, **_kwargs):
@@ -313,6 +322,7 @@ def test_use_oracle_pipeline_flag_dispatches_to_oracle(monkeypatch, tmp_path):
         overwrite=True,
         use_oracle_pipeline=True,
         path="arm_only",
+        mask_dilation_iters=1,
     )
 
     summary = walkthrough.run_walkthrough(args, tmp_path)
