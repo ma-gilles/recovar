@@ -39,6 +39,13 @@ def test_add_args_defaults_are_student_friendly():
     assert args.compute_state_n_min_particles == 100
     assert args.low_memory_option is False
     assert args.very_low_memory_option is False
+    assert args.path == "symmetric"
+
+
+def test_add_args_path_choices_include_arm_only():
+    parser = walkthrough.add_args(argparse.ArgumentParser())
+    args = parser.parse_args(["--output-dir", "/tmp/out", "--path", "arm_only"])
+    assert args.path == "arm_only"
 
 
 def test_write_active_volumes_saves_projection_metadata(tmp_path):
@@ -224,6 +231,7 @@ def test_run_walkthrough_smoke(monkeypatch, tmp_path):
         pdb_path=None,
         overwrite=True,
         use_oracle_pipeline=False,
+        path="symmetric",
     )
 
     summary = walkthrough.run_walkthrough(args, tmp_path)
@@ -304,11 +312,13 @@ def test_use_oracle_pipeline_flag_dispatches_to_oracle(monkeypatch, tmp_path):
         pdb_path=None,
         overwrite=True,
         use_oracle_pipeline=True,
+        path="arm_only",
     )
 
     summary = walkthrough.run_walkthrough(args, tmp_path)
 
     assert calls["dispatched"] == "oracle_pipeline"
+    assert summary["path"] == "arm_only"
     assert summary["use_oracle_pipeline"] is True
     assert "image_assignment" in calls["sim_info_keys"]
     assert calls["mask_paths"]["volume_mask"] == "mask.mrc"
