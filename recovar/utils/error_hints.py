@@ -237,6 +237,25 @@ def _hint_gpu_oom(ctx: DiagnosticContext) -> ErrorHint:
         )
         suggestions.insert(0, "unset RECOVAR_DISABLE_CUDA && recovar build_custom_cuda")
 
+    # If the user asked for --gpu-gb but the bootstrap couldn't apply
+    # the cap (e.g. containerized env without nvidia-smi), say so
+    # explicitly. Otherwise the user wonders why their budget didn't
+    # prevent the OOM.
+    plan = ctx.last_memory_plan if isinstance(ctx.last_memory_plan, dict) else {}
+    budget = plan.get("budget", {})
+    if budget.get("requested_gb") is not None and budget.get("hard_cap_applied") is False:
+        reason = budget.get("hard_cap_skip_reason") or "unknown"
+        cause += (
+            f" IMPORTANT: --gpu-gb was supplied but the JAX cap was NOT applied "
+            f"(reason: {reason}). RECOVAR's batch sizes were planned for the "
+            f"requested budget, but JAX itself was free to allocate up to its "
+            f"default fraction of physical VRAM."
+        )
+        suggestions.insert(
+            0,
+            "install pynvml OR ensure nvidia-smi is on PATH so the cap can be applied",
+        )
+
     if _conflicting_process_present(
         ctx,
         requested_gb=(ctx.last_memory_plan or {}).get("budget", {}).get("requested_gb")

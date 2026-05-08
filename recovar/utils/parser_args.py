@@ -1,5 +1,25 @@
 import argparse
+import math
 import os
+
+
+def positive_finite_gb(raw: str) -> float:
+    """argparse ``type`` for ``--gpu-gb``: reject NaN / inf / non-positive.
+
+    Shared with the pre-import scanner in ``recovar.command_line`` so a
+    malformed budget fails the same way before AND after jax has been
+    imported. Without this, ``float("NaN")`` and ``float("0")`` slip
+    through, produce nonsensical XLA env values, and burn a Slurm hour.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"--gpu-gb={raw!r} is not a number")
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError(f"--gpu-gb={raw!r} is not finite (NaN or inf)")
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"--gpu-gb={raw!r} must be > 0")
+    return value
 
 
 def add_project_arg(parser: argparse.ArgumentParser):
@@ -39,12 +59,12 @@ def add_gpu_memory_arg(parser: argparse.ArgumentParser):
     """
     parser.add_argument(
         "--gpu-gb",
-        type=float,
+        type=positive_finite_gb,
         default=None,
         dest="gpu_memory",
         help=(
-            "GPU memory budget in GB. Caps JAX allocation AND the "
-            "auto-batch-size formula. Default: full physical VRAM via "
+            "GPU memory budget in GB (positive finite). Caps JAX allocation "
+            "AND the auto-batch-size formula. Default: full physical VRAM via "
             "JAX. Lower this on a constrained or shared GPU."
         ),
     )

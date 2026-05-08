@@ -222,11 +222,26 @@ def main():
 
         logger.error("Failed: %s (exit %d)", description, result.returncode)
         failed_functions.append(function_name)
-        try:
-            from recovar.utils import error_hints
+        # If the inner ``recovar`` subprocess already printed a formatted
+        # hint (which it does via ``command_line._run_with_error_hints``),
+        # don't print a second one — the wrapper would just push the
+        # actionable advice further from the tail of the Slurm log.
+        # Detect by looking for the ``═``*N delimiter that
+        # ``error_hints.format_error_hint`` emits.
+        from recovar.utils import error_hints
 
+        captured_stderr = result.stderr or ""
+        already_printed = error_hints._DELIMITER in captured_stderr
+        if already_printed:
+            logger.debug(
+                "Skipping wrapper-level error hint for %s; the inner subprocess already printed one.",
+                function_name,
+            )
+            return False
+
+        try:
             ctx = error_hints.collect_context()
-            hint = error_hints.classify_subprocess_failure(result.stderr or "", result.stdout or "", ctx)
+            hint = error_hints.classify_subprocess_failure(captured_stderr, result.stdout or "", ctx)
             if hint is not None:
                 sys.stderr.write("\n")
                 sys.stderr.write(error_hints.format_error_hint(hint))

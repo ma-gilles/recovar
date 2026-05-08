@@ -79,6 +79,35 @@ def test_pipeline_parser_accepts_canonical_flags():
     assert args_adaptive.adaptive_memory is True
 
 
+def test_positive_finite_gb_validator_rejects_bogus_values():
+    """The shared argparse type rejects NaN / inf / 0 / negative."""
+
+    from recovar.utils.parser_args import positive_finite_gb
+
+    # Valid.
+    assert positive_finite_gb("12.5") == 12.5
+    assert positive_finite_gb("1") == 1.0
+
+    # Invalid.
+    import argparse
+
+    for bad in ("NaN", "inf", "-inf", "-1", "0", "abc", ""):
+        with pytest.raises(argparse.ArgumentTypeError):
+            positive_finite_gb(bad)
+
+
+def test_pipeline_parser_rejects_bogus_gpu_gb():
+    """argparse must reject bogus --gpu-gb values via the shared validator."""
+    from recovar.commands import pipeline as pipe
+
+    parser = argparse.ArgumentParser()
+    pipe.add_args(parser)
+    base = ["pp.mrcs", "-o", "/tmp", "--mask", "sphere"]
+    for bad in ("NaN", "inf", "-1", "0"):
+        with pytest.raises(SystemExit):
+            parser.parse_args(base + ["--gpu-gb", bad])
+
+
 def test_pipeline_parser_rejects_removed_aliases():
     """argparse must reject the removed legacy names with SystemExit."""
     from recovar.commands import pipeline as pipe

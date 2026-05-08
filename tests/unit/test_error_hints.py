@@ -141,3 +141,52 @@ def test_classify_subprocess_failure_uses_combined_text():
     hint = error_hints.classify_subprocess_failure(stderr, stdout, error_hints.DiagnosticContext())
     assert hint is not None
     assert hint.category == "gpu_oom"
+
+
+def test_oom_hint_surfaces_cap_not_applied():
+    """When the user passed --gpu-gb but the bootstrap couldn't apply
+    the cap (no nvidia-smi), the OOM hint must say so explicitly.
+    Without this, the user sees `--gpu-gb 24` and an OOM that exceeded
+    24 GB and assumes the cap is broken when in fact the cap was
+    silently skipped."""
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        backend="custom_cuda",
+        custom_cuda_disabled=False,
+        last_memory_plan={
+            "budget": {
+                "requested_gb": 24.0,
+                "effective_budget_gb": 24.0,
+                "hard_cap_applied": False,
+                "hard_cap_skip_reason": "no_nvml_or_nvidia_smi",
+            }
+        },
+    )
+    hint = error_hints.classify_text("RESOURCE_EXHAUSTED: out of memory", ctx)
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+    blob = hint.likely_cause + " ".join(hint.suggestions)
+    assert "cap was NOT applied" in hint.likely_cause or "NOT applied" in hint.likely_cause
+    assert "no_nvml_or_nvidia_smi" in hint.likely_cause
+    assert any("nvidia-smi" in s or "pynvml" in s for s in hint.suggestions)
+
+
+def test_oom_hint_does_not_mention_cap_skip_when_applied():
+    """If the cap fired, the OOM hint should NOT mention skip reasons."""
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        backend="custom_cuda",
+        last_memory_plan={
+            "budget": {
+                "requested_gb": 24.0,
+                "hard_cap_applied": True,
+                "hard_cap_skip_reason": None,
+            }
+        },
+    )
+    hint = error_hints.classify_text("RESOURCE_EXHAUSTED", ctx)
+    assert hint is not None
+    assert "NOT applied" not in hint.likely_cause
+    assert not any("nvidia-smi" in s for s in hint.suggestions)

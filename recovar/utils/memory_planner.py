@@ -83,6 +83,13 @@ class GpuMemoryBudget:
     backend: Backend
     custom_cuda_disabled: bool
     source: str  # which input drove the effective budget
+    # Did the bootstrap actually set XLA_PYTHON_CLIENT_MEM_FRACTION?
+    # ``None`` means --gpu-gb wasn't passed; ``True`` means the cap fired;
+    # the string value is the reason it didn't (e.g.
+    # "no_nvml_or_nvidia_smi", "jax_already_imported"). Reviewers
+    # caught the silent-degradation case in containerized environments.
+    hard_cap_applied: bool | None = None
+    hard_cap_skip_reason: str | None = None
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -206,6 +213,35 @@ def _round_up_to_calibrated(
     return largest, "extrapolated"
 
 
+def _adaptive_n_pcs_formula_fallback(*, grid_size: int, effective_budget_gb: float, desired_n_pcs: int) -> int:
+    """Heuristic n_pcs choice when no calibration cells are available.
+
+    Mirrors the formula in
+    ``covariance_estimation.get_default_covariance_computation_options``
+    so the planner's choice is consistent with what
+    ``adaptive_n_pcs=True`` would produce there. Walks ``n_pcs`` down
+    from ``desired_n_pcs`` until predicted memory fits 70% of the
+    budget; floors at 50.
+
+    Without this fallback ``run_test_dataset --adaptive-n-pcs`` is a
+    no-op when the calibration JSON is absent — exactly the regression
+    the smoke test exists to catch.
+    """
+    if grid_size < 1 or effective_budget_gb <= 0:
+        return desired_n_pcs
+
+    volume_size = grid_size**3
+    dtype_size = 8  # complex64
+    available = effective_budget_gb * 0.7
+    base_coef = 75.0 / (200.0**4)  # base scales as n_pcs**4
+    basis_coef = volume_size * dtype_size / 1e9  # basis scales linearly
+
+    for n_pcs in range(desired_n_pcs, 0, -1):
+        if base_coef * (n_pcs**4) + basis_coef * n_pcs <= available:
+            return n_pcs
+    return min(desired_n_pcs, 50)
+
+
 def _select_adaptive_n_pcs(
     cells: list[CalibrationCell],
     *,
@@ -216,8 +252,17 @@ def _select_adaptive_n_pcs(
 ) -> tuple[int, str]:
     """Pick the largest calibrated n_pcs that fits ``effective_budget``.
 
-    Returns ``(n_pcs, status)`` where status is "exact"/"rounded_up"/etc.
-    Falls back to the smallest calibrated value if even that overruns.
+    When the calibration table is empty / does not cover this backend,
+    falls back to ``_adaptive_n_pcs_formula_fallback`` so the flag is
+    not a no-op.
+
+    Returns ``(n_pcs, status)`` where status is one of:
+      "exact"                 — exact grid+n_pcs match in the table
+      "rounded_up"            — calibrated cell with larger grid
+      "floor_used"            — even the smallest calibrated n_pcs would OOM
+      "uncalibrated_formula"  — no calibration; used the formula fallback
+      "uncalibrated_passthrough" — no calibration; budget large enough that
+                                   the formula returned ``desired_n_pcs``
     """
     matching = [
         c
@@ -225,7 +270,14 @@ def _select_adaptive_n_pcs(
         if c.backend == backend and c.status == "ok" and c.grid_size >= grid_size  # round up grid axis
     ]
     if not matching:
-        return desired_n_pcs, "uncalibrated"
+        n_pcs = _adaptive_n_pcs_formula_fallback(
+            grid_size=grid_size,
+            effective_budget_gb=effective_budget_gb,
+            desired_n_pcs=desired_n_pcs,
+        )
+        if n_pcs < desired_n_pcs:
+            return n_pcs, "uncalibrated_formula"
+        return desired_n_pcs, "uncalibrated_passthrough"
 
     # Pick the smallest grid_size that's >= user's grid_size (round up)
     grids = sorted({c.grid_size for c in matching})
@@ -330,6 +382,21 @@ def _assemble_budget(
     else:
         source, effective = min(candidates, key=lambda kv: kv[1])
 
+    # Did the bootstrap manage to apply XLA_PYTHON_CLIENT_MEM_FRACTION?
+    # ``RECOVAR_GPU_CAP_NOT_APPLIED`` is set in ``command_line.py`` when
+    # the user passed ``--gpu-gb`` but NVML / nvidia-smi were missing
+    # (typical of containerized environments) or jax was already imported.
+    cap_skip = os.environ.get("RECOVAR_GPU_CAP_NOT_APPLIED")
+    if requested_gpu_gb is None:
+        hard_cap_applied: bool | None = None
+        hard_cap_skip_reason = None
+    elif cap_skip:
+        hard_cap_applied = False
+        hard_cap_skip_reason = cap_skip
+    else:
+        hard_cap_applied = True
+        hard_cap_skip_reason = None
+
     return GpuMemoryBudget(
         requested_gb=requested_gpu_gb,
         physical_total_gb=physical_total,
@@ -339,6 +406,8 @@ def _assemble_budget(
         backend=backend,
         custom_cuda_disabled=custom_cuda_disabled,
         source=source,
+        hard_cap_applied=hard_cap_applied,
+        hard_cap_skip_reason=hard_cap_skip_reason,
         warnings=list(cuda_warnings),
     )
 
@@ -423,6 +492,18 @@ def make_memory_plan(
         if cell is not None:
             predicted_peak = cell.peak_gb_total
             predicted_by_phase = dict(cell.peak_gb_by_phase)
+    elif adaptive_n_pcs:
+        # No calibration table at all → still honor --adaptive-n-pcs
+        # via the formula fallback. Without this branch the flag is a
+        # no-op and ``run_test_dataset`` on a small GPU still launches
+        # 200 PCs (review-feedback bug).
+        chosen_n_pcs, cal_status = _select_adaptive_n_pcs(
+            [],
+            grid_size=grid_size,
+            backend=budget.backend,
+            desired_n_pcs=desired_n_pcs,
+            effective_budget_gb=budget.effective_budget_gb,
+        )
 
     # Pre-launch warning if we predict an OOM. We never refuse.
     if predicted_peak is not None and predicted_peak * PEAK_PREDICTION_SLACK > budget.effective_budget_gb:

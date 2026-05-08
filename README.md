@@ -154,7 +154,7 @@ recovar pipeline ... --gpu-gb 40 --memory-diagnostics
 
 The planner never refuses to launch. If it predicts the run will exceed the budget (based on a calibrated peak-memory table), it logs a loud WARNING and launches anyway. If the run actually OOMs, the error message is followed by an actionable hint suggesting `--gpu-gb`, `--adaptive-n-pcs`, `--low-memory-option`, etc. — the hint is the **last** thing on stderr so it doesn't get lost above the JAX traceback.
 
-The peak-memory table at `recovar/utils/memory_calibration_data.json` is committed to the repo and was produced by `scripts/submit_calibrate_memory_planner.sh` on H100 hardware. Re-run that script if you want to regenerate or extend it.
+The peak-memory table at `recovar/utils/memory_calibration_data.json` is **optional** — when present, the planner uses it to predict per-phase peaks (so the warning above is more accurate) and to drive `--adaptive-n-pcs`. When **absent**, `--adaptive-n-pcs` falls back to the same heuristic in `covariance_estimation.get_default_covariance_computation_options` that walks `n_pcs` down from 200 until predicted memory fits 70 % of the budget. To populate the table on your hardware, run `scripts/submit_calibrate_memory_planner.sh` (Slurm) and then `pixi run python scripts/aggregate_memory_calibration.py`.
 
 `run_test_dataset` always splices `--adaptive-n-pcs` into its inner pipeline calls so the install-sanity test always finishes. Pass `--full-memory-test` if you specifically want the default 200-PC configuration.
 

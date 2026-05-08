@@ -180,7 +180,40 @@ def test_effective_budget_skips_physical_reserve_when_no_user_request(monkeypatc
     assert plan.budget.source == "jax_limit_gb"
 
 
-def test_uncalibrated_falls_back_gracefully(monkeypatch):
+def test_uncalibrated_with_adaptive_uses_formula_fallback(monkeypatch):
+    """No calibration table + tight budget + --adaptive-n-pcs:
+    planner now uses the covariance memory-estimate formula instead
+    of returning a no-op. (Originally just returned desired_n_pcs;
+    review caught that ``run_test_dataset --adaptive-n-pcs`` was a
+    no-op when the calibration JSON wasn't committed.)"""
+    _stub_helpers(monkeypatch, gpu_total=40.0)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)
+    _stub_backend_custom(monkeypatch)
+
+    from recovar.utils import memory_planner as mp
+
+    monkeypatch.setattr(mp, "load_calibration_table", lambda: None)
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=128,
+        n_images=1000,
+        requested_gpu_gb=40.0,
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=True,
+    )
+    # Status now reflects the formula path (40 GB at grid=128 won't fit
+    # 200 PCs, peak ≈ 75 GB).
+    assert plan.calibration_status == "uncalibrated_formula"
+    assert plan.n_pcs_to_compute < 200
+    assert plan.n_pcs_to_compute >= 1
+    # Without a calibration table, no peak prediction.
+    assert plan.predicted_peak_gb_total is None
+
+
+def test_uncalibrated_without_adaptive_keeps_desired_n_pcs(monkeypatch):
+    """No calibration table AND no --adaptive-n-pcs: keep desired_n_pcs.
+    The formula fallback only kicks in when the user opted into adaptive."""
     _stub_helpers(monkeypatch)
     _stub_preflight(monkeypatch, total=80.0, free=78.0)
     _stub_backend_custom(monkeypatch)
@@ -195,10 +228,10 @@ def test_uncalibrated_falls_back_gracefully(monkeypatch):
         requested_gpu_gb=40.0,
         low_memory=False,
         very_low_memory=False,
-        adaptive_n_pcs=True,  # adaptive is requested but no table
+        adaptive_n_pcs=False,
     )
     assert plan.calibration_status == "uncalibrated"
-    assert plan.n_pcs_to_compute == 200  # falls back to desired
+    assert plan.n_pcs_to_compute == 200
     assert plan.predicted_peak_gb_total is None
 
 
@@ -405,3 +438,126 @@ def test_debug_force_peak_gb_overrides_observed(monkeypatch, tmp_path):
     rows = [json.loads(line) for line in (tmp_path / "memory_trace.jsonl").read_text().splitlines()]
     assert rows[0]["jax_peak_gb"] == 999.0
     assert rows[0]["jax_peak_gb_forced"] is True
+
+
+# ---------------------------------------------------------------------------
+# Review-feedback: uncalibrated --adaptive-n-pcs must NOT be a no-op.
+# Without this fallback, ``run_test_dataset --adaptive-n-pcs`` on a
+# small GPU still tries 200 PCs and OOMs — the exact scenario the
+# wrapper exists to prevent.
+# ---------------------------------------------------------------------------
+
+
+def test_adaptive_fallback_picks_smaller_n_pcs_when_uncalibrated(monkeypatch):
+    """No calibration table + tight budget → planner uses formula fallback."""
+    _stub_helpers(monkeypatch, gpu_total=40.0)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)
+    _stub_backend_custom(monkeypatch)
+
+    from recovar.utils import memory_planner as mp
+
+    monkeypatch.setattr(mp, "load_calibration_table", lambda: None)
+
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=128,
+        n_images=1000,
+        requested_gpu_gb=8.0,  # tight: 200 PCs predicts ~75 GB, won't fit
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=True,
+    )
+    # Status reflects the formula path, not "uncalibrated_passthrough".
+    assert plan.calibration_status == "uncalibrated_formula"
+    # And it actually shrunk n_pcs.
+    assert plan.n_pcs_to_compute < 200
+    assert plan.n_pcs_to_compute >= 1
+
+
+def test_adaptive_fallback_passthrough_when_budget_huge(monkeypatch):
+    """No table + huge budget → keep desired_n_pcs."""
+    _stub_helpers(monkeypatch, gpu_total=240.0)
+    _stub_preflight(monkeypatch, total=240.0, free=240.0)
+    _stub_backend_custom(monkeypatch)
+
+    from recovar.utils import memory_planner as mp
+
+    monkeypatch.setattr(mp, "load_calibration_table", lambda: None)
+
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=64,
+        n_images=1000,
+        requested_gpu_gb=200.0,
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=True,
+    )
+    assert plan.calibration_status == "uncalibrated_passthrough"
+    assert plan.n_pcs_to_compute == 200
+
+
+def test_hard_cap_applied_field_when_user_asked_and_cap_fired(monkeypatch):
+    _stub_helpers(monkeypatch)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)
+    _stub_backend_custom(monkeypatch)
+    monkeypatch.delenv("RECOVAR_GPU_CAP_NOT_APPLIED", raising=False)
+
+    from recovar.utils import memory_planner as mp
+
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=128,
+        n_images=1000,
+        requested_gpu_gb=40.0,
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=False,
+    )
+    assert plan.budget.hard_cap_applied is True
+    assert plan.budget.hard_cap_skip_reason is None
+
+
+def test_hard_cap_not_applied_propagates_skip_reason(monkeypatch):
+    """Bootstrap couldn't apply the cap (containerized env, no nvidia-smi)
+    → ``GpuMemoryBudget.hard_cap_applied=False`` with a reason string."""
+    _stub_helpers(monkeypatch)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)
+    _stub_backend_custom(monkeypatch)
+    monkeypatch.setenv("RECOVAR_GPU_CAP_NOT_APPLIED", "no_nvml_or_nvidia_smi")
+
+    from recovar.utils import memory_planner as mp
+
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=128,
+        n_images=1000,
+        requested_gpu_gb=40.0,
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=False,
+    )
+    assert plan.budget.hard_cap_applied is False
+    assert plan.budget.hard_cap_skip_reason == "no_nvml_or_nvidia_smi"
+
+
+def test_hard_cap_field_none_when_user_did_not_ask(monkeypatch):
+    """No --gpu-gb supplied → hard_cap_applied is None (not True/False)."""
+    _stub_helpers(monkeypatch)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)
+    _stub_backend_custom(monkeypatch)
+    monkeypatch.delenv("RECOVAR_GPU_CAP_NOT_APPLIED", raising=False)
+
+    from recovar.utils import memory_planner as mp
+
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=128,
+        n_images=1000,
+        requested_gpu_gb=None,
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=False,
+    )
+    assert plan.budget.hard_cap_applied is None
+    assert plan.budget.hard_cap_skip_reason is None

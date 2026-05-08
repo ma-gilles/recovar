@@ -89,6 +89,22 @@ def _apply_gpu_memory_cap(argv: list[str]) -> None:
     if raw is None:
         return
 
+    # Validate using the same rules as the argparse type so a malformed
+    # ``--gpu-gb=NaN`` fails at the bootstrap layer too. The argparse
+    # layer in the subcommand will then surface the same error to the
+    # user once dispatch resumes.
+    from recovar.utils.parser_args import positive_finite_gb
+
+    try:
+        gpu_gb = positive_finite_gb(raw)
+    except Exception as exc:
+        logger.warning(
+            "Bootstrap could not validate --gpu-gb=%r (%s); deferring to argparse.",
+            raw,
+            exc,
+        )
+        return
+
     if "jax" in sys.modules:
         logger.warning(
             "GPU memory cap could not be applied because jax was already "
@@ -96,32 +112,34 @@ def _apply_gpu_memory_cap(argv: list[str]) -> None:
             "--gpu-gb as a soft planning budget for batch sizes, but JAX's "
             "memory allocation is no longer constrained."
         )
-        return
-
-    try:
-        gpu_gb = float(raw)
-    except ValueError:
-        logger.warning("Could not parse --gpu-gb=%r as float; skipping memory cap.", raw)
+        os.environ["RECOVAR_GPU_CAP_NOT_APPLIED"] = "jax_already_imported"
         return
 
     physical_total: float | None = None
+    n_visible_devices: int | None = None
     try:
         from recovar.utils.gpu_preflight import get_physical_gpu_memory_info
 
         info = get_physical_gpu_memory_info(0)
         if info is not None:
             physical_total = info.total_gb
+        # Best-effort visible-device count for the multi-GPU log line.
+        cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if cvd:
+            n_visible_devices = len([t for t in cvd.split(",") if t.strip()])
     except Exception as exc:
         logger.debug("Pre-jax physical-memory probe failed: %s", exc)
 
     if physical_total is None or physical_total <= 0:
         logger.warning(
             "--gpu-gb=%.1f was supplied but the physical GPU total could "
-            "not be determined (no pynvml/nvidia-smi). Falling back to a "
-            "soft planning budget; JAX may still allocate up to its "
-            "default fraction of physical VRAM.",
+            "not be determined (no pynvml/nvidia-smi). JAX's allocation "
+            "is NOT capped; --gpu-gb will only affect RECOVAR's batch-size "
+            "formulas. Set RECOVAR_CUDA_VISIBLE_GPU_GB=<total_gb> to "
+            "specify a value manually for the cap.",
             gpu_gb,
         )
+        os.environ["RECOVAR_GPU_CAP_NOT_APPLIED"] = "no_nvml_or_nvidia_smi"
         return
 
     if gpu_gb > physical_total:
@@ -134,13 +152,38 @@ def _apply_gpu_memory_cap(argv: list[str]) -> None:
     fraction = gpu_gb / physical_total
     fraction = max(0.05, min(0.95, fraction))
 
+    existing = os.environ.get("XLA_PYTHON_CLIENT_MEM_FRACTION")
+    if existing is not None:
+        logger.warning(
+            "XLA_PYTHON_CLIENT_MEM_FRACTION=%s is set in the environment; "
+            "overriding with the value derived from --gpu-gb=%.1f -> %.4f. "
+            "If you want your shell value to win, omit --gpu-gb.",
+            existing,
+            gpu_gb,
+            fraction,
+        )
+
     os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = f"{fraction:.4f}"
-    logger.info(
-        "GPU memory cap applied: XLA_PYTHON_CLIENT_MEM_FRACTION=%.4f (--gpu-gb=%.1f, physical_total=%.1f GB)",
-        fraction,
-        gpu_gb,
-        physical_total,
-    )
+    os.environ.pop("RECOVAR_GPU_CAP_NOT_APPLIED", None)
+
+    if n_visible_devices and n_visible_devices > 1:
+        logger.info(
+            "GPU memory cap applied: XLA_PYTHON_CLIENT_MEM_FRACTION=%.4f "
+            "(--gpu-gb=%.1f, physical_total=%.1f GB on GPU 0; "
+            "%d visible devices — semantics: per visible device, no "
+            "cross-device rebalancing).",
+            fraction,
+            gpu_gb,
+            physical_total,
+            n_visible_devices,
+        )
+    else:
+        logger.info(
+            "GPU memory cap applied: XLA_PYTHON_CLIENT_MEM_FRACTION=%.4f (--gpu-gb=%.1f, physical_total=%.1f GB)",
+            fraction,
+            gpu_gb,
+            physical_total,
+        )
 
 
 # ---------------------------------------------------------------------------

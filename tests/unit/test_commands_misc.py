@@ -810,3 +810,59 @@ def test_run_test_dataset_all_tests_quotes_reconstruct_paths_with_spaces(monkeyp
     target = str(outdir / "test_dataset" / "target.txt")
     assert any(f"--embedding {embedding} " in c for c in reconstruct_cmds)
     assert any(f"--target {target} " in c for c in reconstruct_cmds)
+
+
+def test_run_test_dataset_skips_wrapper_hint_when_inner_already_printed(monkeypatch, tmp_path, capsys):
+    """The inner ``recovar`` subprocess already prints a hint via
+    ``command_line._run_with_error_hints``. The wrapper detects the
+    delimiter in captured stderr and does NOT print a second hint —
+    otherwise the actionable advice gets buried earlier in the Slurm log.
+    """
+    from recovar.utils import error_hints
+
+    inner_hint = error_hints.format_error_hint(
+        error_hints.classify_text(
+            "RESOURCE_EXHAUSTED: out of memory",
+            error_hints.DiagnosticContext(),
+        )
+    )
+    assert inner_hint.count("TO RECOVER") == 1
+
+    n_calls = {"count": 0}
+
+    def fake_run(command, **_kwargs):
+        n_calls["count"] += 1
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr=f"some traceback...\n{inner_hint}",
+        )
+
+    monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_test_dataset.jax,
+        "devices",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no GPU check with --cpu")),
+    )
+    monkeypatch.setattr(run_test_dataset.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(run_test_dataset.shutil, "rmtree", lambda _p: None)
+    monkeypatch.setattr(
+        run_test_dataset.sys,
+        "argv",
+        ["run_test_dataset", "--output-dir", str(tmp_path), "--cpu"],
+    )
+
+    with pytest.raises(SystemExit):
+        run_test_dataset.main()
+
+    captured = capsys.readouterr()
+    # Each failed subprocess echoes its inner hint to stderr exactly once.
+    # The wrapper must NOT add a second "TO RECOVER" block per call —
+    # otherwise the actionable advice gets buried in the middle of the
+    # log instead of staying at the tail.
+    n = n_calls["count"]
+    assert n > 0, "fake_run was never called — test is broken"
+    assert captured.err.count("TO RECOVER") == n, (
+        f"expected {n} 'TO RECOVER' (one per failed subprocess), got "
+        f"{captured.err.count('TO RECOVER')} — wrapper duplicated the hint."
+    )
