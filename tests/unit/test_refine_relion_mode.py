@@ -71,12 +71,13 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _align_fourier_volume_sign_to_reference,
     _combined_class_direction_prior_from_halves,
     _combined_noise_stats,
+    _estimate_relion_em_batch_sizes,
     _normalize_noise_variance_per_half,
     _replay_control_model_iteration,
     _rotation_eulers_for_canonical_or_custom_grid,
     refine_single_volume,
 )
-from recovar.em.dense_single_volume.helpers.convergence import RefinementState
+from recovar.em.dense_single_volume.helpers.convergence import RefinementState, refine_angular_sampling
 from recovar.em.dense_single_volume.helpers.local_search import (
     _local_search_engine_rotation_block_size,
 )
@@ -302,6 +303,148 @@ def test_local_search_engine_rotation_block_size_caps_dense_tiles():
     assert _local_search_engine_rotation_block_size(64) == 64
     assert _local_search_engine_rotation_block_size(1024) == 1024
     assert _local_search_engine_rotation_block_size(5000) == 1024
+
+
+def test_relion_em_batch_sizing_preserves_small_safe_requests():
+    plan = _estimate_relion_em_batch_sizes(
+        requested_image_batch_size=4,
+        requested_rotation_block_size=8,
+        n_rot=8,
+        n_trans=5,
+        image_shape=IMAGE_SHAPE,
+        volume_shape=VOLUME_SHAPE,
+        padding_factor=2,
+        n_classes=1,
+        gpu_memory_gb=80.0,
+    )
+
+    assert plan.image_batch_size == 4
+    assert plan.rotation_block_size == 8
+
+
+def test_relion_em_batch_sizing_clamps_highres_projection_tiles():
+    plan = _estimate_relion_em_batch_sizes(
+        requested_image_batch_size=250,
+        requested_rotation_block_size=20000,
+        n_rot=294912,
+        n_trans=137,
+        image_shape=(384, 384),
+        volume_shape=(384, 384, 384),
+        padding_factor=2,
+        n_classes=1,
+        gpu_memory_gb=80.0,
+    )
+
+    assert 1 <= plan.image_batch_size <= 250
+    assert 64 <= plan.rotation_block_size < 20000
+    assert plan.projection_block_gb <= plan.projection_budget_gb
+    assert plan.translation_tile_gb <= plan.translation_tile_budget_gb
+
+
+def test_relion_em_batch_sizing_does_not_pad_beyond_actual_rotation_grid():
+    plan = _estimate_relion_em_batch_sizes(
+        requested_image_batch_size=250,
+        requested_rotation_block_size=20000,
+        n_rot=4608,
+        n_trans=29,
+        image_shape=(384, 384),
+        volume_shape=(384, 384, 384),
+        padding_factor=2,
+        n_classes=1,
+        gpu_memory_gb=80.0,
+    )
+
+    assert plan.image_batch_size == 250
+    assert plan.rotation_block_size == 4608
+    assert plan.projection_block_gb <= plan.projection_budget_gb
+
+
+def test_relion_em_batch_sizing_uses_runtime_gpu_occupancy(monkeypatch):
+    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 80.0)
+    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 60.0)
+
+    plan = _estimate_relion_em_batch_sizes(
+        requested_image_batch_size=250,
+        requested_rotation_block_size=20000,
+        n_rot=4608,
+        n_trans=29,
+        image_shape=(384, 384),
+        volume_shape=(384, 384, 384),
+        padding_factor=2,
+        n_classes=1,
+        gpu_memory_gb=None,
+    )
+
+    assert plan.gpu_used_estimate_gb == pytest.approx(60.0)
+    assert plan.rotation_block_size < 4608
+    assert plan.projection_block_gb <= plan.projection_budget_gb
+
+
+def test_relion_em_batch_sizing_caps_runtime_highres_local_translation_tile(monkeypatch):
+    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 80.0)
+    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 24.0)
+
+    plan = _estimate_relion_em_batch_sizes(
+        requested_image_batch_size=250,
+        requested_rotation_block_size=4608,
+        n_rot=4608,
+        n_trans=116,
+        image_shape=(384, 384),
+        volume_shape=(384, 384, 384),
+        padding_factor=2,
+        n_classes=1,
+        gpu_memory_gb=None,
+    )
+
+    assert plan.image_batch_size <= 56
+    assert plan.translation_tile_gb <= plan.translation_tile_budget_gb
+    assert plan.gpu_used_estimate_gb == pytest.approx(24.0)
+
+
+def test_relion_em_batch_sizing_clamps_highres_translation_tiles():
+    plan = _estimate_relion_em_batch_sizes(
+        requested_image_batch_size=250,
+        requested_rotation_block_size=1024,
+        n_rot=1024,
+        n_trans=137,
+        image_shape=(384, 384),
+        volume_shape=(384, 384, 384),
+        padding_factor=2,
+        n_classes=1,
+        gpu_memory_gb=80.0,
+    )
+
+    assert 1 <= plan.image_batch_size < 250
+    assert plan.rotation_block_size == 1024
+    assert plan.translation_tile_gb <= plan.translation_tile_budget_gb
+
+
+def test_relion_em_batch_sizing_accounts_for_k_classes():
+    single = _estimate_relion_em_batch_sizes(
+        requested_image_batch_size=250,
+        requested_rotation_block_size=20000,
+        n_rot=294912,
+        n_trans=137,
+        image_shape=(384, 384),
+        volume_shape=(384, 384, 384),
+        padding_factor=2,
+        n_classes=1,
+        gpu_memory_gb=80.0,
+    )
+    k4 = _estimate_relion_em_batch_sizes(
+        requested_image_batch_size=250,
+        requested_rotation_block_size=20000,
+        n_rot=294912,
+        n_trans=137,
+        image_shape=(384, 384),
+        volume_shape=(384, 384, 384),
+        padding_factor=2,
+        n_classes=4,
+        gpu_memory_gb=80.0,
+    )
+
+    assert k4.image_batch_size <= single.image_batch_size
+    assert k4.rotation_block_size <= single.rotation_block_size
 
 
 def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_support(monkeypatch):
@@ -810,6 +953,80 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
     assert len(outputs) == 5
 
 
+def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
+    class HighresDataset:
+        image_shape = (384, 384)
+        image_size = 384 * 384
+        volume_shape = (384, 384, 384)
+        volume_size = 1
+        n_images = 2
+        n_units = 2
+        voxel_size = 1.0
+        dtype = jnp.complex64
+
+    translation_grid = np.zeros((137, 2), dtype=np.float32)
+    layout = LocalHypothesisLayout(
+        n_global_rotations=1024,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=np.array([0, 1024, 2048], dtype=np.int64),
+        rotation_ids_flat=np.tile(np.arange(1024, dtype=np.int32), 2),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (2048, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(2048, dtype=np.float32),
+        rotation_counts=np.array([1024, 1024], dtype=np.int32),
+        translation_grid=translation_grid,
+        translation_log_priors=np.zeros((2, translation_grid.shape[0]), dtype=np.float32),
+    )
+    captured = {}
+
+    def fake_run_local_em_exact(*args, **kwargs):
+        _ = args
+        captured["image_batch_size"] = int(kwargs["image_batch_size"])
+        captured["rotation_block_size"] = int(kwargs["rotation_block_size"])
+        return (
+            jnp.zeros(1, dtype=jnp.complex64),
+            jnp.zeros(1, dtype=jnp.complex64),
+            np.zeros(2, dtype=np.int32),
+            RelionStats(
+                log_evidence_per_image=jnp.zeros(2, dtype=jnp.float32),
+                best_log_score_per_image=jnp.zeros(2, dtype=jnp.float32),
+                max_posterior_per_image=jnp.ones(2, dtype=jnp.float32),
+                rotation_posterior_sums=jnp.zeros(1024, dtype=jnp.float32),
+            ),
+        )
+
+    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+
+    outputs = iteration_loop_module._run_local_search_iteration(
+        HighresDataset(),
+        jnp.zeros(1, dtype=jnp.complex64),
+        jnp.ones(1, dtype=jnp.float32),
+        jnp.ones(384 * 384, dtype=jnp.float32),
+        np.zeros((2, 3), dtype=np.float32),
+        np.broadcast_to(np.eye(3, dtype=np.float32), (1024, 3, 3)).copy(),
+        None,
+        healpix_order=2,
+        sigma_rot=0.1,
+        sigma_psi=0.1,
+        translations=translation_grid,
+        prior_translations=np.zeros((2, 2), dtype=np.float32),
+        sigma_offset_angstrom=1.0,
+        offset_range_pixels=None,
+        disc_type="linear_interp",
+        image_batch_size=250,
+        rotation_block_size=5000,
+        current_size=56,
+        accumulate_noise=False,
+        projection_padding_factor=2,
+        reconstruction_padding_factor=2,
+        pass2_layout=layout,
+    )
+
+    assert captured["image_batch_size"] < 250
+    assert captured["rotation_block_size"] == 1024
+    assert len(outputs) == 4
+
+
 def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_for_perturbed_grid(
     monkeypatch,
     rng,
@@ -1109,6 +1326,71 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         rtol=1e-5,
     )
     assert np.all(np.isfinite(np.asarray(noise_exact.wsum_sigma2_noise)))
+
+
+def test_run_local_em_exact_can_return_half_volume_accumulators(rng):
+    dataset = MockDataset(1, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=117)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=119)
+    translations = np.zeros((1, 2), dtype=np.float32)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=2,
+        n_psi=1,
+        rotation_offsets=np.array([0, 2], dtype=np.int64),
+        rotation_ids_flat=np.array([0, 1], dtype=np.int32),
+        rotations_flat=np.asarray(local_rotations, dtype=np.float32),
+        rotation_log_priors_flat=np.zeros(2, dtype=np.float32),
+        rotation_counts=np.array([2], dtype=np.int32),
+        translation_grid=np.asarray(translations, dtype=np.float32),
+        translation_log_priors=np.zeros((1, 1), dtype=np.float32),
+    )
+
+    full = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=1,
+        rotation_block_size=4,
+        current_size=None,
+        reconstruct_significant_only=False,
+    )
+    half = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=1,
+        rotation_block_size=4,
+        current_size=None,
+        reconstruct_significant_only=False,
+        return_half_volume_accumulators=True,
+    )
+
+    half_shape = ftu.volume_shape_to_half_volume_shape(dataset.volume_shape)
+    assert np.asarray(half[0]).size == int(np.prod(half_shape))
+    assert np.asarray(half[1]).size == int(np.prod(half_shape))
+    Ft_y_half_full, Ft_ctf_half_full = half_volume_accumulators_to_full(
+        half[0],
+        half[1],
+        dataset.volume_shape,
+    )
+    np.testing.assert_allclose(np.asarray(Ft_y_half_full), np.asarray(full[0]), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_half_full), np.asarray(full[1]), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(half[2]), np.asarray(full[2]))
+    np.testing.assert_allclose(
+        np.asarray(half[3].log_evidence_per_image),
+        np.asarray(full[3].log_evidence_per_image),
+        rtol=1e-5,
+        atol=1e-5,
+    )
 
 
 def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
@@ -1994,7 +2276,7 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
     assert noise_big.sumw == pytest.approx(noise_split.sumw, abs=1e-5)
 
 
-def test_run_local_em_exact_significant_support_uses_packed_split_path(monkeypatch, rng):
+def test_run_local_em_exact_significant_support_uses_sparse_big_jit_packed_backprojection(monkeypatch, rng):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=571)
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
@@ -2046,7 +2328,8 @@ def test_run_local_em_exact_significant_support_uses_packed_split_path(monkeypat
     )
 
     profile = outputs[-1]
-    assert int(profile["big_jit_bucket_count"]) == 0
+    assert int(profile["big_jit_bucket_count"]) > 0
+    assert int(profile["sparse_big_jit_bucket_count"]) > 0
     assert int(profile["sum_reconstruction_rows"]) < int(profile["sum_padded_rows"])
 
 
@@ -3621,14 +3904,43 @@ class TestRelionModeSmokeTest:
             init_current_size=16,
             init_healpix_order=2,
             max_healpix_order=3,
+            auto_local_healpix_order=3,
         )
 
         state = result["convergence_state"]
         assert isinstance(state, RefinementState)
+        assert state.auto_local_healpix_order == 3
         # After 2 iterations, iteration counter should be at least 1
         assert state.iteration >= 1
         # ave_Pmax should be in [0, 1]
         assert 0.0 <= state.ave_Pmax <= 1.0
+
+    def test_refinement_state_uses_configured_auto_local_healpix_order(self):
+        default_state = RefinementState(healpix_order=3)
+        assert not default_state.should_do_local_search
+        assert not default_state.do_local_search
+
+        local_state = RefinementState(healpix_order=3, auto_local_healpix_order=3)
+        assert local_state.should_do_local_search
+        assert local_state.do_local_search
+
+    def test_refine_angular_sampling_uses_configured_auto_local_healpix_order(self):
+        state = RefinementState(
+            healpix_order=2,
+            adaptive_oversampling=1,
+            translation_range=10.0,
+            translation_step=2.0,
+            max_healpix_order=7,
+            auto_local_healpix_order=3,
+        )
+
+        refined = refine_angular_sampling(state)
+
+        assert refined.healpix_order == 3
+        assert refined.auto_local_healpix_order == 3
+        assert refined.do_local_search
+        assert refined.sigma_rot > 0.0
+        assert refined.sigma_psi > 0.0
 
     def test_relion_mode_uses_tau2_from_weights_for_prior(
         self,

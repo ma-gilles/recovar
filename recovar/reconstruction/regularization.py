@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 # NVTX domain for regularization operations
 NVTX_DOMAIN_REG = "regularization"
+_RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS = 200_000_000
 
 
 def _relion_round_away_from_zero(x):
@@ -609,20 +610,26 @@ def _compute_relion_weight_shell_stats(
     half_grid_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(grid_shape)
     full_size = int(np.prod(grid_shape))
     half_size = int(np.prod(half_grid_shape))
-    weight_arr = jnp.asarray(weight).real.astype(jnp.float64)
+    weight_size = int(np.size(weight))
+    force_host_shell_stats = (
+        padding_factor > 1
+        and weight_size in {full_size, half_size}
+        and weight_size > _RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS
+    )
+    weight_arr = np.asarray(weight).real if force_host_shell_stats else jnp.asarray(weight).real.astype(jnp.float64)
     native_layout = False
-    if weight_arr.size == full_size:
+    if weight_size == full_size:
         is_half_layout = False
-        # Match the RELION logical-axis convention used by
-        # compute_relion_fsc_from_backprojector: RECOVAR full accumulators are
-        # (z, y, x), while RELION's compact half-axis maps to RECOVAR axis 0.
-        weight = jnp.transpose(weight_arr.reshape(grid_shape), (1, 2, 0)).reshape(-1)
-        relion_grid_shape = (grid_shape[1], grid_shape[2], grid_shape[0])
-    elif weight_arr.size == half_size:
+        # Keep shell-stat inputs in RECOVAR's centered grid convention so a
+        # full volume and its packed-half view average the same voxels.
+        # RELION backprojector FSC has its own axis conversion below.
+        weight = weight_arr.reshape(-1)
+        relion_grid_shape = grid_shape
+    elif weight_size == half_size:
         is_half_layout = True
         weight = weight_arr.reshape(-1)
         relion_grid_shape = grid_shape
-    elif padding_factor > 1 and weight_arr.size == native_full_size:
+    elif padding_factor > 1 and weight_size == native_full_size:
         # Some callers still pass native-grid weights while requesting a
         # padded-shell scaling factor. Treat those as native full-layout input
         # and only apply the oversampling correction to the output.
@@ -633,52 +640,98 @@ def _compute_relion_weight_shell_stats(
     else:
         raise ValueError(
             f"Expected full or half Fourier weight with {full_size} or {half_size} voxels for "
-            f"volume_shape={volume_shape} and padding_factor={padding_factor}, got {weight_arr.size}"
+            f"volume_shape={volume_shape} and padding_factor={padding_factor}, got {weight_size}"
         )
 
     if shell_rounding not in {"round", "floor"}:
         raise ValueError(f"shell_rounding must be 'round' or 'floor', got {shell_rounding!r}")
 
     round_fn = jnp.round if shell_rounding == "round" else jnp.floor
+    shell_sum_np = None
+    shell_count_np = None
+
+    def _numpy_bincount_shell_stats(labels, values, mask):
+        labels_np = np.asarray(labels, dtype=np.int64).reshape(-1)
+        values_np = np.asarray(values).reshape(-1)
+        mask_np = np.asarray(mask, dtype=bool).reshape(-1)
+        labels_included = labels_np[mask_np]
+        return (
+            np.bincount(labels_included, weights=values_np[mask_np], minlength=n_shells)[:n_shells],
+            np.bincount(labels_included, minlength=n_shells).astype(np.float64)[:n_shells],
+        )
 
     if padding_factor > 1 and not native_layout:
-        padded_dist = fourier_transform_utils.get_grid_of_radial_distances(
-            relion_grid_shape,
-            scaled=False,
-            frequency_shift=0,
-            rounded=False,
-        ).reshape(-1)
-        if r_max is None:
-            radius_included = jnp.ones_like(padded_dist, dtype=jnp.float64)
-        else:
-            max_r_pad = int(_relion_round_away_from_zero(np.asarray(float(r_max) * padding_factor)))
-            radius_included = (padded_dist * padded_dist < float(max_r_pad * max_r_pad)).astype(jnp.float64)
-        shell_index = jnp.minimum(round_fn(padded_dist / padding_factor).astype(jnp.int32), ori_half)
         if is_half_layout:
-            padded_dist_half = fourier_transform_utils.get_grid_of_radial_distances_real(
-                grid_shape,
+            radial_shape = half_grid_shape
+            radial_fn = fourier_transform_utils.get_grid_of_radial_distances_real
+            radial_volume_shape = grid_shape
+        else:
+            radial_shape = relion_grid_shape
+            radial_fn = fourier_transform_utils.get_grid_of_radial_distances
+            radial_volume_shape = relion_grid_shape
+
+        if int(np.prod(radial_shape)) > _RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS:
+            coords = [
+                np.arange(-(int(s) // 2), int(s) - int(s) // 2, dtype=np.float32)
+                for s in radial_volume_shape[:-1]
+            ]
+            if is_half_layout:
+                coords.append(np.arange(0, int(radial_volume_shape[-1]) // 2 + 1, dtype=np.float32))
+            else:
+                last_dim = int(radial_volume_shape[-1])
+                coords.append(np.arange(-(last_dim // 2), last_dim - last_dim // 2, dtype=np.float32))
+            radial_sq = np.zeros(tuple(radial_shape), dtype=np.float32)
+            for axis, grid_axis in enumerate(coords):
+                shape = [1] * len(radial_shape)
+                shape[axis] = grid_axis.shape[0]
+                radial_sq += grid_axis.reshape(shape) ** 2
+            padded_dist_np = np.sqrt(radial_sq).astype(np.float32, copy=False)
+            del radial_sq
+            if r_max is None:
+                radius_included_np = np.ones_like(padded_dist_np, dtype=bool)
+            else:
+                max_r_pad = int(_relion_round_away_from_zero(np.asarray(float(r_max) * padding_factor)))
+                radius_included_np = padded_dist_np * padded_dist_np < float(max_r_pad * max_r_pad)
+            if shell_rounding == "round":
+                shell_index_np = np.rint(padded_dist_np / padding_factor).astype(np.int32)
+            else:
+                shell_index_np = np.floor(padded_dist_np / padding_factor).astype(np.int32)
+            shell_index_np = np.minimum(shell_index_np, ori_half)
+            if not is_half_layout:
+                x_coord = coords[-1]
+                half_complex_included_np = (x_coord == -(int(radial_volume_shape[-1]) // 2)) | (x_coord >= 0)
+                shape = [1] * len(radial_shape)
+                shape[-1] = x_coord.shape[0]
+                radius_included_np = radius_included_np & half_complex_included_np.reshape(shape)
+            shell_sum_np, shell_count_np = _numpy_bincount_shell_stats(
+                shell_index_np,
+                np.asarray(weight).reshape(radial_shape),
+                radius_included_np,
+            )
+        else:
+            padded_dist = radial_fn(
+                radial_volume_shape,
                 scaled=False,
                 frequency_shift=0,
                 rounded=False,
             ).reshape(-1)
             if r_max is None:
-                radius_included = jnp.ones_like(padded_dist_half, dtype=jnp.float64)
+                radius_included = jnp.ones_like(padded_dist, dtype=jnp.float64)
             else:
                 max_r_pad = int(_relion_round_away_from_zero(np.asarray(float(r_max) * padding_factor)))
-                radius_included = (padded_dist_half * padded_dist_half < float(max_r_pad * max_r_pad)).astype(
-                    jnp.float64
-                )
+                radius_included = (padded_dist * padded_dist < float(max_r_pad * max_r_pad)).astype(jnp.float64)
             shell_index = jnp.minimum(
-                round_fn(padded_dist_half / padding_factor).astype(jnp.int32),
+                round_fn(padded_dist / padding_factor).astype(jnp.int32),
                 ori_half,
             )
-            included = radius_included
-        else:
-            # RELION iterates the half-complex x-axis (kx >= 0) only.
-            pf_n = relion_grid_shape[-1]
-            kx_idx = jnp.arange(weight.size) % pf_n
-            half_complex_included = ((kx_idx == 0) | (kx_idx >= pf_n // 2)).astype(jnp.float64)
-            included = half_complex_included * radius_included
+            if is_half_layout:
+                included = radius_included
+            else:
+                # RELION iterates the half-complex x-axis (kx >= 0) only.
+                pf_n = relion_grid_shape[-1]
+                kx_idx = jnp.arange(weight.size) % pf_n
+                half_complex_included = ((kx_idx == 0) | (kx_idx >= pf_n // 2)).astype(jnp.float64)
+                included = half_complex_included * radius_included
     else:
         radial_fn = (
             fourier_transform_utils.get_grid_of_radial_distances_real
@@ -707,10 +760,12 @@ def _compute_relion_weight_shell_stats(
             max_r_native = int(_relion_round_away_from_zero(np.asarray(float(r_max))))
             included = (radial_raw * radial_raw < float(max_r_native * max_r_native)).astype(jnp.float64)
 
-    shell_sum = jnp.zeros(n_shells, dtype=jnp.float64)
-    shell_count = jnp.zeros(n_shells, dtype=jnp.float64)
-    shell_sum = shell_sum.at[shell_index].add(weight * included)
-    shell_count = shell_count.at[shell_index].add(included)
+    if shell_sum_np is None:
+        shell_sum = jnp.bincount(shell_index, weights=weight * included, length=n_shells).astype(jnp.float64)
+        shell_count = jnp.bincount(shell_index, weights=included, length=n_shells).astype(jnp.float64)
+    else:
+        shell_sum = jnp.asarray(shell_sum_np, dtype=jnp.float64)
+        shell_count = jnp.asarray(shell_count_np, dtype=jnp.float64)
     avg_weight = jnp.where(shell_count > 0, shell_sum / shell_count, 0.0)
     return {
         "shell_sum": shell_sum,
@@ -750,9 +805,22 @@ def compute_relion_tau2_from_weights(
     """
     prior_dtype = jnp.float32
 
-    H0 = jnp.asarray(Ft_ctf_0).real.astype(prior_dtype)
-    H1 = jnp.asarray(Ft_ctf_1).real.astype(prior_dtype)
-    H_comb = (H0 + H1) / jnp.asarray(2.0, dtype=prior_dtype)
+    padded_shape = tuple(int(s) * int(padding_factor) for s in volume_shape)
+    half_padded_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(padded_shape)
+    large_weight_size = max(int(np.prod(padded_shape)), int(np.prod(half_padded_shape)))
+    use_host_shell_stats = (
+        int(padding_factor) > 1
+        and max(int(np.size(Ft_ctf_0)), int(np.size(Ft_ctf_1))) > _RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS
+        and large_weight_size > _RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS
+    )
+    if use_host_shell_stats:
+        H0 = np.asarray(Ft_ctf_0).real.astype(np.float32, copy=False)
+        H1 = np.asarray(Ft_ctf_1).real.astype(np.float32, copy=False)
+        H_comb = ((H0 + H1) * np.float32(0.5)).astype(np.float32, copy=False)
+    else:
+        H0 = jnp.asarray(Ft_ctf_0).real.astype(prior_dtype)
+        H1 = jnp.asarray(Ft_ctf_1).real.astype(prior_dtype)
+        H_comb = (H0 + H1) / jnp.asarray(2.0, dtype=prior_dtype)
     shell_stats = _compute_relion_weight_shell_stats(
         H_comb,
         volume_shape,

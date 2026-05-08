@@ -937,9 +937,9 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
     """K=4 STRICT-PARITY cold-start with adaptive_oversampling=1 (8× pose grid).
 
     The strictest K-class test. Builds on test_em_parity_fast_kclass_strict_coldstart
-    with --adaptive_oversampling 1 + --healpix_order 2 (so coarse grid stays at
+    with --adaptive_oversampling 1 + --healpix_order 1 (coarse pass 1 stays at
     healpix order 1 = 576 rotations matching RELION's iter-1 evaluation grid,
-    fine grid at order 2 = 4608 rotations). Routes ALL K-class iters through
+    fine pass 2 is order 2 = 4608 rotations). Routes ALL K-class iters through
     the new run_dense_k_class_em_adaptive plumbing, bypassing the buggy
     _run_k_class_sparse_pass2_local_search_iteration accumulator.
 
@@ -970,7 +970,7 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
         "--max_iter",
         "3",
         "--healpix_order",
-        "2",  # so coarse = order 1 (576 rotations) = RELION K=4 iter-1 grid
+        "1",  # RELION coarse pass-1 order; fine pass 2 is order 2 via os=1
         "--offset_range",
         "6",
         "--offset_step",

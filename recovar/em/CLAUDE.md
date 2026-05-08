@@ -215,6 +215,35 @@ Use local GPUs only for short checks after `nvidia-smi` confirms an idle
 device. Use Slurm for any test ≥ a few minutes or any multi-iter parity
 job. Keep all scratch under `/scratch/gpfs/GILLES/mg6942/`.
 
+## EM Benchmark Dataset Generation
+
+For high-resolution EM/RELION parity or speed benchmarks, do not generate
+particles from the bundled `recovar/assets/vol*.mrc` density maps. Those assets
+are `64^3` legacy fixtures; upsampling them to 128/256/384 only zero-pads
+Fourier space and cannot test near-Nyquist refinement.
+
+Benchmark datasets intended to validate resolution must use the PDB/mmCIF path:
+
+1. start from atomic coordinates, preferably `recovar/assets/5nrl_atoms.npz` or
+   an explicit PDB/mmCIF supplied for the experiment;
+2. generate a target-grid scattering-potential volume at the desired voxel size
+   and grid size;
+3. optionally apply an explicit, recorded B-factor; use `Bfactor=0` or very
+   small values for near-Nyquist simulator sanity checks;
+4. simulate particles from those target-grid volumes at the same resolution.
+
+The existing reference implementation is
+`scripts/prepare_pdb_k2_relion_parity_benchmark.py`, which uses
+`recovar.simulation.trajectory_generation.generate_trajectory_volumes` before
+calling `simulator.generate_synthetic_dataset`. For K=1 benchmarks, create or
+use the analogous PDB-generated single-state script; do not use
+`recovar.commands.make_test_dataset` unless the task is explicitly a low-res
+legacy fixture test.
+
+Always record in the run ledger: source PDB/mmCIF/NPZ path, grid size, voxel
+size, B-factor, noise model/level, class distribution, seed, and whether RELION
+normalization was applied.
+
 ## RELION Conventions
 
 RECOVAR and RELION use different real-space volume frames:
@@ -236,6 +265,13 @@ the GUI-equivalent flags from `pipeline_jobs.cpp::initialiseAutorefineJob()`:
 --ctf --firstiter_cc --flatten_solvent --zero_mask \
 --low_resol_join_halves 40 --norm --scale
 ```
+
+In RECOVAR runner scripts, `--healpix_order` must mean the RELION coarse
+pass-1 HEALPix order (`Oversampling=0` in RELION logs). Adaptive oversampling
+then evaluates pass 2 at `healpix_order + adaptive_oversampling`. Do not encode
+`--healpix_order` as the finest oversampled order; that silently under-samples
+pass 1 by 8x per oversampling level and can look like a high-resolution quality
+regression.
 
 RELION iter-1 `ave_Pmax = 1.0` with `--firstiter_cc` is a hard winner-take-all
 cross-correlation artifact, not Bayesian inference. Do not add that path to

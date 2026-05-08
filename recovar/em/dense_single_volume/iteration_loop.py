@@ -12,8 +12,10 @@ See ``docs/math/relion_refinement_algorithm.md`` for the full algorithm map.
 import logging
 import os
 import time
+import gc
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -113,6 +115,180 @@ RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 8_000_000
 RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET = 2_000_000
 RELION_MAX_FULL_GRID_ORDER = 4
 EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS = 3_000_000
+_RELION_EM_BATCH_DEFAULT_GPU_GB = 80.0
+_RELION_EM_BATCH_USABLE_FRACTION = 0.65
+_RELION_EM_BATCH_PROJECTION_FRACTION = 0.20
+_RELION_EM_BATCH_SCORE_FRACTION = 0.20
+_RELION_EM_BATCH_MAX_PROJECTION_GB = 10.0
+_RELION_EM_BATCH_MIN_PROJECTION_GB = 0.5
+_RELION_EM_BATCH_PROJECTION_LIVE_FACTOR = 1.5
+_RELION_EM_BATCH_TRANSLATION_TILE_FRACTION = 0.35
+_RELION_EM_BATCH_RUNTIME_TRANSLATION_TILE_FRACTION = 0.17
+_RELION_EM_BATCH_MAX_TRANSLATION_TILE_GB = 14.0
+_RELION_EM_BATCH_MIN_TRANSLATION_TILE_GB = 0.5
+_RELION_EM_BATCH_RUNTIME_FREE_FRACTION = 0.80
+
+
+@dataclass(frozen=True)
+class _RelionEMBatchPlan:
+    image_batch_size: int
+    rotation_block_size: int
+    score_float_budget: int
+    projection_budget_gb: float
+    translation_tile_budget_gb: float
+    persistent_estimate_gb: float
+    usable_estimate_gb: float
+    gpu_used_estimate_gb: float
+    runtime_free_estimate_gb: float
+    projection_block_gb: float
+    translation_tile_gb: float
+
+
+def _safe_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _estimate_relion_em_batch_sizes(
+    *,
+    requested_image_batch_size: int,
+    requested_rotation_block_size: int,
+    n_rot: int,
+    n_trans: int,
+    image_shape,
+    volume_shape,
+    padding_factor: int,
+    n_classes: int = 1,
+    gpu_memory_gb: float | None = None,
+) -> _RelionEMBatchPlan:
+    """Choose EM microbatch sizes from pose-grid, image, class, and GPU size.
+
+    The dense RELION loop has two independent transient memory drivers:
+    the pose score tensor, ``n_img * n_rot_block * n_trans * K``, and the
+    projection tile, ``n_rot_block * full_half_image_pixels * K``.  Local and
+    adaptive pass-2 paths also materialize translation-expanded half-images,
+    ``n_img * n_trans * full_half_image_pixels``.  The old clamp only
+    considered the score tensor; at 384 px it still allowed XLA allocations in
+    the 10-20 GiB range before any other temporaries.  It also allowed rotation
+    blocks larger than the actual rotation grid, padding thousands of dummy
+    rotations at coarse orders.  This estimator mirrors the pipeline's
+    hardware-aware batch sizing style while preserving the historical caps when
+    they already fit.
+    """
+
+    requested_image_batch_size = max(1, _safe_int(requested_image_batch_size, 1))
+    requested_rotation_block_size = max(1, _safe_int(requested_rotation_block_size, 1))
+    n_rot = max(1, _safe_int(n_rot, 1))
+    n_trans = max(1, _safe_int(n_trans, 1))
+    n_classes = max(1, _safe_int(n_classes, 1))
+    padding_factor = max(1, _safe_int(padding_factor, 1))
+    image_shape = tuple(int(s) for s in image_shape)
+    volume_shape = tuple(int(s) for s in volume_shape)
+
+    gpu_used_gb = 0.0
+    if gpu_memory_gb is None:
+        try:
+            gpu_memory_gb = float(utils.get_gpu_memory_total())
+        except Exception:
+            gpu_memory_gb = _RELION_EM_BATCH_DEFAULT_GPU_GB
+        try:
+            gpu_used_gb = float(utils.get_gpu_memory_used())
+        except Exception:
+            gpu_used_gb = 0.0
+    if not np.isfinite(gpu_memory_gb) or gpu_memory_gb <= 0:
+        gpu_memory_gb = _RELION_EM_BATCH_DEFAULT_GPU_GB
+    if not np.isfinite(gpu_used_gb) or gpu_used_gb < 0:
+        gpu_used_gb = 0.0
+    gpu_used_gb = min(gpu_used_gb, max(0.0, gpu_memory_gb - 1.0))
+
+    padded_volume_voxels = float(np.prod([d * padding_factor for d in volume_shape]))
+    native_volume_voxels = float(np.prod(volume_shape))
+    # Persistent state is deliberately approximate. It accounts for the two
+    # padded complex accumulators plus per-half/class reference volumes, then
+    # leaves the remainder for XLA temporaries and fragmentation.
+    persistent_bytes = (
+        2.0 * padded_volume_voxels * np.dtype(np.complex64).itemsize * n_classes
+        + 4.0 * native_volume_voxels * np.dtype(np.complex64).itemsize * n_classes
+    )
+    persistent_gb = persistent_bytes / 1e9
+    runtime_free_gb = max(1.0, gpu_memory_gb - gpu_used_gb)
+    usable_from_total_gb = max(1.0, gpu_memory_gb * _RELION_EM_BATCH_USABLE_FRACTION - persistent_gb)
+    usable_from_runtime_gb = max(1.0, runtime_free_gb * _RELION_EM_BATCH_RUNTIME_FREE_FRACTION)
+    usable_gb = min(usable_from_total_gb, usable_from_runtime_gb)
+
+    score_float_budget = int(
+        max(
+            1_000_000,
+            min(
+                RELION_SCORE_TENSOR_FLOAT_BUDGET,
+                usable_gb * _RELION_EM_BATCH_SCORE_FRACTION * 1e9 / np.dtype(np.float32).itemsize,
+            ),
+        )
+    )
+    projection_budget_gb = max(
+        _RELION_EM_BATCH_MIN_PROJECTION_GB,
+        min(_RELION_EM_BATCH_MAX_PROJECTION_GB, usable_gb * _RELION_EM_BATCH_PROJECTION_FRACTION),
+    )
+    translation_tile_budget_gb = max(
+        _RELION_EM_BATCH_MIN_TRANSLATION_TILE_GB,
+        min(
+            _RELION_EM_BATCH_MAX_TRANSLATION_TILE_GB,
+            usable_gb * _RELION_EM_BATCH_TRANSLATION_TILE_FRACTION,
+            usable_from_runtime_gb * _RELION_EM_BATCH_RUNTIME_TRANSLATION_TILE_FRACTION,
+        ),
+    )
+
+    score_image_cap = max(1, score_float_budget // max(n_rot * n_trans * n_classes, 1))
+    full_half_pixels = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
+    # The local exact path holds score and reconstruction shifted half-images
+    # at the same time when masked scoring is enabled. Dense K-class paths keep
+    # per-class score tiles live too, so include K here for the conservative
+    # cross-path cap.
+    translation_bytes_per_image = max(
+        1,
+        2 * n_trans * full_half_pixels * np.dtype(np.complex64).itemsize * n_classes,
+    )
+    translation_image_cap = max(1, int(translation_tile_budget_gb * 1e9 // translation_bytes_per_image))
+    image_batch = min(requested_image_batch_size, score_image_cap, translation_image_cap)
+
+    score_rotation_cap = max(1, score_float_budget // max(image_batch * n_trans * n_classes, 1))
+    projection_bytes_per_rotation = max(
+        1,
+        int(
+            np.ceil(
+                full_half_pixels
+                * np.dtype(np.complex64).itemsize
+                * n_classes
+                * _RELION_EM_BATCH_PROJECTION_LIVE_FACTOR,
+            )
+        ),
+    )
+    projection_rotation_cap = max(1, int(projection_budget_gb * 1e9 // projection_bytes_per_rotation))
+    rotation_cap = min(score_rotation_cap, projection_rotation_cap)
+
+    if requested_rotation_block_size >= 64:
+        rotation_block = max(64, min(requested_rotation_block_size, rotation_cap))
+    else:
+        rotation_block = min(requested_rotation_block_size, rotation_cap)
+    rotation_block = max(1, min(rotation_block, n_rot))
+
+    projection_block_gb = rotation_block * projection_bytes_per_rotation / 1e9
+    translation_tile_gb = image_batch * translation_bytes_per_image / 1e9
+    return _RelionEMBatchPlan(
+        image_batch_size=int(image_batch),
+        rotation_block_size=int(rotation_block),
+        score_float_budget=int(score_float_budget),
+        projection_budget_gb=float(projection_budget_gb),
+        translation_tile_budget_gb=float(translation_tile_budget_gb),
+        persistent_estimate_gb=float(persistent_gb),
+        usable_estimate_gb=float(usable_gb),
+        gpu_used_estimate_gb=float(gpu_used_gb),
+        runtime_free_estimate_gb=float(runtime_free_gb),
+        projection_block_gb=float(projection_block_gb),
+        translation_tile_gb=float(translation_tile_gb),
+    )
 
 
 def _image_backend(ds):
@@ -424,6 +600,7 @@ class PPCAKClassScheduleBridge:
         voxel_size_angstrom: float = 1.0,
         init_healpix_order: int = 2,
         max_healpix_order: int = 7,
+        auto_local_healpix_order: int = LOCAL_SEARCH_HEALPIX_ORDER,
         adaptive_oversampling: int = 0,
         init_translation_range: float = 10.0,
         init_translation_step: float = 2.0,
@@ -445,6 +622,7 @@ class PPCAKClassScheduleBridge:
                 translation_range=float(init_translation_range),
                 translation_step=float(init_translation_step),
                 max_healpix_order=int(max_healpix_order),
+                auto_local_healpix_order=int(auto_local_healpix_order),
                 particle_diameter_angstrom=float(particle_diameter_angstrom),
             )
         self.state = refinement_state
@@ -514,6 +692,7 @@ def make_ppca_kclass_schedule_bridge(
     voxel_size_angstrom: float = 1.0,
     init_healpix_order: int = 2,
     max_healpix_order: int = 7,
+    auto_local_healpix_order: int = LOCAL_SEARCH_HEALPIX_ORDER,
     adaptive_oversampling: int = 0,
     init_translation_range: float = 10.0,
     init_translation_step: float = 2.0,
@@ -529,6 +708,7 @@ def make_ppca_kclass_schedule_bridge(
         voxel_size_angstrom=voxel_size_angstrom,
         init_healpix_order=init_healpix_order,
         max_healpix_order=max_healpix_order,
+        auto_local_healpix_order=auto_local_healpix_order,
         adaptive_oversampling=adaptive_oversampling,
         init_translation_range=init_translation_range,
         init_translation_step=init_translation_step,
@@ -557,6 +737,7 @@ def run_dense_ppca_refinement_with_kclass_schedule(
         voxel_size_angstrom=float(getattr(experiment_dataset, "voxel_size", 1.0)),
         init_healpix_order=int(kwargs.pop("init_healpix_order", 2)),
         max_healpix_order=int(kwargs.pop("max_healpix_order", 7)),
+        auto_local_healpix_order=int(kwargs.pop("auto_local_healpix_order", LOCAL_SEARCH_HEALPIX_ORDER)),
         adaptive_oversampling=int(kwargs.pop("adaptive_oversampling", 0)),
         init_translation_range=float(kwargs.pop("init_translation_range", 10.0)),
         init_translation_step=float(kwargs.pop("init_translation_step", 2.0)),
@@ -595,6 +776,7 @@ def run_local_ppca_refinement_with_kclass_schedule(
         voxel_size_angstrom=float(getattr(first_dataset, "voxel_size", 1.0)),
         init_healpix_order=int(kwargs.pop("init_healpix_order", 2)),
         max_healpix_order=int(kwargs.pop("max_healpix_order", 7)),
+        auto_local_healpix_order=int(kwargs.pop("auto_local_healpix_order", LOCAL_SEARCH_HEALPIX_ORDER)),
         adaptive_oversampling=int(kwargs.pop("adaptive_oversampling", 0)),
         init_translation_range=float(kwargs.pop("init_translation_range", 10.0)),
         init_translation_step=float(kwargs.pop("init_translation_step", 2.0)),
@@ -1171,6 +1353,7 @@ def _run_sparse_pass2_local_search_iteration(
     image_pre_shifts=None,
     mstep_subtract_ctf_projection=False,
     mstep_relion_x_half=False,
+    return_half_volume_accumulators=False,
     use_float64_scoring=False,
     do_gridding_correction=False,
     square_window=False,
@@ -1248,6 +1431,7 @@ def _run_sparse_pass2_local_search_iteration(
             image_pre_shifts=image_pre_shifts,
             mstep_subtract_ctf_projection=mstep_subtract_ctf_projection,
             mstep_relion_x_half=mstep_relion_x_half,
+            return_half_volume_accumulators=return_half_volume_accumulators,
             score_with_masked_images=score_with_masked_images,
             return_profile=return_profile,
             adaptive_fraction=adaptive_fraction,
@@ -1541,6 +1725,7 @@ def _run_local_search_iteration(
     image_pre_shifts=None,
     mstep_subtract_ctf_projection=False,
     mstep_relion_x_half=False,
+    return_half_volume_accumulators=False,
     score_with_masked_images=True,
     return_profile=False,
     disable_adjoint_y=False,
@@ -1561,6 +1746,8 @@ def _run_local_search_iteration(
 ):
     """Run exact local search over image-specific rotation neighborhoods."""
 
+    requested_image_batch_size = int(image_batch_size)
+    requested_rotation_block_size = int(rotation_block_size)
     rotation_block_size = _local_search_engine_rotation_block_size(rotation_block_size)
     prior_rotations = np.asarray(prior_rotations, dtype=np.float32)
     if prior_rotations.ndim == 3:
@@ -1611,6 +1798,58 @@ def _run_local_search_iteration(
         local_layout = pass2_layout
         metadata_build_time = 0.0
         selector_time = 0.0
+
+    if class_log_priors is not None:
+        local_n_classes = int(np.asarray(class_log_priors).size)
+    else:
+        local_n_classes = 1
+    # Exact local K-class invokes the per-class local kernels sequentially
+    # (probe pass per class, then M-step per class), so K is not a simultaneous
+    # tensor dimension for the shifted-image/projection tiles here.
+    local_kernel_classes = 1
+    local_rotation_count = (
+        int(np.max(np.asarray(local_layout.rotation_counts, dtype=np.int64)))
+        if int(np.asarray(local_layout.rotation_counts).size)
+        else 1
+    )
+    local_batch_plan = _estimate_relion_em_batch_sizes(
+        requested_image_batch_size=image_batch_size,
+        requested_rotation_block_size=rotation_block_size,
+        n_rot=max(1, local_rotation_count),
+        n_trans=max(1, int(np.asarray(local_layout.translation_grid).shape[0])),
+        image_shape=experiment_dataset.image_shape,
+        volume_shape=experiment_dataset.volume_shape,
+        padding_factor=max(int(projection_padding_factor), int(reconstruction_padding_factor), 1),
+        n_classes=local_kernel_classes,
+    )
+    if (
+        local_batch_plan.image_batch_size != image_batch_size
+        or local_batch_plan.rotation_block_size != rotation_block_size
+    ):
+        logger.info(
+            "Local search memory batch sizing: requested image_batch_size=%d rotation_block_size=%d; "
+            "using image_batch_size=%d rotation_block_size=%d "
+            "(local_rot_max=%d n_trans=%d K=%d effective_kernel_K=%d, translation_tile=%.2f/%.2f GB, "
+            "projection_tile=%.2f/%.2f GB, persistent_est=%.2f GB, usable_est=%.2f GB, "
+            "gpu_used_est=%.2f GB)",
+            requested_image_batch_size,
+            requested_rotation_block_size,
+            local_batch_plan.image_batch_size,
+            local_batch_plan.rotation_block_size,
+            local_rotation_count,
+            int(np.asarray(local_layout.translation_grid).shape[0]),
+            local_n_classes,
+            local_kernel_classes,
+            local_batch_plan.translation_tile_gb,
+            local_batch_plan.translation_tile_budget_gb,
+            local_batch_plan.projection_block_gb,
+            local_batch_plan.projection_budget_gb,
+            local_batch_plan.persistent_estimate_gb,
+            local_batch_plan.usable_estimate_gb,
+            local_batch_plan.gpu_used_estimate_gb,
+        )
+    image_batch_size = local_batch_plan.image_batch_size
+    rotation_block_size = local_batch_plan.rotation_block_size
 
     if class_log_priors is not None:
         if return_profile:
@@ -1697,6 +1936,7 @@ def _run_local_search_iteration(
             image_pre_shifts=image_pre_shifts,
             mstep_subtract_ctf_projection=mstep_subtract_ctf_projection,
             mstep_relion_x_half=mstep_relion_x_half,
+            return_half_volume_accumulators=return_half_volume_accumulators,
             return_profile=return_profile,
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
@@ -1768,6 +2008,7 @@ def refine_single_volume(
     # --- RELION-mode parameters ---
     init_healpix_order=2,
     max_healpix_order=7,
+    auto_local_healpix_order=LOCAL_SEARCH_HEALPIX_ORDER,
     init_translation_range=10.0,
     init_translation_step=2.0,
     init_translation_sigma_angstrom=10.0,
@@ -1861,6 +2102,9 @@ def refine_single_volume(
         Starting HEALPix order for RELION mode (default 2, ~14.7 deg).
     max_healpix_order : int
         Maximum HEALPix order (finest angular sampling, default 7).
+    auto_local_healpix_order : int
+        RELION ``--auto_local_healpix_order`` threshold for switching from
+        global to local angular searches.
     init_translation_range : float
         Initial translation search range in pixels (RELION mode).
     init_translation_step : float
@@ -1916,6 +2160,7 @@ def refine_single_volume(
         relion_current_sizes=relion_current_sizes,
         init_healpix_order=init_healpix_order,
         max_healpix_order=max_healpix_order,
+        auto_local_healpix_order=auto_local_healpix_order,
         init_translation_range=init_translation_range,
         init_translation_step=init_translation_step,
         init_translation_sigma_angstrom=init_translation_sigma_angstrom,
@@ -1977,6 +2222,7 @@ def _run_relion_iteration_loop(
     relion_current_sizes,
     init_healpix_order,
     max_healpix_order,
+    auto_local_healpix_order,
     init_translation_range,
     init_translation_step,
     init_translation_sigma_angstrom,
@@ -2018,7 +2264,7 @@ def _run_relion_iteration_loop(
     1. Convergence-driven iteration (not fixed max_iter)
     2. data_vs_prior for resolution instead of FSC < 0.143
     3. Angular step refinement (HEALPix order increments)
-    4. Local angular search when HEALPix order >= 4
+    4. Local angular search when HEALPix order reaches auto_local_healpix_order
     5. Per-image best assignment tracking
     6. Average Pmax computation for adaptive current_size growth
 
@@ -2095,6 +2341,7 @@ def _run_relion_iteration_loop(
         translation_range=init_translation_range,
         translation_step=init_translation_step,
         max_healpix_order=max_healpix_order,
+        auto_local_healpix_order=auto_local_healpix_order,
         current_resolution=float("inf"),
         particle_diameter_angstrom=float(particle_diameter_ang or 0.0),
     )
@@ -2222,27 +2469,42 @@ def _run_relion_iteration_loop(
     PROJECTION_PADDING_FACTOR = 2
     padded_volume_shape = tuple(d * PADDING_FACTOR for d in volume_shape)
 
-    def _safe_batch_sizes(n_rot, n_trans):
-        """Reduce batch sizes for large pose grids to avoid GPU OOM.
-
-        2026-04-08: bumped budget from 50M to 200M floats. This is the
-        score-tensor size budget; the M-step GEMMs and CTF accumulators
-        allocate ~10x this much in working memory, so 200M maps to ~2 GB
-        peak. Verified to fit on 80 GB A100s for both 64-px tiny (1k
-        particles) and 128-px 5k benchmarks. Larger budgets give faster
-        per-iter times on tiny but OOM on 128-px boxes.
-        """
-        # Target the actual score-tensor size: n_img * n_rot_block * n_trans.
-        n_trans = max(int(n_trans), 1)
-        ibs = min(
-            image_batch_size,
-            max(1, RELION_SCORE_TENSOR_FLOAT_BUDGET // max(n_rot * n_trans, 1)),
+    def _safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None):
+        """Reduce batch sizes for large pose grids to avoid GPU OOM."""
+        plan = _estimate_relion_em_batch_sizes(
+            requested_image_batch_size=image_batch_size,
+            requested_rotation_block_size=rotation_block_size,
+            n_rot=n_rot,
+            n_trans=n_trans,
+            image_shape=image_shape_for_batch or cryo.image_shape,
+            volume_shape=volume_shape,
+            padding_factor=PADDING_FACTOR,
+            n_classes=n_classes if classes is None else classes,
         )
-        rbs = min(
-            rotation_block_size,
-            max(64, RELION_SCORE_TENSOR_FLOAT_BUDGET // max(ibs * n_trans, 1)),
-        )
-        return ibs, rbs
+        if plan.image_batch_size != image_batch_size or plan.rotation_block_size != rotation_block_size:
+            logger.info(
+                "RELION EM batch sizing: requested image_batch_size=%d rotation_block_size=%d; "
+                "using image_batch_size=%d rotation_block_size=%d "
+                "(n_rot=%d n_trans=%d K=%d, score_budget=%.1fM floats, "
+                "projection_tile=%.2f/%.2f GB, translation_tile=%.2f/%.2f GB, "
+                "persistent_est=%.2f GB, usable_est=%.2f GB, gpu_used_est=%.2f GB)",
+                image_batch_size,
+                rotation_block_size,
+                plan.image_batch_size,
+                plan.rotation_block_size,
+                int(n_rot),
+                int(n_trans),
+                int(n_classes if classes is None else classes),
+                plan.score_float_budget / 1e6,
+                plan.projection_block_gb,
+                plan.projection_budget_gb,
+                plan.translation_tile_gb,
+                plan.translation_tile_budget_gb,
+                plan.persistent_estimate_gb,
+                plan.usable_estimate_gb,
+                plan.gpu_used_estimate_gb,
+            )
+        return plan.image_batch_size, plan.rotation_block_size
 
     # State: two half-set references.  For K-class refinement each half stores
     # an explicit leading class axis; single-class callers keep the historical
@@ -2601,13 +2863,14 @@ def _run_relion_iteration_loop(
                         _star,
                     )
                 state.healpix_order = _capped_hp
-            _replay_do_local = bool(state.healpix_order >= LOCAL_SEARCH_HEALPIX_ORDER)
+            _replay_do_local = bool(state.healpix_order >= state.auto_local_healpix_order)
             if state.do_local_search != _replay_do_local:
                 logger.info(
-                    "Replay override: local_search %s -> %s (healpix_order=%d)",
+                    "Replay override: local_search %s -> %s (healpix_order=%d, auto_local_healpix_order=%d)",
                     state.do_local_search,
                     _replay_do_local,
                     state.healpix_order,
+                    state.auto_local_healpix_order,
                 )
                 state.do_local_search = _replay_do_local
                 if _replay_do_local:
@@ -3200,8 +3463,14 @@ def _run_relion_iteration_loop(
             k_class_image_batch_size = image_batch_size
             dense_k_class_rotation_block_size = rotation_block_size
             if k_class_enabled:
+                k_class_base_ibs, k_class_base_rbs = _safe_batch_sizes(
+                    effective_rotations.shape[0],
+                    current_translations.shape[0],
+                    classes=n_classes,
+                    image_shape_for_batch=experiment_datasets[k].image_shape,
+                )
                 k_class_image_batch_size = min(
-                    image_batch_size,
+                    k_class_base_ibs,
                     _safe_firstiter_cc_image_batch_size(
                         current_translations.shape[0],
                         experiment_datasets[k].image_shape,
@@ -3214,7 +3483,7 @@ def _run_relion_iteration_loop(
                         k_class_image_batch_size,
                     )
                 dense_k_class_rotation_block_size = min(
-                    rotation_block_size,
+                    k_class_base_rbs,
                     _safe_dense_k_class_rotation_block_size(
                         current_translations.shape[0],
                         k_class_image_batch_size,
@@ -3831,8 +4100,8 @@ def _run_relion_iteration_loop(
                             do_gridding_correction=True,
                             square_window=RELION_FOURIER_WINDOW_SQUARE,
                             random_perturbation=random_perturbation,
-                            image_batch_size=image_batch_size,
-                            rotation_block_size=rotation_block_size,
+                            image_batch_size=k_class_image_batch_size,
+                            rotation_block_size=dense_k_class_rotation_block_size,
                             adaptive_fraction=adaptive_fraction,
                             debug_iteration=iteration,
                             translation_prior_centers=trans_prior_center_for_engine,
@@ -3999,17 +4268,17 @@ def _run_relion_iteration_loop(
                                 adaptive_kwargs["relion_firstiter_score_mode"] = "normalized_cc"
                                 adaptive_kwargs["relion_firstiter_winner_take_all"] = True
                                 firstiter_image_batch_size = min(
-                                    image_batch_size,
+                                    k_class_image_batch_size,
                                     _safe_firstiter_cc_image_batch_size(
                                         current_translations.shape[0],
                                         experiment_datasets[k].image_shape,
                                     ),
                                 )
-                                if firstiter_image_batch_size != image_batch_size:
+                                if firstiter_image_batch_size != k_class_image_batch_size:
                                     logger.info(
                                         "STRICT-PARITY: clamping iter-1 winner-take-all image_batch_size "
                                         "from %d to %d",
-                                        image_batch_size,
+                                        k_class_image_batch_size,
                                         firstiter_image_batch_size,
                                     )
                                 adaptive_kwargs["image_batch_size"] = firstiter_image_batch_size
@@ -4059,8 +4328,8 @@ def _run_relion_iteration_loop(
                                 do_gridding_correction=True,
                                 square_window=RELION_FOURIER_WINDOW_SQUARE,
                                 random_perturbation=random_perturbation,
-                                image_batch_size=image_batch_size,
-                                rotation_block_size=rotation_block_size,
+                                image_batch_size=k_class_image_batch_size,
+                                rotation_block_size=dense_k_class_rotation_block_size,
                                 adaptive_fraction=adaptive_fraction,
                                 debug_iteration=iteration,
                                 translation_prior_centers=trans_prior_center_for_engine,
@@ -4124,8 +4393,9 @@ def _run_relion_iteration_loop(
                             do_gridding_correction=True,
                             square_window=RELION_FOURIER_WINDOW_SQUARE,
                             random_perturbation=random_perturbation,
-                            image_batch_size=image_batch_size,
-                            rotation_block_size=rotation_block_size,
+                            image_batch_size=safe_ibs,
+                            rotation_block_size=safe_rbs,
+                            return_half_volume_accumulators=True,
                             adaptive_fraction=adaptive_fraction,
                             debug_iteration=iteration,
                             return_profile=collect_local_search_profile,
@@ -4340,8 +4610,8 @@ def _run_relion_iteration_loop(
                         do_gridding_correction=True,
                         square_window=RELION_FOURIER_WINDOW_SQUARE,
                         random_perturbation=random_perturbation,
-                        image_batch_size=image_batch_size,
-                        rotation_block_size=rotation_block_size,
+                        image_batch_size=k_class_image_batch_size,
+                        rotation_block_size=dense_k_class_rotation_block_size,
                         adaptive_fraction=adaptive_fraction,
                         debug_iteration=iteration,
                         translation_prior_centers=trans_prior_center_for_engine,
@@ -4393,8 +4663,9 @@ def _run_relion_iteration_loop(
                         do_gridding_correction=True,
                         square_window=RELION_FOURIER_WINDOW_SQUARE,
                         random_perturbation=random_perturbation,
-                        image_batch_size=image_batch_size,
-                        rotation_block_size=rotation_block_size,
+                        image_batch_size=safe_ibs,
+                        rotation_block_size=safe_rbs,
+                        return_half_volume_accumulators=True,
                         adaptive_fraction=adaptive_fraction,
                         debug_iteration=iteration,
                         return_profile=collect_local_search_profile,
@@ -5863,6 +6134,29 @@ def _run_relion_iteration_loop(
             state.has_converged,
             elapsed,
         )
+
+        # End-of-iteration memory boundary.  The next iteration immediately
+        # pads each half-map to the projection grid; keeping previous
+        # backprojector accumulators or unregularized diagnostic maps live can
+        # make high-resolution runs OOM before the batch-size estimator can act.
+        try:
+            jax.block_until_ready(means)
+        except Exception:
+            pass
+        Ft_y_0 = Ft_y_1 = None
+        Ft_ctf_0 = Ft_ctf_1 = None
+        Ft_y_combined = Ft_ctf_combined = None
+        unreg_means = previous_means = None
+        mean_signal_variance_per_half = tau2_update_details_per_half = None
+        noise_stats_per_half = noise_stats_per_half_per_class = None
+        gc.collect()
+        if os.environ.get("RECOVAR_RELION_CLEAR_JAX_CACHES_BETWEEN_ITERS", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            jax.clear_caches()
 
         if state.has_converged and not force_max_iter_after_convergence:
             logger.info(

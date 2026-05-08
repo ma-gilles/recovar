@@ -52,6 +52,22 @@ def _shell_index_to_resolution_angstrom(shell_index, grid_size, voxel_size):
     return float(grid_size) * float(voxel_size) / shell_index
 
 
+def _resolve_relion_sampling_orders(healpix_order: int, adaptive_oversampling: int) -> tuple[int, int]:
+    """Return RELION coarse pass-1 and fine pass-2 HEALPix orders.
+
+    RELION's ``--healpix_order`` is the coarse pass-1 order printed as
+    ``OrientationalSampling`` under ``Oversampling=0``. Adaptive oversampling
+    refines pass 2 to ``healpix_order + adaptive_oversampling``.
+    """
+    coarse_order = int(healpix_order)
+    oversampling = int(adaptive_oversampling)
+    if coarse_order < 0:
+        raise ValueError(f"healpix_order must be non-negative, got {healpix_order}")
+    if oversampling < 0:
+        raise ValueError(f"adaptive_oversampling must be non-negative, got {adaptive_oversampling}")
+    return coarse_order, coarse_order + oversampling
+
+
 def _npz_scalar_to_float(npz, key):
     if key not in npz.files:
         return None
@@ -373,17 +389,27 @@ def _find_relion_optimiser_star(args):
 
 def _maybe_apply_relion_image_mask(ds, args):
     """Override the dataset scoring mask with RELION's particle-diameter mask."""
-    optimiser_star = _find_relion_optimiser_star(args)
-    if optimiser_star is None:
-        logger.info("RELION optimiser STAR not found; keeping dataset image mask")
-        return None
+    explicit_particle_diameter = getattr(args, "particle_diameter_ang", None)
+    explicit_width_mask_edge = getattr(args, "width_mask_edge_px", 5.0)
+    if explicit_particle_diameter is not None:
+        params = (float(explicit_particle_diameter), float(explicit_width_mask_edge))
+        optimiser_star = "explicit CLI"
+    else:
+        optimiser_star = _find_relion_optimiser_star(args)
+        if optimiser_star is None:
+            logger.info("RELION optimiser STAR not found; keeping dataset image mask")
+            return None
 
-    params = _load_relion_mask_params(optimiser_star)
-    if params is None:
-        logger.info("No RELION mask parameters found in %s; keeping dataset image mask", optimiser_star)
-        return None
+        params = _load_relion_mask_params(optimiser_star)
+        if params is None:
+            logger.info("No RELION mask parameters found in %s; keeping dataset image mask", optimiser_star)
+            return None
 
     particle_diameter_ang, width_mask_edge_px = params
+
+    if particle_diameter_ang <= 0:
+        logger.info("Non-positive RELION particle diameter %.1f A; keeping dataset image mask", particle_diameter_ang)
+        return None
 
     # Use the backend's set_relion_image_mask hook so we get RELION-exact
     # softMaskOutsideMap behavior (geometry + bg-fill mode), not just the
@@ -440,9 +466,17 @@ def main():
         "--healpix_order",
         type=int,
         default=3,
-        help="HEALPix order for the evaluated orientation grid. In RELION mode "
-        "this is the finest order; the coarse pass-1 order is "
-        "healpix_order - adaptive_oversampling.",
+        help="RELION coarse pass-1 HEALPix order. With adaptive oversampling, "
+        "pass 2 evaluates healpix_order + adaptive_oversampling.",
+    )
+    parser.add_argument(
+        "--auto_local_healpix_order",
+        type=int,
+        default=4,
+        help="RELION --auto_local_healpix_order threshold for switching from "
+        "global to local angular searches. RELION's binary default is 4; "
+        "set to 3 when comparing against runs launched with "
+        "--auto_local_healpix_order 3.",
     )
     parser.add_argument("--offset_range", type=float, default=3.0, help="Translation search range (pixels)")
     parser.add_argument("--offset_step", type=float, default=1.0, help="Translation step (pixels)")
@@ -547,6 +581,20 @@ def main():
         "run_it{NNN}_optimiser.star). Used to source the particle-diameter "
         "mask + max_significants. If unset, searches data_dir and any "
         "relion_ref*/ subdirectory.",
+    )
+    parser.add_argument(
+        "--particle_diameter_ang",
+        type=float,
+        default=None,
+        help="Explicit RELION particle diameter in Angstrom for the scoring "
+        "mask. Overrides mask discovery from --relion_optimiser.",
+    )
+    parser.add_argument(
+        "--width_mask_edge_px",
+        type=float,
+        default=5.0,
+        help="RELION softMaskOutsideMap edge width in pixels when "
+        "--particle_diameter_ang is provided.",
     )
     parser.add_argument(
         "--relion_current_sizes",
@@ -747,12 +795,15 @@ def main():
     # ---- Set up rotation and translation grids ----
     from recovar.em.sampling import get_relion_rotation_grid, get_translation_grid
 
-    init_healpix_order = max(args.healpix_order - args.adaptive_oversampling, 0)
+    init_healpix_order, finest_healpix_order = _resolve_relion_sampling_orders(
+        args.healpix_order,
+        args.adaptive_oversampling,
+    )
     rotation_grid_order = init_healpix_order
     logger.info(
-        "RELION grid orders: coarse=%d, finest=%d (adaptive_oversampling=%d)",
+        "RELION grid orders: coarse/pass1=%d, fine/pass2=%d (adaptive_oversampling=%d)",
         init_healpix_order,
-        args.healpix_order,
+        finest_healpix_order,
         args.adaptive_oversampling,
     )
 
@@ -959,6 +1010,7 @@ def main():
         nside_level=rotation_grid_order if args.adaptive_oversampling > 0 else None,
         translation_pixel_offset=args.offset_step if args.adaptive_oversampling > 0 else None,
         init_healpix_order=init_healpix_order,
+        auto_local_healpix_order=args.auto_local_healpix_order,
         init_translation_sigma_angstrom=(
             relion_init_sigma_offset_angstrom
             if relion_init_sigma_offset_angstrom is not None
@@ -989,6 +1041,7 @@ def main():
         "n_iterations": args.max_iter,
         "healpix_order": args.healpix_order,
         "coarse_healpix_order": init_healpix_order,
+        "finest_healpix_order": finest_healpix_order,
         "n_rotations": rotations.shape[0],
         "n_translations": translations.shape[0],
         "n_images": n_images,
@@ -1156,6 +1209,8 @@ def main():
             "n_translations": int(translations.shape[0]),
             "healpix_order": int(args.healpix_order),
             "coarse_healpix_order": int(init_healpix_order),
+            "finest_healpix_order": int(finest_healpix_order),
+            "auto_local_healpix_order": int(args.auto_local_healpix_order),
             "adaptive_oversampling": int(args.adaptive_oversampling),
             "adaptive_fraction": float(args.adaptive_fraction),
             "max_significants": int(args.max_significants),

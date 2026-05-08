@@ -12,7 +12,7 @@ EM refinement loop:
 - **Angular step refinement**: increment HEALPix order when assignments
   and resolution stabilize.
 - **Local angular search**: switch from global exhaustive to local
-  Gaussian-prior search when HEALPix order >= 4.
+  Gaussian-prior search at the configured RELION auto-local HEALPix order.
 
 See docs/relion5_auto_refine_algorithm.md, sections A (convergence),
 G (angular sampling), H (speed tricks).
@@ -74,6 +74,66 @@ def effective_angular_step(order: int, adaptive_oversampling: int = 0) -> float:
     return healpix_angular_step(order) / (2**adaptive_oversampling)
 
 
+def resolution_required_angular_sampling(
+    current_resolution_angstrom: float,
+    particle_diameter_angstrom: float,
+) -> float:
+    """Return RELION's resolution-implied angular sampling in degrees.
+
+    RELION prints this as::
+
+        360 / ceil(pi * particle_diameter * current_resolution)
+
+    where ``current_resolution`` is stored internally as reciprocal Angstrom.
+    RECOVAR state stores resolution in Angstrom, so the equivalent expression
+    is ``360 / ceil(pi * particle_diameter / current_resolution_angstrom)``.
+    """
+    resolution = float(current_resolution_angstrom)
+    diameter = float(particle_diameter_angstrom)
+    if not np.isfinite(resolution) or resolution <= 0.0:
+        return float("inf")
+    if not np.isfinite(diameter) or diameter <= 0.0:
+        return float("inf")
+    nr_ang_steps = int(np.ceil(np.pi * diameter / resolution))
+    if nr_ang_steps <= 0:
+        return float("inf")
+    return 360.0 / float(nr_ang_steps)
+
+
+def fine_enough_angular_accuracy(state: "RefinementState") -> float:
+    """Return the angular-accuracy threshold used for fine-enough checks."""
+    return min(
+        float(state.acc_rot),
+        resolution_required_angular_sampling(
+            state.current_resolution,
+            state.particle_diameter_angstrom,
+        ),
+    )
+
+
+def convergence_sampling_diagnostics(state: "RefinementState") -> dict[str, float | bool]:
+    """Return scalar diagnostics for RELION auto-sampling decisions."""
+    resolution_required = resolution_required_angular_sampling(
+        state.current_resolution,
+        state.particle_diameter_angstrom,
+    )
+    angular_accuracy = min(float(state.acc_rot), float(resolution_required))
+    return {
+        "effective_step": float(state.effective_step),
+        "acc_rot": float(state.acc_rot),
+        "resolution_required_step": float(resolution_required),
+        "angular_accuracy": float(angular_accuracy),
+        "fine_enough": bool(
+            state.acc_rot < float("inf")
+            and state.effective_step < 0.75 * angular_accuracy
+        ),
+        "resolution_requires_finer_sampling": bool(
+            np.isfinite(resolution_required)
+            and resolution_required < state.effective_step
+        ),
+    }
+
+
 @dataclass
 class RefinementState:
     """Tracks refinement progress for convergence detection and angular stepping.
@@ -122,6 +182,9 @@ class RefinementState:
         Estimated translational accuracy in pixels.
     max_healpix_order : int
         Maximum allowed HEALPix order (finest angular sampling).
+    auto_local_healpix_order : int
+        RELION ``--auto_local_healpix_order`` threshold. Local searches are
+        enabled when ``healpix_order >= auto_local_healpix_order``.
     previous_resolution : float
         Resolution from the previous iteration (for stall detection).
     fraction_changed : float
@@ -169,6 +232,7 @@ class RefinementState:
 
     # Limits
     max_healpix_order: int = 7
+    auto_local_healpix_order: int = LOCAL_SEARCH_HEALPIX_ORDER
 
     # Change tracking
     fraction_changed: float = 1.0
@@ -199,6 +263,8 @@ class RefinementState:
     nr_iter_wo_large_hidden_variable_changes: int = 0
 
     def __post_init__(self):
+        if self.auto_local_healpix_order < 0:
+            raise ValueError("auto_local_healpix_order must be non-negative")
         if self.angular_step == 0.0:
             self.angular_step = healpix_angular_step(self.healpix_order)
         if self.should_do_local_search:
@@ -214,7 +280,11 @@ class RefinementState:
         """True when angular sampling should not be refined further.
 
         Fires when the per-particle ``acc_rot`` estimate is populated and
-        ``effective_step < 0.75 * acc_rot``.
+        ``effective_step < 0.75 * acc_rot``. When particle diameter and current
+        resolution are known, cap ``acc_rot`` by RELION's resolution-implied
+        angular sampling. This prevents a loose approximate ``acc_rot`` from
+        declaring convergence while the current resolution still requires a
+        finer orientation grid.
 
         Mirrors RELION ``ml_optimiser.cpp:9817`` which sets
         ``has_fine_enough_angular_sampling = true`` when the old step is
@@ -227,14 +297,15 @@ class RefinementState:
         iteration, otherwise RECOVAR can terminate earlier than RELION.
         """
         if self.acc_rot < float("inf"):
-            if self.effective_step < 0.75 * self.acc_rot:
+            angular_accuracy = fine_enough_angular_accuracy(self)
+            if self.effective_step < 0.75 * angular_accuracy:
                 return True
         return False
 
     @property
     def should_do_local_search(self) -> bool:
         """True when HEALPix order is high enough for local search."""
-        return self.healpix_order >= LOCAL_SEARCH_HEALPIX_ORDER
+        return self.healpix_order >= self.auto_local_healpix_order
 
 # ---------------------------------------------------------------------------
 # Assignment change tracking
@@ -658,11 +729,12 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
 
     # Don't refine beyond 75% of estimated angular accuracy.
     if state.acc_rot < float("inf"):
-        if state.effective_step < 0.75 * state.acc_rot:
+        angular_accuracy = fine_enough_angular_accuracy(state)
+        if state.effective_step < 0.75 * angular_accuracy:
             logger.info(
-                "Angular step %.2f deg < 75%% of acc_rot %.2f deg; not refining further",
+                "Angular step %.2f deg < 75%% of angular accuracy %.2f deg; not refining further",
                 state.effective_step,
-                state.acc_rot,
+                angular_accuracy,
             )
             return False
 
@@ -677,7 +749,8 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
     - Translation step = min(1.5, 0.75 * acc_trans) * 2^adaptive_oversampling
     - Translation range = 5 * changes_optimal_offsets (capped at 1.3x previous)
 
-    Also activates local search when the new order >= LOCAL_SEARCH_HEALPIX_ORDER.
+    Also activates local search when the new order reaches the configured
+    RELION auto-local HEALPix threshold.
 
     Parameters
     ----------
@@ -711,7 +784,7 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
     new_trans_range = max(new_trans_range, 3.0 * new_trans_step)
 
     # Determine local search activation
-    do_local = new_order >= LOCAL_SEARCH_HEALPIX_ORDER
+    do_local = new_order >= state.auto_local_healpix_order
 
     # Compute sigma for local search: sigma2 = 2 * 2 * angular_step^2
     # (RELION convention, angular_step in degrees, sigma in radians for storage)
@@ -763,6 +836,7 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
         acc_trans=state.acc_trans,
         particle_diameter_angstrom=state.particle_diameter_angstrom,
         max_healpix_order=state.max_healpix_order,
+        auto_local_healpix_order=state.auto_local_healpix_order,
         fraction_changed=state.fraction_changed,
         changes_optimal_offsets=state.changes_optimal_offsets,
         # RELION-exact reset (B4):
@@ -999,6 +1073,7 @@ def update_refinement_state(
         acc_trans=new_acc_trans,
         particle_diameter_angstrom=state.particle_diameter_angstrom,
         max_healpix_order=state.max_healpix_order,
+        auto_local_healpix_order=state.auto_local_healpix_order,
         fraction_changed=frac_changed,
         changes_optimal_offsets=trans_changes,
         current_changes_optimal_orientations=current_changes_orientations,
@@ -1025,6 +1100,19 @@ def update_refinement_state(
         current_changes_orientations if np.isfinite(current_changes_orientations) else float("nan"),
         current_changes_offsets_angstrom if np.isfinite(current_changes_offsets_angstrom) else float("nan"),
         current_changes_classes if np.isfinite(current_changes_classes) else float("nan"),
+        )
+
+    diag = convergence_sampling_diagnostics(updated)
+    logger.info(
+        "Sampling decision: effective_step=%.3f deg, acc_rot=%.3f deg, "
+        "resolution_required=%.3f deg, angular_accuracy=%.3f deg, "
+        "fine_enough=%s, resolution_requires_finer=%s",
+        diag["effective_step"],
+        diag["acc_rot"],
+        diag["resolution_required_step"],
+        diag["angular_accuracy"],
+        diag["fine_enough"],
+        diag["resolution_requires_finer_sampling"],
     )
 
     # --- Check if we should refine angular sampling ---

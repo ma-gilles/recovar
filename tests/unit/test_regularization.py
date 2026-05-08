@@ -356,6 +356,73 @@ def test_relion_weight_shell_stats_floor_bins_reconstruct_support():
     )
 
 
+def test_relion_weight_shell_stats_large_grid_cpu_path_matches_device_path(monkeypatch):
+    shape = (8, 8, 8)
+    padding_factor = 2
+    full_shape = tuple(s * padding_factor for s in shape)
+    rng = np.random.default_rng(10)
+    weight = (0.25 + rng.random(np.prod(full_shape))).astype(np.float32)
+
+    device_stats = regularization._compute_relion_weight_shell_stats(
+        weight,
+        shape,
+        padding_factor=padding_factor,
+        r_max=3,
+        shell_rounding="round",
+    )
+    monkeypatch.setattr(regularization, "_RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS", 1)
+    cpu_stats = regularization._compute_relion_weight_shell_stats(
+        weight,
+        shape,
+        padding_factor=padding_factor,
+        r_max=3,
+        shell_rounding="round",
+    )
+
+    for key in ("shell_sum", "shell_count", "avg_weight_shells"):
+        np.testing.assert_allclose(np.asarray(cpu_stats[key]), np.asarray(device_stats[key]), rtol=1e-6, atol=1e-6)
+
+
+def test_compute_relion_tau2_from_weights_large_grid_cpu_path_matches_device_path(monkeypatch):
+    shape = (8, 8, 8)
+    padding_factor = 2
+    full_shape = tuple(s * padding_factor for s in shape)
+    n_shells = shape[0] // 2 + 1
+    rng = np.random.default_rng(11)
+    weight0 = (0.25 + rng.random(np.prod(full_shape))).astype(np.float32)
+    weight1 = (0.25 + rng.random(np.prod(full_shape))).astype(np.float32)
+    fsc = np.linspace(0.95, 0.25, n_shells, dtype=np.float32)
+
+    prior_device, _, details_device = regularization.compute_relion_tau2_from_weights(
+        weight0,
+        weight1,
+        fsc,
+        shape,
+        padding_factor=padding_factor,
+        r_max=3,
+        return_details=True,
+    )
+    monkeypatch.setattr(regularization, "_RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS", 1)
+    prior_cpu, _, details_cpu = regularization.compute_relion_tau2_from_weights(
+        weight0,
+        weight1,
+        fsc,
+        shape,
+        padding_factor=padding_factor,
+        r_max=3,
+        return_details=True,
+    )
+
+    np.testing.assert_allclose(np.asarray(prior_cpu), np.asarray(prior_device), rtol=1e-6, atol=1e-6)
+    for key in ("shell_sum", "shell_count", "avg_weight_shells", "prior_shells"):
+        np.testing.assert_allclose(
+            np.asarray(details_cpu[key]),
+            np.asarray(details_device[key]),
+            rtol=1e-6,
+            atol=1e-6,
+        )
+
+
 def test_compute_relion_tau2_from_iref_power_spectrum_matches_relion_binding_scaling():
     from pathlib import Path
 

@@ -63,6 +63,39 @@ def test_zero_pad_fourier_volume_maps_centered_frequencies():
     assert np.count_nonzero(padded[~mask]) == 0
 
 
+def test_projection_padding_host_path_matches_device_path(monkeypatch):
+    import recovar.core.fourier_transform_utils as ftu
+
+    rng = np.random.default_rng(141)
+    volume_shape = (6, 6, 6)
+    real = rng.standard_normal(volume_shape).astype(np.float32)
+    ft = ftu.get_dft3(jnp.asarray(real)).reshape(-1)
+
+    device_padded, device_shape = rf.pad_volume_for_projection(
+        ft,
+        volume_shape,
+        2,
+        do_gridding_correction=True,
+        current_size=4,
+    )
+    monkeypatch.setattr(rf, "_RELION_PROJECTION_PAD_HOST_FFT_MIN_VOXELS", 1)
+    host_padded, host_shape = rf.pad_volume_for_projection(
+        ft,
+        volume_shape,
+        2,
+        do_gridding_correction=True,
+        current_size=4,
+    )
+
+    assert host_shape == device_shape
+    np.testing.assert_allclose(
+        np.asarray(host_padded),
+        np.asarray(device_padded),
+        atol=2e-4,
+        rtol=2e-4,
+    )
+
+
 def test_adjust_regularization_relion_style_lower_bounded():
     filt = np.zeros((4, 4, 4), dtype=np.float32)
     reg = rf.adjust_regularization_relion_style(filt, volume_shape=(4, 4, 4))

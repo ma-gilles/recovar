@@ -33,6 +33,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     effective_angular_step,
     healpix_angular_step,
     refine_angular_sampling,
+    resolution_required_angular_sampling,
     should_refine_angular_sampling,
     update_refinement_state,
 )
@@ -84,6 +85,30 @@ class TestRefinementStateConstruction:
 
     def test_has_fine_enough_from_acc_rot(self):
         state = RefinementState(healpix_order=7, max_healpix_order=7, acc_rot=1.0)
+        assert state.has_fine_enough_angular_sampling is True
+
+    def test_resolution_required_sampling_caps_loose_acc_rot(self):
+        """Do not stop at order 2 when high resolution requires a finer grid."""
+        state = RefinementState(
+            healpix_order=2,
+            adaptive_oversampling=1,
+            acc_rot=12.247,
+            current_resolution=4.86,
+            particle_diameter_angstrom=544.0,
+        )
+
+        assert resolution_required_angular_sampling(4.86, 544.0) == pytest.approx(1.0227, rel=1e-3)
+        assert state.has_fine_enough_angular_sampling is False
+
+    def test_loose_acc_rot_still_applies_without_particle_diameter(self):
+        state = RefinementState(
+            healpix_order=2,
+            adaptive_oversampling=1,
+            acc_rot=12.247,
+            current_resolution=4.86,
+            particle_diameter_angstrom=0.0,
+        )
+
         assert state.has_fine_enough_angular_sampling is True
 
     def test_should_do_local_search_at_order_4(self):
@@ -380,6 +405,20 @@ class TestShouldRefineAngularSampling:
         # effective_step at order 6 = 0.9375 deg; 0.75 * 2.0 = 1.5
         # 0.9375 < 1.5, so RELION considers angular sampling fine enough.
         assert should_refine_angular_sampling(state4) is False
+
+    def test_refines_when_resolution_requires_finer_sampling_despite_loose_acc_rot(self):
+        state = RefinementState(
+            healpix_order=2,
+            adaptive_oversampling=1,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=MAX_NR_ITER_WO_RESOL_GAIN,
+            nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+            acc_rot=12.247,
+            current_resolution=4.86,
+            particle_diameter_angstrom=544.0,
+        )
+
+        assert should_refine_angular_sampling(state) is True
 
 
 class TestRefineAngularSampling:

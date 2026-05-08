@@ -105,6 +105,11 @@ EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RAW_CACHE_MAX_GB"
 # iteration slower by precomputing more spectra than the bucket schedule reuses.
 EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB = 0.0
 EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB"
+# Upper bound for the extra M-step tensors materialized by the sparse big-JIT
+# hybrid path. This path still packs rows before backprojection; the cap only
+# guards the temporary fused summed/ctf tensor outputs.
+EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB = 12.0
+EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB"
 EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION = 0.25
 
 _LOCAL_PREPROCESS_TIMER_KEYS = (
@@ -604,6 +609,26 @@ def _local_processed_half_cache_enabled(n_images: int, n_half: int, dtype, *, st
     return estimated_gb <= max_gb
 
 
+def _sparse_big_jit_mstep_tensors_within_memory(
+    *,
+    image_count: int,
+    rotation_count: int,
+    n_recon_windowed: int,
+    use_float64_scoring: bool,
+) -> bool:
+    summed_bytes = 16 if use_float64_scoring else 8
+    ctf_bytes = 8 if use_float64_scoring else 4
+    # Keep margin for XLA output buffers and the following packed tensors.
+    estimated_gb = int(image_count) * int(rotation_count) * int(n_recon_windowed) * (summed_bytes + ctf_bytes) / 1e9
+    max_gb = float(
+        os.environ.get(
+            EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
+            EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB,
+        )
+    )
+    return max_gb > 0.0 and estimated_gb <= max_gb
+
+
 def _validate_native_half_batch(batch, image_shape):
     batch_np = np.asarray(batch)
     if batch_np.ndim != 3 or tuple(batch_np.shape[-2:]) != tuple(image_shape):
@@ -975,6 +1000,7 @@ def run_local_em_exact(
     image_pre_shifts: np.ndarray | None = None,
     mstep_subtract_ctf_projection: bool = False,
     mstep_relion_x_half: bool = False,
+    return_half_volume_accumulators: bool = False,
     return_profile: bool = False,
     disable_adjoint_y: bool = False,
     disable_adjoint_ctf: bool = False,
@@ -1067,6 +1093,8 @@ def run_local_em_exact(
         disc_type=disc_type,
         process_fn=experiment_dataset.process_images,
     )
+    if return_half_volume_accumulators and mstep_relion_x_half:
+        raise ValueError("return_half_volume_accumulators only supports native half-volume accumulators")
 
     if projection_padding_factor > 1:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
@@ -1177,11 +1205,12 @@ def run_local_em_exact(
     preprocess_profile = _new_local_preprocess_timer()
     transfer_profile = _new_local_transfer_timer()
     big_jit_bucket_count = 0
+    sparse_big_jit_bucket_count = 0
     total_local_rotations = int(local_layout.total_local_rotations)
-    collect_profile_stats = bool(return_profile)
+    collect_profile_stats = bool(return_profile or reconstruct_significant_only)
     seen_global_rotations = (
         np.zeros(rotation_posterior_sums.shape[0], dtype=bool)
-        if collect_profile_stats and rotation_posterior_sums.size
+        if return_profile and rotation_posterior_sums.size
         else np.zeros(0, dtype=bool)
     )
     seen_nonzero_global_rotations = np.zeros_like(seen_global_rotations)
@@ -1271,14 +1300,25 @@ def run_local_em_exact(
         "yes",
         "on",
     }
+    processed_half_cache_preferred = (
+        (
+            image_pre_shifts is None
+            or _all_integer_pre_shifts_or_none(image_pre_shifts, n_images) is not None
+        )
+        and _local_processed_half_cache_enabled(
+            n_images,
+            n_half,
+            np.complex64,
+            store_recon_half=bool(score_with_masked_images),
+        )
+    )
     use_big_jit_buckets = (
         (not use_relion_projector)
         and not disable_big_jit_buckets
         and not debug_score_dump_filter_matches
         and not (accumulate_noise and debug_noise_dump_dir is not None)
+        and not processed_half_cache_preferred
     )
-    if significant_backprojection_candidate:
-        use_big_jit_buckets = False
     mean_for_proj_big_jit = mean_for_proj
     projection_half_volume_big_jit = False
     if use_big_jit_buckets and not projection_relion_texture_interp:
@@ -1290,16 +1330,7 @@ def run_local_em_exact(
 
     can_use_processed_half_cache = (
         not use_big_jit_buckets
-        and (
-            image_pre_shifts is None
-            or _all_integer_pre_shifts_or_none(image_pre_shifts, n_images) is not None
-        )
-        and _local_processed_half_cache_enabled(
-            n_images,
-            n_half,
-            np.complex64,
-            store_recon_half=bool(score_with_masked_images),
-        )
+        and processed_half_cache_preferred
     )
     if can_use_processed_half_cache:
         processed_half_cache_t0 = time.time()
@@ -1362,7 +1393,16 @@ def run_local_em_exact(
                 experiment_dataset.voxel_size,
             )
 
-        if use_big_jit_buckets:
+        sparse_big_jit_backprojection = False
+        if use_big_jit_buckets and significant_backprojection_candidate:
+            sparse_big_jit_backprojection = _sparse_big_jit_mstep_tensors_within_memory(
+                image_count=max(batch_size, int(getattr(bucket, "bucket_image_count", batch_size))),
+                rotation_count=int(bucket.bucket_rotation_count),
+                n_recon_windowed=window_spec.n_recon,
+                use_float64_scoring=use_float64_scoring,
+            )
+
+        if use_big_jit_buckets and (not significant_backprojection_candidate or sparse_big_jit_backprojection):
             if batch_data is None:
                 raise RuntimeError("exact local big-JIT requires fetched native image batches")
             big_jit_t0 = time.time()
@@ -1489,25 +1529,12 @@ def run_local_em_exact(
                 n_shells_arg = 1
 
             projection_max_r_big_jit = window_spec.dense_big_jit_max_r()
-            (
-                Ft_y,
-                Ft_ctf,
-                noise_wsum,
-                noise_img_power,
-                noise_a2,
-                noise_xa,
-                noise_sigma2_offset,
-                noise_sumw,
-                batch_norm,
-                log_Z,
-                best_log_score,
-                best_argmax,
-                max_posterior,
-                probs_sum_t,
-                n_significant_samples,
-                reconstruction_rotation_mask,
-                reconstruction_row_count_jax,
-            ) = run_local_bucket_big_jit(
+            return_big_jit_mstep_tensors = sparse_big_jit_backprojection and (
+                not disable_adjoint_y or not disable_adjoint_ctf
+            )
+            big_jit_disable_adjoint_y = disable_adjoint_y or return_big_jit_mstep_tensors
+            big_jit_disable_adjoint_ctf = disable_adjoint_ctf or return_big_jit_mstep_tensors
+            big_jit_result = run_local_bucket_big_jit(
                 jnp.asarray(batch_data),
                 jnp.asarray(ctf_params),
                 mean_for_proj_big_jit,
@@ -1565,14 +1592,59 @@ def run_local_em_exact(
                 projection_force_jax=bool(projection_force_jax),
                 mstep_subtract_ctf_projection=bool(mstep_subtract_ctf_projection),
                 mstep_relion_x_half=bool(mstep_relion_x_half),
-                disable_adjoint_y=disable_adjoint_y,
-                disable_adjoint_ctf=disable_adjoint_ctf,
+                disable_adjoint_y=big_jit_disable_adjoint_y,
+                disable_adjoint_ctf=big_jit_disable_adjoint_ctf,
                 accumulate_noise=accumulate_noise,
                 return_noise_split=return_noise_split,
+                return_mstep_tensors=return_big_jit_mstep_tensors,
                 n_shells=n_shells_arg,
                 has_normalization_log_z=normalization_log_z_np is not None,
                 has_normalization_log_evidence=normalization_log_evidence_np is not None,
             )
+            if return_big_jit_mstep_tensors:
+                (
+                    Ft_y,
+                    Ft_ctf,
+                    noise_wsum,
+                    noise_img_power,
+                    noise_a2,
+                    noise_xa,
+                    noise_sigma2_offset,
+                    noise_sumw,
+                    batch_norm,
+                    log_Z,
+                    best_log_score,
+                    best_argmax,
+                    max_posterior,
+                    probs_sum_t,
+                    n_significant_samples,
+                    reconstruction_rotation_mask,
+                    reconstruction_row_count_jax,
+                    summed,
+                    ctf_probs,
+                ) = big_jit_result
+            else:
+                (
+                    Ft_y,
+                    Ft_ctf,
+                    noise_wsum,
+                    noise_img_power,
+                    noise_a2,
+                    noise_xa,
+                    noise_sigma2_offset,
+                    noise_sumw,
+                    batch_norm,
+                    log_Z,
+                    best_log_score,
+                    best_argmax,
+                    max_posterior,
+                    probs_sum_t,
+                    n_significant_samples,
+                    reconstruction_rotation_mask,
+                    reconstruction_row_count_jax,
+                ) = big_jit_result
+                summed = None
+                ctf_probs = None
             if return_profile:
                 _block_until_ready(
                     Ft_y,
@@ -1588,20 +1660,98 @@ def run_local_em_exact(
                     reconstruction_row_count_jax,
                     noise_wsum,
                     noise_img_power,
+                    *(() if summed is None else (summed, ctf_probs)),
                 )
             timing.big_jit_bucket_s += time.time() - big_jit_t0
             big_jit_bucket_count += 1
+            if sparse_big_jit_backprojection:
+                sparse_big_jit_bucket_count += 1
 
             pack_t0 = time.time()
             reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)[:unpadded_batch_size]
             local_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)[:unpadded_batch_size]
-            reconstruction_take_indices = np.broadcast_to(
-                np.arange(int(bucket.bucket_rotation_count), dtype=np.int32)[None, :],
-                (unpadded_batch_size, int(bucket.bucket_rotation_count)),
-            )
-            reconstruction_pack_mask_np = reconstruction_rotation_mask_np & local_mask_np
-            reconstruction_row_count = int(np.asarray(reconstruction_row_count_jax, dtype=np.int32))
+            if sparse_big_jit_backprojection:
+                probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                (
+                    reconstruction_take_indices,
+                    reconstruction_pack_mask_np,
+                    _,
+                    reconstruction_row_count,
+                ) = _build_nonzero_reconstruction_pack_indices(
+                    reconstruction_rotation_mask_np,
+                    local_mask_np,
+                    probs_sum_t_np,
+                    rotation_block_size,
+                )
+                reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
+                reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
+                packed_rotations_np = np.take_along_axis(
+                    np.asarray(bucket.local_rotations[:unpadded_batch_size], dtype=np.float32),
+                    reconstruction_take_indices[:, :, None, None],
+                    axis=1,
+                )
+                packed_summed = jnp.take_along_axis(
+                    summed[:unpadded_batch_size],
+                    reconstruction_take_indices_jnp[:, :, None],
+                    axis=1,
+                )
+                packed_summed = jnp.where(reconstruction_pack_mask_jnp[:, :, None], packed_summed, 0.0)
+                packed_ctf_probs = jnp.take_along_axis(
+                    ctf_probs[:unpadded_batch_size],
+                    reconstruction_take_indices_jnp[:, :, None],
+                    axis=1,
+                )
+                packed_ctf_probs = jnp.where(reconstruction_pack_mask_jnp[:, :, None], packed_ctf_probs, 0.0)
+                packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_rotations_np))
+            else:
+                probs_sum_t_np = None
+                reconstruction_take_indices = np.broadcast_to(
+                    np.arange(int(bucket.bucket_rotation_count), dtype=np.int32)[None, :],
+                    (unpadded_batch_size, int(bucket.bucket_rotation_count)),
+                )
+                reconstruction_pack_mask_np = reconstruction_rotation_mask_np & local_mask_np
+                reconstruction_row_count = int(np.asarray(reconstruction_row_count_jax, dtype=np.int32))
             timing.pack_s += time.time() - pack_t0
+
+            if sparse_big_jit_backprojection and not disable_adjoint_y:
+                adjoint_y_t0 = time.time()
+                Ft_y = _adjoint_slice_volume_maybe_windowed(
+                    flatten_bucket_rows(packed_summed),
+                    recon_window_indices,
+                    packed_flat_rotations,
+                    Ft_y,
+                    image_shape,
+                    recon_volume_shape,
+                    "linear_interp",
+                    True,
+                    True,
+                    use_window=use_window,
+                    max_r=float(current_size // 2) if use_window else None,
+                    relion_x_half=bool(mstep_relion_x_half),
+                )
+                if return_profile:
+                    _block_until_ready(Ft_y)
+                timing.adjoint_y_s += time.time() - adjoint_y_t0
+
+            if sparse_big_jit_backprojection and not disable_adjoint_ctf:
+                adjoint_ctf_t0 = time.time()
+                Ft_ctf = _adjoint_slice_volume_maybe_windowed(
+                    flatten_bucket_rows(packed_ctf_probs),
+                    recon_window_indices,
+                    packed_flat_rotations,
+                    Ft_ctf,
+                    image_shape,
+                    recon_volume_shape,
+                    "linear_interp",
+                    True,
+                    True,
+                    use_window=use_window,
+                    max_r=float(current_size // 2) if use_window else None,
+                    relion_x_half=bool(mstep_relion_x_half),
+                )
+                if return_profile:
+                    _block_until_ready(Ft_ctf)
+                timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
 
             postprocess_t0 = time.time()
             significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
@@ -1621,7 +1771,7 @@ def run_local_em_exact(
                 log_Z=log_Z[:unpadded_batch_size],
                 best_log_score=best_log_score[:unpadded_batch_size],
                 max_posterior=max_posterior[:unpadded_batch_size],
-                probs_sum_t=probs_sum_t[:unpadded_batch_size],
+                probs_sum_t=probs_sum_t[:unpadded_batch_size] if probs_sum_t_np is None else probs_sum_t_np,
                 n_significant_samples=n_significant_samples[:unpadded_batch_size],
                 collect_profile_stats=collect_profile_stats,
                 reconstruction_row_count=reconstruction_row_count,
@@ -2195,7 +2345,9 @@ def run_local_em_exact(
         logger=logger,
         label="Exact local",
     )
-    if mstep_relion_x_half:
+    if return_half_volume_accumulators:
+        logger.info("Exact local M-step: keeping native half-volume accumulators for downstream reconstruction")
+    elif mstep_relion_x_half:
         Ft_y, Ft_ctf = relion_x_half_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
     else:
         Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
@@ -2246,6 +2398,22 @@ def run_local_em_exact(
             sorted(debug_fused_posterior_dump_targets),
         )
 
+    if reconstruct_significant_only:
+        logger.info(
+            "Exact local significant-support summary: chunks=%d big_jit_buckets=%d "
+            "sparse_big_jit_buckets=%d reconstruction_rows=%d padded_rows=%d "
+            "significant_samples=%d mean_reconstruction_rows_per_image=%.2f "
+            "mean_significant_samples_per_image=%.2f",
+            n_chunks,
+            big_jit_bucket_count,
+            sparse_big_jit_bucket_count,
+            total_reconstruction_rows,
+            total_padded_rotations,
+            total_significant_samples,
+            0.0 if n_images == 0 else total_reconstruction_rows / n_images,
+            0.0 if n_images == 0 else total_significant_samples / n_images,
+        )
+
     if not return_profile:
         return _local_em_return_tuple(
             Ft_y,
@@ -2265,6 +2433,7 @@ def run_local_em_exact(
     total_wall_time = time.time() - overall_t0
     profile_summary = {
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
+        "sparse_big_jit_bucket_count": np.int32(sparse_big_jit_bucket_count),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
         "defer_local_noise_projection": np.asarray(defer_local_noise_projection),
         "bucket_build_time_s": np.float64(timing.bucket_build_s),

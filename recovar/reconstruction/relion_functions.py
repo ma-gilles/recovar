@@ -16,6 +16,8 @@ from recovar.reconstruction import noise, regularization
 
 logger = logging.getLogger(__name__)
 
+_RELION_PROJECTION_PAD_HOST_FFT_MIN_VOXELS = 200_000_000
+
 
 # ---------------------------------------------------------------------------
 # Fourier volume zero-padding for reconstruction with padding_factor > 1
@@ -54,6 +56,64 @@ def _gridding_correct_trilinear(vol_real, ori_size, padding_factor):
     sinc_r = jnp.where(arg < 1e-15, 1.0, jnp.sin(jnp.pi * arg) / (jnp.pi * arg))
     sinc2_r = sinc_r**2
     return vol_real / sinc2_r
+
+
+def _gridding_correct_trilinear_np(vol_real, ori_size, padding_factor):
+    """NumPy equivalent of ``_gridding_correct_trilinear`` for host padding."""
+
+    N = vol_real.shape[0]
+    coords = np.arange(N, dtype=np.float64) - N / 2.0
+    r = np.sqrt(coords[:, None, None] ** 2 + coords[None, :, None] ** 2 + coords[None, None, :] ** 2)
+    arg = r / (ori_size * padding_factor)
+    sinc_r = np.ones_like(arg)
+    nz = arg >= 1e-15
+    sinc_r[nz] = np.sin(np.pi * arg[nz]) / (np.pi * arg[nz])
+    return vol_real / (sinc_r**2)
+
+
+def _get_dft3_np(img, norm=fourier_transform_utils.DEFAULT_FFT_NORM, axes=(-3, -2, -1)):
+    img = np.fft.fftshift(img, axes=axes)
+    img = np.fft.fftn(img, axes=axes, norm=norm)
+    img = np.fft.fftshift(img, axes=axes)
+    return img
+
+
+def _get_idft3_np(img, norm=fourier_transform_utils.DEFAULT_FFT_NORM, axes=(-3, -2, -1)):
+    img = np.fft.ifftshift(img, axes=axes)
+    img = np.fft.ifftn(img, axes=axes, norm=norm)
+    img = np.fft.ifftshift(img, axes=axes)
+    return img
+
+
+def _pad_volume_for_projection_host(
+    vol_ft_flat,
+    volume_shape,
+    padding_factor,
+    *,
+    do_gridding_correction=False,
+    current_size=None,
+):
+    """Host-side projection padding for grids whose cuFFT workspace is too large."""
+
+    N = int(volume_shape[0])
+    padded_shape = tuple(int(s) * int(padding_factor) for s in volume_shape)
+    vol_real = _get_idft3_np(np.asarray(vol_ft_flat, dtype=np.complex64).reshape(volume_shape))
+    if do_gridding_correction:
+        vol_real = _gridding_correct_trilinear_np(vol_real, N, int(padding_factor))
+    pad_amount = N * (int(padding_factor) - 1)
+    pad_before = pad_amount // 2
+    pad_after = pad_amount - pad_before
+    vol_real_padded = np.pad(vol_real, [(pad_before, pad_after)] * 3, mode="constant")
+    vol_ft_padded = _get_dft3_np(vol_real_padded).astype(np.complex64, copy=False)
+
+    if current_size is not None:
+        r_max_ref = int(padding_factor) * (int(current_size) // 2)
+        pN = int(padded_shape[0])
+        coords = np.arange(pN, dtype=np.float32) - pN / 2.0
+        r2_3d = coords[:, None, None] ** 2 + coords[None, :, None] ** 2 + coords[None, None, :] ** 2
+        vol_ft_padded = np.where(r2_3d <= r_max_ref**2, vol_ft_padded, 0.0)
+
+    return jnp.asarray(vol_ft_padded.reshape(-1)), padded_shape
 
 
 def pad_volume_for_projection(
@@ -105,13 +165,22 @@ def pad_volume_for_projection(
     if padding_factor == 1:
         return vol_ft_flat, volume_shape
 
+    padded_shape = tuple(int(s) * int(padding_factor) for s in volume_shape)
+    if int(np.prod(padded_shape)) > _RELION_PROJECTION_PAD_HOST_FFT_MIN_VOXELS:
+        return _pad_volume_for_projection_host(
+            vol_ft_flat,
+            volume_shape,
+            padding_factor,
+            do_gridding_correction=do_gridding_correction,
+            current_size=current_size,
+        )
+
     N = volume_shape[0]
     vol_real = fourier_transform_utils.get_idft3(jnp.asarray(vol_ft_flat).reshape(volume_shape))
     if do_gridding_correction:
         vol_real = _gridding_correct_trilinear(vol_real, N, padding_factor)
     pad_amount = N * (padding_factor - 1)
     vol_real_padded = padding.pad_volume_spatial_domain(vol_real, pad_amount)
-    padded_shape = tuple(s * padding_factor for s in volume_shape)
     vol_ft_padded = fourier_transform_utils.get_dft3(vol_real_padded)
 
     if current_size is not None:

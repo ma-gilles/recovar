@@ -350,6 +350,7 @@ def _project_local_half_spectrum(
         "disable_adjoint_ctf",
         "accumulate_noise",
         "return_noise_split",
+        "return_mstep_tensors",
         "n_shells",
         "has_normalization_log_z",
         "has_normalization_log_evidence",
@@ -418,6 +419,7 @@ def run_local_bucket_big_jit(
     disable_adjoint_ctf: bool,
     accumulate_noise: bool,
     return_noise_split: bool,
+    return_mstep_tensors: bool,
     n_shells: int,
     has_normalization_log_z: bool,
     has_normalization_log_evidence: bool,
@@ -661,6 +663,28 @@ def run_local_bucket_big_jit(
         noise_sigma2_offset = noise_sigma2_offset + noise_sumw_offset
 
     reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
+    if return_mstep_tensors:
+        return (
+            Ft_y,
+            Ft_ctf,
+            noise_wsum,
+            noise_img_power,
+            noise_a2,
+            noise_xa,
+            noise_sigma2_offset,
+            noise_sumw,
+            batch_norm,
+            log_Z,
+            best_log_score,
+            best_argmax,
+            max_posterior,
+            probs_sum_t,
+            n_significant_samples,
+            reconstruction_rotation_mask,
+            reconstruction_row_count,
+            summed,
+            ctf_probs,
+        )
     return (
         Ft_y,
         Ft_ctf,
