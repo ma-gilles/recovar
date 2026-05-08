@@ -122,12 +122,19 @@ def update_probabilities_from_estep_meta(
     direction_sums = _posterior_sums_from_meta(meta, "class_direction_posterior_sums")
     if direction_sums is not None and state.pdf_direction is not None:
         direction_sums = np.asarray(direction_sums, dtype=np.float64)
-        expected = np.asarray(state.pdf_direction).shape
-        if direction_sums.shape != expected:
-            raise ValueError(f"class_direction_posterior_sums must have shape {expected}, got {direction_sums.shape}")
+        if direction_sums.ndim != 2 or direction_sums.shape[0] != state.K:
+            raise ValueError(
+                f"class_direction_posterior_sums must have shape ({state.K}, n_directions), "
+                f"got {direction_sums.shape}"
+            )
         if not np.all(np.isfinite(direction_sums)) or np.any(direction_sums < 0.0):
             raise ValueError("class_direction_posterior_sums must be non-negative and finite")
-        new_pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64) * my_mu
+        pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
+        if pdf_direction.shape != direction_sums.shape:
+            # RELION resizes pdf_direction to the new sampling.NrDirections()
+            # and fills it uniformly when angular sampling changes.
+            pdf_direction = np.full(direction_sums.shape, 1.0 / float(state.K * direction_sums.shape[1]))
+        new_pdf_direction = pdf_direction * my_mu
         new_pdf_direction += (1.0 - my_mu) * direction_sums / sum_weight
         new_state.pdf_direction = new_pdf_direction
 

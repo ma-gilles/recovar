@@ -263,6 +263,35 @@ class TestRunVdamIterations:
         )
         np.testing.assert_allclose(state.pdf_class, [0.5, 0.5])
 
+    def test_direction_prior_resizes_uniformly_when_sampling_changes(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=2,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.pdf_direction = np.full((2, 3), 1.0 / 6.0, dtype=np.float64)
+        state.subset_size = 50
+        direction_sums = np.asarray(
+            [
+                [4.0, 6.0, 8.0, 10.0, 12.0],
+                [10.0, 10.0, 10.0, 15.0, 15.0],
+            ],
+            dtype=np.float64,
+        )
+        meta = {
+            "class_posterior_sums": np.asarray([40.0, 60.0]),
+            "class_direction_posterior_sums": direction_sums,
+        }
+
+        out = update_probabilities_from_estep_meta(state, meta, do_grad=True, mu=0.9)
+
+        assert out.pdf_direction.shape == (2, 5)
+        expected_uniform = np.full((2, 5), 1.0 / 10.0, dtype=np.float64)
+        np.testing.assert_allclose(out.pdf_direction, expected_uniform * 0.9 + 0.1 * direction_sums / 100.0)
+
     def test_all_particle_probability_update_replaces_priors_and_allows_zero_class(self):
         state = initialise_denovo_state(
             ori_size=8,
