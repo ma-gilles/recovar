@@ -139,7 +139,7 @@ JOB_TYPES = {
         "benchmark_kernel_bandwidth_1d",
         False,
         False,
-        "Shellwise kernel bandwidth benchmark",
+        "Student PDB synthetic pipeline and compute_state walkthrough",
     ),
 }
 
