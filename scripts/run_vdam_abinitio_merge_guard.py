@@ -72,6 +72,20 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
                         "tests/unit/initial_model/test_evaluate_ab_initio_gt.py",
                     ),
                 ),
+                GuardCommand(
+                    "initial_model_vdam_unit_slice",
+                    (
+                        _python(),
+                        "-m",
+                        "pytest",
+                        "-q",
+                        "tests/unit/initial_model/test_dense_adapter.py",
+                        "tests/unit/initial_model/test_iteration_loop.py",
+                        "tests/unit/initial_model/test_init_and_estep.py",
+                        "tests/unit/initial_model/test_native_driver.py",
+                        "tests/unit/test_k_class_joint_semantics.py",
+                    ),
+                ),
             ]
         )
         if not quick:
