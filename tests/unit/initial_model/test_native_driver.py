@@ -117,6 +117,7 @@ def test_particle_state_from_star_preserves_class_and_pmax_columns():
     np.testing.assert_array_equal(state.translation_offsets, np.zeros((2, 2), dtype=np.float32))
     np.testing.assert_array_equal(state.class_assignments, [1, 0])
     np.testing.assert_allclose(state.max_posterior, [0.9, 0.25])
+    np.testing.assert_array_equal(state.pose_assignments, [-1, -1])
 
 
 def test_sampling_plan_oversamples_relion_grid():
@@ -132,6 +133,87 @@ def test_sampling_plan_oversamples_relion_grid():
     assert plan.rotations.shape == (4608, 3, 3)
     assert plan.translations.shape == (116, 2)
     assert plan.random_perturbation == 0.0
+
+
+def test_initial_sampling_state_uses_relion_angstrom_internal_units():
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        healpix_order=1,
+        oversampling=1,
+        offset_range_px=6.0,
+        offset_step_px=2.0,
+        random_perturbation=0.0,
+    )
+
+    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    plan = driver._build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
+
+    assert sampling_state.offset_range_angstrom == pytest.approx(12.75)
+    assert sampling_state.offset_step_angstrom == pytest.approx(4.25)
+    assert sampling_state.offset_range_px == pytest.approx(6.0)
+    assert sampling_state.offset_step_px == pytest.approx(2.0)
+    assert sampling_state.effective_offset_step_angstrom == pytest.approx(2.125)
+    assert plan.offset_range_angstrom == pytest.approx(12.75)
+    assert plan.offset_step_angstrom == pytest.approx(4.25)
+    assert plan.rotations.shape == (4608, 3, 3)
+    assert plan.translations.shape == (116, 2)
+
+
+def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        nr_iter=200,
+        healpix_order=1,
+        oversampling=1,
+        offset_range_px=6.0,
+        offset_step_px=2.0,
+    )
+    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    state = initialise_denovo_state(ori_size=256, pixel_size=2.125, K=1, nr_iter=200, n_directions=1)
+    state.current_resolution = 1.0 / 108.8
+
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=9,
+        do_grad=True,
+    ) is False
+    assert sampling_state.healpix_order == 1
+    assert sampling_state.offset_range_angstrom == pytest.approx(12.75)
+    assert sampling_state.offset_step_angstrom == pytest.approx(4.25)
+
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=10,
+        do_grad=True,
+    ) is True
+    assert sampling_state.healpix_order == 2
+    assert sampling_state.offset_range_angstrom == pytest.approx(8.2875)
+    assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
+    assert sampling_state.effective_offset_step_angstrom == pytest.approx(1.5)
+
+    sampling_state.current_changes_optimal_offsets_angstrom = 2.614243
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=20,
+        do_grad=True,
+    ) is True
+    assert sampling_state.healpix_order == 3
+    assert sampling_state.offset_range_angstrom == pytest.approx(10.77375)
+    assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
+
+    sampling_state.current_changes_optimal_offsets_angstrom = 2.0
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=30,
+        do_grad=True,
+    ) is True
+    assert sampling_state.healpix_order == 3
+    assert sampling_state.offset_range_angstrom == pytest.approx(10.0)
+    assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
 
 
 def test_random_perturbation_override_is_fixed():
@@ -333,6 +415,68 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
     )
     np.testing.assert_array_equal(particle_state.class_assignments, [1, 0])
     np.testing.assert_allclose(particle_state.max_posterior, [0.9, 0.8])
+    np.testing.assert_array_equal(particle_state.pose_assignments, [1, 2])
+
+
+def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkeypatch):
+    build_calls = []
+
+    def fake_build_sampling_plan(opts, *, iteration, sampling_state=None):
+        assert sampling_state is not None
+        build_calls.append((iteration, sampling_state.healpix_order, sampling_state.offset_range_angstrom))
+        return driver.NativeSamplingPlan(
+            rotations=np.zeros((2, 3, 3), dtype=np.float32),
+            translations=np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
+            random_perturbation=0.0,
+            healpix_order=sampling_state.healpix_order,
+            oversampling=sampling_state.adaptive_oversampling,
+            offset_range_px=sampling_state.offset_range_px,
+            offset_step_px=sampling_state.offset_step_px,
+            offset_range_angstrom=sampling_state.offset_range_angstrom,
+            offset_step_angstrom=sampling_state.offset_step_angstrom,
+        )
+
+    def fake_run_dense(dataset, state, config, *, particle_ids, halfset_ids):
+        assert config.engine_kwargs["healpix_order"] == 2
+        return SimpleNamespace(
+            accumulators=[],
+            meta={
+                "selected_particle_ids": np.asarray([0], dtype=np.int64),
+                "pose_assignments": np.asarray([1], dtype=np.int32),
+                "class_assignments": np.asarray([0], dtype=np.int32),
+                "max_posterior_per_image": np.asarray([0.75], dtype=np.float32),
+            },
+        )
+
+    monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
+    monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
+
+    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
+    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((1, 2), dtype=np.float32),
+        class_assignments=np.zeros(1, dtype=np.int32),
+        max_posterior=np.zeros(1, dtype=np.float32),
+        pose_assignments=np.full(1, -1, dtype=np.int32),
+    )
+    state = initialise_denovo_state(ori_size=8, pixel_size=2.125, K=1, nr_iter=200, n_directions=1)
+    state.iter = 10
+
+    expectation_step = driver._native_expectation_step(
+        SimpleNamespace(voxel_size=2.125, n_images=1),
+        opts,
+        np.ones(5, dtype=np.float32),
+        particle_state,
+        sampling_state,
+    )
+    _accumulators, meta = expectation_step(state, np.asarray([0]), np.asarray([0], dtype=np.int8))
+
+    assert build_calls == [(10, 2, pytest.approx(8.2875))]
+    assert meta["sampling_updated"] is True
+    assert meta["healpix_order"] == 2
+    assert meta["offset_range_angstrom"] == pytest.approx(8.2875)
+    assert meta["offset_step_angstrom"] == pytest.approx(3.0)
+    assert meta["current_changes_optimal_offsets_angstrom"] == pytest.approx(2.125 / np.sqrt(2.0))
 
 
 def test_dense_estep_config_splits_fine_and_coarse_translation_priors():

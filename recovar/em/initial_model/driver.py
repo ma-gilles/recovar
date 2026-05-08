@@ -40,6 +40,11 @@ DEFAULT_OFFSET_STEP_PX = 2.0
 DEFAULT_RANDOM_SEED = 0
 DEFAULT_OVERSAMPLING = 1
 DEFAULT_PERTURBATION_FACTOR = 0.5
+RELION_INITIALMODEL_LOCAL_SEARCH_HEALPIX_ORDER = 4
+RELION_INITIALMODEL_MIN_TRANSLATION_STEP_ANGSTROM = 1.5
+RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS = 999.0
+RELION_INITIALMODEL_SMALL_CHANGE_INIT_ORIENTATIONS = 999.0
+RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES = 9999999.0
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -101,9 +106,63 @@ class NativeSamplingPlan:
     rotations: np.ndarray
     translations: np.ndarray
     random_perturbation: float
+    healpix_order: int = DEFAULT_HEALPIX_ORDER
+    oversampling: int = DEFAULT_OVERSAMPLING
+    offset_range_px: float = DEFAULT_OFFSET_RANGE_PX
+    offset_step_px: float = DEFAULT_OFFSET_STEP_PX
+    offset_range_angstrom: float = DEFAULT_OFFSET_RANGE_PX
+    offset_step_angstrom: float = DEFAULT_OFFSET_STEP_PX
     coarse_translations: np.ndarray | None = None
     coarse_prior_translations: np.ndarray | None = None
     translation_parent: np.ndarray | None = None
+
+
+@dataclass
+class NativeSamplingState:
+    """RELION InitialModel autosampling state carried between iterations.
+
+    RELION stores ``sampling.offset_range`` and ``sampling.offset_step`` in
+    Angstroms internally, although the GUI command line specifies pixels.  Keep
+    the mutable state in Angstroms here and convert to pixels only when building
+    RECOVAR translation grids.
+    """
+
+    healpix_order: int
+    adaptive_oversampling: int
+    offset_range_angstrom: float
+    offset_step_angstrom: float
+    offset_range_ori_angstrom: float
+    offset_step_ori_angstrom: float
+    pixel_size: float
+    auto_local_healpix_order: int = RELION_INITIALMODEL_LOCAL_SEARCH_HEALPIX_ORDER
+    # Unknown native accuracy should mean "not fine enough yet". RELION fills
+    # this via calculateExpectedAngularErrors before autosampling updates; until
+    # that trial-subset estimator is ported, 0 preserves refinement progress
+    # instead of treating 999 as "already fine enough".
+    acc_rot: float = 0.0
+    acc_trans_angstrom: float = 999.0
+    current_changes_optimal_offsets_angstrom: float = RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS
+    current_changes_optimal_orientations: float = RELION_INITIALMODEL_SMALL_CHANGE_INIT_ORIENTATIONS
+    current_changes_optimal_classes: float = RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES
+    smallest_changes_optimal_offsets_angstrom: float = RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS
+    smallest_changes_optimal_orientations: float = RELION_INITIALMODEL_SMALL_CHANGE_INIT_ORIENTATIONS
+    smallest_changes_optimal_classes: float = RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES
+    nr_iter_wo_resol_gain: int = 0
+    nr_iter_wo_large_hidden_variable_changes: int = 0
+    has_fine_enough_angular_sampling: bool = False
+    last_current_resolution: float = 0.0
+
+    @property
+    def offset_range_px(self) -> float:
+        return float(self.offset_range_angstrom) / float(self.pixel_size)
+
+    @property
+    def offset_step_px(self) -> float:
+        return float(self.offset_step_angstrom) / float(self.pixel_size)
+
+    @property
+    def effective_offset_step_angstrom(self) -> float:
+        return float(self.offset_step_angstrom) / (2**int(self.adaptive_oversampling))
 
 
 @dataclass
@@ -113,6 +172,7 @@ class NativeParticleState:
     translation_offsets: np.ndarray
     class_assignments: np.ndarray
     max_posterior: np.ndarray
+    pose_assignments: np.ndarray | None = None
 
 
 def _relion_rnd_unif_factory(seed: int) -> RndUnifFn:
@@ -291,6 +351,7 @@ def _particle_state_from_star(main_star, dataset) -> NativeParticleState:
         translation_offsets=_image_origin_offsets_pixels_from_star(main_star, dataset),
         class_assignments=class_assignments,
         max_posterior=max_posterior,
+        pose_assignments=np.full(n_images, -1, dtype=np.int32),
     )
 
 
@@ -348,24 +409,227 @@ def _configure_relion_image_mask(dataset, opts: NativeInitialModelOptions) -> No
         backend.image_mask_mode = "relion_background_fill"
 
 
-def _build_sampling_plan(opts: NativeInitialModelOptions, *, iteration: int = 1) -> NativeSamplingPlan:
-    healpix_order = int(opts.healpix_order)
-    oversampling = int(opts.oversampling)
+def _initial_sampling_state(opts: NativeInitialModelOptions, *, pixel_size: float) -> NativeSamplingState:
+    pixel_size = float(pixel_size)
+    if pixel_size <= 0.0:
+        raise ValueError(f"pixel_size must be positive, got {pixel_size}")
+    return NativeSamplingState(
+        healpix_order=int(opts.healpix_order),
+        adaptive_oversampling=int(opts.oversampling),
+        offset_range_angstrom=float(opts.offset_range_px) * pixel_size,
+        offset_step_angstrom=float(opts.offset_step_px) * pixel_size,
+        offset_range_ori_angstrom=float(opts.offset_range_px) * pixel_size,
+        offset_step_ori_angstrom=float(opts.offset_step_px) * pixel_size,
+        pixel_size=pixel_size,
+    )
+
+
+def _native_initialmodel_do_grad(state: InitialModelState, iteration: int) -> bool:
+    return ((int(state.nr_iter) - int(iteration)) >= DEFAULT_GRAD_EM_ITERS) and not bool(state.has_converged)
+
+
+def _should_update_native_sampling(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
+    """Mirror the InitialModel ``updateAngularSampling`` call cadence."""
+
+    iteration = int(iteration)
+    if iteration <= 1:
+        return False
+    if bool(do_grad) and iteration % 10 != 0:
+        return False
+    return iteration <= int(nr_iter)
+
+
+def _should_record_native_sampling_changes(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
+    """Mirror when RELION refreshes hard-assignment change diagnostics."""
+
+    iteration = int(iteration)
+    return bool(iteration == int(nr_iter) or (not bool(do_grad)) or iteration % 10 == 0)
+
+
+def _record_resolution_stall_for_sampling(
+    sampling_state: NativeSamplingState,
+    state: InitialModelState,
+    *,
+    iteration: int,
+) -> None:
+    """Track RELION's resolution-stall counter for diagnostics.
+
+    InitialModel stores ``current_resolution`` as reciprocal Angstroms in this
+    native state, so larger values are better.  The GUI InitialModel path uses
+    ``auto_ignore_angle_changes`` and does not gate autosampling on these
+    counters, but keeping them in metadata makes divergence easier to audit.
+    """
+
+    current_resolution = float(state.current_resolution)
+    if int(iteration) < 10:
+        sampling_state.nr_iter_wo_resol_gain = 0
+        sampling_state.nr_iter_wo_large_hidden_variable_changes = 0
+    elif current_resolution <= float(sampling_state.last_current_resolution) + 0.0001:
+        sampling_state.nr_iter_wo_resol_gain += 1
+    else:
+        sampling_state.nr_iter_wo_resol_gain = 0
+    sampling_state.last_current_resolution = current_resolution
+
+
+def _reset_native_sampling_change_trackers(sampling_state: NativeSamplingState) -> None:
+    sampling_state.nr_iter_wo_resol_gain = 0
+    sampling_state.nr_iter_wo_large_hidden_variable_changes = 0
+    sampling_state.smallest_changes_optimal_offsets_angstrom = RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS
+    sampling_state.smallest_changes_optimal_orientations = RELION_INITIALMODEL_SMALL_CHANGE_INIT_ORIENTATIONS
+    sampling_state.smallest_changes_optimal_classes = RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES
+
+
+def _relion_update_native_sampling_state(
+    sampling_state: NativeSamplingState,
+    *,
+    do_grad: bool,
+    do_auto_refine: bool = False,
+) -> bool:
+    """Port RELION InitialModel autosampling update for the native driver.
+
+    RELION's GUI InitialModel uses ``--auto_sampling --grad`` rather than
+    autorefine.  In that mode hidden-variable changes are ignored for deciding
+    whether to update, and HEALPix growth stops before the local-search order
+    while translation range/step still follow the RELION formulas.
+    """
+
+    old_angular_step = sampling.relion_angular_sampling_deg(
+        sampling_state.healpix_order,
+        sampling_state.adaptive_oversampling,
+    )
+    if old_angular_step < 0.75 * float(sampling_state.acc_rot):
+        sampling_state.has_fine_enough_angular_sampling = True
+        return False
+    sampling_state.has_fine_enough_angular_sampling = False
+
+    oversampling_factor = 2 ** int(sampling_state.adaptive_oversampling)
+    new_step = (
+        min(
+            RELION_INITIALMODEL_MIN_TRANSLATION_STEP_ANGSTROM,
+            0.75 * float(sampling_state.acc_trans_angstrom),
+        )
+        * oversampling_factor
+    )
+    new_range = 5.0 * float(sampling_state.current_changes_optimal_offsets_angstrom)
+    new_range = min(1.3 * float(sampling_state.offset_range_angstrom), new_range)
+    new_range = max(new_range, 1.5 * new_step)
+    if new_range > 4.0 * new_step:
+        new_range /= 2.0
+    if new_range > 4.0 * new_step:
+        new_step = new_range / 4.0
+
+    new_healpix_order = int(sampling_state.healpix_order)
+    if not (
+        bool(do_grad)
+        and not bool(do_auto_refine)
+        and (int(sampling_state.healpix_order) + 1) >= int(sampling_state.auto_local_healpix_order)
+    ):
+        new_healpix_order += 1
+
+    if new_step > float(sampling_state.offset_step_angstrom):
+        new_step = float(sampling_state.offset_step_angstrom)
+        new_range = float(sampling_state.offset_range_angstrom)
+
+    changed = (
+        new_healpix_order != int(sampling_state.healpix_order)
+        or abs(new_step - float(sampling_state.offset_step_angstrom)) > 1e-12
+        or abs(new_range - float(sampling_state.offset_range_angstrom)) > 1e-12
+    )
+    sampling_state.healpix_order = int(new_healpix_order)
+    sampling_state.offset_step_angstrom = float(new_step)
+    sampling_state.offset_range_angstrom = float(new_range)
+    _reset_native_sampling_change_trackers(sampling_state)
+    return changed
+
+
+def _prepare_native_sampling_for_iteration(
+    sampling_state: NativeSamplingState,
+    state: InitialModelState,
+    *,
+    iteration: int,
+    do_grad: bool,
+) -> bool:
+    _record_resolution_stall_for_sampling(sampling_state, state, iteration=iteration)
+    if not _should_update_native_sampling(iteration=iteration, nr_iter=int(state.nr_iter), do_grad=do_grad):
+        return False
+    # RELION InitialModel uses --auto_sampling without autorefine. In that
+    # branch updateAngularSampling proceeds on the cadence above; resolution
+    # stalls are tracked for metadata but do not block the update.
+    return _relion_update_native_sampling_state(sampling_state, do_grad=do_grad)
+
+
+def _record_native_sampling_assignment_changes(
+    sampling_state: NativeSamplingState,
+    *,
+    particle_ids: np.ndarray | None,
+    previous_translations: np.ndarray,
+    current_translations: np.ndarray,
+    previous_classes: np.ndarray,
+    current_classes: np.ndarray,
+) -> None:
+    if particle_ids is None:
+        return
+    ids = np.asarray(particle_ids, dtype=np.int64).reshape(-1)
+    if ids.size == 0:
+        return
+
+    prev_t = np.asarray(previous_translations, dtype=np.float64)
+    curr_t = np.asarray(current_translations, dtype=np.float64)
+    delta = curr_t[ids, :2] - prev_t[ids, :2]
+    if delta.size:
+        rms_pixels = float(np.sqrt(np.sum(delta[:, 0] ** 2 + delta[:, 1] ** 2) / (2.0 * float(ids.size))))
+        sampling_state.current_changes_optimal_offsets_angstrom = rms_pixels * float(sampling_state.pixel_size)
+        if (
+            sampling_state.current_changes_optimal_offsets_angstrom
+            < sampling_state.smallest_changes_optimal_offsets_angstrom
+        ):
+            sampling_state.smallest_changes_optimal_offsets_angstrom = (
+                sampling_state.current_changes_optimal_offsets_angstrom
+            )
+
+    prev_c = np.asarray(previous_classes, dtype=np.int32)
+    curr_c = np.asarray(current_classes, dtype=np.int32)
+    class_changes = float(np.count_nonzero(curr_c[ids] != prev_c[ids]))
+    sampling_state.current_changes_optimal_classes = class_changes
+    if class_changes < sampling_state.smallest_changes_optimal_classes:
+        sampling_state.smallest_changes_optimal_classes = class_changes
+
+
+def _build_sampling_plan(
+    opts: NativeInitialModelOptions,
+    *,
+    iteration: int = 1,
+    sampling_state: NativeSamplingState | None = None,
+) -> NativeSamplingPlan:
+    if sampling_state is None:
+        healpix_order = int(opts.healpix_order)
+        oversampling = int(opts.oversampling)
+        offset_range_px = float(opts.offset_range_px)
+        offset_step_px = float(opts.offset_step_px)
+        offset_range_angstrom = offset_range_px
+        offset_step_angstrom = offset_step_px
+    else:
+        healpix_order = int(sampling_state.healpix_order)
+        oversampling = int(sampling_state.adaptive_oversampling)
+        offset_range_px = float(sampling_state.offset_range_px)
+        offset_step_px = float(sampling_state.offset_step_px)
+        offset_range_angstrom = float(sampling_state.offset_range_angstrom)
+        offset_step_angstrom = float(sampling_state.offset_step_angstrom)
     if oversampling < 0:
         raise ValueError("oversampling must be >= 0")
 
     random_perturbation = _random_perturbation_for_iteration(opts, iteration)
 
     coarse_translations = sampling.get_translation_grid(
-        max_pixel=float(opts.offset_range_px),
-        pixel_offset=float(opts.offset_step_px),
+        max_pixel=offset_range_px,
+        pixel_offset=offset_step_px,
     ).astype(np.float32)
     coarse_pass1_translations = coarse_translations
     if abs(random_perturbation) > 1e-12:
         coarse_pass1_translations = sampling.apply_relion_translation_perturbation(
             coarse_translations.astype(np.float32, copy=False),
             random_perturbation,
-            float(opts.offset_step_px),
+            offset_step_px,
         ).astype(np.float32)
     if oversampling == 0:
         rotations = sampling.get_relion_hidden_rotation_grid(
@@ -382,12 +646,18 @@ def _build_sampling_plan(opts: NativeInitialModelOptions, *, iteration: int = 1)
             translations = sampling.apply_relion_translation_perturbation(
                 translations,
                 random_perturbation,
-                float(opts.offset_step_px),
+                offset_step_px,
             ).astype(np.float32)
         return NativeSamplingPlan(
             rotations=rotations,
             translations=translations,
             random_perturbation=random_perturbation,
+            healpix_order=healpix_order,
+            oversampling=oversampling,
+            offset_range_px=offset_range_px,
+            offset_step_px=offset_step_px,
+            offset_range_angstrom=offset_range_angstrom,
+            offset_step_angstrom=offset_step_angstrom,
             coarse_translations=coarse_pass1_translations,
             coarse_prior_translations=coarse_translations,
             translation_parent=None,
@@ -402,18 +672,24 @@ def _build_sampling_plan(opts: NativeInitialModelOptions, *, iteration: int = 1)
     )
     translations, _translation_parent = sampling.get_oversampled_translation_grid(
         coarse_translations,
-        pixel_offset=float(opts.offset_step_px),
+        pixel_offset=offset_step_px,
         oversampling_order=oversampling,
     )
     translations = sampling.apply_relion_translation_perturbation(
         translations.astype(np.float32, copy=False),
         random_perturbation,
-        offset_step_pixels=float(opts.offset_step_px),
+        offset_step_pixels=offset_step_px,
     )
     return NativeSamplingPlan(
         rotations=np.asarray(rotations, dtype=np.float32),
         translations=np.asarray(translations, dtype=np.float32),
         random_perturbation=random_perturbation,
+        healpix_order=healpix_order,
+        oversampling=oversampling,
+        offset_range_px=offset_range_px,
+        offset_step_px=offset_step_px,
+        offset_range_angstrom=offset_range_angstrom,
+        offset_step_angstrom=offset_step_angstrom,
         coarse_translations=coarse_pass1_translations,
         coarse_prior_translations=coarse_translations,
         translation_parent=np.asarray(_translation_parent, dtype=np.int64),
@@ -542,14 +818,14 @@ def _dense_estep_config(
         "reconstruction_subtract_projected_reference": True,
         "relion_firstiter_score_mode": "gaussian",
         "image_pre_shifts": np.asarray(image_pre_shifts, dtype=np.float32),
-        "sparse_pass2": int(opts.oversampling) > 0,
+        "sparse_pass2": int(sampling_plan.oversampling) > 0,
     }
-    if int(opts.oversampling) > 0:
+    if int(sampling_plan.oversampling) > 0:
         engine_kwargs.update(
             {
-                "healpix_order": int(opts.healpix_order),
-                "oversampling_order": int(opts.oversampling),
-                "translation_step": float(opts.offset_step_px),
+                "healpix_order": int(sampling_plan.healpix_order),
+                "oversampling_order": int(sampling_plan.oversampling),
+                "translation_step": float(sampling_plan.offset_step_px),
                 "random_perturbation": float(sampling_plan.random_perturbation),
                 "coarse_translations": coarse_translations,
                 "particle_diameter_ang": float(opts.particle_diameter),
@@ -605,19 +881,38 @@ def _native_expectation_step(
     opts: NativeInitialModelOptions,
     noise_variance: np.ndarray,
     particle_state: NativeParticleState | np.ndarray,
+    sampling_state: NativeSamplingState | None = None,
 ):
     if not isinstance(particle_state, NativeParticleState):
         particle_state = NativeParticleState(
             translation_offsets=np.asarray(particle_state, dtype=np.float32).copy(),
             class_assignments=np.zeros(int(dataset.n_images), dtype=np.int32),
             max_posterior=np.zeros(int(dataset.n_images), dtype=np.float32),
+            pose_assignments=np.full(int(dataset.n_images), -1, dtype=np.int32),
         )
 
     def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
         iteration = max(1, int(state.iter))
-        sampling_plan = _build_sampling_plan(opts, iteration=iteration)
+        do_grad = _native_initialmodel_do_grad(state, iteration)
+        sampling_updated = False
+        if sampling_state is None:
+            sampling_plan = _build_sampling_plan(opts, iteration=iteration)
+        else:
+            sampling_updated = _prepare_native_sampling_for_iteration(
+                sampling_state,
+                state,
+                iteration=iteration,
+                do_grad=do_grad,
+            )
+            sampling_plan = _build_sampling_plan(
+                opts,
+                iteration=iteration,
+                sampling_state=sampling_state,
+            )
         config = _dense_estep_config(dataset, opts, noise_variance, sampling_plan, particle_state.translation_offsets)
         config.engine_kwargs["debug_iteration"] = iteration
+        previous_translations = np.asarray(particle_state.translation_offsets, dtype=np.float32).copy()
+        previous_classes = np.asarray(particle_state.class_assignments, dtype=np.int32).copy()
         result = run_dense_initial_model_estep(
             dataset,
             state,
@@ -628,11 +923,44 @@ def _native_expectation_step(
         result.meta["random_perturbation"] = float(sampling_plan.random_perturbation)
         result.meta["n_rotations"] = int(sampling_plan.rotations.shape[0])
         result.meta["n_translations"] = int(sampling_plan.translations.shape[0])
+        result.meta["healpix_order"] = int(sampling_plan.healpix_order)
+        result.meta["oversampling"] = int(sampling_plan.oversampling)
+        result.meta["offset_range_px"] = float(sampling_plan.offset_range_px)
+        result.meta["offset_step_px"] = float(sampling_plan.offset_step_px)
+        result.meta["offset_range_angstrom"] = float(sampling_plan.offset_range_angstrom)
+        result.meta["offset_step_angstrom"] = float(sampling_plan.offset_step_angstrom)
+        if sampling_state is not None:
+            result.meta["sampling_updated"] = bool(sampling_updated)
+            result.meta["effective_offset_step_angstrom"] = float(sampling_state.effective_offset_step_angstrom)
+            result.meta["sampling_acc_rot"] = float(sampling_state.acc_rot)
+            result.meta["sampling_acc_trans_angstrom"] = float(sampling_state.acc_trans_angstrom)
+            result.meta["sampling_nr_iter_wo_resol_gain"] = int(sampling_state.nr_iter_wo_resol_gain)
+            result.meta["sampling_has_fine_enough_angular_sampling"] = bool(
+                sampling_state.has_fine_enough_angular_sampling
+            )
         _update_particle_state_from_estep_meta(
             particle_state,
             result.meta,
             sampling_plan.translations,
         )
+        if sampling_state is not None and _should_record_native_sampling_changes(
+            iteration=iteration,
+            nr_iter=int(state.nr_iter),
+            do_grad=do_grad,
+        ):
+            _record_native_sampling_assignment_changes(
+                sampling_state,
+                particle_ids=result.meta.get("selected_particle_ids"),
+                previous_translations=previous_translations,
+                current_translations=particle_state.translation_offsets,
+                previous_classes=previous_classes,
+                current_classes=particle_state.class_assignments,
+            )
+        if sampling_state is not None:
+            result.meta["current_changes_optimal_offsets_angstrom"] = float(
+                sampling_state.current_changes_optimal_offsets_angstrom
+            )
+            result.meta["current_changes_optimal_classes"] = float(sampling_state.current_changes_optimal_classes)
         return result.accumulators, result.meta
 
     return _expectation_step
@@ -647,6 +975,7 @@ def _update_translation_offsets_from_estep_meta(
         translation_offsets=translation_offsets,
         class_assignments=np.zeros(translation_offsets.shape[0], dtype=np.int32),
         max_posterior=np.zeros(translation_offsets.shape[0], dtype=np.float32),
+        pose_assignments=np.full(translation_offsets.shape[0], -1, dtype=np.int32),
     )
     _update_particle_state_from_estep_meta(particle_state, meta, translations)
 
@@ -681,6 +1010,15 @@ def _update_particle_state_from_estep_meta(
         translation_ids = np.mod(assignments, n_trans)
         base = np.rint(particle_state.translation_offsets[particle_ids]).astype(np.float32)
         particle_state.translation_offsets[particle_ids] = base + translations[translation_ids, :2]
+        if particle_state.pose_assignments is None or particle_state.pose_assignments.shape != (
+            particle_state.translation_offsets.shape[0],
+        ):
+            particle_state.pose_assignments = np.full(
+                particle_state.translation_offsets.shape[0],
+                -1,
+                dtype=np.int32,
+            )
+        particle_state.pose_assignments[particle_ids] = assignments.astype(np.int32, copy=False)
 
     class_assignments = meta.get("class_assignments")
     if class_assignments is not None:
@@ -1018,7 +1356,8 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         raise NotImplementedError("native InitialModel currently supports SPA particle STAR files, not tilt-series")
 
     _configure_relion_image_mask(dataset, opts)
-    sampling_plan = _build_sampling_plan(opts, iteration=1)
+    sampling_state = _initial_sampling_state(opts, pixel_size=float(dataset.voxel_size))
+    sampling_plan = _build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
     particle_state = _particle_state_from_star(main_star, dataset)
     state, optics_group_by_particle = _initial_state_from_particles(
         dataset,
@@ -1028,7 +1367,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         sampling_plan.rotations,
     )
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
-    expectation_step = _native_expectation_step(dataset, opts, noise_variance, particle_state)
+    expectation_step = _native_expectation_step(dataset, opts, noise_variance, particle_state, sampling_state)
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(int(dataset.n_images))
 
     if opts.write_iter_artifacts:
