@@ -34,7 +34,7 @@
           {
             "type": "prompt",
             "prompt": "Check if this edit widened a test tolerance or made a test easier to pass. Look for: changes to _TOL, tol_frac, TOL_FRAC, HIGH_VARIANCE_TOKENS, ABSOLUTE_TOLERANCE_FLOORS, skip logic for metrics, or any pattern that makes a failing test pass by loosening the acceptance criteria rather than fixing the code. If ANY such change was made, respond {\"ok\": false, \"reason\": \"Tolerance was widened or test was made easier to pass. This is not allowed without explicit user approval.\"}. If the edit is to a non-test file or doesn't touch tolerances, respond {\"ok\": true}. File: $FILE_PATH",
-            "model": "haiku",
+            "model": "sonnet",
             "timeout": 15
           }
         ]
