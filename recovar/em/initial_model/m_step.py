@@ -245,8 +245,18 @@ def vdam_m_step_single_class(
     new_fourier_coverage_class = state.fourier_coverage_class.copy()
     new_data_vs_prior_class = state.data_vs_prior_class.copy()
     fsc_for_ssnr = np.asarray(state.fsc_halves_class[0], dtype=np.float64)
+    # In pseudo-halfset mode each accumulator independently covers (nearly)
+    # all particles with a different random pose ordering, so accum_h0.weight
+    # alone is biased ~−1% vs RELION's iter-1 single-halfset BPref weight.
+    # Average the two halfsets to recover the unified-halfset weight RELION
+    # passes to updateSSNRarrays. Falls back to accum_h0.weight in
+    # non-pseudo-halfset mode.
+    if accum_h1 is not None:
+        weight_for_ssnr = 0.5 * (accum_h0.weight + accum_h1.weight)
+    else:
+        weight_for_ssnr = accum_h0.weight
     tau2, sigma2, data_vs_prior, fourier_coverage = bind.vdam_update_ssnr_arrays_from_bpref(
-        accum_h0.weight,
+        weight_for_ssnr,
         fsc_for_ssnr,
         state.tau2_class[k],
         tau2_fudge_factor,
