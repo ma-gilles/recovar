@@ -442,15 +442,30 @@ def test_relion_projector_to_dense_volume_handles_ori_size_boundary(monkeypatch)
     np.testing.assert_array_equal(half[0:4, 0:4, :3], slab[::-1, :, :][0:4, 0:4, :3])
 
 
-def test_relion_projector_to_dense_volume_rejects_oversize(monkeypatch):
-    """Beyond ori_size+1 in y/z (or center+1 in x) is a real shape error."""
-    monkeypatch.setattr(
-        "recovar.core.fourier_transform_utils.half_volume_to_full_volume",
-        lambda half, shape: np.asarray(half),
-    )
-    slab = np.zeros((6, 6, 3), dtype=np.complex128)  # ori_size=4 → max 5x5x3
-    with pytest.raises(ValueError, match="does not fit ori_size=4"):
-        _relion_projector_to_dense_volume(slab, 4)
+def test_relion_projector_to_dense_volume_truncates_oversize(monkeypatch):
+    """Slabs larger than the representable half-volume are truncated to the
+    in-range subset rather than rejected. This handles VDAM iters where
+    autosampling pushes current_size up to (or slightly above) ori_size and
+    RELION emits cropped projectors of shape (2*r_max+1, 2*r_max+1, r_max+1)
+    that exceed RECOVAR's (ori_size, ori_size, ori_size/2+1) layout."""
+    captured = {}
+
+    def fake_half_to_full(half, shape):
+        captured["half"] = np.asarray(half)
+        return np.asarray(half)
+
+    monkeypatch.setattr("recovar.core.fourier_transform_utils.half_volume_to_full_volume", fake_half_to_full)
+    # ori_size=4 → max half (4, 4, 3). Pass an even larger (7, 7, 4) slab.
+    slab = np.arange(7 * 7 * 4, dtype=np.float64).reshape(7, 7, 4).astype(np.complex128)
+    out = _relion_projector_to_dense_volume(slab, 4)
+    half = captured["half"]
+    assert half.shape == (4, 4, 3)
+    # Center of slab (index 3) maps to center of half (index 2).
+    # iz=3 → z = 3-3+2 = 2 ✓, iz=2 → z = 1, iz=4 → z = 3, iz=0/1/5/6 → out of range.
+    # Reversed slab[::-1] at iz=2 = original slab[4]; at iz=3 = slab[3]; etc.
+    rev = slab[::-1, :, :]
+    np.testing.assert_array_equal(half[1, 1, :3], rev[2, 2, :3])
+    np.testing.assert_array_equal(half[2, 2, :3], rev[3, 3, :3])
 
 
 def test_reference_to_relion_projector_dense_means_uses_relion_projector_frame(monkeypatch):

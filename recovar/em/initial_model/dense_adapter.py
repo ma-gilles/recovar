@@ -366,18 +366,17 @@ def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int)
         raise ValueError(f"projector_data must be 3D, got {ppref.shape}")
     n = int(ori_size)
     center = n // 2
-    # When current_size == ori_size, RELION's cropped projector has y/z dim
-    # 2*r_max+1 = ori_size+1 (e.g., 129 for ori_size=128). The embedding loop
-    # below skips iz/iy == ori_size via `if z >= n: continue`, so allow this
-    # one-extra-Nyquist-row case. Same for shape[2]: r_max+1 caps at center+1
-    # when current_size == ori_size.
-    if ppref.shape[0] > n + 1 or ppref.shape[1] > n + 1 or ppref.shape[2] > center + 1:
-        raise ValueError(f"cropped Projector::data shape {ppref.shape} does not fit ori_size={ori_size}")
-
+    # RELION's cropped projector has shape (2*r_max+1, 2*r_max+1, r_max+1)
+    # where r_max = current_size/2. When VDAM autosampling pushes current_size
+    # at or beyond ori_size, the cropped slab can exceed RECOVAR's full
+    # centered half-volume dimensions (n, n, center+1). The embedding loop
+    # below clips out-of-range coordinates, so any-size input is accepted —
+    # we just truncate to the representable subset of frequencies.
     half = np.zeros((n, n, center + 1), dtype=np.complex128)
     slab = ppref[::-1, :, :]
     z_center = slab.shape[0] // 2
     y_center = slab.shape[1] // 2
+    x_max = min(slab.shape[2], center + 1)
     for iz in range(slab.shape[0]):
         z = (iz - z_center) + center
         if z < 0 or z >= n:
@@ -385,7 +384,7 @@ def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int)
         for iy in range(slab.shape[1]):
             y = (iy - y_center) + center
             if 0 <= y < n:
-                half[z, y, : slab.shape[2]] = slab[iz, iy, :]
+                half[z, y, :x_max] = slab[iz, iy, :x_max]
     return np.asarray(ftu.half_volume_to_full_volume(half, (n, n, n)), dtype=np.complex128)
 
 
