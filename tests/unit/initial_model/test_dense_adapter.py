@@ -7,20 +7,20 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.dense_adapter import (
     DenseInitialModelEstepConfig,
-    class_log_priors_from_state,
     _estep_meta,
     _initial_model_pass2_layout,
     _relion_projector_to_dense_volume,
     _resolve_sparse_pass1_current_size,
+    class_log_priors_from_state,
     reference_to_dense_means,
     reference_to_relion_projector_dense_means,
     run_dense_initial_model_estep,
     split_pseudo_halfset_particle_ids,
 )
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 
 pytestmark = pytest.mark.unit
 
@@ -97,7 +97,9 @@ def test_class_log_priors_from_state_allows_inactive_class():
 def test_dense_initial_model_estep_runs_separate_k_class_calls_for_pseudo_halfsets(monkeypatch):
     calls = []
 
-    def fake_run_dense_k_class_em(dataset, means, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs):
+    def fake_run_dense_k_class_em(
+        dataset, means, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs
+    ):
         calls.append(
             {
                 "means_shape": np.asarray(means).shape,
@@ -337,7 +339,9 @@ def test_dense_initial_model_estep_uses_current_state_reference_when_means_omitt
         refs = np.asarray(references)
         return np.full((refs.shape[0], refs.shape[1] ** 3), refs[0, 0, 0, 0], dtype=np.complex64)
 
-    def fake_run_dense_k_class_em(dataset, means, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs):
+    def fake_run_dense_k_class_em(
+        dataset, means, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs
+    ):
         calls.append(
             {
                 "means": np.asarray(means).copy(),
@@ -415,13 +419,49 @@ def test_relion_projector_to_dense_volume_embeds_cropped_slab(monkeypatch):
     np.testing.assert_allclose(out, half + 1.0j)
 
 
+def test_relion_projector_to_dense_volume_handles_ori_size_boundary(monkeypatch):
+    """When current_size == ori_size, RELION's cropped projector has y/z dim
+    2*r_max+1 = ori_size+1. The embedding loop must drop the redundant
+    Nyquist row (Hermitian conjugate of index 0) without raising."""
+    captured = {}
+
+    def fake_half_to_full(half, shape):
+        captured["half"] = np.asarray(half)
+        return np.asarray(half)
+
+    monkeypatch.setattr("recovar.core.fourier_transform_utils.half_volume_to_full_volume", fake_half_to_full)
+
+    # ori_size=4 → r_max=2 → cropped shape (5, 5, 3)
+    slab = np.arange(5 * 5 * 3, dtype=np.float64).reshape(5, 5, 3).astype(np.complex128)
+    out = _relion_projector_to_dense_volume(slab, 4)
+
+    half = captured["half"]
+    assert half.shape == (4, 4, 3)
+    # Index iz=4 (extra Nyquist) must be dropped, not raise.
+    # The first 4 rows (iz=0..3) of the reversed slab map to half[0..3, :, :].
+    np.testing.assert_array_equal(half[0:4, 0:4, :3], slab[::-1, :, :][0:4, 0:4, :3])
+
+
+def test_relion_projector_to_dense_volume_rejects_oversize(monkeypatch):
+    """Beyond ori_size+1 in y/z (or center+1 in x) is a real shape error."""
+    monkeypatch.setattr(
+        "recovar.core.fourier_transform_utils.half_volume_to_full_volume",
+        lambda half, shape: np.asarray(half),
+    )
+    slab = np.zeros((6, 6, 3), dtype=np.complex128)  # ori_size=4 → max 5x5x3
+    with pytest.raises(ValueError, match="does not fit ori_size=4"):
+        _relion_projector_to_dense_volume(slab, 4)
+
+
 def test_reference_to_relion_projector_dense_means_uses_relion_projector_frame(monkeypatch):
     calls = []
 
     def fake_recovar_volume_to_relion(ref):
         return np.asarray(ref) + 10.0
 
-    def fake_compute_fourier_transform_map(vol, ori_size, padding_factor, interpolator, current_size, do_gridding, data_dim):
+    def fake_compute_fourier_transform_map(
+        vol, ori_size, padding_factor, interpolator, current_size, do_gridding, data_dim
+    ):
         calls.append(
             {
                 "vol": np.asarray(vol).copy(),
@@ -653,10 +693,7 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
         calls["pass1_class_log_priors"] = np.asarray(kwargs["class_log_priors"], dtype=np.float64).copy()
         n_images = int(dataset.n_images)
         n_rot = int(np.asarray(rotations).shape[0])
-        significant = [
-            [np.asarray([class_idx], dtype=np.int32) for _ in range(n_images)]
-            for class_idx in range(2)
-        ]
+        significant = [[np.asarray([class_idx], dtype=np.int32) for _ in range(n_images)] for class_idx in range(2)]
         return (
             np.ones((2, n_rot), dtype=bool),
             np.full(n_images, 2, dtype=np.int32),
@@ -776,10 +813,7 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
         )
         n_images = int(dataset.n_images)
         n_rot = int(np.asarray(rotations).shape[0])
-        significant = [
-            [np.asarray([class_idx], dtype=np.int32) for _ in range(n_images)]
-            for class_idx in range(1)
-        ]
+        significant = [[np.asarray([class_idx], dtype=np.int32) for _ in range(n_images)] for class_idx in range(1)]
         return (
             np.ones((1, n_rot), dtype=bool),
             np.full(n_images, 1, dtype=np.int32),
@@ -793,9 +827,7 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
         del args
         calls["layouts"].append(
             {
-                "significant_samples": [
-                    np.asarray(samples, dtype=np.int32).copy() for samples in significant_samples
-                ],
+                "significant_samples": [np.asarray(samples, dtype=np.int32).copy() for samples in significant_samples],
                 "pass2_parent_prior": np.asarray(kwargs["translation_log_prior"], dtype=np.float32).copy(),
             }
         )

@@ -366,7 +366,12 @@ def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int)
         raise ValueError(f"projector_data must be 3D, got {ppref.shape}")
     n = int(ori_size)
     center = n // 2
-    if ppref.shape[0] > n or ppref.shape[1] > n or ppref.shape[2] > center + 1:
+    # When current_size == ori_size, RELION's cropped projector has y/z dim
+    # 2*r_max+1 = ori_size+1 (e.g., 129 for ori_size=128). The embedding loop
+    # below skips iz/iy == ori_size via `if z >= n: continue`, so allow this
+    # one-extra-Nyquist-row case. Same for shape[2]: r_max+1 caps at center+1
+    # when current_size == ori_size.
+    if ppref.shape[0] > n + 1 or ppref.shape[1] > n + 1 or ppref.shape[2] > center + 1:
         raise ValueError(f"cropped Projector::data shape {ppref.shape} does not fit ori_size={ori_size}")
 
     half = np.zeros((n, n, center + 1), dtype=np.complex128)
@@ -611,8 +616,7 @@ def _class_local_rotation_log_prior(class_rotation_log_prior, layout) -> np.ndar
         raise ValueError("local layout is missing coarse parent rotation ids for class priors")
     if prior.ndim != 2 or prior.shape[1] <= int(np.max(parent_ids, initial=-1)):
         raise ValueError(
-            "class_rotation_log_prior must have shape (n_classes, n_coarse_rotations), "
-            f"got {prior.shape}",
+            f"class_rotation_log_prior must have shape (n_classes, n_coarse_rotations), got {prior.shape}",
         )
     return prior[:, parent_ids]
 
@@ -808,9 +812,7 @@ def _run_sparse_pass2_initial_model_estep(
             image_corrections=group_kwargs.get("image_corrections"),
             scale_corrections=group_kwargs.get("scale_corrections"),
             image_pre_shifts=group_kwargs.get("image_pre_shifts"),
-            mstep_subtract_ctf_projection=bool(
-                group_kwargs.get("reconstruction_subtract_projected_reference", False)
-            ),
+            mstep_subtract_ctf_projection=bool(group_kwargs.get("reconstruction_subtract_projected_reference", False)),
             mstep_relion_x_half=bool(config.relion_bpref_frame),
             reconstruct_significant_only=True,
             adaptive_fraction=adaptive_fraction,
@@ -992,9 +994,7 @@ def _run_sparse_pass2_initial_model_estep(
             image_corrections=group_kwargs.get("image_corrections"),
             scale_corrections=group_kwargs.get("scale_corrections"),
             image_pre_shifts=group_kwargs.get("image_pre_shifts"),
-            mstep_subtract_ctf_projection=bool(
-                group_kwargs.get("reconstruction_subtract_projected_reference", False)
-            ),
+            mstep_subtract_ctf_projection=bool(group_kwargs.get("reconstruction_subtract_projected_reference", False)),
             mstep_relion_x_half=bool(config.relion_bpref_frame),
             reconstruct_significant_only=True,
             adaptive_fraction=adaptive_fraction,
@@ -1246,9 +1246,7 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
             meta[f"halfset_{h}_noise_sumw"] = half_sumw
             wsum_sigma2_offset += half_wsum
             sigma2_offset_sumw += half_sumw
-            wsum_sigma2_noise = (
-                half_wsum_noise if wsum_sigma2_noise is None else wsum_sigma2_noise + half_wsum_noise
-            )
+            wsum_sigma2_noise = half_wsum_noise if wsum_sigma2_noise is None else wsum_sigma2_noise + half_wsum_noise
             wsum_img_power = half_img_power if wsum_img_power is None else wsum_img_power + half_img_power
             noise_sumw += half_sumw
             have_sigma2_offset = True
