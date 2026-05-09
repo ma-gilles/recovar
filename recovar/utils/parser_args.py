@@ -4,7 +4,7 @@ import os
 
 
 def positive_finite_gb(raw: str) -> float:
-    """argparse ``type`` for ``--gpu-gb``: reject NaN / inf / non-positive.
+    """argparse ``type`` for ``--gpu-budget-gb``: reject NaN / inf / non-positive.
 
     Shared with the pre-import scanner in ``recovar.command_line`` so a
     malformed budget fails the same way before AND after jax has been
@@ -14,11 +14,11 @@ def positive_finite_gb(raw: str) -> float:
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        raise argparse.ArgumentTypeError(f"--gpu-gb={raw!r} is not a number")
+        raise argparse.ArgumentTypeError(f"--gpu-budget-gb={raw!r} is not a number")
     if not math.isfinite(value):
-        raise argparse.ArgumentTypeError(f"--gpu-gb={raw!r} is not finite (NaN or inf)")
+        raise argparse.ArgumentTypeError(f"--gpu-budget-gb={raw!r} is not finite (NaN or inf)")
     if value <= 0:
-        raise argparse.ArgumentTypeError(f"--gpu-gb={raw!r} must be > 0")
+        raise argparse.ArgumentTypeError(f"--gpu-budget-gb={raw!r} must be > 0")
     return value
 
 
@@ -48,38 +48,40 @@ def add_output_name_arg(parser: argparse.ArgumentParser):
 
 
 def add_gpu_memory_arg(parser: argparse.ArgumentParser):
-    """Add ``--gpu-gb`` to any heavy-GPU command.
+    """Add ``--gpu-budget-gb`` to any heavy-GPU command.
 
-    Lowers the GPU budget used by recovar's auto-batch-size formulas
-    AND caps JAX's actual allocation via
-    ``XLA_PYTHON_CLIENT_MEM_FRACTION`` (the latter happens in
-    ``recovar.command_line._apply_gpu_memory_cap`` before jax
-    initializes). Lower it if the heterogeneity / kernel-regression /
-    backproject step OOMs on your GPU.
+    A SOFT budget for RECOVAR's auto-batch-size formulas. It does not
+    enforce anything against JAX directly — JAX's allocation behavior
+    is controlled separately by ``XLA_PYTHON_CLIENT_MEM_FRACTION`` and
+    ``XLA_PYTHON_CLIENT_PREALLOCATE``. Pass it when you want recovar
+    to plan smaller batches than your physical VRAM (e.g. on a shared
+    GPU or to leave headroom for another process).
     """
     parser.add_argument(
-        "--gpu-gb",
+        "--gpu-budget-gb",
         type=positive_finite_gb,
         default=None,
         dest="gpu_memory",
         help=(
-            "GPU memory budget in GB (positive finite). Caps JAX allocation "
-            "AND the auto-batch-size formula. Default: full physical VRAM via "
-            "JAX. Lower this on a constrained or shared GPU."
+            "Soft GPU memory budget in GB used by RECOVAR's auto-batch-size "
+            "formula (positive finite). Default: full physical VRAM as "
+            "reported by JAX. Lower this on a constrained or shared GPU. "
+            "This is NOT a JAX-level cap — see XLA_PYTHON_CLIENT_MEM_FRACTION "
+            "and XLA_PYTHON_CLIENT_PREALLOCATE for that."
         ),
     )
     return parser
 
 
 def apply_gpu_memory_arg(args, logger=None) -> None:
-    """If ``--gpu-gb`` was given, propagate to ``set_gpu_memory_limit``."""
+    """If ``--gpu-budget-gb`` was given, propagate to ``set_gpu_memory_limit``."""
     if getattr(args, "gpu_memory", None) is not None:
         from recovar.utils import helpers as _utils
 
         _utils.set_gpu_memory_limit(args.gpu_memory)
         if logger is not None:
             logger.info(
-                "GPU memory budget set to %.1f GB via --gpu-gb",
+                "GPU batch-size budget set to %.1f GB via --gpu-budget-gb",
                 args.gpu_memory,
             )
 
@@ -88,7 +90,7 @@ def add_memory_planning_args(parser: argparse.ArgumentParser):
     """Add the full GPU-memory flag set for any heavy-GPU command.
 
     Adds:
-      - ``--gpu-gb``                        budget (caps JAX + batch formulas)
+      - ``--gpu-budget-gb``                        budget (caps JAX + batch formulas)
       - ``--low-memory-option``             halve batch sizes
       - ``--very-low-memory-option``        quarter batch sizes
       - ``--adaptive-n-pcs``                pick n_pcs to fit the budget
@@ -152,7 +154,7 @@ def add_memory_planning_args(parser: argparse.ArgumentParser):
         dest="fail_on_memory_exceed",
         action="store_true",
         help=(
-            "Test-only: at end of run, assert max(jax_peak_gb) <= --gpu-gb * 1.05; "
+            "Test-only: at end of run, assert max(jax_peak_gb) <= --gpu-budget-gb * 1.05; "
             "exit non-zero with a structured failure summary if violated. "
             "Does NOT abort mid-run."
         ),
@@ -334,7 +336,7 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze=False):
         help="Edge width of FSC mask (in Angstroms). If None, uses 10%% of fsc-mask-radius. Only used if fsc-mask-radius is specified.",
     )
 
-    # Full memory-planning surface (includes --gpu-gb / --gpu-memory and
+    # Full memory-planning surface (includes --gpu-budget-gb / --gpu-memory and
     # all the new diagnostic / safety flags) so every downstream command
     # exposes the same UX as ``recovar pipeline``.
     add_memory_planning_args(parser)

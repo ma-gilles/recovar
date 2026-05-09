@@ -3,7 +3,7 @@
 Used in two ways:
 
 1. Bootstrap parser in ``command_line.py`` — query physical GPU total
-   to convert ``--gpu-gb`` into ``XLA_PYTHON_CLIENT_MEM_FRACTION`` for
+   to convert ``--gpu-budget-gb`` into ``XLA_PYTHON_CLIENT_MEM_FRACTION`` for
    the hard-limit path. Must work BEFORE jax is imported.
 
 2. Memory planner — sample ``physical_free_gb`` to detect conflicting

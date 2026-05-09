@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 # Subcommands that accept the full memory-planning flag surface
-# (``--gpu-gb``, ``--low-memory-option``, ``--adaptive-n-pcs``, …).
+# (``--gpu-budget-gb``, ``--low-memory-option``, ``--adaptive-n-pcs``, …).
 # Single source of truth: tests and the splicer below both read this.
 _COMMANDS_WITH_MEMORY_ARGS = frozenset(
     {
@@ -84,11 +84,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Disable the auto-add of --adaptive-n-pcs for inner pipeline calls. "
             "Use this when you want the smoke test to exercise the default 200-PC "
-            "configuration even on a constrained --gpu-gb budget."
+            "configuration even on a constrained --gpu-budget-gb budget."
         ),
     )
 
-    # Memory-planning flag set: --gpu-gb, --low-memory-option,
+    # Memory-planning flag set: --gpu-budget-gb, --low-memory-option,
     # --very-low-memory-option, --adaptive-n-pcs, --memory-diagnostics,
     # --fail-on-memory-exceed, --memory-safety-fraction.
     from recovar.utils.parser_args import add_memory_planning_args
@@ -106,7 +106,7 @@ def _build_forward_argv(args: argparse.Namespace) -> list[str]:
     """
     fwd: list[str] = []
     if args.gpu_memory is not None:
-        fwd += ["--gpu-gb", str(args.gpu_memory)]
+        fwd += ["--gpu-budget-gb", str(args.gpu_memory)]
     if args.low_memory_option:
         fwd.append("--low-memory-option")
     if args.very_low_memory_option:

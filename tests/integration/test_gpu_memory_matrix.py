@@ -11,7 +11,7 @@ Two flavors:
     pytest just shells out to a single representative cell here.
 
 Each cell:
-  1. ``recovar run_test_dataset --gpu-gb N --memory-diagnostics --no-delete``
+  1. ``recovar run_test_dataset --gpu-budget-gb N --memory-diagnostics --no-delete``
   2. asserts ``memory_plan.json`` exists under the output dir
   3. asserts ``memory_trace.jsonl`` exists and the recorded peaks fit
      within ``budget * 1.2``.
@@ -57,7 +57,7 @@ def _run_cell(out_dir: Path, *, gpu_gb: int, backend: str) -> None:
         "run_test_dataset",
         "--output-dir",
         str(out_dir),
-        "--gpu-gb",
+        "--gpu-budget-gb",
         str(gpu_gb),
         "--memory-diagnostics",
         "--no-delete",
@@ -67,7 +67,7 @@ def _run_cell(out_dir: Path, *, gpu_gb: int, backend: str) -> None:
     if result.returncode != 0:
         sys.stderr.write(result.stderr)
         sys.stderr.write(result.stdout)
-        pytest.fail(f"run_test_dataset --gpu-gb {gpu_gb} backend={backend} exited {result.returncode}")
+        pytest.fail(f"run_test_dataset --gpu-budget-gb {gpu_gb} backend={backend} exited {result.returncode}")
 
 
 def _assert_diagnostics(out_dir: Path, *, gpu_gb: float) -> None:

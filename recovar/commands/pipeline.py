@@ -267,7 +267,7 @@ def add_args(parser: argparse.ArgumentParser):
         action="store_true",
         help="Accept running on CPU if no GPU is found",
     )
-    # Memory planning flags: --gpu-gb / --gpu-memory, --low-memory-option,
+    # Memory planning flags: --gpu-budget-gb / --gpu-memory, --low-memory-option,
     # --very-low-memory-option, --adaptive-memory / --adaptive-n-pcs /
     # --n-adaptive-pcs, --memory-diagnostics, --fail-on-memory-exceed,
     # --memory-safety-fraction. Defined centrally
@@ -740,12 +740,12 @@ def standard_recovar_pipeline(args):
 
     # Push the soft budget into ``set_gpu_memory_limit`` early so any code
     # that runs before the dataset is loaded (notably ``downsample_to_disk``)
-    # uses the user's --gpu-gb. The MemoryPlanner overwrites it later with
+    # uses the user's --gpu-budget-gb. The MemoryPlanner overwrites it later with
     # the effective_budget once we know grid_size.
     if args.gpu_memory is not None:
         utils.set_gpu_memory_limit(args.gpu_memory)
         logger.info(
-            "GPU memory budget requested: %.1f GB (--gpu-gb). The planner will refine this once the dataset is loaded.",
+            "GPU memory budget requested: %.1f GB (--gpu-budget-gb). The planner will refine this once the dataset is loaded.",
             args.gpu_memory,
         )
 
@@ -1208,19 +1208,19 @@ def standard_recovar_pipeline(args):
             slack_limit = args.gpu_memory * 1.05
             if peak_val > slack_limit and getattr(args, "fail_on_memory_exceed", False):
                 msg = (
-                    "Peak GPU usage %.2f GB exceeded the requested --gpu-gb=%.2f "
+                    "Peak GPU usage %.2f GB exceeded the requested --gpu-budget-gb=%.2f "
                     "GB (slack limit %.2f GB). --fail-on-memory-exceed is set; "
-                    "exiting non-zero. To recover, increase --gpu-gb, add "
+                    "exiting non-zero. To recover, increase --gpu-budget-gb, add "
                     "--adaptive-n-pcs, or use --low-memory-option / "
                     "--very-low-memory-option."
                 ) % (peak_val, args.gpu_memory, slack_limit)
                 logger.error(msg)
                 raise SystemExit(2)
             logger.warning(
-                "Peak GPU usage (%.2f GB) exceeded --gpu-gb=%.2f GB. The run "
+                "Peak GPU usage (%.2f GB) exceeded --gpu-budget-gb=%.2f GB. The run "
                 "completed; if this was a test, pass --fail-on-memory-exceed "
                 "to surface this as a non-zero exit. Otherwise consider raising "
-                "--gpu-gb or adding --adaptive-n-pcs / --low-memory-option.",
+                "--gpu-budget-gb or adding --adaptive-n-pcs / --low-memory-option.",
                 peak_val,
                 args.gpu_memory,
             )

@@ -5,7 +5,7 @@
 #   FAST set:   BUDGETS="16 40 75" CUDA_MODES="custom_cuda"
 #   FULL set:   BUDGETS="8 12 16 24 40 60 75" CUDA_MODES="custom_cuda jax_fallback"
 #
-# Each cell runs `recovar run_test_dataset --gpu-gb $N --adaptive-n-pcs
+# Each cell runs `recovar run_test_dataset --gpu-budget-gb $N --adaptive-n-pcs
 # --memory-diagnostics --fail-on-memory-exceed --no-delete` against a
 # small-but-realistic synthetic dataset, then asserts:
 #   - memory_plan.json exists and reports effective_budget_gb <= N * 1.2
@@ -63,7 +63,7 @@ ${env_setup}
 mkdir -p "${cell_dir}"
 pixi run python -m recovar.command_line run_test_dataset \\
     --output-dir "${cell_dir}" \\
-    --gpu-gb ${gb} \\
+    --gpu-budget-gb ${gb} \\
     --memory-diagnostics \\
     --no-delete
 

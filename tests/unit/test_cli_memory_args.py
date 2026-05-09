@@ -41,7 +41,7 @@ def _help_text_for(cmd: str) -> str:
 @pytest.mark.parametrize("cmd", _HEAVY_GPU_COMMANDS)
 def test_command_help_lists_gpu_gb(cmd):
     txt = _help_text_for(cmd)
-    assert "--gpu-gb" in txt, f"recovar {cmd} --help is missing --gpu-gb"
+    assert "--gpu-budget-gb" in txt, f"recovar {cmd} --help is missing --gpu-budget-gb"
 
 
 @pytest.mark.parametrize("cmd", _HEAVY_GPU_COMMANDS)
@@ -73,7 +73,7 @@ def test_pipeline_parser_accepts_canonical_flags():
     parser = argparse.ArgumentParser()
     pipe.add_args(parser)
 
-    args_gpu = parser.parse_args(["pp.mrcs", "-o", "/tmp", "--mask", "sphere", "--gpu-gb", "12"])
+    args_gpu = parser.parse_args(["pp.mrcs", "-o", "/tmp", "--mask", "sphere", "--gpu-budget-gb", "12"])
     args_adaptive = parser.parse_args(["pp.mrcs", "-o", "/tmp", "--mask", "sphere", "--adaptive-n-pcs"])
     assert args_gpu.gpu_memory == 12.0
     assert args_adaptive.adaptive_memory is True
@@ -97,7 +97,7 @@ def test_positive_finite_gb_validator_rejects_bogus_values():
 
 
 def test_pipeline_parser_rejects_bogus_gpu_gb():
-    """argparse must reject bogus --gpu-gb values via the shared validator."""
+    """argparse must reject bogus --gpu-budget-gb values via the shared validator."""
     from recovar.commands import pipeline as pipe
 
     parser = argparse.ArgumentParser()
@@ -105,7 +105,7 @@ def test_pipeline_parser_rejects_bogus_gpu_gb():
     base = ["pp.mrcs", "-o", "/tmp", "--mask", "sphere"]
     for bad in ("NaN", "inf", "-1", "0"):
         with pytest.raises(SystemExit):
-            parser.parse_args(base + ["--gpu-gb", bad])
+            parser.parse_args(base + ["--gpu-budget-gb", bad])
 
 
 def test_pipeline_parser_rejects_removed_aliases():
@@ -137,17 +137,17 @@ def test_run_test_dataset_always_splices_adaptive_n_pcs():
     fwd = rtd._build_forward_argv(args)
     assert "--adaptive-n-pcs" in fwd
 
-    # --gpu-gb only — still spliced.
-    args = parser.parse_args(["--gpu-gb", "32"])
+    # --gpu-budget-gb only — still spliced.
+    args = parser.parse_args(["--gpu-budget-gb", "32"])
     fwd = rtd._build_forward_argv(args)
-    assert "--gpu-gb" in fwd
+    assert "--gpu-budget-gb" in fwd
     assert "32.0" in fwd
     assert "--adaptive-n-pcs" in fwd
 
     # --full-memory-test — opt out.
-    args = parser.parse_args(["--gpu-gb", "32", "--full-memory-test"])
+    args = parser.parse_args(["--gpu-budget-gb", "32", "--full-memory-test"])
     fwd = rtd._build_forward_argv(args)
-    assert "--gpu-gb" in fwd
+    assert "--gpu-budget-gb" in fwd
     assert "--adaptive-n-pcs" not in fwd
 
     # --full-memory-test + --adaptive-n-pcs — adaptive wins (logged conflict).
@@ -173,17 +173,9 @@ def test_run_test_dataset_command_set_is_single_source_of_truth():
     assert set(rtd._COMMANDS_WITH_MEMORY_ARGS) == expected
 
 
-def test_command_line_bootstrap_scan_helpers():
-    """Tolerant argv scan used by the --gpu-gb -> MEM_FRACTION bootstrap."""
-    from recovar import command_line as cl
-
-    argv = ["--gpu-gb", "40"]
-    assert cl._scan_for_flag_value(argv, ("--gpu-gb",)) == "40"
-
-    # equals form
-    argv2 = ["--gpu-gb=40"]
-    assert cl._scan_for_flag_value(argv2, ("--gpu-gb",)) == "40"
-
-    # absent
-    assert cl._scan_for_flag_value([], ("--gpu-gb",)) is None
-    assert cl._scan_for_bool_flag([], ("--gpu-gb",)) is False
+# NOTE: the pre-import scan helpers (``_scan_for_flag_value`` /
+# ``_scan_for_bool_flag``) used to live in ``recovar.command_line`` to
+# convert --gpu-budget-gb into XLA_PYTHON_CLIENT_MEM_FRACTION before
+# jax import. That auto-cap was reverted (orthogonal to --gpu-budget-gb;
+# the user controls JAX-level allocation via the XLA env vars
+# directly). The scan helpers were removed alongside.

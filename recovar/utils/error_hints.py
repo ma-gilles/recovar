@@ -223,9 +223,12 @@ def _format_memory_context(ctx: DiagnosticContext) -> dict[str, Any]:
 
 def _hint_gpu_oom(ctx: DiagnosticContext) -> ErrorHint:
     suggestions = [
-        "recovar pipeline ... --gpu-gb <smaller-N> --adaptive-n-pcs",
-        "recovar pipeline ... --gpu-gb <smaller-N> --low-memory-option",
-        "recovar pipeline ... --gpu-gb <smaller-N> --very-low-memory-option",
+        "recovar pipeline ... --gpu-budget-gb <smaller-N> --adaptive-n-pcs",
+        "recovar pipeline ... --gpu-budget-gb <smaller-N> --low-memory-option",
+        "recovar pipeline ... --gpu-budget-gb <smaller-N> --very-low-memory-option",
+        "export XLA_PYTHON_CLIENT_PREALLOCATE=false   "
+        "(workstation / shared-GPU users: stops JAX from grabbing 90% of "
+        "physical VRAM upfront; orthogonal to --gpu-budget-gb)",
     ]
     cause = "Peak GPU memory exceeded the available budget during a JAX/XLA allocation."
 
@@ -236,25 +239,6 @@ def _hint_gpu_oom(ctx: DiagnosticContext) -> ErrorHint:
             "CUDA kernel."
         )
         suggestions.insert(0, "unset RECOVAR_DISABLE_CUDA && recovar build_custom_cuda")
-
-    # If the user asked for --gpu-gb but the bootstrap couldn't apply
-    # the cap (e.g. containerized env without nvidia-smi), say so
-    # explicitly. Otherwise the user wonders why their budget didn't
-    # prevent the OOM.
-    plan = ctx.last_memory_plan if isinstance(ctx.last_memory_plan, dict) else {}
-    budget = plan.get("budget", {})
-    if budget.get("requested_gb") is not None and budget.get("hard_cap_applied") is False:
-        reason = budget.get("hard_cap_skip_reason") or "unknown"
-        cause += (
-            f" IMPORTANT: --gpu-gb was supplied but the JAX cap was NOT applied "
-            f"(reason: {reason}). RECOVAR's batch sizes were planned for the "
-            f"requested budget, but JAX itself was free to allocate up to its "
-            f"default fraction of physical VRAM."
-        )
-        suggestions.insert(
-            0,
-            "install pynvml OR ensure nvidia-smi is on PATH so the cap can be applied",
-        )
 
     if _conflicting_process_present(
         ctx,
@@ -291,7 +275,7 @@ def _hint_conflicting_process(ctx: DiagnosticContext) -> ErrorHint:
         ),
         suggestions=[
             "CUDA_VISIBLE_DEVICES=<idx-of-free-gpu> recovar pipeline ...",
-            "recovar pipeline ... --gpu-gb <smaller-N> --adaptive-n-pcs   (fit into the free portion of this GPU)",
+            "recovar pipeline ... --gpu-budget-gb <smaller-N> --adaptive-n-pcs   (fit into the free portion of this GPU)",
             "stop the other GPU process (nvidia-smi -> kill PID)",
         ],
         diagnostic_context=_format_memory_context(ctx),
@@ -311,7 +295,7 @@ def _hint_custom_cuda_unavailable(ctx: DiagnosticContext) -> ErrorHint:
             "recovar build_custom_cuda   (rebuild the kernel; check NVCC is on PATH)",
             'PYTHON="$(pixi run which python)" make -C recovar/cuda clean all',
             "RECOVAR_DISABLE_CUDA=1 recovar pipeline ...   (TEMPORARY: forces JAX "
-            "fallback; expect ~2-3x slower runs and reduce --gpu-gb accordingly)",
+            "fallback; expect ~2-3x slower runs and reduce --gpu-budget-gb accordingly)",
         ],
         diagnostic_context=_format_memory_context(ctx),
     )

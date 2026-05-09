@@ -132,7 +132,7 @@ def test_low_memory_tightens_batches(monkeypatch):
 
 
 def test_effective_budget_is_min_of_inputs_when_user_asked(monkeypatch):
-    """With a user-supplied --gpu-gb, physical_free-reserve is in the min."""
+    """With a user-supplied --gpu-budget-gb, physical_free-reserve is in the min."""
     _stub_helpers(monkeypatch, gpu_total=72.0)
     _stub_preflight(monkeypatch, total=80.0, free=10.0)  # only 10 GB free
     _stub_backend_custom(monkeypatch)
@@ -154,7 +154,7 @@ def test_effective_budget_is_min_of_inputs_when_user_asked(monkeypatch):
 
 
 def test_effective_budget_skips_physical_reserve_when_no_user_request(monkeypatch):
-    """Without --gpu-gb, fall through to jax_limit (matches legacy behavior).
+    """Without --gpu-budget-gb, fall through to jax_limit (matches legacy behavior).
 
     Subtracting physical_free-reserve unconditionally would shrink
     batches by ~5% on a quiet GPU and shift quality baselines (caught
@@ -497,67 +497,9 @@ def test_adaptive_fallback_passthrough_when_budget_huge(monkeypatch):
     assert plan.n_pcs_to_compute == 200
 
 
-def test_hard_cap_applied_field_when_user_asked_and_cap_fired(monkeypatch):
-    _stub_helpers(monkeypatch)
-    _stub_preflight(monkeypatch, total=80.0, free=78.0)
-    _stub_backend_custom(monkeypatch)
-    monkeypatch.delenv("RECOVAR_GPU_CAP_NOT_APPLIED", raising=False)
-
-    from recovar.utils import memory_planner as mp
-
-    plan = mp.make_memory_plan(
-        command="pipeline",
-        grid_size=128,
-        n_images=1000,
-        requested_gpu_gb=40.0,
-        low_memory=False,
-        very_low_memory=False,
-        adaptive_n_pcs=False,
-    )
-    assert plan.budget.hard_cap_applied is True
-    assert plan.budget.hard_cap_skip_reason is None
-
-
-def test_hard_cap_not_applied_propagates_skip_reason(monkeypatch):
-    """Bootstrap couldn't apply the cap (containerized env, no nvidia-smi)
-    → ``GpuMemoryBudget.hard_cap_applied=False`` with a reason string."""
-    _stub_helpers(monkeypatch)
-    _stub_preflight(monkeypatch, total=80.0, free=78.0)
-    _stub_backend_custom(monkeypatch)
-    monkeypatch.setenv("RECOVAR_GPU_CAP_NOT_APPLIED", "no_nvml_or_nvidia_smi")
-
-    from recovar.utils import memory_planner as mp
-
-    plan = mp.make_memory_plan(
-        command="pipeline",
-        grid_size=128,
-        n_images=1000,
-        requested_gpu_gb=40.0,
-        low_memory=False,
-        very_low_memory=False,
-        adaptive_n_pcs=False,
-    )
-    assert plan.budget.hard_cap_applied is False
-    assert plan.budget.hard_cap_skip_reason == "no_nvml_or_nvidia_smi"
-
-
-def test_hard_cap_field_none_when_user_did_not_ask(monkeypatch):
-    """No --gpu-gb supplied → hard_cap_applied is None (not True/False)."""
-    _stub_helpers(monkeypatch)
-    _stub_preflight(monkeypatch, total=80.0, free=78.0)
-    _stub_backend_custom(monkeypatch)
-    monkeypatch.delenv("RECOVAR_GPU_CAP_NOT_APPLIED", raising=False)
-
-    from recovar.utils import memory_planner as mp
-
-    plan = mp.make_memory_plan(
-        command="pipeline",
-        grid_size=128,
-        n_images=1000,
-        requested_gpu_gb=None,
-        low_memory=False,
-        very_low_memory=False,
-        adaptive_n_pcs=False,
-    )
-    assert plan.budget.hard_cap_applied is None
-    assert plan.budget.hard_cap_skip_reason is None
+# NOTE: ``hard_cap_applied`` / ``hard_cap_skip_reason`` were removed
+# along with the --gpu-budget-gb auto-cap mechanism. The flag is now a
+# soft batch-size hint only; capping JAX is the user's responsibility
+# via XLA_PYTHON_CLIENT_MEM_FRACTION / XLA_PYTHON_CLIENT_PREALLOCATE.
+# Their replacement tests are in test_cli_memory_args.py
+# (test_pipeline_parser_rejects_bogus_gpu_gb).

@@ -4,7 +4,7 @@ This module replaces the scattered ``get_*_batch_size`` calls in
 ``commands/pipeline.py`` with a single ``make_memory_plan`` entry point
 that:
 
-  * collects the user's requested budget (``--gpu-gb``), the JAX-reported
+  * collects the user's requested budget (``--gpu-budget-gb``), the JAX-reported
     bytes_limit, and (when available) the physical free memory from
     NVML / nvidia-smi
   * combines them into one ``effective_budget_gb`` with a clear
@@ -83,13 +83,6 @@ class GpuMemoryBudget:
     backend: Backend
     custom_cuda_disabled: bool
     source: str  # which input drove the effective budget
-    # Did the bootstrap actually set XLA_PYTHON_CLIENT_MEM_FRACTION?
-    # ``None`` means --gpu-gb wasn't passed; ``True`` means the cap fired;
-    # the string value is the reason it didn't (e.g.
-    # "no_nvml_or_nvidia_smi", "jax_already_imported"). Reviewers
-    # caught the silent-degradation case in containerized environments.
-    hard_cap_applied: bool | None = None
-    hard_cap_skip_reason: str | None = None
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -364,7 +357,7 @@ def _assemble_budget(
         candidates.append(("jax_limit_gb", jax_limit))
 
     # ``physical_free - reserve`` only enters the min when the user
-    # supplied an explicit ``--gpu-gb`` (i.e. they asked for a budget
+    # supplied an explicit ``--gpu-budget-gb`` (i.e. they asked for a budget
     # we should validate against the GPU's current free space). Without
     # an explicit request, fall through to the JAX-reported limit
     # exactly the way the legacy code did — otherwise we silently
@@ -382,21 +375,6 @@ def _assemble_budget(
     else:
         source, effective = min(candidates, key=lambda kv: kv[1])
 
-    # Did the bootstrap manage to apply XLA_PYTHON_CLIENT_MEM_FRACTION?
-    # ``RECOVAR_GPU_CAP_NOT_APPLIED`` is set in ``command_line.py`` when
-    # the user passed ``--gpu-gb`` but NVML / nvidia-smi were missing
-    # (typical of containerized environments) or jax was already imported.
-    cap_skip = os.environ.get("RECOVAR_GPU_CAP_NOT_APPLIED")
-    if requested_gpu_gb is None:
-        hard_cap_applied: bool | None = None
-        hard_cap_skip_reason = None
-    elif cap_skip:
-        hard_cap_applied = False
-        hard_cap_skip_reason = cap_skip
-    else:
-        hard_cap_applied = True
-        hard_cap_skip_reason = None
-
     return GpuMemoryBudget(
         requested_gb=requested_gpu_gb,
         physical_total_gb=physical_total,
@@ -406,8 +384,6 @@ def _assemble_budget(
         backend=backend,
         custom_cuda_disabled=custom_cuda_disabled,
         source=source,
-        hard_cap_applied=hard_cap_applied,
-        hard_cap_skip_reason=hard_cap_skip_reason,
         warnings=list(cuda_warnings),
     )
 
@@ -512,7 +488,7 @@ def make_memory_plan(
             "exceeds the effective budget %.1f GB. The pipeline will still launch — "
             "if it OOMs, the error message will repeat suggested flags. "
             "To recover proactively, try --adaptive-n-pcs, --low-memory-option, "
-            "or a higher --gpu-gb.",
+            "or a higher --gpu-budget-gb.",
             predicted_peak,
             (PEAK_PREDICTION_SLACK - 1) * 100,
             predicted_peak * PEAK_PREDICTION_SLACK,

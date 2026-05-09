@@ -27,7 +27,7 @@ def test_oom_hint_suggests_recovery_flags():
     assert hint is not None
     assert hint.category == "gpu_oom"
     blob = "\n".join(hint.suggestions)
-    assert "--gpu-gb" in blob
+    assert "--gpu-budget-gb" in blob
     assert "--adaptive-n-pcs" in blob
     assert "--low-memory-option" in blob
     assert "--very-low-memory-option" in blob
@@ -100,7 +100,7 @@ def test_dataset_path_error():
     assert hint.category == "dataset_path_error"
     # Must NOT suggest GPU memory flags for a path error.
     blob = "\n".join(hint.suggestions)
-    assert "--gpu-gb" not in blob
+    assert "--gpu-budget-gb" not in blob
     assert "--adaptive-n-pcs" not in blob
     assert "check_paths" in blob
 
@@ -143,50 +143,14 @@ def test_classify_subprocess_failure_uses_combined_text():
     assert hint.category == "gpu_oom"
 
 
-def test_oom_hint_surfaces_cap_not_applied():
-    """When the user passed --gpu-gb but the bootstrap couldn't apply
-    the cap (no nvidia-smi), the OOM hint must say so explicitly.
-    Without this, the user sees `--gpu-gb 24` and an OOM that exceeded
-    24 GB and assumes the cap is broken when in fact the cap was
-    silently skipped."""
+def test_oom_hint_includes_preallocate_workaround():
+    """OOM hint should mention XLA_PYTHON_CLIENT_PREALLOCATE=false as a
+    recovery for workstation / shared-GPU users where JAX's default
+    preallocation is the actual cause of the OOM. Orthogonal to
+    --gpu-budget-gb (which is RECOVAR's batch-size hint, not a JAX cap)."""
     from recovar.utils import error_hints
 
-    ctx = error_hints.DiagnosticContext(
-        backend="custom_cuda",
-        custom_cuda_disabled=False,
-        last_memory_plan={
-            "budget": {
-                "requested_gb": 24.0,
-                "effective_budget_gb": 24.0,
-                "hard_cap_applied": False,
-                "hard_cap_skip_reason": "no_nvml_or_nvidia_smi",
-            }
-        },
-    )
-    hint = error_hints.classify_text("RESOURCE_EXHAUSTED: out of memory", ctx)
+    hint = error_hints.classify_text("RESOURCE_EXHAUSTED: out of memory", error_hints.DiagnosticContext())
     assert hint is not None
-    assert hint.category == "gpu_oom"
-    blob = hint.likely_cause + " ".join(hint.suggestions)
-    assert "cap was NOT applied" in hint.likely_cause or "NOT applied" in hint.likely_cause
-    assert "no_nvml_or_nvidia_smi" in hint.likely_cause
-    assert any("nvidia-smi" in s or "pynvml" in s for s in hint.suggestions)
-
-
-def test_oom_hint_does_not_mention_cap_skip_when_applied():
-    """If the cap fired, the OOM hint should NOT mention skip reasons."""
-    from recovar.utils import error_hints
-
-    ctx = error_hints.DiagnosticContext(
-        backend="custom_cuda",
-        last_memory_plan={
-            "budget": {
-                "requested_gb": 24.0,
-                "hard_cap_applied": True,
-                "hard_cap_skip_reason": None,
-            }
-        },
-    )
-    hint = error_hints.classify_text("RESOURCE_EXHAUSTED", ctx)
-    assert hint is not None
-    assert "NOT applied" not in hint.likely_cause
-    assert not any("nvidia-smi" in s for s in hint.suggestions)
+    blob = " ".join(hint.suggestions)
+    assert "XLA_PYTHON_CLIENT_PREALLOCATE" in blob
