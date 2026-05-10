@@ -191,6 +191,10 @@ def build_pipeline_argv(
         ]
     # n_pcs is forced by ``RECOVAR_DEBUG_FORCE_N_PCS`` in the subprocess
     # env; not by argv (no user-facing CLI flag for it).
+    # Always pass --memory-profile in sweeps so memory_trace.jsonl
+    # is written. (Production runs default to no trace to avoid
+    # the JAX memory_stats() + nvidia-smi probe cost.)
+    argv.append("--memory-profile")
     return argv
 
 

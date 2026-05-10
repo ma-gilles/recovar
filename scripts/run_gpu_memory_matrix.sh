@@ -6,8 +6,8 @@
 #   FULL set:   BUDGETS="8 12 16 24 40 60 75" CUDA_MODES="custom_cuda jax_fallback"
 #
 # Each cell runs `recovar run_test_dataset --gpu-budget-gb $N --adaptive-n-pcs
-# --memory-diagnostics --fail-on-memory-exceed --no-delete` against a
-# small-but-realistic synthetic dataset, then asserts:
+# --fail-on-memory-exceed --no-delete` against a small-but-realistic
+# synthetic dataset (diagnostics are always-on, no flag needed), then asserts:
 #   - memory_plan.json exists and reports effective_budget_gb <= N * 1.2
 #   - memory_trace.jsonl exists and max(jax_peak_gb) <= N * 1.2 (slack)
 #
@@ -64,10 +64,12 @@ mkdir -p "${cell_dir}"
 pixi run python -m recovar.command_line run_test_dataset \\
     --output-dir "${cell_dir}" \\
     --gpu-budget-gb ${gb} \\
-    --memory-diagnostics \\
+    --fail-on-memory-exceed \\
+    --memory-profile \\
     --no-delete
 
-# Verify diagnostic outputs exist somewhere under the cell directory.
+# Verify diagnostic outputs exist somewhere under the cell directory
+# (always-on under <outdir>/_diagnostics/).
 plan_count=\$(find "${cell_dir}" -name memory_plan.json | wc -l)
 trace_count=\$(find "${cell_dir}" -name memory_trace.jsonl | wc -l)
 echo "memory_plan.json instances: \$plan_count"
@@ -76,6 +78,39 @@ if [ "\$plan_count" -lt 1 ]; then
   echo "FAIL: no memory_plan.json was written"
   exit 1
 fi
+
+# Contract assertion: actual peak memory must not exceed budget * 1.20.
+# This is the cross-architecture portable test — irrespective of GPU
+# generation, IF you ask for N GB then peak should fit N GB (with 20%
+# slack for allocator fragmentation).
+SLACK=\${SLACK:-1.20}
+budget=${gb}
+threshold=\$(python3 -c "print(${gb} * \$SLACK)")
+peak_gb=\$(find "${cell_dir}" -name memory_trace.jsonl -exec cat {} \\; \\
+  | python3 -c "
+import json, sys
+peaks = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        row = json.loads(line)
+    except Exception:
+        continue
+    if row.get('jax_memory_stats_available') and 'jax_peak_gb' in row:
+        peaks.append(float(row['jax_peak_gb']))
+print(max(peaks) if peaks else 0.0)
+")
+echo "observed peak = \${peak_gb} GB; budget = \${budget} GB; threshold = \${threshold} GB"
+python3 -c "
+import sys
+peak = float('\${peak_gb}')
+threshold = float('\${threshold}')
+if peak > threshold:
+    sys.exit(f'CONTRACT VIOLATION: peak {peak} GB > budget * \$SLACK = {threshold} GB')
+print('CONTRACT_OK: peak fits within budget * \$SLACK')
+"
 EOF
     chmod +x "$sbatch_script"
     job_id=$(sbatch --parsable "$sbatch_script")

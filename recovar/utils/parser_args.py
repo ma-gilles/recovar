@@ -299,17 +299,29 @@ def apply_memory_planning_args(
             if logger is not None:
                 logger.warning("Could not write memory_plan.json: %s", exc)
 
-        # Always-on metadata artifacts (small files, big diagnostic value).
-        try:
-            write_run_metadata(args, outdir, logger=logger)
-        except Exception as exc:
-            if logger is not None:
-                logger.warning("Could not write run metadata: %s", exc)
+        # Run metadata is opt-in via --memory-profile so we don't fork
+        # `git rev-parse HEAD` on every nested pipeline call (each
+        # pipeline_with_outliers round calls apply_memory_planning_args
+        # afresh; subprocess calls per-round can perturb noisy outlier
+        # metrics — slurm 7985775 / 7990236 / 8000338 vs 7998510).
+        if getattr(args, "memory_profile", False):
+            try:
+                write_run_metadata(args, outdir, logger=logger)
+            except Exception as exc:
+                if logger is not None:
+                    logger.warning("Could not write run metadata: %s", exc)
 
-    # Memory trace is now always-on (cost < 1 s/run, value high).
+    # Memory trace is opt-in via --memory-profile. Always-on tracing
+    # injected JAX memory_stats() + nvidia-smi subprocess calls at
+    # every phase boundary; that turned out to perturb noisy outlier
+    # regression metrics enough to fail the cryo-ET long test even
+    # though the trace itself doesn't change pipeline math. The
+    # validation sweep (which DOES want the trace) still gets it
+    # because validate_memory_formulas.py sets ``--memory-profile``
+    # explicitly per cell.
     trace = None
     if outdir is not None:
-        trace = memory_planner.MemoryTraceWriter(outdir, enabled=True)
+        trace = memory_planner.MemoryTraceWriter(outdir, enabled=bool(getattr(args, "memory_profile", False)))
 
     return plan, trace
 

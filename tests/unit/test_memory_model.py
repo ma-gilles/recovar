@@ -179,8 +179,16 @@ def test_diagnostics_dir_helper(tmp_path):
 
 
 def test_diagnostics_files_written(tmp_path):
-    """Smoke test that ``apply_memory_planning_args`` writes all the
-    always-on diagnostic files into _diagnostics/."""
+    """Smoke test that ``apply_memory_planning_args`` writes the
+    diagnostics into _diagnostics/.
+
+    ``memory_plan.json`` is written unconditionally (small + always
+    useful). ``args.json``, ``allocator_env.json`` and
+    ``memory_trace.jsonl`` are gated on ``--memory-profile`` because
+    they involve subprocess / JAX-memory-stats probes that perturbed
+    the cryo-ET outliers regression metrics in long-test (slurm
+    7985775 / 7990236 / 8000338 vs isolated 7998510 + dev tip 8006024).
+    """
     import argparse
     import json
 
@@ -188,9 +196,11 @@ def test_diagnostics_files_written(tmp_path):
 
     parser = argparse.ArgumentParser()
     parser_args.add_memory_planning_args(parser)
-    args = parser.parse_args(["--gpu-budget-gb", "40"])
-    plan, trace = parser_args.apply_memory_planning_args(
-        args,
+
+    # Default args: only memory_plan.json should appear.
+    default_args = parser.parse_args(["--gpu-budget-gb", "40"])
+    parser_args.apply_memory_planning_args(
+        default_args,
         command="pipeline",
         grid_size=128,
         n_images=1000,
@@ -198,17 +208,27 @@ def test_diagnostics_files_written(tmp_path):
     )
     diag = tmp_path / "_diagnostics"
     assert (diag / "memory_plan.json").is_file()
+    assert not (diag / "args.json").exists()
+    assert not (diag / "allocator_env.json").exists()
+    assert not (diag / "memory_trace.jsonl").exists()
+
+    # With --memory-profile: full diagnostic surface is written.
+    profile_args = parser.parse_args(["--gpu-budget-gb", "40", "--memory-profile"])
+    parser_args.apply_memory_planning_args(
+        profile_args,
+        command="pipeline",
+        grid_size=128,
+        n_images=1000,
+        outdir=tmp_path,
+    )
     assert (diag / "args.json").is_file()
     assert (diag / "allocator_env.json").is_file()
-    # memory_trace.jsonl is created (truncated) at planner construction.
     assert (diag / "memory_trace.jsonl").is_file()
 
-    # allocator_env captures the relevant XLA env vars
     env = json.loads((diag / "allocator_env.json").read_text())
     for key in ("XLA_PYTHON_CLIENT_PREALLOCATE", "XLA_PYTHON_CLIENT_MEM_FRACTION"):
         assert key in env
 
-    # args captures the canonical flag
     args_data = json.loads((diag / "args.json").read_text())
     assert args_data["gpu_memory"] == 40.0
 

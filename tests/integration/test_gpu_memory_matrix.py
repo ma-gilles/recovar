@@ -59,6 +59,7 @@ def _run_cell(out_dir: Path, *, gpu_gb: int, backend: str) -> None:
         str(out_dir),
         "--gpu-budget-gb",
         str(gpu_gb),
+        "--memory-profile",
         "--no-delete",
     ]
     print(" ".join(cmd))
