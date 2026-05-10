@@ -53,6 +53,7 @@ K1_FIXTURE_DIR = FIXTURE_BASE / "data_noise1_5k_normalized"
 K1_RELION_DIR = K1_FIXTURE_DIR / "relion_ref_os0"
 K1_DATA_STAR = K1_FIXTURE_DIR / "particles.star"
 K1_GT_VOLUME = K1_FIXTURE_DIR / "reference_gt.mrc"
+K1_RELION_RANDOM_SEED = 1775735620
 
 K2_FIXTURE_DIR = FIXTURE_BASE / "data_pdb_k2_5k_128"
 K2_RELION_DIR = K2_FIXTURE_DIR / "relion_pdb_k2_os0_ref"
@@ -378,8 +379,8 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
         "1.0",
         "--perturb_factor",
         "0.5",  # match RELION's --perturb 0.5
-        "--perturb_seed",
-        "42",  # deterministic but autonomous of RELION's RNG
+        "--seed",
+        str(K1_RELION_RANDOM_SEED),  # drives SamplingPerturbation like RELION's --random_seed
         "--init_resolution",
         "30.0",
         "--image_batch_size",
@@ -473,17 +474,12 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
     print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
 
     # NEVER widen tolerance to make a test pass. Fix the code instead.
-    # The 0.95 floor reflects the cold-start drift between recovar's autonomous
-    # SamplingPerturbation RNG (perturb_seed=42) and RELION's per-iter
-    # SamplingPerturbInstance values. Observed at branch HEAD: ~0.965.
-    # Tighter parity (≥ 0.999) requires --perturb_replay_relion_dir
-    # (test_em_parity_fast_k1_replay's replay path) or per-iter perturb
-    # synchronization. The 0.95 bar still locks against regressions in the
-    # A.1 sigma_offset fix or any new iter-1 / iter-2 path bug — pre-A.1
-    # cold-start corr was indeterminate (sigma_offset stuck at 10 Å made
-    # iter-2 trajectory diverge significantly).
-    assert h1_corr >= 0.95, f"K=1 cold-start half1 corr {h1_corr:.6f} below 0.95 vs RELION it003."
-    assert h2_corr >= 0.95, f"K=1 cold-start half2 corr {h2_corr:.6f} below 0.95 vs RELION it003."
+    # CLI-level --seed now reproduces RELION's per-iter SamplingPerturbInstance
+    # stream for the fixture's --random_seed. Keep this autonomous cold-start
+    # guard separate from replay because it still bootstraps model/noise/tau/
+    # sigma state from raw inputs rather than injecting per-iter RELION state.
+    assert h1_corr >= 0.999, f"K=1 cold-start half1 corr {h1_corr:.6f} below 0.999 vs RELION it003."
+    assert h2_corr >= 0.999, f"K=1 cold-start half2 corr {h2_corr:.6f} below 0.999 vs RELION it003."
     # Pre-A.1 cold-start: iter-3 |ΔPmax| was ~22% (sigma_offset stuck at 10 Å).
     # Post-A.1: 5-12% depending on perturbation drift. Threshold 0.15 catches
     # full A.1 regression (would jump back to 22%).

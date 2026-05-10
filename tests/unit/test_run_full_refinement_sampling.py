@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.run_full_refinement import _refine_sampling_kwargs, _resolve_relion_sampling_orders
+from recovar.em.sampling import relion_sampling_perturbation_for_iteration
+from scripts.run_full_refinement import (
+    _effective_perturb_seed,
+    _refine_sampling_kwargs,
+    _resolve_relion_sampling_orders,
+)
 
 
 def test_relion_healpix_order_is_coarse_pass1_order():
@@ -36,3 +41,22 @@ def test_cli_translation_grid_parameters_seed_refinement_state():
     assert kwargs["init_translation_range"] == 3.0
     assert kwargs["init_translation_step"] == 1.0
     assert kwargs["translation_pixel_offset"] == 1.0
+
+
+def test_cli_perturb_seed_defaults_to_relion_random_seed():
+    assert _effective_perturb_seed(SimpleNamespace(seed=17, perturb_seed=None)) == 17
+    assert _effective_perturb_seed(SimpleNamespace(seed=17, perturb_seed=23)) == 23
+    assert _effective_perturb_seed(SimpleNamespace(seed=17, perturb_seed=-1)) is None
+
+
+def test_relion_seeded_sampling_perturbation_sequence_matches_reference_star():
+    values = [
+        relion_sampling_perturbation_for_iteration(
+            perturbation_factor=0.5,
+            random_seed=1776701668,
+            relion_iteration=iteration,
+        )
+        for iteration in range(3)
+    ]
+
+    assert values == pytest.approx([0.460047, -0.25278, 0.125066], abs=5e-6)

@@ -398,6 +398,21 @@ def _find_relion_optimiser_star(args):
     return None
 
 
+def _effective_perturb_seed(args):
+    """Resolve the SamplingPerturbation seed used by the refinement loop.
+
+    RELION uses the optimiser ``--random_seed`` for SamplingPerturbation, so
+    the CLI-level ``--seed`` must drive the perturbation stream too. An explicit
+    ``--perturb_seed`` overrides it; a negative explicit value keeps the legacy
+    non-deterministic NumPy perturbation path for diagnostics.
+    """
+    explicit = getattr(args, "perturb_seed", None)
+    if explicit is not None:
+        return None if int(explicit) < 0 else int(explicit)
+    seed = getattr(args, "seed", None)
+    return None if seed is None else int(seed)
+
+
 def _maybe_apply_relion_image_mask(ds, args):
     """Override the dataset scoring mask with RELION's particle-diameter mask."""
     explicit_particle_diameter = getattr(args, "particle_diameter_ang", None)
@@ -551,7 +566,8 @@ def main():
         type=int,
         default=None,
         help="Optional deterministic seed for the SamplingPerturbation RNG. "
-        "If unset, uses np.random.default_rng() (non-reproducible).",
+        "If unset, defaults to --seed to match RELION's --random_seed. "
+        "Use a negative value for the legacy non-reproducible NumPy path.",
     )
     parser.add_argument(
         "--perturb_replay_relion_dir",
@@ -1000,6 +1016,13 @@ def main():
 
     t_start = time.time()
 
+    effective_perturb_seed = _effective_perturb_seed(args)
+    logger.info(
+        "SamplingPerturbation seed: %s%s",
+        "unseeded" if effective_perturb_seed is None else str(effective_perturb_seed),
+        " (explicit)" if args.perturb_seed is not None else " (from --seed)",
+    )
+
     result = refine_single_volume(
         experiment_datasets=experiment_datasets,
         init_volume=jnp.asarray(init_vol_ft),
@@ -1028,7 +1051,7 @@ def main():
         particle_diameter_ang=particle_diameter_ang,
         tau2_fudge=effective_tau2_fudge,
         perturb_factor=args.perturb_factor,
-        perturb_seed=args.perturb_seed,
+        perturb_seed=effective_perturb_seed,
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,
         replay_iteration_overrides=replay_iteration_overrides,
         n_classes=args.n_classes,

@@ -311,6 +311,31 @@ def relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0):
     return 360.0 / (6 * 2**order)
 
 
+def _wrap_relion_perturbation(value, perturbation_factor):
+    """RELION ``realWRAP(value, -pf, +pf)`` for SamplingPerturbation."""
+    pf = float(perturbation_factor)
+    wrapped = float(value)
+    while wrapped > pf:
+        wrapped -= 2 * pf
+    while wrapped < -pf:
+        wrapped += 2 * pf
+    return float(wrapped)
+
+
+def _relion_rnd_unif_first_draw(seed):
+    """Return RELION ``rnd_unif()`` immediately after ``init_random_generator(seed)``."""
+    try:
+        from recovar.relion_bind import _relion_bind_core as bind
+
+        return float(np.asarray(bind.vdam_rnd_unif_sequence(int(seed), 1), dtype=np.float64)[0])
+    except Exception:
+        import ctypes
+
+        libc = ctypes.CDLL(None)
+        libc.srand(ctypes.c_uint(int(seed)))
+        return float(libc.rand()) / float((2**31) - 1)
+
+
 def advance_relion_perturbation(prev_random_perturbation, perturbation_factor, rng):
     """Update the RELION per-iteration perturbation state.
 
@@ -332,12 +357,34 @@ def advance_relion_perturbation(prev_random_perturbation, perturbation_factor, r
     """
     pf = float(perturbation_factor)
     new = prev_random_perturbation + rng.uniform(0.5 * pf, pf)
-    # realWRAP — map to [-pf, +pf]
-    while new > pf:
-        new -= 2 * pf
-    while new < -pf:
-        new += 2 * pf
-    return float(new)
+    return _wrap_relion_perturbation(new, pf)
+
+
+def advance_relion_perturbation_from_seed(prev_random_perturbation, perturbation_factor, seed):
+    """Advance SamplingPerturbation using RELION's per-iteration RNG seed."""
+    pf = float(perturbation_factor)
+    rnd = _relion_rnd_unif_first_draw(int(seed))
+    new = float(prev_random_perturbation) + (0.5 * pf) + (rnd * 0.5 * pf)
+    return _wrap_relion_perturbation(new, pf)
+
+
+def relion_sampling_perturbation_for_iteration(perturbation_factor, random_seed, relion_iteration):
+    """Return RELION's stored SamplingPerturbation at ``run_itNNN``.
+
+    ``run_it000_sampling.star`` is written after the initial sampling object has
+    already advanced once from the C RNG default state. Later expectation
+    iterations re-seed with ``random_seed + iter`` before advancing.
+    """
+    if relion_iteration < 0:
+        raise ValueError("relion_iteration must be non-negative")
+    current = advance_relion_perturbation_from_seed(0.0, perturbation_factor, seed=1)
+    for iter_idx in range(1, int(relion_iteration) + 1):
+        current = advance_relion_perturbation_from_seed(
+            current,
+            perturbation_factor,
+            seed=int(random_seed) + iter_idx,
+        )
+    return float(current)
 
 
 def _relion_euler_angles_to_matrix(eulers_deg: np.ndarray) -> np.ndarray:

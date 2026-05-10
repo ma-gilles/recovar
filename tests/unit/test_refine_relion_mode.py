@@ -4577,6 +4577,7 @@ class TestRelionModeSmokeTest:
             nside_level=1,
             init_healpix_order=1,
             max_healpix_order=2,
+            init_relion_iteration=1,
             init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
         )
 
@@ -4589,8 +4590,8 @@ class TestRelionModeSmokeTest:
             rtol=1e-6,
             atol=1e-6,
         )
-        np.testing.assert_array_equal(captured["normalization_log_z"][0], np.full(prev_h1.shape[0], 7.5))
-        np.testing.assert_array_equal(captured["normalization_log_z"][1], np.full(prev_h2.shape[0], 7.5))
+        assert np.isnan(captured["normalization_log_z"][0])
+        assert np.isnan(captured["normalization_log_z"][1])
         np.testing.assert_allclose(
             captured["prior_centers"][1],
             relion_sigma_offset_prior_center(prev_h2),
@@ -5056,6 +5057,7 @@ def test_local_search_uses_selected_only_fine_rotation_grid_when_oversampling_is
         return base_outputs + (relion_stats, noise_stats)
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
+    monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
@@ -5234,6 +5236,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         return base_outputs + (relion_stats, noise_stats)
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
+    monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
     monkeypatch.setattr(refine_mod, "advance_relion_perturbation", fake_advance_relion_perturbation)
@@ -5388,10 +5391,29 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         local_prior_translations.append(np.asarray(prior_translations, dtype=np.float32).copy())
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
-        return (
+        base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
+        )
+        relion_stats = RelionStats(
+            log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
+        )
+        noise_stats = NoiseStats(
+            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=float(experiment_dataset.n_units),
+        )
+        if kwargs.get("return_best_pose_details"):
+            best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
+            best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
+            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
+            return base_outputs + (best_rots, best_trans, best_ids, relion_stats, noise_stats)
+        return base_outputs + (
             RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
@@ -5407,6 +5429,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
+    monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
     monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
@@ -5560,25 +5583,32 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
-        return (
+        base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
         )
+        relion_stats = RelionStats(
+            log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
+        )
+        noise_stats = NoiseStats(
+            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=float(experiment_dataset.n_units),
+        )
+        if kwargs.get("return_best_pose_details"):
+            best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
+            best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
+            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
+            return base_outputs + (best_rots, best_trans, best_ids, relion_stats, noise_stats)
+        return base_outputs + (relion_stats, noise_stats)
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
+    monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
     monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
@@ -5969,23 +5999,29 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
-        return (
+        base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
         )
+        relion_stats = RelionStats(
+            log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
+        )
+        noise_stats = NoiseStats(
+            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=float(experiment_dataset.n_units),
+        )
+        if kwargs.get("return_best_pose_details"):
+            best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
+            best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
+            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
+            return base_outputs + (best_rots, best_trans, best_ids, relion_stats, noise_stats)
+        return base_outputs + (relion_stats, noise_stats)
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
@@ -6156,23 +6192,29 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
-        return (
+        base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotation_grid_rotations).shape[0], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
         )
+        relion_stats = RelionStats(
+            log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.ones(np.asarray(rotation_grid_rotations).shape[0], dtype=jnp.float32),
+        )
+        noise_stats = NoiseStats(
+            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=float(experiment_dataset.n_units),
+        )
+        if kwargs.get("return_best_pose_details"):
+            best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
+            best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
+            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
+            return base_outputs + (best_rots, best_trans, best_ids, relion_stats, noise_stats)
+        return base_outputs + (relion_stats, noise_stats)
 
     monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
@@ -6314,23 +6356,29 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
         )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
-        return (
+        base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotation_grid_rotations).shape[0], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
         )
+        relion_stats = RelionStats(
+            log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.ones(np.asarray(rotation_grid_rotations).shape[0], dtype=jnp.float32),
+        )
+        noise_stats = NoiseStats(
+            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=float(experiment_dataset.n_units),
+        )
+        if kwargs.get("return_best_pose_details"):
+            best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
+            best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
+            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
+            return base_outputs + (best_rots, best_trans, best_ids, relion_stats, noise_stats)
+        return base_outputs + (relion_stats, noise_stats)
 
     monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
@@ -6693,23 +6741,34 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
             fine_idx * np.asarray(translations).shape[0] + trans_idx,
             dtype=np.int32,
         )
-        return (
+        base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
             assignment,
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
         )
+        relion_stats = RelionStats(
+            log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
+        )
+        noise_stats = NoiseStats(
+            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=float(experiment_dataset.n_units),
+        )
+        if kwargs.get("return_best_pose_details"):
+            fine_rot = _selected_rotation_matrices(
+                np.array([fine_idx], dtype=np.int32),
+                None,
+                build_local_search_grid_metadata(int(healpix_order)),
+            )[0].astype(np.float32)
+            best_rots = np.repeat(fine_rot[None, :, :], experiment_dataset.n_units, axis=0)
+            best_trans = np.repeat(np.asarray(translations)[trans_idx : trans_idx + 1], experiment_dataset.n_units, axis=0)
+            best_ids = np.full(experiment_dataset.n_units, fine_idx, dtype=np.int32)
+            return base_outputs + (best_rots, best_trans, best_ids, relion_stats, noise_stats)
+        return base_outputs + (relion_stats, noise_stats)
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
@@ -6753,7 +6812,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         build_local_search_grid_metadata(5),
     )
     expected_euler = iteration_loop_module.utils.R_to_relion(expected_rotation, degrees=True)[0].astype(np.float32)
-    observed = np.asarray(result["best_rotation_eulers_history"][1], dtype=np.float32)
+    observed = np.asarray(result["best_rotation_eulers_history"][1], dtype=np.float32).reshape(-1, 3)
     assert observed.shape[0] == N_IMAGES
     np.testing.assert_allclose(
         observed,

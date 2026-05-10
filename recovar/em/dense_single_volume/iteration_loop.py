@@ -74,6 +74,7 @@ from recovar.em.dense_single_volume.local_layout import (
 )
 from recovar.em.sampling import (
     advance_relion_perturbation,
+    advance_relion_perturbation_from_seed,
     apply_relion_rotation_perturbation,
     apply_relion_rotation_perturbation_to_eulers,
     apply_relion_translation_perturbation,
@@ -89,6 +90,7 @@ from recovar.em.sampling import (
     read_relion_optimiser_metadata,
     read_relion_sampling_metadata,
     relion_angular_sampling_deg,
+    relion_sampling_perturbation_for_iteration,
     rotation_grid_size,
 )
 
@@ -2659,8 +2661,21 @@ def _run_relion_iteration_loop(
     # is advanced per iter via realWRAP(prev + rnd_unif(0.5*pf, pf), -pf, +pf).
     # For exact parity replay, read _rlnSamplingPerturbInstance from RELION's
     # per-iter sampling.star.
-    random_perturbation = 0.0
-    perturb_rng = np.random.default_rng(perturb_seed) if perturb_seed is not None else np.random.default_rng()
+    if perturb_factor > 0 and perturb_seed is not None:
+        random_perturbation = relion_sampling_perturbation_for_iteration(
+            perturb_factor,
+            perturb_seed,
+            init_relion_iteration,
+        )
+        logger.info(
+            "Perturbation init: relion_iter=%d random_seed=%d rp=%+.5f",
+            int(init_relion_iteration),
+            int(perturb_seed),
+            random_perturbation,
+        )
+    else:
+        random_perturbation = 0.0
+    perturb_rng = None if perturb_seed is not None else np.random.default_rng()
     iteration = 0
     _mark_setup_phase("before_iterations")
     logger.info(
@@ -3278,8 +3293,24 @@ def _run_relion_iteration_loop(
                 int(_replay_meta["healpix_order"]),
             )
         elif perturb_factor > 0:
-            random_perturbation = advance_relion_perturbation(random_perturbation, perturb_factor, perturb_rng)
-            logger.info("Perturbation advance: iter=%d rp=%+.5f", iteration + 1, random_perturbation)
+            relion_iter = int(init_relion_iteration) + iteration + 1
+            if perturb_seed is not None:
+                seed = int(perturb_seed) + relion_iter
+                random_perturbation = advance_relion_perturbation_from_seed(
+                    random_perturbation,
+                    perturb_factor,
+                    seed=seed,
+                )
+                logger.info(
+                    "Perturbation advance: iter=%d relion_iter=%d seed=%d rp=%+.5f",
+                    iteration + 1,
+                    relion_iter,
+                    seed,
+                    random_perturbation,
+                )
+            else:
+                random_perturbation = advance_relion_perturbation(random_perturbation, perturb_factor, perturb_rng)
+                logger.info("Perturbation advance: iter=%d rp=%+.5f", iteration + 1, random_perturbation)
         if _replay_meta is not None or perturb_factor > 0:
             # Use RELION's actual hp_order when replaying (recovar's current
             # grid order may be capped at MAX_FULL_GRID_ORDER=4 for memory).

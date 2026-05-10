@@ -165,3 +165,4 @@ logs/
 tests/baselines/em_parity_quality_fast_ledger_*.json
 tests/baselines/em_parity_quality_long_ledger_*.json
 tests/baselines/em_parity_perf_*_ledger_*.json
+tests/em_parity_long/initial_model_iter10_ledger.json
