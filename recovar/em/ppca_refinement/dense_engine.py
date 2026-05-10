@@ -16,14 +16,11 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
+from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics
 from recovar.em.ppca_refinement.mean_regularization import (
-    KCLASS_RELION_MINRES_MAP,
     MeanRegularizationConfig,
     resolve_mean_precision,
 )
-
-# KCLASS_RELION_MINRES_MAP retained for backward-compat re-exports; do not prune.
-_ = KCLASS_RELION_MINRES_MAP
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
 from recovar.ppca.pose_marginal import compute_ppca_pose_scores_and_moments_no_contrast
@@ -489,17 +486,18 @@ def run_dense_ppca_fused_refinement_blocks(
             jnp.float32
         )
 
-    diagnostics = {
-        "pmax_mean": float(jnp.mean(jnp.concatenate(pmax_values))) if pmax_values else float("nan"),
-        "nsig_mean": float(jnp.mean(jnp.concatenate(nsig_values))) if nsig_values else float("nan"),
-        "best_rotation_idx": jnp.concatenate(best_rotations) if best_rotations else jnp.zeros((0,), dtype=jnp.int32),
-        "best_translation_idx": jnp.concatenate(best_translations)
-        if best_translations
-        else jnp.zeros((0,), dtype=jnp.int32),
-        "mean_regularization_style": str(mean_reg.style),
-        "mean_tau2_fudge": float(mean_reg.tau2_fudge),
-        "mean_minres_map": int(mean_reg.minres_map),
-    }
+    diagnostics = build_iteration_diagnostics(
+        pmax_values=pmax_values,
+        nsig_values=nsig_values,
+        best_rotations=best_rotations,
+        best_translations=best_translations,
+        log_likelihood=log_likelihood,
+        n_images=n_images,
+        mean_reg=mean_reg,
+        image_scale_min=1.0,
+        image_scale_max=1.0,
+        image_scale_corrections=None,
+    )
     stats = AugmentedPPCAStats(
         rhs=jnp.swapaxes(rhs_volume, 0, 1),
         lhs_tri=jnp.swapaxes(lhs_tri_volume, 0, 1),
