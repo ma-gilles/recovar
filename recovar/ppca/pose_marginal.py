@@ -19,17 +19,83 @@ def compute_ppca_pose_scores_and_moments_no_contrast(
     return_moments: bool,
     debug_jitter: float = 0.0,
 ):
-    """Return no-contrast pose-marginal PPCA score and augmented moments.
+    r"""Closed-form pose-marginal PPCA score and posterior moments.
 
-    The model integrates out ``z ~ N(0, I_q)`` analytically:
+    Takes the six sufficient-statistic tensors produced by
+    :func:`recovar.em.ppca_refinement.engine._per_pose_stats_block` and
+    integrates the latent ``z ~ N(0, I_q)`` analytically.
 
-    ``M = I + Hzz``, ``b = Re(W^H C (y - mu))``,
-    ``score = -0.5 * (rho - Re(b* M^-1 b) + logdet(M))``.
+    Quadratic completion. For a single image at pose (R, t):
 
-    Moment returns keep ``alpha_aug[..., 1:] = E[z]`` for diagnostics, while
-    ``G_aug_tri`` packs the Hermitian normal-equation matrix
-    ``E([1; z] [1; z]^T)`` for real PPCA latent coordinates. ``q=0`` reduces
-    to homogeneous K=1 scoring exactly.
+    .. math::
+
+        -2 \log p(y \mid R, t, z)
+            \;=\; \rho \;-\; 2\,\Re\langle z, b\rangle \;+\; z^{\top} M z,
+        \quad\text{where}\quad
+        \rho \;=\; y\_norm - 2\,t\_mx + \nu_{mm}, \quad
+        b \;=\; g_{zx} - h_{zm}, \quad
+        M \;=\; I_q + H_{zz}.
+
+    Integrating out :math:`z` analytically (Gaussian) gives the pose score
+
+    .. math::
+
+        \log p(y \mid R, t)
+            \;=\; -\tfrac{1}{2}\left[\rho - b^{\top} M^{-1} b + \log\det M\right]
+            \;+\; \text{const}.
+
+    The posterior over ``z`` at fixed pose is
+
+    .. math::
+
+        z \mid y, R, t \;\sim\; \mathcal{N}\!\left(M^{-1} b,\; M^{-1}\right),
+
+    so we return the augmented moments
+
+    .. math::
+
+        \alpha_{\mathrm{aug}}
+            \;=\; \begin{pmatrix} 1 \\ \mathbb{E}[z] \end{pmatrix},
+        \qquad
+        G_{\mathrm{aug}}
+            \;=\; \mathbb{E}\!\left[\begin{pmatrix} 1 \\ z \end{pmatrix}
+                                   \begin{pmatrix} 1 \\ z \end{pmatrix}^{\!\top}\right]
+            \;=\; \begin{pmatrix} 1 & \mathbb{E}[z]^{\!\top} \\
+                                  \mathbb{E}[z] & M^{-1} + \mathbb{E}[z]\,\mathbb{E}[z]^{\!\top}
+                  \end{pmatrix}.
+
+    These are the augmented [μ, W] sufficient statistics consumed by the
+    augmented M-step (:func:`recovar.ppca.augmented_mstep.solve_augmented_ppca_mstep`).
+
+    Parameters
+    ----------
+    y_norm, t_mx, nu_mm, g_zx, h_zm, Hzz
+        Sufficient-statistic tensors from
+        :func:`_per_pose_stats_block`. See that function's docstring for the
+        math definitions and shapes (broadcast to ``(B, T, R, ...)``).
+    return_moments : bool
+        If False, return only ``score`` (saves memory when called by the
+        score-only pass-1).
+    debug_jitter : float
+        Add ``debug_jitter * I`` to ``M`` before the Cholesky; only used
+        when probing ill-conditioned ``M``.
+
+    Returns
+    -------
+    score : ``(B, T, R)``
+        Pose log-score :math:`\log p(y_i \mid R, t)`, up to an additive
+        constant independent of pose.
+    alpha_aug : ``(B, T, R, q+1)`` or ``None``
+        :math:`[\,1,\; \mathbb{E}[z]\,]` per (image, pose). ``None`` when
+        ``return_moments=False``.
+    G_aug_tri : ``(B, T, R, (q+2)(q+1)/2)`` or ``None``
+        Upper-triangular packed :math:`\mathbb{E}[z_{\mathrm{aug}}
+        z_{\mathrm{aug}}^{\top}]`. ``None`` when ``return_moments=False``.
+
+    Special case
+    ------------
+    ``q == 0`` reduces this to homogeneous K=1 scoring:
+    ``score = -0.5 * rho`` and ``alpha_aug = G_aug = [1]``.
     """
     y_norm = jnp.asarray(y_norm)
     t_mx = jnp.asarray(t_mx)

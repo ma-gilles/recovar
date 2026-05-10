@@ -81,7 +81,79 @@ class DenseScoreStats(NamedTuple):
 
 
 def _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm):
-    """Build PPCA sufficient stats over one ``[B, T]`` by ``[R]`` block."""
+    r"""Per-pose sufficient statistics for the PPCA pose-marginal E-step.
+
+    PPCA generative model (per image ``i``, latent ``z ~ N(0, I_q)``):
+
+    .. math::
+
+        y_i \;=\; \mathrm{CTF}_i \odot P_{R_i, t_i}\!\left(\mu + W z\right)
+                  + \varepsilon_i,
+        \qquad \varepsilon_i \sim \mathcal{N}(0, \mathrm{diag}(\sigma_i^2)).
+
+    where :math:`P_{R,t}(\cdot)` is the Fourier slice of the rotated /
+    translated volume. The negative log-likelihood (up to a constant
+    independent of pose and ``z``) is
+
+    .. math::
+
+        -2 \log p(y_i \mid R, t, z) \;=\;
+            \underbrace{\sum_f \frac{|y_i|^2}{\sigma_i^2}}_{=\, y\_norm_i}
+            \;-\; 2\,\Re\!\left\langle Y_1^{(i,t)},\, P_R(\mu) \right\rangle
+            \;+\; \nu_{mm}^{(i,r)}
+            \;-\; 2\,\Re\!\left\langle z,\; g_{zx}^{(i,t,r)} - h_{zm}^{(i,r)} \right\rangle
+            \;+\; z^{\top}\!\left(H_{zz}^{(i,r)} + I_q\right) z .
+
+    Whitened data is :math:`Y_1 \;=\; y \cdot \mathrm{CTF} / \sigma^2`
+    (the translation phase shift is folded into ``Y1`` upstream, indexed
+    by ``t``).
+
+    The tensors built here are the building blocks that
+    :func:`compute_ppca_pose_scores_and_moments_no_contrast` plugs into
+    the closed-form ``z``-marginal to produce the pose log-score
+    :math:`\log p(y_i \mid R, t)` and the posterior moments
+    :math:`\mathbb{E}[z_{\mathrm{aug}}], \mathbb{E}[z_{\mathrm{aug}} z_{\mathrm{aug}}^{\top}]`.
+
+    Parameters
+    ----------
+    Y1 : ``(B, T, F)``
+        Whitened, translation-shifted data
+        :math:`Y_1^{(i,t,f)} = y_{i,f} \cdot \mathrm{CTF}_{i,f} / \sigma^2_{i,f}`
+        for image ``i`` at translation ``t``, Fourier pixel ``f``.
+    proj_aug : ``(R, q+1, F)``
+        Augmented projection. Component 0 is :math:`P_R(\mu)`, components
+        1..q are :math:`P_R(W_q)`. Same ``F`` (half-spectrum) layout as ``Y1``.
+    ctf2_over_noise : ``(B, F)``
+        :math:`\mathrm{CTF}_{i,f}^2 / \sigma_{i,f}^2`. Used for the
+        CTF²/σ²-weighted projection-norm tensors below.
+    y_norm : ``(B,)``
+        :math:`\sum_f |y_i|^2 / \sigma_{i,f}^2` — image-energy constant
+        that's broadcast through but otherwise pose-independent.
+
+    Returns
+    -------
+    Tuple of six tensors, all broadcast to a common ``(B, T, R, ...)`` shape:
+
+    - ``y_norm``  ``(B, T, R)``         constant in (t, r)
+    - ``t_mx``    ``(B, T, R)``         :math:`\Re\langle Y_1^{(i,t)}, P_R(\mu)\rangle`
+    - ``nu_mm``   ``(B, T, R)``         :math:`\sum_f (\mathrm{CTF}^2/\sigma^2)\,|P_R(\mu)|^2`, broadcast in t
+    - ``g_zx``    ``(B, T, R, q)``      :math:`\Re\langle Y_1^{(i,t)}, P_R(W_q)\rangle`
+    - ``h_zm``    ``(B, T, R, q)``      :math:`\Re \sum_f (\mathrm{CTF}^2/\sigma^2)\,\overline{P_R(W_q)}\,P_R(\mu)`, broadcast in t
+    - ``H_zz``    ``(B, T, R, q, q)``   :math:`\Re \sum_f (\mathrm{CTF}^2/\sigma^2)\,\overline{P_R(W_q)}\,P_R(W_{q'})`, broadcast in t
+
+    The translation dimension ``T`` only carries information through
+    ``Y1`` (which encodes the translation phase shift); the projection
+    tensors (``nu_mm``, ``h_zm``, ``H_zz``) are translation-invariant
+    and broadcast in ``t`` purely for downstream einsum convenience.
+
+    Notes
+    -----
+    Even though ``proj_W`` is complex (it is a Fourier slice of a real-
+    space volume), the latent ``z`` is real, so all PPCA arithmetic happens
+    on the real parts of the Hermitian inner products. The ``.real``
+    projections are not approximations — they are exact under Hermitian
+    half-spectrum symmetry with the matching half-image weights upstream.
+    """
     B, T, F = Y1.shape
     R, P, proj_F = proj_aug.shape
     if proj_F != F:
