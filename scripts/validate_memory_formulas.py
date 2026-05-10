@@ -189,11 +189,8 @@ def build_pipeline_argv(
             "-o",
             str(out_dir),
         ]
-    # Force a specific n_pcs: pass --memory-safety-fraction tighten? No,
-    # n_pcs is set by `zdim` indirectly; the cleanest way is to override
-    # via the planner default. For now, use the default 200 and have
-    # the cell n_pcs index into the discovery axis via a separate run
-    # parameter. Future enhancement: support direct n_pcs override.
+    # n_pcs is forced by ``RECOVAR_DEBUG_FORCE_N_PCS`` in the subprocess
+    # env; not by argv (no user-facing CLI flag for it).
     return argv
 
 
@@ -205,6 +202,9 @@ def run_cell(*, pipeline: str, grid_size: int, n_pcs: int, backend: str, dataset
 
     env = os.environ.copy()
     env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"  # observe actual demand
+    # Force this cell's n_pcs into the covariance pipeline. Honored by
+    # recovar/commands/pipeline.py post-planner-override.
+    env["RECOVAR_DEBUG_FORCE_N_PCS"] = str(n_pcs)
     if backend == "jax_fallback":
         env["RECOVAR_DISABLE_CUDA"] = "1"
     else:

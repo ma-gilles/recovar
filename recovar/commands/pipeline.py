@@ -1037,6 +1037,21 @@ def standard_recovar_pipeline(args):
             )
             covariance_options["n_pcs_to_compute"] = plan.n_pcs_to_compute
 
+        # Sweep-only override: validate_memory_formulas.py sets this env
+        # var to force a specific n_pcs per cell. Not user-facing.
+        _force_n_pcs = os.environ.get("RECOVAR_DEBUG_FORCE_N_PCS")
+        if _force_n_pcs:
+            try:
+                _force_val = int(_force_n_pcs)
+                logger.info(
+                    "RECOVAR_DEBUG_FORCE_N_PCS overriding covariance n_pcs: %s -> %s",
+                    covariance_options.get("n_pcs_to_compute"),
+                    _force_val,
+                )
+                covariance_options["n_pcs_to_compute"] = _force_val
+            except ValueError:
+                logger.warning("RECOVAR_DEBUG_FORCE_N_PCS=%r is not an int — ignoring", _force_n_pcs)
+
         if args.low_memory_option:
             logger.info("Using low-memory covariance options (reduced sampling, adaptive n_pcs)")
             covariance_options["sampling_n_cols"] = 50
