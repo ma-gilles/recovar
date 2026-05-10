@@ -49,6 +49,7 @@ _TRAJECTORY_PATHS = {
     "head_only": trajgen.path_head_only,
     "left_right": trajgen.path_left_right,
     "asymmetric": trajgen.path_asymmetric,
+    "identity": trajgen.path_identity,
 }
 
 
