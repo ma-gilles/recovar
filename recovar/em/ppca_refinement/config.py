@@ -55,7 +55,21 @@ class ScheduleConfig:
 
 @dataclass(frozen=True)
 class ScoringConfig:
-    """Per-image scoring options."""
+    """Per-image scoring options.
+
+    Attributes
+    ----------
+    half_spectrum_scoring : bool
+        Misleading legacy name. ``False`` (default) **enables Hermitian
+        half-image weights** (``w_f = 2`` for non-DC/non-Nyquist pixels,
+        ``w_f = 1`` else) so every Fourier inner product in the E-step
+        equals the full-Fourier inner product exactly, the ``.real()``
+        projections in :func:`engine._per_pose_stats_block` are exact,
+        and ``z`` stays exactly real. ``True`` switches to RELION-style
+        unit weights everywhere, which biases pose scores by ~½, makes
+        ``Re(half_IP)`` an approximation of the full IP, and shifts the
+        effective ``z`` prior — only use for RELION-parity tests.
+    """
 
     score_with_masked_images: bool = False
     half_spectrum_scoring: bool = False
