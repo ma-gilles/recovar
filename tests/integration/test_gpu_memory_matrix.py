@@ -11,7 +11,7 @@ Two flavors:
     pytest just shells out to a single representative cell here.
 
 Each cell:
-  1. ``recovar run_test_dataset --gpu-budget-gb N --memory-diagnostics --no-delete``
+  1. ``recovar run_test_dataset --gpu-budget-gb N --no-delete``
   2. asserts ``memory_plan.json`` exists under the output dir
   3. asserts ``memory_trace.jsonl`` exists and the recorded peaks fit
      within ``budget * 1.2``.
@@ -59,7 +59,6 @@ def _run_cell(out_dir: Path, *, gpu_gb: int, backend: str) -> None:
         str(out_dir),
         "--gpu-budget-gb",
         str(gpu_gb),
-        "--memory-diagnostics",
         "--no-delete",
     ]
     print(" ".join(cmd))

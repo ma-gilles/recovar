@@ -47,11 +47,13 @@ def test_command_help_lists_gpu_gb(cmd):
 @pytest.mark.parametrize("cmd", _HEAVY_GPU_COMMANDS)
 def test_command_help_lists_memory_planning_flags(cmd):
     txt = _help_text_for(cmd)
+    # `--memory-diagnostics` was removed (always-on); replaced by
+    # `--memory-profile` for the heavyweight JAX-profiler captures.
     expected = [
         "--low-memory-option",
         "--very-low-memory-option",
         "--adaptive-n-pcs",
-        "--memory-diagnostics",
+        "--memory-profile",
         "--fail-on-memory-exceed",
     ]
     missing = [flag for flag in expected if flag not in txt]
@@ -62,7 +64,13 @@ def test_command_help_lists_memory_planning_flags(cmd):
 def test_command_help_does_not_advertise_removed_aliases(cmd):
     """Catch alias resurrections."""
     txt = _help_text_for(cmd)
-    forbidden = ["--gpu-memory", "--adaptive-memory", "--n-adaptive-pcs", "--hard-gpu-memory-limit"]
+    forbidden = [
+        "--gpu-memory",
+        "--adaptive-memory",
+        "--n-adaptive-pcs",
+        "--hard-gpu-memory-limit",
+        "--memory-diagnostics",  # removed: diagnostics are always-on
+    ]
     present = [flag for flag in forbidden if flag in txt]
     assert not present, f"recovar {cmd} --help still advertises removed aliases: {present}"
 

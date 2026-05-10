@@ -139,14 +139,20 @@ def add_memory_planning_args(parser: argparse.ArgumentParser):
             "Reproducible: same flags + same dataset = same n_pcs."
         ),
     )
+    # NOTE: ``--memory-diagnostics`` was removed. Diagnostics
+    # (memory_plan.json, memory_trace.jsonl, allocator_env.json,
+    # args.json) are ALWAYS written into ``<outdir>/_diagnostics/``.
+    # The cost is < 1 second per run and the diagnostic value is
+    # high enough that opt-in didn't make sense.
     group.add_argument(
-        "--memory-diagnostics",
-        dest="memory_diagnostics",
+        "--memory-profile",
+        dest="memory_profile",
         action="store_true",
         help=(
-            "Write memory_trace.jsonl with per-phase JAX peak-memory rows "
-            "to the output directory. memory_plan.json is written "
-            "unconditionally (it's tiny)."
+            "HEAVYWEIGHT: capture jax.profiler.save_device_memory_profile "
+            "snapshots at each phase boundary (~50-200 ms per phase plus "
+            "~5-50 MB profile files). Used by the validation sweep and "
+            "manual debugging; not needed for production runs."
         ),
     )
     group.add_argument(
@@ -167,6 +173,73 @@ def add_memory_planning_args(parser: argparse.ArgumentParser):
         help=argparse.SUPPRESS,
     )
     return parser
+
+
+def write_run_metadata(args, outdir, logger=None):
+    """Write args.json and allocator_env.json into ``outdir/_diagnostics/``.
+
+    Records: serialized argparse Namespace, the JAX/XLA env vars in
+    effect, the canonical CUDA env var, and the recovar git head if
+    available. Captured at planner-construction time so two runs with
+    identical CLI flags but different shell env can be distinguished.
+    """
+    import json as _json
+    import os as _os
+    import subprocess as _subprocess
+
+    from recovar.utils.memory_planner import diagnostics_dir
+
+    diag = diagnostics_dir(outdir)
+
+    # args.json
+    try:
+        args_dict = {k: _serialize_value(v) for k, v in vars(args).items()}
+        # Resolve git head best-effort
+        try:
+            head = _subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            git_head = head.stdout.strip() if head.returncode == 0 else None
+        except Exception:
+            git_head = None
+        args_dict["__git_head__"] = git_head
+        (diag / "args.json").write_text(_json.dumps(args_dict, indent=2, default=str))
+    except Exception as exc:
+        if logger is not None:
+            logger.warning("Could not write args.json: %s", exc)
+
+    # allocator_env.json
+    try:
+        env_keys = [
+            "XLA_PYTHON_CLIENT_PREALLOCATE",
+            "XLA_PYTHON_CLIENT_MEM_FRACTION",
+            "XLA_PYTHON_CLIENT_ALLOCATOR",
+            "TF_GPU_ALLOCATOR",
+            "CUDA_VISIBLE_DEVICES",
+            "RECOVAR_DISABLE_CUDA",
+            "RECOVAR_CUDA_DISABLE",
+            "JAX_PLATFORMS",
+        ]
+        env_record = {k: _os.environ.get(k) for k in env_keys}
+        (diag / "allocator_env.json").write_text(_json.dumps(env_record, indent=2))
+    except Exception as exc:
+        if logger is not None:
+            logger.warning("Could not write allocator_env.json: %s", exc)
+
+
+def _serialize_value(v):
+    """Best-effort JSON-serializable representation."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, (list, tuple)):
+        return [_serialize_value(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _serialize_value(x) for k, x in v.items()}
+    return str(v)
 
 
 def apply_memory_planning_args(
@@ -224,12 +297,17 @@ def apply_memory_planning_args(
             if logger is not None:
                 logger.warning("Could not write memory_plan.json: %s", exc)
 
+        # Always-on metadata artifacts (small files, big diagnostic value).
+        try:
+            write_run_metadata(args, outdir, logger=logger)
+        except Exception as exc:
+            if logger is not None:
+                logger.warning("Could not write run metadata: %s", exc)
+
+    # Memory trace is now always-on (cost < 1 s/run, value high).
     trace = None
     if outdir is not None:
-        trace = memory_planner.MemoryTraceWriter(
-            outdir,
-            enabled=bool(getattr(args, "memory_diagnostics", False)),
-        )
+        trace = memory_planner.MemoryTraceWriter(outdir, enabled=True)
 
     return plan, trace
 

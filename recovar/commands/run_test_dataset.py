@@ -126,8 +126,10 @@ def _build_forward_argv(args: argparse.Namespace) -> list[str]:
     else:
         fwd.append("--adaptive-n-pcs")
 
-    if args.memory_diagnostics:
-        fwd.append("--memory-diagnostics")
+    # `--memory-diagnostics` was removed (always-on now). The new
+    # `--memory-profile` is heavyweight; only forward if explicitly set.
+    if getattr(args, "memory_profile", False):
+        fwd.append("--memory-profile")
     if args.fail_on_memory_exceed:
         fwd.append("--fail-on-memory-exceed")
     if args.memory_safety_fraction is not None:

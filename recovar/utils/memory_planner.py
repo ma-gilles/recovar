@@ -536,9 +536,24 @@ def make_memory_plan(
 # ---------------------------------------------------------------------------
 
 
+def diagnostics_dir(outdir: str | Path) -> Path:
+    """Return ``<outdir>/_diagnostics`` and ensure it exists.
+
+    Underscore prefix signals "internal/auxiliary" and tells users
+    "no need to look here unless something went wrong." All
+    diagnostic artifacts (memory_plan.json, memory_trace.jsonl,
+    allocator_env.json, args.json, error_hint.json, profile dumps)
+    live under this directory. ``run.log`` stays at outdir root for
+    backward compatibility.
+    """
+    p = Path(outdir) / "_diagnostics"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def write_memory_plan_json(plan: MemoryPlan, outdir: str | Path) -> Path:
-    """Always-on artifact: writes ``memory_plan.json`` next to the run."""
-    out_path = Path(outdir) / "memory_plan.json"
+    """Always-on artifact: writes ``_diagnostics/memory_plan.json``."""
+    out_path = diagnostics_dir(outdir) / "memory_plan.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as fh:
         json.dump(plan.to_dict(), fh, indent=2, default=str)
@@ -553,7 +568,8 @@ class MemoryTraceWriter:
     """
 
     def __init__(self, outdir: str | Path, *, enabled: bool = True):
-        self.path = Path(outdir) / "memory_trace.jsonl"
+        # Always lives in _diagnostics/ now (always-on; no flag).
+        self.path = diagnostics_dir(outdir) / "memory_trace.jsonl"
         self.enabled = enabled
         self._opened = False
         if enabled:

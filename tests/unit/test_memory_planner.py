@@ -421,7 +421,7 @@ def test_trace_writer_records_phase(tmp_path, monkeypatch):
     trace = mp.MemoryTraceWriter(tmp_path, enabled=True)
     trace.record("after_mean")
     trace.record("after_covariance")
-    rows = [json.loads(line) for line in (tmp_path / "memory_trace.jsonl").read_text().splitlines()]
+    rows = [json.loads(line) for line in (tmp_path / "_diagnostics" / "memory_trace.jsonl").read_text().splitlines()]
     assert [r["phase"] for r in rows] == ["after_mean", "after_covariance"]
 
 
@@ -435,7 +435,7 @@ def test_debug_force_peak_gb_overrides_observed(monkeypatch, tmp_path):
 
     trace = mp.MemoryTraceWriter(tmp_path, enabled=True)
     trace.record("after_mean")
-    rows = [json.loads(line) for line in (tmp_path / "memory_trace.jsonl").read_text().splitlines()]
+    rows = [json.loads(line) for line in (tmp_path / "_diagnostics" / "memory_trace.jsonl").read_text().splitlines()]
     assert rows[0]["jax_peak_gb"] == 999.0
     assert rows[0]["jax_peak_gb_forced"] is True
 
