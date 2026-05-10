@@ -509,9 +509,17 @@ def run_dense_ppca_fused_refinement_blocks(
     """Run one dense PPCA EM update over prepared fused blocks.
 
     This is the first integration layer above :func:`fused_dense_pose_ppca_block`.
-    It streams blocks into augmented half-volume sufficient statistics and then
-    calls the joint augmented M-step. The caller is responsible for building
-    blocks from the dataset and current K-class schedule.
+    It streams the prepared blocks into augmented ``[μ, W]`` half-volume
+    sufficient statistics (``rhs``, ``lhs_tri``) and then calls the joint
+    augmented M-step :func:`recovar.ppca.augmented_mstep.solve_augmented_ppca_mstep`.
+
+    The caller is responsible for building the block list from the dataset
+    given the current iteration's geometry (``current_size``, ``q``,
+    ``volume_domain``) and schedule (batch sizes); this function does not
+    know about HEALPix orders or per-iter schedules. The dataset-facing
+    entry points :func:`recovar.em.ppca_refinement.dense_dataset.iter_dense_ppca_dataset_blocks`
+    / :func:`recovar.em.ppca_refinement.local_dataset.iter_local_ppca_dataset_blocks`
+    are what produce the blocks.
     """
     mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
     postprocess = postprocess if postprocess is not None else PostprocessConfig()
