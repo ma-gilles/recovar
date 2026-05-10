@@ -87,6 +87,24 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow a global sign flip during GT alignment. Off by default.",
     )
+    parser.add_argument(
+        "--gt_align_refine_orders",
+        type=int,
+        nargs="*",
+        default=[3, 4],
+        help=("HEALPix orders for local rotation refinement after the coarse pass. Empty list disables refinement."),
+    )
+    parser.add_argument(
+        "--gt_align_refine_sigma_deg",
+        type=float,
+        default=30.0,
+        help="Angular radius (deg) used to keep nearby rotations during local refinement.",
+    )
+    parser.add_argument(
+        "--print_per_shell_fsc",
+        action="store_true",
+        help="Print full per-shell FSC curve for each volume.",
+    )
     return parser.parse_args(argv)
 
 
@@ -188,9 +206,7 @@ def _add_metric_set(
     npz_payload[f"{prefix}_shell_05"] = np.int32(shell_05)
     npz_payload[f"{prefix}_shell_0143"] = np.int32(shell_0143)
     npz_payload[f"{prefix}_resolution_05_A"] = np.float64(_shell_resolution(shell_05, volume_shape[0], voxel_size))
-    npz_payload[f"{prefix}_resolution_0143_A"] = np.float64(
-        _shell_resolution(shell_0143, volume_shape[0], voxel_size)
-    )
+    npz_payload[f"{prefix}_resolution_0143_A"] = np.float64(_shell_resolution(shell_0143, volume_shape[0], voxel_size))
     npz_payload[f"{prefix}_mean_fsc_1_8"] = np.float64(_mean_fsc(fsc, 1, 8))
     npz_payload[f"{prefix}_mean_fsc_1_16"] = np.float64(_mean_fsc(fsc, 1, 16))
 
@@ -203,6 +219,7 @@ def _add_metric_set(
             "resolution_0143_A": _shell_resolution(shell_0143, volume_shape[0], voxel_size),
             "mean_fsc_1_8": _mean_fsc(fsc, 1, 8),
             "mean_fsc_1_16": _mean_fsc(fsc, 1, 16),
+            "fsc_vs_gt": [float(v) for v in fsc],
         }
     )
 
@@ -220,6 +237,8 @@ def evaluate(
     gt_align_max_shell: int,
     gt_align_allow_mirror: bool,
     gt_align_allow_sign: bool,
+    gt_align_refine_orders: tuple[int, ...] = (),
+    gt_align_refine_sigma_deg: float = 30.0,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     gt_real, gt_voxel = _load_volume(gt_volume_path, gt_frame)
     if gt_real.ndim != 3 or len(set(gt_real.shape)) != 1:
@@ -283,6 +302,8 @@ def evaluate(
                 score_max_shell=int(gt_align_max_shell),
                 allow_mirror=bool(gt_align_allow_mirror),
                 allow_sign=bool(gt_align_allow_sign),
+                refine_orders=tuple(int(o) for o in gt_align_refine_orders) or None,
+                refine_sigma_deg=float(gt_align_refine_sigma_deg),
             )
             aligned_prefix = f"{label}_aligned"
             _add_metric_set(
@@ -314,17 +335,25 @@ def evaluate(
     return npz_payload, json_summary
 
 
-def _print_summary(summary: dict[str, Any]) -> None:
+def _print_per_shell(label: str, fsc: list[float]) -> None:
+    n = len(fsc)
+    # Print every shell up to where FSC drops below 0.143, then sample to end.
+    for chunk_start in range(0, n, 16):
+        chunk_end = min(chunk_start + 16, n)
+        header = "    " + "shell:" + " ".join(f"{s:>5d}" for s in range(chunk_start, chunk_end))
+        body = "    " + f"{label:<6s}" + " ".join(f"{fsc[s]:>5.2f}" for s in range(chunk_start, chunk_end))
+        print(header)
+        print(body)
+
+
+def _print_summary(summary: dict[str, Any], *, print_per_shell_fsc: bool = False) -> None:
     align = "aligned" if summary["gt_align_enabled"] else "raw-only"
     print(
         "Ab-initio GT evaluation: "
         f"frame={summary['volume_frame']} gt_frame={summary['gt_frame']} "
         f"voxel={summary.get('voxel_size', 1.0):.6g} A align={align}"
     )
-    header = (
-        f"{'label':<28s} {'corr':>10s} {'fsc1-8':>10s} {'fsc1-16':>10s} "
-        f"{'0.5 shell':>9s} {'0.143 shell':>11s}"
-    )
+    header = f"{'label':<28s} {'corr':>10s} {'fsc1-8':>10s} {'fsc1-16':>10s} {'0.5 shell':>9s} {'0.143 shell':>11s}"
     print(header)
     print("-" * len(header))
     for item in summary["volumes"]:
@@ -339,6 +368,12 @@ def _print_summary(summary: dict[str, Any]) -> None:
                 f"{aligned['mean_fsc_1_8']:10.6f} {aligned['mean_fsc_1_16']:10.6f} "
                 f"{aligned['shell_05']:9d} {aligned['shell_0143']:11d}"
             )
+        if print_per_shell_fsc:
+            print(f"  per-shell FSC vs GT — {item['label']}:")
+            _print_per_shell("raw", item.get("fsc_vs_gt", []))
+            if aligned and "fsc_vs_gt" in aligned:
+                print(f"  per-shell FSC vs GT — {item['label']} aligned:")
+                _print_per_shell("alig", aligned["fsc_vs_gt"])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -356,6 +391,8 @@ def main(argv: list[str] | None = None) -> int:
         gt_align_max_shell=int(args.gt_align_max_shell),
         gt_align_allow_mirror=not bool(args.gt_align_no_mirror),
         gt_align_allow_sign=bool(args.gt_align_allow_sign),
+        gt_align_refine_orders=tuple(int(o) for o in (args.gt_align_refine_orders or [])),
+        gt_align_refine_sigma_deg=float(args.gt_align_refine_sigma_deg),
     )
 
     if args.output_npz:
@@ -367,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         out_json.parent.mkdir(parents=True, exist_ok=True)
         out_json.write_text(json.dumps(json_summary, indent=2, sort_keys=True) + "\n")
 
-    _print_summary(json_summary)
+    _print_summary(json_summary, print_per_shell_fsc=bool(args.print_per_shell_fsc))
     return 0
 
 

@@ -245,8 +245,22 @@ def vdam_m_step_single_class(
     new_fourier_coverage_class = state.fourier_coverage_class.copy()
     new_data_vs_prior_class = state.data_vs_prior_class.copy()
     fsc_for_ssnr = np.asarray(state.fsc_halves_class[0], dtype=np.float64)
+    # In K=1 pseudo-halfset mode each accumulator covers ~all particles with
+    # a different random pose ordering, so accum_h0.weight alone is biased
+    # ~−1% vs RELION's iter-1 single-halfset BPref weight. Averaging h0+h1
+    # recovers the unified-halfset weight RELION passes to updateSSNRarrays
+    # and aligns autosampling timing with RELION (HEALPix 1→2 at iter-10).
+    #
+    # For K>1, particles are split across classes by softmax posterior so
+    # h0 and h1 per-class accumulators are not symmetric. Averaging in that
+    # regime regressed K=4 CC 0.997→0.90 by making the SsnrMap inconsistent
+    # with the reconstruction data; keep accum_h0 alone for K>1.
+    if accum_h1 is not None and state.K == 1:
+        weight_for_ssnr = 0.5 * (accum_h0.weight + accum_h1.weight)
+    else:
+        weight_for_ssnr = accum_h0.weight
     tau2, sigma2, data_vs_prior, fourier_coverage = bind.vdam_update_ssnr_arrays_from_bpref(
-        accum_h0.weight,
+        weight_for_ssnr,
         fsc_for_ssnr,
         state.tau2_class[k],
         tau2_fudge_factor,

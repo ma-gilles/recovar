@@ -80,9 +80,21 @@ def run_em_output_to_bpref(
             c : c + half_ps + 1,
         ]
 
+    # Clamp denormal-range weight values to 0. recovar accumulates the BPref
+    # weight in float32 inside the JAX scatter; for shells where scatter never
+    # actually fires the result should be exact 0, but float32 rounding around
+    # the denormal boundary can leave residual values in the (0, 1e-20) band.
+    # RELION's `BackProjector::updateSSNRarrays` requires sigma2 to be either
+    # exactly 0 or strictly > 1e-20 — anything in between aborts with
+    # `BackProjector::reconstruct: ERROR: unexpectedly small, yet non-zero
+    # sigma2 value, this should not happen...` (seen at iter-7 of K=4
+    # nr_iter=10 where compounding drift drove some shells into this range).
+    # Threshold 1e-15 gives a safety margin above RELION's 1e-20 cutoff.
+    bp_weight_f64 = np.asarray(bp_weight.real, dtype=np.float64).copy()
+    bp_weight_f64[np.abs(bp_weight_f64) < 1e-15] = 0.0
     return (
         np.asarray(bp_data, dtype=np.complex128).copy(),
-        np.asarray(bp_weight.real, dtype=np.float64).copy(),
+        bp_weight_f64,
     )
 
 

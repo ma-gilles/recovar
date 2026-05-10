@@ -366,13 +366,17 @@ def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int)
         raise ValueError(f"projector_data must be 3D, got {ppref.shape}")
     n = int(ori_size)
     center = n // 2
-    if ppref.shape[0] > n or ppref.shape[1] > n or ppref.shape[2] > center + 1:
-        raise ValueError(f"cropped Projector::data shape {ppref.shape} does not fit ori_size={ori_size}")
-
+    # RELION's cropped projector has shape (2*r_max+1, 2*r_max+1, r_max+1)
+    # where r_max = current_size/2. When VDAM autosampling pushes current_size
+    # at or beyond ori_size, the cropped slab can exceed RECOVAR's full
+    # centered half-volume dimensions (n, n, center+1). The embedding loop
+    # below clips out-of-range coordinates, so any-size input is accepted —
+    # we just truncate to the representable subset of frequencies.
     half = np.zeros((n, n, center + 1), dtype=np.complex128)
     slab = ppref[::-1, :, :]
     z_center = slab.shape[0] // 2
     y_center = slab.shape[1] // 2
+    x_max = min(slab.shape[2], center + 1)
     for iz in range(slab.shape[0]):
         z = (iz - z_center) + center
         if z < 0 or z >= n:
@@ -380,7 +384,7 @@ def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int)
         for iy in range(slab.shape[1]):
             y = (iy - y_center) + center
             if 0 <= y < n:
-                half[z, y, : slab.shape[2]] = slab[iz, iy, :]
+                half[z, y, :x_max] = slab[iz, iy, :x_max]
     return np.asarray(ftu.half_volume_to_full_volume(half, (n, n, n)), dtype=np.complex128)
 
 
@@ -611,8 +615,7 @@ def _class_local_rotation_log_prior(class_rotation_log_prior, layout) -> np.ndar
         raise ValueError("local layout is missing coarse parent rotation ids for class priors")
     if prior.ndim != 2 or prior.shape[1] <= int(np.max(parent_ids, initial=-1)):
         raise ValueError(
-            "class_rotation_log_prior must have shape (n_classes, n_coarse_rotations), "
-            f"got {prior.shape}",
+            f"class_rotation_log_prior must have shape (n_classes, n_coarse_rotations), got {prior.shape}",
         )
     return prior[:, parent_ids]
 
@@ -808,9 +811,7 @@ def _run_sparse_pass2_initial_model_estep(
             image_corrections=group_kwargs.get("image_corrections"),
             scale_corrections=group_kwargs.get("scale_corrections"),
             image_pre_shifts=group_kwargs.get("image_pre_shifts"),
-            mstep_subtract_ctf_projection=bool(
-                group_kwargs.get("reconstruction_subtract_projected_reference", False)
-            ),
+            mstep_subtract_ctf_projection=bool(group_kwargs.get("reconstruction_subtract_projected_reference", False)),
             mstep_relion_x_half=bool(config.relion_bpref_frame),
             reconstruct_significant_only=True,
             adaptive_fraction=adaptive_fraction,
@@ -992,9 +993,7 @@ def _run_sparse_pass2_initial_model_estep(
             image_corrections=group_kwargs.get("image_corrections"),
             scale_corrections=group_kwargs.get("scale_corrections"),
             image_pre_shifts=group_kwargs.get("image_pre_shifts"),
-            mstep_subtract_ctf_projection=bool(
-                group_kwargs.get("reconstruction_subtract_projected_reference", False)
-            ),
+            mstep_subtract_ctf_projection=bool(group_kwargs.get("reconstruction_subtract_projected_reference", False)),
             mstep_relion_x_half=bool(config.relion_bpref_frame),
             reconstruct_significant_only=True,
             adaptive_fraction=adaptive_fraction,
@@ -1246,9 +1245,7 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
             meta[f"halfset_{h}_noise_sumw"] = half_sumw
             wsum_sigma2_offset += half_wsum
             sigma2_offset_sumw += half_sumw
-            wsum_sigma2_noise = (
-                half_wsum_noise if wsum_sigma2_noise is None else wsum_sigma2_noise + half_wsum_noise
-            )
+            wsum_sigma2_noise = half_wsum_noise if wsum_sigma2_noise is None else wsum_sigma2_noise + half_wsum_noise
             wsum_img_power = half_img_power if wsum_img_power is None else wsum_img_power + half_img_power
             noise_sumw += half_sumw
             have_sigma2_offset = True
