@@ -31,7 +31,7 @@ from recovar.em.ppca_refinement.config import (
     ScoringConfig,
     SparsePass2Config,
 )
-from recovar.em.ppca_refinement.dense_engine import (
+from recovar.em.ppca_refinement.engine import (
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
     _enforce_augmented_x0,
@@ -249,8 +249,13 @@ def _project_augmented_half_volumes(
     disc_type,
     *,
     max_r,
-    relion_texture_interp: bool,
+    relion_texture_interp: bool = False,
 ) -> jax.Array:
+    """Slice the augmented [μ, W] half-volumes at every rotation in the block.
+
+    Returns ``proj`` shaped ``(R, P, n_freq)`` where ``R = len(rotations_block)``
+    and ``P = q + 1``. Used by both the dense iterator and the local iterator.
+    """
     kwargs = {}
     if max_r is not None:
         kwargs["max_r"] = max_r

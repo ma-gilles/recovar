@@ -4,7 +4,7 @@ import pytest
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_half
-from recovar.em.ppca_refinement.dense_engine import (
+from recovar.em.ppca_refinement.engine import (
     DensePPCAFusedBlock,
     _score_gamma_and_moments,
     fused_dense_pose_ppca_block,

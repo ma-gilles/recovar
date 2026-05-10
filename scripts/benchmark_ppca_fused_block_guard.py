@@ -23,7 +23,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
-from recovar.em.ppca_refinement.dense_engine import fused_dense_pose_ppca_block
+from recovar.em.ppca_refinement.engine import fused_dense_pose_ppca_block
 from recovar.em.sampling import get_rotation_grid_at_order
 
 
