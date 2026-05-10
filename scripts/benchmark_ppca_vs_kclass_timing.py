@@ -26,6 +26,7 @@ from recovar.em.ppca_refinement.initialization import (
     loading_row_norm_variance_prior,
     volume_power_variance_prior,
 )
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig
 from recovar.em.sampling import get_rotation_grid_at_order, get_translation_grid
 from recovar.reconstruction import noise as recon_noise
 
@@ -86,7 +87,9 @@ def _make_rotations_translations(args, simulation_info, n_images):
             raise ValueError("--translation-source=simulation-info-unique requires --simulation-info")
         translations = np.unique(np.asarray(simulation_info["trans"], dtype=np.float32)[: int(n_images)], axis=0)
     else:
-        translations = np.asarray(get_translation_grid(float(args.offset_range_px), float(args.offset_step_px)), dtype=np.float32)
+        translations = np.asarray(
+            get_translation_grid(float(args.offset_range_px), float(args.offset_step_px)), dtype=np.float32
+        )
         if args.max_translations is not None:
             translations = translations[: int(args.max_translations)]
     return rotations, translations
@@ -144,7 +147,9 @@ def main() -> None:
             raise ValueError("--exact-pose-support-mask requires simulator rotation and translation sources")
         gt_trans = np.asarray(simulation_info["trans"], dtype=np.float32)[:n_images]
         _translations_check, expected_translation_idx = np.unique(gt_trans, axis=0, return_inverse=True)
-        rotation_translation_mask = np.zeros((n_images, int(rotations.shape[0]), int(translations.shape[0])), dtype=bool)
+        rotation_translation_mask = np.zeros(
+            (n_images, int(rotations.shape[0]), int(translations.shape[0])), dtype=bool
+        )
         rows = np.arange(n_images, dtype=np.int64)
         rotation_translation_mask[rows, rows, np.asarray(expected_translation_idx, dtype=np.int64)] = True
     noise_variance = _load_noise_variance(simulation_info, dataset.image_shape)
@@ -187,7 +192,9 @@ def main() -> None:
         W_prior = jnp.full((half_size, int(args.q)), float(args.W_prior_variance), dtype=jnp.float32)
 
     class_means = jnp.asarray(
-        np.stack([np.asarray(ftu.get_dft3(volume), dtype=np.complex64).reshape(-1) for volume in class_volumes], axis=0),
+        np.stack(
+            [np.asarray(ftu.get_dft3(volume), dtype=np.complex64).reshape(-1) for volume in class_volumes], axis=0
+        ),
         dtype=jnp.complex64,
     )
     volume_size = int(np.prod(tuple(dataset.volume_shape)))
@@ -220,7 +227,7 @@ def main() -> None:
             skip_empty_pose_blocks=rotation_translation_mask is not None,
             sparse_pass2=bool(args.ppca_sparse_pass2),
             sparse_pass2_log_threshold=float(args.ppca_sparse_pass2_log_threshold),
-            postprocess_strategy=str(args.postprocess_strategy).replace("-", "_"),
+            postprocess=PostprocessConfig(strategy=str(args.postprocess_strategy).replace("-", "_")),
             mstep_chunk_size=int(args.mstep_chunk_size),
             **common,
         )
@@ -274,14 +281,18 @@ def main() -> None:
             "ppca": ppca,
             "kclass": kclass,
             "ppca_over_kclass_median": float(ppca["median_s"] / kclass["median_s"]),
-            "ppca_over_kclass_q2_half_adjusted": float(ppca["median_s"] / kclass["median_s"] * int(args.k_classes) / (0.5 * float(args.q) ** 2)),
+            "ppca_over_kclass_q2_half_adjusted": float(
+                ppca["median_s"] / kclass["median_s"] * int(args.k_classes) / (0.5 * float(args.q) ** 2)
+            ),
         },
         "diagnostics": {
             "ppca_logZ_mean": float(ppca_result.diagnostics["logZ_mean"]),
             "ppca_pmax_mean": float(ppca_result.diagnostics["pmax_mean"]),
             "ppca_sparse_pass2_skipped_blocks": int(ppca_result.diagnostics.get("sparse_pass2_skipped_blocks", 0)),
             "ppca_sparse_pass2_total_blocks": int(ppca_result.diagnostics.get("sparse_pass2_total_blocks", 0)),
-            "ppca_sparse_pass2_skipped_fraction": float(ppca_result.diagnostics.get("sparse_pass2_skipped_fraction", 0.0)),
+            "ppca_sparse_pass2_skipped_fraction": float(
+                ppca_result.diagnostics.get("sparse_pass2_skipped_fraction", 0.0)
+            ),
             "ppca_score_fourier_size": int(ppca_result.diagnostics.get("score_fourier_size", 0)),
             "ppca_recon_fourier_size": int(ppca_result.diagnostics.get("recon_fourier_size", 0)),
             "ppca_full_half_fourier_size": int(ppca_result.diagnostics.get("full_half_fourier_size", 0)),
@@ -311,7 +322,9 @@ def _parse_args():
     parser.add_argument("--k-classes", type=int, default=4)
     parser.add_argument("--n-images", type=int, default=128)
     parser.add_argument("--rotation-source", choices=("healpix", "simulation-info"), default="simulation-info")
-    parser.add_argument("--translation-source", choices=("grid", "simulation-info-unique"), default="simulation-info-unique")
+    parser.add_argument(
+        "--translation-source", choices=("grid", "simulation-info-unique"), default="simulation-info-unique"
+    )
     parser.add_argument("--exact-pose-support-mask", action="store_true")
     parser.add_argument("--healpix-order", type=int, default=1)
     parser.add_argument("--max-rotations", type=int, default=None)

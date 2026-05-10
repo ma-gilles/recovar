@@ -14,6 +14,7 @@ that exists, the default heuristic is explicit and diagnostic-heavy:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import jax
@@ -23,6 +24,25 @@ import numpy as np
 from recovar.core import fourier_transform_utils as ftu
 
 PPCA_POSTPROCESS_HEURISTIC_WARNING = "heuristic_post_solve_mask_grid_correction_not_masked_pcg_objective"
+
+
+@dataclass(frozen=True)
+class PostprocessConfig:
+    """Bundle of post-M-step heuristic parameters.
+
+    Wraps the 8 kwargs previously sprawling across every EM-iteration entry
+    point. ``strategy="none"`` disables postprocess entirely; the other fields
+    are only consulted when the strategy enables masking / grid correction.
+    """
+
+    strategy: str = "mean_and_w_mask"
+    mask_radius_px: float | None = None
+    cosine_width_px: float = 3.0
+    grid_correct: bool = True
+    gridding_padding_factor: float = 1.0
+    gridding_order: int = 1
+    gridding_correct: str = "radial"
+    bandlimit_max_r: float | None = None
 
 
 class PPCAPostprocessResult(NamedTuple):
@@ -128,15 +148,17 @@ def postprocess_ppca_half_volumes(
     W_half,
     volume_shape,
     *,
-    strategy: str = "mean_and_w_mask",
-    mask_radius_px: float | None = None,
-    cosine_width_px: float = 3.0,
-    grid_correct: bool = True,
-    gridding_padding_factor: float = 1.0,
-    gridding_order: int = 1,
-    gridding_correct: str = "radial",
-    bandlimit_max_r: float | None = None,
+    config: PostprocessConfig | None = None,
 ) -> PPCAPostprocessResult:
+    cfg = config if config is not None else PostprocessConfig()
+    strategy = cfg.strategy
+    mask_radius_px = cfg.mask_radius_px
+    cosine_width_px = cfg.cosine_width_px
+    grid_correct = cfg.grid_correct
+    gridding_padding_factor = cfg.gridding_padding_factor
+    gridding_order = cfg.gridding_order
+    gridding_correct = cfg.gridding_correct
+    bandlimit_max_r = cfg.bandlimit_max_r
     """Apply explicit post-solve PPCA reference heuristics.
 
     ``strategy`` choices:
