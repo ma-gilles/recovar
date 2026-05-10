@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
-import more_itertools
 import mrcfile
+import more_itertools
 import numpy as np
 import pandas as pd
 import psutil
@@ -219,39 +219,9 @@ def safe_batch_size(raw_size):
     return max(1, int(raw_size))
 
 
-def _ab_log_divergence(legacy: int, modeled: int, kind: str, **ctx) -> None:
-    """Log a warning if the legacy formula and the new memory_model
-    disagree by more than 10% on the chosen batch size.
-
-    This is the A/B comparison that lets us catch unexpected divergence
-    before removing the legacy helpers in a follow-up PR. Silent if the
-    model isn't importable or if the call site doesn't have enough
-    context (e.g., backend unknown).
-    """
-    if legacy == 0 or modeled == 0:
-        return
-    ratio = legacy / modeled
-    if 0.9 <= ratio <= 1.1:
-        return
-    logger.warning(
-        "Batch-size A/B divergence (%s): legacy=%d, model=%d, ratio=%.2f. "
-        "Context: %s. If this fires repeatedly, investigate before "
-        "removing legacy helpers.",
-        kind,
-        legacy,
-        modeled,
-        ratio,
-        ", ".join(f"{k}={v}" for k, v in ctx.items()),
-    )
-
-
 # Sometimes, memory can grow like O(vol_batch_size * image_batch_size)
 def get_image_batch_size(grid_size, gpu_memory):
     """Calculate batch size for image processing.
-
-    Legacy formula (will be replaced by memory_model in a follow-up PR
-    after A/B logging confirms agreement). The new path is in
-    ``recovar.utils.memory_model.pick_image_batch``.
 
     Args:
         grid_size: Size of the grid
@@ -280,81 +250,54 @@ def get_image_batch_size(grid_size, gpu_memory):
 
     # Clip to reasonable bounds
     batch_size = max(min_batch_size, min(max_batch_size, batch_size))
-    legacy = int(batch_size)
 
-    # A/B compare against the new memory_model. Silent unless they diverge.
-    try:
-        from recovar.utils import memory_model as _mm
-        from recovar.utils.cuda_env import detect_backend as _detect
-
-        modeled = _mm.pick_image_batch(grid_size, gpu_memory, _detect())
-        _ab_log_divergence(legacy, modeled, "image", grid_size=grid_size, gpu_gb=gpu_memory)
-    except Exception:
-        pass
-
-    return legacy
+    return int(batch_size)
 
 
 def get_vol_batch_size(grid_size, gpu_memory):
-    """Calculate batch size for volume processing.
-
-    Legacy formula (will be replaced by ``memory_model.pick_volume_batch``
-    in a follow-up PR after A/B logging confirms agreement).
-    """
+    """Calculate batch size for volume processing."""
     if grid_size < 1:
         raise ValueError("grid_size must be positive")
     if gpu_memory <= 0:
         raise ValueError("gpu_memory must be positive")
 
+    # Use floating point arithmetic
     grid_size_f = float(grid_size)
     gpu_memory_f = float(gpu_memory)
 
     # Empirical formula: 25 volumes at 256^3 fit in ~38 GB.
+    # Scales cubically with grid_size and linearly with gpu_memory.
     batch_size = 25.0 * (256.0 / grid_size_f) ** 3.0 * gpu_memory_f / 38.0
-    batch_size = max(1, min(2**20, batch_size))
-    legacy = int(batch_size)
 
-    try:
-        from recovar.utils import memory_model as _mm
-        from recovar.utils.cuda_env import detect_backend as _detect
+    # Add reasonable bounds
+    max_batch_size = 2**20  # Reduced from 2**30
+    min_batch_size = 1
 
-        modeled = _mm.pick_volume_batch(grid_size, gpu_memory, _detect())
-        _ab_log_divergence(legacy, modeled, "volume", grid_size=grid_size, gpu_gb=gpu_memory)
-    except Exception:
-        pass
-
-    return legacy
+    batch_size = max(min_batch_size, min(max_batch_size, batch_size))
+    return int(batch_size)
 
 
 def get_column_batch_size(grid_size, gpu_memory):
-    """Calculate batch size for column processing.
-
-    Legacy formula (will be replaced by ``memory_model.pick_column_batch``
-    in a follow-up PR after A/B logging confirms agreement).
-    """
+    """Calculate batch size for column processing."""
     if grid_size < 1:
         raise ValueError("grid_size must be positive")
     if gpu_memory <= 0:
         raise ValueError("gpu_memory must be positive")
 
+    # Use floating point arithmetic
     grid_size_f = float(grid_size)
     gpu_memory_f = float(gpu_memory)
 
     # Empirical formula: 50 columns at 256^3 fit in ~38 GB.
+    # Column processing uses ~half the memory per element as full volumes.
     batch_size = 50.0 * (256.0 / grid_size_f) ** 3.0 * gpu_memory_f / 38.0
-    batch_size = max(1, min(2**20, batch_size))
-    legacy = int(batch_size)
 
-    try:
-        from recovar.utils import memory_model as _mm
-        from recovar.utils.cuda_env import detect_backend as _detect
+    # Add reasonable bounds
+    max_batch_size = 2**20  # Reduced from 2**30
+    min_batch_size = 1
 
-        modeled = _mm.pick_column_batch(grid_size, gpu_memory, _detect())
-        _ab_log_divergence(legacy, modeled, "column", grid_size=grid_size, gpu_gb=gpu_memory)
-    except Exception:
-        pass
-
-    return legacy
+    batch_size = max(min_batch_size, min(max_batch_size, batch_size))
+    return int(batch_size)
 
 
 from collections import namedtuple
