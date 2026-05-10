@@ -1,12 +1,23 @@
 # EM Module Agent Guide
 
+## Read First: EM Non-Negotiables
+
+- `recovar/em/CLAUDE.md` and `recovar/em/AGENTS.md` must stay byte-for-byte identical. Any change to one must be made to the other in the same commit; verify with `cmp recovar/em/CLAUDE.md recovar/em/AGENTS.md`.
+- At task start, before test selection, before Slurm submission, before saying an EM task is done, and after context compaction/session resume, re-read this file and restate the active validation scope.
+- For EM/refinement/initial-volume work, do not run repo-wide full/long RECOVAR suites by default. Use the EM-scoped tests below.
+- During normal iterative development, run the fast EM parity regression tier periodically but at most once every 3-4 hours unless fixing a failure, touching the tested path directly, or doing final pre-push validation.
+- When a substantive EM parity, quality, or performance task is done, launch longer RELION comparison runs on Slurm: both K=1 and K=4, at least 100k particles, at least 256x256 images, comparing accuracy and speed.
+- Record completion benchmark results in `docs/math/em_parity_best_metrics.md`; every delta must say better, worse, or same.
+- Always cite immutable commits, Slurm job IDs, exact commands, output paths, and quantitative metrics. Branch names and pass/fail alone are not enough.
+
 This is the compact operating guide for agents working in `recovar/em`.
 Longer parity history and detailed run notes live in
 `docs/math/relion_parity_agent_notes.md`.
 
 ## Startup
 
-- `recovar/em/AGENTS.md` is a loader only; keep durable EM guidance here.
+- `recovar/em/CLAUDE.md` and `recovar/em/AGENTS.md` are the same full guide,
+  not a loader pair. Keep them byte-for-byte synchronized.
 - Use the current checked-out task branch. Do not switch to historical branch
   names unless the user explicitly asks for a baseline comparison.
 - Before implementation work, read the relevant code/tests plus:
@@ -175,6 +186,19 @@ HEAD's ancestry; if it exits 2, the worktree is on the wrong branch.
 
 EM-parity regression tests (locked-down kernel-level RELION parity):
 
+Cadence rule for iterative EM work:
+
+- Run the fast regression tier periodically and before claiming an EM PR is
+  ready, but do not spend the whole work session waiting on it. During normal
+  iteration, rerun it at most once every 3-4 hours unless you just fixed a
+  failing regression, changed the tested parity path directly, or are doing
+  final pre-push validation.
+- Between full fast-regression runs, prefer targeted unit tests or the specific
+  failing parity case. Reuse the last passing fast-regression Slurm job only
+  when the current changes do not touch the tested code path.
+- When reporting parity, compare against the most recent accepted run and mark
+  each delta explicitly as better, worse, or same; do not report pass/fail only.
+
 Fast tier (~5–10 min on a single GPU; required before any EM-only PR push):
 ```bash
 pixi run test-em-parity-fast
@@ -202,6 +226,28 @@ It writes the combined report to the Slurm scratch dir.
 The EM-long tier uses the dedicated `--em-parity-long` pytest flag and
 the `em_parity_long` marker so it stays disjoint from the project-wide
 `--long-test` (which is forbidden for EM-only PRs).
+
+Completion parity/performance benchmark:
+
+- When you think a substantive EM parity, quality, or performance task is
+  done, launch longer RELION comparison runs via Slurm. Do not run these in a
+  tight loop; they are completion evidence, not edit-cycle tests.
+- The completion benchmark must include both K=1 and K=4 cases on a fixture
+  with at least 100k particles and at least 256x256 images. Use the same
+  particles, seeds, initial maps, masks, CTF handling, and hardware class for
+  RECOVAR and RELION. If only the 50k long tier is available, say explicitly
+  that it is a weaker interim check and not the 100k completion benchmark.
+- Compare both accuracy and speed. Required accuracy metrics: final half-map
+  corr vs RELION, RECOVAR-vs-RELION merged map corr, corr/FSC vs GT when GT is
+  available, Pmax gap/correlation, pose agreement, translation agreement, and
+  K=4 class assignment or Hungarian-matched per-class map correlations.
+  Required performance metrics: end-to-end wall time, per-iteration wall time,
+  GPU memory when available, throughput in images/sec, batch sizing, and Slurm
+  job IDs/log paths.
+- Record every completion benchmark in `docs/math/em_parity_best_metrics.md`.
+  Before claiming improvement, compare against that file's accepted best run
+  and label each metric delta as better, worse, or same. If the result is mixed,
+  say mixed; do not cherry-pick only improved metrics.
 
 For PR descriptions on EM-only branches, paste the EM-parity tables:
 ```bash
@@ -232,11 +278,18 @@ Benchmark datasets intended to validate resolution must use the PDB/mmCIF path:
    small values for near-Nyquist simulator sanity checks;
 4. simulate particles from those target-grid volumes at the same resolution.
 
-The existing reference implementation is
-`scripts/prepare_pdb_k2_relion_parity_benchmark.py`, which uses
-`recovar.simulation.trajectory_generation.generate_trajectory_volumes` before
-calling `simulator.generate_synthetic_dataset`. For K=1 benchmarks, create or
-use the analogous PDB-generated single-state script; do not use
+Use the existing PDB generators as the starting point:
+
+- K=1: `scripts/prepare_pdb_k1_relion_sanity_benchmark.py --n-images 100000 --grid-size 256`
+- K=2 trajectory reference: `scripts/prepare_pdb_k2_relion_parity_benchmark.py`
+- K-class PDB directory: `scripts/prepare_cryobench_pdb_multiclass_relion_parity_benchmark.py --n-images 100000 --grid-size 256`
+
+For the completion benchmark, K=4 means exactly four active classes. If using
+the CryoBench/Ribosembly PDB directory, build or point the script at a
+four-PDB directory; a K=15 run is useful stress coverage but is not the K=4
+completion benchmark. Do not use `scripts/prepare_relion_multiclass_parity_benchmark.py`
+for high-resolution completion metrics because it is based on legacy bundled
+asset volumes, not target-grid PDB volumes. Do not use
 `recovar.commands.make_test_dataset` unless the task is explicitly a low-res
 legacy fixture test.
 
