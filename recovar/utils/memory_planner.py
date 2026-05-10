@@ -613,5 +613,14 @@ class MemoryTraceWriter:
         if extra:
             row.update(extra)
 
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row) + "\n")
+        # Resilient append: if the diagnostics dir was wiped between
+        # __init__ and now (observed once during a sweep cold-compile),
+        # recreate it instead of crashing the pipeline. A trace writer
+        # error must never abort a real run.
+        try:
+            with self.path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except FileNotFoundError:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
