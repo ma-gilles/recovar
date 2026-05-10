@@ -544,7 +544,7 @@ def run_dense_ppca_fused_refinement_blocks(
     for block in blocks:
         if postprocess_bandlimit_max_r is None and bool(block.use_recon_window):
             postprocess_bandlimit_max_r = block.backprojection_max_r
-        rhs_volume, lhs_tri_volume, diag = fused_dense_pose_ppca_block(
+        rhs_volume, lhs_tri_volume, posterior = fused_dense_pose_ppca_block(
             block.Y1,
             block.proj_aug,
             block.ctf2_over_noise,
@@ -562,12 +562,12 @@ def run_dense_ppca_fused_refinement_blocks(
             use_recon_window=block.use_recon_window,
             backprojection_max_r=block.backprojection_max_r,
         )
-        log_likelihood += float(jnp.sum(diag.logZ))
-        n_images += int(diag.logZ.shape[0])
-        pmax_values.append(jnp.asarray(diag.pmax))
-        nsig_values.append(jnp.asarray(diag.n_significant_per_image))
-        best_rotations.append(jnp.asarray(diag.best_rotation_idx))
-        best_translations.append(jnp.asarray(diag.best_translation_idx))
+        log_likelihood += float(jnp.sum(posterior.logZ))
+        n_images += int(posterior.logZ.shape[0])
+        pmax_values.append(jnp.asarray(posterior.pmax))
+        nsig_values.append(jnp.asarray(posterior.n_significant_per_image))
+        best_rotations.append(jnp.asarray(posterior.best_rotation_idx))
+        best_translations.append(jnp.asarray(posterior.best_translation_idx))
 
     if enforce_x0:
         rhs_volume = _enforce_augmented_x0(rhs_volume, volume_shape)
