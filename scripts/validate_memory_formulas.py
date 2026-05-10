@@ -145,13 +145,21 @@ def build_dataset_if_needed(*, dataset_root: Path, pipeline: str, grid_size: int
 
 
 def build_pipeline_argv(
-    *, pipeline: str, grid_size: int, n_pcs: int, backend: str, dataset_dir: Path, out_dir: Path
+    *,
+    pipeline: str,
+    grid_size: int,
+    n_pcs: int,
+    backend: str,
+    dataset_dir: Path,
+    out_dir: Path,
+    budget_gb: float | None = None,
 ) -> list[str]:
     """argv for one ``recovar pipeline`` invocation.
 
-    The cell does NOT pass --gpu-budget-gb; we want to observe the
-    actual peak under the user's (or our) allocator settings, not a
-    constrained one.
+    If ``budget_gb`` is None the cell does NOT pass ``--gpu-budget-gb``
+    and we observe the actual peak under the user's (or our) allocator
+    settings. If ``budget_gb`` is given we constrain the planner to
+    that budget (saturation sweeps need this to measure peak vs budget).
     """
     base = [
         sys.executable,
@@ -195,12 +203,24 @@ def build_pipeline_argv(
     # is written. (Production runs default to no trace to avoid
     # the JAX memory_stats() + nvidia-smi probe cost.)
     argv.append("--memory-profile")
+    if budget_gb is not None:
+        argv.extend(["--gpu-budget-gb", str(budget_gb)])
     return argv
 
 
-def run_cell(*, pipeline: str, grid_size: int, n_pcs: int, backend: str, dataset_root: Path, runs_root: Path) -> dict:
+def run_cell(
+    *,
+    pipeline: str,
+    grid_size: int,
+    n_pcs: int,
+    backend: str,
+    dataset_root: Path,
+    runs_root: Path,
+    budget_gb: float | None = None,
+) -> dict:
     """Run one cell. Returns a record dict (status, peaks, wall time)."""
-    cell_id = f"{pipeline}_g{grid_size}_n{n_pcs}_{backend}"
+    budget_tag = f"_b{int(budget_gb)}" if budget_gb is not None else ""
+    cell_id = f"{pipeline}_g{grid_size}_n{n_pcs}_{backend}{budget_tag}"
     cell_out = runs_root / cell_id
     cell_out.mkdir(parents=True, exist_ok=True)
 
@@ -228,6 +248,7 @@ def run_cell(*, pipeline: str, grid_size: int, n_pcs: int, backend: str, dataset
         backend=backend,
         dataset_dir=dataset_dir,
         out_dir=cell_out / "pipeline_out",
+        budget_gb=budget_gb,
     )
 
     print(f"[{cell_id}] running: {' '.join(shlex.quote(a) for a in argv)}", flush=True)
@@ -282,6 +303,7 @@ def run_cell(*, pipeline: str, grid_size: int, n_pcs: int, backend: str, dataset
         "grid_size": grid_size,
         "n_pcs": n_pcs,
         "backend": backend,
+        "budget_gb": budget_gb,
         "cell_id": cell_id,
         "status": status,
         "wall_time_s": wall_time_s,
@@ -322,6 +344,72 @@ def validation_cells() -> list[dict]:
     return cells
 
 
+def saturation_cells() -> list[dict]:
+    """Phase A: measure HEADROOM_SATURATION = peak / budget per (grid, backend).
+
+    Three sub-sweeps:
+
+      A1 — grid × backend at full JAX budget (6 cells). Observes peak
+           when planner has the whole GPU. Yields the per-(grid, backend)
+           "natural" peak ratio.
+
+      A2 — budget sweep at fixed grid=128 custom_cuda, n_pcs=50 (5 cells).
+           Confirms peak tracks budget linearly. If linear, a single
+           SATURATION multiplier suffices; if sub-linear the legacy
+           formula's grid-scaling is the limiter.
+
+      A3 — jax_fallback at constrained budgets (6 cells). Cells in A1
+           that OOM under full budget reappear here with --gpu-budget-gb
+           forcing the planner to pick smaller batches. We measure peak
+           there to derive jax_fallback's saturation.
+
+    Total: 17 cells. Some A1 cells (jax_fallback at g≥128) will OOM —
+    that's expected; their measurement comes from A3.
+    """
+    cells: list[dict] = []
+
+    # A1: grid × backend at full budget. n_pcs=50 fixed (constant in
+    # n_pcs per discovery sweep).
+    for grid in (64, 128, 256):
+        for backend in ("custom_cuda", "jax_fallback"):
+            cells.append(
+                {
+                    "pipeline": "spa",
+                    "grid_size": grid,
+                    "n_pcs": 50,
+                    "backend": backend,
+                    "budget_gb": None,
+                }
+            )
+
+    # A2: budget sweep at the well-understood grid=128 custom_cuda cell.
+    for budget in (16, 24, 40, 60, 76):
+        cells.append(
+            {
+                "pipeline": "spa",
+                "grid_size": 128,
+                "n_pcs": 50,
+                "backend": "custom_cuda",
+                "budget_gb": float(budget),
+            }
+        )
+
+    # A3: jax_fallback at constrained budgets (g=64 and g=128).
+    for grid in (64, 128):
+        for budget in (12, 24, 40):
+            cells.append(
+                {
+                    "pipeline": "spa",
+                    "grid_size": grid,
+                    "n_pcs": 50,
+                    "backend": "jax_fallback",
+                    "budget_gb": float(budget),
+                }
+            )
+
+    return cells
+
+
 def fast_cells() -> list[dict]:
     """A 4-cell smoke test for harness debugging — not for fitting."""
     return [
@@ -336,6 +424,7 @@ def cmd_record(args) -> int:
     cells_to_run = {
         "discover": discovery_cells,
         "validate": validation_cells,
+        "saturation": saturation_cells,
         "fast": fast_cells,
     }[args.cells]()
 
@@ -353,6 +442,7 @@ def cmd_record(args) -> int:
             backend=cell["backend"],
             dataset_root=dataset_root,
             runs_root=runs_root,
+            budget_gb=cell.get("budget_gb"),
         )
         records.append(rec)
         print(
@@ -419,7 +509,7 @@ def main() -> int:
     sub = parser.add_subparsers(dest="mode", required=True)
 
     rec = sub.add_parser("record", help="run cells and write JSON record")
-    rec.add_argument("--cells", choices=("discover", "validate", "fast"), default="fast")
+    rec.add_argument("--cells", choices=("discover", "validate", "saturation", "fast"), default="fast")
     rec.add_argument("--runs-root", default="/scratch/gpfs/GILLES/mg6942/_agent_scratch/sweep_runs")
     rec.add_argument("--dataset-root", default="/scratch/gpfs/GILLES/mg6942/_agent_scratch/sweep_datasets")
     rec.add_argument("--output", required=True)
