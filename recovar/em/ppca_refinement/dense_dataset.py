@@ -695,7 +695,7 @@ def run_dense_ppca_fused_em_iteration(
                 retained_group = tuple(block for block, skip in zip(group, skip_pass2_block, strict=True) if not skip)
 
         for block in retained_group:
-            rhs_volume, lhs_tri_volume, diag = fused_dense_pose_ppca_block(
+            rhs_volume, lhs_tri_volume, posterior = fused_dense_pose_ppca_block(
                 block.Y1,
                 block.proj_aug,
                 block.ctf2_over_noise,
@@ -714,7 +714,7 @@ def run_dense_ppca_fused_em_iteration(
                 use_recon_window=block.use_recon_window,
                 backprojection_max_r=block.backprojection_max_r,
             )
-            batch_nsig = batch_nsig + diag.n_significant_per_image
+            batch_nsig = batch_nsig + posterior.n_significant_per_image
         pmax_values.append(batch_pmax)
         nsig_values.append(batch_nsig)
         best_rotations.append(batch_best_rotation)

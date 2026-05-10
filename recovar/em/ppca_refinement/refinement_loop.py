@@ -102,23 +102,23 @@ def compare_halfset_means_by_fsc(
 def _combined_best_pose_ids(pose_diagnostics, n_trans: int) -> np.ndarray:
     best = []
     for key in ("halfset0", "halfset1"):
-        diag = pose_diagnostics.get(key, {})
-        if "best_rotation_idx" not in diag or "best_translation_idx" not in diag:
+        halfset_pose = pose_diagnostics.get(key, {})
+        if "best_rotation_idx" not in halfset_pose or "best_translation_idx" not in halfset_pose:
             continue
-        rot = np.asarray(diag["best_rotation_idx"], dtype=np.int64)
-        trans = np.asarray(diag["best_translation_idx"], dtype=np.int64)
+        rot = np.asarray(halfset_pose["best_rotation_idx"], dtype=np.int64)
+        trans = np.asarray(halfset_pose["best_translation_idx"], dtype=np.int64)
         best.append(rot * int(n_trans) + trans)
     if not best:
         return np.zeros((0,), dtype=np.int32)
     return np.concatenate(best).astype(np.int32)
 
 
-def _mean_halfset_diag(pose_diagnostics, name: str) -> float:
+def _mean_halfset_diagnostic(pose_diagnostics, name: str) -> float:
     vals = []
     for key in ("halfset0", "halfset1"):
-        diag = pose_diagnostics.get(key, {})
-        if name in diag:
-            vals.append(float(diag[name]))
+        halfset_pose = pose_diagnostics.get(key, {})
+        if name in halfset_pose:
+            vals.append(float(halfset_pose[name]))
     return float(np.mean(vals)) if vals else float("nan")
 
 
@@ -253,9 +253,9 @@ def run_dense_ppca_refinement_loop(
             halfset_resolution_supports=comparison.resolution_supports,
             no_halfset_drift=comparison.no_halfset_drift,
             kclass_schedule_allows=kclass_allows and proposed_size > current_size,
-            pmax_mean=_mean_halfset_diag(updated.pose_diagnostics, "pmax_mean"),
-            logZ_mean=_mean_halfset_diag(updated.pose_diagnostics, "logZ_mean"),
-            nsig_mean=_mean_halfset_diag(updated.pose_diagnostics, "nsig_mean"),
+            pmax_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "pmax_mean"),
+            logZ_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "logZ_mean"),
+            nsig_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "nsig_mean"),
             W_subspace_agreement=W_agreement,
         )
         decision = evaluate_halfset_resolution_gate(
@@ -380,9 +380,9 @@ def run_local_ppca_refinement_loop(
             halfset_resolution_supports=comparison.resolution_supports,
             no_halfset_drift=comparison.no_halfset_drift,
             kclass_schedule_allows=kclass_allows and proposed_size > current_size,
-            pmax_mean=_mean_halfset_diag(updated.pose_diagnostics, "pmax_mean"),
-            logZ_mean=_mean_halfset_diag(updated.pose_diagnostics, "logZ_mean"),
-            nsig_mean=_mean_halfset_diag(updated.pose_diagnostics, "nsig_mean"),
+            pmax_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "pmax_mean"),
+            logZ_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "logZ_mean"),
+            nsig_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "nsig_mean"),
             W_subspace_agreement=W_agreement,
         )
         decision = evaluate_halfset_resolution_gate(

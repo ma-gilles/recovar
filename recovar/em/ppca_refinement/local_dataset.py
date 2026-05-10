@@ -769,7 +769,7 @@ def run_local_ppca_fused_em_iteration(
     ):
         if postprocess_bandlimit_max_r is None and bool(block.use_recon_window):
             postprocess_bandlimit_max_r = block.backprojection_max_r
-        rhs_volume, lhs_tri_volume, diag = fused_local_pose_ppca_bucket(
+        rhs_volume, lhs_tri_volume, posterior = fused_local_pose_ppca_bucket(
             block.Y1,
             block.proj_aug,
             block.ctf2_over_noise,
@@ -787,12 +787,12 @@ def run_local_ppca_fused_em_iteration(
             use_recon_window=block.use_recon_window,
             backprojection_max_r=block.backprojection_max_r,
         )
-        log_likelihood += float(jnp.sum(diag.logZ))
-        n_images += int(diag.logZ.shape[0])
-        pmax_values.append(jnp.asarray(diag.pmax))
-        nsig_values.append(jnp.asarray(diag.n_significant_per_image))
-        best_local = np.asarray(jax.block_until_ready(diag.best_rotation_idx), dtype=np.int64)
-        best_trans = np.asarray(jax.block_until_ready(diag.best_translation_idx), dtype=np.int64)
+        log_likelihood += float(jnp.sum(posterior.logZ))
+        n_images += int(posterior.logZ.shape[0])
+        pmax_values.append(jnp.asarray(posterior.pmax))
+        nsig_values.append(jnp.asarray(posterior.n_significant_per_image))
+        best_local = np.asarray(jax.block_until_ready(posterior.best_rotation_idx), dtype=np.int64)
+        best_trans = np.asarray(jax.block_until_ready(posterior.best_translation_idx), dtype=np.int64)
         local_rotation_ids = np.asarray(block.local_rotation_ids, dtype=np.int32)
         local_rotations = np.asarray(block.local_rotations, dtype=np.float32)
         image_rows = np.asarray(block.image_indices, dtype=np.int64)
