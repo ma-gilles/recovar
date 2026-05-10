@@ -148,11 +148,20 @@ def _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm):
 
     Notes
     -----
-    Even though ``proj_W`` is complex (it is a Fourier slice of a real-
-    space volume), the latent ``z`` is real, so all PPCA arithmetic happens
-    on the real parts of the Hermitian inner products. The ``.real``
-    projections are not approximations — they are exact under Hermitian
-    half-spectrum symmetry with the matching half-image weights upstream.
+    Even though ``proj_W`` is complex (a Fourier slice of a real-space
+    volume), the latent ``z`` is real, so all PPCA arithmetic happens on
+    the real parts of the Hermitian inner products. The ``.real``
+    projections are exact (not approximations) provided the half-image
+    weights are baked into ``Y1``, ``ctf2_over_noise``, and ``y_norm``
+    upstream. They are: ``recovar.em.dense_single_volume.helpers.preprocessing.preprocess_batch``
+    computes ``y_norm = Σ_f (|y|²/σ²) · w_f``, and
+    :func:`iter_dense_ppca_dataset_blocks` bakes
+    ``score_mask = window_mask × half_weights`` into both ``Y1`` and
+    ``ctf2_over_noise``. The weights are ``w_f = 2`` for non-DC /
+    non-Nyquist Fourier pixels and ``w_f = 1`` for DC and Nyquist (see
+    :func:`recovar.em.dense_single_volume.helpers.half_spectrum.make_half_image_weights`),
+    so each einsum below is the **full-Fourier** inner product and its
+    real part is exact under the Hermitian symmetry of real-space volumes.
     """
     B, T, F = Y1.shape
     R, P, proj_F = proj_aug.shape
