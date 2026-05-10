@@ -35,8 +35,11 @@ from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, 
 from recovar.em.ppca_refinement.engine import (
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
+    DenseScoreStats,
     _enforce_augmented_x0,
+    accumulate_pose_ppca_block_cached,
     dense_pose_ppca_score_stats_blocked,
+    dense_pose_ppca_score_with_moments_blocked,
     fused_dense_pose_ppca_block,
 )
 from recovar.em.ppca_refinement.initialization import real_volume_to_centered_fourier_half
@@ -622,14 +625,44 @@ def run_dense_ppca_fused_em_iteration(
         block_logZ = []
         block_score_stats = []
         block_pose_counts = []
+        # Cached-moments fast path: when sparse-pass2 cannot cull any blocks
+        # (disabled, or only one block in the group), compute moments (α, G_tri)
+        # in pass 1 so pass 2 can skip its duplicate `_per_pose_stats_block`
+        # einsum — the dominant cost in the early-iter regime where every
+        # block must be backprojected anyway.
+        cache_moments = (not sparse_pass2_enabled) or len(group) == 1
+        block_alphas: list = []
+        block_G_tris: list = []
+        block_scores: list = []
         for block in group:
-            score_stats = dense_pose_ppca_score_stats_blocked(
-                block.Y1,
-                block.proj_aug,
-                block.ctf2_over_noise,
-                block.y_norm,
-                block.pose_log_prior,
-            )
+            if cache_moments:
+                full = dense_pose_ppca_score_with_moments_blocked(
+                    block.Y1,
+                    block.proj_aug,
+                    block.ctf2_over_noise,
+                    block.y_norm,
+                    block.pose_log_prior,
+                )
+                score_stats = DenseScoreStats(
+                    logZ=full.logZ,
+                    best_log_score_per_image=full.best_log_score_per_image,
+                    best_rotation_idx=full.best_rotation_idx,
+                    best_translation_idx=full.best_translation_idx,
+                )
+                block_alphas.append(full.alpha)
+                block_G_tris.append(full.G_tri)
+                block_scores.append(full.score)
+            else:
+                score_stats = dense_pose_ppca_score_stats_blocked(
+                    block.Y1,
+                    block.proj_aug,
+                    block.ctf2_over_noise,
+                    block.y_norm,
+                    block.pose_log_prior,
+                )
+                block_alphas.append(None)
+                block_G_tris.append(None)
+                block_scores.append(None)
             block_score_stats.append(score_stats)
             block_logZ.append(score_stats.logZ)
             block_pose_counts.append(int(block.Y1.shape[1]) * int(block.rotations.shape[0]))
@@ -694,27 +727,53 @@ def run_dense_ppca_fused_em_iteration(
                 sparse_pass2_omitted_mass_upper_image_count += batch_size
                 retained_group = tuple(block for block, skip in zip(group, skip_pass2_block, strict=True) if not skip)
 
-        for block in retained_group:
-            rhs_volume, lhs_tri_volume, posterior = fused_dense_pose_ppca_block(
-                block.Y1,
-                block.proj_aug,
-                block.ctf2_over_noise,
-                block.y_norm,
-                block.rotations,
-                image_shape,
-                volume_shape,
-                rhs_volume,
-                lhs_tri_volume,
-                block.pose_log_prior,
-                Y1_recon=block.Y1_recon,
-                ctf2_over_noise_recon=block.ctf2_over_noise_recon,
-                normalization_logZ=logZ,
-                disc_type_backproject=disc_type,
-                recon_window_indices=block.recon_window_indices,
-                use_recon_window=block.use_recon_window,
-                backprojection_max_r=block.backprojection_max_r,
-            )
-            batch_nsig = batch_nsig + posterior.n_significant_per_image
+        retained_block_ids = {id(b) for b in retained_group}
+        for block_idx, block in enumerate(group):
+            if id(block) not in retained_block_ids:
+                continue
+            if cache_moments and block_scores[block_idx] is not None:
+                # Fast path: pass-1 already computed score + (α, G_tri). Skip
+                # the duplicate `_per_pose_stats_block` einsum that
+                # `fused_dense_pose_ppca_block` would otherwise redo.
+                rhs_volume, lhs_tri_volume, n_sig_block, _pmax_block = accumulate_pose_ppca_block_cached(
+                    block_scores[block_idx],
+                    block_alphas[block_idx],
+                    block_G_tris[block_idx],
+                    logZ,
+                    block.Y1_recon if block.Y1_recon is not None else block.Y1,
+                    block.ctf2_over_noise_recon if block.ctf2_over_noise_recon is not None else block.ctf2_over_noise,
+                    block.rotations,
+                    image_shape,
+                    volume_shape,
+                    rhs_volume,
+                    lhs_tri_volume,
+                    disc_type_backproject=disc_type,
+                    recon_window_indices=block.recon_window_indices,
+                    use_recon_window=block.use_recon_window,
+                    backprojection_max_r=block.backprojection_max_r,
+                )
+                batch_nsig = batch_nsig + n_sig_block
+            else:
+                rhs_volume, lhs_tri_volume, posterior = fused_dense_pose_ppca_block(
+                    block.Y1,
+                    block.proj_aug,
+                    block.ctf2_over_noise,
+                    block.y_norm,
+                    block.rotations,
+                    image_shape,
+                    volume_shape,
+                    rhs_volume,
+                    lhs_tri_volume,
+                    block.pose_log_prior,
+                    Y1_recon=block.Y1_recon,
+                    ctf2_over_noise_recon=block.ctf2_over_noise_recon,
+                    normalization_logZ=logZ,
+                    disc_type_backproject=disc_type,
+                    recon_window_indices=block.recon_window_indices,
+                    use_recon_window=block.use_recon_window,
+                    backprojection_max_r=block.backprojection_max_r,
+                )
+                batch_nsig = batch_nsig + posterior.n_significant_per_image
         pmax_values.append(batch_pmax)
         nsig_values.append(batch_nsig)
         best_rotations.append(batch_best_rotation)

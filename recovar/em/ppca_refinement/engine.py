@@ -348,6 +348,168 @@ def _score_gamma_and_moments(
     return gamma, alpha, G_tri, diagnostics
 
 
+class DenseScoreAndMomentsStats(NamedTuple):
+    """Pass-1 output that ALSO carries the moments needed by pass-2.
+
+    Returned by :func:`dense_pose_ppca_score_with_moments_blocked`. When the
+    iter loop is committed to running every rotation block through pass-2
+    (i.e., sparse-pass2 disabled), keeping the moments around lets pass-2
+    skip its duplicate ``_per_pose_stats_block`` recompute — the dominant
+    cost in the early-iter regime where sparse-pass2 cannot fire.
+    """
+
+    score: jax.Array  # (B, T, R)
+    alpha: jax.Array  # (B, T, R, q+1)
+    G_tri: jax.Array  # (B, T, R, tri(q+1))
+    logZ: jax.Array  # (B,)
+    best_log_score_per_image: jax.Array  # (B,)
+    best_rotation_idx: jax.Array  # (B,)
+    best_translation_idx: jax.Array  # (B,)
+
+
+@jax.jit
+def dense_pose_ppca_score_with_moments_blocked(
+    Y1,
+    proj_aug,
+    ctf2_over_noise,
+    y_norm,
+    pose_log_prior=None,
+):
+    """Pass-1 score stats AND moments (α, G_aug) in a single kernel.
+
+    Combines the work of :func:`dense_pose_ppca_score_stats_blocked` and the
+    moment-computing branch of :func:`compute_ppca_pose_scores_and_moments_no_contrast`
+    so that pass-2 can consume the moments directly via
+    :func:`accumulate_pose_ppca_block_cached` instead of redoing the heavy
+    ``_per_pose_stats_block`` einsum.
+    """
+    Y1 = jnp.asarray(Y1)
+    proj_aug = jnp.asarray(proj_aug)
+    B, T, _F = Y1.shape
+    R, _P, _ = proj_aug.shape
+    if pose_log_prior is not None and jnp.asarray(pose_log_prior).shape != (B, R, T):
+        raise ValueError(f"pose_log_prior shape {jnp.asarray(pose_log_prior).shape} != ({B}, {R}, {T})")
+    y_stats = _per_pose_stats_block(
+        Y1,
+        proj_aug,
+        jnp.asarray(ctf2_over_noise),
+        jnp.asarray(y_norm),
+    )
+    score_pre, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(*y_stats, return_moments=True)
+    score = _add_pose_log_prior(score_pre, pose_log_prior)
+    score_flat = score.reshape(B, T * R)
+    best_flat = jnp.argmax(score_flat, axis=-1)
+    return DenseScoreAndMomentsStats(
+        score=score,
+        alpha=alpha,
+        G_tri=G_tri,
+        logZ=jax.scipy.special.logsumexp(score_flat, axis=-1),
+        best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
+        best_rotation_idx=(best_flat % R).astype(jnp.int32),
+        best_translation_idx=(best_flat // R).astype(jnp.int32),
+    )
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "significance_threshold",
+        "disc_type_backproject",
+        "use_recon_window",
+        "backprojection_max_r",
+        "image_shape",
+        "volume_shape",
+    ),
+)
+def accumulate_pose_ppca_block_cached(
+    score,
+    alpha,
+    G_tri,
+    normalization_logZ,
+    Y1_recon,
+    ctf2_over_noise_recon,
+    rotations_block,
+    image_shape,
+    volume_shape,
+    rhs_volume,
+    lhs_tri_volume,
+    *,
+    significance_threshold: float = 1e-3,
+    disc_type_backproject: str = "linear_interp",
+    recon_window_indices=None,
+    use_recon_window: bool = False,
+    backprojection_max_r=None,
+):
+    """Pass-2 aggregate + backproject from pre-computed score + moments.
+
+    The dual of :func:`fused_dense_pose_ppca_block` but without the duplicate
+    score recompute — consumes the output of
+    :func:`dense_pose_ppca_score_with_moments_blocked`. Same math, same
+    numerics: γ = exp(score − logZ), aggregate via einsum, backproject.
+    """
+    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+
+    score = jnp.asarray(score)
+    alpha = jnp.asarray(alpha)
+    G_tri = jnp.asarray(G_tri)
+    logZ = jnp.asarray(normalization_logZ)
+    Y1_recon = jnp.asarray(Y1_recon)
+    ctf2_over_noise_recon = jnp.asarray(ctf2_over_noise_recon)
+    rotations_block = jnp.asarray(rotations_block)
+    rhs_volume = jnp.asarray(rhs_volume)
+    lhs_tri_volume = jnp.asarray(lhs_tri_volume)
+
+    B, T, R = score.shape
+    gamma = jnp.exp(score - logZ[:, None, None])
+    pmax = jnp.max(gamma.reshape(B, T * R), axis=-1)
+    n_significant = jnp.sum(gamma > float(significance_threshold), axis=(1, 2)).astype(jnp.int32)
+
+    rhs_dtype = rhs_volume.dtype
+    lhs_dtype = lhs_tri_volume.dtype
+
+    rhs_images = jnp.einsum(
+        "btr,btrp,btf->prf",
+        gamma.astype(rhs_dtype),
+        jnp.conj(alpha).astype(rhs_dtype),
+        Y1_recon.astype(rhs_dtype),
+    ).astype(rhs_dtype)
+    rhs_volume = batch_adjoint_slice_volume_maybe_windowed(
+        rhs_images,
+        recon_window_indices,
+        rotations_block,
+        rhs_volume,
+        image_shape,
+        volume_shape,
+        disc_type_backproject,
+        True,
+        True,
+        use_window=bool(use_recon_window),
+        max_r=backprojection_max_r,
+    )
+
+    lhs_images = jnp.einsum(
+        "btr,btrk,bf->krf",
+        gamma.astype(lhs_dtype),
+        G_tri,
+        ctf2_over_noise_recon.astype(lhs_dtype),
+    ).real.astype(lhs_dtype)
+    lhs_tri_volume = batch_adjoint_slice_volume_maybe_windowed(
+        lhs_images,
+        recon_window_indices,
+        rotations_block,
+        lhs_tri_volume,
+        image_shape,
+        volume_shape,
+        disc_type_backproject,
+        True,
+        True,
+        use_window=bool(use_recon_window),
+        max_r=backprojection_max_r,
+    )
+
+    return rhs_volume, lhs_tri_volume, n_significant, pmax
+
+
 @partial(
     jax.jit,
     static_argnames=(
