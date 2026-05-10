@@ -16,13 +16,11 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-import numpy as np
-
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
-
 
 PPCA_POSTPROCESS_HEURISTIC_WARNING = "heuristic_post_solve_mask_grid_correction_not_masked_pcg_objective"
 
@@ -70,46 +68,6 @@ def _half_radial_shell_labels(volume_shape) -> np.ndarray:
     return labels
 
 
-def _cap_W_shell_power(W_before, W_after, volume_shape):
-    """Do not let real-space W masking invent new per-shell covariance power."""
-
-    W_before = jnp.asarray(W_before)
-    W_after = jnp.asarray(W_after)
-    if W_after.shape[1] == 0:
-        return W_after, {
-            "postprocess_cap_W_shell_power": True,
-            "postprocess_W_shell_power_scale_min": 1.0,
-            "postprocess_W_shell_power_scale_mean": 1.0,
-        }
-
-    labels_np = _half_radial_shell_labels(volume_shape)
-    labels = jnp.asarray(labels_np, dtype=jnp.int32)
-    shell_count = int(labels_np.max(initial=0)) + 1
-    counts = jnp.bincount(labels, length=shell_count).astype(W_after.real.dtype)
-    safe_counts = jnp.where(counts > 0, counts, 1.0)
-
-    before_power = jnp.sum(jnp.abs(W_before) ** 2, axis=1).real.astype(W_after.real.dtype)
-    after_power = jnp.sum(jnp.abs(W_after) ** 2, axis=1).real.astype(W_after.real.dtype)
-    before_shell = jnp.bincount(labels, weights=before_power, length=shell_count) / safe_counts
-    after_shell = jnp.bincount(labels, weights=after_power, length=shell_count) / safe_counts
-
-    eps = jnp.asarray(1.0e-30, dtype=W_after.real.dtype)
-    shell_scale = jnp.where(after_shell > before_shell, jnp.sqrt(before_shell / jnp.maximum(after_shell, eps)), 1.0)
-    W_capped = W_after * shell_scale[labels, None].astype(W_after.dtype)
-
-    capped_power = jnp.sum(jnp.abs(W_capped) ** 2, axis=1).real.astype(W_after.real.dtype)
-    capped_shell = jnp.bincount(labels, weights=capped_power, length=shell_count) / safe_counts
-    diagnostics = {
-        "postprocess_cap_W_shell_power": True,
-        "postprocess_W_shell_power_scale_min": float(jnp.min(shell_scale)) if shell_count else 1.0,
-        "postprocess_W_shell_power_scale_mean": float(jnp.mean(shell_scale)) if shell_count else 1.0,
-        "postprocess_W_shell_power_input_sum": float(jnp.sum(before_shell * counts)),
-        "postprocess_W_shell_power_pre_cap_sum": float(jnp.sum(after_shell * counts)),
-        "postprocess_W_shell_power_output_sum": float(jnp.sum(capped_shell * counts)),
-    }
-    return W_capped, diagnostics
-
-
 def _soft_mask_and_background_weights(volume_shape, *, mask_radius_px: float | None, cosine_width_px: float, dtype):
     radius = -1 if mask_radius_px is None else float(mask_radius_px)
     if radius < 0:
@@ -135,7 +93,9 @@ def _soft_mask_and_background_weights(volume_shape, *, mask_radius_px: float | N
     return soft_mask.astype(dtype), background_weight.astype(dtype)
 
 
-def _gridding_kernel(volume_shape, *, gridding_padding_factor: float, gridding_order: int, gridding_correct: str, dtype):
+def _gridding_kernel(
+    volume_shape, *, gridding_padding_factor: float, gridding_order: int, gridding_correct: str, dtype
+):
     pixels = ftu.get_k_coordinate_of_each_pixel(volume_shape, 1, scaled=False).astype(jnp.float64)
     if gridding_correct == "radial":
         r = jnp.sqrt(jnp.sum(pixels**2, axis=-1))
@@ -159,9 +119,7 @@ def _gridding_kernel(volume_shape, *, gridding_padding_factor: float, gridding_o
             kernel_fn = lambda x: sinc(x) ** 2
         else:
             raise ValueError("gridding_order must be 0 or 1")
-        kernel = kernel_fn(pixels_rescaled[:, 0]) * kernel_fn(pixels_rescaled[:, 1]) * kernel_fn(
-            pixels_rescaled[:, 2]
-        )
+        kernel = kernel_fn(pixels_rescaled[:, 0]) * kernel_fn(pixels_rescaled[:, 1]) * kernel_fn(pixels_rescaled[:, 2])
     return kernel.reshape(volume_shape).astype(dtype)
 
 
@@ -178,7 +136,6 @@ def postprocess_ppca_half_volumes(
     gridding_order: int = 1,
     gridding_correct: str = "radial",
     bandlimit_max_r: float | None = None,
-    cap_W_shell_power: bool = True,
 ) -> PPCAPostprocessResult:
     """Apply explicit post-solve PPCA reference heuristics.
 
@@ -196,10 +153,7 @@ def postprocess_ppca_half_volumes(
 
     strategy = str(strategy)
     if strategy not in {"none", "mean_only", "mean_and_w_mask"}:
-        raise ValueError(
-            "postprocess strategy must be 'none', 'mean_only', or 'mean_and_w_mask', "
-            f"got {strategy!r}"
-        )
+        raise ValueError(f"postprocess strategy must be 'none', 'mean_only', or 'mean_and_w_mask', got {strategy!r}")
     if gridding_correct not in {"radial", "square"}:
         raise ValueError(f"gridding_correct must be 'radial' or 'square', got {gridding_correct!r}")
 
@@ -212,7 +166,6 @@ def postprocess_ppca_half_volumes(
     if W_half.shape[0] != mu_half.shape[0]:
         raise ValueError(f"W_half frequency dimension {W_half.shape[0]} != mu_half size {mu_half.shape[0]}")
 
-    applies_W_shell_cap = bool(strategy == "mean_and_w_mask" and cap_W_shell_power and W_half.shape[1] > 0)
     diagnostics = {
         "postprocess_strategy": strategy,
         "postprocess_warning": PPCA_POSTPROCESS_HEURISTIC_WARNING,
@@ -223,7 +176,6 @@ def postprocess_ppca_half_volumes(
         "postprocess_gridding_order": int(gridding_order),
         "postprocess_gridding_correct": str(gridding_correct),
         "postprocess_bandlimit_max_r": None if bandlimit_max_r is None else float(bandlimit_max_r),
-        "postprocess_cap_W_shell_power": applies_W_shell_cap,
     }
     if strategy == "none":
         return PPCAPostprocessResult(mu_half=mu_half, W_half=W_half, diagnostics=diagnostics)
@@ -270,7 +222,4 @@ def postprocess_ppca_half_volumes(
         diagnostics["postprocess_bandlimit_fraction"] = float(jnp.mean(bandlimit_mask))
     mu_out = half_out[0].astype(mu_half.dtype)
     W_out = jnp.swapaxes(half_out[1:].astype(W_half.dtype), 0, 1) if strategy == "mean_and_w_mask" else W_half
-    if strategy == "mean_and_w_mask" and cap_W_shell_power:
-        W_out, cap_diagnostics = _cap_W_shell_power(W_half, W_out, volume_shape)
-        diagnostics.update(cap_diagnostics)
     return PPCAPostprocessResult(mu_half=mu_out, W_half=W_out, diagnostics=diagnostics)

@@ -15,8 +15,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import core
 import recovar.core.fourier_transform_utils as ftu
+from recovar import core
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.half_spectrum import make_scoring_half_image_weights
@@ -28,7 +28,6 @@ from recovar.em.ppca_refinement.dense_engine import (
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
     _enforce_augmented_x0,
-    dense_pose_ppca_E_step_blocked,
     dense_pose_ppca_score_stats_blocked,
     fused_dense_pose_ppca_block,
 )
@@ -91,8 +90,7 @@ def _coerce_one_volume_to_half(volume, volume_shape, *, volume_domain: str) -> j
             domain = "real"
         else:
             raise ValueError(
-                "Could not infer PPCA volume_domain. Pass one of "
-                "'fourier_half', 'fourier_full', or 'real'."
+                "Could not infer PPCA volume_domain. Pass one of 'fourier_half', 'fourier_full', or 'real'."
             )
 
     if domain == "fourier_half":
@@ -182,7 +180,6 @@ def prepare_dense_ppca_dataset_inputs(
     current_size: int | None = None,
     half_spectrum_scoring: bool = False,
     square_window: bool = False,
-    score_W_scale: float = 1.0,
 ) -> DensePPCADatasetBlockInputs:
     """Resolve augmented volumes and Fourier-window masks for dense PPCA."""
 
@@ -197,9 +194,6 @@ def prepare_dense_ppca_dataset_inputs(
         q=q,
         volume_domain=volume_domain,
     )
-    score_W_scale = float(score_W_scale)
-    if q and score_W_scale != 1.0:
-        augmented_half = augmented_half.at[1:].multiply(jnp.asarray(score_W_scale, dtype=augmented_half.real.dtype))
     window_spec = make_fourier_window_spec(
         image_shape,
         current_size,
@@ -320,7 +314,9 @@ def _per_image_pose_prior_block(
     return None if prior is None else jnp.asarray(prior, dtype=jnp.float32)
 
 
-def _pose_mask_block_has_support(rotation_translation_mask, *, batch_start: int, batch_count: int, r0: int, r1: int) -> bool:
+def _pose_mask_block_has_support(
+    rotation_translation_mask, *, batch_start: int, batch_count: int, r0: int, r1: int
+) -> bool:
     if rotation_translation_mask is None:
         return True
     mask = np.asarray(rotation_translation_mask, dtype=bool)
@@ -354,7 +350,6 @@ def iter_dense_ppca_dataset_blocks(
     score_with_masked_images: bool = False,
     half_spectrum_scoring: bool = False,
     square_window: bool = False,
-    score_W_scale: float = 1.0,
     relion_texture_interp: bool = True,
     skip_empty_pose_blocks: bool = False,
 ) -> Iterable[DensePPCAFusedBlock]:
@@ -380,7 +375,6 @@ def iter_dense_ppca_dataset_blocks(
         current_size=current_size,
         half_spectrum_scoring=half_spectrum_scoring,
         square_window=square_window,
-        score_W_scale=score_W_scale,
     )
     config = ForwardModelConfig.from_dataset(
         experiment_dataset,
@@ -388,7 +382,11 @@ def iter_dense_ppca_dataset_blocks(
         process_fn=experiment_dataset.process_images,
     )
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, resolved.image_shape).squeeze()
-    image_indices = np.arange(getattr(experiment_dataset, "n_units", experiment_dataset.n_images)) if image_indices is None else np.asarray(image_indices)
+    image_indices = (
+        np.arange(getattr(experiment_dataset, "n_units", experiment_dataset.n_images))
+        if image_indices is None
+        else np.asarray(image_indices)
+    )
     batch_iter = experiment_dataset.iter_batches(
         image_batch_size,
         indices=image_indices,
@@ -424,7 +422,9 @@ def iter_dense_ppca_dataset_blocks(
             batch_scale = jnp.ones((batch_count,), dtype=shifted_score_half.real.dtype)
         else:
             scale_arr = np.asarray(image_scale_corrections, dtype=np.float32)
-            batch_scale = jnp.asarray(scale_arr[np.asarray(indices, dtype=np.int64)], dtype=shifted_score_half.real.dtype)
+            batch_scale = jnp.asarray(
+                scale_arr[np.asarray(indices, dtype=np.int64)], dtype=shifted_score_half.real.dtype
+            )
         batch_scale_sq = batch_scale**2
         Y1_score_full = (
             shifted_score_half.reshape(batch_count, n_trans, F)
@@ -582,11 +582,9 @@ def run_dense_ppca_fused_em_iteration(
     skip_empty_pose_blocks: bool = False,
     sparse_pass2: bool = True,
     sparse_pass2_log_threshold: float = float(np.log(1.0e-6)),
-    score_W_scale: float = 1.0,
 ) -> DensePPCAFusedEMResult:
     """Run one dataset-backed dense PPCA EM iteration."""
 
-    score_W_scale = float(score_W_scale)
     block_groups = iter_dense_ppca_dataset_block_groups(
         experiment_dataset,
         mu,
@@ -609,7 +607,6 @@ def run_dense_ppca_fused_em_iteration(
         score_with_masked_images=score_with_masked_images,
         half_spectrum_scoring=half_spectrum_scoring,
         square_window=square_window,
-        score_W_scale=score_W_scale,
         relion_texture_interp=relion_texture_interp,
         skip_empty_pose_blocks=skip_empty_pose_blocks,
     )
@@ -656,7 +653,9 @@ def run_dense_ppca_fused_em_iteration(
             postprocess_bandlimit_max_r = group[0].backprojection_max_r
         if score_fourier_size is None:
             score_fourier_size = int(group[0].Y1.shape[-1])
-            recon_fourier_size = int(group[0].Y1_recon.shape[-1]) if group[0].Y1_recon is not None else score_fourier_size
+            recon_fourier_size = (
+                int(group[0].Y1_recon.shape[-1]) if group[0].Y1_recon is not None else score_fourier_size
+            )
         block_logZ = []
         block_score_stats = []
         block_pose_counts = []
@@ -760,7 +759,9 @@ def run_dense_ppca_fused_em_iteration(
 
     if enforce_x0:
         rhs_volume = _enforce_augmented_x0(rhs_volume, volume_shape)
-        lhs_tri_volume = _enforce_augmented_x0(lhs_tri_volume.astype(jnp.complex64), volume_shape).real.astype(jnp.float32)
+        lhs_tri_volume = _enforce_augmented_x0(lhs_tri_volume.astype(jnp.complex64), volume_shape).real.astype(
+            jnp.float32
+        )
 
     diagnostics = {
         "pmax_mean": float(jnp.mean(jnp.concatenate(pmax_values))) if pmax_values else float("nan"),
@@ -768,15 +769,15 @@ def run_dense_ppca_fused_em_iteration(
         "log_likelihood": float(log_likelihood),
         "logZ_mean": float(log_likelihood / n_images) if n_images else float("nan"),
         "best_rotation_idx": jnp.concatenate(best_rotations) if best_rotations else jnp.zeros((0,), dtype=jnp.int32),
-        "best_translation_idx": jnp.concatenate(best_translations) if best_translations else jnp.zeros((0,), dtype=jnp.int32),
+        "best_translation_idx": jnp.concatenate(best_translations)
+        if best_translations
+        else jnp.zeros((0,), dtype=jnp.int32),
         "sparse_pass2_enabled": bool(sparse_pass2),
         "sparse_pass2_log_threshold": float(sparse_pass2_log_threshold),
         "sparse_pass2_total_blocks": int(sparse_pass2_total_blocks),
         "sparse_pass2_skipped_blocks": int(sparse_pass2_skipped_blocks),
         "sparse_pass2_skipped_fraction": (
-            float(sparse_pass2_skipped_blocks / sparse_pass2_total_blocks)
-            if sparse_pass2_total_blocks
-            else 0.0
+            float(sparse_pass2_skipped_blocks / sparse_pass2_total_blocks) if sparse_pass2_total_blocks else 0.0
         ),
         "sparse_pass2_omitted_mass_upper_sum": float(sparse_pass2_omitted_mass_upper_sum),
         "sparse_pass2_omitted_mass_upper_max": float(sparse_pass2_omitted_mass_upper_max),
@@ -789,14 +790,11 @@ def run_dense_ppca_fused_em_iteration(
         "recon_fourier_size": int(recon_fourier_size) if recon_fourier_size is not None else 0,
         "full_half_fourier_size": int(image_shape[0] * (image_shape[1] // 2 + 1)),
         "uses_fourier_window": bool(
-            score_fourier_size is not None
-            and int(score_fourier_size) < int(image_shape[0] * (image_shape[1] // 2 + 1))
+            score_fourier_size is not None and int(score_fourier_size) < int(image_shape[0] * (image_shape[1] // 2 + 1))
         ),
         "mean_regularization_style": str(mean_regularization_style),
         "mean_tau2_fudge": float(mean_tau2_fudge),
         "mean_minres_map": int(mean_minres_map),
-        "score_W_scale": float(score_W_scale),
-        "score_W_tempered": bool(score_W_scale != 1.0),
         "uses_image_scale_corrections": bool(image_scale_corrections is not None),
         "image_scale_min": float(image_scale_min),
         "image_scale_max": float(image_scale_max),
@@ -820,8 +818,7 @@ def run_dense_ppca_fused_em_iteration(
         )
     else:
         raise ValueError(
-            "mean_regularization_style must be 'variance' or 'relion_tau', "
-            f"got {mean_regularization_style!r}"
+            f"mean_regularization_style must be 'variance' or 'relion_tau', got {mean_regularization_style!r}"
         )
     input_augmented_half, _input_q = coerce_augmented_half_volumes(
         mu,
@@ -836,11 +833,10 @@ def run_dense_ppca_fused_em_iteration(
         if q_resolved
         else jnp.zeros((mean_prior.shape[0], 0), dtype=input_mu_half.dtype)
     )
-    scoring_input_W_half = input_W_half * jnp.asarray(score_W_scale, dtype=input_W_half.real.dtype)
     input_objective = augmented_ppca_mstep_objective(
         stats,
         input_mu_half,
-        scoring_input_W_half,
+        input_W_half,
         mean_prior=mean_prior,
         W_prior=W_prior,
         mean_precision=mean_precision,
@@ -944,7 +940,6 @@ def run_dense_ppca_halfset_fused_em_iteration(
     score_with_masked_images: bool = False,
     half_spectrum_scoring: bool = False,
     square_window: bool = False,
-    score_W_scale: float = 1.0,
     image_scale_corrections: np.ndarray | None = None,
     mean_regularization_style: str = "relion_tau",
     mean_tau2_fudge: float = 1.0,
@@ -981,7 +976,6 @@ def run_dense_ppca_halfset_fused_em_iteration(
                 score_with_masked_images=score_with_masked_images,
                 half_spectrum_scoring=half_spectrum_scoring,
                 square_window=square_window,
-                score_W_scale=score_W_scale,
                 image_scale_corrections=image_scale_corrections,
                 mean_regularization_style=mean_regularization_style,
                 mean_tau2_fudge=mean_tau2_fudge,

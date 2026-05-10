@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 import os
 import time
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+
 from recovar.utils.nvtx_shim import nvtx
 
 from .em_engine import run_em
 from .helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
 from .local_em_engine import run_local_em_exact
 from .local_layout import LocalHypothesisLayout
-
 
 logger = logging.getLogger(__name__)
 NVTX_DOMAIN_EM = "recovar_em"
@@ -108,6 +108,9 @@ def _is_class_lazy_mask(value) -> bool:
 
 def _dense_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_classes: int) -> dict:
     kwargs = dict(engine_kwargs)
+    coarse_translation_log_prior = kwargs.pop("coarse_translation_log_prior", None)
+    if coarse_translation_log_prior is not None and kwargs.get("translation_log_prior") is None:
+        kwargs["translation_log_prior"] = coarse_translation_log_prior
     class_rotation_log_prior = kwargs.pop("class_rotation_log_prior", None)
     if class_rotation_log_prior is not None:
         if "rotation_log_prior" in kwargs and kwargs["rotation_log_prior"] is not None:
@@ -139,6 +142,15 @@ def _dense_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_clas
                     f"{n_classes}, got {mask_array.shape}",
                 )
             kwargs["rotation_translation_mask"] = mask_array[class_index]
+    # Drop any leftover InitialModel/VDAM-specific engine kwargs that run_em
+    # doesn't accept (e.g. ``debug_iteration``, ``adaptive_fraction``,
+    # ``recon_square_window``, ``reconstruction_subtract_projected_reference``).
+    # The adaptive K-class wrapper consumes these higher up; the non-adaptive
+    # path forwards directly to run_em so they have to be filtered here.
+    import inspect as _inspect
+
+    _allowed = set(_inspect.signature(run_em).parameters)
+    kwargs = {k: v for k, v in kwargs.items() if k in _allowed}
     return kwargs
 
 
@@ -411,7 +423,9 @@ def _sum_k_class_noise_stats(
         if class_sumw <= 0.0:
             continue
         image_power += np.asarray(stats.wsum_img_power, dtype=np.float64) * (responsibility / class_sumw)
-    return aggregate._replace(wsum_img_power=jnp.asarray(image_power, dtype=aggregate.wsum_img_power.dtype), sumw=relion_sumw)
+    return aggregate._replace(
+        wsum_img_power=jnp.asarray(image_power, dtype=aggregate.wsum_img_power.dtype), sumw=relion_sumw
+    )
 
 
 def _assemble_result(

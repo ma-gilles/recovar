@@ -4,22 +4,21 @@ import numpy as np
 import pytest
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
-from recovar.em.dense_single_volume.iteration_loop import run_dense_ppca_refinement_with_kclass_schedule
 from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
 from recovar.em.dense_single_volume.helpers.scoring import _e_step_block_scores
+from recovar.em.dense_single_volume.iteration_loop import run_dense_ppca_refinement_with_kclass_schedule
+from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 from recovar.em.ppca_refinement import (
     HalfsetMeanComparison,
     PoseMarginalPPCAEMState,
     dense_pose_ppca_E_step_blocked,
     iter_dense_ppca_dataset_blocks,
-    run_dense_ppca_refinement_loop,
     run_dense_ppca_fused_em_iteration,
     run_dense_ppca_halfset_fused_em_iteration,
+    run_dense_ppca_refinement_loop,
     run_local_ppca_fused_em_iteration,
     run_local_ppca_refinement_loop,
 )
-
 
 pytestmark = pytest.mark.unit
 
@@ -100,9 +99,7 @@ class _TinyPPCAData:
 @pytest.fixture
 def tiny_inputs():
     rng = np.random.default_rng(7)
-    images = (
-        rng.standard_normal((4, N_HALF)) + 1j * rng.standard_normal((4, N_HALF))
-    ).astype(np.complex64)
+    images = (rng.standard_normal((4, N_HALF)) + 1j * rng.standard_normal((4, N_HALF))).astype(np.complex64)
     dataset = _TinyPPCAData(images)
     rotations = np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)).copy()
     translations = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
@@ -151,63 +148,14 @@ def test_dataset_blocks_match_homogeneous_dense_q0_score_convention(tiny_inputs)
         IMAGE_SHAPE,
         VOLUME_SHAPE,
     )
-    expected_logz = jax.scipy.special.logsumexp(
-        dense_scores.reshape(block.Y1_recon.shape[0], -1),
-        axis=-1,
-    ) - 0.5 * block.y_norm
-    np.testing.assert_allclose(np.asarray(diag.logZ), np.asarray(expected_logz), rtol=5e-4, atol=5e-2)
-
-
-def test_score_W_scale_zero_recovers_q0_pose_scores(tiny_inputs):
-    dataset, mu, W, rotations, translations = tiny_inputs
-    common = dict(
-        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        rotations=rotations,
-        translations=translations,
-        image_batch_size=2,
-        rotation_block_size=2,
-        current_size=4,
-        volume_domain="fourier_half",
-    )
-    q0_block = next(iter(iter_dense_ppca_dataset_blocks(dataset, mu, None, q=0, **common)))
-    tempered_block = next(
-        iter(
-            iter_dense_ppca_dataset_blocks(
-                dataset,
-                mu,
-                W,
-                q=1,
-                score_W_scale=0.0,
-                **common,
-            )
+    expected_logz = (
+        jax.scipy.special.logsumexp(
+            dense_scores.reshape(block.Y1_recon.shape[0], -1),
+            axis=-1,
         )
+        - 0.5 * block.y_norm
     )
-
-    np.testing.assert_allclose(np.asarray(tempered_block.proj_aug[:, 1:, :]), 0.0, rtol=0.0, atol=0.0)
-    _q0_stats, q0_diag = dense_pose_ppca_E_step_blocked(
-        q0_block.Y1,
-        q0_block.proj_aug,
-        q0_block.ctf2_over_noise,
-        q0_block.y_norm,
-        q0_block.pose_log_prior,
-    )
-    _tempered_stats, tempered_diag = dense_pose_ppca_E_step_blocked(
-        tempered_block.Y1,
-        tempered_block.proj_aug,
-        tempered_block.ctf2_over_noise,
-        tempered_block.y_norm,
-        tempered_block.pose_log_prior,
-    )
-
-    np.testing.assert_allclose(np.asarray(tempered_diag.logZ), np.asarray(q0_diag.logZ), rtol=5e-5, atol=5e-5)
-    np.testing.assert_array_equal(
-        np.asarray(tempered_diag.best_rotation_idx),
-        np.asarray(q0_diag.best_rotation_idx),
-    )
-    np.testing.assert_array_equal(
-        np.asarray(tempered_diag.best_translation_idx),
-        np.asarray(q0_diag.best_translation_idx),
-    )
+    np.testing.assert_allclose(np.asarray(diag.logZ), np.asarray(expected_logz), rtol=5e-4, atol=5e-2)
 
 
 def test_dataset_blocks_apply_known_image_scale_corrections(tiny_inputs):
@@ -306,31 +254,6 @@ def test_dataset_backed_dense_ppca_iteration_freeze_mean_keeps_input_mean(tiny_i
     assert np.all(np.isfinite(np.asarray(result.W_half)))
 
 
-def test_dataset_backed_dense_ppca_iteration_records_tempered_scoring_model(tiny_inputs):
-    dataset, mu, W, rotations, translations = tiny_inputs
-    result = run_dense_ppca_fused_em_iteration(
-        dataset,
-        mu,
-        W,
-        mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
-        W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
-        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
-        rotations=rotations,
-        translations=translations,
-        image_batch_size=2,
-        rotation_block_size=1,
-        current_size=4,
-        volume_domain="fourier_half",
-        score_W_scale=0.25,
-        enforce_x0=False,
-    )
-
-    assert result.diagnostics["score_W_scale"] == pytest.approx(0.25)
-    assert result.diagnostics["score_W_tempered"] is True
-    assert result.diagnostics["mstep_objective_solved_delta"] >= -1e-5
-    assert np.all(np.isfinite(np.asarray(result.W_half)))
-
-
 def test_dataset_backed_dense_ppca_iteration_uses_windowed_fourier_support(tiny_inputs):
     dataset, mu, W, rotations, translations = tiny_inputs
     block = next(
@@ -377,10 +300,6 @@ def test_dataset_backed_dense_ppca_iteration_uses_windowed_fourier_support(tiny_
     assert np.all(np.isfinite(np.asarray(result.mu_half)))
     assert np.all(np.isfinite(np.asarray(result.W_half)))
     assert result.diagnostics["postprocess_bandlimit_max_r"] == pytest.approx(1.0)
-    assert result.diagnostics["postprocess_cap_W_shell_power"] is True
-    assert result.diagnostics["mstep_objective_output_W_prior"] >= (
-        result.diagnostics["mstep_objective_solved_W_prior"] - 1.0e-4
-    )
 
 
 def test_dense_ppca_skip_empty_pose_blocks_matches_masked_full_grid(tiny_inputs):
@@ -574,7 +493,6 @@ def test_dense_ppca_refinement_loop_advances_current_size_when_gates_pass(tiny_i
         pose_stability_threshold=1.0,
         mstep_chunk_size=8,
         image_scale_corrections=np.asarray([1.2, 0.8, 1.1, 0.9], dtype=np.float32),
-        score_W_scale=0.5,
     )
 
     assert final_state.schedule_state.current_size == 4
@@ -647,7 +565,6 @@ def test_exact_local_all_retained_support_matches_dense(tiny_inputs):
     mean_prior = jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0
     W_prior = jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0
     image_scale_corrections = np.asarray([1.7, 0.5, 1.2, 0.9], dtype=np.float32)
-    score_W_scale = 0.4
     dense = run_dense_ppca_fused_em_iteration(
         dataset,
         mu,
@@ -663,7 +580,6 @@ def test_exact_local_all_retained_support_matches_dense(tiny_inputs):
         enforce_x0=False,
         mstep_chunk_size=8,
         image_scale_corrections=image_scale_corrections,
-        score_W_scale=score_W_scale,
     )
     local = run_local_ppca_fused_em_iteration(
         dataset,
@@ -677,7 +593,6 @@ def test_exact_local_all_retained_support_matches_dense(tiny_inputs):
         enforce_x0=False,
         mstep_chunk_size=8,
         image_scale_corrections=image_scale_corrections,
-        score_W_scale=score_W_scale,
     )
 
     np.testing.assert_allclose(np.asarray(local.stats.rhs), np.asarray(dense.stats.rhs), rtol=2e-5, atol=2e-5)
@@ -689,7 +604,6 @@ def test_exact_local_all_retained_support_matches_dense(tiny_inputs):
         np.asarray(dense.diagnostics["best_rotation_idx"]),
     )
     assert local.diagnostics["uses_image_scale_corrections"] is True
-    assert local.diagnostics["score_W_scale"] == pytest.approx(score_W_scale)
     assert local.diagnostics["local_bucketed"] is True
 
 

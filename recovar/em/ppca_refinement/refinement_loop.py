@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import inspect
+from dataclasses import dataclass, field
 from typing import Callable
 
 import jax.numpy as jnp
@@ -182,7 +182,6 @@ def run_dense_ppca_refinement_loop(
     square_window: bool = False,
     mstep_chunk_size: int | None = None,
     image_scale_corrections: np.ndarray | None = None,
-    score_W_scale: float = 1.0,
 ) -> tuple[PoseMarginalPPCAEMState, list[PPCARefinementIterationRecord]]:
     """Run dense halfset PPCA refinement iterations with gold-standard gating."""
 
@@ -216,7 +215,6 @@ def run_dense_ppca_refinement_loop(
             square_window=square_window,
             mstep_chunk_size=mstep_chunk_size,
             image_scale_corrections=image_scale_corrections,
-            score_W_scale=score_W_scale,
         )
         best_pose_indices = _combined_best_pose_ids(updated.pose_diagnostics, n_trans)
         comparison = (
@@ -305,7 +303,6 @@ def run_local_ppca_refinement_loop(
     square_window: bool = False,
     mstep_chunk_size: int | None = None,
     image_scale_corrections: np.ndarray | None = None,
-    score_W_scale: float = 1.0,
 ) -> tuple[PoseMarginalPPCAEMState, list[PPCARefinementIterationRecord]]:
     """Run exact-local halfset PPCA refinement iterations behind the same gate."""
 
@@ -339,7 +336,6 @@ def run_local_ppca_refinement_loop(
             square_window=square_window,
             mstep_chunk_size=mstep_chunk_size,
             image_scale_corrections=image_scale_corrections,
-            score_W_scale=score_W_scale,
         )
         best_pose_indices = _combined_best_pose_ids(updated.pose_diagnostics, n_trans)
         comparison = (

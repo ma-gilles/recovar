@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import partial
 from typing import Iterable, NamedTuple
 
@@ -11,18 +12,17 @@ import numpy as np
 
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout, bucket_local_hypothesis_layout
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     prepare_reconstruction_batch,
     preprocess_batch,
 )
+from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout, bucket_local_hypothesis_layout
 from recovar.em.ppca_refinement.dense_dataset import prepare_dense_ppca_dataset_inputs
 from recovar.em.ppca_refinement.dense_engine import (
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
     PosteriorDiagnostics,
     _enforce_augmented_x0,
-    run_dense_ppca_fused_refinement_blocks,
 )
 from recovar.em.ppca_refinement.mean_regularization import KCLASS_RELION_MINRES_MAP
 from recovar.em.ppca_refinement.postprocess import postprocess_ppca_half_volumes
@@ -31,6 +31,62 @@ from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, sol
 from recovar.ppca.pose_marginal import compute_ppca_pose_scores_and_moments_no_contrast
 from recovar.ppca.triangular import _tri_size
 from recovar.reconstruction import noise as noise_utils
+
+# Smart-sizing defaults mirror the K-class engine's
+# ``EXACT_LOCAL_TARGET_ROW_PIXELS`` (190 M scoring pixels per microbatch),
+# scaled down by the PPCA augmented-volume row factor ``P = 1 + q``.
+PPCA_LOCAL_TARGET_ROW_PIXELS = 190_000_000
+PPCA_LOCAL_TARGET_ROW_PIXELS_ENV = "RECOVAR_PPCA_LOCAL_TARGET_ROW_PIXELS"
+PPCA_LOCAL_MAX_HYPO_FLOOR = 2_048
+PPCA_LOCAL_MAX_HYPO_CEIL = 16_384
+PPCA_LOCAL_IMAGE_BATCH_FLOOR = 1
+# Conservative ceil: bigger ``image_batch_size`` amortizes JIT/data-transfer
+# overhead but raises peak memory linearly (proj_aug tensor is
+# ``image_batch × R × P × F × 8`` bytes plus working buffers, typically
+# ~3-5× that). At 8 we comfortably fit in ~10 GiB; 16 needs ~20 GiB. Bump
+# only when the GPU has plenty of free memory.
+PPCA_LOCAL_IMAGE_BATCH_CEIL = int(os.environ.get("RECOVAR_PPCA_LOCAL_IMAGE_BATCH_CEIL", "8"))
+PPCA_LOCAL_AUTO_DISABLE_ENV = "RECOVAR_PPCA_LOCAL_AUTO_SIZING_DISABLE"
+
+
+def _ppca_local_smart_max_hypotheses_per_microbatch(default: int | None, n_windowed: int, q: int) -> int:
+    """Mirror ``_exact_local_max_hypotheses_per_microbatch`` but divide the
+    pixel budget by ``P = 1 + q`` so the augmented projection tensor stays
+    inside the same per-microbatch memory envelope as the K-class kernel."""
+    if default is not None:
+        value = int(default)
+        if value <= 0:
+            raise ValueError("max_hypotheses_per_microbatch must be positive")
+        return value
+    if os.environ.get(PPCA_LOCAL_AUTO_DISABLE_ENV, "0") == "1":
+        return 32_768  # legacy default
+    target_row_pixels = int(os.environ.get(PPCA_LOCAL_TARGET_ROW_PIXELS_ENV, PPCA_LOCAL_TARGET_ROW_PIXELS))
+    if target_row_pixels <= 0:
+        raise ValueError(f"{PPCA_LOCAL_TARGET_ROW_PIXELS_ENV} must be positive")
+    P = max(1, int(q) + 1)
+    raw = target_row_pixels // (max(1, int(n_windowed)) * P)
+    return int(max(PPCA_LOCAL_MAX_HYPO_FLOOR, min(PPCA_LOCAL_MAX_HYPO_CEIL, raw)))
+
+
+def _ppca_local_smart_image_batch_size(
+    default: int | None,
+    *,
+    max_hypotheses_per_microbatch: int,
+    mean_bucket_size: int,
+) -> int:
+    """Pick the largest ``image_batch_size`` that still fits inside the
+    microbatch hypothesis budget for the typical bucket size of the run.
+
+    Falls back to the K-class style cap of 32 to avoid huge JIT compile
+    times. Caller-supplied ``default`` (when not None and not 2) is
+    respected so explicit user choices win."""
+    if default is not None and int(default) not in (0, 2):
+        return int(default)
+    if os.environ.get(PPCA_LOCAL_AUTO_DISABLE_ENV, "0") == "1":
+        return 2 if default is None else int(default)
+    bucket = max(1, int(mean_bucket_size))
+    cap = max(1, int(max_hypotheses_per_microbatch) // bucket)
+    return int(max(PPCA_LOCAL_IMAGE_BATCH_FLOOR, min(PPCA_LOCAL_IMAGE_BATCH_CEIL, cap)))
 
 
 class LocalPPCAFusedBucketBlock(NamedTuple):
@@ -281,12 +337,16 @@ def fused_local_pose_ppca_bucket(
         max_r=backprojection_max_r,
     )
 
-    lhs_images = jnp.einsum(
-        "btr,btrk,bf->kbrf",
-        gamma.astype(lhs_dtype),
-        G_tri,
-        ctf2_over_noise_recon.astype(lhs_dtype),
-    ).real.astype(lhs_dtype).reshape(tri, B * R, F_recon)
+    lhs_images = (
+        jnp.einsum(
+            "btr,btrk,bf->kbrf",
+            gamma.astype(lhs_dtype),
+            G_tri,
+            ctf2_over_noise_recon.astype(lhs_dtype),
+        )
+        .real.astype(lhs_dtype)
+        .reshape(tri, B * R, F_recon)
+    )
     lhs_tri_volume = batch_adjoint_slice_volume_maybe_windowed(
         lhs_images,
         recon_window_indices,
@@ -319,7 +379,6 @@ def iter_local_ppca_dataset_blocks(
     square_window: bool = False,
     class_log_prior: float = 0.0,
     image_scale_corrections: np.ndarray | None = None,
-    score_W_scale: float = 1.0,
 ) -> Iterable[tuple[int, np.ndarray, DensePPCAFusedBlock]]:
     """Yield one exact-local PPCA block per image.
 
@@ -346,7 +405,6 @@ def iter_local_ppca_dataset_blocks(
         current_size=current_size,
         half_spectrum_scoring=half_spectrum_scoring,
         square_window=square_window,
-        score_W_scale=score_W_scale,
     )
     config = ForwardModelConfig.from_dataset(
         experiment_dataset,
@@ -462,7 +520,6 @@ def iter_local_ppca_dataset_bucket_blocks(
     square_window: bool = False,
     class_log_prior: float = 0.0,
     image_scale_corrections: np.ndarray | None = None,
-    score_W_scale: float = 1.0,
 ) -> Iterable[LocalPPCAFusedBucketBlock]:
     """Yield padded exact-local PPCA buckets using K-class local bucketization."""
 
@@ -481,7 +538,6 @@ def iter_local_ppca_dataset_bucket_blocks(
         current_size=current_size,
         half_spectrum_scoring=half_spectrum_scoring,
         square_window=square_window,
-        score_W_scale=score_W_scale,
     )
     config = ForwardModelConfig.from_dataset(
         experiment_dataset,
@@ -640,7 +696,6 @@ def run_local_ppca_fused_em_iteration(
     enforce_x0: bool = True,
     mstep_chunk_size: int | None = None,
     image_scale_corrections: np.ndarray | None = None,
-    score_W_scale: float = 1.0,
     image_indices: np.ndarray | None = None,
     image_batch_size: int = 2,
     rotation_block_size: int = 512,
@@ -656,6 +711,29 @@ def run_local_ppca_fused_em_iteration(
     W_prior = jnp.asarray(W_prior)
     if W_prior.shape != (mean_prior.shape[0], q_resolved):
         raise ValueError(f"W_prior shape {W_prior.shape} != ({mean_prior.shape[0]}, {q_resolved})")
+
+    # Smart-size the microbatch and image batch when the caller is at the
+    # legacy library defaults (max_hypotheses=32768, image_batch_size=2),
+    # mirroring the K-class engine's ``EXACT_LOCAL_TARGET_ROW_PIXELS`` rule.
+    # User-specified non-default values are preserved.
+    # Estimate the score-window pixel count: half-spectrum disk of radius
+    # current_size/2, area ≈ pi * current_size^2 / 8. Falls back to a
+    # conservative box-128 default when current_size is None.
+    _box_for_window = int(current_size) if current_size else 64
+    n_windowed_estimate = max(64, int(np.pi * (_box_for_window**2) / 8))
+    if int(max_hypotheses_per_microbatch) == 32768:
+        max_hypotheses_per_microbatch = _ppca_local_smart_max_hypotheses_per_microbatch(
+            None, n_windowed_estimate, q_resolved
+        )
+    if int(image_batch_size) == 2:
+        mean_bucket = (
+            int(np.median(np.asarray(local_layout.rotation_counts, dtype=np.int64))) if local_layout.n_images else 256
+        )
+        image_batch_size = _ppca_local_smart_image_batch_size(
+            None,
+            max_hypotheses_per_microbatch=int(max_hypotheses_per_microbatch),
+            mean_bucket_size=int(mean_bucket),
+        )
 
     rhs_volume = jnp.zeros((P, mean_prior.shape[0]), dtype=jnp.complex64)
     lhs_tri_volume = jnp.zeros((tri, mean_prior.shape[0]), dtype=jnp.float32)
@@ -690,7 +768,6 @@ def run_local_ppca_fused_em_iteration(
         square_window=square_window,
         class_log_prior=class_log_prior,
         image_scale_corrections=image_scale_corrections,
-        score_W_scale=score_W_scale,
     ):
         if postprocess_bandlimit_max_r is None and bool(block.use_recon_window):
             postprocess_bandlimit_max_r = block.backprojection_max_r
@@ -745,22 +822,28 @@ def run_local_ppca_fused_em_iteration(
         "logZ_mean": float(log_likelihood / n_images) if n_images else float("nan"),
         "pmax_mean": float(jnp.mean(jnp.concatenate(pmax_values))) if pmax_values else float("nan"),
         "nsig_mean": float(jnp.mean(jnp.concatenate(nsig_values))) if nsig_values else float("nan"),
-        "best_rotation_idx": jnp.concatenate(best_local_values) if best_local_values else jnp.zeros((0,), dtype=jnp.int32),
+        "best_rotation_idx": jnp.concatenate(best_local_values)
+        if best_local_values
+        else jnp.zeros((0,), dtype=jnp.int32),
         "best_translation_idx": jnp.concatenate(best_translation_values)
         if best_translation_values
         else jnp.zeros((0,), dtype=jnp.int32),
-        "best_rotation_id": jnp.concatenate(best_global_values) if best_global_values else jnp.zeros((0,), dtype=jnp.int32),
+        "best_rotation_id": jnp.concatenate(best_global_values)
+        if best_global_values
+        else jnp.zeros((0,), dtype=jnp.int32),
         "best_rotation_matrix": jnp.concatenate(best_rotation_matrices)
         if best_rotation_matrices
         else jnp.zeros((0, 3, 3), dtype=jnp.float32),
-        "best_translation": jnp.concatenate(best_translations) if best_translations else jnp.zeros((0, 2), dtype=jnp.float32),
-        "image_indices": jnp.concatenate(output_image_indices) if output_image_indices else jnp.zeros((0,), dtype=jnp.int32),
+        "best_translation": jnp.concatenate(best_translations)
+        if best_translations
+        else jnp.zeros((0, 2), dtype=jnp.float32),
+        "image_indices": jnp.concatenate(output_image_indices)
+        if output_image_indices
+        else jnp.zeros((0,), dtype=jnp.int32),
         "mean_regularization_style": str(mean_regularization_style),
         "mean_tau2_fudge": float(mean_tau2_fudge),
         "mean_minres_map": int(mean_minres_map),
         "uses_image_scale_corrections": bool(image_scale_corrections is not None),
-        "score_W_scale": float(score_W_scale),
-        "score_W_tempered": bool(float(score_W_scale) != 1.0),
         "local_bucketed": True,
         "local_image_batch_size": int(image_batch_size),
         "local_rotation_block_size": int(rotation_block_size),
@@ -787,8 +870,7 @@ def run_local_ppca_fused_em_iteration(
         )
     else:
         raise ValueError(
-            "mean_regularization_style must be 'variance' or 'relion_tau', "
-            f"got {mean_regularization_style!r}"
+            f"mean_regularization_style must be 'variance' or 'relion_tau', got {mean_regularization_style!r}"
         )
 
     mu_half, W_half = solve_augmented_ppca_mstep(
@@ -870,7 +952,6 @@ def run_local_ppca_halfset_fused_em_iteration(
     postprocess_gridding_correct: str = "radial",
     mstep_chunk_size: int | None = None,
     image_scale_corrections: np.ndarray | None = None,
-    score_W_scale: float = 1.0,
 ) -> PoseMarginalPPCAEMState:
     """Run one exact-local PPCA iteration for two halfsets."""
 
@@ -907,7 +988,6 @@ def run_local_ppca_halfset_fused_em_iteration(
                 postprocess_gridding_correct=postprocess_gridding_correct,
                 mstep_chunk_size=mstep_chunk_size,
                 image_scale_corrections=image_scale_corrections,
-                score_W_scale=score_W_scale,
             )
         )
     mu_half = (results[0].mu_half, results[1].mu_half)
