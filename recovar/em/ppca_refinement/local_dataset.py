@@ -24,7 +24,7 @@ from recovar.em.ppca_refinement.config import (
     ScoringConfig,
 )
 from recovar.em.ppca_refinement.dense_dataset import prepare_dense_ppca_dataset_inputs
-from recovar.em.ppca_refinement.dense_engine import (
+from recovar.em.ppca_refinement.engine import (
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
     PosteriorDiagnostics,
@@ -157,23 +157,9 @@ def _fetch_single_image_batch(experiment_dataset, image_index: int):
         raise ValueError(f"Could not fetch image index {image_index}") from exc
 
 
-def _project_local_augmented(augmented_half_volumes, rotations, image_shape, volume_shape, disc_type, *, max_r):
-    from recovar import core
-
-    kwargs = {}
-    if max_r is not None:
-        kwargs["max_r"] = max_r
-    projections = core.batch_slice_volume(
-        jnp.asarray(augmented_half_volumes),
-        jnp.asarray(rotations),
-        image_shape,
-        volume_shape,
-        disc_type,
-        half_volume=True,
-        half_image=True,
-        **kwargs,
-    )
-    return jnp.swapaxes(projections, 0, 1)
+from recovar.em.ppca_refinement.dense_dataset import (
+    _project_augmented_half_volumes as _project_local_augmented,
+)
 
 
 def _per_pose_stats_local_bucket(Y1, proj_aug, ctf2_over_noise, y_norm):

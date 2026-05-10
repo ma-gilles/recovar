@@ -22,7 +22,7 @@ import numpy as np
 
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.em.ppca_refinement.dense_dataset import iter_dense_ppca_dataset_blocks
-from recovar.em.ppca_refinement.dense_engine import dense_pose_ppca_E_step_blocked
+from recovar.em.ppca_refinement.engine import dense_pose_ppca_E_step_blocked
 from recovar.reconstruction import noise as recon_noise
 
 

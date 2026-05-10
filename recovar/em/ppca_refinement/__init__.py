@@ -1,6 +1,6 @@
 """Pose-marginal PPCA refinement scaffolding for EM."""
 
-from .dense_engine import (
+from .engine import (
     DenseImageStats,
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,

@@ -5,7 +5,7 @@ import pytest
 from recovar.core.configs import ForwardModelConfig
 from recovar.core.ctf import as_ctf_evaluator
 from recovar.em.ppca_refinement.dense_dataset import _project_augmented_half_volumes, iter_dense_ppca_dataset_blocks
-from recovar.em.ppca_refinement.dense_engine import dense_pose_ppca_E_step_blocked, dense_pose_ppca_logZ_blocked
+from recovar.em.ppca_refinement.engine import dense_pose_ppca_E_step_blocked, dense_pose_ppca_logZ_blocked
 from recovar.em.ppca_refinement.initialization import real_volume_to_centered_fourier_half
 from recovar.em.dense_single_volume.helpers.preprocessing import half_translation_phase_table, preprocess_batch
 from recovar.em.sampling import get_rotation_grid_at_order

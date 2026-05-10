@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.ppca_refinement.dense_engine import dense_pose_ppca_E_step_blocked
+from recovar.em.ppca_refinement.engine import dense_pose_ppca_E_step_blocked
 
 
 pytestmark = pytest.mark.unit
