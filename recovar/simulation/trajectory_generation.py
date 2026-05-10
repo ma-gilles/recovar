@@ -206,6 +206,18 @@ def path_left_right(t, group_coords, fixed_pt):
     return coords
 
 
+def path_identity(t, group_coords, fixed_pt):
+    """No-rotation path: subcomplexes returned in their original PDB frame.
+
+    Independent of ``t``. Useful for generating a strictly-homogeneous
+    dataset (single canonical conformation) from the original 5nrl
+    coordinates so that an atomic-model file written from the same
+    coordinates aligns with the simulated volume.
+    """
+    del t
+    return [c.copy() for c in group_coords]
+
+
 def path_arm_only(t, group_coords, fixed_pt):
     """Path where only the right arm (B) rotates; the head (Db) stays fixed.
 
