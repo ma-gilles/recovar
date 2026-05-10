@@ -31,6 +31,7 @@ from recovar.em.ppca_refinement.config import (
     ScoringConfig,
     SparsePass2Config,
 )
+from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, resolve_image_scale_range
 from recovar.em.ppca_refinement.engine import (
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
@@ -38,7 +39,6 @@ from recovar.em.ppca_refinement.engine import (
     dense_pose_ppca_score_stats_blocked,
     fused_dense_pose_ppca_block,
 )
-from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, resolve_image_scale_range
 from recovar.em.ppca_refinement.initialization import real_volume_to_centered_fourier_half
 from recovar.em.ppca_refinement.mean_regularization import (
     MeanRegularizationConfig,
@@ -68,73 +68,29 @@ class DensePPCADatasetBlockInputs(NamedTuple):
     projection_max_r: float | None
 
 
-def _half_volume_size(volume_shape) -> int:
-    return int(np.prod(ftu.volume_shape_to_half_volume_shape(tuple(volume_shape))))
-
-
-def _full_volume_size(volume_shape) -> int:
-    return int(np.prod(tuple(volume_shape)))
-
-
 def _coerce_one_volume_to_half(volume, volume_shape, *, volume_domain: str) -> jax.Array:
-    """Return one flattened half-Fourier volume.
+    """Flatten one volume to centered half-Fourier (recovar canonical shape).
 
-    ``volume_domain`` is explicit by design. The ``auto`` mode is restricted to
-    obvious unit-test and handoff cases: already half-Fourier, complex full
-    Fourier, or real-space grid-shaped volumes.
+    ``volume_domain`` must be ``"real"`` (full real-space grid), ``"fourier_half"``
+    (already centered + Hermitian-packed flat), or ``"auto"`` (pick based on size).
     """
 
     volume_shape = tuple(int(x) for x in volume_shape)
-    half_size = _half_volume_size(volume_shape)
-    full_size = _full_volume_size(volume_shape)
+    half_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
     arr = np.asarray(volume)
     domain = str(volume_domain)
     if domain == "auto":
-        if arr.size == half_size:
-            domain = "fourier_half"
-        elif arr.size == full_size and np.iscomplexobj(arr):
-            domain = "fourier_full"
-        elif tuple(arr.shape) == volume_shape and not np.iscomplexobj(arr):
-            domain = "real"
-        else:
-            raise ValueError(
-                "Could not infer PPCA volume_domain. Pass one of 'fourier_half', 'fourier_full', or 'real'."
-            )
+        domain = "fourier_half" if arr.size == half_size else "real"
 
     if domain == "fourier_half":
         if arr.size != half_size:
             raise ValueError(f"fourier_half volume has {arr.size} elements, expected {half_size}")
         return jnp.asarray(arr.reshape(-1), dtype=jnp.complex64)
-    if domain == "fourier_full":
-        if arr.size != full_size:
-            raise ValueError(f"fourier_full volume has {arr.size} elements, expected {full_size}")
-        full = jnp.asarray(arr.reshape(volume_shape), dtype=jnp.complex64)
-        return jnp.asarray(ftu.full_volume_to_half_volume(full, volume_shape).reshape(-1), dtype=jnp.complex64)
     if domain == "real":
         if tuple(arr.shape) != volume_shape:
             raise ValueError(f"real volume shape {arr.shape} != {volume_shape}")
         return jnp.asarray(real_volume_to_centered_fourier_half(arr), dtype=jnp.complex64)
-    raise ValueError("volume_domain must be 'auto', 'fourier_half', 'fourier_full', or 'real'")
-
-
-def _coerce_loading_matrix(W, volume_shape, *, q: int | None) -> tuple[np.ndarray, int]:
-    if W is None:
-        q_resolved = 0 if q is None else int(q)
-        return np.zeros((q_resolved, _half_volume_size(volume_shape)), dtype=np.complex64), q_resolved
-    arr = np.asarray(W)
-    if q is None:
-        if arr.ndim >= 2 and tuple(arr.shape[1:]) == tuple(volume_shape):
-            q = int(arr.shape[0])
-        elif arr.ndim == 2:
-            half_size = _half_volume_size(volume_shape)
-            full_size = _full_volume_size(volume_shape)
-            if arr.shape[0] in {half_size, full_size}:
-                q = int(arr.shape[1])
-            else:
-                q = int(arr.shape[0])
-        else:
-            raise ValueError("W must be shaped [q, volume...] or [volume_size, q]")
-    return arr, int(q)
+    raise ValueError(f"volume_domain must be 'auto', 'fourier_half', or 'real', got {domain!r}")
 
 
 def coerce_augmented_half_volumes(
@@ -145,29 +101,37 @@ def coerce_augmented_half_volumes(
     q: int | None = None,
     volume_domain: str = "auto",
 ) -> tuple[jax.Array, int]:
-    """Stack ``[mu, W_1, ..., W_q]`` as flattened half-Fourier volumes."""
+    """Stack ``[mu, W_1, ..., W_q]`` as flattened half-Fourier volumes.
+
+    ``W`` is either ``(q, *volume_shape)`` real-space or ``(half_size, q)``
+    half-Fourier flat; pass ``None`` when ``q == 0``.
+    """
 
     volume_shape = tuple(int(x) for x in volume_shape)
-    W_arr, q = _coerce_loading_matrix(W, volume_shape, q=q)
+    half_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
     mu_half = _coerce_one_volume_to_half(mu, volume_shape, volume_domain=volume_domain)
-    half_size = _half_volume_size(volume_shape)
-    loading_halves = []
-    if q:
-        if W_arr.ndim >= 2 and tuple(W_arr.shape[1:]) == volume_shape:
-            loadings = [W_arr[k] for k in range(q)]
-        elif W_arr.ndim == 2 and W_arr.shape == (half_size, q):
-            loadings = [W_arr[:, k] for k in range(q)]
-        elif W_arr.ndim == 2 and W_arr.shape[0] == q:
-            loadings = [W_arr[k] for k in range(q)]
-        elif W_arr.ndim == 2 and W_arr.shape[1] == q:
-            loadings = [W_arr[:, k] for k in range(q)]
-        else:
-            raise ValueError(f"Cannot interpret W shape {W_arr.shape} for q={q}")
-        loading_halves = [
-            _coerce_one_volume_to_half(loading, volume_shape, volume_domain=volume_domain) for loading in loadings
-        ]
-    aug = jnp.concatenate([mu_half[None, :], jnp.stack(loading_halves, axis=0)], axis=0) if q else mu_half[None, :]
-    return aug, q
+    if W is None:
+        q_resolved = 0 if q is None else int(q)
+        return mu_half[None, :], q_resolved
+
+    W_arr = np.asarray(W)
+    if W_arr.ndim >= 2 and tuple(W_arr.shape[1:]) == volume_shape:
+        # (q, *volume_shape) real-space
+        q_resolved = int(W_arr.shape[0]) if q is None else int(q)
+        loadings = [W_arr[k] for k in range(q_resolved)]
+    elif W_arr.ndim == 2 and W_arr.shape[0] == half_size:
+        # (half_size, q) half-Fourier
+        q_resolved = int(W_arr.shape[1]) if q is None else int(q)
+        loadings = [W_arr[:, k] for k in range(q_resolved)]
+    else:
+        raise ValueError(f"W must be shaped (q, *volume_shape) or (half_size, q); got {W_arr.shape}")
+
+    if q_resolved == 0:
+        return mu_half[None, :], 0
+    loading_halves = [
+        _coerce_one_volume_to_half(loading, volume_shape, volume_domain=volume_domain) for loading in loadings
+    ]
+    return jnp.concatenate([mu_half[None, :], jnp.stack(loading_halves, axis=0)], axis=0), q_resolved
 
 
 def _mask_from_indices(n_half: int, indices, *, dtype=jnp.float32) -> jax.Array:
@@ -220,7 +184,7 @@ def prepare_dense_ppca_dataset_inputs(
         q=q,
         image_shape=image_shape,
         volume_shape=volume_shape,
-        half_volume_size=_half_volume_size(volume_shape),
+        half_volume_size=int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape))),
         score_mask=score_mask.astype(jnp.float32),
         recon_mask=recon_mask.astype(jnp.float32),
         score_indices=window_spec.score_indices,
