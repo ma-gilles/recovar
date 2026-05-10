@@ -38,6 +38,7 @@ from recovar.em.ppca_refinement.dense_engine import (
     dense_pose_ppca_score_stats_blocked,
     fused_dense_pose_ppca_block,
 )
+from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, resolve_image_scale_range
 from recovar.em.ppca_refinement.initialization import real_volume_to_centered_fourier_half
 from recovar.em.ppca_refinement.mean_regularization import (
     MeanRegularizationConfig,
@@ -615,14 +616,7 @@ def run_dense_ppca_fused_em_iteration(
     tri = _tri_size(P)
     image_shape = tuple(int(x) for x in experiment_dataset.image_shape)
     volume_shape = tuple(int(x) for x in experiment_dataset.volume_shape)
-    if image_scale_corrections is not None:
-        scale_arr = np.asarray(image_scale_corrections, dtype=np.float32)
-        selected_scale = scale_arr if image_indices is None else scale_arr[np.asarray(image_indices, dtype=np.int64)]
-        image_scale_min = float(np.min(selected_scale)) if selected_scale.size else float("nan")
-        image_scale_max = float(np.max(selected_scale)) if selected_scale.size else float("nan")
-    else:
-        image_scale_min = 1.0
-        image_scale_max = 1.0
+    image_scale_min, image_scale_max = resolve_image_scale_range(image_scale_corrections, image_indices)
     mean_prior = jnp.asarray(mean_prior)
     W_prior = jnp.asarray(W_prior)
     if W_prior.shape != (mean_prior.shape[0], q_resolved):
@@ -763,42 +757,41 @@ def run_dense_ppca_fused_em_iteration(
             jnp.float32
         )
 
-    diagnostics = {
-        "pmax_mean": float(jnp.mean(jnp.concatenate(pmax_values))) if pmax_values else float("nan"),
-        "nsig_mean": float(jnp.mean(jnp.concatenate(nsig_values))) if nsig_values else float("nan"),
-        "log_likelihood": float(log_likelihood),
-        "logZ_mean": float(log_likelihood / n_images) if n_images else float("nan"),
-        "best_rotation_idx": jnp.concatenate(best_rotations) if best_rotations else jnp.zeros((0,), dtype=jnp.int32),
-        "best_translation_idx": jnp.concatenate(best_translations)
-        if best_translations
-        else jnp.zeros((0,), dtype=jnp.int32),
-        "sparse_pass2_enabled": bool(sparse_pass2_enabled),
-        "sparse_pass2_log_threshold": float(sparse_pass2_log_threshold),
-        "sparse_pass2_total_blocks": int(sparse_pass2_total_blocks),
-        "sparse_pass2_skipped_blocks": int(sparse_pass2_skipped_blocks),
-        "sparse_pass2_skipped_fraction": (
-            float(sparse_pass2_skipped_blocks / sparse_pass2_total_blocks) if sparse_pass2_total_blocks else 0.0
-        ),
-        "sparse_pass2_omitted_mass_upper_sum": float(sparse_pass2_omitted_mass_upper_sum),
-        "sparse_pass2_omitted_mass_upper_max": float(sparse_pass2_omitted_mass_upper_max),
-        "sparse_pass2_omitted_mass_upper_mean": (
-            float(sparse_pass2_omitted_mass_upper_sum / sparse_pass2_omitted_mass_upper_image_count)
-            if sparse_pass2_omitted_mass_upper_image_count
-            else 0.0
-        ),
-        "score_fourier_size": int(score_fourier_size) if score_fourier_size is not None else 0,
-        "recon_fourier_size": int(recon_fourier_size) if recon_fourier_size is not None else 0,
-        "full_half_fourier_size": int(image_shape[0] * (image_shape[1] // 2 + 1)),
-        "uses_fourier_window": bool(
-            score_fourier_size is not None and int(score_fourier_size) < int(image_shape[0] * (image_shape[1] // 2 + 1))
-        ),
-        "mean_regularization_style": str(mean_reg.style),
-        "mean_tau2_fudge": float(mean_reg.tau2_fudge),
-        "mean_minres_map": int(mean_reg.minres_map),
-        "uses_image_scale_corrections": bool(image_scale_corrections is not None),
-        "image_scale_min": float(image_scale_min),
-        "image_scale_max": float(image_scale_max),
-    }
+    full_half_fourier_size = int(image_shape[0] * (image_shape[1] // 2 + 1))
+    diagnostics = build_iteration_diagnostics(
+        pmax_values=pmax_values,
+        nsig_values=nsig_values,
+        best_rotations=best_rotations,
+        best_translations=best_translations,
+        log_likelihood=log_likelihood,
+        n_images=n_images,
+        mean_reg=mean_reg,
+        image_scale_min=image_scale_min,
+        image_scale_max=image_scale_max,
+        image_scale_corrections=image_scale_corrections,
+        extras={
+            "sparse_pass2_enabled": bool(sparse_pass2_enabled),
+            "sparse_pass2_log_threshold": float(sparse_pass2_log_threshold),
+            "sparse_pass2_total_blocks": int(sparse_pass2_total_blocks),
+            "sparse_pass2_skipped_blocks": int(sparse_pass2_skipped_blocks),
+            "sparse_pass2_skipped_fraction": (
+                float(sparse_pass2_skipped_blocks / sparse_pass2_total_blocks) if sparse_pass2_total_blocks else 0.0
+            ),
+            "sparse_pass2_omitted_mass_upper_sum": float(sparse_pass2_omitted_mass_upper_sum),
+            "sparse_pass2_omitted_mass_upper_max": float(sparse_pass2_omitted_mass_upper_max),
+            "sparse_pass2_omitted_mass_upper_mean": (
+                float(sparse_pass2_omitted_mass_upper_sum / sparse_pass2_omitted_mass_upper_image_count)
+                if sparse_pass2_omitted_mass_upper_image_count
+                else 0.0
+            ),
+            "score_fourier_size": int(score_fourier_size) if score_fourier_size is not None else 0,
+            "recon_fourier_size": int(recon_fourier_size) if recon_fourier_size is not None else 0,
+            "full_half_fourier_size": full_half_fourier_size,
+            "uses_fourier_window": bool(
+                score_fourier_size is not None and int(score_fourier_size) < full_half_fourier_size
+            ),
+        },
+    )
     stats = AugmentedPPCAStats(
         rhs=jnp.swapaxes(rhs_volume, 0, 1),
         lhs_tri=jnp.swapaxes(lhs_tri_volume, 0, 1),

@@ -30,13 +30,11 @@ from recovar.em.ppca_refinement.dense_engine import (
     PosteriorDiagnostics,
     _enforce_augmented_x0,
 )
+from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, resolve_image_scale_range
 from recovar.em.ppca_refinement.mean_regularization import (
-    KCLASS_RELION_MINRES_MAP,
     MeanRegularizationConfig,
     resolve_mean_precision,
 )
-
-_ = (KCLASS_RELION_MINRES_MAP, resolve_mean_precision)  # retained: formatter strips otherwise
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
@@ -831,38 +829,37 @@ def run_local_ppca_fused_em_iteration(
             tuple(int(x) for x in experiment_dataset.volume_shape),
         ).real.astype(jnp.float32)
 
-    diagnostics = {
-        "log_likelihood": float(log_likelihood),
-        "logZ_mean": float(log_likelihood / n_images) if n_images else float("nan"),
-        "pmax_mean": float(jnp.mean(jnp.concatenate(pmax_values))) if pmax_values else float("nan"),
-        "nsig_mean": float(jnp.mean(jnp.concatenate(nsig_values))) if nsig_values else float("nan"),
-        "best_rotation_idx": jnp.concatenate(best_local_values)
-        if best_local_values
-        else jnp.zeros((0,), dtype=jnp.int32),
-        "best_translation_idx": jnp.concatenate(best_translation_values)
-        if best_translation_values
-        else jnp.zeros((0,), dtype=jnp.int32),
-        "best_rotation_id": jnp.concatenate(best_global_values)
-        if best_global_values
-        else jnp.zeros((0,), dtype=jnp.int32),
-        "best_rotation_matrix": jnp.concatenate(best_rotation_matrices)
-        if best_rotation_matrices
-        else jnp.zeros((0, 3, 3), dtype=jnp.float32),
-        "best_translation": jnp.concatenate(best_translations)
-        if best_translations
-        else jnp.zeros((0, 2), dtype=jnp.float32),
-        "image_indices": jnp.concatenate(output_image_indices)
-        if output_image_indices
-        else jnp.zeros((0,), dtype=jnp.int32),
-        "mean_regularization_style": str(mean_reg.style),
-        "mean_tau2_fudge": float(mean_reg.tau2_fudge),
-        "mean_minres_map": int(mean_reg.minres_map),
-        "uses_image_scale_corrections": bool(image_scale_corrections is not None),
-        "local_bucketed": True,
-        "local_image_batch_size": int(image_batch_size),
-        "local_rotation_block_size": int(rotation_block_size),
-        "local_max_hypotheses_per_microbatch": int(max_hypotheses_per_microbatch),
-    }
+    image_scale_min, image_scale_max = resolve_image_scale_range(image_scale_corrections, image_indices)
+    diagnostics = build_iteration_diagnostics(
+        pmax_values=pmax_values,
+        nsig_values=nsig_values,
+        best_rotations=best_local_values,
+        best_translations=best_translation_values,
+        log_likelihood=log_likelihood,
+        n_images=n_images,
+        mean_reg=mean_reg,
+        image_scale_min=image_scale_min,
+        image_scale_max=image_scale_max,
+        image_scale_corrections=image_scale_corrections,
+        extras={
+            "best_rotation_id": jnp.concatenate(best_global_values)
+            if best_global_values
+            else jnp.zeros((0,), dtype=jnp.int32),
+            "best_rotation_matrix": jnp.concatenate(best_rotation_matrices)
+            if best_rotation_matrices
+            else jnp.zeros((0, 3, 3), dtype=jnp.float32),
+            "best_translation": jnp.concatenate(best_translations)
+            if best_translations
+            else jnp.zeros((0, 2), dtype=jnp.float32),
+            "image_indices": jnp.concatenate(output_image_indices)
+            if output_image_indices
+            else jnp.zeros((0,), dtype=jnp.int32),
+            "local_bucketed": True,
+            "local_image_batch_size": int(image_batch_size),
+            "local_rotation_block_size": int(rotation_block_size),
+            "local_max_hypotheses_per_microbatch": int(max_hypotheses_per_microbatch),
+        },
+    )
     stats = AugmentedPPCAStats(
         rhs=jnp.swapaxes(rhs_volume, 0, 1),
         lhs_tri=jnp.swapaxes(lhs_tri_volume, 0, 1),
