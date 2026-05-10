@@ -7,7 +7,7 @@ Used in the manual conflict-process integration test:
 
 Then in another shell:
 
-    recovar run_test_dataset --gpu-budget-gb 70 --memory-diagnostics --no-delete
+    recovar run_test_dataset --gpu-budget-gb 70 --no-delete
 
 The wrapper should detect the conflict via the new gpu_preflight probe
 and surface a "GPU appears to be partially occupied" hint instead of a

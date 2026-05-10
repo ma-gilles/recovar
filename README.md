@@ -149,8 +149,10 @@ recovar pipeline ... --gpu-budget-gb 24 --adaptive-n-pcs
 recovar pipeline ... --gpu-budget-gb 12 --low-memory-option
 recovar pipeline ... --gpu-budget-gb 8  --very-low-memory-option
 
-# Write memory_plan.json + memory_trace.jsonl into the output directory.
-recovar pipeline ... --gpu-budget-gb 40 --memory-diagnostics
+# Diagnostics (memory_plan.json, memory_trace.jsonl, args.json,
+# allocator_env.json) are always written to <outdir>/_diagnostics/.
+# For heavyweight per-phase JAX-profiler captures, add --memory-profile.
+recovar pipeline ... --gpu-budget-gb 40 --memory-profile
 ```
 
 The planner never refuses to launch. If it predicts the run will exceed the budget (based on a calibrated peak-memory table when present, or the heuristic in `covariance_estimation` when absent), it logs a loud WARNING and launches anyway. If the run actually OOMs, the error message is followed by an actionable hint suggesting `--gpu-budget-gb`, `--adaptive-n-pcs`, `--low-memory-option`, etc. — the hint is the **last** thing on stderr so it doesn't get lost above the JAX traceback.

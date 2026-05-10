@@ -96,7 +96,9 @@ def add_memory_planning_args(parser: argparse.ArgumentParser):
       - ``--adaptive-n-pcs``                pick n_pcs to fit the budget
                                             (reproducible: same flags +
                                             dataset = same n_pcs)
-      - ``--memory-diagnostics``            write memory_trace.jsonl per phase
+      - ``--memory-profile``                heavyweight jax.profiler captures
+                                            (always-on diagnostics live in
+                                            ``<outdir>/_diagnostics/``)
       - ``--fail-on-memory-exceed``         test-only end-of-run assertion
       - ``--memory-safety-fraction``        advanced multiplier (testing)
 
@@ -256,8 +258,8 @@ def apply_memory_planning_args(
 
     Returns ``(plan, trace)`` where:
       - ``plan`` is a ``recovar.utils.memory_planner.MemoryPlan``
-      - ``trace`` is a ``MemoryTraceWriter`` (no-op if --memory-diagnostics
-        is not set)
+      - ``trace`` is a ``MemoryTraceWriter`` (always-on; writes to
+        ``<outdir>/_diagnostics/memory_trace.jsonl``)
 
     Heavy-GPU commands then read ``plan.image_batch_size`` etc. directly
     instead of calling the legacy ``utils.get_*_batch_size`` formulas.

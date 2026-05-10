@@ -89,7 +89,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # Memory-planning flag set: --gpu-budget-gb, --low-memory-option,
-    # --very-low-memory-option, --adaptive-n-pcs, --memory-diagnostics,
+    # --very-low-memory-option, --adaptive-n-pcs, --memory-profile,
     # --fail-on-memory-exceed, --memory-safety-fraction.
     from recovar.utils.parser_args import add_memory_planning_args
 

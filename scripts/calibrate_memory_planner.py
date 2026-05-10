@@ -98,7 +98,9 @@ def run_pipeline_cell(
             "--correct-contrast",
             "-o",
             str(out_dir / "pipeline_output"),
-            "--memory-diagnostics",
+            # Diagnostics are always-on now; no flag needed. Use
+            # --memory-profile if heavyweight JAX-profiler captures
+            # are wanted.
             *extra_pipeline_args,
         ]
         # Force the planner to use exactly n_pcs by pinning adaptive-n-pcs OFF
