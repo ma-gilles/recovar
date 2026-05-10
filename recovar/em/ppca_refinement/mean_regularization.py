@@ -8,17 +8,45 @@ columns deliberately keep their separate variance-like W prior.
 
 from __future__ import annotations
 
-import numpy as np
+from dataclasses import dataclass
 
 import jax.numpy as jnp
+import numpy as np
 
 from recovar import utils
 from recovar.core import fourier_transform_utils as ftu
 from recovar.ppca import AugmentedPPCAStats
 from recovar.reconstruction import relion_functions
 
-
 KCLASS_RELION_MINRES_MAP = 5
+
+
+@dataclass(frozen=True)
+class MeanRegularizationConfig:
+    """Mean-row regularization parameters for the PPCA augmented solve."""
+
+    style: str = "relion_tau"  # "relion_tau" or "variance"
+    tau2_fudge: float = 1.0
+    minres_map: int = KCLASS_RELION_MINRES_MAP
+
+
+def resolve_mean_precision(stats: AugmentedPPCAStats, mean_prior, volume_shape, config: MeanRegularizationConfig):
+    """Return the mean-precision additive matrix implied by ``config``.
+
+    This is the if/elif/else block that previously lived in every EM iteration
+    function — there is exactly one place to read it now.
+    """
+    if config.style == "variance":
+        return None
+    if config.style == "relion_tau":
+        return relion_style_mean_precision_from_stats(
+            stats,
+            mean_prior,
+            volume_shape,
+            tau2_fudge=float(config.tau2_fudge),
+            minres_map=int(config.minres_map),
+        )
+    raise ValueError(f"mean regularization style must be 'variance' or 'relion_tau', got {config.style!r}")
 
 
 def _coerce_tau_for_half_relion(tau, volume_shape):

@@ -201,10 +201,12 @@ def test_postprocess_diagnostics_no_longer_publish_shell_power_cap_keys():
         mu_half,
         W_half,
         box,
-        strategy="mean_and_w_mask",
-        mask_radius_px=2.0,
-        cosine_width_px=1.0,
-        grid_correct=False,
+        config=postprocess_module.PostprocessConfig(
+            strategy="mean_and_w_mask",
+            mask_radius_px=2.0,
+            cosine_width_px=1.0,
+            grid_correct=False,
+        ),
     )
     forbidden = {
         "postprocess_cap_W_shell_power",

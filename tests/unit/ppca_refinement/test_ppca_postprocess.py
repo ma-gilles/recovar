@@ -5,6 +5,7 @@ import pytest
 from recovar.core import fourier_transform_utils as ftu
 from recovar.em.ppca_refinement.postprocess import (
     PPCA_POSTPROCESS_HEURISTIC_WARNING,
+    PostprocessConfig,
     postprocess_ppca_half_volumes,
 )
 
@@ -39,10 +40,12 @@ def test_ppca_postprocess_mean_background_fill_and_w_zero_mask():
         mu_half,
         W_half,
         volume_shape,
-        strategy="mean_and_w_mask",
-        mask_radius_px=radius,
-        cosine_width_px=width,
-        grid_correct=False,
+        config=PostprocessConfig(
+            strategy="mean_and_w_mask",
+            mask_radius_px=radius,
+            cosine_width_px=width,
+            grid_correct=False,
+        ),
     )
 
     mu_processed = _half_to_real(result.mu_half, volume_shape)
@@ -59,7 +62,9 @@ def test_ppca_postprocess_modes_leave_requested_columns_raw():
     mu_half = jnp.arange(half_size, dtype=jnp.float32).astype(jnp.complex64)
     W_half = jnp.stack([mu_half * 0.1, mu_half * 0.2], axis=1)
 
-    none_result = postprocess_ppca_half_volumes(mu_half, W_half, volume_shape, strategy="none")
+    none_result = postprocess_ppca_half_volumes(
+        mu_half, W_half, volume_shape, config=PostprocessConfig(strategy="none")
+    )
     np.testing.assert_allclose(np.asarray(none_result.mu_half), np.asarray(mu_half))
     np.testing.assert_allclose(np.asarray(none_result.W_half), np.asarray(W_half))
 
@@ -67,8 +72,7 @@ def test_ppca_postprocess_modes_leave_requested_columns_raw():
         mu_half,
         W_half,
         volume_shape,
-        strategy="mean_only",
-        grid_correct=False,
+        config=PostprocessConfig(strategy="mean_only", grid_correct=False),
     )
     np.testing.assert_allclose(np.asarray(mean_only.W_half), np.asarray(W_half))
 
@@ -84,9 +88,7 @@ def test_ppca_postprocess_bandlimits_heuristic_output():
         mu_half,
         W_half,
         volume_shape,
-        strategy="mean_and_w_mask",
-        grid_correct=False,
-        bandlimit_max_r=max_r,
+        config=PostprocessConfig(strategy="mean_and_w_mask", grid_correct=False, bandlimit_max_r=max_r),
     )
 
     coords = np.asarray(ftu.get_k_coordinate_of_each_pixel_3d_real(volume_shape, 1, scaled=False))

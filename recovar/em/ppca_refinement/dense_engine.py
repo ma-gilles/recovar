@@ -9,18 +9,23 @@ materializing global pose moment tensors.
 
 from __future__ import annotations
 
+import dataclasses
 from functools import partial
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 
-from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
 from recovar.em.ppca_refinement.mean_regularization import (
     KCLASS_RELION_MINRES_MAP,
-    relion_style_mean_precision_from_stats,
+    MeanRegularizationConfig,
+    resolve_mean_precision,
 )
-from recovar.em.ppca_refinement.postprocess import postprocess_ppca_half_volumes
+
+# KCLASS_RELION_MINRES_MAP retained for backward-compat re-exports; do not prune.
+_ = KCLASS_RELION_MINRES_MAP
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
+from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
 from recovar.ppca.pose_marginal import compute_ppca_pose_scores_and_moments_no_contrast
 from recovar.ppca.triangular import _tri_size
 
@@ -416,16 +421,8 @@ def run_dense_ppca_fused_refinement_blocks(
     volume_shape,
     mean_prior,
     W_prior,
-    mean_regularization_style: str = "relion_tau",
-    mean_tau2_fudge: float = 1.0,
-    mean_minres_map: int = KCLASS_RELION_MINRES_MAP,
-    postprocess_strategy: str = "mean_and_w_mask",
-    postprocess_mask_radius_px: float | None = None,
-    postprocess_cosine_width_px: float = 3.0,
-    postprocess_grid_correct: bool = True,
-    postprocess_gridding_padding_factor: float = 1.0,
-    postprocess_gridding_order: int = 1,
-    postprocess_gridding_correct: str = "radial",
+    mean_reg: MeanRegularizationConfig | None = None,
+    postprocess: PostprocessConfig | None = None,
     disc_type_backproject: str = "linear_interp",
     enforce_x0: bool = True,
     mstep_chunk_size: int | None = None,
@@ -438,6 +435,8 @@ def run_dense_ppca_fused_refinement_blocks(
     calls the joint augmented M-step. The caller is responsible for building
     blocks from the dataset and current K-class schedule.
     """
+    mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
+    postprocess = postprocess if postprocess is not None else PostprocessConfig()
     q = int(q)
     P = q + 1
     tri = _tri_size(P)
@@ -486,16 +485,20 @@ def run_dense_ppca_fused_refinement_blocks(
 
     if enforce_x0:
         rhs_volume = _enforce_augmented_x0(rhs_volume, volume_shape)
-        lhs_tri_volume = _enforce_augmented_x0(lhs_tri_volume.astype(jnp.complex64), volume_shape).real.astype(jnp.float32)
+        lhs_tri_volume = _enforce_augmented_x0(lhs_tri_volume.astype(jnp.complex64), volume_shape).real.astype(
+            jnp.float32
+        )
 
     diagnostics = {
         "pmax_mean": float(jnp.mean(jnp.concatenate(pmax_values))) if pmax_values else float("nan"),
         "nsig_mean": float(jnp.mean(jnp.concatenate(nsig_values))) if nsig_values else float("nan"),
         "best_rotation_idx": jnp.concatenate(best_rotations) if best_rotations else jnp.zeros((0,), dtype=jnp.int32),
-        "best_translation_idx": jnp.concatenate(best_translations) if best_translations else jnp.zeros((0,), dtype=jnp.int32),
-        "mean_regularization_style": str(mean_regularization_style),
-        "mean_tau2_fudge": float(mean_tau2_fudge),
-        "mean_minres_map": int(mean_minres_map),
+        "best_translation_idx": jnp.concatenate(best_translations)
+        if best_translations
+        else jnp.zeros((0,), dtype=jnp.int32),
+        "mean_regularization_style": str(mean_reg.style),
+        "mean_tau2_fudge": float(mean_reg.tau2_fudge),
+        "mean_minres_map": int(mean_reg.minres_map),
     }
     stats = AugmentedPPCAStats(
         rhs=jnp.swapaxes(rhs_volume, 0, 1),
@@ -504,21 +507,7 @@ def run_dense_ppca_fused_refinement_blocks(
         n_images=n_images,
         diagnostics=diagnostics,
     )
-    if mean_regularization_style == "variance":
-        mean_precision = None
-    elif mean_regularization_style == "relion_tau":
-        mean_precision = relion_style_mean_precision_from_stats(
-            stats,
-            mean_prior,
-            volume_shape,
-            tau2_fudge=float(mean_tau2_fudge),
-            minres_map=int(mean_minres_map),
-        )
-    else:
-        raise ValueError(
-            "mean_regularization_style must be 'variance' or 'relion_tau', "
-            f"got {mean_regularization_style!r}"
-        )
+    mean_precision = resolve_mean_precision(stats, mean_prior, volume_shape, mean_reg)
     mu_half, W_half = solve_augmented_ppca_mstep(
         stats,
         mean_prior=mean_prior,
@@ -540,14 +529,7 @@ def run_dense_ppca_fused_refinement_blocks(
         mu_half,
         W_half,
         volume_shape,
-        strategy=postprocess_strategy,
-        mask_radius_px=postprocess_mask_radius_px,
-        cosine_width_px=postprocess_cosine_width_px,
-        grid_correct=postprocess_grid_correct,
-        gridding_padding_factor=postprocess_gridding_padding_factor,
-        gridding_order=postprocess_gridding_order,
-        gridding_correct=postprocess_gridding_correct,
-        bandlimit_max_r=postprocess_bandlimit_max_r,
+        config=dataclasses.replace(postprocess, bandlimit_max_r=postprocess_bandlimit_max_r),
     )
     diagnostics.update(postprocessed.diagnostics)
     mu_half, W_half = postprocessed.mu_half, postprocessed.W_half

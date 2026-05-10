@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from functools import partial
 from typing import Iterable, NamedTuple
@@ -24,8 +25,14 @@ from recovar.em.ppca_refinement.dense_engine import (
     PosteriorDiagnostics,
     _enforce_augmented_x0,
 )
-from recovar.em.ppca_refinement.mean_regularization import KCLASS_RELION_MINRES_MAP
-from recovar.em.ppca_refinement.postprocess import postprocess_ppca_half_volumes
+from recovar.em.ppca_refinement.mean_regularization import (
+    KCLASS_RELION_MINRES_MAP,
+    MeanRegularizationConfig,
+    resolve_mean_precision,
+)
+
+_ = (KCLASS_RELION_MINRES_MAP, resolve_mean_precision)  # retained: formatter strips otherwise
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
 from recovar.ppca.pose_marginal import compute_ppca_pose_scores_and_moments_no_contrast
@@ -675,16 +682,8 @@ def run_local_ppca_fused_em_iteration(
     W_prior,
     noise_variance,
     local_layout: LocalHypothesisLayout,
-    mean_regularization_style: str = "relion_tau",
-    mean_tau2_fudge: float = 1.0,
-    mean_minres_map: int = KCLASS_RELION_MINRES_MAP,
-    postprocess_strategy: str = "mean_and_w_mask",
-    postprocess_mask_radius_px: float | None = None,
-    postprocess_cosine_width_px: float = 3.0,
-    postprocess_grid_correct: bool = True,
-    postprocess_gridding_padding_factor: float = 1.0,
-    postprocess_gridding_order: int = 1,
-    postprocess_gridding_correct: str = "radial",
+    mean_reg: MeanRegularizationConfig | None = None,
+    postprocess: PostprocessConfig | None = None,
     disc_type: str = "linear_interp",
     current_size: int | None = None,
     q: int | None = None,
@@ -703,6 +702,8 @@ def run_local_ppca_fused_em_iteration(
     fixed_mean_half=None,
 ):
     """Run one exact-local PPCA EM update over a ``LocalHypothesisLayout``."""
+    mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
+    postprocess = postprocess if postprocess is not None else PostprocessConfig()
 
     q_resolved = int(jnp.asarray(W_prior).shape[1])
     P = q_resolved + 1
@@ -840,9 +841,9 @@ def run_local_ppca_fused_em_iteration(
         "image_indices": jnp.concatenate(output_image_indices)
         if output_image_indices
         else jnp.zeros((0,), dtype=jnp.int32),
-        "mean_regularization_style": str(mean_regularization_style),
-        "mean_tau2_fudge": float(mean_tau2_fudge),
-        "mean_minres_map": int(mean_minres_map),
+        "mean_regularization_style": str(mean_reg.style),
+        "mean_tau2_fudge": float(mean_reg.tau2_fudge),
+        "mean_minres_map": int(mean_reg.minres_map),
         "uses_image_scale_corrections": bool(image_scale_corrections is not None),
         "local_bucketed": True,
         "local_image_batch_size": int(image_batch_size),
@@ -856,22 +857,9 @@ def run_local_ppca_fused_em_iteration(
         n_images=n_images,
         diagnostics=diagnostics,
     )
-    if mean_regularization_style == "variance":
-        mean_precision = None
-    elif mean_regularization_style == "relion_tau":
-        from recovar.em.ppca_refinement.mean_regularization import relion_style_mean_precision_from_stats
-
-        mean_precision = relion_style_mean_precision_from_stats(
-            stats,
-            mean_prior,
-            tuple(int(x) for x in experiment_dataset.volume_shape),
-            tau2_fudge=float(mean_tau2_fudge),
-            minres_map=int(mean_minres_map),
-        )
-    else:
-        raise ValueError(
-            f"mean_regularization_style must be 'variance' or 'relion_tau', got {mean_regularization_style!r}"
-        )
+    mean_precision = resolve_mean_precision(
+        stats, mean_prior, tuple(int(x) for x in experiment_dataset.volume_shape), mean_reg
+    )
 
     mu_half, W_half = solve_augmented_ppca_mstep(
         stats,
@@ -894,14 +882,7 @@ def run_local_ppca_fused_em_iteration(
         mu_half,
         W_half,
         tuple(int(x) for x in experiment_dataset.volume_shape),
-        strategy=postprocess_strategy,
-        mask_radius_px=postprocess_mask_radius_px,
-        cosine_width_px=postprocess_cosine_width_px,
-        grid_correct=postprocess_grid_correct,
-        gridding_padding_factor=postprocess_gridding_padding_factor,
-        gridding_order=postprocess_gridding_order,
-        gridding_correct=postprocess_gridding_correct,
-        bandlimit_max_r=postprocess_bandlimit_max_r,
+        config=dataclasses.replace(postprocess, bandlimit_max_r=postprocess_bandlimit_max_r),
     )
     diagnostics.update(postprocessed.diagnostics)
     mu_half, W_half = postprocessed.mu_half, postprocessed.W_half
@@ -940,16 +921,8 @@ def run_local_ppca_halfset_fused_em_iteration(
     score_with_masked_images: bool = False,
     half_spectrum_scoring: bool = False,
     square_window: bool = False,
-    mean_regularization_style: str = "relion_tau",
-    mean_tau2_fudge: float = 1.0,
-    mean_minres_map: int = KCLASS_RELION_MINRES_MAP,
-    postprocess_strategy: str = "mean_and_w_mask",
-    postprocess_mask_radius_px: float | None = None,
-    postprocess_cosine_width_px: float = 3.0,
-    postprocess_grid_correct: bool = True,
-    postprocess_gridding_padding_factor: float = 1.0,
-    postprocess_gridding_order: int = 1,
-    postprocess_gridding_correct: str = "radial",
+    mean_reg: MeanRegularizationConfig | None = None,
+    postprocess: PostprocessConfig | None = None,
     mstep_chunk_size: int | None = None,
     image_scale_corrections: np.ndarray | None = None,
 ) -> PoseMarginalPPCAEMState:
@@ -959,6 +932,8 @@ def run_local_ppca_halfset_fused_em_iteration(
 
     if len(halfset_datasets) != 2 or len(halfset_local_layouts) != 2:
         raise ValueError("halfset_datasets and halfset_local_layouts must each have length 2")
+    mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
+    postprocess = postprocess if postprocess is not None else PostprocessConfig()
     results = []
     for half_dataset, half_layout in zip(halfset_datasets, halfset_local_layouts, strict=True):
         results.append(
@@ -976,16 +951,8 @@ def run_local_ppca_halfset_fused_em_iteration(
                 score_with_masked_images=score_with_masked_images,
                 half_spectrum_scoring=half_spectrum_scoring,
                 square_window=square_window,
-                mean_regularization_style=mean_regularization_style,
-                mean_tau2_fudge=mean_tau2_fudge,
-                mean_minres_map=mean_minres_map,
-                postprocess_strategy=postprocess_strategy,
-                postprocess_mask_radius_px=postprocess_mask_radius_px,
-                postprocess_cosine_width_px=postprocess_cosine_width_px,
-                postprocess_grid_correct=postprocess_grid_correct,
-                postprocess_gridding_padding_factor=postprocess_gridding_padding_factor,
-                postprocess_gridding_order=postprocess_gridding_order,
-                postprocess_gridding_correct=postprocess_gridding_correct,
+                mean_reg=mean_reg,
+                postprocess=postprocess,
                 mstep_chunk_size=mstep_chunk_size,
                 image_scale_corrections=image_scale_corrections,
             )

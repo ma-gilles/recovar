@@ -27,8 +27,10 @@ from recovar.em.ppca_refinement.initialization import (
 )
 from recovar.em.ppca_refinement.mean_regularization import (
     KCLASS_RELION_MINRES_MAP,
+    MeanRegularizationConfig,
     relion_style_mean_precision_from_stats,
 )
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig
 from recovar.em.ppca_refinement.refinement_loop import run_dense_ppca_refinement_loop
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.em.sampling import get_rotation_grid_at_order, get_translation_grid
@@ -1111,16 +1113,20 @@ def main() -> None:
             noise_variance=noise_variance,
             rotations=rotations,
             translations=translations,
-            mean_regularization_style=str(args.mean_regularization_style).replace("-", "_"),
-            mean_tau2_fudge=float(args.mean_tau2_fudge),
-            mean_minres_map=int(args.mean_minres_map),
-            postprocess_strategy=str(args.postprocess_strategy).replace("-", "_"),
-            postprocess_mask_radius_px=args.postprocess_mask_radius_px,
-            postprocess_cosine_width_px=float(args.postprocess_cosine_width_px),
-            postprocess_grid_correct=bool(args.postprocess_grid_correct),
-            postprocess_gridding_padding_factor=float(args.postprocess_gridding_padding_factor),
-            postprocess_gridding_order=int(args.postprocess_gridding_order),
-            postprocess_gridding_correct=str(args.postprocess_gridding_correct),
+            mean_reg=MeanRegularizationConfig(
+                style=str(args.mean_regularization_style).replace("-", "_"),
+                tau2_fudge=float(args.mean_tau2_fudge),
+                minres_map=int(args.mean_minres_map),
+            ),
+            postprocess=PostprocessConfig(
+                strategy=str(args.postprocess_strategy).replace("-", "_"),
+                mask_radius_px=args.postprocess_mask_radius_px,
+                cosine_width_px=float(args.postprocess_cosine_width_px),
+                grid_correct=bool(args.postprocess_grid_correct),
+                gridding_padding_factor=float(args.postprocess_gridding_padding_factor),
+                gridding_order=int(args.postprocess_gridding_order),
+                gridding_correct=str(args.postprocess_gridding_correct),
+            ),
             image_batch_size=int(args.image_batch_size),
             rotation_block_size=int(args.rotation_block_size),
             current_size=iter_current_size,
