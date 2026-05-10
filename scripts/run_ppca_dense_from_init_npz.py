@@ -20,6 +20,14 @@ import jax.numpy as jnp
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
+from recovar.em.ppca_refinement.config import (
+    GeometryConfig,
+    MeanRegularizationConfig,
+    PostprocessConfig,
+    ScheduleConfig,
+    ScoringConfig,
+    SparsePass2Config,
+)
 from recovar.em.ppca_refinement.dense_dataset import coerce_augmented_half_volumes, run_dense_ppca_fused_em_iteration
 from recovar.em.ppca_refinement.initialization import (
     loading_row_norm_variance_prior,
@@ -27,10 +35,8 @@ from recovar.em.ppca_refinement.initialization import (
 )
 from recovar.em.ppca_refinement.mean_regularization import (
     KCLASS_RELION_MINRES_MAP,
-    MeanRegularizationConfig,
     relion_style_mean_precision_from_stats,
 )
-from recovar.em.ppca_refinement.postprocess import PostprocessConfig
 from recovar.em.ppca_refinement.refinement_loop import run_dense_ppca_refinement_loop
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.em.sampling import get_rotation_grid_at_order, get_translation_grid
@@ -1127,22 +1133,24 @@ def main() -> None:
                 gridding_order=int(args.postprocess_gridding_order),
                 gridding_correct=str(args.postprocess_gridding_correct),
             ),
-            image_batch_size=int(args.image_batch_size),
-            rotation_block_size=int(args.rotation_block_size),
-            current_size=iter_current_size,
-            q=q,
-            volume_domain=volume_domain,
+            geometry=GeometryConfig(current_size=iter_current_size, q=q, volume_domain=volume_domain),
+            schedule=ScheduleConfig(
+                image_batch_size=int(args.image_batch_size),
+                rotation_block_size=int(args.rotation_block_size),
+                mstep_chunk_size=int(args.mstep_chunk_size),
+            ),
+            scoring=ScoringConfig(
+                relion_texture_interp=bool(args.relion_texture_interp),
+                image_scale_corrections=image_scale_corrections,
+            ),
+            sparse_pass2=SparsePass2Config(
+                enabled=bool(args.sparse_pass2),
+                log_threshold=float(args.sparse_pass2_log_threshold),
+            ),
             image_indices=image_indices,
             rotation_translation_mask=rotation_translation_mask,
-            image_scale_corrections=image_scale_corrections,
-            mstep_chunk_size=int(args.mstep_chunk_size),
             freeze_mean=freeze_mean,
-            half_spectrum_scoring=False,
-            square_window=False,
-            relion_texture_interp=bool(args.relion_texture_interp),
             skip_empty_pose_blocks=rotation_translation_mask is not None,
-            sparse_pass2=bool(args.sparse_pass2),
-            sparse_pass2_log_threshold=float(args.sparse_pass2_log_threshold),
         )
         jax.block_until_ready(result.mu_half)
         jax.block_until_ready(result.W_half)

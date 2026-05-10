@@ -31,6 +31,11 @@ from run_ppca_dense_from_init_npz import (
 
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
+from recovar.em.ppca_refinement.config import (
+    GeometryConfig,
+    ScheduleConfig,
+    ScoringConfig,
+)
 from recovar.em.ppca_refinement.dense_dataset import coerce_augmented_half_volumes
 from recovar.em.ppca_refinement.initialization import loading_row_norm_variance_prior, volume_power_variance_prior
 from recovar.em.ppca_refinement.local_dataset import run_local_ppca_fused_em_iteration
@@ -663,15 +668,15 @@ def main() -> None:
                 gridding_order=int(args.postprocess_gridding_order),
                 gridding_correct=str(args.postprocess_gridding_correct),
             ),
-            current_size=iter_current_size,
-            q=q,
-            volume_domain=volume_domain,
+            geometry=GeometryConfig(current_size=iter_current_size, q=q, volume_domain=volume_domain),
+            schedule=ScheduleConfig(
+                image_batch_size=int(args.image_batch_size),
+                rotation_block_size=int(args.rotation_block_size),
+                mstep_chunk_size=int(args.mstep_chunk_size),
+            ),
+            scoring=ScoringConfig(image_scale_corrections=image_scale_corrections),
             image_indices=image_indices,
-            image_batch_size=int(args.image_batch_size),
-            rotation_block_size=int(args.rotation_block_size),
             max_hypotheses_per_microbatch=int(args.max_hypotheses_per_microbatch),
-            image_scale_corrections=image_scale_corrections,
-            mstep_chunk_size=int(args.mstep_chunk_size),
             fixed_mean_half=fixed_mean_half,
         )
         jax.block_until_ready(result.mu_half)

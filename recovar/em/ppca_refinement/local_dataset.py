@@ -18,6 +18,11 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
     preprocess_batch,
 )
 from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout, bucket_local_hypothesis_layout
+from recovar.em.ppca_refinement.config import (
+    GeometryConfig,
+    ScheduleConfig,
+    ScoringConfig,
+)
 from recovar.em.ppca_refinement.dense_dataset import prepare_dense_ppca_dataset_inputs
 from recovar.em.ppca_refinement.dense_engine import (
     DensePPCAFusedBlock,
@@ -682,26 +687,34 @@ def run_local_ppca_fused_em_iteration(
     W_prior,
     noise_variance,
     local_layout: LocalHypothesisLayout,
+    geometry: GeometryConfig | None = None,
+    schedule: ScheduleConfig | None = None,
+    scoring: ScoringConfig | None = None,
     mean_reg: MeanRegularizationConfig | None = None,
     postprocess: PostprocessConfig | None = None,
     disc_type: str = "linear_interp",
-    current_size: int | None = None,
-    q: int | None = None,
-    volume_domain: str = "auto",
-    score_with_masked_images: bool = False,
-    half_spectrum_scoring: bool = False,
-    square_window: bool = False,
-    class_log_prior: float = 0.0,
     enforce_x0: bool = True,
-    mstep_chunk_size: int | None = None,
-    image_scale_corrections: np.ndarray | None = None,
     image_indices: np.ndarray | None = None,
-    image_batch_size: int = 2,
-    rotation_block_size: int = 512,
     max_hypotheses_per_microbatch: int = 32768,
     fixed_mean_half=None,
 ):
     """Run one exact-local PPCA EM update over a ``LocalHypothesisLayout``."""
+    geometry = geometry if geometry is not None else GeometryConfig()
+    # Local PPCA's default batch is intentionally smaller than dense (2 vs 500).
+    schedule = schedule if schedule is not None else ScheduleConfig(image_batch_size=2, rotation_block_size=512)
+    scoring = scoring if scoring is not None else ScoringConfig()
+    # Hoist into locals so the rest of the body reads cleanly.
+    current_size = geometry.current_size
+    q = geometry.q
+    volume_domain = geometry.volume_domain
+    score_with_masked_images = scoring.score_with_masked_images
+    half_spectrum_scoring = scoring.half_spectrum_scoring
+    square_window = scoring.square_window
+    class_log_prior = scoring.class_log_prior
+    image_scale_corrections = scoring.image_scale_corrections
+    mstep_chunk_size = schedule.mstep_chunk_size
+    image_batch_size = schedule.image_batch_size
+    rotation_block_size = schedule.rotation_block_size
     mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
     postprocess = postprocess if postprocess is not None else PostprocessConfig()
 
@@ -915,16 +928,12 @@ def run_local_ppca_halfset_fused_em_iteration(
     halfset_datasets,
     halfset_local_layouts,
     *,
-    disc_type: str = "linear_interp",
-    current_size: int | None = None,
-    volume_domain: str = "fourier_half",
-    score_with_masked_images: bool = False,
-    half_spectrum_scoring: bool = False,
-    square_window: bool = False,
+    geometry: GeometryConfig | None = None,
+    schedule: ScheduleConfig | None = None,
+    scoring: ScoringConfig | None = None,
     mean_reg: MeanRegularizationConfig | None = None,
     postprocess: PostprocessConfig | None = None,
-    mstep_chunk_size: int | None = None,
-    image_scale_corrections: np.ndarray | None = None,
+    disc_type: str = "linear_interp",
 ) -> PoseMarginalPPCAEMState:
     """Run one exact-local PPCA iteration for two halfsets."""
 
@@ -932,6 +941,9 @@ def run_local_ppca_halfset_fused_em_iteration(
 
     if len(halfset_datasets) != 2 or len(halfset_local_layouts) != 2:
         raise ValueError("halfset_datasets and halfset_local_layouts must each have length 2")
+    geometry = geometry if geometry is not None else GeometryConfig(volume_domain="fourier_half")
+    schedule = schedule if schedule is not None else ScheduleConfig(image_batch_size=2, rotation_block_size=512)
+    scoring = scoring if scoring is not None else ScoringConfig()
     mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
     postprocess = postprocess if postprocess is not None else PostprocessConfig()
     results = []
@@ -945,16 +957,12 @@ def run_local_ppca_halfset_fused_em_iteration(
                 W_prior=state.W_prior,
                 noise_variance=state.noise_variance,
                 local_layout=half_layout,
-                disc_type=disc_type,
-                current_size=current_size,
-                volume_domain=volume_domain,
-                score_with_masked_images=score_with_masked_images,
-                half_spectrum_scoring=half_spectrum_scoring,
-                square_window=square_window,
+                geometry=geometry,
+                schedule=schedule,
+                scoring=scoring,
                 mean_reg=mean_reg,
                 postprocess=postprocess,
-                mstep_chunk_size=mstep_chunk_size,
-                image_scale_corrections=image_scale_corrections,
+                disc_type=disc_type,
             )
         )
     mu_half = (results[0].mu_half, results[1].mu_half)

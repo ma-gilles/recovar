@@ -220,11 +220,21 @@ For comparison, today:
 
 ## 6. Migration plan (incremental, tests green at each step)
 
-**Phase 0 — Done:**
+**Phase 0 — Done (commit `f8b07e69`):**
 - ✅ `PostprocessConfig` extracted (+ all 5 EM iteration entry points + 3 scripts updated). 86/86 tests pass.
+- ✅ `MeanRegularizationConfig` + `resolve_mean_precision` helper extracted; replaces the mean-precision if/elif/else block previously duplicated in 3 modules.
 
-**Phase 1 — In flight:**
-- ⏳ `MeanRegularizationConfig` + `resolve_mean_precision` helper. Dense iteration done; dense halfset wrapper done; need: `dense_engine.py`, `local_dataset.py` x2, scripts.
+**Phase 2 — Open question (test churn vs. API cleanliness):**
+
+Bundling `ScheduleConfig`, `GeometryConfig`, `ScoringConfig`, `SparsePass2Config` is a clear win for production callers (the 41-arg `run_dense_ppca_fused_em_iteration` becomes 13 args). **But** there are **98 kwarg-call-site usages across the test suite** of the form `image_batch_size=...`, `current_size=...`, `sparse_pass2=False`. Migrating all 98 to `schedule=ScheduleConfig(image_batch_size=...)` makes test code more verbose, not less — most tests pass 1–2 kwargs.
+
+**Three options:**
+
+1. **Clean break**: update all 98 test refs. Cost: ~30 min mechanical churn. Benefit: single API, tests show new style.
+2. **Hybrid**: keep loose kwargs *and* accept configs (configs are sugar). Cost: signatures stay long. Benefit: zero test churn, configs still help production.
+3. **Stop here**: Phase 0 + Phase 1 are clean wins (10 kwargs gone, 1 helper extracted, mean-precision duplication killed). Phases 2–5 land in a follow-up branch. Cost: dense_dataset.py still 989 lines.
+
+I recommend **Option 1**: clean break, one-time mechanical churn. Tests are exercising the API; the new style is what we want them to demonstrate. **But the user should sign off** before I touch tests.
 
 **Phase 2 — Easy wins (target: 1 hour):**
 - `SparsePass2Config` (2 fields, dense only — small touchpoint).

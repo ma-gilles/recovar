@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as ftu
+from recovar.em.ppca_refinement.config import GeometryConfig, ScheduleConfig, ScoringConfig
 from recovar.em.ppca_refinement.dense_dataset import run_dense_ppca_halfset_fused_em_iteration
 from recovar.em.ppca_refinement.local_dataset import run_local_ppca_halfset_fused_em_iteration
 from recovar.em.ppca_refinement.schedule import (
@@ -206,15 +207,19 @@ def run_dense_ppca_refinement_loop(
             experiment_dataset,
             rotations=rotations,
             translations=translations,
+            geometry=GeometryConfig(current_size=current_size, volume_domain="fourier_half"),
+            schedule=ScheduleConfig(
+                image_batch_size=image_batch_size,
+                rotation_block_size=rotation_block_size,
+                mstep_chunk_size=mstep_chunk_size,
+            ),
+            scoring=ScoringConfig(
+                score_with_masked_images=score_with_masked_images,
+                half_spectrum_scoring=half_spectrum_scoring,
+                square_window=square_window,
+                image_scale_corrections=image_scale_corrections,
+            ),
             disc_type=disc_type,
-            image_batch_size=image_batch_size,
-            rotation_block_size=rotation_block_size,
-            current_size=current_size,
-            score_with_masked_images=score_with_masked_images,
-            half_spectrum_scoring=half_spectrum_scoring,
-            square_window=square_window,
-            mstep_chunk_size=mstep_chunk_size,
-            image_scale_corrections=image_scale_corrections,
         )
         best_pose_indices = _combined_best_pose_ids(updated.pose_diagnostics, n_trans)
         comparison = (
@@ -329,13 +334,19 @@ def run_local_ppca_refinement_loop(
             state,
             halfset_datasets,
             halfset_local_layouts,
+            geometry=GeometryConfig(current_size=current_size, volume_domain="fourier_half"),
+            schedule=ScheduleConfig(
+                image_batch_size=2,
+                rotation_block_size=512,
+                mstep_chunk_size=mstep_chunk_size,
+            ),
+            scoring=ScoringConfig(
+                score_with_masked_images=score_with_masked_images,
+                half_spectrum_scoring=half_spectrum_scoring,
+                square_window=square_window,
+                image_scale_corrections=image_scale_corrections,
+            ),
             disc_type=disc_type,
-            current_size=current_size,
-            score_with_masked_images=score_with_masked_images,
-            half_spectrum_scoring=half_spectrum_scoring,
-            square_window=square_window,
-            mstep_chunk_size=mstep_chunk_size,
-            image_scale_corrections=image_scale_corrections,
         )
         best_pose_indices = _combined_best_pose_ids(updated.pose_diagnostics, n_trans)
         comparison = (
