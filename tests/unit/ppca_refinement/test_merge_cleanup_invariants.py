@@ -51,6 +51,10 @@ from recovar.em.ppca_refinement.refinement_loop import (
     run_local_ppca_refinement_loop,
 )
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
+from recovar.em.ppca_refinement.config import (
+    GeometryConfig,
+    ScheduleConfig,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -285,9 +289,8 @@ def test_dense_halfset_iteration_publishes_per_halfset_pose_keys(tiny_halfset_in
         dataset,
         rotations=rotations,
         translations=translations,
-        image_batch_size=2,
-        rotation_block_size=1,
-        current_size=4,
+        schedule=ScheduleConfig(image_batch_size=2, rotation_block_size=1),
+        geometry=GeometryConfig(current_size=4),
     )
 
     pd = updated.pose_diagnostics
@@ -318,8 +321,8 @@ def test_local_halfset_iteration_publishes_per_halfset_pose_keys(tiny_halfset_in
         state,
         halfset_datasets,
         halfset_layouts,
-        current_size=4,
-        mstep_chunk_size=8,
+        geometry=GeometryConfig(current_size=4),
+        schedule=ScheduleConfig(mstep_chunk_size=8),
     )
 
     pd = updated.pose_diagnostics

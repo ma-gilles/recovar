@@ -21,6 +21,12 @@ import jax.numpy as jnp
 from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.em.dense_single_volume.k_class import run_dense_k_class_em
+from recovar.em.ppca_refinement.config import (
+    GeometryConfig,
+    ScheduleConfig,
+    ScoringConfig,
+    SparsePass2Config,
+)
 from recovar.em.ppca_refinement.dense_dataset import run_dense_ppca_fused_em_iteration
 from recovar.em.ppca_refinement.initialization import (
     loading_row_norm_variance_prior,
@@ -220,16 +226,21 @@ def main() -> None:
             noise_variance=noise_variance,
             rotations=rotations,
             translations=translations,
-            q=int(args.q),
-            volume_domain="real",
-            relion_texture_interp=False,
+            geometry=GeometryConfig(current_size=int(args.current_size), q=int(args.q), volume_domain="real"),
+            schedule=ScheduleConfig(
+                image_batch_size=int(args.image_batch_size),
+                rotation_block_size=int(args.rotation_block_size),
+                mstep_chunk_size=int(args.mstep_chunk_size),
+            ),
+            scoring=ScoringConfig(relion_texture_interp=False),
+            sparse_pass2=SparsePass2Config(
+                enabled=bool(args.ppca_sparse_pass2),
+                log_threshold=float(args.ppca_sparse_pass2_log_threshold),
+            ),
+            postprocess=PostprocessConfig(strategy=str(args.postprocess_strategy).replace("-", "_")),
+            image_indices=image_indices,
             rotation_translation_mask=rotation_translation_mask,
             skip_empty_pose_blocks=rotation_translation_mask is not None,
-            sparse_pass2=bool(args.ppca_sparse_pass2),
-            sparse_pass2_log_threshold=float(args.ppca_sparse_pass2_log_threshold),
-            postprocess=PostprocessConfig(strategy=str(args.postprocess_strategy).replace("-", "_")),
-            mstep_chunk_size=int(args.mstep_chunk_size),
-            **common,
         )
 
     def run_kclass():

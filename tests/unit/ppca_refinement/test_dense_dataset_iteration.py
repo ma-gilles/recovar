@@ -19,6 +19,12 @@ from recovar.em.ppca_refinement import (
     run_local_ppca_fused_em_iteration,
     run_local_ppca_refinement_loop,
 )
+from recovar.em.ppca_refinement.config import (
+    GeometryConfig,
+    ScheduleConfig,
+    ScoringConfig,
+    SparsePass2Config,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -211,11 +217,9 @@ def test_dataset_backed_dense_ppca_iteration_returns_finite_update(tiny_inputs):
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
         rotations=rotations,
         translations=translations,
-        image_batch_size=2,
-        rotation_block_size=1,
-        current_size=4,
-        volume_domain="fourier_half",
         enforce_x0=False,
+        schedule=ScheduleConfig(image_batch_size=2, rotation_block_size=1),
+        geometry=GeometryConfig(current_size=4, volume_domain="fourier_half"),
     )
 
     assert result.mu_half.shape == (HALF_VOL,)
@@ -239,12 +243,10 @@ def test_dataset_backed_dense_ppca_iteration_freeze_mean_keeps_input_mean(tiny_i
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
         rotations=rotations,
         translations=translations,
-        image_batch_size=2,
-        rotation_block_size=1,
-        current_size=4,
-        volume_domain="fourier_half",
         freeze_mean=True,
         enforce_x0=False,
+        schedule=ScheduleConfig(image_batch_size=2, rotation_block_size=1),
+        geometry=GeometryConfig(current_size=4, volume_domain="fourier_half"),
     )
 
     np.testing.assert_allclose(np.asarray(result.mu_half), np.asarray(mu), rtol=0.0, atol=0.0)
@@ -286,12 +288,9 @@ def test_dataset_backed_dense_ppca_iteration_uses_windowed_fourier_support(tiny_
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
         rotations=rotations,
         translations=translations,
-        image_batch_size=2,
-        rotation_block_size=1,
-        current_size=2,
-        volume_domain="fourier_half",
         enforce_x0=False,
-        mstep_chunk_size=8,
+        schedule=ScheduleConfig(image_batch_size=2, rotation_block_size=1, mstep_chunk_size=8),
+        geometry=GeometryConfig(current_size=2, volume_domain="fourier_half"),
     )
 
     assert result.mu_half.shape == (HALF_VOL,)
@@ -313,10 +312,8 @@ def test_dense_ppca_skip_empty_pose_blocks_matches_masked_full_grid(tiny_inputs)
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
         rotations=rotations,
         translations=translations,
-        image_batch_size=2,
-        rotation_block_size=1,
-        current_size=4,
-        volume_domain="fourier_half",
+        geometry=GeometryConfig(current_size=4, volume_domain="fourier_half"),
+        schedule=ScheduleConfig(image_batch_size=2, rotation_block_size=1),
         enforce_x0=False,
         rotation_translation_mask=mask,
     )
@@ -351,17 +348,27 @@ def test_dense_ppca_sparse_pass2_matches_full_with_zero_posterior_blocks(tiny_in
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
         rotations=rotations,
         translations=translations,
-        image_batch_size=2,
-        rotation_block_size=1,
-        current_size=4,
-        volume_domain="fourier_half",
+        geometry=GeometryConfig(current_size=4, volume_domain="fourier_half"),
+        schedule=ScheduleConfig(image_batch_size=2, rotation_block_size=1),
         enforce_x0=False,
         rotation_translation_mask=mask,
         skip_empty_pose_blocks=False,
     )
 
-    full = run_dense_ppca_fused_em_iteration(dataset, mu, W, sparse_pass2=False, **kwargs)
-    sparse = run_dense_ppca_fused_em_iteration(dataset, mu, W, sparse_pass2=True, **kwargs)
+    full = run_dense_ppca_fused_em_iteration(
+        dataset,
+        mu,
+        W,
+        **kwargs,
+        sparse_pass2=SparsePass2Config(enabled=False),
+    )
+    sparse = run_dense_ppca_fused_em_iteration(
+        dataset,
+        mu,
+        W,
+        **kwargs,
+        sparse_pass2=SparsePass2Config(enabled=True),
+    )
 
     np.testing.assert_allclose(np.asarray(sparse.stats.rhs), np.asarray(full.stats.rhs), rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(np.asarray(sparse.stats.lhs_tri), np.asarray(full.stats.lhs_tri), rtol=1e-5, atol=1e-5)
@@ -385,26 +392,23 @@ def test_dataset_backed_dense_ppca_iteration_is_invariant_to_rotation_blocking(t
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
         rotations=rotations,
         translations=translations,
-        image_batch_size=2,
-        current_size=4,
-        volume_domain="fourier_half",
+        geometry=GeometryConfig(current_size=4, volume_domain="fourier_half"),
         enforce_x0=False,
-        mstep_chunk_size=8,
     )
 
     unsplit = run_dense_ppca_fused_em_iteration(
         dataset,
         mu,
         W,
-        rotation_block_size=rotations.shape[0],
         **common_kwargs,
+        schedule=ScheduleConfig(image_batch_size=2, rotation_block_size=rotations.shape[0], mstep_chunk_size=8),
     )
     split = run_dense_ppca_fused_em_iteration(
         dataset,
         mu,
         W,
-        rotation_block_size=1,
         **common_kwargs,
+        schedule=ScheduleConfig(image_batch_size=2, rotation_block_size=1, mstep_chunk_size=8),
     )
 
     np.testing.assert_allclose(split.stats.log_likelihood, unsplit.stats.log_likelihood, rtol=5e-4, atol=0.25)
@@ -446,9 +450,8 @@ def test_halfset_dense_ppca_iteration_updates_scoring_state(tiny_inputs):
         dataset,
         rotations=rotations,
         translations=translations,
-        image_batch_size=2,
-        rotation_block_size=1,
-        current_size=4,
+        schedule=ScheduleConfig(image_batch_size=2, rotation_block_size=1),
+        geometry=GeometryConfig(current_size=4),
     )
 
     assert updated.mu_score.shape == (HALF_VOL,)
@@ -574,12 +577,10 @@ def test_exact_local_all_retained_support_matches_dense(tiny_inputs):
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
         rotations=rotations,
         translations=translations,
-        image_batch_size=1,
-        rotation_block_size=rotations.shape[0],
-        volume_domain="fourier_half",
         enforce_x0=False,
-        mstep_chunk_size=8,
-        image_scale_corrections=image_scale_corrections,
+        schedule=ScheduleConfig(image_batch_size=1, rotation_block_size=rotations.shape[0], mstep_chunk_size=8),
+        geometry=GeometryConfig(volume_domain="fourier_half"),
+        scoring=ScoringConfig(image_scale_corrections=image_scale_corrections),
     )
     local = run_local_ppca_fused_em_iteration(
         dataset,
@@ -589,10 +590,10 @@ def test_exact_local_all_retained_support_matches_dense(tiny_inputs):
         W_prior=W_prior,
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
         local_layout=_all_retained_local_layout(dataset, rotations, translations),
-        volume_domain="fourier_half",
         enforce_x0=False,
-        mstep_chunk_size=8,
-        image_scale_corrections=image_scale_corrections,
+        geometry=GeometryConfig(volume_domain="fourier_half"),
+        schedule=ScheduleConfig(mstep_chunk_size=8),
+        scoring=ScoringConfig(image_scale_corrections=image_scale_corrections),
     )
 
     np.testing.assert_allclose(np.asarray(local.stats.rhs), np.asarray(dense.stats.rhs), rtol=2e-5, atol=2e-5)
@@ -622,13 +623,11 @@ def test_exact_local_subset_layout_matches_dense_subset(tiny_inputs):
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
         rotations=rotations,
         translations=translations,
-        image_batch_size=2,
-        rotation_block_size=rotations.shape[0],
-        volume_domain="fourier_half",
         enforce_x0=False,
-        mstep_chunk_size=8,
         image_indices=image_indices,
-        image_scale_corrections=image_scale_corrections,
+        schedule=ScheduleConfig(image_batch_size=2, rotation_block_size=rotations.shape[0], mstep_chunk_size=8),
+        geometry=GeometryConfig(volume_domain="fourier_half"),
+        scoring=ScoringConfig(image_scale_corrections=image_scale_corrections),
     )
     local = run_local_ppca_fused_em_iteration(
         dataset,
@@ -638,12 +637,11 @@ def test_exact_local_subset_layout_matches_dense_subset(tiny_inputs):
         W_prior=W_prior,
         noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
         local_layout=_all_retained_local_layout(dataset, rotations, translations, n_images=image_indices.shape[0]),
-        volume_domain="fourier_half",
         enforce_x0=False,
-        mstep_chunk_size=8,
         image_indices=image_indices,
-        image_batch_size=2,
-        image_scale_corrections=image_scale_corrections,
+        geometry=GeometryConfig(volume_domain="fourier_half"),
+        schedule=ScheduleConfig(mstep_chunk_size=8, image_batch_size=2),
+        scoring=ScoringConfig(image_scale_corrections=image_scale_corrections),
     )
 
     np.testing.assert_allclose(np.asarray(local.stats.rhs), np.asarray(dense.stats.rhs), rtol=5e-4, atol=1e-4)

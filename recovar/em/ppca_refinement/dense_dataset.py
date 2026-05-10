@@ -25,6 +25,12 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
     prepare_reconstruction_batch,
     preprocess_batch,
 )
+from recovar.em.ppca_refinement.config import (
+    GeometryConfig,
+    ScheduleConfig,
+    ScoringConfig,
+    SparsePass2Config,
+)
 from recovar.em.ppca_refinement.dense_engine import (
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
@@ -551,34 +557,33 @@ def run_dense_ppca_fused_em_iteration(
     noise_variance,
     rotations,
     translations,
+    geometry: GeometryConfig | None = None,
+    schedule: ScheduleConfig | None = None,
+    scoring: ScoringConfig | None = None,
+    sparse_pass2: SparsePass2Config | None = None,
     mean_reg: MeanRegularizationConfig | None = None,
     postprocess: PostprocessConfig | None = None,
     disc_type: str = "linear_interp",
-    image_batch_size: int = 500,
-    rotation_block_size: int = 5000,
-    current_size: int | None = None,
-    q: int | None = None,
-    volume_domain: str = "auto",
     image_indices: np.ndarray | None = None,
     rotation_log_prior: np.ndarray | None = None,
     translation_log_prior: np.ndarray | None = None,
     rotation_translation_mask: np.ndarray | None = None,
-    image_scale_corrections: np.ndarray | None = None,
-    class_log_prior: float = 0.0,
-    score_with_masked_images: bool = False,
-    half_spectrum_scoring: bool = False,
-    square_window: bool = False,
-    relion_texture_interp: bool = True,
     enforce_x0: bool = True,
-    mstep_chunk_size: int | None = None,
     freeze_mean: bool = False,
     skip_empty_pose_blocks: bool = False,
-    sparse_pass2: bool = True,
-    sparse_pass2_log_threshold: float = float(np.log(1.0e-6)),
 ) -> DensePPCAFusedEMResult:
     """Run one dataset-backed dense PPCA EM iteration."""
+    geometry = geometry if geometry is not None else GeometryConfig()
+    schedule = schedule if schedule is not None else ScheduleConfig()
+    scoring = scoring if scoring is not None else ScoringConfig()
+    sparse_pass2_cfg = sparse_pass2 if sparse_pass2 is not None else SparsePass2Config()
     mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
     postprocess = postprocess if postprocess is not None else PostprocessConfig()
+    # Local aliases keep the rest of the body readable; configs are the public API.
+    image_scale_corrections = scoring.image_scale_corrections
+    mstep_chunk_size = schedule.mstep_chunk_size
+    sparse_pass2_enabled = sparse_pass2_cfg.enabled
+    sparse_pass2_log_threshold = sparse_pass2_cfg.log_threshold
 
     block_groups = iter_dense_ppca_dataset_block_groups(
         experiment_dataset,
@@ -588,21 +593,21 @@ def run_dense_ppca_fused_em_iteration(
         rotations,
         translations,
         disc_type=disc_type,
-        image_batch_size=image_batch_size,
-        rotation_block_size=rotation_block_size,
-        current_size=current_size,
-        q=q,
-        volume_domain=volume_domain,
+        image_batch_size=schedule.image_batch_size,
+        rotation_block_size=schedule.rotation_block_size,
+        current_size=geometry.current_size,
+        q=geometry.q,
+        volume_domain=geometry.volume_domain,
         image_indices=image_indices,
         rotation_log_prior=rotation_log_prior,
         translation_log_prior=translation_log_prior,
         rotation_translation_mask=rotation_translation_mask,
-        image_scale_corrections=image_scale_corrections,
-        class_log_prior=class_log_prior,
-        score_with_masked_images=score_with_masked_images,
-        half_spectrum_scoring=half_spectrum_scoring,
-        square_window=square_window,
-        relion_texture_interp=relion_texture_interp,
+        image_scale_corrections=scoring.image_scale_corrections,
+        class_log_prior=scoring.class_log_prior,
+        score_with_masked_images=scoring.score_with_masked_images,
+        half_spectrum_scoring=scoring.half_spectrum_scoring,
+        square_window=scoring.square_window,
+        relion_texture_interp=scoring.relion_texture_interp,
         skip_empty_pose_blocks=skip_empty_pose_blocks,
     )
     q_resolved = int(jnp.asarray(W_prior).shape[1])
@@ -689,7 +694,7 @@ def run_dense_ppca_fused_em_iteration(
 
         batch_pmax = jnp.exp(batch_best_score - logZ).astype(jnp.float32)
         retained_group = tuple(group)
-        if sparse_pass2 and len(group) > 1:
+        if sparse_pass2_enabled and len(group) > 1:
             block_best_matrix = jnp.stack(
                 [stats.best_log_score_per_image for stats in block_score_stats],
                 axis=0,
@@ -767,7 +772,7 @@ def run_dense_ppca_fused_em_iteration(
         "best_translation_idx": jnp.concatenate(best_translations)
         if best_translations
         else jnp.zeros((0,), dtype=jnp.int32),
-        "sparse_pass2_enabled": bool(sparse_pass2),
+        "sparse_pass2_enabled": bool(sparse_pass2_enabled),
         "sparse_pass2_log_threshold": float(sparse_pass2_log_threshold),
         "sparse_pass2_total_blocks": int(sparse_pass2_total_blocks),
         "sparse_pass2_skipped_blocks": int(sparse_pass2_skipped_blocks),
@@ -807,7 +812,7 @@ def run_dense_ppca_fused_em_iteration(
         W,
         volume_shape=volume_shape,
         q=q_resolved,
-        volume_domain=volume_domain,
+        volume_domain=geometry.volume_domain,
     )
     input_mu_half = input_augmented_half[0]
     input_W_half = (
@@ -907,20 +912,17 @@ def run_dense_ppca_halfset_fused_em_iteration(
     *,
     rotations,
     translations,
-    disc_type: str = "linear_interp",
-    image_batch_size: int = 500,
-    rotation_block_size: int = 5000,
-    current_size: int | None = None,
-    volume_domain: str = "fourier_half",
-    score_with_masked_images: bool = False,
-    half_spectrum_scoring: bool = False,
-    square_window: bool = False,
-    image_scale_corrections: np.ndarray | None = None,
+    geometry: GeometryConfig | None = None,
+    schedule: ScheduleConfig | None = None,
+    scoring: ScoringConfig | None = None,
     mean_reg: MeanRegularizationConfig | None = None,
     postprocess: PostprocessConfig | None = None,
-    mstep_chunk_size: int | None = None,
+    disc_type: str = "linear_interp",
 ) -> PoseMarginalPPCAEMState:
     """Run one gold-standard halfset dense PPCA iteration and update state."""
+    geometry = geometry if geometry is not None else GeometryConfig(volume_domain="fourier_half")
+    schedule = schedule if schedule is not None else ScheduleConfig()
+    scoring = scoring if scoring is not None else ScoringConfig()
     mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
     postprocess = postprocess if postprocess is not None else PostprocessConfig()
 
@@ -937,18 +939,12 @@ def run_dense_ppca_halfset_fused_em_iteration(
                 noise_variance=state.noise_variance,
                 rotations=rotations,
                 translations=translations,
-                disc_type=disc_type,
-                image_batch_size=image_batch_size,
-                rotation_block_size=rotation_block_size,
-                current_size=current_size,
-                volume_domain=volume_domain,
-                score_with_masked_images=score_with_masked_images,
-                half_spectrum_scoring=half_spectrum_scoring,
-                square_window=square_window,
-                image_scale_corrections=image_scale_corrections,
+                geometry=geometry,
+                schedule=schedule,
+                scoring=scoring,
                 mean_reg=mean_reg,
                 postprocess=postprocess,
-                mstep_chunk_size=mstep_chunk_size,
+                disc_type=disc_type,
             )
         )
 
