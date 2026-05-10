@@ -13,9 +13,13 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import ndimage
 
-
 DEFAULT_GT_ALIGN_HEALPIX_ORDER = 2
 DEFAULT_GT_ALIGN_MAX_SHELL = 8
+DEFAULT_GT_ALIGN_REFINE_ORDERS: tuple[int, ...] = (3, 4)
+# Angular sigma (degrees) to keep around the coarse-best rotation when
+# building each refinement-order grid. Generous enough to clear coarse-grid
+# step error (HEALPix-2 step ≈ 15°) without exploding the refinement size.
+DEFAULT_GT_ALIGN_REFINE_SIGMA_DEG: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -144,6 +148,45 @@ def relion_alignment_rotations(healpix_order: int) -> np.ndarray:
     return np.asarray(get_rotation_grid_at_order(int(healpix_order), matrices=True), dtype=np.float64)
 
 
+def _angular_distance_deg(R_ref: np.ndarray, rotations: np.ndarray) -> np.ndarray:
+    """Return geodesic SO(3) angular distance from ``R_ref`` to each rotation, in degrees."""
+    # angle θ satisfies trace(R_ref.T @ R) = 1 + 2 cos θ
+    traces = np.einsum("ij,kij->k", R_ref, rotations)
+    cos_theta = np.clip(0.5 * (traces - 1.0), -1.0, 1.0)
+    return np.degrees(np.arccos(cos_theta))
+
+
+def _scan_grid(
+    vol_lowpass: np.ndarray,
+    ref_lowpass: np.ndarray,
+    rotations: np.ndarray,
+    *,
+    mirror_options,
+    sign_options,
+    interpolation_order: int,
+):
+    """Inner search loop: pick best (mirror, sign, rot) by centered correlation."""
+    best_score = -np.inf
+    best_corr = -np.inf
+    best_idx = 0
+    best_mirror = False
+    best_sign = 1
+    for mirror_x in mirror_options:
+        base = vol_lowpass[::-1, :, :] if mirror_x else vol_lowpass
+        for idx, rotation in enumerate(rotations):
+            candidate = rotate_volume_about_center(base, rotation, order=interpolation_order)
+            corr = centered_correlation(candidate, ref_lowpass)
+            for sign in sign_options:
+                score = sign * corr
+                if score > best_score:
+                    best_score = float(score)
+                    best_corr = float(corr)
+                    best_idx = int(idx)
+                    best_mirror = bool(mirror_x)
+                    best_sign = int(sign)
+    return best_score, best_corr, best_idx, best_mirror, best_sign
+
+
 def align_volume_to_reference(
     volume: np.ndarray,
     reference: np.ndarray,
@@ -153,16 +196,26 @@ def align_volume_to_reference(
     allow_mirror: bool = True,
     allow_sign: bool = False,
     interpolation_order: int = 1,
+    refine_orders: tuple[int, ...] | None = None,
+    refine_sigma_deg: float = DEFAULT_GT_ALIGN_REFINE_SIGMA_DEG,
 ) -> VolumeAlignment:
-    """Align ``volume`` to ``reference`` by coarse rotation search.
+    """Align ``volume`` to ``reference`` by coarse rotation search + local refinement.
 
-    The search score is centered correlation between low-pass filtered volumes.
-    The returned ``corr`` is the centered correlation of the full aligned map
-    against the full reference.  If ``allow_mirror`` is true, an x-axis mirror
-    is tested before every rotation to cover the cryo-EM handedness ambiguity.
-    ``allow_sign`` is off by default because density sign is not a physical
-    ab-initio pose ambiguity; enable it only to diagnose contrast convention
-    issues.
+    Mirrors the EM convention: a coarse HEALPix grid picks the best
+    orientation, then successive finer-order grids are searched LOCALLY
+    around that pick (within ``refine_sigma_deg`` of the current best).
+    The search score is centered correlation between low-pass filtered
+    volumes.  ``corr`` returned is the centered correlation of the full
+    aligned map against the full reference.
+
+    If ``allow_mirror`` is true, an x-axis mirror is tested at the coarse
+    stage to cover the cryo-EM handedness ambiguity; the chosen mirror is
+    then locked through local refinement.  ``allow_sign`` is off by
+    default because density sign is not a physical ab-initio pose
+    ambiguity; enable it only to diagnose contrast convention issues.
+
+    Pass ``refine_orders=None`` (or an empty tuple) to disable local
+    refinement and reproduce the legacy coarse-only behavior.
     """
     vol = np.asarray(volume, dtype=np.float64)
     ref = np.asarray(reference, dtype=np.float64)
@@ -181,42 +234,60 @@ def align_volume_to_reference(
     ref_score = lowpass_volume_by_shell(ref, score_max_shell, output_size=score_box_size)
     vol_score = lowpass_volume_by_shell(vol, score_max_shell, output_size=score_box_size)
 
-    best_score = -np.inf
-    best_corr = -np.inf
-    best_rotation_index = 0
-    best_mirror = False
-    best_sign = 1
     mirror_options = (False, True) if allow_mirror else (False,)
+    sign_options = (1, -1) if allow_sign else (1,)
 
-    for mirror_x in mirror_options:
-        candidate_base = vol_score[::-1, :, :] if mirror_x else vol_score
-        for idx, rotation in enumerate(rot_grid):
-            candidate = rotate_volume_about_center(candidate_base, rotation, order=interpolation_order)
-            corr = centered_correlation(candidate, ref_score)
-            sign = 1
-            score = corr
-            if allow_sign and np.isfinite(corr) and -corr > corr:
-                sign = -1
-                score = -corr
-            if score > best_score:
-                best_score = float(score)
-                best_corr = float(corr)
-                best_rotation_index = int(idx)
-                best_mirror = bool(mirror_x)
-                best_sign = int(sign)
+    # Coarse pass over the user-supplied grid.
+    best_score, best_corr, best_idx, best_mirror, best_sign = _scan_grid(
+        vol_score,
+        ref_score,
+        rot_grid,
+        mirror_options=mirror_options,
+        sign_options=sign_options,
+        interpolation_order=interpolation_order,
+    )
+    best_rotation_matrix = np.asarray(rot_grid[best_idx], dtype=np.float64)
+
+    # Local refinement: lock mirror/sign, build finer grids, keep rotations
+    # within ``refine_sigma_deg`` of the current best, and pick the best.
+    refine_orders = tuple(refine_orders or ())
+    if refine_orders:
+        for order in refine_orders:
+            fine = relion_alignment_rotations(int(order))
+            angles = _angular_distance_deg(best_rotation_matrix, fine)
+            local_mask = angles <= float(refine_sigma_deg)
+            if not local_mask.any():
+                continue
+            local_rotations = fine[local_mask]
+            r_score, r_corr, r_idx_local, _, _ = _scan_grid(
+                vol_score,
+                ref_score,
+                local_rotations,
+                mirror_options=(best_mirror,),
+                sign_options=(best_sign,),
+                interpolation_order=interpolation_order,
+            )
+            if r_score > best_score:
+                best_score = r_score
+                best_corr = r_corr
+                best_rotation_matrix = np.asarray(local_rotations[r_idx_local], dtype=np.float64)
 
     full_base = vol[::-1, :, :] if best_mirror else vol
-    aligned = rotate_volume_about_center(full_base, rot_grid[best_rotation_index], order=interpolation_order)
+    aligned = rotate_volume_about_center(full_base, best_rotation_matrix, order=interpolation_order)
     if best_sign < 0:
         aligned = -aligned
     full_corr = centered_correlation(aligned, ref)
+
+    # Map best_rotation_matrix back to a coarse-grid index when possible.
+    coarse_dist = _angular_distance_deg(best_rotation_matrix, rot_grid)
+    rotation_index = int(np.argmin(coarse_dist))
 
     return VolumeAlignment(
         aligned_volume=np.asarray(aligned, dtype=np.float64),
         corr=float(full_corr),
         score=float(best_score),
-        rotation_index=int(best_rotation_index),
-        rotation_matrix=np.asarray(rot_grid[best_rotation_index], dtype=np.float64),
+        rotation_index=rotation_index,
+        rotation_matrix=best_rotation_matrix,
         mirror_x=bool(best_mirror),
         sign=int(best_sign),
     )
