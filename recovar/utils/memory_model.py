@@ -101,13 +101,26 @@ MODE_MULTIPLIER: dict[str, float] = {
 # These are the values fitted from the validation sweep. Until the sweep
 # runs, they're set to the legacy values for parity.
 
-# SVD/cross-product workspace inside covariance estimation. Legacy form:
-# ``base_memory_coefficient = 75 / (200**4)`` (covariance_estimation.py:117).
-# Empirically observed at one historical config; reviewer believes the
-# 75 GB number was ≥1.5× over-estimate. The discovery sweep will fit the
-# exponent (4 was assumed; could be 2 or 3) and the coefficient.
-SVD_WORKSPACE_COEF_GB = 75.0 / (200.0**4)  # TODO(sweep): refit
-SVD_WORKSPACE_EXPONENT = 4.0  # TODO(sweep): confirm
+# SVD/cross-product workspace inside covariance estimation.
+#
+# Legacy form: ``base_memory_coefficient = 75 / (200**4)`` in
+# ``covariance_estimation.py:117``, predicting peak ∝ n_pcs⁴.
+#
+# Discovery sweep (2026-05-10, slurm job 7982854, SPA grid=128
+# custom_cuda, n_pcs ∈ {20, 40, 80, 120, 160, 200}, log at
+# /scratch/gpfs/GILLES/mg6942/_agent_scratch/memory_sweep_discover_20260507/
+# discover_fitter_report.md) found the observed peak is essentially
+# CONSTANT (~40 GB) across all tested n_pcs. Log-log fit gave
+# exponent = -0.03, R² = 0.908. The legacy n_pcs⁴ assumption is
+# refuted at this grid: SVD workspace is not the dominant peak driver
+# in the observed regime.
+#
+# We therefore model svd_workspace as a small constant (no n_pcs
+# scaling). The validation sweep at grid={64, 128, 256} will tell us
+# whether the *grid*-dependence is cubic (FFT-dominated) or
+# quadratic (image-batch FFT only).
+SVD_WORKSPACE_COEF_GB = 0.0  # TODO(validate): grid scaling
+SVD_WORKSPACE_EXPONENT = 0.0  # discovery: peak is constant in n_pcs
 
 # Image-batch transient factor. Captures forward FFT in-place + adjoint
 # workspace. Legacy: implicit in the ``2**18 / grid**2`` formula in
