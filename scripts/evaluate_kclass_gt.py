@@ -54,6 +54,27 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         required=True,
         help="K GT MRCs (one per class). Pass --gt_volume once per class.",
     )
+    parser.add_argument(
+        "--label",
+        default="primary",
+        help=(
+            "Label for the --volume set (printed in the report). When --compare_with is "
+            "supplied, the report adds a side-by-side delta table between this label and "
+            "each comparison label."
+        ),
+    )
+    parser.add_argument(
+        "--compare_with",
+        action="append",
+        default=None,
+        metavar="LABEL=PATH1,PATH2,...",
+        help=(
+            "Add another K-class volume set to evaluate against the same --gt_volume(s) and "
+            "produce a side-by-side per-class FSC delta table. Repeatable. Each value is "
+            "'<LABEL>=<comma-separated MRC paths>' with exactly K paths. Example: "
+            "--compare_with 'RELION=run_it100_class001.mrc,run_it100_class002.mrc'."
+        ),
+    )
     parser.add_argument("--volume_frame", choices=("relion", "recovar"), default="relion")
     parser.add_argument("--gt_frame", choices=("relion", "recovar"), default="recovar")
     parser.add_argument("--voxel_size", type=float, default=None)
@@ -145,44 +166,29 @@ def _shell_resolution(shell_index: int, volume_size: int, voxel_size: float) -> 
     return float(volume_size) * float(voxel_size) / float(shell_index)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv)
-    rec_paths = list(args.volume)
-    gt_paths = list(args.gt_volume)
-    if len(rec_paths) != len(gt_paths):
-        raise SystemExit(f"--volume count {len(rec_paths)} must equal --gt_volume count {len(gt_paths)}")
+def _evaluate_one_set(
+    *,
+    label: str,
+    rec_paths: list[str],
+    rec_vols: list[np.ndarray],
+    gt_paths: list[str],
+    gt_vols: list[np.ndarray],
+    voxel_size: float,
+    rotations: np.ndarray,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """Run the K^2 alignment + best-permutation pick for one volume set."""
     K = len(rec_paths)
-
-    rec_pairs = [_load_volume(p, args.volume_frame) for p in rec_paths]
-    gt_pairs = [_load_volume(p, args.gt_frame) for p in gt_paths]
-    rec_vols = [pair[0] for pair in rec_pairs]
-    gt_vols = [pair[0] for pair in gt_pairs]
-    voxel_size = (
-        args.voxel_size
-        or next((v for _, v in gt_pairs if v is not None), None)
-        or next((v for _, v in rec_pairs if v is not None), None)
-        or 1.0
-    )
-
-    shape = rec_vols[0].shape
-    for v in rec_vols + gt_vols:
-        if v.shape != shape:
-            raise SystemExit(f"all volumes must share shape; got {[u.shape for u in rec_vols + gt_vols]}")
-
-    rotations = relion_alignment_rotations(int(args.gt_align_healpix_order))
     refine_orders = tuple(int(o) for o in (args.gt_align_refine_orders or [])) or None
-
-    # Align each (recovar class, GT class) pair once. Building K*K alignments
-    # is O(K^2) volume rotations, but with HEALPix-2 coarse + local refinement
-    # this is still <1 min for K<=4.
-    print(f"K-class GT eval: K={K}, voxel={voxel_size:.4g} A, refine_orders={refine_orders}", flush=True)
-    print(f"  loading {K} recovar volumes and {K} GT volumes...", flush=True)
     print(
-        f"  pairwise aligning {K * K} pairs (coarse HEALPix-{args.gt_align_healpix_order} + refine {refine_orders})...",
+        f"\n[{label}] K-class GT eval: K={K}, voxel={voxel_size:.4g} A, refine_orders={refine_orders}",
         flush=True,
     )
-
-    # alignments[i][j] = aligned recovar class i to GT class j
+    print(
+        f"[{label}]   pairwise aligning {K * K} pairs "
+        f"(coarse HEALPix-{args.gt_align_healpix_order} + refine {refine_orders})...",
+        flush=True,
+    )
     alignments: list[list[Any]] = [[None] * K for _ in range(K)]
     fsc_table: list[list[np.ndarray]] = [[np.array([])] * K for _ in range(K)]
     t0 = time.time()
@@ -201,13 +207,13 @@ def main(argv: list[str] | None = None) -> int:
             alignments[i][j] = a
             fsc_table[i][j] = _fsc(a.aligned_volume, gt_vols[j])
             print(
-                f"    align rec[{i}] -> gt[{j}]: corr={a.corr:.4f} mean_fsc(1-8)={_mean_fsc(fsc_table[i][j], 1, 8):.4f}",
+                f"[{label}]     align rec[{i}] -> gt[{j}]: "
+                f"corr={a.corr:.4f} mean_fsc(1-8)={_mean_fsc(fsc_table[i][j], 1, 8):.4f}",
                 flush=True,
             )
-    print(f"  pairwise alignment done in {time.time() - t0:.1f}s", flush=True)
+    print(f"[{label}]   alignment done in {time.time() - t0:.1f}s", flush=True)
 
-    # Pick the permutation that maximizes mean over per-class fsc(1-8).
-    best_perm = None
+    best_perm: tuple[int, ...] | None = None
     best_score = -np.inf
     for perm in itertools.permutations(range(K)):
         score = float(np.mean([_mean_fsc(fsc_table[i][perm[i]], 1, 8) for i in range(K)]))
@@ -216,12 +222,7 @@ def main(argv: list[str] | None = None) -> int:
             best_perm = perm
     assert best_perm is not None
 
-    print()
-    print(f"Best permutation (rec -> gt): {best_perm}, mean fsc(1-8) = {best_score:.6f}")
-    header = f"{'class':<6s} {'rec_path':<60s} {'gt_path':<60s} {'corr':>8s} {'fsc1-8':>8s} {'fsc1-16':>8s} {'sh@0.5':>7s} {'sh@.143':>8s}"
-    print(header)
-    print("-" * len(header))
-
+    shape = rec_vols[0].shape
     per_class = []
     for i in range(K):
         j = best_perm[i]
@@ -229,12 +230,6 @@ def main(argv: list[str] | None = None) -> int:
         fsc = fsc_table[i][j]
         sh05 = int(first_shell_below_threshold(fsc, 0.5))
         sh143 = int(first_shell_below_threshold(fsc, 0.143))
-        line = (
-            f"{i:<6d} {Path(rec_paths[i]).name[:60]:<60s} {Path(gt_paths[j]).name[:60]:<60s} "
-            f"{a.corr:>8.4f} {_mean_fsc(fsc, 1, 8):>8.4f} {_mean_fsc(fsc, 1, 16):>8.4f} "
-            f"{sh05:>7d} {sh143:>8d}"
-        )
-        print(line)
         per_class.append(
             {
                 "class": int(i),
@@ -255,10 +250,158 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
 
+    return {
+        "label": label,
+        "K": K,
+        "voxel_size": float(voxel_size),
+        "best_perm": list(best_perm),
+        "best_mean_fsc_1_8": best_score,
+        "per_class": per_class,
+    }
+
+
+def _print_set_table(result: dict[str, Any]) -> None:
+    print(
+        f"\n[{result['label']}] best permutation (rec -> gt): {tuple(result['best_perm'])}, "
+        f"mean fsc(1-8) = {result['best_mean_fsc_1_8']:.6f}"
+    )
+    header = (
+        f"{'class':<6s} {'rec_path':<60s} {'gt_path':<60s} "
+        f"{'corr':>8s} {'fsc1-8':>8s} {'fsc1-16':>8s} {'sh@0.5':>7s} {'sh@.143':>8s}"
+    )
+    print(header)
+    print("-" * len(header))
+    for entry in result["per_class"]:
+        print(
+            f"{entry['class']:<6d} {Path(entry['rec_path']).name[:60]:<60s} "
+            f"{Path(entry['gt_path']).name[:60]:<60s} "
+            f"{entry['corr']:>8.4f} {entry['mean_fsc_1_8']:>8.4f} {entry['mean_fsc_1_16']:>8.4f} "
+            f"{entry['shell_05']:>7d} {entry['shell_0143']:>8d}"
+        )
+
+
+def _print_side_by_side_delta(primary: dict[str, Any], comparison: dict[str, Any]) -> None:
+    """Print a per-class delta table primary - comparison.
+
+    Best permutations are evaluated INDEPENDENTLY for each set so an unrelated
+    permutation difference doesn't confuse the delta. Class IDs in the delta
+    table are primary's class indices; the comparison's row uses ITS best
+    permutation lookup at the same primary class.
+    """
+    if primary["K"] != comparison["K"]:
+        print(f"\n[delta] skipping side-by-side: K mismatch primary={primary['K']} vs comparison={comparison['K']}")
+        return
+    print(f"\n[delta] {primary['label']} vs {comparison['label']} (per-class, best-permutation per set):")
+    header = (
+        f"{'class':<6s} "
+        f"{primary['label'] + '_corr':>15s} {comparison['label'] + '_corr':>15s} {'Δcorr':>8s}  "
+        f"{primary['label'] + '_fsc1-8':>17s} {comparison['label'] + '_fsc1-8':>17s} {'Δfsc1-8':>9s}  "
+        f"{primary['label'] + '_sh@.143':>17s} {comparison['label'] + '_sh@.143':>17s} {'Δshell':>8s}"
+    )
+    print(header)
+    print("-" * len(header))
+    for i in range(primary["K"]):
+        p = primary["per_class"][i]
+        c = comparison["per_class"][i]
+        d_corr = p["corr"] - c["corr"]
+        d_fsc18 = p["mean_fsc_1_8"] - c["mean_fsc_1_8"]
+        d_sh143 = p["shell_0143"] - c["shell_0143"]
+        print(
+            f"{i:<6d} "
+            f"{p['corr']:>15.4f} {c['corr']:>15.4f} {d_corr:>+8.4f}  "
+            f"{p['mean_fsc_1_8']:>17.4f} {c['mean_fsc_1_8']:>17.4f} {d_fsc18:>+9.4f}  "
+            f"{p['shell_0143']:>17d} {c['shell_0143']:>17d} {d_sh143:>+8d}"
+        )
+    # Aggregate row
+    p_mean_fsc = primary["best_mean_fsc_1_8"]
+    c_mean_fsc = comparison["best_mean_fsc_1_8"]
+    print(
+        f"{'mean':<6s} "
+        f"{'':>15s} {'':>15s} {'':>8s}  "
+        f"{p_mean_fsc:>17.4f} {c_mean_fsc:>17.4f} {p_mean_fsc - c_mean_fsc:>+9.4f}  "
+        f"{'':>17s} {'':>17s} {'':>8s}"
+    )
+
+
+def _parse_compare_with(spec: str, K: int) -> tuple[str, list[str]]:
+    """Parse 'LABEL=path1,path2,...' into (label, [paths])."""
+    if "=" not in spec:
+        raise SystemExit(f"--compare_with must be 'LABEL=path1,path2,...': got {spec!r}")
+    label, paths_str = spec.split("=", 1)
+    label = label.strip()
+    paths = [p.strip() for p in paths_str.split(",") if p.strip()]
+    if not label:
+        raise SystemExit(f"--compare_with missing LABEL: {spec!r}")
+    if len(paths) != K:
+        raise SystemExit(f"--compare_with {label!r}: expected {K} paths to match --volume count, got {len(paths)}")
+    return label, paths
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    rec_paths = list(args.volume)
+    gt_paths = list(args.gt_volume)
+    if len(rec_paths) != len(gt_paths):
+        raise SystemExit(f"--volume count {len(rec_paths)} must equal --gt_volume count {len(gt_paths)}")
+    K = len(rec_paths)
+
+    # Load primary volume set + GT once; share across comparisons.
+    rec_pairs = [_load_volume(p, args.volume_frame) for p in rec_paths]
+    gt_pairs = [_load_volume(p, args.gt_frame) for p in gt_paths]
+    primary_vols = [pair[0] for pair in rec_pairs]
+    gt_vols = [pair[0] for pair in gt_pairs]
+    voxel_size = (
+        args.voxel_size
+        or next((v for _, v in gt_pairs if v is not None), None)
+        or next((v for _, v in rec_pairs if v is not None), None)
+        or 1.0
+    )
+
+    shape = primary_vols[0].shape
+    for v in primary_vols + gt_vols:
+        if v.shape != shape:
+            raise SystemExit(f"all volumes must share shape; got {[u.shape for u in primary_vols + gt_vols]}")
+
+    rotations = relion_alignment_rotations(int(args.gt_align_healpix_order))
+
+    primary_result = _evaluate_one_set(
+        label=str(args.label),
+        rec_paths=rec_paths,
+        rec_vols=primary_vols,
+        gt_paths=gt_paths,
+        gt_vols=gt_vols,
+        voxel_size=voxel_size,
+        rotations=rotations,
+        args=args,
+    )
+    _print_set_table(primary_result)
+
+    comparison_results: list[dict[str, Any]] = []
+    for spec in args.compare_with or []:
+        cmp_label, cmp_paths = _parse_compare_with(spec, K)
+        cmp_pairs = [_load_volume(p, args.volume_frame) for p in cmp_paths]
+        cmp_vols = [pair[0] for pair in cmp_pairs]
+        for v in cmp_vols:
+            if v.shape != shape:
+                raise SystemExit(f"--compare_with {cmp_label!r} volume shape {v.shape} must match primary {shape}")
+        cmp_result = _evaluate_one_set(
+            label=cmp_label,
+            rec_paths=cmp_paths,
+            rec_vols=cmp_vols,
+            gt_paths=gt_paths,
+            gt_vols=gt_vols,
+            voxel_size=voxel_size,
+            rotations=rotations,
+            args=args,
+        )
+        _print_set_table(cmp_result)
+        _print_side_by_side_delta(primary_result, cmp_result)
+        comparison_results.append(cmp_result)
+
     if args.print_per_shell_fsc:
         print()
-        print("Per-shell FSC vs GT (best permutation):")
-        for entry in per_class:
+        print(f"[{primary_result['label']}] per-shell FSC vs GT (best permutation):")
+        for entry in primary_result["per_class"]:
             fsc = entry["fsc_vs_gt"]
             print(f"  class {entry['class']} (matched gt {entry['matched_gt_class']}):")
             for chunk_start in range(0, len(fsc), 16):
@@ -266,12 +409,11 @@ def main(argv: list[str] | None = None) -> int:
                 print("    shell: " + " ".join(f"{s:>5d}" for s in range(chunk_start, chunk_end)))
                 print("    fsc:   " + " ".join(f"{fsc[s]:>5.2f}" for s in range(chunk_start, chunk_end)))
 
-    summary = {
-        "K": K,
+    summary: dict[str, Any] = {
+        "primary": primary_result,
+        "comparisons": comparison_results,
         "voxel_size": float(voxel_size),
-        "best_perm": list(best_perm),
-        "best_mean_fsc_1_8": best_score,
-        "per_class": per_class,
+        "K": K,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     if args.output_json:

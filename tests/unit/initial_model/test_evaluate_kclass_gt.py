@@ -103,14 +103,16 @@ def test_kclass_eval_identity_permutation(tmp_path):
 
     summary = json.loads(out_json.read_text())
     assert summary["K"] == 2
-    assert tuple(summary["best_perm"]) == (0, 1)
+    primary = summary["primary"]
+    assert tuple(primary["best_perm"]) == (0, 1)
+    assert summary["comparisons"] == []  # no --compare_with → empty list
     # Even for a perfect (recovar = GT) input the alignment goes through
     # HEALPix-2 coarse + HEALPix-(3, 4) refinement, neither of which contains
     # exact identity, so the best on-grid rotation introduces some trilinear
     # blur. The threshold 0.7 is loose enough to survive that interpolation
     # noise but tight enough to fail loudly when alignment is broken
     # (the misaligned cross pairs above score ~0).
-    for entry in summary["per_class"]:
+    for entry in primary["per_class"]:
         assert entry["mean_fsc_1_8"] >= 0.7, (
             f"identity-truth fsc(1-8) should be high after alignment, got class {entry['class']} = {entry['mean_fsc_1_8']:.4f}"
         )
@@ -155,11 +157,12 @@ def test_kclass_eval_swapped_classes_pick_swapped_permutation(tmp_path):
     )
 
     summary = json.loads(out_json.read_text())
-    assert tuple(summary["best_perm"]) == (1, 0), f"expected swapped permutation (1, 0), got {summary['best_perm']}"
+    primary = summary["primary"]
+    assert tuple(primary["best_perm"]) == (1, 0), f"expected swapped permutation (1, 0), got {primary['best_perm']}"
     # Same threshold rationale as test_kclass_eval_identity_permutation:
     # HEALPix grid coarseness + trilinear blur cap "perfect alignment" at
     # ~0.92 fsc(1-8) for these tiny (32^3) synthetic volumes.
-    for entry in summary["per_class"]:
+    for entry in primary["per_class"]:
         assert entry["mean_fsc_1_8"] >= 0.7
 
 
@@ -191,3 +194,79 @@ def test_kclass_eval_count_mismatch_errors(tmp_path):
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     assert proc.returncode != 0
     assert "must equal" in proc.stderr or "must equal" in proc.stdout
+
+
+def test_kclass_eval_compare_with_produces_delta_table(tmp_path):
+    """``--compare_with LABEL=p1,p2`` produces a comparison entry whose
+    per-class metrics are independently best-permutation-aligned and whose
+    deltas equal primary-minus-comparison.
+
+    Setup:
+      * primary = (vol_a, vol_b), GT = (vol_a, vol_b)              → identity
+      * comparison "RELION" = (vol_a, vol_b_noisier), same GT      → identity
+        but the c1 path uses a noisier copy so its fsc(1-8) is strictly
+        lower than primary's. Locks the delta-table sign.
+    """
+    vol_a = _make_synthetic_volume(seed=11)
+    vol_b = _make_synthetic_volume(seed=12)
+    rng = np.random.default_rng(99)
+    vol_b_noisy = vol_b + rng.standard_normal(vol_b.shape).astype(np.float32) * 0.5
+
+    rec_a_path = tmp_path / "rec_class001.mrc"
+    rec_b_path = tmp_path / "rec_class002.mrc"
+    cmp_a_path = tmp_path / "cmp_class001.mrc"
+    cmp_b_path = tmp_path / "cmp_class002.mrc"
+    gt_a_path = tmp_path / "gt_class001.mrc"
+    gt_b_path = tmp_path / "gt_class002.mrc"
+    _save_mrc(rec_a_path, vol_a)
+    _save_mrc(rec_b_path, vol_b)
+    _save_mrc(cmp_a_path, vol_a)
+    _save_mrc(cmp_b_path, vol_b_noisy)
+    _save_mrc(gt_a_path, vol_a.copy())
+    _save_mrc(gt_b_path, vol_b.copy())
+
+    out_json = tmp_path / "summary.json"
+    proc = _run(
+        [
+            "--label",
+            "primary",
+            "--volume",
+            str(rec_a_path),
+            "--volume",
+            str(rec_b_path),
+            "--gt_volume",
+            str(gt_a_path),
+            "--gt_volume",
+            str(gt_b_path),
+            "--compare_with",
+            f"RELION={cmp_a_path},{cmp_b_path}",
+            "--volume_frame",
+            "recovar",
+            "--gt_frame",
+            "recovar",
+            "--gt_align_refine_orders",
+            "3",
+            "--output_json",
+            str(out_json),
+        ]
+    )
+
+    summary = json.loads(out_json.read_text())
+    assert summary["primary"]["label"] == "primary"
+    assert len(summary["comparisons"]) == 1
+    cmp = summary["comparisons"][0]
+    assert cmp["label"] == "RELION"
+    assert tuple(cmp["best_perm"]) == (0, 1)
+    # primary class 0 should match the comparison closely (same vol_a);
+    # primary class 1 should beat comparison c1 because comparison c1 is
+    # the noisy copy.
+    primary_c0 = summary["primary"]["per_class"][0]
+    primary_c1 = summary["primary"]["per_class"][1]
+    cmp_c0 = cmp["per_class"][0]
+    cmp_c1 = cmp["per_class"][1]
+    assert primary_c0["mean_fsc_1_8"] == pytest.approx(cmp_c0["mean_fsc_1_8"], abs=0.05)
+    assert primary_c1["mean_fsc_1_8"] > cmp_c1["mean_fsc_1_8"], (
+        f"primary c1 ({primary_c1['mean_fsc_1_8']:.4f}) should beat noisier RELION c1 ({cmp_c1['mean_fsc_1_8']:.4f})"
+    )
+    # Side-by-side delta table is printed to stdout.
+    assert "[delta] primary vs RELION" in proc.stdout
