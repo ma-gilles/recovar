@@ -6,8 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -15,28 +15,285 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
 import jax.numpy as jnp
+from run_ppca_dense_from_init_npz import (
+    _default_current_size_schedule,
+    _default_healpix_order_schedule,
+    _half_size,
+    _jsonable,
+    _load_init,
+    _load_noise_variance,
+    _load_simulation_info,
+    _parse_int_schedule,
+    _regularization_penalty,
+    _schedule_value,
+    _write_half_volume_mrc,
+)
 
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
 from recovar.em.ppca_refinement.dense_dataset import coerce_augmented_half_volumes
 from recovar.em.ppca_refinement.initialization import loading_row_norm_variance_prior, volume_power_variance_prior
 from recovar.em.ppca_refinement.local_dataset import run_local_ppca_fused_em_iteration
-from recovar.em.ppca_refinement.mean_regularization import KCLASS_RELION_MINRES_MAP, relion_style_mean_precision_from_stats
-from recovar.em.sampling import build_local_search_grid_metadata, get_rotation_grid_at_order, get_translation_grid
-
-from run_ppca_dense_from_init_npz import (
-    _float_schedule_value,
-    _half_size,
-    _jsonable,
-    _load_init,
-    _load_noise_variance,
-    _load_simulation_info,
-    _parse_float_schedule,
-    _parse_int_schedule,
-    _regularization_penalty,
-    _schedule_value,
-    _write_half_volume_mrc,
+from recovar.em.ppca_refinement.mean_regularization import (
+    KCLASS_RELION_MINRES_MAP,
+    relion_style_mean_precision_from_stats,
 )
+from recovar.em.ppca_refinement.refinement_loop import (
+    HalfsetMeanComparison,
+    _half_volume_to_full_flat,
+    run_local_ppca_refinement_loop,
+)
+from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
+from recovar.em.sampling import build_local_search_grid_metadata, get_rotation_grid_at_order, get_translation_grid
+from recovar.reconstruction import regularization as _regularization
+
+
+def _run_local_with_halfset_fsc_schedule(
+    *,
+    args,
+    dataset,
+    n_images: int,
+    mu,
+    W,
+    q: int,
+    init_volume_domain: str,
+    mean_prior,
+    W_prior,
+    noise_variance,
+    prior_rotations,
+    prior_translations,
+    translations,
+    simulation_info,
+    output_dir: Path,
+) -> None:
+    """Halfset-FSC-driven local PPCA refinement using
+    ``run_local_ppca_refinement_loop``. Builds a ``LocalHypothesisLayout`` per
+    halfset and gates cs growth on FSC at the *current* cs Nyquist + pose
+    stability."""
+
+    from recovar.data_io.halfsets import split_index_list
+
+    if getattr(dataset, "halfset_indices", None) is None:
+        all_indices = np.arange(int(n_images), dtype=np.int32)
+        dataset.halfset_indices = split_index_list(all_indices, split_random_seed=0)
+        dataset._invalidate_halfset_cache()
+        print(
+            f"[halfset-fsc-local] auto-assigned halfsets: "
+            f"|H0|={len(dataset.halfset_indices[0])}, |H1|={len(dataset.halfset_indices[1])}",
+            flush=True,
+        )
+
+    halfsets = (dataset.get_halfset(0), dataset.get_halfset(1))
+
+    target_local_hp = int(args.local_healpix_order)
+    local_grid_metadata = build_local_search_grid_metadata(target_local_hp)
+
+    # Build a LocalHypothesisLayout per halfset. Each halfset only sees its
+    # own image_indices' priors.
+    halfset_layouts = []
+    for half_idx, half_dataset in enumerate(halfsets):
+        local_image_indices = np.asarray(dataset.halfset_local_image_indices(half_idx), dtype=np.int64)
+        local_image_indices = local_image_indices[local_image_indices < n_images]
+        prior_rotations_h = np.asarray(prior_rotations, dtype=np.float32)[local_image_indices]
+        prior_translations_h = np.asarray(prior_translations, dtype=np.float32)[local_image_indices]
+        layout = build_local_hypothesis_layout(
+            prior_rotations_h,
+            None,
+            np.deg2rad(float(args.sigma_rot_deg)),
+            np.deg2rad(float(args.sigma_psi_deg)),
+            int(target_local_hp),
+            translations,
+            prior_translations_h,
+            float(args.sigma_offset_angstrom),
+            None,
+            float(getattr(half_dataset, "voxel_size", 1.0)),
+            grid_metadata=local_grid_metadata,
+            translation_prior_reference_translations=translations,
+        )
+        halfset_layouts.append(layout)
+    halfset_layouts = tuple(halfset_layouts)
+
+    # Convert mu/W to fourier-half flat.
+    mu_half_flat, _q_check = coerce_augmented_half_volumes(
+        np.asarray(mu),
+        np.asarray(W),
+        volume_shape=tuple(dataset.volume_shape),
+        q=int(q),
+        volume_domain=init_volume_domain,
+    )
+    mu_h = jnp.asarray(mu_half_flat[0], dtype=jnp.complex64)
+    W_h = jnp.asarray(np.transpose(np.asarray(mu_half_flat[1:])), dtype=jnp.complex64)
+
+    init_cs = (
+        int(args.init_current_size)
+        if args.init_current_size is not None
+        else max(2, (int(args.current_size) // 4 // 2) * 2)
+    )
+    init_cs = min(init_cs, int(args.current_size))
+    if init_cs % 2:
+        init_cs -= 1
+    max_cs = int(args.max_current_size) if args.max_current_size is not None else int(args.current_size)
+
+    state = PoseMarginalPPCAEMState(
+        mu_half=(mu_h, mu_h),
+        W_half=(W_h, W_h),
+        mu_score=mu_h,
+        W_score=W_h,
+        W_prior=jnp.asarray(W_prior, dtype=jnp.float32),
+        mean_prior=jnp.asarray(mean_prior, dtype=jnp.float32),
+        noise_variance=jnp.asarray(noise_variance, dtype=jnp.float32),
+        z_prior_precision_diag=jnp.ones((int(q),), dtype=jnp.float32),
+        schedule_state=None,
+    )
+
+    print(
+        f"[halfset-fsc-local] n_iters={int(args.n_iters)}  init_cs={init_cs}  max_cs={max_cs}  "
+        f"local_hp={target_local_hp}  fsc_threshold={float(args.fsc_threshold)}  "
+        f"growth_factor={float(args.current_size_growth_factor)}",
+        flush=True,
+    )
+
+    def _current_cs_local_comparator(
+        state: PoseMarginalPPCAEMState, proposed_current_size: int
+    ) -> HalfsetMeanComparison:
+        full0 = _half_volume_to_full_flat(state.mu_half[0], dataset.volume_shape)
+        full1 = _half_volume_to_full_flat(state.mu_half[1], dataset.volume_shape)
+        fsc = np.asarray(_regularization.get_fsc(full0, full1, tuple(dataset.volume_shape)))
+        if fsc.size == 0:
+            return HalfsetMeanComparison(
+                means_aligned=True,
+                resolution_supports=False,
+                no_halfset_drift=False,
+                fsc=fsc,
+                diagnostics={"reason": "empty_fsc"},
+            )
+        current_cs = int(state.schedule_state.current_size)
+        test_shell = min(max(current_cs // 2 - 1, 0), int(fsc.size) - 1)
+        proposed_shell = min(max(int(proposed_current_size) // 2 - 1, 0), int(fsc.size) - 1)
+        return HalfsetMeanComparison(
+            means_aligned=True,
+            resolution_supports=bool(np.isfinite(fsc[test_shell]))
+            and float(fsc[test_shell]) >= float(args.fsc_threshold),
+            no_halfset_drift=bool(np.isfinite(fsc[test_shell])),
+            fsc=fsc,
+            diagnostics={
+                "current_cs": int(current_cs),
+                "test_shell_current_cs": int(test_shell),
+                "fsc_at_current_cs_nyquist": float(fsc[test_shell]),
+                "proposed_shell": int(proposed_shell),
+                "fsc_at_proposed_shell": float(fsc[proposed_shell]),
+                "fsc_threshold": float(args.fsc_threshold),
+            },
+        )
+
+    image_scale_corrections = None
+    if args.image_scale_source == "simulation-info-contrast":
+        image_scale_corrections = np.asarray(simulation_info["per_image_contrast"], dtype=np.float32)
+
+    t_loop = time.time()
+    final_state, records = run_local_ppca_refinement_loop(
+        state,
+        halfsets,
+        halfset_layouts,
+        n_iterations=int(args.n_iters),
+        init_current_size=init_cs,
+        max_current_size=max_cs,
+        kclass_schedule_allows=True,
+        halfset_comparator=_current_cs_local_comparator,
+        pose_stability_threshold=float(args.pose_stability_threshold),
+        fsc_threshold=float(args.fsc_threshold),
+        current_size_growth_factor=float(args.current_size_growth_factor),
+        mstep_chunk_size=int(args.mstep_chunk_size),
+        image_scale_corrections=image_scale_corrections,
+    )
+    elapsed_s = float(time.time() - t_loop)
+
+    iter_summaries = []
+    for rec in records:
+        rec_summary = {
+            "iteration": int(rec.iteration),
+            "current_size": int(rec.current_size),
+            "proposed_current_size": int(rec.proposed_current_size),
+            "resolution_increased": bool(rec.resolution_decision.allow_increase),
+            "gate_reasons": list(rec.resolution_decision.reasons),
+            "pose_change_fraction": float(rec.resolution_decision.pose_change_fraction),
+            "diagnostics": _jsonable(rec.diagnostics),
+        }
+        iter_summaries.append(rec_summary)
+        print(json.dumps(rec_summary, indent=2, sort_keys=True), flush=True)
+
+    final_npz = output_dir / "final_ppca_local.npz"
+
+    # Build full-N pose arrays by:
+    #   1. argsort each halfset's bucket image_indices to recover halfset-local image order
+    #   2. scattering via dataset.halfset_indices[i] into the global image-id slots
+    n_imgs_int = int(n_images)
+    full_rot = np.tile(np.eye(3, dtype=np.float32), (n_imgs_int, 1, 1))
+    full_trans = np.zeros((n_imgs_int, 2), dtype=np.float32)
+    full_rot_idx = np.zeros(n_imgs_int, dtype=np.int32)
+    full_trans_idx = np.zeros(n_imgs_int, dtype=np.int32)
+    full_rot_id = np.zeros(n_imgs_int, dtype=np.int32)
+    pose_diag = final_state.pose_diagnostics or {}
+    for half_idx, key in enumerate(("halfset0", "halfset1")):
+        diag = pose_diag.get(key, {}) or {}
+        bucket_image_indices = np.asarray(diag.get("image_indices", []), dtype=np.int64)
+        if bucket_image_indices.size == 0:
+            continue
+        inv_perm = np.argsort(bucket_image_indices).astype(np.int64)
+        rot_h = np.asarray(diag["best_rotation_matrix"], dtype=np.float32)[inv_perm]
+        trans_h = np.asarray(diag["best_translation"], dtype=np.float32)[inv_perm]
+        rot_idx_h = np.asarray(diag["best_rotation_idx"], dtype=np.int32)[inv_perm]
+        rot_id_h = np.asarray(diag.get("best_rotation_id", diag["best_rotation_idx"]), dtype=np.int32)[inv_perm]
+        trans_idx_h = np.asarray(diag["best_translation_idx"], dtype=np.int32)[inv_perm]
+        global_idx = np.asarray(dataset.halfset_indices[half_idx], dtype=np.int64)
+        n_take = min(int(global_idx.size), int(rot_h.shape[0]))
+        if n_take == 0:
+            continue
+        global_idx = global_idx[:n_take]
+        full_rot[global_idx] = rot_h[:n_take]
+        full_trans[global_idx] = trans_h[:n_take]
+        full_rot_idx[global_idx] = rot_idx_h[:n_take]
+        full_rot_id[global_idx] = rot_id_h[:n_take]
+        full_trans_idx[global_idx] = trans_idx_h[:n_take]
+
+    np.savez_compressed(
+        final_npz,
+        mu_half=np.asarray(final_state.mu_score),
+        W_half=np.asarray(final_state.W_score),
+        mu_half_set0=np.asarray(final_state.mu_half[0]),
+        mu_half_set1=np.asarray(final_state.mu_half[1]),
+        W_half_set0=np.asarray(final_state.W_half[0]),
+        W_half_set1=np.asarray(final_state.W_half[1]),
+        best_rotation_matrix=full_rot,
+        best_translation=full_trans,
+        best_rotation_idx=full_rot_idx,
+        best_rotation_id=full_rot_id,
+        best_translation_idx=full_trans_idx,
+        halfset0_image_indices=np.asarray(dataset.halfset_indices[0], dtype=np.int32),
+        halfset1_image_indices=np.asarray(dataset.halfset_indices[1], dtype=np.int32),
+    )
+
+    summary = {
+        "passed": True,
+        "mode": "halfset_fsc_local",
+        "data_star": str(args.data_star),
+        "init_npz": str(args.init_npz),
+        "n_iters": int(args.n_iters),
+        "n_images": int(n_images),
+        "q": int(q),
+        "init_current_size": int(init_cs),
+        "max_current_size": int(max_cs),
+        "fsc_threshold": float(args.fsc_threshold),
+        "current_size_growth_factor": float(args.current_size_growth_factor),
+        "pose_stability_threshold": float(args.pose_stability_threshold),
+        "iterations": iter_summaries,
+        "final_current_size": int(records[-1].current_size) if records else int(init_cs),
+        "elapsed_s": elapsed_s,
+        "output_dir": str(output_dir),
+        "final_npz": str(final_npz),
+    }
+    (output_dir / "summary.json").write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    print(json.dumps(_jsonable(summary), indent=2, sort_keys=True))
 
 
 def _candidate_rotations(
@@ -101,7 +358,9 @@ def _translations_from_source(args, simulation_info, n_images: int):
         gt_trans = np.asarray(simulation_info["trans"], dtype=np.float32)[:n_images]
         translations = np.unique(gt_trans, axis=0)
     else:
-        translations = np.asarray(get_translation_grid(float(args.offset_range_px), float(args.offset_step_px)), dtype=np.float32)
+        translations = np.asarray(
+            get_translation_grid(float(args.offset_range_px), float(args.offset_step_px)), dtype=np.float32
+        )
         if args.max_translations is not None:
             translations = translations[: int(args.max_translations)]
     return translations
@@ -137,6 +396,25 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--prior-healpix-order", type=int, default=3)
     parser.add_argument("--local-healpix-order", type=int, default=4)
+    parser.add_argument(
+        "--local-healpix-order-schedule",
+        default=None,
+        help=(
+            "Comma-separated per-iteration local HEALPix order schedule, e.g. '3,4,5'. "
+            "If shorter than --n-iters, the last value is reused. Overrides --auto-schedule."
+        ),
+    )
+    parser.add_argument(
+        "--auto-schedule",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "When on (default), build a coarse-to-fine local HEALPix order ramp from "
+            "--prior-healpix-order up to --local-healpix-order, plus a current_size ramp, "
+            "if no manual --local-healpix-order-schedule / --current-size-schedule is supplied. "
+            "An iter-N pmax_mean < 0.5 freezes schedule advancement for iter-(N+1)."
+        ),
+    )
     parser.add_argument("--sigma-rot-deg", type=float, default=5.0)
     parser.add_argument("--sigma-psi-deg", type=float, default=5.0)
     parser.add_argument("--sigma-offset-angstrom", type=float, default=3.0)
@@ -148,8 +426,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--current-size", type=int, default=64)
     parser.add_argument("--current-size-schedule", default=None)
     parser.add_argument("--freeze-mean-iters", type=int, default=0)
-    parser.add_argument("--score-W-scale", type=float, default=1.0)
-    parser.add_argument("--score-W-scale-schedule", default=None)
     parser.add_argument("--image-batch-size", type=int, default=2)
     parser.add_argument("--rotation-block-size", type=int, default=512)
     parser.add_argument("--max-hypotheses-per-microbatch", type=int, default=32768)
@@ -159,7 +435,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--mean-regularization-style", choices=("relion-tau", "variance"), default="relion-tau")
     parser.add_argument("--mean-tau2-fudge", type=float, default=1.0)
     parser.add_argument("--mean-minres-map", type=int, default=KCLASS_RELION_MINRES_MAP)
-    parser.add_argument("--postprocess-strategy", choices=("none", "mean-only", "mean-and-w-mask"), default="mean-and-w-mask")
+    parser.add_argument(
+        "--postprocess-strategy", choices=("none", "mean-only", "mean-and-w-mask"), default="mean-and-w-mask"
+    )
     parser.add_argument("--postprocess-mask-radius-px", type=float, default=None)
     parser.add_argument("--postprocess-cosine-width-px", type=float, default=3.0)
     parser.add_argument("--postprocess-grid-correct", action=argparse.BooleanOptionalAction, default=True)
@@ -174,13 +452,33 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--gt-prior-shell-average", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--gt-w-prior-divide-by-q-total", action="store_true")
     parser.add_argument("--save-mrc", action="store_true")
+    parser.add_argument(
+        "--use-halfset-fsc-schedule",
+        action="store_true",
+        help=(
+            "Run iterations through `run_local_ppca_refinement_loop` with halfset M-step "
+            "and gold-standard FSC gating. Same as the dense flag but for local search."
+        ),
+    )
+    parser.add_argument("--fsc-threshold", type=float, default=0.143)
+    parser.add_argument(
+        "--current-size-growth-factor",
+        type=float,
+        default=1.25,
+        help="Multiplicative growth factor for the halfset FSC loop's cs.",
+    )
+    parser.add_argument("--init-current-size", type=int, default=None)
+    parser.add_argument("--max-current-size", type=int, default=None)
+    parser.add_argument("--pose-stability-threshold", type=float, default=0.5)
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
     current_size_schedule = _parse_int_schedule(args.current_size_schedule, name="current_size_schedule")
-    score_W_scale_schedule = _parse_float_schedule(args.score_W_scale_schedule, name="score_W_scale_schedule")
+    local_healpix_order_schedule = _parse_int_schedule(
+        args.local_healpix_order_schedule, name="local_healpix_order_schedule"
+    )
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -205,7 +503,9 @@ def main() -> None:
     image_scale_corrections = None
     if args.image_scale_source == "simulation-info-contrast":
         if simulation_info is None or "per_image_contrast" not in simulation_info:
-            raise ValueError("--image-scale-source=simulation-info-contrast requires simulation_info['per_image_contrast']")
+            raise ValueError(
+                "--image-scale-source=simulation-info-contrast requires simulation_info['per_image_contrast']"
+            )
         image_scale_corrections = np.asarray(simulation_info["per_image_contrast"], dtype=np.float32)
         if image_scale_corrections.shape[0] < n_images:
             raise ValueError(f"per_image_contrast has {image_scale_corrections.shape[0]} entries, need {n_images}")
@@ -249,23 +549,77 @@ def main() -> None:
         mean_prior = jnp.full((half_size,), float(args.mean_prior_variance), dtype=jnp.float32)
         W_prior = jnp.full((half_size, q), float(args.W_prior_variance), dtype=jnp.float32)
 
-    local_grid_metadata = build_local_search_grid_metadata(int(args.local_healpix_order))
+    if bool(args.use_halfset_fsc_schedule):
+        return _run_local_with_halfset_fsc_schedule(
+            args=args,
+            dataset=dataset,
+            n_images=n_images,
+            mu=mu,
+            W=W,
+            q=q,
+            init_volume_domain=init_volume_domain,
+            mean_prior=mean_prior,
+            W_prior=W_prior,
+            noise_variance=noise_variance,
+            prior_rotations=prior_rotations,
+            prior_translations=prior_translations,
+            translations=translations,
+            simulation_info=simulation_info,
+            output_dir=output_dir,
+        )
+
+    # Default-on coarse-to-fine schedule for local HEALPix order and current_size,
+    # mirroring the dense script. Manual schedules from the CLI override.
+    target_local_hp = int(args.local_healpix_order)
+    if local_healpix_order_schedule is None and bool(args.auto_schedule):
+        local_healpix_order_schedule = _default_healpix_order_schedule(
+            int(args.n_iters), target_local_hp, start_order=int(args.prior_healpix_order)
+        )
+    elif local_healpix_order_schedule is None:
+        local_healpix_order_schedule = [target_local_hp] * int(args.n_iters)
+    if current_size_schedule is None and bool(args.auto_schedule):
+        current_size_schedule = _default_current_size_schedule(
+            int(args.n_iters),
+            int(args.current_size),
+            ori_size=int(dataset.volume_shape[0]),
+        )
+
+    grid_metadata_cache: dict[int, dict] = {}
+
+    def _grid_metadata_for(order: int):
+        order = int(order)
+        meta = grid_metadata_cache.get(order)
+        if meta is None:
+            meta = build_local_search_grid_metadata(order)
+            grid_metadata_cache[order] = meta
+        return meta
+
+    local_grid_metadata = _grid_metadata_for(int(local_healpix_order_schedule[0]))
     current_mu = mu
     current_W = W
     volume_domain = init_volume_domain
     final_result = None
     iter_summaries = []
     t_all = time.time()
+    prev_iter_local_hp_order: int | None = None
+    prev_iter_current_size: int | None = None
     for iter_idx in range(1, int(args.n_iters) + 1):
-        iter_current_size = _schedule_value(current_size_schedule, int(args.current_size), iter_idx - 1)
-        iter_score_W_scale = _float_schedule_value(score_W_scale_schedule, float(args.score_W_scale), iter_idx - 1)
+        iter_local_hp_order = int(_schedule_value(local_healpix_order_schedule, target_local_hp, iter_idx - 1))
+        iter_current_size = int(_schedule_value(current_size_schedule, int(args.current_size), iter_idx - 1))
+        if prev_iter_local_hp_order is None or iter_local_hp_order != prev_iter_local_hp_order:
+            local_grid_metadata = _grid_metadata_for(iter_local_hp_order)
+            print(
+                f"[schedule] iter {iter_idx}: local HEALPix order={iter_local_hp_order}  "
+                f"current_size={iter_current_size}",
+                flush=True,
+            )
         freeze_mean = iter_idx <= int(args.freeze_mean_iters)
         local_layout = build_local_hypothesis_layout(
             prior_rotations,
             None,
             np.deg2rad(float(args.sigma_rot_deg)),
             np.deg2rad(float(args.sigma_psi_deg)),
-            int(args.local_healpix_order),
+            int(iter_local_hp_order),
             translations,
             prior_translations,
             float(args.sigma_offset_angstrom),
@@ -311,7 +665,6 @@ def main() -> None:
             rotation_block_size=int(args.rotation_block_size),
             max_hypotheses_per_microbatch=int(args.max_hypotheses_per_microbatch),
             image_scale_corrections=image_scale_corrections,
-            score_W_scale=float(iter_score_W_scale),
             mstep_chunk_size=int(args.mstep_chunk_size),
             fixed_mean_half=fixed_mean_half,
         )
@@ -330,7 +683,7 @@ def main() -> None:
             mean_precision_for_penalty = None
         input_prior_penalty = _regularization_penalty(
             current_mu,
-            np.asarray(current_W) * np.asarray(iter_score_W_scale, dtype=np.float32),
+            np.asarray(current_W),
             mean_prior=mean_prior,
             W_prior=W_prior,
             volume_shape=dataset.volume_shape,
@@ -339,19 +692,28 @@ def main() -> None:
             mean_precision=mean_precision_for_penalty,
         )
 
-        best_rotation_matrix = np.asarray(result.diagnostics["best_rotation_matrix"], dtype=np.float32)
-        best_translation = np.asarray(result.diagnostics["best_translation"], dtype=np.float32)
+        # Bucketization permutes per-image fields; image_indices is the permutation.
+        # Sort all per-image diagnostics back into image (dataset) order before
+        # saving and before feeding back to the next iteration.
+        bucket_image_indices = np.asarray(result.diagnostics["image_indices"], dtype=np.int64)
+        inv_perm = np.argsort(bucket_image_indices).astype(np.int64)
+        best_rotation_matrix = np.asarray(result.diagnostics["best_rotation_matrix"], dtype=np.float32)[inv_perm]
+        best_translation = np.asarray(result.diagnostics["best_translation"], dtype=np.float32)[inv_perm]
+        best_rotation_idx_imgord = np.asarray(result.diagnostics["best_rotation_idx"])[inv_perm]
+        best_rotation_id_imgord = np.asarray(result.diagnostics["best_rotation_id"])[inv_perm]
+        best_translation_idx_imgord = np.asarray(result.diagnostics["best_translation_idx"])[inv_perm]
+        image_indices_imgord = bucket_image_indices[inv_perm]
         iter_npz = output_dir / f"iter{iter_idx:03d}.npz"
         np.savez_compressed(
             iter_npz,
             mu_half=np.asarray(result.mu_half),
             W_half=np.asarray(result.W_half),
-            best_rotation_idx=np.asarray(result.diagnostics["best_rotation_idx"]),
-            best_rotation_id=np.asarray(result.diagnostics["best_rotation_id"]),
+            best_rotation_idx=best_rotation_idx_imgord,
+            best_rotation_id=best_rotation_id_imgord,
             best_rotation_matrix=best_rotation_matrix,
-            best_translation_idx=np.asarray(result.diagnostics["best_translation_idx"]),
+            best_translation_idx=best_translation_idx_imgord,
             best_translation=best_translation,
-            image_indices=np.asarray(result.diagnostics["image_indices"]),
+            image_indices=image_indices_imgord,
             log_likelihood=np.asarray(result.diagnostics["log_likelihood"]),
             logZ_mean=np.asarray(result.diagnostics["logZ_mean"]),
             pmax_mean=np.asarray(result.diagnostics["pmax_mean"]),
@@ -362,10 +724,11 @@ def main() -> None:
             "elapsed_s": elapsed_s,
             "npz_path": iter_npz,
             "current_size": int(iter_current_size),
-            "score_W_scale": float(iter_score_W_scale),
             "mean_frozen": bool(freeze_mean),
             "local_rotation_count_min": int(np.min(local_layout.rotation_counts)) if local_layout.n_images else 0,
-            "local_rotation_count_median": float(np.median(local_layout.rotation_counts)) if local_layout.n_images else 0.0,
+            "local_rotation_count_median": float(np.median(local_layout.rotation_counts))
+            if local_layout.n_images
+            else 0.0,
             "local_rotation_count_max": int(np.max(local_layout.rotation_counts)) if local_layout.n_images else 0,
             "diagnostics": {
                 "log_likelihood": float(result.diagnostics["log_likelihood"]),
@@ -401,22 +764,26 @@ def main() -> None:
         volume_domain = "fourier_half"
         prior_rotations = best_rotation_matrix
         prior_translations = best_translation
+        prev_iter_local_hp_order = int(iter_local_hp_order)
+        prev_iter_current_size = int(iter_current_size)
         final_result = result
 
     if final_result is None:
         raise SystemExit("no iterations were run")
 
+    final_bucket_image_indices = np.asarray(final_result.diagnostics["image_indices"], dtype=np.int64)
+    final_inv_perm = np.argsort(final_bucket_image_indices).astype(np.int64)
     final_npz = output_dir / "final_ppca_local.npz"
     np.savez_compressed(
         final_npz,
         mu_half=np.asarray(final_result.mu_half),
         W_half=np.asarray(final_result.W_half),
-        best_rotation_idx=np.asarray(final_result.diagnostics["best_rotation_idx"]),
-        best_rotation_id=np.asarray(final_result.diagnostics["best_rotation_id"]),
-        best_rotation_matrix=np.asarray(final_result.diagnostics["best_rotation_matrix"]),
-        best_translation_idx=np.asarray(final_result.diagnostics["best_translation_idx"]),
-        best_translation=np.asarray(final_result.diagnostics["best_translation"]),
-        image_indices=np.asarray(final_result.diagnostics["image_indices"]),
+        best_rotation_idx=np.asarray(final_result.diagnostics["best_rotation_idx"])[final_inv_perm],
+        best_rotation_id=np.asarray(final_result.diagnostics["best_rotation_id"])[final_inv_perm],
+        best_rotation_matrix=np.asarray(final_result.diagnostics["best_rotation_matrix"])[final_inv_perm],
+        best_translation_idx=np.asarray(final_result.diagnostics["best_translation_idx"])[final_inv_perm],
+        best_translation=np.asarray(final_result.diagnostics["best_translation"])[final_inv_perm],
+        image_indices=final_bucket_image_indices[final_inv_perm],
     )
 
     written_mrcs = []
@@ -457,7 +824,6 @@ def main() -> None:
         "n_translations": int(translations.shape[0]),
         "image_scale_source": str(args.image_scale_source),
         "current_size_schedule": current_size_schedule,
-        "score_W_scale_schedule": score_W_scale_schedule,
         "freeze_mean_iters": int(args.freeze_mean_iters),
         "image_batch_size": int(args.image_batch_size),
         "rotation_block_size": int(args.rotation_block_size),

@@ -8,7 +8,6 @@ from recovar.em.ppca_refinement.postprocess import (
     postprocess_ppca_half_volumes,
 )
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -44,7 +43,6 @@ def test_ppca_postprocess_mean_background_fill_and_w_zero_mask():
         mask_radius_px=radius,
         cosine_width_px=width,
         grid_correct=False,
-        cap_W_shell_power=False,
     )
 
     mu_processed = _half_to_real(result.mu_half, volume_shape)
@@ -97,35 +95,3 @@ def test_ppca_postprocess_bandlimits_heuristic_output():
     np.testing.assert_allclose(np.asarray(result.W_half)[outside], 0.0, rtol=0.0, atol=0.0)
     assert result.diagnostics["postprocess_bandlimit_max_r"] == pytest.approx(max_r)
     assert 0.0 < result.diagnostics["postprocess_bandlimit_fraction"] < 1.0
-
-
-def test_ppca_postprocess_caps_W_shell_power_after_masking():
-    volume_shape = (8, 8, 8)
-    half_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
-    mu_half = jnp.zeros((half_size,), dtype=jnp.complex64)
-    W_half = jnp.zeros((half_size, 1), dtype=jnp.complex64)
-    shells = np.asarray(
-        ftu.get_grid_of_radial_distances_real(volume_shape, scaled=False, frequency_shift=0),
-        dtype=np.int64,
-    ).reshape(-1)
-    dc_idx = int(np.flatnonzero(shells == 0)[0])
-    W_half = W_half.at[dc_idx, 0].set(1.0 + 0.0j)
-
-    result = postprocess_ppca_half_volumes(
-        mu_half,
-        W_half,
-        volume_shape,
-        strategy="mean_and_w_mask",
-        mask_radius_px=2.0,
-        cosine_width_px=1.0,
-        grid_correct=False,
-    )
-
-    output_power_by_shell = np.bincount(
-        shells,
-        weights=np.sum(np.abs(np.asarray(result.W_half)) ** 2, axis=1),
-    )
-    assert output_power_by_shell[0] > 0.0
-    np.testing.assert_allclose(output_power_by_shell[1:], 0.0, rtol=0.0, atol=1.0e-7)
-    assert result.diagnostics["postprocess_cap_W_shell_power"] is True
-    assert result.diagnostics["postprocess_W_shell_power_scale_min"] == pytest.approx(0.0)
