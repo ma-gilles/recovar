@@ -599,54 +599,71 @@ def test_custom_cuda_does_not_deflate_legacy_budget(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Auto-trigger adaptive-n-pcs when basis term alone exceeds budget.
+# Pre-launch OOM warning when fixed allocations exceed budget.
+#
+# Earlier draft of this PR auto-enabled --adaptive-n-pcs in this case.
+# The maintainer rejected that: silently flipping user-explicit flags
+# is wrong. The planner now logs a loud WARNING and lets the run
+# proceed; if it OOMs, ``error_hints._hint_gpu_oom`` detects that the
+# predicted_peak exceeded the budget and recommends --adaptive-n-pcs
+# as the post-crash fix.
 # ---------------------------------------------------------------------------
 
 
-def test_auto_enables_adaptive_when_basis_exceeds_budget(monkeypatch):
+def test_warns_but_does_not_auto_enable_adaptive_when_oom_predicted(monkeypatch, caplog):
     """g=256 + n_pcs=200 → basis term alone is ~27 GB. At budget=20 GB the
-    run is guaranteed to OOM. Planner must auto-set adaptive without
-    waiting for the user to pass --adaptive-n-pcs."""
+    run is predicted to OOM. The planner MUST NOT silently flip
+    adaptive on; it must log a warning and keep ``n_pcs=200`` so the
+    error_hints layer can recommend the right fix when the run fails."""
+    import logging
+
     _stub_helpers(monkeypatch, gpu_total=20.0)
     _stub_preflight(monkeypatch, total=20.0, free=19.0)
     _stub_backend_custom(monkeypatch)
 
     from recovar.utils import memory_planner as mp
 
-    plan = mp.make_memory_plan(
-        command="pipeline",
-        grid_size=256,
-        n_images=1000,
-        requested_gpu_gb=20.0,
-        low_memory=False,
-        very_low_memory=False,
-        adaptive_n_pcs=False,
-        desired_n_pcs=200,
-    )
-    # Adaptive should fire and pick something well below 200.
-    assert plan.n_pcs_to_compute < 200
-    assert plan.n_pcs_to_compute >= 1
+    with caplog.at_level(logging.WARNING, logger="recovar.utils.memory_planner"):
+        plan = mp.make_memory_plan(
+            command="pipeline",
+            grid_size=256,
+            n_images=1000,
+            requested_gpu_gb=20.0,
+            low_memory=False,
+            very_low_memory=False,
+            adaptive_n_pcs=False,
+            desired_n_pcs=200,
+        )
+
+    # Adaptive must NOT have been silently enabled — n_pcs stays at 200.
+    assert plan.n_pcs_to_compute == 200
+    # A loud WARNING must have been emitted recommending --adaptive-n-pcs.
+    warning_texts = "\n".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "PRE-LAUNCH OOM PREDICTION" in warning_texts
+    assert "--adaptive-n-pcs" in warning_texts
 
 
-def test_does_not_auto_enable_adaptive_when_basis_fits(monkeypatch):
-    """Basis term safely under 50% of budget: do NOT auto-enable adaptive
-    (preserve user's explicit choice)."""
+def test_no_warning_when_fixed_allocations_fit(monkeypatch, caplog):
+    """Fixed allocations safely under 50% of budget: no warning, n_pcs unchanged."""
+    import logging
+
     _stub_helpers(monkeypatch, gpu_total=80.0)
     _stub_preflight(monkeypatch, total=80.0, free=78.0)
     _stub_backend_custom(monkeypatch)
 
     from recovar.utils import memory_planner as mp
 
-    plan = mp.make_memory_plan(
-        command="pipeline",
-        grid_size=128,
-        n_images=1000,
-        requested_gpu_gb=80.0,
-        low_memory=False,
-        very_low_memory=False,
-        adaptive_n_pcs=False,
-        desired_n_pcs=200,
-    )
-    # basis = 200 × 128³ × 8 / 1e9 = 3.36 GB, way under 50% × 80 GB = 40 GB.
-    # Adaptive must not fire; n_pcs stays at desired.
+    with caplog.at_level(logging.WARNING, logger="recovar.utils.memory_planner"):
+        plan = mp.make_memory_plan(
+            command="pipeline",
+            grid_size=128,
+            n_images=1000,
+            requested_gpu_gb=80.0,
+            low_memory=False,
+            very_low_memory=False,
+            adaptive_n_pcs=False,
+            desired_n_pcs=200,
+        )
     assert plan.n_pcs_to_compute == 200
+    warning_texts = "\n".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "PRE-LAUNCH OOM PREDICTION" not in warning_texts

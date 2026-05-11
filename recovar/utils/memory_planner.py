@@ -480,41 +480,33 @@ def make_memory_plan(
     calibration_table = calibration_table or load_calibration_table()
     cells = calibration_table.cells_by_command.get(command, []) if calibration_table is not None else []
 
-    # Effective n_pcs: adaptive mode picks from the table; otherwise we
-    # honor the caller's value verbatim.
-    # AUTO-TRIGGER adaptive when the SUM of guaranteed allocations
-    # (basis + projected_covariance LHS) would exceed the budget.
-    # These two are independent of batch sizes:
-    #   basis        = n_pcs × grid³ × 8 bytes        (PC storage)
-    #   projected_lhs = (n_pcs*(n_pcs+1)/2)² × 8 bytes (covar LHS dense
-    #                                                   matrix, float64)
-    # If their sum exceeds budget, the run is guaranteed to OOM with NO
-    # knob other than --adaptive-n-pcs or smaller grid. The
-    # projected_lhs term dominates at large n_pcs (51 GB at n=400)
-    # while basis dominates at large grid (27 GB at n=200/g=256).
-    # Auto-enabling spares the user from learning about the flag the
-    # hard way.
+    # Pre-launch WARNING when guaranteed covariance allocations would
+    # likely OOM. We do NOT silently flip on adaptive — that mutates
+    # the user's explicit choice. Instead, log the prediction and let
+    # the run proceed. If the run does OOM, ``error_hints._hint_gpu_oom``
+    # detects "predicted_peak > effective_budget" and recommends
+    # ``--adaptive-n-pcs`` as the single specific fix in the
+    # post-crash hint.
     _basis_term_gb = desired_n_pcs * (grid_size**3) * 8 / 1e9
     _packed = desired_n_pcs * (desired_n_pcs + 1) // 2
     _projected_lhs_gb = _packed * _packed * 8 / 1e9
     _fixed_allocs_gb = _basis_term_gb + _projected_lhs_gb
     if not adaptive_n_pcs and _fixed_allocs_gb > budget.effective_budget_gb * 0.50:
         logger.warning(
-            "Auto-enabling --adaptive-n-pcs: guaranteed covariance "
-            "allocations (n_pcs=%d, grid_size=%d) = basis %.2f GB + "
-            "projected_lhs %.2f GB = %.2f GB exceed 50%% of budget "
-            "(%.2f GB). Without adaptive, the run is guaranteed to OOM. "
-            "If you specifically want the n_pcs=%d path, use a larger "
-            "budget or smaller grid.",
+            "PRE-LAUNCH OOM PREDICTION: covariance fixed allocations "
+            "(n_pcs=%d, grid_size=%d) = basis %.2f GB + projected_lhs "
+            "%.2f GB = %.2f GB exceed 50%% of budget (%.2f GB). The run "
+            "will likely OOM. To prevent, add --adaptive-n-pcs (the "
+            "planner will shrink n_pcs to fit), or use a smaller grid "
+            "/ larger --gpu-budget-gb. Launching anyway because the "
+            "user did not pass --adaptive-n-pcs.",
             desired_n_pcs,
             grid_size,
             _basis_term_gb,
             _projected_lhs_gb,
             _fixed_allocs_gb,
             budget.effective_budget_gb,
-            desired_n_pcs,
         )
-        adaptive_n_pcs = True
 
     chosen_n_pcs = desired_n_pcs
     cal_status = "uncalibrated"

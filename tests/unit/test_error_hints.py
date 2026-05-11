@@ -19,7 +19,11 @@ def _ctx_with(monkeypatch, **overrides):
     return base
 
 
-def test_oom_hint_suggests_recovery_flags():
+def test_oom_hint_diagnoses_and_recommends_one_fix():
+    """Old behavior was to dump every recovery flag in one wall.
+    New behavior: diagnose the cause and recommend a SINGLE fix per
+    cause. With an empty context (no physical info, no plan), we fall
+    through to the "JAX preallocation" branch and recommend PREALLOCATE."""
     from recovar.utils import error_hints
 
     text = "XlaRuntimeError: RESOURCE_EXHAUSTED: failed to allocate 12.34 GiB"
@@ -27,10 +31,68 @@ def test_oom_hint_suggests_recovery_flags():
     assert hint is not None
     assert hint.category == "gpu_oom"
     blob = "\n".join(hint.suggestions)
-    assert "--gpu-budget-gb" in blob
+    # Fallback branch (no context): recommend PREALLOCATE=false.
+    assert "XLA_PYTHON_CLIENT_PREALLOCATE=false" in blob
+
+
+def test_oom_hint_when_gpu_occupied_recommends_switching_gpus():
+    """physical_free << physical_total → diagnose 'another process is hogging
+    the GPU' and recommend CUDA_VISIBLE_DEVICES, NOT a wall of budget knobs."""
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        physical_total_gb=80.0,
+        physical_free_gb=1.5,  # 78.5 GB consumed elsewhere
+    )
+    hint = error_hints.classify_text("XlaRuntimeError: RESOURCE_EXHAUSTED: failed to allocate 12.34 GiB", ctx)
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+    assert "another process" in hint.summary.lower() or "hogging" in hint.summary.lower()
+    blob = "\n".join(hint.suggestions)
+    assert "CUDA_VISIBLE_DEVICES" in blob
+    # Sanity: should NOT lecture about --low-memory-option in this branch.
+    assert "--low-memory-option" not in blob
+    assert "--very-low-memory-option" not in blob
+
+
+def test_oom_hint_when_planner_predicted_oom_recommends_adaptive():
+    """planner predicted_peak > effective_budget → recommend --adaptive-n-pcs."""
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        physical_total_gb=80.0,
+        physical_free_gb=78.0,  # GPU is quiet — not the conflict case
+        last_memory_plan={
+            "budget": {"effective_budget_gb": 20.0, "requested_gb": 20.0},
+            "predicted_peak_gb_total": 51.0,  # planner already warned
+        },
+    )
+    hint = error_hints.classify_text("CUDA_ERROR_OUT_OF_MEMORY", ctx)
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+    blob = "\n".join(hint.suggestions)
     assert "--adaptive-n-pcs" in blob
-    assert "--low-memory-option" in blob
-    assert "--very-low-memory-option" in blob
+    # We picked the right single recommendation, not the kitchen sink.
+    assert "CUDA_VISIBLE_DEVICES" not in blob
+
+
+def test_oom_hint_when_jax_fallback_recommends_unsetting_disable_cuda():
+    """custom_cuda_disabled=True → recommend unsetting RECOVAR_DISABLE_CUDA
+    as the single specific fix (3× memory delta documented from sweep)."""
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        backend="jax_fallback",
+        custom_cuda_disabled=True,
+        physical_total_gb=80.0,
+        physical_free_gb=78.0,
+    )
+    hint = error_hints.classify_text("CUDA_ERROR_OUT_OF_MEMORY", ctx)
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+    blob = "\n".join(hint.suggestions)
+    assert "build_custom_cuda" in blob
+    assert "RECOVAR_DISABLE_CUDA" in (blob + hint.likely_cause)
 
 
 def test_oom_under_disable_cuda_mentions_jax_fallback(monkeypatch):
