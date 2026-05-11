@@ -206,6 +206,32 @@ def _round_up_to_calibrated(
     return largest, "extrapolated"
 
 
+_COVARIANCE_WORKLOAD_CEILING_GB = {64: 7.0, 128: 40.0, 256: 55.0}
+
+
+def _covariance_workload_ceiling_gb(grid_size: int) -> float:
+    """Workload ceiling (batches + FFT + accumulators; no basis) from
+    saturation sweep 8020210 at full budget on A100 80GB / SPA /
+    n_images=2000. Linear interp / quadratic extrap for unknown grids."""
+    if grid_size in _COVARIANCE_WORKLOAD_CEILING_GB:
+        return _COVARIANCE_WORKLOAD_CEILING_GB[grid_size]
+    sizes = sorted(_COVARIANCE_WORKLOAD_CEILING_GB.keys())
+    if grid_size <= sizes[0]:
+        return _COVARIANCE_WORKLOAD_CEILING_GB[sizes[0]] * (grid_size / sizes[0]) ** 2
+    if grid_size >= sizes[-1]:
+        slope = (_COVARIANCE_WORKLOAD_CEILING_GB[sizes[-1]] - _COVARIANCE_WORKLOAD_CEILING_GB[sizes[-2]]) / (
+            sizes[-1] - sizes[-2]
+        )
+        return _COVARIANCE_WORKLOAD_CEILING_GB[sizes[-1]] + slope * (grid_size - sizes[-1])
+    for lo, hi in zip(sizes[:-1], sizes[1:]):
+        if lo <= grid_size <= hi:
+            t = (grid_size - lo) / (hi - lo)
+            return _COVARIANCE_WORKLOAD_CEILING_GB[lo] + t * (
+                _COVARIANCE_WORKLOAD_CEILING_GB[hi] - _COVARIANCE_WORKLOAD_CEILING_GB[lo]
+            )
+    return _COVARIANCE_WORKLOAD_CEILING_GB[128]
+
+
 def _adaptive_n_pcs_formula_fallback(*, grid_size: int, effective_budget_gb: float, desired_n_pcs: int) -> int:
     """Heuristic n_pcs choice when no calibration cells are available.
 
@@ -219,6 +245,11 @@ def _adaptive_n_pcs_formula_fallback(*, grid_size: int, effective_budget_gb: flo
     Without this fallback ``run_test_dataset --adaptive-n-pcs`` is a
     no-op when the calibration JSON is absent — exactly the regression
     the smoke test exists to catch.
+
+    Updated 2026-05-11: replaced the legacy ``(75 / 200**4) × n_pcs**4``
+    term (which over-estimated peak by ~2× at grid=128 per saturation
+    sweep 8020210) with an empirical workload-ceiling term. See
+    ``_covariance_workload_ceiling_gb`` for the data source.
     """
     if grid_size < 1 or effective_budget_gb <= 0:
         return desired_n_pcs
@@ -226,11 +257,11 @@ def _adaptive_n_pcs_formula_fallback(*, grid_size: int, effective_budget_gb: flo
     volume_size = grid_size**3
     dtype_size = 8  # complex64
     available = effective_budget_gb * 0.7
-    base_coef = 75.0 / (200.0**4)  # base scales as n_pcs**4
-    basis_coef = volume_size * dtype_size / 1e9  # basis scales linearly
+    basis_coef = volume_size * dtype_size / 1e9  # basis scales linearly with n_pcs
+    workload_gb = min(0.7 * effective_budget_gb, _covariance_workload_ceiling_gb(grid_size))
 
     for n_pcs in range(desired_n_pcs, 0, -1):
-        if base_coef * (n_pcs**4) + basis_coef * n_pcs <= available:
+        if workload_gb + basis_coef * n_pcs <= available:
             return n_pcs
     return min(desired_n_pcs, 50)
 
