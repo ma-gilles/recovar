@@ -12,13 +12,16 @@ from recovar.em.dense_single_volume.em_engine import (
     _pad_dense_big_jit_image_axis,
     _relion_image_correction_factors,
 )
+from recovar.em.dense_single_volume.helpers import projection as projection_helpers
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
 )
-from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
 from recovar.em.dense_single_volume.helpers.half_spectrum import make_relion_noise_shell_indices_half
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_projections_block as _compute_projections_block,
 )
 from recovar.em.dense_single_volume.helpers.scoring import (
@@ -29,8 +32,8 @@ from recovar.em.dense_single_volume.helpers.scoring import (
     _m_step_block_compute,
     _merge_block_logsumexp,
     _update_logsumexp,
+    _winner_take_all_probs_for_block,
 )
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
 from recovar.em.dense_single_volume.local_debug import (
     DensePerPoseScoreDumpRequest,
     maybe_write_dense_per_pose_score_dump,
@@ -421,7 +424,8 @@ def test_pad_dense_big_jit_image_axis_preserves_ctf_rows():
 @pytest.mark.parametrize(
     ("kwargs", "reason"),
     [
-        ({"relion_firstiter_winner_take_all": True}, "winner_take_all"),
+        # winner_take_all is supported in big-JIT; it must NOT trigger a bailout.
+        ({"relion_firstiter_winner_take_all": True}, None),
         ({"accumulate_noise": True, "noise_split_diagnostics_enabled": True}, "noise_split_diagnostics"),
         ({"dense_noise_component_dump_enabled": True}, "dense_noise_component_dump"),
         ({"per_pose_debug_dump_enabled": True}, "per_pose_debug_dump"),
@@ -631,6 +635,183 @@ def test_dense_big_jit_noise_matches_dense_primitives(use_window, current_size):
         np.asarray(ref_offset),
         rtol=1e-6,
         atol=1e-6,
+    )
+
+
+def test_dense_big_jit_winner_take_all_matches_one_hot_reference():
+    """Big-JIT WTA path must match `_winner_take_all_probs_for_block` exactly.
+
+    Pins K-class iter-1 firstiter_cc parity: the dense big-JIT bucket is
+    expected to emit one-hot pose weights at the global argmax per image
+    and zero contribution for images whose winner sits outside the bucket.
+    """
+    s = _inputs()
+    scores = _reference_scores(s)
+    flat_scores = scores.reshape(N_IMAGES, -1)
+    best_score = jnp.max(flat_scores, axis=1)
+    best_argmax = jnp.argmax(flat_scores, axis=1).astype(jnp.int32)
+
+    # Reference probs via the validated helper.
+    ref_probs = _winner_take_all_probs_for_block(
+        best_argmax,
+        0,  # single-bucket test: block_r0 = 0
+        N_ROT,
+        N_ROT,
+        N_TRANS,
+        scores.real.dtype,
+    )
+    ref_P = ref_probs.swapaxes(0, 1).reshape(N_ROT, N_IMAGES * N_TRANS)
+    ref_summed_half = ref_P @ s["shifted_recon_half"]
+    ref_ctf_probs_half = jnp.sum(ref_probs, axis=-1).T @ s["ctf2_over_nv_recon_half"]
+    ref_Ft_y = _adjoint_slice_volume_half(
+        ref_summed_half,
+        s["rotations"],
+        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+        IMAGE_SHAPE,
+        VOLUME_SHAPE,
+        "linear_interp",
+        True,
+    )
+    ref_Ft_ctf = _adjoint_slice_volume_half(
+        ref_ctf_probs_half,
+        s["rotations"],
+        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+        IMAGE_SHAPE,
+        VOLUME_SHAPE,
+        "linear_interp",
+        True,
+    )
+
+    result = run_dense_bucket_big_jit(
+        s["shifted_score_half"],
+        s["batch_norm"],
+        s["score_weight_half"],
+        s["shifted_recon_half"],
+        s["ctf2_over_nv_recon_half"],
+        s["mean_for_proj"],
+        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+        s["rotations"],
+        s["half_weights"],
+        s["rotation_log_prior"],
+        s["translation_log_prior"],
+        s["candidate_mask"],
+        s["valid_rotation_mask"],
+        jnp.ones(N_IMAGES, dtype=bool),
+        jnp.zeros(N_IMAGES, dtype=jnp.float32),
+        jnp.arange(N_HALF, dtype=jnp.int32),
+        jnp.arange(N_HALF, dtype=jnp.int32),
+        None,
+        None,
+        None,
+        None,
+        best_argmax,
+        best_score,
+        jnp.asarray(0, dtype=jnp.int32),
+        score_mode="gaussian",
+        zero_dc_for_scoring=False,
+        use_window=False,
+        use_float64_scoring=False,
+        use_float64_normalization=True,
+        run_mstep=True,
+        winner_take_all=True,
+        image_shape=IMAGE_SHAPE,
+        proj_volume_shape=VOLUME_SHAPE,
+        recon_volume_shape=VOLUME_SHAPE,
+        disc_type="linear_interp",
+        projection_max_r="auto",
+        backprojection_max_r="auto",
+        disable_adjoint_y=False,
+        disable_adjoint_ctf=False,
+        accumulate_noise=False,
+        return_noise_split=False,
+        n_shells=0,
+    )
+
+    # Each image contributes 1.0 of probability mass (one-hot at the winner).
+    np.testing.assert_allclose(
+        np.asarray(jnp.sum(result.probs_sum_t, axis=-1)),
+        np.ones(N_IMAGES, dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        np.asarray(result.max_posterior),
+        np.ones(N_IMAGES, dtype=np.float32),
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(np.asarray(result.Ft_y), np.asarray(ref_Ft_y), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(result.Ft_ctf), np.asarray(ref_Ft_ctf), rtol=1e-6, atol=1e-6)
+
+
+def test_dense_big_jit_winner_take_all_skips_invalid_images():
+    """WTA path must zero out images whose best score is -inf (lost class)."""
+    s = _inputs()
+    scores = _reference_scores(s)
+    flat_scores = scores.reshape(N_IMAGES, -1)
+    best_argmax = jnp.argmax(flat_scores, axis=1).astype(jnp.int32)
+    # Mark image 1's winner as -inf (e.g. K-class adaptive 2-pass losing class).
+    best_score = jnp.array([float(jnp.max(flat_scores, axis=1)[0]), -jnp.inf], dtype=jnp.float32)
+
+    result = run_dense_bucket_big_jit(
+        s["shifted_score_half"],
+        s["batch_norm"],
+        s["score_weight_half"],
+        s["shifted_recon_half"],
+        s["ctf2_over_nv_recon_half"],
+        s["mean_for_proj"],
+        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+        s["rotations"],
+        s["half_weights"],
+        s["rotation_log_prior"],
+        s["translation_log_prior"],
+        s["candidate_mask"],
+        s["valid_rotation_mask"],
+        jnp.ones(N_IMAGES, dtype=bool),
+        jnp.zeros(N_IMAGES, dtype=jnp.float32),
+        jnp.arange(N_HALF, dtype=jnp.int32),
+        jnp.arange(N_HALF, dtype=jnp.int32),
+        None,
+        None,
+        None,
+        None,
+        best_argmax,
+        best_score,
+        jnp.asarray(0, dtype=jnp.int32),
+        score_mode="gaussian",
+        zero_dc_for_scoring=False,
+        use_window=False,
+        use_float64_scoring=False,
+        use_float64_normalization=True,
+        run_mstep=True,
+        winner_take_all=True,
+        image_shape=IMAGE_SHAPE,
+        proj_volume_shape=VOLUME_SHAPE,
+        recon_volume_shape=VOLUME_SHAPE,
+        disc_type="linear_interp",
+        projection_max_r="auto",
+        backprojection_max_r="auto",
+        disable_adjoint_y=False,
+        disable_adjoint_ctf=False,
+        accumulate_noise=False,
+        return_noise_split=False,
+        n_shells=0,
+    )
+
+    # Image 0 contributes 1.0 of weight, image 1 contributes 0.
+    np.testing.assert_allclose(
+        np.asarray(jnp.sum(result.probs_sum_t, axis=-1)),
+        np.array([1.0, 0.0], dtype=np.float32),
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(result.max_posterior),
+        np.array([1.0, 0.0], dtype=np.float32),
+        rtol=0.0,
+        atol=0.0,
     )
 
 

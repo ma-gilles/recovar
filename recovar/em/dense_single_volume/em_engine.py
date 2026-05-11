@@ -153,8 +153,7 @@ def _dense_big_jit_disabled_reason(
 ) -> str | None:
     """Return the dense big-JIT fallback reason, or ``None`` if eligible."""
 
-    if relion_firstiter_winner_take_all:
-        return "winner_take_all"
+    del relion_firstiter_winner_take_all  # WTA is supported in big-JIT now
     if accumulate_noise and noise_split_diagnostics_enabled:
         return "noise_split_diagnostics"
     if dense_noise_component_dump_enabled:
@@ -361,6 +360,9 @@ class _DenseBigJitBatchRunner:
         noise_variance_half=None,
         shell_indices_noise=None,
         translation_sqdist_ang=None,
+        winner_take_all: bool = False,
+        wta_argmax=None,
+        wta_best_score=None,
     ):
         (
             rotation_prior_block,
@@ -391,12 +393,16 @@ class _DenseBigJitBatchRunner:
             noise_variance_half,
             shell_indices_noise,
             translation_sqdist_ang,
+            wta_argmax,
+            wta_best_score,
+            jnp.asarray(block.r0, dtype=jnp.int32),
             score_mode=self.score_mode,
             zero_dc_for_scoring=self.zero_dc_for_scoring,
             use_window=self.use_window,
             use_float64_scoring=self.use_float64_scoring,
             use_float64_normalization=True,
             run_mstep=run_mstep,
+            winner_take_all=winner_take_all,
             image_shape=self.image_shape,
             proj_volume_shape=self.proj_volume_shape,
             recon_volume_shape=self.recon_volume_shape,
@@ -1324,6 +1330,14 @@ def run_em(
                     dense_result.block_max,
                     dense_result.block_sum_exp,
                 )
+                if relion_firstiter_winner_take_all:
+                    improved = dense_result.block_best > best_score_pass1
+                    best_score_pass1 = jnp.where(improved, dense_result.block_best, best_score_pass1)
+                    best_argmax_pass1 = jnp.where(
+                        improved,
+                        dense_result.block_argmax + block.r0 * n_trans,
+                        best_argmax_pass1,
+                    )
                 if block_max_per_image is not None:
                     block_max_per_image.append(dense_result.block_best)
                     block_pose_counts.append(block.actual_rot * n_trans)
@@ -1563,6 +1577,9 @@ def run_em(
                         if translation_sqdist_ang is not None
                         else jnp.zeros((batch_size, n_trans), dtype=jnp.float32)
                     ),
+                    winner_take_all=relion_firstiter_winner_take_all,
+                    wta_argmax=(best_argmax_pass1 if relion_firstiter_winner_take_all else None),
+                    wta_best_score=(best_score_pass1 if relion_firstiter_winner_take_all else None),
                 )
                 Ft_y = dense_result.Ft_y
                 Ft_ctf = dense_result.Ft_ctf

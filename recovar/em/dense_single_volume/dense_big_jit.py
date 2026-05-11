@@ -211,6 +211,53 @@ def _mstep_half_sums(
     return probs, probs_sum_t, summed_half, ctf_probs_half, block_best, block_argmax, max_posterior
 
 
+def _mstep_half_sums_wta(
+    shifted_recon_half,
+    ctf2_over_nv_recon_half,
+    scores,
+    valid_image_mask,
+    *,
+    wta_argmax,
+    wta_best_score,
+    block_r0,
+):
+    """Winner-take-all M-step: one-hot probs anchored on the global per-image argmax.
+
+    ``wta_argmax`` is the global flat index ``rot * n_trans + trans`` over the
+    full grid; ``block_r0`` is this block's first global rotation index (runtime
+    scalar). Images whose winner falls outside ``[r0, r0 + rotation_block_size)``
+    contribute zero, matching RELION's ``--firstiter_cc`` binarization
+    (ml_optimiser.cpp:9181-9207). Padded rotations within a block are masked to
+    -inf upstream so they never claim the global argmax.
+    """
+    batch_size = scores.shape[0]
+    rot_block_size = scores.shape[1]
+    n_trans = scores.shape[2]
+    valid_image = jnp.isfinite(wta_best_score) & valid_image_mask
+    winning_rot = wta_argmax // n_trans
+    winning_trans = wta_argmax % n_trans
+    in_block = (winning_rot >= block_r0) & (winning_rot < (block_r0 + rot_block_size))
+    local_rot = jnp.clip(winning_rot - block_r0, 0, rot_block_size - 1)
+    flat_local = local_rot * n_trans + winning_trans
+    probs = jax.nn.one_hot(
+        flat_local,
+        rot_block_size * n_trans,
+        dtype=scores.real.dtype,
+    ).reshape(batch_size, rot_block_size, n_trans)
+    probs = probs * (in_block & valid_image)[:, None, None].astype(probs.dtype)
+    P = probs.swapaxes(0, 1).reshape(rot_block_size, batch_size * n_trans)
+    summed_half = P @ shifted_recon_half
+    probs_sum_t = jnp.sum(probs, axis=-1)
+    ctf_probs_half = probs_sum_t.T @ ctf2_over_nv_recon_half
+    flat_scores = scores.reshape(batch_size, -1)
+    block_best = jnp.where(valid_image_mask, jnp.max(flat_scores, axis=1), -jnp.inf)
+    block_argmax = jnp.where(valid_image_mask, jnp.argmax(flat_scores, axis=1), 0)
+    # max_posterior is 1.0 for images whose winner sits in this block; the
+    # caller's streaming max across blocks then yields 1.0 globally.
+    max_posterior = (valid_image & in_block).astype(scores.real.dtype)
+    return probs, probs_sum_t, summed_half, ctf_probs_half, block_best, block_argmax, max_posterior
+
+
 def _batch_adjoint_dense_slices(
     slices,
     volumes,
@@ -364,6 +411,7 @@ def _noise_half_sums(
         "use_float64_scoring",
         "use_float64_normalization",
         "run_mstep",
+        "winner_take_all",
         "image_shape",
         "proj_volume_shape",
         "recon_volume_shape",
@@ -401,6 +449,9 @@ def run_dense_bucket_big_jit(
     noise_variance_half=None,
     shell_indices_noise=None,
     translation_sqdist_ang=None,
+    wta_argmax=None,
+    wta_best_score=None,
+    wta_block_r0=None,
     *,
     score_mode: str = "gaussian",
     zero_dc_for_scoring: bool = True,
@@ -408,6 +459,7 @@ def run_dense_bucket_big_jit(
     use_float64_scoring: bool = False,
     use_float64_normalization: bool = True,
     run_mstep: bool = True,
+    winner_take_all: bool = False,
     image_shape,
     proj_volume_shape,
     recon_volume_shape,
@@ -505,21 +557,40 @@ def run_dense_bucket_big_jit(
     noise_sigma2_offset = jnp.asarray(0.0, dtype=jnp.float32)
 
     if run_mstep:
-        (
-            probs,
-            probs_sum_t,
-            summed_half,
-            ctf_probs_half,
-            block_best,
-            block_argmax,
-            max_posterior,
-        ) = _mstep_half_sums(
-            bucket_view.shifted_recon,
-            bucket_view.ctf2_over_nv_recon,
-            scores,
-            log_Z,
-            valid_image_mask.astype(bool),
-        )
+        if winner_take_all:
+            (
+                probs,
+                probs_sum_t,
+                summed_half,
+                ctf_probs_half,
+                block_best,
+                block_argmax,
+                max_posterior,
+            ) = _mstep_half_sums_wta(
+                bucket_view.shifted_recon,
+                bucket_view.ctf2_over_nv_recon,
+                scores,
+                valid_image_mask.astype(bool),
+                wta_argmax=wta_argmax,
+                wta_best_score=wta_best_score,
+                block_r0=wta_block_r0,
+            )
+        else:
+            (
+                probs,
+                probs_sum_t,
+                summed_half,
+                ctf_probs_half,
+                block_best,
+                block_argmax,
+                max_posterior,
+            ) = _mstep_half_sums(
+                bucket_view.shifted_recon,
+                bucket_view.ctf2_over_nv_recon,
+                scores,
+                log_Z,
+                valid_image_mask.astype(bool),
+            )
         if accumulate_noise:
             if use_window:
                 shifted_noise = shifted_noise_half[:, recon_window_indices]
