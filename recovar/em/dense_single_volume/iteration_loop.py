@@ -3516,6 +3516,7 @@ def _run_relion_iteration_loop(
                             float(state.translation_step),
                             random_perturbation,
                         )
+                        _rot_pmap_for_collapse = _rot_pmap_2954
                         k_class_result = run_dense_k_class_em_adaptive(
                             experiment_datasets[k],
                             means[k],
@@ -3562,13 +3563,31 @@ def _run_relion_iteration_loop(
                         k_class_result.class_posterior_sums,
                         dtype=np.float64,
                     )
-                    class_rotation_posterior_per_half[k] = np.stack(
-                        [
-                            np.asarray(stats.rotation_posterior_sums, dtype=np.float64)
-                            for stats in k_class_result.per_class_stats
-                        ],
-                        axis=0,
-                    )
+                    # Collapse fine-grid rotation posteriors to coarse via the parent
+                    # map when iter-1 firstiter_cc routes through the adaptive 2-pass
+                    # engine with adaptive_oversampling > 0. Downstream
+                    # _combined_class_direction_prior_from_halves expects the coarse-grid
+                    # shape (n_rot_coarse,).
+                    _n_rot_coarse_for_stats = int(effective_rotations.shape[0])
+                    _per_class_rot_post_coarse = []
+                    for _stats in k_class_result.per_class_stats:
+                        _rot_post = np.asarray(_stats.rotation_posterior_sums, dtype=np.float64)
+                        if _rot_post.shape[0] == _n_rot_coarse_for_stats:
+                            _per_class_rot_post_coarse.append(_rot_post)
+                        elif relion_firstiter_cc_this_iter and adaptive_os_local > 0:
+                            _coarse_post = np.zeros(_n_rot_coarse_for_stats, dtype=np.float64)
+                            np.add.at(
+                                _coarse_post,
+                                np.asarray(_rot_pmap_for_collapse, dtype=np.int64),
+                                _rot_post,
+                            )
+                            _per_class_rot_post_coarse.append(_coarse_post)
+                        else:
+                            raise RuntimeError(
+                                f"Unexpected K-class rotation_posterior_sums shape {_rot_post.shape}; "
+                                f"expected ({_n_rot_coarse_for_stats},)"
+                            )
+                    class_rotation_posterior_per_half[k] = np.stack(_per_class_rot_post_coarse, axis=0)
                     if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
                         raise RuntimeError("Dense K-class path did not return best pose details")
                     best_pose_rotations[k] = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
@@ -3681,6 +3700,7 @@ def _run_relion_iteration_loop(
                             float(state.translation_step),
                             random_perturbation,
                         )
+                        _rot_pmap_for_collapse = _rot_pmap_3645
                         k_class_result = run_dense_k_class_em_adaptive(
                             experiment_datasets[k],
                             means[k],
@@ -3725,13 +3745,31 @@ def _run_relion_iteration_loop(
                         k_class_result.class_posterior_sums,
                         dtype=np.float64,
                     )
-                    class_rotation_posterior_per_half[k] = np.stack(
-                        [
-                            np.asarray(stats.rotation_posterior_sums, dtype=np.float64)
-                            for stats in k_class_result.per_class_stats
-                        ],
-                        axis=0,
-                    )
+                    # Collapse fine-grid rotation posteriors to coarse via the parent
+                    # map when iter-1 firstiter_cc routes through the adaptive 2-pass
+                    # engine with adaptive_oversampling > 0. Downstream
+                    # _combined_class_direction_prior_from_halves expects the coarse-grid
+                    # shape (n_rot_coarse,).
+                    _n_rot_coarse_for_stats = int(effective_rotations.shape[0])
+                    _per_class_rot_post_coarse = []
+                    for _stats in k_class_result.per_class_stats:
+                        _rot_post = np.asarray(_stats.rotation_posterior_sums, dtype=np.float64)
+                        if _rot_post.shape[0] == _n_rot_coarse_for_stats:
+                            _per_class_rot_post_coarse.append(_rot_post)
+                        elif relion_firstiter_cc_this_iter and adaptive_os_local > 0:
+                            _coarse_post = np.zeros(_n_rot_coarse_for_stats, dtype=np.float64)
+                            np.add.at(
+                                _coarse_post,
+                                np.asarray(_rot_pmap_for_collapse, dtype=np.int64),
+                                _rot_post,
+                            )
+                            _per_class_rot_post_coarse.append(_coarse_post)
+                        else:
+                            raise RuntimeError(
+                                f"Unexpected K-class rotation_posterior_sums shape {_rot_post.shape}; "
+                                f"expected ({_n_rot_coarse_for_stats},)"
+                            )
+                    class_rotation_posterior_per_half[k] = np.stack(_per_class_rot_post_coarse, axis=0)
                     if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
                         raise RuntimeError("Dense K-class path did not return best pose details")
                     best_pose_rotations[k] = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
