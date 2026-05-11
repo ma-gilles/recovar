@@ -1024,7 +1024,16 @@ def _dense_estep_config(
         "relion_firstiter_score_mode": "gaussian",
         "image_pre_shifts": np.asarray(image_pre_shifts, dtype=np.float32),
         "translation_prior_centers": relion_sigma_offset_prior_center(translation_offsets),
-        "sparse_pass2": int(sampling_plan.oversampling) > 0,
+        # ``sparse_pass2`` routes through the local-search engine, whose
+        # batched cuFFT plan currently fails at large box sizes (256² with
+        # batch_count>=32 → CUFFT_ALLOC_FAILED on 80GB GPUs at iter-2+).
+        # Set ``RECOVAR_DISABLE_SPARSE_PASS2=1`` to fall back to the dense
+        # path even when oversampling > 0 so InitialModel can run at large
+        # boxes until the local-engine FFT plan workspace is fixed.
+        "sparse_pass2": (
+            int(sampling_plan.oversampling) > 0
+            and os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in ("1", "true", "TRUE")
+        ),
     }
     if int(sampling_plan.oversampling) > 0:
         engine_kwargs.update(

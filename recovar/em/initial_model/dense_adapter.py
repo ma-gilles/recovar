@@ -233,15 +233,30 @@ def _engine_kwargs_for_image_indices(
 
 
 def _dense_run_em_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Drop InitialModel-only kwargs unsupported by the dense run_em wrapper."""
+    """Drop InitialModel-only kwargs unsupported by the dense run_em wrapper.
+
+    Also drops kwargs that ``run_dense_k_class_em`` controls directly (it
+    raises if any of these are passed through). Those are valid for the
+    local/sparse pass-2 engine but get rejected on the dense path — they
+    show up in the dense kwargs when ``RECOVAR_DISABLE_SPARSE_PASS2=1``
+    routes a sparse-pass2 setup to the dense engine.
+    """
 
     out = dict(kwargs)
     for name in (
+        # InitialModel-only kwargs the dense run_em wrapper doesn't accept.
         "reconstruct_with_masked_images",
         "recon_square_window",
         "recon_exact_radius",
         "reconstruction_subtract_projected_reference",
         "relion_projector_shape",
+        # Sparse/local engine kwargs that run_dense_k_class_em rejects.
+        "return_profile",
+        "return_best_pose_details",
+        "return_stats",
+        "disable_adjoint_y",
+        "disable_adjoint_ctf",
+        "normalization_log_evidence",
     ):
         out.pop(name, None)
     return out
@@ -1399,7 +1414,7 @@ def run_dense_initial_model_estep(
             reconstruction_group_count=reconstruction_group_count,
             accumulate_noise=True,
             **_dense_run_em_kwargs(
-                _engine_kwargs_for_image_indices(
+                _group_local_kwargs(
                     engine_kwargs,
                     packed_image_indices,
                     n_images=int(experiment_dataset.n_images),
@@ -1439,7 +1454,7 @@ def run_dense_initial_model_estep(
             image_indices=image_indices,
             accumulate_noise=True,
             **_dense_run_em_kwargs(
-                _engine_kwargs_for_image_indices(
+                _group_local_kwargs(
                     engine_kwargs,
                     image_indices,
                     n_images=int(experiment_dataset.n_images),
