@@ -156,19 +156,30 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
                 return _WORKLOAD_CEILING_GB[lo] + t * (_WORKLOAD_CEILING_GB[hi] - _WORKLOAD_CEILING_GB[lo])
         return _WORKLOAD_CEILING_GB[128]  # unreachable
 
-    def _estimate_peak_gb(n_pcs_val: int, g: int, budget_gb: float) -> tuple[float, float, float]:
-        """Returns (basis_gb, workload_gb, total_gb)."""
+    def _estimate_peak_gb(n_pcs_val: int, g: int, budget_gb: float) -> tuple[float, float, float, float]:
+        """Returns (basis_gb, projected_lhs_gb, workload_gb, total_gb).
+
+        Three terms:
+          - basis: storage of the PCs themselves (n_pcs × grid³ × 8 B)
+          - projected_lhs: the dense (n_pcs*(n_pcs+1)/2)² covariance
+            LHS matrix in compute_projected_covariance, dtype_real=float64
+            since ``jax_enable_x64`` is on. ≈ n_pcs⁴ / 2 elements × 8 B.
+          - workload: batches + FFT + accumulators (empirical, ≤ ceiling).
+        """
         basis_gb = n_pcs_val * (g**3) * 8 / 1e9
+        # Packed symmetric matrix size: n*(n+1)/2. Squared then × 8 bytes (float64).
+        packed = n_pcs_val * (n_pcs_val + 1) // 2
+        projected_lhs_gb = packed * packed * 8 / 1e9
         ceiling = _workload_ceiling(g)
         workload_gb = min(0.7 * budget_gb, ceiling)
-        return basis_gb, workload_gb, basis_gb + workload_gb
+        return basis_gb, projected_lhs_gb, workload_gb, basis_gb + projected_lhs_gb + workload_gb
 
     if adaptive_n_pcs and grid_size is not None:
         available_memory_gb = gpu_memory * 0.7
 
         n_pcs = 200
         for n_pcs in range(200, 0, -1):
-            basis_memory, base_memory, total = _estimate_peak_gb(n_pcs, grid_size, gpu_memory)
+            basis_memory, projected_lhs_gb, workload_gb, total = _estimate_peak_gb(n_pcs, grid_size, gpu_memory)
             if total <= available_memory_gb:
                 break
         else:
@@ -176,29 +187,35 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
 
         logger.info(
             "Adaptive n_pcs: using %s PCs for covariance computation "
-            "(GPU memory: %.1f GB, grid_size: %s, estimated peak: %.1f GB = basis %.2f + workload %.2f)",
+            "(GPU memory: %.1f GB, grid_size: %s, estimated peak: %.1f GB = "
+            "basis %.2f + projected_lhs %.2f + workload %.2f)",
             n_pcs,
             gpu_memory,
             grid_size,
             total,
             basis_memory,
-            base_memory,
+            projected_lhs_gb,
+            workload_gb,
         )
     else:
         n_pcs = 200
 
         # Estimate memory usage so we can warn if it might OOM
         if grid_size is not None:
-            basis_memory_gb, workload_memory_gb, total_memory_gb = _estimate_peak_gb(n_pcs, grid_size, gpu_memory)
+            basis_memory_gb, projected_lhs_gb, workload_memory_gb, total_memory_gb = _estimate_peak_gb(
+                n_pcs, grid_size, gpu_memory
+            )
             logger.info(
                 "Using %s PCs for covariance computation "
-                "(GPU memory: %.1f GB, grid_size: %s, estimated peak: %.1f GB = basis %.2f + workload %.2f; "
-                "empirical from saturation sweep 8020210)",
+                "(GPU memory: %.1f GB, grid_size: %s, estimated peak: %.1f GB = "
+                "basis %.2f + projected_lhs %.2f + workload %.2f; empirical from sweep 8020210 + "
+                "first-principles for projected_lhs)",
                 n_pcs,
                 gpu_memory,
                 grid_size,
                 total_memory_gb,
                 basis_memory_gb,
+                projected_lhs_gb,
                 workload_memory_gb,
             )
             if total_memory_gb > gpu_memory * 0.8:

@@ -246,10 +246,22 @@ def _adaptive_n_pcs_formula_fallback(*, grid_size: int, effective_budget_gb: flo
     no-op when the calibration JSON is absent — exactly the regression
     the smoke test exists to catch.
 
-    Updated 2026-05-11: replaced the legacy ``(75 / 200**4) × n_pcs**4``
-    term (which over-estimated peak by ~2× at grid=128 per saturation
-    sweep 8020210) with an empirical workload-ceiling term. See
-    ``_covariance_workload_ceiling_gb`` for the data source.
+    Updated 2026-05-11 (two passes):
+
+      Pass 1: replaced the legacy ``(75 / 200**4) × n_pcs**4`` term
+      (which over-estimated peak by ~23× at n=200 — predicted 75 GB
+      vs ~3.2 GB actual) with an empirical workload-ceiling term.
+
+      Pass 2: restored the n_pcs⁴ term with a CORRECT coefficient
+      from first principles. ``compute_projected_covariance`` builds
+      a dense LHS matrix of shape (P, P) where P = n_pcs*(n_pcs+1)/2,
+      in dtype_real (float64 because jax_enable_x64 is on). Size =
+      P² × 8 bytes ≈ 2e-9 × n_pcs⁴ GB. At n=200: 3.2 GB. At n=400:
+      51 GB. The legacy 75-GB coefficient was 23× too large but the
+      n_pcs⁴ SHAPE was correct.
+
+    See ``_covariance_workload_ceiling_gb`` for the workload data
+    source (saturation sweep 8020210).
     """
     if grid_size < 1 or effective_budget_gb <= 0:
         return desired_n_pcs
@@ -257,11 +269,13 @@ def _adaptive_n_pcs_formula_fallback(*, grid_size: int, effective_budget_gb: flo
     volume_size = grid_size**3
     dtype_size = 8  # complex64
     available = effective_budget_gb * 0.7
-    basis_coef = volume_size * dtype_size / 1e9  # basis scales linearly with n_pcs
+    basis_coef = volume_size * dtype_size / 1e9  # basis = n_pcs × grid³ × 8 / 1e9
     workload_gb = min(0.7 * effective_budget_gb, _covariance_workload_ceiling_gb(grid_size))
 
     for n_pcs in range(desired_n_pcs, 0, -1):
-        if workload_gb + basis_coef * n_pcs <= available:
+        packed = n_pcs * (n_pcs + 1) // 2
+        projected_lhs_gb = packed * packed * 8 / 1e9  # (P, P) × 8 bytes
+        if workload_gb + basis_coef * n_pcs + projected_lhs_gb <= available:
             return n_pcs
     return min(desired_n_pcs, 50)
 
@@ -468,24 +482,35 @@ def make_memory_plan(
 
     # Effective n_pcs: adaptive mode picks from the table; otherwise we
     # honor the caller's value verbatim.
-    # AUTO-TRIGGER adaptive when the covariance basis term ALONE would
-    # exceed the budget. This is independent of batch sizes — basis is
-    # n_pcs × grid³ × 8 bytes, allocated once and held throughout
-    # covariance estimation. If that exceeds budget, the run is
-    # guaranteed to OOM with NO knob the user could turn other than
-    # --adaptive-n-pcs or smaller grid. Auto-enabling avoids the
-    # "user runs pipeline, OOMs, has to learn about the flag" trap.
+    # AUTO-TRIGGER adaptive when the SUM of guaranteed allocations
+    # (basis + projected_covariance LHS) would exceed the budget.
+    # These two are independent of batch sizes:
+    #   basis        = n_pcs × grid³ × 8 bytes        (PC storage)
+    #   projected_lhs = (n_pcs*(n_pcs+1)/2)² × 8 bytes (covar LHS dense
+    #                                                   matrix, float64)
+    # If their sum exceeds budget, the run is guaranteed to OOM with NO
+    # knob other than --adaptive-n-pcs or smaller grid. The
+    # projected_lhs term dominates at large n_pcs (51 GB at n=400)
+    # while basis dominates at large grid (27 GB at n=200/g=256).
+    # Auto-enabling spares the user from learning about the flag the
+    # hard way.
     _basis_term_gb = desired_n_pcs * (grid_size**3) * 8 / 1e9
-    if not adaptive_n_pcs and _basis_term_gb > budget.effective_budget_gb * 0.50:
+    _packed = desired_n_pcs * (desired_n_pcs + 1) // 2
+    _projected_lhs_gb = _packed * _packed * 8 / 1e9
+    _fixed_allocs_gb = _basis_term_gb + _projected_lhs_gb
+    if not adaptive_n_pcs and _fixed_allocs_gb > budget.effective_budget_gb * 0.50:
         logger.warning(
-            "Auto-enabling --adaptive-n-pcs: covariance basis term alone "
-            "(%d PCs × grid_size=%d) = %.2f GB exceeds 50%% of budget "
+            "Auto-enabling --adaptive-n-pcs: guaranteed covariance "
+            "allocations (n_pcs=%d, grid_size=%d) = basis %.2f GB + "
+            "projected_lhs %.2f GB = %.2f GB exceed 50%% of budget "
             "(%.2f GB). Without adaptive, the run is guaranteed to OOM. "
-            "If you specifically want to test the n_pcs=%d path, use a "
-            "larger budget or smaller grid.",
+            "If you specifically want the n_pcs=%d path, use a larger "
+            "budget or smaller grid.",
             desired_n_pcs,
             grid_size,
             _basis_term_gb,
+            _projected_lhs_gb,
+            _fixed_allocs_gb,
             budget.effective_budget_gb,
             desired_n_pcs,
         )
