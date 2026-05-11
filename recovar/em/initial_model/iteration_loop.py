@@ -22,6 +22,7 @@ module is the pure orchestrator.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import replace
 from typing import Callable, Sequence
 
@@ -125,11 +126,7 @@ def _scalar_sum_from_meta(meta: dict, key: str) -> float | None:
 
     prefix = "halfset_"
     suffix = f"_{key}"
-    values = [
-        float(meta[name])
-        for name in sorted(meta)
-        if name.startswith(prefix) and name.endswith(suffix)
-    ]
+    values = [float(meta[name]) for name in sorted(meta) if name.startswith(prefix) and name.endswith(suffix)]
     if not values:
         return None
     return float(sum(values))
@@ -169,9 +166,7 @@ def update_noise_from_estep_meta(
         )
     expected_shells = int(state.ori_size) // 2 + 1
     if wsum_sigma2_noise.shape != (expected_shells,):
-        raise ValueError(
-            f"noise weighted sums must have shape ({expected_shells},), got {wsum_sigma2_noise.shape}"
-        )
+        raise ValueError(f"noise weighted sums must have shape ({expected_shells},), got {wsum_sigma2_noise.shape}")
     if not np.all(np.isfinite(wsum_sigma2_noise)) or not np.all(np.isfinite(wsum_img_power)):
         raise ValueError("noise weighted sums must be finite")
 
@@ -240,8 +235,7 @@ def update_probabilities_from_estep_meta(
         direction_sums = np.asarray(direction_sums, dtype=np.float64)
         if direction_sums.ndim != 2 or direction_sums.shape[0] != state.K:
             raise ValueError(
-                f"class_direction_posterior_sums must have shape ({state.K}, n_directions), "
-                f"got {direction_sums.shape}"
+                f"class_direction_posterior_sums must have shape ({state.K}, n_directions), got {direction_sums.shape}"
             )
         if not np.all(np.isfinite(direction_sums)) or np.any(direction_sums < 0.0):
             raise ValueError("class_direction_posterior_sums must be non-negative and finite")
@@ -421,10 +415,12 @@ def select_subset_for_iter(
     else:
         base_order = np.asarray(particle_order, dtype=np.int64)
         if base_order.shape != (int(nr_particles),):
-            raise ValueError(
-                f"particle_order must have shape ({int(nr_particles)},), got {base_order.shape}"
-            )
-        if np.unique(base_order).size != int(nr_particles) or np.any(base_order < 0) or np.any(base_order >= nr_particles):
+            raise ValueError(f"particle_order must have shape ({int(nr_particles)},), got {base_order.shape}")
+        if (
+            np.unique(base_order).size != int(nr_particles)
+            or np.any(base_order < 0)
+            or np.any(base_order >= nr_particles)
+        ):
             raise ValueError("particle_order must be a permutation of particle ids [0, nr_particles)")
 
     if int(random_seed) == 0:
@@ -517,8 +513,7 @@ def relion_solvent_flatten_state(
     iref = np.asarray(state.Iref)
     if iref.ndim != 4 or iref.shape[1:] != (state.ori_size, state.ori_size, state.ori_size):
         raise ValueError(
-            f"state.Iref must have shape (K, {state.ori_size}, {state.ori_size}, {state.ori_size}), "
-            f"got {iref.shape}",
+            f"state.Iref must have shape (K, {state.ori_size}, {state.ori_size}, {state.ori_size}), got {iref.shape}",
         )
     if mask is None:
         if particle_diameter_ang is None or width_mask_edge_px is None:
@@ -636,5 +631,22 @@ def run_vdam_iterations(
             }
         )
         iter_artifact_sink(current, it, meta)
+
+        # Per-iter JAX cache hygiene for large-box runs. JIT compilations
+        # keyed by varying bucket shapes (different rotation counts each
+        # iter under autosampling) accumulate scratch buffers in the JAX
+        # allocator pool. At 50k particles × 256² this fragments the GPU
+        # heap enough that cuFFT plan workspace allocations fail around
+        # iter-9 (CUFFT_ALLOC_FAILED). Opt in via
+        # ``RECOVAR_CLEAR_JAX_CACHES_PER_ITER=1`` since the small-box
+        # default behavior was fine and the global cache clear forces
+        # recompiles on the next iter.
+        if os.environ.get("RECOVAR_CLEAR_JAX_CACHES_PER_ITER", "") in ("1", "true", "TRUE"):
+            import jax
+
+            jax.clear_caches()
+            import gc
+
+            gc.collect()
 
     return current
