@@ -13,7 +13,6 @@ import gc
 import logging
 import os
 import time
-from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
@@ -22,7 +21,17 @@ import numpy as np
 from recovar import utils
 from recovar.core import fourier_transform_utils
 from recovar.em.dense_single_volume import parity_dump as _parity_dump
+from recovar.em.dense_single_volume.batch_planning import (
+    _estimate_relion_em_batch_sizes,
+    _image_backend,
+    _maybe_cache_raw_image_loaders,
+)
 from recovar.em.dense_single_volume.em_engine import run_em
+from recovar.em.dense_single_volume.firstiter_cc import (
+    _build_firstiter_cc_pass2_grids,
+    _safe_dense_k_class_rotation_block_size,
+    _safe_firstiter_cc_image_batch_size,
+)
 from recovar.em.dense_single_volume.helpers.convergence import (
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
@@ -30,10 +39,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     healpix_angular_step,
     update_refinement_state,
 )
-from recovar.em.dense_single_volume.helpers.env_flags import parse_int_set
 from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights, make_shell_indices_half
-from recovar.em.dense_single_volume.helpers.local_search import _local_search_engine_rotation_block_size
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     collapse_rotation_posterior_to_direction_prior,
@@ -55,48 +61,33 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     compute_coarse_image_size,
     shell_index_to_resolution_angstrom,
 )
-from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
+from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
-    run_local_k_class_em,
+)
+
+# Re-exports kept for test back-compat: tests monkeypatch these names at the
+# ``iteration_loop`` module level (``monkeypatch.setattr(iteration_loop, ...)``)
+# even though the call sites now live in the focused submodules. The submodules
+# resolve the symbols through ``recovar.em.dense_single_volume.iteration_loop``
+# at call time, so keeping the bindings here lets the existing monkeypatches
+# continue to win without test churn.
+from recovar.em.dense_single_volume.k_class import (  # noqa: F401
+    run_local_k_class_em as run_local_k_class_em,
+)
+from recovar.em.dense_single_volume.local_em_engine import (  # noqa: F401
+    run_local_em_exact as run_local_em_exact,
+)
+from recovar.em.dense_single_volume.local_layout import (
+    _selected_rotation_matrices,
+)
+from recovar.em.dense_single_volume.local_layout import (  # noqa: F401
+    build_local_hypothesis_layout as build_local_hypothesis_layout,
 )
 from recovar.em.dense_single_volume.local_search_iteration import (
-    _LocalSearchIterationResult,
-    _pack_local_search_iteration_result,
     _precompute_exact_local_fine_grid_enabled,
     _run_local_search_iteration,
-    _unpack_local_search_engine_outputs,
-)
-from recovar.em.dense_single_volume.ppca_bridge import (
-    PPCAKClassScheduleBridge,
-    _ppca_best_pose_ids_from_diagnostics,
-    _ppca_pmax_array_from_diagnostics,
-    make_ppca_kclass_schedule_bridge,
-    run_dense_ppca_refinement_with_kclass_schedule,
-    run_local_ppca_refinement_with_kclass_schedule,
-)
-from recovar.em.dense_single_volume.relion_metadata import (
-    _radial_profile_from_noise_variance,
-    _relion_half_plane_shell_counts,
-    _relion_metadata_translations,
-    _relion_rotation_grid_float32,
-    _rotation_eulers_for_canonical_or_custom_grid,
-)
-from recovar.em.dense_single_volume.batch_planning import (
-    _RelionEMBatchPlan,
-    _dataset_raw_image_loader,
-    _em_raw_image_cache_mode,
-    _estimate_raw_image_cache_bytes,
-    _estimate_relion_em_batch_sizes,
-    _image_backend,
-    _maybe_cache_raw_image_loaders,
-    _safe_int,
-)
-from recovar.em.dense_single_volume.firstiter_cc import (
-    _build_firstiter_cc_pass2_grids,
-    _safe_dense_k_class_rotation_block_size,
-    _safe_firstiter_cc_image_batch_size,
 )
 from recovar.em.dense_single_volume.mean_helpers import (
     _align_fourier_volume_sign_to_reference,
@@ -111,16 +102,16 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _normalize_noise_variance_per_half,
     _reconstruct_volume_eager,
 )
-from recovar.em.dense_single_volume.relion_replay import (
-    _RelionHalfInputState,
-    _normalize_logged_float32_half_pair,
-    _optional_float32_half_pair,
-    _replay_control_model_iteration,
+from recovar.em.dense_single_volume.relion_metadata import (
+    _radial_profile_from_noise_variance,
+    _relion_metadata_translations,
+    _relion_rotation_grid_float32,
+    _rotation_eulers_for_canonical_or_custom_grid,
 )
-from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
-from recovar.em.dense_single_volume.local_layout import (
-    _selected_rotation_matrices,
-    build_local_hypothesis_layout,
+from recovar.em.dense_single_volume.relion_replay import (
+    _optional_float32_half_pair,
+    _RelionHalfInputState,
+    _replay_control_model_iteration,
 )
 from recovar.em.sampling import (
     advance_relion_perturbation,
@@ -129,10 +120,6 @@ from recovar.em.sampling import (
     apply_relion_rotation_perturbation_to_eulers,
     apply_relion_translation_perturbation,
     build_local_search_grid_metadata,
-    get_oversampled_rotation_grid_from_samples,
-    get_oversampled_translation_grid,
-    get_relion_rotation_grid,
-    get_relion_rotation_grid_eulers,
     get_translation_grid,
     read_relion_direction_prior,
     read_relion_direction_priors,
@@ -143,11 +130,26 @@ from recovar.em.sampling import (
     relion_sampling_perturbation_for_iteration,
     rotation_grid_size,
 )
+from recovar.em.sampling import (  # noqa: F401
+    get_oversampled_rotation_grid_from_samples as get_oversampled_rotation_grid_from_samples,
+)
+from recovar.em.sampling import (
+    get_oversampled_translation_grid as get_oversampled_translation_grid,
+)
+from recovar.em.sampling import (
+    get_relion_rotation_grid as get_relion_rotation_grid,
+)
+from recovar.em.sampling import (
+    get_relion_rotation_grid_eulers as get_relion_rotation_grid_eulers,
+)
 from recovar.reconstruction.regularization import (
     compute_current_size_relion,
     fsc_to_relion_ssnr,
     resolution_from_data_vs_prior,
     update_relion_growth_state_from_fsc,
+)
+from recovar.reconstruction.regularization import (  # noqa: F401
+    compute_data_vs_prior as compute_data_vs_prior,
 )
 
 _EM_RAW_IMAGE_CACHE_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE"
@@ -191,71 +193,7 @@ def _exhaustive_grid_order_for_state(state: RefinementState) -> int:
     return min(state.healpix_order, RELION_MAX_FULL_GRID_ORDER)
 
 
-
-def _maybe_dump_noise_update_debug(
-    *,
-    iteration: int,
-    current_size: int | None,
-    image_shape,
-    noise_stats_per_half,
-    previous_noise_radial_per_half,
-    noise_from_res_per_half,
-    noise_from_res,
-):
-    """Write raw noise M-step terms for RELION parity debugging when requested."""
-
-    dump_dir = os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
-    if not dump_dir:
-        return
-    requested_iterations = parse_int_set(os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_ITERATION"))
-    if requested_iterations is not None and int(iteration) not in requested_iterations:
-        return
-
-    os.makedirs(dump_dir, exist_ok=True)
-    n_shells = int(image_shape[0]) // 2 + 1
-    shell_indices_half = np.asarray(make_shell_indices_half(image_shape), dtype=np.int64)
-    half_counts = np.bincount(shell_indices_half, minlength=n_shells).astype(np.float64)[:n_shells]
-    half_weights = np.asarray(make_half_image_weights(image_shape), dtype=np.float64)
-    half_weighted_counts = np.bincount(shell_indices_half, weights=half_weights, minlength=n_shells).astype(
-        np.float64,
-    )[:n_shells]
-
-    payload = {
-        "zero_based_iteration": np.array([int(iteration)], dtype=np.int32),
-        "one_based_iteration": np.array([int(iteration) + 1], dtype=np.int32),
-        "current_size": np.array([-1 if current_size is None else int(current_size)], dtype=np.int32),
-        "image_shape": np.asarray(image_shape, dtype=np.int32),
-        "shell_index_half": shell_indices_half.astype(np.int32),
-        "half_shell_counts": half_counts,
-        "half_weighted_shell_counts": half_weighted_counts,
-        "relion_half_plane_shell_counts": _relion_half_plane_shell_counts(image_shape),
-        "mean_sigma2_noise": np.asarray(noise_from_res, dtype=np.float64),
-    }
-    for half_id, stats_k in enumerate(noise_stats_per_half, start=1):
-        prefix = f"half{half_id}"
-        wsum_sigma2 = np.asarray(stats_k.wsum_sigma2_noise, dtype=np.float64)
-        img_power = np.asarray(stats_k.wsum_img_power, dtype=np.float64)
-        payload[f"{prefix}_wsum_sigma2_noise"] = wsum_sigma2
-        payload[f"{prefix}_wsum_img_power"] = img_power
-        payload[f"{prefix}_wsum_total"] = wsum_sigma2 + img_power
-        payload[f"{prefix}_sumw"] = np.array([float(stats_k.sumw)], dtype=np.float64)
-        payload[f"{prefix}_sigma2_noise"] = np.asarray(noise_from_res_per_half[half_id - 1], dtype=np.float64)
-        payload[f"{prefix}_previous_sigma2_noise"] = np.asarray(
-            previous_noise_radial_per_half[half_id - 1],
-            dtype=np.float64,
-        )
-        if getattr(stats_k, "wsum_noise_a2", None) is not None:
-            payload[f"{prefix}_wsum_noise_a2"] = np.asarray(stats_k.wsum_noise_a2, dtype=np.float64)
-        if getattr(stats_k, "wsum_noise_xa", None) is not None:
-            payload[f"{prefix}_wsum_noise_xa"] = np.asarray(stats_k.wsum_noise_xa, dtype=np.float64)
-
-    path = os.path.join(dump_dir, f"recovar_noise_update_it{int(iteration) + 1:03d}.npz")
-    np.savez_compressed(path, **payload)
-    logger.info("Wrote RECOVAR noise update debug dump: %s", path)
-
-
-
-
+from recovar.em.dense_single_volume.debug_dumps import _maybe_dump_noise_update_debug  # noqa: F401
 
 # RELION stores windowFourierTransform(in, out, current_size) as a rectangular
 # FFTW half image, but the likelihood support is the nonzero Minvsigma2 mask:
