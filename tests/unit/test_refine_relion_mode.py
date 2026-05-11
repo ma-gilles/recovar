@@ -731,6 +731,53 @@ def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods():
     assert not buckets[0].local_rotation_mask[0, 1368:].any()
 
 
+def test_bucket_local_hypothesis_layout_unify_env_collapses_shape_classes(monkeypatch):
+    """RECOVAR_LOCAL_BUCKET_UNIFY=1 collapses ~13 unique bucket shape classes
+    into one max-sized class so the JIT only compiles one shape per layout.
+    Pins the 7.3× perf win measured on 50k/256 K=1 (commit 8e868d5e)."""
+
+    rotation_counts = np.array([16, 16, 128, 256, 512, 1024, 1280, 1408], dtype=np.int32)
+    rotation_ids = np.arange(int(rotation_counts.sum()), dtype=np.int32)
+    rotation_offsets = np.concatenate([[0], np.cumsum(rotation_counts)]).astype(np.int64)
+    n_total = int(rotation_counts.sum())
+    layout = LocalHypothesisLayout(
+        n_global_rotations=2000,
+        n_pixels=768,
+        n_psi=16,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=rotation_ids,
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (n_total, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(n_total, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((4, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((len(rotation_counts), 4), dtype=np.float32),
+    )
+
+    monkeypatch.delenv("RECOVAR_LOCAL_BUCKET_UNIFY", raising=False)
+    default_buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=10,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=65536,
+    )
+    default_unique_sizes = sorted({int(b.bucket_rotation_count) for b in default_buckets})
+    assert len(default_unique_sizes) >= 6  # power-of-2 spread
+
+    monkeypatch.setenv("RECOVAR_LOCAL_BUCKET_UNIFY", "1")
+    unified_buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=10,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=65536,
+    )
+    unified_sizes = {int(b.bucket_rotation_count) for b in unified_buckets}
+    assert unified_sizes == {max(default_unique_sizes)}
+    assert len(unified_buckets) == 1
+    # All images must remain represented exactly once.
+    served_indices = np.sort(np.concatenate([b.image_indices for b in unified_buckets]))
+    np.testing.assert_array_equal(served_indices, np.arange(len(rotation_counts), dtype=np.int32))
+
+
 def test_pad_local_big_jit_image_axis_masks_dummy_rows():
     bucket = LocalBucketSpec(
         image_indices=np.array([2], dtype=np.int32),
@@ -6765,7 +6812,9 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
                 build_local_search_grid_metadata(int(healpix_order)),
             )[0].astype(np.float32)
             best_rots = np.repeat(fine_rot[None, :, :], experiment_dataset.n_units, axis=0)
-            best_trans = np.repeat(np.asarray(translations)[trans_idx : trans_idx + 1], experiment_dataset.n_units, axis=0)
+            best_trans = np.repeat(
+                np.asarray(translations)[trans_idx : trans_idx + 1], experiment_dataset.n_units, axis=0
+            )
             best_ids = np.full(experiment_dataset.n_units, fine_idx, dtype=np.int32)
             return base_outputs + (best_rots, best_trans, best_ids, relion_stats, noise_stats)
         return base_outputs + (relion_stats, noise_stats)
