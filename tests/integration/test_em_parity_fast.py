@@ -936,8 +936,7 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
     with --adaptive_oversampling 1 + --healpix_order 1 (coarse pass 1 stays at
     healpix order 1 = 576 rotations matching RELION's iter-1 evaluation grid,
     fine pass 2 is order 2 = 4608 rotations). Routes ALL K-class iters through
-    the new run_dense_k_class_em_adaptive plumbing, bypassing the buggy
-    _run_k_class_sparse_pass2_local_search_iteration accumulator.
+    the run_dense_k_class_em_adaptive plumbing.
 
     Pass criteria (calibrated after Class3D M-step + post-mask parity):
       * worst per-class corr ≥ 0.985    (observed 0.9898)

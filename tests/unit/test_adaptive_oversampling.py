@@ -518,7 +518,7 @@ class TestSignificantCountsReasonable:
 
     def test_batched_significance_returns_sparse_sample_lists(self):
         """The batched coarse pass should preserve per-image significant samples."""
-        from recovar.em.dense_single_volume.iteration_loop import _compute_significance_batched
+        from recovar.em.dense_single_volume.helpers.significance import _compute_significance_batched
 
         n_images = 6
         n_rot = 12
@@ -943,7 +943,6 @@ class TestRefineWithAdaptive:
             rotation_block_size=len(rotations),
             init_current_size=8,  # Use 8 to match volume_shape
             adaptive_oversampling=1,
-            adaptive_fraction=0.999,
             max_significants=100,
             nside_level=nside_level,
         )

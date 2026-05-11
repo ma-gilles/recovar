@@ -349,12 +349,6 @@ def main():
         help="Override RELION's maximum significant poses. Default: read _rlnMaximumSignificantPoses from optimiser.star.",
     )
     parser.add_argument(
-        "--adaptive_fraction",
-        type=float,
-        default=None,
-        help="Override RELION's adaptive oversample fraction. Default: read _rlnAdaptiveOversampleFraction from optimiser.star.",
-    )
-    parser.add_argument(
         "--local_search_profile",
         choices=["auto", "on", "off"],
         default="auto",
@@ -582,8 +576,6 @@ def main():
     particle_diameter = float(m_pd.group(1)) if m_pd else 544.0
     m_os = re.search(r"_rlnAdaptiveOversampleOrder\s+(\d+)", opt_text)
     oversampling = int(m_os.group(1)) if m_os else 0
-    m_af = re.search(r"_rlnAdaptiveOversampleFraction\s+(\S+)", opt_text)
-    adaptive_fraction = float(m_af.group(1)) if m_af else 0.999
     m_ms = re.search(r"_rlnMaximumSignificantPoses\s+(-?\d+)", opt_text)
     max_significants = int(m_ms.group(1)) if m_ms else 500
     optimiser_cli_flags = parse_relion_optimiser_cli_flags(opt_text)
@@ -638,16 +630,12 @@ def main():
     print(f"RELION state: N={N}, hp={hp_order}, os={oversampling}, cs={current_size}")
     print(f"  pixel_size={pixel_size}, particle_diameter={particle_diameter}")
     print(
-        f"  ave_Pmax={ave_Pmax:.4f}, has_high_fsc_at_limit={has_high_fsc_at_limit}, "
-        f"adaptive_fraction={adaptive_fraction:.6f}, max_significants={max_significants}"
+        f"  ave_Pmax={ave_Pmax:.4f}, has_high_fsc_at_limit={has_high_fsc_at_limit}, max_significants={max_significants}"
     )
     print(f"  RELION do_firstiter_cc={do_firstiter_cc}, ini_high={relion_ini_high}")
     if args.force_oversampling is not None:
         print(f"  Oversampling override: {oversampling} -> {args.force_oversampling}")
         oversampling = int(args.force_oversampling)
-    if args.adaptive_fraction is not None:
-        print(f"  Adaptive fraction override: {adaptive_fraction} -> {args.adaptive_fraction}")
-        adaptive_fraction = float(args.adaptive_fraction)
     if args.max_significants is not None:
         print(f"  Max significants override: {max_significants} -> {args.max_significants}")
         max_significants = int(args.max_significants)
@@ -1055,7 +1043,6 @@ def main():
         init_current_size=current_size,
         fsc_threshold=1.0 / 7.0,
         adaptive_oversampling=oversampling,
-        adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
         init_healpix_order=hp_order,
         max_healpix_order=args.max_healpix_order,
@@ -1144,7 +1131,6 @@ def main():
         "pixel_resolutions": np.array(result["pixel_resolutions"]),
         "n_half1_particles": np.int32(len(np.where(our_subsets == 1)[0])),
         "n_half2_particles": np.int32(len(np.where(our_subsets == 2)[0])),
-        "adaptive_fraction": np.float64(adaptive_fraction),
         "max_significants": np.int32(max_significants),
         "local_search_profile_mode": np.array(args.local_search_profile),
         "local_search_translation_prior_mode": np.array(args.local_search_translation_prior_mode),
@@ -1175,6 +1161,7 @@ def main():
     ]:
         if result.get(scalar_name):
             save_dict[scalar_name] = np.array(result[scalar_name], dtype=np.float64)
+
     def _save_array_or_half_sequence(key, value, dtype=None):
         try:
             arr = np.asarray(value, dtype=dtype) if dtype is not None else np.asarray(value)
@@ -1399,9 +1386,7 @@ def main():
                 gt_summary[f"{label}_aligned_fsc_vs_gt"] = aligned_fsc_vs_gt
                 gt_summary[f"{label}_aligned_corr_vs_gt"] = np.float64(alignment.corr)
                 gt_summary[f"{label}_aligned_score_vs_gt"] = np.float64(alignment.score)
-                gt_summary[f"{label}_aligned_shell_05"] = np.int32(
-                    -1 if aligned_shell_05 is None else aligned_shell_05
-                )
+                gt_summary[f"{label}_aligned_shell_05"] = np.int32(-1 if aligned_shell_05 is None else aligned_shell_05)
                 gt_summary[f"{label}_aligned_shell_0143"] = np.int32(
                     -1 if aligned_shell_0143 is None else aligned_shell_0143
                 )

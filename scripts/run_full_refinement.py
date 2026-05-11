@@ -28,8 +28,8 @@ import time
 from pathlib import Path
 
 import jax
-import jaxlib
 import jax.numpy as jnp
+import jaxlib
 import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
@@ -514,32 +514,11 @@ def main():
     )
     parser.add_argument("--adaptive_oversampling", type=int, default=1, help="Oversampling levels (0=off, 1=2x)")
     parser.add_argument(
-        "--adaptive_fraction",
-        type=float,
-        default=1.0,
-        help="Significance fraction. Default 1.0 disables the "
-        "use_global_significant_support path (see iteration_loop.py:2414) "
-        "which routes iter 2+ through `_run_sparse_pass2_local_search_iteration` "
-        "and produces wildly different BP magnitudes than the dense path "
-        "(BP scale ~10⁴× off, causing iter-2 FSC cliff at the join boundary). "
-        "Setting `--adaptive_fraction 0.999` (RELION's GUI default) re-enables "
-        "the path; only do that once the path's BP scale bug is fixed. "
-        "On the 5k 128² K=1 fixture, default 1.0 gives final corr_vs_GT 0.964 "
-        "(matching RELION's 0.960); the previous default 0.999 gave 0.722.",
-    )
-    parser.add_argument(
         "--max_significants",
         type=int,
         default=None,
         help="Max significant samples per image. Use <=0 for RELION-style uncapped mode. "
         "If omitted, read _rlnMaximumSignificantPoses from the optimiser STAR.",
-    )
-    parser.add_argument(
-        "--adaptive_skip_threshold",
-        type=float,
-        default=0.5,
-        help="Skip adaptive pass 2 when the mean significant-sample fraction "
-        "is at least this value. Use a negative value to disable the shortcut.",
     )
     parser.add_argument(
         "--tau2_fudge",
@@ -620,8 +599,7 @@ def main():
         "--width_mask_edge_px",
         type=float,
         default=5.0,
-        help="RELION softMaskOutsideMap edge width in pixels when "
-        "--particle_diameter_ang is provided.",
+        help="RELION softMaskOutsideMap edge width in pixels when --particle_diameter_ang is provided.",
     )
     parser.add_argument(
         "--relion_current_sizes",
@@ -1038,9 +1016,7 @@ def main():
         init_current_size=init_current_size,
         fsc_threshold=1.0 / 7.0,
         adaptive_oversampling=args.adaptive_oversampling,
-        adaptive_fraction=args.adaptive_fraction,
         max_significants=args.max_significants,
-        adaptive_pass2_skip_threshold=args.adaptive_skip_threshold,
         nside_level=rotation_grid_order if args.adaptive_oversampling > 0 else None,
         **_refine_sampling_kwargs(args, init_healpix_order),
         init_translation_sigma_angstrom=(
@@ -1081,9 +1057,7 @@ def main():
         "volume_shape": np.array(ds.volume_shape),
         "voxel_size": ds.voxel_size,
         "adaptive_oversampling": args.adaptive_oversampling,
-        "adaptive_fraction": args.adaptive_fraction,
         "max_significants": args.max_significants,
-        "adaptive_skip_threshold": args.adaptive_skip_threshold,
         "offset_sigma_angstrom": args.offset_sigma_angstrom,
         "tau2_fudge": np.float64(effective_tau2_fudge),
         "tau2_fudge_source": np.asarray(tau2_fudge_source),
@@ -1136,19 +1110,12 @@ def main():
         )
     local_profile_rows = [
         {
-            key: (
-                np.asarray(value).item()
-                if np.asarray(value).ndim == 0
-                else np.asarray(value).tolist()
-            )
+            key: (np.asarray(value).item() if np.asarray(value).ndim == 0 else np.asarray(value).tolist())
             for key, value in row.items()
         }
         for row in result.get("local_profile_history", [])
     ]
-    setup_phase_seconds = {
-        str(key): float(value)
-        for key, value in result.get("setup_phase_seconds", {}).items()
-    }
+    setup_phase_seconds = {str(key): float(value) for key, value in result.get("setup_phase_seconds", {}).items()}
 
     # Save FSC curves per iteration
     for i, fsc in enumerate(result["fsc_history"]):
@@ -1244,7 +1211,6 @@ def main():
             "finest_healpix_order": int(finest_healpix_order),
             "auto_local_healpix_order": int(args.auto_local_healpix_order),
             "adaptive_oversampling": int(args.adaptive_oversampling),
-            "adaptive_fraction": float(args.adaptive_fraction),
             "max_significants": int(args.max_significants),
             "setup_phase_seconds": setup_phase_seconds,
             "local_profile_rows": local_profile_rows,

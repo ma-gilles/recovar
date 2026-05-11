@@ -88,7 +88,6 @@ def _setup_refinement(n_iter=5, adaptive_oversampling=1, seed=42):
         init_current_size=init_current_size,
         fsc_threshold=1.0 / 7.0,
         adaptive_oversampling=adaptive_oversampling,
-        adaptive_fraction=0.999,
         max_significants=500,
         nside_level=healpix_order if adaptive_oversampling > 0 else None,
         translation_pixel_offset=1.0 if adaptive_oversampling > 0 else None,
