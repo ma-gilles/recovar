@@ -437,6 +437,29 @@ def make_memory_plan(
 
     # Effective n_pcs: adaptive mode picks from the table; otherwise we
     # honor the caller's value verbatim.
+    # AUTO-TRIGGER adaptive when the covariance basis term ALONE would
+    # exceed the budget. This is independent of batch sizes — basis is
+    # n_pcs × grid³ × 8 bytes, allocated once and held throughout
+    # covariance estimation. If that exceeds budget, the run is
+    # guaranteed to OOM with NO knob the user could turn other than
+    # --adaptive-n-pcs or smaller grid. Auto-enabling avoids the
+    # "user runs pipeline, OOMs, has to learn about the flag" trap.
+    _basis_term_gb = desired_n_pcs * (grid_size**3) * 8 / 1e9
+    if not adaptive_n_pcs and _basis_term_gb > budget.effective_budget_gb * 0.50:
+        logger.warning(
+            "Auto-enabling --adaptive-n-pcs: covariance basis term alone "
+            "(%d PCs × grid_size=%d) = %.2f GB exceeds 50%% of budget "
+            "(%.2f GB). Without adaptive, the run is guaranteed to OOM. "
+            "If you specifically want to test the n_pcs=%d path, use a "
+            "larger budget or smaller grid.",
+            desired_n_pcs,
+            grid_size,
+            _basis_term_gb,
+            budget.effective_budget_gb,
+            desired_n_pcs,
+        )
+        adaptive_n_pcs = True
+
     chosen_n_pcs = desired_n_pcs
     cal_status = "uncalibrated"
     predicted_peak: float | None = None

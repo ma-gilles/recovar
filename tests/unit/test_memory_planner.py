@@ -596,3 +596,57 @@ def test_custom_cuda_does_not_deflate_legacy_budget(monkeypatch, tmp_path):
     # --gpu-budget-gb; but apply_memory_planning_args must stay a
     # no-op for the limit when no deflation is needed.)
     assert "value" not in captured
+
+
+# ---------------------------------------------------------------------------
+# Auto-trigger adaptive-n-pcs when basis term alone exceeds budget.
+# ---------------------------------------------------------------------------
+
+
+def test_auto_enables_adaptive_when_basis_exceeds_budget(monkeypatch):
+    """g=256 + n_pcs=200 → basis term alone is ~27 GB. At budget=20 GB the
+    run is guaranteed to OOM. Planner must auto-set adaptive without
+    waiting for the user to pass --adaptive-n-pcs."""
+    _stub_helpers(monkeypatch, gpu_total=20.0)
+    _stub_preflight(monkeypatch, total=20.0, free=19.0)
+    _stub_backend_custom(monkeypatch)
+
+    from recovar.utils import memory_planner as mp
+
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=256,
+        n_images=1000,
+        requested_gpu_gb=20.0,
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=False,
+        desired_n_pcs=200,
+    )
+    # Adaptive should fire and pick something well below 200.
+    assert plan.n_pcs_to_compute < 200
+    assert plan.n_pcs_to_compute >= 1
+
+
+def test_does_not_auto_enable_adaptive_when_basis_fits(monkeypatch):
+    """Basis term safely under 50% of budget: do NOT auto-enable adaptive
+    (preserve user's explicit choice)."""
+    _stub_helpers(monkeypatch, gpu_total=80.0)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)
+    _stub_backend_custom(monkeypatch)
+
+    from recovar.utils import memory_planner as mp
+
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=128,
+        n_images=1000,
+        requested_gpu_gb=80.0,
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=False,
+        desired_n_pcs=200,
+    )
+    # basis = 200 × 128³ × 8 / 1e9 = 3.36 GB, way under 50% × 80 GB = 40 GB.
+    # Adaptive must not fire; n_pcs stays at desired.
+    assert plan.n_pcs_to_compute == 200
