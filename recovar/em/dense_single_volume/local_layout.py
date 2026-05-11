@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -604,6 +605,14 @@ def bucket_local_hypothesis_layout(
         [_exact_bucket_rotation_size(int(count), rotation_block_size) for count in layout.rotation_counts],
         dtype=np.int32,
     )
+    # ``RECOVAR_LOCAL_BUCKET_UNIFY=1`` forces all images to share a single
+    # rotation-count bucket class so the JIT only compiles one shape per
+    # layout. At 50k/256 K=1 this collapses ~13 unique shapes (per-image
+    # significant rotation counts vary widely across iters) into 1, removing
+    # per-bucket JIT compilation overhead. Memory cost: smaller-significance
+    # images carry extra rotation padding.
+    if bucket_sizes.size and os.environ.get("RECOVAR_LOCAL_BUCKET_UNIFY", "").lower() in {"1", "true", "yes", "on"}:
+        bucket_sizes = np.full_like(bucket_sizes, int(bucket_sizes.max()))
     processing_order = np.lexsort((layout.rotation_counts, bucket_sizes)).astype(np.int32)
     bucket_specs: list[LocalBucketSpec] = []
 
