@@ -292,6 +292,52 @@ def apply_memory_planning_args(
         for warn in budget.warnings:
             logger.warning("memory plan warning: %s", warn)
 
+    # Backend-aware budget for legacy ``get_*_batch_size`` formulas.
+    #
+    # Saturation sweep (A100 80GB, slurm 8020210, 17 cells) showed the
+    # legacy formulas OVERSHOOT the budget under ``jax_fallback``:
+    #
+    #   - g=64 jax_fallback, --gpu-budget-gb 12 → observed peak 17 GB
+    #     (1.42× overshoot — would have OOMed under --fail-on-memory-exceed)
+    #   - g=128 jax_fallback at every tested budget (12, 24, 40, 76 GB)
+    #     → OOM (peak > budget always; formula refuses to shrink)
+    #   - g=256 jax_fallback → OOM at full 76 GB
+    #
+    # custom_cuda fits comfortably (ratios 0.09-0.72 across grids). So
+    # the fix is to deflate the budget HANDED TO LEGACY only when
+    # backend == jax_fallback. The user's stated budget is unchanged;
+    # only the value the batch-size formulas see is reduced.
+    #
+    # Divisor = 3.0 chosen conservatively: at g=64 the observed overshoot
+    # was 1.42, so /1.5 would suffice there; at g=128/256 the formula
+    # OOMs even at /3.2, but we cap at 3.0 because going further would
+    # make small-budget jax_fallback runs run pathologically small
+    # batches. Users on tight jax_fallback configs should consider
+    # ``--low-memory-option`` for additional headroom.
+    _BACKEND_DIVISOR = {
+        "custom_cuda": 1.0,
+        "jax_fallback": 3.0,
+        "cpu": 1.0,
+    }
+    divisor = _BACKEND_DIVISOR.get(plan.budget.backend, 1.0)
+    legacy_budget = plan.budget.effective_budget_gb / divisor
+    if divisor != 1.0:
+        if logger is not None:
+            logger.info(
+                "Deflating budget for legacy batch-size formulas: %.2f GB / %.2f = "
+                "%.2f GB (backend=%s; sweep 8020210 showed legacy overshoots otherwise)",
+                plan.budget.effective_budget_gb,
+                divisor,
+                legacy_budget,
+                plan.budget.backend,
+            )
+    try:
+        from recovar.utils import helpers as _helpers
+
+        _helpers.set_gpu_memory_limit(legacy_budget)
+    except Exception:
+        pass
+
     if outdir is not None:
         try:
             memory_planner.write_memory_plan_json(plan, outdir)

@@ -503,3 +503,89 @@ def test_adaptive_fallback_passthrough_when_budget_huge(monkeypatch):
 # via XLA_PYTHON_CLIENT_MEM_FRACTION / XLA_PYTHON_CLIENT_PREALLOCATE.
 # Their replacement tests are in test_cli_memory_args.py
 # (test_pipeline_parser_rejects_bogus_gpu_gb).
+
+
+# ---------------------------------------------------------------------------
+# Backend-aware budget deflation (sweep 8020210 finding).
+# ---------------------------------------------------------------------------
+
+
+def test_jax_fallback_deflates_legacy_budget(monkeypatch, tmp_path):
+    """Saturation sweep (8020210) showed jax_fallback overshoots the user's
+    budget by 1.4× at g=64 and OOMs at g=128 under legacy formulas.
+
+    ``apply_memory_planning_args`` must deflate the value handed to
+    ``set_gpu_memory_limit`` (which drives the legacy batch-size
+    formulas) by a backend-specific divisor — 3.0 for jax_fallback,
+    1.0 for custom_cuda.
+    """
+    import argparse
+
+    from recovar.utils import helpers as _utils
+    from recovar.utils import parser_args
+
+    _stub_helpers(monkeypatch, gpu_total=80.0)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)
+
+    captured = {}
+
+    def fake_set_limit(value):
+        captured["value"] = float(value)
+
+    monkeypatch.setattr(_utils, "set_gpu_memory_limit", fake_set_limit)
+
+    # Force backend to jax_fallback.
+    from recovar.utils import cuda_env
+
+    monkeypatch.setattr(cuda_env, "detect_backend", lambda: "jax_fallback")
+
+    parser = argparse.ArgumentParser()
+    parser_args.add_memory_planning_args(parser)
+    args = parser.parse_args(["--gpu-budget-gb", "60"])
+
+    parser_args.apply_memory_planning_args(
+        args,
+        command="pipeline",
+        grid_size=128,
+        n_images=1000,
+        outdir=tmp_path,
+    )
+    # Effective budget = min(60, jax_limit=80, physical_free-reserve=74) = 60.
+    # 60 GB / 3.0 = 20 GB handed to legacy formulas.
+    assert captured["value"] == pytest.approx(20.0, rel=0.02)
+
+
+def test_custom_cuda_does_not_deflate_legacy_budget(monkeypatch, tmp_path):
+    """Mirror of above: under custom_cuda, legacy formulas get the full
+    effective_budget. Saturation sweep showed the custom kernel uses
+    only ~50-70% of budget so we do NOT deflate."""
+    import argparse
+
+    from recovar.utils import helpers as _utils
+    from recovar.utils import parser_args
+
+    _stub_helpers(monkeypatch, gpu_total=80.0)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)
+    _stub_backend_custom(monkeypatch)
+
+    captured = {}
+
+    def fake_set_limit(value):
+        captured["value"] = float(value)
+
+    monkeypatch.setattr(_utils, "set_gpu_memory_limit", fake_set_limit)
+
+    parser = argparse.ArgumentParser()
+    parser_args.add_memory_planning_args(parser)
+    args = parser.parse_args(["--gpu-budget-gb", "60"])
+
+    parser_args.apply_memory_planning_args(
+        args,
+        command="pipeline",
+        grid_size=128,
+        n_images=1000,
+        outdir=tmp_path,
+    )
+    # custom_cuda divisor = 1.0; effective budget (=60 with this stub
+    # GPU) passes through unchanged.
+    assert captured["value"] == pytest.approx(60.0, rel=0.02)
