@@ -163,6 +163,7 @@ def prepare_benchmark(
     relion_normalize: bool,
     streaming_mmap: bool,
     streaming_chunk_size: int,
+    disc_type: str,
     seed: int,
     force_volumes: bool,
 ) -> None:
@@ -188,7 +189,7 @@ def prepare_benchmark(
     required = _required_dataset_files(output_dir, grid_size)
     if not all(path.exists() for path in required):
         logger.info(
-            "Generating particles: output=%s classes=%d n_images=%d grid=%d noise=%.4g relion_normalize=%s streaming=%s",
+            "Generating particles: output=%s classes=%d n_images=%d grid=%d noise=%.4g relion_normalize=%s streaming=%s disc_type=%s",
             output_dir,
             n_classes,
             n_images,
@@ -196,6 +197,7 @@ def prepare_benchmark(
             noise_level,
             relion_normalize,
             streaming_mmap,
+            disc_type,
         )
         simulator.generate_synthetic_dataset(
             str(output_dir),
@@ -213,7 +215,7 @@ def prepare_benchmark(
             trailing_zero_format_in_vol_name=True,
             noise_scale_std=0.0,
             contrast_std=0.0,
-            disc_type="nufft",
+            disc_type=disc_type,
             n_tilts=-1,
             image_dtype=np.float32,
             outlier_file_input=None,
@@ -235,6 +237,7 @@ def prepare_benchmark(
         "noise_level": noise_level,
         "pdb_bfactor": pdb_bfactor,
         "seed": seed,
+        "disc_type": disc_type,
         "class_manifest": manifest,
     }
     utils.pickle_dump(sim_info, sim_info_path)
@@ -260,6 +263,12 @@ def main() -> None:
     parser.add_argument("--relion-normalize", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--streaming-mmap", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--streaming-chunk-size", type=int, default=1000)
+    parser.add_argument(
+        "--disc-type",
+        choices=("cubic", "linear_interp", "nearest", "nufft"),
+        default="cubic",
+        help="Projection discretization for synthetic particles. Default cubic avoids slow NUFFT generation.",
+    )
     parser.add_argument("--force-volumes", action="store_true")
     args = parser.parse_args()
 
@@ -276,6 +285,7 @@ def main() -> None:
         relion_normalize=args.relion_normalize,
         streaming_mmap=args.streaming_mmap,
         streaming_chunk_size=args.streaming_chunk_size,
+        disc_type=args.disc_type,
         seed=args.seed,
         force_volumes=args.force_volumes,
     )

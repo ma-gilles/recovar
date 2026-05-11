@@ -239,11 +239,14 @@ def compute_noise_block(
     half spectra because RELION's noise update bins over its FFTW half-plane
     convention directly.
     """
-    ctf_probs_raw = ctf_probs * noise_variance_half
-    a2 = jnp.sum(proj_abs2_half * ctf_probs_raw, axis=0)
+    ctf_has_mass = ctf_probs != 0.0
+    ctf_probs_raw = jnp.where(ctf_has_mass, ctf_probs * noise_variance_half, 0.0)
+    a2_terms = jnp.where(ctf_has_mass, proj_abs2_half * ctf_probs_raw, 0.0)
+    a2 = jnp.sum(a2_terms, axis=0)
 
-    cross = jnp.sum(proj_half * jnp.conj(summed_masked), axis=0)
-    xa = noise_variance_half * cross.real
+    cross_terms = jnp.where(summed_masked != 0.0, proj_half * jnp.conj(summed_masked), 0.0)
+    cross = jnp.sum(cross_terms, axis=0)
+    xa = jnp.where(cross.real != 0.0, noise_variance_half * cross.real, 0.0)
     block_noise = a2 - 2.0 * xa
 
     noise_shells = jnp.zeros(shell_count, dtype=jnp.float32)

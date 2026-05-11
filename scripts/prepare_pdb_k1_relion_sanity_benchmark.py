@@ -89,6 +89,7 @@ def prepare_benchmark(
     relion_normalize: bool,
     streaming_mmap: bool,
     streaming_chunk_size: int,
+    disc_type: str,
     seed: int,
 ) -> None:
     if n_images <= 0:
@@ -131,7 +132,7 @@ def prepare_benchmark(
     required = _required_dataset_files(output_dir, grid_size)
     if not all(path.exists() for path in required):
         logger.info(
-            "Generating particles: output=%s n_images=%d grid=%d noise=%g model=%s relion_normalize=%s streaming=%s",
+            "Generating particles: output=%s n_images=%d grid=%d noise=%g model=%s relion_normalize=%s streaming=%s disc_type=%s",
             output_dir,
             n_images,
             grid_size,
@@ -139,6 +140,7 @@ def prepare_benchmark(
             noise_model,
             relion_normalize,
             streaming_mmap,
+            disc_type,
         )
         simulator.generate_synthetic_dataset(
             str(output_dir),
@@ -156,7 +158,7 @@ def prepare_benchmark(
             trailing_zero_format_in_vol_name=True,
             noise_scale_std=0.0,
             contrast_std=0.0,
-            disc_type="nufft",
+            disc_type=disc_type,
             n_tilts=-1,
             image_dtype=np.float32,
             outlier_file_input=None,
@@ -185,6 +187,7 @@ def prepare_benchmark(
         "seed": seed,
         "relion_normalize": relion_normalize,
         "streaming_mmap": streaming_mmap,
+        "disc_type": disc_type,
     }
     utils.pickle_dump(sim_info, sim_info_path)
 
@@ -237,6 +240,12 @@ def main() -> None:
         help="Write particles through a streaming MRC mmap to avoid large resident memory use.",
     )
     parser.add_argument("--streaming-chunk-size", type=int, default=1000)
+    parser.add_argument(
+        "--disc-type",
+        choices=("cubic", "linear_interp", "nearest", "nufft"),
+        default="cubic",
+        help="Projection discretization for synthetic particles. Default cubic avoids slow NUFFT generation.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -253,6 +262,7 @@ def main() -> None:
         relion_normalize=args.relion_normalize,
         streaming_mmap=args.streaming_mmap,
         streaming_chunk_size=args.streaming_chunk_size,
+        disc_type=args.disc_type,
         seed=args.seed,
     )
 

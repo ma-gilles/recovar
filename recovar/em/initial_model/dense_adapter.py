@@ -502,6 +502,10 @@ def _append_sigma2_offset_meta(meta: dict[str, Any], result: Any, *, prefix: str
     )
     meta[f"{key_prefix}wsum_img_power"] = np.asarray(getattr(noise_stats, "wsum_img_power"), dtype=np.float64)
     meta[f"{key_prefix}noise_sumw"] = float(getattr(noise_stats, "sumw"))
+    if getattr(noise_stats, "wsum_noise_a2", None) is not None:
+        meta[f"{key_prefix}wsum_noise_a2"] = np.asarray(getattr(noise_stats, "wsum_noise_a2"), dtype=np.float64)
+    if getattr(noise_stats, "wsum_noise_xa", None) is not None:
+        meta[f"{key_prefix}wsum_noise_xa"] = np.asarray(getattr(noise_stats, "wsum_noise_xa"), dtype=np.float64)
 
 
 def _sparse_pass2_estep_meta(
@@ -1243,6 +1247,10 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
             meta[f"halfset_{h}_wsum_sigma2_noise"] = half_wsum_noise
             meta[f"halfset_{h}_wsum_img_power"] = half_img_power
             meta[f"halfset_{h}_noise_sumw"] = half_sumw
+            if getattr(noise_stats, "wsum_noise_a2", None) is not None:
+                meta[f"halfset_{h}_wsum_noise_a2"] = np.asarray(getattr(noise_stats, "wsum_noise_a2"), dtype=np.float64)
+            if getattr(noise_stats, "wsum_noise_xa", None) is not None:
+                meta[f"halfset_{h}_wsum_noise_xa"] = np.asarray(getattr(noise_stats, "wsum_noise_xa"), dtype=np.float64)
             wsum_sigma2_offset += half_wsum
             sigma2_offset_sumw += half_sumw
             wsum_sigma2_noise = half_wsum_noise if wsum_sigma2_noise is None else wsum_sigma2_noise + half_wsum_noise

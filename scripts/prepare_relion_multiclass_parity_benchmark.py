@@ -118,6 +118,7 @@ def prepare_benchmark(
     n_classes: int,
     init_radius: int,
     relion_normalize: bool,
+    disc_type: str,
 ):
     mkdir_safe(output_dir)
 
@@ -132,13 +133,14 @@ def prepare_benchmark(
         voxel_size = 4.25 * 128 / grid_size
         volumes_path = str(files(recovar) / "assets" / "vol")
         logger.info(
-            "Generating K-class benchmark: output=%s n_images=%d grid=%d noise=%.3f K=%d relion_normalize=%s",
+            "Generating K-class benchmark: output=%s n_images=%d grid=%d noise=%.3f K=%d relion_normalize=%s disc_type=%s",
             output_dir,
             n_images,
             grid_size,
             noise_level,
             n_classes,
             relion_normalize,
+            disc_type,
         )
         simulator.generate_synthetic_dataset(
             output_dir,
@@ -156,7 +158,7 @@ def prepare_benchmark(
             trailing_zero_format_in_vol_name=True,
             noise_scale_std=0.0,
             contrast_std=0.0,
-            disc_type="nufft",
+            disc_type=disc_type,
             n_tilts=-1,
             outlier_file_input=None,
             relion_normalize=relion_normalize,
@@ -182,6 +184,12 @@ def main():
     parser.add_argument("--n-classes", type=int, default=2)
     parser.add_argument("--init-radius", type=int, default=5)
     parser.add_argument("--relion-normalize", action="store_true")
+    parser.add_argument(
+        "--disc-type",
+        choices=("cubic", "linear_interp", "nearest", "nufft"),
+        default="cubic",
+        help="Projection discretization for synthetic particles. Default cubic avoids slow NUFFT generation.",
+    )
     args = parser.parse_args()
 
     prepare_benchmark(
@@ -192,6 +200,7 @@ def main():
         n_classes=args.n_classes,
         init_radius=args.init_radius,
         relion_normalize=args.relion_normalize,
+        disc_type=args.disc_type,
     )
 
 

@@ -25,7 +25,11 @@ def compute_local_ctf_sums(probs, ctf2_over_nv):
     """Compute weighted CTF^2/noise sums for one exact local bucket."""
 
     probs_sum_t = jnp.sum(probs, axis=-1)  # (B, R)
-    return probs_sum_t[..., None] * ctf2_over_nv[:, None, :]
+    return jnp.where(
+        probs_sum_t[..., None] != 0.0,
+        probs_sum_t[..., None] * ctf2_over_nv[:, None, :],
+        0.0,
+    )
 
 
 @jax.jit

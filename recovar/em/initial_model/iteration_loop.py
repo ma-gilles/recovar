@@ -22,7 +22,9 @@ module is the pure orchestrator.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import replace
+from pathlib import Path
 from typing import Callable, Sequence
 
 import numpy as np
@@ -58,6 +60,56 @@ holds 2K entries when pseudo_halfsets is on (halfset-0 first, then
 halfset-1) and meta is a free-form dict written into per-iter STAR output
 (Pmax, nr_significant, best_class, best_euler, best_trans).
 """
+
+
+def _array_finite_summary(name: str, value: object, *, max_indices: int = 5) -> str:
+    arr = np.asarray(value)
+    finite = np.isfinite(arr)
+    bad = np.argwhere(~finite)
+    if bad.size == 0:
+        finite_values = arr.astype(np.float64, copy=False).reshape(-1)
+        if finite_values.size == 0:
+            return f"{name}: shape={arr.shape}, empty"
+        return (
+            f"{name}: shape={arr.shape}, all finite, "
+            f"min={float(np.min(finite_values)):.6g}, max={float(np.max(finite_values)):.6g}"
+        )
+    finite_values = arr[finite].astype(np.float64, copy=False)
+    finite_range = (
+        f"finite_min={float(np.min(finite_values)):.6g}, finite_max={float(np.max(finite_values)):.6g}"
+        if finite_values.size
+        else "no finite values"
+    )
+    sample_indices = [tuple(int(x) for x in idx) for idx in bad[:max_indices]]
+    return (
+        f"{name}: shape={arr.shape}, nonfinite={int(bad.shape[0])}/{arr.size}, "
+        f"{finite_range}, first_bad={sample_indices}"
+    )
+
+
+def _dump_noise_failure_meta(state: InitialModelState, meta: dict, summaries: Sequence[str]) -> str | None:
+    dump_root = os.environ.get("RECOVAR_INITIALMODEL_NOISE_FAILURE_DUMP_DIR")
+    if not dump_root:
+        return None
+    path = Path(dump_root)
+    path.mkdir(parents=True, exist_ok=True)
+    iter_value = getattr(state, "iter", "unknown")
+    dump_path = path / f"noise_failure_iter_{iter_value}.npz"
+    payload: dict[str, np.ndarray] = {
+        "state_iter": np.asarray([getattr(state, "iter", -1)], dtype=np.int64),
+        "state_subset_size": np.asarray([getattr(state, "subset_size", -1)], dtype=np.int64),
+        "state_ori_size": np.asarray([getattr(state, "ori_size", -1)], dtype=np.int64),
+        "summaries": np.asarray(list(summaries), dtype=str),
+    }
+    for key, value in sorted(meta.items()):
+        if not any(token in key for token in ("noise", "wsum")):
+            continue
+        try:
+            payload[key] = np.asarray(value)
+        except Exception:
+            payload[f"{key}_repr"] = np.asarray([repr(value)], dtype=str)
+    np.savez_compressed(dump_path, **payload)
+    return str(dump_path)
 
 IterArtifactSink = Callable[[InitialModelState, int, dict], None]
 PostMstepUpdateFn = Callable[[InitialModelState, int, dict], InitialModelState]
@@ -173,7 +225,15 @@ def update_noise_from_estep_meta(
             f"noise weighted sums must have shape ({expected_shells},), got {wsum_sigma2_noise.shape}"
         )
     if not np.all(np.isfinite(wsum_sigma2_noise)) or not np.all(np.isfinite(wsum_img_power)):
-        raise ValueError("noise weighted sums must be finite")
+        summaries = [
+            _array_finite_summary("wsum_sigma2_noise", wsum_sigma2_noise),
+            _array_finite_summary("wsum_img_power", wsum_img_power),
+            f"noise_sumw={noise_sumw!r}",
+        ]
+        dump_path = _dump_noise_failure_meta(state, meta, summaries)
+        if dump_path is not None:
+            summaries.append(f"dump={dump_path}")
+        raise ValueError("noise weighted sums must be finite: " + "; ".join(summaries))
 
     from recovar.reconstruction import noise
 

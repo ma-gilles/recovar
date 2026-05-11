@@ -87,6 +87,7 @@ from recovar.em.dense_single_volume.local_backprojection import (
 )
 from recovar.em.dense_single_volume.local_debug import maybe_write_debug_score_dump
 from recovar.em.dense_single_volume.local_em_engine import (
+    EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV,
     EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
@@ -260,6 +261,30 @@ def test_exact_local_microbatch_target_row_pixels_override(monkeypatch):
     monkeypatch.setenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, "380000000")
 
     assert _exact_local_max_hypotheses_per_microbatch(None, 8018) == 47393
+
+
+def test_exact_local_microbatch_caps_fused_mstep_matmul(monkeypatch):
+    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
+    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
+
+    assert _exact_local_max_hypotheses_per_microbatch(
+        None,
+        1091,
+        n_trans=21,
+        n_recon_windowed=1134,
+    ) == 41992
+
+
+def test_exact_local_microbatch_matmul_cap_can_be_disabled(monkeypatch):
+    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
+    monkeypatch.setenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, "0")
+
+    assert _exact_local_max_hypotheses_per_microbatch(
+        None,
+        1091,
+        n_trans=21,
+        n_recon_windowed=1134,
+    ) == 65536
 
 
 def test_exact_local_microbatch_target_row_pixels_rejects_invalid(monkeypatch):

@@ -109,6 +109,7 @@ def prepare_benchmark(
     pdb_bfactor: float,
     pdb_max_rotation: float,
     relion_normalize: bool,
+    disc_type: str,
     seed: int,
 ) -> None:
     if n_images <= 0:
@@ -148,12 +149,13 @@ def prepare_benchmark(
     required = _required_dataset_files(output_dir, grid_size)
     if not all(path.exists() for path in required):
         logger.info(
-            "Generating particles: output=%s n_images=%d grid=%d noise=%.4g relion_normalize=%s",
+            "Generating particles: output=%s n_images=%d grid=%d noise=%.4g relion_normalize=%s disc_type=%s",
             output_dir,
             n_images,
             grid_size,
             noise_level,
             relion_normalize,
+            disc_type,
         )
         simulator.generate_synthetic_dataset(
             str(output_dir),
@@ -171,7 +173,7 @@ def prepare_benchmark(
             trailing_zero_format_in_vol_name=True,
             noise_scale_std=0.0,
             contrast_std=0.0,
-            disc_type="nufft",
+            disc_type=disc_type,
             n_tilts=-1,
             image_dtype=np.float32,
             outlier_file_input=None,
@@ -190,6 +192,7 @@ def prepare_benchmark(
         "pdb_bfactor": pdb_bfactor,
         "pdb_max_rotation_degrees": pdb_max_rotation,
         "trajectory_degrees": [0.0, pdb_max_rotation],
+        "disc_type": disc_type,
         "seed": seed,
     }
     utils.pickle_dump(sim_info, sim_info_path)
@@ -230,6 +233,12 @@ def main() -> None:
         default=True,
         help="Apply RELION-style particle normalization; enabled by default.",
     )
+    parser.add_argument(
+        "--disc-type",
+        choices=("cubic", "linear_interp", "nearest", "nufft"),
+        default="cubic",
+        help="Projection discretization for synthetic particles. Default cubic avoids slow NUFFT generation.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -244,6 +253,7 @@ def main() -> None:
         pdb_bfactor=args.pdb_bfactor,
         pdb_max_rotation=args.pdb_max_rotation,
         relion_normalize=args.relion_normalize,
+        disc_type=args.disc_type,
         seed=args.seed,
     )
 

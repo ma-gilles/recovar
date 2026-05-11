@@ -347,6 +347,10 @@ def _score_pass2_bucket_relion_gpu_diff2(
     algebraically equivalent to the CPU ``Frefctf - Fimg`` expression but has
     different float32 rounding.  We remove the image-only constant so the
     existing relative-score/log-evidence contract is unchanged.
+
+    Extremely small CTF/noise combinations can still overflow the direct form
+    on long 256px runs.  Treat non-finite candidates as impossible hypotheses
+    rather than letting NaNs enter posterior and noise accumulators.
     """
 
     weights = corr_img_score * half_weights[None, :]
@@ -368,7 +372,8 @@ def _score_pass2_bucket_relion_gpu_diff2(
 
         _, scores_rt = jax.lax.scan(score_one_rotation, None, proj_rn)
         scores_rt = scores_rt + rot_prior_r[:, None] + trans_prior_t[None, :]
-        return jnp.where(mask_rt, scores_rt, -jnp.inf)
+        scores_rt = jnp.where(mask_rt, scores_rt, -jnp.inf)
+        return jnp.where(jnp.isfinite(scores_rt), scores_rt, -jnp.inf)
 
     return jax.vmap(score_one_image)(
         shifted_corrected,
@@ -383,27 +388,42 @@ def _score_pass2_bucket_relion_gpu_diff2(
 @jax.jit
 def _normalize_pass2_bucket(scores):
     """Compute per-image normalization stats from (B, R, T) scores."""
+    scores = jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
     flat = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat, axis=1)
-    log_shift = best_log_score[:, None, None]
-    probs = jnp.exp((scores - log_shift).astype(jnp.float64))
+    has_finite_score = jnp.isfinite(best_log_score)
+    safe_best_log_score = jnp.where(has_finite_score, best_log_score, 0.0)
+    log_shift = safe_best_log_score[:, None, None]
+    shifted = jnp.where(has_finite_score[:, None, None], scores - log_shift, -jnp.inf)
+    probs = jnp.exp(shifted.astype(jnp.float64))
+    probs = jnp.where(jnp.isfinite(probs), probs, 0.0)
     sum_exp = jnp.sum(probs.reshape(scores.shape[0], -1), axis=1)
-    log_Z = best_log_score + jnp.log(sum_exp)
-    probs = jnp.exp(scores - log_Z[:, None, None])
-    best_argmax = jnp.argmax(flat, axis=1)
-    max_posterior = jnp.exp(best_log_score - log_Z)
+    has_mass = has_finite_score & (sum_exp > 0) & jnp.isfinite(sum_exp)
+    safe_sum_exp = jnp.where(has_mass, sum_exp, 1.0)
+    log_Z = jnp.where(has_mass, safe_best_log_score + jnp.log(safe_sum_exp), 0.0)
+    probs = probs / safe_sum_exp[:, None, None]
+    probs = jnp.where(has_mass[:, None, None], probs, 0.0)
+    best_argmax = jnp.where(has_mass, jnp.argmax(flat, axis=1), 0)
+    max_posterior = jnp.where(has_mass, jnp.max(probs.reshape(scores.shape[0], -1), axis=1), 0.0)
+    best_log_score = jnp.where(has_mass, best_log_score, -jnp.inf)
     return log_Z, probs, best_log_score, best_argmax, max_posterior
 
 
 @jax.jit
 def _normalize_pass2_bucket_with_log_z(scores, log_z):
     """Normalize sparse candidate scores with a precomputed full-grid log-Z."""
+    scores = jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
     flat = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat, axis=1)
-    probs = jnp.exp(scores - log_z[:, None, None])
-    best_argmax = jnp.argmax(flat, axis=1)
-    max_posterior = jnp.exp(best_log_score - log_z)
-    return log_z, probs, best_log_score, best_argmax, max_posterior
+    has_finite_score = jnp.isfinite(best_log_score) & jnp.isfinite(log_z)
+    safe_log_z = jnp.where(has_finite_score, log_z, 0.0)
+    probs = jnp.exp(scores - safe_log_z[:, None, None])
+    probs = jnp.where(has_finite_score[:, None, None] & jnp.isfinite(probs), probs, 0.0)
+    best_argmax = jnp.where(has_finite_score, jnp.argmax(flat, axis=1), 0)
+    max_posterior = jnp.exp(best_log_score - safe_log_z)
+    max_posterior = jnp.where(has_finite_score & jnp.isfinite(max_posterior), max_posterior, 0.0)
+    best_log_score = jnp.where(has_finite_score, best_log_score, -jnp.inf)
+    return safe_log_z, probs, best_log_score, best_argmax, max_posterior
 
 
 # ---------------------------------------------------------------------------

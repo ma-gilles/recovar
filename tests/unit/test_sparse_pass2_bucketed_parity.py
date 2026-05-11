@@ -24,6 +24,11 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
     _compute_pass2_stats_sparse_perimage_reference,
     compute_pass2_stats_sparse,
 )
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _normalize_pass2_bucket,
+    _normalize_pass2_bucket_with_log_z,
+    _score_pass2_bucket_relion_gpu_diff2,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -233,6 +238,106 @@ def _compare_outputs(out_ref, out_bucket, atol=1e-5, rtol=1e-5):
 # ---------------------------------------------------------------------------
 # Test cases
 # ---------------------------------------------------------------------------
+
+
+def test_sparse_pass2_score_matches_direct_diff2_for_finite_inputs():
+    """Sparse pass-2 scores must preserve direct diff2 algebra."""
+    rng = np.random.default_rng(123)
+    batch, n_rot, n_trans, n_half = 2, 3, 4, 5
+    image = (
+        rng.normal(size=(batch, n_trans, n_half)) + 1j * rng.normal(size=(batch, n_trans, n_half))
+    ).astype(np.complex64)
+    ctf = rng.uniform(0.35, 1.25, size=(batch, n_half)).astype(np.float32)
+    noise = rng.uniform(0.7, 2.0, size=(batch, n_half)).astype(np.float32)
+    proj = (
+        rng.normal(size=(batch, n_rot, n_half)) + 1j * rng.normal(size=(batch, n_rot, n_half))
+    ).astype(np.complex64)
+    half_weights = np.array([1.0, 2.0, 2.0, 2.0, 1.0], dtype=np.float32)
+    rot_prior = rng.normal(scale=0.1, size=(batch, n_rot)).astype(np.float32)
+    trans_prior = rng.normal(scale=0.1, size=(batch, n_trans)).astype(np.float32)
+    mask = np.ones((batch, n_rot, n_trans), dtype=bool)
+
+    corr_img_score = ctf * ctf / noise
+    shifted_corrected = image / ctf[:, None, :]
+    scores = _score_pass2_bucket_relion_gpu_diff2(
+        jnp.asarray(shifted_corrected),
+        jnp.asarray(corr_img_score),
+        jnp.asarray(proj),
+        jnp.asarray(half_weights),
+        jnp.asarray(rot_prior),
+        jnp.asarray(trans_prior),
+        jnp.asarray(mask),
+    )
+
+    expected = np.empty((batch, n_rot, n_trans), dtype=np.float32)
+    for b in range(batch):
+        weights = corr_img_score[b] * half_weights
+        image_constant = 0.5 * np.sum(np.abs(shifted_corrected[b]) ** 2 * weights[None, :], axis=-1)
+        for r in range(n_rot):
+            diff = proj[b, r][None, :] - shifted_corrected[b]
+            diff2 = 0.5 * np.sum(np.abs(diff) ** 2 * weights[None, :], axis=-1)
+            expected[b, r] = -diff2 + image_constant + rot_prior[b, r] + trans_prior[b]
+
+    np.testing.assert_allclose(np.asarray(scores), expected, atol=5e-5, rtol=5e-5)
+
+
+def test_sparse_pass2_score_masks_nonfinite_direct_diff2_candidates():
+    """Overflowed direct-diff candidates should become impossible, not NaN."""
+    scores = _score_pass2_bucket_relion_gpu_diff2(
+        jnp.array([[[jnp.inf + 0.0j]]], dtype=jnp.complex64),
+        jnp.ones((1, 1), dtype=jnp.float32),
+        jnp.zeros((1, 1, 1), dtype=jnp.complex64),
+        jnp.ones((1,), dtype=jnp.float32),
+        jnp.zeros((1, 1), dtype=jnp.float32),
+        jnp.zeros((1, 1), dtype=jnp.float32),
+        jnp.ones((1, 1, 1), dtype=bool),
+    )
+
+    assert np.isneginf(float(np.asarray(scores[0, 0, 0])))
+
+
+def test_sparse_pass2_normalization_masks_nonfinite_scores():
+    """Non-finite sparse candidates must not poison probabilities or noise sums."""
+    scores = jnp.array(
+        [
+            [[jnp.nan, -jnp.inf], [1.0, -2.0]],
+            [[-jnp.inf, jnp.nan], [jnp.inf, -jnp.inf]],
+        ],
+        dtype=jnp.float32,
+    )
+
+    log_z, probs, best_log_score, best_argmax, max_posterior = _normalize_pass2_bucket(scores)
+
+    np.testing.assert_allclose(np.asarray(probs[0]).sum(), 1.0, atol=1e-7)
+    assert np.all(np.isfinite(np.asarray(probs)))
+    assert np.isfinite(float(np.asarray(log_z[0])))
+    assert float(np.asarray(best_log_score[0])) == pytest.approx(1.0)
+    assert int(np.asarray(best_argmax[0])) == 2
+    assert float(np.asarray(max_posterior[0])) > 0.0
+
+    # The second image has no finite sparse candidate.  Keep it finite and give
+    # it zero posterior mass instead of emitting NaNs into the M-step/noise sums.
+    np.testing.assert_allclose(np.asarray(probs[1]).sum(), 0.0, atol=1e-7)
+    assert float(np.asarray(log_z[1])) == pytest.approx(0.0)
+    assert np.isneginf(float(np.asarray(best_log_score[1])))
+    assert int(np.asarray(best_argmax[1])) == 0
+    assert float(np.asarray(max_posterior[1])) == pytest.approx(0.0)
+
+
+def test_sparse_pass2_logz_normalization_masks_nonfinite_scores():
+    """Precomputed-log-Z sparse normalization must also stay finite."""
+    scores = jnp.array([[[jnp.nan, -jnp.inf]], [[0.0, -1.0]]], dtype=jnp.float32)
+    log_z = jnp.array([jnp.nan, 0.5], dtype=jnp.float32)
+
+    safe_log_z, probs, best_log_score, best_argmax, max_posterior = _normalize_pass2_bucket_with_log_z(scores, log_z)
+
+    assert float(np.asarray(safe_log_z[0])) == pytest.approx(0.0)
+    np.testing.assert_allclose(np.asarray(probs[0]).sum(), 0.0, atol=1e-7)
+    assert np.isneginf(float(np.asarray(best_log_score[0])))
+    assert int(np.asarray(best_argmax[0])) == 0
+    assert float(np.asarray(max_posterior[0])) == pytest.approx(0.0)
+    assert np.all(np.isfinite(np.asarray(probs)))
+    assert float(np.asarray(safe_log_z[1])) == pytest.approx(0.5)
 
 
 class TestSparsePass2Bucketed:

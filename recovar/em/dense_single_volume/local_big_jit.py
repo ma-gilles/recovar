@@ -122,27 +122,36 @@ def _score_normalize_mstep(
     scores = scores + rotation_log_prior[:, :, None]
     scores = scores + translation_log_prior[:, None, :]
     scores = jnp.where(rotation_mask[:, :, None] & sample_mask, scores, -jnp.inf)
-    scores = jnp.where(valid_image_mask[:, None, None], scores, 0.0)
+    scores = jnp.where(valid_image_mask[:, None, None], scores, -jnp.inf)
+    scores = jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
 
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
+    row_has_score = jnp.isfinite(best_log_score) & valid_image_mask
     if has_normalization_log_z:
-        log_Z = normalization_log_z.astype(scores.real.dtype)
+        raw_log_Z = normalization_log_z.astype(scores.real.dtype)
+        row_has_mass = row_has_score & jnp.isfinite(raw_log_Z)
+        log_Z = jnp.where(row_has_mass, raw_log_Z, 0.0)
     else:
-        log_shift = best_log_score[:, None, None]
+        log_shift = jnp.where(row_has_score, best_log_score, 0.0)[:, None, None]
         if use_float64_normalization:
             shifted_exp = jnp.exp((scores - log_shift).astype(jnp.float64))
         else:
             shifted_exp = jnp.exp(scores - log_shift)
+        shifted_exp = jnp.where(row_has_score[:, None, None] & jnp.isfinite(shifted_exp), shifted_exp, 0.0)
         sum_exp = jnp.sum(shifted_exp.reshape(scores.shape[0], -1), axis=1)
-        log_Z = best_log_score + jnp.log(sum_exp)
-    probs = jnp.exp(scores - log_Z[:, None, None])
-    probs = jnp.where(valid_image_mask[:, None, None], probs, 0.0)
+        row_has_mass = row_has_score & jnp.isfinite(sum_exp) & (sum_exp > 0.0)
+        safe_sum_exp = jnp.where(row_has_mass, sum_exp, 1.0)
+        log_Z = jnp.where(row_has_mass, best_log_score + jnp.log(safe_sum_exp), 0.0)
+    scores_for_probs = jnp.where(row_has_mass[:, None, None], scores, -jnp.inf)
+    probs = jnp.exp(scores_for_probs - log_Z[:, None, None])
+    probs = jnp.where(row_has_mass[:, None, None] & jnp.isfinite(probs), probs, 0.0)
     best_argmax = jnp.argmax(flat_scores, axis=1)
     max_posterior = jnp.exp(best_log_score - log_Z)
-    best_log_score = jnp.where(valid_image_mask, best_log_score, -jnp.inf)
-    best_argmax = jnp.where(valid_image_mask, best_argmax, 0)
-    max_posterior = jnp.where(valid_image_mask, max_posterior, 0.0)
+    best_log_score = jnp.where(row_has_mass, best_log_score, -jnp.inf)
+    best_argmax = jnp.where(row_has_mass, best_argmax, 0)
+    max_posterior = jnp.where(row_has_mass & jnp.isfinite(max_posterior), max_posterior, 0.0)
+    reconstruction_image_mask = valid_image_mask & row_has_mass
 
     if reconstruct_significant_only:
         flat_probs = probs.reshape(probs.shape[0], -1)
@@ -152,12 +161,12 @@ def _score_normalize_mstep(
             max_significants=max_significants,
         )
         reconstruction_sample_mask = significant_flat.reshape(probs.shape)
-        reconstruction_sample_mask = reconstruction_sample_mask & valid_image_mask[:, None, None]
+        reconstruction_sample_mask = reconstruction_sample_mask & reconstruction_image_mask[:, None, None]
         reconstruction_rotation_mask = jnp.any(reconstruction_sample_mask, axis=-1)
-        n_significant_samples = jnp.where(valid_image_mask, n_significant_samples, 0)
+        n_significant_samples = jnp.where(reconstruction_image_mask, n_significant_samples, 0)
         reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
     else:
-        reconstruction_sample_mask = (rotation_mask[:, :, None] & sample_mask) & valid_image_mask[:, None, None]
+        reconstruction_sample_mask = (rotation_mask[:, :, None] & sample_mask) & reconstruction_image_mask[:, None, None]
         reconstruction_rotation_mask = jnp.any(reconstruction_sample_mask, axis=-1)
         n_significant_samples = jnp.sum(reconstruction_sample_mask, axis=(1, 2)).astype(jnp.int32)
         reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
@@ -165,7 +174,11 @@ def _score_normalize_mstep(
     probs_sum_t = jnp.sum(probs, axis=-1)
     reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
     summed = jnp.matmul(reconstruction_probs, shifted_recon_split)
-    ctf_probs = reconstruction_probs_sum_t[..., None] * ctf2_over_nv_recon[:, None, :]
+    ctf_probs = jnp.where(
+        reconstruction_probs_sum_t[..., None] != 0.0,
+        reconstruction_probs_sum_t[..., None] * ctf2_over_nv_recon[:, None, :],
+        0.0,
+    )
     return (
         log_Z,
         best_log_score,
@@ -602,7 +615,12 @@ def run_local_bucket_big_jit(
         # RELION's VDAM/--grad storeWeightedSums backprojects
         # (Fimg_shift_nomask - Frefctf) * CTF / sigma2.
         frefctf_weighted = proj_for_noise * ctf2_over_nv_recon[:, None, :]
-        summed = summed - reconstruction_probs_sum_t[..., None] * frefctf_weighted
+        frefctf_delta = jnp.where(
+            reconstruction_probs_sum_t[..., None] != 0.0,
+            reconstruction_probs_sum_t[..., None] * frefctf_weighted,
+            0.0,
+        )
+        summed = summed - frefctf_delta
 
     flat_summed = summed.reshape(batch_size * local_rotations.shape[1], summed.shape[-1])
     flat_ctf_probs = ctf_probs.reshape(batch_size * local_rotations.shape[1], ctf_probs.shape[-1])
@@ -639,6 +657,7 @@ def run_local_bucket_big_jit(
         noise_sumw = noise_sumw + jnp.sum(support_mass)
 
         shifted_noise_split = shifted_noise.reshape(batch_size, n_trans, -1)
+        shifted_noise_split = jnp.where(support_mass[:, None, None] != 0.0, shifted_noise_split, 0.0)
         summed_masked_noise = jnp.matmul(reconstruction_probs, shifted_noise_split)
         flat_summed_masked_noise = summed_masked_noise.reshape(
             batch_size * local_rotations.shape[1],

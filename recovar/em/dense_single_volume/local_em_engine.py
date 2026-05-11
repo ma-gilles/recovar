@@ -113,6 +113,8 @@ EXACT_LOCAL_TARGET_ROW_PIXELS = 190_000_000
 EXACT_LOCAL_TARGET_ROW_PIXELS_ENV = "RECOVAR_EXACT_LOCAL_TARGET_ROW_PIXELS"
 EXACT_LOCAL_RAW_CACHE_MAX_GB = 16.0
 EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RAW_CACHE_MAX_GB"
+EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB = 4.0
+EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB"
 # Disabled by default: on the 50k/256 local-search target this cache made the
 # iteration slower by precomputing more spectra than the bucket schedule reuses.
 EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB = 0.0
@@ -584,7 +586,13 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
     return padded_bucket, padded_batch_data, padded_ctf_params, valid_image_mask, padded_batch_size
 
 
-def _exact_local_max_hypotheses_per_microbatch(default: int | None, n_windowed: int) -> int:
+def _exact_local_max_hypotheses_per_microbatch(
+    default: int | None,
+    n_windowed: int,
+    *,
+    n_trans: int = 1,
+    n_recon_windowed: int | None = None,
+) -> int:
     """Return exact-local microbatch cap.
 
     The automatic default targets the proven 5k/128 local-search working set
@@ -599,7 +607,16 @@ def _exact_local_max_hypotheses_per_microbatch(default: int | None, n_windowed: 
     if target_row_pixels <= 0:
         raise ValueError(f"{EXACT_LOCAL_TARGET_ROW_PIXELS_ENV} must be positive")
     value = target_row_pixels // max(1, int(n_windowed))
-    return int(max(8192, min(65536, value)))
+    max_gb = float(os.environ.get(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB))
+    if max_gb > 0.0:
+        # The fused local M-step computes probabilities x shifted images with a
+        # peak working set proportional to hypotheses * translations * recon
+        # pixels. The old cap ignored translations and could still build ~32 GiB
+        # buckets on 256-box pass-2 runs.
+        n_recon = int(n_windowed if n_recon_windowed is None else n_recon_windowed)
+        matmul_cap = int((max_gb * 1e9) // max(1, int(n_trans) * max(1, n_recon) * 4))
+        value = min(value, matmul_cap)
+    return int(max(512, min(65536, value)))
 
 
 def _local_raw_cache_enabled(n_images: int, image_shape, dtype) -> bool:
@@ -1243,6 +1260,8 @@ def run_local_em_exact(
     max_hypotheses_per_microbatch = _exact_local_max_hypotheses_per_microbatch(
         max_hypotheses_per_microbatch,
         n_windowed,
+        n_trans=n_trans,
+        n_recon_windowed=window_spec.n_recon,
     )
     bucket_build_t0 = time.time()
     bucket_specs = bucket_local_hypothesis_layout(

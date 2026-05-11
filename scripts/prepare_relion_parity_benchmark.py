@@ -101,7 +101,7 @@ def _write_reference_volumes(output_dir, grid_size):
     )
 
 
-def prepare_benchmark(output_dir, *, n_images, grid_size, noise_level, relion_normalize=False):
+def prepare_benchmark(output_dir, *, n_images, grid_size, noise_level, relion_normalize=False, disc_type="cubic"):
     mkdir_safe(output_dir)
 
     particles_star = os.path.join(output_dir, "particles.star")
@@ -119,12 +119,13 @@ def prepare_benchmark(output_dir, *, n_images, grid_size, noise_level, relion_no
         voxel_size = 4.25 * 128 / grid_size
         volumes_path = str(files(recovar) / "assets" / "vol")
         logger.info(
-            "Generating benchmark dataset: output=%s n_images=%d grid=%d noise=%.3f relion_normalize=%s",
+            "Generating benchmark dataset: output=%s n_images=%d grid=%d noise=%.3f relion_normalize=%s disc_type=%s",
             output_dir,
             n_images,
             grid_size,
             noise_level,
             relion_normalize,
+            disc_type,
         )
         simulator.generate_synthetic_dataset(
             output_dir,
@@ -142,7 +143,7 @@ def prepare_benchmark(output_dir, *, n_images, grid_size, noise_level, relion_no
             trailing_zero_format_in_vol_name=True,
             noise_scale_std=0,
             contrast_std=0,
-            disc_type="nufft",
+            disc_type=disc_type,
             n_tilts=-1,
             outlier_file_input=None,
             relion_normalize=relion_normalize,
@@ -175,6 +176,12 @@ def main():
              "This makes the data directly compatible with RELION's "
              "iter-1 Bayesian E-step (no need for --firstiter_cc). Default off.",
     )
+    parser.add_argument(
+        "--disc-type",
+        choices=("cubic", "linear_interp", "nearest", "nufft"),
+        default="cubic",
+        help="Projection discretization for synthetic particles. Default cubic avoids slow NUFFT generation.",
+    )
     args = parser.parse_args()
 
     prepare_benchmark(
@@ -183,6 +190,7 @@ def main():
         grid_size=args.grid_size,
         noise_level=args.noise_level,
         relion_normalize=args.relion_normalize,
+        disc_type=args.disc_type,
     )
 
 

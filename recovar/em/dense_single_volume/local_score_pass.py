@@ -318,7 +318,11 @@ def fused_score_normalize_mstep_abs2_on_demand(
     probs_sum_t = jnp.sum(probs, axis=-1)
     reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
     summed = jnp.matmul(reconstruction_probs, shifted_recon_split)
-    ctf_probs = reconstruction_probs_sum_t[..., None] * ctf2_over_nv_recon[:, None, :]
+    ctf_probs = jnp.where(
+        reconstruction_probs_sum_t[..., None] != 0.0,
+        reconstruction_probs_sum_t[..., None] * ctf2_over_nv_recon[:, None, :],
+        0.0,
+    )
     return (
         log_Z,
         probs,
