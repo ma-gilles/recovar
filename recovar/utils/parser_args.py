@@ -320,8 +320,16 @@ def apply_memory_planning_args(
         "cpu": 1.0,
     }
     divisor = _BACKEND_DIVISOR.get(plan.budget.backend, 1.0)
-    legacy_budget = plan.budget.effective_budget_gb / divisor
+    # ONLY override the global limit when the divisor is non-trivial.
+    # Calling ``set_gpu_memory_limit`` unconditionally — even with the
+    # planner's effective_budget — shifts batch sizes from "whatever
+    # JAX reports as bytes_limit" to "effective_budget", and the
+    # noise-floor cryo-ET outlier metrics flip on that small a delta
+    # (slurm 8025670 captured it). For custom_cuda (divisor=1.0) we
+    # leave the global alone so production paths are bit-identical to
+    # dev.
     if divisor != 1.0:
+        legacy_budget = plan.budget.effective_budget_gb / divisor
         if logger is not None:
             logger.info(
                 "Deflating budget for legacy batch-size formulas: %.2f GB / %.2f = "
@@ -331,12 +339,12 @@ def apply_memory_planning_args(
                 legacy_budget,
                 plan.budget.backend,
             )
-    try:
-        from recovar.utils import helpers as _helpers
+        try:
+            from recovar.utils import helpers as _helpers
 
-        _helpers.set_gpu_memory_limit(legacy_budget)
-    except Exception:
-        pass
+            _helpers.set_gpu_memory_limit(legacy_budget)
+        except Exception:
+            pass
 
     if outdir is not None:
         try:

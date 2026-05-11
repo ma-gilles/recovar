@@ -556,9 +556,14 @@ def test_jax_fallback_deflates_legacy_budget(monkeypatch, tmp_path):
 
 
 def test_custom_cuda_does_not_deflate_legacy_budget(monkeypatch, tmp_path):
-    """Mirror of above: under custom_cuda, legacy formulas get the full
-    effective_budget. Saturation sweep showed the custom kernel uses
-    only ~50-70% of budget so we do NOT deflate."""
+    """Under custom_cuda the planner deliberately does NOT touch the
+    global ``set_gpu_memory_limit``. The saturation sweep showed the
+    custom kernel comfortably fits in budget (ratios 0.09-0.72 across
+    grids). Unconditionally calling set_gpu_memory_limit even with
+    the same value shifts batch sizes off whatever JAX reports as
+    bytes_limit, which is enough delta to flip the noise-floor
+    cryo-ET outlier metrics in long-test (slurm 8025670 caught this).
+    """
     import argparse
 
     from recovar.utils import helpers as _utils
@@ -586,6 +591,8 @@ def test_custom_cuda_does_not_deflate_legacy_budget(monkeypatch, tmp_path):
         n_images=1000,
         outdir=tmp_path,
     )
-    # custom_cuda divisor = 1.0; effective budget (=60 with this stub
-    # GPU) passes through unchanged.
-    assert captured["value"] == pytest.approx(60.0, rel=0.02)
+    # custom_cuda divisor = 1.0; planner must NOT touch the global.
+    # (apply_gpu_memory_arg, called separately, can set it from
+    # --gpu-budget-gb; but apply_memory_planning_args must stay a
+    # no-op for the limit when no deflation is needed.)
+    assert "value" not in captured
