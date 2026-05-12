@@ -683,5 +683,143 @@ def compute_unregularized_halfmaps_and_align_signs(
 
 
 # ---------------------------------------------------------------------------
+# RELION posterior-weighted noise update
+# ---------------------------------------------------------------------------
+
+
+@_dataclass
+class NoiseUpdateResult:
+    """Posterior-weighted noise-variance update output.
+
+    All four arrays are normalized to RELION conventions:
+    - ``noise_from_res`` / ``noise_from_res_per_half`` are per-shell
+      sigma2_noise (1D arrays of length ``n_shells``).
+    - ``noise_variance_per_half`` is the same data unrolled to a flat
+      ``ravel(make_radial_noise(...))`` representation for the engine.
+    - ``noise_variance`` is the mean of the two halves' radial.
+    - ``previous_noise_radial[_per_half]`` carry the per-shell values
+      forward to the next iteration's update.
+    """
+
+    noise_from_res: np.ndarray
+    noise_from_res_per_half: list
+    noise_variance_per_half: list
+    noise_variance: object
+    previous_noise_radial: object
+    previous_noise_radial_per_half: list
+
+
+def update_posterior_noise_variance(
+    *,
+    noise_stats_per_half,
+    noise_variance_per_half: list,
+    previous_noise_radial_per_half: list,
+    previous_noise_radial,
+    cryo,
+    k_class_enabled: bool,
+    relion_firstiter_cc_this_iter: bool,
+    iteration: int,
+    cs: int,
+    maybe_dump_noise_update_debug=None,
+) -> NoiseUpdateResult:
+    """RELION-style posterior-weighted noise update.
+
+    Sums the ``wsum_sigma2_noise``/``wsum_img_power`` accumulators from
+    both half-sets and normalizes via RELION's M-step formula. K-class
+    refinement shares one sigma2_noise across classes (Class3D ordering);
+    K=1 keeps independent per-half sigma2_noise.
+
+    When ``relion_firstiter_cc_this_iter`` is true, keeps the previous
+    sigma2_noise (matching RELION's iter-1 CC emulation, which skips the
+    first-iter noise update).
+    """
+
+    from recovar.reconstruction import noise
+
+    if noise_stats_per_half[0] is None or noise_stats_per_half[1] is None:
+        raise RuntimeError(
+            "RELION mode expected per-half NoiseStats from the EM engine; "
+            "ensure accumulate_noise=True is plumbed through pass 2.",
+        )
+
+    if relion_firstiter_cc_this_iter:
+        noise_from_res_per_half = [np.asarray(noise_k, dtype=np.float64) for noise_k in previous_noise_radial_per_half]
+        noise_from_res = np.mean(np.stack(noise_from_res_per_half, axis=0), axis=0)
+        logger.info(
+            "RELION iter-1 CC emulation: keeping previous sigma2_noise (skip first-iter noise update)",
+        )
+        return NoiseUpdateResult(
+            noise_from_res=noise_from_res,
+            noise_from_res_per_half=noise_from_res_per_half,
+            noise_variance_per_half=noise_variance_per_half,
+            noise_variance=_mean_noise_variance(noise_variance_per_half),
+            previous_noise_radial=previous_noise_radial,
+            previous_noise_radial_per_half=previous_noise_radial_per_half,
+        )
+
+    if k_class_enabled:
+        combined_noise_stats = _combined_noise_stats(noise_stats_per_half)
+        if combined_noise_stats is None:
+            raise RuntimeError("K-class noise update expected at least one NoiseStats object")
+        noise_shared = noise.normalize_wsum_to_sigma2_noise(
+            np.asarray(combined_noise_stats.wsum_sigma2_noise, dtype=np.float64),
+            np.asarray(combined_noise_stats.wsum_img_power, dtype=np.float64),
+            combined_noise_stats.sumw,
+            cryo.image_shape,
+        )
+        noise_from_res = np.asarray(noise_shared, dtype=np.float64)
+        noise_from_res_per_half = [noise_from_res.copy(), noise_from_res.copy()]
+        noise_variance_shared = jnp.asarray(
+            noise.make_radial_noise(noise_shared, cryo.image_shape),
+        ).reshape(-1)
+        noise_variance_per_half = [noise_variance_shared, noise_variance_shared]
+    else:
+        noise_from_res_per_half = []
+        for k_noise, stats_k in enumerate(noise_stats_per_half):
+            noise_k = noise.normalize_wsum_to_sigma2_noise(
+                np.asarray(stats_k.wsum_sigma2_noise, dtype=np.float64),
+                np.asarray(stats_k.wsum_img_power, dtype=np.float64),
+                stats_k.sumw,
+                cryo.image_shape,
+            )
+            noise_from_res_per_half.append(np.asarray(noise_k, dtype=np.float64))
+            noise_variance_per_half[k_noise] = jnp.asarray(
+                noise.make_radial_noise(noise_k, cryo.image_shape),
+            ).reshape(-1)
+        noise_from_res = np.mean(np.stack(noise_from_res_per_half, axis=0), axis=0)
+
+    # Log per-shell noise comparison (first 10 shells) for convergence diagnostics.
+    old_noise_radial = previous_noise_radial
+    n_log = min(10, len(noise_from_res), len(old_noise_radial))
+    logger.info(
+        "Noise update per shell (first %d): old=[%s] new=[%s]",
+        n_log,
+        ", ".join(f"{float(x):.3e}" for x in old_noise_radial[:n_log]),
+        ", ".join(f"{float(x):.3e}" for x in noise_from_res[:n_log]),
+    )
+    if maybe_dump_noise_update_debug is not None:
+        maybe_dump_noise_update_debug(
+            iteration=iteration,
+            current_size=cs,
+            image_shape=cryo.image_shape,
+            noise_stats_per_half=noise_stats_per_half,
+            previous_noise_radial_per_half=previous_noise_radial_per_half,
+            noise_from_res_per_half=noise_from_res_per_half,
+            noise_from_res=noise_from_res,
+        )
+
+    new_previous_noise_radial = jnp.asarray(noise_from_res, dtype=jnp.float32)
+    noise_variance = _mean_noise_variance(noise_variance_per_half)
+    return NoiseUpdateResult(
+        noise_from_res=noise_from_res,
+        noise_from_res_per_half=noise_from_res_per_half,
+        noise_variance_per_half=noise_variance_per_half,
+        noise_variance=noise_variance,
+        previous_noise_radial=new_previous_noise_radial,
+        previous_noise_radial_per_half=noise_from_res_per_half,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main refinement loop
 # ---------------------------------------------------------------------------
