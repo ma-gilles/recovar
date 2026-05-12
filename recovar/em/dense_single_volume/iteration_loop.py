@@ -443,6 +443,197 @@ def _score_kclass_firstiter_cc_pass2(
     return k_class_result, rot_pmap, adaptive_os_local
 
 
+def _score_half_dense(
+    *,
+    k: int,
+    experiment_dataset,
+    means_k,
+    mean_variance,
+    noise_variance_k,
+    effective_rotations,
+    current_translations,
+    base_translations,
+    current_healpix_order: int,
+    state,
+    random_perturbation,
+    disc_type,
+    image_batch_size: int,
+    rotation_log_prior_k,
+    class_rotation_log_prior_k,
+    translation_log_prior,
+    translation_search_base,
+    trans_prior_center_for_engine,
+    image_corrections_k,
+    scale_corrections_k,
+    firstiter_score_mode_this_iter: str,
+    firstiter_winner_take_all_this_iter: bool,
+    cs_for_engine,
+    class_log_priors,
+    k_class_enabled: bool,
+    relion_firstiter_cc_this_iter: bool,
+    disable_adjoint_y: bool,
+    disable_adjoint_ctf: bool,
+    safe_batch_sizes,
+    # K-class scatter targets (mutated in place):
+    noise_stats_per_half_per_class,
+    class_assignments,
+    class_posterior_per_half,
+    class_rotation_posterior_per_half,
+    best_pose_rotations,
+    best_pose_rotation_eulers,
+    best_pose_translations,
+    # Mode-specific overrides (adaptive site sets these; single-pass uses
+    # the defaults):
+    k_class_image_batch_size_override: int | None = None,
+    k_class_rotation_block_size_override: int | None = None,
+    firstiter_coarse_current_size: int | None = None,
+    firstiter_fine_current_size: int | None = None,
+    firstiter_log_label: str = "(non-adaptive site) ",
+    firstiter_updates_em_kwargs_ibs: bool = False,
+) -> HalfScoreResult:
+    """Dense (non-local-search) E+M scoring for one half-set.
+
+    Used by both the single-pass (``else``) and adaptive-2-pass
+    (``elif use_adaptive``) branches of the half-set loop. The two modes
+    differ in four places, all controlled by trailing parameters:
+
+    1. ``k_class_image_batch_size_override`` /
+       ``k_class_rotation_block_size_override`` — adaptive overrides
+       em_kwargs ibs/rbs to K-class values before firstiter_cc check.
+    2. ``firstiter_coarse_current_size`` / ``firstiter_fine_current_size``
+       — adaptive passes ``coarse_cs`` / ``cs_for_engine`` through to the
+       adaptive 2-pass engine; single-pass omits them.
+    3. ``firstiter_log_label`` — single-pass uses
+       ``"(non-adaptive site) "`` for the routing log message.
+    4. ``firstiter_updates_em_kwargs_ibs`` — adaptive overrides
+       em_kwargs["image_batch_size"] with the firstiter clamp; single-pass
+       leaves em_kwargs untouched.
+
+    Mutates the per-half K-class scatter lists when ``k_class_enabled`` is
+    True (via ``_scatter_dense_k_class_result``); the K=1 per-half lists
+    are still owned by the caller. ``safe_batch_sizes`` is the
+    closure-bound batch sizer from ``_run_relion_iteration_loop``.
+    """
+
+    safe_ibs, safe_rbs = safe_batch_sizes(
+        effective_rotations.shape[0],
+        current_translations.shape[0],
+    )
+    em_kwargs = {
+        **_DENSE_EM_STATIC_KWARGS,
+        "image_batch_size": safe_ibs,
+        "rotation_block_size": safe_rbs,
+        "current_size": cs_for_engine,
+        "rotation_log_prior": rotation_log_prior_k,
+        "translation_log_prior": translation_log_prior,
+        "image_corrections": image_corrections_k,
+        "scale_corrections": scale_corrections_k,
+        "image_pre_shifts": translation_search_base,
+        "translation_prior_centers": trans_prior_center_for_engine,
+        "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
+        "relion_firstiter_winner_take_all": firstiter_winner_take_all_this_iter,
+    }
+    if class_rotation_log_prior_k is not None:
+        em_kwargs["rotation_log_prior"] = None
+        em_kwargs["class_rotation_log_prior"] = class_rotation_log_prior_k
+
+    if k_class_enabled:
+        if disable_adjoint_y or disable_adjoint_ctf:
+            raise NotImplementedError("K-class refine does not support adjoint ablation flags")
+        if k_class_image_batch_size_override is not None:
+            em_kwargs["image_batch_size"] = k_class_image_batch_size_override
+        if k_class_rotation_block_size_override is not None:
+            em_kwargs["rotation_block_size"] = k_class_rotation_block_size_override
+        rot_pmap_for_collapse = None
+        adaptive_os_local = 0
+        # STRICT-PARITY: at iter 1 with --firstiter_cc, route through the
+        # adaptive 2-pass engine so iter-1 matches RELION's
+        # expectationOneParticle pass-2 masked-to-best-coarse semantics
+        # (ml_optimiser.cpp:9181-9207).
+        if relion_firstiter_cc_this_iter:
+            k_class_result, rot_pmap_for_collapse, adaptive_os_local = _score_kclass_firstiter_cc_pass2(
+                experiment_dataset=experiment_dataset,
+                mean=means_k,
+                mean_variance=mean_variance,
+                noise_variance_k=noise_variance_k,
+                effective_rotations=effective_rotations,
+                current_translations=current_translations,
+                base_translations=base_translations,
+                current_healpix_order=current_healpix_order,
+                state=state,
+                random_perturbation=random_perturbation,
+                disc_type=disc_type,
+                class_log_priors=class_log_priors,
+                image_batch_size=image_batch_size,
+                image_shape_k=experiment_dataset.image_shape,
+                em_kwargs=em_kwargs,
+                coarse_current_size=firstiter_coarse_current_size,
+                fine_current_size=firstiter_fine_current_size,
+                log_label=firstiter_log_label,
+                update_em_kwargs_image_batch_size=firstiter_updates_em_kwargs_ibs,
+            )
+        else:
+            k_class_result = run_dense_k_class_em(
+                experiment_dataset,
+                means_k,
+                mean_variance,
+                noise_variance_k,
+                effective_rotations,
+                current_translations,
+                disc_type,
+                class_log_priors=class_log_priors,
+                accumulate_noise=True,
+                return_best_pose_details=True,
+                **em_kwargs,
+            )
+        ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = _scatter_dense_k_class_result(
+            k_class_result,
+            k=k,
+            effective_rotations=effective_rotations,
+            rot_pmap_for_collapse=rot_pmap_for_collapse,
+            relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
+            adaptive_os_local=adaptive_os_local,
+            noise_stats_per_half_per_class=noise_stats_per_half_per_class,
+            class_assignments=class_assignments,
+            class_posterior_per_half=class_posterior_per_half,
+            class_rotation_posterior_per_half=class_rotation_posterior_per_half,
+            best_pose_rotations=best_pose_rotations,
+            best_pose_rotation_eulers=best_pose_rotation_eulers,
+            best_pose_translations=best_pose_translations,
+        )
+        return HalfScoreResult(
+            ha=ha_k,
+            Ft_y=Ft_y_k,
+            Ft_ctf=Ft_ctf_k,
+            em_stats=em_stats_k,
+            noise_stats=noise_stats_k,
+            rot_pmap_for_collapse=rot_pmap_for_collapse,
+            adaptive_os_local=adaptive_os_local,
+        )
+
+    _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
+        experiment_dataset,
+        means_k,
+        mean_variance,
+        noise_variance_k,
+        effective_rotations,
+        current_translations,
+        disc_type,
+        return_stats=True,
+        accumulate_noise=True,
+        disable_adjoint_y=disable_adjoint_y,
+        disable_adjoint_ctf=disable_adjoint_ctf,
+        **em_kwargs,
+    )
+    return HalfScoreResult(
+        ha=ha_k,
+        Ft_y=Ft_y_k,
+        Ft_ctf=Ft_ctf_k,
+        em_stats=em_stats_k,
+        noise_stats=noise_stats_k,
+    )
+
+
 def refine_single_volume(
     experiment_datasets,
     init_volume,
@@ -1976,108 +2167,56 @@ def _run_relion_iteration_loop(
                 coarse_ha[k] = ha_k
 
             elif use_adaptive:
-                safe_ibs, safe_rbs = _safe_batch_sizes(
-                    effective_rotations.shape[0],
-                    current_translations.shape[0],
+                adaptive_result = _score_half_dense(
+                    k=k,
+                    experiment_dataset=experiment_datasets[k],
+                    means_k=means[k],
+                    mean_variance=mean_variance,
+                    noise_variance_k=noise_variance_k,
+                    effective_rotations=effective_rotations,
+                    current_translations=current_translations,
+                    base_translations=base_translations,
+                    current_healpix_order=current_healpix_order,
+                    state=state,
+                    random_perturbation=random_perturbation,
+                    disc_type=disc_type,
+                    image_batch_size=image_batch_size,
+                    rotation_log_prior_k=rotation_log_prior_k,
+                    class_rotation_log_prior_k=class_rotation_log_prior_k,
+                    translation_log_prior=translation_log_prior,
+                    translation_search_base=translation_search_base,
+                    trans_prior_center_for_engine=trans_prior_center_for_engine,
+                    image_corrections_k=relion_half_inputs.image_corrections[k],
+                    scale_corrections_k=relion_half_inputs.scale_corrections[k],
+                    firstiter_score_mode_this_iter=firstiter_score_mode_this_iter,
+                    firstiter_winner_take_all_this_iter=firstiter_winner_take_all_this_iter,
+                    cs_for_engine=cs_for_engine,
+                    class_log_priors=class_log_priors,
+                    k_class_enabled=k_class_enabled,
+                    relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
+                    disable_adjoint_y=disable_adjoint_y,
+                    disable_adjoint_ctf=disable_adjoint_ctf,
+                    safe_batch_sizes=_safe_batch_sizes,
+                    noise_stats_per_half_per_class=noise_stats_per_half_per_class,
+                    class_assignments=class_assignments,
+                    class_posterior_per_half=class_posterior_per_half,
+                    class_rotation_posterior_per_half=class_rotation_posterior_per_half,
+                    best_pose_rotations=best_pose_rotations,
+                    best_pose_rotation_eulers=best_pose_rotation_eulers,
+                    best_pose_translations=best_pose_translations,
+                    # Adaptive-specific:
+                    k_class_image_batch_size_override=k_class_image_batch_size,
+                    k_class_rotation_block_size_override=dense_k_class_rotation_block_size,
+                    firstiter_coarse_current_size=coarse_cs,
+                    firstiter_fine_current_size=cs_for_engine,
+                    firstiter_log_label="",
+                    firstiter_updates_em_kwargs_ibs=True,
                 )
-                dense_skip_kwargs = {
-                    **_DENSE_EM_STATIC_KWARGS,
-                    "image_batch_size": safe_ibs,
-                    "rotation_block_size": safe_rbs,
-                    "current_size": cs_for_engine,
-                    "rotation_log_prior": rotation_log_prior_k,
-                    "translation_log_prior": translation_log_prior,
-                    "image_corrections": relion_half_inputs.image_corrections[k],
-                    "scale_corrections": relion_half_inputs.scale_corrections[k],
-                    "image_pre_shifts": translation_search_base,
-                    "translation_prior_centers": trans_prior_center_for_engine,
-                    "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
-                    "relion_firstiter_winner_take_all": firstiter_winner_take_all_this_iter,
-                }
-                if class_rotation_log_prior_k is not None:
-                    dense_skip_kwargs["rotation_log_prior"] = None
-                    dense_skip_kwargs["class_rotation_log_prior"] = class_rotation_log_prior_k
-                if k_class_enabled:
-                    if disable_adjoint_y or disable_adjoint_ctf:
-                        raise NotImplementedError("K-class refine does not support adjoint ablation flags")
-                    dense_skip_kwargs["image_batch_size"] = k_class_image_batch_size
-                    dense_skip_kwargs["rotation_block_size"] = dense_k_class_rotation_block_size
-                    rot_pmap_for_collapse = None
-                    adaptive_os_local = 0
-                    # STRICT-PARITY: at iter 1 with --firstiter_cc, route through
-                    # run_dense_k_class_em_adaptive with
-                    # firstiter_cc_pass2_only_best_coarse=True so the iter-1
-                    # path matches RELION's expectationOneParticle pass-2
-                    # masked-to-best-coarse semantics (ml_optimiser.cpp:9181-9207
-                    # with K>1). The basic dense engine evaluates all poses with
-                    # soft posteriors then binarizes only the M-step weights,
-                    # which has subtle differences vs RELION's pass2-masked CC.
-                    if relion_firstiter_cc_this_iter:
-                        k_class_result, rot_pmap_for_collapse, adaptive_os_local = _score_kclass_firstiter_cc_pass2(
-                            experiment_dataset=experiment_datasets[k],
-                            mean=means[k],
-                            mean_variance=mean_variance,
-                            noise_variance_k=noise_variance_k,
-                            effective_rotations=effective_rotations,
-                            current_translations=current_translations,
-                            base_translations=base_translations,
-                            current_healpix_order=current_healpix_order,
-                            state=state,
-                            random_perturbation=random_perturbation,
-                            disc_type=disc_type,
-                            class_log_priors=class_log_priors,
-                            image_batch_size=image_batch_size,
-                            image_shape_k=experiment_datasets[k].image_shape,
-                            em_kwargs=dense_skip_kwargs,
-                            coarse_current_size=coarse_cs,
-                            fine_current_size=cs_for_engine,
-                            log_label="",
-                            update_em_kwargs_image_batch_size=True,
-                        )
-                    else:
-                        k_class_result = run_dense_k_class_em(
-                            experiment_datasets[k],
-                            means[k],
-                            mean_variance,
-                            noise_variance_k,
-                            effective_rotations,
-                            current_translations,
-                            disc_type,
-                            class_log_priors=class_log_priors,
-                            accumulate_noise=True,
-                            return_best_pose_details=True,
-                            **dense_skip_kwargs,
-                        )
-                    ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = _scatter_dense_k_class_result(
-                        k_class_result,
-                        k=k,
-                        effective_rotations=effective_rotations,
-                        rot_pmap_for_collapse=rot_pmap_for_collapse,
-                        relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
-                        adaptive_os_local=adaptive_os_local,
-                        noise_stats_per_half_per_class=noise_stats_per_half_per_class,
-                        class_assignments=class_assignments,
-                        class_posterior_per_half=class_posterior_per_half,
-                        class_rotation_posterior_per_half=class_rotation_posterior_per_half,
-                        best_pose_rotations=best_pose_rotations,
-                        best_pose_rotation_eulers=best_pose_rotation_eulers,
-                        best_pose_translations=best_pose_translations,
-                    )
-                else:
-                    _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
-                        experiment_datasets[k],
-                        means[k],
-                        mean_variance,
-                        noise_variance_k,
-                        effective_rotations,
-                        current_translations,
-                        disc_type,
-                        return_stats=True,
-                        accumulate_noise=True,
-                        disable_adjoint_y=disable_adjoint_y,
-                        disable_adjoint_ctf=disable_adjoint_ctf,
-                        **dense_skip_kwargs,
-                    )
+                ha_k = adaptive_result.ha
+                Ft_y_k = adaptive_result.Ft_y
+                Ft_ctf_k = adaptive_result.Ft_ctf
+                em_stats_k = adaptive_result.em_stats
+                noise_stats_k = adaptive_result.noise_stats
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
                 pose_rotation_eulers[k] = effective_rotation_eulers
@@ -2085,106 +2224,49 @@ def _run_relion_iteration_loop(
 
             else:
                 # --- SINGLE-PASS E+M (no adaptive oversampling) ---
-                safe_ibs, safe_rbs = _safe_batch_sizes(
-                    effective_rotations.shape[0],
-                    current_translations.shape[0],
+                single_pass_result = _score_half_dense(
+                    k=k,
+                    experiment_dataset=experiment_datasets[k],
+                    means_k=means[k],
+                    mean_variance=mean_variance,
+                    noise_variance_k=noise_variance_k,
+                    effective_rotations=effective_rotations,
+                    current_translations=current_translations,
+                    base_translations=base_translations,
+                    current_healpix_order=current_healpix_order,
+                    state=state,
+                    random_perturbation=random_perturbation,
+                    disc_type=disc_type,
+                    image_batch_size=image_batch_size,
+                    rotation_log_prior_k=rotation_log_prior_k,
+                    class_rotation_log_prior_k=class_rotation_log_prior_k,
+                    translation_log_prior=translation_log_prior,
+                    translation_search_base=translation_search_base,
+                    trans_prior_center_for_engine=trans_prior_center_for_engine,
+                    image_corrections_k=relion_half_inputs.image_corrections[k],
+                    scale_corrections_k=relion_half_inputs.scale_corrections[k],
+                    firstiter_score_mode_this_iter=firstiter_score_mode_this_iter,
+                    firstiter_winner_take_all_this_iter=firstiter_winner_take_all_this_iter,
+                    cs_for_engine=cs_for_engine,
+                    class_log_priors=class_log_priors,
+                    k_class_enabled=k_class_enabled,
+                    relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
+                    disable_adjoint_y=disable_adjoint_y,
+                    disable_adjoint_ctf=disable_adjoint_ctf,
+                    safe_batch_sizes=_safe_batch_sizes,
+                    noise_stats_per_half_per_class=noise_stats_per_half_per_class,
+                    class_assignments=class_assignments,
+                    class_posterior_per_half=class_posterior_per_half,
+                    class_rotation_posterior_per_half=class_rotation_posterior_per_half,
+                    best_pose_rotations=best_pose_rotations,
+                    best_pose_rotation_eulers=best_pose_rotation_eulers,
+                    best_pose_translations=best_pose_translations,
                 )
-                em_kwargs = {
-                    **_DENSE_EM_STATIC_KWARGS,
-                    "image_batch_size": safe_ibs,
-                    "rotation_block_size": safe_rbs,
-                    "current_size": cs_for_engine,
-                    "rotation_log_prior": rotation_log_prior_k,
-                    "translation_log_prior": translation_log_prior,
-                    "image_corrections": relion_half_inputs.image_corrections[k],
-                    "scale_corrections": relion_half_inputs.scale_corrections[k],
-                    "image_pre_shifts": translation_search_base,
-                    "translation_prior_centers": trans_prior_center_for_engine,
-                    "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
-                    "relion_firstiter_winner_take_all": firstiter_winner_take_all_this_iter,
-                }
-                if class_rotation_log_prior_k is not None:
-                    em_kwargs["rotation_log_prior"] = None
-                    em_kwargs["class_rotation_log_prior"] = class_rotation_log_prior_k
-                if k_class_enabled:
-                    if disable_adjoint_y or disable_adjoint_ctf:
-                        raise NotImplementedError("K-class refine does not support adjoint ablation flags")
-                    rot_pmap_for_collapse = None
-                    adaptive_os_local = 0
-                    # STRICT-PARITY: at iter 1 with --firstiter_cc, route through
-                    # run_dense_k_class_em_adaptive with
-                    # firstiter_cc_pass2_only_best_coarse=True so the iter-1
-                    # path matches RELION's expectationOneParticle pass-2
-                    # masked-to-best-coarse semantics. This is the
-                    # non-adaptive-oversampling K-class path (use_adaptive=False);
-                    # the adaptive_oversampling=0 + K=4 + --firstiter_cc cold-start
-                    # lands here.
-                    if relion_firstiter_cc_this_iter:
-                        k_class_result, rot_pmap_for_collapse, adaptive_os_local = _score_kclass_firstiter_cc_pass2(
-                            experiment_dataset=experiment_datasets[k],
-                            mean=means[k],
-                            mean_variance=mean_variance,
-                            noise_variance_k=noise_variance_k,
-                            effective_rotations=effective_rotations,
-                            current_translations=current_translations,
-                            base_translations=base_translations,
-                            current_healpix_order=current_healpix_order,
-                            state=state,
-                            random_perturbation=random_perturbation,
-                            disc_type=disc_type,
-                            class_log_priors=class_log_priors,
-                            image_batch_size=image_batch_size,
-                            image_shape_k=experiment_datasets[k].image_shape,
-                            em_kwargs=em_kwargs,
-                            coarse_current_size=None,
-                            fine_current_size=None,
-                            log_label="(non-adaptive site) ",
-                            update_em_kwargs_image_batch_size=False,
-                        )
-                    else:
-                        k_class_result = run_dense_k_class_em(
-                            experiment_datasets[k],
-                            means[k],
-                            mean_variance,
-                            noise_variance_k,
-                            effective_rotations,
-                            current_translations,
-                            disc_type,
-                            class_log_priors=class_log_priors,
-                            accumulate_noise=True,
-                            return_best_pose_details=True,
-                            **em_kwargs,
-                        )
-                    ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = _scatter_dense_k_class_result(
-                        k_class_result,
-                        k=k,
-                        effective_rotations=effective_rotations,
-                        rot_pmap_for_collapse=rot_pmap_for_collapse,
-                        relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
-                        adaptive_os_local=adaptive_os_local,
-                        noise_stats_per_half_per_class=noise_stats_per_half_per_class,
-                        class_assignments=class_assignments,
-                        class_posterior_per_half=class_posterior_per_half,
-                        class_rotation_posterior_per_half=class_rotation_posterior_per_half,
-                        best_pose_rotations=best_pose_rotations,
-                        best_pose_rotation_eulers=best_pose_rotation_eulers,
-                        best_pose_translations=best_pose_translations,
-                    )
-                else:
-                    _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
-                        experiment_datasets[k],
-                        means[k],
-                        mean_variance,
-                        noise_variance_k,
-                        effective_rotations,
-                        current_translations,
-                        disc_type,
-                        return_stats=True,
-                        accumulate_noise=True,
-                        disable_adjoint_y=disable_adjoint_y,
-                        disable_adjoint_ctf=disable_adjoint_ctf,
-                        **em_kwargs,
-                    )
+                ha_k = single_pass_result.ha
+                Ft_y_k = single_pass_result.Ft_y
+                Ft_ctf_k = single_pass_result.Ft_ctf
+                em_stats_k = single_pass_result.em_stats
+                noise_stats_k = single_pass_result.noise_stats
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
                 pose_rotation_eulers[k] = effective_rotation_eulers
