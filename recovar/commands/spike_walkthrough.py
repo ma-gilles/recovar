@@ -43,6 +43,7 @@ import recovar.jax_config  # noqa: F401 - initialize JAX config before using REC
 from recovar import utils
 from recovar.commands import compute_state as compute_state_cmd
 from recovar.commands import pipeline
+from recovar.commands import render_spike_morph_volumes as render_cmd
 from recovar.core import fourier_transform_utils as ftu
 from recovar.heterogeneity import kernel_bandwidth_benchmark as kb
 from recovar.output import output as o
