@@ -21,7 +21,6 @@ module is the pure orchestrator.
 
 from __future__ import annotations
 
-import math
 import os
 from dataclasses import replace
 from typing import Callable, Sequence
@@ -33,6 +32,7 @@ from .schedules import (
     DEFAULT_GRAD_EM_ITERS,
     DEFAULT_GRAD_MU,
     VdamPhaseLengths,
+    _relion_round,
     compute_phase_lengths,
     compute_stepsize,
     compute_subset_size,
@@ -304,13 +304,6 @@ def default_schedule_update(
     new_state.grad_current_stepsize = stepsize
     new_state.tau2_fudge_factor = tau2_fudge
     return new_state
-
-
-def _relion_round(x: float) -> int:
-    """Match RELION's positive-valued ROUND macro."""
-    if x >= 0.0:
-        return int(math.floor(float(x) + 0.5))
-    return -int(math.floor(-float(x) + 0.5))
 
 
 def _resolution_shell_from_data_vs_prior(data_vs_prior: np.ndarray, ori_size: int) -> int:
