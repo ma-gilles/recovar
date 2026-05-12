@@ -170,6 +170,15 @@ def test_pad_image_weights_for_fixed_batch_zeroes_padded_rows():
     np.testing.assert_array_equal(padded[2:], np.zeros(3, dtype=np.float32))
 
 
+def test_pad_image_weight_matrix_for_fixed_batch_zeroes_padded_rows():
+    weights = np.array([[1.5, -0.25], [0.0, 2.0]], dtype=np.float32)
+    padded = akd._pad_image_weight_matrix_for_fixed_batch(weights, current_batch_size=2, target_batch_size=5)
+
+    assert padded.shape == (2, 5)
+    np.testing.assert_array_equal(padded[:, :2], weights)
+    np.testing.assert_array_equal(padded[:, 2:], np.zeros((2, 3), dtype=np.float32))
+
+
 def test_deconvolution_weights_are_symmetric_and_finite():
     latent_diff = np.array([-2.0, -0.5, 0.0, 0.5, 2.0], dtype=np.float32)
     latent_precision = np.ones_like(latent_diff) * 4.0
@@ -177,6 +186,19 @@ def test_deconvolution_weights_are_symmetric_and_finite():
 
     assert np.isfinite(weights).all()
     np.testing.assert_allclose(weights, weights[::-1], atol=1e-6)
+
+
+def test_deconvolution_weights_many_matches_single_bandwidth_calls():
+    latent_diff = np.array([-2.0, -0.5, 0.0, 0.5, 2.0], dtype=np.float32)
+    latent_precision = np.ones_like(latent_diff) * 4.0
+    h_grid = np.array([0.5, 1.5, 3.0], dtype=np.float32)
+    weights_many = akd.deconvolution_weights_1d_many(latent_diff, latent_precision, h_grid)
+    weights_single = np.stack(
+        [akd.deconvolution_weights_1d(latent_diff, latent_precision, h) for h in h_grid],
+        axis=0,
+    )
+
+    np.testing.assert_allclose(weights_many, weights_single, atol=1e-6, rtol=1e-6)
 
 
 def test_deconvolution_weights_zero_invalid_precision():
@@ -476,6 +498,7 @@ def test_deconvolved_even_less_naive_return_lhs_rhs_smoke(gpu_device):
             return_lhs_rhs=True,
             upsampling_factor=1,
             return_real_space=True,
+            lambda_batch_size=2,
         )
 
     half_vol_size = int(np.prod(akd.volume_shape_to_half_volume_shape(cryo.volume_shape)))
@@ -484,6 +507,51 @@ def test_deconvolved_even_less_naive_return_lhs_rhs_smoke(gpu_device):
     assert rhs.shape == (lambda_grid.size, half_vol_size)
     assert np.isfinite(lhs).all()
     assert np.isfinite(rhs).all()
+
+
+@pytest.mark.gpu
+def test_deconvolved_lambda_batching_matches_scalar_lambda_loop(gpu_device):
+    """Batched lambda backprojection must match the scalar-lambda path."""
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=17)
+    latent_differences = np.linspace(-1.0, 1.0, cryo.n_images).astype(np.float32)
+    latent_precision = np.ones(cryo.n_images, dtype=np.float32) * 4.0
+    lambda_grid = np.array([0.8, 1.5, 3.0], dtype=np.float32)
+
+    with jax.default_device(gpu_device):
+        est_scalar, lhs_scalar, rhs_scalar = akd.even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
+            cryo,
+            None,
+            latent_differences,
+            latent_precision,
+            lambda_grid=lambda_grid,
+            batch_size=4,
+            tau=None,
+            grid_correct=False,
+            use_spherical_mask=False,
+            return_lhs_rhs=True,
+            upsampling_factor=1,
+            return_real_space=True,
+            lambda_batch_size=1,
+        )
+        est_batched, lhs_batched, rhs_batched = akd.even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
+            cryo,
+            None,
+            latent_differences,
+            latent_precision,
+            lambda_grid=lambda_grid,
+            batch_size=4,
+            tau=None,
+            grid_correct=False,
+            use_spherical_mask=False,
+            return_lhs_rhs=True,
+            upsampling_factor=1,
+            return_real_space=True,
+            lambda_batch_size=3,
+        )
+
+    np.testing.assert_allclose(lhs_batched, lhs_scalar, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(rhs_batched, rhs_scalar, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(est_batched, est_scalar, atol=1e-4, rtol=1e-4)
 
 
 # ---------------------------------------------------------------------------
