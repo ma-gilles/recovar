@@ -1,11 +1,8 @@
-"""InitialModel E-step adapter backed by native dense K-class EM.
+"""InitialModel E-step adapter on the dense K-class engine.
 
-This is the ab-initio bridge we want long-term: the hidden variable axis is
-``class x pose`` inside the dense K-class engine. There is no outer loop over
-classes here. Pseudo-halfsets share one dense E-step and ask the dense engine
-to split reconstruction accumulators by halfset, so projection/scoring work is
-not duplicated while the VDAM M-step still receives independent halfset
-BackProjectors.
+The hidden variable axis is ``class x pose``; pseudo-halfsets share one E-step
+(reconstruction accumulators are split per halfset) so projection/scoring isn't
+duplicated while the VDAM M-step still gets independent halfset BackProjectors.
 """
 
 from __future__ import annotations
@@ -106,12 +103,7 @@ def split_pseudo_halfset_particle_ids(
 
 
 def class_log_priors_from_state(state: InitialModelState) -> np.ndarray:
-    """Return log class priors from ``state.pdf_class``.
-
-    RELION permits class probabilities to collapse to zero and then treats
-    those classes as inactive. Encode that as a finite log-probability
-    sentinel so the dense log-sum-exp path underflows cleanly.
-    """
+    """Log class priors from ``state.pdf_class`` (collapsed classes get a finite sentinel)."""
     weights = np.asarray(state.pdf_class, dtype=np.float64)
     if weights.shape != (state.K,):
         raise ValueError(f"state.pdf_class must have shape ({state.K},), got {weights.shape}")
@@ -176,14 +168,7 @@ def _engine_kwargs_for_image_indices(
     *,
     n_images: int,
 ) -> dict[str, Any]:
-    """Adapt dense-engine kwargs whose first axis is selected-image order.
-
-    Most dense engine per-image inputs are indexed internally by global image
-    ids. ``translation_log_prior`` is different: the dense engine streams it
-    by selected-image row. Accepting a full-dataset prior here keeps callers
-    from duplicating pseudo-halfset packing logic.
-    """
-
+    """Slice ``translation_log_prior`` (selected-image axis) for the dense engine."""
     out = dict(engine_kwargs)
     prior = out.get("translation_log_prior")
     if prior is None:
@@ -203,18 +188,8 @@ def _engine_kwargs_for_image_indices(
     return out
 
 
-def _dense_run_em_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Drop InitialModel-only kwargs unsupported by the dense run_em wrapper.
-
-    Also drops kwargs that ``run_dense_k_class_em`` controls directly (it
-    raises if any of these are passed through). Those are valid for the
-    local/sparse pass-2 engine but get rejected on the dense path — they
-    show up in the dense kwargs when ``RECOVAR_DISABLE_SPARSE_PASS2=1``
-    routes a sparse-pass2 setup to the dense engine.
-    """
-
-    out = dict(kwargs)
-    for name in (
+_DENSE_RUN_EM_REJECT = frozenset(
+    {
         # InitialModel-only kwargs the dense run_em wrapper doesn't accept.
         "reconstruct_with_masked_images",
         "recon_square_window",
@@ -228,9 +203,13 @@ def _dense_run_em_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
         "disable_adjoint_y",
         "disable_adjoint_ctf",
         "normalization_log_evidence",
-    ):
-        out.pop(name, None)
-    return out
+    }
+)
+
+
+def _dense_run_em_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Drop kwargs unsupported by the dense run_em wrapper (sparse-only escape hatch)."""
+    return {k: v for k, v in kwargs.items() if k not in _DENSE_RUN_EM_REJECT}
 
 
 def _select_image_rows(value, image_indices: np.ndarray, *, n_images: int, name: str):
@@ -285,13 +264,7 @@ def _resolve_sparse_pass1_current_size(
     group_kwargs: dict[str, Any],
     options: dict[str, Any],
 ) -> int | None:
-    """Return RELION's coarse pass-1 scoring size for sparse pass 2.
-
-    InitialModel adaptive oversampling follows RELION's two-pass expectation:
-    the first pass finds significant coarse orientations at ``image_coarse_size``
-    and the second pass scores oversampled children at ``image_current_size``.
-    """
-
+    """RELION's coarse pass-1 scoring size (``image_coarse_size``) for sparse pass 2."""
     explicit = options.get("pass1_current_size")
     if explicit is not None:
         explicit = int(explicit)
@@ -337,13 +310,9 @@ def _relion_projector_dense_rotations(rotations: np.ndarray) -> np.ndarray:
 
 
 def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int) -> np.ndarray:
-    """Embed cropped RELION ``Projector::data`` into dense full-centered layout.
+    """Embed cropped RELION ``Projector::data`` half-complex slab into dense full-centered Fourier cube.
 
-    RELION's ``Projector`` stores x>=0 half-complex slabs with centered y/z
-    axes.  In low-resolution InitialModel iterations the data array is cropped
-    to the current projector size, so the generic full-projector conversion is
-    not directly applicable.  This embeds the cropped slab into RECOVAR's full
-    centered Fourier cube at the matching low-frequency coordinates.
+    Out-of-range coordinates are clipped (any-size input accepted; high frequencies truncated).
     """
     import recovar.core.fourier_transform_utils as ftu
 
@@ -352,12 +321,6 @@ def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int)
         raise ValueError(f"projector_data must be 3D, got {ppref.shape}")
     n = int(ori_size)
     center = n // 2
-    # RELION's cropped projector has shape (2*r_max+1, 2*r_max+1, r_max+1)
-    # where r_max = current_size/2. When VDAM autosampling pushes current_size
-    # at or beyond ori_size, the cropped slab can exceed RECOVAR's full
-    # centered half-volume dimensions (n, n, center+1). The embedding loop
-    # below clips out-of-range coordinates, so any-size input is accepted —
-    # we just truncate to the representable subset of frequencies.
     half = np.zeros((n, n, center + 1), dtype=np.complex128)
     slab = ppref[::-1, :, :]
     z_center = slab.shape[0] // 2
@@ -381,15 +344,7 @@ def reference_to_relion_projector_dense_means(
     padding_factor: int = 1,
     interpolator: int = 1,
 ) -> np.ndarray:
-    """Convert recovar-frame references through RELION's Projector setup.
-
-    InitialModel scoring is sensitive to RELION's ``Projector`` normalization
-    and cropped low-frequency storage.  This path calls the RELION binding for
-    ``Projector::computeFourierTransformMap`` with ``data_dim=2`` and embeds
-    the resulting cropped Projector slab into dense Fourier coordinates.
-    The dense scorer uses unnormalised image FFTs, so the embedded RELION
-    projector data is scaled by ``-N^2`` to match the existing scorer frame.
-    """
+    """Convert recovar-frame references through RELION's ``Projector`` setup (data_dim=2, scaled by ``-N^2``)."""
     from recovar.relion_bind import _relion_bind_core as bind
     from recovar.utils.helpers import recovar_volume_to_relion
 
