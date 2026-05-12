@@ -1276,72 +1276,62 @@ def _class_mrc_paths(output_prefix: str, iteration: int, K: int) -> tuple[str, .
 
 
 def _write_model_star(path: str, state: InitialModelState, class_mrcs: tuple[str, ...]) -> None:
-    with open(path, "w") as f:
-        f.write("# Created by recovar native InitialModel\n\n")
-        f.write("data_model_general\n\n")
-        current_resolution_angstrom = (
-            1.0 / float(state.current_resolution) if float(state.current_resolution) > 0.0 else float("inf")
+    current_resolution_angstrom = (
+        1.0 / float(state.current_resolution) if float(state.current_resolution) > 0.0 else float("inf")
+    )
+    pixel_x_ori = float(state.pixel_size) * float(state.ori_size)
+    n_shells = int(state.ori_size) // 2 + 1
+    pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
+
+    lines: list[str] = [
+        "# Created by recovar native InitialModel\n",
+        "\ndata_model_general\n\n",
+        f"_rlnCurrentResolution {current_resolution_angstrom:.12g}\n",
+        f"_rlnCurrentImageSize {int(state.current_size)}\n",
+        f"_rlnCurrentIteration {int(state.iter)}\n",
+        f"_rlnNrClasses {int(state.K)}\n",
+        f"_rlnTau2FudgeFactor {float(state.tau2_fudge_factor):.12g}\n",
+        f"_rlnAveragePmax {float(state.ave_Pmax):.12g}\n",
+        f"_rlnSigmaOffsetsAngst {float(np.sqrt(max(float(state.sigma2_offset), 0.0))):.12g}\n\n",
+        "data_model_classes\n\nloop_\n_rlnReferenceImage #1\n_rlnClassDistribution #2\n_rlnEstimatedResolution #3\n",
+    ]
+    for class_mrc, probability in zip(class_mrcs, np.asarray(state.pdf_class)):
+        lines.append(f"{class_mrc} {float(probability):.12g} {current_resolution_angstrom:.12g}\n")
+
+    for k in range(int(state.K)):
+        lines.append(
+            f"\n\ndata_model_class_{k + 1}\n\nloop_\n"
+            "_rlnSpectralIndex #1\n_rlnResolution #2\n_rlnAngstromResolution #3\n"
+            "_rlnSsnrMap #4\n_rlnGoldStandardFsc #5\n_rlnFourierCompleteness #6\n"
+            "_rlnReferenceSigma2 #7\n_rlnReferenceTau2 #8\n"
         )
-        f.write(f"_rlnCurrentResolution {current_resolution_angstrom:.12g}\n")
-        f.write(f"_rlnCurrentImageSize {int(state.current_size)}\n")
-        f.write(f"_rlnCurrentIteration {int(state.iter)}\n")
-        f.write(f"_rlnNrClasses {int(state.K)}\n")
-        f.write(f"_rlnTau2FudgeFactor {float(state.tau2_fudge_factor):.12g}\n")
-        f.write(f"_rlnAveragePmax {float(state.ave_Pmax):.12g}\n")
-        f.write(f"_rlnSigmaOffsetsAngst {float(np.sqrt(max(float(state.sigma2_offset), 0.0))):.12g}\n\n")
+        tau2 = np.asarray(state.tau2_class[k], dtype=np.float64)
+        dvp = np.asarray(state.data_vs_prior_class[k], dtype=np.float64)
+        fsc = np.asarray(state.fsc_halves_class[k], dtype=np.float64)
+        sigma2_class = np.asarray(state.sigma2_class[k], dtype=np.float64)
+        fourier_coverage = np.asarray(state.fourier_coverage_class[k], dtype=np.float64)
+        for shell in range(n_shells):
+            resolution = float(shell) / pixel_x_ori
+            resolution_angstrom = pixel_x_ori / float(shell) if shell > 0 else 999.0
+            lines.append(
+                f"{int(shell)} {resolution:.12g} {resolution_angstrom:.12g} "
+                f"{float(dvp[shell]):.12g} {float(fsc[shell]):.12g} "
+                f"{float(fourier_coverage[shell]):.12g} "
+                f"{float(sigma2_class[shell]):.12g} {float(tau2[shell]):.12g}\n"
+            )
+        if pdf_direction.ndim == 2 and k < pdf_direction.shape[0]:
+            lines.append(f"\n\ndata_model_pdf_orient_class_{k + 1}\n\nloop_\n_rlnOrientationDistribution #1\n")
+            lines.extend(f"{float(p):.12g}\n" for p in pdf_direction[k])
 
-        f.write("data_model_classes\n\n")
-        f.write("loop_\n")
-        f.write("_rlnReferenceImage #1\n")
-        f.write("_rlnClassDistribution #2\n")
-        f.write("_rlnEstimatedResolution #3\n")
-        for class_mrc, probability in zip(class_mrcs, np.asarray(state.pdf_class)):
-            f.write(f"{class_mrc} {float(probability):.12g} {current_resolution_angstrom:.12g}\n")
+    lines.append(
+        "\n\ndata_model_optics_group_1\n\nloop_\n_rlnSpectralIndex #1\n_rlnResolution #2\n_rlnSigma2Noise #3\n"
+    )
+    lines.extend(
+        f"{int(shell)} 0 {float(sigma2):.12g}\n" for shell, sigma2 in enumerate(np.asarray(state.sigma2_noise)[0])
+    )
 
-        for k in range(int(state.K)):
-            f.write(f"\n\ndata_model_class_{k + 1}\n\n")
-            f.write("loop_\n")
-            f.write("_rlnSpectralIndex #1\n")
-            f.write("_rlnResolution #2\n")
-            f.write("_rlnAngstromResolution #3\n")
-            f.write("_rlnSsnrMap #4\n")
-            f.write("_rlnGoldStandardFsc #5\n")
-            f.write("_rlnFourierCompleteness #6\n")
-            f.write("_rlnReferenceSigma2 #7\n")
-            f.write("_rlnReferenceTau2 #8\n")
-            tau2 = np.asarray(state.tau2_class[k], dtype=np.float64)
-            dvp = np.asarray(state.data_vs_prior_class[k], dtype=np.float64)
-            fsc = np.asarray(state.fsc_halves_class[k], dtype=np.float64)
-            sigma2_class = np.asarray(state.sigma2_class[k], dtype=np.float64)
-            fourier_coverage = np.asarray(state.fourier_coverage_class[k], dtype=np.float64)
-            n_shells = int(state.ori_size) // 2 + 1
-            for shell in range(n_shells):
-                resolution = float(shell) / (float(state.pixel_size) * float(state.ori_size))
-                resolution_angstrom = (
-                    float(state.pixel_size) * float(state.ori_size) / float(shell) if shell > 0 else 999.0
-                )
-                f.write(
-                    f"{int(shell)} {resolution:.12g} {resolution_angstrom:.12g} "
-                    f"{float(dvp[shell]):.12g} {float(fsc[shell]):.12g} "
-                    f"{float(fourier_coverage[shell]):.12g} "
-                    f"{float(sigma2_class[shell]):.12g} {float(tau2[shell]):.12g}\n"
-                )
-
-            pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
-            if pdf_direction.ndim == 2 and k < pdf_direction.shape[0]:
-                f.write(f"\n\ndata_model_pdf_orient_class_{k + 1}\n\n")
-                f.write("loop_\n")
-                f.write("_rlnOrientationDistribution #1\n")
-                for probability in pdf_direction[k]:
-                    f.write(f"{float(probability):.12g}\n")
-
-        f.write("\n\ndata_model_optics_group_1\n\n")
-        f.write("loop_\n")
-        f.write("_rlnSpectralIndex #1\n")
-        f.write("_rlnResolution #2\n")
-        f.write("_rlnSigma2Noise #3\n")
-        for shell, sigma2 in enumerate(np.asarray(state.sigma2_noise)[0]):
-            f.write(f"{int(shell)} 0 {float(sigma2):.12g}\n")
+    with open(path, "w") as f:
+        f.writelines(lines)
 
 
 def _set_star_column(table, column: str, values) -> None:

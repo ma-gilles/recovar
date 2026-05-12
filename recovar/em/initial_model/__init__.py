@@ -1,13 +1,4 @@
-"""RELION InitialModel / VDAM ab-initio refinement.
-
-Implements exact parity with the GUI-generated RELION 5 `relion_refine --grad
---denovo_3dref --pad 1 --auto_sampling` command. See
-`docs/math/plan_ab_initio_relion_parity_v3.md` for scope and rollout.
-
-Phase 1 exposes schedules, particle ordering, and denovo initialisation as
-pure-Python functions so they can be validated against RELION source via
-binding tests in Phase 2.
-"""
+"""RELION InitialModel / VDAM ab-initio refinement (parity with ``relion_refine --grad --denovo_3dref --pad 1 --auto_sampling``)."""
 
 from .align_symmetry import AlignSymmetrySpec, build_align_symmetry_tokens
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
