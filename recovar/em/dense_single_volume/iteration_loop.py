@@ -112,13 +112,15 @@ from recovar.em.dense_single_volume.relion_replay import (
     _RelionHalfInputState,
     _replay_control_model_iteration,
 )
-from recovar.em.sampling import (
+from recovar.em.sampling import (  # noqa: F401  -- monkeypatched by tests/unit/test_refine_relion_mode.py
     advance_relion_perturbation,
     advance_relion_perturbation_from_seed,
     apply_relion_rotation_perturbation,
     apply_relion_rotation_perturbation_to_eulers,
     apply_relion_translation_perturbation,
     build_local_search_grid_metadata,
+    get_relion_rotation_grid,
+    get_relion_rotation_grid_eulers,
     get_translation_grid,
     read_relion_direction_prior,
     read_relion_direction_priors,
@@ -131,15 +133,6 @@ from recovar.em.sampling import (
 )
 from recovar.em.sampling import (  # noqa: F401
     get_oversampled_rotation_grid_from_samples as get_oversampled_rotation_grid_from_samples,
-)
-from recovar.em.sampling import (
-    get_oversampled_translation_grid as get_oversampled_translation_grid,
-)
-from recovar.em.sampling import (
-    get_relion_rotation_grid as get_relion_rotation_grid,
-)
-from recovar.em.sampling import (
-    get_relion_rotation_grid_eulers as get_relion_rotation_grid_eulers,
 )
 from recovar.reconstruction.regularization import (
     compute_current_size_relion,
@@ -2537,7 +2530,7 @@ def _run_relion_iteration_loop(
                 pose_rotation_eulers=pose_rotation_eulers[k],
                 best_pose_rotation_eulers=best_pose_rotation_eulers[k],
                 best_pose_translations=best_pose_translations[k],
-                translation_search_base=translation_search_bases[k] if "translation_search_bases" in dir() else None,
+                translation_search_base=translation_search_bases[k],
                 original_image_indices=_half_orig_idx,
             )
 
