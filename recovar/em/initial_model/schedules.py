@@ -250,22 +250,12 @@ def compute_stepsize(
     _stepsize = grad_stepsize if (grad_stepsize is not None and grad_stepsize > 0) else -1.0
     _scheme = grad_stepsize_scheme if grad_stepsize_scheme is not None else ""
 
+    # Default stepsize: 0.5 for 3D initial model, 0.3 for 3D class / 2D class.
     if _stepsize <= 0:
-        if ref_dim == 3 and not is_3d_model:
-            _stepsize = 0.3
-        elif ref_dim == 3 and is_3d_model:
-            _stepsize = 0.5
-        else:
-            _stepsize = 0.3
-
+        _stepsize = 0.5 if (ref_dim == 3 and is_3d_model) else 0.3
+    # Default scheme: "plain" for 3D classification, "<0.9/stepsize>-step" else.
     if _scheme == "":
-        if ref_dim == 3 and not is_3d_model:
-            _scheme = "plain"
-        elif ref_dim == 3 and is_3d_model:
-            # std::to_string uses %f (6-decimal); matches C++ behaviour
-            _scheme = f"{0.9 / _stepsize:f}-step"
-        else:
-            _scheme = f"{0.9 / _stepsize:f}-step"
+        _scheme = "plain" if (ref_dim == 3 and not is_3d_model) else f"{0.9 / _stepsize:f}-step"
 
     if _scheme == "plain":
         return _stepsize
@@ -317,20 +307,11 @@ def compute_tau2_fudge(
     _fudge = tau2_fudge_arg if (tau2_fudge_arg is not None and tau2_fudge_arg > 0) else -1.0
     _scheme = tau2_fudge_scheme if tau2_fudge_scheme is not None else ""
 
+    # Default fudge: 1.0 for auto-refine; 4.0 for 3D init / 3D class / 2D class.
     if _fudge <= 0:
-        if do_auto_refine:
-            _fudge = 1.0
-        else:
-            # 3D classification, 3D initial model, 2D classification — all 4
-            _fudge = 4.0
-
+        _fudge = 1.0 if do_auto_refine else 4.0
     if _scheme == "":
-        if ref_dim == 3 and not is_3d_model:
-            _scheme = "plain"
-        elif ref_dim == 3 and is_3d_model:
-            _scheme = f"{_fudge / 1.0:f}-step"
-        else:
-            _scheme = f"{_fudge / 1.0:f}-step"
+        _scheme = "plain" if (ref_dim == 3 and not is_3d_model) else f"{_fudge / 1.0:f}-step"
 
     if _scheme == "plain":
         return _fudge
