@@ -17,26 +17,14 @@ from typing import Iterator, Tuple
 import numpy as np
 
 
-def _softmask_outside_map(
-    image: np.ndarray,
-    radius: float,
-    cosine_width: float,
-) -> np.ndarray:
-    """RELION `softMaskOutsideMap` (mask.cpp:43) in NumPy.
-
-    Three radial regions about the image center, with ``radius_p = radius + cosine_width``:
-    ``r < radius`` keep image, ``r ∈ [radius, radius_p]`` cosine-blend toward
-    background, ``r > radius_p`` set to background. ``bg`` is a weighted average
-    over the edge+exterior, computed in a first pass and applied in a second.
-    """
+def _softmask_outside_map(image: np.ndarray, radius: float, cosine_width: float) -> np.ndarray:
+    """RELION ``softMaskOutsideMap`` (mask.cpp:43): cosine taper between ``r=radius`` and ``radius+cosine_width``."""
     H, W = image.shape[-2:]
     yy = np.arange(H) - H // 2
     xx = np.arange(W) - W // 2
     r = np.sqrt(yy[:, None] ** 2 + xx[None, :] ** 2).astype(np.float64)
-
     radius_p = radius + cosine_width
 
-    # Background weight map: 0 inside, raisedcos in edge, 1 outside
     w = np.zeros_like(r)
     outside = r > radius_p
     edge = (r >= radius) & (r <= radius_p)
@@ -45,89 +33,47 @@ def _softmask_outside_map(
         w[edge] = 0.5 + 0.5 * np.cos(np.pi * (radius_p - r[edge]) / cosine_width)
 
     w_sum = w.sum()
-    if w_sum > 0:
-        avg_bg = float((w * image).sum() / w_sum)
-    else:
-        avg_bg = 0.0
+    avg_bg = float((w * image).sum() / w_sum) if w_sum > 0 else 0.0
 
     out = image.astype(np.float64, copy=True)
-    # Outside -> background
     out[outside] = avg_bg
-    # Edge -> blend
     if cosine_width > 0 and edge.any():
-        raisedcos = w[edge]  # same formula
-        out[edge] = (1.0 - raisedcos) * image[edge] + raisedcos * avg_bg
+        out[edge] = (1.0 - w[edge]) * image[edge] + w[edge] * avg_bg
     return out.astype(image.dtype)
 
 
-def _radial_power_spectrum(
-    image_real: np.ndarray,
-    n_shells: int,
-) -> np.ndarray:
-    """Per-shell average of `|FFT(image)|^2`.
-
-    Mirrors the FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM loop at
-    ml_optimiser.cpp:3108-3117.
-
-    Uses rfft2 (RELION stores the half-complex layout). Shell index is
-    `round(sqrt(k^2 + i^2 + j^2))` with k==0 for 2D images; the j axis
-    is already the half-complex direction from rfft2.
-    """
+def _radial_power_spectrum(image_real: np.ndarray, n_shells: int) -> np.ndarray:
+    """Per-shell mean ``|FFT(image)|²`` (ml_optimiser.cpp:3108-3117); RELION-normalised by ``H*W``."""
     H, W = image_real.shape[-2:]
-    # RELION's `transformer.FourierTransform(img(), Faux, false)` without
-    # normalisation does a plain forward FFT scaled by H*W at read; the
-    # equivalent numpy call is `np.fft.rfft2(image, norm=None) /
-    # (H * W)` if we want the "normalized" version. But RELION's
-    # `transformer.FourierTransform` with `normalize=false` returns the
-    # unnormalised DFT (matches fftw forward convention). The critical
-    # point is the *ratio* against Mavg's spectrum — both normalisations
-    # must match. RELION's FourierTransform internal normalisation for
-    # 2D images (see fftw.cpp:358) divides by N^d on forward, so output
-    # is `F_norm = F_fftw / (H*W)`. We mirror that.
     F = np.fft.rfft2(image_real, norm=None) / (H * W)
-
-    # Shell indices for each (i, j) in the rfft2 layout.
-    # rfft2 output shape: (H, W//2 + 1). Row frequencies wrap around:
-    #    ky = [0, 1, ..., H/2, -H/2+1, ..., -1] (fftfreq without 1/N factor)
     ky = np.fft.fftfreq(H, d=1.0) * H
     kx = np.arange(W // 2 + 1, dtype=np.float64)
     ires = np.round(np.sqrt(ky[:, None] ** 2 + kx[None, :] ** 2)).astype(np.int64)
-
-    power = F.real**2 + F.imag**2
     out = np.zeros(n_shells, dtype=np.float64)
     count = np.zeros(n_shells, dtype=np.int64)
-    # Flatten for np.add.at
-    np.add.at(out, ires[ires < n_shells], power[ires < n_shells])
-    # Count pixels per shell
-    flat_ires = ires.ravel()
-    valid = flat_ires < n_shells
-    np.add.at(count, flat_ires[valid], 1)
+    np.add.at(out, ires[ires < n_shells], (F.real**2 + F.imag**2)[ires < n_shells])
+    flat = ires.ravel()
+    np.add.at(count, flat[flat < n_shells], 1)
     count[count == 0] = 1
     return out / count
 
 
 def _fix_negative_sigma2(sigma2: np.ndarray) -> np.ndarray:
-    """Replace non-positive shell values with the nearest positive neighbour.
-
-    RELION's pass (ml_optimiser.cpp:3293-3320): if sigma2[n] <= 0, try
-    sigma2[n-1]; if that's also <= 0, walk forward until a positive value
-    is found; fail if none exists.
-    """
+    """Replace non-positive shells with the nearest positive neighbour (ml_optimiser.cpp:3293-3320)."""
     out = sigma2.copy()
     n = out.size
     for i in range(n):
-        if out[i] <= 0.0:
-            if i - 1 >= 0 and out[i - 1] > 0.0:
-                out[i] = out[i - 1]
-            else:
-                nn = i
-                while nn < n - 1:
-                    nn += 1
-                    if out[nn] > 0.0:
-                        out[i] = out[nn]
-                        break
-                else:
-                    raise RuntimeError(f"sigma2_noise[{i}] is non-positive with no positive neighbour")
+        if out[i] > 0.0:
+            continue
+        if i - 1 >= 0 and out[i - 1] > 0.0:
+            out[i] = out[i - 1]
+            continue
+        for nn in range(i + 1, n):
+            if out[nn] > 0.0:
+                out[i] = out[nn]
+                break
+        else:
+            raise RuntimeError(f"sigma2_noise[{i}] is non-positive with no positive neighbour")
     return out
 
 
@@ -142,28 +88,7 @@ def compute_avg_unaligned_and_sigma2(
     nr_optics_groups: int,
     minimum_nr_particles: int = 1000,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Reproduce calculateSumOfPowerSpectra + setSigmaNoiseEstimates.
-
-    Parameters
-    ----------
-    image_iter
-        Iterator yielding `(optics_group_id, real_space_image)` tuples. Each
-        image must be `(ori_size, ori_size)`, centred origin (the real-space
-        centre pixel at `(ori_size // 2, ori_size // 2)`).
-    ori_size, pixel_size, particle_diameter_ang, width_mask_edge_px,
-    do_zero_mask
-        Particle-mask parameters matching RELION's `softMaskOutsideMap`.
-    nr_optics_groups
-        Number of optics groups present in the dataset.
-    minimum_nr_particles
-        Per-group cap on how many particles contribute to sigma2 estimation
-        (RELION default 1000 for 2D).
-
-    Returns
-    -------
-    Mavg : (ori_size, ori_size) real-space average image
-    sigma2_per_group : (nr_optics_groups, ori_size // 2 + 1)
-    """
+    """``calculateSumOfPowerSpectra`` + ``setSigmaNoiseEstimates`` (per-group cap defaults to RELION's 1000)."""
     n_shells = ori_size // 2 + 1
 
     Mavg = np.zeros((ori_size, ori_size), dtype=np.float64)
