@@ -668,3 +668,96 @@ def make_moving_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1, dilation_
         soft_mask = np.zeros(volume_shape, dtype=np.float32)
 
     return np.asarray(soft_mask, dtype=np.float32), binary_mask
+
+
+def make_localized_moving_gt_mask(
+    gt_volumes_real,
+    volume_shape,
+    *,
+    percentile=95.0,
+    envelope_mask=None,
+    lowpass_sigma=2.0,
+    extend=2,
+    soft_edge=6,
+):
+    """Localized smooth focus mask from a stack of GT volumes.
+
+    Like :func:`make_moving_gt_mask` it summarizes per-voxel motion across
+    the trajectory, but instead of "any voxel that moves at all" it keeps
+    only the top ``(100 - percentile)`` % of moving voxels *within the
+    union envelope*, then puts that through the standard
+    :func:`make_mask` smoothing pipeline (gaussian lowpass → threshold →
+    largest-connected-component + fill-holes → spherical dilation →
+    cosine soft edge). The result is clipped to a softened envelope so
+    it cannot bleed into solvent.
+
+    Args:
+        gt_volumes_real: List of 3-D arrays, or a 2-D ``(n_vols, n_voxels)``
+            array, or a 3-D / 4-D array.
+        volume_shape: Tuple giving the 3-D grid dimensions.
+        percentile: Threshold percentile (0-100) of per-voxel motion std
+            taken inside the union envelope. Higher = tighter mask.
+            Default 95 (keeps the top 5% most-moving voxels).
+        envelope_mask: Optional pre-computed boolean envelope used to
+            constrain the percentile computation and the final clip.
+            Defaults to the binary output of
+            :func:`make_union_gt_mask`.
+        lowpass_sigma: Gaussian sigma (voxels) applied before
+            thresholding. Passed through to :func:`make_mask`.
+        extend: Binary dilation (voxels) after threshold.
+        soft_edge: Width (voxels) of the cosine soft edge.
+
+    Returns:
+        Tuple ``(soft_mask, binary_mask)`` matching the contract of
+        :func:`make_moving_gt_mask`. ``binary_mask`` is the pre-softening
+        ``soft_mask > 0.5``.
+    """
+    if isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 2:
+        gt_volumes_real = [gt_volumes_real[i].reshape(volume_shape) for i in range(gt_volumes_real.shape[0])]
+    elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 4:
+        gt_volumes_real = [gt_volumes_real[i] for i in range(gt_volumes_real.shape[0])]
+    elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 3:
+        gt_volumes_real = [gt_volumes_real]
+
+    if len(gt_volumes_real) == 0:
+        raise ValueError("gt_volumes_real must contain at least one volume")
+    if not 0.0 <= percentile <= 100.0:
+        raise ValueError(f"percentile must be in [0, 100], got {percentile}")
+
+    volumes = np.asarray(
+        [np.asarray(vol).reshape(volume_shape) for vol in gt_volumes_real],
+        dtype=np.float32,
+    )
+    motion = volumes.std(axis=0).astype(np.float32)
+
+    if envelope_mask is None:
+        _, envelope_mask = make_union_gt_mask(list(volumes), volume_shape)
+    envelope_mask = np.asarray(envelope_mask, dtype=bool)
+
+    in_env = motion[envelope_mask]
+    if in_env.size == 0:
+        empty = np.zeros(volume_shape, dtype=np.float32)
+        return empty, empty.astype(bool)
+    thresh = float(np.percentile(in_env, percentile))
+
+    soft = make_mask(
+        motion,
+        threshold=thresh,
+        lowpass_sigma=lowpass_sigma,
+        extend=extend,
+        soft_edge=soft_edge,
+        cleanup=True,
+    ).astype(np.float32)
+
+    envelope_soft = make_mask(
+        envelope_mask.astype(np.float32),
+        threshold=0.5,
+        lowpass_sigma=0,
+        extend=max(extend, 2),
+        soft_edge=soft_edge,
+        cleanup=False,
+    ).astype(np.float32)
+    soft = np.minimum(soft, envelope_soft)
+
+    binary_mask = soft > 0.5
+    return soft, binary_mask

@@ -1,6 +1,7 @@
 """Unit tests for the student PDB walkthrough command."""
 
 import argparse
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,11 +36,15 @@ def test_add_args_defaults_are_student_friendly():
     assert args.pc_project == 0
     assert args.n_states == 50
     assert args.n_bins == 50
-    assert args.compute_state_maskrad_fraction == 4.0
+    assert args.compute_state_maskrad_fraction == 20.0
     assert args.compute_state_n_min_particles == 100
     assert args.low_memory_option is False
     assert args.very_low_memory_option is False
     assert args.path == "symmetric"
+    # voxel-size is auto/None by default; --voxel-size explicit override works
+    assert args.voxel_size is None
+    args2 = parser.parse_args(["--output-dir", "/tmp/out", "--voxel-size", "2.0"])
+    assert args2.voxel_size == 2.0
 
 
 def test_add_args_path_choices_include_arm_only():
@@ -106,17 +111,20 @@ def test_write_gt_masks_and_volumes(tmp_path, monkeypatch):
         seen["union_dilation"] = dilation_iters
         return np.ones(shape, dtype=np.float32), np.ones(shape, dtype=bool)
 
-    def fake_moving(_real_vols, shape, dilation_iters=None, **_kwargs):
-        seen["moving_dilation"] = dilation_iters
+    def fake_localized(_real_vols, shape, *, percentile, envelope_mask=None, **_kwargs):
+        seen["focus_percentile"] = percentile
+        seen["envelope_passed"] = envelope_mask is not None
         mask = np.zeros(shape, dtype=np.float32)
         mask[0, 0, 0] = 1.0
         return mask, mask.astype(bool)
 
     monkeypatch.setattr(walkthrough.synthetic_dataset, "load_heterogeneous_reconstruction", lambda _sim_info: FakeHVD())
     monkeypatch.setattr(core_mask, "make_union_gt_mask", fake_union)
-    monkeypatch.setattr(core_mask, "make_moving_gt_mask", fake_moving)
+    monkeypatch.setattr(core_mask, "make_localized_moving_gt_mask", fake_localized)
 
-    paths = walkthrough._write_gt_masks_and_volumes(tmp_path, {}, grid_size=2, voxel_size=1.0, mask_dilation_iters=1)
+    paths = walkthrough._write_gt_masks_and_volumes(
+        tmp_path, {}, grid_size=2, voxel_size=1.0, mask_dilation_iters=1, focus_mask_percentile=95.0
+    )
 
     assert Path(paths["volume_mask"]).name == "volume_mask_union.mrc"
     assert Path(paths["focus_mask"]).name == "focus_mask_moving.mrc"
@@ -124,7 +132,45 @@ def test_write_gt_masks_and_volumes(tmp_path, monkeypatch):
     assert Path(paths["focus_mask"]).exists()
     assert (tmp_path / "04_ground_truth" / "gt_volumes_used_by_simulator.npy").exists()
     assert seen["union_dilation"] == 1
-    assert seen["moving_dilation"] == 1
+    assert seen["focus_percentile"] == 95.0
+    assert seen["envelope_passed"] is True
+
+    readme = json.loads((tmp_path / "05_masks" / "README.json").read_text())
+    assert readme["focus_mask_method"] == "localized@p95"
+    assert readme["focus_mask_percentile"] == 95.0
+
+
+def test_write_gt_masks_legacy_focus_mask_when_percentile_zero(tmp_path, monkeypatch):
+    from recovar.core import mask as core_mask
+
+    class FakeHVD:
+        volumes = np.ones((2, 2, 2, 2), dtype=np.float32)
+
+    seen = {}
+
+    def fake_union(_real_vols, shape, dilation_iters=None, **_kwargs):
+        return np.ones(shape, dtype=np.float32), np.ones(shape, dtype=bool)
+
+    def fake_moving(_real_vols, shape, dilation_iters=None, **_kwargs):
+        seen["called_legacy"] = True
+        mask = np.zeros(shape, dtype=np.float32)
+        mask[0, 0, 0] = 1.0
+        return mask, mask.astype(bool)
+
+    def boom_localized(*_args, **_kwargs):
+        raise AssertionError("localized focus mask should not be called when percentile=0")
+
+    monkeypatch.setattr(walkthrough.synthetic_dataset, "load_heterogeneous_reconstruction", lambda _sim_info: FakeHVD())
+    monkeypatch.setattr(core_mask, "make_union_gt_mask", fake_union)
+    monkeypatch.setattr(core_mask, "make_moving_gt_mask", fake_moving)
+    monkeypatch.setattr(core_mask, "make_localized_moving_gt_mask", boom_localized)
+
+    walkthrough._write_gt_masks_and_volumes(
+        tmp_path, {}, grid_size=2, voxel_size=1.0, mask_dilation_iters=1, focus_mask_percentile=0.0
+    )
+    assert seen.get("called_legacy") is True
+    readme = json.loads((tmp_path / "05_masks" / "README.json").read_text())
+    assert readme["focus_mask_method"] == "legacy_anything_moves"
 
 
 def test_run_pipeline_disables_contrast_and_uses_masks(tmp_path, monkeypatch):
@@ -177,6 +223,167 @@ def test_middle_state_latent_point_uses_pipeline_embedding(monkeypatch):
     assert np.allclose(latent, [[3.0]])
 
 
+def test_voxel_size_autodetect_from_mrc_header(monkeypatch, tmp_path):
+    """run_walkthrough auto-picks voxel_size from 01_raw_volumes/vol0000.mrc
+    when --voxel-size is not given. Explicit --voxel-size still wins."""
+    from recovar import utils as recovar_utils
+
+    raw_dir = tmp_path / "01_raw_volumes"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    # Pre-stage a volume with a non-5nrl voxel size in its header.
+    recovar_utils.write_mrc(str(raw_dir / "vol0000.mrc"), np.zeros((2, 2, 2), dtype=np.float32), voxel_size=2.0)
+    recovar_utils.write_mrc(str(raw_dir / "vol0001.mrc"), np.zeros((2, 2, 2), dtype=np.float32), voxel_size=2.0)
+    recovar_utils.write_mrc(str(raw_dir / "vol0002.mrc"), np.zeros((2, 2, 2), dtype=np.float32), voxel_size=2.0)
+
+    seen = {}
+
+    def fake_raw(_args, out, voxel_size):
+        seen["raw_vs"] = voxel_size
+        return out / "01_raw_volumes" / "vol", np.zeros((3, 2, 2, 2), dtype=np.float32)
+
+    def fake_active(raw_volumes, _args, out, voxel_size):
+        seen["active_vs"] = voxel_size
+        return out / "02_active_volumes" / "vol", raw_volumes, {"explained_energy": np.array([1.0], dtype=np.float32)}
+
+    def fake_dataset(_args, _out, _prefix, voxel_size):
+        seen["dataset_vs"] = voxel_size
+        return np.zeros((1, 2, 2, 2), dtype=np.float32), {"image_assignment": np.array([0], dtype=np.int32)}
+
+    def fake_masks(out, _sim_info, _grid_size, voxel_size, **_kwargs):
+        seen["masks_vs"] = voxel_size
+        return {"gt_dir": str(out / "04_ground_truth"), "volume_mask": "m.mrc", "focus_mask": "f.mrc"}
+
+    def fake_pipeline(_args, out, _mask_paths):
+        return out / "06_pipeline"
+
+    def fake_latent(*_a, **_kw):
+        return np.array([[0.0]], dtype=np.float32)
+
+    def fake_compute_state(_args, out, *_a, **_kw):
+        return out / "07_compute_state"
+
+    monkeypatch.setattr(walkthrough, "_write_raw_pdb_volumes", fake_raw)
+    monkeypatch.setattr(walkthrough, "_write_active_volumes", fake_active)
+    monkeypatch.setattr(walkthrough, "_simulate_dataset", fake_dataset)
+    monkeypatch.setattr(walkthrough, "_write_gt_masks_and_volumes", fake_masks)
+    monkeypatch.setattr(walkthrough, "_run_pipeline", fake_pipeline)
+    monkeypatch.setattr(walkthrough, "_middle_state_latent_point", fake_latent)
+    monkeypatch.setattr(walkthrough, "_run_compute_state", fake_compute_state)
+
+    def make_args(voxel_size):
+        return SimpleNamespace(
+            output_dir=str(tmp_path),
+            grid_size=128,
+            n_states=3,
+            n_images=1,
+            noise_level=1.0,
+            noise_model="radial1",
+            seed=0,
+            pc_project=0,
+            target_state=None,
+            zdim=1,
+            n_bins=3,
+            compute_state_maskrad_fraction=20.0,
+            compute_state_n_min_particles=100,
+            compute_state_save_all_estimates=False,
+            lazy=False,
+            low_memory_option=False,
+            very_low_memory_option=False,
+            pipeline_gpu_memory=None,
+            premultiplied_ctf=False,
+            bfactor=80.0,
+            max_rotation_degrees=5.0,
+            pdb_path=None,
+            overwrite=True,
+            use_oracle_pipeline=False,
+            path="symmetric",
+            mask_dilation_iters=None,
+            focus_mask_percentile=95.0,
+            voxel_size=voxel_size,
+        )
+
+    # Case 1: auto-detect from header (voxel_size=None, header says 2.0)
+    walkthrough.run_walkthrough(make_args(None), tmp_path)
+    assert pytest.approx(seen["raw_vs"], rel=1e-4) == 2.0
+    assert pytest.approx(seen["active_vs"], rel=1e-4) == 2.0
+    assert pytest.approx(seen["dataset_vs"], rel=1e-4) == 2.0
+    assert pytest.approx(seen["masks_vs"], rel=1e-4) == 2.0
+
+    # Case 2: explicit override wins over auto-detect
+    seen.clear()
+    walkthrough.run_walkthrough(make_args(1.7), tmp_path)
+    assert seen["raw_vs"] == 1.7
+    assert seen["active_vs"] == 1.7
+    assert seen["dataset_vs"] == 1.7
+    assert seen["masks_vs"] == 1.7
+
+
+def test_voxel_size_falls_back_to_5nrl_default_when_no_raw_volumes(monkeypatch, tmp_path):
+    """No 01_raw_volumes and no --voxel-size → 4.25 * 128 / grid_size."""
+    seen = {}
+
+    def fake_raw(_args, out, voxel_size):
+        seen["vs"] = voxel_size
+        return out / "01_raw_volumes" / "vol", np.zeros((3, 2, 2, 2), dtype=np.float32)
+
+    monkeypatch.setattr(walkthrough, "_write_raw_pdb_volumes", fake_raw)
+    monkeypatch.setattr(
+        walkthrough,
+        "_write_active_volumes",
+        lambda *_a, **_kw: (
+            tmp_path,
+            np.zeros((3, 2, 2, 2), np.float32),
+            {"explained_energy": np.array([1.0], np.float32)},
+        ),
+    )
+    monkeypatch.setattr(
+        walkthrough,
+        "_simulate_dataset",
+        lambda *_a, **_kw: (np.zeros((1, 2, 2, 2), np.float32), {"image_assignment": np.array([0], np.int32)}),
+    )
+    monkeypatch.setattr(
+        walkthrough,
+        "_write_gt_masks_and_volumes",
+        lambda *_a, **_kw: {"gt_dir": "g", "volume_mask": "m", "focus_mask": "f"},
+    )
+    monkeypatch.setattr(walkthrough, "_run_pipeline", lambda _a, out, _mp: out / "06_pipeline")
+    monkeypatch.setattr(walkthrough, "_middle_state_latent_point", lambda *_a, **_kw: np.array([[0.0]], np.float32))
+    monkeypatch.setattr(walkthrough, "_run_compute_state", lambda _a, out, *_x, **_kw: out / "07_compute_state")
+
+    args = SimpleNamespace(
+        output_dir=str(tmp_path),
+        grid_size=64,
+        n_states=3,
+        n_images=1,
+        noise_level=1.0,
+        noise_model="radial1",
+        seed=0,
+        pc_project=0,
+        target_state=None,
+        zdim=1,
+        n_bins=3,
+        compute_state_maskrad_fraction=20.0,
+        compute_state_n_min_particles=100,
+        compute_state_save_all_estimates=False,
+        lazy=False,
+        low_memory_option=False,
+        very_low_memory_option=False,
+        pipeline_gpu_memory=None,
+        premultiplied_ctf=False,
+        bfactor=80.0,
+        max_rotation_degrees=5.0,
+        pdb_path=None,
+        overwrite=True,
+        use_oracle_pipeline=False,
+        path="symmetric",
+        mask_dilation_iters=None,
+        focus_mask_percentile=95.0,
+        voxel_size=None,
+    )
+    walkthrough.run_walkthrough(args, tmp_path)
+    assert pytest.approx(seen["vs"], rel=1e-6) == 4.25 * 128 / 64
+
+
 def test_run_walkthrough_smoke(monkeypatch, tmp_path):
     calls = {}
 
@@ -226,7 +433,7 @@ def test_run_walkthrough_smoke(monkeypatch, tmp_path):
         target_state=None,
         zdim=1,
         n_bins=3,
-        compute_state_maskrad_fraction=4.0,
+        compute_state_maskrad_fraction=20.0,
         compute_state_n_min_particles=100,
         compute_state_save_all_estimates=False,
         lazy=False,
@@ -241,6 +448,8 @@ def test_run_walkthrough_smoke(monkeypatch, tmp_path):
         use_oracle_pipeline=False,
         path="symmetric",
         mask_dilation_iters=None,
+        focus_mask_percentile=95.0,
+        voxel_size=None,
     )
 
     summary = walkthrough.run_walkthrough(args, tmp_path)
@@ -308,7 +517,7 @@ def test_use_oracle_pipeline_flag_dispatches_to_oracle(monkeypatch, tmp_path):
         target_state=None,
         zdim=1,
         n_bins=3,
-        compute_state_maskrad_fraction=4.0,
+        compute_state_maskrad_fraction=20.0,
         compute_state_n_min_particles=100,
         compute_state_save_all_estimates=False,
         lazy=False,
@@ -323,6 +532,8 @@ def test_use_oracle_pipeline_flag_dispatches_to_oracle(monkeypatch, tmp_path):
         use_oracle_pipeline=True,
         path="arm_only",
         mask_dilation_iters=1,
+        focus_mask_percentile=95.0,
+        voxel_size=None,
     )
 
     summary = walkthrough.run_walkthrough(args, tmp_path)

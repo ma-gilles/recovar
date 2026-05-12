@@ -184,16 +184,27 @@ def _simulate_dataset(args, out: Path, volume_prefix: Path, voxel_size: float) -
 
 
 def _write_gt_masks_and_volumes(
-    out: Path, sim_info: dict, grid_size: int, voxel_size: float, mask_dilation_iters: int | None = None
+    out: Path,
+    sim_info: dict,
+    grid_size: int,
+    voxel_size: float,
+    mask_dilation_iters: int | None = None,
+    focus_mask_percentile: float = 95.0,
 ) -> dict[str, str]:
     """Save the simulator's GT reconstruction plus the pipeline masks.
 
-    ``mask_dilation_iters`` controls how aggressively both the union and
-    moving masks are grown beyond the molecular envelope; if ``None``, the
-    pipeline default ``ceil(6 * grid_size / 128)`` is used. Set to a small
-    number (or 0) for a tight mask; this is useful when the moving region
-    is small (e.g. arm-only trajectories) and the default dilation would
-    swallow the static body.
+    ``mask_dilation_iters`` controls how aggressively the union mask is
+    grown beyond the molecular envelope; if ``None``, the pipeline default
+    ``ceil(6 * grid_size / 128)`` is used.
+
+    ``focus_mask_percentile`` controls the focus mask. When > 0 (default 95)
+    the focus mask is built via
+    :func:`recovar.core.mask.make_localized_moving_gt_mask` — top
+    ``(100 - percentile)``% of per-voxel motion std inside the envelope,
+    pushed through the standard lowpass / threshold / largest-CC /
+    dilate / cosine-soft-edge pipeline. Pass ``0`` to fall back to the
+    legacy "anything moves" mask from
+    :func:`recovar.core.mask.make_moving_gt_mask`.
     """
     from recovar.core import mask as core_mask
 
@@ -215,9 +226,16 @@ def _write_gt_masks_and_volumes(
     volume_mask, binary_volume_mask = core_mask.make_union_gt_mask(
         real_vols, volume_shape, dilation_iters=mask_dilation_iters
     )
-    focus_mask, binary_focus_mask = core_mask.make_moving_gt_mask(
-        real_vols, volume_shape, dilation_iters=mask_dilation_iters
-    )
+    if focus_mask_percentile and focus_mask_percentile > 0:
+        focus_mask, binary_focus_mask = core_mask.make_localized_moving_gt_mask(
+            real_vols, volume_shape, percentile=focus_mask_percentile, envelope_mask=binary_volume_mask
+        )
+        focus_mask_method = f"localized@p{focus_mask_percentile:g}"
+    else:
+        focus_mask, binary_focus_mask = core_mask.make_moving_gt_mask(
+            real_vols, volume_shape, dilation_iters=mask_dilation_iters
+        )
+        focus_mask_method = "legacy_anything_moves"
     utils.write_mrc(
         mask_dir / "volume_mask_union.mrc", np.asarray(volume_mask, dtype=np.float32), voxel_size=voxel_size
     )
@@ -231,6 +249,8 @@ def _write_gt_masks_and_volumes(
             "volume_mask_union_fraction": float(np.mean(binary_volume_mask)),
             "focus_mask_moving_fraction": float(np.mean(binary_focus_mask)),
             "dilation_iters": mask_dilation_iters,
+            "focus_mask_method": focus_mask_method,
+            "focus_mask_percentile": float(focus_mask_percentile) if focus_mask_percentile else 0.0,
         },
     )
     return {
@@ -368,7 +388,28 @@ def _run_compute_state(args, out: Path, pipeline_dir: Path, latent_point: np.nda
 
 def run_walkthrough(args, out: Path) -> dict:
     out.mkdir(parents=True, exist_ok=True)
-    voxel_size = 4.25 * 128 / args.grid_size
+    # Voxel size resolution order:
+    #   1. Explicit --voxel-size wins.
+    #   2. Otherwise, if 01_raw_volumes/vol0000.mrc already exists (i.e. raw
+    #      volumes were pre-rendered by an external script), read voxel_size
+    #      from its MRC header so every downstream stage interprets
+    #      frequencies at the correct physical scale.
+    #   3. Otherwise fall back to the 5nrl rendering convention
+    #      (4.25 Å/voxel at grid 128 → 544 Å box).
+    pre_rendered = out / "01_raw_volumes" / "vol0000.mrc"
+    if args.voxel_size is not None:
+        voxel_size = float(args.voxel_size)
+    elif pre_rendered.exists():
+        import mrcfile
+
+        with mrcfile.open(pre_rendered, permissive=True) as m:
+            voxel_size = float(m.voxel_size.x)
+        if voxel_size <= 0:
+            voxel_size = 4.25 * 128 / args.grid_size
+        else:
+            logger.info("Auto-detected voxel_size=%.4f Å from %s", voxel_size, pre_rendered)
+    else:
+        voxel_size = 4.25 * 128 / args.grid_size
     target_state = args.target_state if args.target_state is not None else args.n_states // 2
     if not (0 <= target_state < args.n_states):
         raise ValueError(f"--target-state must be in [0, {args.n_states - 1}], got {target_state}")
@@ -377,7 +418,12 @@ def run_walkthrough(args, out: Path) -> dict:
     active_prefix, _active_volumes, pca_meta = _write_active_volumes(raw_volumes, args, out, voxel_size)
     _image_stack, sim_info = _simulate_dataset(args, out, active_prefix, voxel_size)
     mask_paths = _write_gt_masks_and_volumes(
-        out, sim_info, args.grid_size, voxel_size, mask_dilation_iters=args.mask_dilation_iters
+        out,
+        sim_info,
+        args.grid_size,
+        voxel_size,
+        mask_dilation_iters=args.mask_dilation_iters,
+        focus_mask_percentile=args.focus_mask_percentile,
     )
     if args.use_oracle_pipeline:
         pipeline_dir = _run_oracle_pipeline(args, out, mask_paths, sim_info, voxel_size)
@@ -451,6 +497,17 @@ Key settings:
 def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=os.path.abspath, required=True)
     parser.add_argument("--grid-size", type=int, default=64)
+    parser.add_argument(
+        "--voxel-size",
+        type=float,
+        default=None,
+        help=(
+            "Voxel size in Å. If unset, the walkthrough auto-detects from the header "
+            "of 01_raw_volumes/vol0000.mrc when present (so pre-rendered datasets, e.g. "
+            "the spike walkthrough at 2.0 Å/voxel, just work); otherwise falls back to the "
+            "5nrl rendering convention 4.25 * 128 / grid_size (Å/voxel)."
+        ),
+    )
     parser.add_argument("--n-states", type=int, default=50)
     parser.add_argument("--n-images", type=int, default=10000)
     parser.add_argument("--noise-level", type=float, default=1.0)
@@ -467,8 +524,13 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
         "--compute-state-maskrad-fraction",
         type=float,
-        default=4.0,
-        help="compute_state local-window scale. 4.0 keeps the smoke examples GPU-friendly; use 0.5 for the historical default.",
+        default=20.0,
+        help=(
+            "compute_state local-window scale. Matches recovar.commands.compute_state's "
+            "production default of 20 — fine-grained locres (many overlapping subvolumes, "
+            "per-zone bandwidth selection). Use a smaller value (e.g. 4) for a coarse, "
+            "GPU-friendly smoke run that collapses to a single central subvolume."
+        ),
     )
     parser.add_argument("--compute-state-n-min-particles", type=int, default=100)
     parser.add_argument("--compute-state-save-all-estimates", action="store_true")
@@ -489,6 +551,18 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
             "How many binary-dilation iterations to grow both the union and moving GT masks. "
             "If unset, the pipeline default ceil(6 * grid_size / 128) is used (3 at grid 64, "
             "6 at grid 128). Pass 0 or 1 for tighter masks when the moving region is small."
+        ),
+    )
+    parser.add_argument(
+        "--focus-mask-percentile",
+        type=float,
+        default=95.0,
+        help=(
+            "Percentile of per-voxel motion std (inside the union envelope) used as the "
+            "threshold for the focus mask. The thresholded volume is then pushed through "
+            "the standard lowpass/threshold/largest-CC/dilate/cosine-soft-edge pipeline. "
+            "Higher = tighter, more localized focus. Pass 0 for the legacy 'any voxel "
+            "that moves at all' mask. Default 95."
         ),
     )
     parser.add_argument(
