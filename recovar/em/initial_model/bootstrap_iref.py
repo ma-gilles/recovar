@@ -1,38 +1,11 @@
 """Denovo-init Iref seeding via random-orient backprojection.
 
-Mirrors the `fn_ref == "None"` branch of
-`MlOptimiser::calculateSumOfPowerSpectraAndAverageImage`
-(ml_optimiser.cpp:3127-3205) followed by the
-`wsum_model.BPref[iclass].reconstruct` call inside
-`setSigmaNoiseEstimatesAndSetAverageImage` (ml_optimiser.cpp:3259-3265)
-and the subsequent `initialLowPassFilterReferences`
-(ml_optimiser.cpp:3336-3372).
-
-For each particle in `sorted_idx` order:
-
-  1. `init_random_generator(random_seed + part_id)` — per-particle RNG reset
-  2. `rot = rnd_unif() * 360`
-  3. `tilt = rnd_unif() * 180`
-  4. `psi = rnd_unif() * 360`
-  5. `A = Euler_angles2matrix(rot, tilt, psi, homogeneous=false)`
-  6. `iclass = part_id_sorted % nr_classes`
-  7. apply softMaskOutsideMap (when do_zero_mask)
-  8. FFT(img) with RELION's "normalize=true" forward (divide by H*W)
-  9. CenterFFTbySign(Faux)  -> sign flip (-1)^(ky+kx+kz)
- 10. windowFourierTransform to current_size (pad=1 at box 64 + ini_high path
-     gives current_size = 136 which clamps to ori_size=64, so no-op)
- 11. Compute `Fctf` via CTF::getFftwImage with particle's metadata
- 12. `Fimg *= Fctf`, `Fctf² = Fctf * Fctf`
- 13. `BPref[iclass].set2DFourierTransform(Fimg, A, &Fctf²)`
-
-Then:
-  - `BPref[iclass].reconstruct(Iref[iclass], 10, false, dummy_tau2)` (RELION
-    calls this with `do_map = false` so no Wiener prior).
-  - `initialLowPassFilterReferences` applies a raised-cosine low-pass
-    filter at `radius = ori_size * pixel_size / ini_high` pixels,
-    tapered over `WIDTH_FMASK_EDGE = 2` shells.
-
-Parity target: `run_it000_class001.mrc` on the 64px fixture.
+Production path delegates to the RELION C++ binding
+(compute_bootstrap_iref_via_cpp) which mirrors the fn_ref=None branch of
+calculateSumOfPowerSpectraAndAverageImage (ml_optimiser.cpp:3127-3205),
+the wsum_model.BPref reconstruct call (ml_optimiser.cpp:3259-3265),
+and initialLowPassFilterReferences (ml_optimiser.cpp:3336-3372).
+Parity target: run_it000_class001.mrc on the 64-px fixture.
 """
 
 from __future__ import annotations

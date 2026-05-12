@@ -1,40 +1,13 @@
-"""Denovo-init Mavg + sigma2_noise computation.
+"""Denovo-init Mavg + sigma2_noise computation (pure NumPy).
 
-Mirrors the pair of RELION routines:
+Mirrors RELION ``calculateSumOfPowerSpectraAndAverageImage``
+(ml_optimiser.cpp:2891) + ``setSigmaNoiseEstimatesAndSetAverageImage``
+(ml_optimiser.cpp:3243). For up to N≤1000 particles per optics group:
+accumulate Mavg and per-shell radial power; then
+``sigma2_noise[g] = sum_sigma2[g] / (2 * sumw[g]) - 0.5*|FFT(Mavg)|²``
+with negative shells replaced by their nearest positive neighbour.
 
-  MlOptimiser::calculateSumOfPowerSpectraAndAverageImage
-      ml_optimiser.cpp:2891-3240
-  MlOptimiser::setSigmaNoiseEstimatesAndSetAverageImage
-      ml_optimiser.cpp:3243-3325
-
-Algorithm (for the GUI InitialModel path, 2D particles, single optics group):
-
-  1. For at most `minimum_nr_particles_sigma2_noise` particles per optics
-     group (default 1000 for 2D; capped at the dataset's particle count):
-       a. Read particle into real space.
-       b. If --zero_mask: apply softMaskOutsideMap with
-          radius = particle_diameter / (2 * pixel_size) and edge
-          width = width_mask_edge_px.
-       c. Accumulate `Mavg += img`.
-       d. FFT(img) -> Faux; compute radial power spectrum
-          `ind_spectrum[ires] += |Faux[k,i,j]|^2` summing over all
-          Fourier pixels at shell index `ires = round(sqrt(k^2+i^2+j^2))`.
-       e. Divide by shell pixel count -> per-particle mean
-          power-per-shell.
-       f. Accumulate `sum_sigma2[g] += ind_spectrum`;
-          `sumw[g] += 1`.
-
-  2. `Mavg /= total_sum` (total_sum == sumw summed over groups).
-  3. `spect = 0.5 * |FFT(Mavg)|^2 radial_average` (POWER_SPECTRUM / 2).
-  4. `sigma2_noise[g] = sum_sigma2[g] / (2 * sumw[g]) - spect`.
-  5. Replace negative shell values with a positive neighbouring value
-     (previous shell if >0, else walk forward until one is found).
-
-Everything above is pure NumPy — no JAX / no GPU. This is a one-shot
-preprocessing step that runs in seconds even for 1000 particles.
-
-Public API:
-  compute_avg_unaligned_and_sigma2(image_iter, ...) -> (Mavg, sigma2_per_group)
+Public API: ``compute_avg_unaligned_and_sigma2``.
 """
 
 from __future__ import annotations
