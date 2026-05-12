@@ -724,8 +724,9 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
         elif embedding_option == 'cov_dist':
             heterogeneity_distances = latent_density.compute_latent_quadratic_forms_in_batch(latent_points, zs, cov_zs)[...,0]
         elif embedding_option == 'dist':
-            cov_zs = cov_zs*0 + np.eye(ndim)
-            heterogeneity_distances = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]
+            #<<LH 003
+            tmp_cov_zs = cov_zs*0 + np.eye(ndim)
+            heterogeneity_distances = latent_density.compute_latent_log_likelihood(latent_points, zs, tmp_cov_zs)[...,0]
         else:
             raise ValueError("Unknown embed option")
 

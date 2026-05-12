@@ -287,6 +287,7 @@ def _run_compute_state(args, out: Path, pipeline_dir: Path, latent_point: np.nda
         fsc_mask_edgewidth=None,
         latent_points=str(latent_path),
         save_all_estimates=bool(args.compute_state_save_all_estimates),
+        embedding_option=args.embedding_option,
     )
     logger.info("Running recovar compute_state at %s", latent_path)
     compute_state_cmd.compute_state(compute_state_args)
@@ -387,6 +388,7 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--pipeline-gpu-memory", type=float, default=None, help="Optional value passed to pipeline --gpu-gb.")
     parser.add_argument("--premultiplied-ctf", action="store_true")
     parser.add_argument("--bfactor", type=float, default=80.0)
+    parser.add_argument("--embedding-option", type=str, default="cov_dist", choices=["cov_dist", "llh", "dist"], help="Embedding option passed to compute_state.")
     parser.add_argument("--max-rotation-degrees", type=float, default=5.0)
     parser.add_argument("--pdb-path", type=str, default=None)
     parser.add_argument("--overwrite", action="store_true", help="Regenerate cached dataset/pipeline outputs.")

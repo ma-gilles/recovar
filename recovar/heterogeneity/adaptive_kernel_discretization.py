@@ -1841,9 +1841,9 @@ def even_less_naive_heterogeneity_scheme_relion_style(
 ):
     bins = heterogeneity_bins
 
-    if my_distances is not None and my_cov is not None:
-        # Replace 1D heterogeneity_distances with Mahalanobis distance
-        heterogeneity_distances = np.einsum('ij,ijk,ik->i', my_distances, my_cov, my_distances)
+    #if my_distances is not None and my_cov is not None:
+    #   # Replace 1D heterogeneity_distances with Mahalanobis distance
+    #    heterogeneity_distances = np.einsum('ij,ijk,ik->i', my_distances, my_cov, my_distances)
 
     # For tilt-series datasets, distances may be per-particle while the kernel
     # iterates per-image.  Expand to per-image so bin assignments match image indices.
@@ -1864,19 +1864,34 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     #my_inds = np.digitize(heterogeneity_distances, bins, right=True).astype(np.int32)
     #my_inds = np.clip(my_inds, 0, n_bins - 1)
     #discretized_distances = bins[my_inds]
-    #my_kernel_fn = lambda dist: np.where(np.abs(dist) < 1, 3 / 4 * (1 - dist**2), 0)
-    my_h_grid = 2 * bins
+    my_kernel_epi = lambda dist: np.where(np.abs(dist) < 1, 3 / 4 * (1 - dist**2), 0)
+    #smallest_bandwidth = np.nanquantile(np.abs(my_distances), 0.05)
+    #my_h_grid = np.concatenate(([smallest_bandwidth], np.logspace(1.5, 4, n_bins - 1)))
+    #quantiles = np.array([np.nanquantile(np.abs(my_distances), i) for i in np.linspace(0.05, 1, n_bins)])
+    #my_h_grid = quantiles
+    my_h_grid = np.sqrt(2*bins)
     my_kernels = np.zeros((n_bins, my_distances.shape[0]))
     
+    # Warning! It is unintuitive, but my_cov probably
+    # stores the inverse matrix of the covariance and nott the covariance itself!
+    my_cov = np.linalg.inv(my_cov)
     for idx, h in enumerate(my_h_grid):
-        my_kernels[idx] = calculate_kernel(my_distances, my_cov, h)
+        if idx == 0:
+            my_kernels[idx] = my_kernel_epi(my_distances.squeeze()/h)
+        else:
+
+            my_kernels[idx] = calculate_kernel(my_distances, my_cov, h)
+        #my_kernels[idx] = my_kernel_epi(my_distances.squeeze()/h)
+
     os.makedirs("output", exist_ok=True)
     np.savetxt(os.path.join("output", "my_kernels.txt"), my_kernels)
     np.savetxt(os.path.join("output", "my_h_grid.txt"), my_h_grid)
     np.savetxt(os.path.join("output", "my_cov.txt"), my_cov.reshape(my_cov.shape[0], -1))
     np.savetxt(os.path.join("output", "my_distances.txt"), my_distances)
+    np.savetxt(os.path.join("output", "heterogeneity_distances.txt"), heterogeneity_distances)
     #>>LH 001
 
+    #recovar.utils.load_mrc(a)
     if upsampling_factor is not None:
         upsampled_vol_shape = tuple(3 * [experiment_dataset.grid_size * upsampling_factor])
     else:
@@ -1983,12 +1998,15 @@ def even_less_naive_heterogeneity_scheme_relion_style(
             return_real_space=return_real_space,
             input_half_volume=True,
         )
+
+        
         estimate_bins.append(estimate.reshape(-1))
 
     estimates = np.asarray(jnp.stack(estimate_bins, axis=0))
     if return_lhs_rhs:
         return estimates, np.asarray(my_lhs), np.asarray(my_rhs)
 
+     
     return estimates
 
 
