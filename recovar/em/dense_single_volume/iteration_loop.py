@@ -2082,33 +2082,21 @@ def _run_relion_iteration_loop(
                     class_log_priors=class_log_priors if k_class_enabled else None,
                     return_class_details=k_class_enabled,
                 )
+                (
+                    Ft_y_k,
+                    Ft_ctf_k,
+                    ha_k,
+                    best_rots_k,
+                    best_trans_k,
+                    _best_rot_ids_k,
+                    em_stats_k,
+                    noise_stats_k,
+                    *_local_tail,
+                ) = local_outputs
+                _tail_idx = 0
                 if collect_local_search_profile:
-                    if k_class_enabled:
-                        (
-                            Ft_y_k,
-                            Ft_ctf_k,
-                            ha_k,
-                            best_rots_k,
-                            best_trans_k,
-                            _best_rot_ids_k,
-                            em_stats_k,
-                            noise_stats_k,
-                            local_profile_k,
-                            class_assignments_k,
-                            class_posterior_sums_k,
-                        ) = local_outputs
-                    else:
-                        (
-                            Ft_y_k,
-                            Ft_ctf_k,
-                            ha_k,
-                            best_rots_k,
-                            best_trans_k,
-                            _best_rot_ids_k,
-                            em_stats_k,
-                            noise_stats_k,
-                            local_profile_k,
-                        ) = local_outputs
+                    local_profile_k = _local_tail[_tail_idx]
+                    _tail_idx += 1
                     profile_row = dict(local_profile_k)
                     profile_row["iteration"] = np.int32(iteration)
                     profile_row["half_index"] = np.int32(k)
@@ -2121,32 +2109,8 @@ def _run_relion_iteration_loop(
                             ),
                             **local_profile_k,
                         )
-                else:
-                    if k_class_enabled:
-                        (
-                            Ft_y_k,
-                            Ft_ctf_k,
-                            ha_k,
-                            best_rots_k,
-                            best_trans_k,
-                            _best_rot_ids_k,
-                            em_stats_k,
-                            noise_stats_k,
-                            class_assignments_k,
-                            class_posterior_sums_k,
-                        ) = local_outputs
-                    else:
-                        (
-                            Ft_y_k,
-                            Ft_ctf_k,
-                            ha_k,
-                            best_rots_k,
-                            best_trans_k,
-                            _best_rot_ids_k,
-                            em_stats_k,
-                            noise_stats_k,
-                        ) = local_outputs
                 if k_class_enabled:
+                    class_assignments_k, class_posterior_sums_k = _local_tail[_tail_idx : _tail_idx + 2]
                     class_assignments[k] = np.asarray(class_assignments_k, dtype=np.int32)
                     class_posterior_per_half[k] = np.asarray(class_posterior_sums_k, dtype=np.float64)
                 best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
