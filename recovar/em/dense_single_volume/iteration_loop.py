@@ -3638,23 +3638,15 @@ def _run_relion_iteration_loop(
             current_rotations.shape[0],
             current_translations.shape[0],
         )
-        final_em_kwargs = dict(
-            image_batch_size=safe_ibs,
-            rotation_block_size=safe_rbs,
-            current_size=final_cs,  # full Nyquist
-            score_with_masked_images=True,
-            half_spectrum_scoring=True,
-            projection_padding_factor=PROJECTION_PADDING_FACTOR,
-            reconstruction_padding_factor=PADDING_FACTOR,
-            image_corrections=relion_half_inputs.image_corrections[k],
-            scale_corrections=relion_half_inputs.scale_corrections[k],
-            image_pre_shifts=relion_translation_search_base(relion_half_inputs.previous_best_translations[k]),
-            use_float64_scoring=False,
-            use_float64_projections=False,
-            do_gridding_correction=True,
-            square_window=RELION_FOURIER_WINDOW_SQUARE,
-            sparse_pass2=False,
-        )
+        final_em_kwargs = {
+            **_DENSE_EM_STATIC_KWARGS,
+            "image_batch_size": safe_ibs,
+            "rotation_block_size": safe_rbs,
+            "current_size": final_cs,  # full Nyquist
+            "image_corrections": relion_half_inputs.image_corrections[k],
+            "scale_corrections": relion_half_inputs.scale_corrections[k],
+            "image_pre_shifts": relion_translation_search_base(relion_half_inputs.previous_best_translations[k]),
+        }
         if (
             k_class_enabled
             and class_direction_prior_per_half[k] is not None
