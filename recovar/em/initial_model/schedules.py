@@ -20,24 +20,6 @@ from typing import Optional
 
 import numpy as np
 
-
-def _relion_cpp_std_to_string_then_textToFloat(value: float) -> float:
-    """Mimic RELION's C++ round-trip `std::to_string(x)` then
-    `textToFloat(str)` which returns `float` (32-bit).
-
-    `std::to_string` uses `%f` formatting (6 decimal places by default).
-    `textToFloat` uses `sscanf("%f", &retval)` so the result is a 32-bit
-    float. The value stored in an RFLOAT (double) is that float32 bit
-    pattern cast to double, which has float32 precision.
-
-    Any schedule code path that formats a float via `std::to_string(...)` and
-    re-parses via `textToFloat(...)` must round-trip through this helper so
-    Python matches C++ bit-for-bit. Source: strings.cpp:220-236.
-    """
-    s = f"{value:f}"  # same default precision as std::to_string (6 decimals)
-    return float(np.float32(s))
-
-
 # ---------------------------------------------------------------------------
 # GUI InitialModel defaults (pipeline_jobs.cpp::initialiseInimodelJob)
 # ---------------------------------------------------------------------------

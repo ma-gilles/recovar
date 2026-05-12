@@ -1218,20 +1218,6 @@ def _native_expectation_step(
     return _expectation_step
 
 
-def _update_translation_offsets_from_estep_meta(
-    translation_offsets: np.ndarray,
-    meta: dict,
-    translations: np.ndarray,
-) -> None:
-    particle_state = NativeParticleState(
-        translation_offsets=translation_offsets,
-        class_assignments=np.zeros(translation_offsets.shape[0], dtype=np.int32),
-        max_posterior=np.zeros(translation_offsets.shape[0], dtype=np.float32),
-        pose_assignments=np.full(translation_offsets.shape[0], -1, dtype=np.int32),
-    )
-    _update_particle_state_from_estep_meta(particle_state, meta, translations)
-
-
 def _update_particle_state_from_estep_meta(
     particle_state: NativeParticleState,
     meta: dict,

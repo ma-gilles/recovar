@@ -93,30 +93,6 @@ def _center_fft_by_sign_2d_half(fourier: np.ndarray) -> np.ndarray:
     return fourier * sign
 
 
-def _window_fourier_transform_half(Faux: np.ndarray, new_size: int) -> np.ndarray:
-    """Crop / pad a half-complex 2D Fourier image to `new_size`.
-
-    Matches RELION's `windowFourierTransform(in, out, new_size)` for 2D
-    when the input size already equals new_size (no-op) or when new_size
-    > ori_size (no-op via clamping to input). For real cropping, the low
-    rows + high rows are kept as in recovar.em.initial_model.e_step.fourier_crop_half.
-    """
-    H, W_h = Faux.shape[-2:]
-    ori_size = H  # assume square
-    target_x = new_size // 2 + 1
-    if new_size == ori_size:
-        return Faux
-    if new_size > ori_size:
-        # RELION pads; but the bootstrap path calls with current_size >=
-        # ori_size so this is effectively a no-op in our path.
-        return Faux
-    half = new_size // 2
-    out = np.zeros((new_size, target_x), dtype=Faux.dtype)
-    out[:half, :target_x] = Faux[:half, :target_x]
-    out[half:, :target_x] = Faux[ori_size - (new_size - half) :, :target_x]
-    return out
-
-
 def _soft_mask_image_fixture(
     image: np.ndarray,
     radius: float,
