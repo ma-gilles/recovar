@@ -86,8 +86,10 @@ from recovar.em.dense_single_volume.local_search_iteration import (
     _precompute_exact_local_fine_grid_enabled,
     _run_local_search_iteration,
 )
+from recovar.em.dense_single_volume.mean_helpers import (  # noqa: F401  -- imported by tests
+    _align_fourier_volume_sign_to_reference as _align_fourier_volume_sign_to_reference,
+)
 from recovar.em.dense_single_volume.mean_helpers import (
-    _align_fourier_volume_sign_to_reference,
     _class_weights_from_posterior,
     _combined_class_direction_prior_from_halves,
     _combined_noise_stats,
@@ -98,6 +100,7 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _normalize_noise_variance_per_half,
     _reconstruct_and_postprocess_means,
     _reconstruct_volume_eager,
+    compute_unregularized_halfmaps_and_align_signs,
     update_c1_sigma_offset_from_posterior,
 )
 from recovar.em.dense_single_volume.relion_metadata import (
@@ -2537,86 +2540,29 @@ def _run_relion_iteration_loop(
                     global_direction_prior_order_per_half[k] = current_healpix_order
 
         # --- Compute unregularized half-maps only when diagnostics need them ---
-        #
-        # The K=1 FSC path is already computed above directly from the
-        # BackProjector accumulators (`current_iter_fsc`), matching RELION's
-        # ordering. For K>1, the shared class3D prior has already been derived
-        # from the previous Iref power spectrum. Reconstructing unregularized
-        # maps here is only needed for saved intermediates/parity dumps, so
-        # skip it in normal timing/production paths.
-        _t_unreg = time.time()
+        # K=1 FSC was already computed above directly from the BackProjector
+        # accumulators (current_iter_fsc), matching RELION ordering. For K>1
+        # the shared class3D prior is from the previous Iref power spectrum.
+        # Reconstructing unreg here is only needed for saved intermediates /
+        # parity dumps.
         need_unreg_means = save_intermediates_dir is not None or _parity_dump.is_active()
-        if need_unreg_means:
-            if k_class_enabled:
-                unreg_shared = jnp.stack(
-                    [
-                        _reconstruct_volume_eager(
-                            Ft_ctf_combined[class_idx],
-                            Ft_y_combined[class_idx],
-                            volume_shape,
-                            PADDING_FACTOR,
-                            tau=None,
-                            tau2_fudge=tau2_fudge,
-                            projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                            minres_map=RELION_MINRES_MAP,
-                        ).reshape(-1)
-                        for class_idx in range(n_classes)
-                    ],
-                    axis=0,
-                )
-                unreg_means = [unreg_shared, unreg_shared]
-            else:
-                unreg_means = [
-                    _reconstruct_volume_eager(
-                        Ft_ctf_half,
-                        Ft_y_half,
-                        volume_shape,
-                        PADDING_FACTOR,
-                        tau=None,
-                        tau2_fudge=tau2_fudge,
-                        projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                        minres_map=RELION_MINRES_MAP,
-                    )
-                    for Ft_ctf_half, Ft_y_half in ((Ft_ctf_0, Ft_y_0), (Ft_ctf_1, Ft_y_1))
-                ]
-        else:
-            unreg_means = [None, None]
-        if k_class_enabled:
-            aligned_classes = []
-            unreg_classes = [] if unreg_means[0] is not None else None
-            for class_idx in range(n_classes):
-                aligned_class, sign_flipped = _align_fourier_volume_sign_to_reference(
-                    means[0][class_idx],
-                    previous_means[0][class_idx],
-                    volume_shape,
-                )
-                aligned_classes.append(aligned_class)
-                if unreg_classes is not None:
-                    unreg_classes.append(-unreg_means[0][class_idx] if sign_flipped else unreg_means[0][class_idx])
-                if sign_flipped:
-                    logger.info("Aligned shared class-%d volume sign to the previous reference", class_idx + 1)
-            shared_aligned = jnp.stack(aligned_classes, axis=0)
-            means[0] = shared_aligned
-            means[1] = shared_aligned
-            if unreg_classes is not None:
-                shared_unreg = jnp.stack(unreg_classes, axis=0)
-                unreg_means = [shared_unreg, shared_unreg]
-        else:
-            for k in range(2):
-                means[k], sign_flipped = _align_fourier_volume_sign_to_reference(
-                    means[k],
-                    previous_means[k],
-                    volume_shape,
-                )
-                if sign_flipped and unreg_means[k] is not None:
-                    unreg_means[k] = -unreg_means[k]
-                if sign_flipped:
-                    logger.info("Aligned half-%d volume sign to the previous reference", k + 1)
-        logger.info(
-            "Unregularized reconstruction (2 halves): %.1fs%s",
-            time.time() - _t_unreg,
-            "" if need_unreg_means else " (skipped; diagnostics disabled)",
+        unreg_result = compute_unregularized_halfmaps_and_align_signs(
+            means=means,
+            previous_means=previous_means,
+            Ft_y_per_half=(Ft_y_0, Ft_y_1),
+            Ft_ctf_per_half=(Ft_ctf_0, Ft_ctf_1),
+            Ft_y_combined=Ft_y_combined if k_class_enabled else None,
+            Ft_ctf_combined=Ft_ctf_combined if k_class_enabled else None,
+            volume_shape=volume_shape,
+            n_classes=n_classes,
+            k_class_enabled=k_class_enabled,
+            tau2_fudge=tau2_fudge,
+            padding_factor=PADDING_FACTOR,
+            projection_padding_factor=PROJECTION_PADDING_FACTOR,
+            minres_map=RELION_MINRES_MAP,
+            need_unreg_means=need_unreg_means,
         )
+        unreg_means = unreg_result.unregularized_means
 
         # K>1 uses the shared per-class data_vs_prior curve to drive growth;
         # K=1 keeps the split-half FSC history.

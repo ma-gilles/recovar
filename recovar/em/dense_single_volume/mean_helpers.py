@@ -547,5 +547,141 @@ def update_c1_sigma_offset_from_posterior(
 
 
 # ---------------------------------------------------------------------------
+# Unregularized half-map reconstruction + sign alignment
+# ---------------------------------------------------------------------------
+
+
+@_dataclass
+class UnregularizedHalfmapResult:
+    """Unregularized half-maps + sign-flip telemetry.
+
+    ``unregularized_means`` is a 2-element list, one per half. For K-class
+    refinement both halves point at the same shared K-stack (RELION's
+    Class3D shares one mean across halves).
+
+    ``aligned_means`` is the input ``means`` argument after sign alignment
+    against ``previous_means`` (passed in so the caller can pick it up;
+    the helper also mutates ``means`` in place for convenience).
+    """
+
+    unregularized_means: list
+    aligned_means: list
+    any_sign_flipped: bool
+
+
+def compute_unregularized_halfmaps_and_align_signs(
+    *,
+    means: list,
+    previous_means: list,
+    Ft_y_per_half: tuple,
+    Ft_ctf_per_half: tuple,
+    Ft_y_combined,
+    Ft_ctf_combined,
+    volume_shape,
+    n_classes: int,
+    k_class_enabled: bool,
+    tau2_fudge: float,
+    padding_factor: int,
+    projection_padding_factor: int,
+    minres_map: int,
+    need_unreg_means: bool,
+) -> UnregularizedHalfmapResult:
+    """Reconstruct unregularized half-maps (only when diagnostics need them)
+    and sign-align the regularized means against the previous-iter reference.
+
+    For K-class refinement both halves share the same Iref-derived
+    prior, so the unregularized accumulator is the combined Ft_y/Ft_ctf
+    rather than the per-half pair; the K=1 path reconstructs from each
+    half's own accumulators.
+
+    Sign alignment uses ``_align_fourier_volume_sign_to_reference`` against
+    the previous iteration's means; in the K-class case both half-slots
+    end up pointing at the same shared K-stack.
+    """
+
+    _t_unreg = time.time()
+    if need_unreg_means:
+        if k_class_enabled:
+            unreg_shared = jnp.stack(
+                [
+                    _reconstruct_volume_eager(
+                        Ft_ctf_combined[class_idx],
+                        Ft_y_combined[class_idx],
+                        volume_shape,
+                        padding_factor,
+                        tau=None,
+                        tau2_fudge=tau2_fudge,
+                        projection_padding_factor=projection_padding_factor,
+                        minres_map=minres_map,
+                    ).reshape(-1)
+                    for class_idx in range(n_classes)
+                ],
+                axis=0,
+            )
+            unreg_means: list = [unreg_shared, unreg_shared]
+        else:
+            unreg_means = [
+                _reconstruct_volume_eager(
+                    Ft_ctf_half,
+                    Ft_y_half,
+                    volume_shape,
+                    padding_factor,
+                    tau=None,
+                    tau2_fudge=tau2_fudge,
+                    projection_padding_factor=projection_padding_factor,
+                    minres_map=minres_map,
+                )
+                for Ft_ctf_half, Ft_y_half in zip(Ft_ctf_per_half, Ft_y_per_half)
+            ]
+    else:
+        unreg_means = [None, None]
+
+    any_sign_flipped = False
+    if k_class_enabled:
+        aligned_classes = []
+        unreg_classes = [] if unreg_means[0] is not None else None
+        for class_idx in range(n_classes):
+            aligned_class, sign_flipped = _align_fourier_volume_sign_to_reference(
+                means[0][class_idx],
+                previous_means[0][class_idx],
+                volume_shape,
+            )
+            aligned_classes.append(aligned_class)
+            if unreg_classes is not None:
+                unreg_classes.append(-unreg_means[0][class_idx] if sign_flipped else unreg_means[0][class_idx])
+            if sign_flipped:
+                any_sign_flipped = True
+                logger.info("Aligned shared class-%d volume sign to the previous reference", class_idx + 1)
+        shared_aligned = jnp.stack(aligned_classes, axis=0)
+        means[0] = shared_aligned
+        means[1] = shared_aligned
+        if unreg_classes is not None:
+            shared_unreg = jnp.stack(unreg_classes, axis=0)
+            unreg_means = [shared_unreg, shared_unreg]
+    else:
+        for k in range(2):
+            means[k], sign_flipped = _align_fourier_volume_sign_to_reference(
+                means[k],
+                previous_means[k],
+                volume_shape,
+            )
+            if sign_flipped and unreg_means[k] is not None:
+                unreg_means[k] = -unreg_means[k]
+            if sign_flipped:
+                any_sign_flipped = True
+                logger.info("Aligned half-%d volume sign to the previous reference", k + 1)
+    logger.info(
+        "Unregularized reconstruction (2 halves): %.1fs%s",
+        time.time() - _t_unreg,
+        "" if need_unreg_means else " (skipped; diagnostics disabled)",
+    )
+    return UnregularizedHalfmapResult(
+        unregularized_means=unreg_means,
+        aligned_means=means,
+        any_sign_flipped=any_sign_flipped,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main refinement loop
 # ---------------------------------------------------------------------------
