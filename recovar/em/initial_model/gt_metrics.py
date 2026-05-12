@@ -1,9 +1,7 @@
-"""Ground-truth map metrics for InitialModel / ab-initio benchmarks.
+"""GT map metrics for InitialModel/ab-initio (raw vs alignment-aware separated).
 
-Ab-initio volumes have an arbitrary global orientation, and cryo-EM maps also
-have an unresolved handedness without extra information.  The helpers here keep
-raw GT metrics separate from alignment-aware metrics so benchmark outputs can
-report both without hiding which ambiguity was used.
+Cryo-EM maps have arbitrary global orientation + handedness; helpers keep both
+reporting modes available without hiding which ambiguity was used.
 """
 
 from __future__ import annotations
@@ -16,10 +14,7 @@ from scipy import ndimage
 DEFAULT_GT_ALIGN_HEALPIX_ORDER = 2
 DEFAULT_GT_ALIGN_MAX_SHELL = 8
 DEFAULT_GT_ALIGN_REFINE_ORDERS: tuple[int, ...] = (3, 4)
-# Angular sigma (degrees) to keep around the coarse-best rotation when
-# building each refinement-order grid. Generous enough to clear coarse-grid
-# step error (HEALPix-2 step ≈ 15°) without exploding the refinement size.
-DEFAULT_GT_ALIGN_REFINE_SIGMA_DEG: float = 30.0
+DEFAULT_GT_ALIGN_REFINE_SIGMA_DEG: float = 30.0  # generous re HEALPix-2 step ~15°
 
 
 @dataclass(frozen=True)
@@ -56,12 +51,7 @@ def first_shell_below_threshold(fsc_values: np.ndarray, threshold: float) -> int
 
 
 def rotate_volume_about_center(volume: np.ndarray, rotation_matrix: np.ndarray, *, order: int = 1) -> np.ndarray:
-    """Rotate ``volume`` around its geometric center with scipy interpolation.
-
-    ``rotation_matrix`` is expressed in array-axis coordinates.  The search
-    scans the same convention it applies, so callers do not need to interpret
-    the matrix as a RELION or RECOVAR pose.
-    """
+    """Rotate ``volume`` around its geometric center (matrix in array-axis coordinates)."""
     vol = np.asarray(volume, dtype=np.float64)
     if vol.ndim != 3 or len(set(vol.shape)) != 1:
         raise ValueError(f"Expected a cubic 3D volume, got shape {vol.shape}")
@@ -70,11 +60,10 @@ def rotate_volume_about_center(volume: np.ndarray, rotation_matrix: np.ndarray, 
         raise ValueError(f"rotation_matrix must have shape (3, 3), got {matrix.shape}")
     center = (np.asarray(vol.shape, dtype=np.float64) - 1.0) * 0.5
     inv_matrix = matrix.T
-    offset = center - inv_matrix @ center
     return ndimage.affine_transform(
         vol,
         inv_matrix,
-        offset=offset,
+        offset=center - inv_matrix @ center,
         output_shape=vol.shape,
         order=int(order),
         mode="constant",
@@ -99,13 +88,7 @@ def lowpass_volume_by_shell(
     *,
     output_size: int | None = None,
 ) -> np.ndarray:
-    """Low-pass a cubic volume by zeroing Fourier shells above ``max_shell``.
-
-    If ``output_size`` is smaller than the input box, the low-frequency Fourier
-    cube is cropped before inverse FFT.  Alignment scoring only uses low shells,
-    so this preserves the information being scored while avoiding thousands of
-    full-box interpolations during high-order rotation searches.
-    """
+    """Zero Fourier shells > ``max_shell``; optional smaller-box crop before iFFT for cheap scoring."""
     vol = np.asarray(volume, dtype=np.float64)
     if vol.ndim != 3 or len(set(vol.shape)) != 1:
         raise ValueError(f"Expected a cubic 3D volume, got shape {vol.shape}")
@@ -199,23 +182,11 @@ def align_volume_to_reference(
     refine_orders: tuple[int, ...] | None = None,
     refine_sigma_deg: float = DEFAULT_GT_ALIGN_REFINE_SIGMA_DEG,
 ) -> VolumeAlignment:
-    """Align ``volume`` to ``reference`` by coarse rotation search + local refinement.
+    """Coarse rotation search + per-order local refinement (locked mirror/sign).
 
-    Mirrors the EM convention: a coarse HEALPix grid picks the best
-    orientation, then successive finer-order grids are searched LOCALLY
-    around that pick (within ``refine_sigma_deg`` of the current best).
-    The search score is centered correlation between low-pass filtered
-    volumes.  ``corr`` returned is the centered correlation of the full
-    aligned map against the full reference.
-
-    If ``allow_mirror`` is true, an x-axis mirror is tested at the coarse
-    stage to cover the cryo-EM handedness ambiguity; the chosen mirror is
-    then locked through local refinement.  ``allow_sign`` is off by
-    default because density sign is not a physical ab-initio pose
-    ambiguity; enable it only to diagnose contrast convention issues.
-
-    Pass ``refine_orders=None`` (or an empty tuple) to disable local
-    refinement and reproduce the legacy coarse-only behavior.
+    ``corr`` is the full-resolution centered correlation; scoring uses LP-filtered volumes.
+    ``allow_sign`` is diagnostic-only (density sign isn't a physical ambiguity).
+    Pass ``refine_orders=None`` to disable local refinement.
     """
     vol = np.asarray(volume, dtype=np.float64)
     ref = np.asarray(reference, dtype=np.float64)
@@ -237,7 +208,6 @@ def align_volume_to_reference(
     mirror_options = (False, True) if allow_mirror else (False,)
     sign_options = (1, -1) if allow_sign else (1,)
 
-    # Coarse pass over the user-supplied grid.
     best_score, best_corr, best_idx, best_mirror, best_sign = _scan_grid(
         vol_score,
         ref_score,
@@ -248,8 +218,6 @@ def align_volume_to_reference(
     )
     best_rotation_matrix = np.asarray(rot_grid[best_idx], dtype=np.float64)
 
-    # Local refinement: lock mirror/sign, build finer grids, keep rotations
-    # within ``refine_sigma_deg`` of the current best, and pick the best.
     refine_orders = tuple(refine_orders or ())
     if refine_orders:
         for order in refine_orders:
