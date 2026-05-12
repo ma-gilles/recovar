@@ -7,14 +7,20 @@ at ``iteration_loop.<name>``; all dependencies are imported directly.
 
 from __future__ import annotations
 
+import logging
+import os
+import time
+
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.core import fourier_transform_utils
+from recovar.core import fourier_transform_utils, mask
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     collapse_rotation_posterior_to_direction_prior,
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_noise_variance_per_half(init_noise_variance, n_halves=2):
@@ -287,6 +293,149 @@ def _align_fourier_volume_sign_to_reference(volume_ft_flat, reference_ft_flat, v
     if overlap < 0.0:
         return -volume_ft_flat, True
     return volume_ft_flat, False
+
+
+def _reconstruct_and_postprocess_means(
+    means,
+    *,
+    Ft_y_0,
+    Ft_y_1,
+    Ft_ctf_0,
+    Ft_ctf_1,
+    Ft_y_combined,
+    Ft_ctf_combined,
+    mean_signal_variance,
+    mean_signal_variance_per_half,
+    n_classes: int,
+    k_class_enabled: bool,
+    cs,
+    iteration: int,
+    grid_size: int,
+    cryo,
+    volume_shape,
+    tau2_fudge: float,
+    padding_factor: int,
+    projection_padding_factor: int,
+    relion_minres_map: int,
+    particle_diameter_ang,
+    relion_firstiter_cc_this_iter: bool,
+    relion_firstiter_ini_high_angstrom,
+    relion_width_mask_edge: int,
+) -> None:
+    """Run one iteration's regularized reconstruction + post-processing.
+
+    Mutates ``means`` in place. Performs Wiener reconstruction (per-class for
+    K>1, per-half for K=1), optional pre-mask debug dump, RELION solvent
+    flatten, and iter-1 firstiter_cc low-pass filter.
+    """
+
+    _t_recon = time.time()
+    cs_int = int(cs) if cs is not None else None
+    if k_class_enabled:
+        shared_classes = jnp.stack(
+            [
+                _reconstruct_volume_eager(
+                    Ft_ctf_combined[class_idx],
+                    Ft_y_combined[class_idx],
+                    volume_shape,
+                    padding_factor,
+                    tau=mean_signal_variance[class_idx],
+                    tau2_fudge=tau2_fudge,
+                    projection_padding_factor=projection_padding_factor,
+                    minres_map=relion_minres_map,
+                    current_size=cs_int,
+                ).reshape(-1)
+                for class_idx in range(n_classes)
+            ],
+            axis=0,
+        )
+        means[0] = shared_classes
+        means[1] = shared_classes
+    else:
+        for k in range(2):
+            Ft_y_k_local = Ft_y_0 if k == 0 else Ft_y_1
+            Ft_ctf_k_local = Ft_ctf_0 if k == 0 else Ft_ctf_1
+            means[k] = _reconstruct_volume_eager(
+                Ft_ctf_k_local,
+                Ft_y_k_local,
+                volume_shape,
+                padding_factor,
+                tau=mean_signal_variance_per_half[k],
+                tau2_fudge=tau2_fudge,
+                projection_padding_factor=projection_padding_factor,
+                minres_map=relion_minres_map,
+                current_size=cs_int,
+            ).reshape(-1)
+
+    for k in range(2):
+        # Diagnostic: dump pre-mask Wiener output when env var set.
+        _premask_dump = os.environ.get("RECOVAR_PREMASK_DUMP_DIR")
+        if _premask_dump:
+            import pathlib
+
+            pathlib.Path(_premask_dump).mkdir(parents=True, exist_ok=True)
+            np.savez(
+                pathlib.Path(_premask_dump) / f"recovar_premask_it{iteration + 1:03d}_half{k + 1}.npz",
+                iteration=np.int32(iteration + 1),
+                half=np.int32(k + 1),
+                current_size=np.int32(cs),
+                grid_size=np.int32(grid_size),
+                voxel_size=np.float32(cryo.voxel_size),
+                volume_shape=np.asarray(volume_shape, dtype=np.int32),
+                means_premask=np.asarray(means[k], dtype=np.complex64),
+            )
+
+        # RELION's solventFlatten (ml_optimiser.cpp:5469): mask the
+        # reconstructed reference outside particle_diameter to remove
+        # solvent noise before the next E-step's projections.
+        if particle_diameter_ang is not None and particle_diameter_ang > 0:
+            flatten_radius = particle_diameter_ang / (2.0 * cryo.voxel_size)
+            solvent_mask = mask.raised_cosine_mask(
+                volume_shape,
+                radius=flatten_radius,
+                radius_p=flatten_radius + relion_width_mask_edge,
+                offset=jnp.zeros(3),
+            )
+            if k_class_enabled:
+                flattened_classes = []
+                for class_idx in range(n_classes):
+                    vol_real = fourier_transform_utils.get_idft3(means[k][class_idx].reshape(volume_shape))
+                    flattened_classes.append(
+                        fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1),
+                    )
+                means[k] = jnp.stack(flattened_classes, axis=0)
+            else:
+                vol_real = fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
+                means[k] = fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1)
+        if relion_firstiter_cc_this_iter:
+            if k_class_enabled:
+                means[k] = jnp.stack(
+                    [
+                        _apply_relion_initial_lowpass_filter(
+                            means[k][class_idx],
+                            volume_shape,
+                            cryo.voxel_size,
+                            relion_firstiter_ini_high_angstrom,
+                            filter_edgewidth=relion_width_mask_edge,
+                        )
+                        for class_idx in range(n_classes)
+                    ],
+                    axis=0,
+                )
+            else:
+                means[k] = _apply_relion_initial_lowpass_filter(
+                    means[k],
+                    volume_shape,
+                    cryo.voxel_size,
+                    relion_firstiter_ini_high_angstrom,
+                    filter_edgewidth=relion_width_mask_edge,
+                )
+    if relion_firstiter_cc_this_iter and relion_firstiter_ini_high_angstrom is not None:
+        logger.info(
+            "RELION iter-1 CC emulation: reapplying ini_high low-pass filter at %.2f A",
+            float(relion_firstiter_ini_high_angstrom),
+        )
+    logger.info("Regularized reconstruction (2 halves + flatten): %.1fs", time.time() - _t_recon)
 
 
 # ---------------------------------------------------------------------------
