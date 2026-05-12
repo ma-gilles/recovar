@@ -970,13 +970,7 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
     meta: dict[str, Any] = {"halfset_ids": tuple(sorted(halfset_results))}
     class_posterior_sums = None
     class_direction_posterior_sums = None
-    wsum_sigma2_offset = 0.0
-    sigma2_offset_sumw = 0.0
-    wsum_sigma2_noise = None
-    wsum_img_power = None
-    noise_sumw = 0.0
-    have_sigma2_offset = False
-    have_noise = False
+    noise_totals: dict[str, Any] | None = None
     for h, result in halfset_results.items():
         if getattr(result, "class_posterior_sums", None) is not None:
             sums = np.asarray(result.class_posterior_sums, dtype=np.float64)
@@ -992,26 +986,20 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
             meta[f"halfset_{h}_profile_summary"] = dict(profile_summary)
         noise_stats = getattr(result, "aggregate_noise_stats", None)
         if noise_stats is not None:
-            half_wsum = float(getattr(noise_stats, "wsum_sigma2_offset"))
-            half_sumw = float(getattr(noise_stats, "sumw"))
-            half_wsum_noise = np.asarray(getattr(noise_stats, "wsum_sigma2_noise"), dtype=np.float64)
-            half_img_power = np.asarray(getattr(noise_stats, "wsum_img_power"), dtype=np.float64)
-            meta[f"halfset_{h}_wsum_sigma2_offset"] = half_wsum
-            meta[f"halfset_{h}_sigma2_offset_sumw"] = half_sumw
-            meta[f"halfset_{h}_wsum_sigma2_noise"] = half_wsum_noise
-            meta[f"halfset_{h}_wsum_img_power"] = half_img_power
-            meta[f"halfset_{h}_noise_sumw"] = half_sumw
-            wsum_sigma2_offset += half_wsum
-            sigma2_offset_sumw += half_sumw
-            wsum_sigma2_noise = half_wsum_noise if wsum_sigma2_noise is None else wsum_sigma2_noise + half_wsum_noise
-            wsum_img_power = half_img_power if wsum_img_power is None else wsum_img_power + half_img_power
-            noise_sumw += half_sumw
-            have_sigma2_offset = True
-            have_noise = True
+            half = {
+                "wsum_sigma2_offset": float(noise_stats.wsum_sigma2_offset),
+                "sigma2_offset_sumw": float(noise_stats.sumw),
+                "wsum_sigma2_noise": np.asarray(noise_stats.wsum_sigma2_noise, dtype=np.float64),
+                "wsum_img_power": np.asarray(noise_stats.wsum_img_power, dtype=np.float64),
+                "noise_sumw": float(noise_stats.sumw),
+            }
+            for k, v in half.items():
+                meta[f"halfset_{h}_{k}"] = v
+            noise_totals = dict(half) if noise_totals is None else {k: noise_totals[k] + half[k] for k in half}
         per_class_stats = getattr(result, "per_class_stats", None)
         if per_class_stats is not None:
             direction_sums = np.stack(
-                [np.asarray(class_stats.rotation_posterior_sums, dtype=np.float64) for class_stats in per_class_stats],
+                [np.asarray(cs.rotation_posterior_sums, dtype=np.float64) for cs in per_class_stats],
                 axis=0,
             )
             class_direction_posterior_sums = (
@@ -1023,13 +1011,8 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
         meta["class_posterior_sums"] = class_posterior_sums
     if class_direction_posterior_sums is not None:
         meta["class_direction_posterior_sums"] = class_direction_posterior_sums
-    if have_sigma2_offset:
-        meta["wsum_sigma2_offset"] = wsum_sigma2_offset
-        meta["sigma2_offset_sumw"] = sigma2_offset_sumw
-    if have_noise:
-        meta["wsum_sigma2_noise"] = wsum_sigma2_noise
-        meta["wsum_img_power"] = wsum_img_power
-        meta["noise_sumw"] = noise_sumw
+    if noise_totals is not None:
+        meta.update(noise_totals)
     return meta
 
 
