@@ -625,21 +625,16 @@ def run_vdam_iterations(
         )
         iter_artifact_sink(current, it, meta)
 
-        # Per-iter JAX cache hygiene for large-box runs. JIT compilations
-        # keyed by varying bucket shapes (different rotation counts each
-        # iter under autosampling) accumulate scratch buffers in the JAX
-        # allocator pool. At 50k particles × 256² this fragments the GPU
-        # heap enough that cuFFT plan workspace allocations fail around
-        # iter-9 (CUFFT_ALLOC_FAILED). Opt in via
-        # ``RECOVAR_CLEAR_JAX_CACHES_PER_ITER=1`` since the small-box
-        # default behavior was fine and the global cache clear forces
-        # recompiles on the next iter.
+        # Opt-in JAX cache clear (RECOVAR_CLEAR_JAX_CACHES_PER_ITER=1) for
+        # large-box runs — releases per-iter scratch buffers that otherwise
+        # fragment the GPU heap and trip CUFFT_ALLOC_FAILED around iter-9 at
+        # 50k×256². Forces recompiles on the next iter.
         if os.environ.get("RECOVAR_CLEAR_JAX_CACHES_PER_ITER", "") in ("1", "true", "TRUE"):
+            import gc
+
             import jax
 
             jax.clear_caches()
-            import gc
-
             gc.collect()
 
     return current
