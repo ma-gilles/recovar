@@ -196,6 +196,11 @@ from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
     _maybe_dump_noise_update_debug,
     _save_iteration_intermediates,
 )
+from recovar.em.dense_single_volume.ppca_bridge import (  # noqa: F401
+    PPCAKClassScheduleBridge,
+    run_dense_ppca_refinement_with_kclass_schedule,
+    run_local_ppca_refinement_with_kclass_schedule,
+)
 
 # RELION stores windowFourierTransform(in, out, current_size) as a rectangular
 # FFTW half image, but the likelihood support is the nonzero Minvsigma2 mask:
