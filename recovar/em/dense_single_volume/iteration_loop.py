@@ -13,6 +13,7 @@ import gc
 import logging
 import os
 import time
+from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
@@ -293,6 +294,153 @@ def _scatter_dense_k_class_result(
         k_class_result.stats,
         k_class_result.aggregate_noise_stats,
     )
+
+
+@dataclass
+class HalfScoreResult:
+    """Unified per-half scoring output.
+
+    Required for every scoring branch (local / adaptive-2pass / single-pass);
+    optional fields are populated only where the branch produces them.
+    Phase 4 introduces this shape; phases 6-8 migrate each scoring branch
+    to return one.
+    """
+
+    # Always populated by every scoring branch.
+    ha: np.ndarray
+    Ft_y: object
+    Ft_ctf: object
+    em_stats: object
+    noise_stats: object
+
+    # K-class only.
+    class_assignments: np.ndarray | None = None
+    class_posterior: np.ndarray | None = None
+    class_rotation_posterior: np.ndarray | None = None
+    noise_stats_per_class: tuple | None = None
+    rot_pmap_for_collapse: np.ndarray | None = None
+    adaptive_os_local: int = 0
+
+    # Local-search and explicit best-pose paths.
+    best_pose_rotations: np.ndarray | None = None
+    best_pose_rotation_eulers: np.ndarray | None = None
+    best_pose_translations: np.ndarray | None = None
+
+    # Diagnostics emitted by some branches.
+    coarse_ha: np.ndarray | None = None
+    pose_rotations: object | None = None
+    pose_rotation_eulers: object | None = None
+
+
+def _score_kclass_firstiter_cc_pass2(
+    *,
+    experiment_dataset,
+    mean,
+    mean_variance,
+    noise_variance_k,
+    effective_rotations,
+    current_translations,
+    base_translations,
+    current_healpix_order: int,
+    state,
+    random_perturbation,
+    disc_type,
+    class_log_priors,
+    image_batch_size: int,
+    image_shape_k,
+    em_kwargs: dict,
+    coarse_current_size: int | None = None,
+    fine_current_size: int | None = None,
+    log_label: str = "",
+    update_em_kwargs_image_batch_size: bool = False,
+):
+    """RELION iter-1 ``--firstiter_cc`` K-class adaptive 2-pass dispatch.
+
+    Builds the firstiter_cc pass-2 (coarse, fine, parent-map) grids and
+    invokes ``run_dense_k_class_em_adaptive`` with
+    ``firstiter_cc_pass2_only_best_coarse=True`` so the iter-1 M-step
+    matches RELION's pass-2 masked-to-best-coarse semantics
+    (ml_optimiser.cpp:9181-9207).
+
+    Shared between the half-set loop's adaptive (``elif use_adaptive``)
+    and single-pass (``else``) branches with three controlled
+    differences:
+
+    1. ``update_em_kwargs_image_batch_size`` — adaptive site overrides
+       em_kwargs["image_batch_size"] with the firstiter clamp; single-pass
+       leaves em_kwargs untouched.
+    2. ``coarse_current_size`` / ``fine_current_size`` — adaptive site
+       passes ``coarse_cs`` / ``cs_for_engine`` to the engine; single-pass
+       omits both (engine resolves from ``current_size`` in em_kwargs).
+    3. ``log_label`` — "" for adaptive site, "(non-adaptive site) " for
+       single-pass.
+
+    Returns ``(k_class_result, rot_pmap_for_collapse, adaptive_os_local)``.
+    """
+
+    adaptive_os_local = int(state.adaptive_oversampling)
+    firstiter_image_batch_size = min(
+        image_batch_size,
+        _safe_firstiter_cc_image_batch_size(
+            current_translations.shape[0],
+            image_shape_k,
+        ),
+    )
+    if firstiter_image_batch_size != image_batch_size:
+        logger.info(
+            "STRICT-PARITY: clamping iter-1 winner-take-all image_batch_size from %d to %d",
+            image_batch_size,
+            firstiter_image_batch_size,
+        )
+    if update_em_kwargs_image_batch_size:
+        em_kwargs["image_batch_size"] = firstiter_image_batch_size
+    logger.info(
+        "STRICT-PARITY %srouting iter-1 K-class through run_dense_k_class_em_adaptive (oversampling=%d)",
+        log_label,
+        adaptive_os_local,
+    )
+    (
+        coarse_rot,
+        coarse_trans,
+        fine_rot,
+        fine_trans,
+        rot_pmap,
+        trans_pmap,
+    ) = _build_firstiter_cc_pass2_grids(
+        effective_rotations,
+        current_translations,
+        base_translations,
+        int(current_healpix_order),
+        adaptive_os_local,
+        float(state.translation_step),
+        random_perturbation,
+    )
+    extra: dict = {}
+    if coarse_current_size is not None:
+        extra["coarse_current_size"] = coarse_current_size
+    if fine_current_size is not None:
+        extra["fine_current_size"] = fine_current_size
+    k_class_result = run_dense_k_class_em_adaptive(
+        experiment_dataset,
+        mean,
+        mean_variance,
+        noise_variance_k,
+        coarse_rot,
+        coarse_trans,
+        fine_rot,
+        fine_trans,
+        rot_pmap,
+        trans_pmap,
+        disc_type,
+        class_log_priors=class_log_priors,
+        accumulate_noise=True,
+        return_best_pose_details=True,
+        firstiter_cc_pass2_only_best_coarse=True,
+        skip_significance_pruning=True,
+        **extra,
+        **em_kwargs,
+    )
+    return k_class_result, rot_pmap, adaptive_os_local
 
 
 def refine_single_volume(
@@ -1865,62 +2013,26 @@ def _run_relion_iteration_loop(
                     # soft posteriors then binarizes only the M-step weights,
                     # which has subtle differences vs RELION's pass2-masked CC.
                     if relion_firstiter_cc_this_iter:
-                        adaptive_os_local = int(state.adaptive_oversampling)
-                        firstiter_image_batch_size = min(
-                            image_batch_size,
-                            _safe_firstiter_cc_image_batch_size(
-                                current_translations.shape[0],
-                                experiment_datasets[k].image_shape,
-                            ),
-                        )
-                        if firstiter_image_batch_size != image_batch_size:
-                            logger.info(
-                                "STRICT-PARITY: clamping iter-1 winner-take-all image_batch_size from %d to %d",
-                                image_batch_size,
-                                firstiter_image_batch_size,
-                            )
-                        dense_skip_kwargs["image_batch_size"] = firstiter_image_batch_size
-                        logger.info(
-                            "STRICT-PARITY: routing iter-1 K-class through run_dense_k_class_em_adaptive (oversampling=%d)",
-                            adaptive_os_local,
-                        )
-                        (
-                            coarse_rot,
-                            coarse_trans,
-                            fine_rot,
-                            fine_trans,
-                            rot_pmap,
-                            trans_pmap,
-                        ) = _build_firstiter_cc_pass2_grids(
-                            effective_rotations,
-                            current_translations,
-                            base_translations,
-                            int(current_healpix_order),
-                            adaptive_os_local,
-                            float(state.translation_step),
-                            random_perturbation,
-                        )
-                        rot_pmap_for_collapse = rot_pmap
-                        k_class_result = run_dense_k_class_em_adaptive(
-                            experiment_datasets[k],
-                            means[k],
-                            mean_variance,
-                            noise_variance_k,
-                            coarse_rot,
-                            coarse_trans,
-                            fine_rot,
-                            fine_trans,
-                            rot_pmap,
-                            trans_pmap,
-                            disc_type,
+                        k_class_result, rot_pmap_for_collapse, adaptive_os_local = _score_kclass_firstiter_cc_pass2(
+                            experiment_dataset=experiment_datasets[k],
+                            mean=means[k],
+                            mean_variance=mean_variance,
+                            noise_variance_k=noise_variance_k,
+                            effective_rotations=effective_rotations,
+                            current_translations=current_translations,
+                            base_translations=base_translations,
+                            current_healpix_order=current_healpix_order,
+                            state=state,
+                            random_perturbation=random_perturbation,
+                            disc_type=disc_type,
                             class_log_priors=class_log_priors,
-                            accumulate_noise=True,
-                            return_best_pose_details=True,
-                            firstiter_cc_pass2_only_best_coarse=True,
-                            skip_significance_pruning=True,
+                            image_batch_size=image_batch_size,
+                            image_shape_k=experiment_datasets[k].image_shape,
+                            em_kwargs=dense_skip_kwargs,
                             coarse_current_size=coarse_cs,
                             fine_current_size=cs_for_engine,
-                            **dense_skip_kwargs,
+                            log_label="",
+                            update_em_kwargs_image_batch_size=True,
                         )
                     else:
                         k_class_result = run_dense_k_class_em(
@@ -2008,59 +2120,26 @@ def _run_relion_iteration_loop(
                     # the adaptive_oversampling=0 + K=4 + --firstiter_cc cold-start
                     # lands here.
                     if relion_firstiter_cc_this_iter:
-                        adaptive_os_local = int(state.adaptive_oversampling)
-                        firstiter_image_batch_size = min(
-                            image_batch_size,
-                            _safe_firstiter_cc_image_batch_size(
-                                current_translations.shape[0],
-                                experiment_datasets[k].image_shape,
-                            ),
-                        )
-                        if firstiter_image_batch_size != image_batch_size:
-                            logger.info(
-                                "STRICT-PARITY: clamping iter-1 winner-take-all image_batch_size from %d to %d",
-                                image_batch_size,
-                                firstiter_image_batch_size,
-                            )
-                        logger.info(
-                            "STRICT-PARITY (non-adaptive site): routing iter-1 K-class through run_dense_k_class_em_adaptive (oversampling=%d)",
-                            adaptive_os_local,
-                        )
-                        (
-                            coarse_rot,
-                            coarse_trans,
-                            fine_rot,
-                            fine_trans,
-                            rot_pmap,
-                            trans_pmap,
-                        ) = _build_firstiter_cc_pass2_grids(
-                            effective_rotations,
-                            current_translations,
-                            base_translations,
-                            int(current_healpix_order),
-                            adaptive_os_local,
-                            float(state.translation_step),
-                            random_perturbation,
-                        )
-                        rot_pmap_for_collapse = rot_pmap
-                        k_class_result = run_dense_k_class_em_adaptive(
-                            experiment_datasets[k],
-                            means[k],
-                            mean_variance,
-                            noise_variance_k,
-                            coarse_rot,
-                            coarse_trans,
-                            fine_rot,
-                            fine_trans,
-                            rot_pmap,
-                            trans_pmap,
-                            disc_type,
+                        k_class_result, rot_pmap_for_collapse, adaptive_os_local = _score_kclass_firstiter_cc_pass2(
+                            experiment_dataset=experiment_datasets[k],
+                            mean=means[k],
+                            mean_variance=mean_variance,
+                            noise_variance_k=noise_variance_k,
+                            effective_rotations=effective_rotations,
+                            current_translations=current_translations,
+                            base_translations=base_translations,
+                            current_healpix_order=current_healpix_order,
+                            state=state,
+                            random_perturbation=random_perturbation,
+                            disc_type=disc_type,
                             class_log_priors=class_log_priors,
-                            accumulate_noise=True,
-                            return_best_pose_details=True,
-                            firstiter_cc_pass2_only_best_coarse=True,
-                            skip_significance_pruning=True,
-                            **em_kwargs,
+                            image_batch_size=image_batch_size,
+                            image_shape_k=experiment_datasets[k].image_shape,
+                            em_kwargs=em_kwargs,
+                            coarse_current_size=None,
+                            fine_current_size=None,
+                            log_label="(non-adaptive site) ",
+                            update_em_kwargs_image_batch_size=False,
                         )
                     else:
                         k_class_result = run_dense_k_class_em(
