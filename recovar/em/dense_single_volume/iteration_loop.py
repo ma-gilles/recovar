@@ -233,6 +233,71 @@ _DENSE_EM_STATIC_KWARGS: dict = {
 }
 
 
+def _scatter_dense_k_class_result(
+    k_class_result,
+    *,
+    k: int,
+    effective_rotations,
+    rot_pmap_for_collapse,
+    relion_firstiter_cc_this_iter: bool,
+    adaptive_os_local: int,
+    noise_stats_per_half_per_class,
+    class_assignments,
+    class_posterior_per_half,
+    class_rotation_posterior_per_half,
+    best_pose_rotations,
+    best_pose_rotation_eulers,
+    best_pose_translations,
+):
+    """Scatter ``run_dense_k_class_em*`` result into per-half output lists.
+
+    Returns the five tuple of E-step outputs ``(ha_k, Ft_y_k, Ft_ctf_k,
+    em_stats_k, noise_stats_k)`` used downstream by both the adaptive
+    pass-2 and single-pass branches.
+    """
+    ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
+    noise_stats_per_half_per_class[k] = k_class_result.noise_stats
+    class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
+    class_posterior_per_half[k] = np.asarray(k_class_result.class_posterior_sums, dtype=np.float64)
+    # Collapse fine-grid rotation posteriors to coarse via the parent map
+    # when iter-1 firstiter_cc routes through the adaptive 2-pass engine
+    # with adaptive_oversampling > 0; downstream
+    # _combined_class_direction_prior_from_halves expects the coarse-grid
+    # shape (n_rot_coarse,).
+    n_rot_coarse = int(effective_rotations.shape[0])
+    per_class_rot_post_coarse = []
+    for stats in k_class_result.per_class_stats:
+        rot_post = np.asarray(stats.rotation_posterior_sums, dtype=np.float64)
+        if rot_post.shape[0] == n_rot_coarse:
+            per_class_rot_post_coarse.append(rot_post)
+        elif relion_firstiter_cc_this_iter and adaptive_os_local > 0:
+            coarse_post = np.zeros(n_rot_coarse, dtype=np.float64)
+            np.add.at(
+                coarse_post,
+                np.asarray(rot_pmap_for_collapse, dtype=np.int64),
+                rot_post,
+            )
+            per_class_rot_post_coarse.append(coarse_post)
+        else:
+            raise RuntimeError(
+                f"Unexpected K-class rotation_posterior_sums shape {rot_post.shape}; expected ({n_rot_coarse},)"
+            )
+    class_rotation_posterior_per_half[k] = np.stack(per_class_rot_post_coarse, axis=0)
+    if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
+        raise RuntimeError("Dense K-class path did not return best pose details")
+    best_rots = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
+    best_pose_rotations[k] = best_rots
+    best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
+    best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
+    return (
+        ha_k,
+        k_class_result.Ft_y,
+        k_class_result.Ft_ctf,
+        k_class_result.stats,
+        k_class_result.aggregate_noise_stats,
+    )
+
+
 def refine_single_volume(
     experiment_datasets,
     init_volume,
@@ -2129,15 +2194,15 @@ def _run_relion_iteration_loop(
                         raise NotImplementedError("K-class refine does not support adjoint ablation flags")
                     dense_skip_kwargs["image_batch_size"] = k_class_image_batch_size
                     dense_skip_kwargs["rotation_block_size"] = dense_k_class_rotation_block_size
+                    rot_pmap_for_collapse = None
+                    adaptive_os_local = 0
                     # STRICT-PARITY: at iter 1 with --firstiter_cc, route through
                     # run_dense_k_class_em_adaptive with
                     # firstiter_cc_pass2_only_best_coarse=True so the iter-1
                     # path matches RELION's expectationOneParticle pass-2
                     # masked-to-best-coarse semantics (ml_optimiser.cpp:9181-9207
-                    # with K>1). This is what run_k_class_parity.py uses to
-                    # achieve mean_corr 0.998 at iter 0->1 with the K=4 5k 128
-                    # fixture; the basic dense engine evaluates all poses with
-                    # soft posteriors, then binarizes only the M-step weights,
+                    # with K>1). The basic dense engine evaluates all poses with
+                    # soft posteriors then binarizes only the M-step weights,
                     # which has subtle differences vs RELION's pass2-masked CC.
                     if relion_firstiter_cc_this_iter:
                         adaptive_os_local = int(state.adaptive_oversampling)
@@ -2155,18 +2220,17 @@ def _run_relion_iteration_loop(
                                 firstiter_image_batch_size,
                             )
                         dense_skip_kwargs["image_batch_size"] = firstiter_image_batch_size
-                        dense_skip_kwargs["rotation_block_size"] = dense_k_class_rotation_block_size
                         logger.info(
                             "STRICT-PARITY: routing iter-1 K-class through run_dense_k_class_em_adaptive (oversampling=%d)",
                             adaptive_os_local,
                         )
                         (
-                            _coarse_rot_2954,
-                            _coarse_trans_2954,
-                            _fine_rot_2954,
-                            _fine_trans_2954,
-                            _rot_pmap_2954,
-                            _trans_pmap_2954,
+                            coarse_rot,
+                            coarse_trans,
+                            fine_rot,
+                            fine_trans,
+                            rot_pmap,
+                            trans_pmap,
                         ) = _build_firstiter_cc_pass2_grids(
                             effective_rotations,
                             current_translations,
@@ -2176,18 +2240,18 @@ def _run_relion_iteration_loop(
                             float(state.translation_step),
                             random_perturbation,
                         )
-                        _rot_pmap_for_collapse = _rot_pmap_2954
+                        rot_pmap_for_collapse = rot_pmap
                         k_class_result = run_dense_k_class_em_adaptive(
                             experiment_datasets[k],
                             means[k],
                             mean_variance,
                             noise_variance_k,
-                            _coarse_rot_2954,
-                            _coarse_trans_2954,
-                            _fine_rot_2954,
-                            _fine_trans_2954,
-                            _rot_pmap_2954,
-                            _trans_pmap_2954,
+                            coarse_rot,
+                            coarse_trans,
+                            fine_rot,
+                            fine_trans,
+                            rot_pmap,
+                            trans_pmap,
                             disc_type,
                             class_log_priors=class_log_priors,
                             accumulate_noise=True,
@@ -2212,50 +2276,21 @@ def _run_relion_iteration_loop(
                             return_best_pose_details=True,
                             **dense_skip_kwargs,
                         )
-                    ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
-                    Ft_y_k = k_class_result.Ft_y
-                    Ft_ctf_k = k_class_result.Ft_ctf
-                    em_stats_k = k_class_result.stats
-                    noise_stats_k = k_class_result.aggregate_noise_stats
-                    noise_stats_per_half_per_class[k] = k_class_result.noise_stats
-                    class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
-                    class_posterior_per_half[k] = np.asarray(
-                        k_class_result.class_posterior_sums,
-                        dtype=np.float64,
+                    ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = _scatter_dense_k_class_result(
+                        k_class_result,
+                        k=k,
+                        effective_rotations=effective_rotations,
+                        rot_pmap_for_collapse=rot_pmap_for_collapse,
+                        relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
+                        adaptive_os_local=adaptive_os_local,
+                        noise_stats_per_half_per_class=noise_stats_per_half_per_class,
+                        class_assignments=class_assignments,
+                        class_posterior_per_half=class_posterior_per_half,
+                        class_rotation_posterior_per_half=class_rotation_posterior_per_half,
+                        best_pose_rotations=best_pose_rotations,
+                        best_pose_rotation_eulers=best_pose_rotation_eulers,
+                        best_pose_translations=best_pose_translations,
                     )
-                    # Collapse fine-grid rotation posteriors to coarse via the parent
-                    # map when iter-1 firstiter_cc routes through the adaptive 2-pass
-                    # engine with adaptive_oversampling > 0. Downstream
-                    # _combined_class_direction_prior_from_halves expects the coarse-grid
-                    # shape (n_rot_coarse,).
-                    _n_rot_coarse_for_stats = int(effective_rotations.shape[0])
-                    _per_class_rot_post_coarse = []
-                    for _stats in k_class_result.per_class_stats:
-                        _rot_post = np.asarray(_stats.rotation_posterior_sums, dtype=np.float64)
-                        if _rot_post.shape[0] == _n_rot_coarse_for_stats:
-                            _per_class_rot_post_coarse.append(_rot_post)
-                        elif relion_firstiter_cc_this_iter and adaptive_os_local > 0:
-                            _coarse_post = np.zeros(_n_rot_coarse_for_stats, dtype=np.float64)
-                            np.add.at(
-                                _coarse_post,
-                                np.asarray(_rot_pmap_for_collapse, dtype=np.int64),
-                                _rot_post,
-                            )
-                            _per_class_rot_post_coarse.append(_coarse_post)
-                        else:
-                            raise RuntimeError(
-                                f"Unexpected K-class rotation_posterior_sums shape {_rot_post.shape}; "
-                                f"expected ({_n_rot_coarse_for_stats},)"
-                            )
-                    class_rotation_posterior_per_half[k] = np.stack(_per_class_rot_post_coarse, axis=0)
-                    if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
-                        raise RuntimeError("Dense K-class path did not return best pose details")
-                    best_pose_rotations[k] = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
-                    best_pose_rotation_eulers[k] = utils.R_to_relion(
-                        np.asarray(k_class_result.best_pose_rotations),
-                        degrees=True,
-                    ).astype(np.float32)
-                    best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
                 else:
                     _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
                         experiment_datasets[k],
@@ -2302,6 +2337,8 @@ def _run_relion_iteration_loop(
                 if k_class_enabled:
                     if disable_adjoint_y or disable_adjoint_ctf:
                         raise NotImplementedError("K-class refine does not support adjoint ablation flags")
+                    rot_pmap_for_collapse = None
+                    adaptive_os_local = 0
                     # STRICT-PARITY: at iter 1 with --firstiter_cc, route through
                     # run_dense_k_class_em_adaptive with
                     # firstiter_cc_pass2_only_best_coarse=True so the iter-1
@@ -2330,12 +2367,12 @@ def _run_relion_iteration_loop(
                             adaptive_os_local,
                         )
                         (
-                            _coarse_rot_3645,
-                            _coarse_trans_3645,
-                            _fine_rot_3645,
-                            _fine_trans_3645,
-                            _rot_pmap_3645,
-                            _trans_pmap_3645,
+                            coarse_rot,
+                            coarse_trans,
+                            fine_rot,
+                            fine_trans,
+                            rot_pmap,
+                            trans_pmap,
                         ) = _build_firstiter_cc_pass2_grids(
                             effective_rotations,
                             current_translations,
@@ -2345,18 +2382,18 @@ def _run_relion_iteration_loop(
                             float(state.translation_step),
                             random_perturbation,
                         )
-                        _rot_pmap_for_collapse = _rot_pmap_3645
+                        rot_pmap_for_collapse = rot_pmap
                         k_class_result = run_dense_k_class_em_adaptive(
                             experiment_datasets[k],
                             means[k],
                             mean_variance,
                             noise_variance_k,
-                            _coarse_rot_3645,
-                            _coarse_trans_3645,
-                            _fine_rot_3645,
-                            _fine_trans_3645,
-                            _rot_pmap_3645,
-                            _trans_pmap_3645,
+                            coarse_rot,
+                            coarse_trans,
+                            fine_rot,
+                            fine_trans,
+                            rot_pmap,
+                            trans_pmap,
                             disc_type,
                             class_log_priors=class_log_priors,
                             accumulate_noise=True,
@@ -2379,50 +2416,21 @@ def _run_relion_iteration_loop(
                             return_best_pose_details=True,
                             **em_kwargs,
                         )
-                    ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
-                    Ft_y_k = k_class_result.Ft_y
-                    Ft_ctf_k = k_class_result.Ft_ctf
-                    em_stats_k = k_class_result.stats
-                    noise_stats_k = k_class_result.aggregate_noise_stats
-                    noise_stats_per_half_per_class[k] = k_class_result.noise_stats
-                    class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
-                    class_posterior_per_half[k] = np.asarray(
-                        k_class_result.class_posterior_sums,
-                        dtype=np.float64,
+                    ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = _scatter_dense_k_class_result(
+                        k_class_result,
+                        k=k,
+                        effective_rotations=effective_rotations,
+                        rot_pmap_for_collapse=rot_pmap_for_collapse,
+                        relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
+                        adaptive_os_local=adaptive_os_local,
+                        noise_stats_per_half_per_class=noise_stats_per_half_per_class,
+                        class_assignments=class_assignments,
+                        class_posterior_per_half=class_posterior_per_half,
+                        class_rotation_posterior_per_half=class_rotation_posterior_per_half,
+                        best_pose_rotations=best_pose_rotations,
+                        best_pose_rotation_eulers=best_pose_rotation_eulers,
+                        best_pose_translations=best_pose_translations,
                     )
-                    # Collapse fine-grid rotation posteriors to coarse via the parent
-                    # map when iter-1 firstiter_cc routes through the adaptive 2-pass
-                    # engine with adaptive_oversampling > 0. Downstream
-                    # _combined_class_direction_prior_from_halves expects the coarse-grid
-                    # shape (n_rot_coarse,).
-                    _n_rot_coarse_for_stats = int(effective_rotations.shape[0])
-                    _per_class_rot_post_coarse = []
-                    for _stats in k_class_result.per_class_stats:
-                        _rot_post = np.asarray(_stats.rotation_posterior_sums, dtype=np.float64)
-                        if _rot_post.shape[0] == _n_rot_coarse_for_stats:
-                            _per_class_rot_post_coarse.append(_rot_post)
-                        elif relion_firstiter_cc_this_iter and adaptive_os_local > 0:
-                            _coarse_post = np.zeros(_n_rot_coarse_for_stats, dtype=np.float64)
-                            np.add.at(
-                                _coarse_post,
-                                np.asarray(_rot_pmap_for_collapse, dtype=np.int64),
-                                _rot_post,
-                            )
-                            _per_class_rot_post_coarse.append(_coarse_post)
-                        else:
-                            raise RuntimeError(
-                                f"Unexpected K-class rotation_posterior_sums shape {_rot_post.shape}; "
-                                f"expected ({_n_rot_coarse_for_stats},)"
-                            )
-                    class_rotation_posterior_per_half[k] = np.stack(_per_class_rot_post_coarse, axis=0)
-                    if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
-                        raise RuntimeError("Dense K-class path did not return best pose details")
-                    best_pose_rotations[k] = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
-                    best_pose_rotation_eulers[k] = utils.R_to_relion(
-                        np.asarray(k_class_result.best_pose_rotations),
-                        degrees=True,
-                    ).astype(np.float32)
-                    best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
                 else:
                     _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
                         experiment_datasets[k],
