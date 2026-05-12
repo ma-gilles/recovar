@@ -258,10 +258,17 @@ def refine_single_volume(
     force_max_iter_after_convergence=False,
     n_classes=1,
     init_class_log_priors=None,
+    options=None,
 ):
     """Multi-iteration RELION-parity EM refinement.
 
     This API always runs the RELION-parity refinement loop.
+
+    ``options`` accepts a :class:`recovar.em.dense_single_volume.refinement_options.RefinementOptions`
+    struct that bundles the schedule / adaptive / parity / local-search /
+    K-class / replay / debug / batching kwarg groups. When provided, its
+    fields override the individual kwargs below. Existing callers that
+    pass individual kwargs continue to work unchanged.
 
     Parameters
     ----------
@@ -347,6 +354,72 @@ def refine_single_volume(
         healpix_order_trajectory : list of int -- HEALPix order per iter
         ave_Pmax_trajectory : list of float -- average Pmax per iter
     """
+    if options is not None:
+        # Pull from RefinementOptions struct. Per-field unpacking lets old kwargs
+        # remain authoritative when no struct is passed.
+        schedule = options.schedule
+        max_iter = schedule.max_iter
+        init_current_size = schedule.init_current_size
+        fsc_threshold = schedule.fsc_threshold
+        init_healpix_order = schedule.init_healpix_order
+        max_healpix_order = schedule.max_healpix_order
+        init_translation_range = schedule.init_translation_range
+        init_translation_step = schedule.init_translation_step
+        init_translation_sigma_angstrom = schedule.init_translation_sigma_angstrom
+        particle_diameter_ang = schedule.particle_diameter_ang
+        init_relion_iteration = schedule.init_relion_iteration
+        init_fsc = schedule.init_fsc
+        init_ave_Pmax = schedule.init_ave_Pmax
+        init_has_high_fsc_at_limit = schedule.init_has_high_fsc_at_limit
+        force_max_iter_after_convergence = schedule.force_max_iter_after_convergence
+        skip_final_iteration = schedule.skip_final_iteration
+
+        adaptive = options.adaptive
+        adaptive_oversampling = adaptive.adaptive_oversampling
+        max_significants = adaptive.max_significants
+        nside_level = adaptive.nside_level
+        translation_pixel_offset = adaptive.translation_pixel_offset
+        relion_current_sizes = adaptive.relion_current_sizes
+
+        parity = options.parity
+        low_resol_join_halves_angstrom = parity.low_resol_join_halves_angstrom
+        tau2_fudge = parity.tau2_fudge
+        perturb_factor = parity.perturb_factor
+        perturb_seed = parity.perturb_seed
+        perturb_replay_relion_dir = parity.perturb_replay_relion_dir
+        emulate_relion_firstiter_cc = parity.emulate_relion_firstiter_cc
+        relion_firstiter_ini_high_angstrom = parity.relion_firstiter_ini_high_angstrom
+        first_iteration_score_mode = parity.first_iteration_score_mode
+        first_iteration_reconstruction_mode = parity.first_iteration_reconstruction_mode
+
+        local_search = options.local_search
+        auto_local_healpix_order = local_search.auto_local_healpix_order
+        local_search_profile_mode = local_search.local_search_profile_mode
+        local_search_translation_prior_mode = local_search.local_search_translation_prior_mode
+
+        debug_opts = options.debug
+        disable_adjoint_y = debug_opts.disable_adjoint_y
+        disable_adjoint_ctf = debug_opts.disable_adjoint_ctf
+        save_intermediates_dir = debug_opts.save_intermediates_dir
+
+        k_class_opts = options.k_class
+        n_classes = k_class_opts.n_classes
+        init_class_log_priors = k_class_opts.init_class_log_priors
+
+        replay = options.replay
+        init_image_corrections = replay.init_image_corrections
+        init_scale_corrections = replay.init_scale_corrections
+        init_direction_prior = replay.init_direction_prior
+        init_previous_best_translations = replay.init_previous_best_translations
+        init_previous_best_rotation_eulers = replay.init_previous_best_rotation_eulers
+        replay_iteration_overrides = replay.replay_iteration_overrides
+
+        batching = options.batching
+        image_batch_size = batching.image_batch_size
+        rotation_block_size = batching.rotation_block_size
+
+        disc_type = options.disc_type
+
     if relion_current_sizes is not None and len(relion_current_sizes) == 0:
         raise ValueError("relion_current_sizes must be non-empty when provided")
     n_total_images = int(sum(int(ds.n_units) for ds in experiment_datasets))

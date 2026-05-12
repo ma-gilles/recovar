@@ -264,24 +264,30 @@ def test_exact_local_microbatch_caps_fused_mstep_matmul(monkeypatch):
     monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
     monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
 
-    assert _exact_local_max_hypotheses_per_microbatch(
-        None,
-        1091,
-        n_trans=21,
-        n_recon_windowed=1134,
-    ) == 41992
+    assert (
+        _exact_local_max_hypotheses_per_microbatch(
+            None,
+            1091,
+            n_trans=21,
+            n_recon_windowed=1134,
+        )
+        == 41992
+    )
 
 
 def test_exact_local_microbatch_matmul_cap_can_be_disabled(monkeypatch):
     monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
     monkeypatch.setenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, "0")
 
-    assert _exact_local_max_hypotheses_per_microbatch(
-        None,
-        1091,
-        n_trans=21,
-        n_recon_windowed=1134,
-    ) == 65536
+    assert (
+        _exact_local_max_hypotheses_per_microbatch(
+            None,
+            1091,
+            n_trans=21,
+            n_recon_windowed=1134,
+        )
+        == 65536
+    )
 
 
 def test_exact_local_microbatch_target_row_pixels_rejects_invalid(monkeypatch):
@@ -4129,6 +4135,7 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(captured_noise[0], half1_noise)
         np.testing.assert_allclose(captured_noise[1], half2_noise)
 
+
 class TestRelionDefault:
     def test_default_mode_is_relion(
         self,
@@ -4173,6 +4180,68 @@ class TestRelionDefault:
 
         assert result is sentinel
         assert called == {"ran_relion": True}
+
+    def test_refinement_options_struct_overrides_kwargs(
+        self,
+        half_datasets,
+        init_volume,
+        rotations,
+        translations,
+        monkeypatch,
+    ):
+        """Passing ``options=RefinementOptions(...)`` overrides individual kwargs."""
+        from recovar.em.dense_single_volume import (
+            KClassOptions,
+            RefinementOptions,
+            RefinementSchedule,
+            RelionParityOptions,
+        )
+
+        sentinel = {"convergence_state": object()}
+        captured: dict = {}
+
+        def fake_relion_loop(**kwargs):
+            captured.update(kwargs)
+            return sentinel
+
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "_run_relion_iteration_loop",
+            fake_relion_loop,
+        )
+
+        opts = RefinementOptions(
+            schedule=RefinementSchedule(max_iter=7, init_healpix_order=3, max_healpix_order=4),
+            parity=RelionParityOptions(tau2_fudge=4.0, emulate_relion_firstiter_cc=True),
+            k_class=KClassOptions(n_classes=4),
+        )
+        result = refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations,
+            translations,
+            # These individual kwargs would normally win, but the struct overrides.
+            max_iter=1,
+            init_healpix_order=2,
+            max_healpix_order=3,
+            tau2_fudge=1.0,
+            emulate_relion_firstiter_cc=False,
+            n_classes=1,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            init_current_size=16,
+            options=opts,
+        )
+
+        assert result is sentinel
+        assert captured["max_iter"] == 7
+        assert captured["init_healpix_order"] == 3
+        assert captured["max_healpix_order"] == 4
+        assert captured["tau2_fudge"] == 4.0
+        assert captured["emulate_relion_firstiter_cc"] is True
+        assert captured["n_classes"] == 4
 
     def test_canonical_rotation_grid_reuses_relion_euler_table(self, monkeypatch):
         """The auto-refine setup path must not convert canonical grids via SciPy."""
@@ -6051,7 +6120,9 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
                 build_local_search_grid_metadata(int(healpix_order)),
             )[0].astype(np.float32)
             best_rots = np.repeat(fine_rot[None, :, :], experiment_dataset.n_units, axis=0)
-            best_trans = np.repeat(np.asarray(translations)[trans_idx : trans_idx + 1], experiment_dataset.n_units, axis=0)
+            best_trans = np.repeat(
+                np.asarray(translations)[trans_idx : trans_idx + 1], experiment_dataset.n_units, axis=0
+            )
             best_ids = np.full(experiment_dataset.n_units, fine_idx, dtype=np.int32)
             return base_outputs + (best_rots, best_trans, best_ids, relion_stats, noise_stats)
         return base_outputs + (relion_stats, noise_stats)
