@@ -49,22 +49,12 @@ def _softmask_outside_map(
     radius: float,
     cosine_width: float,
 ) -> np.ndarray:
-    """RELION's `softMaskOutsideMap(img, radius, cosine_width)` in NumPy.
+    """RELION `softMaskOutsideMap` (mask.cpp:43) in NumPy.
 
-    RELION source: mask.cpp::softMaskOutsideMap (line 43).
-
-    Three regions, with `radius_p = radius + cosine_width`:
-      r <  radius:           keep image (fully inside)
-      radius <= r <= radius_p: cosine taper out toward background
-                               with raisedcos = 0.5 + 0.5*cos(π*(radius_p-r)/cosine_width)
-                               so raisedcos(r=radius)=1, raisedcos(r=radius_p)=0
-                               → out = (1-raisedcos)*img + raisedcos*bg
-      r >  radius_p:         set to background
-
-    The "bg" value is a weighted average of the image over the edge+exterior,
-    where interior pixels contribute 0, edge pixels contribute `raisedcos`,
-    and exterior pixels contribute 1. Computed in a first pass; applied in
-    a second pass.
+    Three radial regions about the image center, with ``radius_p = radius + cosine_width``:
+    ``r < radius`` keep image, ``r ∈ [radius, radius_p]`` cosine-blend toward
+    background, ``r > radius_p`` set to background. ``bg`` is a weighted average
+    over the edge+exterior, computed in a first pass and applied in a second.
     """
     H, W = image.shape[-2:]
     yy = np.arange(H) - H // 2
