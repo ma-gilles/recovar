@@ -711,10 +711,8 @@ def _build_sampling_plan(
     if sampling_state is None:
         healpix_order = int(opts.healpix_order)
         oversampling = int(opts.oversampling)
-        offset_range_px = float(opts.offset_range_px)
-        offset_step_px = float(opts.offset_step_px)
-        offset_range_angstrom = offset_range_px
-        offset_step_angstrom = offset_step_px
+        offset_range_px = offset_range_angstrom = float(opts.offset_range_px)
+        offset_step_px = offset_step_angstrom = float(opts.offset_step_px)
     else:
         healpix_order = int(sampling_state.healpix_order)
         oversampling = int(sampling_state.adaptive_oversampling)
@@ -728,53 +726,40 @@ def _build_sampling_plan(
     random_perturbation = _random_perturbation_for_iteration(opts, iteration)
     perturbed = abs(random_perturbation) > 1e-12
 
-    coarse_translations = sampling.get_translation_grid(
-        max_pixel=offset_range_px,
-        pixel_offset=offset_step_px,
-    ).astype(np.float32)
+    coarse_translations = sampling.get_translation_grid(max_pixel=offset_range_px, pixel_offset=offset_step_px).astype(
+        np.float32
+    )
     coarse_pass1_translations = (
-        sampling.apply_relion_translation_perturbation(
-            coarse_translations,
-            random_perturbation,
-            offset_step_px,
-        ).astype(np.float32)
+        sampling.apply_relion_translation_perturbation(coarse_translations, random_perturbation, offset_step_px).astype(
+            np.float32
+        )
         if perturbed
         else coarse_translations
     )
 
-    translation_parent: np.ndarray | None
     if oversampling == 0:
         rotations = sampling.get_relion_hidden_rotation_grid(healpix_order, matrices=True).astype(np.float32)
         translations = coarse_translations
         if perturbed:
             rotations = sampling.apply_relion_rotation_perturbation(
-                rotations,
-                random_perturbation,
-                sampling.relion_angular_sampling_deg(healpix_order),
+                rotations, random_perturbation, sampling.relion_angular_sampling_deg(healpix_order)
             ).astype(np.float32)
             translations = sampling.apply_relion_translation_perturbation(
-                translations,
-                random_perturbation,
-                offset_step_px,
+                translations, random_perturbation, offset_step_px
             ).astype(np.float32)
         translation_parent = None
     else:
-        coarse_indices = np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64)
         rotations, _ = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
-            coarse_indices,
+            np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64),
             parent_nside_level=healpix_order,
             oversampling_order=oversampling,
             random_perturbation=random_perturbation,
         )
         oversampled_trans, _translation_parent = sampling.get_oversampled_translation_grid(
-            coarse_translations,
-            pixel_offset=offset_step_px,
-            oversampling_order=oversampling,
+            coarse_translations, pixel_offset=offset_step_px, oversampling_order=oversampling
         )
         translations = sampling.apply_relion_translation_perturbation(
-            oversampled_trans.astype(np.float32, copy=False),
-            random_perturbation,
-            offset_step_pixels=offset_step_px,
+            oversampled_trans.astype(np.float32, copy=False), random_perturbation, offset_step_pixels=offset_step_px
         )
         translation_parent = np.asarray(_translation_parent, dtype=np.int64)
 
