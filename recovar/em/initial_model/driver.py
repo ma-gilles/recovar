@@ -1426,35 +1426,22 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     n_images = int(getattr(dataset, "n_images", len(main_star)))
     if len(main_star) != n_images:
         raise ValueError(f"STAR table has {len(main_star)} particles but dataset has {n_images} images")
-    if particle_state.translation_offsets.shape != (n_images, 2):
-        raise ValueError(
-            f"translation_offsets must have shape ({n_images}, 2), got {particle_state.translation_offsets.shape}"
-        )
-    if particle_state.class_assignments.shape != (n_images,):
-        raise ValueError(
-            f"class_assignments must have shape ({n_images},), got {particle_state.class_assignments.shape}"
-        )
-    if particle_state.max_posterior.shape != (n_images,):
-        raise ValueError(f"max_posterior must have shape ({n_images},), got {particle_state.max_posterior.shape}")
 
     output_order = _micrograph_sort_order(main_star)
     table = main_star.copy()
     visited = particle_state.visited
     if visited is None:
-        if particle_state.pose_assignments is not None:
-            visited = np.asarray(particle_state.pose_assignments, dtype=np.int32) >= 0
-        else:
-            visited = np.ones(n_images, dtype=bool)
+        visited = (
+            np.asarray(particle_state.pose_assignments, dtype=np.int32) >= 0
+            if particle_state.pose_assignments is not None
+            else np.ones(n_images, dtype=bool)
+        )
     visited = np.asarray(visited, dtype=bool).reshape(-1)
-    if visited.shape != (n_images,):
-        raise ValueError(f"visited must have shape ({n_images},), got {visited.shape}")
 
     offsets_angstrom = np.asarray(particle_state.translation_offsets, dtype=np.float64) * float(dataset.voxel_size)
     _set_star_column(table, "_rlnOriginXAngst", _format_float_column(offsets_angstrom[:, 0]))
     _set_star_column(table, "_rlnOriginYAngst", _format_float_column(offsets_angstrom[:, 1]))
-    has_legacy_x = _star_column(table, "_rlnOriginX") is not None
-    has_legacy_y = _star_column(table, "_rlnOriginY") is not None
-    if has_legacy_x or has_legacy_y:
+    if _star_column(table, "_rlnOriginX") is not None or _star_column(table, "_rlnOriginY") is not None:
         offsets_pixels = np.asarray(particle_state.translation_offsets, dtype=np.float64)
         _set_star_column(table, "_rlnOriginX", _format_float_column(offsets_pixels[:, 0]))
         _set_star_column(table, "_rlnOriginY", _format_float_column(offsets_pixels[:, 1]))
@@ -1463,22 +1450,16 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     _set_star_column(table, "_rlnClassNumber", class_numbers)
     _set_star_column(table, "_rlnMaxValueProbDistribution", _format_float_column(particle_state.max_posterior))
 
-    if particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None:
-        angle_rot = (
-            table["_rlnAngleRot"].astype(float).to_numpy(copy=True) if "_rlnAngleRot" in table else np.zeros(n_images)
-        )
-        angle_tilt = (
-            table["_rlnAngleTilt"].astype(float).to_numpy(copy=True) if "_rlnAngleTilt" in table else np.zeros(n_images)
-        )
-        angle_psi = (
-            table["_rlnAnglePsi"].astype(float).to_numpy(copy=True) if "_rlnAnglePsi" in table else np.zeros(n_images)
-        )
+    has_rotations = particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None
+    if has_rotations:
+
+        def _angle(col):
+            return table[col].astype(float).to_numpy(copy=True) if col in table else np.zeros(n_images)
+
+        angle_rot, angle_tilt, angle_psi = (_angle(c) for c in ("_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"))
         remaining_rot = visited.copy()
         if particle_state.best_pose_rotations is not None:
             rotations = np.asarray(particle_state.best_pose_rotations, dtype=np.float64)
-            expected = (n_images, 3, 3)
-            if rotations.shape != expected:
-                raise ValueError(f"best_pose_rotations must have shape {expected}, got {rotations.shape}")
             valid_matrix = visited & np.any(np.abs(rotations.reshape(n_images, -1)) > 0.0, axis=1)
             if np.any(valid_matrix):
                 eulers = np.asarray(R_to_relion(rotations[valid_matrix], degrees=True), dtype=np.float64)
@@ -1487,46 +1468,34 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
                 angle_psi[valid_matrix] = eulers[:, 2]
                 remaining_rot[valid_matrix] = False
 
-    if particle_state.best_pose_rotation_ids is not None:
-        rotation_ids = np.asarray(particle_state.best_pose_rotation_ids, dtype=np.int64).reshape(-1)
-        if rotation_ids.shape != (n_images,):
-            raise ValueError(f"best_pose_rotation_ids must have shape ({n_images},), got {rotation_ids.shape}")
-        valid_rot = remaining_rot & (rotation_ids >= 0)
-        if np.any(valid_rot):
-            rotation_orders = None
-            if particle_state.best_pose_rotation_orders is not None:
-                rotation_orders = np.asarray(particle_state.best_pose_rotation_orders, dtype=np.int32).reshape(-1)
-                if rotation_orders.shape != (n_images,):
-                    raise ValueError(
-                        f"best_pose_rotation_orders must have shape ({n_images},), got {rotation_orders.shape}"
+        if particle_state.best_pose_rotation_ids is not None:
+            rotation_ids = np.asarray(particle_state.best_pose_rotation_ids, dtype=np.int64).reshape(-1)
+            valid_rot = remaining_rot & (rotation_ids >= 0)
+            if np.any(valid_rot):
+                rotation_orders = (
+                    np.asarray(particle_state.best_pose_rotation_orders, dtype=np.int32).reshape(-1)
+                    if particle_state.best_pose_rotation_orders is not None
+                    else None
+                )
+                if rotation_orders is None:
+                    max_rotations = int(np.max(rotation_ids[valid_rot])) + 1
+                    inferred_order = next(
+                        (o for o in range(16) if sampling.rotation_grid_size(o) >= max_rotations), None
                     )
-            if rotation_orders is None:
-                max_rotations = int(np.max(rotation_ids[valid_rot])) + 1
-                inferred_order = None
-                for order in range(0, 16):
-                    if sampling.rotation_grid_size(order) >= max_rotations:
-                        inferred_order = order
-                        break
-                if inferred_order is None:
-                    raise ValueError(
-                        f"cannot infer HEALPix order for max rotation id {int(np.max(rotation_ids[valid_rot]))}"
-                    )
-                rotation_orders = np.full(n_images, inferred_order, dtype=np.int32)
-            for order in np.unique(rotation_orders[valid_rot]):
-                order = int(order)
-                order_mask = valid_rot & (rotation_orders == order)
-                if order < 0:
-                    continue
-                eulers = sampling.get_relion_rotation_grid_eulers(order, rotation_index_order="relion")
-                max_id = int(np.max(rotation_ids[order_mask]))
-                if max_id >= eulers.shape[0]:
-                    raise ValueError(
-                        f"best_pose_rotation_ids contains {max_id}, outside order-{order} grid of {eulers.shape[0]} rotations"
-                    )
-                angle_rot[order_mask] = eulers[rotation_ids[order_mask], 0]
-                angle_tilt[order_mask] = eulers[rotation_ids[order_mask], 1]
-                angle_psi[order_mask] = eulers[rotation_ids[order_mask], 2]
-    if particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None:
+                    if inferred_order is None:
+                        raise ValueError(
+                            f"cannot infer HEALPix order for max rotation id {int(np.max(rotation_ids[valid_rot]))}"
+                        )
+                    rotation_orders = np.full(n_images, inferred_order, dtype=np.int32)
+                for order in np.unique(rotation_orders[valid_rot]):
+                    order = int(order)
+                    if order < 0:
+                        continue
+                    order_mask = valid_rot & (rotation_orders == order)
+                    eulers = sampling.get_relion_rotation_grid_eulers(order, rotation_index_order="relion")
+                    angle_rot[order_mask] = eulers[rotation_ids[order_mask], 0]
+                    angle_tilt[order_mask] = eulers[rotation_ids[order_mask], 1]
+                    angle_psi[order_mask] = eulers[rotation_ids[order_mask], 2]
         _set_star_column(table, "_rlnAngleRot", _format_float_column(angle_rot))
         _set_star_column(table, "_rlnAngleTilt", _format_float_column(angle_tilt))
         _set_star_column(table, "_rlnAnglePsi", _format_float_column(angle_psi))
