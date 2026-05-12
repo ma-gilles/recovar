@@ -313,10 +313,41 @@ class TestStepSizeSchedule:
         v200 = compute_stepsize(iter=200, phase_lengths=p, is_3d_model=True, ref_dim=3)
         assert abs(v200 - 0.5) < 1e-6
 
-        # Sigmoid midpoint iter = b + a/2 = 60 + 25 = 85, scale = 0.5
+        # Sigmoid midpoint uses the inclusive in-between span:
+        # b + (grad_inbetween_iter - 1) / 4 = 60 + 24.75 = 84.75.
         # stepsize = 0.9*0.5 + 0.5*0.5 = 0.45 + 0.25 = 0.7
         v_mid = compute_stepsize(iter=85, phase_lengths=p, is_3d_model=True, ref_dim=3)
-        assert abs(v_mid - 0.7) < 1e-6
+        assert abs(v_mid - 0.695349139902437) < 1e-12
+
+    def test_short_8_iter_reference_schedule_matches_relion_initialmodel(self):
+        """Pinned from the 50k/256 RELION InitialModel iter-8 reference."""
+        p = compute_phase_lengths(8, 0.3, 0.2)
+        assert p.grad_ini_iter == 2
+        assert p.grad_inbetween_iter == 5
+        assert p.grad_fin_iter == 1
+
+        step_values = [
+            compute_stepsize(iter=it, phase_lengths=p, is_3d_model=True, ref_dim=3) for it in range(1, 9)
+        ]
+        assert step_values[0] == pytest.approx(0.89996, abs=5e-6)
+        assert step_values[1] == pytest.approx(0.89604, abs=5e-6)
+        assert step_values[2] == pytest.approx(0.7, abs=5e-6)
+        assert step_values[3] == pytest.approx(0.50396, abs=5e-6)
+
+        tau_values = [
+            compute_tau2_fudge(
+                iter=it,
+                phase_lengths=p,
+                is_3d_model=True,
+                ref_dim=3,
+                tau2_fudge_arg=4.0,
+            )
+            for it in range(1, 9)
+        ]
+        assert tau_values[0] == pytest.approx(1.000003, abs=5e-6)
+        assert tau_values[1] == pytest.approx(1.029703, abs=5e-6)
+        assert tau_values[2] == pytest.approx(3.970297, abs=5e-6)
+        assert tau_values[3] == pytest.approx(3.999997, abs=5e-6)
 
     def test_3d_class_default_scheme_is_plain(self):
         p = compute_phase_lengths(200, 0.3, 0.2)
@@ -391,8 +422,8 @@ class TestTau2FudgeSchedule:
         )
         assert abs(v_late - 4.0) < 1e-3
 
-        # Midpoint iter = b + a/2 = grad_ini_iter + sigmoid_length/2
-        # = 60 + 12.5 = 72.5 --> use 72 or 73 integer
+        # Midpoint iter = b + a/2 = grad_ini_iter + (grad_inbetween_iter - 1) / 8
+        # = 60 + 12.375 --> use 72 or 73 integer
         # scale = 0.5 --> tau = 4 - 3*0.5 = 2.5
         v_mid = compute_tau2_fudge(
             iter=72,

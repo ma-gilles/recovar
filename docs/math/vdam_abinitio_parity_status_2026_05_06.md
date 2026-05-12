@@ -41,6 +41,56 @@ This is the current production-scale native VDAM InitialModel status on
 `codex/vdam-after-merge-20260506`, after rebasing on the EM/VDAM/PPCA
 integration branch.
 
+### 2026-05-12 integration branch schedule check
+
+On integration branch `codex/vdam-initial-volume-parity` at base commit
+`5e90b143d7b6176c50dec8bec2a3633385e09cb5` plus the inclusive VDAM sigmoid
+schedule fix, the same 50k/256 K=1 `nr_iter=8` run reproduces the accepted
+May 6 parity band.
+
+RECOVAR run:
+
+`/scratch/gpfs/GILLES/mg6942/_agent_scratch/codex_vdam_initial_parity_20260512/k1_50k8_fix_8146395`
+
+Slurm/log:
+
+- Job: `8146395`
+- Log: `/scratch/gpfs/GILLES/mg6942/slurmo/vdam-k1-50k8-fix-8146395.out`
+- Wall time: `426.75 s`
+
+The first failed comparison in this session used `--nr_iter 3` against the
+8-iteration RELION reference. That mismatched VDAM schedules
+(`1833/3417/5000` selected particles instead of RELION's
+`250/250/1200` for iters 1-3) and is not a parity result.
+
+Schedule source fix:
+
+- RELION's short 8-iteration InitialModel reference uses the inclusive
+  in-between span for sigmoid schedules. Stepsize/tau2 at iters 1-4 are
+  `0.899960/1.000003`, `0.896040/1.029703`, `0.700000/3.970297`,
+  `0.503960/3.999997`.
+- RECOVAR now uses `grad_inbetween_iter - 1` in the VDAM stepsize and tau2
+  sigmoid lengths, while leaving the subset-size ramp unchanged.
+
+Direct native-vs-RELION map parity, loading both maps with
+`helpers.load_relion_volume()`:
+
+| Iteration | CC vs RELION | Scale | Residual/std | Delta vs May 6 status |
+|---:|---:|---:|---:|---|
+| 1 | `0.997919083` | `1.020772` | `0.064479` | same (`+0.000003`) |
+| 2 | `0.999005145` | `1.036257` | `0.044595` | same (`+0.000006`) |
+| 3 | `0.998927025` | `1.026496` | `0.046312` | not previously listed |
+| 4 | `0.998764692` | `1.022317` | `0.049690` | same (`+0.000259`) |
+| 5 | `0.998483144` | `1.019283` | `0.055058` | not previously listed |
+| 6 | `0.998080996` | `1.016842` | `0.061922` | not previously listed |
+| 7 | `0.997549550` | `1.014715` | `0.069964` | not previously listed |
+| 8 | `0.996847267` | `1.012668` | `0.079344` | same (`+0.000032`) |
+
+Conclusion: the integration branch had not regressed the accepted 50k/256
+K=1 VDAM parity after the schedule fix. The remaining iter-8 gap to the strict
+`0.999` target is still the known multi-iteration state-evolution gap, not a
+post-merge regression.
+
 Native run:
 
 `/scratch/gpfs/GILLES/mg6942/_agent_scratch/native_vdam_solventfix_nr8_50k256_20260506_234219_27563`

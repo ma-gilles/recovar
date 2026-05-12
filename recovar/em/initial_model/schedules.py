@@ -165,13 +165,14 @@ def compute_stepsize(
         inflate = float(np.float32(_scheme[: _scheme.find("-step")]))
         if inflate <= 0.0:
             raise ValueError("Invalid inflate value for --grad_stepsize_scheme <inflate>-step (inflate > 1)")
+        sigmoid_len = max(float(phase_lengths.grad_inbetween_iter - 1), 0.0) / 2.0
         return _step_sigmoid_value(
             iter=iter,
             grad_ini_iter=phase_lengths.grad_ini_iter,
             grad_inbetween_iter=phase_lengths.grad_inbetween_iter,
             base=_stepsize,
             inflated=_stepsize * inflate,
-            sigmoid_length=phase_lengths.grad_inbetween_iter / 2.0,
+            sigmoid_length=sigmoid_len,
         )
     raise ValueError("Invalid value for --grad_stepsize_scheme")
 
@@ -207,13 +208,14 @@ def compute_tau2_fudge(
         deflate = float(np.float32(_scheme[: _scheme.find("-step")]))
         if deflate <= 0.0:
             raise ValueError("Invalid deflate value for --tau2_fudge_scheme <deflate>-step (deflate > 1)")
+        sigmoid_len = max(float(phase_lengths.grad_inbetween_iter - 1), 0.0) / 4.0
         return _step_sigmoid_value(
             iter=iter,
             grad_ini_iter=phase_lengths.grad_ini_iter,
             grad_inbetween_iter=phase_lengths.grad_inbetween_iter,
             base=_fudge,
             inflated=_fudge / deflate,
-            sigmoid_length=phase_lengths.grad_inbetween_iter / 4.0,
+            sigmoid_length=sigmoid_len,
         )
     raise ValueError("Invalid value for --tau2_fudge_scheme")
 
