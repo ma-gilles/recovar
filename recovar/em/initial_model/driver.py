@@ -1412,40 +1412,23 @@ def _initial_state_from_particles(
     # iter000 ref directly when isolating E/M-step behavior from bootstrap.
     override_path = os.environ.get("RECOVAR_INITIAL_IREF_OVERRIDE")
     if override_path:
+        # Parity hook: load Iref directly. Comma-separated paths for K-class,
+        # single path broadcast across K, or a "{k}" template expanded k=1..K.
         from recovar.utils.helpers import load_relion_volume
 
-        # Comma-separated paths for K-class parity (e.g.
-        # "run_it000_class001.mrc,run_it000_class002.mrc"). When a single
-        # path is provided, broadcast to all classes (back-compat).
-        # If the path contains the literal "{k}" or "{k:03d}" template,
-        # expand for k=1..K.
-        paths = [p.strip() for p in override_path.split(",") if p.strip()]
-        if len(paths) == 1 and ("{k" in paths[0]):
-            template = paths[0]
-            paths = [template.format(k=k + 1) for k in range(int(opts.nr_classes))]
         K = int(opts.nr_classes)
-        if len(paths) == 1:
-            loaded = np.asarray(load_relion_volume(paths[0]), dtype=np.float64)
-            if loaded.shape != (ori_size, ori_size, ori_size):
-                raise ValueError(
-                    f"RECOVAR_INITIAL_IREF_OVERRIDE volume shape {loaded.shape} != ({ori_size}, {ori_size}, {ori_size})"
-                )
-            state.Iref = np.broadcast_to(loaded, (K, ori_size, ori_size, ori_size)).copy()
-        elif len(paths) == K:
-            stacked = np.stack(
-                [np.asarray(load_relion_volume(p), dtype=np.float64) for p in paths],
-                axis=0,
-            )
-            if stacked.shape != (K, ori_size, ori_size, ori_size):
-                raise ValueError(
-                    f"RECOVAR_INITIAL_IREF_OVERRIDE stacked shape {stacked.shape} != "
-                    f"({K}, {ori_size}, {ori_size}, {ori_size})"
-                )
-            state.Iref = stacked
-        else:
-            raise ValueError(
-                f"RECOVAR_INITIAL_IREF_OVERRIDE expects 1 or K={K} comma-separated paths, got {len(paths)}"
-            )
+        paths = [p.strip() for p in override_path.split(",") if p.strip()]
+        if len(paths) == 1 and "{k" in paths[0]:
+            paths = [paths[0].format(k=k + 1) for k in range(K)]
+        if len(paths) not in (1, K):
+            raise ValueError(f"RECOVAR_INITIAL_IREF_OVERRIDE expects 1 or K={K} paths, got {len(paths)}")
+        vols = np.stack(
+            [np.asarray(load_relion_volume(p), dtype=np.float64) for p in paths],
+            axis=0,
+        )
+        if vols.shape[1:] != (ori_size, ori_size, ori_size):
+            raise ValueError(f"RECOVAR_INITIAL_IREF_OVERRIDE volume shape {vols.shape[1:]} != {(ori_size,) * 3}")
+        state.Iref = np.broadcast_to(vols, (K, ori_size, ori_size, ori_size)).copy() if len(paths) == 1 else vols
     else:
         state.Iref = postprocess_bootstrap_iref_via_cpp(
             iref,
