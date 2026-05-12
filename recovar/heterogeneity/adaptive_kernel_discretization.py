@@ -64,6 +64,14 @@ def deconvolution_weights_1d(latent_diff, latent_precision, h):
     noise variance is its reciprocal; do not invert it before calling this.
     Invalid precision or non-finite weights are set to zero.
     """
+    return deconvolution_weights_1d_many(latent_diff, latent_precision, np.asarray([h], dtype=np.float64))[0]
+
+
+def deconvolution_weights_1d_many(latent_diff, latent_precision, h_grid):
+    """Return signed deconvolution weights for several bandwidths at once.
+
+    Output shape is ``(len(h_grid), n_images)``.
+    """
     latent_diff = np.asarray(latent_diff, dtype=np.float64).reshape(-1)
     latent_precision = np.asarray(latent_precision, dtype=np.float64).reshape(-1)
     if latent_diff.shape != latent_precision.shape:
@@ -71,9 +79,9 @@ def deconvolution_weights_1d(latent_diff, latent_precision, h):
             "latent_diff and latent_precision must have the same flattened shape, "
             f"got {latent_diff.shape} and {latent_precision.shape}"
         )
-    h = float(h)
-    if not np.isfinite(h) or h <= 0:
-        raise ValueError(f"h must be finite and positive, got {h}")
+    h_grid = np.asarray(h_grid, dtype=np.float64).reshape(-1)
+    if h_grid.size == 0 or not np.all(np.isfinite(h_grid)) or np.any(h_grid <= 0):
+        raise ValueError(f"h_grid must contain finite positive values, got {h_grid}")
 
     valid_precision = np.isfinite(latent_precision) & (latent_precision > 0)
     latent_noise_variance = np.zeros_like(latent_precision, dtype=np.float64)
@@ -81,13 +89,13 @@ def deconvolution_weights_1d(latent_diff, latent_precision, h):
     latent_noise_std = np.full_like(latent_precision, np.inf, dtype=np.float64)
     latent_noise_std[valid_precision] = np.sqrt(latent_noise_variance[valid_precision])
 
-    weights = np.zeros_like(latent_diff, dtype=np.float64)
+    weights = np.zeros((h_grid.size, latent_diff.size), dtype=np.float64)
     valid_inputs = valid_precision & np.isfinite(latent_diff)
     if np.any(valid_inputs):
-        u = latent_diff[valid_inputs] / h
-        lambda_i = h / np.maximum(latent_noise_std[valid_inputs], _DECONV_EPS)
-        weights[valid_inputs] = epanechnikov_deconvolution_kernel_1d(u, lambda_i)
-    valid_weights = valid_inputs & np.isfinite(weights)
+        u = latent_diff[valid_inputs][None, :] / h_grid[:, None]
+        lambda_i = h_grid[:, None] / np.maximum(latent_noise_std[valid_inputs][None, :], _DECONV_EPS)
+        weights[:, valid_inputs] = epanechnikov_deconvolution_kernel_1d(u, lambda_i)
+    valid_weights = valid_inputs[None, :] & np.isfinite(weights)
     weights = np.where(valid_weights, weights, 0.0)
     with np.errstate(over="ignore", invalid="ignore"):
         weights32 = weights.astype(np.float32)
@@ -129,6 +137,17 @@ def deconvolution_bandwidths_1d(latent_precision, lambda_grid=None, sigma_ref=No
     if not np.isfinite(sigma_ref) or sigma_ref <= 0:
         raise ValueError(f"Invalid deconvolution sigma_ref={sigma_ref}")
     return lambda_grid, (lambda_grid.astype(np.float64) * sigma_ref), sigma_ref
+
+
+def _auto_deconv_lambda_batch_size(n_lambdas, half_volume_size, complex_dtype, real_dtype):
+    """Pick how many lambda candidates to backproject together."""
+    per_lambda_gb = (
+        half_volume_size * (np.dtype(complex_dtype).itemsize + np.dtype(real_dtype).itemsize) / (1024**3)
+    )
+    if per_lambda_gb <= 0:
+        return 1
+    target_gb = max(1.0, 0.20 * float(utils.get_gpu_memory_total()))
+    return max(1, min(int(n_lambdas), 64, int(target_gb / per_lambda_gb)))
 
 
 def _coerce_1d_latent_differences(latent_differences):
@@ -272,6 +291,22 @@ def _pad_image_weights_for_fixed_batch(image_weights, current_batch_size, target
     return padded
 
 
+def _pad_image_weight_matrix_for_fixed_batch(image_weights, current_batch_size, target_batch_size):
+    """Pad a ``(n_weights, n_images)`` weight matrix with zero image rows."""
+    arr = np.asarray(image_weights)
+    if arr.ndim != 2:
+        raise ValueError(f"image_weights must have shape (n_weights, n_images), got {arr.shape}")
+    if arr.shape[1] != current_batch_size:
+        raise ValueError(f"image_weights image axis must match batch size: {arr.shape[1]} != {current_batch_size}")
+    if current_batch_size == target_batch_size:
+        return arr
+    if current_batch_size > target_batch_size:
+        raise ValueError(f"batch size {current_batch_size} exceeds target_batch_size {target_batch_size}")
+    padded = np.zeros((arr.shape[0], target_batch_size), dtype=arr.dtype)
+    padded[:, :current_batch_size] = arr
+    return padded
+
+
 def _iter_processed_half_batches(experiment_dataset, raw_batches):
     """Prefetch raw batches and overlap half-spectrum preprocessing with GPU work.
 
@@ -392,6 +427,65 @@ def _heterogeneity_weighted_kernel_batch_from_fft(
     )
 
 
+def _can_use_cuda_batch_backproject(config: ForwardModelConfig) -> bool:
+    return custom_cuda_requested() and jax.default_backend() == "gpu" and core.decide_order(config.disc_type) <= 1
+
+
+def _heterogeneity_weighted_kernel_batch_many_from_fft(
+    config: ForwardModelConfig,
+    images,
+    ctf_params,
+    rotation_matrices,
+    translations,
+    noise_variance,
+    image_weights,
+    Ft_y: jax.Array = None,
+    Ft_ctf: jax.Array = None,
+    upsample_ctf: bool = True,
+):
+    """Backproject one image batch into several weighted accumulators.
+
+    ``image_weights`` has shape ``(n_weight_sets, n_images)``.  On GPU with
+    RECOVAR's CUDA kernel available this uses ``batch_backproject`` so all
+    weight sets share the translated images, CTFs, rotations, and interpolation
+    coordinates.  The fallback preserves correctness by looping over weight
+    sets through the scalar helper.
+    """
+    if _can_use_cuda_batch_backproject(config):
+        return _heterogeneity_weighted_kernel_batch_many_from_fft_explicit(
+            config,
+            images,
+            ctf_params,
+            rotation_matrices,
+            translations,
+            noise_variance,
+            image_weights,
+            Ft_y=Ft_y,
+            Ft_ctf=Ft_ctf,
+            upsample_ctf=upsample_ctf,
+        )
+
+    image_weights = np.asarray(image_weights)
+    y_rows = []
+    ctf_rows = []
+    for weight_idx in range(image_weights.shape[0]):
+        y_row, ctf_row = _heterogeneity_weighted_kernel_batch_from_fft(
+            config,
+            images,
+            ctf_params,
+            rotation_matrices,
+            translations,
+            noise_variance,
+            image_weights[weight_idx],
+            Ft_y=None if Ft_y is None else Ft_y[weight_idx],
+            Ft_ctf=None if Ft_ctf is None else Ft_ctf[weight_idx],
+            upsample_ctf=upsample_ctf,
+        )
+        y_rows.append(y_row)
+        ctf_rows.append(ctf_row)
+    return jnp.stack(y_rows, axis=0), jnp.stack(ctf_rows, axis=0)
+
+
 @eqx.filter_jit
 def _heterogeneity_kernel_batch_from_fft_explicit(
     config: ForwardModelConfig,
@@ -459,6 +553,89 @@ def _heterogeneity_kernel_batch_from_fft_explicit(
         half_image=True,
         half_volume=True,
         max_r=None,  # TODO: see above
+    )
+    return Ft_y, Ft_ctf.real
+
+
+@eqx.filter_jit
+def _heterogeneity_weighted_kernel_batch_many_from_fft_explicit(
+    config: ForwardModelConfig,
+    images,
+    ctf_params,
+    rotation_matrices,
+    translations,
+    noise_variance,
+    image_weights,
+    Ft_y: jax.Array = None,
+    Ft_ctf: jax.Array = None,
+    upsample_ctf: bool = False,
+):
+    from recovar.core.geometry import translate_images
+    from recovar.reconstruction import noise as noise_mod
+    from recovar.cuda_backproject import batch_backproject
+
+    half_images = translate_images(images, translations, config.image_shape, half_image=True)
+    n_images = half_images.shape[0]
+    half_images = half_images.reshape(n_images, -1)
+    weights = jnp.asarray(image_weights, dtype=half_images.real.dtype)
+
+    noise_half = noise_mod.to_batched_half_pixel_noise(
+        noise_variance, config.image_shape, batch_size=half_images.shape[0]
+    ).reshape(n_images, -1)
+    half_images = half_images / noise_half
+
+    ctf = config.compute_ctf_half(ctf_params).reshape(n_images, -1)
+    if not config.premultiplied_ctf:
+        half_images = half_images * ctf
+    weighted_images = half_images[None, :, :] * weights[:, :, None]
+
+    if Ft_y is None:
+        vol_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(config.volume_shape)
+        Ft_y = jnp.zeros((weights.shape[0], int(np.prod(vol_shape))), dtype=weighted_images.dtype)
+
+    Ft_y = batch_backproject(
+        Ft_y,
+        weighted_images,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        order=core.decide_order(config.disc_type),
+        half_image=True,
+        half_volume=True,
+        max_r=None,
+    )
+
+    if upsample_ctf:
+        from recovar.core.ctf import compute_antialiased_ctf_squared
+
+        ctf_half = (
+            compute_antialiased_ctf_squared(
+                config.ctf,
+                ctf_params,
+                config.image_shape,
+                config.voxel_size,
+                half_image=True,
+            ).reshape(n_images, -1)
+            / noise_half
+        )
+    else:
+        ctf_half = ctf**2 / noise_half
+    weighted_ctf = ctf_half[None, :, :] * weights[:, :, None]
+
+    if Ft_ctf is None:
+        vol_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(config.volume_shape)
+        Ft_ctf = jnp.zeros((weights.shape[0], int(np.prod(vol_shape))), dtype=weighted_ctf.real.dtype)
+
+    Ft_ctf = batch_backproject(
+        Ft_ctf,
+        weighted_ctf.astype(Ft_ctf.dtype),
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        order=core.decide_order(config.disc_type),
+        half_image=True,
+        half_volume=True,
+        max_r=None,
     )
     return Ft_y, Ft_ctf.real
 
@@ -2220,6 +2397,7 @@ def even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
     return_real_space=False,
     use_fast_rfft=False,
     sigma_ref=None,
+    lambda_batch_size=None,
 ):
     del signal_variance, compute_lhs_rhs
     latent_differences = _coerce_1d_latent_differences(latent_differences)
@@ -2245,7 +2423,16 @@ def even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
         accum_gb = utils.get_size_in_gb(rhs_all) + utils.get_size_in_gb(lhs_all)
         avail_gb = _effective_heterogeneity_memory_budget(max(1.0, utils.get_gpu_memory_total() - accum_gb))
         batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, avail_gb))
+    if lambda_batch_size is None:
+        lambda_batch_size = _auto_deconv_lambda_batch_size(
+            n_lambdas,
+            half_volume_size,
+            experiment_dataset.dtype,
+            experiment_dataset.dtype_real,
+        )
+    lambda_batch_size = int(max(1, min(n_lambdas, lambda_batch_size)))
     logger.info("batch size in deconvolved heterogeneity kernel: %s", batch_size)
+    logger.info("lambda batch size in deconvolved heterogeneity kernel: %s", lambda_batch_size)
     logger.info("deconvolution lambda_grid=%s sigma_ref=%s", lambda_grid, sigma_ref)
 
     if upsampling_factor is not None:
@@ -2255,11 +2442,12 @@ def even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
     else:
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=2)
 
-    Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
-    Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
-    for lambda_idx, h in enumerate(h_grid):
-        Ft_y_acc = jnp.zeros_like(Ft_y_acc)
-        Ft_ctf_acc = jnp.zeros_like(Ft_ctf_acc)
+    for lambda_start in range(0, n_lambdas, lambda_batch_size):
+        lambda_stop = min(lambda_start + lambda_batch_size, n_lambdas)
+        h_group = h_grid[lambda_start:lambda_stop]
+        n_lambda_group = h_group.size
+        Ft_y_acc = jnp.zeros((n_lambda_group, half_volume_size), dtype=experiment_dataset.dtype)
+        Ft_ctf_acc = jnp.zeros((n_lambda_group, half_volume_size), dtype=experiment_dataset.dtype_real)
         raw_batches = experiment_dataset.iter_batches(
             batch_size,
             noise_model=experiment_dataset.noise,
@@ -2275,14 +2463,14 @@ def even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
             image_indices,
         ) in raw_batches:
             image_indices = np.asarray(image_indices, dtype=np.int32)
-            image_weights = deconvolution_weights_1d(
+            image_weights = deconvolution_weights_1d_many(
                 latent_differences[image_indices],
                 latent_precision[image_indices],
-                h,
+                h_group,
             )
             if use_fast_rfft:
                 current_batch_size = int(raw_images.shape[0])
-                image_weights = _pad_image_weights_for_fixed_batch(
+                image_weights = _pad_image_weight_matrix_for_fixed_batch(
                     image_weights,
                     current_batch_size=current_batch_size,
                     target_batch_size=batch_size,
@@ -2301,7 +2489,7 @@ def even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
             else:
                 images = experiment_dataset.process_images_half(raw_images)
                 current_batch_size = int(images.shape[0])
-                image_weights = _pad_image_weights_for_fixed_batch(
+                image_weights = _pad_image_weight_matrix_for_fixed_batch(
                     image_weights,
                     current_batch_size=current_batch_size,
                     target_batch_size=batch_size,
@@ -2314,7 +2502,7 @@ def even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
                     noise_variance,
                     target_batch_size=batch_size,
                 )
-            Ft_y_acc, Ft_ctf_acc = _heterogeneity_weighted_kernel_batch_from_fft(
+            Ft_y_acc, Ft_ctf_acc = _heterogeneity_weighted_kernel_batch_many_from_fft(
                 config,
                 images,
                 ctf_params,
@@ -2326,8 +2514,8 @@ def even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
                 Ft_ctf=Ft_ctf_acc,
             )
 
-        rhs_all[lambda_idx] = np.asarray(Ft_y_acc)
-        lhs_all[lambda_idx] = np.asarray(Ft_ctf_acc)
+        rhs_all[lambda_start:lambda_stop] = np.asarray(Ft_y_acc)
+        lhs_all[lambda_start:lambda_stop] = np.asarray(Ft_ctf_acc)
 
     kernel_type = "triangular" if disc_type == "linear_interp" else "square"
     vol_upsample = upsampling_factor if upsampling_factor is not None else 1
