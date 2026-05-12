@@ -1009,6 +1009,10 @@ def main():
     # job_context checks for args.recovar_result_dir; this parser uses pipeline_output_dir
     args.recovar_result_dir = args.pipeline_output_dir
 
+    from recovar.utils.parser_args import apply_gpu_memory_arg
+
+    apply_gpu_memory_arg(args, logger=logger)
+
     from recovar.project.job_context import job_context
 
     with job_context(args, "outlier_detection") as ctx:
@@ -1552,10 +1556,11 @@ def add_args(parser):
         help="Save all detailed diagnostic plots and per-method data files (default: only combined results and summary)",
     )
 
-    from recovar.utils.parser_args import add_output_name_arg, add_project_arg
+    from recovar.utils.parser_args import add_gpu_memory_arg, add_output_name_arg, add_project_arg
 
     add_project_arg(parser)
     add_output_name_arg(parser)
+    add_gpu_memory_arg(parser)
 
     return parser
 

@@ -682,7 +682,11 @@ def plot_umap(output_folder, zs, centers):
     plot_axes(axes = [0,1])
 
 
-
+# TODO
+#<<LH 001 In this function, we should just pass the differences between the 
+# target points and the zs on to the next function. We could do this, by just adding 
+# a new argument to make_volumes_kernel_estimate_local.
+# We also need to pass on the covariances!
 def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state"):
     """Compute reweighted volume estimates and save with standardized organization.
 
@@ -720,17 +724,44 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
         elif embedding_option == 'cov_dist':
             heterogeneity_distances = latent_density.compute_latent_quadratic_forms_in_batch(latent_points, zs, cov_zs)[...,0]
         elif embedding_option == 'dist':
-            cov_zs = cov_zs*0 + np.eye(ndim)
-            heterogeneity_distances = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]
+            #<<LH 003
+            tmp_cov_zs = cov_zs*0 + np.eye(ndim)
+            heterogeneity_distances = latent_density.compute_latent_log_likelihood(latent_points, zs, tmp_cov_zs)[...,0]
         else:
             raise ValueError("Unknown embed option")
 
         heterogeneity_distances = ds.split_halfset_array(
             heterogeneity_distances, per_particle=ds.tilt_series_flag)
 
+        #<<LH 001
+        differences = latent_points - zs
+        differences_split = ds.split_halfset_array(
+            differences, per_particle=ds.tilt_series_flag)
+        cov_split = ds.split_halfset_array(
+            cov_zs, per_particle=ds.tilt_series_flag)
+        #>>LH 001
+
         locres_maskrad = ds.grid_size * ds.voxel_size / maskrad_fraction
         logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
-        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, vol_paths, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely', use_fast_rfft=True)
+        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, 
+                                                                ds, 
+                                                                vol_paths, 
+                                                                ndim, 
+                                                                n_bins, 
+                                                                B_factor, 
+                                                                tau=None, 
+                                                                n_min_particles=n_min_particles, 
+                                                                locres_sampling=locres_maskrad, 
+                                                                locres_maskrad=locres_maskrad, 
+                                                                locres_edgwidth=0, 
+                                                                upsampling_for_ests=1, 
+                                                                use_mask_ests=False, 
+                                                                grid_correct_ests=False, 
+                                                                save_all_estimates=save_all_estimates, 
+                                                                metric_used='locshellmost_likely', 
+                                                                use_fast_rfft=True,
+                                                                my_distances = differences_split,
+                                                                my_cov = cov_split)
 
         logger.info("Done with volume %d: %s", k, vol_paths.stem)
 

@@ -1,11 +1,12 @@
-import recovar.jax_config
+import argparse
 import logging
+import os
+
 import numpy as np
-from recovar.output import output as o
+
 from recovar import utils
-from recovar.data_io import cryoem_dataset
-from recovar.heterogeneity import latent_density, embedding
-import os, argparse
+from recovar.heterogeneity import embedding, latent_density
+from recovar.output import output as o
 from recovar.utils import parser_args
 
 logger = logging.getLogger(__name__)
@@ -121,9 +122,7 @@ def compute_trajectory(
             return entry
         alt = fallback_map.get(entry)
         if alt and has_check and po.has_embedding_entry(alt):
-            logger.warning(
-                "Embedding entry '%s' not found, falling back to '%s'", entry, alt
-            )
+            logger.warning("Embedding entry '%s' not found, falling back to '%s'", entry, alt)
             return alt
         # If has_embedding_entry is not available, just return the original
         # and let downstream code raise its own error.
@@ -263,6 +262,8 @@ def compute_trajectory(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
+
+    parser_args.apply_gpu_memory_arg(args, logger=logger)
 
     if args.ind is not None:
         z_st_ind = args.ind[0]

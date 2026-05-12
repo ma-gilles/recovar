@@ -65,3 +65,23 @@ def test_has_blackwell_conditional_present():
         "HAS_BLACKWELL conditional structure changed; update this test or "
         "the Makefile so the two branches stay in sync."
     )
+
+
+def test_has_volta_turing_conditional_present():
+    """The HAS_VOLTA_TURING conditional must exist so CUDA 13+ toolkits
+    don't fail the build with 'Unsupported gpu architecture compute_70'.
+
+    CUDA 13 dropped Volta and Turing support entirely. Without dropping
+    sm_70 / sm_75 from CUDA_ARCH on those toolkits, the make invocation
+    fails — exactly what happened on the Slurm node with
+    /usr/local/cuda-13.1 until this conditional was added.
+    """
+    mk = _read_makefile()
+    assert "HAS_VOLTA_TURING" in mk, (
+        "Makefile must conditionally drop sm_70/sm_75 on nvcc >=13. "
+        "Without this, the build fails with 'Unsupported gpu architecture' on CUDA 13."
+    )
+    assert "ifeq ($(HAS_VOLTA_TURING),yes)" in mk, (
+        "HAS_VOLTA_TURING conditional structure changed; update this test or "
+        "the Makefile so the two branches stay in sync."
+    )

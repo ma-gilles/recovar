@@ -6,25 +6,42 @@ neighbor) and triangular (linear-interpolation) kernel precomputation, along
 with residual-based model selection across discretization parameters.
 """
 
-import logging
 import functools
+import logging
+import os
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import core, jax_config, utils
-from recovar.reconstruction import noise, regularization, relion_functions
-from recovar.data_io import cryoem_dataset
-from recovar.core import linalg
-from recovar.core.configs import ForwardModelConfig
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar import core, jax_config, utils
+from recovar.core import linalg
+from recovar.core.configs import ForwardModelConfig
+from recovar.cuda_backproject import custom_cuda_requested
+from recovar.data_io import cryoem_dataset
+from recovar.reconstruction import noise, regularization, relion_functions
 
 logger = logging.getLogger(__name__)
 
 _SENTINEL = object()
+
+
+def _effective_heterogeneity_memory_budget(avail_gb):
+    """Apply the fallback-path safety margin to the batch-size budget."""
+    if custom_cuda_requested():
+        return avail_gb
+
+    scaled_gb = max(1.0, avail_gb / 3.0)
+    logger.info(
+        "RECOVAR_DISABLE_CUDA is active - scaling heterogeneity-kernel "
+        "memory budget to 1/3 of available (%.1f GB) to account for the "
+        "JAX-native fallback path's higher per-image memory cost.",
+        scaled_gb,
+    )
+    return scaled_gb
 
 
 def _pad_noise_variance_for_fixed_batch(noise_variance, current_batch_size, target_batch_size):
@@ -149,14 +166,18 @@ def _process_images_half_fast(images, dataset):
     Falls back to ``process_images_half`` for non-standard image sources
     (e.g. test fixtures) that lack ``data_multiplier`` / ``padding``.
     """
-    src = getattr(dataset, 'image_source', None)
-    if src is not None and hasattr(src, 'data_multiplier') and hasattr(src, 'padding'):
+    src = getattr(dataset, "image_source", None)
+    if src is not None and hasattr(src, "data_multiplier") and hasattr(src, "padding"):
         from recovar.core import padding as pad
+
         images = jnp.asarray(images) * src.data_multiplier
         return pad.padded_rfft(images, dataset.grid_size, src.padding)
     return dataset.process_images_half(images)
 
-
+# TODO
+#<<LH Here we will need to scale the CTF and the images accordingly
+# Even though it is less efficient, we will probably just do a loop over 
+# the previous function. As we can not reuse the computations in this step easily.
 def _heterogeneity_kernel_batch_from_fft(
     config: ForwardModelConfig,
     images,
@@ -167,6 +188,7 @@ def _heterogeneity_kernel_batch_from_fft(
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
     upsample_ctf: bool = True,
+    kernels = None,
 ):
     """Backproject half-spectrum images into heterogeneity kernel accumulators.
 
@@ -190,6 +212,7 @@ def _heterogeneity_kernel_batch_from_fft(
         Ft_y=Ft_y,
         Ft_ctf=Ft_ctf,
         upsample_ctf=upsample_ctf,
+        kernels=kernels
     )
 
 
@@ -204,6 +227,7 @@ def _heterogeneity_kernel_batch_from_fft_explicit(
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
     upsample_ctf: bool = False,
+    kernels = None,
 ):
     from recovar.core.geometry import translate_images
     from recovar.reconstruction import noise as noise_mod
@@ -213,6 +237,9 @@ def _heterogeneity_kernel_batch_from_fft_explicit(
         noise_variance, config.image_shape, batch_size=half_images.shape[0]
     )
     half_images = half_images / noise_half
+
+    if kernels is not None:
+        half_images = half_images * kernels.reshape(-1,1)
 
     # Pre-compute CTF once (reused for both image and weight backprojections)
     ctf = config.compute_ctf_half(ctf_params)
@@ -249,6 +276,10 @@ def _heterogeneity_kernel_batch_from_fft_explicit(
         )
     else:
         ctf_half = ctf**2 / noise_half
+
+    if kernels is not None:
+        ctf_half = ctf_half * kernels.reshape(-1,1)
+
 
     Ft_ctf = core.adjoint_slice_volume(
         ctf_half,
@@ -1743,6 +1774,52 @@ def less_naive_heterogeneity_scheme_relion_style(
     return estimates
 
 
+#<<LH 002
+# Here, we implement our own kernel
+from scipy.special import wofz, comb
+# lambda_val = h/sigma
+def kernel_one_dimensional(x, lambda_val):
+    # Calculate the complex argument for the Faddeeva function w(z)
+    # z = (i * lambda * |x| - 1/lambda) / sqrt(2)
+    z = (1j * lambda_val * np.abs(x) - (1 / lambda_val)) / np.sqrt(2)
+
+    # Evaluate the Faddeeva function (efficient numerical implementation)
+    w_z = wofz(z)
+
+    # Combine with the exponential term: exp(-i|x|) * w(z)
+    term_to_extract = np.exp(-1j * np.abs(x)) * w_z
+    imag_part = np.imag(term_to_extract)
+
+    constant = (-lambda_val / np.sqrt(2 * np.pi)) * np.exp(1 / (2 * lambda_val**2))
+
+    return constant * imag_part
+
+def calculate_kernel(diff, cov, h):
+  diff = diff/h
+  # 1. Compute all eigenbases at once
+  # eigenvalues shape: (n, d), eigenvectors shape: (n, d, d)
+  eigenvalues, eigenvectors = np.linalg.eigh(cov)
+  lambdas = h/np.sqrt(np.maximum(eigenvalues, 1e-12))
+
+  # 2. Project points onto the eigenbasis
+  # We want the dot product for each pair: (d, d) @ (d, 1)
+  # Using np.einsum for a clean, vectorized batch operation:
+  # 'nij' represents the (n, d, d) eigenvectors (Q)
+  # 'ni' represents the (n, d) points (x)
+  # We use 'nji' to effectively transpose Q to Q^T for the projection
+  diff_new_basis = np.einsum('nji,ni->nj', eigenvectors, diff)
+
+  one_dimensional_kernel = kernel_one_dimensional(diff_new_basis, lambdas)
+
+  return np.prod(one_dimensional_kernel, axis=1)
+
+
+# TODO
+#<<LH Here we will work the most. We should calculate
+# the weigths within this function. Therefore, we 
+# also need to define our kernel function here. We 
+# then need to check that our kernel weights are 
+# divided into the right batch logic
 def even_less_naive_heterogeneity_scheme_relion_style(
     experiment_dataset,
     signal_variance,
@@ -1759,8 +1836,14 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     upsampling_factor=None,
     return_real_space=False,
     use_fast_rfft=False,
+    my_distances=None,
+    my_cov=None, #<<LH 001
 ):
     bins = heterogeneity_bins
+
+    #if my_distances is not None and my_cov is not None:
+    #   # Replace 1D heterogeneity_distances with Mahalanobis distance
+    #    heterogeneity_distances = np.einsum('ij,ijk,ik->i', my_distances, my_cov, my_distances)
 
     # For tilt-series datasets, distances may be per-particle while the kernel
     # iterates per-image.  Expand to per-image so bin assignments match image indices.
@@ -1777,6 +1860,38 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     inds = np.digitize(heterogeneity_distances, bins, right=True).astype(np.int32)
     n_bins = bins.size
 
+    #<<LH 001
+    #my_inds = np.digitize(heterogeneity_distances, bins, right=True).astype(np.int32)
+    #my_inds = np.clip(my_inds, 0, n_bins - 1)
+    #discretized_distances = bins[my_inds]
+    my_kernel_epi = lambda dist: np.where(np.abs(dist) < 1, 3 / 4 * (1 - dist**2), 0)
+    #smallest_bandwidth = np.nanquantile(np.abs(my_distances), 0.05)
+    #my_h_grid = np.concatenate(([smallest_bandwidth], np.logspace(1.5, 4, n_bins - 1)))
+    #quantiles = np.array([np.nanquantile(np.abs(my_distances), i) for i in np.linspace(0.05, 1, n_bins)])
+    #my_h_grid = quantiles
+    my_h_grid = np.sqrt(2*bins)
+    my_kernels = np.zeros((n_bins, my_distances.shape[0]))
+    
+    # Warning! It is unintuitive, but my_cov probably
+    # stores the inverse matrix of the covariance and nott the covariance itself!
+    my_cov = np.linalg.inv(my_cov)
+    for idx, h in enumerate(my_h_grid):
+        if idx == 0:
+            my_kernels[idx] = my_kernel_epi(my_distances.squeeze()/h)
+        else:
+
+            my_kernels[idx] = calculate_kernel(my_distances, my_cov, h)
+        #my_kernels[idx] = my_kernel_epi(my_distances.squeeze()/h)
+
+    os.makedirs("output", exist_ok=True)
+    np.savetxt(os.path.join("output", "my_kernels.txt"), my_kernels)
+    np.savetxt(os.path.join("output", "my_h_grid.txt"), my_h_grid)
+    np.savetxt(os.path.join("output", "my_cov.txt"), my_cov.reshape(my_cov.shape[0], -1))
+    np.savetxt(os.path.join("output", "my_distances.txt"), my_distances)
+    np.savetxt(os.path.join("output", "heterogeneity_distances.txt"), heterogeneity_distances)
+    #>>LH 001
+
+    #recovar.utils.load_mrc(a)
     if upsampling_factor is not None:
         upsampled_vol_shape = tuple(3 * [experiment_dataset.grid_size * upsampling_factor])
     else:
@@ -1786,12 +1901,20 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     # Accumulate on CPU to avoid OOM from JAX immutable-array copies at large
     # grid sizes (256^3 × 50 bins ≈ 5 GB; .at[].set() would double that).
     # Transferred to GPU only for the final matmul below.
-    rhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype)
-    lhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype_real)
 
-    # Auto-compute batch size based on GPU memory if not specified
+    # Auto-compute batch size based on GPU memory if not specified.
+    #
+    # The default formula is calibrated for the custom CUDA backproject kernel,
+    # which scatters in place. The JAX-native fallback path materializes
+    # per-image volumes for the whole batch before reducing, so the working set
+    # is materially larger for the same batch size.
+    #<<LH 001
+    my_rhs = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype)
+    my_lhs = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype_real)
+    #>>LH 001
+
     if batch_size is None:
-        accum_gb = utils.get_size_in_gb(rhs_all) + utils.get_size_in_gb(lhs_all)
+        accum_gb = utils.get_size_in_gb(my_rhs) + utils.get_size_in_gb(my_lhs)
         avail_gb = max(1.0, utils.get_gpu_memory_total() - accum_gb)
         batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, avail_gb))
     logger.info("batch size in heterogeneity kernel: %s", batch_size)
@@ -1804,12 +1927,13 @@ def even_less_naive_heterogeneity_scheme_relion_style(
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=2)
 
     image_inds_by_bin = [np.flatnonzero(inds == bin_idx).astype(np.int32) for bin_idx in range(n_bins)]
+    #<<LH 001
+    my_all_indices = np.arange(len(heterogeneity_distances))
+
     # Pre-allocate accumulators once (reused across bins)
     Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
     Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
-    for bin_idx, image_inds in enumerate(image_inds_by_bin):
-        if image_inds.size == 0:
-            continue
+    for h_idx, h in enumerate(my_h_grid):
 
         Ft_y_acc = jnp.zeros_like(Ft_y_acc)
         Ft_ctf_acc = jnp.zeros_like(Ft_ctf_acc)
@@ -1817,9 +1941,16 @@ def even_less_naive_heterogeneity_scheme_relion_style(
             batch_size,
             noise_model=experiment_dataset.noise,
             noise_half=False,
-            indices=image_inds,
+            indices=my_all_indices,
         )
         for raw_images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in raw_batches:
+            kernel_batch = my_kernels[h_idx,_image_indices]
+            
+            if kernel_batch.shape[0] < batch_size:
+                pad_size = batch_size - kernel_batch.shape[0]
+                padding = np.zeros((pad_size,))
+                kernel_batch = np.concatenate([kernel_batch, padding])
+
             if use_fast_rfft:
                 # Pad BEFORE rfft so padded_rfft always sees a fixed batch
                 # shape — avoids JIT recompilation for unique tail-batch sizes.
@@ -1843,50 +1974,19 @@ def even_less_naive_heterogeneity_scheme_relion_style(
                 noise_variance,
                 Ft_y=Ft_y_acc,
                 Ft_ctf=Ft_ctf_acc,
+                kernels = kernel_batch,
             )
 
-        rhs_all[bin_idx] = np.asarray(Ft_y_acc)
-        lhs_all[bin_idx] = np.asarray(Ft_ctf_acc)
-
-    # A slight improvement is an almost triangular kernel/ pyramid kernel
-    #    _
-    #  _| |_
-    # _|     |_
-    # or almost epachenikov
-    #
-    # heterogeneity_kernel
-    if heterogeneity_kernel == "parabola" or heterogeneity_kernel == "triangle":
-        distances = bins
-        h_grid = 2 * bins
-
-        np_to_use = np
-        if heterogeneity_kernel == "triangle":
-            kernel_fn = lambda dist: np_to_use.where(np_to_use.abs(dist) < 1, 1 - np_to_use.abs(dist), 0)
-        else:
-            kernel_fn = lambda dist: np_to_use.where(np_to_use.abs(dist) < 1, 3 / 4 * (1 - dist**2), 0)
-        weight_matrix = np_to_use.zeros((n_bins, n_bins)).astype(np.float32)
-        weight_matrix[0, 0] = 1
-        for idx in range(1, n_bins):
-            weights = kernel_fn(np_to_use.sqrt(distances / h_grid[idx]))
-            weight_matrix[:, idx] = weights
-        # Matmul on CPU: (50,50) @ (50, half_vol) — fast and avoids GPU OOM.
-        # Downstream post_process_from_filter_v2 transfers each row individually.
-        rhs_all = np.asarray(weight_matrix.T.astype(rhs_all.real.dtype) @ rhs_all)
-        lhs_all = np.asarray(weight_matrix.T @ lhs_all)
-
-    elif heterogeneity_kernel == "square":
-        rhs_all = np.cumsum(rhs_all, axis=0)
-        lhs_all = np.cumsum(lhs_all, axis=0)
-    else:
-        raise NotImplementedError
+        my_rhs[h_idx] = np.asarray(Ft_y_acc)
+        my_lhs[h_idx] = np.asarray(Ft_ctf_acc)
 
     kernel_type = "triangular" if disc_type == "linear_interp" else "square"
     vol_upsample = upsampling_factor if upsampling_factor is not None else 1
     estimate_bins = []
     for idx in range(heterogeneity_bins.size):
         estimate = relion_functions.post_process_from_filter_v2(
-            lhs_all[idx],
-            rhs_all[idx],
+            my_lhs[idx],
+            my_rhs[idx],
             experiment_dataset.volume_shape,
             vol_upsample,
             tau=tau,
@@ -1898,12 +1998,15 @@ def even_less_naive_heterogeneity_scheme_relion_style(
             return_real_space=return_real_space,
             input_half_volume=True,
         )
+
+        
         estimate_bins.append(estimate.reshape(-1))
 
     estimates = np.asarray(jnp.stack(estimate_bins, axis=0))
     if return_lhs_rhs:
-        return estimates, np.asarray(lhs_all), np.asarray(rhs_all)
+        return estimates, np.asarray(my_lhs), np.asarray(my_rhs)
 
+     
     return estimates
 
 
@@ -2352,7 +2455,7 @@ def compute_weights_from_precompute(
     # NOTE the 1.0x is a weird hack to make sure that JAX doesn't compile store some arrays when compiling. I don't know why it does that.
     threed_frequencies = core.vec_indices_to_vol_indices(np.arange(volume_size), volume_shape) * 1.0
 
-    if type(h) == float or type(h) == int:
+    if isinstance(h, (float, int)):
         h_max = int(h)
         h_ar = h * np.ones(volume_size)
     else:

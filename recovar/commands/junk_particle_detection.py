@@ -2726,10 +2726,11 @@ def add_args(parser):
         help="Save all detailed diagnostic plots and data files (default: only summary plot and essential indices)",
     )
 
-    from recovar.utils.parser_args import add_output_name_arg, add_project_arg
+    from recovar.utils.parser_args import add_gpu_memory_arg, add_output_name_arg, add_project_arg
 
     add_project_arg(parser)
     add_output_name_arg(parser)
+    add_gpu_memory_arg(parser)
 
     return parser
 
@@ -2740,6 +2741,10 @@ def main():
     args = parser.parse_args()
     # job_context checks for args.output_dir; this parser uses output_folder
     args.output_dir = args.output_folder
+
+    from recovar.utils.parser_args import apply_gpu_memory_arg
+
+    apply_gpu_memory_arg(args, logger=logger)
 
     from recovar.project.job_context import job_context
 

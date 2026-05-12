@@ -1,14 +1,16 @@
-import recovar.jax_config
+import argparse
 import logging
-import numpy as np
-import warnings
-from recovar.output import output as o
-from recovar.heterogeneity import embedding
+import os
 import pickle
-import os, argparse
+import warnings
+
+import numpy as np
+
+from recovar.heterogeneity import embedding
+from recovar.output import output as o
+from recovar.utils import parser_args
 
 logger = logging.getLogger(__name__)
-from recovar.utils import parser_args
 
 _PATH_REMAP_ATTRS = (
     "particles",
@@ -126,6 +128,13 @@ def add_args(parser: argparse.ArgumentParser):
         action="store_true",
         help="Save all estimates. This is useful for debugging.",
     )
+    parser.add_argument(
+        "--embedding-option",
+        type=str,
+        default="cov_dist",
+        choices=["cov_dist", "llh", "dist"],
+        help="Method for computing heterogeneity distances.",
+    )
 
     return parser
 
@@ -143,6 +152,7 @@ def compute_state(args):
     apply_global_filtering = bool(getattr(args, "apply_global_filtering", False))
     fsc_mask_radius = getattr(args, "fsc_mask_radius", None)
     fsc_mask_edgewidth = getattr(args, "fsc_mask_edgewidth", None)
+    embedding_option = getattr(args, "embedding_option", "cov_dist")
 
     result_dir = os.fspath(args.result_dir)
     outdir = os.fspath(args.outdir)
@@ -233,7 +243,8 @@ def compute_state(args):
         n_bins=n_bins,
         maskrad_fraction=maskrad_fraction,
         n_min_particles=n_min_particles,
-        save_all_estimates=save_all_estimates,
+        embedding_option=embedding_option,
+        save_all_estimates=True, #<<LH 004
         apply_global_filtering=apply_global_filtering,
         fsc_mask=fsc_mask,
         fsc_mask_radius=fsc_mask_radius,
@@ -244,6 +255,8 @@ def compute_state(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
+
+    parser_args.apply_gpu_memory_arg(args, logger=logger)
 
     from recovar.project.job_context import job_context
 

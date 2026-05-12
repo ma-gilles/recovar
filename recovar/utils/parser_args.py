@@ -27,6 +27,40 @@ def add_output_name_arg(parser: argparse.ArgumentParser):
     return parser
 
 
+def add_gpu_memory_arg(parser: argparse.ArgumentParser):
+    """Add ``--gpu-memory`` to any command that does heavy GPU work.
+
+    The flag overrides the auto-detected GPU memory used by recovar's
+    auto-batch-size formulas. Lower it if the heterogeneity / kernel-
+    regression / backproject step OOMs on your GPU — particularly when
+    running with ``RECOVAR_DISABLE_CUDA=1`` (the JAX-native fallback uses
+    ~3x more memory per image than the custom CUDA kernel).
+    """
+    parser.add_argument(
+        "--gpu-memory",
+        type=float,
+        default=None,
+        dest="gpu_memory",
+        help=(
+            "GPU memory budget in GB used by the auto-batch-size formula. "
+            "Default: detect via JAX. Lower than your physical VRAM if you "
+            "OOM (especially under RECOVAR_DISABLE_CUDA=1, where the "
+            "JAX-native fallback path needs ~3x more memory per image)."
+        ),
+    )
+    return parser
+
+
+def apply_gpu_memory_arg(args, logger=None) -> None:
+    """If ``--gpu-memory N`` was given, propagate to ``set_gpu_memory_limit``."""
+    if getattr(args, "gpu_memory", None) is not None:
+        from recovar.utils import helpers as _utils
+
+        _utils.set_gpu_memory_limit(args.gpu_memory)
+        if logger is not None:
+            logger.info("GPU memory budget set to %.1f GB via --gpu-memory", args.gpu_memory)
+
+
 def standard_downstream_args(parser: argparse.ArgumentParser, analyze=False):
 
     parser.add_argument(
@@ -128,5 +162,7 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze=False):
         default=None,
         help="Edge width of FSC mask (in Angstroms). If None, uses 10%% of fsc-mask-radius. Only used if fsc-mask-radius is specified.",
     )
+
+    add_gpu_memory_arg(parser)
 
     return parser

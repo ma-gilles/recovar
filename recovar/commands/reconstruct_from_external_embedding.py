@@ -172,10 +172,11 @@ def add_args(parser: argparse.ArgumentParser):
         help="Whether CTF is premultiplied in the data",
     )
 
-    from recovar.utils.parser_args import add_output_name_arg, add_project_arg
+    from recovar.utils.parser_args import add_gpu_memory_arg, add_output_name_arg, add_project_arg
 
     add_project_arg(parser)
     add_output_name_arg(parser)
+    add_gpu_memory_arg(parser)
 
     return parser
 
@@ -226,6 +227,10 @@ def main():
     parser = argparse.ArgumentParser()
     add_args(parser)
     args = parser.parse_args()
+
+    from recovar.utils.parser_args import apply_gpu_memory_arg
+
+    apply_gpu_memory_arg(args, logger=logger)
 
     from recovar.project.job_context import job_context
 

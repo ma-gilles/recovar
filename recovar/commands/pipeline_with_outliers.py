@@ -1,16 +1,17 @@
 #!/usr/bin/env python
 
-import os
-import sys
 import argparse
+import logging
+import os
 import pickle
 import shutil
-import logging
+import sys
+
 import matplotlib
-from recovar.output import output
 
 # Import necessary functions from pipeline.py and output module
 from recovar.commands.pipeline import add_args, standard_recovar_pipeline
+from recovar.output import output
 from recovar.utils.helpers import RobustFileHandler as _RobustFileHandler
 from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
 
@@ -96,7 +97,13 @@ def run_pipeline_with_outlier_removal():
         help="Which indices to save (default: both)",
     )
 
+    from recovar.utils.parser_args import add_gpu_memory_arg, apply_gpu_memory_arg
+
+    add_gpu_memory_arg(parser)
+
     args = parser.parse_args()
+
+    apply_gpu_memory_arg(args, logger=logging.getLogger(__name__))
 
     from recovar.project.job_context import job_context
 
