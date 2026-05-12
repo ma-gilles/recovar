@@ -475,6 +475,15 @@ def _sparse_pass2_result_to_accumulators(
     )
 
 
+# (attr_name_on_result, dtype) for fields harvested per halfset and concatenated.
+_SPARSE_PASS2_RESULT_FIELDS: tuple[tuple[str, type], ...] = (
+    ("pose_assignments", np.int32),
+    ("class_assignments", np.int32),
+    ("best_pose_rotations", np.float32),
+    ("best_pose_translations", np.float32),
+    ("best_pose_rotation_ids", np.int32),
+)
+
 
 def _sparse_pass2_estep_meta(
     halfset_results: dict[int, Any],
@@ -483,27 +492,17 @@ def _sparse_pass2_estep_meta(
     """Meta merger for separate exact-local K-class pseudo-halfset passes."""
 
     meta = _estep_meta(halfset_results)
-    selected_particle_ids = []
-    pose_assignments = []
-    class_assignments = []
-    max_posterior = []
-    best_pose_rotations = []
-    best_pose_translations = []
-    best_pose_rotation_ids = []
+    selected_particle_ids: list[np.ndarray] = []
+    max_posterior: list[np.ndarray] = []
+    field_lists: dict[str, list[np.ndarray]] = {attr: [] for attr, _ in _SPARSE_PASS2_RESULT_FIELDS}
 
     for halfset_idx, result in sorted(halfset_results.items()):
         image_ids = np.asarray(selected_particle_ids_by_halfset[int(halfset_idx)], dtype=np.int64)
         selected_particle_ids.append(image_ids)
-        if getattr(result, "pose_assignments", None) is not None:
-            pose_assignments.append(np.asarray(result.pose_assignments, dtype=np.int32))
-        if getattr(result, "class_assignments", None) is not None:
-            class_assignments.append(np.asarray(result.class_assignments, dtype=np.int32))
-        if getattr(result, "best_pose_rotations", None) is not None:
-            best_pose_rotations.append(np.asarray(result.best_pose_rotations, dtype=np.float32))
-        if getattr(result, "best_pose_translations", None) is not None:
-            best_pose_translations.append(np.asarray(result.best_pose_translations, dtype=np.float32))
-        if getattr(result, "best_pose_rotation_ids", None) is not None:
-            best_pose_rotation_ids.append(np.asarray(result.best_pose_rotation_ids, dtype=np.int32))
+        for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+            value = getattr(result, attr, None)
+            if value is not None:
+                field_lists[attr].append(np.asarray(value, dtype=dtype))
         stats = getattr(result, "stats", None)
         if stats is not None and getattr(stats, "max_posterior_per_image", None) is not None:
             max_posterior.append(np.asarray(stats.max_posterior_per_image, dtype=np.float32))
@@ -511,20 +510,14 @@ def _sparse_pass2_estep_meta(
                 float(np.mean(np.asarray(stats.max_posterior_per_image))) if image_ids.size else 0.0
             )
 
-    if selected_particle_ids:
-        meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
-    if pose_assignments:
-        meta["pose_assignments"] = np.concatenate(pose_assignments).astype(np.int32, copy=False)
-    if class_assignments:
-        meta["class_assignments"] = np.concatenate(class_assignments).astype(np.int32, copy=False)
-    if max_posterior:
-        meta["max_posterior_per_image"] = np.concatenate(max_posterior).astype(np.float32, copy=False)
-    if best_pose_rotations:
-        meta["best_pose_rotations"] = np.concatenate(best_pose_rotations).astype(np.float32, copy=False)
-    if best_pose_translations:
-        meta["best_pose_translations"] = np.concatenate(best_pose_translations).astype(np.float32, copy=False)
-    if best_pose_rotation_ids:
-        meta["best_pose_rotation_ids"] = np.concatenate(best_pose_rotation_ids).astype(np.int32, copy=False)
+    def _merge(arrays: list[np.ndarray], key: str, dtype) -> None:
+        if arrays:
+            meta[key] = np.concatenate(arrays).astype(dtype, copy=False)
+
+    _merge(selected_particle_ids, "selected_particle_ids", np.int64)
+    for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+        _merge(field_lists[attr], attr, dtype)
+    _merge(max_posterior, "max_posterior_per_image", np.float32)
     meta["sparse_pass2"] = True
     return meta
 
@@ -973,7 +966,6 @@ def _arrays_to_accumulators(
     return accumulators
 
 
-
 def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
     meta: dict[str, Any] = {"halfset_ids": tuple(sorted(halfset_results))}
     class_posterior_sums = None
@@ -1039,7 +1031,6 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
         meta["wsum_img_power"] = wsum_img_power
         meta["noise_sumw"] = noise_sumw
     return meta
-
 
 
 def run_dense_initial_model_estep(
