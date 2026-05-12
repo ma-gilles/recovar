@@ -834,19 +834,14 @@ def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteratio
 
 
 def _random_perturbation_sequence(random_seed: int, perturbation_factor: float, n_steps: int) -> float:
+    """Replay RELION's per-iter perturbation sequence (seed=1 first, then random_seed+step)."""
     if perturbation_factor <= 0.0:
         return 0.0
     pf = float(perturbation_factor)
     value = 0.0
-    n_steps = max(1, int(n_steps))
-    for step in range(n_steps + 1):
-        # RELION advances once during sampling.initialise() before
-        # initialiseWorkLoad() calls init_random_generator(random_seed). C's
-        # default rand state is the same as srand(1) on glibc. Then each
-        # expectationSetup() reinitializes with random_seed + iter.
+    for step in range(max(1, int(n_steps)) + 1):
         seed = 1 if step == 0 else int(random_seed) + step
-        rnd = _relion_rnd_unif_factory(seed)
-        value += 0.5 * pf + (pf - 0.5 * pf) * rnd(0)
+        value += 0.5 * pf + (pf - 0.5 * pf) * _relion_rnd_unif_factory(seed)(0)
         while value > pf:
             value -= 2.0 * pf
         while value < -pf:
@@ -855,15 +850,11 @@ def _random_perturbation_sequence(random_seed: int, perturbation_factor: float, 
 
 
 def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.ndarray:
-    # RELION stores normalized 2D FFT shell power. The dense engine scores
-    # unnormalized particle FFTs, matching the existing InitialModel fixture.
+    """Convert RELION normalized shell power to engine-frame radial noise (unnormalised FFT)."""
     n4 = int(ori_size) ** 4
     return (
         np.asarray(make_radial_noise(np.asarray(sigma2_noise)[0] * n4, (ori_size, ori_size)))
-        .astype(
-            np.float32,
-            copy=False,
-        )
+        .astype(np.float32, copy=False)
         .reshape(-1)
     )
 
@@ -904,42 +895,42 @@ def _dense_estep_config(
     class_log_priors: np.ndarray | None = None,
 ) -> DenseInitialModelEstepConfig:
     image_pre_shifts = np.rint(np.asarray(translation_offsets, dtype=np.float32)).astype(np.float32)
-    coarse_translations = (
-        np.asarray(sampling_plan.coarse_translations, dtype=np.float32)
+    coarse_translations = np.asarray(
+        sampling_plan.coarse_translations
         if sampling_plan.coarse_translations is not None
-        else np.asarray(sampling_plan.translations, dtype=np.float32)
+        else sampling_plan.translations,
+        dtype=np.float32,
     )
-    coarse_prior_translations = (
-        np.asarray(sampling_plan.coarse_prior_translations, dtype=np.float32)
+    coarse_prior_translations = np.asarray(
+        sampling_plan.coarse_prior_translations
         if sampling_plan.coarse_prior_translations is not None
-        else coarse_translations
+        else coarse_translations,
+        dtype=np.float32,
     )
     # Default σ_offset = 10 Å matches RELION's _rlnSigmaOffsetsAngst at iter000.
     if sigma_offset_angstrom is None:
         sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
     else:
         sigma_angstrom = float(sigma_offset_angstrom)
-    # Prior centers go through relion_translation_prior_center to cancel the
-    # voxel_size scaling in make_relion_translation_log_prior; reproduces
-    # RELION's mixed-unit pdf_offset. Fix from K=2 c2 parity bug, 2026-05-08.
-    trans_prior_center = relion_translation_prior_center(translation_offsets, float(dataset.voxel_size))
+    # relion_translation_prior_center cancels voxel_size scaling in make_relion_translation_log_prior
+    # (RELION's mixed-unit pdf_offset; K=2 c2 parity fix 2026-05-08).
     _prior_kwargs = dict(
-        voxel_size=float(dataset.voxel_size), sigma_angstrom=sigma_angstrom, centers=trans_prior_center
+        voxel_size=float(dataset.voxel_size),
+        sigma_angstrom=sigma_angstrom,
+        centers=relion_translation_prior_center(translation_offsets, float(dataset.voxel_size)),
     )
     coarse_translation_log_prior = _translation_log_prior(coarse_prior_translations, **_prior_kwargs)
     translation_log_prior = _translation_log_prior(sampling_plan.translations, **_prior_kwargs)
 
-    engine_kwargs = {
+    engine_kwargs: dict = {
         "score_with_masked_images": True,
         "reconstruct_with_masked_images": False,
-        # VDAM --grad accumulates Fimg_store = Fimg_shift_nomask - Frefctf
-        # (ml_optimiser.cpp:10092-10105); flag lifts BPref CC +0.91→+0.996.
+        # VDAM --grad subtracts Frefctf (ml_optimiser.cpp:10092-10105); lifts BPref CC +0.91→+0.996.
         "reconstruction_subtract_projected_reference": True,
         "relion_firstiter_score_mode": "gaussian",
-        "image_pre_shifts": np.asarray(image_pre_shifts, dtype=np.float32),
+        "image_pre_shifts": image_pre_shifts,
         "translation_prior_centers": relion_sigma_offset_prior_center(translation_offsets),
-        # sparse_pass2 uses the local-search engine; RECOVAR_DISABLE_SPARSE_PASS2=1
-        # forces the dense path (workaround for cuFFT plan OOM at 256²+).
+        # RECOVAR_DISABLE_SPARSE_PASS2=1 forces dense path (cuFFT plan OOM at 256²+).
         "sparse_pass2": (
             int(sampling_plan.oversampling) > 0
             and os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in ("1", "true", "TRUE")
@@ -947,15 +938,13 @@ def _dense_estep_config(
     }
     if int(sampling_plan.oversampling) > 0:
         engine_kwargs.update(
-            {
-                "healpix_order": int(sampling_plan.healpix_order),
-                "oversampling_order": int(sampling_plan.oversampling),
-                "translation_step": float(sampling_plan.offset_step_px),
-                "random_perturbation": float(sampling_plan.random_perturbation),
-                "coarse_translations": coarse_translations,
-                "particle_diameter_ang": float(opts.particle_diameter),
-                "return_profile": bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE")),
-            }
+            healpix_order=int(sampling_plan.healpix_order),
+            oversampling_order=int(sampling_plan.oversampling),
+            translation_step=float(sampling_plan.offset_step_px),
+            random_perturbation=float(sampling_plan.random_perturbation),
+            coarse_translations=coarse_translations,
+            particle_diameter_ang=float(opts.particle_diameter),
+            return_profile=bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE")),
         )
         if _af := os.environ.get("RECOVAR_ADAPTIVE_FRACTION"):
             engine_kwargs["adaptive_fraction"] = float(_af)
@@ -966,11 +955,8 @@ def _dense_estep_config(
     ):
         if os.environ.get(env_var):
             engine_kwargs[kwarg] = True
-    # RECON window override: True backprojects all pixels of current_size's
-    # FFTW half (no r<=r_max cutoff). Defaults to mirror square_window.
     if (_recon_sq := os.environ.get("RECOVAR_RECON_SQUARE_WINDOW")) is not None:
         engine_kwargs["recon_square_window"] = bool(int(_recon_sq))
-    # Diagnostic: disable VDAM Fimg - Frefctf subtraction (raw EM accumulation).
     if os.environ.get("RECOVAR_DISABLE_SUBTRACT_PROJECTED_REFERENCE"):
         engine_kwargs["reconstruction_subtract_projected_reference"] = False
     if translation_log_prior is not None:
