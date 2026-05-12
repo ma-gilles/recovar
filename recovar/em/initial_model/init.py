@@ -1,35 +1,12 @@
-"""Denovo InitialModel state initialisation (RELION-parity).
+"""Denovo InitialModel state initialisation (RELION parity).
 
-Mirrors these RELION entry points:
-  - MlModel::initialiseFromImages (fn_ref == "None" branch)  (ml_model.cpp:1082-1133)
-  - MlOptimiser::calculateSumOfPowerSpectraAndAverageImage    (ml_optimiser.cpp:2891)
-  - MlOptimiser::setSigmaNoiseEstimatesAndSetAverageImage     (ml_optimiser.cpp:3243)
-  - MlOptimiser::initialLowPassFilterReferences              (ml_optimiser.cpp:3287+)
-  - MlOptimiser `ini_high` fallback for do_average_unaligned (ml_optimiser.cpp:2513-2518)
+Mirrors MlModel::initialiseFromImages fn_ref=None branch
+(ml_model.cpp:1082) plus the surrounding ini_high / sigma2_noise / tau2
+setup. Three public callables:
 
-Two callables:
-
-  - `initialise_denovo_state(...)`
-        Fills everything that does not depend on particle data: class
-        references (zero), gradient moment slots, pdf_class / pdf_direction
-        uniform priors, empty spectra, current_size / current_resolution
-        from the 0.07·ori_size rule.
-
-  - `seed_noise_from_avg_unaligned(state, Mavg_per_group, ...)`
-        Given the per-optics-group average-unaligned power spectra (computed
-        externally — this is a Phase 4 concern, not Phase 3), writes
-        sigma2_noise. The handoff note confirms this step already matches
-        RELION to ~3e-7 on the fixture, so we just wire the transfer.
-
-  - `initialise_data_vs_prior_from_references(state, nr_particles, ...)`
-        Mirrors `MlModel::initialiseDataVersusPrior`, which seeds
-        tau2_class/data_vs_prior_class from the initial denovo references
-        before the first VDAM gradient M-step.
-
-Reference data-dependent steps (reading particle stacks, FFTing them) are
-out of scope here; callers provide `Mavg_per_group` via the existing
-recovar data-io machinery. That lets Phase 3 tests run without touching
-the RELION fixture.
+- ``initialise_denovo_state`` — particle-independent state fields.
+- ``seed_noise_from_mavg`` — write per-optics-group sigma2_noise.
+- ``initialise_data_vs_prior_from_references`` — seed tau2_class.
 """
 
 from __future__ import annotations
@@ -270,9 +247,7 @@ def initialise_data_vs_prior_from_references(
         raise ValueError(f"nr_particles must be positive, got {nr_particles}")
     sigma2 = np.asarray(state.sigma2_noise, dtype=np.float64)
     if sigma2.ndim != 2 or sigma2.shape[1] != state.ori_size // 2 + 1:
-        raise ValueError(
-            f"sigma2_noise must have shape (G, {state.ori_size // 2 + 1}), got {sigma2.shape}"
-        )
+        raise ValueError(f"sigma2_noise must have shape (G, {state.ori_size // 2 + 1}), got {sigma2.shape}")
     group_has_noise = np.sum(sigma2, axis=1) > 0.0
     if not np.any(group_has_noise):
         raise ValueError("cannot initialise data_vs_prior without positive sigma2_noise")
