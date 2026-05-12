@@ -1550,9 +1550,10 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         with open(config_path, "w") as f:
             json.dump(asdict(opts), f, indent=2, sort_keys=True)
 
-    artifact_sink = (
-        (
-            lambda current, iteration, meta: _write_iteration_artifacts(
+    if opts.write_iter_artifacts:
+
+        def artifact_sink(current, iteration, meta):
+            _write_iteration_artifacts(
                 opts.outputname,
                 current,
                 iteration,
@@ -1562,10 +1563,9 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
                 dataset=dataset,
                 particle_state=particle_state,
             )
-        )
-        if opts.write_iter_artifacts
-        else (lambda *args, **kwargs: None)
-    )
+    else:
+        artifact_sink = lambda *args, **kwargs: None
+
     post_mstep_update = None
     if opts.do_solvent:
         solvent_mask = relion_solvent_mask(
@@ -1574,10 +1574,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             particle_diameter_ang=float(opts.particle_diameter),
             width_mask_edge_px=float(opts.width_mask_edge_px),
         )
-        post_mstep_update = lambda current, _iteration, _meta: relion_solvent_flatten_state(
-            current,
-            mask=solvent_mask,
-        )
+        post_mstep_update = lambda current, _iteration, _meta: relion_solvent_flatten_state(current, mask=solvent_mask)
 
     final_state = run_vdam_iterations(
         state,
