@@ -634,6 +634,205 @@ def _score_half_dense(
     )
 
 
+def _score_half_local(
+    *,
+    k: int,
+    experiment_dataset,
+    means_k,
+    mean_variance,
+    noise_variance_k,
+    previous_best_rotation_eulers_k,
+    local_search_rotations,
+    local_search_rotation_eulers,
+    local_search_order: int,
+    sigma_rot,
+    sigma_psi,
+    current_translations,
+    base_translations,
+    trans_prior_center,
+    trans_prior_center_for_engine,
+    current_sigma_offset_angstrom: float,
+    current_translation_range: float,
+    disc_type,
+    cs_for_engine,
+    image_corrections_k,
+    scale_corrections_k,
+    translation_search_base,
+    disable_adjoint_y: bool,
+    disable_adjoint_ctf: bool,
+    max_significants,
+    state,
+    iteration: int,
+    save_intermediates_dir,
+    local_search_random_perturbation,
+    local_search_angular_sampling_deg,
+    local_search_translation_prior_mode: str,
+    replay_prior_translations,
+    class_log_priors,
+    k_class_enabled: bool,
+    collect_local_search_profile: bool,
+    safe_batch_sizes,
+    # Scatter targets (mutated in place):
+    class_assignments,
+    class_posterior_per_half,
+    best_pose_rotations,
+    best_pose_rotation_eulers,
+    best_pose_translations,
+    local_profile_history,
+) -> HalfScoreResult:
+    """Local-search E+M scoring for one half-set.
+
+    Sizes the per-chunk M-step batches against the cone-restricted
+    rotation count (not the full HEALPix grid) so chunk_size doesn't
+    collapse at high HEALPix orders. Routes through
+    ``_run_local_search_iteration`` which itself handles K-class /
+    K=1 internally via ``return_class_details=k_class_enabled``.
+
+    Caller handles ``noise_stats_per_half[k]``, ``pose_rotations[k] = None``,
+    and ``coarse_ha[k] = ha_k`` from the returned ``HalfScoreResult``.
+    """
+
+    # For local search the per-chunk M-step only sees the cone-restricted
+    # rotation set (typically a few thousand rotations per image with high
+    # overlap across the chunk) rather than the full ~10⁶-rotation grid at
+    # healpix order 5+. Estimate per-image cone size from
+    #     fraction = (sigma_cutoff * sigma_rot / pi)^2
+    # (spherical cap area as a fraction of full SO(3) volume; good to
+    # within ~30% for reasonable cones). Use that for an effective rotation
+    # count equal to ``chunk_size * cone_size`` with a 2x safety factor.
+    cone_radius = 3.0 * float(sigma_rot)  # sigma_cutoff=3.0
+    cone_fraction = max(
+        (cone_radius / float(np.pi)) ** 2,
+        1.0 / float(rotation_grid_size(local_search_order)),
+    )
+    est_cone_rots = int(np.ceil(rotation_grid_size(local_search_order) * cone_fraction))
+    eff_n_rot = max(64, 2 * est_cone_rots)
+    safe_ibs, safe_rbs = safe_batch_sizes(
+        eff_n_rot,
+        current_translations.shape[0],
+    )
+    logger.info(
+        "Local search batch sizing: cone_radius=%.3f rad (%.2f deg), est_cone_rots=%d, eff_n_rot=%d "
+        "→ image_batch_size=%d, rotation_block_size=%d",
+        cone_radius,
+        np.rad2deg(cone_radius),
+        est_cone_rots,
+        eff_n_rot,
+        safe_ibs,
+        safe_rbs,
+    )
+    translation_prior_reference_translations = np.asarray(current_translations, dtype=np.float32)
+    if local_search_translation_prior_mode == "coarse":
+        if replay_prior_translations is not None:
+            translation_prior_reference_translations = np.asarray(replay_prior_translations, dtype=np.float32)
+        else:
+            translation_prior_reference_translations = np.asarray(base_translations, dtype=np.float32)
+        logger.info(
+            "RELION mode: local translation prior uses coarse base grid (n=%d) while scoring perturbed translations",
+            translation_prior_reference_translations.shape[0],
+        )
+    # RELION's accelerated local-search loop still executes the symbolic
+    # second pass when adaptive_oversampling == 0. In that case
+    # convertAllSquaredDifferencesToWeights sets significant_weight to the
+    # minimum fine-pass weight, so storeWeightedSums keeps all local
+    # candidates. Do not apply the 0.999 significant-support prune on
+    # this os0 path.
+    local_reconstruct_significant_only = state.adaptive_oversampling > 0
+    local_outputs = _run_local_search_iteration(
+        experiment_dataset,
+        means_k,
+        mean_variance,
+        noise_variance_k,
+        previous_best_rotation_eulers_k,
+        local_search_rotations,
+        local_search_rotation_eulers,
+        local_search_order,
+        sigma_rot,
+        sigma_psi,
+        current_translations,
+        trans_prior_center,
+        current_sigma_offset_angstrom,
+        current_translation_range,
+        disc_type,
+        image_batch_size=safe_ibs,
+        rotation_block_size=safe_rbs,
+        current_size=cs_for_engine,
+        accumulate_noise=True,
+        projection_padding_factor=PROJECTION_PADDING_FACTOR,
+        reconstruction_padding_factor=PADDING_FACTOR,
+        use_float64_scoring=False,
+        use_float64_projections=False,
+        do_gridding_correction=True,
+        square_window=RELION_FOURIER_WINDOW_SQUARE,
+        half_spectrum_scoring=True,
+        image_corrections=image_corrections_k,
+        scale_corrections=scale_corrections_k,
+        image_pre_shifts=translation_search_base,
+        score_with_masked_images=True,
+        return_profile=collect_local_search_profile,
+        disable_adjoint_y=disable_adjoint_y,
+        disable_adjoint_ctf=disable_adjoint_ctf,
+        adaptive_fraction=1.0,
+        max_significants=max_significants,
+        reconstruct_significant_only=local_reconstruct_significant_only,
+        translation_prior_reference_translations=translation_prior_reference_translations,
+        debug_iteration=iteration + 1,
+        return_best_pose_details=True,
+        translation_prior_centers=trans_prior_center_for_engine,
+        rotation_grid_random_perturbation=local_search_random_perturbation,
+        rotation_grid_angular_sampling_deg=local_search_angular_sampling_deg,
+        class_log_priors=class_log_priors if k_class_enabled else None,
+        return_class_details=k_class_enabled,
+    )
+    (
+        Ft_y_k,
+        Ft_ctf_k,
+        ha_k,
+        best_rots_k,
+        best_trans_k,
+        _best_rot_ids_k,
+        em_stats_k,
+        noise_stats_k,
+        *_local_tail,
+    ) = local_outputs
+    _tail_idx = 0
+    if collect_local_search_profile:
+        local_profile_k = _local_tail[_tail_idx]
+        _tail_idx += 1
+        profile_row = dict(local_profile_k)
+        profile_row["iteration"] = np.int32(iteration)
+        profile_row["half_index"] = np.int32(k)
+        local_profile_history.append(profile_row)
+        if save_intermediates_dir is not None:
+            np.savez_compressed(
+                os.path.join(
+                    save_intermediates_dir,
+                    f"it{iteration:03d}_half{k + 1}_local_profile.npz",
+                ),
+                **local_profile_k,
+            )
+    if k_class_enabled:
+        class_assignments_k, class_posterior_sums_k = _local_tail[_tail_idx : _tail_idx + 2]
+        class_assignments[k] = np.asarray(class_assignments_k, dtype=np.int32)
+        class_posterior_per_half[k] = np.asarray(class_posterior_sums_k, dtype=np.float64)
+    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
+    best_pose_rotation_eulers[k] = utils.R_to_relion(
+        np.asarray(best_rots_k),
+        degrees=True,
+    ).astype(np.float32)
+    best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
+    return HalfScoreResult(
+        ha=ha_k,
+        Ft_y=Ft_y_k,
+        Ft_ctf=Ft_ctf_k,
+        em_stats=em_stats_k,
+        noise_stats=noise_stats_k,
+        best_pose_rotations=best_pose_rotations[k],
+        best_pose_rotation_eulers=best_pose_rotation_eulers[k],
+        best_pose_translations=best_pose_translations[k],
+    )
+
+
 def refine_single_volume(
     experiment_datasets,
     init_volume,
@@ -2021,147 +2220,55 @@ def _run_relion_iteration_loop(
                 )
                 continue
             if use_local:
-                # For local search the per-chunk M-step only sees the
-                # cone-restricted rotation set (typically a few thousand
-                # rotations per image with high overlap across the chunk)
-                # rather than the full ~10⁶-rotation grid at healpix order
-                # 5+. Sizing the batch by the full grid produces ibs ≈ 5
-                # at order 5 → chunks of 5 images → ~500 chunks per half
-                # → ~7 hours per iter on the 5k benchmark.
-                #
-                # Estimate the per-image cone size from
-                #     fraction = (sigma_cutoff * sigma_rot / pi)^2
-                # which is the spherical cap area as a fraction of the
-                # full SO(3) volume (good to within ~30% for reasonable
-                # cones). Use that to compute an effective rotation count
-                # equal to ``chunk_size * cone_size``, with a safety
-                # factor of 2x for cone-overlap inefficiency.
-                _cone_radius = 3.0 * float(sigma_rot)  # sigma_cutoff=3.0
-                _cone_fraction = max(
-                    (_cone_radius / float(np.pi)) ** 2,
-                    1.0 / float(rotation_grid_size(local_search_order)),
-                )
-                _est_cone_rots = int(np.ceil(rotation_grid_size(local_search_order) * _cone_fraction))
-                # Per-chunk effective rotations ≈ 2 * cone_size
-                # (after dedup of overlapping cones).
-                _eff_n_rot = max(64, 2 * _est_cone_rots)
-                safe_ibs, safe_rbs = _safe_batch_sizes(
-                    _eff_n_rot,
-                    current_translations.shape[0],
-                )
-                logger.info(
-                    "Local search batch sizing: cone_radius=%.3f rad "
-                    "(%.2f deg), est_cone_rots=%d, eff_n_rot=%d "
-                    "→ image_batch_size=%d, rotation_block_size=%d",
-                    _cone_radius,
-                    np.rad2deg(_cone_radius),
-                    _est_cone_rots,
-                    _eff_n_rot,
-                    safe_ibs,
-                    safe_rbs,
-                )
-                translation_prior_reference_translations = np.asarray(current_translations, dtype=np.float32)
-                if local_search_translation_prior_mode == "coarse":
-                    if _replay_prior_translations is not None:
-                        translation_prior_reference_translations = np.asarray(
-                            _replay_prior_translations, dtype=np.float32
-                        )
-                    else:
-                        translation_prior_reference_translations = np.asarray(base_translations, dtype=np.float32)
-                    logger.info(
-                        "RELION mode: local translation prior uses coarse base grid (n=%d) while scoring perturbed translations",
-                        translation_prior_reference_translations.shape[0],
-                    )
-                # RELION's accelerated local-search loop still executes the
-                # symbolic second pass when adaptive_oversampling == 0. In
-                # that case convertAllSquaredDifferencesToWeights sets
-                # significant_weight to the minimum fine-pass weight, so
-                # storeWeightedSums keeps all local candidates. Do not apply
-                # the 0.999 significant-support prune on this os0 path.
-                local_reconstruct_significant_only = state.adaptive_oversampling > 0
-                local_outputs = _run_local_search_iteration(
-                    experiment_datasets[k],
-                    means[k],
-                    mean_variance,
-                    noise_variance_k,
-                    relion_half_inputs.previous_best_rotation_eulers[k],
-                    local_search_rotations,
-                    local_search_rotation_eulers,
-                    local_search_order,
-                    sigma_rot,
-                    sigma_psi,
-                    current_translations,
-                    trans_prior_center,
-                    current_sigma_offset_angstrom,
-                    current_translation_range,
-                    disc_type,
-                    image_batch_size=safe_ibs,
-                    rotation_block_size=safe_rbs,
-                    current_size=cs_for_engine,
-                    accumulate_noise=True,
-                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                    reconstruction_padding_factor=PADDING_FACTOR,
-                    use_float64_scoring=False,
-                    use_float64_projections=False,
-                    do_gridding_correction=True,
-                    square_window=RELION_FOURIER_WINDOW_SQUARE,
-                    half_spectrum_scoring=True,
-                    image_corrections=relion_half_inputs.image_corrections[k],
-                    scale_corrections=relion_half_inputs.scale_corrections[k],
-                    image_pre_shifts=translation_search_base,
-                    score_with_masked_images=True,
-                    return_profile=collect_local_search_profile,
+                local_result = _score_half_local(
+                    k=k,
+                    experiment_dataset=experiment_datasets[k],
+                    means_k=means[k],
+                    mean_variance=mean_variance,
+                    noise_variance_k=noise_variance_k,
+                    previous_best_rotation_eulers_k=relion_half_inputs.previous_best_rotation_eulers[k],
+                    local_search_rotations=local_search_rotations,
+                    local_search_rotation_eulers=local_search_rotation_eulers,
+                    local_search_order=local_search_order,
+                    sigma_rot=sigma_rot,
+                    sigma_psi=sigma_psi,
+                    current_translations=current_translations,
+                    base_translations=base_translations,
+                    trans_prior_center=trans_prior_center,
+                    trans_prior_center_for_engine=trans_prior_center_for_engine,
+                    current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+                    current_translation_range=current_translation_range,
+                    disc_type=disc_type,
+                    cs_for_engine=cs_for_engine,
+                    image_corrections_k=relion_half_inputs.image_corrections[k],
+                    scale_corrections_k=relion_half_inputs.scale_corrections[k],
+                    translation_search_base=translation_search_base,
                     disable_adjoint_y=disable_adjoint_y,
                     disable_adjoint_ctf=disable_adjoint_ctf,
-                    adaptive_fraction=1.0,
                     max_significants=max_significants,
-                    reconstruct_significant_only=local_reconstruct_significant_only,
-                    translation_prior_reference_translations=translation_prior_reference_translations,
-                    debug_iteration=iteration + 1,
-                    return_best_pose_details=True,
-                    translation_prior_centers=trans_prior_center_for_engine,
-                    rotation_grid_random_perturbation=local_search_random_perturbation,
-                    rotation_grid_angular_sampling_deg=local_search_angular_sampling_deg,
-                    class_log_priors=class_log_priors if k_class_enabled else None,
-                    return_class_details=k_class_enabled,
+                    state=state,
+                    iteration=iteration,
+                    save_intermediates_dir=save_intermediates_dir,
+                    local_search_random_perturbation=local_search_random_perturbation,
+                    local_search_angular_sampling_deg=local_search_angular_sampling_deg,
+                    local_search_translation_prior_mode=local_search_translation_prior_mode,
+                    replay_prior_translations=_replay_prior_translations,
+                    class_log_priors=class_log_priors,
+                    k_class_enabled=k_class_enabled,
+                    collect_local_search_profile=collect_local_search_profile,
+                    safe_batch_sizes=_safe_batch_sizes,
+                    class_assignments=class_assignments,
+                    class_posterior_per_half=class_posterior_per_half,
+                    best_pose_rotations=best_pose_rotations,
+                    best_pose_rotation_eulers=best_pose_rotation_eulers,
+                    best_pose_translations=best_pose_translations,
+                    local_profile_history=local_profile_history,
                 )
-                (
-                    Ft_y_k,
-                    Ft_ctf_k,
-                    ha_k,
-                    best_rots_k,
-                    best_trans_k,
-                    _best_rot_ids_k,
-                    em_stats_k,
-                    noise_stats_k,
-                    *_local_tail,
-                ) = local_outputs
-                _tail_idx = 0
-                if collect_local_search_profile:
-                    local_profile_k = _local_tail[_tail_idx]
-                    _tail_idx += 1
-                    profile_row = dict(local_profile_k)
-                    profile_row["iteration"] = np.int32(iteration)
-                    profile_row["half_index"] = np.int32(k)
-                    local_profile_history.append(profile_row)
-                    if save_intermediates_dir is not None:
-                        np.savez_compressed(
-                            os.path.join(
-                                save_intermediates_dir,
-                                f"it{iteration:03d}_half{k + 1}_local_profile.npz",
-                            ),
-                            **local_profile_k,
-                        )
-                if k_class_enabled:
-                    class_assignments_k, class_posterior_sums_k = _local_tail[_tail_idx : _tail_idx + 2]
-                    class_assignments[k] = np.asarray(class_assignments_k, dtype=np.int32)
-                    class_posterior_per_half[k] = np.asarray(class_posterior_sums_k, dtype=np.float64)
-                best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
-                best_pose_rotation_eulers[k] = utils.R_to_relion(
-                    np.asarray(best_rots_k),
-                    degrees=True,
-                ).astype(np.float32)
-                best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
+                ha_k = local_result.ha
+                Ft_y_k = local_result.Ft_y
+                Ft_ctf_k = local_result.Ft_ctf
+                em_stats_k = local_result.em_stats
+                noise_stats_k = local_result.noise_stats
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
                 coarse_ha[k] = ha_k
