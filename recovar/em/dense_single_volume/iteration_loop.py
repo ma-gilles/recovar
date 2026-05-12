@@ -465,7 +465,6 @@ def refine_single_volume(
         adaptive_oversampling = adaptive.adaptive_oversampling
         max_significants = adaptive.max_significants
         nside_level = adaptive.nside_level
-        translation_pixel_offset = adaptive.translation_pixel_offset
         relion_current_sizes = adaptive.relion_current_sizes
 
         parity = options.parity
