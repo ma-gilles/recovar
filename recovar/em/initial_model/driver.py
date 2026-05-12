@@ -1166,128 +1166,61 @@ def _native_expectation_step(
     return _expectation_step
 
 
+def _ensure_field(arr: np.ndarray | None, shape: tuple, dtype, fill=0) -> np.ndarray:
+    if arr is None or arr.shape != shape:
+        return np.full(shape, fill, dtype=dtype) if fill != 0 else np.zeros(shape, dtype=dtype)
+    return arr
+
+
 def _update_particle_state_from_estep_meta(
     particle_state: NativeParticleState,
     meta: dict,
     translations: np.ndarray,
 ) -> None:
-    selected_particle_ids = meta.get("selected_particle_ids")
-    if selected_particle_ids is None:
+    selected = meta.get("selected_particle_ids")
+    if selected is None:
         return
-
-    particle_ids = np.asarray(selected_particle_ids, dtype=np.int64).reshape(-1)
-    if particle_ids.size == 0:
+    ids = np.asarray(selected, dtype=np.int64).reshape(-1)
+    if ids.size == 0:
         return
-    if np.any(particle_ids < 0) or np.any(particle_ids >= particle_state.translation_offsets.shape[0]):
+    N = particle_state.translation_offsets.shape[0]
+    if np.any(ids < 0) or np.any(ids >= N):
         raise ValueError("selected_particle_ids contains entries outside the particle state table")
-    particle_state.visited = np.zeros(particle_state.translation_offsets.shape[0], dtype=bool)
-    particle_state.visited[particle_ids] = True
+    particle_state.visited = np.zeros(N, dtype=bool)
+    particle_state.visited[ids] = True
 
-    pose_assignments = meta.get("pose_assignments")
-    if pose_assignments is not None:
-        assignments = np.asarray(pose_assignments, dtype=np.int64).reshape(-1)
-        translations = np.asarray(translations, dtype=np.float32)
-        if particle_ids.shape != assignments.shape:
-            raise ValueError(
-                "selected_particle_ids and pose_assignments must have matching shape, "
-                f"got {particle_ids.shape} and {assignments.shape}"
-            )
-        if translations.ndim != 2 or translations.shape[1] < 2:
-            raise ValueError(f"translations must have shape (T, >=2), got {translations.shape}")
-        n_trans = int(translations.shape[0])
-        translation_ids = np.mod(assignments, n_trans)
-        base = np.rint(particle_state.translation_offsets[particle_ids]).astype(np.float32)
-        particle_state.translation_offsets[particle_ids] = base + translations[translation_ids, :2]
-        if particle_state.pose_assignments is None or particle_state.pose_assignments.shape != (
-            particle_state.translation_offsets.shape[0],
-        ):
-            particle_state.pose_assignments = np.full(
-                particle_state.translation_offsets.shape[0],
-                -1,
-                dtype=np.int32,
-            )
-        particle_state.pose_assignments[particle_ids] = assignments.astype(np.int32, copy=False)
+    if (pose := meta.get("pose_assignments")) is not None:
+        assignments = np.asarray(pose, dtype=np.int64).reshape(-1)
+        trans = np.asarray(translations, dtype=np.float32)
+        translation_ids = np.mod(assignments, int(trans.shape[0]))
+        base = np.rint(particle_state.translation_offsets[ids]).astype(np.float32)
+        particle_state.translation_offsets[ids] = base + trans[translation_ids, :2]
+        particle_state.pose_assignments = _ensure_field(particle_state.pose_assignments, (N,), np.int32, -1)
+        particle_state.pose_assignments[ids] = assignments.astype(np.int32, copy=False)
 
-    best_pose_rotations = meta.get("best_pose_rotations")
-    if best_pose_rotations is not None:
-        rotations = np.asarray(best_pose_rotations, dtype=np.float32)
-        expected = (particle_ids.size, 3, 3)
-        if rotations.shape != expected:
-            raise ValueError(f"best_pose_rotations must have shape {expected}, got {rotations.shape}")
-        if particle_state.best_pose_rotations is None or particle_state.best_pose_rotations.shape != (
-            particle_state.translation_offsets.shape[0],
-            3,
-            3,
-        ):
-            particle_state.best_pose_rotations = np.zeros(
-                (particle_state.translation_offsets.shape[0], 3, 3),
-                dtype=np.float32,
-            )
-        particle_state.best_pose_rotations[particle_ids] = rotations
+    if (rot := meta.get("best_pose_rotations")) is not None:
+        particle_state.best_pose_rotations = _ensure_field(particle_state.best_pose_rotations, (N, 3, 3), np.float32)
+        particle_state.best_pose_rotations[ids] = np.asarray(rot, dtype=np.float32)
 
-    best_pose_translations = meta.get("best_pose_translations")
-    if best_pose_translations is not None:
-        translations_best = np.asarray(best_pose_translations, dtype=np.float32)
-        expected = (particle_ids.size, 2)
-        if translations_best.shape != expected:
-            raise ValueError(f"best_pose_translations must have shape {expected}, got {translations_best.shape}")
-        if particle_state.best_pose_translations is None or particle_state.best_pose_translations.shape != (
-            particle_state.translation_offsets.shape[0],
-            2,
-        ):
-            particle_state.best_pose_translations = np.zeros(
-                (particle_state.translation_offsets.shape[0], 2),
-                dtype=np.float32,
-            )
-        particle_state.best_pose_translations[particle_ids] = translations_best
+    if (bt := meta.get("best_pose_translations")) is not None:
+        particle_state.best_pose_translations = _ensure_field(particle_state.best_pose_translations, (N, 2), np.float32)
+        particle_state.best_pose_translations[ids] = np.asarray(bt, dtype=np.float32)
 
-    best_pose_rotation_ids = meta.get("best_pose_rotation_ids")
-    if best_pose_rotation_ids is not None:
-        rotation_ids = np.asarray(best_pose_rotation_ids, dtype=np.int32).reshape(-1)
-        if rotation_ids.shape != particle_ids.shape:
-            raise ValueError(
-                "best_pose_rotation_ids must match selected_particle_ids shape, "
-                f"got {rotation_ids.shape} and {particle_ids.shape}"
-            )
-        if particle_state.best_pose_rotation_ids is None or particle_state.best_pose_rotation_ids.shape != (
-            particle_state.translation_offsets.shape[0],
-        ):
-            particle_state.best_pose_rotation_ids = np.full(
-                particle_state.translation_offsets.shape[0],
-                -1,
-                dtype=np.int32,
-            )
-        particle_state.best_pose_rotation_ids[particle_ids] = rotation_ids
-        rotation_grid_order = int(meta.get("healpix_order", 0)) + int(meta.get("oversampling", 0))
-        if particle_state.best_pose_rotation_orders is None or particle_state.best_pose_rotation_orders.shape != (
-            particle_state.translation_offsets.shape[0],
-        ):
-            particle_state.best_pose_rotation_orders = np.full(
-                particle_state.translation_offsets.shape[0],
-                -1,
-                dtype=np.int32,
-            )
-        particle_state.best_pose_rotation_orders[particle_ids] = rotation_grid_order
+    if (rid := meta.get("best_pose_rotation_ids")) is not None:
+        particle_state.best_pose_rotation_ids = _ensure_field(particle_state.best_pose_rotation_ids, (N,), np.int32, -1)
+        particle_state.best_pose_rotation_ids[ids] = np.asarray(rid, dtype=np.int32).reshape(-1)
+        particle_state.best_pose_rotation_orders = _ensure_field(
+            particle_state.best_pose_rotation_orders, (N,), np.int32, -1
+        )
+        particle_state.best_pose_rotation_orders[ids] = int(meta.get("healpix_order", 0)) + int(
+            meta.get("oversampling", 0)
+        )
 
-    class_assignments = meta.get("class_assignments")
-    if class_assignments is not None:
-        classes = np.asarray(class_assignments, dtype=np.int32).reshape(-1)
-        if particle_ids.shape != classes.shape:
-            raise ValueError(
-                "selected_particle_ids and class_assignments must have matching shape, "
-                f"got {particle_ids.shape} and {classes.shape}"
-            )
-        particle_state.class_assignments[particle_ids] = classes
+    if (cls := meta.get("class_assignments")) is not None:
+        particle_state.class_assignments[ids] = np.asarray(cls, dtype=np.int32).reshape(-1)
 
-    max_posterior = meta.get("max_posterior_per_image")
-    if max_posterior is not None:
-        pmax = np.asarray(max_posterior, dtype=np.float32).reshape(-1)
-        if particle_ids.shape != pmax.shape:
-            raise ValueError(
-                "selected_particle_ids and max_posterior_per_image must have matching shape, "
-                f"got {particle_ids.shape} and {pmax.shape}"
-            )
-        particle_state.max_posterior[particle_ids] = pmax
+    if (pmax := meta.get("max_posterior_per_image")) is not None:
+        particle_state.max_posterior[ids] = np.asarray(pmax, dtype=np.float32).reshape(-1)
 
 
 def _initial_state_from_particles(
