@@ -54,12 +54,7 @@ RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES = 9999999.0
 
 @dataclass(frozen=True, kw_only=True)
 class NativeInitialModelOptions:
-    """Options for a native InitialModel run.
-
-    Defaults mirror the GUI InitialModel command where the dense path already
-    has a native implementation. Unsupported RELION branches fail loudly rather
-    than silently diverging.
-    """
+    """Options for a native InitialModel run; defaults mirror the GUI command."""
 
     fn_img: str
     outputname: str = "ab_initio/run"
@@ -124,13 +119,7 @@ class NativeSamplingPlan:
 
 @dataclass
 class NativeSamplingState:
-    """RELION InitialModel autosampling state carried between iterations.
-
-    RELION stores ``sampling.offset_range`` and ``sampling.offset_step`` in
-    Angstroms internally, although the GUI command line specifies pixels.  Keep
-    the mutable state in Angstroms here and convert to pixels only when building
-    RECOVAR translation grids.
-    """
+    """RELION InitialModel autosampling state (Angstroms internally, like RELION)."""
 
     healpix_order: int
     adaptive_oversampling: int
@@ -140,10 +129,7 @@ class NativeSamplingState:
     offset_step_ori_angstrom: float
     pixel_size: float
     auto_local_healpix_order: int = RELION_INITIALMODEL_LOCAL_SEARCH_HEALPIX_ORDER
-    # Unknown native accuracy should mean "not fine enough yet". RELION fills
-    # this via calculateExpectedAngularErrors before autosampling updates; until
-    # that trial-subset estimator is ported, 0 preserves refinement progress
-    # instead of treating 999 as "already fine enough".
+    # acc_rot=0 means "not fine enough yet" pending calculateExpectedAngularErrors port.
     acc_rot: float = 0.0
     acc_trans_angstrom: float = 999.0
     current_changes_optimal_offsets_angstrom: float = RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS
@@ -319,54 +305,42 @@ def _star_column(main_star, name: str):
     return None
 
 
+def _stack_star_pair(main_star, x_name: str, y_name: str) -> np.ndarray | None:
+    x = _star_column(main_star, x_name)
+    y = _star_column(main_star, y_name)
+    if (x is None) != (y is None):
+        raise ValueError(f"STAR file must provide both {x_name} and {y_name}")
+    if x is None:
+        return None
+    return np.stack(
+        [
+            np.asarray(x.astype(float).to_numpy(), dtype=np.float64),
+            np.asarray(y.astype(float).to_numpy(), dtype=np.float64),
+        ],
+        axis=1,
+    )
+
+
 def _image_origin_offsets_pixels_from_star(main_star, dataset) -> np.ndarray:
     n_images = int(len(main_star))
-    origin_x_ang = _star_column(main_star, "_rlnOriginXAngst")
-    origin_y_ang = _star_column(main_star, "_rlnOriginYAngst")
-    if (origin_x_ang is None) != (origin_y_ang is None):
-        raise ValueError("STAR file must provide both _rlnOriginXAngst and _rlnOriginYAngst")
-    if origin_x_ang is not None and origin_y_ang is not None:
+    angst = _stack_star_pair(main_star, "_rlnOriginXAngst", "_rlnOriginYAngst")
+    if angst is not None:
         pixel_size = float(dataset.voxel_size)
         if pixel_size <= 0.0:
             raise ValueError("dataset voxel_size must be positive to convert STAR origins from Angstroms")
-        shifts = np.stack(
-            [
-                np.asarray(origin_x_ang.astype(float).to_numpy(), dtype=np.float64) / pixel_size,
-                np.asarray(origin_y_ang.astype(float).to_numpy(), dtype=np.float64) / pixel_size,
-            ],
-            axis=1,
-        )
+        shifts = angst / pixel_size
     else:
-        origin_x_px = _star_column(main_star, "_rlnOriginX")
-        origin_y_px = _star_column(main_star, "_rlnOriginY")
-        if (origin_x_px is None) != (origin_y_px is None):
-            raise ValueError("STAR file must provide both _rlnOriginX and _rlnOriginY")
-        if origin_x_px is None or origin_y_px is None:
+        pixels = _stack_star_pair(main_star, "_rlnOriginX", "_rlnOriginY")
+        if pixels is None:
             return np.zeros((n_images, 2), dtype=np.float32)
-        shifts = np.stack(
-            [
-                np.asarray(origin_x_px.astype(float).to_numpy(), dtype=np.float64),
-                np.asarray(origin_y_px.astype(float).to_numpy(), dtype=np.float64),
-            ],
-            axis=1,
-        )
-
-    if shifts.shape != (n_images, 2):
-        raise ValueError(f"STAR origin shifts must have shape ({n_images}, 2), got {shifts.shape}")
+        shifts = pixels
     if not np.all(np.isfinite(shifts)):
         raise ValueError("STAR origin shifts must be finite")
     return shifts.astype(np.float32)
 
 
 def _image_pre_shifts_from_star(main_star, dataset) -> np.ndarray:
-    """Return RELION rounded old-offset image pre-shifts in pixel units.
-
-    Dense EM uses these as the per-image pre-centering base before applying
-    the sampled translation grid. RELION rounds old offsets and applies an
-    integer zero-filled real-space shift in its accelerated path; pass the
-    rounded values so the shared dense engine uses the same fast path.
-    """
-
+    """RELION rounded old-offset image pre-shifts in pixel units (accelerated path)."""
     return np.rint(_image_origin_offsets_pixels_from_star(main_star, dataset)).astype(np.float32)
 
 
@@ -473,25 +447,14 @@ def _native_initialmodel_do_grad(state: InitialModelState, iteration: int) -> bo
 
 def _should_update_native_sampling(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
     """Mirror the InitialModel ``updateAngularSampling`` call cadence."""
-
     iteration = int(iteration)
-    if iteration <= 1:
-        return False
-    if bool(do_grad) and iteration % 10 != 0:
+    if iteration <= 1 or (bool(do_grad) and iteration % 10 != 0):
         return False
     return iteration <= int(nr_iter)
 
 
 def _should_record_native_sampling_changes(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
-    """Mirror RELION's per-iteration hidden-variable change diagnostics.
-
-    RELION calls ``monitorHiddenVariableChanges`` during every expectation
-    pool, then ``updateOverallChangesInHiddenVariables`` during every
-    maximization. Autosampling reads the value at the start of the next
-    expectation setup, so native must not defer this to 10-iteration sampling
-    checkpoints.
-    """
-
+    """Per-iteration ``monitorHiddenVariableChanges`` cadence (must NOT defer to autosampling)."""
     return int(iteration) <= int(nr_iter)
 
 
@@ -501,14 +464,7 @@ def _record_resolution_stall_for_sampling(
     *,
     iteration: int,
 ) -> None:
-    """Track RELION's resolution-stall counter for diagnostics.
-
-    InitialModel stores ``current_resolution`` as reciprocal Angstroms in this
-    native state, so larger values are better.  The GUI InitialModel path uses
-    ``auto_ignore_angle_changes`` and does not gate autosampling on these
-    counters, but keeping them in metadata makes divergence easier to audit.
-    """
-
+    """Track RELION's resolution-stall counter (audit only; not used for autosampling here)."""
     current_resolution = float(state.current_resolution)
     if int(iteration) < 10:
         sampling_state.nr_iter_wo_resol_gain = 0
@@ -534,14 +490,11 @@ def _relion_update_native_sampling_state(
     do_grad: bool,
     do_auto_refine: bool = False,
 ) -> bool:
-    """Port RELION InitialModel autosampling update for the native driver.
+    """RELION InitialModel autosampling update (``--auto_sampling --grad`` mode).
 
-    RELION's GUI InitialModel uses ``--auto_sampling --grad`` rather than
-    autorefine.  In that mode hidden-variable changes are ignored for deciding
-    whether to update, and HEALPix growth stops before the local-search order
-    while translation range/step still follow the RELION formulas.
+    HEALPix growth stops before the local-search order; translation range/step
+    follow the RELION formulas.
     """
-
     old_angular_step = sampling.relion_angular_sampling_deg(
         sampling_state.healpix_order,
         sampling_state.adaptive_oversampling,
@@ -607,8 +560,7 @@ def _prepare_native_sampling_for_iteration(
 
 
 def _should_estimate_native_sampling_accuracy(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
-    """Mirror RELION's ``calculateExpectedAngularErrors`` cadence."""
-
+    """RELION's ``calculateExpectedAngularErrors`` cadence."""
     iteration = int(iteration)
     if iteration <= 1:
         return True
