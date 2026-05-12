@@ -774,25 +774,27 @@ def _build_sampling_plan(
         raise ValueError("oversampling must be >= 0")
 
     random_perturbation = _random_perturbation_for_iteration(opts, iteration)
+    perturbed = abs(random_perturbation) > 1e-12
 
     coarse_translations = sampling.get_translation_grid(
         max_pixel=offset_range_px,
         pixel_offset=offset_step_px,
     ).astype(np.float32)
-    coarse_pass1_translations = coarse_translations
-    if abs(random_perturbation) > 1e-12:
-        coarse_pass1_translations = sampling.apply_relion_translation_perturbation(
-            coarse_translations.astype(np.float32, copy=False),
+    coarse_pass1_translations = (
+        sampling.apply_relion_translation_perturbation(
+            coarse_translations,
             random_perturbation,
             offset_step_px,
         ).astype(np.float32)
+        if perturbed
+        else coarse_translations
+    )
+
+    translation_parent: np.ndarray | None
     if oversampling == 0:
-        rotations = sampling.get_relion_hidden_rotation_grid(
-            healpix_order,
-            matrices=True,
-        ).astype(np.float32)
+        rotations = sampling.get_relion_hidden_rotation_grid(healpix_order, matrices=True).astype(np.float32)
         translations = coarse_translations
-        if abs(random_perturbation) > 1e-12:
+        if perturbed:
             rotations = sampling.apply_relion_rotation_perturbation(
                 rotations,
                 random_perturbation,
@@ -803,38 +805,27 @@ def _build_sampling_plan(
                 random_perturbation,
                 offset_step_px,
             ).astype(np.float32)
-        return NativeSamplingPlan(
-            rotations=rotations,
-            translations=translations,
+        translation_parent = None
+    else:
+        coarse_indices = np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64)
+        rotations, _ = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
+            coarse_indices,
+            parent_nside_level=healpix_order,
+            oversampling_order=oversampling,
             random_perturbation=random_perturbation,
-            healpix_order=healpix_order,
-            oversampling=oversampling,
-            offset_range_px=offset_range_px,
-            offset_step_px=offset_step_px,
-            offset_range_angstrom=offset_range_angstrom,
-            offset_step_angstrom=offset_step_angstrom,
-            coarse_translations=coarse_pass1_translations,
-            coarse_prior_translations=coarse_translations,
-            translation_parent=None,
         )
+        oversampled_trans, _translation_parent = sampling.get_oversampled_translation_grid(
+            coarse_translations,
+            pixel_offset=offset_step_px,
+            oversampling_order=oversampling,
+        )
+        translations = sampling.apply_relion_translation_perturbation(
+            oversampled_trans.astype(np.float32, copy=False),
+            random_perturbation,
+            offset_step_pixels=offset_step_px,
+        )
+        translation_parent = np.asarray(_translation_parent, dtype=np.int64)
 
-    coarse_indices = np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64)
-    rotations, _rotation_parent = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
-        coarse_indices,
-        parent_nside_level=healpix_order,
-        oversampling_order=oversampling,
-        random_perturbation=random_perturbation,
-    )
-    translations, _translation_parent = sampling.get_oversampled_translation_grid(
-        coarse_translations,
-        pixel_offset=offset_step_px,
-        oversampling_order=oversampling,
-    )
-    translations = sampling.apply_relion_translation_perturbation(
-        translations.astype(np.float32, copy=False),
-        random_perturbation,
-        offset_step_pixels=offset_step_px,
-    )
     return NativeSamplingPlan(
         rotations=np.asarray(rotations, dtype=np.float32),
         translations=np.asarray(translations, dtype=np.float32),
@@ -847,7 +838,7 @@ def _build_sampling_plan(
         offset_step_angstrom=offset_step_angstrom,
         coarse_translations=coarse_pass1_translations,
         coarse_prior_translations=coarse_translations,
-        translation_parent=np.asarray(_translation_parent, dtype=np.int64),
+        translation_parent=translation_parent,
     )
 
 
