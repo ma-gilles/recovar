@@ -99,37 +99,23 @@ def refresh_tau2_from_projector_power(
     return out
 
 
-def _posterior_sums_from_meta(meta: dict, key: str) -> np.ndarray | None:
-    value = meta.get(key)
-    if value is not None:
-        return np.asarray(value, dtype=np.float64)
-
-    prefix = "halfset_"
+def _halfset_values(meta: dict, key: str) -> list:
     suffix = f"_{key}"
-    values = [
-        np.asarray(meta[name], dtype=np.float64)
-        for name in sorted(meta)
-        if name.startswith(prefix) and name.endswith(suffix)
-    ]
-    if not values:
-        return None
-    total = values[0].copy()
-    for value in values[1:]:
-        total += value
-    return total
+    return [meta[name] for name in sorted(meta) if name.startswith("halfset_") and name.endswith(suffix)]
+
+
+def _posterior_sums_from_meta(meta: dict, key: str) -> np.ndarray | None:
+    if (value := meta.get(key)) is not None:
+        return np.asarray(value, dtype=np.float64)
+    values = [np.asarray(v, dtype=np.float64) for v in _halfset_values(meta, key)]
+    return sum(values[1:], values[0].copy()) if values else None
 
 
 def _scalar_sum_from_meta(meta: dict, key: str) -> float | None:
-    value = meta.get(key)
-    if value is not None:
+    if (value := meta.get(key)) is not None:
         return float(value)
-
-    prefix = "halfset_"
-    suffix = f"_{key}"
-    values = [float(meta[name]) for name in sorted(meta) if name.startswith(prefix) and name.endswith(suffix)]
-    if not values:
-        return None
-    return float(sum(values))
+    values = _halfset_values(meta, key)
+    return float(sum(float(v) for v in values)) if values else None
 
 
 def update_noise_from_estep_meta(
@@ -618,10 +604,8 @@ def run_vdam_iterations(
         )
         iter_artifact_sink(current, it, meta)
 
-        # Opt-in JAX cache clear (RECOVAR_CLEAR_JAX_CACHES_PER_ITER=1) for
-        # large-box runs — releases per-iter scratch buffers that otherwise
-        # fragment the GPU heap and trip CUFFT_ALLOC_FAILED around iter-9 at
-        # 50k×256². Forces recompiles on the next iter.
+        # RECOVAR_CLEAR_JAX_CACHES_PER_ITER=1: release scratch buffers to avoid
+        # CUFFT_ALLOC_FAILED at 50k×256² (forces next-iter recompile).
         if os.environ.get("RECOVAR_CLEAR_JAX_CACHES_PER_ITER", "") in ("1", "true", "TRUE"):
             import gc
 
