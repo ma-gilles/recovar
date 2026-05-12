@@ -22,58 +22,23 @@ from .state import (
     half_slot_count,
 )
 
-# RELION's 0.07 digital-frequency low-pass rule for do_average_unaligned
-# (ml_optimiser.cpp:2513-2518). The exact formula is:
-#     ini_high_shell = ROUND(0.07 * ori_size)
-#     ini_high_angstrom = ori_size * pixel_size / ini_high_shell
+# RELION's 0.07 digital-frequency low-pass for do_average_unaligned (ml_optimiser.cpp:2513-2518).
 INI_HIGH_DIGITAL_FREQ: float = 0.07
 
 
 def compute_ini_high_shell(ori_size: int) -> int:
-    """Return `ROUND(0.07 * ori_size)` — the initial resolution shell.
-
-    RELION source: ml_optimiser.cpp:2518 `mymodel.getResolution(ROUND(0.07 *
-    mymodel.ori_size))`.  RELION's ROUND macro rounds ties away from zero;
-    for positive inputs this is floor(x + 0.5).
-    """
-    x = INI_HIGH_DIGITAL_FREQ * ori_size
-    return int(math.floor(x + 0.5))
+    """``ROUND(0.07 * ori_size)`` (initial resolution shell)."""
+    return int(math.floor(INI_HIGH_DIGITAL_FREQ * ori_size + 0.5))
 
 
 def compute_ini_high_angstrom(ori_size: int, pixel_size: float) -> float:
-    """Return the initial low-pass in Ångström for denovo init.
-
-    `mymodel.getResolution(ires)` returns `ires / (ori_size * pixel_size)`
-    (digital frequency in 1/Å). RELION stores `ini_high = 1 / resolution`
-    in Ångström (ml_optimiser.cpp:2518).
-    """
-    ini_shell = compute_ini_high_shell(ori_size)
-    return ori_size * pixel_size / ini_shell
+    """Initial low-pass in Ångström (1/getResolution(ini_shell))."""
+    return ori_size * pixel_size / compute_ini_high_shell(ori_size)
 
 
 def compute_current_size_for_denovo(ori_size: int) -> int:
-    """Pre-iter-1 `current_size` for a denovo InitialModel run.
-
-    At `do_average_unaligned=true`, RELION limits the initial reconstruction
-    to the first `current_resolution_shell` of the image — see
-    `wsum_model.current_size = 1./mymodel.getResolution(ROUND(0.07 *
-    mymodel.ori_size))` at ml_optimiser.cpp:2939 then
-    `updateImageSizeAndResolutionPointers` expands with incr_size.
-
-    For a 64×8.5 Å fixture: 0.07·64 = 4.48 -> ROUND = 4 -> 2·(4 + 10) = 28.
-    That matches the handoff's observed `current_size = 28`.
-    """
-    ini_shell = compute_ini_high_shell(ori_size)
-    # updateImageSizeAndResolutionPointers (ml_optimiser.cpp:5826-5854):
-    # maxres = ini_shell (+ optional 25% extension if ave_Pmax > 0.1);
-    # at iter 0 / before E-step that gate is false, so just += incr_size.
-    # RELION's default incr_size is 10 (set in parseContinue — hard-coded
-    # elsewhere in the CLI parser at the same constant).
-    incr_size = 10
-    current_size = 2 * (ini_shell + incr_size)
-    if current_size > ori_size:
-        current_size = ori_size
-    return current_size
+    """Pre-iter-1 ``current_size = 2*(ini_shell + 10)`` clipped to ``ori_size``."""
+    return min(2 * (compute_ini_high_shell(ori_size) + 10), ori_size)
 
 
 def initialise_denovo_state(
@@ -87,19 +52,7 @@ def initialise_denovo_state(
     pseudo_halfsets: bool = True,
     padding_factor: int = 1,
 ) -> InitialModelState:
-    """Produce a fresh `InitialModelState` equivalent to RELION's denovo
-    init at iter 0 (before the first E-step).
-
-    Mirrors ml_model.cpp:1082-1133 (denovo branch of initialiseFromImages).
-
-    Padded Fourier shape of Igrad arrays:
-        Nx_pad = ori_size * padding_factor
-        Ny_pad = ori_size * padding_factor
-        Nz_pad = ori_size * padding_factor  (3D)
-        Igrad shape = (Nz_pad, Ny_pad, Nx_pad // 2 + 1)
-
-    At the GUI InitialModel default `padding_factor = 1`.
-    """
+    """Fresh ``InitialModelState`` at iter 0 (ml_model.cpp:1082-1133 denovo branch)."""
     if K < 1:
         raise ValueError("K must be >= 1")
     if n_directions < 1:
@@ -107,47 +60,10 @@ def initialise_denovo_state(
     if ori_size < 2:
         raise ValueError("ori_size must be >= 2")
 
-    # Fourier box (half-complex, padded to padding_factor)
     pf = padding_factor
-    Nz_pad = ori_size * pf
-    Ny_pad = ori_size * pf
-    Nx_pad_half = (ori_size * pf) // 2 + 1
-
-    # Real-space references: zero (denovo branch, ml_model.cpp:1099-1106)
-    Iref = np.zeros((K, ori_size, ori_size, ori_size), dtype=np.float64)
-
-    # Gradient first moments: zero (denovo branch, ml_model.cpp:1117-1125)
-    n_slots = half_slot_count(K, pseudo_halfsets)
-    Igrad1 = np.zeros((n_slots, Nz_pad, Ny_pad, Nx_pad_half), dtype=np.complex128)
-
-    # Gradient second moments: Complex(MOM2_INIT_CONSTANT, MOM2_INIT_CONSTANT)
-    Igrad2 = np.full(
-        (K, Nz_pad, Ny_pad, Nx_pad_half),
-        MOM2_INIT_CONSTANT + 1j * MOM2_INIT_CONSTANT,
-        dtype=np.complex128,
-    )
-
-    # Spectra: empty. sigma2_noise is filled by
-    # setSigmaNoiseEstimatesAndSetAverageImage (Phase 4).
+    pad_shape = (ori_size * pf, ori_size * pf, (ori_size * pf) // 2 + 1)
     n_shells = ori_size // 2 + 1
-    sigma2_noise = np.zeros((nr_optics_groups, n_shells), dtype=np.float64)
-    tau2_class = np.zeros((K, n_shells), dtype=np.float64)
-    sigma2_class = np.zeros((K, n_shells), dtype=np.float64)
-    fsc_halves_class = np.zeros((K, n_shells), dtype=np.float64)
-    fourier_coverage_class = np.zeros((K, n_shells), dtype=np.float64)
-    data_vs_prior_class = np.zeros((K, n_shells), dtype=np.float64)
-
-    # Class mixing weights: uniform (ml_model.cpp::initialise path)
-    pdf_class = np.full(K, 1.0 / K, dtype=np.float64)
-
-    # pdf_direction: uniform 1/(K * n_directions) (ml_model.cpp:1154-1167)
-    pdf_direction = np.full((K, n_directions), 1.0 / (K * n_directions), dtype=np.float64)
-
-    # Resolution pointers
     ini_high_A = compute_ini_high_angstrom(ori_size, pixel_size)
-    current_resolution = 1.0 / ini_high_A  # digital freq (1/Å)
-    current_size = compute_current_size_for_denovo(ori_size)
-    current_resolution_shell = compute_ini_high_shell(ori_size)
 
     return InitialModelState(
         iter=0,
@@ -156,25 +72,22 @@ def initialise_denovo_state(
         ori_size=ori_size,
         pixel_size=pixel_size,
         pseudo_halfsets=pseudo_halfsets,
-        Iref=Iref,
-        Igrad1=Igrad1,
-        Igrad2=Igrad2,
-        sigma2_noise=sigma2_noise,
-        tau2_class=tau2_class,
-        sigma2_class=sigma2_class,
-        fsc_halves_class=fsc_halves_class,
-        fourier_coverage_class=fourier_coverage_class,
-        data_vs_prior_class=data_vs_prior_class,
-        pdf_class=pdf_class,
-        pdf_direction=pdf_direction,
+        Iref=np.zeros((K, ori_size, ori_size, ori_size), dtype=np.float64),
+        Igrad1=np.zeros((half_slot_count(K, pseudo_halfsets), *pad_shape), dtype=np.complex128),
+        Igrad2=np.full((K, *pad_shape), MOM2_INIT_CONSTANT + 1j * MOM2_INIT_CONSTANT, dtype=np.complex128),
+        sigma2_noise=np.zeros((nr_optics_groups, n_shells), dtype=np.float64),
+        tau2_class=np.zeros((K, n_shells), dtype=np.float64),
+        sigma2_class=np.zeros((K, n_shells), dtype=np.float64),
+        fsc_halves_class=np.zeros((K, n_shells), dtype=np.float64),
+        fourier_coverage_class=np.zeros((K, n_shells), dtype=np.float64),
+        data_vs_prior_class=np.zeros((K, n_shells), dtype=np.float64),
+        pdf_class=np.full(K, 1.0 / K, dtype=np.float64),
+        pdf_direction=np.full((K, n_directions), 1.0 / (K * n_directions), dtype=np.float64),
         sigma2_offset=100.0,
         ini_high=ini_high_A,
-        current_resolution=current_resolution,
-        current_resolution_shell=current_resolution_shell,
-        current_size=current_size,
-        Mavg=None,
-        subset_particle_ids=None,
-        subset_halfset_ids=None,
+        current_resolution=1.0 / ini_high_A,
+        current_resolution_shell=compute_ini_high_shell(ori_size),
+        current_size=compute_current_size_for_denovo(ori_size),
     )
 
 
@@ -182,14 +95,7 @@ def seed_noise_from_mavg(
     state: InitialModelState,
     sigma2_per_group: np.ndarray,
 ) -> InitialModelState:
-    """Write `sigma2_noise` from an externally-computed per-group spectrum.
-
-    `sigma2_per_group` must have shape `(nr_optics_groups, ori_size/2 + 1)`.
-    The caller is responsible for computing it via RELION's average-unaligned
-    recipe (Phase 4 will use the existing recovar data-io to fetch a 500-
-    particle batch and FFT it through the `calculateSumOfPowerSpectraAnd
-    AverageImage` logic).
-    """
+    """Write ``sigma2_noise`` from an externally-computed ``(G, S)`` spectrum."""
     if sigma2_per_group.shape != state.sigma2_noise.shape:
         raise ValueError(f"sigma2_per_group shape {sigma2_per_group.shape} != expected {state.sigma2_noise.shape}")
     new_state = replace(state)
@@ -198,12 +104,7 @@ def seed_noise_from_mavg(
 
 
 def _relion_power_spectrum_3d(volume: np.ndarray, n_shells: int) -> np.ndarray:
-    """Return RELION ``getSpectrum(..., POWER_SPECTRUM)`` shells.
-
-    RELION's ``FourierTransformer::Transform(FFTW_FORWARD)`` normalises the
-    forward FFT by the real-space array size.  ``getSpectrum`` then averages
-    ``norm(F)`` by rounded Fourier radius in FFTW half-complex coordinates.
-    """
+    """RELION ``getSpectrum(POWER_SPECTRUM)``: FFTW-normalized forward FFT, per-shell mean ``|F|^2``."""
     vol = np.asarray(volume, dtype=np.float64)
     if vol.ndim != 3 or vol.shape[0] != vol.shape[1] or vol.shape[1] != vol.shape[2]:
         raise ValueError(f"volume must be cubic 3D, got shape {vol.shape}")
@@ -213,14 +114,13 @@ def _relion_power_spectrum_3d(volume: np.ndarray, n_shells: int) -> np.ndarray:
 
     fourier = np.fft.rfftn(vol, axes=(0, 1, 2), norm=None) / float(vol.size)
     kz = np.fft.fftfreq(n, d=1.0) * n
-    ky = np.fft.fftfreq(n, d=1.0) * n
     kx = np.arange(n // 2 + 1, dtype=np.float64)
-    radius = np.sqrt(kz[:, None, None] ** 2 + ky[None, :, None] ** 2 + kx[None, None, :] ** 2)
+    radius = np.sqrt(kz[:, None, None] ** 2 + kz[None, :, None] ** 2 + kx[None, None, :] ** 2)
     shell = np.floor(radius + 0.5).astype(np.int64)
     valid = shell < int(n_shells)
-    power = np.abs(fourier) ** 2
     out = np.zeros(int(n_shells), dtype=np.float64)
     count = np.zeros(int(n_shells), dtype=np.float64)
+    power = np.abs(fourier) ** 2
     np.add.at(out, shell[valid].ravel(), power[valid].ravel())
     np.add.at(count, shell[valid].ravel(), 1.0)
     nz = count > 0.0
@@ -234,15 +134,7 @@ def initialise_data_vs_prior_from_references(
     nr_particles: int,
     fix_tau: bool = False,
 ) -> InitialModelState:
-    """Mirror RELION ``MlModel::initialiseDataVersusPrior``.
-
-    RELION calls this after denovo references and sigma2_noise are initialised
-    and before writing ``it000_model.star``.  Gradient InitialModel later calls
-    ``BackProjector::updateSSNRarrays(update_tau2_with_fsc=false)``; if this
-    prior spectrum is left at zero, RELION falls back to ``0.001 * weight`` as
-    the prior and the current-size schedule races to the edge of the current
-    Fourier window.
-    """
+    """``MlModel::initialiseDataVersusPrior`` (avoids the 0.001*weight fallback if tau2=0)."""
     if nr_particles <= 0:
         raise ValueError(f"nr_particles must be positive, got {nr_particles}")
     sigma2 = np.asarray(state.sigma2_noise, dtype=np.float64)
