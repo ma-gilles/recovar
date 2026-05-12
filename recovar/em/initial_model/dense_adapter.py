@@ -475,20 +475,6 @@ def _sparse_pass2_result_to_accumulators(
     )
 
 
-def _append_sigma2_offset_meta(meta: dict[str, Any], result: Any, *, prefix: str | None = None) -> None:
-    noise_stats = getattr(result, "aggregate_noise_stats", None)
-    if noise_stats is None:
-        return
-    key_prefix = "" if prefix is None else f"{prefix}_"
-    meta[f"{key_prefix}wsum_sigma2_offset"] = float(getattr(noise_stats, "wsum_sigma2_offset"))
-    meta[f"{key_prefix}sigma2_offset_sumw"] = float(getattr(noise_stats, "sumw"))
-    meta[f"{key_prefix}wsum_sigma2_noise"] = np.asarray(
-        getattr(noise_stats, "wsum_sigma2_noise"),
-        dtype=np.float64,
-    )
-    meta[f"{key_prefix}wsum_img_power"] = np.asarray(getattr(noise_stats, "wsum_img_power"), dtype=np.float64)
-    meta[f"{key_prefix}noise_sumw"] = float(getattr(noise_stats, "sumw"))
-
 
 def _sparse_pass2_estep_meta(
     halfset_results: dict[int, Any],
