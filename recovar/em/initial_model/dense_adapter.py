@@ -702,36 +702,27 @@ def _run_sparse_pass2_initial_model_estep(
         pass1_time_s += time.time() - t0
         n_significant_by_image.append(np.asarray(_n_sig_all, dtype=np.int32))
 
+        # Per-image union of class-wise significant samples; None if any class is full-support.
         union_significant_samples = []
-        for image_idx in range(int(image_indices.size)):
-            image_parts = []
-            full_support = False
-            for class_idx in range(state.K):
-                class_samples = significant_sample_indices[class_idx][image_idx]
-                if class_samples is None:
-                    full_support = True
-                    break
-                if np.asarray(class_samples).size:
-                    image_parts.append(np.asarray(class_samples, dtype=np.int32))
-            if full_support:
+        for i in range(int(image_indices.size)):
+            cls = [significant_sample_indices[k][i] for k in range(state.K)]
+            if any(s is None for s in cls):
                 union_significant_samples.append(None)
-            elif image_parts:
-                union_significant_samples.append(np.unique(np.concatenate(image_parts)).astype(np.int32, copy=False))
-            else:
-                union_significant_samples.append(np.empty(0, dtype=np.int32))
+                continue
+            arrs = [np.asarray(s, dtype=np.int32) for s in cls if np.asarray(s).size]
+            union_significant_samples.append(
+                np.unique(np.concatenate(arrs)).astype(np.int32, copy=False) if arrs else np.empty(0, dtype=np.int32)
+            )
 
-        # RELION computes pdf_offset on the coarse pass-1 translation index and
-        # reuses that value for all oversampled child translations in pass 2.
+        # RELION reuses the coarse pass-1 pdf_offset for all oversampled pass-2 children.
         pass2_translation_log_prior = pass1_translation_log_prior
         pass2_fine_translation_log_prior = None
-        if pass2_translation_log_prior is None:
-            fallback_prior = group_kwargs.get("translation_log_prior")
-            if fallback_prior is not None:
-                fallback_prior_np = np.asarray(fallback_prior)
-                if fallback_prior_np.ndim > 0 and fallback_prior_np.shape[-1] == int(coarse_translations.shape[0]):
-                    pass2_translation_log_prior = fallback_prior
-                else:
-                    pass2_fine_translation_log_prior = fallback_prior
+        if pass2_translation_log_prior is None and (fallback := group_kwargs.get("translation_log_prior")) is not None:
+            fallback_np = np.asarray(fallback)
+            if fallback_np.ndim > 0 and fallback_np.shape[-1] == int(coarse_translations.shape[0]):
+                pass2_translation_log_prior = fallback
+            else:
+                pass2_fine_translation_log_prior = fallback
 
         local_layout = build_pass2_hypothesis_layout(
             union_significant_samples,
