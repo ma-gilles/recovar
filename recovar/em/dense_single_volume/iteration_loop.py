@@ -303,13 +303,7 @@ def _scatter_dense_k_class_result(
 
 @dataclass
 class HalfScoreResult:
-    """Unified per-half scoring output.
-
-    Required for every scoring branch (local / adaptive-2pass / single-pass);
-    optional fields are populated only where the branch produces them.
-    Phase 4 introduces this shape; phases 6-8 migrate each scoring branch
-    to return one.
-    """
+    """Per-half scoring output shared by the dense scoring branches."""
 
     # Always populated by every scoring branch.
     ha: np.ndarray
@@ -317,14 +311,6 @@ class HalfScoreResult:
     Ft_ctf: object
     em_stats: object
     noise_stats: object
-
-    # K-class only.
-    class_assignments: np.ndarray | None = None
-    class_posterior: np.ndarray | None = None
-    class_rotation_posterior: np.ndarray | None = None
-    noise_stats_per_class: tuple | None = None
-    rot_pmap_for_collapse: np.ndarray | None = None
-    adaptive_os_local: int = 0
 
     # Local-search and explicit best-pose paths.
     best_pose_rotations: np.ndarray | None = None
@@ -381,9 +367,6 @@ class PerHalfOutputs:
             pose_rotation_eulers=[None, None],
         )
 
-    def for_half(self, idx: int) -> dict:
-        return {name: getattr(self, name)[idx] for name in self.__dataclass_fields__}
-
     def update_from(self, idx: int, hs: HalfScoreResult) -> None:
         self.hard_assignments[idx] = hs.ha
         self.Ft_y[idx] = hs.Ft_y
@@ -397,14 +380,6 @@ class PerHalfOutputs:
             hs.em_stats.rotation_posterior_sums,
             dtype=np.float32,
         )
-        if hs.class_assignments is not None:
-            self.class_assignments[idx] = hs.class_assignments
-        if hs.class_posterior is not None:
-            self.class_posterior[idx] = hs.class_posterior
-        if hs.class_rotation_posterior is not None:
-            self.class_rotation_posterior[idx] = hs.class_rotation_posterior
-        if hs.noise_stats_per_class is not None:
-            self.noise_stats_per_class[idx] = hs.noise_stats_per_class
         if hs.best_pose_rotations is not None:
             self.best_pose_rotations[idx] = hs.best_pose_rotations
         if hs.best_pose_rotation_eulers is not None:
@@ -417,19 +392,6 @@ class PerHalfOutputs:
             self.pose_rotations[idx] = hs.pose_rotations
         if hs.pose_rotation_eulers is not None:
             self.pose_rotation_eulers[idx] = hs.pose_rotation_eulers
-
-
-@dataclass(frozen=True)
-class IterationRunSpec:
-    current_size: int
-    relion_firstiter_cc: bool
-    do_join_random_halves: bool
-    do_use_all_data: bool
-    update_noise: bool
-    update_convergence: bool
-    update_direction_priors: bool
-    label: str
-
 
 def _score_kclass_firstiter_cc_pass2(
     *,
@@ -708,8 +670,6 @@ def _score_half_dense(
             Ft_ctf=Ft_ctf_k,
             em_stats=em_stats_k,
             noise_stats=noise_stats_k,
-            rot_pmap_for_collapse=rot_pmap_for_collapse,
-            adaptive_os_local=adaptive_os_local,
         )
 
     _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
@@ -1877,22 +1837,13 @@ def _run_relion_iteration_loop(
         sigma_offset_used_trajectory.append(float(current_sigma_offset_angstrom))
         current_sizes.append(cs)
         healpix_order_trajectory.append(state.healpix_order)
-        iter_spec = IterationRunSpec(
-            current_size=int(cs),
-            relion_firstiter_cc=relion_firstiter_cc_this_iter,
-            do_join_random_halves=False,
-            do_use_all_data=False,
-            update_noise=True,
-            update_convergence=True,
-            update_direction_priors=True,
-            label="iter",
-        )
+        current_size = int(cs)
 
         logger.info(
             "=== RELION Iteration %d/%d: current_size=%d, healpix_order=%d, local_search=%s ===",
             iteration + 1,
             max_iter,
-            iter_spec.current_size,
+            current_size,
             state.healpix_order,
             state.do_local_search,
         )
@@ -2128,7 +2079,7 @@ def _run_relion_iteration_loop(
                     current_healpix_order,
                 )
 
-        cs_for_engine = iter_spec.current_size if iter_spec.current_size < cryo.image_shape[0] else None
+        cs_for_engine = current_size if current_size < cryo.image_shape[0] else None
 
         # --- Run E+M on each half-set ---
         # Two modes: single-pass (adaptive_oversampling=0) or two-pass
@@ -2903,8 +2854,7 @@ def _run_relion_iteration_loop(
         significant_counts.append(iter_sig_counts)
 
         if (
-            iter_spec.update_direction_priors
-            and not use_local
+            not use_local
             and all(rot_sum is not None for rot_sum in rotation_posterior_per_half)
             and effective_rotations.shape[0] == rotation_grid_size(current_healpix_order)
         ):
@@ -3517,21 +3467,8 @@ def _run_relion_iteration_loop(
     # reconstruction.
     final_join_means = [means[0], means[1]]
     final_iter_t0 = time.time()
-    final_spec = IterationRunSpec(
-        current_size=int(grid_size),  # = ori_size, full Nyquist
-        relion_firstiter_cc=False,
-        do_join_random_halves=True,
-        do_use_all_data=True,
-        update_noise=False,
-        update_convergence=False,
-        update_direction_priors=False,
-        label="final-join",
-    )
-    logger.info(
-        "=== RELION final all-data Nyquist iteration (do_join_random_halves=%s, do_use_all_data=%s) ===",
-        final_spec.do_join_random_halves,
-        final_spec.do_use_all_data,
-    )
+    final_current_size = int(grid_size)  # = ori_size, full Nyquist
+    logger.info("=== RELION final all-data Nyquist iteration ===")
     final_outs = PerHalfOutputs.empty()
     for k in range(2):
         # Pass the merged mean as input (both halves get the same projection source).
@@ -3579,10 +3516,10 @@ def _run_relion_iteration_loop(
             scale_corrections_k=relion_half_inputs.scale_corrections[k],
             firstiter_score_mode_this_iter="gaussian",
             firstiter_winner_take_all_this_iter=False,
-            cs_for_engine=final_spec.current_size,
+            cs_for_engine=final_current_size,
             class_log_priors=class_log_priors,
             k_class_enabled=k_class_enabled,
-            relion_firstiter_cc_this_iter=final_spec.relion_firstiter_cc,
+            relion_firstiter_cc_this_iter=False,
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
             safe_batch_sizes=_safe_batch_sizes,
@@ -3625,7 +3562,7 @@ def _run_relion_iteration_loop(
                 "mean_vol_ft": np.asarray(final_join_means[k]),
                 "mean_variance": np.asarray(mean_variance),
                 "noise_variance": np.asarray(noise_variance_per_half[k]),
-                "current_size": np.int32(final_spec.current_size),
+                "current_size": np.int32(final_current_size),
                 "half_spectrum_scoring": np.bool_(True),
                 "use_float64_scoring": np.bool_(False),
                 "projection_padding_factor": np.int32(PROJECTION_PADDING_FACTOR),
@@ -3690,7 +3627,7 @@ def _run_relion_iteration_loop(
     final_iter_elapsed = time.time() - final_iter_t0
     logger.info(
         "Final iter complete: current_size=%d (Nyquist), wall=%.1fs",
-        final_spec.current_size,
+        final_current_size,
         final_iter_elapsed,
     )
     wall_times.append(final_iter_elapsed)
