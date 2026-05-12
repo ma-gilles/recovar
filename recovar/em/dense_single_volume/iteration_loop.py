@@ -2146,7 +2146,6 @@ def _run_relion_iteration_loop(
                             em_stats_k,
                             noise_stats_k,
                         ) = local_outputs
-                    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
                 if k_class_enabled:
                     class_assignments[k] = np.asarray(class_assignments_k, dtype=np.int32)
                     class_posterior_per_half[k] = np.asarray(class_posterior_sums_k, dtype=np.float64)
