@@ -1,11 +1,8 @@
-"""InitialModel E-step adapter backed by native dense K-class EM.
+"""InitialModel E-step adapter on the dense K-class engine.
 
-This is the ab-initio bridge we want long-term: the hidden variable axis is
-``class x pose`` inside the dense K-class engine. There is no outer loop over
-classes here. Pseudo-halfsets share one dense E-step and ask the dense engine
-to split reconstruction accumulators by halfset, so projection/scoring work is
-not duplicated while the VDAM M-step still receives independent halfset
-BackProjectors.
+The hidden variable axis is ``class x pose``; pseudo-halfsets share one E-step
+(reconstruction accumulators are split per halfset) so projection/scoring isn't
+duplicated while the VDAM M-step still gets independent halfset BackProjectors.
 """
 
 from __future__ import annotations
@@ -106,12 +103,7 @@ def split_pseudo_halfset_particle_ids(
 
 
 def class_log_priors_from_state(state: InitialModelState) -> np.ndarray:
-    """Return log class priors from ``state.pdf_class``.
-
-    RELION permits class probabilities to collapse to zero and then treats
-    those classes as inactive. Encode that as a finite log-probability
-    sentinel so the dense log-sum-exp path underflows cleanly.
-    """
+    """Log class priors from ``state.pdf_class`` (collapsed classes get a finite sentinel)."""
     weights = np.asarray(state.pdf_class, dtype=np.float64)
     if weights.shape != (state.K,):
         raise ValueError(f"state.pdf_class must have shape ({state.K},), got {weights.shape}")
@@ -154,35 +146,6 @@ def _image_groups(
     return [(0, h0), (1, h1)]
 
 
-def _pack_image_groups(groups: list[tuple[int, np.ndarray]]) -> tuple[np.ndarray, np.ndarray, int]:
-    """Pack halfset groups into one image list plus dense reconstruction ids."""
-
-    if not groups:
-        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int32), 0
-    image_indices = [np.asarray(group_ids, dtype=np.int64) for _, group_ids in groups]
-    group_ids = [
-        np.full(np.asarray(group_image_ids).shape, int(group_index), dtype=np.int32)
-        for group_index, group_image_ids in groups
-    ]
-    packed_images = np.concatenate(image_indices) if image_indices else np.empty(0, dtype=np.int64)
-    packed_groups = np.concatenate(group_ids) if group_ids else np.empty(0, dtype=np.int32)
-    return packed_images, packed_groups, max(int(group_index) for group_index, _ in groups) + 1
-
-
-def _supports_fused_pseudo_halfsets() -> bool:
-    """Whether the active dense EM engine can split M-step groups in one call.
-
-    The older InitialModel branch had a fused reconstruction-group path.  This
-    worktree is intentionally based on the newer EM-quality K-class engine,
-    which preserves the public K-class API but does not expose those temporary
-    reconstruction-group kwargs.  Running the two pseudo-halfsets as separate
-    dense/local E-steps preserves the RELION hidden-variable math while avoiding
-    a large rollback of the EM-quality implementation.
-    """
-
-    return False
-
-
 def _dense_engine_kwargs(state: InitialModelState, config: DenseInitialModelEstepConfig) -> dict[str, Any]:
     engine_kwargs = dict(_ENGINE_DEFAULTS)
     engine_kwargs["current_size"] = None if state.current_size <= 0 else state.current_size
@@ -205,14 +168,7 @@ def _engine_kwargs_for_image_indices(
     *,
     n_images: int,
 ) -> dict[str, Any]:
-    """Adapt dense-engine kwargs whose first axis is selected-image order.
-
-    Most dense engine per-image inputs are indexed internally by global image
-    ids. ``translation_log_prior`` is different: the dense engine streams it
-    by selected-image row. Accepting a full-dataset prior here keeps callers
-    from duplicating pseudo-halfset packing logic.
-    """
-
+    """Slice ``translation_log_prior`` (selected-image axis) for the dense engine."""
     out = dict(engine_kwargs)
     prior = out.get("translation_log_prior")
     if prior is None:
@@ -232,19 +188,28 @@ def _engine_kwargs_for_image_indices(
     return out
 
 
-def _dense_run_em_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Drop InitialModel-only kwargs unsupported by the dense run_em wrapper."""
-
-    out = dict(kwargs)
-    for name in (
+_DENSE_RUN_EM_REJECT = frozenset(
+    {
+        # InitialModel-only kwargs the dense run_em wrapper doesn't accept.
         "reconstruct_with_masked_images",
         "recon_square_window",
         "recon_exact_radius",
         "reconstruction_subtract_projected_reference",
         "relion_projector_shape",
-    ):
-        out.pop(name, None)
-    return out
+        # Sparse/local engine kwargs that run_dense_k_class_em rejects.
+        "return_profile",
+        "return_best_pose_details",
+        "return_stats",
+        "disable_adjoint_y",
+        "disable_adjoint_ctf",
+        "normalization_log_evidence",
+    }
+)
+
+
+def _dense_run_em_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Drop kwargs unsupported by the dense run_em wrapper (sparse-only escape hatch)."""
+    return {k: v for k, v in kwargs.items() if k not in _DENSE_RUN_EM_REJECT}
 
 
 def _select_image_rows(value, image_indices: np.ndarray, *, n_images: int, name: str):
@@ -299,13 +264,7 @@ def _resolve_sparse_pass1_current_size(
     group_kwargs: dict[str, Any],
     options: dict[str, Any],
 ) -> int | None:
-    """Return RELION's coarse pass-1 scoring size for sparse pass 2.
-
-    InitialModel adaptive oversampling follows RELION's two-pass expectation:
-    the first pass finds significant coarse orientations at ``image_coarse_size``
-    and the second pass scores oversampled children at ``image_current_size``.
-    """
-
+    """RELION's coarse pass-1 scoring size (``image_coarse_size``) for sparse pass 2."""
     explicit = options.get("pass1_current_size")
     if explicit is not None:
         explicit = int(explicit)
@@ -351,13 +310,9 @@ def _relion_projector_dense_rotations(rotations: np.ndarray) -> np.ndarray:
 
 
 def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int) -> np.ndarray:
-    """Embed cropped RELION ``Projector::data`` into dense full-centered layout.
+    """Embed cropped RELION ``Projector::data`` half-complex slab into dense full-centered Fourier cube.
 
-    RELION's ``Projector`` stores x>=0 half-complex slabs with centered y/z
-    axes.  In low-resolution InitialModel iterations the data array is cropped
-    to the current projector size, so the generic full-projector conversion is
-    not directly applicable.  This embeds the cropped slab into RECOVAR's full
-    centered Fourier cube at the matching low-frequency coordinates.
+    Out-of-range coordinates are clipped (any-size input accepted; high frequencies truncated).
     """
     import recovar.core.fourier_transform_utils as ftu
 
@@ -366,12 +321,6 @@ def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int)
         raise ValueError(f"projector_data must be 3D, got {ppref.shape}")
     n = int(ori_size)
     center = n // 2
-    # RELION's cropped projector has shape (2*r_max+1, 2*r_max+1, r_max+1)
-    # where r_max = current_size/2. When VDAM autosampling pushes current_size
-    # at or beyond ori_size, the cropped slab can exceed RECOVAR's full
-    # centered half-volume dimensions (n, n, center+1). The embedding loop
-    # below clips out-of-range coordinates, so any-size input is accepted —
-    # we just truncate to the representable subset of frequencies.
     half = np.zeros((n, n, center + 1), dtype=np.complex128)
     slab = ppref[::-1, :, :]
     z_center = slab.shape[0] // 2
@@ -395,15 +344,7 @@ def reference_to_relion_projector_dense_means(
     padding_factor: int = 1,
     interpolator: int = 1,
 ) -> np.ndarray:
-    """Convert recovar-frame references through RELION's Projector setup.
-
-    InitialModel scoring is sensitive to RELION's ``Projector`` normalization
-    and cropped low-frequency storage.  This path calls the RELION binding for
-    ``Projector::computeFourierTransformMap`` with ``data_dim=2`` and embeds
-    the resulting cropped Projector slab into dense Fourier coordinates.
-    The dense scorer uses unnormalised image FFTs, so the embedded RELION
-    projector data is scaled by ``-N^2`` to match the existing scorer frame.
-    """
+    """Convert recovar-frame references through RELION's ``Projector`` setup (data_dim=2, scaled by ``-N^2``)."""
     from recovar.relion_bind import _relion_bind_core as bind
     from recovar.utils.helpers import recovar_volume_to_relion
 
@@ -424,26 +365,11 @@ def reference_to_relion_projector_dense_means(
             2,
         )
         dense = _relion_projector_to_dense_volume(np.asarray(projector_data), n)
-        # Diagnostic-only env-controlled override of the historical -N^2 scaling.
-        # The -N^2 factor was a per-particle-constant compensation that biases
-        # per-class score gaps (~3 nat) when projections differ in magnitude.
-        # See project_k2_c2_cc_root_cause_2026_05_03 memory.
-        scale_env = os.environ.get("RECOVAR_DENSE_MEANS_SCALE")
-        if scale_env is None:
-            scale = -(n**2)
-        else:
-            # Allow values like "1", "-1", "-N2", "-N", "1/-N2", or a literal float.
-            tok = scale_env.strip()
-            if tok == "-N2":
-                scale = -(n**2)
-            elif tok == "N2":
-                scale = float(n**2)
-            elif tok == "1":
-                scale = 1.0
-            elif tok == "-1":
-                scale = -1.0
-            else:
-                scale = float(tok)
+        # RECOVAR_DENSE_MEANS_SCALE diag override (see project_k2_c2_cc_root_cause_2026_05_03).
+        tok = (os.environ.get("RECOVAR_DENSE_MEANS_SCALE") or "-N2").strip()
+        scale = {"-N2": -(n**2), "N2": float(n**2)}.get(tok)
+        if scale is None:
+            scale = float(tok)
         means.append(dense.reshape(-1) * scale)
     return np.asarray(means, dtype=np.complex64)
 
@@ -469,43 +395,14 @@ def _coarse_translations_from_config(
     return get_translation_grid(max_pixel=max_offset, pixel_offset=step).astype(np.float32)
 
 
-def _sparse_pass2_result_to_accumulators(
-    result,
-    state: InitialModelState,
-    *,
-    halfset_idx: int,
-    relion_bpref_frame: bool,
-    relion_projector_frame: bool,
-    padding_factor: int,
-) -> list[VdamAccumulator]:
-    return _arrays_to_accumulators(
-        result.Ft_y,
-        result.Ft_ctf,
-        state,
-        halfset_idx=halfset_idx,
-        relion_bpref_frame=relion_bpref_frame,
-        relion_projector_frame=relion_projector_frame,
-        padding_factor=padding_factor,
-    )
-
-
-def _append_sigma2_offset_meta(meta: dict[str, Any], result: Any, *, prefix: str | None = None) -> None:
-    noise_stats = getattr(result, "aggregate_noise_stats", None)
-    if noise_stats is None:
-        return
-    key_prefix = "" if prefix is None else f"{prefix}_"
-    meta[f"{key_prefix}wsum_sigma2_offset"] = float(getattr(noise_stats, "wsum_sigma2_offset"))
-    meta[f"{key_prefix}sigma2_offset_sumw"] = float(getattr(noise_stats, "sumw"))
-    meta[f"{key_prefix}wsum_sigma2_noise"] = np.asarray(
-        getattr(noise_stats, "wsum_sigma2_noise"),
-        dtype=np.float64,
-    )
-    meta[f"{key_prefix}wsum_img_power"] = np.asarray(getattr(noise_stats, "wsum_img_power"), dtype=np.float64)
-    meta[f"{key_prefix}noise_sumw"] = float(getattr(noise_stats, "sumw"))
-    if getattr(noise_stats, "wsum_noise_a2", None) is not None:
-        meta[f"{key_prefix}wsum_noise_a2"] = np.asarray(getattr(noise_stats, "wsum_noise_a2"), dtype=np.float64)
-    if getattr(noise_stats, "wsum_noise_xa", None) is not None:
-        meta[f"{key_prefix}wsum_noise_xa"] = np.asarray(getattr(noise_stats, "wsum_noise_xa"), dtype=np.float64)
+# (attr_name_on_result, dtype) for fields harvested per halfset and concatenated.
+_SPARSE_PASS2_RESULT_FIELDS: tuple[tuple[str, type], ...] = (
+    ("pose_assignments", np.int32),
+    ("class_assignments", np.int32),
+    ("best_pose_rotations", np.float32),
+    ("best_pose_translations", np.float32),
+    ("best_pose_rotation_ids", np.int32),
+)
 
 
 def _sparse_pass2_estep_meta(
@@ -515,27 +412,17 @@ def _sparse_pass2_estep_meta(
     """Meta merger for separate exact-local K-class pseudo-halfset passes."""
 
     meta = _estep_meta(halfset_results)
-    selected_particle_ids = []
-    pose_assignments = []
-    class_assignments = []
-    max_posterior = []
-    best_pose_rotations = []
-    best_pose_translations = []
-    best_pose_rotation_ids = []
+    selected_particle_ids: list[np.ndarray] = []
+    max_posterior: list[np.ndarray] = []
+    field_lists: dict[str, list[np.ndarray]] = {attr: [] for attr, _ in _SPARSE_PASS2_RESULT_FIELDS}
 
     for halfset_idx, result in sorted(halfset_results.items()):
         image_ids = np.asarray(selected_particle_ids_by_halfset[int(halfset_idx)], dtype=np.int64)
         selected_particle_ids.append(image_ids)
-        if getattr(result, "pose_assignments", None) is not None:
-            pose_assignments.append(np.asarray(result.pose_assignments, dtype=np.int32))
-        if getattr(result, "class_assignments", None) is not None:
-            class_assignments.append(np.asarray(result.class_assignments, dtype=np.int32))
-        if getattr(result, "best_pose_rotations", None) is not None:
-            best_pose_rotations.append(np.asarray(result.best_pose_rotations, dtype=np.float32))
-        if getattr(result, "best_pose_translations", None) is not None:
-            best_pose_translations.append(np.asarray(result.best_pose_translations, dtype=np.float32))
-        if getattr(result, "best_pose_rotation_ids", None) is not None:
-            best_pose_rotation_ids.append(np.asarray(result.best_pose_rotation_ids, dtype=np.int32))
+        for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+            value = getattr(result, attr, None)
+            if value is not None:
+                field_lists[attr].append(np.asarray(value, dtype=dtype))
         stats = getattr(result, "stats", None)
         if stats is not None and getattr(stats, "max_posterior_per_image", None) is not None:
             max_posterior.append(np.asarray(stats.max_posterior_per_image, dtype=np.float32))
@@ -543,20 +430,14 @@ def _sparse_pass2_estep_meta(
                 float(np.mean(np.asarray(stats.max_posterior_per_image))) if image_ids.size else 0.0
             )
 
-    if selected_particle_ids:
-        meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
-    if pose_assignments:
-        meta["pose_assignments"] = np.concatenate(pose_assignments).astype(np.int32, copy=False)
-    if class_assignments:
-        meta["class_assignments"] = np.concatenate(class_assignments).astype(np.int32, copy=False)
-    if max_posterior:
-        meta["max_posterior_per_image"] = np.concatenate(max_posterior).astype(np.float32, copy=False)
-    if best_pose_rotations:
-        meta["best_pose_rotations"] = np.concatenate(best_pose_rotations).astype(np.float32, copy=False)
-    if best_pose_translations:
-        meta["best_pose_translations"] = np.concatenate(best_pose_translations).astype(np.float32, copy=False)
-    if best_pose_rotation_ids:
-        meta["best_pose_rotation_ids"] = np.concatenate(best_pose_rotation_ids).astype(np.int32, copy=False)
+    def _merge(arrays: list[np.ndarray], key: str, dtype) -> None:
+        if arrays:
+            meta[key] = np.concatenate(arrays).astype(dtype, copy=False)
+
+    _merge(selected_particle_ids, "selected_particle_ids", np.int64)
+    for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+        _merge(field_lists[attr], attr, dtype)
+    _merge(max_posterior, "max_posterior_per_image", np.float32)
     meta["sparse_pass2"] = True
     return meta
 
@@ -571,17 +452,11 @@ def _sparse_pass2_profile_summary(
         if n_significant_by_image
         else np.zeros(0, dtype=np.int32)
     )
-    if all_counts.size:
-        mean_significant = float(np.mean(all_counts))
-        max_significant = int(np.max(all_counts))
-    else:
-        mean_significant = 0.0
-        max_significant = 0
     return {
         "pass1_time_s": float(pass1_time_s),
         "pass2_time_s": float(pass2_time_s),
-        "mean_significant_samples": mean_significant,
-        "max_significant_samples": max_significant,
+        "mean_significant_samples": float(np.mean(all_counts)) if all_counts.size else 0.0,
+        "max_significant_samples": int(np.max(all_counts)) if all_counts.size else 0,
     }
 
 
@@ -673,181 +548,6 @@ def _run_sparse_pass2_initial_model_estep(
         if config.relion_projector_frame
         else np.asarray(coarse_rotations, dtype=np.float32)
     )
-    if state.pseudo_halfsets and _supports_fused_pseudo_halfsets():
-        if any(np.asarray(image_ids).size == 0 for _, image_ids in groups):
-            raise NotImplementedError("InitialModel sparse pass-2 currently requires non-empty pseudo-halfsets")
-
-        packed_image_indices, reconstruction_group_ids, reconstruction_group_count = _pack_image_groups(groups)
-        group_kwargs = _group_local_kwargs(
-            base_kwargs,
-            packed_image_indices,
-            n_images=int(experiment_dataset.n_images),
-        )
-        if coarse_translation_log_prior is not None:
-            coarse_prior_array = np.asarray(coarse_translation_log_prior)
-            pass1_translation_log_prior = (
-                coarse_translation_log_prior
-                if coarse_prior_array.ndim == 1
-                else _select_image_rows(
-                    coarse_translation_log_prior,
-                    packed_image_indices,
-                    n_images=int(experiment_dataset.n_images),
-                    name="coarse_translation_log_prior",
-                )
-            )
-        else:
-            pass1_translation_log_prior = group_kwargs.get("translation_log_prior")
-        pass1_current_size = _resolve_sparse_pass1_current_size(state, group_kwargs, options)
-
-        t0 = time.time()
-        sig_result = _compute_k_class_significance_batched(
-            experiment_dataset.subset(packed_image_indices),
-            means,
-            config.noise_variance,
-            coarse_rotations_for_dense,
-            coarse_translations,
-            config.disc_type,
-            class_log_priors=class_log_priors,
-            adaptive_fraction=adaptive_fraction,
-            max_significants=max_significants,
-            image_batch_size=config.image_batch_size,
-            rotation_block_size=config.rotation_block_size,
-            current_size=pass1_current_size,
-            score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
-            rotation_log_prior=group_kwargs.get("class_rotation_log_prior", group_kwargs.get("rotation_log_prior")),
-            translation_log_prior=pass1_translation_log_prior,
-            image_corrections=group_kwargs.get("image_corrections"),
-            scale_corrections=group_kwargs.get("scale_corrections"),
-            image_pre_shifts=group_kwargs.get("image_pre_shifts"),
-            half_spectrum_scoring=bool(group_kwargs.get("half_spectrum_scoring", False)),
-            projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
-            do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
-            square_window=bool(group_kwargs.get("square_window", False)),
-            use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
-        )
-        (
-            _sig_rot_any,
-            _n_sig_all,
-            _hard_assignment,
-            _class_assignment,
-            significant_sample_indices,
-            _full_stats,
-        ) = sig_result
-        pass1_time_s += time.time() - t0
-        n_significant_by_image.append(np.asarray(_n_sig_all, dtype=np.int32))
-
-        union_significant_samples = []
-        for image_idx in range(int(packed_image_indices.size)):
-            image_parts = []
-            full_support = False
-            for class_idx in range(state.K):
-                class_samples = significant_sample_indices[class_idx][image_idx]
-                if class_samples is None:
-                    full_support = True
-                    break
-                if np.asarray(class_samples).size:
-                    image_parts.append(np.asarray(class_samples, dtype=np.int32))
-            if full_support:
-                union_significant_samples.append(None)
-            elif image_parts:
-                union_significant_samples.append(np.unique(np.concatenate(image_parts)).astype(np.int32, copy=False))
-            else:
-                union_significant_samples.append(np.empty(0, dtype=np.int32))
-
-        pass2_translation_log_prior = pass1_translation_log_prior
-        pass2_fine_translation_log_prior = None
-        if pass2_translation_log_prior is None:
-            fallback_prior = group_kwargs.get("translation_log_prior")
-            if fallback_prior is not None:
-                fallback_prior_np = np.asarray(fallback_prior)
-                if fallback_prior_np.ndim > 0 and fallback_prior_np.shape[-1] == int(coarse_translations.shape[0]):
-                    pass2_translation_log_prior = fallback_prior
-                else:
-                    pass2_fine_translation_log_prior = fallback_prior
-
-        local_layout = build_pass2_hypothesis_layout(
-            union_significant_samples,
-            n_coarse_rotations,
-            int(coarse_translations.shape[0]),
-            healpix_order,
-            coarse_translations,
-            oversampling_order=oversampling_order,
-            translation_step=translation_step,
-            rotation_log_prior=group_kwargs.get("rotation_log_prior"),
-            translation_log_prior=pass2_translation_log_prior,
-            fine_translation_log_prior=pass2_fine_translation_log_prior,
-            random_perturbation=random_perturbation,
-            rotation_index_order="relion_hidden",
-        )
-        class_local_rotation_log_prior = _class_local_rotation_log_prior(
-            group_kwargs.get("class_rotation_log_prior"),
-            local_layout,
-        )
-        if config.relion_projector_frame:
-            local_layout = replace(
-                local_layout,
-                rotations_flat=_relion_projector_dense_rotations(local_layout.rotations_flat),
-            )
-        local_layout = _initial_model_pass2_layout(local_layout)
-
-        t0 = time.time()
-        result = run_local_k_class_em(
-            experiment_dataset.subset(packed_image_indices),
-            means,
-            mean_variance,
-            config.noise_variance,
-            local_layout,
-            config.disc_type,
-            class_log_priors=class_log_priors,
-            image_batch_size=config.image_batch_size,
-            rotation_block_size=config.rotation_block_size,
-            current_size=group_kwargs.get("current_size"),
-            accumulate_noise=True,
-            projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
-            reconstruction_padding_factor=int(group_kwargs.get("reconstruction_padding_factor", 1)),
-            score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
-            half_spectrum_scoring=bool(group_kwargs.get("half_spectrum_scoring", False)),
-            use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
-            use_float64_normalization=bool(group_kwargs.get("use_float64_scoring", False)),
-            use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
-            do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
-            square_window=bool(group_kwargs.get("square_window", False)),
-            image_corrections=group_kwargs.get("image_corrections"),
-            scale_corrections=group_kwargs.get("scale_corrections"),
-            image_pre_shifts=group_kwargs.get("image_pre_shifts"),
-            mstep_subtract_ctf_projection=bool(group_kwargs.get("reconstruction_subtract_projected_reference", False)),
-            mstep_relion_x_half=bool(config.relion_bpref_frame),
-            reconstruct_significant_only=True,
-            adaptive_fraction=adaptive_fraction,
-            max_significants=max_significants,
-            return_profile=return_profile,
-            return_best_pose_details=True,
-            translation_prior_centers=group_kwargs.get("translation_prior_centers"),
-            class_local_rotation_log_prior=class_local_rotation_log_prior,
-        )
-        pass2_time_s += time.time() - t0
-        halfset_results = {int(halfset_idx): result for halfset_idx, _ in groups}
-        accumulators = _grouped_result_to_accumulators(
-            result,
-            state,
-            groups,
-            relion_bpref_frame=config.relion_bpref_frame,
-            relion_projector_frame=config.relion_projector_frame,
-            padding_factor=config.padding_factor,
-        )
-        out = DenseInitialModelEstepResult(
-            accumulators=accumulators,
-            meta=_grouped_estep_meta(result, groups),
-            halfset_results=halfset_results,
-        )
-        if return_profile:
-            out.meta["sparse_pass2_profile_summary"] = _sparse_pass2_profile_summary(
-                pass1_time_s,
-                pass2_time_s,
-                n_significant_by_image,
-            )
-        return out
-
     accumulators: list[VdamAccumulator] = []
     halfset_results: dict[int, Any] = {}
 
@@ -916,36 +616,27 @@ def _run_sparse_pass2_initial_model_estep(
         pass1_time_s += time.time() - t0
         n_significant_by_image.append(np.asarray(_n_sig_all, dtype=np.int32))
 
+        # Per-image union of class-wise significant samples; None if any class is full-support.
         union_significant_samples = []
-        for image_idx in range(int(image_indices.size)):
-            image_parts = []
-            full_support = False
-            for class_idx in range(state.K):
-                class_samples = significant_sample_indices[class_idx][image_idx]
-                if class_samples is None:
-                    full_support = True
-                    break
-                if np.asarray(class_samples).size:
-                    image_parts.append(np.asarray(class_samples, dtype=np.int32))
-            if full_support:
+        for i in range(int(image_indices.size)):
+            cls = [significant_sample_indices[k][i] for k in range(state.K)]
+            if any(s is None for s in cls):
                 union_significant_samples.append(None)
-            elif image_parts:
-                union_significant_samples.append(np.unique(np.concatenate(image_parts)).astype(np.int32, copy=False))
-            else:
-                union_significant_samples.append(np.empty(0, dtype=np.int32))
+                continue
+            arrs = [np.asarray(s, dtype=np.int32) for s in cls if np.asarray(s).size]
+            union_significant_samples.append(
+                np.unique(np.concatenate(arrs)).astype(np.int32, copy=False) if arrs else np.empty(0, dtype=np.int32)
+            )
 
-        # RELION computes pdf_offset on the coarse pass-1 translation index and
-        # reuses that value for all oversampled child translations in pass 2.
+        # RELION reuses the coarse pass-1 pdf_offset for all oversampled pass-2 children.
         pass2_translation_log_prior = pass1_translation_log_prior
         pass2_fine_translation_log_prior = None
-        if pass2_translation_log_prior is None:
-            fallback_prior = group_kwargs.get("translation_log_prior")
-            if fallback_prior is not None:
-                fallback_prior_np = np.asarray(fallback_prior)
-                if fallback_prior_np.ndim > 0 and fallback_prior_np.shape[-1] == int(coarse_translations.shape[0]):
-                    pass2_translation_log_prior = fallback_prior
-                else:
-                    pass2_fine_translation_log_prior = fallback_prior
+        if pass2_translation_log_prior is None and (fallback := group_kwargs.get("translation_log_prior")) is not None:
+            fallback_np = np.asarray(fallback)
+            if fallback_np.ndim > 0 and fallback_np.shape[-1] == int(coarse_translations.shape[0]):
+                pass2_translation_log_prior = fallback
+            else:
+                pass2_fine_translation_log_prior = fallback
 
         local_layout = build_pass2_hypothesis_layout(
             union_significant_samples,
@@ -1010,8 +701,9 @@ def _run_sparse_pass2_initial_model_estep(
         pass2_time_s += time.time() - t0
         halfset_results[int(halfset_idx)] = result
         accumulators.extend(
-            _sparse_pass2_result_to_accumulators(
-                result,
+            _arrays_to_accumulators(
+                result.Ft_y,
+                result.Ft_ctf,
                 state,
                 halfset_idx=int(halfset_idx),
                 relion_bpref_frame=config.relion_bpref_frame,
@@ -1038,13 +730,7 @@ def _run_sparse_pass2_initial_model_estep(
 
 
 def reference_to_dense_means(references: np.ndarray) -> np.ndarray:
-    """Convert recovar-frame real-space InitialModel references to dense EM means.
-
-    VDAM stores ``Iref`` in recovar's real-space volume frame. The dense EM engine
-    scores unnormalised, centered Fourier volumes. Keep this conversion in
-    that scoring frame. The BPref bridge applies RELION's sign/scale convention
-    later when moving dense M-step accumulators back into VDAM.
-    """
+    """Convert recovar-frame InitialModel references to unnormalised centered FFTs for dense scoring."""
     import jax.numpy as jnp
 
     from recovar.core import fourier_transform_utils as ftu
@@ -1057,8 +743,7 @@ def reference_to_dense_means(references: np.ndarray) -> np.ndarray:
     means = []
     for ref in refs:
         corrected, _ = griddingCorrect(jnp.asarray(ref), n, padding_factor=1, order=1)
-        ft = ftu.get_dft3(corrected).reshape(-1)
-        means.append(np.asarray(ft))
+        means.append(np.asarray(ftu.get_dft3(corrected).reshape(-1)))
     return np.asarray(means, dtype=np.complex64)
 
 
@@ -1069,26 +754,19 @@ def _resolve_class_inputs(
     if config.means is not None:
         means = config.means
     elif config.relion_projector_frame:
-        current_size = state.current_size if state.current_size > 0 else state.ori_size
         means = reference_to_relion_projector_dense_means(
             state.Iref,
-            current_size=current_size,
+            current_size=state.current_size if state.current_size > 0 else state.ori_size,
             padding_factor=config.padding_factor,
         )
     else:
         means = reference_to_dense_means(state.Iref)
-    if config.mean_variance is not None:
-        mean_variance = config.mean_variance
-    else:
-        mean_variance = np.abs(np.asarray(means)) ** 2
+    mean_variance = config.mean_variance if config.mean_variance is not None else np.abs(np.asarray(means)) ** 2
     return means, mean_variance
 
 
 def _empty_accumulator(state: InitialModelState, class_idx: int, halfset_idx: int) -> VdamAccumulator:
-    if state.current_size <= 0:
-        r_max = state.ori_size // 2
-    else:
-        r_max = state.current_size // 2
+    r_max = state.ori_size // 2 if state.current_size <= 0 else state.current_size // 2
     if r_max >= state.ori_size // 2:
         shape = (state.ori_size, state.ori_size, state.ori_size // 2 + 1)
     else:
@@ -1099,26 +777,6 @@ def _empty_accumulator(state: InitialModelState, class_idx: int, halfset_idx: in
         weight=np.zeros(shape, dtype=np.float64),
         class_idx=class_idx,
         halfset_idx=halfset_idx,
-    )
-
-
-def _result_to_accumulators(
-    result,
-    state: InitialModelState,
-    *,
-    halfset_idx: int,
-    relion_bpref_frame: bool,
-    relion_projector_frame: bool,
-    padding_factor: int,
-) -> list[VdamAccumulator]:
-    return _arrays_to_accumulators(
-        result.Ft_y,
-        result.Ft_ctf,
-        state,
-        halfset_idx=halfset_idx,
-        relion_bpref_frame=relion_bpref_frame,
-        relion_projector_frame=relion_projector_frame,
-        padding_factor=padding_factor,
     )
 
 
@@ -1180,49 +838,11 @@ def _arrays_to_accumulators(
     return accumulators
 
 
-def _grouped_result_to_accumulators(
-    result,
-    state: InitialModelState,
-    groups: list[tuple[int, np.ndarray]],
-    *,
-    relion_bpref_frame: bool,
-    relion_projector_frame: bool,
-    padding_factor: int,
-) -> list[VdamAccumulator]:
-    grouped_Ft_y = getattr(result, "grouped_Ft_y", None)
-    grouped_Ft_ctf = getattr(result, "grouped_Ft_ctf", None)
-    if grouped_Ft_y is None or grouped_Ft_ctf is None:
-        raise RuntimeError("dense K-class result did not return grouped reconstruction accumulators")
-
-    accumulators: list[VdamAccumulator] = []
-    grouped_Ft_y = np.asarray(grouped_Ft_y)
-    grouped_Ft_ctf = np.asarray(grouped_Ft_ctf)
-    for halfset_idx, _ in sorted(groups):
-        accumulators.extend(
-            _arrays_to_accumulators(
-                grouped_Ft_y[int(halfset_idx)],
-                grouped_Ft_ctf[int(halfset_idx)],
-                state,
-                halfset_idx=int(halfset_idx),
-                relion_bpref_frame=relion_bpref_frame,
-                relion_projector_frame=relion_projector_frame,
-                padding_factor=padding_factor,
-            )
-        )
-    return accumulators
-
-
 def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
     meta: dict[str, Any] = {"halfset_ids": tuple(sorted(halfset_results))}
     class_posterior_sums = None
     class_direction_posterior_sums = None
-    wsum_sigma2_offset = 0.0
-    sigma2_offset_sumw = 0.0
-    wsum_sigma2_noise = None
-    wsum_img_power = None
-    noise_sumw = 0.0
-    have_sigma2_offset = False
-    have_noise = False
+    noise_totals: dict[str, Any] | None = None
     for h, result in halfset_results.items():
         if getattr(result, "class_posterior_sums", None) is not None:
             sums = np.asarray(result.class_posterior_sums, dtype=np.float64)
@@ -1238,30 +858,28 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
             meta[f"halfset_{h}_profile_summary"] = dict(profile_summary)
         noise_stats = getattr(result, "aggregate_noise_stats", None)
         if noise_stats is not None:
-            half_wsum = float(getattr(noise_stats, "wsum_sigma2_offset"))
-            half_sumw = float(getattr(noise_stats, "sumw"))
-            half_wsum_noise = np.asarray(getattr(noise_stats, "wsum_sigma2_noise"), dtype=np.float64)
-            half_img_power = np.asarray(getattr(noise_stats, "wsum_img_power"), dtype=np.float64)
-            meta[f"halfset_{h}_wsum_sigma2_offset"] = half_wsum
-            meta[f"halfset_{h}_sigma2_offset_sumw"] = half_sumw
-            meta[f"halfset_{h}_wsum_sigma2_noise"] = half_wsum_noise
-            meta[f"halfset_{h}_wsum_img_power"] = half_img_power
-            meta[f"halfset_{h}_noise_sumw"] = half_sumw
+            half = {
+                "wsum_sigma2_offset": float(noise_stats.wsum_sigma2_offset),
+                "sigma2_offset_sumw": float(noise_stats.sumw),
+                "wsum_sigma2_noise": np.asarray(noise_stats.wsum_sigma2_noise, dtype=np.float64),
+                "wsum_img_power": np.asarray(noise_stats.wsum_img_power, dtype=np.float64),
+                "noise_sumw": float(noise_stats.sumw),
+            }
             if getattr(noise_stats, "wsum_noise_a2", None) is not None:
-                meta[f"halfset_{h}_wsum_noise_a2"] = np.asarray(getattr(noise_stats, "wsum_noise_a2"), dtype=np.float64)
+                half["wsum_noise_a2"] = np.asarray(noise_stats.wsum_noise_a2, dtype=np.float64)
             if getattr(noise_stats, "wsum_noise_xa", None) is not None:
-                meta[f"halfset_{h}_wsum_noise_xa"] = np.asarray(getattr(noise_stats, "wsum_noise_xa"), dtype=np.float64)
-            wsum_sigma2_offset += half_wsum
-            sigma2_offset_sumw += half_sumw
-            wsum_sigma2_noise = half_wsum_noise if wsum_sigma2_noise is None else wsum_sigma2_noise + half_wsum_noise
-            wsum_img_power = half_img_power if wsum_img_power is None else wsum_img_power + half_img_power
-            noise_sumw += half_sumw
-            have_sigma2_offset = True
-            have_noise = True
+                half["wsum_noise_xa"] = np.asarray(noise_stats.wsum_noise_xa, dtype=np.float64)
+            for k, v in half.items():
+                meta[f"halfset_{h}_{k}"] = v
+            if noise_totals is None:
+                noise_totals = dict(half)
+            else:
+                for k, v in half.items():
+                    noise_totals[k] = noise_totals.get(k, 0.0) + v
         per_class_stats = getattr(result, "per_class_stats", None)
         if per_class_stats is not None:
             direction_sums = np.stack(
-                [np.asarray(class_stats.rotation_posterior_sums, dtype=np.float64) for class_stats in per_class_stats],
+                [np.asarray(cs.rotation_posterior_sums, dtype=np.float64) for cs in per_class_stats],
                 axis=0,
             )
             class_direction_posterior_sums = (
@@ -1273,71 +891,8 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
         meta["class_posterior_sums"] = class_posterior_sums
     if class_direction_posterior_sums is not None:
         meta["class_direction_posterior_sums"] = class_direction_posterior_sums
-    if have_sigma2_offset:
-        meta["wsum_sigma2_offset"] = wsum_sigma2_offset
-        meta["sigma2_offset_sumw"] = sigma2_offset_sumw
-    if have_noise:
-        meta["wsum_sigma2_noise"] = wsum_sigma2_noise
-        meta["wsum_img_power"] = wsum_img_power
-        meta["noise_sumw"] = noise_sumw
-    return meta
-
-
-def _grouped_estep_meta(result, groups: list[tuple[int, np.ndarray]]) -> dict[str, Any]:
-    meta: dict[str, Any] = {
-        "halfset_ids": tuple(int(group_index) for group_index, _ in sorted(groups)),
-        "fused_pseudo_halfsets": True,
-    }
-    class_responsibilities = getattr(result, "class_responsibilities", None)
-    class_assignments = getattr(result, "class_assignments", None)
-    pose_assignments = getattr(result, "pose_assignments", None)
-    stats = getattr(result, "stats", None)
-    pmax = None if stats is None else getattr(stats, "max_posterior_per_image", None)
-    if getattr(result, "class_posterior_sums", None) is not None:
-        meta["class_posterior_sums"] = np.asarray(result.class_posterior_sums, dtype=np.float64)
-    _append_sigma2_offset_meta(meta, result)
-    per_class_stats = getattr(result, "per_class_stats", None)
-    if per_class_stats is not None:
-        meta["class_direction_posterior_sums"] = np.stack(
-            [np.asarray(class_stats.rotation_posterior_sums, dtype=np.float64) for class_stats in per_class_stats],
-            axis=0,
-        )
-
-    cursor = 0
-    selected_particle_ids = []
-    selected_class_assignments = []
-    selected_pmax = []
-    for h, image_ids in sorted(groups):
-        image_ids = np.asarray(image_ids, dtype=np.int64)
-        count = int(image_ids.size)
-        rows = slice(cursor, cursor + count)
-        selected_particle_ids.append(image_ids)
-        if class_responsibilities is not None:
-            meta[f"halfset_{h}_class_posterior_sums"] = np.sum(
-                np.asarray(class_responsibilities, dtype=np.float64)[:, rows],
-                axis=1,
-            )
-        if class_assignments is not None:
-            class_rows = np.asarray(class_assignments, dtype=np.int32)[rows]
-            meta[f"halfset_{h}_class_assignments"] = class_rows
-            selected_class_assignments.append(class_rows)
-        if pmax is not None:
-            pmax_rows = np.asarray(pmax, dtype=np.float64)[rows]
-            meta[f"halfset_{h}_pmax_mean"] = float(np.mean(pmax_rows)) if pmax_rows.size else 0.0
-            selected_pmax.append(pmax_rows)
-        cursor += count
-    if selected_particle_ids:
-        meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
-    if selected_class_assignments:
-        meta["class_assignments"] = np.concatenate(selected_class_assignments).astype(np.int32, copy=False)
-    if selected_pmax:
-        meta["max_posterior_per_image"] = np.concatenate(selected_pmax).astype(np.float32, copy=False)
-    if pose_assignments is not None:
-        meta["pose_assignments"] = np.asarray(pose_assignments, dtype=np.int32)
-
-    profile_summary = getattr(result, "profile_summary", None)
-    if profile_summary is not None:
-        meta["fused_profile_summary"] = dict(profile_summary)
+    if noise_totals is not None:
+        meta.update(noise_totals)
     return meta
 
 
@@ -1349,12 +904,7 @@ def run_dense_initial_model_estep(
     particle_ids: np.ndarray | None = None,
     halfset_ids: np.ndarray | None = None,
 ) -> DenseInitialModelEstepResult:
-    """Run the InitialModel E-step and return VDAM accumulators.
-
-    The dense K-class engine sees all classes at once. When the active engine
-    does not expose reconstruction-group accumulators, pseudo-halfsets run as
-    separate E-steps with shared class/pose priors.
-    """
+    """Run the InitialModel E-step; pseudo-halfsets run as separate E-steps with shared priors."""
     class_log_priors = (
         class_log_priors_from_state(state) if config.class_log_priors is None else np.asarray(config.class_log_priors)
     )
@@ -1380,53 +930,6 @@ def run_dense_initial_model_estep(
             engine_kwargs=engine_kwargs,
         )
 
-    if state.pseudo_halfsets and _supports_fused_pseudo_halfsets():
-        packed_image_indices, reconstruction_group_ids, reconstruction_group_count = _pack_image_groups(groups)
-        if packed_image_indices.size == 0:
-            accumulators = [
-                _empty_accumulator(state, k, halfset_idx) for halfset_idx, _ in sorted(groups) for k in range(state.K)
-            ]
-            return DenseInitialModelEstepResult(
-                accumulators=accumulators,
-                meta={"halfset_ids": tuple(int(group_index) for group_index, _ in sorted(groups))},
-                halfset_results={},
-            )
-
-        result = run_dense_k_class_em(
-            experiment_dataset,
-            means,
-            mean_variance,
-            config.noise_variance,
-            dense_rotations,
-            config.translations,
-            config.disc_type,
-            class_log_priors=class_log_priors,
-            image_batch_size=config.image_batch_size,
-            rotation_block_size=config.rotation_block_size,
-            reconstruction_group_ids=reconstruction_group_ids,
-            reconstruction_group_count=reconstruction_group_count,
-            accumulate_noise=True,
-            **_dense_run_em_kwargs(
-                _engine_kwargs_for_image_indices(
-                    engine_kwargs,
-                    packed_image_indices,
-                    n_images=int(experiment_dataset.n_images),
-                )
-            ),
-        )
-        return DenseInitialModelEstepResult(
-            accumulators=_grouped_result_to_accumulators(
-                result,
-                state,
-                groups,
-                relion_bpref_frame=config.relion_bpref_frame,
-                relion_projector_frame=config.relion_projector_frame,
-                padding_factor=config.padding_factor,
-            ),
-            meta=_grouped_estep_meta(result, groups),
-            halfset_results={int(halfset_idx): result for halfset_idx, _ in groups},
-        )
-
     halfset_results: dict[int, Any] = {}
     by_halfset: dict[int, list[VdamAccumulator]] = {}
     for halfset_idx, image_indices in groups:
@@ -1447,7 +950,7 @@ def run_dense_initial_model_estep(
             image_indices=image_indices,
             accumulate_noise=True,
             **_dense_run_em_kwargs(
-                _engine_kwargs_for_image_indices(
+                _group_local_kwargs(
                     engine_kwargs,
                     image_indices,
                     n_images=int(experiment_dataset.n_images),
@@ -1455,8 +958,9 @@ def run_dense_initial_model_estep(
             ),
         )
         halfset_results[halfset_idx] = result
-        by_halfset[halfset_idx] = _result_to_accumulators(
-            result,
+        by_halfset[halfset_idx] = _arrays_to_accumulators(
+            result.Ft_y,
+            result.Ft_ctf,
             state,
             halfset_idx=halfset_idx,
             relion_bpref_frame=config.relion_bpref_frame,
@@ -1467,61 +971,34 @@ def run_dense_initial_model_estep(
     accumulators: list[VdamAccumulator] = []
     for halfset_idx in sorted(by_halfset):
         accumulators.extend(by_halfset[halfset_idx])
-    selected_particle_ids = []
-    pose_assignments = []
-    class_assignments = []
-    max_posterior = []
-    best_pose_rotations = []
-    best_pose_translations = []
-    best_pose_rotation_ids = []
+
+    selected_particle_ids: list[np.ndarray] = []
+    field_lists: dict[str, list[np.ndarray]] = {attr: [] for attr, _ in _SPARSE_PASS2_RESULT_FIELDS}
+    max_posterior: list[np.ndarray] = []
     for halfset_idx, image_indices in groups:
         result = halfset_results.get(halfset_idx)
         if result is None:
             continue
-        result_pose_assignments = getattr(result, "pose_assignments", None)
-        result_class_assignments = getattr(result, "class_assignments", None)
-        result_best_pose_rotations = getattr(result, "best_pose_rotations", None)
-        result_best_pose_translations = getattr(result, "best_pose_translations", None)
-        result_best_pose_rotation_ids = getattr(result, "best_pose_rotation_ids", None)
-        result_stats = getattr(result, "stats", None)
-        result_pmax = None if result_stats is None else getattr(result_stats, "max_posterior_per_image", None)
-        if (
-            result_pose_assignments is None
-            and result_class_assignments is None
-            and result_pmax is None
-            and result_best_pose_rotations is None
-            and result_best_pose_translations is None
-            and result_best_pose_rotation_ids is None
-        ):
+        attrs = {attr: getattr(result, attr, None) for attr, _ in _SPARSE_PASS2_RESULT_FIELDS}
+        stats = getattr(result, "stats", None)
+        pmax = None if stats is None else getattr(stats, "max_posterior_per_image", None)
+        if pmax is None and all(v is None for v in attrs.values()):
             continue
         selected_particle_ids.append(np.asarray(image_indices, dtype=np.int64))
-        if result_pose_assignments is not None:
-            pose_assignments.append(np.asarray(result_pose_assignments, dtype=np.int32))
-        if result_class_assignments is not None:
-            class_assignments.append(np.asarray(result_class_assignments, dtype=np.int32))
-        if result_pmax is not None:
-            max_posterior.append(np.asarray(result_pmax, dtype=np.float32))
-        if result_best_pose_rotations is not None:
-            best_pose_rotations.append(np.asarray(result_best_pose_rotations, dtype=np.float32))
-        if result_best_pose_translations is not None:
-            best_pose_translations.append(np.asarray(result_best_pose_translations, dtype=np.float32))
-        if result_best_pose_rotation_ids is not None:
-            best_pose_rotation_ids.append(np.asarray(result_best_pose_rotation_ids, dtype=np.int32))
+        for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+            if attrs[attr] is not None:
+                field_lists[attr].append(np.asarray(attrs[attr], dtype=dtype))
+        if pmax is not None:
+            max_posterior.append(np.asarray(pmax, dtype=np.float32))
+
     meta = _estep_meta(halfset_results)
     if selected_particle_ids:
         meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
-    if pose_assignments:
-        meta["pose_assignments"] = np.concatenate(pose_assignments).astype(np.int32, copy=False)
-    if class_assignments:
-        meta["class_assignments"] = np.concatenate(class_assignments).astype(np.int32, copy=False)
+    for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+        if field_lists[attr]:
+            meta[attr] = np.concatenate(field_lists[attr]).astype(dtype, copy=False)
     if max_posterior:
         meta["max_posterior_per_image"] = np.concatenate(max_posterior).astype(np.float32, copy=False)
-    if best_pose_rotations:
-        meta["best_pose_rotations"] = np.concatenate(best_pose_rotations).astype(np.float32, copy=False)
-    if best_pose_translations:
-        meta["best_pose_translations"] = np.concatenate(best_pose_translations).astype(np.float32, copy=False)
-    if best_pose_rotation_ids:
-        meta["best_pose_rotation_ids"] = np.concatenate(best_pose_rotation_ids).astype(np.int32, copy=False)
     return DenseInitialModelEstepResult(
         accumulators=accumulators,
         meta=meta,

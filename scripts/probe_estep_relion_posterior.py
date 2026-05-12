@@ -78,7 +78,7 @@ def _read_relion_posterior(part_id: int) -> np.ndarray:
 
 def main() -> None:
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.em.initial_model.gpu_pipeline import _split_halfset_particle_ids
+    from recovar.em.initial_model.dense_adapter import split_pseudo_halfset_particle_ids as _split_halfset_particle_ids
 
     # Load RELION-exact rotations + translations + per-particle posterior
     with open(DUMP_DIR / "p0_oversampled_eulers.bin", "rb") as f:

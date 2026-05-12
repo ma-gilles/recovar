@@ -21,7 +21,6 @@ module is the pure orchestrator.
 
 from __future__ import annotations
 
-import math
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -34,6 +33,7 @@ from .schedules import (
     DEFAULT_GRAD_EM_ITERS,
     DEFAULT_GRAD_MU,
     VdamPhaseLengths,
+    _relion_round,
     compute_phase_lengths,
     compute_stepsize,
     compute_subset_size,
@@ -61,56 +61,6 @@ halfset-1) and meta is a free-form dict written into per-iter STAR output
 (Pmax, nr_significant, best_class, best_euler, best_trans).
 """
 
-
-def _array_finite_summary(name: str, value: object, *, max_indices: int = 5) -> str:
-    arr = np.asarray(value)
-    finite = np.isfinite(arr)
-    bad = np.argwhere(~finite)
-    if bad.size == 0:
-        finite_values = arr.astype(np.float64, copy=False).reshape(-1)
-        if finite_values.size == 0:
-            return f"{name}: shape={arr.shape}, empty"
-        return (
-            f"{name}: shape={arr.shape}, all finite, "
-            f"min={float(np.min(finite_values)):.6g}, max={float(np.max(finite_values)):.6g}"
-        )
-    finite_values = arr[finite].astype(np.float64, copy=False)
-    finite_range = (
-        f"finite_min={float(np.min(finite_values)):.6g}, finite_max={float(np.max(finite_values)):.6g}"
-        if finite_values.size
-        else "no finite values"
-    )
-    sample_indices = [tuple(int(x) for x in idx) for idx in bad[:max_indices]]
-    return (
-        f"{name}: shape={arr.shape}, nonfinite={int(bad.shape[0])}/{arr.size}, "
-        f"{finite_range}, first_bad={sample_indices}"
-    )
-
-
-def _dump_noise_failure_meta(state: InitialModelState, meta: dict, summaries: Sequence[str]) -> str | None:
-    dump_root = os.environ.get("RECOVAR_INITIALMODEL_NOISE_FAILURE_DUMP_DIR")
-    if not dump_root:
-        return None
-    path = Path(dump_root)
-    path.mkdir(parents=True, exist_ok=True)
-    iter_value = getattr(state, "iter", "unknown")
-    dump_path = path / f"noise_failure_iter_{iter_value}.npz"
-    payload: dict[str, np.ndarray] = {
-        "state_iter": np.asarray([getattr(state, "iter", -1)], dtype=np.int64),
-        "state_subset_size": np.asarray([getattr(state, "subset_size", -1)], dtype=np.int64),
-        "state_ori_size": np.asarray([getattr(state, "ori_size", -1)], dtype=np.int64),
-        "summaries": np.asarray(list(summaries), dtype=str),
-    }
-    for key, value in sorted(meta.items()):
-        if not any(token in key for token in ("noise", "wsum")):
-            continue
-        try:
-            payload[key] = np.asarray(value)
-        except Exception:
-            payload[f"{key}_repr"] = np.asarray([repr(value)], dtype=str)
-    np.savez_compressed(dump_path, **payload)
-    return str(dump_path)
-
 IterArtifactSink = Callable[[InitialModelState, int, dict], None]
 PostMstepUpdateFn = Callable[[InitialModelState, int, dict], InitialModelState]
 
@@ -121,14 +71,8 @@ def refresh_tau2_from_projector_power(
     padding_factor: int = 1,
     interpolator: int = 1,
 ) -> InitialModelState:
-    """Mirror RELION ``MlModel::setFourierTransformMaps(!fix_tau)``."""
-    try:
-        from recovar.relion_bind import _relion_bind_core as bind
-    except ImportError as e:  # pragma: no cover
-        raise RuntimeError(
-            "VDAM InitialModel tau2 refresh requires the RELION bindings. Run:\n"
-            "  pixi run python recovar/relion_bind/build.py"
-        ) from e
+    """``MlModel::setFourierTransformMaps(!fix_tau)``."""
+    from recovar.relion_bind import _relion_bind_core as bind
 
     current_size = int(state.current_size if state.current_size > 0 else state.ori_size)
     new_tau2 = np.asarray(state.tau2_class, dtype=np.float64).copy()
@@ -150,41 +94,72 @@ def refresh_tau2_from_projector_power(
     return out
 
 
-def _posterior_sums_from_meta(meta: dict, key: str) -> np.ndarray | None:
-    value = meta.get(key)
-    if value is not None:
-        return np.asarray(value, dtype=np.float64)
-
-    prefix = "halfset_"
+def _halfset_values(meta: dict, key: str) -> list:
     suffix = f"_{key}"
-    values = [
-        np.asarray(meta[name], dtype=np.float64)
-        for name in sorted(meta)
-        if name.startswith(prefix) and name.endswith(suffix)
-    ]
-    if not values:
-        return None
-    total = values[0].copy()
-    for value in values[1:]:
-        total += value
-    return total
+    return [meta[name] for name in sorted(meta) if name.startswith("halfset_") and name.endswith(suffix)]
+
+
+def _posterior_sums_from_meta(meta: dict, key: str) -> np.ndarray | None:
+    if (value := meta.get(key)) is not None:
+        return np.asarray(value, dtype=np.float64)
+    values = [np.asarray(v, dtype=np.float64) for v in _halfset_values(meta, key)]
+    return sum(values[1:], values[0].copy()) if values else None
 
 
 def _scalar_sum_from_meta(meta: dict, key: str) -> float | None:
-    value = meta.get(key)
-    if value is not None:
+    if (value := meta.get(key)) is not None:
         return float(value)
+    values = _halfset_values(meta, key)
+    return float(sum(float(v) for v in values)) if values else None
 
-    prefix = "halfset_"
-    suffix = f"_{key}"
-    values = [
-        float(meta[name])
-        for name in sorted(meta)
-        if name.startswith(prefix) and name.endswith(suffix)
-    ]
-    if not values:
+
+def _my_mu(mu: float, do_grad: bool, subset_size: int) -> float:
+    my_mu = float(mu) if do_grad and subset_size != -1 else 0.0
+    if my_mu < 0.0 or my_mu > 1.0:
+        raise ValueError(f"mu must be in [0, 1], got {mu}")
+    return my_mu
+
+
+def _array_finite_summary(name: str, value: object, *, max_indices: int = 5) -> str:
+    arr = np.asarray(value)
+    bad = np.argwhere(~np.isfinite(arr))
+    if bad.size == 0:
+        values = arr.astype(np.float64, copy=False).reshape(-1)
+        if values.size == 0:
+            return f"{name}: shape={arr.shape}, empty"
+        return f"{name}: shape={arr.shape}, all finite, min={float(np.min(values)):.6g}, max={float(np.max(values)):.6g}"
+    finite_values = arr[np.isfinite(arr)].astype(np.float64, copy=False)
+    finite_range = (
+        f"finite_min={float(np.min(finite_values)):.6g}, finite_max={float(np.max(finite_values)):.6g}"
+        if finite_values.size
+        else "no finite values"
+    )
+    sample_indices = [tuple(int(x) for x in idx) for idx in bad[:max_indices]]
+    return f"{name}: shape={arr.shape}, nonfinite={int(bad.shape[0])}/{arr.size}, {finite_range}, first_bad={sample_indices}"
+
+
+def _dump_noise_failure_meta(state: InitialModelState, meta: dict, summaries: Sequence[str]) -> str | None:
+    dump_root = os.environ.get("RECOVAR_INITIALMODEL_NOISE_FAILURE_DUMP_DIR")
+    if not dump_root:
         return None
-    return float(sum(values))
+    path = Path(dump_root)
+    path.mkdir(parents=True, exist_ok=True)
+    dump_path = path / f"noise_failure_iter_{getattr(state, 'iter', 'unknown')}.npz"
+    payload: dict[str, np.ndarray] = {
+        "state_iter": np.asarray([getattr(state, "iter", -1)], dtype=np.int64),
+        "state_subset_size": np.asarray([getattr(state, "subset_size", -1)], dtype=np.int64),
+        "state_ori_size": np.asarray([getattr(state, "ori_size", -1)], dtype=np.int64),
+        "summaries": np.asarray(list(summaries), dtype=str),
+    }
+    for key, value in sorted(meta.items()):
+        if not any(token in key for token in ("noise", "wsum")):
+            continue
+        try:
+            payload[key] = np.asarray(value)
+        except Exception:
+            payload[f"{key}_repr"] = np.asarray([repr(value)], dtype=str)
+    np.savez_compressed(dump_path, **payload)
+    return str(dump_path)
 
 
 def update_noise_from_estep_meta(
@@ -194,13 +169,7 @@ def update_noise_from_estep_meta(
     do_grad: bool,
     mu: float = DEFAULT_GRAD_MU,
 ) -> InitialModelState:
-    """Update ``sigma2_noise`` from RELION-style E-step noise weighted sums.
-
-    Dense engines accumulate residual noise in the scorer's unnormalised FFT
-    units. ``InitialModelState.sigma2_noise`` is stored in RELION model STAR
-    units, so convert by ``ori_size**4`` before writing it back to state; the
-    next E-step converts it back via ``_noise_variance_from_sigma2``.
-    """
+    """Update ``sigma2_noise`` from E-step weighted sums (engine units → RELION /N⁴)."""
     wsum_sigma2_noise = _posterior_sums_from_meta(meta, "wsum_sigma2_noise")
     wsum_img_power = _posterior_sums_from_meta(meta, "wsum_img_power")
     noise_sumw = _scalar_sum_from_meta(meta, "noise_sumw")
@@ -208,42 +177,33 @@ def update_noise_from_estep_meta(
         return state
     if noise_sumw <= 0.0 or not np.isfinite(noise_sumw):
         return state
-    my_mu = float(mu) if do_grad and state.subset_size != -1 else 0.0
-    if my_mu < 0.0 or my_mu > 1.0:
-        raise ValueError(f"mu must be in [0, 1], got {mu}")
+    my_mu = _my_mu(mu, do_grad, state.subset_size)
 
-    wsum_sigma2_noise = np.asarray(wsum_sigma2_noise, dtype=np.float64)
-    wsum_img_power = np.asarray(wsum_img_power, dtype=np.float64)
     if wsum_sigma2_noise.shape != wsum_img_power.shape:
         raise ValueError(
-            "wsum_sigma2_noise and wsum_img_power must have matching shapes, "
-            f"got {wsum_sigma2_noise.shape} and {wsum_img_power.shape}",
+            f"wsum_sigma2_noise and wsum_img_power shape mismatch: {wsum_sigma2_noise.shape} vs {wsum_img_power.shape}"
         )
     expected_shells = int(state.ori_size) // 2 + 1
     if wsum_sigma2_noise.shape != (expected_shells,):
-        raise ValueError(
-            f"noise weighted sums must have shape ({expected_shells},), got {wsum_sigma2_noise.shape}"
-        )
+        raise ValueError(f"noise weighted sums must have shape ({expected_shells},), got {wsum_sigma2_noise.shape}")
     if not np.all(np.isfinite(wsum_sigma2_noise)) or not np.all(np.isfinite(wsum_img_power)):
         summaries = [
             _array_finite_summary("wsum_sigma2_noise", wsum_sigma2_noise),
             _array_finite_summary("wsum_img_power", wsum_img_power),
             f"noise_sumw={noise_sumw!r}",
         ]
-        dump_path = _dump_noise_failure_meta(state, meta, summaries)
-        if dump_path is not None:
+        if dump_path := _dump_noise_failure_meta(state, meta, summaries):
             summaries.append(f"dump={dump_path}")
         raise ValueError("noise weighted sums must be finite: " + "; ".join(summaries))
 
     from recovar.reconstruction import noise
 
-    sigma2_engine_units = noise.normalize_wsum_to_sigma2_noise(
-        wsum_sigma2_noise,
-        wsum_img_power,
-        float(noise_sumw),
-        (int(state.ori_size), int(state.ori_size)),
-    )
-    sigma2_relion_units = np.asarray(sigma2_engine_units, dtype=np.float64) / float(int(state.ori_size) ** 4)
+    sigma2_relion_units = np.asarray(
+        noise.normalize_wsum_to_sigma2_noise(
+            wsum_sigma2_noise, wsum_img_power, float(noise_sumw), (int(state.ori_size), int(state.ori_size))
+        ),
+        dtype=np.float64,
+    ) / float(int(state.ori_size) ** 4)
     if not np.all(np.isfinite(sigma2_relion_units)) or np.any(sigma2_relion_units <= 0.0):
         raise ValueError("updated sigma2_noise must be positive and finite")
 
@@ -251,9 +211,7 @@ def update_noise_from_estep_meta(
     new_sigma2 = np.asarray(state.sigma2_noise, dtype=np.float64).copy()
     if new_sigma2.ndim != 2 or new_sigma2.shape[1] != expected_shells:
         raise ValueError(f"sigma2_noise must have shape (G, {expected_shells}), got {new_sigma2.shape}")
-    new_sigma2 = new_sigma2 * my_mu
-    new_sigma2 += (1.0 - my_mu) * sigma2_relion_units[None, :]
-    new_state.sigma2_noise = new_sigma2
+    new_state.sigma2_noise = new_sigma2 * my_mu + (1.0 - my_mu) * sigma2_relion_units[None, :]
     return new_state
 
 
@@ -264,13 +222,7 @@ def update_probabilities_from_estep_meta(
     do_grad: bool,
     mu: float = DEFAULT_GRAD_MU,
 ) -> InitialModelState:
-    """Update class, direction, and offset priors from E-step posterior masses.
-
-    Mirrors ``MlOptimiser::maximizationOtherParameters`` for ``pdf_class``
-    ``pdf_direction``, and ``sigma2_offset``. Subset gradient iterations use
-    momentum ``mu``; all-particle or EM-tail iterations use ``my_mu = 0`` and
-    replace priors by the current weighted sums.
-    """
+    """``MlOptimiser::maximizationOtherParameters`` for pdf_class / pdf_direction / sigma2_offset."""
     class_sums = _posterior_sums_from_meta(meta, "class_posterior_sums")
     if class_sums is None:
         return state
@@ -282,10 +234,7 @@ def update_probabilities_from_estep_meta(
     sum_weight = float(np.sum(class_sums))
     if sum_weight <= 0.0:
         return state
-
-    my_mu = float(mu) if do_grad and state.subset_size != -1 else 0.0
-    if my_mu < 0.0 or my_mu > 1.0:
-        raise ValueError(f"mu must be in [0, 1], got {mu}")
+    my_mu = _my_mu(mu, do_grad, state.subset_size)
 
     new_state = replace(state)
     new_pdf_class = np.asarray(state.pdf_class, dtype=np.float64) * my_mu
@@ -300,8 +249,7 @@ def update_probabilities_from_estep_meta(
         direction_sums = np.asarray(direction_sums, dtype=np.float64)
         if direction_sums.ndim != 2 or direction_sums.shape[0] != state.K:
             raise ValueError(
-                f"class_direction_posterior_sums must have shape ({state.K}, n_directions), "
-                f"got {direction_sums.shape}"
+                f"class_direction_posterior_sums must have shape ({state.K}, n_directions), got {direction_sums.shape}"
             )
         if not np.all(np.isfinite(direction_sums)) or np.any(direction_sums < 0.0):
             raise ValueError("class_direction_posterior_sums must be non-negative and finite")
@@ -370,13 +318,6 @@ def default_schedule_update(
     new_state.grad_current_stepsize = stepsize
     new_state.tau2_fudge_factor = tau2_fudge
     return new_state
-
-
-def _relion_round(x: float) -> int:
-    """Match RELION's positive-valued ROUND macro."""
-    if x >= 0.0:
-        return int(math.floor(float(x) + 0.5))
-    return -int(math.floor(-float(x) + 0.5))
 
 
 def _resolution_shell_from_data_vs_prior(data_vs_prior: np.ndarray, ori_size: int) -> int:
@@ -481,22 +422,18 @@ def select_subset_for_iter(
     else:
         base_order = np.asarray(particle_order, dtype=np.int64)
         if base_order.shape != (int(nr_particles),):
-            raise ValueError(
-                f"particle_order must have shape ({int(nr_particles)},), got {base_order.shape}"
-            )
-        if np.unique(base_order).size != int(nr_particles) or np.any(base_order < 0) or np.any(base_order >= nr_particles):
+            raise ValueError(f"particle_order must have shape ({int(nr_particles)},), got {base_order.shape}")
+        if (
+            np.unique(base_order).size != int(nr_particles)
+            or np.any(base_order < 0)
+            or np.any(base_order >= nr_particles)
+        ):
             raise ValueError("particle_order must be a permutation of particle ids [0, nr_particles)")
 
     if int(random_seed) == 0:
         shuffled = base_order.copy()
     else:
-        # RELION's exp_model.cpp:451 uses `std::shuffle(sorted_idx, std::mt19937(seed))`
-        # for non-halves randomisation. The Python rnd_unif Fisher-Yates does NOT
-        # match std::shuffle byte-for-byte, so we route through the C++ binding
-        # `vdam_randomise_particles_order` which calls std::shuffle directly on
-        # an identity vector. Compose that permutation with RELION's current
-        # sorted_idx base order. Falls back to the Python implementation if the
-        # binding is unavailable.
+        # C++ binding does std::shuffle byte-exact vs RELION; Python is a fallback.
         try:
             from recovar.relion_bind import _relion_bind_core as _bind
 
@@ -504,8 +441,7 @@ def select_subset_for_iter(
                 _bind.vdam_randomise_particles_order(int(nr_particles), int(random_seed + iter)), dtype=np.int64
             )
         except (ImportError, AttributeError):
-            rnd = rnd_unif_factory(random_seed + iter)
-            permutation = randomise_particles_order(nr_particles, rnd)
+            permutation = randomise_particles_order(nr_particles, rnd_unif_factory(random_seed + iter))
         shuffled = base_order[permutation]
     subset_size = state.subset_size if state.subset_size != -1 else nr_particles
     # `-1` (all particles) still needs to be translated via select_vdam_subset
@@ -563,23 +499,10 @@ def relion_solvent_flatten_state(
     width_mask_edge_px: float | None = None,
     mask: np.ndarray | None = None,
 ) -> InitialModelState:
-    """Apply RELION's spherical ``solventFlatten`` mask to all references.
-
-    RELION's InitialModel command passes ``--flatten_solvent``. In
-    ``MlOptimiser::iterate`` this runs after ``maximization()`` and before
-    writing the iteration artifacts, multiplying each reference by a centered
-    spherical raised-cosine mask:
-
-    ``radius = particle_diameter / (2 * pixel_size)``,
-    ``radius_p = radius + width_mask_edge``.
-    """
-
+    """Apply RELION's spherical ``solventFlatten`` mask to all references (post-maximization)."""
     iref = np.asarray(state.Iref)
-    if iref.ndim != 4 or iref.shape[1:] != (state.ori_size, state.ori_size, state.ori_size):
-        raise ValueError(
-            f"state.Iref must have shape (K, {state.ori_size}, {state.ori_size}, {state.ori_size}), "
-            f"got {iref.shape}",
-        )
+    if iref.ndim != 4 or iref.shape[1:] != (state.ori_size,) * 3:
+        raise ValueError(f"state.Iref must have shape (K, {state.ori_size}, ...), got {iref.shape}")
     if mask is None:
         if particle_diameter_ang is None or width_mask_edge_px is None:
             raise ValueError("particle_diameter_ang and width_mask_edge_px are required when mask is not provided")
@@ -590,10 +513,8 @@ def relion_solvent_flatten_state(
             width_mask_edge_px=float(width_mask_edge_px),
         )
     mask = np.asarray(mask, dtype=np.float64)
-    if mask.shape != (state.ori_size, state.ori_size, state.ori_size):
-        raise ValueError(
-            f"mask must have shape ({state.ori_size}, {state.ori_size}, {state.ori_size}), got {mask.shape}"
-        )
+    if mask.shape != (state.ori_size,) * 3:
+        raise ValueError(f"mask must have shape ({state.ori_size},)*3, got {mask.shape}")
 
     new_state = replace(state)
     new_state.Iref = (iref * mask[None, :, :, :]).astype(iref.dtype, copy=False)
@@ -622,11 +543,7 @@ def run_vdam_iterations(
     projector_padding_factor: int = 1,
     projector_interpolator: int = 1,
 ) -> InitialModelState:
-    """Run the full VDAM iteration loop.
-
-    `state` must already be the output of `initialise_denovo_state(...)`
-    with `sigma2_noise` filled (via `seed_noise_from_mavg`).
-    """
+    """Full VDAM loop; ``state`` must come from ``initialise_denovo_state`` + ``seed_noise_from_mavg``."""
     phase_lengths = compute_phase_lengths(state.nr_iter, grad_ini_frac, grad_fin_frac)
     current = state
 
@@ -696,5 +613,15 @@ def run_vdam_iterations(
             }
         )
         iter_artifact_sink(current, it, meta)
+
+        # RECOVAR_CLEAR_JAX_CACHES_PER_ITER=1: release scratch buffers to avoid
+        # CUFFT_ALLOC_FAILED at 50k×256² (forces next-iter recompile).
+        if os.environ.get("RECOVAR_CLEAR_JAX_CACHES_PER_ITER", "") in ("1", "true", "TRUE"):
+            import gc
+
+            import jax
+
+            jax.clear_caches()
+            gc.collect()
 
     return current

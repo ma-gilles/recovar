@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -14,9 +15,9 @@ from recovar.em.sampling import (
     _normalized_log_weights,
     _wrapped_abs_diff_deg,
     apply_relion_rotation_perturbation_to_eulers,
+    get_local_rotation_grid_fast,
     get_oversampled_rotation_grid_from_samples,
     get_oversampled_translation_grid,
-    get_local_rotation_grid_fast,
     rotation_grid_n_in_planes,
     rotation_indices_to_relion_eulers,
 )
@@ -45,7 +46,23 @@ def _exact_bucket_rotation_size(local_rotation_count: int, rotation_block_size: 
                 minimum=16,
             ),
         )
-    large_bucket_quantum = max(64, engine_cap // 8)
+    # ``RECOVAR_LOCAL_BUCKET_QUANTUM`` (default 64 = engine_cap//8) lets
+    # callers coarsen the large-bucket quantization to reduce the number
+    # of distinct JIT compile shapes that accumulate over long ab-initio
+    # trajectories. At 50k particles × 256² the local engine's bucket
+    # cardinality varies iter-to-iter (significance pruning shrinks the
+    # candidate set), and each unique padded count triggers a fresh
+    # ``run_local_bucket_big_jit`` compilation whose scratch buffers
+    # eventually fragment the GPU heap. Raising the quantum to e.g. 512
+    # collapses the {65..4608} range into ~9 shapes instead of ~70.
+    # Memory cost: more rotation padding per bucket. Off by default.
+    import os
+
+    env_quantum = os.environ.get("RECOVAR_LOCAL_BUCKET_QUANTUM", "")
+    if env_quantum:
+        large_bucket_quantum = max(1, int(env_quantum))
+    else:
+        large_bucket_quantum = max(64, engine_cap // 8)
     return int(
         coarse_bucket(
             local_rotation_count,
@@ -199,8 +216,12 @@ def _build_factorized_local_entries(
         rotation_ids_parts.append(local_ids)
         log_prior_parts.append(local_log_prior)
 
-    rotation_ids_flat = np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
-    rotation_log_priors_flat = np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
+    rotation_ids_flat = (
+        np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
+    )
+    rotation_log_priors_flat = (
+        np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
+    )
     return offsets, counts, rotation_ids_flat, rotation_log_priors_flat
 
 
@@ -314,8 +335,12 @@ def build_local_hypothesis_layout(
             rotation_ids_parts.append(local_ids)
             log_prior_parts.append(local_log_prior)
 
-        rotation_ids_flat = np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
-        rotation_log_priors_flat = np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
+        rotation_ids_flat = (
+            np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
+        )
+        rotation_log_priors_flat = (
+            np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
+        )
     rotations_flat = _selected_rotation_matrices(
         rotation_ids_flat,
         rotation_grid_rotations,
@@ -413,8 +438,7 @@ def _pass2_translation_log_prior(
     if prior_np.ndim == 2:
         if prior_np.shape != (n_images, n_fine_translations):
             raise ValueError(
-                "fine_translation_log_prior must have shape "
-                f"({n_images}, {n_fine_translations}); got {prior_np.shape}",
+                f"fine_translation_log_prior must have shape ({n_images}, {n_fine_translations}); got {prior_np.shape}",
             )
         return prior_np.astype(np.float32, copy=False)
     raise ValueError(f"fine_translation_log_prior must be 1D or 2D, got {prior_np.ndim} dimensions")
@@ -509,10 +533,20 @@ def build_pass2_hypothesis_layout(
         else:
             sample_mask = np.zeros((oversampled_rots.shape[0], n_fine_translations), dtype=bool)
             if coarse_trans.size:
-                for parent_local_idx, coarse_rot_idx in enumerate(unique_rot.tolist()):
-                    valid_coarse_trans = coarse_trans[coarse_rot == coarse_rot_idx]
-                    col_mask = np.isin(fine_translation_parent, valid_coarse_trans)
-                    sample_mask[parent_map == parent_local_idx, :] = col_mask[None, :]
+                # Vectorized replacement of the inner-image Python loop over
+                # unique_rot. Build a (n_unique_rot, n_coarse_trans) mask of
+                # significant (rot, trans) pairs, then expand by parent_map
+                # and fine_translation_parent. At 50k/256 K=1 this cuts pass2
+                # layout-build time from ~10 s/iter to <1 s.
+                coarse_rot_to_local = np.full(int(n_coarse_rotations), -1, dtype=np.int32)
+                coarse_rot_to_local[unique_rot] = np.arange(unique_rot.shape[0], dtype=np.int32)
+                significance_mask_coarse = np.zeros(
+                    (unique_rot.shape[0], int(n_coarse_translations)),
+                    dtype=bool,
+                )
+                local_idx_per_sample = coarse_rot_to_local[coarse_rot]
+                significance_mask_coarse[local_idx_per_sample, coarse_trans] = True
+                sample_mask = significance_mask_coarse[parent_map][:, fine_translation_parent]
 
         if not np.any(sample_mask) and not allow_empty:
             raise ValueError(f"Image {image_idx} has no valid sparse pass-2 candidates after oversampling")
@@ -525,8 +559,12 @@ def build_pass2_hypothesis_layout(
         log_prior_parts.append(local_rotation_log_prior)
         sample_mask_parts.append(sample_mask)
 
-    rotations_flat = np.concatenate(rotations_parts, axis=0) if rotations_parts else np.zeros((0, 3, 3), dtype=np.float32)
-    rotation_ids_flat = np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
+    rotations_flat = (
+        np.concatenate(rotations_parts, axis=0) if rotations_parts else np.zeros((0, 3, 3), dtype=np.float32)
+    )
+    rotation_ids_flat = (
+        np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
+    )
     posterior_ids_flat = (
         np.concatenate(posterior_ids_parts, axis=0) if posterior_ids_parts else np.zeros(0, dtype=np.int32)
     )
@@ -577,6 +615,14 @@ def bucket_local_hypothesis_layout(
         [_exact_bucket_rotation_size(int(count), rotation_block_size) for count in layout.rotation_counts],
         dtype=np.int32,
     )
+    # ``RECOVAR_LOCAL_BUCKET_UNIFY=1`` forces all images to share a single
+    # rotation-count bucket class so the JIT only compiles one shape per
+    # layout. At 50k/256 K=1 this collapses ~13 unique shapes (per-image
+    # significant rotation counts vary widely across iters) into 1, removing
+    # per-bucket JIT compilation overhead. Memory cost: smaller-significance
+    # images carry extra rotation padding.
+    if bucket_sizes.size and os.environ.get("RECOVAR_LOCAL_BUCKET_UNIFY", "").lower() in {"1", "true", "yes", "on"}:
+        bucket_sizes = np.full_like(bucket_sizes, int(bucket_sizes.max()))
     processing_order = np.lexsort((layout.rotation_counts, bucket_sizes)).astype(np.int32)
     bucket_specs: list[LocalBucketSpec] = []
 

@@ -54,12 +54,7 @@ RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES = 9999999.0
 
 @dataclass(frozen=True, kw_only=True)
 class NativeInitialModelOptions:
-    """Options for a native InitialModel run.
-
-    Defaults mirror the GUI InitialModel command where the dense path already
-    has a native implementation. Unsupported RELION branches fail loudly rather
-    than silently diverging.
-    """
+    """Options for a native InitialModel run; defaults mirror the GUI command."""
 
     fn_img: str
     outputname: str = "ab_initio/run"
@@ -124,13 +119,7 @@ class NativeSamplingPlan:
 
 @dataclass
 class NativeSamplingState:
-    """RELION InitialModel autosampling state carried between iterations.
-
-    RELION stores ``sampling.offset_range`` and ``sampling.offset_step`` in
-    Angstroms internally, although the GUI command line specifies pixels.  Keep
-    the mutable state in Angstroms here and convert to pixels only when building
-    RECOVAR translation grids.
-    """
+    """RELION InitialModel autosampling state (Angstroms internally, like RELION)."""
 
     healpix_order: int
     adaptive_oversampling: int
@@ -140,10 +129,7 @@ class NativeSamplingState:
     offset_step_ori_angstrom: float
     pixel_size: float
     auto_local_healpix_order: int = RELION_INITIALMODEL_LOCAL_SEARCH_HEALPIX_ORDER
-    # Unknown native accuracy should mean "not fine enough yet". RELION fills
-    # this via calculateExpectedAngularErrors before autosampling updates; until
-    # that trial-subset estimator is ported, 0 preserves refinement progress
-    # instead of treating 999 as "already fine enough".
+    # acc_rot=0 means "not fine enough yet" pending calculateExpectedAngularErrors port.
     acc_rot: float = 0.0
     acc_trans_angstrom: float = 999.0
     current_changes_optimal_offsets_angstrom: float = RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS
@@ -319,54 +305,42 @@ def _star_column(main_star, name: str):
     return None
 
 
+def _stack_star_pair(main_star, x_name: str, y_name: str) -> np.ndarray | None:
+    x = _star_column(main_star, x_name)
+    y = _star_column(main_star, y_name)
+    if (x is None) != (y is None):
+        raise ValueError(f"STAR file must provide both {x_name} and {y_name}")
+    if x is None:
+        return None
+    return np.stack(
+        [
+            np.asarray(x.astype(float).to_numpy(), dtype=np.float64),
+            np.asarray(y.astype(float).to_numpy(), dtype=np.float64),
+        ],
+        axis=1,
+    )
+
+
 def _image_origin_offsets_pixels_from_star(main_star, dataset) -> np.ndarray:
     n_images = int(len(main_star))
-    origin_x_ang = _star_column(main_star, "_rlnOriginXAngst")
-    origin_y_ang = _star_column(main_star, "_rlnOriginYAngst")
-    if (origin_x_ang is None) != (origin_y_ang is None):
-        raise ValueError("STAR file must provide both _rlnOriginXAngst and _rlnOriginYAngst")
-    if origin_x_ang is not None and origin_y_ang is not None:
+    angst = _stack_star_pair(main_star, "_rlnOriginXAngst", "_rlnOriginYAngst")
+    if angst is not None:
         pixel_size = float(dataset.voxel_size)
         if pixel_size <= 0.0:
             raise ValueError("dataset voxel_size must be positive to convert STAR origins from Angstroms")
-        shifts = np.stack(
-            [
-                np.asarray(origin_x_ang.astype(float).to_numpy(), dtype=np.float64) / pixel_size,
-                np.asarray(origin_y_ang.astype(float).to_numpy(), dtype=np.float64) / pixel_size,
-            ],
-            axis=1,
-        )
+        shifts = angst / pixel_size
     else:
-        origin_x_px = _star_column(main_star, "_rlnOriginX")
-        origin_y_px = _star_column(main_star, "_rlnOriginY")
-        if (origin_x_px is None) != (origin_y_px is None):
-            raise ValueError("STAR file must provide both _rlnOriginX and _rlnOriginY")
-        if origin_x_px is None or origin_y_px is None:
+        pixels = _stack_star_pair(main_star, "_rlnOriginX", "_rlnOriginY")
+        if pixels is None:
             return np.zeros((n_images, 2), dtype=np.float32)
-        shifts = np.stack(
-            [
-                np.asarray(origin_x_px.astype(float).to_numpy(), dtype=np.float64),
-                np.asarray(origin_y_px.astype(float).to_numpy(), dtype=np.float64),
-            ],
-            axis=1,
-        )
-
-    if shifts.shape != (n_images, 2):
-        raise ValueError(f"STAR origin shifts must have shape ({n_images}, 2), got {shifts.shape}")
+        shifts = pixels
     if not np.all(np.isfinite(shifts)):
         raise ValueError("STAR origin shifts must be finite")
     return shifts.astype(np.float32)
 
 
 def _image_pre_shifts_from_star(main_star, dataset) -> np.ndarray:
-    """Return RELION rounded old-offset image pre-shifts in pixel units.
-
-    Dense EM uses these as the per-image pre-centering base before applying
-    the sampled translation grid. RELION rounds old offsets and applies an
-    integer zero-filled real-space shift in its accelerated path; pass the
-    rounded values so the shared dense engine uses the same fast path.
-    """
-
+    """RELION rounded old-offset image pre-shifts in pixel units (accelerated path)."""
     return np.rint(_image_origin_offsets_pixels_from_star(main_star, dataset)).astype(np.float32)
 
 
@@ -473,25 +447,14 @@ def _native_initialmodel_do_grad(state: InitialModelState, iteration: int) -> bo
 
 def _should_update_native_sampling(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
     """Mirror the InitialModel ``updateAngularSampling`` call cadence."""
-
     iteration = int(iteration)
-    if iteration <= 1:
-        return False
-    if bool(do_grad) and iteration % 10 != 0:
+    if iteration <= 1 or (bool(do_grad) and iteration % 10 != 0):
         return False
     return iteration <= int(nr_iter)
 
 
 def _should_record_native_sampling_changes(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
-    """Mirror RELION's per-iteration hidden-variable change diagnostics.
-
-    RELION calls ``monitorHiddenVariableChanges`` during every expectation
-    pool, then ``updateOverallChangesInHiddenVariables`` during every
-    maximization. Autosampling reads the value at the start of the next
-    expectation setup, so native must not defer this to 10-iteration sampling
-    checkpoints.
-    """
-
+    """Per-iteration ``monitorHiddenVariableChanges`` cadence (must NOT defer to autosampling)."""
     return int(iteration) <= int(nr_iter)
 
 
@@ -501,14 +464,7 @@ def _record_resolution_stall_for_sampling(
     *,
     iteration: int,
 ) -> None:
-    """Track RELION's resolution-stall counter for diagnostics.
-
-    InitialModel stores ``current_resolution`` as reciprocal Angstroms in this
-    native state, so larger values are better.  The GUI InitialModel path uses
-    ``auto_ignore_angle_changes`` and does not gate autosampling on these
-    counters, but keeping them in metadata makes divergence easier to audit.
-    """
-
+    """Track RELION's resolution-stall counter (audit only; not used for autosampling here)."""
     current_resolution = float(state.current_resolution)
     if int(iteration) < 10:
         sampling_state.nr_iter_wo_resol_gain = 0
@@ -534,14 +490,11 @@ def _relion_update_native_sampling_state(
     do_grad: bool,
     do_auto_refine: bool = False,
 ) -> bool:
-    """Port RELION InitialModel autosampling update for the native driver.
+    """RELION InitialModel autosampling update (``--auto_sampling --grad`` mode).
 
-    RELION's GUI InitialModel uses ``--auto_sampling --grad`` rather than
-    autorefine.  In that mode hidden-variable changes are ignored for deciding
-    whether to update, and HEALPix growth stops before the local-search order
-    while translation range/step still follow the RELION formulas.
+    HEALPix growth stops before the local-search order; translation range/step
+    follow the RELION formulas.
     """
-
     old_angular_step = sampling.relion_angular_sampling_deg(
         sampling_state.healpix_order,
         sampling_state.adaptive_oversampling,
@@ -607,8 +560,7 @@ def _prepare_native_sampling_for_iteration(
 
 
 def _should_estimate_native_sampling_accuracy(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
-    """Mirror RELION's ``calculateExpectedAngularErrors`` cadence."""
-
+    """RELION's ``calculateExpectedAngularErrors`` cadence."""
     iteration = int(iteration)
     if iteration <= 1:
         return True
@@ -759,10 +711,8 @@ def _build_sampling_plan(
     if sampling_state is None:
         healpix_order = int(opts.healpix_order)
         oversampling = int(opts.oversampling)
-        offset_range_px = float(opts.offset_range_px)
-        offset_step_px = float(opts.offset_step_px)
-        offset_range_angstrom = offset_range_px
-        offset_step_angstrom = offset_step_px
+        offset_range_px = offset_range_angstrom = float(opts.offset_range_px)
+        offset_step_px = offset_step_angstrom = float(opts.offset_step_px)
     else:
         healpix_order = int(sampling_state.healpix_order)
         oversampling = int(sampling_state.adaptive_oversampling)
@@ -774,67 +724,45 @@ def _build_sampling_plan(
         raise ValueError("oversampling must be >= 0")
 
     random_perturbation = _random_perturbation_for_iteration(opts, iteration)
+    perturbed = abs(random_perturbation) > 1e-12
 
-    coarse_translations = sampling.get_translation_grid(
-        max_pixel=offset_range_px,
-        pixel_offset=offset_step_px,
-    ).astype(np.float32)
-    coarse_pass1_translations = coarse_translations
-    if abs(random_perturbation) > 1e-12:
-        coarse_pass1_translations = sampling.apply_relion_translation_perturbation(
-            coarse_translations.astype(np.float32, copy=False),
-            random_perturbation,
-            offset_step_px,
-        ).astype(np.float32)
+    coarse_translations = sampling.get_translation_grid(max_pixel=offset_range_px, pixel_offset=offset_step_px).astype(
+        np.float32
+    )
+    coarse_pass1_translations = (
+        sampling.apply_relion_translation_perturbation(coarse_translations, random_perturbation, offset_step_px).astype(
+            np.float32
+        )
+        if perturbed
+        else coarse_translations
+    )
+
     if oversampling == 0:
-        rotations = sampling.get_relion_hidden_rotation_grid(
-            healpix_order,
-            matrices=True,
-        ).astype(np.float32)
+        rotations = sampling.get_relion_hidden_rotation_grid(healpix_order, matrices=True).astype(np.float32)
         translations = coarse_translations
-        if abs(random_perturbation) > 1e-12:
+        if perturbed:
             rotations = sampling.apply_relion_rotation_perturbation(
-                rotations,
-                random_perturbation,
-                sampling.relion_angular_sampling_deg(healpix_order),
+                rotations, random_perturbation, sampling.relion_angular_sampling_deg(healpix_order)
             ).astype(np.float32)
             translations = sampling.apply_relion_translation_perturbation(
-                translations,
-                random_perturbation,
-                offset_step_px,
+                translations, random_perturbation, offset_step_px
             ).astype(np.float32)
-        return NativeSamplingPlan(
-            rotations=rotations,
-            translations=translations,
+        translation_parent = None
+    else:
+        rotations, _ = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
+            np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64),
+            parent_nside_level=healpix_order,
+            oversampling_order=oversampling,
             random_perturbation=random_perturbation,
-            healpix_order=healpix_order,
-            oversampling=oversampling,
-            offset_range_px=offset_range_px,
-            offset_step_px=offset_step_px,
-            offset_range_angstrom=offset_range_angstrom,
-            offset_step_angstrom=offset_step_angstrom,
-            coarse_translations=coarse_pass1_translations,
-            coarse_prior_translations=coarse_translations,
-            translation_parent=None,
         )
+        oversampled_trans, _translation_parent = sampling.get_oversampled_translation_grid(
+            coarse_translations, pixel_offset=offset_step_px, oversampling_order=oversampling
+        )
+        translations = sampling.apply_relion_translation_perturbation(
+            oversampled_trans.astype(np.float32, copy=False), random_perturbation, offset_step_pixels=offset_step_px
+        )
+        translation_parent = np.asarray(_translation_parent, dtype=np.int64)
 
-    coarse_indices = np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64)
-    rotations, _rotation_parent = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
-        coarse_indices,
-        parent_nside_level=healpix_order,
-        oversampling_order=oversampling,
-        random_perturbation=random_perturbation,
-    )
-    translations, _translation_parent = sampling.get_oversampled_translation_grid(
-        coarse_translations,
-        pixel_offset=offset_step_px,
-        oversampling_order=oversampling,
-    )
-    translations = sampling.apply_relion_translation_perturbation(
-        translations.astype(np.float32, copy=False),
-        random_perturbation,
-        offset_step_pixels=offset_step_px,
-    )
     return NativeSamplingPlan(
         rotations=np.asarray(rotations, dtype=np.float32),
         translations=np.asarray(translations, dtype=np.float32),
@@ -847,7 +775,7 @@ def _build_sampling_plan(
         offset_step_angstrom=offset_step_angstrom,
         coarse_translations=coarse_pass1_translations,
         coarse_prior_translations=coarse_translations,
-        translation_parent=np.asarray(_translation_parent, dtype=np.int64),
+        translation_parent=translation_parent,
     )
 
 
@@ -891,19 +819,14 @@ def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteratio
 
 
 def _random_perturbation_sequence(random_seed: int, perturbation_factor: float, n_steps: int) -> float:
+    """Replay RELION's per-iter perturbation sequence (seed=1 first, then random_seed+step)."""
     if perturbation_factor <= 0.0:
         return 0.0
     pf = float(perturbation_factor)
     value = 0.0
-    n_steps = max(1, int(n_steps))
-    for step in range(n_steps + 1):
-        # RELION advances once during sampling.initialise() before
-        # initialiseWorkLoad() calls init_random_generator(random_seed). C's
-        # default rand state is the same as srand(1) on glibc. Then each
-        # expectationSetup() reinitializes with random_seed + iter.
+    for step in range(max(1, int(n_steps)) + 1):
         seed = 1 if step == 0 else int(random_seed) + step
-        rnd = _relion_rnd_unif_factory(seed)
-        value += 0.5 * pf + (pf - 0.5 * pf) * rnd(0)
+        value += 0.5 * pf + (pf - 0.5 * pf) * _relion_rnd_unif_factory(seed)(0)
         while value > pf:
             value -= 2.0 * pf
         while value < -pf:
@@ -912,15 +835,11 @@ def _random_perturbation_sequence(random_seed: int, perturbation_factor: float, 
 
 
 def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.ndarray:
-    # RELION stores normalized 2D FFT shell power. The dense engine scores
-    # unnormalized particle FFTs, matching the existing InitialModel fixture.
+    """Convert RELION normalized shell power to engine-frame radial noise (unnormalised FFT)."""
     n4 = int(ori_size) ** 4
     return (
         np.asarray(make_radial_noise(np.asarray(sigma2_noise)[0] * n4, (ori_size, ori_size)))
-        .astype(
-            np.float32,
-            copy=False,
-        )
+        .astype(np.float32, copy=False)
         .reshape(-1)
     )
 
@@ -961,107 +880,68 @@ def _dense_estep_config(
     class_log_priors: np.ndarray | None = None,
 ) -> DenseInitialModelEstepConfig:
     image_pre_shifts = np.rint(np.asarray(translation_offsets, dtype=np.float32)).astype(np.float32)
-    coarse_translations = (
-        np.asarray(sampling_plan.coarse_translations, dtype=np.float32)
+    coarse_translations = np.asarray(
+        sampling_plan.coarse_translations
         if sampling_plan.coarse_translations is not None
-        else np.asarray(sampling_plan.translations, dtype=np.float32)
+        else sampling_plan.translations,
+        dtype=np.float32,
     )
-    coarse_prior_translations = (
-        np.asarray(sampling_plan.coarse_prior_translations, dtype=np.float32)
+    coarse_prior_translations = np.asarray(
+        sampling_plan.coarse_prior_translations
         if sampling_plan.coarse_prior_translations is not None
-        else coarse_translations
+        else coarse_translations,
+        dtype=np.float32,
     )
-    # RELION InitialModel default: _rlnSigmaOffsetsAngst = 10.0 Å (set at
-    # iter000 in run_it000_model.star, used for the Gaussian translation
-    # prior in iter-1 E-step). When `opts.translation_sigma_angstrom` is
-    # unset, default to 10.0 to match RELION's iter-1 prior. Without this
-    # the prior is None (uniform) and posteriors diverge from RELION.
+    # Default σ_offset = 10 Å matches RELION's _rlnSigmaOffsetsAngst at iter000.
     if sigma_offset_angstrom is None:
         sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
     else:
         sigma_angstrom = float(sigma_offset_angstrom)
-    # PARITY FIX 2026-05-08: route the prior centers through
-    # `relion_translation_prior_center`, which returns
-    # ``(prior_PX - rounded_old_offset_PX) / voxel_size``. This matches
-    # ``make_relion_translation_log_prior`` which scales `(translations -
-    # centers) * voxel_size`: dividing centers by voxel here cancels the
-    # multiplication, leaving centers acting as PX-numerics while
-    # translations get converted to Å. That reproduces RELION's
-    # mixed-unit pdf_offset (acc_ml_optimiser_impl.h:2620 +
-    # ml_optimiser.cpp:9249): ``offset = old_offset_PX +
-    # sampling.translations_x_Å`` followed by ``tdiff2 *= pixel_size**2``.
-    # Previously this passed `-image_pre_shifts` (raw PX), which scaled the
-    # centers AND translations symmetrically — making the per-image Gaussian
-    # 18× over-sharp and symmetric around the wrong grid center on axes
-    # where the prior offset was non-zero. This was the K=2 iter-2
-    # pmax_abs_mean=0.056 root cause (per-particle posterior leak to
-    # wrong-class secondary modes). main EM ``iteration_loop.py:3534-3537``
-    # already uses ``relion_translation_prior_center``; InitialModel
-    # was the missing caller.
-    trans_prior_center = relion_translation_prior_center(translation_offsets, float(dataset.voxel_size))
-    coarse_translation_log_prior = _translation_log_prior(
-        coarse_prior_translations,
+    # relion_translation_prior_center cancels voxel_size scaling in make_relion_translation_log_prior
+    # (RELION's mixed-unit pdf_offset; K=2 c2 parity fix 2026-05-08).
+    _prior_kwargs = dict(
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=sigma_angstrom,
-        centers=trans_prior_center,
+        centers=relion_translation_prior_center(translation_offsets, float(dataset.voxel_size)),
     )
-    translation_log_prior = _translation_log_prior(
-        sampling_plan.translations,
-        voxel_size=float(dataset.voxel_size),
-        sigma_angstrom=sigma_angstrom,
-        centers=trans_prior_center,
-    )
+    coarse_translation_log_prior = _translation_log_prior(coarse_prior_translations, **_prior_kwargs)
+    translation_log_prior = _translation_log_prior(sampling_plan.translations, **_prior_kwargs)
 
-    engine_kwargs = {
+    engine_kwargs: dict = {
         "score_with_masked_images": True,
         "reconstruct_with_masked_images": False,
-        # RELION's --grad mode (ml_optimiser.cpp:10092-10105) accumulates
-        # Fimg_store = Fimg_shift_nomask - Frefctf into BPref. Without this
-        # flag the engine accumulates Fimg_shift_nomask directly, matching
-        # standard EM but NOT VDAM. Production was missing this; fixing
-        # lifts bp_data CC from +0.91 to +0.996 (per BPref test fixture).
+        # VDAM --grad subtracts Frefctf (ml_optimiser.cpp:10092-10105); lifts BPref CC +0.91→+0.996.
         "reconstruction_subtract_projected_reference": True,
         "relion_firstiter_score_mode": "gaussian",
-        "image_pre_shifts": np.asarray(image_pre_shifts, dtype=np.float32),
+        "image_pre_shifts": image_pre_shifts,
         "translation_prior_centers": relion_sigma_offset_prior_center(translation_offsets),
-        "sparse_pass2": int(sampling_plan.oversampling) > 0,
+        # RECOVAR_DISABLE_SPARSE_PASS2=1 forces dense path (cuFFT plan OOM at 256²+).
+        "sparse_pass2": (
+            int(sampling_plan.oversampling) > 0
+            and os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in ("1", "true", "TRUE")
+        ),
     }
     if int(sampling_plan.oversampling) > 0:
         engine_kwargs.update(
-            {
-                "healpix_order": int(sampling_plan.healpix_order),
-                "oversampling_order": int(sampling_plan.oversampling),
-                "translation_step": float(sampling_plan.offset_step_px),
-                "random_perturbation": float(sampling_plan.random_perturbation),
-                "coarse_translations": coarse_translations,
-                "particle_diameter_ang": float(opts.particle_diameter),
-                "return_profile": bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE")),
-            }
+            healpix_order=int(sampling_plan.healpix_order),
+            oversampling_order=int(sampling_plan.oversampling),
+            translation_step=float(sampling_plan.offset_step_px),
+            random_perturbation=float(sampling_plan.random_perturbation),
+            coarse_translations=coarse_translations,
+            particle_diameter_ang=float(opts.particle_diameter),
+            return_profile=bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE")),
         )
-        # Allow env-override of adaptive_fraction for K-class parity tuning
-        _af_env = os.environ.get("RECOVAR_ADAPTIVE_FRACTION")
-        if _af_env:
-            engine_kwargs["adaptive_fraction"] = float(_af_env)
-    if os.environ.get("RECOVAR_USE_FLOAT64_SCORING"):
-        engine_kwargs["use_float64_scoring"] = True
-    if os.environ.get("RECOVAR_HALF_SPECTRUM_SCORING"):
-        engine_kwargs["half_spectrum_scoring"] = True
-    if os.environ.get("RECOVAR_SQUARE_WINDOW"):
-        engine_kwargs["square_window"] = True
-    # Independent RECON window override: SCORE uses square_window, RECON uses
-    # recon_square_window. Set this to True to backproject all pixels of the
-    # current_size FFTW half (matching RELION's set2DFourierTransform sweep
-    # without the radial r<=r_max cutoff). Default behavior follows
-    # square_window via dense_adapter group_kwargs.
-    _recon_sq = os.environ.get("RECOVAR_RECON_SQUARE_WINDOW")
-    if _recon_sq is not None:
+        if _af := os.environ.get("RECOVAR_ADAPTIVE_FRACTION"):
+            engine_kwargs["adaptive_fraction"] = float(_af)
+    for env_var, kwarg in (
+        ("RECOVAR_USE_FLOAT64_SCORING", "use_float64_scoring"),
+        ("RECOVAR_HALF_SPECTRUM_SCORING", "half_spectrum_scoring"),
+        ("RECOVAR_SQUARE_WINDOW", "square_window"),
+    ):
+        if os.environ.get(env_var):
+            engine_kwargs[kwarg] = True
+    if (_recon_sq := os.environ.get("RECOVAR_RECON_SQUARE_WINDOW")) is not None:
         engine_kwargs["recon_square_window"] = bool(int(_recon_sq))
-    # Disable VDAM gradient subtraction (Fimg_store = Fimg - Frefctf). Setting
-    # RECOVAR_DISABLE_SUBTRACT_PROJECTED_REFERENCE=1 makes the M-step accumulate
-    # raw posterior-weighted images (standard EM), bypassing the VDAM gradient
-    # form. Useful for diagnosing whether the Frefctf subtraction is the c2
-    # parity bottleneck (the proj_weighted=-N²×Fref scaling makes the subtraction
-    # add instead of subtract — see m_step.py and dense_adapter.py).
     if os.environ.get("RECOVAR_DISABLE_SUBTRACT_PROJECTED_REFERENCE"):
         engine_kwargs["reconstruction_subtract_projected_reference"] = False
     if translation_log_prior is not None:
@@ -1144,42 +1024,38 @@ def _native_expectation_step(
             class_log_priors=np.zeros(int(state.K), dtype=np.float64),
         )
         config.engine_kwargs["class_rotation_log_prior"] = _class_direction_rotation_log_prior(
-            state,
-            int(sampling_plan.healpix_order),
+            state, int(sampling_plan.healpix_order)
         )
         config.engine_kwargs["debug_iteration"] = iteration
-        result_sigma2_offset = float(state.sigma2_offset)
         previous_translations = np.asarray(particle_state.translation_offsets, dtype=np.float32).copy()
         previous_classes = np.asarray(particle_state.class_assignments, dtype=np.int32).copy()
         result = run_dense_initial_model_estep(
-            dataset,
-            state,
-            config,
-            particle_ids=particle_ids,
-            halfset_ids=halfset_ids,
+            dataset, state, config, particle_ids=particle_ids, halfset_ids=halfset_ids
         )
-        result.meta["random_perturbation"] = float(sampling_plan.random_perturbation)
-        result.meta["n_rotations"] = int(sampling_plan.rotations.shape[0])
-        result.meta["n_translations"] = int(sampling_plan.translations.shape[0])
-        result.meta["healpix_order"] = int(sampling_plan.healpix_order)
-        result.meta["oversampling"] = int(sampling_plan.oversampling)
-        result.meta["offset_range_px"] = float(sampling_plan.offset_range_px)
-        result.meta["offset_step_px"] = float(sampling_plan.offset_step_px)
-        result.meta["offset_range_angstrom"] = float(sampling_plan.offset_range_angstrom)
-        result.meta["offset_step_angstrom"] = float(sampling_plan.offset_step_angstrom)
-        result.meta["sigma_offset_angstrom"] = sigma_offset_angstrom
-        result.meta["sigma2_offset_before"] = result_sigma2_offset
+        result.meta.update(
+            random_perturbation=float(sampling_plan.random_perturbation),
+            n_rotations=int(sampling_plan.rotations.shape[0]),
+            n_translations=int(sampling_plan.translations.shape[0]),
+            healpix_order=int(sampling_plan.healpix_order),
+            oversampling=int(sampling_plan.oversampling),
+            offset_range_px=float(sampling_plan.offset_range_px),
+            offset_step_px=float(sampling_plan.offset_step_px),
+            offset_range_angstrom=float(sampling_plan.offset_range_angstrom),
+            offset_step_angstrom=float(sampling_plan.offset_step_angstrom),
+            sigma_offset_angstrom=sigma_offset_angstrom,
+            sigma2_offset_before=float(state.sigma2_offset),
+        )
         if sampling_state is not None:
             result.meta["sampling_accuracy_estimated"] = accuracy_meta is not None
             if accuracy_meta is not None:
                 result.meta.update(accuracy_meta)
-            result.meta["sampling_updated"] = bool(sampling_updated)
-            result.meta["effective_offset_step_angstrom"] = float(sampling_state.effective_offset_step_angstrom)
-            result.meta["sampling_acc_rot"] = float(sampling_state.acc_rot)
-            result.meta["sampling_acc_trans_angstrom"] = float(sampling_state.acc_trans_angstrom)
-            result.meta["sampling_nr_iter_wo_resol_gain"] = int(sampling_state.nr_iter_wo_resol_gain)
-            result.meta["sampling_has_fine_enough_angular_sampling"] = bool(
-                sampling_state.has_fine_enough_angular_sampling
+            result.meta.update(
+                sampling_updated=bool(sampling_updated),
+                effective_offset_step_angstrom=float(sampling_state.effective_offset_step_angstrom),
+                sampling_acc_rot=float(sampling_state.acc_rot),
+                sampling_acc_trans_angstrom=float(sampling_state.acc_trans_angstrom),
+                sampling_nr_iter_wo_resol_gain=int(sampling_state.nr_iter_wo_resol_gain),
+                sampling_has_fine_enough_angular_sampling=bool(sampling_state.has_fine_enough_angular_sampling),
             )
         _update_particle_state_from_estep_meta(
             particle_state,
@@ -1209,18 +1085,10 @@ def _native_expectation_step(
     return _expectation_step
 
 
-def _update_translation_offsets_from_estep_meta(
-    translation_offsets: np.ndarray,
-    meta: dict,
-    translations: np.ndarray,
-) -> None:
-    particle_state = NativeParticleState(
-        translation_offsets=translation_offsets,
-        class_assignments=np.zeros(translation_offsets.shape[0], dtype=np.int32),
-        max_posterior=np.zeros(translation_offsets.shape[0], dtype=np.float32),
-        pose_assignments=np.full(translation_offsets.shape[0], -1, dtype=np.int32),
-    )
-    _update_particle_state_from_estep_meta(particle_state, meta, translations)
+def _ensure_field(arr: np.ndarray | None, shape: tuple, dtype, fill=0) -> np.ndarray:
+    if arr is None or arr.shape != shape:
+        return np.full(shape, fill, dtype=dtype) if fill != 0 else np.zeros(shape, dtype=dtype)
+    return arr
 
 
 def _update_particle_state_from_estep_meta(
@@ -1228,123 +1096,50 @@ def _update_particle_state_from_estep_meta(
     meta: dict,
     translations: np.ndarray,
 ) -> None:
-    selected_particle_ids = meta.get("selected_particle_ids")
-    if selected_particle_ids is None:
+    selected = meta.get("selected_particle_ids")
+    if selected is None:
         return
-
-    particle_ids = np.asarray(selected_particle_ids, dtype=np.int64).reshape(-1)
-    if particle_ids.size == 0:
+    ids = np.asarray(selected, dtype=np.int64).reshape(-1)
+    if ids.size == 0:
         return
-    if np.any(particle_ids < 0) or np.any(particle_ids >= particle_state.translation_offsets.shape[0]):
+    N = particle_state.translation_offsets.shape[0]
+    if np.any(ids < 0) or np.any(ids >= N):
         raise ValueError("selected_particle_ids contains entries outside the particle state table")
-    particle_state.visited = np.zeros(particle_state.translation_offsets.shape[0], dtype=bool)
-    particle_state.visited[particle_ids] = True
+    particle_state.visited = np.zeros(N, dtype=bool)
+    particle_state.visited[ids] = True
 
-    pose_assignments = meta.get("pose_assignments")
-    if pose_assignments is not None:
-        assignments = np.asarray(pose_assignments, dtype=np.int64).reshape(-1)
-        translations = np.asarray(translations, dtype=np.float32)
-        if particle_ids.shape != assignments.shape:
-            raise ValueError(
-                "selected_particle_ids and pose_assignments must have matching shape, "
-                f"got {particle_ids.shape} and {assignments.shape}"
-            )
-        if translations.ndim != 2 or translations.shape[1] < 2:
-            raise ValueError(f"translations must have shape (T, >=2), got {translations.shape}")
-        n_trans = int(translations.shape[0])
-        translation_ids = np.mod(assignments, n_trans)
-        base = np.rint(particle_state.translation_offsets[particle_ids]).astype(np.float32)
-        particle_state.translation_offsets[particle_ids] = base + translations[translation_ids, :2]
-        if particle_state.pose_assignments is None or particle_state.pose_assignments.shape != (
-            particle_state.translation_offsets.shape[0],
-        ):
-            particle_state.pose_assignments = np.full(
-                particle_state.translation_offsets.shape[0],
-                -1,
-                dtype=np.int32,
-            )
-        particle_state.pose_assignments[particle_ids] = assignments.astype(np.int32, copy=False)
+    if (pose := meta.get("pose_assignments")) is not None:
+        assignments = np.asarray(pose, dtype=np.int64).reshape(-1)
+        trans = np.asarray(translations, dtype=np.float32)
+        translation_ids = np.mod(assignments, int(trans.shape[0]))
+        base = np.rint(particle_state.translation_offsets[ids]).astype(np.float32)
+        particle_state.translation_offsets[ids] = base + trans[translation_ids, :2]
+        particle_state.pose_assignments = _ensure_field(particle_state.pose_assignments, (N,), np.int32, -1)
+        particle_state.pose_assignments[ids] = assignments.astype(np.int32, copy=False)
 
-    best_pose_rotations = meta.get("best_pose_rotations")
-    if best_pose_rotations is not None:
-        rotations = np.asarray(best_pose_rotations, dtype=np.float32)
-        expected = (particle_ids.size, 3, 3)
-        if rotations.shape != expected:
-            raise ValueError(f"best_pose_rotations must have shape {expected}, got {rotations.shape}")
-        if particle_state.best_pose_rotations is None or particle_state.best_pose_rotations.shape != (
-            particle_state.translation_offsets.shape[0],
-            3,
-            3,
-        ):
-            particle_state.best_pose_rotations = np.zeros(
-                (particle_state.translation_offsets.shape[0], 3, 3),
-                dtype=np.float32,
-            )
-        particle_state.best_pose_rotations[particle_ids] = rotations
+    if (rot := meta.get("best_pose_rotations")) is not None:
+        particle_state.best_pose_rotations = _ensure_field(particle_state.best_pose_rotations, (N, 3, 3), np.float32)
+        particle_state.best_pose_rotations[ids] = np.asarray(rot, dtype=np.float32)
 
-    best_pose_translations = meta.get("best_pose_translations")
-    if best_pose_translations is not None:
-        translations_best = np.asarray(best_pose_translations, dtype=np.float32)
-        expected = (particle_ids.size, 2)
-        if translations_best.shape != expected:
-            raise ValueError(f"best_pose_translations must have shape {expected}, got {translations_best.shape}")
-        if particle_state.best_pose_translations is None or particle_state.best_pose_translations.shape != (
-            particle_state.translation_offsets.shape[0],
-            2,
-        ):
-            particle_state.best_pose_translations = np.zeros(
-                (particle_state.translation_offsets.shape[0], 2),
-                dtype=np.float32,
-            )
-        particle_state.best_pose_translations[particle_ids] = translations_best
+    if (bt := meta.get("best_pose_translations")) is not None:
+        particle_state.best_pose_translations = _ensure_field(particle_state.best_pose_translations, (N, 2), np.float32)
+        particle_state.best_pose_translations[ids] = np.asarray(bt, dtype=np.float32)
 
-    best_pose_rotation_ids = meta.get("best_pose_rotation_ids")
-    if best_pose_rotation_ids is not None:
-        rotation_ids = np.asarray(best_pose_rotation_ids, dtype=np.int32).reshape(-1)
-        if rotation_ids.shape != particle_ids.shape:
-            raise ValueError(
-                "best_pose_rotation_ids must match selected_particle_ids shape, "
-                f"got {rotation_ids.shape} and {particle_ids.shape}"
-            )
-        if particle_state.best_pose_rotation_ids is None or particle_state.best_pose_rotation_ids.shape != (
-            particle_state.translation_offsets.shape[0],
-        ):
-            particle_state.best_pose_rotation_ids = np.full(
-                particle_state.translation_offsets.shape[0],
-                -1,
-                dtype=np.int32,
-            )
-        particle_state.best_pose_rotation_ids[particle_ids] = rotation_ids
-        rotation_grid_order = int(meta.get("healpix_order", 0)) + int(meta.get("oversampling", 0))
-        if particle_state.best_pose_rotation_orders is None or particle_state.best_pose_rotation_orders.shape != (
-            particle_state.translation_offsets.shape[0],
-        ):
-            particle_state.best_pose_rotation_orders = np.full(
-                particle_state.translation_offsets.shape[0],
-                -1,
-                dtype=np.int32,
-            )
-        particle_state.best_pose_rotation_orders[particle_ids] = rotation_grid_order
+    if (rid := meta.get("best_pose_rotation_ids")) is not None:
+        particle_state.best_pose_rotation_ids = _ensure_field(particle_state.best_pose_rotation_ids, (N,), np.int32, -1)
+        particle_state.best_pose_rotation_ids[ids] = np.asarray(rid, dtype=np.int32).reshape(-1)
+        particle_state.best_pose_rotation_orders = _ensure_field(
+            particle_state.best_pose_rotation_orders, (N,), np.int32, -1
+        )
+        particle_state.best_pose_rotation_orders[ids] = int(meta.get("healpix_order", 0)) + int(
+            meta.get("oversampling", 0)
+        )
 
-    class_assignments = meta.get("class_assignments")
-    if class_assignments is not None:
-        classes = np.asarray(class_assignments, dtype=np.int32).reshape(-1)
-        if particle_ids.shape != classes.shape:
-            raise ValueError(
-                "selected_particle_ids and class_assignments must have matching shape, "
-                f"got {particle_ids.shape} and {classes.shape}"
-            )
-        particle_state.class_assignments[particle_ids] = classes
+    if (cls := meta.get("class_assignments")) is not None:
+        particle_state.class_assignments[ids] = np.asarray(cls, dtype=np.int32).reshape(-1)
 
-    max_posterior = meta.get("max_posterior_per_image")
-    if max_posterior is not None:
-        pmax = np.asarray(max_posterior, dtype=np.float32).reshape(-1)
-        if particle_ids.shape != pmax.shape:
-            raise ValueError(
-                "selected_particle_ids and max_posterior_per_image must have matching shape, "
-                f"got {particle_ids.shape} and {pmax.shape}"
-            )
-        particle_state.max_posterior[particle_ids] = pmax
+    if (pmax := meta.get("max_posterior_per_image")) is not None:
+        particle_state.max_posterior[ids] = np.asarray(pmax, dtype=np.float32).reshape(-1)
 
 
 def _initial_state_from_particles(
@@ -1426,40 +1221,23 @@ def _initial_state_from_particles(
     # iter000 ref directly when isolating E/M-step behavior from bootstrap.
     override_path = os.environ.get("RECOVAR_INITIAL_IREF_OVERRIDE")
     if override_path:
+        # Parity hook: load Iref directly. Comma-separated paths for K-class,
+        # single path broadcast across K, or a "{k}" template expanded k=1..K.
         from recovar.utils.helpers import load_relion_volume
 
-        # Comma-separated paths for K-class parity (e.g.
-        # "run_it000_class001.mrc,run_it000_class002.mrc"). When a single
-        # path is provided, broadcast to all classes (back-compat).
-        # If the path contains the literal "{k}" or "{k:03d}" template,
-        # expand for k=1..K.
-        paths = [p.strip() for p in override_path.split(",") if p.strip()]
-        if len(paths) == 1 and ("{k" in paths[0]):
-            template = paths[0]
-            paths = [template.format(k=k + 1) for k in range(int(opts.nr_classes))]
         K = int(opts.nr_classes)
-        if len(paths) == 1:
-            loaded = np.asarray(load_relion_volume(paths[0]), dtype=np.float64)
-            if loaded.shape != (ori_size, ori_size, ori_size):
-                raise ValueError(
-                    f"RECOVAR_INITIAL_IREF_OVERRIDE volume shape {loaded.shape} != ({ori_size}, {ori_size}, {ori_size})"
-                )
-            state.Iref = np.broadcast_to(loaded, (K, ori_size, ori_size, ori_size)).copy()
-        elif len(paths) == K:
-            stacked = np.stack(
-                [np.asarray(load_relion_volume(p), dtype=np.float64) for p in paths],
-                axis=0,
-            )
-            if stacked.shape != (K, ori_size, ori_size, ori_size):
-                raise ValueError(
-                    f"RECOVAR_INITIAL_IREF_OVERRIDE stacked shape {stacked.shape} != "
-                    f"({K}, {ori_size}, {ori_size}, {ori_size})"
-                )
-            state.Iref = stacked
-        else:
-            raise ValueError(
-                f"RECOVAR_INITIAL_IREF_OVERRIDE expects 1 or K={K} comma-separated paths, got {len(paths)}"
-            )
+        paths = [p.strip() for p in override_path.split(",") if p.strip()]
+        if len(paths) == 1 and "{k" in paths[0]:
+            paths = [paths[0].format(k=k + 1) for k in range(K)]
+        if len(paths) not in (1, K):
+            raise ValueError(f"RECOVAR_INITIAL_IREF_OVERRIDE expects 1 or K={K} paths, got {len(paths)}")
+        vols = np.stack(
+            [np.asarray(load_relion_volume(p), dtype=np.float64) for p in paths],
+            axis=0,
+        )
+        if vols.shape[1:] != (ori_size, ori_size, ori_size):
+            raise ValueError(f"RECOVAR_INITIAL_IREF_OVERRIDE volume shape {vols.shape[1:]} != {(ori_size,) * 3}")
+        state.Iref = np.broadcast_to(vols, (K, ori_size, ori_size, ori_size)).copy() if len(paths) == 1 else vols
     else:
         state.Iref = postprocess_bootstrap_iref_via_cpp(
             iref,
@@ -1483,72 +1261,62 @@ def _class_mrc_paths(output_prefix: str, iteration: int, K: int) -> tuple[str, .
 
 
 def _write_model_star(path: str, state: InitialModelState, class_mrcs: tuple[str, ...]) -> None:
-    with open(path, "w") as f:
-        f.write("# Created by recovar native InitialModel\n\n")
-        f.write("data_model_general\n\n")
-        current_resolution_angstrom = (
-            1.0 / float(state.current_resolution) if float(state.current_resolution) > 0.0 else float("inf")
+    current_resolution_angstrom = (
+        1.0 / float(state.current_resolution) if float(state.current_resolution) > 0.0 else float("inf")
+    )
+    pixel_x_ori = float(state.pixel_size) * float(state.ori_size)
+    n_shells = int(state.ori_size) // 2 + 1
+    pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
+
+    lines: list[str] = [
+        "# Created by recovar native InitialModel\n",
+        "\ndata_model_general\n\n",
+        f"_rlnCurrentResolution {current_resolution_angstrom:.12g}\n",
+        f"_rlnCurrentImageSize {int(state.current_size)}\n",
+        f"_rlnCurrentIteration {int(state.iter)}\n",
+        f"_rlnNrClasses {int(state.K)}\n",
+        f"_rlnTau2FudgeFactor {float(state.tau2_fudge_factor):.12g}\n",
+        f"_rlnAveragePmax {float(state.ave_Pmax):.12g}\n",
+        f"_rlnSigmaOffsetsAngst {float(np.sqrt(max(float(state.sigma2_offset), 0.0))):.12g}\n\n",
+        "data_model_classes\n\nloop_\n_rlnReferenceImage #1\n_rlnClassDistribution #2\n_rlnEstimatedResolution #3\n",
+    ]
+    for class_mrc, probability in zip(class_mrcs, np.asarray(state.pdf_class)):
+        lines.append(f"{class_mrc} {float(probability):.12g} {current_resolution_angstrom:.12g}\n")
+
+    for k in range(int(state.K)):
+        lines.append(
+            f"\n\ndata_model_class_{k + 1}\n\nloop_\n"
+            "_rlnSpectralIndex #1\n_rlnResolution #2\n_rlnAngstromResolution #3\n"
+            "_rlnSsnrMap #4\n_rlnGoldStandardFsc #5\n_rlnFourierCompleteness #6\n"
+            "_rlnReferenceSigma2 #7\n_rlnReferenceTau2 #8\n"
         )
-        f.write(f"_rlnCurrentResolution {current_resolution_angstrom:.12g}\n")
-        f.write(f"_rlnCurrentImageSize {int(state.current_size)}\n")
-        f.write(f"_rlnCurrentIteration {int(state.iter)}\n")
-        f.write(f"_rlnNrClasses {int(state.K)}\n")
-        f.write(f"_rlnTau2FudgeFactor {float(state.tau2_fudge_factor):.12g}\n")
-        f.write(f"_rlnAveragePmax {float(state.ave_Pmax):.12g}\n")
-        f.write(f"_rlnSigmaOffsetsAngst {float(np.sqrt(max(float(state.sigma2_offset), 0.0))):.12g}\n\n")
+        tau2 = np.asarray(state.tau2_class[k], dtype=np.float64)
+        dvp = np.asarray(state.data_vs_prior_class[k], dtype=np.float64)
+        fsc = np.asarray(state.fsc_halves_class[k], dtype=np.float64)
+        sigma2_class = np.asarray(state.sigma2_class[k], dtype=np.float64)
+        fourier_coverage = np.asarray(state.fourier_coverage_class[k], dtype=np.float64)
+        for shell in range(n_shells):
+            resolution = float(shell) / pixel_x_ori
+            resolution_angstrom = pixel_x_ori / float(shell) if shell > 0 else 999.0
+            lines.append(
+                f"{int(shell)} {resolution:.12g} {resolution_angstrom:.12g} "
+                f"{float(dvp[shell]):.12g} {float(fsc[shell]):.12g} "
+                f"{float(fourier_coverage[shell]):.12g} "
+                f"{float(sigma2_class[shell]):.12g} {float(tau2[shell]):.12g}\n"
+            )
+        if pdf_direction.ndim == 2 and k < pdf_direction.shape[0]:
+            lines.append(f"\n\ndata_model_pdf_orient_class_{k + 1}\n\nloop_\n_rlnOrientationDistribution #1\n")
+            lines.extend(f"{float(p):.12g}\n" for p in pdf_direction[k])
 
-        f.write("data_model_classes\n\n")
-        f.write("loop_\n")
-        f.write("_rlnReferenceImage #1\n")
-        f.write("_rlnClassDistribution #2\n")
-        f.write("_rlnEstimatedResolution #3\n")
-        for class_mrc, probability in zip(class_mrcs, np.asarray(state.pdf_class)):
-            f.write(f"{class_mrc} {float(probability):.12g} {current_resolution_angstrom:.12g}\n")
+    lines.append(
+        "\n\ndata_model_optics_group_1\n\nloop_\n_rlnSpectralIndex #1\n_rlnResolution #2\n_rlnSigma2Noise #3\n"
+    )
+    lines.extend(
+        f"{int(shell)} 0 {float(sigma2):.12g}\n" for shell, sigma2 in enumerate(np.asarray(state.sigma2_noise)[0])
+    )
 
-        for k in range(int(state.K)):
-            f.write(f"\n\ndata_model_class_{k + 1}\n\n")
-            f.write("loop_\n")
-            f.write("_rlnSpectralIndex #1\n")
-            f.write("_rlnResolution #2\n")
-            f.write("_rlnAngstromResolution #3\n")
-            f.write("_rlnSsnrMap #4\n")
-            f.write("_rlnGoldStandardFsc #5\n")
-            f.write("_rlnFourierCompleteness #6\n")
-            f.write("_rlnReferenceSigma2 #7\n")
-            f.write("_rlnReferenceTau2 #8\n")
-            tau2 = np.asarray(state.tau2_class[k], dtype=np.float64)
-            dvp = np.asarray(state.data_vs_prior_class[k], dtype=np.float64)
-            fsc = np.asarray(state.fsc_halves_class[k], dtype=np.float64)
-            sigma2_class = np.asarray(state.sigma2_class[k], dtype=np.float64)
-            fourier_coverage = np.asarray(state.fourier_coverage_class[k], dtype=np.float64)
-            n_shells = int(state.ori_size) // 2 + 1
-            for shell in range(n_shells):
-                resolution = float(shell) / (float(state.pixel_size) * float(state.ori_size))
-                resolution_angstrom = (
-                    float(state.pixel_size) * float(state.ori_size) / float(shell) if shell > 0 else 999.0
-                )
-                f.write(
-                    f"{int(shell)} {resolution:.12g} {resolution_angstrom:.12g} "
-                    f"{float(dvp[shell]):.12g} {float(fsc[shell]):.12g} "
-                    f"{float(fourier_coverage[shell]):.12g} "
-                    f"{float(sigma2_class[shell]):.12g} {float(tau2[shell]):.12g}\n"
-                )
-
-            pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
-            if pdf_direction.ndim == 2 and k < pdf_direction.shape[0]:
-                f.write(f"\n\ndata_model_pdf_orient_class_{k + 1}\n\n")
-                f.write("loop_\n")
-                f.write("_rlnOrientationDistribution #1\n")
-                for probability in pdf_direction[k]:
-                    f.write(f"{float(probability):.12g}\n")
-
-        f.write("\n\ndata_model_optics_group_1\n\n")
-        f.write("loop_\n")
-        f.write("_rlnSpectralIndex #1\n")
-        f.write("_rlnResolution #2\n")
-        f.write("_rlnSigma2Noise #3\n")
-        for shell, sigma2 in enumerate(np.asarray(state.sigma2_noise)[0]):
-            f.write(f"{int(shell)} 0 {float(sigma2):.12g}\n")
+    with open(path, "w") as f:
+        f.writelines(lines)
 
 
 def _set_star_column(table, column: str, values) -> None:
@@ -1567,35 +1335,22 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     n_images = int(getattr(dataset, "n_images", len(main_star)))
     if len(main_star) != n_images:
         raise ValueError(f"STAR table has {len(main_star)} particles but dataset has {n_images} images")
-    if particle_state.translation_offsets.shape != (n_images, 2):
-        raise ValueError(
-            f"translation_offsets must have shape ({n_images}, 2), got {particle_state.translation_offsets.shape}"
-        )
-    if particle_state.class_assignments.shape != (n_images,):
-        raise ValueError(
-            f"class_assignments must have shape ({n_images},), got {particle_state.class_assignments.shape}"
-        )
-    if particle_state.max_posterior.shape != (n_images,):
-        raise ValueError(f"max_posterior must have shape ({n_images},), got {particle_state.max_posterior.shape}")
 
     output_order = _micrograph_sort_order(main_star)
     table = main_star.copy()
     visited = particle_state.visited
     if visited is None:
-        if particle_state.pose_assignments is not None:
-            visited = np.asarray(particle_state.pose_assignments, dtype=np.int32) >= 0
-        else:
-            visited = np.ones(n_images, dtype=bool)
+        visited = (
+            np.asarray(particle_state.pose_assignments, dtype=np.int32) >= 0
+            if particle_state.pose_assignments is not None
+            else np.ones(n_images, dtype=bool)
+        )
     visited = np.asarray(visited, dtype=bool).reshape(-1)
-    if visited.shape != (n_images,):
-        raise ValueError(f"visited must have shape ({n_images},), got {visited.shape}")
 
     offsets_angstrom = np.asarray(particle_state.translation_offsets, dtype=np.float64) * float(dataset.voxel_size)
     _set_star_column(table, "_rlnOriginXAngst", _format_float_column(offsets_angstrom[:, 0]))
     _set_star_column(table, "_rlnOriginYAngst", _format_float_column(offsets_angstrom[:, 1]))
-    has_legacy_x = _star_column(table, "_rlnOriginX") is not None
-    has_legacy_y = _star_column(table, "_rlnOriginY") is not None
-    if has_legacy_x or has_legacy_y:
+    if _star_column(table, "_rlnOriginX") is not None or _star_column(table, "_rlnOriginY") is not None:
         offsets_pixels = np.asarray(particle_state.translation_offsets, dtype=np.float64)
         _set_star_column(table, "_rlnOriginX", _format_float_column(offsets_pixels[:, 0]))
         _set_star_column(table, "_rlnOriginY", _format_float_column(offsets_pixels[:, 1]))
@@ -1604,22 +1359,16 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     _set_star_column(table, "_rlnClassNumber", class_numbers)
     _set_star_column(table, "_rlnMaxValueProbDistribution", _format_float_column(particle_state.max_posterior))
 
-    if particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None:
-        angle_rot = (
-            table["_rlnAngleRot"].astype(float).to_numpy(copy=True) if "_rlnAngleRot" in table else np.zeros(n_images)
-        )
-        angle_tilt = (
-            table["_rlnAngleTilt"].astype(float).to_numpy(copy=True) if "_rlnAngleTilt" in table else np.zeros(n_images)
-        )
-        angle_psi = (
-            table["_rlnAnglePsi"].astype(float).to_numpy(copy=True) if "_rlnAnglePsi" in table else np.zeros(n_images)
-        )
+    has_rotations = particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None
+    if has_rotations:
+
+        def _angle(col):
+            return table[col].astype(float).to_numpy(copy=True) if col in table else np.zeros(n_images)
+
+        angle_rot, angle_tilt, angle_psi = (_angle(c) for c in ("_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"))
         remaining_rot = visited.copy()
         if particle_state.best_pose_rotations is not None:
             rotations = np.asarray(particle_state.best_pose_rotations, dtype=np.float64)
-            expected = (n_images, 3, 3)
-            if rotations.shape != expected:
-                raise ValueError(f"best_pose_rotations must have shape {expected}, got {rotations.shape}")
             valid_matrix = visited & np.any(np.abs(rotations.reshape(n_images, -1)) > 0.0, axis=1)
             if np.any(valid_matrix):
                 eulers = np.asarray(R_to_relion(rotations[valid_matrix], degrees=True), dtype=np.float64)
@@ -1628,46 +1377,34 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
                 angle_psi[valid_matrix] = eulers[:, 2]
                 remaining_rot[valid_matrix] = False
 
-    if particle_state.best_pose_rotation_ids is not None:
-        rotation_ids = np.asarray(particle_state.best_pose_rotation_ids, dtype=np.int64).reshape(-1)
-        if rotation_ids.shape != (n_images,):
-            raise ValueError(f"best_pose_rotation_ids must have shape ({n_images},), got {rotation_ids.shape}")
-        valid_rot = remaining_rot & (rotation_ids >= 0)
-        if np.any(valid_rot):
-            rotation_orders = None
-            if particle_state.best_pose_rotation_orders is not None:
-                rotation_orders = np.asarray(particle_state.best_pose_rotation_orders, dtype=np.int32).reshape(-1)
-                if rotation_orders.shape != (n_images,):
-                    raise ValueError(
-                        f"best_pose_rotation_orders must have shape ({n_images},), got {rotation_orders.shape}"
+        if particle_state.best_pose_rotation_ids is not None:
+            rotation_ids = np.asarray(particle_state.best_pose_rotation_ids, dtype=np.int64).reshape(-1)
+            valid_rot = remaining_rot & (rotation_ids >= 0)
+            if np.any(valid_rot):
+                rotation_orders = (
+                    np.asarray(particle_state.best_pose_rotation_orders, dtype=np.int32).reshape(-1)
+                    if particle_state.best_pose_rotation_orders is not None
+                    else None
+                )
+                if rotation_orders is None:
+                    max_rotations = int(np.max(rotation_ids[valid_rot])) + 1
+                    inferred_order = next(
+                        (o for o in range(16) if sampling.rotation_grid_size(o) >= max_rotations), None
                     )
-            if rotation_orders is None:
-                max_rotations = int(np.max(rotation_ids[valid_rot])) + 1
-                inferred_order = None
-                for order in range(0, 16):
-                    if sampling.rotation_grid_size(order) >= max_rotations:
-                        inferred_order = order
-                        break
-                if inferred_order is None:
-                    raise ValueError(
-                        f"cannot infer HEALPix order for max rotation id {int(np.max(rotation_ids[valid_rot]))}"
-                    )
-                rotation_orders = np.full(n_images, inferred_order, dtype=np.int32)
-            for order in np.unique(rotation_orders[valid_rot]):
-                order = int(order)
-                order_mask = valid_rot & (rotation_orders == order)
-                if order < 0:
-                    continue
-                eulers = sampling.get_relion_rotation_grid_eulers(order, rotation_index_order="relion")
-                max_id = int(np.max(rotation_ids[order_mask]))
-                if max_id >= eulers.shape[0]:
-                    raise ValueError(
-                        f"best_pose_rotation_ids contains {max_id}, outside order-{order} grid of {eulers.shape[0]} rotations"
-                    )
-                angle_rot[order_mask] = eulers[rotation_ids[order_mask], 0]
-                angle_tilt[order_mask] = eulers[rotation_ids[order_mask], 1]
-                angle_psi[order_mask] = eulers[rotation_ids[order_mask], 2]
-    if particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None:
+                    if inferred_order is None:
+                        raise ValueError(
+                            f"cannot infer HEALPix order for max rotation id {int(np.max(rotation_ids[valid_rot]))}"
+                        )
+                    rotation_orders = np.full(n_images, inferred_order, dtype=np.int32)
+                for order in np.unique(rotation_orders[valid_rot]):
+                    order = int(order)
+                    if order < 0:
+                        continue
+                    order_mask = valid_rot & (rotation_orders == order)
+                    eulers = sampling.get_relion_rotation_grid_eulers(order, rotation_index_order="relion")
+                    angle_rot[order_mask] = eulers[rotation_ids[order_mask], 0]
+                    angle_tilt[order_mask] = eulers[rotation_ids[order_mask], 1]
+                    angle_psi[order_mask] = eulers[rotation_ids[order_mask], 2]
         _set_star_column(table, "_rlnAngleRot", _format_float_column(angle_rot))
         _set_star_column(table, "_rlnAngleTilt", _format_float_column(angle_tilt))
         _set_star_column(table, "_rlnAnglePsi", _format_float_column(angle_psi))
@@ -1788,9 +1525,10 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         with open(config_path, "w") as f:
             json.dump(asdict(opts), f, indent=2, sort_keys=True)
 
-    artifact_sink = (
-        (
-            lambda current, iteration, meta: _write_iteration_artifacts(
+    if opts.write_iter_artifacts:
+
+        def artifact_sink(current, iteration, meta):
+            _write_iteration_artifacts(
                 opts.outputname,
                 current,
                 iteration,
@@ -1800,10 +1538,9 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
                 dataset=dataset,
                 particle_state=particle_state,
             )
-        )
-        if opts.write_iter_artifacts
-        else (lambda *args, **kwargs: None)
-    )
+    else:
+        artifact_sink = lambda *args, **kwargs: None
+
     post_mstep_update = None
     if opts.do_solvent:
         solvent_mask = relion_solvent_mask(
@@ -1812,10 +1549,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             particle_diameter_ang=float(opts.particle_diameter),
             width_mask_edge_px=float(opts.width_mask_edge_px),
         )
-        post_mstep_update = lambda current, _iteration, _meta: relion_solvent_flatten_state(
-            current,
-            mask=solvent_mask,
-        )
+        post_mstep_update = lambda current, _iteration, _meta: relion_solvent_flatten_state(current, mask=solvent_mask)
 
     final_state = run_vdam_iterations(
         state,

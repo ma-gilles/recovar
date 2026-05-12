@@ -245,7 +245,12 @@ def test_dense_initial_model_estep_slices_full_translation_prior_for_pseudo_half
 
 def test_dense_initial_model_estep_meta_includes_optional_profiles(monkeypatch):
     def fake_run_dense_k_class_em(*args, **kwargs):
-        assert kwargs["return_profile"] is True
+        # ``return_profile`` is filtered out by _dense_run_em_kwargs before
+        # reaching run_dense_k_class_em — it's a sparse/local-engine-only
+        # kwarg that run_dense_k_class_em explicitly _reject_kwargs's.
+        # dense_adapter still extracts profile info from the return-value
+        # meta regardless of whether the kwarg flowed through.
+        assert "return_profile" not in kwargs
         return _fake_result_with_profile(
             n_classes=1,
             n=8,
@@ -289,7 +294,9 @@ def test_dense_initial_model_estep_meta_includes_optional_profiles(monkeypatch):
 
 def test_dense_initial_model_estep_pseudo_halfset_meta_includes_per_halfset_profiles(monkeypatch):
     def fake_run_dense_k_class_em(*args, **kwargs):
-        assert kwargs["return_profile"] is True
+        # See note in test_dense_initial_model_estep_meta_includes_optional_profiles
+        # — return_profile is filtered out before the dense entry-point.
+        assert "return_profile" not in kwargs
         return _fake_result_with_profile(
             n_classes=1,
             n=8,
