@@ -193,7 +193,10 @@ def _exhaustive_grid_order_for_state(state: RefinementState) -> int:
     return min(state.healpix_order, RELION_MAX_FULL_GRID_ORDER)
 
 
-from recovar.em.dense_single_volume.debug_dumps import _maybe_dump_noise_update_debug  # noqa: F401
+from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
+    _maybe_dump_noise_update_debug,
+    _save_iteration_intermediates,
+)
 
 # RELION stores windowFourierTransform(in, out, current_size) as a rectangular
 # FFTW half image, but the likelihood support is the nonzero Minvsigma2 mask:
@@ -3068,106 +3071,31 @@ def _run_relion_iteration_loop(
 
         # --- Save intermediate volumes if requested ---
         if save_intermediates_dir is not None:
-            from recovar.output.output import save_volume
-
-            os.makedirs(save_intermediates_dir, exist_ok=True)
-            np.save(os.path.join(save_intermediates_dir, f"it{iteration:03d}_Ft_y_0.npy"), np.asarray(Ft_y_0))
-            np.save(os.path.join(save_intermediates_dir, f"it{iteration:03d}_Ft_y_1.npy"), np.asarray(Ft_y_1))
-            np.save(os.path.join(save_intermediates_dir, f"it{iteration:03d}_Ft_ctf_0.npy"), np.asarray(Ft_ctf_0))
-            np.save(os.path.join(save_intermediates_dir, f"it{iteration:03d}_Ft_ctf_1.npy"), np.asarray(Ft_ctf_1))
-            for k_half in range(2):
-                class_indices_to_save = range(n_classes) if k_class_enabled else (None,)
-                for class_idx in class_indices_to_save:
-                    suffix = f"_class{class_idx + 1}" if class_idx is not None else ""
-                    mean_to_save = means[k_half][class_idx] if class_idx is not None else means[k_half]
-                    save_volume(
-                        np.asarray(mean_to_save).reshape(-1),
-                        os.path.join(
-                            save_intermediates_dir,
-                            f"it{iteration:03d}_half{k_half + 1}{suffix}_reg",
-                        ),
-                        volume_shape=volume_shape,
-                        from_ft=True,
-                        voxel_size=cryo.voxel_size,
-                    )
-                    if unreg_means[k_half] is not None:
-                        unreg_to_save = unreg_means[k_half][class_idx] if class_idx is not None else unreg_means[k_half]
-                        save_volume(
-                            np.asarray(unreg_to_save).reshape(-1),
-                            os.path.join(
-                                save_intermediates_dir,
-                                f"it{iteration:03d}_half{k_half + 1}{suffix}_unreg",
-                            ),
-                            volume_shape=volume_shape,
-                            from_ft=True,
-                            voxel_size=cryo.voxel_size,
-                        )
-            # Save FSC and noise/tau2 per iteration
-            np.save(
-                os.path.join(save_intermediates_dir, f"it{iteration:03d}_fsc.npy"),
-                np.asarray(fsc) if fsc is not None else np.array([], dtype=np.float32),
-            )
-            np.save(
-                os.path.join(save_intermediates_dir, f"it{iteration:03d}_noise.npy"),
-                np.asarray(noise_variance),
-            )
-            for k_half, noise_k in enumerate(noise_variance_per_half):
-                np.save(
-                    os.path.join(save_intermediates_dir, f"it{iteration:03d}_noise_half{k_half + 1}.npy"),
-                    np.asarray(noise_k),
-                )
-            np.save(
-                os.path.join(save_intermediates_dir, f"it{iteration:03d}_tau2.npy"),
-                np.asarray(mean_variance),
-            )
-            # Save hard assignments for angular error analysis
-            for k_half in range(2):
-                if hard_assignments[k_half] is not None:
-                    np.save(
-                        os.path.join(
-                            save_intermediates_dir,
-                            f"it{iteration:03d}_ha_half{k_half + 1}.npy",
-                        ),
-                        hard_assignments[k_half],
-                    )
-            # Save per-iteration metadata
-            iter_meta = {
-                "iteration": iteration,
-                "current_size": int(cs),
-                "n_rotations": int(
-                    rotation_grid_size(local_search_order) if use_local else effective_rotations.shape[0]
-                ),
-                "n_translations": int(current_translations.shape[0]),
-                "healpix_order": int(state.healpix_order),
-                "local_search": bool(use_local),
-                "sigma_rot": float(state.sigma_rot),
-            }
-            np.save(
-                os.path.join(save_intermediates_dir, f"it{iteration:03d}_meta.npy"),
-                iter_meta,
-            )
-            # Save the effective rotation grid for angular error computation
-            np.save(
-                os.path.join(save_intermediates_dir, f"it{iteration:03d}_rotations.npy"),
-                (np.asarray(effective_rotations) if not use_local else np.empty((0, 3, 3), dtype=np.float32)),
-            )
-            np.save(
-                os.path.join(save_intermediates_dir, f"it{iteration:03d}_translations.npy"),
-                np.asarray(current_translations),
-            )
-            for k_half in range(2):
-                if coarse_ha[k_half] is not None:
-                    np.save(
-                        os.path.join(
-                            save_intermediates_dir,
-                            f"it{iteration:03d}_coarse_ha_half{k_half + 1}.npy",
-                        ),
-                        np.asarray(coarse_ha[k_half], dtype=np.int32),
-                    )
-            logger.info(
-                "Saved intermediate volumes to %s (iteration %d)",
+            _save_iteration_intermediates(
                 save_intermediates_dir,
-                iteration,
+                iteration=iteration,
+                Ft_y_0=Ft_y_0,
+                Ft_y_1=Ft_y_1,
+                Ft_ctf_0=Ft_ctf_0,
+                Ft_ctf_1=Ft_ctf_1,
+                means=means,
+                unreg_means=unreg_means,
+                fsc=fsc,
+                noise_variance=noise_variance,
+                noise_variance_per_half=noise_variance_per_half,
+                mean_variance=mean_variance,
+                hard_assignments=hard_assignments,
+                coarse_ha=coarse_ha,
+                effective_rotations=effective_rotations,
+                current_translations=current_translations,
+                use_local=use_local,
+                local_search_order=local_search_order,
+                cs=cs,
+                state=state,
+                n_classes=n_classes,
+                k_class_enabled=k_class_enabled,
+                volume_shape=volume_shape,
+                voxel_size=cryo.voxel_size,
             )
 
         # --- Compute ave_Pmax from the actual E-step maxima ---
