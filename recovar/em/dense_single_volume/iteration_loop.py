@@ -335,6 +335,88 @@ class HalfScoreResult:
     pose_rotation_eulers: object | None = None
 
 
+@dataclass(frozen=True)
+class PerHalfOutputs:
+    """Mutable per-half E-step outputs grouped behind one owner."""
+
+    hard_assignments: list
+    Ft_y: list
+    Ft_ctf: list
+    coarse_ha: list
+    max_posterior: list
+    rotation_posterior: list
+    class_assignments: list
+    class_posterior: list
+    class_rotation_posterior: list
+    noise_stats: list
+    noise_stats_per_class: list
+    best_pose_rotations: list
+    best_pose_rotation_eulers: list
+    best_pose_translations: list
+    translation_search_bases: list
+    pose_rotations: list
+    pose_rotation_eulers: list
+
+    @classmethod
+    def empty(cls) -> "PerHalfOutputs":
+        return cls(
+            hard_assignments=[None, None],
+            Ft_y=[None, None],
+            Ft_ctf=[None, None],
+            coarse_ha=[None, None],
+            max_posterior=[None, None],
+            rotation_posterior=[None, None],
+            class_assignments=[None, None],
+            class_posterior=[None, None],
+            class_rotation_posterior=[None, None],
+            noise_stats=[None, None],
+            noise_stats_per_class=[None, None],
+            best_pose_rotations=[None, None],
+            best_pose_rotation_eulers=[None, None],
+            best_pose_translations=[None, None],
+            translation_search_bases=[None, None],
+            pose_rotations=[None, None],
+            pose_rotation_eulers=[None, None],
+        )
+
+    def for_half(self, idx: int) -> dict:
+        return {name: getattr(self, name)[idx] for name in self.__dataclass_fields__}
+
+    def update_from(self, idx: int, hs: HalfScoreResult) -> None:
+        self.hard_assignments[idx] = hs.ha
+        self.Ft_y[idx] = hs.Ft_y
+        self.Ft_ctf[idx] = hs.Ft_ctf
+        self.noise_stats[idx] = hs.noise_stats
+        self.max_posterior[idx] = np.asarray(
+            hs.em_stats.max_posterior_per_image,
+            dtype=np.float32,
+        )
+        self.rotation_posterior[idx] = np.asarray(
+            hs.em_stats.rotation_posterior_sums,
+            dtype=np.float32,
+        )
+        if hs.class_assignments is not None:
+            self.class_assignments[idx] = hs.class_assignments
+        if hs.class_posterior is not None:
+            self.class_posterior[idx] = hs.class_posterior
+        if hs.class_rotation_posterior is not None:
+            self.class_rotation_posterior[idx] = hs.class_rotation_posterior
+        if hs.noise_stats_per_class is not None:
+            self.noise_stats_per_class[idx] = hs.noise_stats_per_class
+        if hs.best_pose_rotations is not None:
+            self.best_pose_rotations[idx] = hs.best_pose_rotations
+        if hs.best_pose_rotation_eulers is not None:
+            self.best_pose_rotation_eulers[idx] = hs.best_pose_rotation_eulers
+        if hs.best_pose_translations is not None:
+            self.best_pose_translations[idx] = hs.best_pose_translations
+        if hs.coarse_ha is not None:
+            self.coarse_ha[idx] = hs.coarse_ha
+        if hs.pose_rotations is not None:
+            self.pose_rotations[idx] = hs.pose_rotations
+        if hs.pose_rotation_eulers is not None:
+            self.pose_rotation_eulers[idx] = hs.pose_rotation_eulers
+
+
 def _score_kclass_firstiter_cc_pass2(
     *,
     experiment_dataset,
@@ -1423,9 +1505,10 @@ def _run_relion_iteration_loop(
     fsc_history = []
     pixel_resolutions = []
     wall_times = []
-    hard_assignments = [None, None]
+    per_half = PerHalfOutputs.empty()
+    hard_assignments = per_half.hard_assignments
     previous_assignments = [None, None]
-    class_assignments = [None, None]
+    class_assignments = per_half.class_assignments
     previous_class_assignments = [None, None]
     previous_best_rotations = [None, None]
     relion_half_inputs = _RelionHalfInputState.from_initial_values(
@@ -1434,9 +1517,9 @@ def _run_relion_iteration_loop(
         image_corrections=init_image_corrections,
         scale_corrections=init_scale_corrections,
     )
-    max_posterior_per_half = [None, None]
-    rotation_posterior_per_half = [None, None]
-    class_rotation_posterior_per_half = [None, None]
+    max_posterior_per_half = per_half.max_posterior
+    rotation_posterior_per_half = per_half.rotation_posterior
+    class_rotation_posterior_per_half = per_half.class_rotation_posterior
     significant_counts = []
     data_vs_prior_trajectory = []
     previous_data_vs_prior_for_scheduling = None
@@ -2029,16 +2112,22 @@ def _run_relion_iteration_loop(
         # Track the rotation grids used for pose extraction.
         # When adaptive oversampling is active, ha_k indices refer to the
         # oversampled grid (from pass 2), not effective_rotations.
-        pose_rotations = [None, None]  # rotations to use with ha for poses
-        pose_rotation_eulers = [None, None]
-        best_pose_rotations = [None, None]
-        best_pose_rotation_eulers = [None, None]
-        best_pose_translations = [None, None]
-        translation_search_bases = [None, None]
+        per_half = PerHalfOutputs.empty()
+        hard_assignments = per_half.hard_assignments
+        class_assignments = per_half.class_assignments
+        max_posterior_per_half = per_half.max_posterior
+        rotation_posterior_per_half = per_half.rotation_posterior
+        class_rotation_posterior_per_half = per_half.class_rotation_posterior
+        pose_rotations = per_half.pose_rotations  # rotations to use with ha for poses
+        pose_rotation_eulers = per_half.pose_rotation_eulers
+        best_pose_rotations = per_half.best_pose_rotations
+        best_pose_rotation_eulers = per_half.best_pose_rotation_eulers
+        best_pose_translations = per_half.best_pose_translations
+        translation_search_bases = per_half.translation_search_bases
         # Coarse-grid assignments for local search tracking (always indexed
         # into effective_rotations, even when adaptive oversampling is used).
-        coarse_ha = [None, None]
-        class_posterior_per_half = [None, None]
+        coarse_ha = per_half.coarse_ha
+        class_posterior_per_half = per_half.class_posterior
 
         if use_adaptive:
             # --- TWO-PASS ADAPTIVE OVERSAMPLING (RELION parity) ---
@@ -2072,11 +2161,11 @@ def _run_relion_iteration_loop(
                 (f"{float(particle_diameter_ang):.1f} A" if particle_diameter_ang is not None else "box_size"),
             )
 
-        noise_stats_per_half = [None, None]
         # D.2: per-class noise stats (K-tuple of NoiseStats per half) for the
         # per-class sigma_offset C1 update at end-of-iter. K=1 paths leave
         # this None; K-class paths populate from k_class_result.noise_stats.
-        noise_stats_per_half_per_class = [None, None]
+        noise_stats_per_half = per_half.noise_stats
+        noise_stats_per_half_per_class = per_half.noise_stats_per_class
 
         for k in range(2):
             noise_variance_k = noise_variance_per_half[k]
@@ -2198,11 +2287,15 @@ def _run_relion_iteration_loop(
                     wsum_sigma2_offset=0.0,
                     sumw=0.0,
                 )
-                noise_stats_per_half[k] = noise_stats_k
-                hard_assignments[k] = ha_k
                 coarse_ha[k] = ha_k
-                max_posterior_per_half[k] = np.zeros(0, dtype=np.float32)
-                rotation_posterior_per_half[k] = np.zeros(n_rot_for_stats, dtype=np.float32)
+                empty_result = HalfScoreResult(
+                    ha=ha_k,
+                    Ft_y=Ft_y_k,
+                    Ft_ctf=Ft_ctf_k,
+                    em_stats=em_stats_k,
+                    noise_stats=noise_stats_k,
+                )
+                per_half.update_from(k, empty_result)
                 if k == 0:
                     Ft_y_0, Ft_ctf_0 = Ft_y_k, Ft_ctf_k
                 else:
@@ -2275,6 +2368,7 @@ def _run_relion_iteration_loop(
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
                 coarse_ha[k] = ha_k
+                score_result = local_result
 
             elif use_adaptive:
                 adaptive_result = _score_half_dense(
@@ -2331,6 +2425,7 @@ def _run_relion_iteration_loop(
                 pose_rotations[k] = effective_rotations
                 pose_rotation_eulers[k] = effective_rotation_eulers
                 coarse_ha[k] = ha_k
+                score_result = adaptive_result
 
             else:
                 # --- SINGLE-PASS E+M (no adaptive oversampling) ---
@@ -2381,6 +2476,7 @@ def _run_relion_iteration_loop(
                 pose_rotations[k] = effective_rotations
                 pose_rotation_eulers[k] = effective_rotation_eulers
                 coarse_ha[k] = ha_k  # same grid, no oversampling
+                score_result = single_pass_result
 
                 # --- Manifest dump for deterministic replay (Phase 0.1) ---
                 if save_intermediates_dir is not None:
@@ -2431,15 +2527,7 @@ def _run_relion_iteration_loop(
             # low_resol_join_halves step below — we need both halves'
             # Ft_y / Ft_ctf accumulators in hand before we can average
             # the low-frequency shells across the two halves.
-            hard_assignments[k] = ha_k
-            max_posterior_per_half[k] = np.asarray(
-                em_stats_k.max_posterior_per_image,
-                dtype=np.float32,
-            )
-            rotation_posterior_per_half[k] = np.asarray(
-                em_stats_k.rotation_posterior_sums,
-                dtype=np.float32,
-            )
+            per_half.update_from(k, score_result)
 
             if k == 0:
                 Ft_y_0, Ft_ctf_0 = Ft_y_k, Ft_ctf_k
