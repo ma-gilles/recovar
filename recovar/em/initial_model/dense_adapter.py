@@ -452,17 +452,11 @@ def _sparse_pass2_profile_summary(
         if n_significant_by_image
         else np.zeros(0, dtype=np.int32)
     )
-    if all_counts.size:
-        mean_significant = float(np.mean(all_counts))
-        max_significant = int(np.max(all_counts))
-    else:
-        mean_significant = 0.0
-        max_significant = 0
     return {
         "pass1_time_s": float(pass1_time_s),
         "pass2_time_s": float(pass2_time_s),
-        "mean_significant_samples": mean_significant,
-        "max_significant_samples": max_significant,
+        "mean_significant_samples": float(np.mean(all_counts)) if all_counts.size else 0.0,
+        "max_significant_samples": int(np.max(all_counts)) if all_counts.size else 0,
     }
 
 
@@ -736,13 +730,7 @@ def _run_sparse_pass2_initial_model_estep(
 
 
 def reference_to_dense_means(references: np.ndarray) -> np.ndarray:
-    """Convert recovar-frame real-space InitialModel references to dense EM means.
-
-    VDAM stores ``Iref`` in recovar's real-space volume frame. The dense EM engine
-    scores unnormalised, centered Fourier volumes. Keep this conversion in
-    that scoring frame. The BPref bridge applies RELION's sign/scale convention
-    later when moving dense M-step accumulators back into VDAM.
-    """
+    """Convert recovar-frame InitialModel references to unnormalised centered FFTs for dense scoring."""
     import jax.numpy as jnp
 
     from recovar.core import fourier_transform_utils as ftu
@@ -755,8 +743,7 @@ def reference_to_dense_means(references: np.ndarray) -> np.ndarray:
     means = []
     for ref in refs:
         corrected, _ = griddingCorrect(jnp.asarray(ref), n, padding_factor=1, order=1)
-        ft = ftu.get_dft3(corrected).reshape(-1)
-        means.append(np.asarray(ft))
+        means.append(np.asarray(ftu.get_dft3(corrected).reshape(-1)))
     return np.asarray(means, dtype=np.complex64)
 
 
@@ -767,26 +754,19 @@ def _resolve_class_inputs(
     if config.means is not None:
         means = config.means
     elif config.relion_projector_frame:
-        current_size = state.current_size if state.current_size > 0 else state.ori_size
         means = reference_to_relion_projector_dense_means(
             state.Iref,
-            current_size=current_size,
+            current_size=state.current_size if state.current_size > 0 else state.ori_size,
             padding_factor=config.padding_factor,
         )
     else:
         means = reference_to_dense_means(state.Iref)
-    if config.mean_variance is not None:
-        mean_variance = config.mean_variance
-    else:
-        mean_variance = np.abs(np.asarray(means)) ** 2
+    mean_variance = config.mean_variance if config.mean_variance is not None else np.abs(np.asarray(means)) ** 2
     return means, mean_variance
 
 
 def _empty_accumulator(state: InitialModelState, class_idx: int, halfset_idx: int) -> VdamAccumulator:
-    if state.current_size <= 0:
-        r_max = state.ori_size // 2
-    else:
-        r_max = state.current_size // 2
+    r_max = state.ori_size // 2 if state.current_size <= 0 else state.current_size // 2
     if r_max >= state.ori_size // 2:
         shape = (state.ori_size, state.ori_size, state.ori_size // 2 + 1)
     else:
@@ -916,12 +896,7 @@ def run_dense_initial_model_estep(
     particle_ids: np.ndarray | None = None,
     halfset_ids: np.ndarray | None = None,
 ) -> DenseInitialModelEstepResult:
-    """Run the InitialModel E-step and return VDAM accumulators.
-
-    The dense K-class engine sees all classes at once. When the active engine
-    does not expose reconstruction-group accumulators, pseudo-halfsets run as
-    separate E-steps with shared class/pose priors.
-    """
+    """Run the InitialModel E-step; pseudo-halfsets run as separate E-steps with shared priors."""
     class_log_priors = (
         class_log_priors_from_state(state) if config.class_log_priors is None else np.asarray(config.class_log_priors)
     )
