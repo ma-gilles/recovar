@@ -63,17 +63,10 @@ def vdam_m_step_single_class(
     grad_min_resol_shell: float = 0.0,
     padding_factor: int = 1,
 ) -> InitialModelState:
-    """Run the VDAM M-step for a single class, returning an updated state.
+    """VDAM M-step for one class (per-class loop matches RELION's binding shape).
 
-    `accum_h1` is None when `pseudo_halfsets` is off.
-
-    For pseudo-halfsets: the FSC / noise-power estimate comes from the
-    difference of the two halfset data arrays inside `applyMomenta`; we
-    then feed `use_fsc=False` so `reconstructGrad` derives the FSC
-    internally from `mom1_noise_power`.
-
-    This is deliberately per-class rather than vectorised over K so the
-    RELION binding calls match the per-class loop shape RELION uses.
+    Pseudo-halfsets: FSC/noise-power is derived from the halfset-data difference
+    in ``applyMomenta``; ``reconstructGrad`` then uses ``mom1_noise_power``.
     """
     if not (0 <= k < state.K):
         raise ValueError(f"class index {k} out of range")
@@ -85,17 +78,15 @@ def vdam_m_step_single_class(
     bind = _get_bindings()
     ori_size = state.ori_size
     r_max = _r_max_from_state(state, padding_factor)
-    # RELION uses different EMA constants for the two moments:
-    #   getFristMoment default lambda = 0.9   (backprojector.h:335)
-    #   getSecondMoment default lambda = 0.999 (backprojector.h:343)
-    mu_first = 0.9
-    mu_second = 0.999
+    # backprojector.h:335/343 EMA defaults
+    mu_first, mu_second = 0.9, 0.999
 
     import os as _os
 
     _dump_dir = _os.environ.get("RECOVAR_MSTEP_DUMP_DIR")
-    _dump_iter = int(_os.environ.get("RECOVAR_MSTEP_DUMP_ITER", "1"))
-    _do_dump = _dump_dir is not None and int(getattr(state, "iter", 0)) == _dump_iter
+    _do_dump = _dump_dir is not None and int(getattr(state, "iter", 0)) == int(
+        _os.environ.get("RECOVAR_MSTEP_DUMP_ITER", "1")
+    )
     _dump_prefix = f"c{k}_" if state.K > 1 else ""
 
     def _dump(name, arr):
@@ -179,54 +170,26 @@ def vdam_m_step_single_class(
         )
         _dump("m2_post", new_Igrad2[k])
 
-    # Step 5. applyMomenta — returns (post_apply_data, mom1_noise_power)
-    # For the non-halfset case, mom1_noise_power stays empty; pass data twice
-    # so RELION's `do_half = false` branch triggers.
+    # Step 5. applyMomenta. Non-halfset: pass m1 twice to trigger do_half=false.
     m1_h0 = new_Igrad1[slot_h0]
-    if state.pseudo_halfsets:
-        m1_h1 = new_Igrad1[slot_h1]
-    else:
-        m1_h1 = m1_h0  # RELION checks nzyxdim mismatch to decide; pass-through
-
-    post_data_tuple = bind.vdam_apply_momenta(
-        data_h0,  # any one of the halfset datas — reconstructGrad reads
-        # data from PPref anyway, so this argument is used for
-        # shape only (internal BackProjector copy)
-        m1_h0,
-        m1_h1,
-        new_Igrad2[k],
-        ori_size,
-        padding_factor,
-        1,
-        r_max,
+    m1_h1 = new_Igrad1[slot_h1] if state.pseudo_halfsets else m1_h0
+    _post_data, mom1_noise_power = bind.vdam_apply_momenta(
+        data_h0, m1_h0, m1_h1, new_Igrad2[k], ori_size, padding_factor, 1, r_max
     )
-    # We want the noise power for reconstructGrad's internal FSC estimate
-    _post_data, mom1_noise_power = post_data_tuple
-    mom1_noise_power = np.asarray(mom1_noise_power)
     _post_data = np.asarray(_post_data)
+    mom1_noise_power = np.asarray(mom1_noise_power)
     _dump("post_apply_data", _post_data)
     _dump("mom1_noise_power", mom1_noise_power)
 
-    # Step 6. updateSSNRarrays. RELION calls this on the BPref after the
-    # gradient-momentum pipeline and before reconstructGrad, with
-    # update_tau2_with_fsc=false in gradient mode. The resulting
-    # data_vs_prior_class drives updateCurrentResolution for the next
-    # expectation step.
+    # Step 6. updateSSNRarrays (update_tau2_with_fsc=false in gradient mode);
+    # drives updateCurrentResolution for the next expectation step.
     new_tau2_class = state.tau2_class.copy()
     new_sigma2_class = state.sigma2_class.copy()
     new_fourier_coverage_class = state.fourier_coverage_class.copy()
     new_data_vs_prior_class = state.data_vs_prior_class.copy()
     fsc_for_ssnr = np.asarray(state.fsc_halves_class[0], dtype=np.float64)
-    # In K=1 pseudo-halfset mode each accumulator covers ~all particles with
-    # a different random pose ordering, so accum_h0.weight alone is biased
-    # ~−1% vs RELION's iter-1 single-halfset BPref weight. Averaging h0+h1
-    # recovers the unified-halfset weight RELION passes to updateSSNRarrays
-    # and aligns autosampling timing with RELION (HEALPix 1→2 at iter-10).
-    #
-    # For K>1, particles are split across classes by softmax posterior so
-    # h0 and h1 per-class accumulators are not symmetric. Averaging in that
-    # regime regressed K=4 CC 0.997→0.90 by making the SsnrMap inconsistent
-    # with the reconstruction data; keep accum_h0 alone for K>1.
+    # K=1: avg(h0,h1) matches RELION's unified BPref weight (HEALPix 1→2 at iter-10).
+    # K>1: h0/h1 per-class accumulators are asymmetric, so averaging regresses K=4 CC.
     if accum_h1 is not None and state.K == 1:
         weight_for_ssnr = 0.5 * (accum_h0.weight + accum_h1.weight)
     else:
@@ -253,18 +216,9 @@ def vdam_m_step_single_class(
     _dump("data_vs_prior_post_ssnr", new_data_vs_prior_class[k])
     _dump("fourier_coverage_post_ssnr", new_fourier_coverage_class[k])
 
-    # Step 7. reconstructGrad updates Iref[k].
-    # Pass weight from the h0 accumulator and the noise-power spectrum emitted
-    # by applyMomenta. This is the RELION pseudo-halfset path; omitting
-    # mom1_noise_power silently falls back to the wrong FSC/tau weighting.
-    #
-    # Frame: state.Iref[k] is in recovar's real-space frame (negated &
-    # axis-flipped relative to RELION), but vdam_reconstruct_grad runs
-    # inside RELION's BackProjector — its FFT must see the same volume
-    # RELION's reconstructGrad would. Convert recovar↔RELION on the
-    # boundary so the gradient update is computed in the same frame as
-    # the accumulators (which the iter-1 BPref test verifies are RELION
-    # frame at machine precision).
+    # Step 7. reconstructGrad updates Iref[k] (RELION pseudo-halfset path —
+    # mom1_noise_power required for correct FSC/tau weighting). Convert
+    # recovar↔RELION at the boundary so the gradient is in the same frame as the accumulators.
     from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
 
     iref_relion_in = recovar_volume_to_relion(np.asarray(state.Iref[k]))
@@ -305,8 +259,6 @@ def vdam_m_step_single_class(
     new_state.sigma2_class = new_sigma2_class
     new_state.data_vs_prior_class = new_data_vs_prior_class
     new_state.fourier_coverage_class = new_fourier_coverage_class
-    # mom1_noise_power per class -> could be exposed via state if Phase 4
-    # needs it for scoring; left internal for now.
     return new_state
 
 
@@ -319,11 +271,10 @@ def vdam_m_step(
     grad_min_resol_shell: float = 0.0,
     padding_factor: int = 1,
 ) -> InitialModelState:
-    """Run the full VDAM M-step across all K classes.
+    """Full VDAM M-step over K classes.
 
-    `accumulators` must hold `2K` entries when pseudo_halfsets is active
-    (halfset 0 of each class first, then halfset 1), else `K` entries.
-    The ordering mirrors RELION's BackProjector indexing.
+    ``accumulators`` holds ``2K`` entries when ``pseudo_halfsets`` is active
+    (halfset 0 of each class first, then halfset 1), else ``K``.
     """
     K = state.K
     expected = 2 * K if state.pseudo_halfsets else K
