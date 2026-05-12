@@ -410,26 +410,11 @@ def reference_to_relion_projector_dense_means(
             2,
         )
         dense = _relion_projector_to_dense_volume(np.asarray(projector_data), n)
-        # Diagnostic-only env-controlled override of the historical -N^2 scaling.
-        # The -N^2 factor was a per-particle-constant compensation that biases
-        # per-class score gaps (~3 nat) when projections differ in magnitude.
-        # See project_k2_c2_cc_root_cause_2026_05_03 memory.
-        scale_env = os.environ.get("RECOVAR_DENSE_MEANS_SCALE")
-        if scale_env is None:
-            scale = -(n**2)
-        else:
-            # Allow values like "1", "-1", "-N2", "-N", "1/-N2", or a literal float.
-            tok = scale_env.strip()
-            if tok == "-N2":
-                scale = -(n**2)
-            elif tok == "N2":
-                scale = float(n**2)
-            elif tok == "1":
-                scale = 1.0
-            elif tok == "-1":
-                scale = -1.0
-            else:
-                scale = float(tok)
+        # RECOVAR_DENSE_MEANS_SCALE diag override (see project_k2_c2_cc_root_cause_2026_05_03).
+        tok = (os.environ.get("RECOVAR_DENSE_MEANS_SCALE") or "-N2").strip()
+        scale = {"-N2": -(n**2), "N2": float(n**2)}.get(tok)
+        if scale is None:
+            scale = float(tok)
         means.append(dense.reshape(-1) * scale)
     return np.asarray(means, dtype=np.complex64)
 
@@ -453,26 +438,6 @@ def _coarse_translations_from_config(
         step = _translation_step_from_grid(np.asarray(config.translations, dtype=np.float32))
     max_offset = float(np.max(np.abs(np.asarray(config.translations, dtype=np.float32))))
     return get_translation_grid(max_pixel=max_offset, pixel_offset=step).astype(np.float32)
-
-
-def _sparse_pass2_result_to_accumulators(
-    result,
-    state: InitialModelState,
-    *,
-    halfset_idx: int,
-    relion_bpref_frame: bool,
-    relion_projector_frame: bool,
-    padding_factor: int,
-) -> list[VdamAccumulator]:
-    return _arrays_to_accumulators(
-        result.Ft_y,
-        result.Ft_ctf,
-        state,
-        halfset_idx=halfset_idx,
-        relion_bpref_frame=relion_bpref_frame,
-        relion_projector_frame=relion_projector_frame,
-        padding_factor=padding_factor,
-    )
 
 
 # (attr_name_on_result, dtype) for fields harvested per halfset and concatenated.
@@ -787,8 +752,9 @@ def _run_sparse_pass2_initial_model_estep(
         pass2_time_s += time.time() - t0
         halfset_results[int(halfset_idx)] = result
         accumulators.extend(
-            _sparse_pass2_result_to_accumulators(
-                result,
+            _arrays_to_accumulators(
+                result.Ft_y,
+                result.Ft_ctf,
                 state,
                 halfset_idx=int(halfset_idx),
                 relion_bpref_frame=config.relion_bpref_frame,
@@ -876,26 +842,6 @@ def _empty_accumulator(state: InitialModelState, class_idx: int, halfset_idx: in
         weight=np.zeros(shape, dtype=np.float64),
         class_idx=class_idx,
         halfset_idx=halfset_idx,
-    )
-
-
-def _result_to_accumulators(
-    result,
-    state: InitialModelState,
-    *,
-    halfset_idx: int,
-    relion_bpref_frame: bool,
-    relion_projector_frame: bool,
-    padding_factor: int,
-) -> list[VdamAccumulator]:
-    return _arrays_to_accumulators(
-        result.Ft_y,
-        result.Ft_ctf,
-        state,
-        halfset_idx=halfset_idx,
-        relion_bpref_frame=relion_bpref_frame,
-        relion_projector_frame=relion_projector_frame,
-        padding_factor=padding_factor,
     )
 
 
@@ -1074,8 +1020,9 @@ def run_dense_initial_model_estep(
             ),
         )
         halfset_results[halfset_idx] = result
-        by_halfset[halfset_idx] = _result_to_accumulators(
-            result,
+        by_halfset[halfset_idx] = _arrays_to_accumulators(
+            result.Ft_y,
+            result.Ft_ctf,
             state,
             halfset_idx=halfset_idx,
             relion_bpref_frame=config.relion_bpref_frame,
@@ -1086,61 +1033,34 @@ def run_dense_initial_model_estep(
     accumulators: list[VdamAccumulator] = []
     for halfset_idx in sorted(by_halfset):
         accumulators.extend(by_halfset[halfset_idx])
-    selected_particle_ids = []
-    pose_assignments = []
-    class_assignments = []
-    max_posterior = []
-    best_pose_rotations = []
-    best_pose_translations = []
-    best_pose_rotation_ids = []
+
+    selected_particle_ids: list[np.ndarray] = []
+    field_lists: dict[str, list[np.ndarray]] = {attr: [] for attr, _ in _SPARSE_PASS2_RESULT_FIELDS}
+    max_posterior: list[np.ndarray] = []
     for halfset_idx, image_indices in groups:
         result = halfset_results.get(halfset_idx)
         if result is None:
             continue
-        result_pose_assignments = getattr(result, "pose_assignments", None)
-        result_class_assignments = getattr(result, "class_assignments", None)
-        result_best_pose_rotations = getattr(result, "best_pose_rotations", None)
-        result_best_pose_translations = getattr(result, "best_pose_translations", None)
-        result_best_pose_rotation_ids = getattr(result, "best_pose_rotation_ids", None)
-        result_stats = getattr(result, "stats", None)
-        result_pmax = None if result_stats is None else getattr(result_stats, "max_posterior_per_image", None)
-        if (
-            result_pose_assignments is None
-            and result_class_assignments is None
-            and result_pmax is None
-            and result_best_pose_rotations is None
-            and result_best_pose_translations is None
-            and result_best_pose_rotation_ids is None
-        ):
+        attrs = {attr: getattr(result, attr, None) for attr, _ in _SPARSE_PASS2_RESULT_FIELDS}
+        stats = getattr(result, "stats", None)
+        pmax = None if stats is None else getattr(stats, "max_posterior_per_image", None)
+        if pmax is None and all(v is None for v in attrs.values()):
             continue
         selected_particle_ids.append(np.asarray(image_indices, dtype=np.int64))
-        if result_pose_assignments is not None:
-            pose_assignments.append(np.asarray(result_pose_assignments, dtype=np.int32))
-        if result_class_assignments is not None:
-            class_assignments.append(np.asarray(result_class_assignments, dtype=np.int32))
-        if result_pmax is not None:
-            max_posterior.append(np.asarray(result_pmax, dtype=np.float32))
-        if result_best_pose_rotations is not None:
-            best_pose_rotations.append(np.asarray(result_best_pose_rotations, dtype=np.float32))
-        if result_best_pose_translations is not None:
-            best_pose_translations.append(np.asarray(result_best_pose_translations, dtype=np.float32))
-        if result_best_pose_rotation_ids is not None:
-            best_pose_rotation_ids.append(np.asarray(result_best_pose_rotation_ids, dtype=np.int32))
+        for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+            if attrs[attr] is not None:
+                field_lists[attr].append(np.asarray(attrs[attr], dtype=dtype))
+        if pmax is not None:
+            max_posterior.append(np.asarray(pmax, dtype=np.float32))
+
     meta = _estep_meta(halfset_results)
     if selected_particle_ids:
         meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
-    if pose_assignments:
-        meta["pose_assignments"] = np.concatenate(pose_assignments).astype(np.int32, copy=False)
-    if class_assignments:
-        meta["class_assignments"] = np.concatenate(class_assignments).astype(np.int32, copy=False)
+    for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+        if field_lists[attr]:
+            meta[attr] = np.concatenate(field_lists[attr]).astype(dtype, copy=False)
     if max_posterior:
         meta["max_posterior_per_image"] = np.concatenate(max_posterior).astype(np.float32, copy=False)
-    if best_pose_rotations:
-        meta["best_pose_rotations"] = np.concatenate(best_pose_rotations).astype(np.float32, copy=False)
-    if best_pose_translations:
-        meta["best_pose_translations"] = np.concatenate(best_pose_translations).astype(np.float32, copy=False)
-    if best_pose_rotation_ids:
-        meta["best_pose_rotation_ids"] = np.concatenate(best_pose_rotation_ids).astype(np.int32, copy=False)
     return DenseInitialModelEstepResult(
         accumulators=accumulators,
         meta=meta,
