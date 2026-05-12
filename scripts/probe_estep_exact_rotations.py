@@ -92,7 +92,7 @@ def main() -> None:
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
     from recovar.em.dense_single_volume.em_engine import run_em
-    from recovar.em.initial_model.gpu_pipeline import _split_halfset_particle_ids
+    from recovar.em.initial_model.dense_adapter import split_pseudo_halfset_particle_ids as _split_halfset_particle_ids
     from recovar.reconstruction.noise import make_radial_noise
     from recovar.utils.helpers import load_relion_volume
 

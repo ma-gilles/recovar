@@ -364,7 +364,9 @@ def test_estep_bpref_forward_parity():
     from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
     from recovar.em.initial_model import initialise_denovo_state
     from recovar.em.initial_model.dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
-    from recovar.em.initial_model.gpu_pipeline import _split_halfset_particle_ids
+    from recovar.em.initial_model.dense_adapter import (
+        split_pseudo_halfset_particle_ids as _split_halfset_particle_ids,
+    )
     from recovar.em.sampling import (
         apply_relion_translation_perturbation,
         get_oversampled_rotation_grid_from_samples,
