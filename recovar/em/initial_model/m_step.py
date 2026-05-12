@@ -1,36 +1,8 @@
 """VDAM M-step: gradient moment update + reference reconstruction.
 
-Pipeline per class k:
-
-  1. Raw accumulation of (data_k, weight_k) from the posterior-weighted
-     backprojection of particles in this halfset (handled in Phase 4 by
-     the E-step adapter / dense-path backprojector).
-
-  2. `reweightGrad(data_k, weight_k)` — divides by max(1, weight) to
-     normalise accumulator (backprojector.cpp:1933).
-
-  3. `getFristMoment(Igrad1[h*K + k], reweighted_data_k, mu)` — EMA
-     first moment update per halfset slot (backprojector.cpp:1943).
-
-  4. `getSecondMoment(Igrad2[k], data_h0, data_h1, mu)` — normalised
-     difference second moment (backprojector.cpp:1975).
-
-  5. `applyMomenta(Igrad1[h0_k], Igrad1[h1_k], Igrad2[k])` — combine
-     momenta + derive mom1_noise_power (backprojector.cpp:2000).
-
-  6. `updateSSNRarrays(...)` — update tau2/data-vs-prior spectra from the
-     post-momentum BPref weights. RELION uses these spectra to drive the next
-     iteration's current-resolution/current-size pointers.
-
-  7. `reconstructGrad(Iref[k], fsc_halves_class[k],
-                      grad_current_stepsize, tau2_fudge_factor,
-                      grad_min_resol_shell, use_fsc=False)` —
-     apply the gradient update to Iref (backprojector.cpp:2054).
-
-All six primitives are routed through the RELION C++ bindings added in
-Phase 2 so the M-step is bit-identical to the RELION implementation from
-the first commit. A later-phase pure-JAX port is possible but out of scope
-for parity.
+Routes each step through the RELION C++ binding (backprojector.cpp:1933-2054)
+for bit-identical parity: reweightGrad, getFristMoment, getSecondMoment,
+applyMomenta, updateSSNRarrays, reconstructGrad.
 """
 
 from __future__ import annotations
@@ -354,26 +326,17 @@ def vdam_m_step(
     The ordering mirrors RELION's BackProjector indexing.
     """
     K = state.K
-    if state.pseudo_halfsets:
-        if len(accumulators) != 2 * K:
-            raise ValueError(f"expected 2K={2 * K} accumulators, got {len(accumulators)}")
-    else:
-        if len(accumulators) != K:
-            raise ValueError(f"expected K={K} accumulators, got {len(accumulators)}")
+    expected = 2 * K if state.pseudo_halfsets else K
+    if len(accumulators) != expected:
+        raise ValueError(f"expected {expected} accumulators, got {len(accumulators)}")
 
     out = state
     for k in range(K):
-        if state.pseudo_halfsets:
-            accum_h0 = accumulators[k]
-            accum_h1 = accumulators[K + k]
-        else:
-            accum_h0 = accumulators[k]
-            accum_h1 = None
         out = vdam_m_step_single_class(
             out,
             k=k,
-            accum_h0=accum_h0,
-            accum_h1=accum_h1,
+            accum_h0=accumulators[k],
+            accum_h1=accumulators[K + k] if state.pseudo_halfsets else None,
             grad_current_stepsize=grad_current_stepsize,
             tau2_fudge_factor=tau2_fudge_factor,
             grad_min_resol_shell=grad_min_resol_shell,
