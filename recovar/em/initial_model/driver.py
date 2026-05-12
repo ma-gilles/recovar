@@ -1101,42 +1101,38 @@ def _native_expectation_step(
             class_log_priors=np.zeros(int(state.K), dtype=np.float64),
         )
         config.engine_kwargs["class_rotation_log_prior"] = _class_direction_rotation_log_prior(
-            state,
-            int(sampling_plan.healpix_order),
+            state, int(sampling_plan.healpix_order)
         )
         config.engine_kwargs["debug_iteration"] = iteration
-        result_sigma2_offset = float(state.sigma2_offset)
         previous_translations = np.asarray(particle_state.translation_offsets, dtype=np.float32).copy()
         previous_classes = np.asarray(particle_state.class_assignments, dtype=np.int32).copy()
         result = run_dense_initial_model_estep(
-            dataset,
-            state,
-            config,
-            particle_ids=particle_ids,
-            halfset_ids=halfset_ids,
+            dataset, state, config, particle_ids=particle_ids, halfset_ids=halfset_ids
         )
-        result.meta["random_perturbation"] = float(sampling_plan.random_perturbation)
-        result.meta["n_rotations"] = int(sampling_plan.rotations.shape[0])
-        result.meta["n_translations"] = int(sampling_plan.translations.shape[0])
-        result.meta["healpix_order"] = int(sampling_plan.healpix_order)
-        result.meta["oversampling"] = int(sampling_plan.oversampling)
-        result.meta["offset_range_px"] = float(sampling_plan.offset_range_px)
-        result.meta["offset_step_px"] = float(sampling_plan.offset_step_px)
-        result.meta["offset_range_angstrom"] = float(sampling_plan.offset_range_angstrom)
-        result.meta["offset_step_angstrom"] = float(sampling_plan.offset_step_angstrom)
-        result.meta["sigma_offset_angstrom"] = sigma_offset_angstrom
-        result.meta["sigma2_offset_before"] = result_sigma2_offset
+        result.meta.update(
+            random_perturbation=float(sampling_plan.random_perturbation),
+            n_rotations=int(sampling_plan.rotations.shape[0]),
+            n_translations=int(sampling_plan.translations.shape[0]),
+            healpix_order=int(sampling_plan.healpix_order),
+            oversampling=int(sampling_plan.oversampling),
+            offset_range_px=float(sampling_plan.offset_range_px),
+            offset_step_px=float(sampling_plan.offset_step_px),
+            offset_range_angstrom=float(sampling_plan.offset_range_angstrom),
+            offset_step_angstrom=float(sampling_plan.offset_step_angstrom),
+            sigma_offset_angstrom=sigma_offset_angstrom,
+            sigma2_offset_before=float(state.sigma2_offset),
+        )
         if sampling_state is not None:
             result.meta["sampling_accuracy_estimated"] = accuracy_meta is not None
             if accuracy_meta is not None:
                 result.meta.update(accuracy_meta)
-            result.meta["sampling_updated"] = bool(sampling_updated)
-            result.meta["effective_offset_step_angstrom"] = float(sampling_state.effective_offset_step_angstrom)
-            result.meta["sampling_acc_rot"] = float(sampling_state.acc_rot)
-            result.meta["sampling_acc_trans_angstrom"] = float(sampling_state.acc_trans_angstrom)
-            result.meta["sampling_nr_iter_wo_resol_gain"] = int(sampling_state.nr_iter_wo_resol_gain)
-            result.meta["sampling_has_fine_enough_angular_sampling"] = bool(
-                sampling_state.has_fine_enough_angular_sampling
+            result.meta.update(
+                sampling_updated=bool(sampling_updated),
+                effective_offset_step_angstrom=float(sampling_state.effective_offset_step_angstrom),
+                sampling_acc_rot=float(sampling_state.acc_rot),
+                sampling_acc_trans_angstrom=float(sampling_state.acc_trans_angstrom),
+                sampling_nr_iter_wo_resol_gain=int(sampling_state.nr_iter_wo_resol_gain),
+                sampling_has_fine_enough_angular_sampling=bool(sampling_state.has_fine_enough_angular_sampling),
             )
         _update_particle_state_from_estep_meta(
             particle_state,
