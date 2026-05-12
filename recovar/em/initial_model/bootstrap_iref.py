@@ -1,11 +1,9 @@
-"""Denovo-init Iref seeding via random-orient backprojection.
+"""Denovo Iref seeding (RELION ``--pad 1`` parity).
 
-Production path delegates to the RELION C++ binding
-(compute_bootstrap_iref_via_cpp) which mirrors the fn_ref=None branch of
-calculateSumOfPowerSpectraAndAverageImage (ml_optimiser.cpp:3127-3205),
-the wsum_model.BPref reconstruct call (ml_optimiser.cpp:3259-3265),
-and initialLowPassFilterReferences (ml_optimiser.cpp:3336-3372).
-Parity target: run_it000_class001.mrc on the 64-px fixture.
+Production path is ``compute_bootstrap_iref_via_cpp`` (C++ binding mirrors
+``calculateSumOfPowerSpectraAndAverageImage`` ml_optimiser.cpp:3127-3205 +
+reconstruct :3265 + ``initialLowPassFilterReferences`` :3336-3372).
+Parity target: ``run_it000_class001.mrc`` (|CC|>0.998).
 """
 
 from __future__ import annotations
@@ -14,26 +12,21 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# RELION's fixed low-pass edge width (ml_optimiser.h:91)
-WIDTH_FMASK_EDGE: float = 2.0
+WIDTH_FMASK_EDGE: float = 2.0  # ml_optimiser.h:91
 
 
 @dataclass
 class ParticleCTF:
-    """Per-particle CTF metadata, matching RELION's `_rlnDefocusU` / V / Angle /
-    PhaseShift and the optics-group-level voltage/Cs/Q0/angpix/size.
-    """
+    """Per-particle CTF + optics-group scalars (voltage kV, Cs mm, Q0, angpix Å)."""
 
-    defU: float  # Å
-    defV: float  # Å
-    defAngle: float  # degrees
-    phase_shift: float = 0.0  # degrees
-
-    # Optics-group params (same for all particles in one group)
-    voltage: float = 300.0  # kV
-    Cs: float = 2.7  # mm
-    Q0: float = 0.07  # amplitude contrast
-    angpix: float = 8.5  # Å
+    defU: float
+    defV: float
+    defAngle: float
+    phase_shift: float = 0.0
+    voltage: float = 300.0
+    Cs: float = 2.7
+    Q0: float = 0.07
+    angpix: float = 8.5
     ori_size: int = 64
 
 
@@ -45,18 +38,7 @@ def reorder_particles_relion_style(
     defAngle: np.ndarray,
     phase_shift: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Reorder particles to match RELION's internal processing order.
-
-    RELION's `Experiment::read` sorts particles by `_rlnMicrographName`
-    lexicographically (stable sort on string). For single-optics-group
-    datasets, the first 1000 particles RELION processes for the bootstrap
-    are the first 1000 in that sorted order. If recovar feeds particles
-    in STAR row order instead, the first 1000 are a DIFFERENT subset,
-    breaking iter-0 bootstrap parity for N > 1000.
-
-    Returns reordered (images, defU, defV, defAngle, phase_shift) with
-    the stack re-indexed by the image-name's stack frame.
-    """
+    """Stable-sort by ``_rlnMicrographName`` and re-index by stack frame (matches ``Experiment::read``)."""
     img_names = main_star["_rlnImageName"].tolist()
     mic_names = main_star["_rlnMicrographName"].tolist()
     order = sorted(range(len(mic_names)), key=lambda i: mic_names[i])
@@ -72,7 +54,7 @@ def reorder_particles_relion_style(
 
 def compute_bootstrap_iref_via_cpp(
     *,
-    images: np.ndarray,  # (N, H, W) real-space particles in RELION order
+    images: np.ndarray,
     defU: np.ndarray,
     defV: np.ndarray,
     defAngle: np.ndarray,
@@ -92,34 +74,12 @@ def compute_bootstrap_iref_via_cpp(
     current_size: int = -1,
     minimum_nr_particles: int = 1000,
 ) -> np.ndarray:
-    """Run the entire RELION InitialModel bootstrap in C++ (recommended).
-
-    Calls `vdam_bootstrap_iref` which reproduces ml_optimiser.cpp:3127-3205
-    + the reconstruct call at :3265 using real RELION C++ classes
-    (softMaskOutsideMap, FourierTransformer, CenterFFTbySign,
-    windowFourierTransform, CTF::getFftwImage, BackProjector).
-
-    RELION GUI InitialModel uses ``--pad 1`` for this bootstrap path. Fresh
-    same-build RELION dumps match at |CC| > 0.998 with ``padding_factor=1``
-    and the RELION bootstrap current size ``round(0.07 * ori_size)``.
-
-    Returns an Iref array of shape `(nr_classes, ori_size, ori_size, ori_size)`
-    in recovar's real-space frame, suitable for ``InitialModelState.Iref`` and
-    ``write_relion_mrc``. The C++ binding returns RELION's raw BackProjector
-    frame; this wrapper applies the established ``relion_volume_to_recovar``
-    axis/sign conversion.
-    """
+    """Run the full RELION InitialModel bootstrap in C++; returns Iref in recovar frame."""
     from recovar.relion_bind import _relion_bind_core as bind
     from recovar.utils.helpers import relion_volume_to_recovar
 
     if current_size <= 0:
-        # RELION's wsum_model.current_size for bootstrap goes through
-        # ml_optimiser.cpp:2941 `getPixelFromResolution(1./ini_high)` when
-        # ini_high > 0, and ini_high is set to the 0.07-digital-freq Å
-        # value at line 2518 for do_average_unaligned. Net result:
-        #   current_size = ROUND(0.07 * ori_size) (the SHELL count, not Å)
-        # which on the 64-px fixture is 4 (NOT 136). RELION dumps confirm
-        # r_max=2, pad_size=7, skip_gridding=1 for the BPref accumulator.
+        # RELION wsum_model.current_size = ROUND(0.07 * ori_size) (shell count, not Å).
         current_size = int(np.floor(0.07 * ori_size + 0.5))
 
     iref_relion = np.asarray(
@@ -159,21 +119,10 @@ def postprocess_bootstrap_iref_via_cpp(
     do_init_blobs: bool = True,
     is_helical_segment: bool = False,
 ) -> np.ndarray:
-    """Apply RELION's post-bootstrap InitialModel reference processing.
+    """Apply RELION's post-bootstrap blobs+LP+softMask pipeline (ml_optimiser.cpp:2940-2980).
 
-    This wraps the real RELION C++ primitives used by
-    ``ml_optimiser.cpp:2940-2980``:
-
-      1. ``initialLowPassFilterReferences``
-      2. ``SomGraph::make_blobs_3d`` for positive and negative blobs
-      3. standard-deviation-preserving ``Iref = blobs_pos - blobs_neg / 2``
-      4. a second ``initialLowPassFilterReferences``
-      5. ``softMaskOutsideMap``
-
-    ``compute_bootstrap_iref_via_cpp`` leaves RELION's global ``rand()``
-    state exactly where the bootstrap loop leaves it. Calling this wrapper
-    immediately afterwards preserves that state for the blob draws, matching
-    RELION's denovo InitialModel sequence.
+    Call immediately after ``compute_bootstrap_iref_via_cpp`` to preserve RELION's
+    global ``rand()`` state for the blob draws.
     """
     from recovar.relion_bind import _relion_bind_core as bind
     from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
@@ -205,44 +154,22 @@ def initial_low_pass_filter_references(
     pixel_size: float,
     ini_high_ang: float,
 ) -> np.ndarray:
-    """Apply RELION's `initialLowPassFilterReferences` (ml_optimiser.cpp:3336).
-
-    radius = ori_size * pixel_size / ini_high (in Fourier shells)
-    radius -= WIDTH_FMASK_EDGE / 2
+    """``initialLowPassFilterReferences`` (ml_optimiser.cpp:3336): cosine-taper from r=radius outward to r=radius_p."""
+    radius = ori_size * pixel_size / ini_high_ang - WIDTH_FMASK_EDGE / 2.0
     radius_p = radius + WIDTH_FMASK_EDGE
-
-    For r < radius: keep
-    For radius <= r <= radius_p: multiply by 0.5 - 0.5*cos(π*(radius_p - r)/WIDTH_FMASK_EDGE)
-      → 0 at r=radius_p, 1 at r=radius (note: RELION's formula is
-      `0.5 - 0.5*cos(...)`, which equals 0 when cos=1 and 1 when cos=-1 —
-      so it's an OUTWARD taper from radius to radius_p, going 1→0 as r grows)
-    For r > radius_p: zero
-    """
-    K = Iref.shape[0]
-    radius = ori_size * pixel_size / ini_high_ang
-    radius -= WIDTH_FMASK_EDGE / 2.0
-    radius_p = radius + WIDTH_FMASK_EDGE
+    N = Iref.shape[1]
+    kz = np.fft.fftfreq(N, d=1.0) * N
+    kx = np.arange(N // 2 + 1, dtype=np.float64)
+    r = np.sqrt(kz[:, None, None] ** 2 + kz[None, :, None] ** 2 + kx[None, None, :] ** 2)
+    mask = np.zeros_like(r)
+    mask[r < radius] = 1.0
+    edge = (r >= radius) & (r <= radius_p)
+    if WIDTH_FMASK_EDGE > 0:
+        mask[edge] = 0.5 - 0.5 * np.cos(np.pi * (radius_p - r[edge]) / WIDTH_FMASK_EDGE)
 
     out = np.zeros_like(Iref)
-    for k in range(K):
+    for k in range(Iref.shape[0]):
         vol = Iref[k]
-        # Forward FFT with RELION normalisation (divide by N^3)
         F = np.fft.rfftn(vol, axes=(0, 1, 2), norm=None) / vol.size
-        # Shell indices
-        N = vol.shape[0]
-        kz = np.fft.fftfreq(N, d=1.0) * N
-        ky = np.fft.fftfreq(N, d=1.0) * N
-        kx = np.arange(N // 2 + 1, dtype=np.float64)
-        r = np.sqrt(kz[:, None, None] ** 2 + ky[None, :, None] ** 2 + kx[None, None, :] ** 2)
-        mask = np.zeros_like(r)
-        inner = r < radius
-        edge = (r >= radius) & (r <= radius_p)
-        outer = r > radius_p
-        mask[inner] = 1.0
-        if WIDTH_FMASK_EDGE > 0:
-            mask[edge] = 0.5 - 0.5 * np.cos(np.pi * (radius_p - r[edge]) / WIDTH_FMASK_EDGE)
-        # outer -> mask stays 0
-        F_filt = F * mask
-        # Inverse FFT
-        out[k] = np.fft.irfftn(F_filt * vol.size, s=vol.shape, axes=(0, 1, 2), norm=None)
+        out[k] = np.fft.irfftn(F * mask * vol.size, s=vol.shape, axes=(0, 1, 2), norm=None)
     return out
