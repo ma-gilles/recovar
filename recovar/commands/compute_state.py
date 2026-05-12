@@ -114,6 +114,21 @@ def _get_embedding_components(pipeline_output, zdim, coords_entry, precision_ent
     )
 
 
+def _parse_deconv_lambda_grid(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",") if p.strip()]
+        if not parts:
+            raise ValueError("--deconv-lambda-grid must contain at least one value")
+        values = np.asarray([float(p) for p in parts], dtype=np.float32)
+    else:
+        values = np.asarray(value, dtype=np.float32).reshape(-1)
+    if values.size == 0 or not np.all(np.isfinite(values)) or np.any(values <= 0):
+        raise ValueError(f"--deconv-lambda-grid must contain finite positive values, got {value}")
+    return values
+
+
 def add_args(parser: argparse.ArgumentParser):
     parser = parser_args.standard_downstream_args(parser)
 
@@ -127,6 +142,18 @@ def add_args(parser: argparse.ArgumentParser):
         "--save-all-estimates",
         action="store_true",
         help="Save all estimates. This is useful for debugging.",
+    )
+    parser.add_argument(
+        "--kernel-regression-mode",
+        choices=("standard", "deconvolved"),
+        default="standard",
+        help="Latent kernel-regression mode for compute_state volume reconstruction.",
+    )
+    parser.add_argument(
+        "--deconv-lambda-grid",
+        type=str,
+        default=None,
+        help="Comma-separated lambda grid for --kernel-regression-mode deconvolved.",
     )
 
     return parser
@@ -142,6 +169,8 @@ def compute_state(args):
     maskrad_fraction = getattr(args, "maskrad_fraction", 20)
     n_min_particles = getattr(args, "n_min_particles", None)
     save_all_estimates = bool(getattr(args, "save_all_estimates", False))
+    kernel_regression_mode = getattr(args, "kernel_regression_mode", "standard") or "standard"
+    deconv_lambda_grid = _parse_deconv_lambda_grid(getattr(args, "deconv_lambda_grid", None))
     apply_global_filtering = bool(getattr(args, "apply_global_filtering", False))
     fsc_mask_radius = getattr(args, "fsc_mask_radius", None)
     fsc_mask_edgewidth = getattr(args, "fsc_mask_edgewidth", None)
@@ -183,6 +212,15 @@ def compute_state(args):
         if target_zs.ndim == 1:
             logger.warning("Did you mean to use --zdim1?")
             target_zs = target_zs[None]
+
+    if kernel_regression_mode == "deconvolved":
+        if zdim != 1:
+            raise NotImplementedError(f"Deconvolved kernel regression only supports zdim=1; got zdim={zdim}")
+        if not no_z_regularization:
+            logger.info("Using noreg latent coordinates/precision for deconvolved kernel regression.")
+        no_z_regularization = True
+    elif kernel_regression_mode != "standard":
+        raise ValueError(f"Unknown kernel_regression_mode={kernel_regression_mode!r}")
 
     # Select reg vs noreg entry names
     coords_entry = "latent_coords_noreg" if no_z_regularization else "latent_coords"
@@ -240,6 +278,8 @@ def compute_state(args):
         fsc_mask=fsc_mask,
         fsc_mask_radius=fsc_mask_radius,
         fsc_mask_edgewidth=fsc_mask_edgewidth,
+        kernel_regression_mode=kernel_regression_mode,
+        deconv_lambda_grid=deconv_lambda_grid,
     )
 
 

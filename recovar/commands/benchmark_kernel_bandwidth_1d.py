@@ -380,6 +380,8 @@ def _run_compute_state(args, out: Path, pipeline_dir: Path, latent_point: np.nda
         fsc_mask_edgewidth=None,
         latent_points=str(latent_path),
         save_all_estimates=bool(args.compute_state_save_all_estimates),
+        kernel_regression_mode=str(args.compute_state_kernel_regression_mode),
+        deconv_lambda_grid=args.compute_state_deconv_lambda_grid,
     )
     logger.info("Running recovar compute_state at %s", latent_path)
     compute_state_cmd.compute_state(compute_state_args)
@@ -534,6 +536,18 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     )
     parser.add_argument("--compute-state-n-min-particles", type=int, default=100)
     parser.add_argument("--compute-state-save-all-estimates", action="store_true")
+    parser.add_argument(
+        "--compute-state-kernel-regression-mode",
+        choices=("standard", "deconvolved"),
+        default="standard",
+        help="Kernel-regression mode passed through to compute_state.",
+    )
+    parser.add_argument(
+        "--compute-state-deconv-lambda-grid",
+        type=str,
+        default=None,
+        help="Comma-separated lambda grid passed through to deconvolved compute_state.",
+    )
     parser.add_argument("--lazy", action="store_true")
     parser.add_argument("--low-memory-option", action="store_true")
     parser.add_argument("--very-low-memory-option", action="store_true")

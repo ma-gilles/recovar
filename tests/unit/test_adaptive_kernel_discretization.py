@@ -162,6 +162,57 @@ def test_pad_heterogeneity_kernel_batch_preserves_valid_rows_and_zero_weights_pa
     assert np.isinf(padded_noise[2:]).all()
 
 
+def test_pad_image_weights_for_fixed_batch_zeroes_padded_rows():
+    weights = np.array([1.5, -0.25], dtype=np.float32)
+    padded = akd._pad_image_weights_for_fixed_batch(weights, current_batch_size=2, target_batch_size=5)
+
+    np.testing.assert_array_equal(padded[:2], weights)
+    np.testing.assert_array_equal(padded[2:], np.zeros(3, dtype=np.float32))
+
+
+def test_deconvolution_weights_are_symmetric_and_finite():
+    latent_diff = np.array([-2.0, -0.5, 0.0, 0.5, 2.0], dtype=np.float32)
+    latent_precision = np.ones_like(latent_diff) * 4.0
+    weights = akd.deconvolution_weights_1d(latent_diff, latent_precision, h=1.5)
+
+    assert np.isfinite(weights).all()
+    np.testing.assert_allclose(weights, weights[::-1], atol=1e-6)
+
+
+def test_deconvolution_weights_zero_invalid_precision():
+    latent_diff = np.array([0.0, 0.25, 0.5, 0.75], dtype=np.float32)
+    latent_precision = np.array([1.0, 0.0, -2.0, np.inf], dtype=np.float32)
+    weights = akd.deconvolution_weights_1d(latent_diff, latent_precision, h=1.0)
+
+    assert np.isfinite(weights).all()
+    assert weights[0] != 0
+    np.testing.assert_array_equal(weights[1:], np.zeros(3, dtype=np.float32))
+
+
+def test_default_deconvolution_lambda_grid_gives_finite_bandwidths():
+    latent_precision = np.array([1.0, 4.0, 9.0, 16.0], dtype=np.float32)
+    lambda_grid, h_grid, sigma_ref = akd.deconvolution_bandwidths_1d(latent_precision)
+
+    np.testing.assert_array_equal(lambda_grid, akd.DEFAULT_DECONV_LAMBDA_GRID)
+    assert np.isfinite(h_grid).all()
+    assert sigma_ref > 0
+
+
+def test_deconvolved_scheme_rejects_zdim_greater_than_one_before_reconstruction():
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8)
+    latent_differences = np.zeros((cryo.n_images, 2), dtype=np.float32)
+    latent_precision = np.ones((cryo.n_images, 2, 2), dtype=np.float32)
+
+    with pytest.raises(NotImplementedError):
+        akd.even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
+            cryo,
+            None,
+            latent_differences,
+            latent_precision,
+            lambda_grid=np.array([1.0], dtype=np.float32),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Tier 2 – JAX-traced functions on tiny synthetic inputs
 # ---------------------------------------------------------------------------
@@ -401,6 +452,38 @@ def test_even_less_naive_matches_reference_bin_loop(gpu_device):
     np.testing.assert_allclose(lhs_new, lhs_ref, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(rhs_new, rhs_ref, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(est_new, est_ref, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.gpu
+def test_deconvolved_even_less_naive_return_lhs_rhs_smoke(gpu_device):
+    """Deconvolved path returns one candidate per lambda and finite accumulators."""
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=13)
+    latent_differences = np.linspace(-1.0, 1.0, cryo.n_images).astype(np.float32)
+    latent_precision = np.ones(cryo.n_images, dtype=np.float32) * 4.0
+    lambda_grid = np.array([1.0, 2.0], dtype=np.float32)
+
+    with jax.default_device(gpu_device):
+        estimates, lhs, rhs = akd.even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
+            cryo,
+            None,
+            latent_differences,
+            latent_precision,
+            lambda_grid=lambda_grid,
+            batch_size=4,
+            tau=None,
+            grid_correct=False,
+            use_spherical_mask=False,
+            return_lhs_rhs=True,
+            upsampling_factor=1,
+            return_real_space=True,
+        )
+
+    half_vol_size = int(np.prod(akd.volume_shape_to_half_volume_shape(cryo.volume_shape)))
+    assert estimates.shape[0] == lambda_grid.size
+    assert lhs.shape == (lambda_grid.size, half_vol_size)
+    assert rhs.shape == (lambda_grid.size, half_vol_size)
+    assert np.isfinite(lhs).all()
+    assert np.isfinite(rhs).all()
 
 
 # ---------------------------------------------------------------------------

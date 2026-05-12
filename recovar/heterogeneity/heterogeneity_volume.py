@@ -124,6 +124,10 @@ def make_volumes_kernel_estimate_local(
     save_all_estimates=False,
     heterogeneity_kernel="parabola",
     use_fast_rfft=False,
+    kernel_regression_mode="standard",
+    deconv_latent_differences=None,
+    deconv_latent_precision=None,
+    deconv_lambda_grid=None,
 ):
     """Reconstruct volumes along a heterogeneity path using kernel regression.
 
@@ -155,54 +159,122 @@ def make_volumes_kernel_estimate_local(
     """
     vol_paths.ensure_dirs()
     ds = dataset
+    if kernel_regression_mode not in ("standard", "deconvolved"):
+        raise ValueError(f"Unknown kernel_regression_mode={kernel_regression_mode!r}")
 
-    if isinstance(bins, int):
-        logger.warning("Picking bins based on number of particles only. n_min_particles = %s", n_min_particles)
-        heterogeneity_bins = pick_heterogeneity_bins2(-1, heterogeneity_distances[1], 0.5, n_min_particles, n_bins=bins)
+    deconv_sigma_ref = None
+    if kernel_regression_mode == "standard":
+        if isinstance(bins, int):
+            logger.warning("Picking bins based on number of particles only. n_min_particles = %s", n_min_particles)
+            heterogeneity_bins = pick_heterogeneity_bins2(
+                -1, heterogeneity_distances[1], 0.5, n_min_particles, n_bins=bins
+            )
+        else:
+            heterogeneity_bins = bins
+        logger.info("bins %s", heterogeneity_bins)
+        n_images_per_bin = [
+            int(np.sum(heterogeneity_distances[0] < b) + np.sum(heterogeneity_distances[1] < b))
+            for b in heterogeneity_bins
+        ]
+        logger.info("Particles per bin: %s", n_images_per_bin)
     else:
-        heterogeneity_bins = bins
+        if ndim != 1:
+            raise NotImplementedError(f"Deconvolved kernel regression only supports zdim=1; got ndim={ndim}")
+        if deconv_latent_differences is None or deconv_latent_precision is None:
+            raise ValueError(
+                "deconv_latent_differences and deconv_latent_precision are required for deconvolved mode"
+            )
+        deconv_latent_differences = [
+            adaptive_kernel_discretization._coerce_1d_latent_differences(x) for x in deconv_latent_differences
+        ]
+        deconv_latent_precision = [
+            adaptive_kernel_discretization._coerce_1d_latent_precision(x) for x in deconv_latent_precision
+        ]
+        heterogeneity_bins, _, deconv_sigma_ref = adaptive_kernel_discretization.deconvolution_bandwidths_1d(
+            np.concatenate(deconv_latent_precision), lambda_grid=deconv_lambda_grid
+        )
+        logger.info("deconvolution lambda grid %s", heterogeneity_bins)
+        logger.info("deconvolution sigma_ref %s", deconv_sigma_ref)
+        n_images_per_bin = []
+        all_latent_differences = np.concatenate(deconv_latent_differences)
+        all_latent_precision = np.concatenate(deconv_latent_precision)
+        for lambda_val in heterogeneity_bins:
+            h = float(lambda_val) * deconv_sigma_ref
+            weights = adaptive_kernel_discretization.deconvolution_weights_1d(
+                all_latent_differences, all_latent_precision, h
+            )
+            n_images_per_bin.append(int(np.count_nonzero(weights)))
+        logger.info("Nonzero deconvolution weights per lambda: %s", n_images_per_bin)
 
-    logger.info("bins %s", heterogeneity_bins)
-    n_images_per_bin = [
-        int(np.sum(heterogeneity_distances[0] < b) + np.sum(heterogeneity_distances[1] < b)) for b in heterogeneity_bins
-    ]
-    logger.info("Particles per bin: %s", n_images_per_bin)
+    def _run_kernel_estimator(
+        half_ds,
+        half_idx,
+        candidate_grid,
+        *,
+        tau_value,
+        grid_correct,
+        use_spherical_mask,
+        upsampling_factor,
+        return_lhs_rhs=False,
+    ):
+        if kernel_regression_mode == "standard":
+            return adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(
+                half_ds,
+                None,
+                heterogeneity_distances[half_idx],
+                candidate_grid,
+                tau=tau_value,
+                grid_correct=grid_correct,
+                use_spherical_mask=use_spherical_mask,
+                return_lhs_rhs=return_lhs_rhs,
+                heterogeneity_kernel=heterogeneity_kernel,
+                upsampling_factor=upsampling_factor,
+                return_real_space=True,
+                use_fast_rfft=use_fast_rfft,
+            )
+        return adaptive_kernel_discretization.even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
+            half_ds,
+            None,
+            deconv_latent_differences[half_idx],
+            deconv_latent_precision[half_idx],
+            candidate_grid,
+            tau=tau_value,
+            grid_correct=grid_correct,
+            use_spherical_mask=use_spherical_mask,
+            return_lhs_rhs=return_lhs_rhs,
+            upsampling_factor=upsampling_factor,
+            return_real_space=True,
+            use_fast_rfft=use_fast_rfft,
+            sigma_ref=deconv_sigma_ref,
+        )
 
     estimates = [None, None]
     lhs, rhs = [None, None], [None, None]
     cross_validation_estimators = [None, None]
     for k in range(2):
         half_ds = ds.get_halfset(k)
-        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(
+        estimates[k] = _run_kernel_estimator(
             half_ds,
-            None,
-            heterogeneity_distances[k],
+            k,
             heterogeneity_bins,
-            tau=tau,
+            tau_value=tau,
             grid_correct=grid_correct_ests,
             use_spherical_mask=use_mask_ests,
-            heterogeneity_kernel=heterogeneity_kernel,
             upsampling_factor=upsampling_for_ests,
-            return_real_space=True,
-            use_fast_rfft=use_fast_rfft,
         )
         estimates[k] = estimates[k].reshape(-1, *ds.volume_shape).astype(np.float32)
         logger.info("Computing estimates done")
 
         cross_validation_estimators[k], lhs[k], rhs[k] = (
-            adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(
+            _run_kernel_estimator(
                 half_ds,
-                None,
-                heterogeneity_distances[k],
+                k,
                 heterogeneity_bins[0:1],
-                tau=tau,
+                tau_value=tau,
                 grid_correct=False,
                 use_spherical_mask=False,
                 return_lhs_rhs=True,
-                heterogeneity_kernel=heterogeneity_kernel,
                 upsampling_factor=1,
-                return_real_space=True,
-                use_fast_rfft=use_fast_rfft,
             )
         )
 
@@ -252,18 +324,14 @@ def make_volumes_kernel_estimate_local(
     for k in range(2):
         logger.info("Computing estimates start")
         half_ds = ds.get_halfset(k)
-        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(
+        estimates[k] = _run_kernel_estimator(
             half_ds,
-            None,
-            heterogeneity_distances[k],
+            k,
             heterogeneity_bins,
-            tau=None,
+            tau_value=None,
             grid_correct=True,
             use_spherical_mask=True,
-            heterogeneity_kernel=heterogeneity_kernel,
             upsampling_factor=2,
-            return_real_space=True,
-            use_fast_rfft=use_fast_rfft,
         )
         estimates[k] = estimates[k].reshape(-1, *ds.volume_shape).astype(np.float32)
 
@@ -390,6 +458,7 @@ def make_volumes_kernel_estimate_local(
             recovar.utils.write_mrc(vol_paths.choice_smooth, smoothed_choice, voxel_size=ds.voxel_size)
 
         output_dict = {
+            "kernel_regression_mode": kernel_regression_mode,
             "heterogeneity_bins": heterogeneity_bins,
             "n_images_per_bin": n_images_per_bin,
             "fscs": fscs,
@@ -399,6 +468,9 @@ def make_volumes_kernel_estimate_local(
             "ml_choice": ml_choice,
             "ml_errors": ml_errors,
         }
+        if kernel_regression_mode == "deconvolved":
+            output_dict["lambda_grid"] = heterogeneity_bins
+            output_dict["sigma_ref"] = deconv_sigma_ref
 
         recovar.utils.pickle_dump(output_dict, vol_paths.params)
 

@@ -384,6 +384,8 @@ def _run_compute_state(args, out: Path, pipeline_dir: Path, latent_point: np.nda
         fsc_mask_edgewidth=None,
         latent_points=str(latent_path),
         save_all_estimates=bool(args.compute_state_save_all_estimates),
+        kernel_regression_mode=str(args.compute_state_kernel_regression_mode),
+        deconv_lambda_grid=args.compute_state_deconv_lambda_grid,
     )
     logger.info("Running recovar compute_state at %s", latent_path)
     compute_state_cmd.compute_state(compute_state_args)
@@ -483,6 +485,7 @@ def run_walkthrough(args, out: Path) -> dict:
         "raw_volume_prefix": str(raw_dir / "vol"),
         "active_volume_prefix": str(active_prefix),
         "use_oracle_pipeline": bool(args.use_oracle_pipeline),
+        "compute_state_kernel_regression_mode": str(args.compute_state_kernel_regression_mode),
     }
     _write_json(out / "config.json", {"args": vars(args), "summary": summary})
     _write_readme(out, summary)
@@ -514,6 +517,7 @@ Key settings:
 - pc_project: {summary["pc_project"]}
 - target_state: {summary["target_state"]}
 - use_oracle_pipeline: {summary["use_oracle_pipeline"]}
+- compute_state_kernel_regression_mode: {summary["compute_state_kernel_regression_mode"]}
 """
     (out / "README.md").write_text(text)
 
@@ -587,6 +591,18 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--compute-state-maskrad-fraction", type=float, default=20.0)
     parser.add_argument("--compute-state-n-min-particles", type=int, default=100)
     parser.add_argument("--compute-state-save-all-estimates", action="store_true")
+    parser.add_argument(
+        "--compute-state-kernel-regression-mode",
+        choices=("standard", "deconvolved"),
+        default="standard",
+        help="Kernel-regression mode passed through to compute_state.",
+    )
+    parser.add_argument(
+        "--compute-state-deconv-lambda-grid",
+        type=str,
+        default=None,
+        help="Comma-separated lambda grid passed through to deconvolved compute_state.",
+    )
     parser.add_argument("--lazy", action="store_true")
     parser.add_argument("--low-memory-option", action="store_true")
     parser.add_argument("--very-low-memory-option", action="store_true")
