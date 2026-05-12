@@ -3465,9 +3465,7 @@ def _run_relion_iteration_loop(
                     volume_shape=tuple(volume_shape),
                     ave_pmax=float(ave_pmax),
                     fsc=np.asarray(fsc, dtype=np.float64),
-                    sigma2_noise=np.asarray(noise_variance, dtype=np.float64)
-                    if "noise_variance" in dir()
-                    else np.zeros(0),
+                    sigma2_noise=np.asarray(noise_variance, dtype=np.float64),
                     means=means,
                     unreg_means=unreg_means,
                     new_iter_best_rotation_eulers=new_iter_best_rotation_eulers,
