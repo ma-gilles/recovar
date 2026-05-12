@@ -70,14 +70,8 @@ def refresh_tau2_from_projector_power(
     padding_factor: int = 1,
     interpolator: int = 1,
 ) -> InitialModelState:
-    """Mirror RELION ``MlModel::setFourierTransformMaps(!fix_tau)``."""
-    try:
-        from recovar.relion_bind import _relion_bind_core as bind
-    except ImportError as e:  # pragma: no cover
-        raise RuntimeError(
-            "VDAM InitialModel tau2 refresh requires the RELION bindings. Run:\n"
-            "  pixi run python recovar/relion_bind/build.py"
-        ) from e
+    """``MlModel::setFourierTransformMaps(!fix_tau)``."""
+    from recovar.relion_bind import _relion_bind_core as bind
 
     current_size = int(state.current_size if state.current_size > 0 else state.ori_size)
     new_tau2 = np.asarray(state.tau2_class, dtype=np.float64).copy()
@@ -118,6 +112,13 @@ def _scalar_sum_from_meta(meta: dict, key: str) -> float | None:
     return float(sum(float(v) for v in values)) if values else None
 
 
+def _my_mu(mu: float, do_grad: bool, subset_size: int) -> float:
+    my_mu = float(mu) if do_grad and subset_size != -1 else 0.0
+    if my_mu < 0.0 or my_mu > 1.0:
+        raise ValueError(f"mu must be in [0, 1], got {mu}")
+    return my_mu
+
+
 def update_noise_from_estep_meta(
     state: InitialModelState,
     meta: dict,
@@ -125,13 +126,7 @@ def update_noise_from_estep_meta(
     do_grad: bool,
     mu: float = DEFAULT_GRAD_MU,
 ) -> InitialModelState:
-    """Update ``sigma2_noise`` from RELION-style E-step noise weighted sums.
-
-    Dense engines accumulate residual noise in the scorer's unnormalised FFT
-    units. ``InitialModelState.sigma2_noise`` is stored in RELION model STAR
-    units, so convert by ``ori_size**4`` before writing it back to state; the
-    next E-step converts it back via ``_noise_variance_from_sigma2``.
-    """
+    """Update ``sigma2_noise`` from E-step weighted sums (engine units → RELION /N⁴)."""
     wsum_sigma2_noise = _posterior_sums_from_meta(meta, "wsum_sigma2_noise")
     wsum_img_power = _posterior_sums_from_meta(meta, "wsum_img_power")
     noise_sumw = _scalar_sum_from_meta(meta, "noise_sumw")
@@ -139,16 +134,11 @@ def update_noise_from_estep_meta(
         return state
     if noise_sumw <= 0.0 or not np.isfinite(noise_sumw):
         return state
-    my_mu = float(mu) if do_grad and state.subset_size != -1 else 0.0
-    if my_mu < 0.0 or my_mu > 1.0:
-        raise ValueError(f"mu must be in [0, 1], got {mu}")
+    my_mu = _my_mu(mu, do_grad, state.subset_size)
 
-    wsum_sigma2_noise = np.asarray(wsum_sigma2_noise, dtype=np.float64)
-    wsum_img_power = np.asarray(wsum_img_power, dtype=np.float64)
     if wsum_sigma2_noise.shape != wsum_img_power.shape:
         raise ValueError(
-            "wsum_sigma2_noise and wsum_img_power must have matching shapes, "
-            f"got {wsum_sigma2_noise.shape} and {wsum_img_power.shape}",
+            f"wsum_sigma2_noise and wsum_img_power shape mismatch: {wsum_sigma2_noise.shape} vs {wsum_img_power.shape}"
         )
     expected_shells = int(state.ori_size) // 2 + 1
     if wsum_sigma2_noise.shape != (expected_shells,):
@@ -158,13 +148,12 @@ def update_noise_from_estep_meta(
 
     from recovar.reconstruction import noise
 
-    sigma2_engine_units = noise.normalize_wsum_to_sigma2_noise(
-        wsum_sigma2_noise,
-        wsum_img_power,
-        float(noise_sumw),
-        (int(state.ori_size), int(state.ori_size)),
-    )
-    sigma2_relion_units = np.asarray(sigma2_engine_units, dtype=np.float64) / float(int(state.ori_size) ** 4)
+    sigma2_relion_units = np.asarray(
+        noise.normalize_wsum_to_sigma2_noise(
+            wsum_sigma2_noise, wsum_img_power, float(noise_sumw), (int(state.ori_size), int(state.ori_size))
+        ),
+        dtype=np.float64,
+    ) / float(int(state.ori_size) ** 4)
     if not np.all(np.isfinite(sigma2_relion_units)) or np.any(sigma2_relion_units <= 0.0):
         raise ValueError("updated sigma2_noise must be positive and finite")
 
@@ -172,9 +161,7 @@ def update_noise_from_estep_meta(
     new_sigma2 = np.asarray(state.sigma2_noise, dtype=np.float64).copy()
     if new_sigma2.ndim != 2 or new_sigma2.shape[1] != expected_shells:
         raise ValueError(f"sigma2_noise must have shape (G, {expected_shells}), got {new_sigma2.shape}")
-    new_sigma2 = new_sigma2 * my_mu
-    new_sigma2 += (1.0 - my_mu) * sigma2_relion_units[None, :]
-    new_state.sigma2_noise = new_sigma2
+    new_state.sigma2_noise = new_sigma2 * my_mu + (1.0 - my_mu) * sigma2_relion_units[None, :]
     return new_state
 
 
@@ -185,13 +172,7 @@ def update_probabilities_from_estep_meta(
     do_grad: bool,
     mu: float = DEFAULT_GRAD_MU,
 ) -> InitialModelState:
-    """Update class, direction, and offset priors from E-step posterior masses.
-
-    Mirrors ``MlOptimiser::maximizationOtherParameters`` for ``pdf_class``
-    ``pdf_direction``, and ``sigma2_offset``. Subset gradient iterations use
-    momentum ``mu``; all-particle or EM-tail iterations use ``my_mu = 0`` and
-    replace priors by the current weighted sums.
-    """
+    """``MlOptimiser::maximizationOtherParameters`` for pdf_class / pdf_direction / sigma2_offset."""
     class_sums = _posterior_sums_from_meta(meta, "class_posterior_sums")
     if class_sums is None:
         return state
@@ -203,10 +184,7 @@ def update_probabilities_from_estep_meta(
     sum_weight = float(np.sum(class_sums))
     if sum_weight <= 0.0:
         return state
-
-    my_mu = float(mu) if do_grad and state.subset_size != -1 else 0.0
-    if my_mu < 0.0 or my_mu > 1.0:
-        raise ValueError(f"mu must be in [0, 1], got {mu}")
+    my_mu = _my_mu(mu, do_grad, state.subset_size)
 
     new_state = replace(state)
     new_pdf_class = np.asarray(state.pdf_class, dtype=np.float64) * my_mu
@@ -471,22 +449,10 @@ def relion_solvent_flatten_state(
     width_mask_edge_px: float | None = None,
     mask: np.ndarray | None = None,
 ) -> InitialModelState:
-    """Apply RELION's spherical ``solventFlatten`` mask to all references.
-
-    RELION's InitialModel command passes ``--flatten_solvent``. In
-    ``MlOptimiser::iterate`` this runs after ``maximization()`` and before
-    writing the iteration artifacts, multiplying each reference by a centered
-    spherical raised-cosine mask:
-
-    ``radius = particle_diameter / (2 * pixel_size)``,
-    ``radius_p = radius + width_mask_edge``.
-    """
-
+    """Apply RELION's spherical ``solventFlatten`` mask to all references (post-maximization)."""
     iref = np.asarray(state.Iref)
-    if iref.ndim != 4 or iref.shape[1:] != (state.ori_size, state.ori_size, state.ori_size):
-        raise ValueError(
-            f"state.Iref must have shape (K, {state.ori_size}, {state.ori_size}, {state.ori_size}), got {iref.shape}",
-        )
+    if iref.ndim != 4 or iref.shape[1:] != (state.ori_size,) * 3:
+        raise ValueError(f"state.Iref must have shape (K, {state.ori_size}, ...), got {iref.shape}")
     if mask is None:
         if particle_diameter_ang is None or width_mask_edge_px is None:
             raise ValueError("particle_diameter_ang and width_mask_edge_px are required when mask is not provided")
@@ -497,10 +463,8 @@ def relion_solvent_flatten_state(
             width_mask_edge_px=float(width_mask_edge_px),
         )
     mask = np.asarray(mask, dtype=np.float64)
-    if mask.shape != (state.ori_size, state.ori_size, state.ori_size):
-        raise ValueError(
-            f"mask must have shape ({state.ori_size}, {state.ori_size}, {state.ori_size}), got {mask.shape}"
-        )
+    if mask.shape != (state.ori_size,) * 3:
+        raise ValueError(f"mask must have shape ({state.ori_size},)*3, got {mask.shape}")
 
     new_state = replace(state)
     new_state.Iref = (iref * mask[None, :, :, :]).astype(iref.dtype, copy=False)
@@ -529,11 +493,7 @@ def run_vdam_iterations(
     projector_padding_factor: int = 1,
     projector_interpolator: int = 1,
 ) -> InitialModelState:
-    """Run the full VDAM iteration loop.
-
-    `state` must already be the output of `initialise_denovo_state(...)`
-    with `sigma2_noise` filled (via `seed_noise_from_mavg`).
-    """
+    """Full VDAM loop; ``state`` must come from ``initialise_denovo_state`` + ``seed_noise_from_mavg``."""
     phase_lengths = compute_phase_lengths(state.nr_iter, grad_ini_frac, grad_fin_frac)
     current = state
 
