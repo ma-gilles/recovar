@@ -706,3 +706,62 @@ class TestReferenceEquivalence:
         )
         np.testing.assert_array_equal(got_binary, exp_binary)
         np.testing.assert_allclose(got_soft, exp_soft)
+
+    def test_make_localized_moving_gt_mask_smooth_and_localized(self):
+        # Build 10 GT volumes on a 24^3 grid. Place a static blob at one
+        # location and a moving (different sign each frame) blob at another
+        # — the focus mask should localize on the moving blob, not the
+        # static one, and it should be smooth (have a soft cosine edge).
+        rng = np.random.default_rng(0)
+        N = 24
+        shape = (N, N, N)
+        n_vols = 10
+        vols = rng.standard_normal((n_vols, *shape), dtype=np.float32) * 0.01
+
+        # Static blob (centered): not in the focus mask, but contributes to envelope.
+        vols[:, 8:12, 8:12, 8:12] += 5.0
+
+        # Moving blob: varies sign across frames → high per-voxel std.
+        scale = np.linspace(-1.0, 1.0, n_vols, dtype=np.float32)
+        vols[:, 16:20, 16:20, 16:20] += scale[:, None, None, None] * 10.0
+
+        soft, binary = mask.make_localized_moving_gt_mask(
+            vols,
+            volume_shape=shape,
+            percentile=90.0,
+            lowpass_sigma=1.0,
+            extend=1,
+            soft_edge=2,
+        )
+
+        assert soft.shape == shape
+        assert binary.shape == shape
+        assert soft.dtype == np.float32
+        # Soft cosine edge → some intermediate (0,1) values exist.
+        assert (soft > 1e-3).sum() > binary.sum(), "soft edge should add taper voxels"
+        assert soft.max() <= 1.0 + 1e-5
+        assert soft.min() >= 0.0
+        # Localizes on the moving blob, not the static one.
+        moving_core = binary[16:20, 16:20, 16:20]
+        static_core = binary[8:12, 8:12, 8:12]
+        assert moving_core.sum() > 0, "moving blob should be in focus mask"
+        assert static_core.sum() == 0, "static blob should not be in focus mask"
+
+    def test_make_localized_moving_gt_mask_higher_percentile_is_tighter(self):
+        rng = np.random.default_rng(1)
+        N = 24
+        shape = (N, N, N)
+        n_vols = 8
+        vols = rng.standard_normal((n_vols, *shape), dtype=np.float32) * 0.01
+        scale = np.linspace(-1.0, 1.0, n_vols, dtype=np.float32)
+        # A larger moving region so there are several "intensities" of motion.
+        vols[:, 4:20, 4:20, 4:20] += scale[:, None, None, None] * np.linspace(0.5, 5.0, 16)[None, :, None, None]
+
+        _, b90 = mask.make_localized_moving_gt_mask(
+            vols, volume_shape=shape, percentile=90.0, lowpass_sigma=1.0, extend=1, soft_edge=2
+        )
+        _, b99 = mask.make_localized_moving_gt_mask(
+            vols, volume_shape=shape, percentile=99.0, lowpass_sigma=1.0, extend=1, soft_edge=2
+        )
+        # p99 should be a (non-strict) subset of p90 in voxel count.
+        assert b99.sum() <= b90.sum()
