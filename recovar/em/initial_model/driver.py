@@ -962,65 +962,32 @@ def _dense_estep_config(
         if sampling_plan.coarse_prior_translations is not None
         else coarse_translations
     )
-    # RELION InitialModel default: _rlnSigmaOffsetsAngst = 10.0 Å (set at
-    # iter000 in run_it000_model.star, used for the Gaussian translation
-    # prior in iter-1 E-step). When `opts.translation_sigma_angstrom` is
-    # unset, default to 10.0 to match RELION's iter-1 prior. Without this
-    # the prior is None (uniform) and posteriors diverge from RELION.
+    # Default σ_offset = 10 Å matches RELION's _rlnSigmaOffsetsAngst at iter000.
     if sigma_offset_angstrom is None:
         sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
     else:
         sigma_angstrom = float(sigma_offset_angstrom)
-    # PARITY FIX 2026-05-08: route the prior centers through
-    # `relion_translation_prior_center`, which returns
-    # ``(prior_PX - rounded_old_offset_PX) / voxel_size``. This matches
-    # ``make_relion_translation_log_prior`` which scales `(translations -
-    # centers) * voxel_size`: dividing centers by voxel here cancels the
-    # multiplication, leaving centers acting as PX-numerics while
-    # translations get converted to Å. That reproduces RELION's
-    # mixed-unit pdf_offset (acc_ml_optimiser_impl.h:2620 +
-    # ml_optimiser.cpp:9249): ``offset = old_offset_PX +
-    # sampling.translations_x_Å`` followed by ``tdiff2 *= pixel_size**2``.
-    # Previously this passed `-image_pre_shifts` (raw PX), which scaled the
-    # centers AND translations symmetrically — making the per-image Gaussian
-    # 18× over-sharp and symmetric around the wrong grid center on axes
-    # where the prior offset was non-zero. This was the K=2 iter-2
-    # pmax_abs_mean=0.056 root cause (per-particle posterior leak to
-    # wrong-class secondary modes). main EM ``iteration_loop.py:3534-3537``
-    # already uses ``relion_translation_prior_center``; InitialModel
-    # was the missing caller.
+    # Prior centers go through relion_translation_prior_center to cancel the
+    # voxel_size scaling in make_relion_translation_log_prior; reproduces
+    # RELION's mixed-unit pdf_offset. Fix from K=2 c2 parity bug, 2026-05-08.
     trans_prior_center = relion_translation_prior_center(translation_offsets, float(dataset.voxel_size))
-    coarse_translation_log_prior = _translation_log_prior(
-        coarse_prior_translations,
-        voxel_size=float(dataset.voxel_size),
-        sigma_angstrom=sigma_angstrom,
-        centers=trans_prior_center,
+    _prior_kwargs = dict(
+        voxel_size=float(dataset.voxel_size), sigma_angstrom=sigma_angstrom, centers=trans_prior_center
     )
-    translation_log_prior = _translation_log_prior(
-        sampling_plan.translations,
-        voxel_size=float(dataset.voxel_size),
-        sigma_angstrom=sigma_angstrom,
-        centers=trans_prior_center,
-    )
+    coarse_translation_log_prior = _translation_log_prior(coarse_prior_translations, **_prior_kwargs)
+    translation_log_prior = _translation_log_prior(sampling_plan.translations, **_prior_kwargs)
 
     engine_kwargs = {
         "score_with_masked_images": True,
         "reconstruct_with_masked_images": False,
-        # RELION's --grad mode (ml_optimiser.cpp:10092-10105) accumulates
-        # Fimg_store = Fimg_shift_nomask - Frefctf into BPref. Without this
-        # flag the engine accumulates Fimg_shift_nomask directly, matching
-        # standard EM but NOT VDAM. Production was missing this; fixing
-        # lifts bp_data CC from +0.91 to +0.996 (per BPref test fixture).
+        # VDAM --grad accumulates Fimg_store = Fimg_shift_nomask - Frefctf
+        # (ml_optimiser.cpp:10092-10105); flag lifts BPref CC +0.91→+0.996.
         "reconstruction_subtract_projected_reference": True,
         "relion_firstiter_score_mode": "gaussian",
         "image_pre_shifts": np.asarray(image_pre_shifts, dtype=np.float32),
         "translation_prior_centers": relion_sigma_offset_prior_center(translation_offsets),
-        # ``sparse_pass2`` routes through the local-search engine, whose
-        # batched cuFFT plan currently fails at large box sizes (256² with
-        # batch_count>=32 → CUFFT_ALLOC_FAILED on 80GB GPUs at iter-2+).
-        # Set ``RECOVAR_DISABLE_SPARSE_PASS2=1`` to fall back to the dense
-        # path even when oversampling > 0 so InitialModel can run at large
-        # boxes until the local-engine FFT plan workspace is fixed.
+        # sparse_pass2 uses the local-search engine; RECOVAR_DISABLE_SPARSE_PASS2=1
+        # forces the dense path (workaround for cuFFT plan OOM at 256²+).
         "sparse_pass2": (
             int(sampling_plan.oversampling) > 0
             and os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in ("1", "true", "TRUE")
@@ -1038,30 +1005,20 @@ def _dense_estep_config(
                 "return_profile": bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE")),
             }
         )
-        # Allow env-override of adaptive_fraction for K-class parity tuning
-        _af_env = os.environ.get("RECOVAR_ADAPTIVE_FRACTION")
-        if _af_env:
-            engine_kwargs["adaptive_fraction"] = float(_af_env)
-    if os.environ.get("RECOVAR_USE_FLOAT64_SCORING"):
-        engine_kwargs["use_float64_scoring"] = True
-    if os.environ.get("RECOVAR_HALF_SPECTRUM_SCORING"):
-        engine_kwargs["half_spectrum_scoring"] = True
-    if os.environ.get("RECOVAR_SQUARE_WINDOW"):
-        engine_kwargs["square_window"] = True
-    # Independent RECON window override: SCORE uses square_window, RECON uses
-    # recon_square_window. Set this to True to backproject all pixels of the
-    # current_size FFTW half (matching RELION's set2DFourierTransform sweep
-    # without the radial r<=r_max cutoff). Default behavior follows
-    # square_window via dense_adapter group_kwargs.
-    _recon_sq = os.environ.get("RECOVAR_RECON_SQUARE_WINDOW")
-    if _recon_sq is not None:
+        if _af := os.environ.get("RECOVAR_ADAPTIVE_FRACTION"):
+            engine_kwargs["adaptive_fraction"] = float(_af)
+    for env_var, kwarg in (
+        ("RECOVAR_USE_FLOAT64_SCORING", "use_float64_scoring"),
+        ("RECOVAR_HALF_SPECTRUM_SCORING", "half_spectrum_scoring"),
+        ("RECOVAR_SQUARE_WINDOW", "square_window"),
+    ):
+        if os.environ.get(env_var):
+            engine_kwargs[kwarg] = True
+    # RECON window override: True backprojects all pixels of current_size's
+    # FFTW half (no r<=r_max cutoff). Defaults to mirror square_window.
+    if (_recon_sq := os.environ.get("RECOVAR_RECON_SQUARE_WINDOW")) is not None:
         engine_kwargs["recon_square_window"] = bool(int(_recon_sq))
-    # Disable VDAM gradient subtraction (Fimg_store = Fimg - Frefctf). Setting
-    # RECOVAR_DISABLE_SUBTRACT_PROJECTED_REFERENCE=1 makes the M-step accumulate
-    # raw posterior-weighted images (standard EM), bypassing the VDAM gradient
-    # form. Useful for diagnosing whether the Frefctf subtraction is the c2
-    # parity bottleneck (the proj_weighted=-N²×Fref scaling makes the subtraction
-    # add instead of subtract — see m_step.py and dense_adapter.py).
+    # Diagnostic: disable VDAM Fimg - Frefctf subtraction (raw EM accumulation).
     if os.environ.get("RECOVAR_DISABLE_SUBTRACT_PROJECTED_REFERENCE"):
         engine_kwargs["reconstruction_subtract_projected_reference"] = False
     if translation_log_prior is not None:
