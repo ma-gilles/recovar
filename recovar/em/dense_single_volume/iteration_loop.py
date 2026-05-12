@@ -209,6 +209,28 @@ RELION_FOURIER_WINDOW_SQUARE = False
 # RELION's --minres_map default: do not add the Wiener prior term to the
 # lowest Fourier shells during MAP reconstruction.
 RELION_MINRES_MAP = 5
+# RELION uses pf=2 for both projection and reconstruction (--pad 2).
+# Projection: real-space zero-pad N³→(2N)³, DFT, then trilinear slice.
+# Reconstruction: backproject into (2N)³ Fourier grid, Wiener solve,
+# iDFT at (2N)³, crop real-space to N³.
+PADDING_FACTOR = 2
+PROJECTION_PADDING_FACTOR = 2
+
+
+# Dense ``run_em`` kwargs that are identical for every E-step in RELION mode.
+# Per-iter and per-half values are layered on top at each call site via
+# ``{**_DENSE_EM_STATIC_KWARGS, ...}``.
+_DENSE_EM_STATIC_KWARGS: dict = {
+    "score_with_masked_images": True,
+    "half_spectrum_scoring": True,
+    "projection_padding_factor": PROJECTION_PADDING_FACTOR,
+    "reconstruction_padding_factor": PADDING_FACTOR,
+    "use_float64_scoring": False,
+    "use_float64_projections": False,
+    "do_gridding_correction": True,
+    "square_window": RELION_FOURIER_WINDOW_SQUARE,
+    "sparse_pass2": False,
+}
 
 
 def refine_single_volume(
@@ -429,7 +451,6 @@ def refine_single_volume(
 
     if relion_current_sizes is not None and len(relion_current_sizes) == 0:
         raise ValueError("relion_current_sizes must be non-empty when provided")
-    n_total_images = int(sum(int(ds.n_units) for ds in experiment_datasets))
 
     return _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
@@ -714,17 +735,14 @@ def _run_relion_iteration_loop(
                 current_healpix_order,
             )
         current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
-        current_nside_level = current_healpix_order
     elif rotations is not None:
         current_rotations = np.asarray(rotations, dtype=np.float32)
         current_rotation_eulers = _rotation_eulers_for_canonical_or_custom_grid(
             current_rotations,
             current_healpix_order,
         )
-        current_nside_level = current_healpix_order
     else:
         current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
-        current_nside_level = current_healpix_order
     if translations is None:
         current_translations = jnp.asarray(
             get_translation_grid(init_translation_range, init_translation_step), dtype=jnp.float32
@@ -746,12 +764,6 @@ def _run_relion_iteration_loop(
     )
     _mark_setup_phase("sampling_grid")
 
-    # RELION uses pf=2 for both projection and reconstruction (--pad 2).
-    # Projection: real-space zero-pad N³→(2N)³, DFT, then trilinear slice.
-    # Reconstruction: backproject into (2N)³ Fourier grid, Wiener solve,
-    # iDFT at (2N)³, crop real-space to N³.
-    PADDING_FACTOR = 2
-    PROJECTION_PADDING_FACTOR = 2
     padded_volume_shape = tuple(d * PADDING_FACTOR for d in volume_shape)
 
     def _safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None):
@@ -962,6 +974,12 @@ def _run_relion_iteration_loop(
         )
         first_iter_hard_reconstruction_this_iter = bool(
             first_iteration_reconstruction_mode == "hard" and init_relion_iteration == 0 and iteration == 0
+        )
+        firstiter_score_mode_this_iter = (
+            "normalized_cc" if (relion_firstiter_cc_this_iter or first_iter_normalized_cc_this_iter) else "gaussian"
+        )
+        firstiter_winner_take_all_this_iter = bool(
+            relion_firstiter_cc_this_iter or first_iter_hard_reconstruction_this_iter
         )
 
         # --- Determine current_size using RELION's FSC-derived SSNR (C4/C5) ---
@@ -1496,7 +1514,6 @@ def _run_relion_iteration_loop(
                 global_direction_prior_order_per_half = [None, None]
                 class_direction_prior_per_half = [None, None]
                 class_direction_prior_order_per_half = [None, None]
-            current_nside_level = current_healpix_order
 
             # Regenerate translation grid based on updated parameters
             current_translations = jnp.array(
@@ -1711,10 +1728,6 @@ def _run_relion_iteration_loop(
         # oversampled grid (from pass 2), not effective_rotations.
         pose_rotations = [None, None]  # rotations to use with ha for poses
         pose_rotation_eulers = [None, None]
-        pose_translations = [
-            np.asarray(current_translations, dtype=np.float32),
-            np.asarray(current_translations, dtype=np.float32),
-        ]
         best_pose_rotations = [None, None]
         best_pose_rotation_eulers = [None, None]
         best_pose_translations = [None, None]
@@ -2094,34 +2107,20 @@ def _run_relion_iteration_loop(
                     effective_rotations.shape[0],
                     current_translations.shape[0],
                 )
-                dense_skip_kwargs = dict(
-                    image_batch_size=safe_ibs,
-                    rotation_block_size=safe_rbs,
-                    current_size=cs_for_engine,
-                    rotation_log_prior=rotation_log_prior_k,
-                    translation_log_prior=translation_log_prior,
-                    score_with_masked_images=True,
-                    half_spectrum_scoring=True,
-                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                    reconstruction_padding_factor=PADDING_FACTOR,
-                    image_corrections=relion_half_inputs.image_corrections[k],
-                    scale_corrections=relion_half_inputs.scale_corrections[k],
-                    image_pre_shifts=translation_search_base,
-                    translation_prior_centers=trans_prior_center_for_engine,
-                    use_float64_scoring=False,
-                    use_float64_projections=False,
-                    do_gridding_correction=True,
-                    square_window=RELION_FOURIER_WINDOW_SQUARE,
-                    sparse_pass2=False,
-                    relion_firstiter_score_mode=(
-                        "normalized_cc"
-                        if (relion_firstiter_cc_this_iter or first_iter_normalized_cc_this_iter)
-                        else "gaussian"
-                    ),
-                    relion_firstiter_winner_take_all=(
-                        relion_firstiter_cc_this_iter or first_iter_hard_reconstruction_this_iter
-                    ),
-                )
+                dense_skip_kwargs = {
+                    **_DENSE_EM_STATIC_KWARGS,
+                    "image_batch_size": safe_ibs,
+                    "rotation_block_size": safe_rbs,
+                    "current_size": cs_for_engine,
+                    "rotation_log_prior": rotation_log_prior_k,
+                    "translation_log_prior": translation_log_prior,
+                    "image_corrections": relion_half_inputs.image_corrections[k],
+                    "scale_corrections": relion_half_inputs.scale_corrections[k],
+                    "image_pre_shifts": translation_search_base,
+                    "translation_prior_centers": trans_prior_center_for_engine,
+                    "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
+                    "relion_firstiter_winner_take_all": firstiter_winner_take_all_this_iter,
+                }
                 if class_rotation_log_prior_k is not None:
                     dense_skip_kwargs["rotation_log_prior"] = None
                     dense_skip_kwargs["class_rotation_log_prior"] = class_rotation_log_prior_k
@@ -2275,7 +2274,6 @@ def _run_relion_iteration_loop(
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
                 pose_rotation_eulers[k] = effective_rotation_eulers
-                pose_translations[k] = np.asarray(current_translations, dtype=np.float32)
                 coarse_ha[k] = ha_k
 
             else:
@@ -2284,34 +2282,20 @@ def _run_relion_iteration_loop(
                     effective_rotations.shape[0],
                     current_translations.shape[0],
                 )
-                em_kwargs = dict(
-                    image_batch_size=safe_ibs,
-                    rotation_block_size=safe_rbs,
-                    current_size=cs_for_engine,
-                    rotation_log_prior=rotation_log_prior_k,
-                    translation_log_prior=translation_log_prior,
-                    score_with_masked_images=True,
-                    half_spectrum_scoring=True,
-                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                    reconstruction_padding_factor=PADDING_FACTOR,
-                    image_corrections=relion_half_inputs.image_corrections[k],
-                    scale_corrections=relion_half_inputs.scale_corrections[k],
-                    image_pre_shifts=translation_search_base,
-                    translation_prior_centers=trans_prior_center_for_engine,
-                    use_float64_scoring=False,
-                    use_float64_projections=False,
-                    do_gridding_correction=True,
-                    square_window=RELION_FOURIER_WINDOW_SQUARE,
-                    sparse_pass2=False,
-                    relion_firstiter_score_mode=(
-                        "normalized_cc"
-                        if (relion_firstiter_cc_this_iter or first_iter_normalized_cc_this_iter)
-                        else "gaussian"
-                    ),
-                    relion_firstiter_winner_take_all=(
-                        relion_firstiter_cc_this_iter or first_iter_hard_reconstruction_this_iter
-                    ),
-                )
+                em_kwargs = {
+                    **_DENSE_EM_STATIC_KWARGS,
+                    "image_batch_size": safe_ibs,
+                    "rotation_block_size": safe_rbs,
+                    "current_size": cs_for_engine,
+                    "rotation_log_prior": rotation_log_prior_k,
+                    "translation_log_prior": translation_log_prior,
+                    "image_corrections": relion_half_inputs.image_corrections[k],
+                    "scale_corrections": relion_half_inputs.scale_corrections[k],
+                    "image_pre_shifts": translation_search_base,
+                    "translation_prior_centers": trans_prior_center_for_engine,
+                    "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
+                    "relion_firstiter_winner_take_all": firstiter_winner_take_all_this_iter,
+                }
                 if class_rotation_log_prior_k is not None:
                     em_kwargs["rotation_log_prior"] = None
                     em_kwargs["class_rotation_log_prior"] = class_rotation_log_prior_k
@@ -2457,7 +2441,6 @@ def _run_relion_iteration_loop(
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
                 pose_rotation_eulers[k] = effective_rotation_eulers
-                pose_translations[k] = np.asarray(current_translations, dtype=np.float32)
                 coarse_ha[k] = ha_k  # same grid, no oversampling
 
                 # --- Manifest dump for deterministic replay (Phase 0.1) ---
@@ -2793,7 +2776,6 @@ def _run_relion_iteration_loop(
                 padding_factor=PADDING_FACTOR,
                 r_max=cs // 2,
             )
-            current_iter_fsc_by_class = [current_iter_fsc]
             logger.info(
                 "Computed iter-%d FSC for tau2 (RELION backprojector path): %.1fs",
                 iteration + 1,
@@ -3148,7 +3130,6 @@ def _run_relion_iteration_loop(
                 best_trans,
             )
         previous_best_rotations = new_iter_best_rotations
-        previous_best_rotation_eulers = new_iter_best_rotation_eulers
         relion_half_inputs.previous_best_rotation_eulers = new_iter_best_rotation_eulers
         relion_half_inputs.previous_best_translations = new_iter_best_translations
         best_rotation_eulers_history.append(
@@ -3646,9 +3627,6 @@ def _run_relion_iteration_loop(
     final_accumulator_shape = (n_classes, recon_vol_size) if k_class_enabled else (recon_vol_size,)
     final_ft_y = jnp.zeros(final_accumulator_shape, dtype=cryo.dtype)
     final_ft_ctf = jnp.zeros(final_accumulator_shape, dtype=cryo.dtype)
-    final_noise_wsum = np.zeros_like(np.asarray(noise_radial_trajectory[-1])) if noise_radial_trajectory else None
-    final_img_power = np.zeros_like(np.asarray(noise_radial_trajectory[-1])) if noise_radial_trajectory else None
-    final_sumw = 0.0
     final_class_assignments = [None, None]
     final_class_posterior_per_half = [None, None]
     for k in range(2):
@@ -3706,14 +3684,12 @@ def _run_relion_iteration_loop(
                 accumulate_noise=True,
                 **final_em_kwargs,
             )
-            ha_k_final = np.asarray(final_k_class_result.pose_assignments, dtype=np.int32)
             Ft_y_k_final = final_k_class_result.Ft_y
             Ft_ctf_k_final = final_k_class_result.Ft_ctf
-            noise_stats_k_final = final_k_class_result.aggregate_noise_stats
             final_class_assignments[k] = np.asarray(final_k_class_result.class_assignments, dtype=np.int32)
             final_class_posterior_per_half[k] = np.asarray(final_k_class_result.class_posterior_sums, dtype=np.float64)
         else:
-            _, ha_k_final, Ft_y_k_final, Ft_ctf_k_final, _, noise_stats_k_final = run_em(
+            _, _, Ft_y_k_final, Ft_ctf_k_final, _, _ = run_em(
                 experiment_datasets[k],
                 final_join_means[k],
                 mean_variance,
@@ -3774,10 +3750,6 @@ def _run_relion_iteration_loop(
 
         final_ft_y = final_ft_y + Ft_y_k_final
         final_ft_ctf = final_ft_ctf + Ft_ctf_k_final
-        if noise_stats_k_final is not None and final_noise_wsum is not None:
-            final_noise_wsum += np.asarray(noise_stats_k_final.wsum_sigma2_noise, dtype=np.float64)
-            final_img_power += np.asarray(noise_stats_k_final.wsum_img_power, dtype=np.float64)
-            final_sumw += float(noise_stats_k_final.sumw)
     if k_class_enabled:
         class_weights = _class_weights_from_posterior(
             final_class_posterior_per_half,
