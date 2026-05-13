@@ -150,6 +150,19 @@ def _auto_deconv_lambda_batch_size(n_lambdas, half_volume_size, complex_dtype, r
     return max(1, min(int(n_lambdas), 64, int(target_gb / per_lambda_gb)))
 
 
+def _auto_deconv_per_image_batch_size(batch_size, n_weight_sets, half_volume_size, complex_dtype, real_dtype):
+    """Cap image batch size for dense per-image backprojection temporaries."""
+    if not (custom_cuda_requested() and jax.default_backend() == "gpu"):
+        return batch_size
+
+    bytes_per_image = half_volume_size * (np.dtype(complex_dtype).itemsize + np.dtype(real_dtype).itemsize)
+    bytes_per_weight_set = bytes_per_image
+    target_bytes = utils.get_gpu_memory_total() * (1024**3) * 0.45
+    target_bytes -= 2 * n_weight_sets * bytes_per_weight_set
+    memory_limited = max(1, int(target_bytes // max(1, bytes_per_image)))
+    return max(1, min(int(batch_size), int(memory_limited), 256))
+
+
 def _coerce_1d_latent_differences(latent_differences):
     arr = np.asarray(latent_differences, dtype=np.float32)
     if arr.ndim == 1:
@@ -572,7 +585,7 @@ def _heterogeneity_weighted_kernel_batch_many_from_fft_explicit(
 ):
     from recovar.core.geometry import translate_images
     from recovar.reconstruction import noise as noise_mod
-    from recovar.cuda_backproject import batch_backproject
+    from recovar.cuda_backproject import per_image_backproject
 
     half_images = translate_images(images, translations, config.image_shape, half_image=True)
     n_images = half_images.shape[0]
@@ -587,15 +600,15 @@ def _heterogeneity_weighted_kernel_batch_many_from_fft_explicit(
     ctf = config.compute_ctf_half(ctf_params).reshape(n_images, -1)
     if not config.premultiplied_ctf:
         half_images = half_images * ctf
-    weighted_images = half_images[None, :, :] * weights[:, :, None]
 
     if Ft_y is None:
         vol_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(config.volume_shape)
-        Ft_y = jnp.zeros((weights.shape[0], int(np.prod(vol_shape))), dtype=weighted_images.dtype)
+        Ft_y = jnp.zeros((weights.shape[0], int(np.prod(vol_shape))), dtype=half_images.dtype)
 
-    Ft_y = batch_backproject(
-        Ft_y,
-        weighted_images,
+    per_image_y = jnp.zeros((n_images, Ft_y.shape[1]), dtype=half_images.dtype)
+    per_image_y = per_image_backproject(
+        per_image_y,
+        half_images,
         rotation_matrices,
         config.image_shape,
         config.volume_shape,
@@ -604,6 +617,7 @@ def _heterogeneity_weighted_kernel_batch_many_from_fft_explicit(
         half_volume=True,
         max_r=None,
     )
+    Ft_y = Ft_y + weights.astype(per_image_y.real.dtype) @ per_image_y
 
     if upsample_ctf:
         from recovar.core.ctf import compute_antialiased_ctf_squared
@@ -620,15 +634,15 @@ def _heterogeneity_weighted_kernel_batch_many_from_fft_explicit(
         )
     else:
         ctf_half = ctf**2 / noise_half
-    weighted_ctf = ctf_half[None, :, :] * weights[:, :, None]
 
     if Ft_ctf is None:
         vol_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(config.volume_shape)
-        Ft_ctf = jnp.zeros((weights.shape[0], int(np.prod(vol_shape))), dtype=weighted_ctf.real.dtype)
+        Ft_ctf = jnp.zeros((weights.shape[0], int(np.prod(vol_shape))), dtype=ctf_half.real.dtype)
 
-    Ft_ctf = batch_backproject(
-        Ft_ctf,
-        weighted_ctf.astype(Ft_ctf.dtype),
+    per_image_ctf = jnp.zeros((n_images, Ft_ctf.shape[1]), dtype=Ft_ctf.dtype)
+    per_image_ctf = per_image_backproject(
+        per_image_ctf,
+        ctf_half.astype(Ft_ctf.dtype),
         rotation_matrices,
         config.image_shape,
         config.volume_shape,
@@ -637,6 +651,7 @@ def _heterogeneity_weighted_kernel_batch_many_from_fft_explicit(
         half_volume=True,
         max_r=None,
     )
+    Ft_ctf = Ft_ctf + weights.astype(Ft_ctf.dtype) @ per_image_ctf
     return Ft_y, Ft_ctf.real
 
 
@@ -2431,6 +2446,14 @@ def even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
             experiment_dataset.dtype_real,
         )
     lambda_batch_size = int(max(1, min(n_lambdas, lambda_batch_size)))
+    if custom_cuda_requested() and jax.default_backend() == "gpu" and core.decide_order(disc_type) <= 1:
+        batch_size = _auto_deconv_per_image_batch_size(
+            batch_size,
+            lambda_batch_size,
+            half_volume_size,
+            experiment_dataset.dtype,
+            experiment_dataset.dtype_real,
+        )
     logger.info("batch size in deconvolved heterogeneity kernel: %s", batch_size)
     logger.info("lambda batch size in deconvolved heterogeneity kernel: %s", lambda_batch_size)
     logger.info("deconvolution lambda_grid=%s sigma_ref=%s", lambda_grid, sigma_ref)

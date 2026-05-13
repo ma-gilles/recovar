@@ -549,8 +549,10 @@ def test_deconvolved_lambda_batching_matches_scalar_lambda_loop(gpu_device):
             lambda_batch_size=3,
         )
 
-    np.testing.assert_allclose(lhs_batched, lhs_scalar, atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(rhs_batched, rhs_scalar, atol=1e-5, rtol=1e-5)
+    # The CUDA per-image path reduces weight sets through GEMM; grouping
+    # lambdas changes the floating-point summation order versus scalar GEMVs.
+    np.testing.assert_allclose(lhs_batched, lhs_scalar, atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(rhs_batched, rhs_scalar, atol=1e-4, rtol=1e-4)
     np.testing.assert_allclose(est_batched, est_scalar, atol=1e-4, rtol=1e-4)
 
 

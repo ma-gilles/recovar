@@ -588,6 +588,55 @@ def test_batch_backproject_matches_single(half_vol, half_img, gpu_device):
     )
 
 
+@pytest.mark.parametrize("half_vol,half_img", _HALF_COMBOS)
+@pytest.mark.parametrize("dtype", [jnp.complex64, jnp.float32])
+def test_per_image_backproject_sums_to_single_backproject(half_vol, half_img, dtype, gpu_device):
+    """per_image_backproject should sum to the normal accumulated backproject."""
+    _skip_if_no_cuda()
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.cuda_backproject import backproject, per_image_backproject
+
+    rng = np.random.default_rng(123)
+    N = 24
+    n_images = 5
+    image_shape = (N, N)
+    volume_shape = (N, N, N)
+    H, W = image_shape
+    rots = jnp.array(_random_rotations(n_images, rng))
+
+    vol_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape))) if half_vol else N**3
+    n_pix = H * (W // 2 + 1) if half_img else H * W
+    if dtype == jnp.complex64:
+        imgs = jnp.array(
+            (rng.standard_normal((n_images, n_pix)) + 1j * rng.standard_normal((n_images, n_pix))).astype(
+                np.complex64
+            )
+        )
+    else:
+        imgs = jnp.array(rng.standard_normal((n_images, n_pix)).astype(np.float32))
+
+    with jax.default_device(gpu_device):
+        imgs_gpu = jax.device_put(imgs)
+        rots_gpu = jax.device_put(rots)
+        vol = jax.device_put(jnp.zeros(vol_size, dtype=dtype))
+        per_vol = jax.device_put(jnp.zeros((n_images, vol_size), dtype=dtype))
+        accumulated = backproject(
+            vol, imgs_gpu, rots_gpu, image_shape, volume_shape, order=1, half_volume=half_vol, half_image=half_img
+        )
+        per_image = per_image_backproject(
+            per_vol, imgs_gpu, rots_gpu, image_shape, volume_shape, order=1, half_volume=half_vol, half_image=half_img
+        )
+        summed = jnp.sum(per_image, axis=0)
+
+    np.testing.assert_allclose(
+        np.asarray(summed),
+        np.asarray(accumulated),
+        atol=1e-5,
+        rtol=1e-5,
+        err_msg=f"per_image_backproject sum != backproject for dtype={dtype}, half_vol={half_vol}, half_img={half_img}",
+    )
+
+
 # ── Edge cases ───────────────────────────────────────────────────────
 
 
