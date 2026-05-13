@@ -23,13 +23,13 @@ least 256x256 images, compared against RELION for accuracy and speed.
 
 ## Accepted Best Runs
 
-No accepted >=100k, >=256x256 completion benchmark has been recorded in this
-ledger yet.
+K=4 has one accepted >=100k, >=256x256 completion benchmark. K=1 is still
+pending in this ledger.
 
 | Case | Date | Commit | Fixture | Particles | Box | RELION baseline | RECOVAR run | Accuracy status | Speed status | Notes |
 |------|------|--------|---------|-----------|-----|-----------------|-------------|-----------------|--------------|-------|
 | K=1 | pending | pending | pending | >=100k | >=256 | pending | pending | pending | pending | Populate after the first accepted completion benchmark. |
-| K=4 | pending | pending | pending | >=100k | >=256 | pending | pending | pending | pending | Populate after the first accepted completion benchmark. |
+| K=4 | 2026-05-13 | 93a7a365 | ribosembly_k4_g256_n100000_completion_20260512_171123 | 100k | 256 | relion_class3d_k4_it015_clean9d9 iter 1 | recovar_class3d_k4_it001_scoreprep_dirty9cf5f876 | same vs prior accepted quality | better, 1.87x RELION iter time | First accepted K=4 speed run; dirty validation tree was committed unchanged as 93a7a365. |
 
 ## Required Metric Template
 
@@ -91,3 +91,73 @@ Conclusion:
 - Worse metrics:
 - Same metrics:
 - Accepted as new best:
+
+### 2026-05-13 `k4-firstiter-score-probe-speed`
+
+Run metadata:
+
+- Commit: 93a7a365 (`Speed up first-iter K-class score probes`). The Slurm
+  validation ran from dirty HEAD 9cf5f876 with the same code changes, then the
+  code was committed unchanged.
+- Branch: `codex/em-firstiter-kclass-perf-20260513`
+- Worktree: `/scratch/gpfs/GILLES/mg6942/recovar_wt_em_completion_9d9ce981_20260512_1926`
+- Dirty state during benchmark: `em_engine.py`, `k_class.py`,
+  `test_half_spectrum_em.py`, `test_k_class_joint_semantics.py`
+- Fixture: `/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123`
+- Particle count: 100000
+- Box size: 256
+- K: 4
+- Initial/reference maps: `relion_class3d_k4_it015_clean9d9`
+- RELION log: `relion_class3d_k4_it015_clean9d9/run.log`
+- RECOVAR command/log:
+  `/scratch/gpfs/GILLES/mg6942/_agent_scratch/em_perf_profile_20260513_9cf5f876/k4_iter1_profile_wtaskip_100k_256.sh`,
+  `recovar_class3d_k4_it001_scoreprep_dirty9cf5f876/run.log`
+- Slurm job IDs: RECOVAR 8177614; earlier obsolete profiles 8175369,
+  8176853 cancelled, 8177242 cancelled
+- Hardware: RECOVAR H100 80GB (`della-h21g4`); RELION memory log reports
+  A100 80GB, so absolute RECOVAR-vs-RELION speed is hardware-mixed.
+- Artifacts:
+  `recovar_class3d_k4_it001_scoreprep_dirty9cf5f876/benchmark_ledger.json`,
+  `recovar_class3d_k4_it001_scoreprep_dirty9cf5f876/k4_recovar_gt_eval.json`,
+  `recovar_class3d_k4_it001_scoreprep_dirty9cf5f876/gpu_memory.csv`
+
+Quality comparison:
+
+| Metric | Previous best | Current | Delta | Status |
+|--------|---------------|---------|-------|--------|
+| K4_mean_FSC_1_8_vs_GT | none | 0.995477 | new | accepted |
+| K4_per_class_FSC_1_8_vs_GT | none | 0.9961, 0.9952, 0.9955, 0.9951 | new | accepted |
+| K4_per_class_FSC_1_16_vs_GT | none | 0.9024, 0.9095, 0.9032, 0.9245 | new | accepted |
+| K4_shell_at_FSC_0.5 | none | 19, 19, 19, 20 | new | accepted |
+| K4_shell_at_FSC_0.143 | none | 20, 20, 20, 20 | new | accepted |
+| K4_map_corr_vs_previous_winner_subset | none | 1.000000, 0.999999967, 1.000000, 1.000000 | new | same |
+| Pmax_gap_RECOVAR_minus_RELION | not captured | not captured | n/a | not measured in this full-refine profile |
+| pose_angle_error_vs_RELION | not captured | not captured | n/a | not measured in this full-refine profile |
+| translation_error_vs_RELION | not captured | not captured | n/a | not measured in this full-refine profile |
+
+Performance comparison:
+
+| Metric | Previous best | Current | Delta | Status |
+|--------|---------------|---------|-------|--------|
+| RELION_iter1_expectation_plus_maximization | none | 694.752s | new | baseline |
+| RECOVAR_iter1_walltime | none | 1296.811s | new | accepted |
+| RECOVAR_vs_RELION_iter1_ratio | none | 1.87x | new | accepted, under 2x target |
+| RECOVAR_script_walltime | none | 1375s | new | accepted; includes setup/staging |
+| RECOVAR_images_per_second_iter | none | 77.1 img/s | new | accepted |
+| RELION_images_per_second_iter | none | 143.9 img/s | new | baseline |
+| RECOVAR_peak_gpu_memory | none | 41.2 GB | new | accepted |
+| RELION_peak_gpu_memory | none | 79.7 GB | new | baseline |
+| RECOVAR_half1_coarse_fine | none | 359.2s / 285.0s | new | accepted |
+| RECOVAR_half2_coarse_fine | none | 352.2s / 280.3s | new | accepted |
+
+Conclusion:
+
+- Overall status: accepted as the first K=4 100k/256 speed/quality benchmark.
+- Better metrics: new RECOVAR path is 1296.8s for iter 1, 1.87x RELION and
+  below the 2x target; it improves the previous RECOVAR winner-subset profile
+  from 1608.8s to 1296.8s.
+- Worse metrics: none versus the prior RECOVAR quality run; absolute
+  RECOVAR-vs-RELION speed is hardware-mixed (RECOVAR H100, RELION A100).
+- Same metrics: GT FSC quality and class ordering match the prior accepted
+  winner-subset output within numerical noise.
+- Accepted as new best: yes for K=4; K=1 completion benchmark is still pending.
