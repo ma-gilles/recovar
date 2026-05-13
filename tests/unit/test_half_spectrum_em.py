@@ -1487,6 +1487,52 @@ class TestFullIterationHalfMatches:
         np.testing.assert_allclose(np.asarray(no_ctf_ft_y), np.asarray(base_ft_y), atol=1e-6, rtol=1e-6)
         np.testing.assert_allclose(np.asarray(no_ctf_ft_ctf), 0.0, atol=1e-7, rtol=1e-7)
 
+    def test_score_only_wta_probe_skips_pass2_mstep(self, seeded_inputs, monkeypatch):
+        """First-iter K-class score probes should not recompute a disabled M-step."""
+        s = seeded_inputs
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+        run_mstep_flags = []
+        original_run = em_engine_module._DenseBigJitBatchRunner.run
+
+        def spy_run(self, *args, **kwargs):
+            run_mstep_flags.append(bool(kwargs["run_mstep"]))
+            return original_run(self, *args, **kwargs)
+
+        def fail_reconstruction_prep(*args, **kwargs):
+            raise AssertionError("score-only WTA probe should not prepare M-step images")
+
+        monkeypatch.setattr(em_engine_module._DenseBigJitBatchRunner, "run", spy_run)
+        monkeypatch.setattr(em_engine_module, "_prepare_reconstruction_batch", fail_reconstruction_prep)
+
+        _, hard_assignments, ft_y, ft_ctf, stats, profile = run_em(
+            s["dataset"],
+            s["volume"],
+            mean_variance,
+            s["noise_variance"],
+            np.array(s["rotations"]),
+            np.array(s["translations"]),
+            "linear_interp",
+            image_batch_size=2,
+            rotation_block_size=2,
+            current_size=4,
+            relion_firstiter_score_mode="normalized_cc",
+            relion_firstiter_winner_take_all=True,
+            disable_adjoint_y=True,
+            disable_adjoint_ctf=True,
+            return_stats=True,
+            return_profile=True,
+            sparse_pass2=False,
+        )
+
+        assert run_mstep_flags
+        assert not any(run_mstep_flags)
+        assert profile.pass2_score_s == 0.0
+        np.testing.assert_allclose(np.asarray(ft_y), 0.0, atol=0.0)
+        np.testing.assert_allclose(np.asarray(ft_ctf), 0.0, atol=0.0)
+        np.testing.assert_array_equal(np.asarray(stats.max_posterior_per_image), np.ones(N_IMAGES, dtype=np.float32))
+        np.testing.assert_allclose(float(np.sum(np.asarray(stats.rotation_posterior_sums))), float(N_IMAGES))
+        assert hard_assignments.shape == (N_IMAGES,)
+
     def test_profile_timing_sync_runs_only_when_requested(self, seeded_inputs, monkeypatch):
         """Timing barriers should be inserted only for profiling runs."""
         s = seeded_inputs

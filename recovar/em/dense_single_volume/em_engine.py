@@ -244,6 +244,54 @@ def _dense_em_return_tuple(
     return tuple(result)
 
 
+def _dense_batch_stat_arrays(
+    batch_norm,
+    log_Z,
+    best_score,
+    actual_batch_size: int,
+    *,
+    winner_take_all: bool,
+):
+    """Return per-image stats with RELION's image-only score offset restored."""
+
+    log_score_offset = -0.5 * jnp.squeeze(batch_norm[:actual_batch_size], axis=1)
+    log_Z_actual = log_Z[:actual_batch_size]
+    best_score_actual = best_score[:actual_batch_size]
+    if winner_take_all:
+        # RELION's --firstiter_cc hard branch binarizes each valid image to one
+        # pose, so rlnMaxValueProbDistribution is 1.0 at iter 1.
+        pmax = jnp.ones_like(best_score_actual)
+    else:
+        # Avoid -inf - (-inf) = NaN when every pose was masked out.
+        both_neg_inf = jnp.isneginf(best_score_actual) & jnp.isneginf(log_Z_actual)
+        pmax = jnp.where(both_neg_inf, 0.0, jnp.exp(best_score_actual - log_Z_actual))
+    return (
+        log_Z_actual.astype(jnp.float64) + log_score_offset.astype(jnp.float64),
+        best_score_actual.astype(jnp.float64) + log_score_offset.astype(jnp.float64),
+        pmax,
+    )
+
+
+def _accumulate_wta_rotation_sums(
+    rotation_posterior_sums,
+    best_argmax,
+    best_score,
+    *,
+    n_trans: int,
+    n_rot: int,
+    n_images: int,
+):
+    """Accumulate one-hot WTA rotation mass without the pass-2 M-step loop."""
+
+    if rotation_posterior_sums is None or n_images == 0:
+        return
+    valid = np.asarray(jnp.isfinite(best_score[:n_images]), dtype=bool)
+    if not np.any(valid):
+        return
+    rotation_ids = np.asarray(best_argmax[:n_images], dtype=np.int64)[valid] // int(n_trans)
+    rotation_posterior_sums += np.bincount(rotation_ids, minlength=int(n_rot))[: int(n_rot)]
+
+
 @dataclass(frozen=True)
 class _DenseDebugOptions:
     """Environment-gated dense debug outputs for one EM call."""
@@ -975,6 +1023,15 @@ def run_em(
         max_posterior_per_image = np.empty(n_images, dtype=np.float32)
         rotation_posterior_sums = np.zeros(n_rot, dtype=np.float64)
 
+    score_only_wta_probe = (
+        relion_firstiter_winner_take_all
+        and disable_adjoint_y
+        and disable_adjoint_ctf
+        and not accumulate_noise
+    )
+    if score_only_wta_probe:
+        logger.info("Dense WTA score-only probe: skipping pass-2 M-step recompute")
+
     # Noise accumulation precomputation (RELION parity)
     noise_wsum = None
     noise_img_power = None
@@ -1076,18 +1133,21 @@ def run_em(
                 score_with_masked_images,
             )
             ctf2_half_score = None
-        shifted_recon_half = (
-            _prepare_reconstruction_batch(
-                experiment_dataset,
-                batch_data,
-                ctf_params,
-                noise_variance_half,
-                translations,
-                config,
+        if score_only_wta_probe:
+            shifted_recon_half = shifted_half
+        else:
+            shifted_recon_half = (
+                _prepare_reconstruction_batch(
+                    experiment_dataset,
+                    batch_data,
+                    ctf_params,
+                    noise_variance_half,
+                    translations,
+                    config,
+                )
+                if (score_with_masked_images or relion_firstiter_score_mode == "normalized_cc")
+                else shifted_half
             )
-            if (score_with_masked_images or relion_firstiter_score_mode == "normalized_cc")
-            else shifted_half
-        )
         if sync_timers:
             _block_until_ready(shifted_half, shifted_recon_half)
 
@@ -1515,6 +1575,44 @@ def run_em(
         log_Z = max_s + jnp.log(sum_exp)  # (batch_size,)
         if external_log_Z is not None:
             log_Z = external_log_Z
+        if score_only_wta_probe:
+            best_score = best_score_pass1
+            best_argmax = best_argmax_pass1
+            if return_stats:
+                stats_finalize_t0 = time.time()
+                _accumulate_wta_rotation_sums(
+                    rotation_posterior_sums,
+                    best_argmax,
+                    best_score,
+                    n_trans=n_trans,
+                    n_rot=n_rot,
+                    n_images=actual_batch_size,
+                )
+                log_evidence, best_log_score, pmax = _dense_batch_stat_arrays(
+                    batch_norm,
+                    log_Z,
+                    best_score,
+                    actual_batch_size,
+                    winner_take_all=True,
+                )
+                log_evidence_per_image[start_idx:end_idx] = np.asarray(
+                    log_evidence,
+                    dtype=log_evidence_per_image.dtype,
+                )
+                best_log_score_per_image[start_idx:end_idx] = np.asarray(
+                    best_log_score,
+                    dtype=best_log_score_per_image.dtype,
+                )
+                max_posterior_per_image[start_idx:end_idx] = np.asarray(
+                    pmax,
+                    dtype=max_posterior_per_image.dtype,
+                )
+                if sync_timers:
+                    _block_until_ready(log_Z, best_score, pmax)
+                timing.stats_finalize_s += time.time() - stats_finalize_t0
+            hard_assignment[start_idx:end_idx] = np.asarray(best_argmax[:actual_batch_size])
+            start_idx = end_idx
+            continue
         skip_pass2_block = np.zeros(n_blocks, dtype=bool)
         pass2_skipmask_t0 = time.time()
         if block_max_per_image:
@@ -1867,38 +1965,28 @@ def run_em(
 
         if return_stats:
             stats_finalize_t0 = time.time()
-            log_score_offset = -0.5 * jnp.squeeze(batch_norm[:actual_batch_size], axis=1)
-            log_Z_actual = log_Z[:actual_batch_size]
-            best_score_actual = best_score[:actual_batch_size]
-            if relion_firstiter_winner_take_all:
-                # RELION's --firstiter_cc + winner-take-all assigns 100% probability
-                # to the best (rotation, translation) per image (ml_optimiser.cpp
-                # storeWeightedSums hard branch). Reflect that in stats so K-class
-                # pmax matches RELION's rlnMaxValueProbDistribution=1.0 at iter 1.
-                pmax = jnp.ones_like(best_score)
-            else:
-                # Guard against -inf - (-inf) = NaN when an entire image had
-                # every pose masked out (e.g., K-class adaptive 2-pass for
-                # a losing class). Map the indeterminate form to 0, the
-                # mathematically correct limit when both numerator and
-                # denominator collapse to "no valid pose" together.
-                _both_neg_inf = jnp.isneginf(best_score) & jnp.isneginf(log_Z)
-                pmax = jnp.where(_both_neg_inf, 0.0, jnp.exp(best_score - log_Z))
+            log_evidence, best_log_score, pmax = _dense_batch_stat_arrays(
+                batch_norm,
+                log_Z,
+                best_score,
+                actual_batch_size,
+                winner_take_all=relion_firstiter_winner_take_all,
+            )
             # Cast the per-image stats sums into the destination buffer dtype
             # (float64 if the buffer was allocated as float64) so the small
             # CC-mode delta between best_score values survives the addition of
             # the much-larger image_power-scaled log_score_offset. Float32
             # rounding here would quantize per-class K=2 differences to 0.
             log_evidence_per_image[start_idx:end_idx] = np.asarray(
-                (log_Z_actual.astype(jnp.float64) + log_score_offset.astype(jnp.float64)),
+                log_evidence,
                 dtype=log_evidence_per_image.dtype,
             )
             best_log_score_per_image[start_idx:end_idx] = np.asarray(
-                (best_score_actual.astype(jnp.float64) + log_score_offset.astype(jnp.float64)),
+                best_log_score,
                 dtype=best_log_score_per_image.dtype,
             )
             max_posterior_per_image[start_idx:end_idx] = np.asarray(
-                pmax[:actual_batch_size],
+                pmax,
                 dtype=max_posterior_per_image.dtype,
             )
             if sync_timers:

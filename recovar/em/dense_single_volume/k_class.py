@@ -15,6 +15,7 @@ import numpy as np
 from recovar.utils.nvtx_shim import nvtx
 
 from .em_engine import run_em
+from .firstiter_cc import _safe_firstiter_cc_image_batch_size
 from .helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
 from .local_em_engine import run_local_em_exact
 from .local_layout import LocalHypothesisLayout
@@ -430,6 +431,83 @@ def _sum_k_class_noise_stats(
     )
 
 
+def _zero_dense_noise_stats(experiment_dataset) -> NoiseStats:
+    n_shells = int(experiment_dataset.image_shape[0] // 2 + 1)
+    zeros = np.zeros(n_shells, dtype=np.float64)
+    include_split = bool(
+        os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR") or os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_DIR")
+    )
+    return make_noise_stats(
+        wsum_sigma2_noise=zeros,
+        wsum_img_power=zeros,
+        wsum_sigma2_offset=0.0,
+        sumw=0.0,
+        wsum_noise_a2=zeros if include_split else None,
+        wsum_noise_xa=zeros if include_split else None,
+    )
+
+
+def _empty_dense_relion_stats(n_images: int, n_rot: int) -> RelionStats:
+    return make_relion_stats(
+        log_evidence_per_image=np.full(n_images, -np.inf, dtype=np.float64),
+        best_log_score_per_image=np.full(n_images, -np.inf, dtype=np.float64),
+        max_posterior_per_image=np.zeros(n_images, dtype=np.float32),
+        rotation_posterior_sums=np.zeros(n_rot, dtype=np.float64),
+        image_dtype=jnp.float64,
+        rotation_dtype=jnp.float64,
+    )
+
+
+def _scatter_subset_stats(stats: RelionStats, subset_indices: np.ndarray, n_images: int, n_rot: int) -> RelionStats:
+    full = _empty_dense_relion_stats(n_images, n_rot)
+    log_evidence = np.array(full.log_evidence_per_image, dtype=np.float64, copy=True)
+    best_scores = np.array(full.best_log_score_per_image, dtype=np.float64, copy=True)
+    pmax = np.array(full.max_posterior_per_image, dtype=np.float32, copy=True)
+    log_evidence[subset_indices] = np.asarray(stats.log_evidence_per_image, dtype=np.float64)
+    best_scores[subset_indices] = np.asarray(stats.best_log_score_per_image, dtype=np.float64)
+    pmax[subset_indices] = np.asarray(stats.max_posterior_per_image, dtype=np.float32)
+    return make_relion_stats(
+        log_evidence_per_image=log_evidence,
+        best_log_score_per_image=best_scores,
+        max_posterior_per_image=pmax,
+        rotation_posterior_sums=np.asarray(stats.rotation_posterior_sums, dtype=np.float64),
+        image_dtype=jnp.float64,
+        rotation_dtype=jnp.float64,
+    )
+
+
+def _zero_dense_accumulators(experiment_dataset, engine_kwargs: dict):
+    reconstruction_padding_factor = int(engine_kwargs.get("reconstruction_padding_factor", 1))
+    recon_volume_shape = tuple(int(d) * reconstruction_padding_factor for d in experiment_dataset.volume_shape)
+    size = int(np.prod(recon_volume_shape))
+    dtype = getattr(experiment_dataset, "dtype", jnp.complex64)
+    return jnp.zeros(size, dtype=dtype), jnp.zeros(size, dtype=dtype)
+
+
+def _subset_per_image_engine_kwargs(kwargs: dict, image_indices: np.ndarray, n_images: int) -> dict:
+    """Slice kwargs that ``run_em`` indexes on its subset-local image axis."""
+
+    subset = np.asarray(image_indices, dtype=np.int64)
+    result = dict(kwargs)
+    for name in (
+        "rotation_log_prior",
+        "translation_log_prior",
+        "translation_prior_centers",
+    ):
+        value = result.get(name)
+        if value is None:
+            continue
+        value_np = np.asarray(value)
+        if value_np.ndim == 2 and value_np.shape[0] == int(n_images):
+            result[name] = value_np[subset]
+    value = result.get("normalization_log_evidence")
+    if value is not None:
+        value_np = np.asarray(value)
+        if value_np.ndim == 1 and value_np.shape[0] == int(n_images):
+            result["normalization_log_evidence"] = value_np[subset]
+    return result
+
+
 def _assemble_result(
     *,
     class_log_evidence: np.ndarray,
@@ -521,6 +599,146 @@ def _assemble_result(
     )
 
 
+def _run_firstiter_fine_k_class_by_winner_subset(
+    experiment_dataset,
+    means_array,
+    mean_variance,
+    noise_variance,
+    fine_rotations_np,
+    fine_translations_np,
+    rot_parent_map_np,
+    trans_parent_map_np,
+    sig_sample_indices_by_class,
+    global_winner: np.ndarray,
+    disc_type: str,
+    *,
+    class_log_priors,
+    accumulate_noise: bool,
+    return_best_pose_details: bool,
+    pass2_kwargs: dict,
+) -> KClassEMResult:
+    """Run firstiter_cc fine pass only on each class's coarse-winning images."""
+
+    n_classes = int(means_array.shape[0])
+    n_images = int(global_winner.shape[0])
+    n_rot_fine = int(fine_rotations_np.shape[0])
+    n_trans_fine = int(fine_translations_np.shape[0])
+    n_rot_coarse = int(max(rot_parent_map_np.max(initial=0), 0) + 1)
+    n_trans_coarse = int(max(trans_parent_map_np.max(initial=0), 0) + 1)
+    log_priors = _class_log_priors(n_classes, class_log_priors)
+
+    new_means = []
+    Ft_y = []
+    Ft_ctf = []
+    hard_assignments = []
+    per_class_stats = []
+    per_class_noise = [] if accumulate_noise else None
+    per_class_best_pose_rotations = [] if return_best_pose_details else None
+    per_class_best_pose_translations = [] if return_best_pose_details else None
+    per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
+
+    for class_index in range(n_classes):
+        image_indices = np.flatnonzero(global_winner == class_index).astype(np.int64)
+        if image_indices.size == 0:
+            class_Ft_y, class_Ft_ctf = _zero_dense_accumulators(experiment_dataset, pass2_kwargs)
+            class_stats = _empty_dense_relion_stats(n_images, n_rot_fine)
+            hard_full = np.zeros(n_images, dtype=np.int32)
+            noise = _zero_dense_noise_stats(experiment_dataset) if accumulate_noise else None
+            new_mean = (
+                None
+                if int(pass2_kwargs.get("reconstruction_padding_factor", 1)) > 1
+                else jnp.zeros_like(means_array[class_index])
+            )
+            best_rots_full = jnp.zeros((n_images, 3, 3), dtype=jnp.float32) if return_best_pose_details else None
+            best_trans_full = (
+                jnp.zeros((n_images, fine_translations_np.shape[1]), dtype=jnp.float32)
+                if return_best_pose_details
+                else None
+            )
+            best_rot_ids_full = jnp.zeros(n_images, dtype=jnp.int32) if return_best_pose_details else None
+        else:
+            class_engine_kwargs = _dense_engine_kwargs_for_class(pass2_kwargs, class_index, n_classes)
+            class_engine_kwargs = _subset_per_image_engine_kwargs(class_engine_kwargs, image_indices, n_images)
+            class_engine_kwargs["rotation_translation_mask"] = _PerClassFineGridSignificanceMask(
+                significant_sample_indices=[
+                    sig_sample_indices_by_class[class_index][int(image_index)] for image_index in image_indices
+                ],
+                n_rot_coarse=n_rot_coarse,
+                n_trans_coarse=n_trans_coarse,
+                n_rot_fine=n_rot_fine,
+                n_trans_fine=n_trans_fine,
+                rot_parent_map=rot_parent_map_np,
+                trans_parent_map=trans_parent_map_np,
+                n_images=int(image_indices.size),
+                class_index=class_index,
+            )
+            with _DenseScoreDumpClassLabel(class_index):
+                output = run_em(
+                    experiment_dataset,
+                    means_array[class_index],
+                    _select_class_value(mean_variance, class_index, n_classes),
+                    _select_class_value(noise_variance, class_index, n_classes),
+                    fine_rotations_np,
+                    fine_translations_np,
+                    disc_type,
+                    image_indices=image_indices,
+                    return_stats=True,
+                    accumulate_noise=accumulate_noise,
+                    class_log_prior=float(log_priors[class_index]),
+                    **class_engine_kwargs,
+                )
+            new_mean, hard_subset, class_Ft_y, class_Ft_ctf, subset_stats, noise = _dense_outputs(
+                output,
+                accumulate_noise=accumulate_noise,
+            )
+            hard_full = np.zeros(n_images, dtype=np.int32)
+            hard_full[image_indices] = np.asarray(hard_subset, dtype=np.int32)
+            class_stats = _scatter_subset_stats(subset_stats, image_indices, n_images, n_rot_fine)
+            best_rots_full = None
+            best_trans_full = None
+            best_rot_ids_full = None
+            if return_best_pose_details:
+                best_rots, best_trans, best_rot_ids = _decode_dense_best_pose_details(
+                    hard_subset,
+                    fine_rotations_np,
+                    fine_translations_np,
+                )
+                best_rots_full = jnp.zeros((n_images, 3, 3), dtype=jnp.float32)
+                best_trans_full = jnp.zeros((n_images, fine_translations_np.shape[1]), dtype=jnp.float32)
+                best_rot_ids_full = jnp.zeros(n_images, dtype=jnp.int32)
+                best_rots_full = best_rots_full.at[image_indices].set(best_rots)
+                best_trans_full = best_trans_full.at[image_indices].set(best_trans)
+                best_rot_ids_full = best_rot_ids_full.at[image_indices].set(best_rot_ids)
+
+        new_means.append(new_mean)
+        Ft_y.append(class_Ft_y)
+        Ft_ctf.append(class_Ft_ctf)
+        hard_assignments.append(hard_full)
+        per_class_stats.append(class_stats)
+        if per_class_noise is not None:
+            per_class_noise.append(noise)
+        if return_best_pose_details:
+            per_class_best_pose_rotations.append(best_rots_full)
+            per_class_best_pose_translations.append(best_trans_full)
+            per_class_best_pose_rotation_ids.append(best_rot_ids_full)
+
+    return _assemble_result(
+        class_log_evidence=np.stack(
+            [np.asarray(stats.log_evidence_per_image, dtype=np.float64) for stats in per_class_stats],
+            axis=0,
+        ),
+        new_means=new_means,
+        Ft_y=Ft_y,
+        Ft_ctf=Ft_ctf,
+        per_class_hard_assignments=np.stack(hard_assignments, axis=0),
+        per_class_stats=tuple(per_class_stats),
+        noise_stats=None if per_class_noise is None else tuple(per_class_noise),
+        per_class_best_pose_rotations=per_class_best_pose_rotations,
+        per_class_best_pose_translations=per_class_best_pose_translations,
+        per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
+    )
+
+
 def _run_dense_k_class_score_probe(
     experiment_dataset,
     means_array,
@@ -586,6 +804,14 @@ def _run_dense_k_class_score_probe(
         per_class_stats=per_class_stats_tuple,
         class_assignments=class_assignments,
     )
+
+
+def _coarse_score_probe_image_batch_size(experiment_dataset, n_trans: int, requested_batch_size: int) -> int:
+    """Use larger batches for score-only coarse probes than for fine M-steps."""
+
+    n_images = _dataset_image_count(experiment_dataset)
+    safe_batch_size = _safe_firstiter_cc_image_batch_size(n_trans, experiment_dataset.image_shape)
+    return max(1, min(int(n_images), max(int(requested_batch_size), int(safe_batch_size))))
 
 
 @nvtx.annotate("kclass.run_dense_k_class_em", color="cyan", domain=NVTX_DOMAIN_EM)
@@ -1329,6 +1555,17 @@ def run_dense_k_class_em_adaptive(
         coarse_probe_kwargs["current_size"] = (
             coarse_current_size if coarse_current_size is not None else fine_current_size
         )
+        coarse_probe_kwargs["image_batch_size"] = _coarse_score_probe_image_batch_size(
+            experiment_dataset,
+            int(coarse_translations_np.shape[0]),
+            image_batch_size,
+        )
+        if int(coarse_probe_kwargs["image_batch_size"]) != image_batch_size:
+            logger.info(
+                "STRICT-PARITY: firstiter_cc coarse score probe image_batch_size=%d (fine image_batch_size=%d)",
+                int(coarse_probe_kwargs["image_batch_size"]),
+                image_batch_size,
+            )
         with _DenseScoreDumpPhaseLabel("coarse"):
             with nvtx.annotate("kclass.adaptive.coarse_probe", color="yellow", domain=NVTX_DOMAIN_EM):
                 coarse_result = _run_dense_k_class_score_probe(
@@ -1467,7 +1704,8 @@ def run_dense_k_class_em_adaptive(
         # Mask out images where global winner != class_index so class k's M-step
         # only sees its global-winner images.
         global_winner = np.asarray(coarse_class_assignments_for_override, dtype=np.int64)
-    if not (skip_significance_pruning and global_winner is None):
+    use_firstiter_winner_subset = firstiter_cc_pass2_only_best_coarse and global_winner is not None
+    if not use_firstiter_winner_subset and not (skip_significance_pruning and global_winner is None):
         pass2_kwargs["class_rotation_translation_mask"] = _ClassFineGridSignificanceMask(
             significant_sample_indices_by_class=sig_sample_indices_by_class,
             n_rot_coarse=n_rot_coarse,
@@ -1485,19 +1723,43 @@ def run_dense_k_class_em_adaptive(
     with _DenseScoreDumpPhaseLabel("fine"):
         with nvtx.annotate("kclass.adaptive.fine_dense_em", color="green", domain=NVTX_DOMAIN_EM):
             pass2_t0 = time.time()
-            result = run_dense_k_class_em(
-                experiment_dataset,
-                means_array,
-                mean_variance,
-                noise_variance,
-                fine_rotations_np,
-                fine_translations_np,
-                disc_type,
-                class_log_priors=class_log_priors,
-                accumulate_noise=accumulate_noise,
-                return_best_pose_details=return_best_pose_details,
-                **pass2_kwargs,
-            )
+            if use_firstiter_winner_subset:
+                class_counts = np.bincount(global_winner, minlength=n_classes).astype(np.int64)
+                logger.info(
+                    "STRICT-PARITY: firstiter_cc fine pass uses winner-class subsets: %s",
+                    class_counts.tolist(),
+                )
+                result = _run_firstiter_fine_k_class_by_winner_subset(
+                    experiment_dataset,
+                    means_array,
+                    mean_variance,
+                    noise_variance,
+                    fine_rotations_np,
+                    fine_translations_np,
+                    rot_parent_map_np,
+                    trans_parent_map_np,
+                    sig_sample_indices_by_class,
+                    global_winner,
+                    disc_type,
+                    class_log_priors=class_log_priors,
+                    accumulate_noise=accumulate_noise,
+                    return_best_pose_details=return_best_pose_details,
+                    pass2_kwargs=pass2_kwargs,
+                )
+            else:
+                result = run_dense_k_class_em(
+                    experiment_dataset,
+                    means_array,
+                    mean_variance,
+                    noise_variance,
+                    fine_rotations_np,
+                    fine_translations_np,
+                    disc_type,
+                    class_log_priors=class_log_priors,
+                    accumulate_noise=accumulate_noise,
+                    return_best_pose_details=return_best_pose_details,
+                    **pass2_kwargs,
+                )
             pass2_s = time.time() - pass2_t0
     if coarse_class_assignments_for_override is not None:
         # RELION binarization picks the global-best (class, pose) at the
