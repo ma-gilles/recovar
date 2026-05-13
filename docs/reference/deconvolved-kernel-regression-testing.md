@@ -211,3 +211,32 @@ For each run, report:
 
 Do not use local CV error as the main success criterion for this experiment.
 Use CV only to understand how `compute_state` would choose an estimator.
+
+## Report Generator
+
+The spike walkthrough now attempts to generate the comparison report by default.
+It writes `<output_dir>/08_kernel_report` when it can resolve both a standard
+and a deconvolved `compute_state` output. If the current run only produced one
+mode, pass the paired output explicitly:
+
+```bash
+pixi run python -m recovar.commands.spike_walkthrough \
+  --output-dir /path/to/spike_run \
+  --compute-state-kernel-regression-mode deconvolved \
+  --kernel-report-standard-dir /path/to/standard_compute_state \
+  --kernel-report-deconvolved-dir /path/to/deconvolved_compute_state \
+  --kernel-report-mask /path/to/local_cv_mask.mrc
+```
+
+The report can also be regenerated directly:
+
+```bash
+recovar spike_kernel_report \
+  --standard-root /path/to/standard_compute_state \
+  --deconvolved-root /path/to/deconvolved_compute_state \
+  --pipeline-root /path/to/pipeline \
+  --target-point /path/to/target_latent_point.txt \
+  --target-volume /path/to/gt_vol0032.mrc \
+  --mask /path/to/local_cv_mask.mrc \
+  --out-dir /path/to/08_kernel_report
+```

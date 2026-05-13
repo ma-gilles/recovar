@@ -44,6 +44,7 @@ from recovar import utils
 from recovar.commands import compute_state as compute_state_cmd
 from recovar.commands import pipeline
 from recovar.commands import render_spike_morph_volumes as render_cmd
+from recovar.commands import spike_kernel_report
 from recovar.core import fourier_transform_utils as ftu
 from recovar.heterogeneity import kernel_bandwidth_benchmark as kb
 from recovar.output import output as o
@@ -401,6 +402,81 @@ def _run_compute_state(args, out: Path, pipeline_dir: Path, latent_point: np.nda
     return compute_state_dir
 
 
+def _resolve_kernel_report_roots(args, out: Path, compute_state_dir: Path) -> tuple[Path | None, Path | None]:
+    standard_root = Path(args.kernel_report_standard_dir) if args.kernel_report_standard_dir else None
+    deconvolved_root = Path(args.kernel_report_deconvolved_dir) if args.kernel_report_deconvolved_dir else None
+
+    if standard_root is None:
+        if args.compute_state_kernel_regression_mode == "standard":
+            standard_root = compute_state_dir
+        elif (out / "07_compute_state_standard").exists():
+            standard_root = out / "07_compute_state_standard"
+
+    if deconvolved_root is None:
+        if args.compute_state_kernel_regression_mode == "deconvolved":
+            deconvolved_root = compute_state_dir
+        elif (out / "07_compute_state_deconvolved").exists():
+            deconvolved_root = out / "07_compute_state_deconvolved"
+
+    return standard_root, deconvolved_root
+
+
+def _kernel_report_can_use_current_run(args, out: Path) -> bool:
+    if not args.kernel_report:
+        return False
+    if args.compute_state_kernel_regression_mode == "standard":
+        return bool(args.kernel_report_deconvolved_dir) or (out / "07_compute_state_deconvolved").exists()
+    if args.compute_state_kernel_regression_mode == "deconvolved":
+        return bool(args.kernel_report_standard_dir) or (out / "07_compute_state_standard").exists()
+    return False
+
+
+def _maybe_run_kernel_report(
+    args,
+    out: Path,
+    pipeline_dir: Path,
+    compute_state_dir: Path,
+    mask_paths: dict[str, str],
+    target_state: int,
+) -> dict | None:
+    if not args.kernel_report:
+        return None
+
+    standard_root, deconvolved_root = _resolve_kernel_report_roots(args, out, compute_state_dir)
+    if standard_root is None or deconvolved_root is None:
+        logger.info(
+            "Skipping 08 kernel report: need both standard and deconvolved compute_state outputs. "
+            "Resolved standard=%s deconvolved=%s. Use --kernel-report-standard-dir and "
+            "--kernel-report-deconvolved-dir, or place paired outputs at 07_compute_state_standard "
+            "and 07_compute_state_deconvolved.",
+            standard_root,
+            deconvolved_root,
+        )
+        return None
+
+    target_volume = out / "04_ground_truth" / f"gt_vol{target_state:04d}.mrc"
+    mask = Path(args.kernel_report_mask) if args.kernel_report_mask else Path(mask_paths["focus_mask"])
+    target_point = out / "target_latent_point.txt"
+    report_out = Path(args.kernel_report_out_dir) if args.kernel_report_out_dir else out / "08_kernel_report"
+
+    cfg = spike_kernel_report.SpikeKernelReportConfig(
+        standard_root=standard_root,
+        deconvolved_root=deconvolved_root,
+        target_volume=target_volume,
+        mask=mask,
+        out_dir=report_out,
+        pipeline_root=pipeline_dir,
+        target_point=target_point,
+        state_label="state000",
+        report_title=f"target state {target_state}",
+        expected_candidates=args.kernel_report_expected_candidates,
+        package_lowpass=bool(args.kernel_report_package_lowpass),
+        lowpass_cutoff=float(args.kernel_report_lowpass_cutoff),
+    )
+    logger.info("Generating 08 kernel report in %s", report_out)
+    return spike_kernel_report.generate_report(cfg)
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -481,7 +557,18 @@ def run_walkthrough(args, out: Path) -> dict:
         args.zdim,
         coords_entry=target_coords_entry,
     )
+    if _kernel_report_can_use_current_run(args, out) and not args.compute_state_save_all_estimates:
+        logger.info("Enabling compute_state save_all_estimates because --kernel-report is on by default.")
+        args.compute_state_save_all_estimates = True
     compute_state_dir = _run_compute_state(args, out, pipeline_dir, latent_point)
+    kernel_report_summary = _maybe_run_kernel_report(
+        args,
+        out,
+        pipeline_dir,
+        compute_state_dir,
+        mask_paths,
+        target_state,
+    )
 
     summary = {
         "output_dir": str(out),
@@ -506,6 +593,7 @@ def run_walkthrough(args, out: Path) -> dict:
         "active_volume_prefix": str(active_prefix),
         "use_oracle_pipeline": bool(args.use_oracle_pipeline),
         "compute_state_kernel_regression_mode": str(args.compute_state_kernel_regression_mode),
+        "kernel_report": kernel_report_summary,
     }
     _write_json(out / "config.json", {"args": vars(args), "summary": summary})
     _write_readme(out, summary)
@@ -538,6 +626,7 @@ Key settings:
 - target_state: {summary["target_state"]}
 - use_oracle_pipeline: {summary["use_oracle_pipeline"]}
 - compute_state_kernel_regression_mode: {summary["compute_state_kernel_regression_mode"]}
+- kernel_report: {summary["kernel_report"]["out_dir"] if summary["kernel_report"] else None}
 """
     (out / "README.md").write_text(text)
 
@@ -611,6 +700,42 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--compute-state-maskrad-fraction", type=float, default=20.0)
     parser.add_argument("--compute-state-n-min-particles", type=int, default=100)
     parser.add_argument("--compute-state-save-all-estimates", action="store_true")
+    parser.add_argument(
+        "--kernel-report",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Generate an 08_kernel_report by default when both standard and deconvolved compute_state "
+            "outputs are available. Use --no-kernel-report to disable."
+        ),
+    )
+    parser.add_argument(
+        "--kernel-report-standard-dir",
+        type=str,
+        default=None,
+        help="Standard compute_state output dir for the 08 kernel report. Defaults to the current run if mode=standard, otherwise 07_compute_state_standard when present.",
+    )
+    parser.add_argument(
+        "--kernel-report-deconvolved-dir",
+        type=str,
+        default=None,
+        help="Deconvolved compute_state output dir for the 08 kernel report. Defaults to the current run if mode=deconvolved, otherwise 07_compute_state_deconvolved when present.",
+    )
+    parser.add_argument(
+        "--kernel-report-mask",
+        type=str,
+        default=None,
+        help="Mask for 08 report true-GT FSC/error metrics. Defaults to 05_masks/focus_mask_moving.mrc.",
+    )
+    parser.add_argument(
+        "--kernel-report-out-dir",
+        type=str,
+        default=None,
+        help="Output directory for the 08 report. Defaults to <output_dir>/08_kernel_report.",
+    )
+    parser.add_argument("--kernel-report-expected-candidates", type=int, default=None)
+    parser.add_argument("--kernel-report-package-lowpass", action="store_true")
+    parser.add_argument("--kernel-report-lowpass-cutoff", type=float, default=0.15)
     parser.add_argument(
         "--compute-state-kernel-regression-mode",
         choices=("standard", "deconvolved", "local_poly"),
