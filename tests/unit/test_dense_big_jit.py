@@ -549,6 +549,35 @@ def test_dense_big_jit_mstep_matches_dense_primitives_and_adjoint():
     np.testing.assert_allclose(np.asarray(result.Ft_ctf), np.asarray(ref_Ft_ctf), rtol=1e-6, atol=1e-6)
 
 
+def test_dense_big_jit_mstep_keeps_complex64_accumulators_with_float64_logsumexp():
+    s = _inputs()
+    scores = _reference_scores(s)
+    max_s, sum_exp = _update_logsumexp(
+        jnp.full((N_IMAGES,), -jnp.inf),
+        jnp.zeros((N_IMAGES,), dtype=jnp.float64),
+        scores,
+    )
+    log_z = max_s + jnp.log(sum_exp)
+
+    probs, _, _, summed_half, ctf_probs_half = _m_step_block_compute(
+        s["shifted_recon_half"],
+        scores,
+        log_z,
+        s["rotations"],
+        s["ctf2_over_nv_recon_half"],
+        N_IMAGES,
+        N_TRANS,
+    )
+    result = _run_big_jit(s, run_mstep=True, log_z=log_z)
+
+    assert log_z.dtype == jnp.float64
+    assert probs.dtype == jnp.float64
+    assert summed_half.dtype == jnp.complex64
+    assert ctf_probs_half.dtype == jnp.float32
+    assert result.Ft_y.dtype == jnp.complex64
+    assert result.Ft_ctf.dtype == jnp.complex64
+
+
 @pytest.mark.parametrize(("use_window", "current_size"), [(False, None), (True, 4)])
 def test_dense_big_jit_noise_matches_dense_primitives(use_window, current_size):
     s = _inputs()
@@ -728,6 +757,8 @@ def test_dense_big_jit_winner_take_all_matches_one_hot_reference():
         n_shells=0,
     )
 
+    assert result.Ft_y.dtype == jnp.complex64
+    assert result.Ft_ctf.dtype == jnp.complex64
     # Each image contributes 1.0 of probability mass (one-hot at the winner).
     np.testing.assert_allclose(
         np.asarray(jnp.sum(result.probs_sum_t, axis=-1)),
@@ -743,6 +774,69 @@ def test_dense_big_jit_winner_take_all_matches_one_hot_reference():
     )
     np.testing.assert_allclose(np.asarray(result.Ft_y), np.asarray(ref_Ft_y), rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(result.Ft_ctf), np.asarray(ref_Ft_ctf), rtol=1e-6, atol=1e-6)
+
+
+def test_dense_big_jit_winner_take_all_keeps_complex64_accumulators_with_float64_scoring():
+    s = _inputs()
+    scores = _reference_scores(s)
+    flat_scores = scores.reshape(N_IMAGES, -1)
+    best_score = jnp.max(flat_scores, axis=1)
+    best_argmax = jnp.argmax(flat_scores, axis=1).astype(jnp.int32)
+
+    result = run_dense_bucket_big_jit(
+        s["shifted_score_half"],
+        s["batch_norm"],
+        s["score_weight_half"],
+        s["shifted_recon_half"],
+        s["ctf2_over_nv_recon_half"],
+        s["mean_for_proj"],
+        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+        s["rotations"],
+        s["half_weights"],
+        s["rotation_log_prior"],
+        s["translation_log_prior"],
+        s["candidate_mask"],
+        s["valid_rotation_mask"],
+        jnp.ones(N_IMAGES, dtype=bool),
+        jnp.zeros(N_IMAGES, dtype=jnp.float32),
+        jnp.arange(N_HALF, dtype=jnp.int32),
+        jnp.arange(N_HALF, dtype=jnp.int32),
+        None,
+        None,
+        None,
+        None,
+        best_argmax,
+        best_score,
+        jnp.asarray(0, dtype=jnp.int32),
+        score_mode="gaussian",
+        zero_dc_for_scoring=False,
+        use_window=False,
+        use_float64_scoring=True,
+        use_float64_normalization=True,
+        run_mstep=True,
+        winner_take_all=True,
+        image_shape=IMAGE_SHAPE,
+        proj_volume_shape=VOLUME_SHAPE,
+        recon_volume_shape=VOLUME_SHAPE,
+        disc_type="linear_interp",
+        projection_max_r="auto",
+        backprojection_max_r="auto",
+        disable_adjoint_y=False,
+        disable_adjoint_ctf=False,
+        accumulate_noise=False,
+        return_noise_split=False,
+        n_shells=0,
+    )
+
+    assert result.Ft_y.dtype == jnp.complex64
+    assert result.Ft_ctf.dtype == jnp.complex64
+    np.testing.assert_allclose(
+        np.asarray(jnp.sum(result.probs_sum_t, axis=-1)),
+        np.ones(N_IMAGES, dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
 
 
 def test_dense_big_jit_winner_take_all_skips_invalid_images():

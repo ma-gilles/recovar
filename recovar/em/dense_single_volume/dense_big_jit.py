@@ -197,9 +197,9 @@ def _mstep_half_sums(
     probs = jnp.where(jnp.isfinite(diff), jnp.exp(diff), 0.0)
     probs = jnp.where(valid_image_mask[:, None, None], probs, 0.0)
     P = probs.swapaxes(0, 1).reshape(rot_block_size, batch_size * n_trans)
-    summed_half = P @ shifted_recon_half
+    summed_half = (P @ shifted_recon_half).astype(shifted_recon_half.dtype)
     probs_sum_t = jnp.sum(probs, axis=-1)
-    ctf_probs_half = probs_sum_t.T @ ctf2_over_nv_recon_half
+    ctf_probs_half = (probs_sum_t.T @ ctf2_over_nv_recon_half).astype(ctf2_over_nv_recon_half.dtype)
     flat_scores = scores.reshape(batch_size, -1)
     block_best = jnp.max(flat_scores, axis=1)
     block_argmax = jnp.argmax(flat_scores, axis=1)
@@ -246,9 +246,9 @@ def _mstep_half_sums_wta(
     ).reshape(batch_size, rot_block_size, n_trans)
     probs = probs * (in_block & valid_image)[:, None, None].astype(probs.dtype)
     P = probs.swapaxes(0, 1).reshape(rot_block_size, batch_size * n_trans)
-    summed_half = P @ shifted_recon_half
+    summed_half = (P @ shifted_recon_half).astype(shifted_recon_half.dtype)
     probs_sum_t = jnp.sum(probs, axis=-1)
-    ctf_probs_half = probs_sum_t.T @ ctf2_over_nv_recon_half
+    ctf_probs_half = (probs_sum_t.T @ ctf2_over_nv_recon_half).astype(ctf2_over_nv_recon_half.dtype)
     flat_scores = scores.reshape(batch_size, -1)
     block_best = jnp.where(valid_image_mask, jnp.max(flat_scores, axis=1), -jnp.inf)
     block_argmax = jnp.where(valid_image_mask, jnp.argmax(flat_scores, axis=1), 0)
@@ -319,6 +319,8 @@ def _adjoint_dense_bucket(
     if disable_adjoint_y and disable_adjoint_ctf:
         return Ft_y, Ft_ctf
 
+    summed_half = summed_half.astype(Ft_y.dtype)
+    ctf_probs_half = ctf_probs_half.astype(Ft_ctf.dtype)
     if not disable_adjoint_y and not disable_adjoint_ctf:
         volumes = jnp.stack([Ft_y, Ft_ctf], axis=0)
         slices = jnp.stack([summed_half, ctf_probs_half], axis=0)
@@ -591,6 +593,8 @@ def run_dense_bucket_big_jit(
                 log_Z,
                 valid_image_mask.astype(bool),
             )
+        summed_half = summed_half.astype(Ft_y.dtype)
+        ctf_probs_half = ctf_probs_half.astype(Ft_ctf.dtype)
         if accumulate_noise:
             if use_window:
                 shifted_noise = shifted_noise_half[:, recon_window_indices]

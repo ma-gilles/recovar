@@ -159,8 +159,8 @@ _EM_RAW_IMAGE_CACHE_DEFAULT_MAX_GB = 16.0
 logger = logging.getLogger(__name__)
 
 RELION_SCORE_TENSOR_FLOAT_BUDGET = 200_000_000
-RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 8_000_000
-RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET = 2_000_000
+RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 256_000_000
+RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET = 8_000_000
 RELION_MAX_FULL_GRID_ORDER = 4
 EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS = 3_000_000
 _RELION_EM_BATCH_DEFAULT_GPU_GB = 80.0
@@ -481,6 +481,19 @@ def _score_kclass_firstiter_cc_pass2(
         extra["coarse_current_size"] = coarse_current_size
     if fine_current_size is not None:
         extra["fine_current_size"] = fine_current_size
+    fine_rotation_block_size = min(
+        int(fine_rot.shape[0]),
+        _safe_dense_k_class_rotation_block_size(
+            fine_trans.shape[0],
+            firstiter_image_batch_size,
+        ),
+    )
+    if fine_rotation_block_size > int(em_kwargs.get("rotation_block_size", 1)):
+        logger.info(
+            "STRICT-PARITY: increasing iter-1 winner-take-all fine rotation_block_size from %d to %d",
+            int(em_kwargs.get("rotation_block_size", 1)),
+            fine_rotation_block_size,
+        )
     k_class_result = run_dense_k_class_em_adaptive(
         experiment_dataset,
         mean,
@@ -498,6 +511,7 @@ def _score_kclass_firstiter_cc_pass2(
         return_best_pose_details=True,
         firstiter_cc_pass2_only_best_coarse=True,
         skip_significance_pruning=True,
+        fine_rotation_block_size=fine_rotation_block_size,
         **extra,
         **em_kwargs,
     )

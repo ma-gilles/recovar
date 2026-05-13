@@ -253,9 +253,9 @@ def _m_step_block_windowed(
     diff = scores_block - log_Z[:, None, None]
     probs = jnp.where(jnp.isfinite(diff), jnp.exp(diff), 0.0)
     P = probs.swapaxes(0, 1).reshape(rot_block_size, n_images * n_trans)
-    summed_windowed = P @ shifted_windowed
+    summed_windowed = (P @ shifted_windowed).astype(shifted_windowed.dtype)
     probs_sum_t = jnp.sum(probs, axis=-1)
-    ctf_probs_windowed = probs_sum_t.T @ ctf2_over_nv_windowed
+    ctf_probs_windowed = (probs_sum_t.T @ ctf2_over_nv_windowed).astype(ctf2_over_nv_windowed.dtype)
     block_best = jnp.max(scores_block.reshape(n_images, -1), axis=1)
     block_argmax = jnp.argmax(scores_block.reshape(n_images, -1), axis=1)
     return Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed
@@ -342,9 +342,9 @@ def _m_step_block_compute(
     diff = scores_block - log_Z[:, None, None]
     probs = jnp.where(jnp.isfinite(diff), jnp.exp(diff), 0.0)
     P = probs.swapaxes(0, 1).reshape(rot_block_size, n_images * n_trans)
-    summed_half = P @ shifted_half
+    summed_half = (P @ shifted_half).astype(shifted_half.dtype)
     probs_sum_t = jnp.sum(probs, axis=-1)
-    ctf_probs_half = probs_sum_t.T @ ctf2_over_nv_half
+    ctf_probs_half = (probs_sum_t.T @ ctf2_over_nv_half).astype(ctf2_over_nv_half.dtype)
     block_best = jnp.max(scores_block.reshape(n_images, -1), axis=1)
     block_argmax = jnp.argmax(scores_block.reshape(n_images, -1), axis=1)
     return probs, block_best, block_argmax, summed_half, ctf_probs_half

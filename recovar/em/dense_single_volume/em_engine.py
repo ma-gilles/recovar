@@ -1315,6 +1315,19 @@ def run_em(
         best_argmax_pass1 = jnp.zeros(batch_size, dtype=jnp.int32)
 
         for block in _iter_dense_rotation_blocks(rotations_padded, n_rot, n_blocks, rotation_block_size):
+            if not score_constraints.block_has_candidates(
+                r0=block.r0,
+                start=start_idx,
+                end=end_idx,
+                batch_count=batch_size,
+                rotation_block_size=rotation_block_size,
+            ):
+                if block_max_per_image is not None:
+                    block_max_per_image.append(
+                        jnp.full(batch_size, -jnp.inf, dtype=precision_policy.score_real_dtype)
+                    )
+                    block_pose_counts.append(max(int(block.actual_rot) * int(n_trans), 1))
+                continue
             if use_dense_big_jit:
                 score_t0 = time.time()
                 dense_result = dense_big_jit_runner.run(

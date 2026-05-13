@@ -237,6 +237,35 @@ class DenseScoreConstraints:
         valid_rotation_mask = jnp.arange(rotation_block_size) < valid
         return rotation_prior, translation_prior, candidate_mask, valid_rotation_mask
 
+    def block_has_candidates(
+        self,
+        *,
+        r0: int,
+        start: int,
+        end: int,
+        batch_count: int,
+        rotation_block_size: int,
+    ) -> bool:
+        """Return whether a block can contain any valid masked candidate."""
+
+        actual_count = int(end - start)
+        valid_rot = max(0, min(int(rotation_block_size), self.n_rot - int(r0)))
+        if actual_count <= 0 or valid_rot <= 0:
+            return False
+        if self.candidate_mask is None:
+            return True
+        if _is_lazy_candidate_mask(self.candidate_mask) and hasattr(self.candidate_mask, "block_has_candidates"):
+            return bool(
+                self.candidate_mask.block_has_candidates(
+                    r0=r0,
+                    start=start,
+                    end=end,
+                    batch_count=batch_count,
+                    rotation_block_size=rotation_block_size,
+                )
+            )
+        return True
+
 
 def apply_dense_score_constraints(
     scores,

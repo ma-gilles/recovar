@@ -18,8 +18,8 @@ from recovar.em.sampling import (
 
 # Mirrors iteration_loop's module-level constants so monkeypatches at either
 # module level still bind correctly.
-RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 8_000_000
-RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET = 2_000_000
+RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 256_000_000
+RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET = 8_000_000
 
 
 def _safe_firstiter_cc_image_batch_size(n_trans, image_shape):

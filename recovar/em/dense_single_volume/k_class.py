@@ -149,8 +149,10 @@ def _dense_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_clas
     # path forwards directly to run_em so they have to be filtered here.
     import inspect as _inspect
 
-    _allowed = set(_inspect.signature(run_em).parameters)
-    kwargs = {k: v for k, v in kwargs.items() if k in _allowed}
+    _signature = _inspect.signature(run_em)
+    if not any(param.kind is _inspect.Parameter.VAR_KEYWORD for param in _signature.parameters.values()):
+        _allowed = set(_signature.parameters)
+        kwargs = {k: v for k, v in kwargs.items() if k in _allowed}
     return kwargs
 
 
@@ -673,22 +675,31 @@ def run_dense_k_class_em(
             per_class_best_pose_rotation_ids=None if best_pose_rotation_ids is None else [best_pose_rotation_ids],
         )
 
-    probe_t0 = time.time()
-    score_probe = _run_dense_k_class_score_probe(
-        experiment_dataset,
-        means_array,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        class_log_priors=log_priors,
-        **base_engine_kwargs,
+    wta_masked_mstep = bool(base_engine_kwargs.get("relion_firstiter_winner_take_all")) and (
+        base_engine_kwargs.get("class_rotation_translation_mask") is not None
     )
-    probe_s = time.time() - probe_t0
+    if wta_masked_mstep:
+        probe_s = 0.0
+        score_probe = None
+        class_log_evidence_np = None
+        global_log_evidence = None
+    else:
+        probe_t0 = time.time()
+        score_probe = _run_dense_k_class_score_probe(
+            experiment_dataset,
+            means_array,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            disc_type,
+            class_log_priors=log_priors,
+            **base_engine_kwargs,
+        )
+        probe_s = time.time() - probe_t0
 
-    class_log_evidence_np = score_probe.class_log_evidence
-    global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
+        class_log_evidence_np = score_probe.class_log_evidence
+        global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
 
     new_means = []
     Ft_y = []
@@ -714,7 +725,7 @@ def run_dense_k_class_em(
                 return_stats=True,
                 accumulate_noise=accumulate_noise,
                 class_log_prior=float(log_priors[class_index]),
-                normalization_log_evidence=global_log_evidence,
+                **({} if global_log_evidence is None else {"normalization_log_evidence": global_log_evidence}),
                 **class_engine_kwargs,
             )
         new_mean, hard_assignment, class_Ft_y, class_Ft_ctf, stats, noise = _dense_outputs(
@@ -738,6 +749,11 @@ def run_dense_k_class_em(
             per_class_best_pose_translations.append(best_trans)
             per_class_best_pose_rotation_ids.append(best_rot_ids)
     mstep_s = time.time() - mstep_t0
+    if class_log_evidence_np is None:
+        class_log_evidence_np = np.stack(
+            [np.asarray(stats.log_evidence_per_image, dtype=np.float64) for stats in per_class_stats],
+            axis=0,
+        )
     logger.info(
         "Dense K-class EM profile: classes=%d images=%d rotations=%d translations=%d probe=%.1fs mstep=%.1fs total=%.1fs",
         n_classes,
@@ -1115,6 +1131,27 @@ class _PerClassFineGridSignificanceMask:
             mask[local_image, :actual_rot, :] = coarse_pair[rot_parent_block][:, self.trans_parent_map]
         return jnp.asarray(mask)
 
+    def block_has_candidates(self, *, r0: int, start: int, end: int, batch_count: int, rotation_block_size: int):
+        del batch_count
+        actual_count = int(end - start)
+        r0 = int(r0)
+        actual_rot = max(0, min(int(rotation_block_size), self.n_rot_fine - r0))
+        if actual_count <= 0 or actual_rot <= 0:
+            return False
+        rot_parent_block = self.rot_parent_map[r0 : r0 + actual_rot]
+        for image_index in range(int(start), int(end)):
+            if self.global_winner is not None and int(self.global_winner[image_index]) != int(self.class_index):
+                continue
+            sig = self.significant_sample_indices[image_index]
+            if sig is None:
+                return True
+            sig = np.asarray(sig, dtype=np.int64).reshape(-1)
+            if sig.size == 0:
+                continue
+            if np.isin(rot_parent_block, sig // self.n_trans_coarse).any():
+                return True
+        return False
+
 
 @dataclass(frozen=True)
 class _ClassFineGridSignificanceMask:
@@ -1180,6 +1217,7 @@ def run_dense_k_class_em_adaptive(
     coarse_translation_log_prior=None,
     coarse_rotation_log_prior=None,
     coarse_class_rotation_log_prior=None,
+    fine_rotation_block_size: int | None = None,
     skip_significance_pruning: bool = False,
     firstiter_cc_pass2_only_best_coarse: bool = False,
     return_best_pose_details: bool = False,
@@ -1370,6 +1408,8 @@ def run_dense_k_class_em_adaptive(
     pass2_kwargs.pop("rotation_translation_mask", None)
     if "current_size" not in pass2_kwargs and fine_current_size is not None:
         pass2_kwargs["current_size"] = fine_current_size
+    if fine_rotation_block_size is not None:
+        pass2_kwargs["rotation_block_size"] = max(1, int(fine_rotation_block_size))
 
     # Expand priors from coarse to fine grid by parent broadcasting.
     # Mirrors RELION's pushback semantics where each oversampled child inherits

@@ -10,6 +10,10 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     normalize_class_direction_prior_per_half,
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
+from recovar.em.dense_single_volume.firstiter_cc import (
+    _safe_dense_k_class_rotation_block_size,
+    _safe_firstiter_cc_image_batch_size,
+)
 from recovar.em.dense_single_volume.k_class import (
     _ClassFineGridSignificanceMask,
     _assemble_result,
@@ -281,6 +285,57 @@ def test_dense_k_class_single_class_skips_score_probe(monkeypatch):
     np.testing.assert_allclose(np.asarray(result.best_pose_translations), translations[[1, 0]])
 
 
+def test_dense_k_class_wta_mask_skips_score_probe(monkeypatch):
+    calls = []
+
+    class TinyDataset:
+        n_images = 2
+
+    def fake_run_em(
+        _dataset,
+        mean,
+        _mean_variance,
+        _noise_variance,
+        rotations_arg,
+        _translations,
+        _disc_type,
+        **kwargs,
+    ):
+        calls.append(kwargs)
+        n_images = TinyDataset.n_images
+        n_rot = int(np.asarray(rotations_arg).shape[0])
+        stats = make_relion_stats(
+            log_evidence_per_image=np.full(n_images, float(len(calls)), dtype=np.float32),
+            best_log_score_per_image=np.full(n_images, float(len(calls)), dtype=np.float32),
+            max_posterior_per_image=np.ones(n_images, dtype=np.float32),
+            rotation_posterior_sums=np.zeros(n_rot, dtype=np.float32),
+        )
+        return (
+            jnp.zeros_like(mean),
+            np.zeros(n_images, dtype=np.int32),
+            jnp.zeros_like(mean),
+            jnp.zeros_like(mean),
+            stats,
+        )
+
+    monkeypatch.setattr(k_class_module, "run_em", fake_run_em)
+
+    run_dense_k_class_em(
+        TinyDataset(),
+        jnp.zeros((2, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(4, dtype=jnp.float32),
+        np.zeros((3, 3, 3), dtype=np.float32),
+        np.zeros((1, 2), dtype=np.float32),
+        "linear_interp",
+        relion_firstiter_winner_take_all=True,
+        class_rotation_translation_mask=np.ones((2, TinyDataset.n_images, 3, 1), dtype=bool),
+    )
+
+    assert len(calls) == 2
+    assert all("normalization_log_evidence" not in call for call in calls)
+
+
 def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeypatch):
     score_calls = []
     dense_calls = []
@@ -485,12 +540,14 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
         fine_current_size=56,
         current_size=56,
         firstiter_cc_pass2_only_best_coarse=True,
+        fine_rotation_block_size=123,
     )
 
     assert len(score_calls) == 2
     assert len(dense_calls) == 1
     assert {call["current_size"] for call in score_calls} == {26}
     assert dense_calls[0]["current_size"] == 56
+    assert dense_calls[0]["rotation_block_size"] == 123
 
 
 def test_lazy_k_class_adaptive_mask_matches_dense_blocks_without_materializing():
@@ -569,6 +626,13 @@ def test_lazy_k_class_adaptive_mask_matches_dense_blocks_without_materializing()
                 rotation_block_size=rotation_block_size,
             )
             np.testing.assert_array_equal(np.asarray(actual), expected)
+            assert per_class.block_has_candidates(
+                r0=r0,
+                start=start,
+                end=end,
+                batch_count=batch_count,
+                rotation_block_size=rotation_block_size,
+            ) == bool(expected.any())
 
 
 def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
@@ -613,6 +677,11 @@ def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
     ) + np.float32(expected_shift)
     np.testing.assert_allclose(fine_trans, expected, atol=1e-6)
     np.testing.assert_array_equal(trans_parent_map, np.zeros(4, dtype=np.int64))
+
+
+def test_firstiter_cc_batch_cap_keeps_relion_default_batch_for_256_box():
+    assert _safe_firstiter_cc_image_batch_size(116, (256, 256)) >= 50
+    assert _safe_dense_k_class_rotation_block_size(116, 50) >= 1_000
 
 
 def test_local_k_class_single_class_skips_score_probe(monkeypatch):
