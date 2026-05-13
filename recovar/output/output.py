@@ -750,6 +750,8 @@ def compute_and_save_reweighted(
     vol_prefix="state",
     kernel_regression_mode="standard",
     deconv_lambda_grid=None,
+    local_poly_degree=3,
+    local_poly_bandwidth_multipliers=None,
 ):
     """Compute reweighted volume estimates and save with standardized organization.
 
@@ -770,9 +772,14 @@ def compute_and_save_reweighted(
         n_min_particles = 100
 
     mkdir_safe(output_folder)
-    from recovar.heterogeneity import deconvolved_kernel_regression, heterogeneity_volume, latent_density
+    from recovar.heterogeneity import (
+        deconvolved_kernel_regression,
+        heterogeneity_volume,
+        latent_density,
+        local_polynomial_regression,
+    )
     n_vols = path_subsampled.shape[0]
-    if kernel_regression_mode not in ("standard", "deconvolved"):
+    if kernel_regression_mode not in ("standard", "deconvolved", "local_poly"):
         raise ValueError(f"Unknown kernel_regression_mode={kernel_regression_mode!r}")
 
     for k in range(n_vols):
@@ -798,6 +805,8 @@ def compute_and_save_reweighted(
             heterogeneity_distances, per_particle=ds.tilt_series_flag)
         deconv_latent_differences = None
         deconv_latent_precision = None
+        local_poly_latent_differences = None
+        local_poly_latent_precision = None
         if kernel_regression_mode == "deconvolved":
             if ndim != 1:
                 raise NotImplementedError(f"Deconvolved kernel regression only supports zdim=1; got ndim={ndim}")
@@ -811,6 +820,22 @@ def compute_and_save_reweighted(
                 per_particle=ds.tilt_series_flag,
             )
             deconv_latent_precision = ds.split_halfset_array(
+                latent_precision,
+                per_particle=ds.tilt_series_flag,
+            )
+        elif kernel_regression_mode == "local_poly":
+            if ndim != 1:
+                raise NotImplementedError(f"local_poly kernel regression only supports zdim=1; got ndim={ndim}")
+            zs_1d = np.asarray(zs, dtype=np.float32)
+            if zs_1d.ndim == 1:
+                zs_1d = zs_1d[:, None]
+            latent_differences = np.asarray(zs_1d[:, :1] - latent_points[:, :1], dtype=np.float32)
+            latent_precision = local_polynomial_regression.coerce_1d_latent_precision(cov_zs)
+            local_poly_latent_differences = ds.split_halfset_array(
+                latent_differences[:, 0],
+                per_particle=ds.tilt_series_flag,
+            )
+            local_poly_latent_precision = ds.split_halfset_array(
                 latent_precision,
                 per_particle=ds.tilt_series_flag,
             )
@@ -839,6 +864,10 @@ def compute_and_save_reweighted(
             deconv_latent_differences=deconv_latent_differences,
             deconv_latent_precision=deconv_latent_precision,
             deconv_lambda_grid=deconv_lambda_grid,
+            local_poly_degree=local_poly_degree,
+            local_poly_bandwidth_multipliers=local_poly_bandwidth_multipliers,
+            local_poly_latent_differences=local_poly_latent_differences,
+            local_poly_latent_precision=local_poly_latent_precision,
         )
 
         logger.info("Done with volume %d: %s", k, vol_paths.stem)

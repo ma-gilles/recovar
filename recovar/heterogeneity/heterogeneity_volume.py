@@ -13,7 +13,12 @@ import recovar.jax_config
 from recovar import utils
 from recovar.core import mask
 from recovar.data_io import cryoem_dataset, halfsets
-from recovar.heterogeneity import deconvolved_kernel_regression, kernel_regression_reconstruction, locres
+from recovar.heterogeneity import (
+    deconvolved_kernel_regression,
+    kernel_regression_reconstruction,
+    local_polynomial_regression,
+    locres,
+)
 from recovar.output import output as output_mod
 from recovar.output.output_paths import VolumeOutputPaths, resolve_volume_diag_path
 from recovar.utils.nvtx_shim import nvtx
@@ -152,6 +157,51 @@ def _deconvolved_kernel_candidates(ndim, latent_differences, latent_precision, l
     return lambda_grid, n_images_per_lambda, sigma_ref, latent_differences, latent_precision
 
 
+def _local_poly_kernel_candidates(
+    ndim,
+    latent_differences,
+    latent_precision,
+    n_min_particles,
+    bandwidth_multipliers,
+):
+    if ndim != 1:
+        raise NotImplementedError(f"local_poly kernel regression only supports zdim=1; got ndim={ndim}")
+    if latent_differences is None or latent_precision is None:
+        raise ValueError("local_poly_latent_differences and local_poly_latent_precision are required for local_poly")
+
+    latent_differences = [
+        local_polynomial_regression.coerce_1d_latent_differences(x) for x in latent_differences
+    ]
+    latent_precision = [
+        local_polynomial_regression.coerce_1d_latent_precision(x) for x in latent_precision
+    ]
+    all_latent_differences = np.concatenate(latent_differences)
+    all_latent_precision = np.concatenate(latent_precision)
+    multipliers, h_grid, sigma_ref, h_min, r_min = (
+        local_polynomial_regression.local_poly_bandwidth_grid_info_1d(
+            all_latent_differences,
+            all_latent_precision,
+            n_min_particles,
+            multipliers=bandwidth_multipliers,
+        )
+    )
+    n_images_per_h = []
+    for h in h_grid:
+        alpha, _ = local_polynomial_regression.gaussian_window_polynomial_moments_1d(
+            all_latent_differences,
+            all_latent_precision,
+            h=float(h),
+            degree=0,
+            poly_scale=float(h),
+        )
+        n_images_per_h.append(int(np.count_nonzero(alpha[:, 0] > 0)))
+    logger.info("local_poly bandwidth multipliers %s", multipliers)
+    logger.info("local_poly h_grid %s", h_grid)
+    logger.info("local_poly sigma_ref=%s h_min=%s r_min=%s", sigma_ref, h_min, r_min)
+    logger.info("Nonzero local_poly posterior-window weights per bandwidth: %s", n_images_per_h)
+    return h_grid, n_images_per_h, sigma_ref, h_min, r_min, latent_differences, latent_precision
+
+
 @nvtx.annotate("make_volumes_kernel_estimate_local", color="yellow")
 def make_volumes_kernel_estimate_local(
     heterogeneity_distances,
@@ -177,6 +227,10 @@ def make_volumes_kernel_estimate_local(
     deconv_latent_differences=None,
     deconv_latent_precision=None,
     deconv_lambda_grid=None,
+    local_poly_degree=local_polynomial_regression.DEFAULT_LOCAL_POLY_DEGREE,
+    local_poly_bandwidth_multipliers=None,
+    local_poly_latent_differences=None,
+    local_poly_latent_precision=None,
 ):
     """Reconstruct volumes along a heterogeneity path using kernel regression.
 
@@ -208,15 +262,16 @@ def make_volumes_kernel_estimate_local(
     """
     vol_paths.ensure_dirs()
     ds = dataset
-    if kernel_regression_mode not in ("standard", "deconvolved"):
+    if kernel_regression_mode not in ("standard", "deconvolved", "local_poly"):
         raise ValueError(f"Unknown kernel_regression_mode={kernel_regression_mode!r}")
 
     deconv_sigma_ref = None
+    local_poly_info = None
     if kernel_regression_mode == "standard":
         heterogeneity_bins, n_images_per_bin = _standard_kernel_candidates(
             bins, heterogeneity_distances, n_min_particles
         )
-    else:
+    elif kernel_regression_mode == "deconvolved":
         (
             heterogeneity_bins,
             n_images_per_bin,
@@ -229,6 +284,29 @@ def make_volumes_kernel_estimate_local(
             deconv_latent_precision,
             deconv_lambda_grid,
         )
+    else:
+        (
+            heterogeneity_bins,
+            n_images_per_bin,
+            local_poly_sigma_ref,
+            local_poly_h_min,
+            local_poly_r_min,
+            local_poly_latent_differences,
+            local_poly_latent_precision,
+        ) = _local_poly_kernel_candidates(
+            ndim,
+            local_poly_latent_differences,
+            local_poly_latent_precision,
+            n_min_particles,
+            local_poly_bandwidth_multipliers,
+        )
+        local_poly_info = {
+            "degree": int(local_poly_degree),
+            "h_grid": heterogeneity_bins,
+            "sigma_ref": local_poly_sigma_ref,
+            "h_min": local_poly_h_min,
+            "r_min": local_poly_r_min,
+        }
 
     if kernel_regression_mode == "standard":
 
@@ -257,7 +335,7 @@ def make_volumes_kernel_estimate_local(
                 use_fast_rfft=use_fast_rfft,
             )
 
-    else:
+    elif kernel_regression_mode == "deconvolved":
 
         def _run_kernel_estimator(
             half_ds,
@@ -283,6 +361,34 @@ def make_volumes_kernel_estimate_local(
                 return_real_space=True,
                 use_fast_rfft=use_fast_rfft,
                 sigma_ref=deconv_sigma_ref,
+            )
+
+    else:
+
+        def _run_kernel_estimator(
+            half_ds,
+            half_idx,
+            candidate_grid,
+            *,
+            tau_value,
+            grid_correct,
+            use_spherical_mask,
+            upsampling_factor,
+            return_lhs_rhs=False,
+        ):
+            return local_polynomial_regression.estimate_local_polynomial_volumes(
+                half_ds,
+                local_poly_latent_differences[half_idx],
+                local_poly_latent_precision[half_idx],
+                candidate_grid,
+                degree=local_poly_degree,
+                tau=tau_value,
+                grid_correct=grid_correct,
+                use_spherical_mask=use_spherical_mask,
+                return_lhs_rhs=return_lhs_rhs,
+                upsampling_factor=upsampling_factor,
+                return_real_space=True,
+                use_fast_rfft=use_fast_rfft,
             )
 
     estimates = [None, None]
@@ -315,8 +421,9 @@ def make_volumes_kernel_estimate_local(
             )
         )
 
+        lhs_cv_half = lhs[k][0, 0, 0] if kernel_regression_mode == "local_poly" else lhs[k][0]
         lhs[k] = fourier_transform_utils.half_volume_to_full_volume(
-            lhs[k][0],
+            lhs_cv_half,
             ds.volume_shape,
         )
         # Zero out things after Nyquist - these won't be used in CV
@@ -508,6 +615,8 @@ def make_volumes_kernel_estimate_local(
         if kernel_regression_mode == "deconvolved":
             output_dict["lambda_grid"] = heterogeneity_bins
             output_dict["sigma_ref"] = deconv_sigma_ref
+        if kernel_regression_mode == "local_poly":
+            output_dict["local_poly"] = local_poly_info
 
         recovar.utils.pickle_dump(output_dict, vol_paths.params)
 
