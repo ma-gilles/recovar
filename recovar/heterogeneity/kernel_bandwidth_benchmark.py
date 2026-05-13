@@ -19,8 +19,8 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as ftu
 from recovar import utils
-from recovar.heterogeneity import adaptive_kernel_discretization as akd
 from recovar.heterogeneity import heterogeneity_volume as hv
+from recovar.heterogeneity import kernel_regression_reconstruction as kernel_recon
 from recovar.output import plot_style
 
 
@@ -168,7 +168,6 @@ def compute_candidate_estimates(
     distances_by_half: list[np.ndarray],
     bins: np.ndarray,
     *,
-    noise_variance=None,
     batch_size: int | None = None,
     heterogeneity_kernel: str = "parabola",
     use_fast_rfft: bool = False,
@@ -183,9 +182,8 @@ def compute_candidate_estimates(
 
     for half in range(2):
         half_ds = dataset.get_halfset(half)
-        estimates = akd.even_less_naive_heterogeneity_scheme_relion_style(
+        estimates = kernel_recon.estimate_standard_kernel_volumes(
             half_ds,
-            noise_variance,
             np.asarray(distances_by_half[half]),
             np.asarray(bins),
             batch_size=batch_size,
@@ -202,9 +200,8 @@ def compute_candidate_estimates(
         estimates = np.asarray(estimates).reshape(len(bins), *vol_shape).astype(np.float32)
         estimates_by_half.append(estimates)
 
-        cv_est, lhs_half, _rhs = akd.even_less_naive_heterogeneity_scheme_relion_style(
+        cv_est, lhs_half, _rhs = kernel_recon.estimate_standard_kernel_volumes(
             half_ds,
-            noise_variance,
             np.asarray(distances_by_half[half]),
             np.asarray(bins[:1]),
             batch_size=batch_size,

@@ -19,6 +19,8 @@ import jax
 import jax.numpy as jnp
 
 import recovar.heterogeneity.adaptive_kernel_discretization as akd
+import recovar.heterogeneity.deconvolved_kernel_regression as dkr
+import recovar.heterogeneity.kernel_regression_reconstruction as krecon
 
 from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import relion_functions
@@ -110,7 +112,7 @@ def test_find_diagonal_pol_indices_degree1():
 
 def test_pad_noise_variance_for_fixed_batch_marks_padded_rows_infinite():
     noise = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
-    padded = akd._pad_noise_variance_for_fixed_batch(
+    padded = krecon._pad_noise_variance_for_fixed_batch(
         noise,
         current_batch_size=2,
         target_batch_size=4,
@@ -131,7 +133,7 @@ def test_pad_heterogeneity_kernel_batch_preserves_valid_rows_and_zero_weights_pa
     ctf_params = np.arange(18, dtype=np.float32).reshape(2, 9)
     noise_variance = np.array([[5.0, 6.0, 7.0, 8.0]], dtype=np.float32)
 
-    padded = akd._pad_heterogeneity_kernel_batch(
+    padded = krecon._pad_heterogeneity_kernel_batch(
         images,
         rotation_matrices,
         translations,
@@ -162,27 +164,27 @@ def test_pad_heterogeneity_kernel_batch_preserves_valid_rows_and_zero_weights_pa
     assert np.isinf(padded_noise[2:]).all()
 
 
-def test_pad_image_weights_for_fixed_batch_zeroes_padded_rows():
-    weights = np.array([1.5, -0.25], dtype=np.float32)
-    padded = akd._pad_image_weights_for_fixed_batch(weights, current_batch_size=2, target_batch_size=5)
-
-    np.testing.assert_array_equal(padded[:2], weights)
-    np.testing.assert_array_equal(padded[2:], np.zeros(3, dtype=np.float32))
-
-
 def test_pad_image_weight_matrix_for_fixed_batch_zeroes_padded_rows():
     weights = np.array([[1.5, -0.25], [0.0, 2.0]], dtype=np.float32)
-    padded = akd._pad_image_weight_matrix_for_fixed_batch(weights, current_batch_size=2, target_batch_size=5)
+    padded = dkr._pad_image_weight_matrix_for_fixed_batch(weights, current_batch_size=2, target_batch_size=5)
 
     assert padded.shape == (2, 5)
     np.testing.assert_array_equal(padded[:, :2], weights)
     np.testing.assert_array_equal(padded[:, 2:], np.zeros((2, 3), dtype=np.float32))
 
 
+def test_broadcast_rows_and_flatten_expands_singleton_batch_rows():
+    arr = jnp.arange(6, dtype=jnp.float32).reshape(1, 2, 3)
+    out = dkr._broadcast_rows_and_flatten(arr, 4)
+
+    assert out.shape == (4, 6)
+    np.testing.assert_array_equal(np.asarray(out), np.tile(np.arange(6, dtype=np.float32), (4, 1)))
+
+
 def test_deconvolution_weights_are_symmetric_and_finite():
     latent_diff = np.array([-2.0, -0.5, 0.0, 0.5, 2.0], dtype=np.float32)
     latent_precision = np.ones_like(latent_diff) * 4.0
-    weights = akd.deconvolution_weights_1d(latent_diff, latent_precision, h=1.5)
+    weights = dkr.deconvolution_weights_1d(latent_diff, latent_precision, h=1.5)
 
     assert np.isfinite(weights).all()
     np.testing.assert_allclose(weights, weights[::-1], atol=1e-6)
@@ -192,9 +194,9 @@ def test_deconvolution_weights_many_matches_single_bandwidth_calls():
     latent_diff = np.array([-2.0, -0.5, 0.0, 0.5, 2.0], dtype=np.float32)
     latent_precision = np.ones_like(latent_diff) * 4.0
     h_grid = np.array([0.5, 1.5, 3.0], dtype=np.float32)
-    weights_many = akd.deconvolution_weights_1d_many(latent_diff, latent_precision, h_grid)
+    weights_many = dkr.deconvolution_weights_1d_many(latent_diff, latent_precision, h_grid)
     weights_single = np.stack(
-        [akd.deconvolution_weights_1d(latent_diff, latent_precision, h) for h in h_grid],
+        [dkr.deconvolution_weights_1d(latent_diff, latent_precision, h) for h in h_grid],
         axis=0,
     )
 
@@ -204,7 +206,7 @@ def test_deconvolution_weights_many_matches_single_bandwidth_calls():
 def test_deconvolution_weights_zero_invalid_precision():
     latent_diff = np.array([0.0, 0.25, 0.5, 0.75], dtype=np.float32)
     latent_precision = np.array([1.0, 0.0, -2.0, np.inf], dtype=np.float32)
-    weights = akd.deconvolution_weights_1d(latent_diff, latent_precision, h=1.0)
+    weights = dkr.deconvolution_weights_1d(latent_diff, latent_precision, h=1.0)
 
     assert np.isfinite(weights).all()
     assert weights[0] != 0
@@ -213,9 +215,9 @@ def test_deconvolution_weights_zero_invalid_precision():
 
 def test_default_deconvolution_lambda_grid_gives_finite_bandwidths():
     latent_precision = np.array([1.0, 4.0, 9.0, 16.0], dtype=np.float32)
-    lambda_grid, h_grid, sigma_ref = akd.deconvolution_bandwidths_1d(latent_precision)
+    lambda_grid, h_grid, sigma_ref = dkr.deconvolution_bandwidths_1d(latent_precision)
 
-    np.testing.assert_array_equal(lambda_grid, akd.DEFAULT_DECONV_LAMBDA_GRID)
+    np.testing.assert_array_equal(lambda_grid, dkr.DEFAULT_DECONV_LAMBDA_GRID)
     assert np.isfinite(h_grid).all()
     assert sigma_ref > 0
 
@@ -226,9 +228,8 @@ def test_deconvolved_scheme_rejects_zdim_greater_than_one_before_reconstruction(
     latent_precision = np.ones((cryo.n_images, 2, 2), dtype=np.float32)
 
     with pytest.raises(NotImplementedError):
-        akd.even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
+        dkr.estimate_deconvolved_kernel_volumes(
             cryo,
-            None,
             latent_differences,
             latent_precision,
             lambda_grid=np.array([1.0], dtype=np.float32),
@@ -389,17 +390,16 @@ def test_estimate_multiple_disc_relion_style_returns_finite_volume():
 
 
 @pytest.mark.gpu
-def test_even_less_naive_matches_reference_bin_loop(gpu_device):
-    """even_less_naive bin accumulation should match explicit per-bin reference."""
+def test_standard_kernel_volumes_match_reference_bin_loop(gpu_device):
+    """Standard bin accumulation should match an explicit per-bin reference."""
     cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=11)
     het_dists = np.array([0.1, 0.2, 0.35, 0.7, 0.75, 1.1, 1.2, 1.8], dtype=np.float32)
     bins = np.array([0.25, 0.8, 1.3], dtype=np.float32)
     batch_size = 4
 
     with jax.default_device(gpu_device):
-        est_new, lhs_new, rhs_new = akd.even_less_naive_heterogeneity_scheme_relion_style(
+        est_new, lhs_new, rhs_new = krecon.estimate_standard_kernel_volumes(
             cryo,
-            None,
             het_dists,
             bins,
             batch_size=batch_size,
@@ -439,13 +439,15 @@ def test_even_less_naive_matches_reference_bin_loop(gpu_device):
                 indices=image_inds,
             ):
                 images = cryo.process_images_half(images)
-                Ft_y_acc, Ft_ctf_acc = akd._heterogeneity_kernel_batch_from_fft(
+                image_weights = jnp.ones((images.shape[0],), dtype=images.real.dtype)
+                Ft_y_acc, Ft_ctf_acc = krecon._backproject_weighted_batch_from_fft(
                     cfg,
                     images,
                     ctf_params,
                     rotation_matrices,
                     translations,
                     noise_variance,
+                    image_weights,
                     Ft_y=Ft_y_acc,
                     Ft_ctf=Ft_ctf_acc,
                 )
@@ -477,7 +479,7 @@ def test_even_less_naive_matches_reference_bin_loop(gpu_device):
 
 
 @pytest.mark.gpu
-def test_deconvolved_even_less_naive_return_lhs_rhs_smoke(gpu_device):
+def test_deconvolved_kernel_volumes_return_lhs_rhs_smoke(gpu_device):
     """Deconvolved path returns one candidate per lambda and finite accumulators."""
     cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=13)
     latent_differences = np.linspace(-1.0, 1.0, cryo.n_images).astype(np.float32)
@@ -485,9 +487,8 @@ def test_deconvolved_even_less_naive_return_lhs_rhs_smoke(gpu_device):
     lambda_grid = np.array([1.0, 2.0], dtype=np.float32)
 
     with jax.default_device(gpu_device):
-        estimates, lhs, rhs = akd.even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
+        estimates, lhs, rhs = dkr.estimate_deconvolved_kernel_volumes(
             cryo,
-            None,
             latent_differences,
             latent_precision,
             lambda_grid=lambda_grid,
@@ -518,9 +519,8 @@ def test_deconvolved_lambda_batching_matches_scalar_lambda_loop(gpu_device):
     lambda_grid = np.array([0.8, 1.5, 3.0], dtype=np.float32)
 
     with jax.default_device(gpu_device):
-        est_scalar, lhs_scalar, rhs_scalar = akd.even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
+        est_scalar, lhs_scalar, rhs_scalar = dkr.estimate_deconvolved_kernel_volumes(
             cryo,
-            None,
             latent_differences,
             latent_precision,
             lambda_grid=lambda_grid,
@@ -533,9 +533,8 @@ def test_deconvolved_lambda_batching_matches_scalar_lambda_loop(gpu_device):
             return_real_space=True,
             lambda_batch_size=1,
         )
-        est_batched, lhs_batched, rhs_batched = akd.even_less_naive_deconvolved_heterogeneity_scheme_relion_style(
+        est_batched, lhs_batched, rhs_batched = dkr.estimate_deconvolved_kernel_volumes(
             cryo,
-            None,
             latent_differences,
             latent_precision,
             lambda_grid=lambda_grid,

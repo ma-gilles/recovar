@@ -1119,7 +1119,7 @@ batch_backproject_kernel(
 
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
-    const int img_stride = n_images * n_pixels;  /* elements between batch slices */
+    const int64_t img_stride = (int64_t)n_images * (int64_t)n_pixels;  /* elements between batch slices */
     using V2 = vec2_t<T>;
 
     /* Conjugate scatter coords (computed once for HALF_IMG) */
@@ -1173,19 +1173,21 @@ batch_backproject_kernel(
     }
 
     /* Volume stride: REAL_DATA uses 1 T per voxel, complex uses 2 */
-    const int vol_bytes_stride = REAL_DATA ? vol_stride : vol_stride * 2;
+    const int64_t vol_bytes_stride = REAL_DATA ? (int64_t)vol_stride : (int64_t)vol_stride * 2;
 
     /* Inner loop over batch — same coords, different volumes and images */
     for (int b = 0; b < batch_size; b++) {
-        T* vol = vols + b * vol_bytes_stride;
+        T* vol = vols + (int64_t)b * vol_bytes_stride;
 
         /* Load pixel — scalar for REAL_DATA, complex pair for complex */
         T val_re, val_im;
         if (REAL_DATA) {
-            val_re = imgs[(b * img_stride) + img_idx * n_pixels + pix];
+            const int64_t img_off = (int64_t)b * img_stride + (int64_t)img_idx * n_pixels + pix;
+            val_re = imgs[img_off];
             val_im = (T)0;
         } else {
-            V2 px = reinterpret_cast<const V2*>(imgs)[(b * img_stride) + img_idx * n_pixels + pix];
+            const int64_t img_off = (int64_t)b * img_stride + (int64_t)img_idx * n_pixels + pix;
+            V2 px = reinterpret_cast<const V2*>(imgs)[img_off];
             val_re = px.x;
             val_im = px.y;
         }
@@ -1329,7 +1331,7 @@ per_image_backproject_kernel(
         }
     }
 
-    T* vol = vols + img_idx * (HALF_VOL ? (N0 * N1 * N2_eff) : vol_stride) * 2;
+    T* vol = vols + (int64_t)img_idx * (int64_t)vol_stride * 2;
     V2 px = reinterpret_cast<const V2*>(imgs)[img_idx * n_pixels + pix];
 
     if (ORDER == 0) {
@@ -1461,7 +1463,7 @@ per_image_backproject_real_kernel(
         }
     }
 
-    T* vol = vols + img_idx * vol_stride;
+    T* vol = vols + (int64_t)img_idx * (int64_t)vol_stride;
     const T px = imgs[img_idx * n_pixels + pix];
 
     if (ORDER == 0) {

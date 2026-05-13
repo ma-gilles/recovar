@@ -1,7 +1,7 @@
 """GPU memory stress test for compute_state at 256^3.
 
 Exercises the bin-accumulation and kernel-regression path in
-adaptive_kernel_discretization.py under realistic memory pressure.
+kernel_regression_reconstruction.py under realistic memory pressure.
 Prior to the OOM fix, this would crash with a 25 GiB scatter allocation.
 """
 
@@ -37,7 +37,7 @@ def test_compute_state_gpu_memory_stress_256(tmp_path):
       5. Pass if no OOM or error.
 
     The critical path is the (n_bins x half_volume_size) accumulation in
-    even_less_naive_heterogeneity_scheme_relion_style.  At 256^3 with
+    estimate_standard_kernel_volumes.  At 256^3 with
     n_bins=50, this is ~5 GB of arrays that previously caused OOM via
     JAX immutable-array copies on GPU.
     """

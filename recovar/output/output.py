@@ -722,7 +722,7 @@ def compute_and_save_reweighted(
         n_min_particles = 100
 
     mkdir_safe(output_folder)
-    from recovar.heterogeneity import adaptive_kernel_discretization, heterogeneity_volume, latent_density
+    from recovar.heterogeneity import deconvolved_kernel_regression, heterogeneity_volume, latent_density
     n_vols = path_subsampled.shape[0]
     if kernel_regression_mode not in ("standard", "deconvolved"):
         raise ValueError(f"Unknown kernel_regression_mode={kernel_regression_mode!r}")
@@ -757,7 +757,7 @@ def compute_and_save_reweighted(
             if zs_1d.ndim == 1:
                 zs_1d = zs_1d[:, None]
             latent_differences = np.asarray(zs_1d[:, :1] - latent_points[:, :1], dtype=np.float32)
-            latent_precision = adaptive_kernel_discretization._coerce_1d_latent_precision(cov_zs)
+            latent_precision = deconvolved_kernel_regression._coerce_1d_latent_precision(cov_zs)
             deconv_latent_differences = ds.split_halfset_array(
                 latent_differences[:, 0],
                 per_particle=ds.tilt_series_flag,
