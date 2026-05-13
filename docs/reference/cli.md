@@ -164,6 +164,10 @@ recovar compute_state result_dir -o volumes --latent-points coords.txt [options]
 | `--particles` | Same | Higher-resolution particle stack |
 | `--datadir` | Same | Path prefix for particles |
 | `--zdim1` | False | Enable for 1D latent space |
+| `--kernel-regression-mode` | `standard` | `standard`, `deconvolved`, or experimental `local_poly` |
+| `--deconv-lambda-grid` | Built-in grid | Comma-separated lambda grid for `deconvolved` |
+| `--local-poly-degree` | 3 | Polynomial degree for `local_poly` |
+| `--local-poly-bandwidth-multipliers` | Built-in grid | Comma-separated bandwidth multipliers for `local_poly` |
 
 ---
 

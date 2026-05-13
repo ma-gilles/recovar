@@ -129,6 +129,21 @@ def _parse_deconv_lambda_grid(value):
     return values
 
 
+def _parse_local_poly_bandwidth_multipliers(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",") if p.strip()]
+        if not parts:
+            raise ValueError("--local-poly-bandwidth-multipliers must contain at least one value")
+        values = np.asarray([float(p) for p in parts], dtype=np.float32)
+    else:
+        values = np.asarray(value, dtype=np.float32).reshape(-1)
+    if values.size == 0 or not np.all(np.isfinite(values)) or np.any(values <= 0):
+        raise ValueError(f"--local-poly-bandwidth-multipliers must contain finite positive values, got {value}")
+    return values
+
+
 def add_args(parser: argparse.ArgumentParser):
     parser = parser_args.standard_downstream_args(parser)
 
@@ -145,7 +160,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
     parser.add_argument(
         "--kernel-regression-mode",
-        choices=("standard", "deconvolved"),
+        choices=("standard", "deconvolved", "local_poly"),
         default="standard",
         help="Latent kernel-regression mode for compute_state volume reconstruction.",
     )
@@ -154,6 +169,18 @@ def add_args(parser: argparse.ArgumentParser):
         type=str,
         default=None,
         help="Comma-separated lambda grid for --kernel-regression-mode deconvolved.",
+    )
+    parser.add_argument(
+        "--local-poly-degree",
+        type=int,
+        default=3,
+        help="Polynomial degree for --kernel-regression-mode local_poly.",
+    )
+    parser.add_argument(
+        "--local-poly-bandwidth-multipliers",
+        type=str,
+        default=None,
+        help="Comma-separated positive bandwidth multipliers for --kernel-regression-mode local_poly.",
     )
 
     return parser
@@ -171,6 +198,10 @@ def compute_state(args):
     save_all_estimates = bool(getattr(args, "save_all_estimates", False))
     kernel_regression_mode = getattr(args, "kernel_regression_mode", "standard") or "standard"
     deconv_lambda_grid = _parse_deconv_lambda_grid(getattr(args, "deconv_lambda_grid", None))
+    local_poly_degree = int(getattr(args, "local_poly_degree", 3))
+    local_poly_bandwidth_multipliers = _parse_local_poly_bandwidth_multipliers(
+        getattr(args, "local_poly_bandwidth_multipliers", None)
+    )
     apply_global_filtering = bool(getattr(args, "apply_global_filtering", False))
     fsc_mask_radius = getattr(args, "fsc_mask_radius", None)
     fsc_mask_edgewidth = getattr(args, "fsc_mask_edgewidth", None)
@@ -218,6 +249,14 @@ def compute_state(args):
             raise NotImplementedError(f"Deconvolved kernel regression only supports zdim=1; got zdim={zdim}")
         if not no_z_regularization:
             logger.info("Using noreg latent coordinates/precision for deconvolved kernel regression.")
+        no_z_regularization = True
+    elif kernel_regression_mode == "local_poly":
+        if zdim != 1:
+            raise NotImplementedError(f"local_poly kernel regression only supports zdim=1; got zdim={zdim}")
+        if local_poly_degree < 0 or local_poly_degree > 4:
+            raise ValueError(f"--local-poly-degree must be between 0 and 4, got {local_poly_degree}")
+        if not no_z_regularization:
+            logger.info("Using noreg latent coordinates/precision for local_poly kernel regression.")
         no_z_regularization = True
     elif kernel_regression_mode != "standard":
         raise ValueError(f"Unknown kernel_regression_mode={kernel_regression_mode!r}")
@@ -280,6 +319,8 @@ def compute_state(args):
         fsc_mask_edgewidth=fsc_mask_edgewidth,
         kernel_regression_mode=kernel_regression_mode,
         deconv_lambda_grid=deconv_lambda_grid,
+        local_poly_degree=local_poly_degree,
+        local_poly_bandwidth_multipliers=local_poly_bandwidth_multipliers,
     )
 
 

@@ -320,6 +320,153 @@ def _backproject_weighted_batch_from_fft(
     return Ft_y, Ft_ctf.real
 
 
+def _broadcast_rows_and_flatten(arr, n_rows):
+    """Return ``arr`` as ``(n_rows, -1)``, expanding broadcast rows when needed."""
+    if arr.shape[0] == 1 and n_rows != 1:
+        arr = jnp.broadcast_to(arr, (n_rows,) + arr.shape[1:])
+    return arr.reshape(n_rows, -1)
+
+
+def _pad_image_weight_matrix_for_fixed_batch(image_weights, current_batch_size, target_batch_size):
+    """Pad a ``(n_weights, n_images)`` weight matrix with zero image rows."""
+    arr = np.asarray(image_weights)
+    if arr.ndim != 2:
+        raise ValueError(f"image_weights must have shape (n_weights, n_images), got {arr.shape}")
+    if arr.shape[1] != current_batch_size:
+        raise ValueError(f"image_weights image axis must match batch size: {arr.shape[1]} != {current_batch_size}")
+    if current_batch_size == target_batch_size:
+        return arr
+    if current_batch_size > target_batch_size:
+        raise ValueError(f"batch size {current_batch_size} exceeds target_batch_size {target_batch_size}")
+    padded = np.zeros((arr.shape[0], target_batch_size), dtype=arr.dtype)
+    padded[:, :current_batch_size] = arr
+    return padded
+
+
+def _can_use_cuda_per_image_backproject(config: ForwardModelConfig) -> bool:
+    return custom_cuda_requested() and jax.default_backend() == "gpu" and core.decide_order(config.disc_type) <= 1
+
+
+def backproject_weight_sets_from_fft(
+    config: ForwardModelConfig,
+    images,
+    ctf_params,
+    rotation_matrices,
+    translations,
+    noise_variance,
+    image_weights,
+    Ft_y: jax.Array = None,
+    Ft_ctf: jax.Array = None,
+    upsample_ctf: bool = True,
+):
+    """Backproject one image batch into several weighted accumulators.
+
+    ``image_weights`` has shape ``(n_weight_sets, batch_size)``.  The returned
+    arrays have shape ``(n_weight_sets, half_volume_size)`` and can be reshaped
+    by callers into estimator-specific coefficient axes.
+    """
+    if _can_use_cuda_per_image_backproject(config):
+        return _backproject_weight_sets_from_fft_cuda(
+            config,
+            images,
+            ctf_params,
+            rotation_matrices,
+            translations,
+            noise_variance,
+            image_weights,
+            Ft_y=Ft_y,
+            Ft_ctf=Ft_ctf,
+            upsample_ctf=upsample_ctf,
+        )
+
+    image_weights = np.asarray(image_weights)
+    y_rows = []
+    ctf_rows = []
+    for weight_idx in range(image_weights.shape[0]):
+        y_row, ctf_row = _backproject_weighted_batch_from_fft(
+            config,
+            images,
+            ctf_params,
+            rotation_matrices,
+            translations,
+            noise_variance,
+            image_weights[weight_idx],
+            Ft_y=None if Ft_y is None else Ft_y[weight_idx],
+            Ft_ctf=None if Ft_ctf is None else Ft_ctf[weight_idx],
+            upsample_ctf=upsample_ctf,
+        )
+        y_rows.append(y_row)
+        ctf_rows.append(ctf_row)
+    return jnp.stack(y_rows, axis=0), jnp.stack(ctf_rows, axis=0)
+
+
+@eqx.filter_jit
+def _backproject_weight_sets_from_fft_cuda(
+    config: ForwardModelConfig,
+    images,
+    ctf_params,
+    rotation_matrices,
+    translations,
+    noise_variance,
+    image_weights,
+    Ft_y: jax.Array = None,
+    Ft_ctf: jax.Array = None,
+    upsample_ctf: bool = False,
+):
+    from recovar.cuda_backproject import per_image_backproject
+
+    half_images, ctf_half = _image_and_ctf_terms_from_fft(
+        config,
+        images,
+        ctf_params,
+        translations,
+        noise_variance,
+        upsample_ctf=upsample_ctf,
+    )
+    n_images = half_images.shape[0]
+    half_images = half_images.reshape(n_images, -1)
+    weights = jnp.asarray(image_weights, dtype=half_images.real.dtype)
+
+    if Ft_y is None:
+        vol_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(config.volume_shape)
+        Ft_y = jnp.zeros((weights.shape[0], int(np.prod(vol_shape))), dtype=half_images.dtype)
+
+    per_image_y = jnp.zeros((n_images, Ft_y.shape[1]), dtype=half_images.dtype)
+    per_image_y = per_image_backproject(
+        per_image_y,
+        half_images,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        order=core.decide_order(config.disc_type),
+        half_image=True,
+        half_volume=True,
+        max_r=None,
+    )
+    Ft_y = Ft_y + weights.astype(per_image_y.real.dtype) @ per_image_y
+
+    ctf_half = _broadcast_rows_and_flatten(ctf_half, n_images)
+
+    if Ft_ctf is None:
+        vol_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(config.volume_shape)
+        Ft_ctf = jnp.zeros((weights.shape[0], int(np.prod(vol_shape))), dtype=ctf_half.real.dtype)
+
+    per_image_ctf = jnp.zeros((n_images, Ft_ctf.shape[1]), dtype=Ft_ctf.dtype)
+    per_image_ctf = per_image_backproject(
+        per_image_ctf,
+        ctf_half.astype(Ft_ctf.dtype),
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        order=core.decide_order(config.disc_type),
+        half_image=True,
+        half_volume=True,
+        max_r=None,
+    )
+    Ft_ctf = Ft_ctf + weights.astype(Ft_ctf.dtype) @ per_image_ctf
+    return Ft_y, Ft_ctf.real
+
+
 def estimate_standard_kernel_volumes(
     experiment_dataset,
     heterogeneity_distances,

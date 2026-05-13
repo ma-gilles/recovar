@@ -345,12 +345,19 @@ def _run_oracle_pipeline(
 # ---------------------------------------------------------------------------
 
 
-def _target_state_latent_point(pipeline_dir: Path, sim_info: dict, target_state: int, zdim: int) -> np.ndarray:
+def _target_state_latent_point(
+    pipeline_dir: Path,
+    sim_info: dict,
+    target_state: int,
+    zdim: int,
+    *,
+    coords_entry: str = "latent_coords",
+) -> np.ndarray:
     po = o.PipelineOutput(str(pipeline_dir))
-    latent_by_zdim = po.get("latent_coords")
+    latent_by_zdim = po.get(coords_entry)
     key = zdim if zdim in latent_by_zdim else f"zdim_{zdim}"
     if key not in latent_by_zdim:
-        raise KeyError(f"Pipeline output has no latent_coords/{key}. Available: {sorted(latent_by_zdim)}")
+        raise KeyError(f"Pipeline output has no {coords_entry}/{key}. Available: {sorted(latent_by_zdim)}")
     zs = np.asarray(latent_by_zdim[key], dtype=np.float32)
     assignments = np.asarray(sim_info["image_assignment"], dtype=np.int32).reshape(-1)
     target_particles = assignments == int(target_state)
@@ -386,6 +393,8 @@ def _run_compute_state(args, out: Path, pipeline_dir: Path, latent_point: np.nda
         save_all_estimates=bool(args.compute_state_save_all_estimates),
         kernel_regression_mode=str(args.compute_state_kernel_regression_mode),
         deconv_lambda_grid=args.compute_state_deconv_lambda_grid,
+        local_poly_degree=int(args.compute_state_local_poly_degree),
+        local_poly_bandwidth_multipliers=args.compute_state_local_poly_bandwidth_multipliers,
     )
     logger.info("Running recovar compute_state at %s", latent_path)
     compute_state_cmd.compute_state(compute_state_args)
@@ -460,7 +469,18 @@ def run_walkthrough(args, out: Path) -> dict:
         pipeline_dir = _run_oracle_pipeline(args, out, mask_paths, sim_info, voxel_size)
     else:
         pipeline_dir = _run_pipeline(args, out, mask_paths)
-    latent_point = _target_state_latent_point(pipeline_dir, sim_info, target_state, args.zdim)
+    target_coords_entry = (
+        "latent_coords_noreg"
+        if args.compute_state_kernel_regression_mode in ("deconvolved", "local_poly")
+        else "latent_coords"
+    )
+    latent_point = _target_state_latent_point(
+        pipeline_dir,
+        sim_info,
+        target_state,
+        args.zdim,
+        coords_entry=target_coords_entry,
+    )
     compute_state_dir = _run_compute_state(args, out, pipeline_dir, latent_point)
 
     summary = {
@@ -593,7 +613,7 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--compute-state-save-all-estimates", action="store_true")
     parser.add_argument(
         "--compute-state-kernel-regression-mode",
-        choices=("standard", "deconvolved"),
+        choices=("standard", "deconvolved", "local_poly"),
         default="standard",
         help="Kernel-regression mode passed through to compute_state.",
     )
@@ -602,6 +622,18 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Comma-separated lambda grid passed through to deconvolved compute_state.",
+    )
+    parser.add_argument(
+        "--compute-state-local-poly-degree",
+        type=int,
+        default=3,
+        help="Polynomial degree passed through to local_poly compute_state.",
+    )
+    parser.add_argument(
+        "--compute-state-local-poly-bandwidth-multipliers",
+        type=str,
+        default=None,
+        help="Comma-separated bandwidth multipliers passed through to local_poly compute_state.",
     )
     parser.add_argument("--lazy", action="store_true")
     parser.add_argument("--low-memory-option", action="store_true")

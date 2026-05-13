@@ -102,6 +102,7 @@ nav:
     - CLI Commands: reference/cli.md
     - File Formats: reference/file-formats.md
     - Deconvolved Kernel Regression Testing: reference/deconvolved-kernel-regression-testing.md
+    - Local Polynomial Fourier Regression: reference/local-polynomial-fourier-regression.md
     - Developer API:
       - recovar.core: reference/api/core.md
       - recovar.data_io: reference/api/data_io.md

@@ -158,9 +158,7 @@ def _deconvolved_batch_size(experiment_dataset, lhs_all, rhs_all, lambda_batch_s
 
 def _broadcast_rows_and_flatten(arr, n_rows):
     """Return ``arr`` as ``(n_rows, -1)``, expanding broadcast rows when needed."""
-    if arr.shape[0] == 1 and n_rows != 1:
-        arr = jnp.broadcast_to(arr, (n_rows,) + arr.shape[1:])
-    return arr.reshape(n_rows, -1)
+    return kernel_recon._broadcast_rows_and_flatten(arr, n_rows)
 
 
 def _coerce_1d_latent_differences(latent_differences):
@@ -201,22 +199,15 @@ def _expand_tilt_latent_array_to_images(experiment_dataset, values, name):
 
 def _pad_image_weight_matrix_for_fixed_batch(image_weights, current_batch_size, target_batch_size):
     """Pad a ``(n_weights, n_images)`` weight matrix with zero image rows."""
-    arr = np.asarray(image_weights)
-    if arr.ndim != 2:
-        raise ValueError(f"image_weights must have shape (n_weights, n_images), got {arr.shape}")
-    if arr.shape[1] != current_batch_size:
-        raise ValueError(f"image_weights image axis must match batch size: {arr.shape[1]} != {current_batch_size}")
-    if current_batch_size == target_batch_size:
-        return arr
-    if current_batch_size > target_batch_size:
-        raise ValueError(f"batch size {current_batch_size} exceeds target_batch_size {target_batch_size}")
-    padded = np.zeros((arr.shape[0], target_batch_size), dtype=arr.dtype)
-    padded[:, :current_batch_size] = arr
-    return padded
+    return kernel_recon._pad_image_weight_matrix_for_fixed_batch(
+        image_weights,
+        current_batch_size,
+        target_batch_size,
+    )
 
 
 def _can_use_cuda_per_image_backproject(config: ForwardModelConfig) -> bool:
-    return custom_cuda_requested() and jax.default_backend() == "gpu" and core.decide_order(config.disc_type) <= 1
+    return kernel_recon._can_use_cuda_per_image_backproject(config)
 
 
 def _backproject_weight_sets_from_fft(
@@ -232,39 +223,18 @@ def _backproject_weight_sets_from_fft(
     upsample_ctf: bool = True,
 ):
     """Backproject one image batch into several weighted accumulators."""
-    if _can_use_cuda_per_image_backproject(config):
-        return _backproject_weight_sets_from_fft_cuda(
-            config,
-            images,
-            ctf_params,
-            rotation_matrices,
-            translations,
-            noise_variance,
-            image_weights,
-            Ft_y=Ft_y,
-            Ft_ctf=Ft_ctf,
-            upsample_ctf=upsample_ctf,
-        )
-
-    image_weights = np.asarray(image_weights)
-    y_rows = []
-    ctf_rows = []
-    for weight_idx in range(image_weights.shape[0]):
-        y_row, ctf_row = kernel_recon._backproject_weighted_batch_from_fft(
-            config,
-            images,
-            ctf_params,
-            rotation_matrices,
-            translations,
-            noise_variance,
-            image_weights[weight_idx],
-            Ft_y=None if Ft_y is None else Ft_y[weight_idx],
-            Ft_ctf=None if Ft_ctf is None else Ft_ctf[weight_idx],
-            upsample_ctf=upsample_ctf,
-        )
-        y_rows.append(y_row)
-        ctf_rows.append(ctf_row)
-    return jnp.stack(y_rows, axis=0), jnp.stack(ctf_rows, axis=0)
+    return kernel_recon.backproject_weight_sets_from_fft(
+        config,
+        images,
+        ctf_params,
+        rotation_matrices,
+        translations,
+        noise_variance,
+        image_weights,
+        Ft_y=Ft_y,
+        Ft_ctf=Ft_ctf,
+        upsample_ctf=upsample_ctf,
+    )
 
 
 @eqx.filter_jit
@@ -431,7 +401,7 @@ def estimate_deconvolved_kernel_volumes(
                 current_batch_size=current_batch_size,
                 target_batch_size=batch_size,
             )
-            Ft_y_acc, Ft_ctf_acc = _backproject_weight_sets_from_fft(
+            Ft_y_acc, Ft_ctf_acc = kernel_recon.backproject_weight_sets_from_fft(
                 config,
                 images,
                 ctf_params,

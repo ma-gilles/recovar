@@ -594,6 +594,108 @@ def test_compute_state_uses_noreg_key_when_requested(monkeypatch, tmp_path):
     np.testing.assert_array_equal(cov_used, payload["latent_precision_noreg"][2])
 
 
+def test_compute_state_local_poly_forces_noreg_embedding(monkeypatch, tmp_path):
+    latent_points = np.array([[0.25]], dtype=np.float32)
+    latent_path = tmp_path / "latent.txt"
+    np.savetxt(latent_path, latent_points)
+
+    payload = {
+        "latent_coords": {1: np.zeros((5, 1), dtype=np.float32)},
+        "latent_coords_noreg": {1: np.ones((5, 1), dtype=np.float32)},
+        "latent_precision": {1: np.ones((5, 1, 1), dtype=np.float32)},
+        "latent_precision_noreg": {1: np.ones((5, 1, 1), dtype=np.float32) * 3.0},
+        "contrasts": {1: np.ones(5, dtype=np.float32)},
+        "contrasts_noreg": {1: np.full(5, 2.0, dtype=np.float32)},
+        "dataset": ["d0"],
+        "lazy_dataset": ["ld0"],
+        "noise_var_used": np.ones(4, dtype=np.float32),
+        "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
+    }
+    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _fake_pipeline_output(payload))
+    monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
+
+    captured = {}
+    monkeypatch.setattr(
+        compute_state_cmd.o,
+        "compute_and_save_reweighted",
+        lambda _cryos, _target_zs, zs, cov_zs, *_args, **kwargs: captured.setdefault(
+            "vals", (zs.copy(), cov_zs.copy(), kwargs)
+        ),
+    )
+
+    args = SimpleNamespace(
+        result_dir=str(tmp_path / "pipeline_out"),
+        particles=None,
+        datadir=None,
+        strip_prefix=None,
+        latent_points=str(latent_path),
+        outdir=str(tmp_path / "state_out"),
+        zdim1=True,
+        no_z_regularization=False,
+        lazy=False,
+        n_bins=20,
+        Bfactor=0.0,
+        maskrad_fraction=0.5,
+        n_min_particles=1,
+        save_all_estimates=False,
+        apply_global_filtering=False,
+        fsc_mask_radius=None,
+        fsc_mask_edgewidth=None,
+        kernel_regression_mode="local_poly",
+        local_poly_degree=2,
+        local_poly_bandwidth_multipliers="1,2",
+    )
+    compute_state_cmd.compute_state(args)
+    zs_used, cov_used, kwargs = captured["vals"]
+    np.testing.assert_array_equal(zs_used, payload["latent_coords_noreg"][1])
+    np.testing.assert_array_equal(cov_used, payload["latent_precision_noreg"][1])
+    assert kwargs["kernel_regression_mode"] == "local_poly"
+    assert kwargs["local_poly_degree"] == 2
+    np.testing.assert_array_equal(kwargs["local_poly_bandwidth_multipliers"], np.array([1.0, 2.0], dtype=np.float32))
+
+
+def test_compute_state_local_poly_rejects_non_1d_latent_points(monkeypatch, tmp_path):
+    latent_points = np.array([[0.0, 1.0]], dtype=np.float32)
+    latent_path = tmp_path / "latent.txt"
+    np.savetxt(latent_path, latent_points)
+
+    payload = {
+        "latent_coords": {2: np.zeros((5, 2), dtype=np.float32)},
+        "latent_precision": {2: np.ones((5, 2, 2), dtype=np.float32)},
+        "contrasts": {2: np.ones(5, dtype=np.float32)},
+        "dataset": ["d0"],
+        "lazy_dataset": ["ld0"],
+        "noise_var_used": np.ones(4, dtype=np.float32),
+    }
+    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _fake_pipeline_output(payload))
+
+    args = SimpleNamespace(
+        result_dir=str(tmp_path / "pipeline_out"),
+        particles=None,
+        datadir=None,
+        strip_prefix=None,
+        latent_points=str(latent_path),
+        outdir=str(tmp_path / "state_out"),
+        zdim1=False,
+        no_z_regularization=False,
+        lazy=False,
+        n_bins=20,
+        Bfactor=0.0,
+        maskrad_fraction=0.5,
+        n_min_particles=1,
+        save_all_estimates=False,
+        apply_global_filtering=False,
+        fsc_mask_radius=None,
+        fsc_mask_edgewidth=None,
+        kernel_regression_mode="local_poly",
+        local_poly_degree=3,
+        local_poly_bandwidth_multipliers=None,
+    )
+    with pytest.raises(NotImplementedError, match="local_poly kernel regression only supports zdim=1"):
+        compute_state_cmd.compute_state(args)
+
+
 def test_compute_state_uses_embedding_component_api_when_available(monkeypatch, tmp_path):
     latent_points = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
     latent_path = tmp_path / "latent.txt"
