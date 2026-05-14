@@ -20,18 +20,23 @@ from .bounds import (
     cryosparc_score_upper_correction,
 )
 from .diagnostics import BnBDiagnostics, BnBStageDiagnostics
+from .engine_k1 import run_bnb_em_k1
 from .frequency import (
     fourier_window_spec_from_indices,
     make_bnb_frequency_schedule,
     make_bnb_high_indices_np,
     make_bnb_low_window_spec,
 )
+from .layout import build_bnb_local_layout
 from .options import BranchBoundOptions
+from .support import BnBSupportResult, select_bnb_support_fixed_grid_k1
 
 __all__ = [
     "BnBDiagnostics",
     "BnBStageDiagnostics",
+    "BnBSupportResult",
     "BranchBoundOptions",
+    "build_bnb_local_layout",
     "cauchy_score_upper_correction",
     "compute_high_model_pmax_per_image",
     "compute_image_high_power_per_image",
@@ -40,4 +45,6 @@ __all__ = [
     "make_bnb_frequency_schedule",
     "make_bnb_high_indices_np",
     "make_bnb_low_window_spec",
+    "run_bnb_em_k1",
+    "select_bnb_support_fixed_grid_k1",
 ]
