@@ -127,7 +127,15 @@ def _score_at_low_freq(
     rotation_block_size: int,
     image_indices: np.ndarray,
 ) -> np.ndarray:
-    """Dense score (n_images, n_rot, n_trans) at radius L. Shared grid across images."""
+    """Dense score (n_images, n_rot, n_trans) at radius L. Shared grid across images.
+
+    .. warning::
+        Materialises a (n_images, n_rot, n_trans) float32 host tensor. At
+        100k images × ~36k rotations × ~50 translations that's ~700 GB and
+        will OOM. Use only with modest n_images for now; a streaming
+        per-batch score+prune analogue to ``select_bnb_support_fixed_grid_k1``
+        is a follow-up. (The Phase-2 fixed-grid path is OOM-safe.)
+    """
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     H, W = image_shape

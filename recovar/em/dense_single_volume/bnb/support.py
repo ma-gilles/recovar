@@ -87,106 +87,11 @@ class BnBSupportResult:
     diagnostics: BnBDiagnostics
 
 
-def _score_active_low_frequency(
-    experiment_dataset,
-    mean,
-    rotations_global,
-    translations_global,
-    noise_variance,
-    L: int,
-    disc_type: str,
-    image_batch_size: int,
-    rotation_block_size: int,
-    image_indices: np.ndarray,
-) -> np.ndarray:
-    """Score all (image, rot, trans) at low-frequency radius L.
-
-    Returns
-    -------
-    scores : np.ndarray, shape (n_images, n_rot, n_trans), float32
-        recovar Gaussian score over |k| <= L for each candidate.
-    """
-    image_shape = experiment_dataset.image_shape
-    volume_shape = experiment_dataset.volume_shape
-    H, W = image_shape
-    n_half = H * (W // 2 + 1)
-
-    config = ForwardModelConfig.from_dataset(
-        experiment_dataset,
-        disc_type=disc_type,
-        process_fn=experiment_dataset.process_images,
-    )
-
-    low_window = make_bnb_low_window_spec(image_shape, L, n_half)
-    half_weights = make_half_image_weights(image_shape)
-    precision_policy = DensePrecisionPolicy()
-    translations_j = jnp.asarray(translations_global)
-
-    n_rot = int(rotations_global.shape[0])
-    n_trans = int(translations_global.shape[0])
-    n_images = int(image_indices.shape[0])
-
-    scores = np.empty((n_images, n_rot, n_trans), dtype=np.float32)
-
-    n_rot_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
-
-    start = 0
-    for batch in experiment_dataset.iter_batches(
-        image_batch_size, indices=image_indices, by_image=False,
-    ):
-        batch_data = batch[0]
-        ctf_params = batch[3]
-        batch_size = int(jnp.asarray(batch_data).shape[0])
-        end = start + batch_size
-
-        shifted_half, batch_norm, ctf2_over_nv_half = preprocess_batch(
-            experiment_dataset, jnp.asarray(batch_data), ctf_params,
-            _to_half_noise(noise_variance, image_shape),
-            translations_j, config, False,
-        )
-        shifted_windowed = low_window.score_values(shifted_half)
-        ctf2_windowed = low_window.score_values(ctf2_over_nv_half)
-
-        scores_batch = np.empty((batch_size, n_rot, n_trans), dtype=np.float32)
-        for b in range(n_rot_blocks):
-            r0 = b * rotation_block_size
-            r1 = min(r0 + rotation_block_size, n_rot)
-            rot_block = rotations_global[r0:r1]
-            # Skip empty trailing block.
-            if rot_block.shape[0] == 0:
-                continue
-
-            # We need projections of the mean at this block — compute on the
-            # fly via compute_projections_block.
-            from recovar.em.dense_single_volume.helpers.projection import (
-                compute_projections_block,
-            )
-            proj_half, proj_abs2_half = compute_projections_block(
-                mean, rot_block, image_shape, volume_shape, disc_type,
-                return_abs2=True,
-            )
-
-            block_scores = _score_rotation_block(
-                low_window,
-                shifted_score=shifted_windowed,
-                batch_norm=batch_norm,
-                score_weight=ctf2_windowed,
-                proj_half=proj_half,
-                proj_abs2_half=proj_abs2_half,
-                half_weights=half_weights,
-                n_images=batch_size,
-                n_trans=n_trans,
-                image_shape=image_shape,
-                volume_shape=volume_shape,
-                score_mode="gaussian",
-                precision_policy=precision_policy,
-            )
-            scores_batch[:, r0:r1, :] = np.asarray(block_scores)[:, : (r1 - r0), :]
-
-        scores[start:end] = scores_batch
-        start = end
-
-    return scores
+# NOTE: an earlier draft kept a separate `_score_active_low_frequency` helper
+# that returned a (n_images, n_rot, n_trans) float32 tensor. At 100k images,
+# 36864 rotations, 49 translations that's 723 GB — host OOM on Slurm 8235089.
+# The streaming version inlined in `select_bnb_support_fixed_grid_k1` keeps
+# only the per-batch (batch_size, n_rot, n_trans) ~1.3 GB tensor alive.
 
 
 def _prune_by_tail_mass_and_caps(
@@ -353,20 +258,83 @@ def select_bnb_support_fixed_grid_k1(
             np.maximum(pmax_per_image, 0.0),
         )
 
-        # Score active candidates at low-frequency radius L.
-        s_low = _score_active_low_frequency(
-            experiment_dataset, mean, rotations_global, translations_global,
-            noise_variance, L, disc_type, image_batch_size, rotation_block_size,
-            image_indices,
-        )
+        # Stream score+prune per image batch. Materialising the full
+        # (n_images, n_rot, n_trans) score tensor (e.g. 100k × 36864 × 49 × 4 B
+        # = 723 GB) would OOM the host. Per-batch is bounded at
+        # batch_size × n_rot × n_trans × 4 B ~ 1.3 GB for batch_size=187,
+        # n_rot=36864, n_trans=49 — comfortable.
+        omitted_mass_stage = np.zeros(n_images, dtype=np.float32)
+        cap_applied_stage = np.zeros(n_images, dtype=bool)
+        stage_best_upper = np.full(n_images, -np.inf, dtype=np.float32)
 
-        upper = s_low + delta_H[:, None, None].astype(s_low.dtype)
-        best_score_upper = np.max(upper.reshape(n_images, -1), axis=1)
+        low_window = make_bnb_low_window_spec(image_shape, L, n_half)
+        translations_j = jnp.asarray(translations_global)
+        precision_policy = DensePrecisionPolicy()
+        n_rot_blocks_score = (n_rot + rotation_block_size - 1) // rotation_block_size
 
-        # Prune.
-        sample_mask, omitted_mass_stage, cap_applied_stage = prune_by_tail_mass_and_caps(
-            sample_mask, upper, options,
-        )
+        start = 0
+        for batch in experiment_dataset.iter_batches(
+            image_batch_size, indices=image_indices, by_image=False,
+        ):
+            batch_data = batch[0]
+            ctf_params = batch[3]
+            batch_size = int(jnp.asarray(batch_data).shape[0])
+            end = start + batch_size
+
+            shifted_half, batch_norm, ctf2_over_nv_half = preprocess_batch(
+                experiment_dataset, jnp.asarray(batch_data), ctf_params,
+                _to_half_noise(noise_variance, image_shape),
+                translations_j, config, False,
+            )
+            shifted_windowed = low_window.score_values(shifted_half)
+            ctf2_windowed = low_window.score_values(ctf2_over_nv_half)
+
+            # Per-batch scores at L: (batch_size, n_rot, n_trans) float32.
+            scores_batch = np.empty((batch_size, n_rot, n_trans), dtype=np.float32)
+            for b in range(n_rot_blocks_score):
+                r0 = b * rotation_block_size
+                r1 = min(r0 + rotation_block_size, n_rot)
+                rot_block = rotations_global[r0:r1]
+                if rot_block.shape[0] == 0:
+                    continue
+                proj_half, proj_abs2_half = compute_projections_block(
+                    mean, rot_block, image_shape,
+                    experiment_dataset.volume_shape, disc_type,
+                    return_abs2=True,
+                )
+                block_scores = _score_rotation_block(
+                    low_window,
+                    shifted_score=shifted_windowed,
+                    batch_norm=batch_norm,
+                    score_weight=ctf2_windowed,
+                    proj_half=proj_half,
+                    proj_abs2_half=proj_abs2_half,
+                    half_weights=half_weights,
+                    n_images=batch_size,
+                    n_trans=n_trans,
+                    image_shape=image_shape,
+                    volume_shape=experiment_dataset.volume_shape,
+                    score_mode="gaussian",
+                    precision_policy=precision_policy,
+                )
+                scores_batch[:, r0:r1, :] = np.asarray(block_scores)[:, : (r1 - r0), :]
+
+            upper_batch = scores_batch + delta_H[start:end, None, None].astype(scores_batch.dtype)
+            stage_best_upper[start:end] = np.max(
+                upper_batch.reshape(batch_size, -1), axis=1,
+            )
+
+            active_batch = sample_mask[start:end]
+            new_active_batch, rho_batch, cap_batch = prune_by_tail_mass_and_caps(
+                active_batch, upper_batch, options,
+            )
+            sample_mask[start:end] = new_active_batch
+            omitted_mass_stage[start:end] = rho_batch
+            cap_applied_stage[start:end] = cap_batch
+
+            start = end
+
+        best_score_upper = stage_best_upper.astype(np.float32)
         omitted_mass = np.maximum(omitted_mass, omitted_mass_stage)
 
         n_kept_per_image = sample_mask.reshape(n_images, -1).sum(axis=1)
