@@ -138,9 +138,12 @@ def _score_active_low_frequency(
         batch_size = int(jnp.asarray(batch_data).shape[0])
         end = start + batch_size
 
+        from .hierarchical_support import _to_half_noise
+
         shifted_half, batch_norm, ctf2_over_nv_half = preprocess_batch(
             experiment_dataset, jnp.asarray(batch_data), ctf_params,
-            noise_variance, translations_j, config, False,
+            _to_half_noise(noise_variance, image_shape),
+            translations_j, config, False,
         )
         shifted_windowed = low_window.score_values(shifted_half)
         ctf2_windowed = low_window.score_values(ctf2_over_nv_half)
@@ -308,7 +311,8 @@ def select_bnb_support_fixed_grid_k1(
 
             _, _, ctf2_over_nv_half = preprocess_batch(
                 experiment_dataset, jnp.asarray(batch_data), ctf_params,
-                noise_variance, translations_global, config, False,
+                _to_half_noise(noise_variance, image_shape),
+                translations_global, config, False,
             )
             pmax_batch = compute_high_model_pmax_per_image(
                 mean,

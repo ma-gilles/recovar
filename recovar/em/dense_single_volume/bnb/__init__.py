@@ -28,6 +28,7 @@ from .bounds import (
 )
 from .diagnostics import BnBDiagnostics, BnBStageDiagnostics
 from .engine_k1 import run_bnb_em_k1
+from .hierarchical_support import select_bnb_support_hierarchical_k1
 from .frequency import (
     fourier_window_spec_from_indices,
     make_bnb_frequency_schedule,
@@ -77,6 +78,7 @@ __all__ = [
     "prune_by_tail_mass_and_caps",
     "run_bnb_em_k1",
     "select_bnb_support_fixed_grid_k1",
+    "select_bnb_support_hierarchical_k1",
     "subdivide_axis_angle_cells",
     "subdivide_shift_cells",
 ]

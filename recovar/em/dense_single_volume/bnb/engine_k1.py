@@ -23,6 +23,7 @@ import numpy as np
 from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
 from recovar.em.dense_single_volume.local_layout import bucket_local_hypothesis_layout
 
+from .hierarchical_support import select_bnb_support_hierarchical_k1
 from .layout import build_bnb_local_layout
 from .options import BranchBoundOptions
 from .support import select_bnb_support_fixed_grid_k1
@@ -67,26 +68,51 @@ def run_bnb_em_k1(
     """
     t0 = time.time()
 
-    support = select_bnb_support_fixed_grid_k1(
-        experiment_dataset,
-        mean,
-        noise_variance,
-        np.asarray(rotations, dtype=np.float32),
-        jnp.asarray(translations),
-        current_size=current_size,
-        options=options,
-        disc_type=disc_type,
-        image_batch_size=image_batch_size,
-        rotation_block_size=rotation_block_size,
-    )
+    if options.subdivision_mode == "axis_angle_hierarchical":
+        support, rotations_final, translations_final = select_bnb_support_hierarchical_k1(
+            experiment_dataset,
+            mean,
+            noise_variance,
+            max_shift_px=float(options.max_shift_px),
+            current_size=current_size,
+            options=options,
+            disc_type=disc_type,
+            image_batch_size=image_batch_size,
+            rotation_block_size=rotation_block_size,
+        )
+        rotations_for_layout = rotations_final
+        translations_for_layout = translations_final
+        # Priors: hierarchical paths build their own pose grid, so caller-
+        # supplied per-rotation/per-translation priors don't apply 1:1. Pass
+        # uniform priors for now; per-class prior plumbing is a follow-up.
+        rotation_log_prior_for_layout = None
+        translation_log_prior_for_layout = None
+    else:
+        support = select_bnb_support_fixed_grid_k1(
+            experiment_dataset,
+            mean,
+            noise_variance,
+            np.asarray(rotations, dtype=np.float32),
+            jnp.asarray(translations),
+            current_size=current_size,
+            options=options,
+            disc_type=disc_type,
+            image_batch_size=image_batch_size,
+            rotation_block_size=rotation_block_size,
+        )
+        rotations_for_layout = np.asarray(rotations, dtype=np.float32)
+        translations_for_layout = np.asarray(translations, dtype=np.float32)
+        rotation_log_prior_for_layout = rotation_log_prior
+        translation_log_prior_for_layout = translation_log_prior
+
     t_support = time.time() - t0
 
     layout = build_bnb_local_layout(
         support,
-        np.asarray(rotations, dtype=np.float32),
-        np.asarray(translations, dtype=np.float32),
-        rotation_log_prior=rotation_log_prior,
-        translation_log_prior=translation_log_prior,
+        rotations_for_layout,
+        translations_for_layout,
+        rotation_log_prior=rotation_log_prior_for_layout,
+        translation_log_prior=translation_log_prior_for_layout,
     )
     bucketed = bucket_local_hypothesis_layout(
         layout,

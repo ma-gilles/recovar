@@ -35,6 +35,16 @@ class BranchBoundOptions:
     """Number of standard deviations for the probabilistic noise bound.
     cryoSPARC default is 4 (probability 0.999936)."""
 
+    subdivision_mode: Literal["fixed_grid", "axis_angle_hierarchical"] = "fixed_grid"
+    """``fixed_grid`` (default) prunes a caller-supplied pose grid by
+    progressive L. ``axis_angle_hierarchical`` uses cryoSPARC's paper-faithful
+    8-axis-angle / 4-shift Cartesian subdivision starting from
+    ``initial_angular_spacing_deg`` and ``initial_shift_spacing_px``."""
+
+    max_shift_px: float = 10.0
+    """When ``subdivision_mode='axis_angle_hierarchical'``, this is the
+    radius of the initial 2D shift disc in pixels."""
+
     ctf_bound_mode: Literal["exact", "cryosparc_rms", "hybrid"] = "exact"
     """``exact`` uses per-image CTF/sigma in the high-frequency power bound
     (paper-validation default). ``cryosparc_rms`` uses the RMS-CTF
