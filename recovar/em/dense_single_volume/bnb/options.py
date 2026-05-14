@@ -41,6 +41,12 @@ class BranchBoundOptions:
     approximation (|C|^2 -> 1/2) so the bound is shared across images of the
     same noise group; speed optimisation, may be looser. Phase 6+ only."""
 
+    rms_ctf_squared: float = 0.5
+    """When ``ctf_bound_mode='cryosparc_rms'``, this is the constant used to
+    replace |C_l|^2 in the bound. cryoSPARC default 1/2 corresponds to a
+    uniform-phase oscillating CTF; lower values make the bound looser, higher
+    values can be unsafe."""
+
     # EM-correct pruning
     posterior_tail_tol: float = 1e-6
     """Per-image upper bound on omitted posterior mass after pruning. Used to

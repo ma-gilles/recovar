@@ -53,6 +53,9 @@ def compute_high_model_pmax_per_image(
     volume_shape: tuple[int, int, int],
     disc_type: str,
     rotation_block_size: int = 5000,
+    use_rms_ctf_approximation: bool = False,
+    rms_ctf_squared: float = 0.5,
+    noise_variance_half: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """Per-image P^max_{i,H} = 1/2 max_r sum_{l in H} h_l (C^2/sigma^2) |Y_l(r)|^2.
 
@@ -70,10 +73,21 @@ def compute_high_model_pmax_per_image(
           ``helpers.half_spectrum.make_half_image_weights``.
         - ``high_indices``: (n_high,) packed-half indices into the high band.
 
+    When ``use_rms_ctf_approximation=True`` (cryoSPARC Suppl §"Approximations"):
+        The oscillating high-frequency CTF magnitude |C_l| is replaced by its
+        root-mean-square value, so C_l^2 -> rms_ctf_squared (default 1/2).
+        This removes per-image CTF dependence, so a single Pmax is shared
+        across all images that share the same noise spectrum. Pass
+        ``noise_variance_half`` (n_half,) to use a per-shell noise spectrum;
+        otherwise the per-image ``ctf2_over_nv_half`` is reused as
+        ``rms_ctf_squared / sigma^2``. The approximation does NOT generally
+        make the bound tighter — it is a speed optimization for production
+        runs after correctness is verified with ``use_rms_ctf_approximation=False``.
+
     Returns
     -------
     pmax : jnp.ndarray, shape (n_images,), float
-        ``P^max_{i,H}`` per image.
+        ``P^max_{i,H}`` per image (broadcast to all images in RMS mode).
     """
     rotations_for_bound = np.asarray(rotations_for_bound, dtype=np.float32)
     n_rot = int(rotations_for_bound.shape[0])
@@ -83,11 +97,31 @@ def compute_high_model_pmax_per_image(
 
     high_indices = jnp.asarray(high_indices, dtype=jnp.int32)
     weights_high = jnp.asarray(half_weights)[high_indices]
-    ctf2_high = jnp.asarray(ctf2_over_nv_half)[:, high_indices]
-    weighted_ctf2 = ctf2_high * weights_high[None, :]
 
-    n_images = int(ctf2_high.shape[0])
-    pmax = jnp.full((n_images,), 0.0, dtype=ctf2_high.dtype)
+    if use_rms_ctf_approximation:
+        # cryoSPARC RMS-CTF mode: replace C_l^2 by rms_ctf_squared (default 1/2).
+        # If a per-shell noise spectrum is supplied use it; otherwise derive
+        # a per-image C^2/sigma^2 -> rms_ctf_squared / sigma^2 by dividing
+        # by the average C^2 across the high band (approximation only).
+        if noise_variance_half is not None:
+            nv_high = jnp.asarray(noise_variance_half)[high_indices]
+            # Shared (n_high,) value, broadcast to (n_images, n_high) so the
+            # downstream matmul has the right shape.
+            shared = (float(rms_ctf_squared) / jnp.maximum(nv_high, 1e-30))
+            n_images = int(ctf2_over_nv_half.shape[0])
+            weighted_ctf2 = jnp.broadcast_to(shared[None, :], (n_images, shared.shape[0]))
+            weighted_ctf2 = weighted_ctf2 * weights_high[None, :]
+        else:
+            ctf2_high = jnp.asarray(ctf2_over_nv_half)[:, high_indices]
+            # Replace per-image C^2 with its high-band mean times rms_ctf_squared / mean(C^2).
+            mean_c2 = jnp.maximum(jnp.mean(ctf2_high, axis=1, keepdims=True), 1e-30)
+            weighted_ctf2 = ctf2_high * (float(rms_ctf_squared) / mean_c2) * weights_high[None, :]
+    else:
+        ctf2_high = jnp.asarray(ctf2_over_nv_half)[:, high_indices]
+        weighted_ctf2 = ctf2_high * weights_high[None, :]
+
+    n_images = int(weighted_ctf2.shape[0])
+    pmax = jnp.full((n_images,), 0.0, dtype=weighted_ctf2.dtype)
 
     block = max(1, int(rotation_block_size))
     for r0 in range(0, n_rot, block):

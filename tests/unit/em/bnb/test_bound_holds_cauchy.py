@@ -268,3 +268,68 @@ def test_cryosparc_bound_formula():
     delta2 = cryosparc_score_upper_correction(pmax, tau_sigma=2.0)
     expected2 = np.array([0.0, 1.0 + 2.0 * 1.0, 4.0 + 2.0 * 2.0, 9.0 + 2.0 * 3.0])
     np.testing.assert_allclose(np.asarray(delta2), expected2, atol=1e-6)
+
+
+def test_rms_ctf_mode_returns_same_value_per_image():
+    """RMS-CTF mode broadcasts a single P^max across all images that share
+    the noise spectrum (Phase-6 cryoSPARC speed optimization)."""
+    image_shape = (16, 16)
+    H, W = image_shape
+    n_half = H * (W // 2 + 1)
+    volume_shape = (H, H, H)
+    volume_size = H * H * H
+
+    rng = np.random.default_rng(101)
+    mean = jnp.asarray(
+        rng.standard_normal(volume_size).astype(np.float32)
+        + 1j * rng.standard_normal(volume_size).astype(np.float32),
+        dtype=jnp.complex64,
+    )
+    rotations = _random_rotations(4, seed=102)
+
+    n_images = 3
+    # Per-image CTF/noise differing across images (so the exact bound
+    # produces 3 different Pmax values).
+    ctf2_over_nv = rng.uniform(0.3, 1.5, size=(n_images, n_half)).astype(np.float32)
+    half_weights = np.asarray(make_half_image_weights(image_shape), dtype=np.float32)
+
+    final_idx, _ = make_fourier_window_indices_np(
+        image_shape, 16, square=False, include_dc=False,
+    )
+    low_idx, _ = make_fourier_window_indices_np(
+        image_shape, 8, square=False, include_dc=False,
+    )
+    high_idx = make_bnb_high_indices_np(final_idx, low_idx)
+
+    # Shared noise spectrum across all images.
+    noise_variance_half = np.ones(n_half, dtype=np.float32) * 0.7
+
+    # Exact mode: Pmax varies across images.
+    pmax_exact = np.asarray(compute_high_model_pmax_per_image(
+        mean,
+        rotations,
+        jnp.asarray(ctf2_over_nv),
+        jnp.asarray(half_weights),
+        jnp.asarray(high_idx, dtype=jnp.int32),
+        image_shape=image_shape,
+        volume_shape=volume_shape,
+        disc_type="linear_interp",
+    ))
+    assert np.std(pmax_exact) > 1e-6, "Exact-mode Pmax should differ across images"
+
+    # RMS mode with shared noise_variance_half: Pmax broadcast to one value.
+    pmax_rms = np.asarray(compute_high_model_pmax_per_image(
+        mean,
+        rotations,
+        jnp.asarray(ctf2_over_nv),
+        jnp.asarray(half_weights),
+        jnp.asarray(high_idx, dtype=jnp.int32),
+        image_shape=image_shape,
+        volume_shape=volume_shape,
+        disc_type="linear_interp",
+        use_rms_ctf_approximation=True,
+        rms_ctf_squared=0.5,
+        noise_variance_half=jnp.asarray(noise_variance_half),
+    ))
+    # All RMS Pmax values must agree (shared noise spectrum -> shared bound).
+    np.testing.assert_allclose(pmax_rms, pmax_rms[0], atol=1e-6)

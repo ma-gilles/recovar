@@ -320,6 +320,9 @@ def select_bnb_support_fixed_grid_k1(
                 volume_shape=experiment_dataset.volume_shape,
                 disc_type=disc_type,
                 rotation_block_size=rotation_block_size,
+                use_rms_ctf_approximation=(options.ctf_bound_mode == "cryosparc_rms"),
+                rms_ctf_squared=float(getattr(options, "rms_ctf_squared", 0.5)),
+                noise_variance_half=jnp.asarray(noise_variance) if options.ctf_bound_mode == "cryosparc_rms" else None,
             )
             pmax_per_image[start:end] = np.asarray(pmax_batch)
             start = end
