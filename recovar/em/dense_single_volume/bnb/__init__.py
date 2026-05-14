@@ -13,6 +13,13 @@ Subsequent phases will add the pose-tree subdivision, support selector,
 ``LocalHypothesisLayout`` bridge, and the ``run_bnb_em_k1`` driver.
 """
 
+from .axis_angle_grid import (
+    AxisAngleGridLevel,
+    axis_angle_to_matrix,
+    axis_angle_to_quaternion,
+    make_initial_axis_angle_grid,
+    subdivide_axis_angle_cells,
+)
 from .bounds import (
     cauchy_score_upper_correction,
     compute_high_model_pmax_per_image,
@@ -29,13 +36,22 @@ from .frequency import (
 )
 from .layout import build_bnb_local_layout
 from .options import BranchBoundOptions
+from .shift_grid import (
+    ShiftGridLevel,
+    make_initial_shift_grid,
+    subdivide_shift_cells,
+)
 from .support import BnBSupportResult, select_bnb_support_fixed_grid_k1
 
 __all__ = [
+    "AxisAngleGridLevel",
     "BnBDiagnostics",
     "BnBStageDiagnostics",
     "BnBSupportResult",
     "BranchBoundOptions",
+    "ShiftGridLevel",
+    "axis_angle_to_matrix",
+    "axis_angle_to_quaternion",
     "build_bnb_local_layout",
     "cauchy_score_upper_correction",
     "compute_high_model_pmax_per_image",
@@ -45,6 +61,10 @@ __all__ = [
     "make_bnb_frequency_schedule",
     "make_bnb_high_indices_np",
     "make_bnb_low_window_spec",
+    "make_initial_axis_angle_grid",
+    "make_initial_shift_grid",
     "run_bnb_em_k1",
     "select_bnb_support_fixed_grid_k1",
+    "subdivide_axis_angle_cells",
+    "subdivide_shift_cells",
 ]
