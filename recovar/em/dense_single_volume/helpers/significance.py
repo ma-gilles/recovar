@@ -354,6 +354,10 @@ def _maybe_dump_k_class_significance_batch(
     target_local_positions=None,
     target_scores_pre_prior_per_class=None,
     target_scores_with_prior_per_class=None,
+    shifted_data=None,
+    ctf2_data=None,
+    window_indices=None,
+    half_weights_used=None,
 ):
     """Env-gated debug dump for the K-class significance pass.
 
@@ -442,6 +446,19 @@ def _maybe_dump_k_class_significance_batch(
                     axis=0,
                 )
 
+        image_rows = slice(local_pos * n_trans, (local_pos + 1) * n_trans)
+        shifted_target = None
+        if shifted_data is not None:
+            shifted_target = np.asarray(shifted_data[image_rows], dtype=np.complex128)
+        ctf2_target = None
+        if ctf2_data is not None:
+            ctf2_arr = np.asarray(ctf2_data)
+            ctf2_target = (
+                ctf2_arr[local_pos : local_pos + 1]
+                if ctf2_arr.shape[0] == local_indices.shape[0]
+                else ctf2_arr[image_rows]
+            )
+
         out_path = os.path.join(
             dump_dir,
             f"significance_orig{int(original_idx):06d}_cs{(-1 if current_size is None else int(current_size)):03d}.npz",
@@ -476,6 +493,26 @@ def _maybe_dump_k_class_significance_batch(
             translation_log_prior=(
                 np.asarray(trans_prior, dtype=np.float64)
                 if trans_prior is not None
+                else np.empty((0,), dtype=np.float64)
+            ),
+            shifted_data=(
+                shifted_target
+                if shifted_target is not None
+                else np.empty((0,), dtype=np.complex128)
+            ),
+            ctf2_data=(
+                np.asarray(ctf2_target, dtype=np.float64)
+                if ctf2_target is not None
+                else np.empty((0,), dtype=np.float64)
+            ),
+            window_indices=(
+                np.asarray(window_indices, dtype=np.int32)
+                if window_indices is not None
+                else np.empty((0,), dtype=np.int32)
+            ),
+            half_weights=(
+                np.asarray(half_weights_used, dtype=np.float64)
+                if half_weights_used is not None
                 else np.empty((0,), dtype=np.float64)
             ),
         )
@@ -752,6 +789,7 @@ def _compute_significance_batched(
                 r_max=int(relion_projector_r_max),
                 padding_factor=int(projection_padding_factor),
                 centered_rows=True,
+                dense_scale=True,
             )
         else:
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
@@ -1135,6 +1173,11 @@ def _compute_k_class_significance_batched(
     do_gridding_correction=False,
     square_window=False,
     use_float64_scoring=False,
+    relion_projector_half=None,
+    relion_projector_r_max=None,
+    score_mode: str = "gaussian",
+    collect_significance: bool = True,
+    return_class_best: bool = False,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
 
@@ -1156,16 +1199,27 @@ def _compute_k_class_significance_batched(
     from recovar.em.dense_single_volume.helpers.preprocessing import (
         preprocess_batch as _preprocess_batch,
     )
+    from recovar.em.dense_single_volume.helpers.preprocessing import (
+        preprocess_batch_firstiter_cc as _preprocess_batch_firstiter_cc,
+    )
     from recovar.em.dense_single_volume.helpers.projection import (
         compute_projections_block as _compute_projections_block,
     )
+    from recovar.em.dense_single_volume.helpers.projection import (
+        compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
+    )
     from recovar.em.dense_single_volume.helpers.scoring import (
         _e_step_block_scores,
+        _e_step_block_scores_normalized_cc,
         _e_step_block_scores_windowed,
+        _e_step_block_scores_windowed_normalized_cc,
         _update_logsumexp,
     )
     from recovar.reconstruction import noise as noise_utils
 
+    score_mode = str(score_mode)
+    if score_mode not in {"gaussian", "normalized_cc"}:
+        raise ValueError(f"score_mode must be 'gaussian' or 'normalized_cc', got {score_mode!r}")
     means_array = jnp.asarray(means)
     if means_array.ndim != 2:
         raise ValueError(f"means must have shape (n_classes, volume_size), got {means_array.shape}")
@@ -1183,7 +1237,18 @@ def _compute_k_class_significance_batched(
     volume_shape = experiment_dataset.volume_shape
     n_half = int(image_shape[0] * (image_shape[1] // 2 + 1))
 
-    if projection_padding_factor > 1:
+    use_relion_projector = relion_projector_half is not None
+    if use_relion_projector and relion_projector_r_max is None:
+        raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
+    if use_relion_projector:
+        relion_projector_half = jnp.asarray(relion_projector_half)
+        if relion_projector_half.ndim != 4 or int(relion_projector_half.shape[0]) != n_classes:
+            raise ValueError(
+                "relion_projector_half must have shape "
+                f"({n_classes}, z, y, x_half), got {relion_projector_half.shape}",
+            )
+
+    if projection_padding_factor > 1 and not use_relion_projector:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
 
         means_for_proj = []
@@ -1205,12 +1270,19 @@ def _compute_k_class_significance_batched(
         image_shape,
         relion_half_sum=half_spectrum_scoring,
     )
+    window_spec_kwargs = {}
+    if score_mode == "normalized_cc":
+        window_spec_kwargs = {
+            "score_square": True,
+            "score_include_dc": True,
+        }
     window_spec = make_fourier_window_spec(
         image_shape,
         current_size,
         n_half,
         square=square_window,
         include_recon_window=False,
+        **window_spec_kwargs,
     )
     use_window = window_spec.use_window
     window_indices = window_spec.score_indices
@@ -1309,21 +1381,45 @@ def _compute_k_class_significance_batched(
         ).real
         return shifted_half, batch_norm, ctf2_over_nv_half
 
-    def _score_block(mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
-        proj_half_b, proj_abs2_half_b = _compute_projections_block(
-            mean_for_proj,
-            rots_b,
-            image_shape,
-            proj_volume_shape,
-            disc_type,
-            **projection_kwargs,
-        )
+    def _score_block(class_index, mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
+        if use_relion_projector:
+            proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
+                relion_projector_half[class_index],
+                rots_b,
+                image_shape,
+                r_max=int(relion_projector_r_max),
+                padding_factor=int(projection_padding_factor),
+                centered_rows=True,
+                dense_scale=True,
+            )
+        else:
+            proj_half_b, proj_abs2_half_b = _compute_projections_block(
+                mean_for_proj,
+                rots_b,
+                image_shape,
+                proj_volume_shape,
+                disc_type,
+                **projection_kwargs,
+            )
         if use_window:
             proj_w = proj_half_b[:, window_indices]
             proj_abs2_w = proj_abs2_half_b[:, window_indices]
             if not use_float64_scoring:
                 proj_w = proj_w.astype(jnp.complex64)
                 proj_abs2_w = proj_abs2_w.astype(jnp.float32)
+            if score_mode == "normalized_cc":
+                return _e_step_block_scores_windowed_normalized_cc(
+                    shifted_data,
+                    batch_norm,
+                    ctf2_data,
+                    proj_w * half_weights_windowed,
+                    proj_abs2_w * half_weights_windowed,
+                    batch_size,
+                    n_trans,
+                    n_windowed,
+                    image_shape,
+                    volume_shape,
+                )
             return _e_step_block_scores_windowed(
                 shifted_data,
                 batch_norm,
@@ -1340,6 +1436,18 @@ def _compute_k_class_significance_batched(
         if not use_float64_scoring:
             proj_half_b = proj_half_b.astype(jnp.complex64)
             proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
+        if score_mode == "normalized_cc":
+            return _e_step_block_scores_normalized_cc(
+                shifted_data,
+                batch_norm,
+                ctf2_data,
+                proj_half_b * half_weights,
+                proj_abs2_half_b * half_weights,
+                batch_size,
+                n_trans,
+                image_shape,
+                volume_shape,
+            )
         return _e_step_block_scores(
             shifted_data,
             batch_norm,
@@ -1354,6 +1462,8 @@ def _compute_k_class_significance_batched(
         )
 
     def _add_priors(scores, class_index, r0, r1, batch_translation_log_prior):
+        if score_mode == "normalized_cc":
+            return scores
         scores = scores + jnp.asarray(class_log_priors_np[class_index], dtype=scores.real.dtype)
         if rotation_log_prior_padded is not None:
             scores = scores + jnp.asarray(rotation_log_prior_padded[class_index, r0:r1])[None, :, None]
@@ -1368,13 +1478,19 @@ def _compute_k_class_significance_batched(
     n_sig_all = np.empty(n_images, dtype=np.int32)
     hard_assignment = np.empty(n_images, dtype=np.int32)
     class_assignment = np.empty(n_images, dtype=np.int32)
-    significant_sample_indices = [[None] * n_images for _ in range(n_classes)]
+    significant_sample_indices = [[None] * n_images for _ in range(n_classes)] if collect_significance else None
     normalization_log_z = np.empty(n_images, dtype=np.float64)
     normalization_log_evidence = np.empty(n_images, dtype=np.float64)
     log_evidence = np.empty(n_images, dtype=np.float32)
     best_log_score = np.empty(n_images, dtype=np.float32)
     max_posterior = np.empty(n_images, dtype=np.float32)
     class_log_evidence = np.empty((n_classes, n_images), dtype=np.float64)
+    class_best_log_score = (
+        np.empty((n_classes, n_images), dtype=np.float32) if return_class_best else None
+    )
+    class_hard_assignment = (
+        np.empty((n_classes, n_images), dtype=np.int32) if return_class_best else None
+    )
 
     start_idx = 0
     image_indices = np.arange(n_images)
@@ -1397,7 +1513,24 @@ def _compute_k_class_significance_batched(
         else:
             batch_translation_log_prior = jnp.asarray(translation_log_prior[start_idx:end_idx])
 
-        if use_relion_numpy_preprocess:
+        if score_mode == "normalized_cc":
+            cc_window_indices = window_indices if use_window else None
+            score_complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
+            score_real_dtype = jnp.float64 if use_float64_scoring else jnp.float32
+            shifted_half, batch_norm, ctf2_half_score, ctf2_over_nv_half = _preprocess_batch_firstiter_cc(
+                experiment_dataset,
+                batch_data,
+                ctf_params,
+                noise_variance_half,
+                translations,
+                config,
+                score_with_masked_images,
+                window_indices=cc_window_indices,
+                score_complex_dtype=score_complex_dtype,
+                score_real_dtype=score_real_dtype,
+                norm_real_dtype=jnp.float64,
+            )
+        elif use_relion_numpy_preprocess:
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch_relion_numpy(
                 batch_data,
                 ctf_params,
@@ -1413,29 +1546,40 @@ def _compute_k_class_significance_batched(
                 config,
                 score_with_masked_images,
             )
+        batch_scale = None
+        if scale_corrections is not None:
+            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
         if image_corrections is not None:
             batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
             corr_expanded = jnp.repeat(batch_corr, n_trans)
             shifted_half = shifted_half * corr_expanded[:, None]
-            batch_norm = batch_norm * (batch_corr**2)[:, None]
-        if scale_corrections is not None:
-            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
+            norm_corr = batch_corr if score_mode != "normalized_cc" or batch_scale is None else batch_corr / batch_scale
+            batch_norm = batch_norm * (norm_corr**2)[:, None]
+        if batch_scale is not None:
             ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
+            if score_mode == "normalized_cc":
+                ctf2_half_score = ctf2_half_score * (batch_scale**2)[:, None]
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
             shifted_half = shifted_half * tiled_half_image_phase_factors(image_shape, batch_shifts, n_trans)
-        if half_spectrum_scoring:
+        if score_mode == "normalized_cc":
+            inv_xi2 = 1.0 / jnp.maximum(batch_norm, jnp.asarray(1e-30, dtype=batch_norm.dtype))
+            score_weight_half = ctf2_half_score * inv_xi2
+            shifted_half = shifted_half * jnp.repeat(inv_xi2, n_trans, axis=0)
+        else:
+            score_weight_half = ctf2_over_nv_half
+        if half_spectrum_scoring and score_mode != "normalized_cc":
             from recovar.em.dense_single_volume.helpers.half_spectrum import make_shell_indices_half as _mshi
 
             dc_mask = _mshi(image_shape) == 0
             shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
-            ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
+            score_weight_half = jnp.where(dc_mask[None, :], 0.0, score_weight_half)
         if use_window:
             shifted_data = shifted_half[:, window_indices]
-            ctf2_data = ctf2_over_nv_half[:, window_indices]
+            ctf2_data = score_weight_half[:, window_indices]
         else:
             shifted_data = shifted_half
-            ctf2_data = ctf2_over_nv_half
+            ctf2_data = score_weight_half
         if use_float64_scoring:
             shifted_data = shifted_data.astype(jnp.complex128)
             ctf2_data = ctf2_data.astype(jnp.float64)
@@ -1470,7 +1614,12 @@ def _compute_k_class_significance_batched(
         global_sum = jnp.zeros(batch_size, dtype=jnp.float64)
         class_max_values = []
         class_sum_values = []
-        cache_score_blocks = _significance_score_cache_enabled(
+        best_score_batch = jnp.full(batch_size, -jnp.inf)
+        best_argmax_batch = jnp.zeros(batch_size, dtype=jnp.int32)
+        best_class_batch = jnp.zeros(batch_size, dtype=jnp.int32)
+        class_best_scores = [jnp.full(batch_size, -jnp.inf) for _ in range(n_classes)] if return_class_best else None
+        class_best_argmaxes = [jnp.zeros(batch_size, dtype=jnp.int32) for _ in range(n_classes)] if return_class_best else None
+        cache_score_blocks = collect_significance and _significance_score_cache_enabled(
             batch_size,
             n_classes,
             n_rot_padded,
@@ -1486,6 +1635,8 @@ def _compute_k_class_significance_batched(
         # have access to intermediate scores.
         use_fused_pass1 = (
             _pass1_fused_enabled()
+            and score_mode == "gaussian"
+            and not use_relion_projector
             and dump_target_pre_prior_blocks_per_class is None
             and dump_target_with_prior_blocks_per_class is None
         )
@@ -1550,6 +1701,7 @@ def _compute_k_class_significance_batched(
                         cached_score_blocks.append(scores)
                 else:
                     scores = _score_block(
+                        class_index,
                         mean_for_proj,
                         rotations_padded[r0:r1],
                         shifted_data,
@@ -1588,6 +1740,24 @@ def _compute_k_class_significance_batched(
                         cached_score_blocks.append(scores)
                     class_max, class_sum = _update_logsumexp(class_max, class_sum, scores)
                     global_max, global_sum = _update_logsumexp(global_max, global_sum, scores)
+                block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
+                block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
+                improved = block_best > best_score_batch
+                best_score_batch = jnp.where(improved, block_best, best_score_batch)
+                best_argmax_batch = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax_batch)
+                best_class_batch = jnp.where(improved, class_index, best_class_batch)
+                if return_class_best:
+                    class_improved = block_best > class_best_scores[class_index]
+                    class_best_scores[class_index] = jnp.where(
+                        class_improved,
+                        block_best,
+                        class_best_scores[class_index],
+                    )
+                    class_best_argmaxes[class_index] = jnp.where(
+                        class_improved,
+                        block_argmax + r0 * n_trans,
+                        class_best_argmaxes[class_index],
+                    )
             if cached_class_score_blocks is not None:
                 cached_class_score_blocks.append(cached_score_blocks)
             class_max_values.append(class_max)
@@ -1598,57 +1768,52 @@ def _compute_k_class_significance_batched(
             class_max + jnp.log(class_sum) for class_max, class_sum in zip(class_max_values, class_sum_values)
         ]
 
-        best_score_batch = jnp.full(batch_size, -jnp.inf)
-        best_argmax_batch = jnp.zeros(batch_size, dtype=jnp.int32)
-        best_class_batch = jnp.zeros(batch_size, dtype=jnp.int32)
         class_weight_mats = []
-        for class_index, mean_for_proj in enumerate(means_for_proj):
-            class_weight_blocks = []
-            for block_index in range(n_blocks):
-                r0 = block_index * rotation_block_size
-                r1 = r0 + rotation_block_size
-                if cached_class_score_blocks is None:
-                    scores = _score_block(
-                        mean_for_proj,
-                        rotations_padded[r0:r1],
-                        shifted_data,
-                        batch_norm,
-                        ctf2_data,
-                        batch_size,
-                    )
-                    if r1 > n_rot:
-                        valid = n_rot - r0
-                        scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
-                    scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
-                else:
-                    scores = cached_class_score_blocks[class_index][block_index]
-                probs = jnp.exp(scores - global_log_z[:, None, None])
+        if collect_significance:
+            for class_index, mean_for_proj in enumerate(means_for_proj):
+                class_weight_blocks = []
+                for block_index in range(n_blocks):
+                    r0 = block_index * rotation_block_size
+                    r1 = r0 + rotation_block_size
+                    if cached_class_score_blocks is None:
+                        scores = _score_block(
+                            class_index,
+                            mean_for_proj,
+                            rotations_padded[r0:r1],
+                            shifted_data,
+                            batch_norm,
+                            ctf2_data,
+                            batch_size,
+                        )
+                        if r1 > n_rot:
+                            valid = n_rot - r0
+                            scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
+                        scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
+                    else:
+                        scores = cached_class_score_blocks[class_index][block_index]
+                    probs = jnp.exp(scores - global_log_z[:, None, None])
 
-                block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
-                block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
-                improved = block_best > best_score_batch
-                best_score_batch = jnp.where(improved, block_best, best_score_batch)
-                best_argmax_batch = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax_batch)
-                best_class_batch = jnp.where(improved, class_index, best_class_batch)
+                    actual_rot = min(rotation_block_size, n_rot - r0)
+                    class_weight_blocks.append(probs[:, :actual_rot, :].reshape(batch_size, -1))
+                class_weight_mats.append(jnp.concatenate(class_weight_blocks, axis=1))
 
-                actual_rot = min(rotation_block_size, n_rot - r0)
-                class_weight_blocks.append(probs[:, :actual_rot, :].reshape(batch_size, -1))
-            class_weight_mats.append(jnp.concatenate(class_weight_blocks, axis=1))
-
-        batch_weights = jnp.concatenate(class_weight_mats, axis=1)
-        batch_sig_mask, batch_sig_rot_mask, batch_n_sig = _find_sig(
-            batch_weights,
-            n_classes * n_rot,
-            n_trans,
-            adaptive_fraction=adaptive_fraction,
-            max_significants=max_significants,
-        )
-        batch_sig_mask_np = np.asarray(batch_sig_mask, dtype=bool)
-        sig_rot_any |= np.asarray(jnp.any(batch_sig_rot_mask, axis=0), dtype=bool).reshape(n_classes, n_rot)
+            batch_weights = jnp.concatenate(class_weight_mats, axis=1)
+            batch_sig_mask, batch_sig_rot_mask, batch_n_sig = _find_sig(
+                batch_weights,
+                n_classes * n_rot,
+                n_trans,
+                adaptive_fraction=adaptive_fraction,
+                max_significants=max_significants,
+            )
+            batch_sig_mask_np = np.asarray(batch_sig_mask, dtype=bool)
+            sig_rot_any |= np.asarray(jnp.any(batch_sig_rot_mask, axis=0), dtype=bool).reshape(n_classes, n_rot)
+            n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig, dtype=np.int32)
+        else:
+            batch_sig_mask_np = None
+            n_sig_all[start_idx:end_idx] = 0
 
         hard_assignment[start_idx:end_idx] = np.asarray(best_argmax_batch, dtype=np.int32)
         class_assignment[start_idx:end_idx] = np.asarray(best_class_batch, dtype=np.int32)
-        n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig, dtype=np.int32)
 
         log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
         global_log_z_np = np.asarray(global_log_z, dtype=np.float64)
@@ -1662,8 +1827,19 @@ def _compute_k_class_significance_batched(
             class_log_evidence[class_index, start_idx:end_idx] = (
                 np.asarray(class_log_z, dtype=np.float64) + log_score_offset
             )
+        if return_class_best:
+            for class_index in range(n_classes):
+                class_best_log_score[class_index, start_idx:end_idx] = (
+                    np.asarray(class_best_scores[class_index], dtype=np.float64) + log_score_offset
+                ).astype(np.float32)
+                class_hard_assignment[class_index, start_idx:end_idx] = np.asarray(
+                    class_best_argmaxes[class_index],
+                    dtype=np.int32,
+                )
 
         if _significance_debug_dump_enabled():
+            if not collect_significance:
+                raise ValueError("debug significance dumps require collect_significance=True")
             # Concatenate per-class per-block raw scores for the dump targets
             # into per-class arrays of shape (n_targets, n_rot, n_trans).
             target_scores_pre_prior_per_class = None
@@ -1703,18 +1879,23 @@ def _compute_k_class_significance_batched(
                 target_local_positions=target_local_positions_for_dump,
                 target_scores_pre_prior_per_class=target_scores_pre_prior_per_class,
                 target_scores_with_prior_per_class=target_scores_with_prior_per_class,
+                shifted_data=shifted_data,
+                ctf2_data=ctf2_data,
+                window_indices=window_indices,
+                half_weights_used=half_weights_windowed if use_window else half_weights,
             )
 
-        samples_per_class = n_rot * n_trans
-        for local_idx, global_idx in enumerate(indices):
-            global_idx = int(global_idx)
-            for class_index in range(n_classes):
-                c0 = class_index * samples_per_class
-                c1 = c0 + samples_per_class
-                mask = batch_sig_mask_np[local_idx, c0:c1]
-                significant_sample_indices[class_index][global_idx] = (
-                    None if np.all(mask) else np.flatnonzero(mask).astype(np.int32)
-                )
+        if collect_significance:
+            samples_per_class = n_rot * n_trans
+            for local_idx, global_idx in enumerate(indices):
+                global_idx = int(global_idx)
+                for class_index in range(n_classes):
+                    c0 = class_index * samples_per_class
+                    c1 = c0 + samples_per_class
+                    mask = batch_sig_mask_np[local_idx, c0:c1]
+                    significant_sample_indices[class_index][global_idx] = (
+                        None if np.all(mask) else np.flatnonzero(mask).astype(np.int32)
+                    )
         start_idx = end_idx
 
     full_stats = {
@@ -1726,4 +1907,7 @@ def _compute_k_class_significance_batched(
         "class_log_evidence_per_image": class_log_evidence,
         "class_assignments": class_assignment,
     }
+    if return_class_best:
+        full_stats["class_best_log_score_per_image"] = class_best_log_score
+        full_stats["class_hard_assignments"] = class_hard_assignment
     return sig_rot_any, n_sig_all, hard_assignment, class_assignment, significant_sample_indices, full_stats

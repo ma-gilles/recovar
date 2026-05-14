@@ -26,11 +26,27 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
+import recovar.core as core
 import recovar.core.fourier_transform_utils as ftu
+from recovar.em.dense_single_volume.helpers.preprocessing import (
+    apply_half_translation_phases,
+    half_translation_phase_table,
+)
 from recovar.em.dense_single_volume.helpers.oversampling import (
     compute_pass2_stats_sparse,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import _bucket_pass2_inputs
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _bucket_pass2_inputs,
+    _logsumexp_pass2_bucket_score_only,
+    _max_hypotheses_per_microbatch_for_pass,
+    _max_images_for_translation_tile,
+    _max_translation_tile_bytes_for_pass,
+    _normalize_pass2_bucket,
+    _normalize_pass2_bucket_score_only,
+    _nvidia_smi_visible_device_memory_bytes,
+    _prepare_per_image_pass2_inputs,
+    _projection_cache_max_bytes_for_pass,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -178,7 +194,501 @@ def test_bucket_count_bounded_under_varied_per_image_rotation_counts():
     )
     # Must be much smaller than n_images — that's the whole point.
     assert len(buckets) < n_images / 10, f"Got {len(buckets)} buckets for {n_images} images — bucketing too granular."
-    print(f"Bucketed: {n_images} images with {n_distinct_counts} distinct counts -> {len(buckets)} buckets")
+
+
+def test_default_sparse_pass2_budget_keeps_broad_support_batched():
+    """Broad soft K-class supports must not fall back to one image per launch."""
+
+    n_images = 26
+    n_fine_trans = 116
+    n_rot = 1024
+    per_image = {
+        "oversampled_rots": [np.zeros((n_rot, 3, 3), dtype=np.float32) for _ in range(n_images)],
+    }
+
+    default_buckets = _bucket_pass2_inputs(
+        per_image,
+        n_fine_trans=n_fine_trans,
+        max_images_per_microbatch=13,
+    )
+    old_cap_buckets = _bucket_pass2_inputs(
+        per_image,
+        n_fine_trans=n_fine_trans,
+        max_hypotheses_per_microbatch=100_000,
+        max_images_per_microbatch=13,
+    )
+
+    assert [len(bucket["image_indices"]) for bucket in default_buckets] == [8, 8, 8, 2]
+    assert len(old_cap_buckets) == n_images
+
+
+def test_score_only_sparse_pass_uses_larger_default_bucket_budget(monkeypatch):
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES", raising=False)
+
+    device_memory = 80 * 1024**3
+    n_score_pixels = 652
+    assert (
+        _max_hypotheses_per_microbatch_for_pass(
+            score_only=True,
+            use_window=True,
+            has_external_normalization=False,
+            dump_pass2_operands=False,
+            n_score_pixels=n_score_pixels,
+            device_memory_bytes=device_memory,
+        )
+        > _max_hypotheses_per_microbatch_for_pass(
+            score_only=False,
+            use_window=True,
+            has_external_normalization=False,
+            dump_pass2_operands=False,
+            n_score_pixels=n_score_pixels,
+            device_memory_bytes=device_memory,
+        )
+    )
+    assert (
+        _max_hypotheses_per_microbatch_for_pass(
+            score_only=True,
+            use_window=True,
+            has_external_normalization=False,
+            dump_pass2_operands=False,
+            n_score_pixels=n_score_pixels * 2,
+            device_memory_bytes=device_memory,
+        )
+        < _max_hypotheses_per_microbatch_for_pass(
+            score_only=True,
+            use_window=True,
+            has_external_normalization=False,
+            dump_pass2_operands=False,
+            n_score_pixels=n_score_pixels,
+            device_memory_bytes=device_memory,
+        )
+    )
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES", "12345")
+    assert (
+        _max_hypotheses_per_microbatch_for_pass(
+            score_only=True,
+            use_window=True,
+            has_external_normalization=False,
+            dump_pass2_operands=False,
+            n_score_pixels=n_score_pixels,
+            device_memory_bytes=device_memory,
+        )
+        == 12345
+    )
+
+
+def test_sparse_pass2_auto_hypothesis_cap_matches_80gb_probe_scale(monkeypatch):
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES", raising=False)
+
+    device_memory = 80 * 1024**3
+    n_score_pixels = 652
+    cap = _max_hypotheses_per_microbatch_for_pass(
+        score_only=True,
+        use_window=True,
+        has_external_normalization=False,
+        dump_pass2_operands=False,
+        n_score_pixels=n_score_pixels,
+        device_memory_bytes=device_memory,
+    )
+
+    assert 4_500_000 <= cap <= 5_500_000
+
+
+def test_sparse_pass2_memory_budgets_auto_scale_with_device_memory(monkeypatch):
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MAX_TRANSLATION_TILE_BYTES", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE_MAX_BYTES", raising=False)
+
+    small_gpu = 20 * 1024**3
+    large_gpu = 80 * 1024**3
+
+    assert _max_translation_tile_bytes_for_pass(large_gpu) == pytest.approx(
+        4 * _max_translation_tile_bytes_for_pass(small_gpu),
+        rel=1e-6,
+    )
+    assert _projection_cache_max_bytes_for_pass(large_gpu) == pytest.approx(
+        4 * _projection_cache_max_bytes_for_pass(small_gpu),
+        rel=1e-6,
+    )
+    assert (
+        _max_images_for_translation_tile(
+            (256, 256),
+            116,
+            max_tile_bytes=_max_translation_tile_bytes_for_pass(large_gpu),
+        )
+        >= 50
+    )
+    assert (
+        _max_images_for_translation_tile(
+            (256, 256),
+            116,
+            max_tile_bytes=_max_translation_tile_bytes_for_pass(small_gpu),
+        )
+        >= 13
+    )
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_TRANSLATION_TILE_BYTES", "123456")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE_MAX_BYTES", "654321")
+    assert _max_translation_tile_bytes_for_pass(large_gpu) == 123456
+    assert _projection_cache_max_bytes_for_pass(large_gpu) == 654321
+
+
+def test_sparse_pass2_device_memory_probe_honors_visible_device():
+    smi_output = "\n".join(
+        [
+            "0, GPU-a100, 40960",
+            "1, GPU-h100, 81559",
+        ],
+    )
+
+    assert _nvidia_smi_visible_device_memory_bytes(smi_output, "1") == 81559 * 1024**2
+    assert _nvidia_smi_visible_device_memory_bytes(smi_output, "GPU-h100") == 81559 * 1024**2
+    assert _nvidia_smi_visible_device_memory_bytes(smi_output, "h100") == 81559 * 1024**2
+    assert _nvidia_smi_visible_device_memory_bytes(smi_output, "-1") is None
+    assert _nvidia_smi_visible_device_memory_bytes(smi_output, None) == 40960 * 1024**2
+
+
+def test_half_translation_phase_table_matches_generic_translate_images():
+    rng = np.random.default_rng(13)
+    image_shape = (16, 16)
+    n_half = image_shape[0] * (image_shape[1] // 2 + 1)
+    weighted_half = jnp.asarray(
+        rng.normal(size=(3, n_half)).astype(np.float32)
+        + 1j * rng.normal(size=(3, n_half)).astype(np.float32),
+        dtype=jnp.complex64,
+    )
+    translations = jnp.asarray(rng.normal(size=(5, 2)).astype(np.float32))
+
+    tiled_images = jnp.repeat(weighted_half[:, None, :], translations.shape[0], axis=1).reshape(
+        weighted_half.shape[0] * translations.shape[0],
+        -1,
+    )
+    tiled_translations = jnp.repeat(translations[None], weighted_half.shape[0], axis=0).reshape(
+        weighted_half.shape[0] * translations.shape[0],
+        -1,
+    )
+    generic = core.translate_images(tiled_images, tiled_translations, image_shape, half_image=True)
+    phase_table = apply_half_translation_phases(
+        weighted_half,
+        half_translation_phase_table(translations, image_shape),
+    )
+
+    np.testing.assert_array_equal(np.asarray(phase_table), np.asarray(generic))
+
+
+def test_score_only_sparse_normalizer_matches_full_normalizer_stats():
+    scores = jnp.asarray(
+        [
+            [[1.0, -2.0, -jnp.inf], [0.25, -0.5, -3.0]],
+            [[-jnp.inf, -jnp.inf, -jnp.inf], [-jnp.inf, -jnp.inf, -jnp.inf]],
+        ],
+        dtype=jnp.float32,
+    )
+
+    full_log_z, _probs, full_best, full_argmax, full_pmax = _normalize_pass2_bucket(scores)
+    score_log_z, score_best, score_argmax, score_pmax = _normalize_pass2_bucket_score_only(scores)
+
+    np.testing.assert_allclose(np.asarray(score_log_z), np.asarray(full_log_z), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(score_best), np.asarray(full_best), rtol=0, atol=0)
+    np.testing.assert_array_equal(np.asarray(score_argmax), np.asarray(full_argmax))
+    logz_only = np.asarray(_logsumexp_pass2_bucket_score_only(scores))
+    np.testing.assert_allclose(logz_only[0], np.asarray(full_log_z)[0], rtol=0, atol=0)
+    assert np.isneginf(logz_only[1])
+    np.testing.assert_allclose(np.asarray(score_pmax), np.asarray(full_pmax), rtol=1e-7, atol=1e-7)
+
+
+def test_fine_rotation_override_preserves_fine_grid_order_and_parent_map():
+    fine_rotations = np.arange(6 * 9, dtype=np.float32).reshape(6, 3, 3)
+    fine_parent = np.array([0, 1, 0, 2, 1, 2], dtype=np.int64)
+
+    per_image = _prepare_per_image_pass2_inputs(
+        [np.array([0, 2], dtype=np.int32)],
+        n_coarse_rot=3,
+        n_coarse_trans=1,
+        nside_level=1,
+        oversampling_order=1,
+        n_fine_trans=1,
+        fine_translation_parent=np.array([0], dtype=np.int32),
+        rotation_log_prior=None,
+        random_perturbation=0.0,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+    )
+
+    np.testing.assert_array_equal(per_image["oversampled_rot_indices"][0], np.array([0, 2, 3, 5]))
+    np.testing.assert_array_equal(per_image["parent_map"][0], np.array([0, 0, 1, 1], dtype=np.int32))
+    np.testing.assert_array_equal(per_image["oversampled_rots"][0], fine_rotations[[0, 2, 3, 5]])
+
+
+def test_fine_grid_candidate_mask_uses_parented_translation_support():
+    fine_rotations = np.arange(5 * 9, dtype=np.float32).reshape(5, 3, 3)
+    fine_parent = np.array([0, 0, 1, 3, 3], dtype=np.int64)
+    fine_translation_parent = np.array([0, 1, 2, 0, 1, 2], dtype=np.int32)
+
+    per_image = _prepare_per_image_pass2_inputs(
+        [np.array([0, 2, 10], dtype=np.int32)],
+        n_coarse_rot=4,
+        n_coarse_trans=3,
+        nside_level=1,
+        oversampling_order=1,
+        n_fine_trans=fine_translation_parent.size,
+        fine_translation_parent=fine_translation_parent,
+        rotation_log_prior=None,
+        random_perturbation=0.0,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+    )
+
+    expected = np.array(
+        [
+            [True, False, True, True, False, True],
+            [True, False, True, True, False, True],
+            [False, True, False, False, True, False],
+            [False, True, False, False, True, False],
+        ],
+        dtype=bool,
+    )
+    np.testing.assert_array_equal(per_image["oversampled_rot_indices"][0], np.array([0, 1, 3, 4]))
+    np.testing.assert_array_equal(per_image["candidate_mask"][0], expected)
+
+
+def test_sparse_pass2_projection_cache_projects_fine_grid_once(monkeypatch):
+    """Fine-grid override projections are shared across sparse buckets."""
+
+    n_images = 8
+    n_coarse_rot = 48
+    n_coarse_trans = 2
+    fine_rotations = np.tile(np.eye(3, dtype=np.float32), (10, 1, 1))
+    fine_parent = np.array([0, 0, 1, 1, 2, 3, 3, 4, 5, 7], dtype=np.int64)
+    fine_translations = np.array(
+        [[0.0, 0.0], [0.25, 0.0], [1.0, 0.0], [1.25, 0.0]],
+        dtype=np.float32,
+    )
+    fine_translation_parent = np.array([0, 0, 1, 1], dtype=np.int32)
+    significant_samples = [
+        np.asarray([parent * n_coarse_trans for parent in parents], dtype=np.int32)
+        for parents in ([0], [0, 1], [0, 1, 2], [3], [3, 4], [5], [7], [0, 3, 5])
+    ]
+
+    ds = MockDataset(n_images=n_images, seed=41)
+    volume = _hermitian_volume(VOLUME_SHAPE, seed=43)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    translations = jnp.array([[0.0, 0.0], [1.0, 0.0]], dtype=jnp.float32)
+
+    monkeypatch.delenv("RECOVAR_PASS2_DUMP_DIR", raising=False)
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", "16")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE_MAX_BYTES", str(1024**3))
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    projection_call_sizes = []
+
+    def fake_project(volume_block, rotations_block, image_shape, volume_shape, disc_type, **kwargs):
+        del volume_block, image_shape, volume_shape, disc_type
+        projection_call_sizes.append(int(rotations_block.shape[0]))
+        n_half = IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1)
+        proj = jnp.zeros((rotations_block.shape[0], n_half), dtype=jnp.complex64)
+        return_abs2 = kwargs.get("return_abs2", None)
+        return proj, None if return_abs2 is False else jnp.zeros((rotations_block.shape[0], n_half), dtype=jnp.float32)
+
+    monkeypatch.setattr(bucketed_mod, "_compute_projections_block", fake_project)
+
+    compute_pass2_stats_sparse(
+        ds,
+        volume,
+        mean_variance,
+        noise_variance,
+        translations,
+        significant_samples,
+        nside_level=1,
+        disc_type="linear_interp",
+        oversampling_order=1,
+        current_size=None,
+        return_stats=True,
+        return_score_log_z=True,
+        accumulate_noise=False,
+        disable_adjoint_y=True,
+        disable_adjoint_ctf=True,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+        fine_translations_override=fine_translations,
+        fine_translation_parent_override=fine_translation_parent,
+    )
+
+    assert projection_call_sizes == [fine_rotations.shape[0]]
+
+
+def test_score_log_z_only_matches_full_score_probe(monkeypatch):
+    n_images = 6
+    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 6, axis=0)
+    fine_parent = np.asarray([0, 1, 2, 3, 4, 5], dtype=np.int64)
+    fine_translations = np.asarray([[0.0, 0.0], [0.5, 0.0], [0.0, 1.0], [0.5, 1.0]], dtype=np.float32)
+    fine_translation_parent = np.asarray([0, 0, 1, 1], dtype=np.int32)
+    significant_samples = [
+        np.asarray([0, 1, 4, 7], dtype=np.int32),
+        np.asarray([2, 3, 6], dtype=np.int32),
+        np.asarray([8, 9], dtype=np.int32),
+        np.asarray([0, 5, 10], dtype=np.int32),
+        np.asarray([1], dtype=np.int32),
+        np.asarray([2, 11], dtype=np.int32),
+    ]
+
+    ds = MockDataset(n_images=n_images, seed=51)
+    volume = _hermitian_volume(VOLUME_SHAPE, seed=53)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    translations = jnp.array([[0.0, 0.0], [1.0, 0.0]], dtype=jnp.float32)
+
+    monkeypatch.delenv("RECOVAR_PASS2_DUMP_DIR", raising=False)
+    full = compute_pass2_stats_sparse(
+        ds,
+        volume,
+        mean_variance,
+        noise_variance,
+        translations,
+        significant_samples,
+        nside_level=1,
+        disc_type="linear_interp",
+        oversampling_order=1,
+        current_size=None,
+        return_stats=True,
+        return_score_log_z=True,
+        accumulate_noise=False,
+        disable_adjoint_y=True,
+        disable_adjoint_ctf=True,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+        fine_translations_override=fine_translations,
+        fine_translation_parent_override=fine_translation_parent,
+    )
+    log_evidence, score_log_z = compute_pass2_stats_sparse(
+        ds,
+        volume,
+        mean_variance,
+        noise_variance,
+        translations,
+        significant_samples,
+        nside_level=1,
+        disc_type="linear_interp",
+        oversampling_order=1,
+        current_size=None,
+        return_score_log_z_only=True,
+        accumulate_noise=False,
+        disable_adjoint_y=True,
+        disable_adjoint_ctf=True,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+        fine_translations_override=fine_translations,
+        fine_translation_parent_override=fine_translation_parent,
+    )
+
+    np.testing.assert_allclose(np.asarray(log_evidence), np.asarray(full[6].log_evidence_per_image), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(score_log_z), np.asarray(full[7]), rtol=0, atol=0)
+
+
+def test_fused_other_class_log_z_matches_two_pass_normalization(monkeypatch):
+    n_images = 5
+    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 6, axis=0)
+    fine_parent = np.asarray([0, 1, 2, 3, 4, 5], dtype=np.int64)
+    fine_translations = np.asarray([[0.0, 0.0], [0.5, 0.0], [0.0, 1.0], [0.5, 1.0]], dtype=np.float32)
+    fine_translation_parent = np.asarray([0, 0, 1, 1], dtype=np.int32)
+    significant_samples = [
+        np.asarray([0, 1, 4, 7], dtype=np.int32),
+        np.asarray([2, 3, 6], dtype=np.int32),
+        np.asarray([8, 9], dtype=np.int32),
+        np.asarray([0, 5, 10], dtype=np.int32),
+        np.asarray([1, 2, 11], dtype=np.int32),
+    ]
+
+    ds = MockDataset(n_images=n_images, seed=71)
+    volume_a = _hermitian_volume(VOLUME_SHAPE, seed=73)
+    volume_b = _hermitian_volume(VOLUME_SHAPE, seed=79)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    translations = jnp.array([[0.0, 0.0], [1.0, 0.0]], dtype=jnp.float32)
+    common = dict(
+        nside_level=1,
+        disc_type="linear_interp",
+        oversampling_order=1,
+        current_size=None,
+        return_stats=True,
+        accumulate_noise=False,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+        fine_translations_override=fine_translations,
+        fine_translation_parent_override=fine_translation_parent,
+    )
+
+    monkeypatch.delenv("RECOVAR_PASS2_DUMP_DIR", raising=False)
+    _, score_a = compute_pass2_stats_sparse(
+        ds,
+        volume_a,
+        mean_variance,
+        noise_variance,
+        translations,
+        significant_samples,
+        return_score_log_z_only=True,
+        disable_adjoint_y=True,
+        disable_adjoint_ctf=True,
+        **common,
+    )
+    log_evidence_b, score_b = compute_pass2_stats_sparse(
+        ds,
+        volume_b,
+        mean_variance,
+        noise_variance,
+        translations,
+        significant_samples,
+        return_score_log_z_only=True,
+        disable_adjoint_y=True,
+        disable_adjoint_ctf=True,
+        **common,
+    )
+    global_score_log_z = np.logaddexp(np.asarray(score_a, dtype=np.float64), np.asarray(score_b, dtype=np.float64))
+
+    two_pass = compute_pass2_stats_sparse(
+        ds,
+        volume_b,
+        mean_variance,
+        noise_variance,
+        translations,
+        significant_samples,
+        normalization_log_z=global_score_log_z,
+        **common,
+    )
+    fused = compute_pass2_stats_sparse(
+        ds,
+        volume_b,
+        mean_variance,
+        noise_variance,
+        translations,
+        significant_samples,
+        normalization_other_score_log_z=score_a,
+        return_score_log_z=True,
+        **common,
+    )
+
+    np.testing.assert_allclose(np.asarray(fused[0]), np.asarray(two_pass[0]), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(fused[1]), np.asarray(two_pass[1]), rtol=1e-6, atol=1e-6)
+    np.testing.assert_array_equal(np.asarray(fused[2]), np.asarray(two_pass[2]))
+    np.testing.assert_array_equal(np.asarray(fused[5]), np.asarray(two_pass[5]))
+    np.testing.assert_allclose(
+        np.asarray(fused[6].best_log_score_per_image),
+        np.asarray(two_pass[6].best_log_score_per_image),
+    )
+    np.testing.assert_allclose(
+        np.asarray(fused[6].max_posterior_per_image),
+        np.asarray(two_pass[6].max_posterior_per_image),
+    )
+    np.testing.assert_allclose(
+        np.asarray(fused[6].rotation_posterior_sums),
+        np.asarray(two_pass[6].rotation_posterior_sums),
+    )
+    np.testing.assert_allclose(np.asarray(fused[6].log_evidence_per_image), np.asarray(log_evidence_b), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(fused[7]), np.asarray(score_b), rtol=0, atol=0)
 
 
 def test_bucketed_call_count_bounded_versus_perimage():
