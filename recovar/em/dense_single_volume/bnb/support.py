@@ -54,6 +54,7 @@ from .frequency import (
     make_bnb_high_indices_np,
     make_bnb_low_window_spec,
 )
+from .hierarchical_support import _to_half_noise
 from .options import BranchBoundOptions
 from .pruning import prune_by_tail_mass_and_caps
 
@@ -137,8 +138,6 @@ def _score_active_low_frequency(
         ctf_params = batch[3]
         batch_size = int(jnp.asarray(batch_data).shape[0])
         end = start + batch_size
-
-        from .hierarchical_support import _to_half_noise
 
         shifted_half, batch_norm, ctf2_over_nv_half = preprocess_batch(
             experiment_dataset, jnp.asarray(batch_data), ctf_params,
