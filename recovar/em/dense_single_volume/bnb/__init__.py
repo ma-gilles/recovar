@@ -36,6 +36,13 @@ from .frequency import (
 )
 from .layout import build_bnb_local_layout
 from .options import BranchBoundOptions
+from .pruning import (
+    apply_orientation_cap,
+    apply_shift_cap,
+    compute_omitted_mass_upper,
+    prune_by_score_margin,
+    prune_by_tail_mass_and_caps,
+)
 from .shift_grid import (
     ShiftGridLevel,
     make_initial_shift_grid,
@@ -50,10 +57,13 @@ __all__ = [
     "BnBSupportResult",
     "BranchBoundOptions",
     "ShiftGridLevel",
+    "apply_orientation_cap",
+    "apply_shift_cap",
     "axis_angle_to_matrix",
     "axis_angle_to_quaternion",
     "build_bnb_local_layout",
     "cauchy_score_upper_correction",
+    "compute_omitted_mass_upper",
     "compute_high_model_pmax_per_image",
     "compute_image_high_power_per_image",
     "cryosparc_score_upper_correction",
@@ -63,6 +73,8 @@ __all__ = [
     "make_bnb_low_window_spec",
     "make_initial_axis_angle_grid",
     "make_initial_shift_grid",
+    "prune_by_score_margin",
+    "prune_by_tail_mass_and_caps",
     "run_bnb_em_k1",
     "select_bnb_support_fixed_grid_k1",
     "subdivide_axis_angle_cells",

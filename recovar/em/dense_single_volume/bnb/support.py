@@ -55,6 +55,7 @@ from .frequency import (
     make_bnb_low_window_spec,
 )
 from .options import BranchBoundOptions
+from .pruning import prune_by_tail_mass_and_caps
 
 logger = logging.getLogger(__name__)
 
@@ -191,126 +192,17 @@ def _prune_by_tail_mass_and_caps(
     upper_scores: np.ndarray,
     options: BranchBoundOptions,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Prune per-image (rot, trans) candidates by posterior-mass tail + caps.
+    """Phase-2 shim that delegates to ``pruning.prune_by_tail_mass_and_caps``.
 
-    Parameters
-    ----------
-    sample_mask : (n_images, n_rot, n_trans) bool
-        Currently active candidates per image.
-    upper_scores : (n_images, n_rot, n_trans) float
-        Per-image score upper bound U_iL(r, t). Inactive candidates should
-        have score = -inf (or any value that will not be in the top-K).
-    options : BranchBoundOptions
-
-    Returns
-    -------
-    new_sample_mask : (n_images, n_rot, n_trans) bool
-    omitted_mass_upper : (n_images,) float — upper bound on the pruned
-        posterior mass per image (sum of exp(U_pruned - U_max), normalized
-        by sum exp(U_kept - U_max)).
+    Returned tuple is ``(new_mask, omitted_mass_upper)``; cap-applied
+    diagnostics are dropped here for back-compat. New callers should use
+    ``pruning.prune_by_tail_mass_and_caps`` directly to also receive the
+    ``cap_applied_per_image`` vector.
     """
-    n_images, n_rot, n_trans = sample_mask.shape
-
-    # Score margin tau = -log(posterior_tail_tol).
-    if options.score_margin is not None:
-        tau = float(options.score_margin)
-    else:
-        tau = -np.log(max(options.posterior_tail_tol, 1e-300))
-
-    # Force inactive candidates to -inf so they never pass any pruning step.
-    flat_upper = np.where(sample_mask, upper_scores, -np.inf).reshape(n_images, -1)
-
-    # Per-image best score.
-    best = np.max(flat_upper, axis=1)
-    # Default: keep all candidates whose upper score is within tau of the
-    # best.
-    keep_by_margin = flat_upper >= (best[:, None] - tau)
-
-    # Apply orientation cap: keep at most max_orientation_fraction * n_rot
-    # rotations. We score each rotation by max_t upper_score and keep the
-    # top-K rotations.
-    keep_2d = keep_by_margin.reshape(n_images, n_rot, n_trans)
-    rot_upper = np.where(keep_2d, upper_scores, -np.inf).max(axis=2)  # (n_images, n_rot)
-    n_keep_rot = max(
-        int(options.min_orientations_per_image),
-        int(np.ceil(options.max_orientation_fraction * n_rot)),
+    new_mask, rho, _cap_applied = prune_by_tail_mass_and_caps(
+        sample_mask, upper_scores, options,
     )
-    n_keep_rot = min(n_keep_rot, n_rot)
-    if n_keep_rot < n_rot:
-        # Per image, find indices of top-K rotations by rot_upper.
-        thresh = np.partition(rot_upper, n_rot - n_keep_rot, axis=1)[:, n_rot - n_keep_rot]
-        rot_keep_mask = rot_upper >= thresh[:, None]
-    else:
-        rot_keep_mask = np.ones((n_images, n_rot), dtype=bool)
-
-    # Apply shift cap: keep at most max_shift_fraction * n_trans shifts per image.
-    trans_upper = np.where(keep_2d, upper_scores, -np.inf).max(axis=1)  # (n_images, n_trans)
-    n_keep_trans = max(
-        int(options.min_shifts_per_image),
-        int(np.ceil(options.max_shift_fraction * n_trans)),
-    )
-    n_keep_trans = min(n_keep_trans, n_trans)
-    if n_keep_trans < n_trans:
-        thresh_t = np.partition(trans_upper, n_trans - n_keep_trans, axis=1)[
-            :, n_trans - n_keep_trans
-        ]
-        trans_keep_mask = trans_upper >= thresh_t[:, None]
-    else:
-        trans_keep_mask = np.ones((n_images, n_trans), dtype=bool)
-
-    # Joint mask: tail-bound AND rotation cap AND shift cap.
-    new_mask_2d = (
-        keep_2d
-        & rot_keep_mask[:, :, None]
-        & trans_keep_mask[:, None, :]
-    )
-
-    # Enforce min_joint_candidates_per_image floor: if a image has fewer than
-    # the floor, restore the top-K overall by upper score (ignoring caps).
-    n_kept_per_image = new_mask_2d.reshape(n_images, -1).sum(axis=1)
-    floor = int(options.min_joint_candidates_per_image)
-    if floor > 0:
-        below_floor = n_kept_per_image < floor
-        if np.any(below_floor):
-            flat_full = upper_scores.reshape(n_images, -1)
-            # Build top-K mask for each below-floor image.
-            for i in np.where(below_floor)[0]:
-                k = min(floor, n_rot * n_trans)
-                thresh_full = np.partition(flat_full[i], n_rot * n_trans - k)[
-                    n_rot * n_trans - k
-                ]
-                mask_i = flat_full[i] >= thresh_full
-                new_mask_2d[i] = mask_i.reshape(n_rot, n_trans) & sample_mask[i]
-
-    # Cap above max_joint_candidates_per_image (rare).
-    ceiling = int(options.max_joint_candidates_per_image)
-    if ceiling > 0:
-        n_kept_per_image = new_mask_2d.reshape(n_images, -1).sum(axis=1)
-        above_ceiling = n_kept_per_image > ceiling
-        if np.any(above_ceiling):
-            for i in np.where(above_ceiling)[0]:
-                flat_i = np.where(new_mask_2d[i].reshape(-1), upper_scores[i].reshape(-1), -np.inf)
-                k = ceiling
-                thresh_top = np.partition(flat_i, n_rot * n_trans - k)[n_rot * n_trans - k]
-                new_mask_2d[i] = (flat_i >= thresh_top).reshape(n_rot, n_trans)
-
-    # Diagnostic: omitted mass upper bound per image. Compute relative to the
-    # max upper score over the kept set.
-    omitted_mass_upper = np.zeros(n_images, dtype=np.float32)
-    for i in range(n_images):
-        flat_u = upper_scores[i].reshape(-1)
-        kept_flat = new_mask_2d[i].reshape(-1)
-        active_flat = sample_mask[i].reshape(-1)
-        pruned_flat = active_flat & ~kept_flat
-        if not np.any(kept_flat):
-            omitted_mass_upper[i] = 1.0
-            continue
-        u_max = float(np.max(flat_u[kept_flat]))
-        kept_sum = float(np.sum(np.exp(flat_u[kept_flat] - u_max)))
-        pruned_sum = float(np.sum(np.exp(flat_u[pruned_flat] - u_max))) if np.any(pruned_flat) else 0.0
-        omitted_mass_upper[i] = pruned_sum / max(kept_sum + pruned_sum, 1e-30)
-
-    return new_mask_2d, omitted_mass_upper
+    return new_mask, rho
 
 
 def select_bnb_support_fixed_grid_k1(
@@ -447,7 +339,7 @@ def select_bnb_support_fixed_grid_k1(
         best_score_upper = np.max(upper.reshape(n_images, -1), axis=1)
 
         # Prune.
-        sample_mask, omitted_mass_stage = _prune_by_tail_mass_and_caps(
+        sample_mask, omitted_mass_stage, cap_applied_stage = prune_by_tail_mass_and_caps(
             sample_mask, upper, options,
         )
         omitted_mass = np.maximum(omitted_mass, omitted_mass_stage)
@@ -456,7 +348,7 @@ def select_bnb_support_fixed_grid_k1(
         diag.append_stage(BnBStageDiagnostics(
             stage=stage_idx,
             L=int(L),
-            angular_spacing_deg=float("nan"),  # axis-angle grid lands in Phase 3
+            angular_spacing_deg=float("nan"),  # axis-angle grid hooks up in Phase 5+
             shift_spacing_px=float("nan"),
             n_active_rotations=int(sample_mask.any(axis=2).sum() / max(1, n_images)),
             n_active_shifts=int(sample_mask.any(axis=1).sum() / max(1, n_images)),
@@ -465,7 +357,7 @@ def select_bnb_support_fixed_grid_k1(
             n_survivors_max=int(n_kept_per_image.max()),
             pmax_high_mean=float(pmax_per_image.mean()),
             high_correction_mean=float(delta_H.mean()),
-            cap_applied_count=int(0),
+            cap_applied_count=int(cap_applied_stage.sum()),
             omitted_mass_upper_mean=float(omitted_mass_stage.mean()),
             omitted_mass_upper_max=float(omitted_mass_stage.max()),
         ))
