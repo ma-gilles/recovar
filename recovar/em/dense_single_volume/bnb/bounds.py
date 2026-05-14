@@ -39,6 +39,8 @@ import numpy as np
 
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_projections_block,
+    indexed_projection_available,
+    project_indexed_half_spectrum,
 )
 
 
@@ -124,18 +126,36 @@ def compute_high_model_pmax_per_image(
     pmax = jnp.full((n_images,), 0.0, dtype=weighted_ctf2.dtype)
 
     block = max(1, int(rotation_block_size))
+    use_indexed = indexed_projection_available() and bool(high_indices.shape[0] < 0.25 * jnp.asarray(half_weights).shape[0])
     for r0 in range(0, n_rot, block):
         r1 = min(r0 + block, n_rot)
         rot_block = rotations_for_bound[r0:r1]
-        _, proj_abs2_half = compute_projections_block(
-            mean,
-            rot_block,
-            image_shape,
-            volume_shape,
-            disc_type,
-            return_abs2=True,
-        )
-        proj_abs2_high = proj_abs2_half[:, high_indices]
+        if use_indexed:
+            # Project only the high-frequency packed-half pixels — avoids
+            # materialising the full half-spectrum projection when the high
+            # band is a small fraction of the support. Suppl §"Approximations"
+            # equivalent of the "Y_l^max only depends on V" observation: at
+            # low L most pixels are in the low band, so the high band is
+            # small for the first few BnB stages.
+            proj_high = project_indexed_half_spectrum(
+                mean,
+                high_indices,
+                rot_block,
+                image_shape,
+                volume_shape,
+                disc_type,
+            )
+            proj_abs2_high = jnp.abs(proj_high) ** 2
+        else:
+            _, proj_abs2_half = compute_projections_block(
+                mean,
+                rot_block,
+                image_shape,
+                volume_shape,
+                disc_type,
+                return_abs2=True,
+            )
+            proj_abs2_high = proj_abs2_half[:, high_indices]
         # power[i, r] = sum_l weighted_ctf2[i,l] * proj_abs2_high[r,l]
         power = jnp.matmul(weighted_ctf2, proj_abs2_high.T)
         block_max = jnp.max(power, axis=1)

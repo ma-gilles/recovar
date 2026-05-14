@@ -287,6 +287,28 @@ def main():
         ),
     )
     parser.add_argument(
+        "--refinement_strategy",
+        default="relion_dense",
+        choices=("relion_dense", "relion_local", "cryosparc_bnb"),
+        help=(
+            "Pose-refinement strategy. 'relion_dense' (default) is the existing "
+            "RELION-parity path. 'cryosparc_bnb' routes K=1 through the new "
+            "cryoSPARC branch-and-bound support selector."
+        ),
+    )
+    parser.add_argument(
+        "--bnb_subdivision_mode",
+        default="fixed_grid",
+        choices=("fixed_grid", "axis_angle_hierarchical"),
+        help=(
+            "When --refinement_strategy cryosparc_bnb is set, choose between "
+            "Phase-2 fixed-grid pruning over the existing recovar HEALPix grid "
+            "or paper-faithful axis-angle/shift Cartesian subdivision."
+        ),
+    )
+    parser.add_argument("--bnb_initial_fourier_radius", type=int, default=12)
+    parser.add_argument("--bnb_posterior_tail_tol", type=float, default=1e-6)
+    parser.add_argument(
         "--max_particles", type=int, default=None, help="Subsample to at most N particles (N/2 per half)"
     )
     parser.add_argument(
@@ -1028,6 +1050,20 @@ def main():
 
     # ---- Run ----
     print(f"\nRunning {args.max_iter} iterations...")
+    print(f"  Refinement strategy: {args.refinement_strategy}")
+    if args.refinement_strategy == "cryosparc_bnb":
+        from recovar.em.dense_single_volume.bnb import BranchBoundOptions
+        bnb_options = BranchBoundOptions(
+            enabled=True,
+            subdivision_mode=args.bnb_subdivision_mode,
+            initial_fourier_radius=int(args.bnb_initial_fourier_radius),
+            posterior_tail_tol=float(args.bnb_posterior_tail_tol),
+        )
+        print(f"  BnB subdivision_mode: {bnb_options.subdivision_mode}")
+        print(f"  BnB initial_fourier_radius: {bnb_options.initial_fourier_radius}")
+        print(f"  BnB posterior_tail_tol: {bnb_options.posterior_tail_tol}")
+    else:
+        bnb_options = None
     t0 = time.time()
     result = refine_single_volume(
         experiment_datasets=[ds_half1, ds_half2],
@@ -1074,6 +1110,8 @@ def main():
         first_iteration_score_mode=args.first_iteration_score_mode,
         first_iteration_reconstruction_mode=args.first_iteration_reconstruction_mode,
         force_max_iter_after_convergence=args.force_max_iter_after_convergence,
+        refinement_strategy=args.refinement_strategy,
+        bnb_options=bnb_options,
     )
     elapsed = time.time() - t0
     completed_iters = len(result.get("current_sizes", []))

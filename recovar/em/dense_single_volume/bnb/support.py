@@ -300,36 +300,55 @@ def select_bnb_support_fixed_grid_k1(
         )
 
         pmax_per_image = np.empty(n_images, dtype=np.float32)
-        start = 0
-        for batch in experiment_dataset.iter_batches(
-            image_batch_size, indices=image_indices, by_image=False,
-        ):
-            batch_data = batch[0]
-            ctf_params = batch[3]
-            batch_size = int(jnp.asarray(batch_data).shape[0])
-            end = start + batch_size
-
-            _, _, ctf2_over_nv_half = preprocess_batch(
-                experiment_dataset, jnp.asarray(batch_data), ctf_params,
-                _to_half_noise(noise_variance, image_shape),
-                translations_global, config, False,
-            )
-            pmax_batch = compute_high_model_pmax_per_image(
+        use_rms = options.ctf_bound_mode == "cryosparc_rms"
+        if use_rms:
+            # Phase-6 optimisation: RMS-CTF + shared noise spectrum gives a
+            # single P^max for the whole batch — compute once and broadcast.
+            # Skips the per-batch CTF preprocess + projection redo loop.
+            pmax_shared = float(np.asarray(compute_high_model_pmax_per_image(
                 mean,
                 rotations_global,
-                ctf2_over_nv_half,
+                jnp.zeros((1, jnp.asarray(half_weights).shape[0]), dtype=jnp.float32),  # ignored in RMS mode
                 half_weights,
                 jnp.asarray(high_indices_np, dtype=jnp.int32),
                 image_shape=image_shape,
                 volume_shape=experiment_dataset.volume_shape,
                 disc_type=disc_type,
                 rotation_block_size=rotation_block_size,
-                use_rms_ctf_approximation=(options.ctf_bound_mode == "cryosparc_rms"),
+                use_rms_ctf_approximation=True,
                 rms_ctf_squared=float(getattr(options, "rms_ctf_squared", 0.5)),
-                noise_variance_half=jnp.asarray(noise_variance) if options.ctf_bound_mode == "cryosparc_rms" else None,
-            )
-            pmax_per_image[start:end] = np.asarray(pmax_batch)
-            start = end
+                noise_variance_half=jnp.asarray(_to_half_noise(noise_variance, image_shape)),
+            ))[0])
+            pmax_per_image[:] = pmax_shared
+        else:
+            start = 0
+            for batch in experiment_dataset.iter_batches(
+                image_batch_size, indices=image_indices, by_image=False,
+            ):
+                batch_data = batch[0]
+                ctf_params = batch[3]
+                batch_size = int(jnp.asarray(batch_data).shape[0])
+                end = start + batch_size
+
+                _, _, ctf2_over_nv_half = preprocess_batch(
+                    experiment_dataset, jnp.asarray(batch_data), ctf_params,
+                    _to_half_noise(noise_variance, image_shape),
+                    translations_global, config, False,
+                )
+                pmax_batch = compute_high_model_pmax_per_image(
+                    mean,
+                    rotations_global,
+                    ctf2_over_nv_half,
+                    half_weights,
+                    jnp.asarray(high_indices_np, dtype=jnp.int32),
+                    image_shape=image_shape,
+                    volume_shape=experiment_dataset.volume_shape,
+                    disc_type=disc_type,
+                    rotation_block_size=rotation_block_size,
+                    use_rms_ctf_approximation=False,
+                )
+                pmax_per_image[start:end] = np.asarray(pmax_batch)
+                start = end
 
         delta_H = pmax_per_image + float(options.tau_sigma) * np.sqrt(
             np.maximum(pmax_per_image, 0.0),
