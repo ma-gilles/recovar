@@ -10,8 +10,11 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
 from recovar.core import mask
+from recovar.core.forward import forward_model
+from recovar.core.geometry import translate_images
 from recovar.cuda_backproject import custom_cuda_requested
 from recovar.heterogeneity import kernel_regression_reconstruction as kernel_recon
+from recovar.reconstruction import noise as noise_mod
 from recovar.reconstruction import relion_functions
 
 logger = logging.getLogger(__name__)
@@ -21,6 +24,7 @@ DEFAULT_LOCAL_POLY_BANDWIDTH_MULTIPLIERS = np.asarray(
     [1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0],
     dtype=np.float32,
 )
+MAX_LOCAL_POLY_DEGREE = 8
 _LOCAL_POLY_EPS = 1e-12
 
 
@@ -149,8 +153,8 @@ def gaussian_window_polynomial_moments_1d(
             f"got {latent_diff.shape} and {latent_precision.shape}"
         )
     degree = int(degree)
-    if degree < 0 or degree > 4:
-        raise ValueError(f"local_poly degree must be between 0 and 4, got {degree}")
+    if degree < 0 or degree > MAX_LOCAL_POLY_DEGREE:
+        raise ValueError(f"local_poly degree must be between 0 and {MAX_LOCAL_POLY_DEGREE}, got {degree}")
     h = float(h)
     if not np.isfinite(h) or h <= 0:
         raise ValueError(f"h must be finite and positive, got {h}")
@@ -179,6 +183,63 @@ def gaussian_window_polynomial_moments_1d(
         for s in range(degree + 1):
             M[:, r, s] = alpha * raw_moments[r + s] / (factorials[r] * factorials[s])
     return m.astype(np.float32), M.astype(np.float32)
+
+
+def hermite_quadrature_1d(n_quadrature):
+    """Return nodes and normalized weights for E[f(N(0, 1))]."""
+    n_quadrature = int(n_quadrature)
+    if n_quadrature <= 0:
+        raise ValueError(f"n_quadrature must be positive, got {n_quadrature}")
+    nodes, weights = np.polynomial.hermite.hermgauss(n_quadrature)
+    return nodes.astype(np.float32), (weights / np.sqrt(np.pi)).astype(np.float32)
+
+
+def gaussian_window_polynomial_quadrature_1d(
+    latent_diff,
+    latent_precision,
+    h,
+    degree,
+    n_quadrature,
+    poly_scale=None,
+):
+    """Quadrature features for the product of the latent posterior and window.
+
+    Returns ``(alpha, phi, quad_weights)`` where ``alpha`` is the scalar product
+    normalizer, ``phi`` has shape ``(n_images, n_quadrature, degree + 1)``, and
+    ``quad_weights`` are normalized Gauss-Hermite weights.
+    """
+    latent_diff = coerce_1d_latent_differences(latent_diff).astype(np.float64)
+    latent_precision = coerce_1d_latent_precision(latent_precision).astype(np.float64)
+    if latent_diff.shape != latent_precision.shape:
+        raise ValueError(
+            "latent_diff and latent_precision must have the same flattened shape, "
+            f"got {latent_diff.shape} and {latent_precision.shape}"
+        )
+    degree = int(degree)
+    if degree < 0 or degree > MAX_LOCAL_POLY_DEGREE:
+        raise ValueError(f"local_poly degree must be between 0 and {MAX_LOCAL_POLY_DEGREE}, got {degree}")
+    h = float(h)
+    if not np.isfinite(h) or h <= 0:
+        raise ValueError(f"h must be finite and positive, got {h}")
+    if poly_scale is None:
+        poly_scale = h
+    poly_scale = float(poly_scale)
+    if not np.isfinite(poly_scale) or poly_scale <= 0:
+        raise ValueError(f"poly_scale must be finite and positive, got {poly_scale}")
+
+    variance = 1.0 / latent_precision
+    h2 = h * h
+    denom = h2 + variance
+    alpha = h / np.sqrt(denom) * np.exp(-0.5 * latent_diff**2 / denom)
+    mu = latent_diff * h2 / denom
+    tau2 = variance * h2 / denom
+
+    nodes, quad_weights = hermite_quadrature_1d(n_quadrature)
+    xdiff = mu[:, None] + np.sqrt(np.maximum(2.0 * tau2, 0.0))[:, None] * nodes[None, :]
+    t = xdiff / poly_scale
+    factorials = np.asarray([math.factorial(idx) for idx in range(degree + 1)], dtype=np.float64)
+    phi = np.stack([t**r / factorials[r] for r in range(degree + 1)], axis=-1)
+    return alpha.astype(np.float32), phi.astype(np.float32), quad_weights
 
 
 def _expand_tilt_latent_array_to_images(experiment_dataset, values, name):
@@ -244,6 +305,86 @@ def _local_poly_weight_sets(latent_diff, latent_precision, h_group, degree):
     return np.asarray(rhs_rows, dtype=np.float32), np.asarray(lhs_rows, dtype=np.float32)
 
 
+def _local_poly_upsampled_shape_and_valid_half(experiment_dataset, upsampling_factor, half_volume_size):
+    vol_upsample = kernel_recon._postprocess_upsampling_factor(upsampling_factor)
+    upsampled_volume_shape = tuple(3 * [experiment_dataset.volume_shape[0] * vol_upsample])
+    expected_half_size = int(
+        np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape))
+    )
+    if half_volume_size != expected_half_size:
+        raise ValueError(f"half_volume_size {half_volume_size} does not match expected {expected_half_size}")
+
+    valid_full = (
+        mask.get_radial_mask(upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1)
+        .reshape(-1)
+        .astype(np.float32)
+    )
+    valid_half = np.asarray(
+        fourier_transform_utils.full_volume_to_half_volume(jnp.asarray(valid_full), upsampled_volume_shape)
+    ).reshape(-1).real.astype(np.float32)
+    return vol_upsample, upsampled_volume_shape, valid_half
+
+
+def solve_local_polynomial_fourier_coefficients(
+    lhs_all,
+    rhs_all,
+    experiment_dataset,
+    *,
+    tau=None,
+    upsampling_factor=None,
+    solve_chunk_size=262144,
+):
+    """Solve per-voxel polynomial normal equations and return all theta_r."""
+    lhs_all = np.asarray(lhs_all, dtype=np.float32)
+    rhs_all = np.asarray(rhs_all)
+    if lhs_all.ndim != 4 or rhs_all.ndim != 3:
+        raise ValueError(
+            "lhs_all must have shape (n_bandwidths, degree+1, degree+1, half_volume_size) "
+            f"and rhs_all (n_bandwidths, degree+1, half_volume_size); got {lhs_all.shape}, {rhs_all.shape}"
+        )
+    if (
+        lhs_all.shape[0] != rhs_all.shape[0]
+        or lhs_all.shape[1] != lhs_all.shape[2]
+        or lhs_all.shape[1] != rhs_all.shape[1]
+    ):
+        raise ValueError(f"Incompatible local_poly lhs/rhs shapes: {lhs_all.shape} and {rhs_all.shape}")
+
+    n_bandwidths, n_features, _, half_volume_size = lhs_all.shape
+    vol_upsample, upsampled_volume_shape, valid_half = _local_poly_upsampled_shape_and_valid_half(
+        experiment_dataset,
+        upsampling_factor,
+        half_volume_size,
+    )
+
+    coeffs = np.zeros((n_bandwidths, n_features, half_volume_size), dtype=rhs_all.dtype)
+    diag_idx = np.arange(n_features)
+    solve_chunk_size = int(max(1, solve_chunk_size))
+    for bw_idx in range(n_bandwidths):
+        lhs = lhs_all[bw_idx]
+        rhs = rhs_all[bw_idx]
+        reg_filter = np.asarray(
+            relion_functions.adjust_regularization_relion_style(
+                jnp.asarray(lhs[0, 0]),
+                upsampled_volume_shape,
+                tau=None if tau is None else jnp.asarray(tau),
+                padding_factor=vol_upsample,
+                max_res_shell=None,
+                half_volume=True,
+            )
+        ).reshape(-1).astype(np.float32)
+        rho = np.maximum(reg_filter - lhs[0, 0], 0.0).astype(np.float32)
+        for start in range(0, half_volume_size, solve_chunk_size):
+            stop = min(start + solve_chunk_size, half_volume_size)
+            gram = np.moveaxis(lhs[:, :, start:stop], -1, 0).astype(np.float32, copy=True)
+            gram = 0.5 * (gram + np.swapaxes(gram, 1, 2))
+            gram[:, diag_idx, diag_idx] += rho[start:stop, None]
+            rhs_chunk = np.moveaxis(rhs[:, start:stop], -1, 0)
+            theta = np.linalg.solve(gram, rhs_chunk[..., None])[..., 0]
+            coeffs[bw_idx, :, start:stop] = np.moveaxis(theta, 0, -1)
+        coeffs[bw_idx] *= valid_half.astype(coeffs.real.dtype)[None, :]
+    return coeffs
+
+
 def solve_local_polynomial_fourier_system(
     lhs_all,
     rhs_all,
@@ -265,62 +406,70 @@ def solve_local_polynomial_fourier_system(
             "lhs_all must have shape (n_bandwidths, degree+1, degree+1, half_volume_size) "
             f"and rhs_all (n_bandwidths, degree+1, half_volume_size); got {lhs_all.shape}, {rhs_all.shape}"
         )
-    if (
-        lhs_all.shape[0] != rhs_all.shape[0]
-        or lhs_all.shape[1] != lhs_all.shape[2]
-        or lhs_all.shape[1] != rhs_all.shape[1]
-    ):
-        raise ValueError(f"Incompatible local_poly lhs/rhs shapes: {lhs_all.shape} and {rhs_all.shape}")
-
-    n_bandwidths, n_features, _, half_volume_size = lhs_all.shape
+    n_bandwidths, _, _, half_volume_size = lhs_all.shape
     kernel_type = "triangular" if disc_type == "linear_interp" else "square"
-    vol_upsample = kernel_recon._postprocess_upsampling_factor(upsampling_factor)
-    upsampled_volume_shape = tuple(3 * [experiment_dataset.volume_shape[0] * vol_upsample])
-    expected_half_size = int(
-        np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape))
+    vol_upsample, _, _ = _local_poly_upsampled_shape_and_valid_half(
+        experiment_dataset,
+        upsampling_factor,
+        half_volume_size,
     )
-    if half_volume_size != expected_half_size:
-        raise ValueError(f"half_volume_size {half_volume_size} does not match expected {expected_half_size}")
-
-    valid_full = (
-        mask.get_radial_mask(upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1)
-        .reshape(-1)
-        .astype(np.float32)
+    coeffs = solve_local_polynomial_fourier_coefficients(
+        lhs_all,
+        rhs_all,
+        experiment_dataset,
+        tau=tau,
+        upsampling_factor=upsampling_factor,
+        solve_chunk_size=solve_chunk_size,
     )
-    valid_half = np.asarray(
-        fourier_transform_utils.full_volume_to_half_volume(jnp.asarray(valid_full), upsampled_volume_shape)
-    ).reshape(-1).real.astype(np.float32)
-
     estimates = []
-    diag_idx = np.arange(n_features)
-    solve_chunk_size = int(max(1, solve_chunk_size))
     for bw_idx in range(n_bandwidths):
-        lhs = lhs_all[bw_idx]
-        rhs = rhs_all[bw_idx]
-        reg_filter = np.asarray(
-            relion_functions.adjust_regularization_relion_style(
-                jnp.asarray(lhs[0, 0]),
-                upsampled_volume_shape,
-                tau=None if tau is None else jnp.asarray(tau),
-                padding_factor=vol_upsample,
-                max_res_shell=None,
-                half_volume=True,
-            )
-        ).reshape(-1).astype(np.float32)
-        rho = np.maximum(reg_filter - lhs[0, 0], 0.0).astype(np.float32)
-        theta0 = np.zeros(half_volume_size, dtype=rhs.dtype)
-        for start in range(0, half_volume_size, solve_chunk_size):
-            stop = min(start + solve_chunk_size, half_volume_size)
-            gram = np.moveaxis(lhs[:, :, start:stop], -1, 0).astype(np.float32, copy=True)
-            gram = 0.5 * (gram + np.swapaxes(gram, 1, 2))
-            gram[:, diag_idx, diag_idx] += rho[start:stop, None]
-            rhs_chunk = np.moveaxis(rhs[:, start:stop], -1, 0)
-            theta = np.linalg.solve(gram, rhs_chunk[..., None])[..., 0]
-            theta0[start:stop] = theta[:, 0]
-        theta0 = theta0 * valid_half.astype(theta0.real.dtype)
+        theta0 = coeffs[bw_idx, 0]
         estimates.append(
             relion_functions.post_process_predivided_fourier_volume(
                 jnp.asarray(theta0),
+                experiment_dataset.volume_shape,
+                vol_upsample,
+                kernel=kernel_type,
+                use_spherical_mask=use_spherical_mask,
+                grid_correct=grid_correct,
+                gridding_correct="square",
+                kernel_width=1,
+                return_real_space=return_real_space,
+                input_half_volume=True,
+            ).reshape(-1)
+        )
+    return np.asarray(jnp.stack(estimates, axis=0))
+
+
+def postprocess_local_polynomial_fourier_coefficients(
+    theta_coeffs,
+    experiment_dataset,
+    *,
+    grid_correct=True,
+    disc_type="linear_interp",
+    use_spherical_mask=True,
+    upsampling_factor=None,
+    return_real_space=False,
+):
+    """Post-process already solved local-polynomial coefficients using theta_0."""
+    theta_coeffs = np.asarray(theta_coeffs)
+    if theta_coeffs.ndim != 3:
+        raise ValueError(
+            "theta_coeffs must have shape (n_bandwidths, degree+1, half_volume_size); "
+            f"got {theta_coeffs.shape}"
+        )
+    half_volume_size = int(theta_coeffs.shape[-1])
+    kernel_type = "triangular" if disc_type == "linear_interp" else "square"
+    vol_upsample, _, _ = _local_poly_upsampled_shape_and_valid_half(
+        experiment_dataset,
+        upsampling_factor,
+        half_volume_size,
+    )
+    estimates = []
+    for bw_idx in range(theta_coeffs.shape[0]):
+        estimates.append(
+            relion_functions.post_process_predivided_fourier_volume(
+                jnp.asarray(theta_coeffs[bw_idx, 0]),
                 experiment_dataset.volume_shape,
                 vol_upsample,
                 kernel=kernel_type,
@@ -366,8 +515,8 @@ def estimate_local_polynomial_volumes(
             f"got {latent_differences.shape} and {latent_precision.shape}"
         )
     degree = int(degree)
-    if degree < 0 or degree > 4:
-        raise ValueError(f"local_poly degree must be between 0 and 4, got {degree}")
+    if degree < 0 or degree > MAX_LOCAL_POLY_DEGREE:
+        raise ValueError(f"local_poly degree must be between 0 and {MAX_LOCAL_POLY_DEGREE}, got {degree}")
     h_grid = np.asarray(h_grid, dtype=np.float32).reshape(-1)
     if h_grid.size == 0 or not np.all(np.isfinite(h_grid)) or np.any(h_grid <= 0):
         raise ValueError(f"h_grid must contain finite positive values, got {h_grid}")
@@ -483,3 +632,348 @@ def estimate_local_polynomial_volumes(
     if return_lhs_rhs:
         return estimates, np.asarray(lhs_all), np.asarray(rhs_all)
     return estimates
+
+
+def _pad_quadrature_features_for_fixed_batch(phi, current_batch_size, target_batch_size):
+    phi = np.asarray(phi, dtype=np.float32)
+    if phi.ndim != 3:
+        raise ValueError(f"phi must have shape (n_images, n_quadrature, n_features), got {phi.shape}")
+    if phi.shape[0] != current_batch_size:
+        raise ValueError(f"phi image axis must match batch size: {phi.shape[0]} != {current_batch_size}")
+    if current_batch_size == target_batch_size:
+        return phi
+    padded = np.zeros((target_batch_size, *phi.shape[1:]), dtype=phi.dtype)
+    padded[:current_batch_size] = phi
+    return padded
+
+
+def _em_quadrature_posteriors_for_prepared_batch(
+    config,
+    images,
+    ctf_params,
+    rotation_matrices,
+    translations,
+    noise_variance,
+    theta_coeffs,
+    phi_padded,
+    quad_weights,
+    current_batch_size,
+    *,
+    em_temperature=1.0,
+    em_prior_mix=0.0,
+):
+    n_features = int(theta_coeffs.shape[0])
+    batch_size = int(images.shape[0])
+    theta_coeffs = jnp.asarray(theta_coeffs)
+    phi = jnp.asarray(phi_padded, dtype=theta_coeffs.real.dtype)
+    quad_weights = jnp.asarray(quad_weights, dtype=theta_coeffs.real.dtype)
+
+    centered_images = translate_images(images, translations, config.image_shape, half_image=True)
+    centered_flat = centered_images.reshape(batch_size, -1)
+    noise_half = noise_mod.to_batched_half_pixel_noise(noise_variance, config.image_shape, batch_size=batch_size)
+    if noise_half.shape[0] == 1 and batch_size != 1:
+        noise_half = jnp.broadcast_to(noise_half, centered_images.shape)
+    noise_flat = noise_half.reshape(batch_size, -1)
+
+    projected_basis = []
+    for feature_idx in range(n_features):
+        projected_basis.append(
+            forward_model(
+                config,
+                theta_coeffs[feature_idx],
+                ctf_params,
+                rotation_matrices,
+                half_image=True,
+                half_volume=True,
+            ).reshape(batch_size, -1)
+        )
+    projected_basis = jnp.stack(projected_basis, axis=0)
+    predicted = jnp.einsum("bqr,rbp->bqp", phi, projected_basis)
+    residual = jnp.sum(jnp.abs(centered_flat[:, None, :] - predicted) ** 2 / noise_flat[:, None, :], axis=-1)
+    em_temperature = float(em_temperature)
+    if em_temperature <= 0 or not np.isfinite(em_temperature):
+        raise ValueError(f"em_temperature must be finite and positive, got {em_temperature}")
+    em_prior_mix = float(em_prior_mix)
+    if em_prior_mix < 0 or em_prior_mix > 1 or not np.isfinite(em_prior_mix):
+        raise ValueError(f"em_prior_mix must be in [0, 1], got {em_prior_mix}")
+
+    quad_prior = quad_weights / jnp.maximum(jnp.sum(quad_weights), 1e-30)
+    log_prob = jnp.log(jnp.maximum(quad_prior, 1e-30))[None, :] - 0.5 * residual / em_temperature
+    gamma = jax.nn.softmax(log_prob, axis=1)
+    if em_prior_mix > 0:
+        gamma = (1.0 - em_prior_mix) * gamma + em_prior_mix * quad_prior[None, :]
+    return np.asarray(gamma[:current_batch_size])
+
+
+def _em_weight_sets(alpha, phi, gamma):
+    alpha = np.asarray(alpha, dtype=np.float32).reshape(-1)
+    phi = np.asarray(phi, dtype=np.float32)
+    gamma = np.asarray(gamma, dtype=np.float32)
+    if phi.ndim != 3 or gamma.ndim != 2 or phi.shape[:2] != gamma.shape or phi.shape[0] != alpha.size:
+        raise ValueError(
+            "Incompatible EM weights: "
+            f"alpha {alpha.shape}, phi {phi.shape}, gamma {gamma.shape}"
+        )
+    weighted = alpha[:, None] * gamma
+    rhs_weights = np.einsum("bq,bqr->rb", weighted, phi, optimize=True)
+    lhs_weights = np.einsum("bq,bqr,bqs->rsb", weighted, phi, phi, optimize=True)
+    return rhs_weights.astype(np.float32), lhs_weights.reshape(phi.shape[2] * phi.shape[2], phi.shape[0]).astype(np.float32)
+
+
+def _accumulate_local_polynomial_em_normal_equations(
+    experiment_dataset,
+    latent_differences,
+    latent_precision,
+    h_grid,
+    theta_coeffs,
+    *,
+    degree,
+    n_quadrature,
+    batch_size,
+    disc_type,
+    upsampling_factor,
+    use_fast_rfft,
+    em_temperature,
+    em_prior_mix,
+):
+    n_bandwidths = h_grid.size
+    n_features = degree + 1
+    half_volume_size = kernel_recon._candidate_half_volume_size(experiment_dataset, upsampling_factor)
+    rhs_all = np.zeros((n_bandwidths, n_features, half_volume_size), dtype=experiment_dataset.dtype)
+    lhs_all = np.zeros((n_bandwidths, n_features, n_features, half_volume_size), dtype=experiment_dataset.dtype_real)
+    config = kernel_recon._reconstruction_config(experiment_dataset, disc_type, upsampling_factor)
+    diagnostics = []
+
+    for h_idx, h in enumerate(h_grid):
+        Ft_y_acc = jnp.zeros((n_features, half_volume_size), dtype=experiment_dataset.dtype)
+        Ft_ctf_acc = jnp.zeros((n_features * n_features, half_volume_size), dtype=experiment_dataset.dtype_real)
+        entropy_sum = 0.0
+        max_gamma_sum = 0.0
+        n_gamma = 0
+        raw_batches = experiment_dataset.iter_batches(
+            batch_size,
+            noise_model=experiment_dataset.noise,
+            noise_half=False,
+        )
+        for (
+            raw_images,
+            rotation_matrices,
+            translations,
+            ctf_params,
+            noise_variance,
+            _particle_indices,
+            image_indices,
+        ) in raw_batches:
+            image_indices = np.asarray(image_indices, dtype=np.int32)
+            current_batch_size, images, rotation_matrices, translations, ctf_params, noise_variance = (
+                kernel_recon._prepare_half_image_batch(
+                    experiment_dataset,
+                    raw_images,
+                    rotation_matrices,
+                    translations,
+                    ctf_params,
+                    noise_variance,
+                    batch_size=batch_size,
+                    use_fast_rfft=use_fast_rfft,
+                )
+            )
+            alpha, phi, quad_weights = gaussian_window_polynomial_quadrature_1d(
+                latent_differences[image_indices],
+                latent_precision[image_indices],
+                h=float(h),
+                degree=degree,
+                n_quadrature=n_quadrature,
+                poly_scale=float(h),
+            )
+            phi_padded = _pad_quadrature_features_for_fixed_batch(phi, current_batch_size, batch_size)
+            gamma = _em_quadrature_posteriors_for_prepared_batch(
+                config,
+                images,
+                ctf_params,
+                rotation_matrices,
+                translations,
+                noise_variance,
+                theta_coeffs[h_idx],
+                phi_padded,
+                quad_weights,
+                current_batch_size,
+                em_temperature=em_temperature,
+                em_prior_mix=em_prior_mix,
+            )
+            rhs_weights, lhs_weights = _em_weight_sets(alpha, phi, gamma)
+            entropy_sum += float(-np.sum(gamma * np.log(np.maximum(gamma, 1e-30))))
+            max_gamma_sum += float(np.sum(np.max(gamma, axis=1)))
+            n_gamma += int(gamma.shape[0])
+
+            image_weights = np.concatenate([rhs_weights, lhs_weights], axis=0)
+            image_weights = kernel_recon._pad_image_weight_matrix_for_fixed_batch(
+                image_weights,
+                current_batch_size=current_batch_size,
+                target_batch_size=batch_size,
+            )
+            Ft_all_y, Ft_all_ctf = kernel_recon.backproject_weight_sets_from_fft(
+                config,
+                images,
+                ctf_params,
+                rotation_matrices,
+                translations,
+                noise_variance,
+                image_weights,
+                Ft_y=jnp.concatenate([Ft_y_acc, jnp.zeros_like(Ft_ctf_acc, dtype=Ft_y_acc.dtype)], axis=0),
+                Ft_ctf=jnp.concatenate([jnp.zeros_like(Ft_y_acc, dtype=Ft_ctf_acc.dtype), Ft_ctf_acc], axis=0),
+            )
+            Ft_y_acc = Ft_all_y[:n_features]
+            Ft_ctf_acc = Ft_all_ctf[n_features:]
+
+        rhs_all[h_idx] = np.asarray(Ft_y_acc).reshape(n_features, half_volume_size)
+        lhs_all[h_idx] = np.asarray(Ft_ctf_acc).reshape(n_features, n_features, half_volume_size)
+        diagnostics.append(
+            {
+                "h": float(h),
+                "mean_gamma_entropy": float(entropy_sum / max(n_gamma, 1)),
+                "mean_max_gamma": float(max_gamma_sum / max(n_gamma, 1)),
+            }
+        )
+
+    return lhs_all, rhs_all, diagnostics
+
+
+def estimate_local_polynomial_volumes_em(
+    experiment_dataset,
+    latent_differences,
+    latent_precision,
+    h_grid,
+    *,
+    degree=DEFAULT_LOCAL_POLY_DEGREE,
+    n_iterations=2,
+    n_quadrature=5,
+    batch_size=None,
+    tau=None,
+    grid_correct=True,
+    disc_type="linear_interp",
+    use_spherical_mask=True,
+    return_lhs_rhs=False,
+    return_diagnostics=False,
+    upsampling_factor=None,
+    return_real_space=False,
+    use_fast_rfft=False,
+    em_temperature=1.0,
+    em_prior_mix=0.0,
+    em_update_damping=1.0,
+):
+    """Estimate local-polynomial volumes with EM quadrature over latent x."""
+    latent_differences = coerce_1d_latent_differences(latent_differences)
+    latent_precision = coerce_1d_latent_precision(latent_precision)
+    latent_differences = _expand_tilt_latent_array_to_images(
+        experiment_dataset, latent_differences, "latent_differences"
+    )
+    latent_precision = _expand_tilt_latent_array_to_images(experiment_dataset, latent_precision, "latent_precision")
+    if latent_differences.shape != latent_precision.shape:
+        raise ValueError(
+            "latent_differences and latent_precision must have the same flattened shape, "
+            f"got {latent_differences.shape} and {latent_precision.shape}"
+        )
+    degree = int(degree)
+    if degree < 0 or degree > MAX_LOCAL_POLY_DEGREE:
+        raise ValueError(f"local_poly degree must be between 0 and {MAX_LOCAL_POLY_DEGREE}, got {degree}")
+    h_grid = np.asarray(h_grid, dtype=np.float32).reshape(-1)
+    if h_grid.size == 0 or not np.all(np.isfinite(h_grid)) or np.any(h_grid <= 0):
+        raise ValueError(f"h_grid must contain finite positive values, got {h_grid}")
+    n_iterations = int(n_iterations)
+    if n_iterations < 0:
+        raise ValueError(f"n_iterations must be nonnegative, got {n_iterations}")
+    em_temperature = float(em_temperature)
+    if em_temperature <= 0 or not np.isfinite(em_temperature):
+        raise ValueError(f"em_temperature must be finite and positive, got {em_temperature}")
+    em_prior_mix = float(em_prior_mix)
+    if em_prior_mix < 0 or em_prior_mix > 1 or not np.isfinite(em_prior_mix):
+        raise ValueError(f"em_prior_mix must be in [0, 1], got {em_prior_mix}")
+    em_update_damping = float(em_update_damping)
+    if em_update_damping <= 0 or em_update_damping > 1 or not np.isfinite(em_update_damping):
+        raise ValueError(f"em_update_damping must be in (0, 1], got {em_update_damping}")
+
+    half_volume_size = kernel_recon._candidate_half_volume_size(experiment_dataset, upsampling_factor)
+    if batch_size is None:
+        lhs_probe = np.zeros((h_grid.size, degree + 1, degree + 1, half_volume_size), dtype=experiment_dataset.dtype_real)
+        rhs_probe = np.zeros((h_grid.size, degree + 1, half_volume_size), dtype=experiment_dataset.dtype)
+        batch_size = _local_poly_batch_size(experiment_dataset, lhs_probe, rhs_probe, half_volume_size)
+
+    logger.info(
+        "local_poly EM initialization: degree=%s n_iter=%s n_quad=%s temperature=%s prior_mix=%s update_damping=%s h_grid=%s",
+        degree,
+        n_iterations,
+        n_quadrature,
+        em_temperature,
+        em_prior_mix,
+        em_update_damping,
+        h_grid,
+    )
+    _, lhs_all, rhs_all = estimate_local_polynomial_volumes(
+        experiment_dataset,
+        latent_differences,
+        latent_precision,
+        h_grid,
+        degree=degree,
+        batch_size=batch_size,
+        tau=tau,
+        grid_correct=grid_correct,
+        disc_type=disc_type,
+        use_spherical_mask=use_spherical_mask,
+        return_lhs_rhs=True,
+        upsampling_factor=upsampling_factor,
+        return_real_space=False,
+        use_fast_rfft=use_fast_rfft,
+    )
+    theta_coeffs = solve_local_polynomial_fourier_coefficients(
+        lhs_all,
+        rhs_all,
+        experiment_dataset,
+        tau=tau,
+        upsampling_factor=upsampling_factor,
+    )
+
+    diagnostics = []
+    for iteration in range(n_iterations):
+        logger.info("local_poly EM iteration %s/%s", iteration + 1, n_iterations)
+        lhs_all, rhs_all, iteration_diag = _accumulate_local_polynomial_em_normal_equations(
+            experiment_dataset,
+            latent_differences,
+            latent_precision,
+            h_grid,
+            theta_coeffs,
+            degree=degree,
+            n_quadrature=n_quadrature,
+            batch_size=batch_size,
+            disc_type=disc_type,
+            upsampling_factor=upsampling_factor,
+            use_fast_rfft=use_fast_rfft,
+            em_temperature=em_temperature,
+            em_prior_mix=em_prior_mix,
+        )
+        new_theta_coeffs = solve_local_polynomial_fourier_coefficients(
+            lhs_all,
+            rhs_all,
+            experiment_dataset,
+            tau=tau,
+            upsampling_factor=upsampling_factor,
+        )
+        theta_coeffs = (1.0 - em_update_damping) * theta_coeffs + em_update_damping * new_theta_coeffs
+        diagnostics.append({"iteration": int(iteration + 1), "bandwidths": iteration_diag})
+
+    estimates = postprocess_local_polynomial_fourier_coefficients(
+        theta_coeffs,
+        experiment_dataset,
+        grid_correct=grid_correct,
+        disc_type=disc_type,
+        use_spherical_mask=use_spherical_mask,
+        upsampling_factor=upsampling_factor,
+        return_real_space=return_real_space,
+    )
+    outputs = [estimates]
+    if return_lhs_rhs:
+        outputs.extend([np.asarray(lhs_all), np.asarray(rhs_all)])
+    if return_diagnostics:
+        outputs.append(diagnostics)
+    if len(outputs) == 1:
+        return outputs[0]
+    return tuple(outputs)
