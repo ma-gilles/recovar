@@ -973,6 +973,8 @@ def _score_half_bnb_k1(
         return_best_pose_details=True,
         half_spectrum_scoring=True,
         score_with_masked_images=True,
+        projection_padding_factor=PROJECTION_PADDING_FACTOR,
+        reconstruction_padding_factor=PADDING_FACTOR,
     )
     # run_local_em_exact return tuple (return_best_pose_details=True,
     # accumulate_noise=True):

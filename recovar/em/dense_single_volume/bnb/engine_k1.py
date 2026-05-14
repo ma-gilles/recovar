@@ -58,6 +58,8 @@ def run_bnb_em_k1(
     do_gridding_correction: bool = False,
     square_window: bool = False,
     score_with_masked_images: bool = False,
+    projection_padding_factor: int = 1,
+    reconstruction_padding_factor: int = 1,
 ):
     """Phase-2 BnB driver for K=1 EM refinement on a fixed global pose grid.
 
@@ -131,7 +133,10 @@ def run_bnb_em_k1(
         t_support, t_layout,
     )
 
-    # Delegate the final E-step and M-step to the local engine.
+    # Delegate the final E-step and M-step to the local engine. Padding
+    # factors default to 2 to match `iteration_loop.PROJECTION_PADDING_FACTOR`
+    # so downstream `join_halves_at_low_resolution` receives the expected
+    # 256³-style Ft_y shape (not the unpadded 128³).
     return run_local_em_exact(
         experiment_dataset,
         mean,
@@ -143,6 +148,8 @@ def run_bnb_em_k1(
         rotation_block_size=rotation_block_size,
         current_size=current_size,
         accumulate_noise=accumulate_noise,
+        projection_padding_factor=projection_padding_factor,
+        reconstruction_padding_factor=reconstruction_padding_factor,
         half_spectrum_scoring=half_spectrum_scoring,
         use_float64_scoring=use_float64_scoring,
         use_float64_projections=use_float64_projections,
