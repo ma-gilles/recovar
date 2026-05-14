@@ -132,6 +132,34 @@ def _masked_metrics_for_volume(
     return fsc, rel_err
 
 
+def _mean_volume_from_stack(path: Path, target_shape: tuple[int, int, int]) -> np.ndarray:
+    stack = np.load(path, mmap_mode="r")
+    if stack.ndim != 4 or tuple(stack.shape[1:]) != target_shape:
+        raise ValueError(f"Expected {path} to have shape (n, {target_shape}), got {stack.shape}")
+
+    acc = np.zeros(target_shape, dtype=np.float64)
+    for idx in range(stack.shape[0]):
+        acc += np.asarray(stack[idx], dtype=np.float64)
+    return (acc / float(stack.shape[0])).astype(np.float32)
+
+
+def _load_distribution_mean_volume(cfg: SpikeKernelReportConfig, target_shape: tuple[int, int, int]) -> tuple[np.ndarray, Path, str] | None:
+    stack_path = cfg.target_volume.parent / "gt_volumes_used_by_simulator.npy"
+    if stack_path.exists():
+        return _mean_volume_from_stack(stack_path, target_shape), stack_path, "mean of gt_volumes_used_by_simulator.npy"
+
+    if cfg.pipeline_root is not None:
+        mean_path = cfg.pipeline_root / "output" / "volumes" / "mean.mrc"
+        if mean_path.exists():
+            mean_volume = np.asarray(utils.load_mrc(mean_path), dtype=np.float32)
+            if mean_volume.shape != target_shape:
+                raise ValueError(f"Expected {mean_path} to have shape {target_shape}, got {mean_volume.shape}")
+            return mean_volume, mean_path, "pipeline output mean.mrc"
+
+    logger.warning("Could not find a distribution mean volume for FSC/error reference plot.")
+    return None
+
+
 def _all_masked_metrics(
     root: Path,
     state_label: str,
@@ -367,6 +395,19 @@ def _save_all_candidate_report(
     combined_oracle_fsc, combined_oracle_err = _masked_metrics_for_volume(
         combined_oracle, target, mask, labels, n_shells, target_ft, target_power
     )
+    distribution_mean = _load_distribution_mean_volume(cfg, target.shape)
+    if distribution_mean is not None:
+        distribution_mean_volume, distribution_mean_path, distribution_mean_source = distribution_mean
+        distribution_mean_fsc, distribution_mean_err = _masked_metrics_for_volume(
+            distribution_mean_volume, target, mask, labels, n_shells, target_ft, target_power
+        )
+        distribution_mean_score = float(np.nanmedian(distribution_mean_err[shell_mask]))
+    else:
+        distribution_mean_path = None
+        distribution_mean_source = None
+        distribution_mean_fsc = None
+        distribution_mean_err = None
+        distribution_mean_score = None
 
     fig, axes = plt.subplots(2, 2, figsize=(18, 11), constrained_layout=True, sharex=True)
     fig.suptitle(f"All candidates | standard vs deconvolved | true GT metrics | {cfg.report_title}", fontsize=15, fontweight="bold")
@@ -385,6 +426,7 @@ def _save_all_candidate_report(
                     standard_oracle_err[shell_mask],
                     deconv_oracle_err[shell_mask],
                     combined_oracle_err[shell_mask],
+                    distribution_mean_err[shell_mask] if distribution_mean_err is not None else np.asarray([], dtype=np.float64),
                 ]
             ),
             99.0,
@@ -400,6 +442,8 @@ def _save_all_candidate_report(
     ax.plot(freq, standard_fsc[standard_best], color="black", linewidth=2.5, label=f"best median: #{standard_best + 1}, h={standard_grid[standard_best]:.3g}")
     ax.plot(freq, standard_oracle_fsc, color="magenta", linewidth=2.0, linestyle="-.", label="standard shell oracle")
     ax.plot(freq, combined_oracle_fsc, color="cyan", linewidth=2.0, linestyle=":", label="combined shell oracle")
+    if distribution_mean_fsc is not None:
+        ax.plot(freq, distribution_mean_fsc, color="forestgreen", linewidth=2.0, linestyle="--", label="distribution mean")
     ax.axhline(0.5, color="0.4", linestyle="--", linewidth=0.9)
     ax.axhline(1 / 7, color="0.4", linestyle=":", linewidth=0.9)
     ax.set_ylabel("masked FSC vs GT")
@@ -416,6 +460,8 @@ def _save_all_candidate_report(
     ax.plot(freq, deconv_fsc[deconv_best], color="black", linewidth=2.5, label=f"best median: #{deconv_best + 1}, lambda={deconv_grid[deconv_best]:.3g}")
     ax.plot(freq, deconv_oracle_fsc, color="magenta", linewidth=2.0, linestyle="-.", label="deconv shell oracle")
     ax.plot(freq, combined_oracle_fsc, color="cyan", linewidth=2.0, linestyle=":", label="combined shell oracle")
+    if distribution_mean_fsc is not None:
+        ax.plot(freq, distribution_mean_fsc, color="forestgreen", linewidth=2.0, linestyle="--", label="distribution mean")
     ax.axhline(0.5, color="0.4", linestyle="--", linewidth=0.9)
     ax.axhline(1 / 7, color="0.4", linestyle=":", linewidth=0.9)
     ax.set_title("Deconvolved FSC vs GT")
@@ -431,6 +477,8 @@ def _save_all_candidate_report(
     ax.semilogy(freq, np.maximum(standard_err[standard_best], 1e-30), color="black", linewidth=2.5, label=f"best median: #{standard_best + 1}, h={standard_grid[standard_best]:.3g}")
     ax.semilogy(freq, np.maximum(standard_oracle_err, 1e-30), color="magenta", linewidth=2.0, linestyle="-.", label="standard shell oracle")
     ax.semilogy(freq, np.maximum(combined_oracle_err, 1e-30), color="cyan", linewidth=2.0, linestyle=":", label="combined shell oracle")
+    if distribution_mean_err is not None:
+        ax.semilogy(freq, np.maximum(distribution_mean_err, 1e-30), color="forestgreen", linewidth=2.0, linestyle="--", label="distribution mean")
     ax.set_ylim(1e-4, error_ylim_max)
     ax.set_xlabel("spatial frequency (1/A)")
     ax.set_ylabel("masked relative Fourier error vs GT")
@@ -446,6 +494,8 @@ def _save_all_candidate_report(
     ax.semilogy(freq, np.maximum(deconv_err[deconv_best], 1e-30), color="black", linewidth=2.5, label=f"best median: #{deconv_best + 1}, lambda={deconv_grid[deconv_best]:.3g}")
     ax.semilogy(freq, np.maximum(deconv_oracle_err, 1e-30), color="magenta", linewidth=2.0, linestyle="-.", label="deconv shell oracle")
     ax.semilogy(freq, np.maximum(combined_oracle_err, 1e-30), color="cyan", linewidth=2.0, linestyle=":", label="combined shell oracle")
+    if distribution_mean_err is not None:
+        ax.semilogy(freq, np.maximum(distribution_mean_err, 1e-30), color="forestgreen", linewidth=2.0, linestyle="--", label="distribution mean")
     ax.set_ylim(1e-4, error_ylim_max)
     ax.set_xlabel("spatial frequency (1/A)")
     ax.set_title("Deconvolved true error vs GT; gray candidates may clip above y-limit")
@@ -472,6 +522,8 @@ def _save_all_candidate_report(
         Line2D([0], [0], color="0.4", lw=0.9, linestyle="--", label="FSC 0.5"),
         Line2D([0], [0], color="0.4", lw=0.9, linestyle=":", label="FSC 1/7"),
     ]
+    if distribution_mean_fsc is not None:
+        proxy.insert(4, Line2D([0], [0], color="forestgreen", lw=2.0, linestyle="--", label="distribution mean"))
     fig.legend(handles=proxy, loc="outside lower center", ncol=6, frameon=True)
 
     png = plots_dir / "all_candidates_true_gt_fsc_error.png"
@@ -503,6 +555,10 @@ def _save_all_candidate_report(
         standard_oracle_choice=standard_choice,
         deconv_oracle_choice=deconv_choice,
         combined_oracle_choice=combined_choice,
+        distribution_mean_fsc=np.asarray(distribution_mean_fsc if distribution_mean_fsc is not None else [], dtype=np.float64),
+        distribution_mean_gt_errors=np.asarray(distribution_mean_err if distribution_mean_err is not None else [], dtype=np.float64),
+        distribution_mean_path=str(distribution_mean_path) if distribution_mean_path is not None else "",
+        distribution_mean_source=str(distribution_mean_source) if distribution_mean_source is not None else "",
     )
     np.savez_compressed(
         oracle_dir / "shell_oracle_choices_and_metrics.npz",
@@ -518,6 +574,10 @@ def _save_all_candidate_report(
         deconv_oracle_gt_errors=deconv_oracle_err,
         combined_oracle_fsc=combined_oracle_fsc,
         combined_oracle_gt_errors=combined_oracle_err,
+        distribution_mean_fsc=np.asarray(distribution_mean_fsc if distribution_mean_fsc is not None else [], dtype=np.float64),
+        distribution_mean_gt_errors=np.asarray(distribution_mean_err if distribution_mean_err is not None else [], dtype=np.float64),
+        distribution_mean_path=str(distribution_mean_path) if distribution_mean_path is not None else "",
+        distribution_mean_source=str(distribution_mean_source) if distribution_mean_source is not None else "",
     )
 
     fig2, axes2 = plt.subplots(1, 2, figsize=(15, 5), constrained_layout=True)
@@ -526,6 +586,8 @@ def _save_all_candidate_report(
     axes2[0].loglog(deconv_grid, deconv_score, marker="s", markersize=3.5, label="deconv median true error")
     axes2[0].axvline(standard_grid[standard_best], color="C0", linestyle="--", label=f"best standard h={standard_grid[standard_best]:.3g}")
     axes2[0].axvline(deconv_grid[deconv_best], color="C1", linestyle="--", label=f"best deconv lambda={deconv_grid[deconv_best]:.3g}")
+    if distribution_mean_score is not None:
+        axes2[0].axhline(distribution_mean_score, color="forestgreen", linestyle=":", label="distribution mean")
     axes2[0].set_xlabel("bandwidth parameter")
     axes2[0].set_ylabel(f"median relative Fourier error vs GT, 0 < freq <= {cfg.score_frequency_max:g} 1/A")
     axes2[0].grid(True, which="both", alpha=0.25)
@@ -574,6 +636,11 @@ def _save_all_candidate_report(
             "combined": str(oracle_dir / "combined_standard_deconvolved_shell_oracle_estimator.mrc"),
             "choices_npz": str(oracle_dir / "shell_oracle_choices_and_metrics.npz"),
         },
+        "distribution_mean": {
+            "path": str(distribution_mean_path) if distribution_mean_path is not None else None,
+            "source": distribution_mean_source,
+            "score": distribution_mean_score,
+        },
     }
 
 
@@ -603,6 +670,12 @@ def _save_selected_overlay(
         err_key = f"{name}_gt_errors"
         if fsc_key in data.files and err_key in data.files:
             oracle[name] = (data[fsc_key], data[err_key])
+    distribution_mean = None
+    if "distribution_mean_fsc" in data.files and "distribution_mean_gt_errors" in data.files:
+        mean_fsc = data["distribution_mean_fsc"]
+        mean_err = data["distribution_mean_gt_errors"]
+        if mean_fsc.shape == freq.shape and mean_err.shape == freq.shape:
+            distribution_mean = (mean_fsc, mean_err)
 
     fig, axes = plt.subplots(2, 1, figsize=(15, 11), constrained_layout=True)
     fig.suptitle(f"Selected candidates on the same axes | true GT metrics | {cfg.report_title}", fontsize=15, fontweight="bold")
@@ -619,6 +692,8 @@ def _save_selected_overlay(
         ax.plot(freq, oracle["deconv_oracle"][0], color="orangered", linewidth=2.1, linestyle="-.", label="dec shell oracle")
     if "combined_oracle" in oracle:
         ax.plot(freq, oracle["combined_oracle"][0], color="black", linewidth=2.4, linestyle=":", label="combined shell oracle")
+    if distribution_mean is not None:
+        ax.plot(freq, distribution_mean[0], color="forestgreen", linewidth=2.3, linestyle="--", label="distribution mean")
     ax.axhline(0.5, color="0.35", linestyle="--", linewidth=0.9)
     ax.axhline(1.0 / 7.0, color="0.35", linestyle=":", linewidth=0.9)
     ax.set_ylabel("masked FSC vs GT")
@@ -640,9 +715,13 @@ def _save_selected_overlay(
         ax.semilogy(freq, np.maximum(oracle["deconv_oracle"][1], 1e-30), color="orangered", linewidth=2.1, linestyle="-.", label="dec shell oracle")
     if "combined_oracle" in oracle:
         ax.semilogy(freq, np.maximum(oracle["combined_oracle"][1], 1e-30), color="black", linewidth=2.4, linestyle=":", label="combined shell oracle")
+    if distribution_mean is not None:
+        ax.semilogy(freq, np.maximum(distribution_mean[1], 1e-30), color="forestgreen", linewidth=2.3, linestyle="--", label="distribution mean")
     selected_errors = np.concatenate([standard_err[standard_selected][:, shell_mask].ravel(), deconv_err[deconv_selected][:, shell_mask].ravel()])
     if oracle:
         selected_errors = np.concatenate([selected_errors] + [value[1][shell_mask] for value in oracle.values()])
+    if distribution_mean is not None:
+        selected_errors = np.concatenate([selected_errors, distribution_mean[1][shell_mask]])
     finite = selected_errors[np.isfinite(selected_errors)]
     ax.set_ylim(1e-4, max(float(np.nanpercentile(finite, 99.0)) * 1.6, 1e-2))
     ax.set_ylabel("masked relative Fourier error vs GT")
