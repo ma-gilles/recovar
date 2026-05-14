@@ -55,6 +55,19 @@ class BranchBoundOptions:
     approximation (|C|^2 -> 1/2) so the bound is shared across images of the
     same noise group; speed optimisation, may be looser. Phase 6+ only."""
 
+    score_kernel: Literal["per_image_loop", "bucketed"] = "bucketed"
+    """For ``subdivision_mode='paper_faithful'``: how to score per-image
+    candidate sets. 'per_image_loop' calls JAX once per image (simpler,
+    high Python overhead at 100k+ images). 'bucketed' (default) groups
+    images by similar candidate count, pads to bucket max, and runs one
+    JAX kernel per bucket — should be 50-200x faster at scale."""
+
+    bucketed_axis_quantum: int = 64
+    bucketed_shift_quantum: int = 8
+    """Quanta for rounding up per-image (n_axis, n_shift) to bucket size in
+    the bucketed scorer. Larger quanta = fewer JIT shapes (better cache
+    hit rate) at the cost of more padding."""
+
     rms_ctf_squared: float = 0.5
     """When ``ctf_bound_mode='cryosparc_rms'``, this is the constant used to
     replace |C_l|^2 in the bound. cryoSPARC default 1/2 corresponds to a

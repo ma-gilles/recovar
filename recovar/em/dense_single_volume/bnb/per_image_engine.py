@@ -47,6 +47,7 @@ from .diagnostics import BnBDiagnostics, BnBStageDiagnostics
 from .frequency import make_bnb_frequency_schedule, make_bnb_high_indices_np
 from .options import BranchBoundOptions
 from .per_image_score import _to_half_noise, score_per_image_at_low_freq
+from .per_image_score_bucketed import score_per_image_at_low_freq_bucketed
 from .per_image_state import (
     PerImageBnBPoseState,
     initialize_per_image_state,
@@ -308,11 +309,23 @@ def run_paper_faithful_bnb_em_k1(
             final_score_indices_np, low_score_indices_np,
         )
 
-        # Score per image at L.
-        per_image_scores = score_per_image_at_low_freq(
-            experiment_dataset, mean, noise_variance, state, image_indices,
-            L=L, disc_type=disc_type, image_batch_size=image_batch_size,
-        )
+        # Score per image at L. The bucketed kernel amortises per-image
+        # JAX kernel launches; the per-image-loop variant is the simple
+        # reference (also useful for small N where bucketing overhead
+        # dominates).
+        score_kernel = getattr(options, "score_kernel", "bucketed")
+        if score_kernel == "bucketed":
+            per_image_scores = score_per_image_at_low_freq_bucketed(
+                experiment_dataset, mean, noise_variance, state, image_indices,
+                L=L, disc_type=disc_type, image_batch_size=image_batch_size,
+                axis_quantum=int(getattr(options, "bucketed_axis_quantum", 64)),
+                shift_quantum=int(getattr(options, "bucketed_shift_quantum", 8)),
+            )
+        else:
+            per_image_scores = score_per_image_at_low_freq(
+                experiment_dataset, mean, noise_variance, state, image_indices,
+                L=L, disc_type=disc_type, image_batch_size=image_batch_size,
+            )
 
         # Per-image P^max and Δ_iH using each image's own axis_rotations.
         # For the bound, we need per-image projections of mean at the
