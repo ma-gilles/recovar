@@ -26,6 +26,7 @@ from recovar.em.dense_single_volume.local_layout import bucket_local_hypothesis_
 from .hierarchical_support import select_bnb_support_hierarchical_k1
 from .layout import build_bnb_local_layout
 from .options import BranchBoundOptions
+from .per_image_engine import run_paper_faithful_bnb_em_k1
 from .support import select_bnb_support_fixed_grid_k1
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,26 @@ def run_bnb_em_k1(
     padding, M-step ablations, K-class) are deferred to later phases.
     """
     t0 = time.time()
+
+    if options.subdivision_mode == "paper_faithful":
+        return run_paper_faithful_bnb_em_k1(
+            experiment_dataset, mean, mean_variance, noise_variance,
+            current_size=current_size,
+            options=options,
+            disc_type=disc_type,
+            image_batch_size=image_batch_size,
+            rotation_block_size=rotation_block_size,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            translation_prior_centers=translation_prior_centers,
+            accumulate_noise=accumulate_noise,
+            return_best_pose_details=return_best_pose_details,
+            half_spectrum_scoring=half_spectrum_scoring,
+            score_with_masked_images=score_with_masked_images,
+            projection_padding_factor=projection_padding_factor,
+            reconstruction_padding_factor=reconstruction_padding_factor,
+        )
 
     if options.subdivision_mode == "axis_angle_hierarchical":
         support, rotations_final, translations_final = select_bnb_support_hierarchical_k1(

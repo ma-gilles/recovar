@@ -299,11 +299,12 @@ def main():
     parser.add_argument(
         "--bnb_subdivision_mode",
         default="fixed_grid",
-        choices=("fixed_grid", "axis_angle_hierarchical"),
+        choices=("fixed_grid", "axis_angle_hierarchical", "paper_faithful"),
         help=(
-            "When --refinement_strategy cryosparc_bnb is set, choose between "
-            "Phase-2 fixed-grid pruning over the existing recovar HEALPix grid "
-            "or paper-faithful axis-angle/shift Cartesian subdivision."
+            "When --refinement_strategy cryosparc_bnb is set: "
+            "'fixed_grid' prunes a fixed pose grid (no subdivision; fast bound-math check); "
+            "'axis_angle_hierarchical' subdivides on a SHARED grid + per-image mask; "
+            "'paper_faithful' is per-image-ragged BnB matching cryoSPARC Suppl Note 2."
         ),
     )
     parser.add_argument("--bnb_initial_fourier_radius", type=int, default=12)
