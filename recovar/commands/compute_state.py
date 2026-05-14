@@ -253,8 +253,9 @@ def compute_state(args):
     elif kernel_regression_mode == "local_poly":
         if zdim != 1:
             raise NotImplementedError(f"local_poly kernel regression only supports zdim=1; got zdim={zdim}")
-        if local_poly_degree < 0 or local_poly_degree > 4:
-            raise ValueError(f"--local-poly-degree must be between 0 and 4, got {local_poly_degree}")
+        max_degree = 8
+        if local_poly_degree < 0 or local_poly_degree > max_degree:
+            raise ValueError(f"--local-poly-degree must be between 0 and {max_degree}, got {local_poly_degree}")
         if not no_z_regularization:
             logger.info("Using noreg latent coordinates/precision for local_poly kernel regression.")
         no_z_regularization = True
