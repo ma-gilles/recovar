@@ -112,116 +112,97 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
 
     # Empirical workload-ceiling for covariance peak memory.
     #
-    # Old formula: ``base = (75 / 200**4) × n_pcs**4`` — claimed peak
-    # scales as n_pcs⁴. Predicted 75 GB at n=200/g=128 and triggered
-    # a "may exceed budget" warning for the default config on ANY
-    # 80 GB GPU. Saturation sweep (slurm 8020210, A100 80GB,
-    # 17 cells; discovery sweep 7982854, 7 cells) showed the prediction
-    # was a 2× over-estimate: actual peak at n=200/g=128 is 40 GB and
-    # is essentially CONSTANT in n_pcs across the [20, 200] range.
+    # ---------------- Peak-GB prediction for compute_projected_covariance ----------------
     #
-    # The real model is:
-    #   peak ≈ basis(n_pcs, grid) + workload(grid, budget)
-    # where:
-    #   basis    = n_pcs × grid³ × 8 bytes   (the PC storage itself)
-    #   workload = batches + FFT + accumulators; scales linearly with
-    #              budget (slope ≈ 0.65–0.70 from A2 sweep) UNTIL it
-    #              saturates at a grid-dependent ceiling determined
-    #              by dataset size and FFT working set.
+    # Walk of ``_reduce_covariance_inner_explicit`` +
+    # ``_projected_covariance_packed_lhs_batch`` gives three dominant terms:
     #
-    # Workload ceilings (GB) from sweep 8020210 at full budget=76 GB on
-    # A100 80GB / SPA / n_images=2000:
-    #   grid=64  →  7 GB
-    #   grid=128 → 40 GB
-    #   grid=256 → 55 GB
-    # Linear-interpolated for unknown grids; extrapolation is crude
-    # past grid=256 and the caller should treat that branch as
-    # informational.
-    _WORKLOAD_CEILING_GB = {64: 7.0, 128: 40.0, 256: 55.0}
+    #   basis            = n_pcs × grid³ × 8 B           (complex64 PCs; persistent)
+    #   AUs + AUs_noise  = 2 × n_pcs × batch × grid²/2 × 8 B
+    #                                                     (per-batch projections;
+    #                                                      both alive at peak)
+    #   n⁴ packed mats   = (P·n² + P²) × 4 B  where P = n(n+1)/2
+    #                       cross_terms (P, n, n)  float32
+    #                       packed_lhs  (P, P)     float32
+    #                                                     (already in upper-tri
+    #                                                      packed form — no further
+    #                                                      compression possible)
+    #
+    # Multiplicative slack on the analytic peak prediction. Calibrated
+    # from per-chunk fork-per-cell sweep 2026-05-14
+    # (_agent_scratch/chunk_floor_measurements.json) using device_put-only
+    # allocations (no `+ 1` artifact). Projected covariance:
+    # measured / predicted across 13 cells spanning {grid=64,128,256} x
+    # {n_pcs=50,100,200} x {batch=1,16,64}: min=1.00 max=1.03.
+    #
+    # 1.30 = measured 1.03 + ~25% headroom for runtime-only costs the
+    # pure-allocator harness doesn't capture (XLA scratch, JIT cache,
+    # FFT plans, activation buffers).
+    _PEAK_SLACK_BY_GRID = {64: 1.30, 128: 1.30, 256: 1.30}
 
-    def _workload_ceiling(g: int) -> float:
-        if g in _WORKLOAD_CEILING_GB:
-            return _WORKLOAD_CEILING_GB[g]
-        # Linear interp between the two nearest known grids; extrapolate
-        # outside via the slope of the highest pair.
-        sizes = sorted(_WORKLOAD_CEILING_GB.keys())
-        if g <= sizes[0]:
-            return _WORKLOAD_CEILING_GB[sizes[0]] * (g / sizes[0]) ** 2
-        if g >= sizes[-1]:
-            slope = (_WORKLOAD_CEILING_GB[sizes[-1]] - _WORKLOAD_CEILING_GB[sizes[-2]]) / (sizes[-1] - sizes[-2])
-            return _WORKLOAD_CEILING_GB[sizes[-1]] + slope * (g - sizes[-1])
-        for lo, hi in zip(sizes[:-1], sizes[1:]):
-            if lo <= g <= hi:
-                t = (g - lo) / (hi - lo)
-                return _WORKLOAD_CEILING_GB[lo] + t * (_WORKLOAD_CEILING_GB[hi] - _WORKLOAD_CEILING_GB[lo])
-        return _WORKLOAD_CEILING_GB[128]  # unreachable
+    def _peak_slack(g: int) -> float:
+        return _PEAK_SLACK_BY_GRID.get(g, 1.30)
 
     def _estimate_peak_gb(n_pcs_val: int, g: int, budget_gb: float) -> tuple[float, float, float, float]:
-        """Returns (basis_gb, projected_lhs_gb, workload_gb, total_gb).
+        """Predict peak GPU memory for compute_projected_covariance.
 
-        Three terms:
-          - basis: storage of the PCs themselves (n_pcs × grid³ × 8 B)
-          - projected_lhs: the dense (n_pcs*(n_pcs+1)/2)² covariance
-            LHS matrix in compute_projected_covariance, dtype_real=float64
-            since ``jax_enable_x64`` is on. ≈ n_pcs⁴ / 2 elements × 8 B.
-          - workload: batches + FFT + accumulators (empirical, ≤ ceiling).
+        Returns (basis_gb, n4_packed_gb, aus_gb, total_gb_with_slack).
+        ``batch_size`` is pulled from ``get_image_batch_size(g, budget_gb)``
+        so the prediction matches the batch size the planner actually uses.
         """
+        batch_size = utils.safe_batch_size(utils.get_image_batch_size(g, budget_gb))
+        half_img = (g * g) // 2
+        P = n_pcs_val * (n_pcs_val + 1) // 2
+
         basis_gb = n_pcs_val * (g**3) * 8 / 1e9
-        # Packed symmetric matrix size: n*(n+1)/2. Squared then × 8 bytes (float64).
-        packed = n_pcs_val * (n_pcs_val + 1) // 2
-        projected_lhs_gb = packed * packed * 8 / 1e9
-        ceiling = _workload_ceiling(g)
-        workload_gb = min(0.7 * budget_gb, ceiling)
-        return basis_gb, projected_lhs_gb, workload_gb, basis_gb + projected_lhs_gb + workload_gb
+        n4_packed_gb = (P * n_pcs_val * n_pcs_val + P * P) * 4 / 1e9
+        aus_gb = 2 * n_pcs_val * batch_size * half_img * 8 / 1e9
+        raw_peak = basis_gb + n4_packed_gb + aus_gb
+        return basis_gb, n4_packed_gb, aus_gb, raw_peak * _peak_slack(g)
 
     if adaptive_n_pcs and grid_size is not None:
-        available_memory_gb = gpu_memory * 0.7
-
         n_pcs = 200
         for n_pcs in range(200, 0, -1):
-            basis_memory, projected_lhs_gb, workload_gb, total = _estimate_peak_gb(n_pcs, grid_size, gpu_memory)
-            if total <= available_memory_gb:
+            basis_memory, n4_gb, aus_gb, total = _estimate_peak_gb(n_pcs, grid_size, gpu_memory)
+            if total <= gpu_memory:
                 break
         else:
             n_pcs = 50
 
         logger.info(
             "Adaptive n_pcs: using %s PCs for covariance computation "
-            "(GPU memory: %.1f GB, grid_size: %s, estimated peak: %.1f GB = "
-            "basis %.2f + projected_lhs %.2f + workload %.2f)",
+            "(GPU budget: %.1f GB, grid_size: %s, predicted peak: %.1f GB = "
+            "(basis %.2f + n4_packed %.2f + AUs %.2f) × slack)",
             n_pcs,
             gpu_memory,
             grid_size,
             total,
             basis_memory,
-            projected_lhs_gb,
-            workload_gb,
+            n4_gb,
+            aus_gb,
         )
     else:
         n_pcs = 200
 
         # Estimate memory usage so we can warn if it might OOM
         if grid_size is not None:
-            basis_memory_gb, projected_lhs_gb, workload_memory_gb, total_memory_gb = _estimate_peak_gb(
-                n_pcs, grid_size, gpu_memory
-            )
+            basis_memory_gb, n4_gb, aus_gb, total_memory_gb = _estimate_peak_gb(n_pcs, grid_size, gpu_memory)
             logger.info(
                 "Using %s PCs for covariance computation "
-                "(GPU memory: %.1f GB, grid_size: %s, estimated peak: %.1f GB = "
-                "basis %.2f + projected_lhs %.2f + workload %.2f; empirical from sweep 8020210 + "
-                "first-principles for projected_lhs)",
+                "(GPU budget: %.1f GB, grid_size: %s, predicted peak: %.1f GB = "
+                "(basis %.2f + n4_packed %.2f + AUs %.2f) × slack(grid))",
                 n_pcs,
                 gpu_memory,
                 grid_size,
                 total_memory_gb,
                 basis_memory_gb,
-                projected_lhs_gb,
-                workload_memory_gb,
+                n4_gb,
+                aus_gb,
             )
-            if total_memory_gb > gpu_memory * 0.8:
+            if total_memory_gb > gpu_memory:
                 logger.warning(
-                    "Estimated peak (%.1f GB) may exceed 80%% of available GPU memory (%.1f GB). "
-                    "If you get OOM errors, use --adaptive-n-pcs or --low-memory-option.",
+                    "Predicted peak (%.1f GB) exceeds GPU budget (%.1f GB). "
+                    "If you get OOM, use --adaptive-n-pcs or --gpu-gb <smaller>.",
                     total_memory_gb,
                     gpu_memory,
                 )

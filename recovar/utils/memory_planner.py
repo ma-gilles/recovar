@@ -206,76 +206,146 @@ def _round_up_to_calibrated(
     return largest, "extrapolated"
 
 
-_COVARIANCE_WORKLOAD_CEILING_GB = {64: 7.0, 128: 40.0, 256: 55.0}
+# Multiplicative slack on the analytic peak prediction. Calibrated from
+# per-chunk fork-per-cell measurement 2026-05-14
+# (_agent_scratch/chunk_floor_measurements.json) using device_put-only
+# allocations (no `+ 1` artifact). For the projected-covariance chunk,
+# measured / predicted across 13 cells spanning {grid=64,128,256} x
+# {n_pcs=50,100,200} x {batch=1,16,64}: min=1.00 max=1.03.
+#
+# We use 1.30 across all grids: that's the measured 1.03 plus ~25%
+# headroom for runtime-only costs the pure-allocator harness doesn't
+# capture (XLA scratch, JIT cache, FFT plans, activation buffers).
+_PEAK_SLACK_BY_GRID = {64: 1.30, 128: 1.30, 256: 1.30}
 
 
-def _covariance_workload_ceiling_gb(grid_size: int) -> float:
-    """Workload ceiling (batches + FFT + accumulators; no basis) from
-    saturation sweep 8020210 at full budget on A100 80GB / SPA /
-    n_images=2000. Linear interp / quadratic extrap for unknown grids."""
-    if grid_size in _COVARIANCE_WORKLOAD_CEILING_GB:
-        return _COVARIANCE_WORKLOAD_CEILING_GB[grid_size]
-    sizes = sorted(_COVARIANCE_WORKLOAD_CEILING_GB.keys())
-    if grid_size <= sizes[0]:
-        return _COVARIANCE_WORKLOAD_CEILING_GB[sizes[0]] * (grid_size / sizes[0]) ** 2
-    if grid_size >= sizes[-1]:
-        slope = (_COVARIANCE_WORKLOAD_CEILING_GB[sizes[-1]] - _COVARIANCE_WORKLOAD_CEILING_GB[sizes[-2]]) / (
-            sizes[-1] - sizes[-2]
-        )
-        return _COVARIANCE_WORKLOAD_CEILING_GB[sizes[-1]] + slope * (grid_size - sizes[-1])
-    for lo, hi in zip(sizes[:-1], sizes[1:]):
-        if lo <= grid_size <= hi:
-            t = (grid_size - lo) / (hi - lo)
-            return _COVARIANCE_WORKLOAD_CEILING_GB[lo] + t * (
-                _COVARIANCE_WORKLOAD_CEILING_GB[hi] - _COVARIANCE_WORKLOAD_CEILING_GB[lo]
-            )
-    return _COVARIANCE_WORKLOAD_CEILING_GB[128]
+def _peak_slack(grid_size: int) -> float:
+    """Multiplicative slack on the analytic peak prediction.
+
+    Calibrated 2026-05-14 from per-chunk measurement sweep. Returns the
+    nearest calibrated grid's slack; falls back to 1.30 for sizes
+    outside the calibrated set since the formula structure is the same.
+    """
+    return _PEAK_SLACK_BY_GRID.get(grid_size, 1.30)
+
+
+def _predict_covariance_peak_gb(grid_size: int, n_pcs: int, batch_size: int) -> float:
+    """Predict peak GPU memory (GB) for ``compute_projected_covariance``.
+
+    Derived by static walk of:
+      - ``_compute_projected_covariance_single`` (basis cast + LHS allocation)
+      - ``_reduce_covariance_inner_explicit`` (per-batch AUs)
+      - ``_projected_covariance_packed_lhs_batch`` (n⁴-scale packed
+        matrices: ``cross_terms`` and ``packed_lhs``)
+
+    Three dominant terms (verified against measured JAX peak via fork-
+    per-cell sweep 2026-05-14, _agent_scratch/proj_cov_peak_fork_results.json):
+
+    1. ``basis`` — the eigenvector stack, persistent across batches:
+           shape  = (n_pcs, grid³)   dtype complex64 (8 B/elem)
+           bytes  = n_pcs · grid³ · 8
+
+    2. ``AUs + AUs_noise`` — per-image basis projections (half-image
+       Hermitian layout) plus the noise-scaled variant; both alive
+       simultaneously inside the inner kernel:
+           shape  = (n_pcs, batch, grid²/2)   dtype complex64
+           bytes  = 2 · n_pcs · batch · (grid²/2) · 8
+                  = n_pcs · batch · grid² · 8
+
+    3. ``n⁴-scale packed matrices`` — let P = n_pcs·(n_pcs+1)/2. The
+       inner kernel materializes:
+           cross_terms  shape (P, n_pcs, n_pcs)   float32  → P · n² · 4 B
+           packed_lhs   shape (P, P)              float32  → P² · 4 B
+       both already in upper-triangular packed form (no further
+       compression possible; packed_lhs is asymmetric due to the
+       per-row scaling factor). Combined ≈ 3·n_pcs⁴·1e-9 GB
+       asymptotically; we use the exact form here.
+
+    A grid-dependent slack (``_peak_slack``) absorbs the additional
+    transients we don't model line-by-line: FFT plans, image masks,
+    JIT scratch, ``lhs_rows``/``lhs_cols`` fancy-index transients (which
+    XLA may or may not fuse), and the second basis-sized buffer that
+    forward_model needs at grid=256 (`+ astype + .T` cycle).
+    """
+    half_img = (grid_size * grid_size) // 2
+    P = n_pcs * (n_pcs + 1) // 2
+
+    # complex64 = 8 B/elem
+    basis_gb = n_pcs * grid_size**3 * 8 / 1e9
+    # AUs and AUs_noise both alive per batch
+    aus_noise_gb = 2 * n_pcs * batch_size * half_img * 8 / 1e9
+    # cross_terms + packed_lhs (float32 = 4 B/elem). Exact form, not
+    # asymptotic — at n=50 the exact form is ~3% larger than 3·n⁴·1e-9.
+    n4_packed_gb = (P * n_pcs * n_pcs + P * P) * 4 / 1e9
+
+    raw_peak = basis_gb + aus_noise_gb + n4_packed_gb
+    return raw_peak * _peak_slack(grid_size)
+
+
+def _covariance_runtime_batch_size(grid_size: int, n_pcs: int, budget_gb: float) -> int:
+    """Mirror of ``_projected_covariance_batch_size`` from
+    ``recovar/heterogeneity/principal_components.py``.
+
+    The production pipeline does NOT use ``get_image_batch_size`` for the
+    covariance call. It uses ``_projected_covariance_batch_size``, which:
+
+      1. Reserves ``2 · P² · 8B`` for the LHS+RHS (legacy float64 sizing;
+         the actual allocation is float32 so this over-reserves by 2×).
+      2. Subtracts the basis size (``n_pcs · grid³ · 8B``).
+      3. Calls ``get_embedding_batch_size`` with the remainder. That
+         helper has a ``/20`` safety factor over the raw per-image cost.
+
+    Reproducing the same calculation here lets the picker predict the
+    batch size that will actually be used at runtime — without it, the
+    planner uses a much larger batch from ``get_image_batch_size`` and
+    over-predicts peak by a wide margin (causing it to downgrade
+    ``n_pcs`` at production-realistic configurations that, in practice,
+    fit fine).
+    """
+    image_size = grid_size * grid_size
+    basis_gb = n_pcs * (grid_size**3) * 8 / 1e9
+    P = n_pcs * (n_pcs + 1) // 2
+    # Match production's legacy reservation (8 B/elem, factor of 2).
+    lhs_reservation_gb = 2 * P * P * 8 / 1e9
+    remaining_gb = budget_gb - basis_gb - lhs_reservation_gb
+    if remaining_gb <= 0:
+        return 1
+    # ``get_embedding_batch_size``: per-image bytes = (image_size · max(zdim,4) + zdim²) · 8 B;
+    # divided by 20 for the JIT/transient safety factor.
+    per_image_gb = (image_size * max(n_pcs, 4) + n_pcs * n_pcs) * 8 / 1e9
+    batch = int(remaining_gb / per_image_gb / 20)
+    return max(1, batch)
 
 
 def _adaptive_n_pcs_formula_fallback(*, grid_size: int, effective_budget_gb: float, desired_n_pcs: int) -> int:
     """Heuristic n_pcs choice when no calibration cells are available.
 
-    Mirrors the formula in
-    ``covariance_estimation.get_default_covariance_computation_options``
-    so the planner's choice is consistent with what
-    ``adaptive_n_pcs=True`` would produce there. Walks ``n_pcs`` down
-    from ``desired_n_pcs`` until predicted memory fits 70% of the
-    budget; floors at 50.
+    Walks ``n_pcs`` down from ``desired_n_pcs`` until the analytic peak
+    prediction fits ``effective_budget``. The batch size is computed via
+    ``_covariance_runtime_batch_size`` so it matches what the actual
+    covariance code path will use at runtime (which uses a `/20` safety
+    factor in ``get_embedding_batch_size``).
 
-    Without this fallback ``run_test_dataset --adaptive-n-pcs`` is a
-    no-op when the calibration JSON is absent — exactly the regression
-    the smoke test exists to catch.
+    History:
+      Pre-2026-05-14: empirical "workload ceiling" table + n_pcs⁴ × 8B
+      assuming float64 LHS. Wrong by 2-16× at grid=128.
 
-    Updated 2026-05-11 (two passes):
-
-      Pass 1: replaced the legacy ``(75 / 200**4) × n_pcs**4`` term
-      (which over-estimated peak by ~23× at n=200 — predicted 75 GB
-      vs ~3.2 GB actual) with an empirical workload-ceiling term.
-
-      Pass 2: restored the n_pcs⁴ term with a CORRECT coefficient
-      from first principles. ``compute_projected_covariance`` builds
-      a dense LHS matrix of shape (P, P) where P = n_pcs*(n_pcs+1)/2,
-      in dtype_real (float64 because jax_enable_x64 is on). Size =
-      P² × 8 bytes ≈ 2e-9 × n_pcs⁴ GB. At n=200: 3.2 GB. At n=400:
-      51 GB. The legacy 75-GB coefficient was 23× too large but the
-      n_pcs⁴ SHAPE was correct.
-
-    See ``_covariance_workload_ceiling_gb`` for the workload data
-    source (saturation sweep 8020210).
+      2026-05-14: replaced with term-by-term analytic formula
+      (basis + AUs + n^4 packed) plus a grid-dependent slack. Initial
+      version fed ``get_image_batch_size`` (the LARGER batch used by
+      mean reconstruction etc.) which over-predicted peak — the
+      production covariance call uses a much smaller batch via
+      ``_projected_covariance_batch_size`` (/20 safety factor). Fixed
+      by introducing ``_covariance_runtime_batch_size`` here so the
+      picker mirrors the runtime exactly.
     """
     if grid_size < 1 or effective_budget_gb <= 0:
         return desired_n_pcs
 
-    volume_size = grid_size**3
-    dtype_size = 8  # complex64
-    available = effective_budget_gb * 0.7
-    basis_coef = volume_size * dtype_size / 1e9  # basis = n_pcs × grid³ × 8 / 1e9
-    workload_gb = min(0.7 * effective_budget_gb, _covariance_workload_ceiling_gb(grid_size))
-
     for n_pcs in range(desired_n_pcs, 0, -1):
-        packed = n_pcs * (n_pcs + 1) // 2
-        projected_lhs_gb = packed * packed * 8 / 1e9  # (P, P) × 8 bytes
-        if workload_gb + basis_coef * n_pcs + projected_lhs_gb <= available:
+        batch_size = _covariance_runtime_batch_size(grid_size, n_pcs, effective_budget_gb)
+        predicted_peak = _predict_covariance_peak_gb(grid_size, n_pcs, batch_size)
+        if predicted_peak <= effective_budget_gb:
             return n_pcs
     return min(desired_n_pcs, 50)
 

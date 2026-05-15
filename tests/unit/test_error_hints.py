@@ -20,10 +20,9 @@ def _ctx_with(monkeypatch, **overrides):
 
 
 def test_oom_hint_diagnoses_and_recommends_one_fix():
-    """Old behavior was to dump every recovery flag in one wall.
-    New behavior: diagnose the cause and recommend a SINGLE fix per
-    cause. With an empty context (no physical info, no plan), we fall
-    through to the "JAX preallocation" branch and recommend PREALLOCATE."""
+    """With an empty context (no physical info, no plan), we fall through
+    to the generic branch and recommend --gpu-gb + --adaptive-n-pcs.
+    The hint must NOT lecture the user to undo deliberate flags."""
     from recovar.utils import error_hints
 
     text = "XlaRuntimeError: RESOURCE_EXHAUSTED: failed to allocate 12.34 GiB"
@@ -31,8 +30,10 @@ def test_oom_hint_diagnoses_and_recommends_one_fix():
     assert hint is not None
     assert hint.category == "gpu_oom"
     blob = "\n".join(hint.suggestions)
-    # Fallback branch (no context): recommend PREALLOCATE=false.
-    assert "XLA_PYTHON_CLIENT_PREALLOCATE=false" in blob
+    assert "--gpu-gb" in blob
+    assert "--adaptive-n-pcs" in blob
+    # Should not tell the user to unset their own deliberate choice.
+    assert "unset RECOVAR_DISABLE_CUDA" not in blob
 
 
 def test_oom_hint_when_gpu_occupied_recommends_switching_gpus():
@@ -76,38 +77,52 @@ def test_oom_hint_when_planner_predicted_oom_recommends_adaptive():
     assert "CUDA_VISIBLE_DEVICES" not in blob
 
 
-def test_oom_hint_when_jax_fallback_recommends_unsetting_disable_cuda():
-    """custom_cuda_disabled=True → recommend unsetting RECOVAR_DISABLE_CUDA
-    as the single specific fix (3× memory delta documented from sweep)."""
+def test_oom_hint_when_disable_cuda_is_set_does_not_tell_user_to_unset_it():
+    """custom_cuda_disabled=True is informational — user set it on purpose.
+    The hint MUST NOT recommend unsetting RECOVAR_DISABLE_CUDA. It should
+    recommend the actionable flags (--gpu-gb, --adaptive-n-pcs) and mention
+    the fallback as context only."""
     from recovar.utils import error_hints
 
     ctx = error_hints.DiagnosticContext(
         backend="jax_fallback",
         custom_cuda_disabled=True,
         physical_total_gb=80.0,
-        physical_free_gb=78.0,
+        physical_free_gb=78.0,  # quiet GPU — case 1 should not fire
     )
     hint = error_hints.classify_text("CUDA_ERROR_OUT_OF_MEMORY", ctx)
     assert hint is not None
     assert hint.category == "gpu_oom"
     blob = "\n".join(hint.suggestions)
-    assert "build_custom_cuda" in blob
-    assert "RECOVAR_DISABLE_CUDA" in (blob + hint.likely_cause)
+    # Actionable suggestions:
+    assert "--gpu-gb" in blob
+    assert "--adaptive-n-pcs" in blob
+    # Should NOT lecture about undoing the user's deliberate choice.
+    assert "unset RECOVAR_DISABLE_CUDA" not in blob
+    assert "build_custom_cuda" not in blob
+    # The fallback is mentioned in the cause as context only.
+    assert "fallback" in hint.likely_cause.lower()
 
 
-def test_oom_under_disable_cuda_mentions_jax_fallback(monkeypatch):
+def test_oom_when_other_process_detected_recommends_switching_gpu():
+    """nvidia-smi enumerated another process holding GPU memory →
+    suggest CUDA_VISIBLE_DEVICES + lowering --gpu-gb."""
     from recovar.utils import error_hints
 
-    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     ctx = error_hints.DiagnosticContext(
-        backend="jax_fallback",
-        custom_cuda_disabled=True,
+        physical_total_gb=80.0,
+        physical_free_gb=15.0,
+        physical_processes=[
+            {"pid": 99999, "name": "other.py", "used_mb": 60_000},
+        ],
     )
     hint = error_hints.classify_text("CUDA_ERROR_OUT_OF_MEMORY", ctx)
     assert hint is not None
-    text = " ".join(hint.suggestions) + " " + hint.likely_cause
-    assert "RECOVAR_DISABLE_CUDA" in text
-    assert "build_custom_cuda" in text
+    assert hint.category == "gpu_oom"
+    blob = "\n".join(hint.suggestions)
+    assert "CUDA_VISIBLE_DEVICES" in blob
+    assert "--gpu-gb" in blob
+    assert "another process" in hint.summary.lower() or "another process" in hint.likely_cause.lower()
 
 
 def test_conflicting_process_when_free_is_tiny(monkeypatch):
@@ -205,14 +220,13 @@ def test_classify_subprocess_failure_uses_combined_text():
     assert hint.category == "gpu_oom"
 
 
-def test_oom_hint_includes_preallocate_workaround():
-    """OOM hint should mention XLA_PYTHON_CLIENT_PREALLOCATE=false as a
-    recovery for workstation / shared-GPU users where JAX's default
-    preallocation is the actual cause of the OOM. Orthogonal to
-    --gpu-budget-gb (which is RECOVAR's batch-size hint, not a JAX cap)."""
+def test_oom_hint_does_not_recommend_disabling_preallocate():
+    """The user explicitly does not want XLA_PYTHON_CLIENT_PREALLOCATE=false
+    surfaced as a recommendation. Their RECOVAR budgeting story relies on
+    JAX preallocation being on so the planner reads a stable bytes_limit."""
     from recovar.utils import error_hints
 
     hint = error_hints.classify_text("RESOURCE_EXHAUSTED: out of memory", error_hints.DiagnosticContext())
     assert hint is not None
-    blob = " ".join(hint.suggestions)
-    assert "XLA_PYTHON_CLIENT_PREALLOCATE" in blob
+    blob = " ".join(hint.suggestions) + " " + hint.likely_cause
+    assert "XLA_PYTHON_CLIENT_PREALLOCATE" not in blob

@@ -224,113 +224,127 @@ def _format_memory_context(ctx: DiagnosticContext) -> dict[str, Any]:
 def _hint_gpu_oom(ctx: DiagnosticContext) -> ErrorHint:
     """OOM hint: diagnose the SPECIFIC cause and recommend ONE fix.
 
-    Previously this dumped every possible recovery flag in priority
-    order, which forced the user to read a wall of options and guess
-    which one applied to their situation. The actual cause is
-    usually obvious from the diagnostic context — pick it.
-
     Decision tree (first match wins, most specific to most generic):
 
-      1. Another process is hogging the GPU (physical_free << total).
-         → fix: switch GPUs (CUDA_VISIBLE_DEVICES). Not a budget issue.
+      1. Another process is using a significant chunk of the GPU.
+         → fix: switch GPUs (CUDA_VISIBLE_DEVICES) or lower --gpu-gb.
 
-      2. RECOVAR_DISABLE_CUDA=1 is set (JAX fallback uses ~3× more memory).
-         → fix: unset it OR shrink budget by 3×.
+      2. The planner already warned this would OOM (predicted_peak >
+         budget, or covariance fixed allocations > 50% of budget).
+         → fix: --n-pcs-adaptive (the warning that fired pre-launch).
 
-      3. Planner predicted peak > budget (config genuinely too big).
-         → fix: --adaptive-n-pcs or shrink the workload.
-
-      4. Planner predicted peak ≤ budget but we OOMed anyway: probably
-         JAX preallocation grabbed too much upfront.
-         → fix: PREALLOCATE=false.
+      3. Generic OOM. Suggest lowering --gpu-gb and/or --n-pcs-adaptive.
+         If RECOVAR_DISABLE_CUDA=1 is set, mention it as informational
+         (the fallback path uses more memory), but DO NOT tell the user
+         to unset it — they set it deliberately.
     """
     plan = ctx.last_memory_plan or {}
     budget = plan.get("budget", {}) if isinstance(plan, dict) else {}
     predicted_peak = plan.get("predicted_peak_gb_total") if isinstance(plan, dict) else None
     effective_budget = budget.get("effective_budget_gb")
+    grid_size = plan.get("grid_size") if isinstance(plan, dict) else None
+    desired_n_pcs = plan.get("desired_n_pcs") if isinstance(plan, dict) else None
+    adaptive_already = bool(plan.get("adaptive_n_pcs")) if isinstance(plan, dict) else False
 
-    # Case 1: GPU is occupied by another process.
-    occupied_fraction = (
-        1.0 - (ctx.physical_free_gb / ctx.physical_total_gb)
-        if (ctx.physical_total_gb and ctx.physical_free_gb is not None and ctx.physical_total_gb > 0)
+    # Case 1: another process is using the GPU.
+    own_pid = os.getpid()
+    other_procs = [p for p in ctx.physical_processes if p.get("pid") != own_pid]
+    other_used_gb = sum(p.get("used_mb", 0) / 1024.0 for p in other_procs)
+    # Also surface a weaker signal: the GPU was not mostly-empty at launch
+    # but nvidia-smi enumerated NO compute PIDs at all (common with cgroup
+    # isolation or non-compute clients). If physical_processes lists *any*
+    # PIDs but only ours, the GPU is genuinely ours — don't misattribute.
+    occupied_gb = (
+        ctx.physical_total_gb - ctx.physical_free_gb
+        if (ctx.physical_total_gb and ctx.physical_free_gb is not None)
         else None
     )
-    if occupied_fraction is not None and occupied_fraction > 0.30:
-        used_gb = ctx.physical_total_gb - (ctx.physical_free_gb or 0.0)
-        cause = (
-            f"Another process is using {used_gb:.1f} GB / {ctx.physical_total_gb:.1f} GB on this "
-            f"GPU. Only {ctx.physical_free_gb:.1f} GB was free when RECOVAR launched — that's "
-            f"not enough for a default-config run."
-        )
-        suggestions = [
-            "Check `nvidia-smi` for the conflicting process. Then either:",
-            "  • CUDA_VISIBLE_DEVICES=<idx-of-free-gpu> recovar pipeline ...   (switch to a free GPU)",
-            "  • wait for / stop the conflicting process",
-        ]
-        return ErrorHint(
-            category="gpu_oom",
-            summary="RECOVAR ran out of GPU memory — another process is hogging the GPU.",
-            likely_cause=cause,
-            suggestions=suggestions,
-            diagnostic_context=_format_memory_context(ctx),
-        )
-
-    # Case 2: JAX fallback active — known to use ~3× more memory.
-    if ctx.custom_cuda_disabled:
-        cause = (
-            "RECOVAR_DISABLE_CUDA=1 is active so RECOVAR is on the JAX fallback path. "
-            "The fallback uses ~3× more GPU memory per image than the custom CUDA kernel. "
-            "Empirically (saturation sweep slurm 8020210): a config that uses 8 GB peak under "
-            "custom_cuda OOMs at 17+ GB under JAX fallback."
-        )
-        suggestions = [
-            "  • unset RECOVAR_DISABLE_CUDA && recovar build_custom_cuda   "
-            "(rebuild the kernel — this is the right fix; the fallback is meant only for the "
-            "rare case where the kernel can't be built)",
-            "  • OR shrink the budget by 3× and retry: --gpu-budget-gb <N/3>",
-        ]
-        return ErrorHint(
-            category="gpu_oom",
-            summary="RECOVAR ran out of GPU memory — JAX fallback path is ~3× heavier than the custom kernel.",
-            likely_cause=cause,
-            suggestions=suggestions,
-            diagnostic_context=_format_memory_context(ctx),
-        )
-
-    # Case 3: planner predicted the OOM (config too big for budget).
-    if predicted_peak is not None and effective_budget is not None and predicted_peak > effective_budget * 0.95:
-        cause = (
-            f"Before launch, the planner predicted peak={predicted_peak:.1f} GB which exceeds "
-            f"the effective budget {effective_budget:.1f} GB. The run was launched anyway and "
-            f"hit the predicted OOM."
-        )
-        suggestions = [
-            "  • recovar pipeline ... --adaptive-n-pcs   (let the planner auto-shrink n_pcs to fit; "
-            "this is the recommended single fix)",
-            "  • If you specifically need n_pcs=200, raise --gpu-budget-gb or use a smaller grid.",
-        ]
-        return ErrorHint(
-            category="gpu_oom",
-            summary="RECOVAR ran out of GPU memory — predicted before launch (config exceeds budget).",
-            likely_cause=cause,
-            suggestions=suggestions,
-            diagnostic_context=_format_memory_context(ctx),
-        )
-
-    # Case 4 (fallback): predicted fit but OOMed anyway — usually JAX preallocation.
-    cause = (
-        "The planner predicted the run would fit, but JAX/XLA still ran out of memory at peak. "
-        "Most common cause on shared / workstation GPUs: JAX's default behavior preallocates "
-        "~90% of physical VRAM upfront, regardless of RECOVAR's budget."
+    weak_external_signal = (
+        len(ctx.physical_processes) == 0
+        and occupied_gb is not None
+        and ctx.physical_total_gb
+        and occupied_gb >= max(2.0, 0.15 * ctx.physical_total_gb)
     )
+    if other_used_gb >= 1.0 or weak_external_signal:
+        if other_procs:
+            proc_str = ", ".join(
+                f"PID {p['pid']} ({p.get('name', '?')}, {p.get('used_mb', 0) / 1024:.1f} GB)" for p in other_procs[:3]
+            )
+            cause = (
+                f"Another process appears to be using {other_used_gb:.1f} GB on this GPU "
+                f"({proc_str}). That likely left RECOVAR without enough headroom for its "
+                f"requested workload."
+            )
+        else:
+            cause = (
+                f"GPU 0 reports {occupied_gb:.1f} GB / {ctx.physical_total_gb:.1f} GB in use, "
+                f"but nvidia-smi didn't enumerate the holding PID. Something on this node is "
+                f"consuming GPU memory outside RECOVAR — likely another job."
+            )
+        suggestions = [
+            "CUDA_VISIBLE_DEVICES=<idx-of-free-gpu> recovar pipeline ...   (run on a different GPU)",
+            "OR lower the budget so RECOVAR fits beside the other process: --gpu-gb <smaller-N>",
+            "OR stop / wait for the other GPU process (check `nvidia-smi`)",
+        ]
+        return ErrorHint(
+            category="gpu_oom",
+            summary="RECOVAR ran out of GPU memory — another process appears to be using this GPU.",
+            likely_cause=cause,
+            suggestions=suggestions,
+            diagnostic_context=_format_memory_context(ctx),
+        )
+
+    # Case 2: planner predicted this OOM (warning was logged pre-launch).
+    prelaunch_warned = False
+    if predicted_peak is not None and effective_budget is not None and predicted_peak > effective_budget * 0.95:
+        prelaunch_warned = True
+    if not adaptive_already and grid_size is not None and desired_n_pcs is not None and effective_budget is not None:
+        basis_gb = desired_n_pcs * (grid_size**3) * 8 / 1e9
+        packed = desired_n_pcs * (desired_n_pcs + 1) // 2
+        lhs_gb = packed * packed * 8 / 1e9
+        if basis_gb + lhs_gb > effective_budget * 0.50:
+            prelaunch_warned = True
+
+    if prelaunch_warned:
+        peak_str = f"{predicted_peak:.1f} GB" if predicted_peak is not None else "the configured workload"
+        budget_str = f"{effective_budget:.1f} GB" if effective_budget is not None else "the budget"
+        cause = (
+            f"Before launch the planner warned that {peak_str} would not fit in {budget_str}. "
+            f"The run was launched anyway (--adaptive-n-pcs was not passed) and hit the "
+            f"predicted OOM."
+        )
+        suggestions = [
+            "recovar pipeline ... --adaptive-n-pcs   (planner auto-shrinks n_pcs to fit budget)",
+            "OR raise --gpu-gb if a larger GPU is available, or use a smaller --grid-size",
+        ]
+        return ErrorHint(
+            category="gpu_oom",
+            summary="RECOVAR ran out of GPU memory — the planner already warned this would happen.",
+            likely_cause=cause,
+            suggestions=suggestions,
+            diagnostic_context=_format_memory_context(ctx),
+        )
+
+    # Case 3 (generic): no clear external cause, no pre-launch warning.
+    cause_parts = [
+        "JAX/XLA reported an out-of-memory allocation during the run. The planner did not "
+        "predict this ahead of time, so the workload was heavier in practice than the "
+        "calibration table suggested."
+    ]
+    if ctx.custom_cuda_disabled:
+        cause_parts.append(
+            "Note: RECOVAR_DISABLE_CUDA=1 is set, which routes RECOVAR through the JAX fallback "
+            "path. The fallback consumes more GPU memory than the custom kernel, so the same "
+            "budget that worked with the kernel may be too tight here."
+        )
+    cause = " ".join(cause_parts)
     suggestions = [
-        "  • export XLA_PYTHON_CLIENT_PREALLOCATE=false && recovar pipeline ...   "
-        "(stops JAX from grabbing VRAM upfront; orthogonal to --gpu-budget-gb)",
-        "  • If that doesn't help: --adaptive-n-pcs to shrink the workload.",
+        "recovar pipeline ... --gpu-gb <smaller-N>   (tighter budget → planner shrinks batches)",
+        "OR recovar pipeline ... --adaptive-n-pcs   (if a pre-launch warning suggested it)",
     ]
     return ErrorHint(
         category="gpu_oom",
-        summary="RECOVAR ran out of GPU memory — JAX preallocation likely grabbed too much.",
+        summary="RECOVAR ran out of GPU memory.",
         likely_cause=cause,
         suggestions=suggestions,
         diagnostic_context=_format_memory_context(ctx),

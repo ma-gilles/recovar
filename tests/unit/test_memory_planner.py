@@ -182,11 +182,16 @@ def test_effective_budget_skips_physical_reserve_when_no_user_request(monkeypatc
 
 def test_uncalibrated_with_adaptive_uses_formula_fallback(monkeypatch):
     """No calibration table + tight budget + --adaptive-n-pcs:
-    planner now uses the covariance memory-estimate formula instead
-    of returning a no-op. (Originally just returned desired_n_pcs;
+    planner uses the analytic peak formula instead of returning
+    desired_n_pcs unchanged. (Originally just returned desired_n_pcs;
     review caught that ``run_test_dataset --adaptive-n-pcs`` was a
-    no-op when the calibration JSON wasn't committed.)"""
-    _stub_helpers(monkeypatch, gpu_total=40.0)
+    no-op when the calibration JSON wasn't committed.)
+
+    Updated 2026-05-14: the formula was rewritten to model the actual
+    inner-kernel allocations (basis + AUs + n^4 packed matrices). At
+    grid=128, n=200 the formula predicts ~18 GB, so 40 GB budget is
+    enough — use a TIGHT 8 GB budget here to force a shrink."""
+    _stub_helpers(monkeypatch, gpu_total=8.0)
     _stub_preflight(monkeypatch, total=80.0, free=78.0)
     _stub_backend_custom(monkeypatch)
 
@@ -197,13 +202,12 @@ def test_uncalibrated_with_adaptive_uses_formula_fallback(monkeypatch):
         command="pipeline",
         grid_size=128,
         n_images=1000,
-        requested_gpu_gb=40.0,
+        requested_gpu_gb=8.0,
         low_memory=False,
         very_low_memory=False,
         adaptive_n_pcs=True,
     )
-    # Status now reflects the formula path (40 GB at grid=128 won't fit
-    # 200 PCs, peak ≈ 75 GB).
+    # At grid=128 / budget=8 GB the analytic formula picks n_pcs ~ 151.
     assert plan.calibration_status == "uncalibrated_formula"
     assert plan.n_pcs_to_compute < 200
     assert plan.n_pcs_to_compute >= 1
