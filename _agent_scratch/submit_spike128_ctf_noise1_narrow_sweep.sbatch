@@ -90,6 +90,7 @@ PY
     --embedding-noise-std "$EMB_SIGMA" \
     --stream-simulation \
     --compute-state-lazy \
+    --local-poly-only \
     --crafted-mask /scratch/gpfs/GILLES/mg6942/uploads/mask_crafted.mrc \
     --crafted-mask-level 0.0126 \
     --crafted-mask-cosine-width 3 \
