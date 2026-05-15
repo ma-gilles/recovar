@@ -147,18 +147,35 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
         """Predict peak GPU memory for compute_projected_covariance.
 
         Returns (basis_gb, n4_packed_gb, aus_gb, total_gb_with_slack).
-        ``batch_size`` is pulled from ``get_image_batch_size(g, budget_gb)``
-        so the prediction matches the batch size the planner actually uses.
+        ``batch_size`` is derived from the same logic
+        ``_projected_covariance_batch_size`` uses at runtime so the
+        prediction matches the actual batch size.
         """
-        batch_size = utils.safe_batch_size(utils.get_image_batch_size(g, budget_gb))
         half_img = (g * g) // 2
         P = n_pcs_val * (n_pcs_val + 1) // 2
+        image_size = g * g
 
         basis_gb = n_pcs_val * (g**3) * 8 / 1e9
         n4_packed_gb = (P * n_pcs_val * n_pcs_val + P * P) * 4 / 1e9
+
+        # Mirror _projected_covariance_batch_size so the predicted batch
+        # matches what the runtime actually picks. Per-image cost includes
+        # AUs+AUs_noise + AU_t_AU + lhs_rows/cols (the last term dominates
+        # at high n_pcs and was missed by the legacy formula).
+        persistent_lhs_gb = 2 * P * P * 4 / 1e9
+        remaining_gb = budget_gb - basis_gb - persistent_lhs_gb
+        if remaining_gb <= 0:
+            batch_size = 1
+        else:
+            per_image_bytes = image_size * n_pcs_val * 8 + n_pcs_val * n_pcs_val * 4 + 2 * P * n_pcs_val * 4
+            batch_size = max(1, int(remaining_gb / (per_image_bytes / 1e9) / 20))
+
         aus_gb = 2 * n_pcs_val * batch_size * half_img * 8 / 1e9
-        raw_peak = basis_gb + n4_packed_gb + aus_gb
-        return basis_gb, n4_packed_gb, aus_gb, raw_peak * _peak_slack(g)
+        # lhs_rows + lhs_cols: each (batch, P, n_pcs) float32 — dominant
+        # transient at large batch_size.
+        lhs_rows_cols_gb = 2 * batch_size * P * n_pcs_val * 4 / 1e9
+        raw_peak = basis_gb + n4_packed_gb + aus_gb + lhs_rows_cols_gb
+        return basis_gb, n4_packed_gb, aus_gb + lhs_rows_cols_gb, raw_peak * _peak_slack(g)
 
     if adaptive_n_pcs and grid_size is not None:
         n_pcs = 200

@@ -232,53 +232,34 @@ def _peak_slack(grid_size: int) -> float:
 def _predict_covariance_peak_gb(grid_size: int, n_pcs: int, batch_size: int) -> float:
     """Predict peak GPU memory (GB) for ``compute_projected_covariance``.
 
-    Derived by static walk of:
-      - ``_compute_projected_covariance_single`` (basis cast + LHS allocation)
-      - ``_reduce_covariance_inner_explicit`` (per-batch AUs)
-      - ``_projected_covariance_packed_lhs_batch`` (n⁴-scale packed
-        matrices: ``cross_terms`` and ``packed_lhs``)
+    Static walk of ``_reduce_covariance_inner_explicit`` +
+    ``_projected_covariance_packed_lhs_batch``. Five dominant terms:
 
-    Three dominant terms (verified against measured JAX peak via fork-
-    per-cell sweep 2026-05-14, _agent_scratch/proj_cov_peak_fork_results.json):
+    1. basis            — (n_pcs, grid³) complex64  : n_pcs · grid³ · 8 B
+    2. AUs + AUs_noise  — 2 × (n_pcs, batch, grid²/2) complex64
+                        : 2 · n_pcs · batch · grid²/2 · 8 B
+                        = n_pcs · batch · grid² · 8 B
+    3. cross_terms      — (P, n_pcs, n_pcs) float32 : P · n_pcs² · 4 B
+    4. packed_lhs       — (P, P) float32            : P² · 4 B
+    5. lhs_rows+cols    — 2 × (batch, P, n_pcs) float32
+                        : 2 · batch · P · n_pcs · 4 B    (per-batch term)
+                        — MISSED earlier; dominates at large batch_size.
+                        At batch=488, n=200: 15.7 GB. Slurm 8252749 OOM at
+                        17.6 GB came from this term.
 
-    1. ``basis`` — the eigenvector stack, persistent across batches:
-           shape  = (n_pcs, grid³)   dtype complex64 (8 B/elem)
-           bytes  = n_pcs · grid³ · 8
-
-    2. ``AUs + AUs_noise`` — per-image basis projections (half-image
-       Hermitian layout) plus the noise-scaled variant; both alive
-       simultaneously inside the inner kernel:
-           shape  = (n_pcs, batch, grid²/2)   dtype complex64
-           bytes  = 2 · n_pcs · batch · (grid²/2) · 8
-                  = n_pcs · batch · grid² · 8
-
-    3. ``n⁴-scale packed matrices`` — let P = n_pcs·(n_pcs+1)/2. The
-       inner kernel materializes:
-           cross_terms  shape (P, n_pcs, n_pcs)   float32  → P · n² · 4 B
-           packed_lhs   shape (P, P)              float32  → P² · 4 B
-       both already in upper-triangular packed form (no further
-       compression possible; packed_lhs is asymmetric due to the
-       per-row scaling factor). Combined ≈ 3·n_pcs⁴·1e-9 GB
-       asymptotically; we use the exact form here.
-
-    A grid-dependent slack (``_peak_slack``) absorbs the additional
-    transients we don't model line-by-line: FFT plans, image masks,
-    JIT scratch, ``lhs_rows``/``lhs_cols`` fancy-index transients (which
-    XLA may or may not fuse), and the second basis-sized buffer that
-    forward_model needs at grid=256 (`+ astype + .T` cycle).
+    P = n_pcs · (n_pcs + 1) / 2. Slack absorbs FFT plans, JIT cache,
+    masks, and other small transients we don't enumerate.
     """
     half_img = (grid_size * grid_size) // 2
     P = n_pcs * (n_pcs + 1) // 2
 
-    # complex64 = 8 B/elem
     basis_gb = n_pcs * grid_size**3 * 8 / 1e9
-    # AUs and AUs_noise both alive per batch
     aus_noise_gb = 2 * n_pcs * batch_size * half_img * 8 / 1e9
-    # cross_terms + packed_lhs (float32 = 4 B/elem). Exact form, not
-    # asymptotic — at n=50 the exact form is ~3% larger than 3·n⁴·1e-9.
     n4_packed_gb = (P * n_pcs * n_pcs + P * P) * 4 / 1e9
+    # lhs_rows + lhs_cols: each (batch, P, n_pcs) float32
+    lhs_rows_cols_gb = 2 * batch_size * P * n_pcs * 4 / 1e9
 
-    raw_peak = basis_gb + aus_noise_gb + n4_packed_gb
+    raw_peak = basis_gb + aus_noise_gb + n4_packed_gb + lhs_rows_cols_gb
     return raw_peak * _peak_slack(grid_size)
 
 
@@ -286,34 +267,40 @@ def _covariance_runtime_batch_size(grid_size: int, n_pcs: int, budget_gb: float)
     """Mirror of ``_projected_covariance_batch_size`` from
     ``recovar/heterogeneity/principal_components.py``.
 
-    The production pipeline does NOT use ``get_image_batch_size`` for the
-    covariance call. It uses ``_projected_covariance_batch_size``, which:
+    Per-image cost in the inner kernel:
+      AUs + AUs_noise         : 2 · n_pcs · image_size/2 · 8 B = n_pcs · image_size · 8 B
+      AU_t_AU (.real)         : n_pcs² · 4 B
+      lhs_rows + lhs_cols     : 2 · P · n_pcs · 4 B  where P = n(n+1)/2
+                                ← DOMINANT at high n_pcs; was missed before.
 
-      1. Reserves ``2 · P² · 8B`` for the LHS+RHS (legacy float64 sizing;
-         the actual allocation is float32 so this over-reserves by 2×).
-      2. Subtracts the basis size (``n_pcs · grid³ · 8B``).
-      3. Calls ``get_embedding_batch_size`` with the remainder. That
-         helper has a ``/20`` safety factor over the raw per-image cost.
+    Persistent (one-time):
+      basis                   : n_pcs · grid³ · 8 B
+      lhs + packed_lhs (alive simultaneously at peak) : 2 · P² · 4 B
 
-    Reproducing the same calculation here lets the picker predict the
-    batch size that will actually be used at runtime — without it, the
-    planner uses a much larger batch from ``get_image_batch_size`` and
-    over-predicts peak by a wide margin (causing it to downgrade
-    ``n_pcs`` at production-realistic configurations that, in practice,
-    fit fine).
+    History: pre-2026-05-15 the picker matched the legacy
+    ``get_embedding_batch_size`` formula which forgot the
+    ``2·P·n_pcs·4 B`` per-image term. At n_pcs=200 the missed term is
+    ~16 MB/image — the legacy formula's per-image of ~7 KB underestimated
+    by ~2300×. Slurm 8252749 (G=64, R=200, budget=80GB) picked batch=488
+    and OOM'd at 17.6 GB; the new formula at that cell picks batch ~ 93.
     """
     image_size = grid_size * grid_size
     basis_gb = n_pcs * (grid_size**3) * 8 / 1e9
     P = n_pcs * (n_pcs + 1) // 2
-    # Match production's legacy reservation (8 B/elem, factor of 2).
-    lhs_reservation_gb = 2 * P * P * 8 / 1e9
-    remaining_gb = budget_gb - basis_gb - lhs_reservation_gb
+    # lhs + packed_lhs are both float32 (P, P). Both alive at peak.
+    persistent_lhs_gb = 2 * P * P * 4 / 1e9
+    remaining_gb = budget_gb - basis_gb - persistent_lhs_gb
     if remaining_gb <= 0:
         return 1
-    # ``get_embedding_batch_size``: per-image bytes = (image_size · max(zdim,4) + zdim²) · 8 B;
-    # divided by 20 for the JIT/transient safety factor.
-    per_image_gb = (image_size * max(n_pcs, 4) + n_pcs * n_pcs) * 8 / 1e9
-    batch = int(remaining_gb / per_image_gb / 20)
+
+    # Per-image cost — includes the previously missed lhs_rows/cols term.
+    per_image_bytes = (
+        image_size * n_pcs * 8  # AUs + AUs_noise per image
+        + n_pcs * n_pcs * 4  # AU_t_AU per image (float32 after .real)
+        + 2 * P * n_pcs * 4  # lhs_rows + lhs_cols per image (float32)
+    )
+    per_image_gb = per_image_bytes / 1e9
+    batch = int(remaining_gb / per_image_gb / 20)  # /20 safety preserved
     return max(1, batch)
 
 
