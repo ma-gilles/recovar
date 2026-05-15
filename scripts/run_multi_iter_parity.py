@@ -310,6 +310,17 @@ def main():
     parser.add_argument("--bnb_initial_fourier_radius", type=int, default=12)
     parser.add_argument("--bnb_posterior_tail_tol", type=float, default=1e-6)
     parser.add_argument(
+        "--bnb_n_subdivisions",
+        type=int,
+        default=7,
+        help=(
+            "Paper-faithful only: number of axis/shift subdivision stages. "
+            "Total = n_subdivisions + 1 evaluation passes. With cone init at "
+            "~11° spacing, n_subdivisions=3 reaches ~1.4° final precision; "
+            "=5 reaches ~0.35°; =7 reaches ~0.09° (paper precision)."
+        ),
+    )
+    parser.add_argument(
         "--bnb_prior_cone_radius_deg",
         type=float,
         default=None,
@@ -1069,6 +1080,7 @@ def main():
         bnb_options = BranchBoundOptions(
             enabled=True,
             subdivision_mode=args.bnb_subdivision_mode,
+            n_subdivisions=int(args.bnb_n_subdivisions),
             initial_fourier_radius=int(args.bnb_initial_fourier_radius),
             posterior_tail_tol=float(args.bnb_posterior_tail_tol),
             prior_cone_radius_deg=(
