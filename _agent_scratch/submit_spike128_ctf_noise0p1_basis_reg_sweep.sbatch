@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=300G
 #SBATCH --time=12:00:00
-#SBATCH --array=0-50%2
+#SBATCH --array=4-50%4
 #SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/spike128_ctf_noise0p1_basis_reg_%A_%a.out
 #SBATCH --error=/scratch/gpfs/GILLES/mg6942/slurmo/spike128_ctf_noise0p1_basis_reg_%A_%a.err
 
@@ -88,6 +88,7 @@ PY
     --local-poly-output-tag "$TAG" \
     --local-poly-h-state-grid 1,2,4,8,16,32 \
     --local-poly-em \
+    --skip-gt-polynomial-sweep \
     $EXTRA_ARGS
   date -Is
 } 2>&1

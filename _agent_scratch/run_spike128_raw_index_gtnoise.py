@@ -1674,7 +1674,9 @@ def write_three_mode_report(
     fig.savefig(plots_dir / "best_mean_fsc_candidates.png", dpi=180)
     plt.close(fig)
 
-    gt_sweep = write_gt_polynomial_sweep(args, mask_path, report_out)
+    gt_sweep = None
+    if not args.skip_gt_polynomial_sweep:
+        gt_sweep = write_gt_polynomial_sweep(args, mask_path, report_out)
 
     local_poly_grid = all_metrics["local_poly"]["grid"]
     diagnostic_h_values = [float(local_poly_grid[0])]
@@ -1907,6 +1909,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report-score-frequency-max", type=float, default=0.18)
     parser.add_argument("--report-plot-frequency-max", type=float, default=0.20)
     parser.add_argument("--overwrite-report", action="store_true")
+    parser.add_argument(
+        "--skip-gt-polynomial-sweep",
+        action="store_true",
+        help="Skip the expensive GT state polynomial diagnostic in per-parameter reports.",
+    )
     parser.add_argument(
         "--lambda-grid",
         type=str,
