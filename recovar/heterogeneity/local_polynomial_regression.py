@@ -1486,6 +1486,10 @@ def estimate_local_polynomial_volumes_em(
         upsampling_factor=upsampling_factor,
         return_real_space=False,
         use_fast_rfft=use_fast_rfft,
+        # The EM initializer can otherwise accumulate all bandwidths in one
+        # multi-weight-set backprojection. At 256^3 this produces hundreds of
+        # simultaneous channels and can exceed Triton GEMM autotuning memory.
+        bandwidth_batch_size=1,
         basis=basis,
         basis_quantile=basis_quantile,
         cholesky_jitter=cholesky_jitter,
