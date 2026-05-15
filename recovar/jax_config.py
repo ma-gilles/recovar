@@ -8,6 +8,26 @@ import logging
 import os
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", ".90")
+
+# Robustness: when XLA picks a Triton GEMM and its autotuner can't find a
+# valid config (common on MIG slices, smaller GPUs, and uncommon einsum
+# shapes), fall back to cuBLAS automatically instead of failing with
+# "No valid config found". Triton GEMM is otherwise faster on full A100/
+# H100, so we keep it enabled and only force the fallback.
+#
+# See:
+#   https://github.com/NVIDIA/JAX-Toolbox/issues/317
+#   https://github.com/google-deepmind/alphafold3/issues/240
+#   https://docs.jax.dev/en/latest/gpu_performance_tips.html
+#
+# Triggered by recovar's compute_projected_covariance:
+#   jit(_reduce_covariance_inner_explicit)/bpk,bpl->pkl/dot_general
+# which produces a (P, n_pcs, n_pcs) float32 tensor (P = n_pcs(n_pcs+1)/2).
+_existing_flags = os.environ.get("XLA_FLAGS", "")
+if "xla_gpu_cublas_fallback" not in _existing_flags:
+    fallback_flag = "--xla_gpu_cublas_fallback=true"
+    os.environ["XLA_FLAGS"] = f"{_existing_flags} {fallback_flag}".strip() if _existing_flags else fallback_flag
+
 import jax
 
 jax.config.update("jax_enable_x64", True)
