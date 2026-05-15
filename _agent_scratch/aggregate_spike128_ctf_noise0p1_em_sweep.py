@@ -210,6 +210,142 @@ def _masked_halfmap_fsc_curve(report: Path, best_idx: int) -> tuple[list[float],
     return freq.tolist(), fsc.astype(np.float64).tolist()
 
 
+def _row_by_tag(rows: list[dict], tag: str) -> dict | None:
+    for row in rows:
+        if row.get("tag") == tag and row.get("status") == "complete":
+            return row
+    return None
+
+
+def _row_float(row: dict | None, key: str, default=np.nan) -> float:
+    if row is None:
+        return default
+    return _finite_float(row.get(key), default=default)
+
+
+def _curve_arrays(curve_payload: dict, tag: str, *, halfmap: bool = False):
+    curve = curve_payload.get(tag)
+    if curve is None:
+        return None, None
+    freq_key = "halfmap_frequency_1_per_A" if halfmap else "oracle_frequency_1_per_A"
+    fsc_key = "halfmap_fsc" if halfmap else "oracle_fsc"
+    freq = np.asarray(curve.get(freq_key) or [], dtype=np.float64)
+    fsc = np.asarray(curve.get(fsc_key) or [], dtype=np.float64)
+    if freq.size == 0 or fsc.size == 0:
+        return None, None
+    return freq, fsc
+
+
+def _plot_curve_group(
+    out_path: Path,
+    title: str,
+    curve_payload: dict,
+    rows: list[dict],
+    entries: list[tuple[str, str]],
+    *,
+    halfmap: bool = False,
+    ylim=(-0.08, 1.03),
+) -> bool:
+    plotted = False
+    fig, ax = plt.subplots(figsize=(8.8, 5.4), constrained_layout=True)
+    for idx, (tag, label) in enumerate(entries):
+        freq, fsc = _curve_arrays(curve_payload, tag, halfmap=halfmap)
+        if freq is None:
+            continue
+        row = _row_by_tag(rows, tag)
+        mean = _row_float(row, "local_poly_em_oracle_mean_fsc")
+        shell32 = _row_float(row, "local_poly_em_oracle_shell32")
+        suffix = ""
+        if np.isfinite(mean):
+            suffix = f"  mean={mean:.4f}, s32={shell32:.4f}"
+        ax.plot(freq, fsc, linewidth=2.2, label=f"{label}{suffix}")
+        plotted = True
+    if not plotted:
+        plt.close(fig)
+        return False
+    ax.axhline(0.5, color="0.55", linestyle="--", linewidth=0.8)
+    ax.axhline(1 / 7, color="0.55", linestyle=":", linewidth=0.8)
+    ax.set_xlim(0, 0.20)
+    ax.set_ylim(*ylim)
+    ax.set_xlabel("spatial frequency (1/A)")
+    ylabel = "masked halfmap FSC" if halfmap else "oracle FSC vs GT"
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=8.5, loc="lower left")
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+    return True
+
+
+def _write_readable_plots(out_dir: Path, curve_payload: dict, rows: list[dict]) -> dict[str, str]:
+    plot_specs = [
+        (
+            "fsc_readable_01_baselines.png",
+            "Oracle FSC: main baselines",
+            [
+                ("basis_baseline_d5_i1_q5_mono_none", "d5 q5 EM1 mono none"),
+                ("basis_baseline_d5_i1_q7_mono_none", "d5 q7 EM1 mono none"),
+                ("basis_baseline_d5_i2_q5_mono_none", "d5 q5 EM2 mono none"),
+                ("em_d5_i2_q5_plain_h1_32", "old d5 q5 EM2 plain"),
+            ],
+            False,
+        ),
+        (
+            "fsc_readable_02_q5_em1_basis_reg.png",
+            "Oracle FSC: d5 q5 EM1 basis and regularization",
+            [
+                ("basis_baseline_d5_i1_q5_mono_none", "mono none"),
+                ("basis_d5_i1_q5_monomial_deriv2_eta30", "mono deriv2 eta=30"),
+                ("basis_d5_i1_q5_weighted_cholesky_coeff_eta0p3", "w-chol coeff eta=0.3"),
+                ("basis_d5_i1_q5_weighted_cholesky_deriv2_eta0p3", "w-chol deriv2 eta=0.3"),
+            ],
+            False,
+        ),
+        (
+            "fsc_readable_03_d5_hardcases.png",
+            "Oracle FSC: d5 hard cases",
+            [
+                ("basis_baseline_d5_i2_q5_mono_none", "q5 EM2 mono none"),
+                ("basis_hard_d5_i2_q5_monomial_deriv2_eta30", "q5 EM2 mono deriv2 eta=30"),
+                ("basis_baseline_d5_i1_q7_mono_none", "q7 EM1 mono none"),
+                ("basis_hard_d5_i2_q7_monomial_deriv2_eta30", "q7 EM2 mono deriv2 eta=30"),
+                ("basis_hard_d5_i2_q7_weighted_cholesky_coeff_eta0p3", "q7 EM2 w-chol coeff eta=0.3"),
+            ],
+            False,
+        ),
+        (
+            "fsc_readable_04_degree7.png",
+            "Oracle FSC: degree 7 checks",
+            [
+                ("basis_hard_d7_i1_q5_monomial_none", "d7 q5 mono none"),
+                ("basis_hard_d7_i1_q5_monomial_coeff_eta1", "d7 q5 mono coeff eta=1"),
+                ("basis_hard_d7_i1_q5_weighted_cholesky_coeff_eta0p3", "d7 q5 w-chol coeff eta=0.3"),
+                ("basis_hard_d7_i1_q7_monomial_none", "d7 q7 mono none"),
+                ("basis_hard_d7_i1_q7_weighted_cholesky_coeff_eta0p3", "d7 q7 w-chol coeff eta=0.3"),
+            ],
+            False,
+        ),
+        (
+            "fsc_readable_05_halfmap_selected.png",
+            "Masked halfmap FSC: selected estimates",
+            [
+                ("basis_baseline_d5_i2_q5_mono_none", "d5 q5 EM2 mono none"),
+                ("basis_hard_d5_i2_q5_monomial_deriv2_eta30", "d5 q5 EM2 mono deriv2 eta=30"),
+                ("basis_d5_i1_q5_weighted_cholesky_coeff_eta0p3", "d5 q5 EM1 w-chol coeff eta=0.3"),
+                ("basis_hard_d7_i1_q5_monomial_none", "d7 q5 EM1 mono none"),
+            ],
+            True,
+        ),
+    ]
+    written = {}
+    for filename, title, entries, halfmap in plot_specs:
+        path = out_dir / filename
+        if _plot_curve_group(path, title, curve_payload, rows, entries, halfmap=halfmap):
+            written[filename] = str(path)
+    return written
+
+
 def main() -> None:
     out_dir = RUN_DIR / "09_local_poly_em_sweep_summary"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -321,12 +457,14 @@ def main() -> None:
     plt.close(fig)
     curves_json_path = out_dir / "curves.json"
     curves_json_path.write_text(json.dumps(curve_payload, indent=2, sort_keys=True) + "\n")
+    readable_plots = _write_readable_plots(out_dir, curve_payload, rows)
 
     payload = {
         "run_dir": str(RUN_DIR),
         "summary_csv": str(csv_path),
         "curves_json": str(curves_json_path),
         "plot": str(plot_path),
+        "readable_plots": readable_plots,
         "best_by_local_poly_em_oracle_mean_fsc": best_row,
         "rows": rows,
     }
