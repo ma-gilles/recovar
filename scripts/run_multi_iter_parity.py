@@ -310,6 +310,18 @@ def main():
     parser.add_argument("--bnb_initial_fourier_radius", type=int, default=12)
     parser.add_argument("--bnb_posterior_tail_tol", type=float, default=1e-6)
     parser.add_argument(
+        "--bnb_prior_cone_radius_deg",
+        type=float,
+        default=None,
+        help=(
+            "When set (paper_faithful mode only), each image's stage-0 cells "
+            "live in a cone of this half-angle around its previous-best pose "
+            "instead of the full SO(3) cube. Matches RELION's local-search "
+            "cone (22.5 deg). Leave None for ab-initio / iter-1."
+        ),
+    )
+    parser.add_argument("--bnb_prior_shift_radius_px", type=float, default=5.0)
+    parser.add_argument(
         "--max_particles", type=int, default=None, help="Subsample to at most N particles (N/2 per half)"
     )
     parser.add_argument(
@@ -1059,7 +1071,18 @@ def main():
             subdivision_mode=args.bnb_subdivision_mode,
             initial_fourier_radius=int(args.bnb_initial_fourier_radius),
             posterior_tail_tol=float(args.bnb_posterior_tail_tol),
+            prior_cone_radius_deg=(
+                float(args.bnb_prior_cone_radius_deg)
+                if args.bnb_prior_cone_radius_deg is not None
+                else None
+            ),
+            prior_shift_radius_px=float(args.bnb_prior_shift_radius_px),
         )
+        if bnb_options.prior_cone_radius_deg is not None:
+            print(
+                f"  BnB cone-from-prior: cone={bnb_options.prior_cone_radius_deg}deg, "
+                f"shift={bnb_options.prior_shift_radius_px}px"
+            )
         print(f"  BnB subdivision_mode: {bnb_options.subdivision_mode}")
         print(f"  BnB initial_fourier_radius: {bnb_options.initial_fourier_radius}")
         print(f"  BnB posterior_tail_tol: {bnb_options.posterior_tail_tol}")
