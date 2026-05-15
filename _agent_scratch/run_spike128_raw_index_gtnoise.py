@@ -1727,7 +1727,19 @@ def run_compute_and_report(args: argparse.Namespace, gt_pipeline: Path, target_p
     report_out = args.run_dir / f"08_kernel_report_mask_crafted_level0p0126_cosine3{suffix}"
     target_vol = args.run_dir / f"04_ground_truth/gt_vol{args.target_state:04d}.mrc"
 
-    if not (standard_out / "job.json").exists():
+    if args.local_poly_only:
+        missing = [
+            str(path)
+            for path in (standard_out / "job.json", deconv_out / "job.json")
+            if not path.exists()
+        ]
+        if missing:
+            raise RuntimeError(
+                "local-poly-only mode requires completed standard/deconvolved outputs; "
+                f"missing: {missing}"
+            )
+        print("LOCAL_POLY_ONLY: reusing completed standard and deconvolved outputs", flush=True)
+    elif not (standard_out / "job.json").exists():
         cmd = [
             sys.executable,
             "-m",
@@ -1748,7 +1760,9 @@ def run_compute_and_report(args: argparse.Namespace, gt_pipeline: Path, target_p
     else:
         print(f"Reusing standard compute_state at {standard_out}", flush=True)
 
-    if not (deconv_out / "job.json").exists():
+    if args.local_poly_only:
+        pass
+    elif not (deconv_out / "job.json").exists():
         cmd = [
             sys.executable,
             "-m",
@@ -1775,7 +1789,9 @@ def run_compute_and_report(args: argparse.Namespace, gt_pipeline: Path, target_p
     if args.local_poly_em:
         compute_local_poly_em_candidates_direct(args, gt_pipeline, local_poly_em_out, target_point)
 
-    if not (report_out / "summary.json").exists():
+    if args.local_poly_only:
+        print("LOCAL_POLY_ONLY: skipping shared standard/deconvolved report", flush=True)
+    elif not (report_out / "summary.json").exists():
         run_command(
             [
                 sys.executable,
@@ -1861,6 +1877,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--embedding-noise-from-reference-metadata", action="store_true")
     parser.add_argument("--stream-simulation", action="store_true")
     parser.add_argument("--compute-state-lazy", action="store_true")
+    parser.add_argument(
+        "--local-poly-only",
+        action="store_true",
+        help="Reuse existing dataset, standard, and deconvolved outputs; run only tagged local_poly/local_poly_EM and three-mode report.",
+    )
     parser.add_argument("--local-poly-degree", type=int, default=3)
     parser.add_argument(
         "--local-poly-basis",
