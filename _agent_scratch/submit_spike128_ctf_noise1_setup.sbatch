@@ -23,8 +23,8 @@ mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR" /scratch/gpfs/GILLES/mg6942
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 
 PYTHON=/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/.pixi/envs/default/bin/python
-RUN_DIR=/scratch/gpfs/GILLES/mg6942/runs/spike_grid128_box320_ctf_noise1_n200k_raw_index_embsigma316_20260515
-EMB_SIGMA=316.22776601683796
+RUN_DIR=/scratch/gpfs/GILLES/mg6942/runs/spike_grid128_box320_ctf_noise1_n200k_raw_index_embsigma44p2_20260515
+EMB_SIGMA=44.1772892748141
 TAG=noise1_d5_i2_q5_monomial_none
 mkdir -p "$RUN_DIR"
 LOG="$RUN_DIR/run_setup_${TAG}.log"

@@ -24,8 +24,8 @@ mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR" /scratch/gpfs/GILLES/mg6942
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 
 PYTHON=/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/.pixi/envs/default/bin/python
-RUN_DIR=/scratch/gpfs/GILLES/mg6942/runs/spike_grid128_box320_ctf_noise1_n200k_raw_index_embsigma316_20260515
-EMB_SIGMA=316.22776601683796
+RUN_DIR=/scratch/gpfs/GILLES/mg6942/runs/spike_grid128_box320_ctf_noise1_n200k_raw_index_embsigma44p2_20260515
+EMB_SIGMA=44.1772892748141
 mkdir -p "$RUN_DIR"
 
 case "$SLURM_ARRAY_TASK_ID" in
