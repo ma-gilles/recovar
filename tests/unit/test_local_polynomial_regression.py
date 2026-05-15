@@ -71,6 +71,77 @@ def test_degree_zero_is_noise_aware_gaussian_kernel_weight():
     np.testing.assert_allclose(M[:, 0, 0], alpha, atol=1e-6, rtol=1e-6)
 
 
+def test_nonmonomial_target_eval_combines_coefficients():
+    theta = np.array(
+        [
+            [
+                [1.0 + 1.0j, 2.0 + 2.0j],
+                [3.0 + 0.5j, 4.0 + 1.5j],
+                [5.0 - 1.0j, 6.0 - 2.0j],
+            ]
+        ],
+        dtype=np.complex64,
+    )
+    target_eval = np.array([[2.0, -1.0, 0.5]], dtype=np.float32)
+
+    evaluated = lpr.evaluate_local_polynomial_target_coefficients(theta, target_eval)
+
+    expected = 2.0 * theta[:, 0] - theta[:, 1] + 0.5 * theta[:, 2]
+    np.testing.assert_allclose(evaluated, expected)
+    np.testing.assert_allclose(lpr.evaluate_local_polynomial_target_coefficients(theta), theta[:, 0])
+
+
+def test_weighted_cholesky_basis_whitens_local_quadrature_cloud():
+    latent_diff = np.linspace(-1.0, 1.0, 25).astype(np.float32)
+    latent_precision = np.full(latent_diff.shape, 4.0, dtype=np.float32)
+
+    spec = lpr.local_polynomial_basis_spec_1d(
+        latent_diff,
+        latent_precision,
+        h=0.8,
+        degree=3,
+        n_quadrature=7,
+        basis="weighted_cholesky",
+        cholesky_jitter=1e-10,
+    )
+
+    np.testing.assert_allclose(spec["target_eval"], np.asarray(spec["target_eval"]))
+    np.testing.assert_allclose(spec["basis_gram"], np.eye(4), atol=3e-5, rtol=3e-5)
+    assert spec["basis_info"]["basis_gram_condition"] < 1.01
+
+
+def test_polynomial_regularization_matrices():
+    latent_diff = np.linspace(-0.5, 0.5, 9).astype(np.float32)
+    latent_precision = np.full(latent_diff.shape, 5.0, dtype=np.float32)
+    spec = lpr.local_polynomial_basis_spec_1d(
+        latent_diff,
+        latent_precision,
+        h=1.0,
+        degree=3,
+        n_quadrature=5,
+        basis="monomial",
+    )
+
+    np.testing.assert_allclose(
+        lpr.local_polynomial_regularization_matrix(spec, pol_reg_type="none", pol_reg_eta=10.0),
+        np.eye(4),
+    )
+    np.testing.assert_allclose(
+        lpr.local_polynomial_regularization_matrix(spec, pol_reg_type="coeff", pol_reg_eta=0.0),
+        np.eye(4),
+    )
+    coeff = lpr.local_polynomial_regularization_matrix(
+        spec,
+        pol_reg_type="coeff",
+        pol_reg_eta=0.5,
+        pol_reg_power=2,
+    )
+    np.testing.assert_allclose(np.diag(coeff), np.array([1.0, 1.5, 3.0, 5.5], dtype=np.float32))
+    deriv2 = lpr.local_polynomial_regularization_matrix(spec, pol_reg_type="deriv2", pol_reg_eta=0.5)
+    assert deriv2.shape == (4, 4)
+    assert np.all(np.linalg.eigvalsh(deriv2) > 0)
+
+
 def test_local_poly_rejects_non_1d_and_invalid_precision():
     with pytest.raises(NotImplementedError):
         lpr.coerce_1d_latent_differences(np.zeros((5, 2), dtype=np.float32))
@@ -188,6 +259,48 @@ def test_local_poly_estimator_returns_candidates_lhs_rhs_and_no_debug_files(tmp_
     assert np.isfinite(lhs).all()
     assert np.isfinite(rhs).all()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_local_poly_monomial_no_reg_is_default_behavior(monkeypatch, tmp_path):
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=31)
+    latent_differences = np.linspace(-0.8, 0.8, cryo.n_images).astype(np.float32)
+    latent_precision = np.full(cryo.n_images, 4.0, dtype=np.float32)
+    h_grid = np.array([1.0], dtype=np.float32)
+    monkeypatch.chdir(tmp_path)
+
+    default = lpr.estimate_local_polynomial_volumes(
+        cryo,
+        latent_differences,
+        latent_precision,
+        h_grid,
+        degree=2,
+        batch_size=4,
+        tau=None,
+        grid_correct=False,
+        use_spherical_mask=False,
+        upsampling_factor=1,
+        return_real_space=True,
+        bandwidth_batch_size=1,
+    )
+    explicit = lpr.estimate_local_polynomial_volumes(
+        cryo,
+        latent_differences,
+        latent_precision,
+        h_grid,
+        degree=2,
+        batch_size=4,
+        tau=None,
+        grid_correct=False,
+        use_spherical_mask=False,
+        upsampling_factor=1,
+        return_real_space=True,
+        bandwidth_batch_size=1,
+        basis="monomial",
+        pol_reg_type="none",
+        pol_reg_eta=0.0,
+    )
+
+    np.testing.assert_allclose(explicit, default, atol=0, rtol=0)
 
 
 def test_compute_and_save_reweighted_passes_local_poly_latent_inputs(monkeypatch, tmp_path):

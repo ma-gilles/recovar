@@ -7,6 +7,7 @@ import warnings
 import numpy as np
 
 from recovar.heterogeneity import embedding
+from recovar.heterogeneity import local_polynomial_regression
 from recovar.output import output as o
 from recovar.utils import parser_args
 
@@ -182,6 +183,30 @@ def add_args(parser: argparse.ArgumentParser):
         default=None,
         help="Comma-separated positive bandwidth multipliers for --kernel-regression-mode local_poly.",
     )
+    parser.add_argument(
+        "--local-poly-basis",
+        choices=local_polynomial_regression.LOCAL_POLY_BASIS_OPTIONS,
+        default=local_polynomial_regression.DEFAULT_LOCAL_POLY_BASIS,
+        help="Polynomial basis for --kernel-regression-mode local_poly.",
+    )
+    parser.add_argument(
+        "--local-poly-pol-reg-type",
+        choices=local_polynomial_regression.LOCAL_POLY_POL_REG_TYPES,
+        default="none",
+        help="Polynomial coefficient/derivative regularization for --kernel-regression-mode local_poly.",
+    )
+    parser.add_argument(
+        "--local-poly-pol-reg-eta",
+        type=float,
+        default=0.0,
+        help="Strength for local polynomial coefficient/derivative regularization.",
+    )
+    parser.add_argument(
+        "--local-poly-pol-reg-power",
+        type=float,
+        default=2.0,
+        help="Power for --local-poly-pol-reg-type coeff.",
+    )
 
     return parser
 
@@ -202,6 +227,10 @@ def compute_state(args):
     local_poly_bandwidth_multipliers = _parse_local_poly_bandwidth_multipliers(
         getattr(args, "local_poly_bandwidth_multipliers", None)
     )
+    local_poly_basis = getattr(args, "local_poly_basis", local_polynomial_regression.DEFAULT_LOCAL_POLY_BASIS)
+    local_poly_pol_reg_type = getattr(args, "local_poly_pol_reg_type", "none")
+    local_poly_pol_reg_eta = float(getattr(args, "local_poly_pol_reg_eta", 0.0))
+    local_poly_pol_reg_power = float(getattr(args, "local_poly_pol_reg_power", 2.0))
     apply_global_filtering = bool(getattr(args, "apply_global_filtering", False))
     fsc_mask_radius = getattr(args, "fsc_mask_radius", None)
     fsc_mask_edgewidth = getattr(args, "fsc_mask_edgewidth", None)
@@ -256,6 +285,12 @@ def compute_state(args):
         max_degree = 8
         if local_poly_degree < 0 or local_poly_degree > max_degree:
             raise ValueError(f"--local-poly-degree must be between 0 and {max_degree}, got {local_poly_degree}")
+        local_polynomial_regression._validate_local_poly_basis(local_poly_basis)
+        local_polynomial_regression._validate_pol_reg_type(local_poly_pol_reg_type)
+        if local_poly_pol_reg_eta < 0 or not np.isfinite(local_poly_pol_reg_eta):
+            raise ValueError("--local-poly-pol-reg-eta must be finite and nonnegative")
+        if not np.isfinite(local_poly_pol_reg_power):
+            raise ValueError("--local-poly-pol-reg-power must be finite")
         if not no_z_regularization:
             logger.info("Using noreg latent coordinates/precision for local_poly kernel regression.")
         no_z_regularization = True
@@ -322,6 +357,10 @@ def compute_state(args):
         deconv_lambda_grid=deconv_lambda_grid,
         local_poly_degree=local_poly_degree,
         local_poly_bandwidth_multipliers=local_poly_bandwidth_multipliers,
+        local_poly_basis=local_poly_basis,
+        local_poly_pol_reg_type=local_poly_pol_reg_type,
+        local_poly_pol_reg_eta=local_poly_pol_reg_eta,
+        local_poly_pol_reg_power=local_poly_pol_reg_power,
     )
 
 

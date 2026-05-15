@@ -704,6 +704,10 @@ def compute_and_save_reweighted(
     deconv_lambda_grid=None,
     local_poly_degree=3,
     local_poly_bandwidth_multipliers=None,
+    local_poly_basis="monomial",
+    local_poly_pol_reg_type="none",
+    local_poly_pol_reg_eta=0.0,
+    local_poly_pol_reg_power=2.0,
 ):
     """Compute reweighted volume estimates and save with standardized organization.
 
@@ -820,6 +824,10 @@ def compute_and_save_reweighted(
             local_poly_bandwidth_multipliers=local_poly_bandwidth_multipliers,
             local_poly_latent_differences=local_poly_latent_differences,
             local_poly_latent_precision=local_poly_latent_precision,
+            local_poly_basis=local_poly_basis,
+            local_poly_pol_reg_type=local_poly_pol_reg_type,
+            local_poly_pol_reg_eta=local_poly_pol_reg_eta,
+            local_poly_pol_reg_power=local_poly_pol_reg_power,
         )
 
         logger.info("Done with volume %d: %s", k, vol_paths.stem)
