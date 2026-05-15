@@ -61,6 +61,8 @@ def run_bnb_em_k1(
     score_with_masked_images: bool = False,
     projection_padding_factor: int = 1,
     reconstruction_padding_factor: int = 1,
+    prior_rotations: np.ndarray | None = None,
+    prior_translations: np.ndarray | None = None,
 ):
     """Phase-2 BnB driver for K=1 EM refinement on a fixed global pose grid.
 
@@ -89,6 +91,8 @@ def run_bnb_em_k1(
             score_with_masked_images=score_with_masked_images,
             projection_padding_factor=projection_padding_factor,
             reconstruction_padding_factor=reconstruction_padding_factor,
+            prior_rotations=prior_rotations,
+            prior_translations=prior_translations,
         )
 
     if options.subdivision_mode == "axis_angle_hierarchical":

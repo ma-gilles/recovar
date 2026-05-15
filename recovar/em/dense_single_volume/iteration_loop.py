@@ -935,6 +935,8 @@ def _score_half_bnb_k1(
     best_pose_rotations,
     best_pose_rotation_eulers,
     best_pose_translations,
+    prior_rotations_k=None,
+    prior_translations_k=None,
 ) -> HalfScoreResult:
     """cryoSPARC BnB K=1 scoring for one half-set.
 
@@ -975,6 +977,8 @@ def _score_half_bnb_k1(
         score_with_masked_images=True,
         projection_padding_factor=PROJECTION_PADDING_FACTOR,
         reconstruction_padding_factor=PADDING_FACTOR,
+        prior_rotations=prior_rotations_k,
+        prior_translations=prior_translations_k,
     )
     # run_local_em_exact return tuple (return_best_pose_details=True,
     # accumulate_noise=True):
@@ -2445,6 +2449,13 @@ def _run_relion_iteration_loop(
                 )
                 continue
             if use_bnb:
+                # Pass per-image previous-best pose into BnB so the
+                # per-image-ragged engine can initialise from a cone around
+                # the prior instead of the full SO(3) cube. The dense+local
+                # path uses the same cone (radius 22.5° at sigma_rot=7.5°);
+                # without this, BnB at refined-pose iters wastes ~16× work.
+                prior_rotations_k = previous_best_rotations[k]
+                prior_translations_k = best_pose_translations[k]
                 bnb_result = _score_half_bnb_k1(
                     k=k,
                     experiment_dataset=experiment_datasets[k],
@@ -2467,6 +2478,8 @@ def _run_relion_iteration_loop(
                     best_pose_rotations=best_pose_rotations,
                     best_pose_rotation_eulers=best_pose_rotation_eulers,
                     best_pose_translations=best_pose_translations,
+                    prior_rotations_k=prior_rotations_k,
+                    prior_translations_k=prior_translations_k,
                 )
                 ha_k = bnb_result.ha
                 Ft_y_k = bnb_result.Ft_y

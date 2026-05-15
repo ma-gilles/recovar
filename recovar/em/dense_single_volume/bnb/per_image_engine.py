@@ -51,6 +51,7 @@ from .per_image_score_bucketed import score_per_image_at_low_freq_bucketed
 from .per_image_state import (
     PerImageBnBPoseState,
     initialize_per_image_state,
+    initialize_per_image_state_from_priors,
     subdivide_per_image_state,
 )
 
@@ -258,10 +259,18 @@ def run_paper_faithful_bnb_em_k1(
     score_with_masked_images: bool = False,
     projection_padding_factor: int = 1,
     reconstruction_padding_factor: int = 1,
+    prior_rotations: np.ndarray | None = None,
+    prior_translations: np.ndarray | None = None,
 ):
     """Paper-faithful K=1 BnB driver.
 
     Returns the same tuple shape as ``run_local_em_exact``.
+
+    If ``prior_rotations`` and ``prior_translations`` are supplied AND
+    ``options.prior_cone_radius_deg`` is set, the initial per-image cells
+    are placed in a small cone around each image's prior pose instead of
+    spanning the full SO(3) cube. This is the load-bearing speedup for
+    refined-pose iterations (matches what dense+local search does).
     """
     image_shape = experiment_dataset.image_shape
     H, W = image_shape
@@ -271,13 +280,42 @@ def run_paper_faithful_bnb_em_k1(
 
     diag = BnBDiagnostics()
 
-    # Initialise per-image state with the shared coarse grid.
-    state = initialize_per_image_state(
-        n_images=n_images,
-        initial_angular_spacing_deg=float(options.initial_angular_spacing_deg),
-        initial_shift_spacing_px=float(options.initial_shift_spacing_px),
-        max_shift_px=float(options.max_shift_px),
-    )
+    # Initialise per-image state. Cone-from-prior when priors are supplied
+    # AND the option is enabled; otherwise full SO(3) cube.
+    cone_radius_deg = getattr(options, "prior_cone_radius_deg", None)
+    if (
+        cone_radius_deg is not None
+        and prior_rotations is not None
+        and prior_translations is not None
+        and prior_rotations.shape[0] == n_images
+    ):
+        shift_radius_px = float(getattr(options, "prior_shift_radius_px", 5.0))
+        state = initialize_per_image_state_from_priors(
+            prior_rotations=prior_rotations,
+            prior_translations=prior_translations,
+            cone_radius_deg=float(cone_radius_deg),
+            shift_radius_px=shift_radius_px,
+            cells_across_diameter=int(getattr(options, "prior_cells_across_diameter", 4)),
+        )
+        logger.info(
+            "Paper-faithful BnB init: cone-from-prior (cone=%.1f deg, shift=%.2f px); "
+            "axis_spacing=%.3f deg, shift_spacing=%.4f px, mean_init_cells/image=%.1f",
+            float(cone_radius_deg), shift_radius_px,
+            float(np.rad2deg(state.axis_spacing_rad)), float(state.shift_spacing_px),
+            float(state.per_image_candidate_counts().mean()),
+        )
+    else:
+        state = initialize_per_image_state(
+            n_images=n_images,
+            initial_angular_spacing_deg=float(options.initial_angular_spacing_deg),
+            initial_shift_spacing_px=float(options.initial_shift_spacing_px),
+            max_shift_px=float(options.max_shift_px),
+        )
+        logger.info(
+            "Paper-faithful BnB init: full SO(3) cube (no prior_cone_radius_deg or "
+            "missing prior_rotations); cells/image=%d",
+            int(state.per_image_candidate_counts()[0]),
+        )
 
     L_schedule = make_bnb_frequency_schedule(current_size, image_shape, options)
     diag.L_schedule = np.asarray(L_schedule, dtype=np.int32)

@@ -55,6 +55,25 @@ class BranchBoundOptions:
     approximation (|C|^2 -> 1/2) so the bound is shared across images of the
     same noise group; speed optimisation, may be looser. Phase 6+ only."""
 
+    prior_cone_radius_deg: float | None = None
+    """When set (paper_faithful mode only), each image's initial axis-angle
+    cells live in a cone of this half-angle around its previous-best pose
+    instead of spanning the full SO(3) cube. RELION's local-search cone
+    is 22.5 deg (3 sigma at sigma_rot=7.5 deg) — set this to a similar
+    value at refined-pose iterations. Leaving as None preserves the
+    paper's "no pose prior" behaviour and uses the full 24 deg SO(3)
+    cube; that's correct for ab-initio / iter-1 but wastes work at
+    refined poses."""
+
+    prior_shift_radius_px: float = 5.0
+    """Disc radius for the per-image shift search around the prior
+    translation, in pixels. Used only when prior_cone_radius_deg is set."""
+
+    prior_cells_across_diameter: int = 4
+    """Initial cell count across the cone diameter when cone-from-prior
+    is enabled. Initial spacing = cone_radius / cells_across_diameter * 2.
+    Default 4 → ~30-50 cells per image at stage 0."""
+
     score_kernel: Literal["per_image_loop", "bucketed"] = "bucketed"
     """For ``subdivision_mode='paper_faithful'``: how to score per-image
     candidate sets. 'per_image_loop' calls JAX once per image (simpler,
