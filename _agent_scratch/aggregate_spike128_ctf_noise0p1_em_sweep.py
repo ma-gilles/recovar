@@ -10,8 +10,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from recovar import utils
+from recovar.commands import spike_kernel_report as skr
+
 
 RUN_DIR = Path("/scratch/gpfs/GILLES/mg6942/runs/spike_grid128_box320_ctf_noise0p1_n200k_raw_index_embsigma100_20260514")
+MASK_PATH = RUN_DIR / "05_masks/mask_crafted_level0p0126_cosine3_128.mrc"
 BASE_TAG = "em_deg3_i1_h1_32"
 SWEEP_TAGS = [
     "em_d3_i2_q5_plain_h1_32",
@@ -34,8 +38,32 @@ SWEEP_TAGS = [
 ]
 
 
+def _finite_float(value, default=np.nan):
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if np.isfinite(out) else default
+
+
 def report_dir(tag: str) -> Path:
     return RUN_DIR / f"08_kernel_report_mask_crafted_level0p0126_cosine3_local_poly_{tag}_lazy"
+
+
+def discover_tags() -> list[str]:
+    prefix = "08_kernel_report_mask_crafted_level0p0126_cosine3_local_poly_"
+    suffix = "_lazy"
+    tags = [BASE_TAG] + SWEEP_TAGS
+    seen = set(tags)
+    for path in sorted(RUN_DIR.glob(f"{prefix}*{suffix}")):
+        name = path.name
+        if not name.startswith(prefix) or not name.endswith(suffix):
+            continue
+        tag = name[len(prefix) : -len(suffix)]
+        if tag and tag not in seen:
+            tags.append(tag)
+            seen.add(tag)
+    return tags
 
 
 def read_summary(tag: str) -> dict | None:
@@ -47,12 +75,148 @@ def read_summary(tag: str) -> dict | None:
     return summary
 
 
+def _local_poly_em_params(report: Path) -> dict:
+    metrics_path = report / "candidate_metrics.csv"
+    if not metrics_path.exists():
+        return {}
+    with metrics_path.open() as f:
+        for row in csv.DictReader(f):
+            if row["mode"] != "local_poly_em":
+                continue
+            candidate_path = Path(row["path"])
+            params_path = candidate_path.parent.parent / "params.pkl"
+            if not params_path.exists():
+                return {}
+            params = utils.pickle_load(params_path)
+            return params.get("local_poly_em", params.get("local_poly", {}))
+    return {}
+
+
+def _summarize_diagnostics(params: dict) -> dict:
+    out = {
+        "basis": params.get("basis"),
+        "reg_type": params.get("pol_reg_type"),
+        "eta": params.get("pol_reg_eta"),
+        "reg_power": params.get("pol_reg_power"),
+        "degree": params.get("degree"),
+        "q": params.get("n_quadrature"),
+        "em_iters": params.get("n_iterations"),
+        "basis_gram_condition_median": np.nan,
+        "basis_gram_condition_p95": np.nan,
+        "basis_gram_condition_max": np.nan,
+        "normal_eq_condition_median": np.nan,
+        "normal_eq_condition_p95": np.nan,
+        "normal_eq_condition_max": np.nan,
+        "posterior_entropy_mean": np.nan,
+        "effective_quadrature_nodes_mean": np.nan,
+        "fraction_max_gamma_gt_0p9": np.nan,
+        "fraction_max_gamma_gt_0p99": np.nan,
+    }
+    half_diagnostics = params.get("half_diagnostics") or []
+    basis_conds = []
+    normal_medians = []
+    normal_p95 = []
+    normal_max = []
+    entropies = []
+    eff_nodes = []
+    frac09 = []
+    frac099 = []
+    for half_diag in half_diagnostics:
+        for stage in half_diag:
+            for info in stage.get("basis_info", []) or []:
+                val = _finite_float(info.get("basis_gram_condition"))
+                if np.isfinite(val):
+                    basis_conds.append(val)
+            for info in stage.get("solve_diagnostics", []) or []:
+                val = _finite_float(info.get("normal_eq_condition_median"))
+                if np.isfinite(val):
+                    normal_medians.append(val)
+                val = _finite_float(info.get("normal_eq_condition_p95"))
+                if np.isfinite(val):
+                    normal_p95.append(val)
+                val = _finite_float(info.get("normal_eq_condition_max"))
+                if np.isfinite(val):
+                    normal_max.append(val)
+            for info in stage.get("bandwidths", []) or []:
+                val = _finite_float(info.get("mean_gamma_entropy"))
+                if np.isfinite(val):
+                    entropies.append(val)
+                val = _finite_float(info.get("effective_quadrature_nodes"))
+                if np.isfinite(val):
+                    eff_nodes.append(val)
+                val = _finite_float(info.get("fraction_max_gamma_gt_0p9"))
+                if np.isfinite(val):
+                    frac09.append(val)
+                val = _finite_float(info.get("fraction_max_gamma_gt_0p99"))
+                if np.isfinite(val):
+                    frac099.append(val)
+
+    if basis_conds:
+        out["basis_gram_condition_median"] = float(np.median(basis_conds))
+        out["basis_gram_condition_p95"] = float(np.percentile(basis_conds, 95))
+        out["basis_gram_condition_max"] = float(np.max(basis_conds))
+    if normal_medians:
+        out["normal_eq_condition_median"] = float(np.median(normal_medians))
+    if normal_p95:
+        out["normal_eq_condition_p95"] = float(np.max(normal_p95))
+    if normal_max:
+        out["normal_eq_condition_max"] = float(np.max(normal_max))
+    if entropies:
+        out["posterior_entropy_mean"] = float(np.mean(entropies))
+    if eff_nodes:
+        out["effective_quadrature_nodes_mean"] = float(np.mean(eff_nodes))
+    if frac09:
+        out["fraction_max_gamma_gt_0p9"] = float(np.mean(frac09))
+    if frac099:
+        out["fraction_max_gamma_gt_0p99"] = float(np.mean(frac099))
+    return out
+
+
+def _masked_halfmap_fsc_curve(report: Path, best_idx: int) -> tuple[list[float], list[float]]:
+    metrics_path = report / "candidate_metrics.csv"
+    if not metrics_path.exists() or not MASK_PATH.exists():
+        return [], []
+    candidate_path = None
+    with metrics_path.open() as f:
+        for row in csv.DictReader(f):
+            if row["mode"] == "local_poly_em" and int(row["candidate_index_0based"]) == int(best_idx):
+                candidate_path = Path(row["path"])
+                break
+    if candidate_path is None:
+        return [], []
+    state_dir = candidate_path.parent.parent
+    filename = candidate_path.name
+    half1_path = state_dir / "estimates_half1_unfil" / filename
+    half2_path = state_dir / "estimates_half2_unfil" / filename
+    if not half1_path.exists() or not half2_path.exists():
+        return [], []
+    half1 = np.asarray(utils.load_mrc(half1_path), dtype=np.float32)
+    half2 = np.asarray(utils.load_mrc(half2_path), dtype=np.float32)
+    mask = np.asarray(utils.load_mrc(MASK_PATH), dtype=np.float32)
+    labels, n_shells = skr._shell_labels(half1.shape)
+    ft1 = skr._numpy_dft3(half1 * mask).reshape(-1)
+    ft2 = skr._numpy_dft3(half2 * mask).reshape(-1)
+    flat_labels = labels.reshape(-1)
+    cross = np.bincount(flat_labels, weights=np.real(ft1 * np.conj(ft2)), minlength=n_shells)
+    p1 = np.bincount(flat_labels, weights=np.abs(ft1) ** 2, minlength=n_shells)
+    p2 = np.bincount(flat_labels, weights=np.abs(ft2) ** 2, minlength=n_shells)
+    fsc = cross / np.maximum(np.sqrt(p1 * p2), 1e-30)
+    voxel_size = 2.5
+    try:
+        voxel_size = float(utils.pickle_load(state_dir / "params.pkl")["voxel_size"])
+    except Exception:
+        pass
+    freq = np.arange(n_shells, dtype=np.float64) / (half1.shape[0] * voxel_size)
+    return freq.tolist(), fsc.astype(np.float64).tolist()
+
+
 def main() -> None:
     out_dir = RUN_DIR / "09_local_poly_em_sweep_summary"
     out_dir.mkdir(parents=True, exist_ok=True)
-    tags = [BASE_TAG] + SWEEP_TAGS
+    tags = discover_tags()
     rows = []
     curves = []
+    curve_payload = {}
     for tag in tags:
         summary = read_summary(tag)
         if summary is None:
@@ -77,6 +241,8 @@ def main() -> None:
             "best_single_candidate_shell32": best["best_by_mean_fsc_shell32"],
             "report": str(report_dir(tag)),
         }
+        params = _local_poly_em_params(report_dir(tag))
+        row.update(_summarize_diagnostics(params))
         rows.append(row)
         choices_path = Path(summary["oracle_shell_choices_csv"])
         with choices_path.open() as f:
@@ -84,11 +250,28 @@ def main() -> None:
         freq = np.asarray([float(r["frequency_1_per_A"]) for r in choice_rows], dtype=np.float64)
         fsc = np.asarray([float(r["fsc_oracle_fsc"]) for r in choice_rows], dtype=np.float64)
         curves.append((tag, freq, fsc))
+        half_freq, half_fsc = _masked_halfmap_fsc_curve(
+            report_dir(tag),
+            int(row["best_single_candidate_index"]),
+        )
+        curve_payload[tag] = {
+            "oracle_frequency_1_per_A": freq.tolist(),
+            "oracle_fsc": fsc.tolist(),
+            "halfmap_frequency_1_per_A": half_freq,
+            "halfmap_fsc": half_fsc,
+        }
 
     csv_path = out_dir / "summary.csv"
     fieldnames = [
         "tag",
         "status",
+        "basis",
+        "reg_type",
+        "eta",
+        "reg_power",
+        "degree",
+        "q",
+        "em_iters",
         "local_poly_em_oracle_mean_fsc",
         "local_poly_em_oracle_shell32",
         "local_poly_em_error_choice_mean_fsc",
@@ -99,6 +282,16 @@ def main() -> None:
         "best_single_candidate_parameter",
         "best_single_candidate_mean_fsc",
         "best_single_candidate_shell32",
+        "basis_gram_condition_median",
+        "basis_gram_condition_p95",
+        "basis_gram_condition_max",
+        "normal_eq_condition_median",
+        "normal_eq_condition_p95",
+        "normal_eq_condition_max",
+        "posterior_entropy_mean",
+        "effective_quadrature_nodes_mean",
+        "fraction_max_gamma_gt_0p9",
+        "fraction_max_gamma_gt_0p99",
         "report",
     ]
     with csv_path.open("w", newline="") as f:
@@ -126,10 +319,13 @@ def main() -> None:
     plot_path = out_dir / "local_poly_em_oracle_fsc_sweep.png"
     fig.savefig(plot_path, dpi=180)
     plt.close(fig)
+    curves_json_path = out_dir / "curves.json"
+    curves_json_path.write_text(json.dumps(curve_payload, indent=2, sort_keys=True) + "\n")
 
     payload = {
         "run_dir": str(RUN_DIR),
         "summary_csv": str(csv_path),
+        "curves_json": str(curves_json_path),
         "plot": str(plot_path),
         "best_by_local_poly_em_oracle_mean_fsc": best_row,
         "rows": rows,

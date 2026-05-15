@@ -909,12 +909,25 @@ def _tag_token(tag: str | None) -> str:
     return f"_{safe}"
 
 
+def _local_poly_config_token(args: argparse.Namespace) -> str:
+    tokens = []
+    basis = str(getattr(args, "local_poly_basis", "monomial"))
+    reg_type = str(getattr(args, "local_poly_pol_reg_type", "none"))
+    eta = float(getattr(args, "local_poly_pol_reg_eta", 0.0))
+    power = float(getattr(args, "local_poly_pol_reg_power", 2.0))
+    if basis != "monomial":
+        tokens.append(f"basis{basis}")
+    if reg_type != "none" or eta != 0.0:
+        tokens.append(f"reg{reg_type}_eta{eta:g}_pow{power:g}".replace(".", "p"))
+    return "" if not tokens else "_" + "_".join(tokens)
+
+
 def local_poly_output_dir(args: argparse.Namespace) -> Path:
     suffix = "_lazy" if args.compute_state_lazy else ""
     local_poly_maskrad_token = f"_maskrad{args.local_poly_maskrad_fraction:g}".replace(".", "p")
     return args.run_dir / (
         f"07_compute_state_local_poly_index_gtnoise_degree{args.local_poly_degree}"
-        f"{local_poly_maskrad_token}{_tag_token(args.local_poly_output_tag)}{suffix}"
+        f"{local_poly_maskrad_token}{_local_poly_config_token(args)}{_tag_token(args.local_poly_output_tag)}{suffix}"
     )
 
 
@@ -924,7 +937,7 @@ def local_poly_em_output_dir(args: argparse.Namespace) -> Path:
     return args.run_dir / (
         f"07_compute_state_local_poly_em_index_gtnoise_degree{args.local_poly_degree}"
         f"_iter{args.local_poly_em_iterations}_quad{args.local_poly_em_quadrature}"
-        f"{local_poly_maskrad_token}{_tag_token(args.local_poly_output_tag)}{suffix}"
+        f"{local_poly_maskrad_token}{_local_poly_config_token(args)}{_tag_token(args.local_poly_output_tag)}{suffix}"
     )
 
 
@@ -1021,6 +1034,10 @@ def compute_local_poly_candidates_direct(
             upsampling_factor=1,
             return_real_space=True,
             use_fast_rfft=True,
+            basis=args.local_poly_basis,
+            pol_reg_type=args.local_poly_pol_reg_type,
+            pol_reg_eta=args.local_poly_pol_reg_eta,
+            pol_reg_power=args.local_poly_pol_reg_power,
         )
         half_estimates.append(estimates.reshape(-1, *dataset.volume_shape).astype(np.float32))
 
@@ -1052,6 +1069,10 @@ def compute_local_poly_candidates_direct(
         ),
         "local_poly": {
             "degree": int(args.local_poly_degree),
+            "basis": str(args.local_poly_basis),
+            "pol_reg_type": str(args.local_poly_pol_reg_type),
+            "pol_reg_eta": float(args.local_poly_pol_reg_eta),
+            "pol_reg_power": float(args.local_poly_pol_reg_power),
             "h_grid": h_grid,
             "h_state_grid": (
                 (h_grid / float(json.loads((args.run_dir / "index_noisy_embedding_metadata.json").read_text())["scaled_index_slope"]))
@@ -1208,6 +1229,8 @@ def compute_local_poly_em_candidates_direct(
             f"temperature={args.local_poly_em_temperature:g} "
             f"prior_mix={args.local_poly_em_prior_mix:g} "
             f"update_damping={args.local_poly_em_update_damping:g} "
+            f"basis={args.local_poly_basis} "
+            f"pol_reg={args.local_poly_pol_reg_type}:{args.local_poly_pol_reg_eta:g} "
             f"tau_mode={args.local_poly_em_tau_mode} "
             f"h_grid={h_grid.tolist()}",
             flush=True,
@@ -1230,6 +1253,10 @@ def compute_local_poly_em_candidates_direct(
             em_temperature=args.local_poly_em_temperature,
             em_prior_mix=args.local_poly_em_prior_mix,
             em_update_damping=args.local_poly_em_update_damping,
+            basis=args.local_poly_basis,
+            pol_reg_type=args.local_poly_pol_reg_type,
+            pol_reg_eta=args.local_poly_pol_reg_eta,
+            pol_reg_power=args.local_poly_pol_reg_power,
         )
         half_estimates.append(estimates.reshape(-1, *dataset.volume_shape).astype(np.float32))
         half_diagnostics.append(diagnostics)
@@ -1268,6 +1295,10 @@ def compute_local_poly_em_candidates_direct(
             "degree": int(args.local_poly_degree),
             "n_iterations": int(args.local_poly_em_iterations),
             "n_quadrature": int(args.local_poly_em_quadrature),
+            "basis": str(args.local_poly_basis),
+            "pol_reg_type": str(args.local_poly_pol_reg_type),
+            "pol_reg_eta": float(args.local_poly_pol_reg_eta),
+            "pol_reg_power": float(args.local_poly_pol_reg_power),
             "em_temperature": float(args.local_poly_em_temperature),
             "em_prior_mix": float(args.local_poly_em_prior_mix),
             "em_update_damping": float(args.local_poly_em_update_damping),
@@ -1829,6 +1860,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stream-simulation", action="store_true")
     parser.add_argument("--compute-state-lazy", action="store_true")
     parser.add_argument("--local-poly-degree", type=int, default=3)
+    parser.add_argument(
+        "--local-poly-basis",
+        choices=local_polynomial_regression.LOCAL_POLY_BASIS_OPTIONS,
+        default=local_polynomial_regression.DEFAULT_LOCAL_POLY_BASIS,
+    )
+    parser.add_argument(
+        "--local-poly-pol-reg-type",
+        choices=local_polynomial_regression.LOCAL_POLY_POL_REG_TYPES,
+        default="none",
+    )
+    parser.add_argument("--local-poly-pol-reg-eta", type=float, default=0.0)
+    parser.add_argument("--local-poly-pol-reg-power", type=float, default=2.0)
     parser.add_argument("--local-poly-maskrad-fraction", type=float, default=4.0)
     parser.add_argument("--local-poly-output-tag", type=str, default=None)
     parser.add_argument("--local-poly-em", action="store_true")

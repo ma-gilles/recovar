@@ -231,6 +231,10 @@ def make_volumes_kernel_estimate_local(
     local_poly_bandwidth_multipliers=None,
     local_poly_latent_differences=None,
     local_poly_latent_precision=None,
+    local_poly_basis=local_polynomial_regression.DEFAULT_LOCAL_POLY_BASIS,
+    local_poly_pol_reg_type="none",
+    local_poly_pol_reg_eta=0.0,
+    local_poly_pol_reg_power=2.0,
 ):
     """Reconstruct volumes along a heterogeneity path using kernel regression.
 
@@ -302,6 +306,10 @@ def make_volumes_kernel_estimate_local(
         )
         local_poly_info = {
             "degree": int(local_poly_degree),
+            "basis": str(local_poly_basis),
+            "pol_reg_type": str(local_poly_pol_reg_type),
+            "pol_reg_eta": float(local_poly_pol_reg_eta),
+            "pol_reg_power": float(local_poly_pol_reg_power),
             "h_grid": heterogeneity_bins,
             "sigma_ref": local_poly_sigma_ref,
             "h_min": local_poly_h_min,
@@ -389,6 +397,10 @@ def make_volumes_kernel_estimate_local(
                 upsampling_factor=upsampling_factor,
                 return_real_space=True,
                 use_fast_rfft=use_fast_rfft,
+                basis=local_poly_basis,
+                pol_reg_type=local_poly_pol_reg_type,
+                pol_reg_eta=local_poly_pol_reg_eta,
+                pol_reg_power=local_poly_pol_reg_power,
             )
 
     estimates = [None, None]

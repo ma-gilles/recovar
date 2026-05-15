@@ -26,6 +26,41 @@ DEFAULT_LOCAL_POLY_BANDWIDTH_MULTIPLIERS = np.asarray(
 )
 MAX_LOCAL_POLY_DEGREE = 8
 _LOCAL_POLY_EPS = 1e-12
+LOCAL_POLY_BASIS_OPTIONS = ("monomial", "legendre", "weighted_cholesky")
+LOCAL_POLY_POL_REG_TYPES = ("none", "coeff", "deriv1", "deriv2")
+DEFAULT_LOCAL_POLY_BASIS = "monomial"
+DEFAULT_LOCAL_POLY_BASIS_QUANTILE = 0.995
+DEFAULT_LOCAL_POLY_CHOLESKY_JITTER = 1e-6
+DEFAULT_LOCAL_POLY_MOMENT_QUADRATURE = 9
+
+
+def _as_jsonable(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    if isinstance(value, dict):
+        return {key: _as_jsonable(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_as_jsonable(val) for val in value]
+    return value
+
+
+def _validate_local_poly_basis(basis):
+    basis = str(basis)
+    if basis not in LOCAL_POLY_BASIS_OPTIONS:
+        raise ValueError(f"local_poly basis must be one of {LOCAL_POLY_BASIS_OPTIONS}, got {basis!r}")
+    return basis
+
+
+def _validate_pol_reg_type(pol_reg_type):
+    pol_reg_type = str(pol_reg_type)
+    if pol_reg_type not in LOCAL_POLY_POL_REG_TYPES:
+        raise ValueError(
+            f"local_poly polynomial regularization type must be one of {LOCAL_POLY_POL_REG_TYPES}, "
+            f"got {pol_reg_type!r}"
+        )
+    return pol_reg_type
 
 
 def _coerce_positive_1d_array(values, name):
@@ -194,20 +229,13 @@ def hermite_quadrature_1d(n_quadrature):
     return nodes.astype(np.float32), (weights / np.sqrt(np.pi)).astype(np.float32)
 
 
-def gaussian_window_polynomial_quadrature_1d(
+def _posterior_window_alpha_t_quadrature(
     latent_diff,
     latent_precision,
     h,
-    degree,
     n_quadrature,
     poly_scale=None,
 ):
-    """Quadrature features for the product of the latent posterior and window.
-
-    Returns ``(alpha, phi, quad_weights)`` where ``alpha`` is the scalar product
-    normalizer, ``phi`` has shape ``(n_images, n_quadrature, degree + 1)``, and
-    ``quad_weights`` are normalized Gauss-Hermite weights.
-    """
     latent_diff = coerce_1d_latent_differences(latent_diff).astype(np.float64)
     latent_precision = coerce_1d_latent_precision(latent_precision).astype(np.float64)
     if latent_diff.shape != latent_precision.shape:
@@ -215,9 +243,6 @@ def gaussian_window_polynomial_quadrature_1d(
             "latent_diff and latent_precision must have the same flattened shape, "
             f"got {latent_diff.shape} and {latent_precision.shape}"
         )
-    degree = int(degree)
-    if degree < 0 or degree > MAX_LOCAL_POLY_DEGREE:
-        raise ValueError(f"local_poly degree must be between 0 and {MAX_LOCAL_POLY_DEGREE}, got {degree}")
     h = float(h)
     if not np.isfinite(h) or h <= 0:
         raise ValueError(f"h must be finite and positive, got {h}")
@@ -237,9 +262,341 @@ def gaussian_window_polynomial_quadrature_1d(
     nodes, quad_weights = hermite_quadrature_1d(n_quadrature)
     xdiff = mu[:, None] + np.sqrt(np.maximum(2.0 * tau2, 0.0))[:, None] * nodes[None, :]
     t = xdiff / poly_scale
+    return alpha.astype(np.float32), t.astype(np.float32), quad_weights
+
+
+def _monomial_feature_stack(t, degree):
     factorials = np.asarray([math.factorial(idx) for idx in range(degree + 1)], dtype=np.float64)
-    phi = np.stack([t**r / factorials[r] for r in range(degree + 1)], axis=-1)
+    return np.stack([t**r / factorials[r] for r in range(degree + 1)], axis=-1).astype(np.float32)
+
+
+def _monomial_derivative_stack(t, degree, derivative_order):
+    t = np.asarray(t, dtype=np.float64)
+    derivative_order = int(derivative_order)
+    out = []
+    for r in range(degree + 1):
+        if r < derivative_order:
+            out.append(np.zeros_like(t, dtype=np.float64))
+        else:
+            out.append(t ** (r - derivative_order) / math.factorial(r - derivative_order))
+    return np.stack(out, axis=-1).astype(np.float32)
+
+
+def _legendre_feature_stack(t, degree, scale, derivative_order=0):
+    scale = float(scale)
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError(f"Legendre basis scale must be finite and positive, got {scale}")
+    u = np.asarray(t, dtype=np.float64) / scale
+    out = []
+    for r in range(degree + 1):
+        coeff = np.zeros(r + 1, dtype=np.float64)
+        coeff[-1] = 1.0
+        if derivative_order:
+            coeff = np.polynomial.legendre.legder(coeff, m=derivative_order)
+            if coeff.size == 0:
+                out.append(np.zeros_like(u, dtype=np.float64))
+                continue
+        values = np.polynomial.legendre.legval(u, coeff)
+        if derivative_order:
+            values = values / (scale**derivative_order)
+        out.append(values)
+    return np.stack(out, axis=-1).astype(np.float32)
+
+
+def _weighted_quantile(values, weights, quantile):
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    weights = np.asarray(weights, dtype=np.float64).reshape(-1)
+    if values.shape != weights.shape:
+        raise ValueError(f"values and weights must have matching shapes, got {values.shape} and {weights.shape}")
+    finite = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+    if not np.any(finite):
+        return float(np.nanmax(np.abs(values))) if values.size else 1.0
+    values = values[finite]
+    weights = weights[finite]
+    order = np.argsort(values)
+    values = values[order]
+    weights = weights[order]
+    cdf = np.cumsum(weights)
+    total = float(cdf[-1])
+    if total <= 0:
+        return float(values[-1])
+    q = float(np.clip(quantile, 0.0, 1.0))
+    return float(values[min(np.searchsorted(cdf, q * total, side="left"), values.size - 1)])
+
+
+def _basis_features_from_spec(t, degree, basis_spec, derivative_order=0):
+    basis = basis_spec["basis"]
+    if basis == "monomial":
+        return _monomial_derivative_stack(t, degree, derivative_order) if derivative_order else _monomial_feature_stack(t, degree)
+    if basis == "legendre":
+        return _legendre_feature_stack(t, degree, basis_spec["basis_scale"], derivative_order=derivative_order)
+    if basis == "weighted_cholesky":
+        raw = (
+            _monomial_derivative_stack(t, degree, derivative_order)
+            if derivative_order
+            else _monomial_feature_stack(t, degree)
+        )
+        return np.einsum("...r,rs->...s", raw, basis_spec["basis_transform"], optimize=True).astype(np.float32)
+    raise ValueError(f"Unknown local_poly basis {basis!r}")
+
+
+def _basis_gram_condition(features, weights, denom):
+    gram = np.einsum("bq,bqr,bqs->rs", weights, features, features, optimize=True) / max(float(denom), _LOCAL_POLY_EPS)
+    gram = 0.5 * (gram + gram.T)
+    return gram.astype(np.float64), float(np.linalg.cond(gram))
+
+
+def local_polynomial_basis_spec_1d(
+    latent_diff,
+    latent_precision,
+    h,
+    degree,
+    *,
+    n_quadrature=DEFAULT_LOCAL_POLY_MOMENT_QUADRATURE,
+    basis=DEFAULT_LOCAL_POLY_BASIS,
+    poly_scale=None,
+    basis_quantile=DEFAULT_LOCAL_POLY_BASIS_QUANTILE,
+    cholesky_jitter=DEFAULT_LOCAL_POLY_CHOLESKY_JITTER,
+):
+    """Build a basis specification for one local polynomial bandwidth."""
+    degree = int(degree)
+    if degree < 0 or degree > MAX_LOCAL_POLY_DEGREE:
+        raise ValueError(f"local_poly degree must be between 0 and {MAX_LOCAL_POLY_DEGREE}, got {degree}")
+    basis = _validate_local_poly_basis(basis)
+    alpha, t, quad_weights = _posterior_window_alpha_t_quadrature(
+        latent_diff,
+        latent_precision,
+        h,
+        n_quadrature,
+        poly_scale=poly_scale,
+    )
+    weights = alpha[:, None].astype(np.float64) * quad_weights[None, :].astype(np.float64)
+    denom = float(np.sum(alpha))
+    n_features = degree + 1
+    raw_features = _monomial_feature_stack(t, degree)
+    raw_gram, raw_cond = _basis_gram_condition(raw_features, weights, denom)
+
+    basis_scale = 1.0
+    basis_transform = np.eye(n_features, dtype=np.float64)
+    cholesky_jitter_used = 0.0
+    if basis == "legendre":
+        basis_scale = max(
+            _weighted_quantile(np.abs(t), weights, basis_quantile),
+            _LOCAL_POLY_EPS,
+        )
+    elif basis == "weighted_cholesky":
+        trace_scale = float(np.trace(raw_gram)) / max(n_features, 1)
+        if not np.isfinite(trace_scale) or trace_scale <= 0:
+            trace_scale = 1.0
+        cholesky_jitter_used = float(cholesky_jitter) * trace_scale
+        eye = np.eye(n_features, dtype=np.float64)
+        for attempt in range(8):
+            try:
+                lower = np.linalg.cholesky(raw_gram + cholesky_jitter_used * (10.0**attempt) * eye)
+                cholesky_jitter_used *= 10.0**attempt
+                break
+            except np.linalg.LinAlgError:
+                lower = None
+        if lower is None:
+            raise np.linalg.LinAlgError("Could not Cholesky-factor local polynomial weighted Gram matrix")
+        upper = lower.T
+        basis_transform = np.linalg.inv(upper)
+
+    features = _basis_features_from_spec(
+        t,
+        degree,
+        {
+            "basis": basis,
+            "basis_scale": basis_scale,
+            "basis_transform": basis_transform,
+        },
+    )
+    basis_gram, basis_cond = _basis_gram_condition(features, weights, denom)
+    deriv1 = _basis_features_from_spec(
+        t,
+        degree,
+        {
+            "basis": basis,
+            "basis_scale": basis_scale,
+            "basis_transform": basis_transform,
+        },
+        derivative_order=1,
+    )
+    deriv2 = _basis_features_from_spec(
+        t,
+        degree,
+        {
+            "basis": basis,
+            "basis_scale": basis_scale,
+            "basis_transform": basis_transform,
+        },
+        derivative_order=2,
+    )
+    deriv1_gram, deriv1_cond = _basis_gram_condition(deriv1, weights, denom)
+    deriv2_gram, deriv2_cond = _basis_gram_condition(deriv2, weights, denom)
+    t0 = np.zeros((1,), dtype=np.float32)
+    target_eval = _basis_features_from_spec(
+        t0,
+        degree,
+        {
+            "basis": basis,
+            "basis_scale": basis_scale,
+            "basis_transform": basis_transform,
+        },
+    )[0]
+    return {
+        "basis": basis,
+        "degree": int(degree),
+        "h": float(h),
+        "poly_scale": float(h if poly_scale is None else poly_scale),
+        "basis_scale": float(basis_scale),
+        "basis_transform": basis_transform.astype(np.float32),
+        "target_eval": target_eval.astype(np.float32),
+        "basis_gram": basis_gram.astype(np.float32),
+        "deriv1_gram": deriv1_gram.astype(np.float32),
+        "deriv2_gram": deriv2_gram.astype(np.float32),
+        "basis_info": {
+            "basis": basis,
+            "h": float(h),
+            "poly_scale": float(h if poly_scale is None else poly_scale),
+            "basis_scale": float(basis_scale),
+            "basis_quantile": float(basis_quantile),
+            "cholesky_jitter_requested": float(cholesky_jitter),
+            "cholesky_jitter_used": float(cholesky_jitter_used),
+            "raw_gram_condition": float(raw_cond),
+            "basis_gram_condition": float(basis_cond),
+            "deriv1_gram_condition": float(deriv1_cond),
+            "deriv2_gram_condition": float(deriv2_cond),
+            "target_eval": target_eval.astype(np.float64).tolist(),
+        },
+    }
+
+
+def local_polynomial_basis_specs_1d(
+    latent_diff,
+    latent_precision,
+    h_grid,
+    degree,
+    *,
+    n_quadrature=DEFAULT_LOCAL_POLY_MOMENT_QUADRATURE,
+    basis=DEFAULT_LOCAL_POLY_BASIS,
+    basis_quantile=DEFAULT_LOCAL_POLY_BASIS_QUANTILE,
+    cholesky_jitter=DEFAULT_LOCAL_POLY_CHOLESKY_JITTER,
+):
+    return [
+        local_polynomial_basis_spec_1d(
+            latent_diff,
+            latent_precision,
+            float(h),
+            degree,
+            n_quadrature=n_quadrature,
+            basis=basis,
+            poly_scale=float(h),
+            basis_quantile=basis_quantile,
+            cholesky_jitter=cholesky_jitter,
+        )
+        for h in np.asarray(h_grid, dtype=np.float32).reshape(-1)
+    ]
+
+
+def gaussian_window_polynomial_quadrature_1d(
+    latent_diff,
+    latent_precision,
+    h,
+    degree,
+    n_quadrature,
+    poly_scale=None,
+    basis_spec=None,
+):
+    """Quadrature features for the product of the latent posterior and window.
+
+    Returns ``(alpha, phi, quad_weights)`` where ``alpha`` is the scalar product
+    normalizer, ``phi`` has shape ``(n_images, n_quadrature, degree + 1)``, and
+    ``quad_weights`` are normalized Gauss-Hermite weights.
+    """
+    degree = int(degree)
+    if degree < 0 or degree > MAX_LOCAL_POLY_DEGREE:
+        raise ValueError(f"local_poly degree must be between 0 and {MAX_LOCAL_POLY_DEGREE}, got {degree}")
+    alpha, t, quad_weights = _posterior_window_alpha_t_quadrature(
+        latent_diff,
+        latent_precision,
+        h,
+        n_quadrature,
+        poly_scale=poly_scale,
+    )
+    if basis_spec is None:
+        phi = _monomial_feature_stack(t, degree)
+    else:
+        phi = _basis_features_from_spec(t, degree, basis_spec)
     return alpha.astype(np.float32), phi.astype(np.float32), quad_weights
+
+
+def local_polynomial_regularization_matrix(
+    basis_spec,
+    *,
+    pol_reg_type="none",
+    pol_reg_eta=0.0,
+    pol_reg_power=2.0,
+):
+    pol_reg_type = _validate_pol_reg_type(pol_reg_type)
+    eta = float(pol_reg_eta)
+    if not np.isfinite(eta) or eta < 0:
+        raise ValueError(f"local_poly polynomial regularization eta must be finite and nonnegative, got {eta}")
+    power = float(pol_reg_power)
+    if not np.isfinite(power):
+        raise ValueError(f"local_poly polynomial regularization power must be finite, got {power}")
+    n_features = int(basis_spec["degree"]) + 1
+    if pol_reg_type == "none" or eta == 0:
+        return np.eye(n_features, dtype=np.float32)
+    if pol_reg_type == "coeff":
+        orders = np.arange(n_features, dtype=np.float32)
+        diag = np.ones(n_features, dtype=np.float32)
+        diag[1:] = 1.0 + eta * np.power(orders[1:], power)
+        return np.diag(diag).astype(np.float32)
+    if pol_reg_type == "deriv1":
+        return (np.eye(n_features, dtype=np.float32) + eta * np.asarray(basis_spec["deriv1_gram"], dtype=np.float32))
+    if pol_reg_type == "deriv2":
+        return (np.eye(n_features, dtype=np.float32) + eta * np.asarray(basis_spec["deriv2_gram"], dtype=np.float32))
+    raise ValueError(f"Unknown polynomial regularization type {pol_reg_type!r}")
+
+
+def local_polynomial_regularization_matrices(
+    basis_specs,
+    *,
+    pol_reg_type="none",
+    pol_reg_eta=0.0,
+    pol_reg_power=2.0,
+):
+    return np.stack(
+        [
+            local_polynomial_regularization_matrix(
+                spec,
+                pol_reg_type=pol_reg_type,
+                pol_reg_eta=pol_reg_eta,
+                pol_reg_power=pol_reg_power,
+            )
+            for spec in basis_specs
+        ],
+        axis=0,
+    ).astype(np.float32)
+
+
+def evaluate_local_polynomial_target_coefficients(theta_coeffs, target_eval_all=None):
+    """Evaluate Fourier coefficients at the target latent coordinate."""
+    theta_coeffs = np.asarray(theta_coeffs)
+    if theta_coeffs.ndim != 3:
+        raise ValueError(
+            "theta_coeffs must have shape (n_bandwidths, degree+1, half_volume_size); "
+            f"got {theta_coeffs.shape}"
+        )
+    if target_eval_all is None:
+        return theta_coeffs[:, 0]
+    target_eval_all = np.asarray(target_eval_all, dtype=theta_coeffs.real.dtype)
+    if target_eval_all.ndim == 1:
+        target_eval_all = np.broadcast_to(target_eval_all[None, :], theta_coeffs.shape[:2])
+    if target_eval_all.shape != theta_coeffs.shape[:2]:
+        raise ValueError(f"target_eval_all shape {target_eval_all.shape} does not match {theta_coeffs.shape[:2]}")
+    return np.einsum("br,brv->bv", target_eval_all, theta_coeffs, optimize=True)
 
 
 def _expand_tilt_latent_array_to_images(experiment_dataset, values, name):
@@ -288,18 +645,42 @@ def _local_poly_batch_size(experiment_dataset, lhs_all, rhs_all, half_volume_siz
     return batch_size
 
 
-def _local_poly_weight_sets(latent_diff, latent_precision, h_group, degree):
+def _local_poly_weight_sets(
+    latent_diff,
+    latent_precision,
+    h_group,
+    degree,
+    *,
+    basis_specs=None,
+    basis_spec_offset=0,
+    moment_quadrature=DEFAULT_LOCAL_POLY_MOMENT_QUADRATURE,
+):
     n_features = int(degree) + 1
     rhs_rows = []
     lhs_rows = []
-    for h in h_group:
-        m, M = gaussian_window_polynomial_moments_1d(
-            latent_diff,
-            latent_precision,
-            h=float(h),
-            degree=degree,
-            poly_scale=float(h),
-        )
+    for local_idx, h in enumerate(h_group):
+        basis_spec = None if basis_specs is None else basis_specs[basis_spec_offset + local_idx]
+        if basis_spec is None or basis_spec["basis"] == "monomial":
+            m, M = gaussian_window_polynomial_moments_1d(
+                latent_diff,
+                latent_precision,
+                h=float(h),
+                degree=degree,
+                poly_scale=float(h),
+            )
+        else:
+            alpha, phi, quad_weights = gaussian_window_polynomial_quadrature_1d(
+                latent_diff,
+                latent_precision,
+                h=float(h),
+                degree=degree,
+                n_quadrature=moment_quadrature,
+                poly_scale=float(h),
+                basis_spec=basis_spec,
+            )
+            weighted = alpha[:, None] * quad_weights[None, :]
+            m = np.einsum("bq,bqr->br", weighted, phi, optimize=True)
+            M = np.einsum("bq,bqr,bqs->brs", weighted, phi, phi, optimize=True)
         rhs_rows.extend([m[:, r] for r in range(n_features)])
         lhs_rows.extend([M[:, r, s] for r in range(n_features) for s in range(n_features)])
     return np.asarray(rhs_rows, dtype=np.float32), np.asarray(lhs_rows, dtype=np.float32)
@@ -325,14 +706,50 @@ def _local_poly_upsampled_shape_and_valid_half(experiment_dataset, upsampling_fa
     return vol_upsample, upsampled_volume_shape, valid_half
 
 
+def _sample_normal_equation_condition(lhs, rho, pol_reg_matrix, max_samples=4096):
+    half_volume_size = int(lhs.shape[-1])
+    if half_volume_size == 0:
+        return {
+            "normal_eq_condition_median": np.nan,
+            "normal_eq_condition_p95": np.nan,
+            "normal_eq_condition_max": np.nan,
+            "normal_eq_condition_sample_count": 0,
+        }
+    max_samples = int(max(1, max_samples))
+    if half_volume_size <= max_samples:
+        indices = np.arange(half_volume_size, dtype=np.int64)
+    else:
+        indices = np.linspace(0, half_volume_size - 1, max_samples, dtype=np.int64)
+    gram = np.moveaxis(lhs[:, :, indices], -1, 0).astype(np.float64, copy=True)
+    gram = 0.5 * (gram + np.swapaxes(gram, 1, 2))
+    gram += rho[indices, None, None].astype(np.float64) * np.asarray(pol_reg_matrix, dtype=np.float64)[None, :, :]
+    cond = np.linalg.cond(gram)
+    cond = cond[np.isfinite(cond)]
+    if cond.size == 0:
+        return {
+            "normal_eq_condition_median": np.inf,
+            "normal_eq_condition_p95": np.inf,
+            "normal_eq_condition_max": np.inf,
+            "normal_eq_condition_sample_count": int(indices.size),
+        }
+    return {
+        "normal_eq_condition_median": float(np.median(cond)),
+        "normal_eq_condition_p95": float(np.percentile(cond, 95)),
+        "normal_eq_condition_max": float(np.max(cond)),
+        "normal_eq_condition_sample_count": int(indices.size),
+    }
+
+
 def solve_local_polynomial_fourier_coefficients(
     lhs_all,
     rhs_all,
     experiment_dataset,
     *,
     tau=None,
+    pol_reg_matrices=None,
     upsampling_factor=None,
     solve_chunk_size=262144,
+    return_diagnostics=False,
 ):
     """Solve per-voxel polynomial normal equations and return all theta_r."""
     lhs_all = np.asarray(lhs_all, dtype=np.float32)
@@ -350,6 +767,17 @@ def solve_local_polynomial_fourier_coefficients(
         raise ValueError(f"Incompatible local_poly lhs/rhs shapes: {lhs_all.shape} and {rhs_all.shape}")
 
     n_bandwidths, n_features, _, half_volume_size = lhs_all.shape
+    if pol_reg_matrices is None:
+        pol_reg_matrices = np.broadcast_to(
+            np.eye(n_features, dtype=np.float32)[None, :, :],
+            (n_bandwidths, n_features, n_features),
+        )
+    pol_reg_matrices = np.asarray(pol_reg_matrices, dtype=np.float32)
+    if pol_reg_matrices.shape != (n_bandwidths, n_features, n_features):
+        raise ValueError(
+            "pol_reg_matrices must have shape (n_bandwidths, degree+1, degree+1), "
+            f"got {pol_reg_matrices.shape}"
+        )
     vol_upsample, upsampled_volume_shape, valid_half = _local_poly_upsampled_shape_and_valid_half(
         experiment_dataset,
         upsampling_factor,
@@ -357,11 +785,12 @@ def solve_local_polynomial_fourier_coefficients(
     )
 
     coeffs = np.zeros((n_bandwidths, n_features, half_volume_size), dtype=rhs_all.dtype)
-    diag_idx = np.arange(n_features)
+    diagnostics = []
     solve_chunk_size = int(max(1, solve_chunk_size))
     for bw_idx in range(n_bandwidths):
         lhs = lhs_all[bw_idx]
         rhs = rhs_all[bw_idx]
+        pol_reg_matrix = pol_reg_matrices[bw_idx]
         reg_filter = np.asarray(
             relion_functions.adjust_regularization_relion_style(
                 jnp.asarray(lhs[0, 0]),
@@ -373,15 +802,24 @@ def solve_local_polynomial_fourier_coefficients(
             )
         ).reshape(-1).astype(np.float32)
         rho = np.maximum(reg_filter - lhs[0, 0], 0.0).astype(np.float32)
+        if return_diagnostics:
+            diagnostics.append(
+                {
+                    "bandwidth_index": int(bw_idx),
+                    **_sample_normal_equation_condition(lhs, rho, pol_reg_matrix),
+                }
+            )
         for start in range(0, half_volume_size, solve_chunk_size):
             stop = min(start + solve_chunk_size, half_volume_size)
             gram = np.moveaxis(lhs[:, :, start:stop], -1, 0).astype(np.float32, copy=True)
             gram = 0.5 * (gram + np.swapaxes(gram, 1, 2))
-            gram[:, diag_idx, diag_idx] += rho[start:stop, None]
+            gram += rho[start:stop, None, None] * pol_reg_matrix[None, :, :]
             rhs_chunk = np.moveaxis(rhs[:, start:stop], -1, 0)
             theta = np.linalg.solve(gram, rhs_chunk[..., None])[..., 0]
             coeffs[bw_idx, :, start:stop] = np.moveaxis(theta, 0, -1)
         coeffs[bw_idx] *= valid_half.astype(coeffs.real.dtype)[None, :]
+    if return_diagnostics:
+        return coeffs, diagnostics
     return coeffs
 
 
@@ -391,14 +829,17 @@ def solve_local_polynomial_fourier_system(
     experiment_dataset,
     *,
     tau=None,
+    target_eval_all=None,
+    pol_reg_matrices=None,
     grid_correct=True,
     disc_type="linear_interp",
     use_spherical_mask=True,
     upsampling_factor=None,
     return_real_space=False,
     solve_chunk_size=262144,
+    return_diagnostics=False,
 ):
-    """Solve per-voxel polynomial normal equations and post-process theta_0."""
+    """Solve per-voxel polynomial normal equations and post-process target estimate."""
     lhs_all = np.asarray(lhs_all, dtype=np.float32)
     rhs_all = np.asarray(rhs_all)
     if lhs_all.ndim != 4 or rhs_all.ndim != 3:
@@ -413,20 +854,27 @@ def solve_local_polynomial_fourier_system(
         upsampling_factor,
         half_volume_size,
     )
-    coeffs = solve_local_polynomial_fourier_coefficients(
+    solved = solve_local_polynomial_fourier_coefficients(
         lhs_all,
         rhs_all,
         experiment_dataset,
         tau=tau,
+        pol_reg_matrices=pol_reg_matrices,
         upsampling_factor=upsampling_factor,
         solve_chunk_size=solve_chunk_size,
+        return_diagnostics=return_diagnostics,
     )
+    if return_diagnostics:
+        coeffs, diagnostics = solved
+    else:
+        coeffs = solved
+        diagnostics = None
+    target_coeffs = evaluate_local_polynomial_target_coefficients(coeffs, target_eval_all=target_eval_all)
     estimates = []
     for bw_idx in range(n_bandwidths):
-        theta0 = coeffs[bw_idx, 0]
         estimates.append(
             relion_functions.post_process_predivided_fourier_volume(
-                jnp.asarray(theta0),
+                jnp.asarray(target_coeffs[bw_idx]),
                 experiment_dataset.volume_shape,
                 vol_upsample,
                 kernel=kernel_type,
@@ -438,13 +886,17 @@ def solve_local_polynomial_fourier_system(
                 input_half_volume=True,
             ).reshape(-1)
         )
-    return np.asarray(jnp.stack(estimates, axis=0))
+    estimates = np.asarray(jnp.stack(estimates, axis=0))
+    if return_diagnostics:
+        return estimates, diagnostics
+    return estimates
 
 
 def postprocess_local_polynomial_fourier_coefficients(
     theta_coeffs,
     experiment_dataset,
     *,
+    target_eval_all=None,
     grid_correct=True,
     disc_type="linear_interp",
     use_spherical_mask=True,
@@ -465,11 +917,12 @@ def postprocess_local_polynomial_fourier_coefficients(
         upsampling_factor,
         half_volume_size,
     )
+    target_coeffs = evaluate_local_polynomial_target_coefficients(theta_coeffs, target_eval_all=target_eval_all)
     estimates = []
     for bw_idx in range(theta_coeffs.shape[0]):
         estimates.append(
             relion_functions.post_process_predivided_fourier_volume(
-                jnp.asarray(theta_coeffs[bw_idx, 0]),
+                jnp.asarray(target_coeffs[bw_idx]),
                 experiment_dataset.volume_shape,
                 vol_upsample,
                 kernel=kernel_type,
@@ -501,6 +954,14 @@ def estimate_local_polynomial_volumes(
     return_real_space=False,
     use_fast_rfft=False,
     bandwidth_batch_size=None,
+    basis=DEFAULT_LOCAL_POLY_BASIS,
+    basis_quantile=DEFAULT_LOCAL_POLY_BASIS_QUANTILE,
+    cholesky_jitter=DEFAULT_LOCAL_POLY_CHOLESKY_JITTER,
+    moment_quadrature=DEFAULT_LOCAL_POLY_MOMENT_QUADRATURE,
+    pol_reg_type="none",
+    pol_reg_eta=0.0,
+    pol_reg_power=2.0,
+    return_diagnostics=False,
 ):
     """Estimate local-polynomial candidate volumes for one halfset."""
     latent_differences = coerce_1d_latent_differences(latent_differences)
@@ -520,12 +981,31 @@ def estimate_local_polynomial_volumes(
     h_grid = np.asarray(h_grid, dtype=np.float32).reshape(-1)
     if h_grid.size == 0 or not np.all(np.isfinite(h_grid)) or np.any(h_grid <= 0):
         raise ValueError(f"h_grid must contain finite positive values, got {h_grid}")
+    basis = _validate_local_poly_basis(basis)
+    pol_reg_type = _validate_pol_reg_type(pol_reg_type)
 
     n_bandwidths = h_grid.size
     n_features = degree + 1
     half_volume_size = kernel_recon._candidate_half_volume_size(experiment_dataset, upsampling_factor)
     rhs_all = np.zeros((n_bandwidths, n_features, half_volume_size), dtype=experiment_dataset.dtype)
     lhs_all = np.zeros((n_bandwidths, n_features, n_features, half_volume_size), dtype=experiment_dataset.dtype_real)
+    basis_specs = local_polynomial_basis_specs_1d(
+        latent_differences,
+        latent_precision,
+        h_grid,
+        degree,
+        n_quadrature=moment_quadrature,
+        basis=basis,
+        basis_quantile=basis_quantile,
+        cholesky_jitter=cholesky_jitter,
+    )
+    target_eval_all = np.stack([spec["target_eval"] for spec in basis_specs], axis=0).astype(np.float32)
+    pol_reg_matrices = local_polynomial_regularization_matrices(
+        basis_specs,
+        pol_reg_type=pol_reg_type,
+        pol_reg_eta=pol_reg_eta,
+        pol_reg_power=pol_reg_power,
+    )
 
     if bandwidth_batch_size is None:
         bandwidth_batch_size = _auto_local_poly_bandwidth_batch_size(
@@ -541,7 +1021,14 @@ def estimate_local_polynomial_volumes(
 
     logger.info("batch size in local_poly heterogeneity kernel: %s", batch_size)
     logger.info("bandwidth batch size in local_poly heterogeneity kernel: %s", bandwidth_batch_size)
-    logger.info("local_poly degree=%s h_grid=%s", degree, h_grid)
+    logger.info(
+        "local_poly degree=%s basis=%s pol_reg_type=%s pol_reg_eta=%s h_grid=%s",
+        degree,
+        basis,
+        pol_reg_type,
+        pol_reg_eta,
+        h_grid,
+    )
 
     config = kernel_recon._reconstruction_config(experiment_dataset, disc_type, upsampling_factor)
     n_rhs_sets = n_features
@@ -573,6 +1060,9 @@ def estimate_local_polynomial_volumes(
                 latent_precision[image_indices],
                 h_group,
                 degree,
+                basis_specs=basis_specs,
+                basis_spec_offset=h_start,
+                moment_quadrature=moment_quadrature,
             )
             current_batch_size, images, rotation_matrices, translations, ctf_params, noise_variance = (
                 kernel_recon._prepare_half_image_batch(
@@ -618,19 +1108,50 @@ def estimate_local_polynomial_volumes(
             half_volume_size,
         )
 
-    estimates = solve_local_polynomial_fourier_system(
+    solved = solve_local_polynomial_fourier_system(
         lhs_all,
         rhs_all,
         experiment_dataset,
         tau=tau,
+        target_eval_all=target_eval_all,
+        pol_reg_matrices=pol_reg_matrices,
         grid_correct=grid_correct,
         disc_type=disc_type,
         use_spherical_mask=use_spherical_mask,
         upsampling_factor=upsampling_factor,
         return_real_space=return_real_space,
+        return_diagnostics=return_diagnostics,
     )
+    if return_diagnostics:
+        estimates, solve_diagnostics = solved
+    else:
+        estimates = solved
+        solve_diagnostics = None
     if return_lhs_rhs:
-        return estimates, np.asarray(lhs_all), np.asarray(rhs_all)
+        outputs = [estimates, np.asarray(lhs_all), np.asarray(rhs_all)]
+        if return_diagnostics:
+            outputs.append(
+                {
+                    "basis": basis,
+                    "basis_info": [_as_jsonable(spec["basis_info"]) for spec in basis_specs],
+                    "pol_reg_type": pol_reg_type,
+                    "pol_reg_eta": float(pol_reg_eta),
+                    "pol_reg_power": float(pol_reg_power),
+                    "target_eval": target_eval_all.tolist(),
+                    "solve_diagnostics": solve_diagnostics,
+                }
+            )
+        return tuple(outputs)
+    if return_diagnostics:
+        return estimates, {
+            "basis": basis,
+            "basis_info": [_as_jsonable(spec["basis_info"]) for spec in basis_specs],
+            "pol_reg_type": pol_reg_type,
+            "pol_reg_eta": float(pol_reg_eta),
+            "pol_reg_power": float(pol_reg_power),
+            "target_eval": target_eval_all.tolist(),
+            "solve_diagnostics": solve_diagnostics,
+        }
     return estimates
 
 
@@ -729,6 +1250,7 @@ def _accumulate_local_polynomial_em_normal_equations(
     *,
     degree,
     n_quadrature,
+    basis_specs,
     batch_size,
     disc_type,
     upsampling_factor,
@@ -749,6 +1271,9 @@ def _accumulate_local_polynomial_em_normal_equations(
         Ft_ctf_acc = jnp.zeros((n_features * n_features, half_volume_size), dtype=experiment_dataset.dtype_real)
         entropy_sum = 0.0
         max_gamma_sum = 0.0
+        effective_nodes_sum = 0.0
+        frac_gt_09_count = 0
+        frac_gt_099_count = 0
         n_gamma = 0
         raw_batches = experiment_dataset.iter_batches(
             batch_size,
@@ -784,6 +1309,7 @@ def _accumulate_local_polynomial_em_normal_equations(
                 degree=degree,
                 n_quadrature=n_quadrature,
                 poly_scale=float(h),
+                basis_spec=basis_specs[h_idx],
             )
             phi_padded = _pad_quadrature_features_for_fixed_batch(phi, current_batch_size, batch_size)
             gamma = _em_quadrature_posteriors_for_prepared_batch(
@@ -801,8 +1327,13 @@ def _accumulate_local_polynomial_em_normal_equations(
                 em_prior_mix=em_prior_mix,
             )
             rhs_weights, lhs_weights = _em_weight_sets(alpha, phi, gamma)
-            entropy_sum += float(-np.sum(gamma * np.log(np.maximum(gamma, 1e-30))))
-            max_gamma_sum += float(np.sum(np.max(gamma, axis=1)))
+            entropy = -np.sum(gamma * np.log(np.maximum(gamma, 1e-30)), axis=1)
+            max_gamma = np.max(gamma, axis=1)
+            entropy_sum += float(np.sum(entropy))
+            effective_nodes_sum += float(np.sum(np.exp(entropy)))
+            max_gamma_sum += float(np.sum(max_gamma))
+            frac_gt_09_count += int(np.count_nonzero(max_gamma > 0.9))
+            frac_gt_099_count += int(np.count_nonzero(max_gamma > 0.99))
             n_gamma += int(gamma.shape[0])
 
             image_weights = np.concatenate([rhs_weights, lhs_weights], axis=0)
@@ -831,7 +1362,10 @@ def _accumulate_local_polynomial_em_normal_equations(
             {
                 "h": float(h),
                 "mean_gamma_entropy": float(entropy_sum / max(n_gamma, 1)),
+                "effective_quadrature_nodes": float(effective_nodes_sum / max(n_gamma, 1)),
                 "mean_max_gamma": float(max_gamma_sum / max(n_gamma, 1)),
+                "fraction_max_gamma_gt_0p9": float(frac_gt_09_count / max(n_gamma, 1)),
+                "fraction_max_gamma_gt_0p99": float(frac_gt_099_count / max(n_gamma, 1)),
             }
         )
 
@@ -860,6 +1394,12 @@ def estimate_local_polynomial_volumes_em(
     em_temperature=1.0,
     em_prior_mix=0.0,
     em_update_damping=1.0,
+    basis=DEFAULT_LOCAL_POLY_BASIS,
+    basis_quantile=DEFAULT_LOCAL_POLY_BASIS_QUANTILE,
+    cholesky_jitter=DEFAULT_LOCAL_POLY_CHOLESKY_JITTER,
+    pol_reg_type="none",
+    pol_reg_eta=0.0,
+    pol_reg_power=2.0,
 ):
     """Estimate local-polynomial volumes with EM quadrature over latent x."""
     latent_differences = coerce_1d_latent_differences(latent_differences)
@@ -879,6 +1419,8 @@ def estimate_local_polynomial_volumes_em(
     h_grid = np.asarray(h_grid, dtype=np.float32).reshape(-1)
     if h_grid.size == 0 or not np.all(np.isfinite(h_grid)) or np.any(h_grid <= 0):
         raise ValueError(f"h_grid must contain finite positive values, got {h_grid}")
+    basis = _validate_local_poly_basis(basis)
+    pol_reg_type = _validate_pol_reg_type(pol_reg_type)
     n_iterations = int(n_iterations)
     if n_iterations < 0:
         raise ValueError(f"n_iterations must be nonnegative, got {n_iterations}")
@@ -899,16 +1441,37 @@ def estimate_local_polynomial_volumes_em(
         batch_size = _local_poly_batch_size(experiment_dataset, lhs_probe, rhs_probe, half_volume_size)
 
     logger.info(
-        "local_poly EM initialization: degree=%s n_iter=%s n_quad=%s temperature=%s prior_mix=%s update_damping=%s h_grid=%s",
+        "local_poly EM initialization: degree=%s n_iter=%s n_quad=%s basis=%s pol_reg_type=%s pol_reg_eta=%s "
+        "temperature=%s prior_mix=%s update_damping=%s h_grid=%s",
         degree,
         n_iterations,
         n_quadrature,
+        basis,
+        pol_reg_type,
+        pol_reg_eta,
         em_temperature,
         em_prior_mix,
         em_update_damping,
         h_grid,
     )
-    _, lhs_all, rhs_all = estimate_local_polynomial_volumes(
+    basis_specs = local_polynomial_basis_specs_1d(
+        latent_differences,
+        latent_precision,
+        h_grid,
+        degree,
+        n_quadrature=n_quadrature,
+        basis=basis,
+        basis_quantile=basis_quantile,
+        cholesky_jitter=cholesky_jitter,
+    )
+    target_eval_all = np.stack([spec["target_eval"] for spec in basis_specs], axis=0).astype(np.float32)
+    pol_reg_matrices = local_polynomial_regularization_matrices(
+        basis_specs,
+        pol_reg_type=pol_reg_type,
+        pol_reg_eta=pol_reg_eta,
+        pol_reg_power=pol_reg_power,
+    )
+    _, lhs_all, rhs_all, init_diagnostics = estimate_local_polynomial_volumes(
         experiment_dataset,
         latent_differences,
         latent_precision,
@@ -923,16 +1486,38 @@ def estimate_local_polynomial_volumes_em(
         upsampling_factor=upsampling_factor,
         return_real_space=False,
         use_fast_rfft=use_fast_rfft,
+        basis=basis,
+        basis_quantile=basis_quantile,
+        cholesky_jitter=cholesky_jitter,
+        moment_quadrature=n_quadrature,
+        pol_reg_type=pol_reg_type,
+        pol_reg_eta=pol_reg_eta,
+        pol_reg_power=pol_reg_power,
+        return_diagnostics=True,
     )
-    theta_coeffs = solve_local_polynomial_fourier_coefficients(
+    theta_coeffs, init_solve_diagnostics = solve_local_polynomial_fourier_coefficients(
         lhs_all,
         rhs_all,
         experiment_dataset,
         tau=tau,
+        pol_reg_matrices=pol_reg_matrices,
         upsampling_factor=upsampling_factor,
+        return_diagnostics=True,
     )
 
-    diagnostics = []
+    diagnostics = [
+        {
+            "stage": "initial_moment_fit",
+            "basis": basis,
+            "basis_info": [_as_jsonable(spec["basis_info"]) for spec in basis_specs],
+            "pol_reg_type": pol_reg_type,
+            "pol_reg_eta": float(pol_reg_eta),
+            "pol_reg_power": float(pol_reg_power),
+            "target_eval": target_eval_all.tolist(),
+            "solve_diagnostics": init_solve_diagnostics,
+            "moment_diagnostics": init_diagnostics,
+        }
+    ]
     for iteration in range(n_iterations):
         logger.info("local_poly EM iteration %s/%s", iteration + 1, n_iterations)
         lhs_all, rhs_all, iteration_diag = _accumulate_local_polynomial_em_normal_equations(
@@ -943,6 +1528,7 @@ def estimate_local_polynomial_volumes_em(
             theta_coeffs,
             degree=degree,
             n_quadrature=n_quadrature,
+            basis_specs=basis_specs,
             batch_size=batch_size,
             disc_type=disc_type,
             upsampling_factor=upsampling_factor,
@@ -950,19 +1536,29 @@ def estimate_local_polynomial_volumes_em(
             em_temperature=em_temperature,
             em_prior_mix=em_prior_mix,
         )
-        new_theta_coeffs = solve_local_polynomial_fourier_coefficients(
+        new_theta_coeffs, solve_diagnostics = solve_local_polynomial_fourier_coefficients(
             lhs_all,
             rhs_all,
             experiment_dataset,
             tau=tau,
+            pol_reg_matrices=pol_reg_matrices,
             upsampling_factor=upsampling_factor,
+            return_diagnostics=True,
         )
         theta_coeffs = (1.0 - em_update_damping) * theta_coeffs + em_update_damping * new_theta_coeffs
-        diagnostics.append({"iteration": int(iteration + 1), "bandwidths": iteration_diag})
+        diagnostics.append(
+            {
+                "stage": "em_iteration",
+                "iteration": int(iteration + 1),
+                "bandwidths": iteration_diag,
+                "solve_diagnostics": solve_diagnostics,
+            }
+        )
 
     estimates = postprocess_local_polynomial_fourier_coefficients(
         theta_coeffs,
         experiment_dataset,
+        target_eval_all=target_eval_all,
         grid_correct=grid_correct,
         disc_type=disc_type,
         use_spherical_mask=use_spherical_mask,
