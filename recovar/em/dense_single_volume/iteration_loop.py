@@ -2454,8 +2454,20 @@ def _run_relion_iteration_loop(
                 # the prior instead of the full SO(3) cube. The dense+local
                 # path uses the same cone (radius 22.5° at sigma_rot=7.5°);
                 # without this, BnB at refined-pose iters wastes ~16× work.
-                prior_rotations_k = previous_best_rotations[k]
-                prior_translations_k = best_pose_translations[k]
+                # Source the prior from `relion_half_inputs.previous_best_rotation_eulers[k]`
+                # which is populated by the RELION replay (the local-search path
+                # uses the same source).
+                _prev_eulers_k = relion_half_inputs.previous_best_rotation_eulers[k]
+                prior_rotations_k = (
+                    utils.R_from_relion(np.asarray(_prev_eulers_k), degrees=True).astype(np.float32)
+                    if _prev_eulers_k is not None
+                    else None
+                )
+                prior_translations_k = (
+                    relion_half_inputs.previous_best_translations[k]
+                    if relion_half_inputs.previous_best_translations[k] is not None
+                    else best_pose_translations[k]
+                )
                 bnb_result = _score_half_bnb_k1(
                     k=k,
                     experiment_dataset=experiment_datasets[k],
