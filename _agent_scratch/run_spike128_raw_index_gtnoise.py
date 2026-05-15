@@ -28,7 +28,7 @@ from recovar.core import mask as mask_utils
 from recovar.heterogeneity import embedding, local_polynomial_regression
 from recovar.output import output as output_mod
 from recovar.reconstruction import regularization
-from recovar.simulation import simulator
+from recovar.simulation import simulator, synthetic_dataset
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -408,6 +408,7 @@ def scale_state_index_embedding(args: argparse.Namespace, source_pipeline: Path,
     target_point = out / f"target_latent_point_index_state{args.target_state:04d}.txt"
     np.savetxt(target_point, np.asarray([[target_true]], dtype=np.float32))
     np.save(out / "index_latent_true_scaled.npy", true_scaled.astype(np.float32))
+    np.save(out / "index_latent_true_scaled_by_state.npy", true_scaled_by_state.astype(np.float32))
     np.save(out / "index_latent_added_noise.npy", added_noise.astype(np.float32))
 
     metadata = {
@@ -419,6 +420,9 @@ def scale_state_index_embedding(args: argparse.Namespace, source_pipeline: Path,
         "scaled_index_std_target": ref_std,
         "scaled_index_slope": float(slope),
         "scaled_index_intercept": float(intercept),
+        "bandwidth_state_to_latent_scale": float(abs(slope)),
+        "true_scaled_by_state_path": str(out / "index_latent_true_scaled_by_state.npy"),
+        "state_latent_by_state_path": str(out / "index_latent_true_scaled_by_state.npy"),
         "sigma_source": sigma_source,
         "sigma_noise": sigma_noise,
         "precision_constant": precision_constant,
@@ -441,6 +445,266 @@ def scale_state_index_embedding(args: argparse.Namespace, source_pipeline: Path,
     }
     write_json(out / "index_noisy_embedding_metadata.json", metadata)
     print(json.dumps(metadata, indent=2, sort_keys=True), flush=True)
+
+
+def _gt_pc1_state_coordinates(
+    args: argparse.Namespace,
+    source_pipeline: Path,
+) -> tuple[np.ndarray, dict]:
+    """Return the signed oracle PC1 coordinate U^H(V_state-mean) for each state."""
+    sim_info = utils.pickle_load(args.run_dir / "03_dataset/simulation_info.pkl")
+    hvd = synthetic_dataset.load_heterogeneous_reconstruction(sim_info)
+    mean = np.asarray(hvd.get_mean()).reshape(-1)
+    u0 = np.asarray(hvd.get_u())[:, 0].reshape(-1)
+    coords = np.asarray(
+        [np.vdot(u0, hvd.volumes[idx].reshape(-1) - mean).real for idx in range(hvd.volumes.shape[0])],
+        dtype=np.float64,
+    )
+
+    source_z_path = source_pipeline / "model/zdim_1/latent_coords_noreg.npy"
+    source_z = np.load(source_z_path).astype(np.float64).reshape(-1)
+    state_assignment = np.load(args.run_dir / "03_dataset/state_assignment.npy").astype(np.int64).reshape(-1)
+    source_state_means = np.asarray(
+        [np.mean(source_z[state_assignment == idx]) for idx in range(coords.size)],
+        dtype=np.float64,
+    )
+    corr = float(np.corrcoef(coords, source_state_means)[0, 1])
+    sign = 1.0
+    if np.isfinite(corr) and corr < 0:
+        coords = -coords
+        sign = -1.0
+        corr = -corr
+
+    true_per_image = coords[state_assignment]
+    design = np.stack([true_per_image, np.ones_like(true_per_image)], axis=1)
+    slope, intercept = np.linalg.lstsq(design, source_z, rcond=None)[0]
+    residual = source_z - (float(slope) * true_per_image + float(intercept))
+    within_state_stds = []
+    for idx in range(coords.size):
+        vals = source_z[state_assignment == idx]
+        if vals.size:
+            within_state_stds.append(float(np.std(vals - np.mean(vals))))
+
+    target_state = int(args.target_state)
+    if 0 < target_state < coords.size - 1:
+        local_slope = float((coords[target_state + 1] - coords[target_state - 1]) / 2.0)
+    elif target_state < coords.size - 1:
+        local_slope = float(coords[target_state + 1] - coords[target_state])
+    else:
+        local_slope = float(coords[target_state] - coords[target_state - 1])
+    median_adjacent_slope = float(np.median(np.abs(np.diff(coords))))
+    fallback_slope = median_adjacent_slope if median_adjacent_slope > 0 else float(abs(slope))
+    bandwidth_scale = abs(local_slope) if np.isfinite(local_slope) and abs(local_slope) > 0 else fallback_slope
+
+    diagnostics = {
+        "source_z_path": str(source_z_path),
+        "signed_to_match_source_state_means": bool(sign < 0),
+        "state_mean_correlation_after_sign": float(corr),
+        "source_z_affine_slope_on_true_pc1": float(slope),
+        "source_z_affine_intercept_on_true_pc1": float(intercept),
+        "source_z_affine_residual_std": float(np.std(residual)),
+        "source_z_within_state_std_mean": float(np.mean(within_state_stds)),
+        "source_z_within_state_std_median": float(np.median(within_state_stds)),
+        "local_state_to_latent_slope": float(local_slope),
+        "median_abs_adjacent_state_to_latent_slope": median_adjacent_slope,
+        "bandwidth_state_to_latent_scale": float(bandwidth_scale),
+    }
+    return coords, diagnostics
+
+
+def scale_gt_volume_pc1_embedding(args: argparse.Namespace, source_pipeline: Path, gt_pipeline: Path) -> None:
+    if (gt_pipeline / "model/zdim_1/latent_coords_noreg.npy").exists():
+        print(f"Reusing existing GT-PC1-noisy pipeline: {gt_pipeline}", flush=True)
+        return
+
+    if gt_pipeline.exists():
+        shutil.rmtree(gt_pipeline)
+    shutil.copytree(source_pipeline, gt_pipeline)
+
+    out = args.run_dir
+    state_assignment = np.load(out / "03_dataset/state_assignment.npy").astype(np.int64).reshape(-1)
+    source_precision = np.load(source_pipeline / "model/zdim_1/latent_precision_noreg.npy").astype(np.float64).reshape(-1)
+    true_by_state, diagnostics = _gt_pc1_state_coordinates(args, source_pipeline)
+    true_z = true_by_state[state_assignment]
+
+    sigma_source = "measured source oracle embedding residual relative to signed GT PC1 coordinates"
+    if args.embedding_noise_std is not None:
+        sigma_noise = float(args.embedding_noise_std)
+        sigma_source = "explicit --embedding-noise-std"
+    elif args.embedding_noise_from_reference_metadata and args.reference_gt_metadata is not None and args.reference_gt_metadata.exists():
+        ref_meta = json.loads(args.reference_gt_metadata.read_text())
+        sigma_noise = float(ref_meta["sigma_noise"])
+        sigma_source = f"sigma_noise from {args.reference_gt_metadata}"
+    else:
+        sigma_noise = float(diagnostics["source_z_affine_residual_std"])
+        if not np.isfinite(sigma_noise) or sigma_noise <= 0:
+            valid_precision = np.isfinite(source_precision) & (source_precision > 0)
+            sigma_noise = float(np.mean(np.sqrt(1.0 / source_precision[valid_precision])))
+            sigma_source = "fallback mean sqrt(1 / latent_precision_noreg) from source oracle pipeline"
+
+    if not np.isfinite(sigma_noise) or sigma_noise < 0:
+        raise ValueError(f"Invalid embedding noise std {sigma_noise}")
+    precision_constant = float(1.0 / max(sigma_noise, 1e-6) ** 2)
+    rng = np.random.default_rng(args.embedding_seed)
+    added_noise = np.zeros_like(true_z, dtype=np.float64)
+    if sigma_noise > 0:
+        added_noise = rng.normal(loc=0.0, scale=sigma_noise, size=true_z.shape)
+    noisy_z = (true_z + added_noise).astype(np.float32).reshape(-1, 1)
+    precision = np.full((noisy_z.shape[0], 1, 1), precision_constant, dtype=np.float32)
+
+    zdir = gt_pipeline / "model/zdim_1"
+    for name in ("latent_coords.npy", "latent_coords_noreg.npy"):
+        np.save(zdir / name, noisy_z)
+    for name in ("latent_precision.npy", "latent_precision_noreg.npy"):
+        np.save(zdir / name, precision)
+
+    target_true = float(true_by_state[int(args.target_state)])
+    target_point = out / f"target_latent_point_gtpc1_state{args.target_state:04d}.txt"
+    true_by_state_path = out / "gtpc1_latent_true_by_state.npy"
+    true_per_image_path = out / "gtpc1_latent_true.npy"
+    noise_path = out / f"{_embedding_run_token(args)}_latent_added_noise.npy"
+    np.savetxt(target_point, np.asarray([[target_true]], dtype=np.float32))
+    np.save(true_by_state_path, true_by_state.astype(np.float32))
+    np.save(true_per_image_path, true_z.astype(np.float32))
+    np.save(noise_path, added_noise.astype(np.float32))
+
+    metadata = {
+        "embedding_source": "GT volume PC1: U^H(V_state - mean) with optional white Gaussian z-noise",
+        "embedding_source_key": "gt_volume_pc1",
+        "sigma_source": sigma_source,
+        "sigma_noise": sigma_noise,
+        "precision_constant": precision_constant,
+        "rng_seed": args.embedding_seed,
+        "target_state": int(args.target_state),
+        "target_latent_point_true_state": target_true,
+        "target_latent_point_noisy_centroid_state": float(np.mean(noisy_z[state_assignment == args.target_state, 0])),
+        "source_pipeline": str(source_pipeline),
+        "pipeline": str(gt_pipeline),
+        "target_point": str(target_point),
+        "state_latent_by_state_path": str(true_by_state_path),
+        "true_latent_per_image_path": str(true_per_image_path),
+        "added_noise_path": str(noise_path),
+        **diagnostics,
+        "stats": {
+            "true_scaled_min": float(np.min(true_z)),
+            "true_scaled_max": float(np.max(true_z)),
+            "true_scaled_mean": float(np.mean(true_z)),
+            "true_scaled_std": float(np.std(true_z)),
+            "state_latent_min": float(np.min(true_by_state)),
+            "state_latent_max": float(np.max(true_by_state)),
+            "state_latent_std": float(np.std(true_by_state)),
+            "noisy_z_min": float(np.min(noisy_z)),
+            "noisy_z_max": float(np.max(noisy_z)),
+            "noisy_z_mean": float(np.mean(noisy_z)),
+            "noisy_z_std": float(np.std(noisy_z)),
+        },
+    }
+    write_json(_embedding_metadata_path(args), metadata)
+    print(json.dumps(metadata, indent=2, sort_keys=True), flush=True)
+
+
+def write_source_oracle_embedding_metadata(args: argparse.Namespace, source_pipeline: Path) -> Path:
+    """Describe the oracle-pipeline image embedding without overwriting it."""
+    target_point = args.run_dir / f"target_latent_point_source_oracle_state{args.target_state:04d}.txt"
+    metadata_path = _embedding_metadata_path(args)
+    if metadata_path.exists() and target_point.exists():
+        print(f"Reusing existing source-oracle embedding metadata: {metadata_path}", flush=True)
+        return target_point
+
+    state_assignment = np.load(args.run_dir / "03_dataset/state_assignment.npy").astype(np.int64).reshape(-1)
+    source_z = np.load(source_pipeline / "model/zdim_1/latent_coords_noreg.npy").astype(np.float64).reshape(-1)
+    source_precision = np.load(source_pipeline / "model/zdim_1/latent_precision_noreg.npy").astype(np.float64).reshape(-1)
+
+    state_latent = np.empty(args.n_states, dtype=np.float64)
+    state_counts = np.empty(args.n_states, dtype=np.int64)
+    state_stds = np.empty(args.n_states, dtype=np.float64)
+    for idx in range(args.n_states):
+        vals = source_z[state_assignment == idx]
+        if vals.size == 0:
+            raise ValueError(f"No particles assigned to state {idx}")
+        state_latent[idx] = float(np.mean(vals))
+        state_counts[idx] = int(vals.size)
+        state_stds[idx] = float(np.std(vals - np.mean(vals)))
+
+    target_state = int(args.target_state)
+    if 0 < target_state < state_latent.size - 1:
+        local_slope = float((state_latent[target_state + 1] - state_latent[target_state - 1]) / 2.0)
+    elif target_state < state_latent.size - 1:
+        local_slope = float(state_latent[target_state + 1] - state_latent[target_state])
+    else:
+        local_slope = float(state_latent[target_state] - state_latent[target_state - 1])
+    median_adjacent_slope = float(np.median(np.abs(np.diff(state_latent))))
+    bandwidth_scale = abs(local_slope) if np.isfinite(local_slope) and abs(local_slope) > 0 else median_adjacent_slope
+    if not np.isfinite(bandwidth_scale) or bandwidth_scale <= 0:
+        bandwidth_scale = 1.0
+
+    target_true = float(state_latent[target_state])
+    np.savetxt(target_point, np.asarray([[target_true]], dtype=np.float32))
+    state_latent_path = args.run_dir / "source_oracle_state_mean_latent_by_state.npy"
+    np.save(state_latent_path, state_latent.astype(np.float32))
+
+    gt_pc1_diagnostics = {}
+    try:
+        gt_pc1_by_state, gt_pc1_diagnostics = _gt_pc1_state_coordinates(args, source_pipeline)
+        gt_pc1_path = args.run_dir / "source_oracle_reference_gtpc1_by_state.npy"
+        np.save(gt_pc1_path, gt_pc1_by_state.astype(np.float32))
+        gt_pc1_diagnostics["reference_gtpc1_by_state_path"] = str(gt_pc1_path)
+        gt_pc1_diagnostics = {f"reference_gtpc1_{key}": value for key, value in gt_pc1_diagnostics.items()}
+    except Exception as exc:
+        gt_pc1_diagnostics = {"reference_gtpc1_diagnostic_error": repr(exc)}
+
+    valid_precision = np.isfinite(source_precision) & (source_precision > 0)
+    sigma = np.sqrt(1.0 / source_precision[valid_precision])
+    metadata = {
+        "embedding_source": "source oracle pipeline image embedding: GT mean/PCs/noise, estimated zs from images",
+        "embedding_source_key": "source_oracle",
+        "pipeline": str(source_pipeline),
+        "target_state": target_state,
+        "target_latent_point_true_state": target_true,
+        "target_point": str(target_point),
+        "state_latent_by_state_path": str(state_latent_path),
+        "local_state_to_latent_slope": local_slope,
+        "median_abs_adjacent_state_to_latent_slope": median_adjacent_slope,
+        "bandwidth_state_to_latent_scale": float(bandwidth_scale),
+        "state_counts_min": int(np.min(state_counts)),
+        "state_counts_max": int(np.max(state_counts)),
+        "source_precision_shape": list(np.load(source_pipeline / "model/zdim_1/latent_precision_noreg.npy").shape),
+        "source_sigma_median": float(np.median(sigma)),
+        "source_sigma_mean": float(np.mean(sigma)),
+        "source_sigma_min": float(np.min(sigma)),
+        "source_sigma_max": float(np.max(sigma)),
+        "within_state_std_mean": float(np.mean(state_stds)),
+        "within_state_std_median": float(np.median(state_stds)),
+        "stats": {
+            "source_z_min": float(np.min(source_z)),
+            "source_z_max": float(np.max(source_z)),
+            "source_z_mean": float(np.mean(source_z)),
+            "source_z_std": float(np.std(source_z)),
+            "state_mean_min": float(np.min(state_latent)),
+            "state_mean_max": float(np.max(state_latent)),
+            "state_mean_std": float(np.std(state_latent)),
+        },
+        **gt_pc1_diagnostics,
+    }
+    write_json(metadata_path, metadata)
+    print(json.dumps(metadata, indent=2, sort_keys=True), flush=True)
+    return target_point
+
+
+def write_controlled_embedding(args: argparse.Namespace, source_pipeline: Path) -> tuple[Path, Path]:
+    gt_pipeline = args.run_dir / f"06_pipeline_{_embedding_run_token(args)}_scaled_meansigma_seed{args.embedding_seed}"
+    if args.embedding_source == "state_index":
+        scale_state_index_embedding(args, source_pipeline, gt_pipeline)
+        target_point = args.run_dir / f"target_latent_point_index_state{args.target_state:04d}.txt"
+    elif args.embedding_source == "gt_volume_pc1":
+        scale_gt_volume_pc1_embedding(args, source_pipeline, gt_pipeline)
+        target_point = args.run_dir / f"target_latent_point_gtpc1_state{args.target_state:04d}.txt"
+    elif args.embedding_source == "source_oracle":
+        gt_pipeline = source_pipeline
+        target_point = write_source_oracle_embedding_metadata(args, source_pipeline)
+    else:
+        raise ValueError(f"Unknown --embedding-source {args.embedding_source!r}")
+    return gt_pipeline, target_point
 
 
 def write_crafted_mask(args: argparse.Namespace) -> Path:
@@ -579,16 +843,9 @@ def write_gt_shell_voxel_polynomial_diagnostic(
     if not all(path.exists() for path in gt_paths):
         return None
 
-    metadata_path = args.run_dir / "index_noisy_embedding_metadata.json"
-    if metadata_path.exists():
-        metadata = json.loads(metadata_path.read_text())
-        slope = float(metadata["scaled_index_slope"])
-        intercept = float(metadata["scaled_index_intercept"])
-    else:
-        slope, intercept = 1.0, 0.0
     states = np.arange(args.n_states, dtype=np.float64)
-    z_scaled = slope * states + intercept
-    target_z = float(slope * args.target_state + intercept)
+    z_scaled = _state_latent_values_from_metadata(args)
+    target_z = float(z_scaled[args.target_state])
 
     mask = np.asarray(utils.load_mrc(mask_path), dtype=np.float32)
     labels, _ = skr._shell_labels(mask.shape)
@@ -608,7 +865,7 @@ def write_gt_shell_voxel_polynomial_diagnostic(
     y = coeffs[:, voxel_local]
 
     dense_states = np.linspace(0, args.n_states - 1, 600)
-    dense_z = slope * dense_states + intercept
+    dense_z = np.interp(dense_states, states, z_scaled)
 
     def _poly_fit(values: np.ndarray, h: float) -> np.ndarray:
         t = (z_scaled - target_z) / h
@@ -640,7 +897,7 @@ def write_gt_shell_voxel_polynomial_diagnostic(
         ax.legend(fontsize=8, loc="best")
     axes[-1].set_xlabel("GT state index")
     fig.suptitle(
-        f"GT Fourier voxel on shell {shell}, zyx={voxel_zyx}; polynomial fits use scaled index embedding",
+        f"GT Fourier voxel on shell {shell}, zyx={voxel_zyx}; polynomial fits use {_embedding_token(args)} embedding",
         fontsize=12,
         fontweight="bold",
     )
@@ -656,7 +913,7 @@ def write_gt_shell_voxel_polynomial_diagnostic(
             "target_state": int(args.target_state),
             "target_scaled_z": target_z,
             "h_values": [float(x) for x in h_values],
-            "description": "GT masked Fourier voxel values over all state volumes with local degree-3 polynomial fits.",
+            "description": "GT masked Fourier voxel values over all state volumes with local polynomial fits in the active embedding coordinate.",
         },
     )
     return plot_path
@@ -725,17 +982,16 @@ def write_gt_polynomial_sweep(
     if not stack_path.exists():
         return None
 
-    metadata_path = args.run_dir / "index_noisy_embedding_metadata.json"
-    if metadata_path.exists():
-        metadata = json.loads(metadata_path.read_text())
-        slope = float(metadata["scaled_index_slope"])
-        intercept = float(metadata["scaled_index_intercept"])
-    else:
-        slope, intercept = 1.0, 0.0
     states = np.arange(args.n_states, dtype=np.float64)
-    z_scaled = slope * states + intercept
+    z_scaled = _state_latent_values_from_metadata(args)
     target_state = int(args.target_state)
     target_z = float(z_scaled[target_state])
+    metadata_path = _embedding_metadata_path(args)
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text())
+        state_to_latent_scale = _metadata_state_to_latent_scale(metadata)
+    else:
+        state_to_latent_scale = 1.0
 
     mask = np.asarray(utils.load_mrc(mask_path), dtype=np.float32)
     labels, n_shells = skr._shell_labels(mask.shape)
@@ -760,7 +1016,7 @@ def write_gt_polynomial_sweep(
     )
     local_poly_params = utils.pickle_load(_state_dir(local_poly_output_dir(args)) / "params.pkl")
     local_h_scaled = np.asarray(local_poly_params["local_poly"]["h_grid"], dtype=np.float64)
-    h_state_grid = np.unique(np.round(np.concatenate([base_h_state, local_h_scaled / slope]), 8))
+    h_state_grid = np.unique(np.round(np.concatenate([base_h_state, local_h_scaled / state_to_latent_scale]), 8))
     degree_grid = np.asarray([0, 1, 2, 3, 4, 5, 6, 8], dtype=np.int32)
 
     rows = []
@@ -769,7 +1025,7 @@ def write_gt_polynomial_sweep(
     include_leave_target_out[target_state] = False
     for degree in degree_grid:
         for h_state in h_state_grid:
-            h_scaled = float(h_state * slope)
+            h_scaled = float(h_state * state_to_latent_scale)
             for fit_mode, include_state in (
                 ("in_sample", include_all),
                 ("leave_target_out", include_leave_target_out),
@@ -822,7 +1078,7 @@ def write_gt_polynomial_sweep(
         [r for r in rows if r["fit_mode"] == "leave_target_out" and r["degree"] == args.local_poly_degree],
         key=lambda r: r["mean_fsc_0_to_score_max"],
     )
-    current_local_h_state = float(local_h_scaled[0] / slope)
+    current_local_h_state = float(local_h_scaled[0] / state_to_latent_scale)
     current_degree3 = min(
         [r for r in rows if r["fit_mode"] == "leave_target_out" and r["degree"] == args.local_poly_degree],
         key=lambda r: abs(r["h_state"] - current_local_h_state),
@@ -848,7 +1104,7 @@ def write_gt_polynomial_sweep(
             )
         ax.axvline(current_local_h_state, color="0.25", linestyle="--", linewidth=1.0, label="current local_poly h_min")
         ax.set_xscale("log")
-        ax.set_xlabel("bandwidth h in GT state-index units")
+        ax.set_xlabel("bandwidth h in local GT state units")
         ax.set_ylabel(ylabel)
         ax.set_title(f"GT polynomial sweep ({fit_mode.replace('_', ' ')})")
         ax.grid(alpha=0.25)
@@ -883,7 +1139,8 @@ def write_gt_polynomial_sweep(
         },
         "degree_grid": [int(x) for x in degree_grid],
         "h_state_grid": [float(x) for x in h_state_grid],
-        "slope_scaled_z_per_state": float(slope),
+        "state_to_latent_scale_for_bandwidth": float(state_to_latent_scale),
+        "embedding_token": _embedding_token(args),
         "current_local_poly_h_state": current_local_h_state,
         "best_leave_target_out_by_mean_fsc": best_leave,
         "best_leave_target_out_by_median_relative_error": best_leave_err,
@@ -909,6 +1166,61 @@ def _tag_token(tag: str | None) -> str:
     return f"_{safe}"
 
 
+def _embedding_token(args: argparse.Namespace) -> str:
+    source = str(getattr(args, "embedding_source", "state_index"))
+    if source == "state_index":
+        return "index"
+    if source == "gt_volume_pc1":
+        return "gtpc1"
+    if source == "source_oracle":
+        return "oracle"
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "p" for ch in source)
+
+
+def _safe_float_token(value: float) -> str:
+    return f"{float(value):g}".replace("-", "m").replace(".", "p")
+
+
+def _embedding_run_token(args: argparse.Namespace) -> str:
+    token = _embedding_token(args)
+    if token != "gtpc1":
+        return token
+    if getattr(args, "embedding_noise_std", None) is None:
+        return "gtpc1_measured"
+    return f"gtpc1_sigma{_safe_float_token(float(args.embedding_noise_std))}"
+
+
+def _embedding_metadata_path(args: argparse.Namespace) -> Path:
+    if _embedding_run_token(args) == "index":
+        return args.run_dir / "index_noisy_embedding_metadata.json"
+    return args.run_dir / f"{_embedding_run_token(args)}_noisy_embedding_metadata.json"
+
+
+def _metadata_state_to_latent_scale(metadata: dict) -> float:
+    for key in ("bandwidth_state_to_latent_scale", "local_state_to_latent_slope", "scaled_index_slope"):
+        if key in metadata:
+            scale = abs(float(metadata[key]))
+            if np.isfinite(scale) and scale > 0:
+                return scale
+    raise KeyError("Embedding metadata does not contain a positive state-to-latent bandwidth scale")
+
+
+def _state_latent_values_from_metadata(args: argparse.Namespace) -> np.ndarray:
+    metadata_path = _embedding_metadata_path(args)
+    if not metadata_path.exists():
+        states = np.arange(args.n_states, dtype=np.float64)
+        return states
+    metadata = json.loads(metadata_path.read_text())
+    if "state_latent_by_state_path" in metadata and Path(metadata["state_latent_by_state_path"]).exists():
+        return np.load(metadata["state_latent_by_state_path"]).astype(np.float64).reshape(-1)
+    if "true_scaled_by_state_path" in metadata and Path(metadata["true_scaled_by_state_path"]).exists():
+        return np.load(metadata["true_scaled_by_state_path"]).astype(np.float64).reshape(-1)
+    if "scaled_index_slope" in metadata:
+        states = np.arange(args.n_states, dtype=np.float64)
+        return float(metadata["scaled_index_slope"]) * states + float(metadata["scaled_index_intercept"])
+    raise KeyError(f"Cannot recover state latent coordinates from {metadata_path}")
+
+
 def _local_poly_config_token(args: argparse.Namespace) -> str:
     tokens = []
     basis = str(getattr(args, "local_poly_basis", "monomial"))
@@ -926,7 +1238,7 @@ def local_poly_output_dir(args: argparse.Namespace) -> Path:
     suffix = "_lazy" if args.compute_state_lazy else ""
     local_poly_maskrad_token = f"_maskrad{args.local_poly_maskrad_fraction:g}".replace(".", "p")
     return args.run_dir / (
-        f"07_compute_state_local_poly_index_gtnoise_degree{args.local_poly_degree}"
+        f"07_compute_state_local_poly_{_embedding_run_token(args)}_gtnoise_degree{args.local_poly_degree}"
         f"{local_poly_maskrad_token}{_local_poly_config_token(args)}{_tag_token(args.local_poly_output_tag)}{suffix}"
     )
 
@@ -935,7 +1247,7 @@ def local_poly_em_output_dir(args: argparse.Namespace) -> Path:
     suffix = "_lazy" if args.compute_state_lazy else ""
     local_poly_maskrad_token = f"_maskrad{args.local_poly_maskrad_fraction:g}".replace(".", "p")
     return args.run_dir / (
-        f"07_compute_state_local_poly_em_index_gtnoise_degree{args.local_poly_degree}"
+        f"07_compute_state_local_poly_em_{_embedding_run_token(args)}_gtnoise_degree{args.local_poly_degree}"
         f"_iter{args.local_poly_em_iterations}_quad{args.local_poly_em_quadrature}"
         f"{local_poly_maskrad_token}{_local_poly_config_token(args)}{_tag_token(args.local_poly_output_tag)}{suffix}"
     )
@@ -943,7 +1255,11 @@ def local_poly_em_output_dir(args: argparse.Namespace) -> Path:
 
 def three_mode_report_dir(args: argparse.Namespace) -> Path:
     suffix = "_lazy" if args.compute_state_lazy else ""
-    return args.run_dir / f"08_kernel_report_mask_crafted_level0p0126_cosine3_local_poly{_tag_token(args.local_poly_output_tag)}{suffix}"
+    embedding_report_token = "" if _embedding_run_token(args) == "index" else f"_{_embedding_run_token(args)}"
+    return args.run_dir / (
+        f"08_kernel_report_mask_crafted_level0p0126_cosine3_local_poly"
+        f"{embedding_report_token}{_tag_token(args.local_poly_output_tag)}{suffix}"
+    )
 
 
 def compute_local_poly_candidates_direct(
@@ -997,10 +1313,10 @@ def compute_local_poly_candidates_direct(
     if args.local_poly_h_scaled_grid:
         h_grid = _parse_float_list(args.local_poly_h_scaled_grid, default_h_grid)
     elif args.local_poly_h_state_grid:
-        metadata_path = args.run_dir / "index_noisy_embedding_metadata.json"
+        metadata_path = _embedding_metadata_path(args)
         metadata = json.loads(metadata_path.read_text())
-        slope = float(metadata["scaled_index_slope"])
-        h_grid = _parse_float_list(args.local_poly_h_state_grid, default_h_grid / slope) * slope
+        state_to_latent_scale = _metadata_state_to_latent_scale(metadata)
+        h_grid = _parse_float_list(args.local_poly_h_state_grid, default_h_grid / state_to_latent_scale) * state_to_latent_scale
     else:
         h_grid = default_h_grid
     h_grid = np.asarray(h_grid, dtype=np.float32).reshape(-1)
@@ -1074,11 +1390,9 @@ def compute_local_poly_candidates_direct(
             "pol_reg_eta": float(args.local_poly_pol_reg_eta),
             "pol_reg_power": float(args.local_poly_pol_reg_power),
             "h_grid": h_grid,
-            "h_state_grid": (
-                (h_grid / float(json.loads((args.run_dir / "index_noisy_embedding_metadata.json").read_text())["scaled_index_slope"]))
-                if (args.run_dir / "index_noisy_embedding_metadata.json").exists()
-                else None
-            ),
+            "h_state_grid": (h_grid / _metadata_state_to_latent_scale(json.loads(_embedding_metadata_path(args).read_text())))
+            if _embedding_metadata_path(args).exists()
+            else None,
             "requested_h_state_grid": args.local_poly_h_state_grid,
             "requested_h_scaled_grid": args.local_poly_h_scaled_grid,
             "sigma_ref": float(sigma_ref),
@@ -1197,10 +1511,10 @@ def compute_local_poly_em_candidates_direct(
     if args.local_poly_h_scaled_grid:
         h_grid = _parse_float_list(args.local_poly_h_scaled_grid, default_h_grid)
     elif args.local_poly_h_state_grid:
-        metadata_path = args.run_dir / "index_noisy_embedding_metadata.json"
+        metadata_path = _embedding_metadata_path(args)
         metadata = json.loads(metadata_path.read_text())
-        slope = float(metadata["scaled_index_slope"])
-        h_grid = _parse_float_list(args.local_poly_h_state_grid, default_h_grid / slope) * slope
+        state_to_latent_scale = _metadata_state_to_latent_scale(metadata)
+        h_grid = _parse_float_list(args.local_poly_h_state_grid, default_h_grid / state_to_latent_scale) * state_to_latent_scale
     else:
         h_grid = default_h_grid
     h_grid = np.asarray(h_grid, dtype=np.float32).reshape(-1)
@@ -1278,7 +1592,7 @@ def compute_local_poly_em_candidates_direct(
         )
 
     metadata = {}
-    metadata_path = args.run_dir / "index_noisy_embedding_metadata.json"
+    metadata_path = _embedding_metadata_path(args)
     if metadata_path.exists():
         metadata = json.loads(metadata_path.read_text())
     params = {
@@ -1305,8 +1619,8 @@ def compute_local_poly_em_candidates_direct(
             "tau": tau_metadata,
             "h_grid": h_grid,
             "h_state_grid": (
-                (h_grid / float(metadata["scaled_index_slope"]))
-                if "scaled_index_slope" in metadata
+                (h_grid / _metadata_state_to_latent_scale(metadata))
+                if metadata
                 else None
             ),
             "requested_h_state_grid": args.local_poly_h_state_grid,
@@ -1720,12 +2034,29 @@ def write_three_mode_report(
 
 def run_compute_and_report(args: argparse.Namespace, gt_pipeline: Path, target_point: Path, mask_path: Path) -> None:
     suffix = "_lazy" if args.compute_state_lazy else ""
-    standard_out = args.run_dir / f"07_compute_state_standard_index_gtnoise{suffix}"
-    deconv_out = args.run_dir / f"07_compute_state_deconvolved_index_gtnoise_lam0p2_20{suffix}"
+    token = _embedding_run_token(args)
+    standard_out = args.run_dir / f"07_compute_state_standard_{token}_gtnoise{suffix}"
+    deconv_out = args.run_dir / f"07_compute_state_deconvolved_{token}_gtnoise_lam0p2_20{suffix}"
     local_poly_out = local_poly_output_dir(args)
     local_poly_em_out = local_poly_em_output_dir(args) if args.local_poly_em else None
-    report_out = args.run_dir / f"08_kernel_report_mask_crafted_level0p0126_cosine3{suffix}"
+    report_token = "" if token == "index" else f"_{token}"
+    report_out = args.run_dir / f"08_kernel_report_mask_crafted_level0p0126_cosine3{report_token}{suffix}"
     target_vol = args.run_dir / f"04_ground_truth/gt_vol{args.target_state:04d}.mrc"
+
+    if args.local_poly_candidates_only:
+        compute_local_poly_candidates_direct(args, gt_pipeline, local_poly_out, target_point)
+        if args.local_poly_em:
+            compute_local_poly_em_candidates_direct(args, gt_pipeline, local_poly_em_out, target_point)
+        print("LOCAL_POLY_CANDIDATES_ONLY: skipping standard/deconvolved/report generation", flush=True)
+        print(f"RUN_DIR={args.run_dir}", flush=True)
+        print(f"GT_PIPELINE={gt_pipeline}", flush=True)
+        print(f"TARGET_POINT={target_point}", flush=True)
+        print(f"LOCAL_POLY_OUT={local_poly_out}", flush=True)
+        if local_poly_em_out is not None:
+            print(f"LOCAL_POLY_EM_OUT={local_poly_em_out}", flush=True)
+        print(f"MASK={mask_path}", flush=True)
+        print(f"TARGET_VOL={target_vol}", flush=True)
+        return
 
     if args.local_poly_only:
         missing = [
@@ -1759,6 +2090,16 @@ def run_compute_and_report(args: argparse.Namespace, gt_pipeline: Path, target_p
         run_command(cmd)
     else:
         print(f"Reusing standard compute_state at {standard_out}", flush=True)
+
+    if args.standard_only:
+        print("STANDARD_ONLY: skipping deconvolved/local_poly/report generation", flush=True)
+        print(f"RUN_DIR={args.run_dir}", flush=True)
+        print(f"GT_PIPELINE={gt_pipeline}", flush=True)
+        print(f"TARGET_POINT={target_point}", flush=True)
+        print(f"STANDARD_OUT={standard_out}", flush=True)
+        print(f"MASK={mask_path}", flush=True)
+        print(f"TARGET_VOL={target_vol}", flush=True)
+        return
 
     if args.local_poly_only:
         pass
@@ -1821,7 +2162,7 @@ def run_compute_and_report(args: argparse.Namespace, gt_pipeline: Path, target_p
                 (
                     f"grid{args.grid_size} raw volumes {args.n_images // 1000}k "
                     f"{'no CTF, ' if args.no_ctf else ''}"
-                    f"image noise{args.noise_level:g} state-index embedding + artificial noise, crafted mask"
+                    f"image noise{args.noise_level:g} {_embedding_run_token(args)} embedding + artificial noise, crafted mask"
                 ),
             ]
         )
@@ -1872,6 +2213,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-ctf", action="store_true")
     parser.add_argument("--render-bfactor", type=float, default=100.0)
     parser.add_argument("--target-state", type=int, default=50)
+    parser.add_argument(
+        "--embedding-source",
+        choices=["state_index", "gt_volume_pc1", "source_oracle"],
+        default="state_index",
+        help="Controlled 1D latent coordinate to write into the copied oracle pipeline.",
+    )
     parser.add_argument("--embedding-seed", type=int, default=20260513)
     parser.add_argument("--embedding-noise-std", type=float, default=None)
     parser.add_argument("--embedding-noise-from-reference-metadata", action="store_true")
@@ -1881,6 +2228,21 @@ def parse_args() -> argparse.Namespace:
         "--local-poly-only",
         action="store_true",
         help="Reuse existing dataset, standard, and deconvolved outputs; run only tagged local_poly/local_poly_EM and three-mode report.",
+    )
+    parser.add_argument(
+        "--local-poly-candidates-only",
+        action="store_true",
+        help="Run only direct local_poly/local_poly_EM candidate generation; useful for parallelizing with standard/deconvolved jobs.",
+    )
+    parser.add_argument(
+        "--standard-only",
+        action="store_true",
+        help="Create the controlled embedding pipeline and run only standard compute_state for a quick oracle-embedding baseline.",
+    )
+    parser.add_argument(
+        "--prepare-embedding-only",
+        action="store_true",
+        help="Create/reuse the embedding pipeline, target point, metadata, and mask, then exit.",
     )
     parser.add_argument("--local-poly-degree", type=int, default=3)
     parser.add_argument(
@@ -1957,10 +2319,15 @@ def main() -> None:
     args = parse_args()
     args.run_dir.mkdir(parents=True, exist_ok=True)
     source_pipeline = ensure_source_pipeline(args)
-    gt_pipeline = args.run_dir / f"06_pipeline_index_scaled_meansigma_seed{args.embedding_seed}"
-    scale_state_index_embedding(args, source_pipeline, gt_pipeline)
+    gt_pipeline, target_point = write_controlled_embedding(args, source_pipeline)
     mask_path = write_crafted_mask(args)
-    target_point = args.run_dir / f"target_latent_point_index_state{args.target_state:04d}.txt"
+    if args.prepare_embedding_only:
+        print(f"RUN_DIR={args.run_dir}", flush=True)
+        print(f"GT_PIPELINE={gt_pipeline}", flush=True)
+        print(f"TARGET_POINT={target_point}", flush=True)
+        print(f"MASK={mask_path}", flush=True)
+        print(f"METADATA={_embedding_metadata_path(args)}", flush=True)
+        return
     run_compute_and_report(args, gt_pipeline, target_point, mask_path)
 
 

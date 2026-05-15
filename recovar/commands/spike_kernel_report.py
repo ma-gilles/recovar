@@ -50,6 +50,7 @@ class SpikeKernelReportConfig:
     score_frequency_max: float = 0.35
     plot_frequency_max: float = 0.40
     selected_count: int = 10
+    package_masked_unfiltered: bool = True
     package_lowpass: bool = False
     lowpass_cutoff: float = 0.15
 
@@ -210,6 +211,40 @@ def _shell_oracle_volume(
     return oracle
 
 
+def _unfiltered_candidate_count(state_dir: Path) -> int:
+    half1 = sorted((state_dir / "estimates_half1_unfil").glob("*.mrc"))
+    half2 = sorted((state_dir / "estimates_half2_unfil").glob("*.mrc"))
+    if not half1:
+        raise RuntimeError(f"No unfiltered half-map candidates found in {state_dir}")
+    if len(half1) != len(half2):
+        raise RuntimeError(
+            f"Mismatched unfiltered half-map candidates in {state_dir}: "
+            f"{len(half1)} half1 vs {len(half2)} half2"
+        )
+    return len(half1)
+
+
+def _shell_oracle_unfiltered_half_average(choices: np.ndarray, state_dirs: list[Path]) -> np.ndarray:
+    first, _ = _load_half_average(state_dirs[0], 0)
+    labels, _ = _shell_labels(first.shape)
+    oracle_ft = np.zeros(first.shape, dtype=np.complex128)
+    flat_labels = labels.ravel()
+
+    offset = 0
+    for state_dir in state_dirs:
+        n_candidates = _unfiltered_candidate_count(state_dir)
+        for local_idx in range(n_candidates):
+            global_idx = offset + local_idx
+            if not np.any(choices == global_idx):
+                continue
+            volume, _ = _load_half_average(state_dir, local_idx)
+            selected = choices[flat_labels] == global_idx
+            oracle_ft.ravel()[selected] = _numpy_dft3(volume).ravel()[selected]
+        offset += n_candidates
+
+    return _inverse_numpy_dft3(oracle_ft).astype(np.float32)
+
+
 def _top_candidate_indices(scores: np.ndarray, best: int, count: int = 5) -> list[int]:
     finite_scores = np.where(np.isfinite(scores), scores, np.inf)
     indices = list(np.argsort(finite_scores)[:count])
@@ -331,6 +366,150 @@ def _write_lowpass_candidate(
         "input_half_maps": inputs,
         "output": str(out_path),
     }
+
+
+def _write_masked_unfiltered_candidate(
+    method: str,
+    state_dir: Path,
+    idx: int,
+    parameter_name: str,
+    parameter_value: float,
+    mask: np.ndarray,
+    voxel_size: float,
+    out_dir: Path,
+) -> dict[str, object]:
+    volume, inputs = _load_half_average(state_dir, idx)
+    out_name = (
+        f"{method}_{idx:04d}_{parameter_name}{_safe_token(parameter_value)}_"
+        "halfavg_unfil_masked.mrc"
+    )
+    out_path = out_dir / out_name
+    utils.write_mrc(str(out_path), volume * mask, voxel_size=voxel_size)
+    return {
+        "method": method,
+        "index_0based": int(idx),
+        parameter_name: float(parameter_value),
+        "input_half_maps": inputs,
+        "output": str(out_path),
+    }
+
+
+def _candidate_shells(choices: np.ndarray, idx: int, freq: np.ndarray) -> dict[str, object]:
+    shells = np.flatnonzero(choices == idx)
+    return {
+        "selected_shell_indices": [int(shell) for shell in shells],
+        "selected_freq_1_per_A": [float(value) for value in freq[shells]],
+    }
+
+
+def _package_masked_unfiltered_oracle_volumes(
+    cfg: SpikeKernelReportConfig,
+    all_report: dict,
+    target: np.ndarray,
+    mask: np.ndarray,
+    standard_grid: np.ndarray,
+    deconv_grid: np.ndarray,
+    voxel_size: float,
+) -> dict:
+    out_dir = cfg.out_dir / "selected_masked_unfil_oracle_shell"
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+
+    metrics = np.load(all_report["metrics_npz"])
+    freq = metrics["freq"]
+    standard_choice = metrics["standard_oracle_choice"].astype(np.int64)
+    deconv_choice = metrics["deconv_oracle_choice"].astype(np.int64)
+    combined_choice = metrics["combined_oracle_choice"].astype(np.int64)
+
+    standard_state_dir = _state_dir(cfg.standard_root, cfg.state_label)
+    deconv_state_dir = _state_dir(cfg.deconvolved_root, cfg.state_label)
+    manifest: dict[str, object] = {
+        "description": (
+            "Masked, unfiltered volume package. Candidate volumes are half1/half2 "
+            "averages from estimates_half*_unfil multiplied by the report mask. "
+            "Shell-oracle composites are assembled in Fourier shells from those "
+            "unfiltered half averages, then multiplied by the same mask. No "
+            "low-pass filtering and no downsampling are applied."
+        ),
+        "selection_rule": "true-GT per-frequency-shell oracle choices from the report metrics",
+        "standard_root": str(standard_state_dir),
+        "deconvolved_root": str(deconv_state_dir),
+        "target_volume": str(cfg.target_volume),
+        "mask": str(cfg.mask),
+        "shape": list(target.shape),
+        "voxel_size_A": voxel_size,
+        "standard_oracle_candidate_indices_0based": [int(idx) for idx in np.unique(standard_choice)],
+        "deconvolved_oracle_candidate_indices_0based": [int(idx) for idx in np.unique(deconv_choice)],
+        "combined_choice_encoding": "0..n_standard-1 standard, n_standard..n_standard+n_deconvolved-1 deconvolved",
+        "outputs": [],
+        "candidates": [],
+    }
+
+    def write_output(name: str, volume: np.ndarray, role: str, **metadata: object) -> str:
+        path = out_dir / name
+        utils.write_mrc(str(path), np.asarray(volume, dtype=np.float32), voxel_size=voxel_size)
+        manifest["outputs"].append({"role": role, "output": str(path), **metadata})
+        return str(path)
+
+    write_output("gt_masked_unfil.mrc", target * mask, "masked_ground_truth_target")
+    write_output("mask.mrc", mask, "mask_applied_to_all_volumes")
+
+    write_output(
+        "standard_shell_oracle_halfavg_unfil_masked.mrc",
+        _shell_oracle_unfiltered_half_average(standard_choice, [standard_state_dir]) * mask,
+        "standard_shell_oracle_from_unfiltered_half_averages",
+    )
+    write_output(
+        "deconvolved_shell_oracle_halfavg_unfil_masked.mrc",
+        _shell_oracle_unfiltered_half_average(deconv_choice, [deconv_state_dir]) * mask,
+        "deconvolved_shell_oracle_from_unfiltered_half_averages",
+    )
+    write_output(
+        "combined_shell_oracle_halfavg_unfil_masked.mrc",
+        _shell_oracle_unfiltered_half_average(combined_choice, [standard_state_dir, deconv_state_dir]) * mask,
+        "combined_shell_oracle_from_unfiltered_half_averages",
+    )
+
+    for idx in np.unique(standard_choice):
+        item = _write_masked_unfiltered_candidate(
+            "standard",
+            standard_state_dir,
+            int(idx),
+            "h",
+            float(standard_grid[idx]),
+            mask,
+            voxel_size,
+            out_dir,
+        )
+        item.update(_candidate_shells(standard_choice, int(idx), freq))
+        manifest["candidates"].append(item)
+
+    for idx in np.unique(deconv_choice):
+        item = _write_masked_unfiltered_candidate(
+            "deconvolved",
+            deconv_state_dir,
+            int(idx),
+            "lambda",
+            float(deconv_grid[idx]),
+            mask,
+            voxel_size,
+            out_dir,
+        )
+        item.update(_candidate_shells(deconv_choice, int(idx), freq))
+        manifest["candidates"].append(item)
+
+    manifest_path = out_dir / "manifest.json"
+    _write_json(manifest_path, manifest)
+
+    tar_path = out_dir.with_suffix(".tar.gz")
+    if tar_path.exists():
+        tar_path.unlink()
+    with tarfile.open(tar_path, "w:gz") as tar:
+        tar.add(out_dir, arcname=out_dir.name)
+    manifest["tarball"] = str(tar_path)
+    _write_json(manifest_path, manifest)
+    return {"directory": str(out_dir), "tarball": str(tar_path), "manifest": str(manifest_path)}
 
 
 def _save_all_candidate_report(
@@ -1119,6 +1298,7 @@ Key outputs:
 - all candidates: `{summary["all_candidate_report"]["all_candidates_png"]}`
 - selected overlay: `{summary["selected_overlay"]["png"]}`
 - shell oracle volumes: `{summary["all_candidate_report"]["oracle_outputs"]}`
+- masked unfiltered oracle/candidate volumes: `{summary["masked_unfiltered_package"]}`
 """
     (cfg.out_dir / "README.md").write_text(text)
 
@@ -1167,6 +1347,19 @@ def generate_report(cfg: SpikeKernelReportConfig) -> dict:
     selected = _save_selected_overlay(cfg, Path(all_report["metrics_npz"]), plots_dir)
     real_space = _save_real_space_kernels(cfg, standard_grid, deconv_grid, plots_dir)
     deconv_embedding = _save_deconv_kernels_over_embedding(cfg, deconv_grid, plots_dir)
+    masked_unfiltered = (
+        _package_masked_unfiltered_oracle_volumes(
+            cfg,
+            all_report,
+            target,
+            mask,
+            standard_grid,
+            deconv_grid,
+            voxel_size,
+        )
+        if cfg.package_masked_unfiltered
+        else None
+    )
     lowpass = _package_lowpass_candidates(cfg, selected, target, voxel_size) if cfg.package_lowpass else None
 
     candidate_map = tables_dir / "candidate_volume_index_map.csv"
@@ -1195,6 +1388,7 @@ def generate_report(cfg: SpikeKernelReportConfig) -> dict:
         "selected_overlay": selected,
         "real_space_kernels": real_space,
         "deconvolved_kernels_over_embedding": deconv_embedding,
+        "masked_unfiltered_package": masked_unfiltered,
         "lowpass_package": lowpass,
         "candidate_map": str(candidate_map),
     }
@@ -1217,8 +1411,15 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--score-frequency-max", type=float, default=0.35)
     parser.add_argument("--plot-frequency-max", type=float, default=0.40)
     parser.add_argument("--selected-count", type=int, default=10)
+    parser.add_argument(
+        "--no-package-masked-unfiltered",
+        dest="package_masked_unfiltered",
+        action="store_false",
+        help="Disable the default masked, unfiltered shell-oracle/candidate volume package.",
+    )
     parser.add_argument("--package-lowpass", action="store_true")
     parser.add_argument("--lowpass-cutoff", type=float, default=0.15)
+    parser.set_defaults(package_masked_unfiltered=True)
     return parser
 
 
@@ -1237,6 +1438,7 @@ def _config_from_args(args: argparse.Namespace) -> SpikeKernelReportConfig:
         score_frequency_max=float(args.score_frequency_max),
         plot_frequency_max=float(args.plot_frequency_max),
         selected_count=int(args.selected_count),
+        package_masked_unfiltered=bool(args.package_masked_unfiltered),
         package_lowpass=bool(args.package_lowpass),
         lowpass_cutoff=float(args.lowpass_cutoff),
     )

@@ -123,6 +123,46 @@ class _ImageView:
         return img, np.inf, idx
 
 
+class _ParticleImageBatchLoader:
+    """Batch ordinary particle images through the underlying ImageLoader."""
+
+    def __init__(self, dataset, batch_size: int, indices=None):
+        if not isinstance(batch_size, (int, np.integer)):
+            raise TypeError(f"batch_size must be an integer, got {type(batch_size).__name__}")
+        batch_size = int(batch_size)
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+
+        self.dataset = dataset
+        self.batch_size = batch_size
+        if indices is None:
+            self.indices = np.arange(dataset.num_images, dtype=np.int32)
+        else:
+            self.indices = normalize_indices(indices, n_total=int(dataset.num_images), name="indices").astype(
+                np.int32,
+                copy=False,
+            )
+
+    def _iter_batches(self):
+        source = self.dataset.source
+        for start in range(0, len(self.indices), self.batch_size):
+            batch_indices = self.indices[start : start + self.batch_size]
+            images = source.images(batch_indices)
+            if images.ndim == 2:
+                images = images[np.newaxis, ...]
+            yield (
+                jnp.asarray(images),
+                jnp.asarray(batch_indices),
+                jnp.asarray(batch_indices),
+            )
+
+    def __iter__(self):
+        return iter(_PrefetchIterator(self._iter_batches(), buffer_size=2))
+
+    def __len__(self) -> int:
+        return (len(self.indices) + self.batch_size - 1) // self.batch_size
+
+
 # ---------------------------------------------------------------------------
 # ParticleImageDataset
 # ---------------------------------------------------------------------------
@@ -327,7 +367,7 @@ class ParticleImageDataset:
         mode: str = "tilt_series",
         **kwargs,
     ):
-        return _GrainBatchLoader(self, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        return _ParticleImageBatchLoader(self, batch_size=batch_size)
 
     def get_dataset_subset_generator(
         self,
@@ -339,8 +379,7 @@ class ParticleImageDataset:
         **kwargs,
     ):
         subset_indices = normalize_indices(subset_indices, n_total=int(self.num_images), name="subset_indices")
-        subset = _SimpleSubset(self, subset_indices)
-        return _GrainBatchLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        return _ParticleImageBatchLoader(self, batch_size=batch_size, indices=subset_indices)
 
     def get_image_generator(self, batch_size: int, num_workers: int = 0):
         return self.get_dataset_generator(batch_size, num_workers)
