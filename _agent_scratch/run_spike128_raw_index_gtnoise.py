@@ -36,34 +36,116 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
 
 
+MRC_HEADER_BYTES = 1024
+MRC_FLOAT32_MODE = 2
+
+
+def expected_mrc_stack_size(n_images: int, grid_size: int) -> int:
+    pixels = int(n_images) * int(grid_size) * int(grid_size)
+    return MRC_HEADER_BYTES + pixels * np.dtype(np.float32).itemsize
+
+
 def write_mrc_stack_header(path: Path, shape: tuple[int, int, int], voxel_size: float) -> None:
-    """Write a valid MRC stack header without memory-mapping the stack data."""
+    """Write a valid MRC image-stack header without memory-mapping the data."""
     import mrcfile
 
+    n_images, ny, nx = (int(shape[0]), int(shape[1]), int(shape[2]))
     with mrcfile.new(path, overwrite=True) as mrc:
         header = mrc.header
-        header.nx = int(shape[2])
-        header.ny = int(shape[1])
-        header.nz = int(shape[0])
-        header.mode = 2  # float32
-        header.mx = int(shape[2])
-        header.my = int(shape[1])
-        header.mz = int(shape[0])
-        header.cella.x = float(shape[2] * voxel_size)
-        header.cella.y = float(shape[1] * voxel_size)
-        header.cella.z = float(shape[0] * voxel_size)
+        header.nx = nx
+        header.ny = ny
+        header.nz = n_images
+        header.mode = MRC_FLOAT32_MODE
+        header.nxstart = 0
+        header.nystart = 0
+        header.nzstart = 0
+        header.mx = nx
+        header.my = ny
+        header.mz = 1
+        header.cellb.alpha = 90.0
+        header.cellb.beta = 90.0
+        header.cellb.gamma = 90.0
+        header.mapc = 1
+        header.mapr = 2
+        header.maps = 3
+        header.ispg = 0
+        header.nsymbt = 0
         header.dmin = 0.0
         header.dmax = -1.0
         header.dmean = -2.0
         header.rms = -1.0
         mrc.voxel_size = voxel_size
+        mrc.flush()
+
+
+def allocate_file_exact(file_obj, size: int) -> None:
+    """Allocate or truncate a file to an exact byte size."""
+    size = int(size)
+    try:
+        os.posix_fallocate(file_obj.fileno(), 0, size)
+    except AttributeError:
+        file_obj.truncate(size)
+    except OSError as exc:
+        print(f"posix_fallocate failed for MRC stack ({exc}); falling back to truncate", flush=True)
+        file_obj.truncate(size)
+    file_obj.flush()
+    os.fsync(file_obj.fileno())
 
 
 def write_array_chunk(file_obj, start_index: int, images: np.ndarray) -> None:
     image_stride = int(images.shape[-2] * images.shape[-1] * np.dtype(np.float32).itemsize)
-    offset = 1024 + int(start_index) * image_stride
+    offset = MRC_HEADER_BYTES + int(start_index) * image_stride
     file_obj.seek(offset)
-    file_obj.write(np.asarray(images, dtype="<f4", order="C").tobytes(order="C"))
+    payload = memoryview(np.asarray(images, dtype="<f4", order="C")).cast("B")
+    total_written = 0
+    while total_written < len(payload):
+        written = file_obj.write(payload[total_written:])
+        if written is None:
+            written = len(payload) - total_written
+        if written <= 0:
+            raise OSError(
+                f"Short write while writing MRC stack chunk at image {start_index}: "
+                f"wrote {total_written} of {len(payload)} bytes"
+            )
+        total_written += int(written)
+
+
+def validate_mrc_image_stack_file(path: Path, n_images: int, grid_size: int) -> None:
+    import mrcfile
+
+    expected_size = expected_mrc_stack_size(n_images, grid_size)
+    actual_size = path.stat().st_size
+    if actual_size != expected_size:
+        raise RuntimeError(f"MRC stack size mismatch for {path}: size={actual_size}, expected={expected_size}")
+
+    with mrcfile.open(path, mode="r", header_only=True, permissive=False) as mrc:
+        header = mrc.header
+        checks = {
+            "nx": int(grid_size),
+            "ny": int(grid_size),
+            "nz": int(n_images),
+            "mode": MRC_FLOAT32_MODE,
+            "ispg": 0,
+            "nsymbt": 0,
+            "mx": int(grid_size),
+            "my": int(grid_size),
+            "mz": 1,
+            "mapc": 1,
+            "mapr": 2,
+            "maps": 3,
+        }
+        for field, expected in checks.items():
+            actual = int(getattr(header, field))
+            if actual != expected:
+                raise RuntimeError(f"MRC header field {field}={actual}, expected {expected} for {path}")
+
+    pixels_per_image = int(grid_size) * int(grid_size)
+    offset = MRC_HEADER_BYTES + (int(n_images) - 1) * pixels_per_image * np.dtype(np.float32).itemsize
+    with path.open("rb") as file_obj:
+        file_obj.seek(offset)
+        last_image = np.fromfile(file_obj, dtype=np.float32, count=pixels_per_image)
+    if last_image.size != pixels_per_image:
+        raise RuntimeError(f"Could not read final image from {path}: got {last_image.size} pixels")
 
 
 def copy_raw_volumes(reference_raw_dir: Path, raw_dir: Path) -> bool:
@@ -187,6 +269,19 @@ def simulate_dataset_streaming(args, out: Path, volume_prefix: Path, voxel_size:
     particles_path = dataset_dir / f"particles.{args.grid_size}.mrcs"
     sim_info_path = dataset_dir / "simulation_info.pkl"
     if particles_path.exists() and sim_info_path.exists() and not args.overwrite:
+        expected_size = expected_mrc_stack_size(args.n_images, args.grid_size)
+        actual_size = particles_path.stat().st_size
+        if actual_size != expected_size:
+            print(
+                f"Existing particle stack has wrong size, regenerating: "
+                f"{particles_path} size={actual_size} expected={expected_size}",
+                flush=True,
+            )
+            particles_path.unlink()
+            sim_info_path.unlink()
+        else:
+            return None, utils.pickle_load(sim_info_path)
+    if particles_path.exists() and sim_info_path.exists() and not args.overwrite:
         return None, utils.pickle_load(sim_info_path)
 
     volumes = simulator.load_volumes_from_folder(
@@ -245,8 +340,10 @@ def simulate_dataset_streaming(args, out: Path, volume_prefix: Path, voxel_size:
     print(logger_msg, flush=True)
 
     write_mrc_stack_header(particles_path, (args.n_images, args.grid_size, args.grid_size), voxel_size)
+    expected_stack_bytes = expected_mrc_stack_size(args.n_images, args.grid_size)
     sequential_chunk_size = max(1, min(args.n_images, max(batch_size, 32768)))
     with particles_path.open("r+b", buffering=0) as stack_file:
+        allocate_file_exact(stack_file, expected_stack_bytes)
         for chunk_id, chunk_start in enumerate(range(0, args.n_images, sequential_chunk_size)):
             chunk_end = min(args.n_images, chunk_start + sequential_chunk_size)
             chunk_slice = slice(chunk_start, chunk_end)
@@ -274,9 +371,20 @@ def simulate_dataset_streaming(args, out: Path, volume_prefix: Path, voxel_size:
                 mrc_file=None,
                 premultiplied_ctf=args.premultiplied_ctf,
             )
+            expected_images = int(chunk_end - chunk_start)
+            if int(chunk_images.shape[0]) != expected_images:
+                raise RuntimeError(
+                    f"simulate_data returned {chunk_images.shape[0]} images for chunk "
+                    f"{chunk_start}:{chunk_end}; expected {expected_images}"
+                )
             write_array_chunk(stack_file, chunk_start, chunk_images)
             if chunk_id == 0 or chunk_end == args.n_images or chunk_id % 10 == 0:
                 print(f"Streamed {chunk_end}/{args.n_images} images", flush=True)
+        stack_file.truncate(expected_stack_bytes)
+        stack_file.flush()
+        os.fsync(stack_file.fileno())
+    validate_mrc_image_stack_file(particles_path, args.n_images, args.grid_size)
+    print(f"Validated MRC stack {particles_path} ({expected_stack_bytes} bytes)", flush=True)
 
     sim_info = {
         "ctf_params": ctf_params,
@@ -709,7 +817,8 @@ def write_controlled_embedding(args: argparse.Namespace, source_pipeline: Path) 
 
 def write_crafted_mask(args: argparse.Namespace) -> Path:
     out = args.run_dir
-    mask_path = out / "05_masks/mask_crafted_level0p0126_cosine3_128.mrc"
+    mask_stem = f"mask_crafted_level0p0126_cosine{args.crafted_mask_cosine_width}_{args.grid_size}"
+    mask_path = out / "05_masks" / f"{mask_stem}.mrc"
     if mask_path.exists():
         return mask_path
 
@@ -731,7 +840,7 @@ def write_crafted_mask(args: argparse.Namespace) -> Path:
 
     binary = binary.astype(np.float32)
     soft = mask_utils.soften_volume_mask(binary, kern_rad=args.crafted_mask_cosine_width).astype(np.float32)
-    binary_path = out / "05_masks/mask_crafted_level0p0126_binary_downsampled128.mrc"
+    binary_path = out / "05_masks" / f"{mask_stem}_binary.mrc"
     utils.write_mrc(str(binary_path), binary, voxel_size=args.voxel_size)
     utils.write_mrc(str(mask_path), soft, voxel_size=args.voxel_size)
 
@@ -741,7 +850,7 @@ def write_crafted_mask(args: argparse.Namespace) -> Path:
     else:
         center = (args.grid_size // 2,) * 3
     center = tuple(max(0, min(args.grid_size - 1, c)) for c in center)
-    preview_path = out / "05_masks/mask_crafted_level0p0126_cosine3_128_preview.png"
+    preview_path = out / "05_masks" / f"{mask_stem}_preview.png"
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
     planes = [
         ("z", target[center[0], :, :], soft[center[0], :, :], center[0]),
@@ -758,7 +867,10 @@ def write_crafted_mask(args: argparse.Namespace) -> Path:
         ax.set_title(f"{name}-slice index {idx}")
         ax.set_xticks([])
         ax.set_yticks([])
-    fig.suptitle("mask_crafted > 0.0126, downsampled to 128, cosine edge 3 voxels; over raw-volume GT state 50")
+    fig.suptitle(
+        f"mask_crafted > {args.crafted_mask_level:g}, grid {args.grid_size}, "
+        f"cosine edge {args.crafted_mask_cosine_width} voxels; over raw-volume GT state {args.target_state}"
+    )
     fig.savefig(preview_path, dpi=180)
     plt.close(fig)
 
@@ -776,7 +888,7 @@ def write_crafted_mask(args: argparse.Namespace) -> Path:
         "preview_png": str(preview_path),
         "slice_center_zyx": list(center),
     }
-    write_json(out / "05_masks/mask_crafted_level0p0126_cosine3_128_stats.json", stats)
+    write_json(out / "05_masks" / f"{mask_stem}_stats.json", stats)
     print(json.dumps(stats, indent=2, sort_keys=True), flush=True)
     return mask_path
 
@@ -2044,14 +2156,16 @@ def run_compute_and_report(args: argparse.Namespace, gt_pipeline: Path, target_p
     target_vol = args.run_dir / f"04_ground_truth/gt_vol{args.target_state:04d}.mrc"
 
     if args.local_poly_candidates_only:
-        compute_local_poly_candidates_direct(args, gt_pipeline, local_poly_out, target_point)
+        if not args.local_poly_em_only:
+            compute_local_poly_candidates_direct(args, gt_pipeline, local_poly_out, target_point)
         if args.local_poly_em:
             compute_local_poly_em_candidates_direct(args, gt_pipeline, local_poly_em_out, target_point)
         print("LOCAL_POLY_CANDIDATES_ONLY: skipping standard/deconvolved/report generation", flush=True)
         print(f"RUN_DIR={args.run_dir}", flush=True)
         print(f"GT_PIPELINE={gt_pipeline}", flush=True)
         print(f"TARGET_POINT={target_point}", flush=True)
-        print(f"LOCAL_POLY_OUT={local_poly_out}", flush=True)
+        if not args.local_poly_em_only:
+            print(f"LOCAL_POLY_OUT={local_poly_out}", flush=True)
         if local_poly_em_out is not None:
             print(f"LOCAL_POLY_EM_OUT={local_poly_em_out}", flush=True)
         print(f"MASK={mask_path}", flush=True)
@@ -2260,6 +2374,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--local-poly-maskrad-fraction", type=float, default=4.0)
     parser.add_argument("--local-poly-output-tag", type=str, default=None)
     parser.add_argument("--local-poly-em", action="store_true")
+    parser.add_argument(
+        "--local-poly-em-only",
+        action="store_true",
+        help="With --local-poly-candidates-only, skip non-EM local_poly candidates and write only local_poly_EM outputs.",
+    )
     parser.add_argument("--local-poly-em-iterations", type=int, default=2)
     parser.add_argument("--local-poly-em-quadrature", type=int, default=5)
     parser.add_argument("--local-poly-em-temperature", type=float, default=1.0)
@@ -2317,6 +2436,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.local_poly_em_only and (not args.local_poly_candidates_only or not args.local_poly_em):
+        raise ValueError("--local-poly-em-only requires --local-poly-candidates-only and --local-poly-em")
     args.run_dir.mkdir(parents=True, exist_ok=True)
     source_pipeline = ensure_source_pipeline(args)
     gt_pipeline, target_point = write_controlled_embedding(args, source_pipeline)
