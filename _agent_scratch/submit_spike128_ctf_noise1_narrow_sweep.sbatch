@@ -26,6 +26,7 @@ unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 PYTHON=/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/.pixi/envs/default/bin/python
 RUN_DIR=/scratch/gpfs/GILLES/mg6942/runs/spike_grid128_box320_ctf_noise1_n200k_raw_index_embsigma316_20260515
 EMB_SIGMA=316.22776601683796
+mkdir -p "$RUN_DIR"
 
 case "$SLURM_ARRAY_TASK_ID" in
   0)  TAG=noise1_d5_i1_q3_monomial_none; EXTRA_ARGS="--local-poly-degree 5 --local-poly-em-iterations 1 --local-poly-em-quadrature 3 --local-poly-basis monomial --local-poly-pol-reg-type none" ;;
