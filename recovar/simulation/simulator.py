@@ -400,7 +400,7 @@ def generate_synthetic_dataset(
     n_tilts=-1,
     dose_per_tilt=3,
     angle_per_tilt=3,
-    image_dtype=np.float16,
+    image_dtype=np.float32,
     image_offset_n_std=0.0,
     per_particle_contrast=True,
     premultiplied_ctf=False,

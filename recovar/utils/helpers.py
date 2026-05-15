@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
-import mrcfile
 import more_itertools
+import mrcfile
 import numpy as np
 import pandas as pd
 import psutil
@@ -497,9 +497,12 @@ def write_starfile(
             "rlnAnglePsi",
             "rlnOriginXAngst",
             "rlnOriginYAngst",
+            "rlnRandomSubset",
         ]
         rots = R_to_relion(rotation_matrices)
-        values += [rots[:, 0], rots[:, 1], rots[:, 2], translations[:, 0], translations[:, 1]]
+        # cryoSPARC's import_particles silently drops poses if rlnRandomSubset is absent.
+        random_subset = (np.arange(n_images) % 2 + 1).astype(np.int32)
+        values += [rots[:, 0], rots[:, 1], rots[:, 2], translations[:, 0], translations[:, 1], random_subset]
 
     if tilt_groups is not None:
         keys += ["rlnGroupName"]
