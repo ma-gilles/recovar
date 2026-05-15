@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=300G
 #SBATCH --time=12:00:00
-#SBATCH --array=0-22%8
+#SBATCH --array=0-27%8
 #SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/spike128_ctf_noise0p1_basis_hard_%A_%a.out
 #SBATCH --error=/scratch/gpfs/GILLES/mg6942/slurmo/spike128_ctf_noise0p1_basis_hard_%A_%a.err
 
@@ -118,6 +118,26 @@ case "$SLURM_ARRAY_TASK_ID" in
   22)
     TAG="basis_hard_d7_i1_q7_weighted_cholesky_coeff_eta0p03"
     EXTRA_ARGS="--local-poly-degree 7 --local-poly-em-iterations 1 --local-poly-em-quadrature 7 --local-poly-basis weighted_cholesky --local-poly-pol-reg-type coeff --local-poly-pol-reg-eta 0.03 --local-poly-pol-reg-power 2"
+    ;;
+  23)
+    TAG="basis_hard_d5_i1_q7_weighted_cholesky_coeff_eta0p3"
+    EXTRA_ARGS="--local-poly-degree 5 --local-poly-em-iterations 1 --local-poly-em-quadrature 7 --local-poly-basis weighted_cholesky --local-poly-pol-reg-type coeff --local-poly-pol-reg-eta 0.3 --local-poly-pol-reg-power 2"
+    ;;
+  24)
+    TAG="basis_hard_d5_i2_q5_weighted_cholesky_coeff_eta0p3"
+    EXTRA_ARGS="--local-poly-degree 5 --local-poly-em-iterations 2 --local-poly-em-quadrature 5 --local-poly-basis weighted_cholesky --local-poly-pol-reg-type coeff --local-poly-pol-reg-eta 0.3 --local-poly-pol-reg-power 2"
+    ;;
+  25)
+    TAG="basis_hard_d5_i2_q7_weighted_cholesky_coeff_eta0p3"
+    EXTRA_ARGS="--local-poly-degree 5 --local-poly-em-iterations 2 --local-poly-em-quadrature 7 --local-poly-basis weighted_cholesky --local-poly-pol-reg-type coeff --local-poly-pol-reg-eta 0.3 --local-poly-pol-reg-power 2"
+    ;;
+  26)
+    TAG="basis_hard_d7_i1_q5_weighted_cholesky_coeff_eta0p3"
+    EXTRA_ARGS="--local-poly-degree 7 --local-poly-em-iterations 1 --local-poly-em-quadrature 5 --local-poly-basis weighted_cholesky --local-poly-pol-reg-type coeff --local-poly-pol-reg-eta 0.3 --local-poly-pol-reg-power 2"
+    ;;
+  27)
+    TAG="basis_hard_d7_i1_q7_weighted_cholesky_coeff_eta0p3"
+    EXTRA_ARGS="--local-poly-degree 7 --local-poly-em-iterations 1 --local-poly-em-quadrature 7 --local-poly-basis weighted_cholesky --local-poly-pol-reg-type coeff --local-poly-pol-reg-eta 0.3 --local-poly-pol-reg-power 2"
     ;;
   *)
     echo "Unknown array task $SLURM_ARRAY_TASK_ID" >&2
