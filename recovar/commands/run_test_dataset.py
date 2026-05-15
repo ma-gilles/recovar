@@ -63,6 +63,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run integration tests for recovar")
     parser.add_argument("--output-dir", "-o", default="/tmp/")
     parser.add_argument("--all-tests", action="store_true", help="Run all tests")
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help=(
+            "Run the broader default smoke (currently: also a second pipeline "
+            "variant). Without this, the default scope is minimal: one "
+            "pipeline + analyze + estimate_conformational_density. See "
+            "issue #143."
+        ),
+    )
     parser.add_argument("--tilt-series-only", action="store_true", help="Run only tilt series tests")
     parser.add_argument(
         "--no-delete",
@@ -100,9 +110,13 @@ def _build_parser() -> argparse.ArgumentParser:
 def _build_forward_argv(args: argparse.Namespace) -> list[str]:
     """Return the list of argv tokens spliced into memory-aware subcommands.
 
-    ``--adaptive-n-pcs`` is included BY DEFAULT (the smoke test must
-    finish on small / shared GPUs). ``--full-memory-test`` is the
-    explicit opt-out for users who want the default 200-PC config.
+    Since 2026-05-15 ``--adaptive-n-pcs`` is ON BY DEFAULT in the
+    downstream pipeline (BooleanOptionalAction). The smoke test always
+    splices a deterministic ``--adaptive-n-pcs`` or ``--no-adaptive-n-pcs``
+    so the inner subprocess gets an explicit choice regardless of how
+    its own defaults evolve. ``--full-memory-test`` forces the opt-out
+    (fixed 200 PCs) for users who want to stress-test the unshrunk
+    config on a constrained budget.
     """
     fwd: list[str] = []
     if args.gpu_memory is not None:
@@ -113,18 +127,16 @@ def _build_forward_argv(args: argparse.Namespace) -> list[str]:
         fwd.append("--very-low-memory-option")
 
     if args.full_memory_test:
+        fwd.append("--no-adaptive-n-pcs")
         if args.adaptive_memory:
-            # User said both. Honor --adaptive-n-pcs, log the conflict.
-            fwd.append("--adaptive-n-pcs")
-            logger.warning("Both --adaptive-n-pcs and --full-memory-test were passed; --adaptive-n-pcs wins.")
-        else:
-            logger.info(
-                "run_test_dataset: --full-memory-test set, NOT splicing "
-                "--adaptive-n-pcs into inner calls. Smoke test will use "
-                "the default 200-PC configuration."
+            logger.warning(
+                "Both --adaptive-n-pcs and --full-memory-test passed; "
+                "--full-memory-test wins (splicing --no-adaptive-n-pcs)."
             )
-    else:
+    elif args.adaptive_memory:
         fwd.append("--adaptive-n-pcs")
+    else:
+        fwd.append("--no-adaptive-n-pcs")
 
     # `--memory-diagnostics` was removed (always-on now). The new
     # `--memory-profile` is heavyweight; only forward if explicitly set.
@@ -207,10 +219,16 @@ def main():
         classifier so the caller still gets actionable advice even though
         the inner ``recovar`` invocation exits non-zero from inside its
         own error wrapper.
+
+        The child env is forced through ``recovar_subprocess_env`` so it
+        gets ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` even when the user
+        didn't export it (issue #143).
         """
+        from recovar.utils.subprocess_helpers import recovar_subprocess_env
+
         logger.info("Running: %s", description)
         logger.info("Command: %s", " ".join(argv))
-        result = subprocess.run(argv, check=False, capture_output=True, text=True)
+        result = subprocess.run(argv, check=False, capture_output=True, text=True, env=recovar_subprocess_env())
         # Echo the child's output so the user sees it (capture_output silences
         # the stream by default).
         if result.stdout:
@@ -391,18 +409,23 @@ def main():
             "pipeline",
         )
 
-        run_command(
-            pipeline_argv(
-                *common_pos,
-                "--correct-contrast",
-                "--mask=from_halfmaps",
-                "--lazy",
-                output_path=_p("test_dataset", "pipeline_output"),
-                extras=[],
-            ),
-            "Run pipeline (variant 2)",
-            "pipeline",
-        )
+        # Variant 2 is a near-duplicate of variant 1 (no --ignore-zero-frequency)
+        # that doubles the wall-clock cost of the default smoke. Gate it
+        # behind --full and --all-tests so the default smoke completes in a
+        # few minutes (issue #143).
+        if args.full or do_all_tests:
+            run_command(
+                pipeline_argv(
+                    *common_pos,
+                    "--correct-contrast",
+                    "--mask=from_halfmaps",
+                    "--lazy",
+                    output_path=_p("test_dataset", "pipeline_output"),
+                    extras=[],
+                ),
+                "Run pipeline (variant 2)",
+                "pipeline",
+            )
 
         run_command(
             _recovar_argv(

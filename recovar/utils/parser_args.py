@@ -131,14 +131,15 @@ def add_memory_planning_args(parser: argparse.ArgumentParser):
     group.add_argument(
         "--adaptive-n-pcs",
         dest="adaptive_memory",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
             "Adaptively reduce the number of principal components to fit "
-            "the GPU memory budget. By default, 200 PCs are used regardless "
-            "of GPU size for reproducibility. With this flag, the planner "
-            "consults the calibrated peak-memory table and picks the "
-            "largest n_pcs whose predicted peak fits the budget. "
-            "Reproducible: same flags + same dataset = same n_pcs."
+            "the GPU memory budget. ON BY DEFAULT (was opt-in pre-2026-05-15). "
+            "The planner predicts peak memory for the (grid, n_pcs) cell and "
+            "walks n_pcs down from 200 until the prediction fits the budget. "
+            "Reproducible: same flags + same dataset = same n_pcs. Use "
+            "--no-adaptive-n-pcs to force the legacy fixed-200-PCs behavior."
         ),
     )
     # NOTE: ``--memory-diagnostics`` was removed. Diagnostics

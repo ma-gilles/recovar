@@ -135,33 +135,50 @@ def test_pipeline_parser_rejects_removed_aliases():
 
 
 def test_run_test_dataset_always_splices_adaptive_n_pcs():
-    """Default contract: --adaptive-n-pcs is ALWAYS in the forward argv."""
+    """Default contract: an explicit ``--adaptive-n-pcs`` /
+    ``--no-adaptive-n-pcs`` is ALWAYS spliced into the inner argv so
+    the smoke test's choice is deterministic regardless of how the
+    inner pipeline's own defaults evolve.
+
+    Updated 2026-05-15: --adaptive-n-pcs is ON BY DEFAULT
+    (BooleanOptionalAction). --full-memory-test now wins over
+    --adaptive-n-pcs because the flag's whole point is to disable
+    adaptive shrinking."""
     from recovar.commands import run_test_dataset as rtd
 
     parser = rtd._build_parser()
 
-    # No flags at all — still get --adaptive-n-pcs.
+    # No flags at all — adaptive is now default-True, so we get --adaptive-n-pcs.
     args = parser.parse_args([])
     fwd = rtd._build_forward_argv(args)
     assert "--adaptive-n-pcs" in fwd
+    assert "--no-adaptive-n-pcs" not in fwd
 
-    # --gpu-budget-gb only — still spliced.
+    # --gpu-budget-gb only — still spliced with adaptive ON.
     args = parser.parse_args(["--gpu-budget-gb", "32"])
     fwd = rtd._build_forward_argv(args)
     assert "--gpu-budget-gb" in fwd
     assert "32.0" in fwd
     assert "--adaptive-n-pcs" in fwd
 
-    # --full-memory-test — opt out.
+    # --full-memory-test — opt out (splices --no-adaptive-n-pcs explicitly).
     args = parser.parse_args(["--gpu-budget-gb", "32", "--full-memory-test"])
     fwd = rtd._build_forward_argv(args)
     assert "--gpu-budget-gb" in fwd
+    assert "--no-adaptive-n-pcs" in fwd
+    assert "--adaptive-n-pcs" not in fwd  # only the --no- form is present
+
+    # --no-adaptive-n-pcs explicit — opt out.
+    args = parser.parse_args(["--no-adaptive-n-pcs"])
+    fwd = rtd._build_forward_argv(args)
+    assert "--no-adaptive-n-pcs" in fwd
     assert "--adaptive-n-pcs" not in fwd
 
-    # --full-memory-test + --adaptive-n-pcs — adaptive wins (logged conflict).
+    # --full-memory-test + --adaptive-n-pcs — --full-memory-test wins
+    # (the user explicitly asked to disable shrinking).
     args = parser.parse_args(["--full-memory-test", "--adaptive-n-pcs"])
     fwd = rtd._build_forward_argv(args)
-    assert "--adaptive-n-pcs" in fwd
+    assert "--no-adaptive-n-pcs" in fwd
 
 
 def test_run_test_dataset_command_set_is_single_source_of_truth():

@@ -247,40 +247,24 @@ def _hint_gpu_oom(ctx: DiagnosticContext) -> ErrorHint:
     adaptive_already = bool(plan.get("adaptive_n_pcs")) if isinstance(plan, dict) else False
 
     # Case 1: another process is using the GPU.
+    # Only fire on CONFIRMED PID evidence — i.e. nvidia-smi enumerated
+    # at least one compute process whose PID != ours. Don't infer
+    # "another process" from "GPU is partially occupied but PID list
+    # is empty": that signal is common when nvidia-smi can't enumerate
+    # under cgroup / slurm isolation and recovar itself is the holder.
+    # Falling through to case 3 (generic) is the right behavior there.
     own_pid = os.getpid()
     other_procs = [p for p in ctx.physical_processes if p.get("pid") != own_pid]
     other_used_gb = sum(p.get("used_mb", 0) / 1024.0 for p in other_procs)
-    # Also surface a weaker signal: the GPU was not mostly-empty at launch
-    # but nvidia-smi enumerated NO compute PIDs at all (common with cgroup
-    # isolation or non-compute clients). If physical_processes lists *any*
-    # PIDs but only ours, the GPU is genuinely ours — don't misattribute.
-    occupied_gb = (
-        ctx.physical_total_gb - ctx.physical_free_gb
-        if (ctx.physical_total_gb and ctx.physical_free_gb is not None)
-        else None
-    )
-    weak_external_signal = (
-        len(ctx.physical_processes) == 0
-        and occupied_gb is not None
-        and ctx.physical_total_gb
-        and occupied_gb >= max(2.0, 0.15 * ctx.physical_total_gb)
-    )
-    if other_used_gb >= 1.0 or weak_external_signal:
-        if other_procs:
-            proc_str = ", ".join(
-                f"PID {p['pid']} ({p.get('name', '?')}, {p.get('used_mb', 0) / 1024:.1f} GB)" for p in other_procs[:3]
-            )
-            cause = (
-                f"Another process appears to be using {other_used_gb:.1f} GB on this GPU "
-                f"({proc_str}). That likely left RECOVAR without enough headroom for its "
-                f"requested workload."
-            )
-        else:
-            cause = (
-                f"GPU 0 reports {occupied_gb:.1f} GB / {ctx.physical_total_gb:.1f} GB in use, "
-                f"but nvidia-smi didn't enumerate the holding PID. Something on this node is "
-                f"consuming GPU memory outside RECOVAR — likely another job."
-            )
+    if other_procs and other_used_gb >= 1.0:
+        proc_str = ", ".join(
+            f"PID {p['pid']} ({p.get('name', '?')}, {p.get('used_mb', 0) / 1024:.1f} GB)" for p in other_procs[:3]
+        )
+        cause = (
+            f"Another process is using {other_used_gb:.1f} GB on this GPU "
+            f"({proc_str}). That likely left RECOVAR without enough headroom "
+            f"for its requested workload."
+        )
         suggestions = [
             "CUDA_VISIBLE_DEVICES=<idx-of-free-gpu> recovar pipeline ...   (run on a different GPU)",
             "OR lower the budget so RECOVAR fits beside the other process: --gpu-gb <smaller-N>",
@@ -288,7 +272,7 @@ def _hint_gpu_oom(ctx: DiagnosticContext) -> ErrorHint:
         ]
         return ErrorHint(
             category="gpu_oom",
-            summary="RECOVAR ran out of GPU memory — another process appears to be using this GPU.",
+            summary="RECOVAR ran out of GPU memory — another process is using this GPU.",
             likely_cause=cause,
             suggestions=suggestions,
             diagnostic_context=_format_memory_context(ctx),

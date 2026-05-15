@@ -37,13 +37,22 @@ def test_oom_hint_diagnoses_and_recommends_one_fix():
 
 
 def test_oom_hint_when_gpu_occupied_recommends_switching_gpus():
-    """physical_free << physical_total → diagnose 'another process is hogging
-    the GPU' and recommend CUDA_VISIBLE_DEVICES, NOT a wall of budget knobs."""
+    """nvidia-smi enumerated a competing PID → diagnose 'another process' and
+    recommend CUDA_VISIBLE_DEVICES, NOT a wall of budget knobs.
+
+    Updated 2026-05-15: requires CONFIRMED PID evidence. Without
+    enumerated PIDs we now (conservatively) fall through to case 3
+    (generic OOM) rather than misattribute. Driver clarification: the
+    previous heuristic fired on 'physical_free<<total + empty PID list',
+    which under slurm cgroup isolation often hid recovar itself."""
     from recovar.utils import error_hints
 
     ctx = error_hints.DiagnosticContext(
         physical_total_gb=80.0,
-        physical_free_gb=1.5,  # 78.5 GB consumed elsewhere
+        physical_free_gb=1.5,
+        physical_processes=[
+            {"pid": 99999, "name": "other_user.py", "used_mb": 78_000},
+        ],
     )
     hint = error_hints.classify_text("XlaRuntimeError: RESOURCE_EXHAUSTED: failed to allocate 12.34 GiB", ctx)
     assert hint is not None
@@ -51,9 +60,30 @@ def test_oom_hint_when_gpu_occupied_recommends_switching_gpus():
     assert "another process" in hint.summary.lower() or "hogging" in hint.summary.lower()
     blob = "\n".join(hint.suggestions)
     assert "CUDA_VISIBLE_DEVICES" in blob
-    # Sanity: should NOT lecture about --low-memory-option in this branch.
     assert "--low-memory-option" not in blob
     assert "--very-low-memory-option" not in blob
+
+
+def test_oom_hint_when_gpu_occupied_but_no_pid_enumerated_falls_through():
+    """When the GPU appears occupied (free << total) but nvidia-smi
+    enumerated NO compute PIDs (cgroup/slurm isolation case), do NOT
+    misdiagnose as 'another process'. Fall through to case 3 (generic)
+    so the user isn't told to switch GPUs when really it's just
+    recovar itself whose PID wasn't enumerated."""
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        physical_total_gb=80.0,
+        physical_free_gb=1.5,  # appears 78.5 GB used by "someone"
+        physical_processes=[],  # but nvidia-smi enumerated nothing
+    )
+    hint = error_hints.classify_text("RESOURCE_EXHAUSTED: failed to allocate 12.34 GiB", ctx)
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+    # Case 3 (generic) — NOT case 1 (other-process).
+    assert "another process" not in hint.summary.lower()
+    blob = "\n".join(hint.suggestions)
+    assert "--gpu-gb" in blob
 
 
 def test_oom_hint_when_planner_predicted_oom_recommends_adaptive():
