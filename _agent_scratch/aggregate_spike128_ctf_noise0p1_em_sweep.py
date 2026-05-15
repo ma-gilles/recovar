@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 from pathlib import Path
@@ -14,7 +15,10 @@ from recovar import utils
 from recovar.commands import spike_kernel_report as skr
 
 
-RUN_DIR = Path("/scratch/gpfs/GILLES/mg6942/runs/spike_grid128_box320_ctf_noise0p1_n200k_raw_index_embsigma100_20260514")
+DEFAULT_RUN_DIR = Path(
+    "/scratch/gpfs/GILLES/mg6942/runs/spike_grid128_box320_ctf_noise0p1_n200k_raw_index_embsigma100_20260514"
+)
+RUN_DIR = DEFAULT_RUN_DIR
 MASK_PATH = RUN_DIR / "05_masks/mask_crafted_level0p0126_cosine3_128.mrc"
 BASE_TAG = "em_deg3_i1_h1_32"
 SWEEP_TAGS = [
@@ -346,7 +350,17 @@ def _write_readable_plots(out_dir: Path, curve_payload: dict, rows: list[dict]) 
     return written
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-dir", type=Path, default=DEFAULT_RUN_DIR)
+    return parser.parse_args()
+
+
 def main() -> None:
+    global RUN_DIR, MASK_PATH
+    args = parse_args()
+    RUN_DIR = args.run_dir
+    MASK_PATH = RUN_DIR / "05_masks/mask_crafted_level0p0126_cosine3_128.mrc"
     out_dir = RUN_DIR / "09_local_poly_em_sweep_summary"
     out_dir.mkdir(parents=True, exist_ok=True)
     tags = discover_tags()
