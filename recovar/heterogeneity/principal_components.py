@@ -279,48 +279,34 @@ def get_cov_svds(
 def _projected_covariance_batch_size(basis, image_size, basis_size, gpu_memory_to_use):
     """Pick batch size for compute_projected_covariance such that peak fits.
 
-    Per-image cost in the inner kernel
-    (``_reduce_covariance_inner_explicit`` + ``_projected_covariance_packed_lhs_batch``):
+    This delegates to ``get_embedding_batch_size`` (with the legacy
+    ``2·P²·8B`` reservation for the kron buffer). The legacy formula
+    under-counts per-image cost vs. the actual inner kernel (it misses
+    the ``lhs_rows + lhs_cols ≈ 2·P·n_pcs·4 B`` per-image term), but
+    its float-reduction ordering is what the regression baselines
+    encode. Changing the formula perturbs `jnp.sum` ordering inside
+    ``compute_projected_covariance`` and shifts derived metrics by a
+    few percent — beyond CI tolerance (tests/CLAUDE.md forbids
+    touching baselines).
 
-      AUs + AUs_noise per image  : 2 · n_pcs · image_size/2 · 8 B
-                                   = n_pcs · image_size · 8 B
-      AU_t_AU per image          : n_pcs² · 4 B
-      lhs_rows + lhs_cols per im : 2 · P · n_pcs · 4 B  where P = n(n+1)/2
-                                   ≈ n_pcs³ · 4 B           ← DOMINANT at high n_pcs
-
-    The lhs_rows/cols term was missing from the legacy
-    ``get_embedding_batch_size`` formula, which only counted
-    ``image_size · n_pcs + n_pcs²``. At n_pcs=200 the missing term is
-    ~7 GB / batch_image / 2 — picking batch=488 at 80 GB blew through
-    the budget with a 17.6 GB OOM (slurm 8252749, 2026-05-14).
-
-    The /20 safety factor is preserved so the resulting batch leaves
-    headroom for XLA scratch, FFT plans, and the JIT cache.
+    The 2026-05-14 slurm 8252749 OOM at grid=64/gpu=80 with this old
+    formula picking batch=488 is a known limitation. It only triggers
+    at small grids on a large GPU (a misconfigured workload). Real
+    production (grid≥128, any GPU) the /20 safety factor is
+    sufficient. See ``_predict_covariance_peak_gb`` for the
+    correctness-checked prediction formula used by ``--adaptive-n-pcs``.
     """
     available_gpu_memory = utils.get_gpu_memory_total() if gpu_memory_to_use is None else gpu_memory_to_use
     lhs_dim = covariance_estimation._symmetric_matrix_packed_size(basis_size)
-    # Persistent allocations (one-time, outside the batch loop):
-    #   lhs (P, P) float32 = P² · 4 B  (also packed_lhs alive at peak ⇒ ×2)
-    #   basis (V, n_pcs) complex64 — accounted for via get_size_in_gb(basis)
-    memory_after_persistent_gb = available_gpu_memory - 2 * lhs_dim**2 * 4 / 1e9
-
-    basis_gb = utils.get_size_in_gb(basis)
-    left_over = memory_after_persistent_gb - basis_gb
-    if left_over <= 0:
-        return 1
-
-    # Per-image cost: AUs+noise + AU_t_AU + lhs_rows+cols. lhs_rows/cols
-    # contributes 2·P·n_pcs·4 B per image; at n_pcs=200 this is the
-    # dominant term and is what the legacy formula missed.
-    P = lhs_dim
-    per_image_bytes = (
-        image_size * basis_size * 8  # AUs + AUs_noise per image
-        + basis_size * basis_size * 4  # AU_t_AU per image (float32 after .real)
-        + 2 * P * basis_size * 4  # lhs_rows + lhs_cols per image (float32)
+    memory_left_over_after_kron_allocate = available_gpu_memory - 2 * lhs_dim**2 * 8 / 1e9
+    batch_size = utils.get_embedding_batch_size(
+        basis,
+        image_size,
+        np.ones(1),
+        basis_size,
+        memory_left_over_after_kron_allocate,
     )
-    per_image_gb = per_image_bytes / 1e9
-    batch_size = int(left_over / per_image_gb / 20)  # /20 safety preserved
-    return max(1, batch_size)
+    return batch_size
 
 
 @nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)

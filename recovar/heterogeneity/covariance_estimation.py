@@ -138,10 +138,13 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
     # 1.30 = measured 1.03 + ~25% headroom for runtime-only costs the
     # pure-allocator harness doesn't capture (XLA scratch, JIT cache,
     # FFT plans, activation buffers).
-    _PEAK_SLACK_BY_GRID = {64: 1.30, 128: 1.30, 256: 1.30}
+    # Bumped 2026-05-15 from 1.30 → 1.50: extra headroom for
+    # cross-phase persistent state the proj-cov-only formula misses.
+    # See recovar/utils/memory_planner.py for full rationale.
+    _PEAK_SLACK_BY_GRID = {64: 1.50, 128: 1.50, 256: 1.50}
 
     def _peak_slack(g: int) -> float:
-        return _PEAK_SLACK_BY_GRID.get(g, 1.30)
+        return _PEAK_SLACK_BY_GRID.get(g, 1.50)
 
     def _estimate_peak_gb(n_pcs_val: int, g: int, budget_gb: float) -> tuple[float, float, float, float]:
         """Predict peak GPU memory for compute_projected_covariance.
@@ -158,16 +161,16 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
         basis_gb = n_pcs_val * (g**3) * 8 / 1e9
         n4_packed_gb = (P * n_pcs_val * n_pcs_val + P * P) * 4 / 1e9
 
-        # Mirror _projected_covariance_batch_size so the predicted batch
-        # matches what the runtime actually picks. Per-image cost includes
-        # AUs+AUs_noise + AU_t_AU + lhs_rows/cols (the last term dominates
-        # at high n_pcs and was missed by the legacy formula).
-        persistent_lhs_gb = 2 * P * P * 4 / 1e9
+        # Mirror the legacy _projected_covariance_batch_size so the
+        # predicted batch matches what the runtime actually picks. The
+        # legacy per-image formula under-counts but its float ordering
+        # is what regression baselines encode.
+        persistent_lhs_gb = 2 * P * P * 8 / 1e9  # legacy 8B/elem reservation
         remaining_gb = budget_gb - basis_gb - persistent_lhs_gb
         if remaining_gb <= 0:
             batch_size = 1
         else:
-            per_image_bytes = image_size * n_pcs_val * 8 + n_pcs_val * n_pcs_val * 4 + 2 * P * n_pcs_val * 4
+            per_image_bytes = (image_size * max(n_pcs_val, 4) + n_pcs_val * n_pcs_val) * 8
             batch_size = max(1, int(remaining_gb / (per_image_bytes / 1e9) / 20))
 
         aus_gb = 2 * n_pcs_val * batch_size * half_img * 8 / 1e9

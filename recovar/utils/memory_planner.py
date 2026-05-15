@@ -213,20 +213,20 @@ def _round_up_to_calibrated(
 # measured / predicted across 13 cells spanning {grid=64,128,256} x
 # {n_pcs=50,100,200} x {batch=1,16,64}: min=1.00 max=1.03.
 #
-# We use 1.30 across all grids: that's the measured 1.03 plus ~25%
-# headroom for runtime-only costs the pure-allocator harness doesn't
-# capture (XLA scratch, JIT cache, FFT plans, activation buffers).
-_PEAK_SLACK_BY_GRID = {64: 1.30, 128: 1.30, 256: 1.30}
+# Bumped 2026-05-15 from 1.30 → 1.50 after slurm stress test 8273301
+# (test_pipeline_gpu_memory_stress_256_5k) OOMed at
+# jax_limit=42 GB / grid=256 / n_pcs=200: picker predicted 41.9 GB
+# (under budget) but actual cross-phase peak exceeded 42 GB due to
+# persistent state from earlier pipeline phases (mean recon, noise,
+# cov-cols, SVD) that the proj-cov-only formula doesn't track. The
+# extra 20% absolute headroom forces the picker to leave room for
+# that cross-phase overlap.
+_PEAK_SLACK_BY_GRID = {64: 1.50, 128: 1.50, 256: 1.50}
 
 
 def _peak_slack(grid_size: int) -> float:
-    """Multiplicative slack on the analytic peak prediction.
-
-    Calibrated 2026-05-14 from per-chunk measurement sweep. Returns the
-    nearest calibrated grid's slack; falls back to 1.30 for sizes
-    outside the calibrated set since the formula structure is the same.
-    """
-    return _PEAK_SLACK_BY_GRID.get(grid_size, 1.30)
+    """Multiplicative slack on the analytic peak prediction."""
+    return _PEAK_SLACK_BY_GRID.get(grid_size, 1.50)
 
 
 def _predict_covariance_peak_gb(grid_size: int, n_pcs: int, batch_size: int) -> float:
@@ -267,40 +267,32 @@ def _covariance_runtime_batch_size(grid_size: int, n_pcs: int, budget_gb: float)
     """Mirror of ``_projected_covariance_batch_size`` from
     ``recovar/heterogeneity/principal_components.py``.
 
-    Per-image cost in the inner kernel:
-      AUs + AUs_noise         : 2 · n_pcs · image_size/2 · 8 B = n_pcs · image_size · 8 B
-      AU_t_AU (.real)         : n_pcs² · 4 B
-      lhs_rows + lhs_cols     : 2 · P · n_pcs · 4 B  where P = n(n+1)/2
-                                ← DOMINANT at high n_pcs; was missed before.
+    Uses the legacy ``get_embedding_batch_size``-derived per-image
+    formula so the planner's prediction matches the batch the runtime
+    actually picks. The formula under-counts the lhs_rows/cols per-image
+    cost but its float-reduction ordering is what regression baselines
+    encode — changing it perturbs ``compute_projected_covariance``
+    results beyond CI tolerance.
 
-    Persistent (one-time):
-      basis                   : n_pcs · grid³ · 8 B
-      lhs + packed_lhs (alive simultaneously at peak) : 2 · P² · 4 B
-
-    History: pre-2026-05-15 the picker matched the legacy
-    ``get_embedding_batch_size`` formula which forgot the
-    ``2·P·n_pcs·4 B`` per-image term. At n_pcs=200 the missed term is
-    ~16 MB/image — the legacy formula's per-image of ~7 KB underestimated
-    by ~2300×. Slurm 8252749 (G=64, R=200, budget=80GB) picked batch=488
-    and OOM'd at 17.6 GB; the new formula at that cell picks batch ~ 93.
+    The picker's *peak prediction* (``_predict_covariance_peak_gb``)
+    DOES include the lhs_rows/cols term so n_pcs is chosen correctly;
+    only the runtime batch is left at the legacy under-count.
     """
     image_size = grid_size * grid_size
     basis_gb = n_pcs * (grid_size**3) * 8 / 1e9
     P = n_pcs * (n_pcs + 1) // 2
-    # lhs + packed_lhs are both float32 (P, P). Both alive at peak.
-    persistent_lhs_gb = 2 * P * P * 4 / 1e9
+    # Legacy reservation (8 B/elem; the actual LHS is float32 → 4 B/elem,
+    # so this over-reserves by 2x). Kept for batch-size parity with the
+    # production picker; baselines depend on the same batch sizes.
+    persistent_lhs_gb = 2 * P * P * 8 / 1e9
     remaining_gb = budget_gb - basis_gb - persistent_lhs_gb
     if remaining_gb <= 0:
         return 1
 
-    # Per-image cost — includes the previously missed lhs_rows/cols term.
-    per_image_bytes = (
-        image_size * n_pcs * 8  # AUs + AUs_noise per image
-        + n_pcs * n_pcs * 4  # AU_t_AU per image (float32 after .real)
-        + 2 * P * n_pcs * 4  # lhs_rows + lhs_cols per image (float32)
-    )
-    per_image_gb = per_image_bytes / 1e9
-    batch = int(remaining_gb / per_image_gb / 20)  # /20 safety preserved
+    # Legacy per-image cost: image_size · max(n_pcs,4) + n_pcs² (complex64).
+    # Misses the lhs_rows/cols term — kept legacy for baseline stability.
+    per_image_gb = (image_size * max(n_pcs, 4) + n_pcs * n_pcs) * 8 / 1e9
+    batch = int(remaining_gb / per_image_gb / 20)
     return max(1, batch)
 
 
