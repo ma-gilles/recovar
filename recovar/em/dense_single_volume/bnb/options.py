@@ -81,8 +81,8 @@ class BranchBoundOptions:
     images by similar candidate count, pads to bucket max, and runs one
     JAX kernel per bucket — should be 50-200x faster at scale."""
 
-    bucketed_axis_quantum: int = 1024
-    bucketed_shift_quantum: int = 64
+    bucketed_axis_quantum: int = 256
+    bucketed_shift_quantum: int = 16
     """Quanta for rounding up per-image (n_axis, n_shift) to bucket size in
     the bucketed scorer. Larger quanta = fewer JIT shapes (better cache
     hit rate) at the cost of more padding."""
