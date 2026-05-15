@@ -88,8 +88,10 @@ def _score_normalize_mstep(
     normalization_log_z,
     shifted_recon_split,
     ctf2_over_nv_recon,
+    reconstruction_probability_threshold=None,
     *,
     has_normalization_log_z: bool,
+    has_reconstruction_probability_threshold: bool = False,
     half_spectrum_scoring: bool,
     use_float64_normalization: bool,
     reconstruct_significant_only: bool,
@@ -154,13 +156,21 @@ def _score_normalize_mstep(
     reconstruction_image_mask = valid_image_mask & row_has_mass
 
     if reconstruct_significant_only:
-        flat_probs = probs.reshape(probs.shape[0], -1)
-        significant_flat, n_significant_samples = _find_significant_mask_full_sort(
-            flat_probs,
-            adaptive_fraction=adaptive_fraction,
-            max_significants=max_significants,
-        )
-        reconstruction_sample_mask = significant_flat.reshape(probs.shape)
+        if has_reconstruction_probability_threshold:
+            threshold = reconstruction_probability_threshold.astype(probs.dtype).reshape((probs.shape[0], 1, 1))
+            reconstruction_sample_mask = (probs > 0.0) & (probs >= threshold)
+            n_significant_samples = jnp.sum(
+                reconstruction_sample_mask.reshape(probs.shape[0], -1),
+                axis=1,
+            ).astype(jnp.int32)
+        else:
+            flat_probs = probs.reshape(probs.shape[0], -1)
+            significant_flat, n_significant_samples = _find_significant_mask_full_sort(
+                flat_probs,
+                adaptive_fraction=adaptive_fraction,
+                max_significants=max_significants,
+            )
+            reconstruction_sample_mask = significant_flat.reshape(probs.shape)
         reconstruction_sample_mask = reconstruction_sample_mask & reconstruction_image_mask[:, None, None]
         reconstruction_rotation_mask = jnp.any(reconstruction_sample_mask, axis=-1)
         n_significant_samples = jnp.where(reconstruction_image_mask, n_significant_samples, 0)
@@ -367,6 +377,7 @@ def _project_local_half_spectrum(
         "n_shells",
         "has_normalization_log_z",
         "has_normalization_log_evidence",
+        "has_reconstruction_probability_threshold",
     ),
 )
 def run_local_bucket_big_jit(
@@ -405,6 +416,7 @@ def run_local_bucket_big_jit(
     valid_image_mask,
     normalization_log_z,
     normalization_log_evidence,
+    reconstruction_probability_threshold,
     config,
     *,
     mask_mode: str,
@@ -436,6 +448,7 @@ def run_local_bucket_big_jit(
     n_shells: int,
     has_normalization_log_z: bool,
     has_normalization_log_evidence: bool,
+    has_reconstruction_probability_threshold: bool,
 ):
     """Run one exact-local bucket in a single compiled numeric boundary.
 
@@ -447,7 +460,10 @@ def run_local_bucket_big_jit(
     if apply_integer_pre_shift:
         batch = _apply_integer_pre_shifts(batch, integer_pre_shifts)
 
-    ctf_half = config.compute_ctf_half(ctf_params)
+    precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
+    ctf_half = config.compute_ctf_half(ctf_params).astype(precision_policy.score_real_dtype)
+    noise_variance_half = noise_variance_half.astype(precision_policy.score_real_dtype)
+    translation_phases_half = translation_phases_half.astype(precision_policy.score_complex_dtype)
     ctf2_over_nv_half = ctf_half**2 / noise_variance_half
 
     processed_score_half = _preprocess_half(
@@ -456,7 +472,7 @@ def run_local_bucket_big_jit(
         config,
         apply_image_mask=score_with_masked_images,
         mask_mode=mask_mode,
-    )
+    ).astype(precision_policy.score_complex_dtype)
     if score_with_masked_images:
         processed_recon_half = _preprocess_half(
             batch,
@@ -464,7 +480,7 @@ def run_local_bucket_big_jit(
             config,
             apply_image_mask=False,
             mask_mode=mask_mode,
-        )
+        ).astype(precision_policy.score_complex_dtype)
     else:
         processed_recon_half = processed_score_half
 
@@ -551,7 +567,6 @@ def run_local_bucket_big_jit(
         proj_for_noise = proj_half
 
     proj_weighted = proj_half * score_half_weights[None, None, :]
-    precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
     (
         shifted_score,
         shifted_recon,
@@ -604,7 +619,9 @@ def run_local_bucket_big_jit(
         effective_normalization_log_z,
         shifted_recon_split,
         ctf2_over_nv_recon,
+        reconstruction_probability_threshold=reconstruction_probability_threshold,
         has_normalization_log_z=effective_has_normalization_log_z,
+        has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
         half_spectrum_scoring=half_spectrum_scoring,
         use_float64_normalization=use_float64_normalization,
         reconstruct_significant_only=reconstruct_significant_only,
@@ -698,6 +715,7 @@ def run_local_bucket_big_jit(
             best_argmax,
             max_posterior,
             probs_sum_t,
+            reconstruction_probs_sum_t,
             n_significant_samples,
             reconstruction_rotation_mask,
             reconstruction_row_count,
@@ -719,6 +737,7 @@ def run_local_bucket_big_jit(
         best_argmax,
         max_posterior,
         probs_sum_t,
+        reconstruction_probs_sum_t,
         n_significant_samples,
         reconstruction_rotation_mask,
         reconstruction_row_count,

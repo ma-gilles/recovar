@@ -165,7 +165,9 @@ def compute_stepsize(
         inflate = float(np.float32(_scheme[: _scheme.find("-step")]))
         if inflate <= 0.0:
             raise ValueError("Invalid inflate value for --grad_stepsize_scheme <inflate>-step (inflate > 1)")
-        sigmoid_len = max(float(phase_lengths.grad_inbetween_iter - 1), 0.0) / 2.0
+        # RELION assigns `float a = grad_inbetween_iter/2`, so the division
+        # is integer division before conversion to float.
+        sigmoid_len = float(max(int(phase_lengths.grad_inbetween_iter), 0) // 2)
         return _step_sigmoid_value(
             iter=iter,
             grad_ini_iter=phase_lengths.grad_ini_iter,
@@ -208,7 +210,10 @@ def compute_tau2_fudge(
         deflate = float(np.float32(_scheme[: _scheme.find("-step")]))
         if deflate <= 0.0:
             raise ValueError("Invalid deflate value for --tau2_fudge_scheme <deflate>-step (deflate > 1)")
-        sigmoid_len = max(float(phase_lengths.grad_inbetween_iter - 1), 0.0) / 4.0
+        # RELION assigns `float a = grad_inbetween_iter/4`, so short runs can
+        # hit a=0. The resulting 0/0 at iter==grad_ini_iter intentionally
+        # produces NaN and is written to InitialModel model.star.
+        sigmoid_len = float(max(int(phase_lengths.grad_inbetween_iter), 0) // 4)
         return _step_sigmoid_value(
             iter=iter,
             grad_ini_iter=phase_lengths.grad_ini_iter,
@@ -237,11 +242,11 @@ def _step_sigmoid_value(
     a = float(sigmoid_length)
     b = float(grad_ini_iter)
     if a <= 0.0:
-        # Degenerate schedule: inbetween phase is zero. Sigmoid is undefined.
-        # Fall back to RELION's behaviour at x >> b: scale -> 0, value -> base.
-        # (Matches C++ divide-by-zero in rare boundary configs by short-
-        # circuiting to the asymptote.)
-        return base
+        offset = x - b
+        if offset == 0.0:
+            return math.nan
+        scale = 0.0 if offset > 0.0 else 1.0
+        return inflated * scale + base * (1.0 - scale)
     exponent = (x - b - a / 2.0) / (a / 4.0)
     # Cap the exponent to avoid math.pow overflow; RELION relies on IEEE-754
     # saturating to +inf which makes scale -> 0.

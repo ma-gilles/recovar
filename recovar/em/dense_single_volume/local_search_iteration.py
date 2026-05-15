@@ -264,6 +264,7 @@ def _run_local_search_iteration(
         volume_shape=experiment_dataset.volume_shape,
         padding_factor=max(int(projection_padding_factor), int(reconstruction_padding_factor), 1),
         n_classes=local_kernel_classes,
+        current_size=current_size,
     )
     if (
         local_batch_plan.image_batch_size != image_batch_size

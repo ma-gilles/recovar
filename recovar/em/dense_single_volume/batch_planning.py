@@ -32,6 +32,12 @@ _RELION_EM_BATCH_SCORE_FRACTION = 0.20
 _RELION_EM_BATCH_MAX_PROJECTION_GB = 10.0
 _RELION_EM_BATCH_MIN_PROJECTION_GB = 0.5
 _RELION_EM_BATCH_PROJECTION_LIVE_FACTOR = 1.5
+_RELION_EM_BATCH_SCORE_MATMUL_LIVE_FACTOR = 7.0
+_RELION_EM_BATCH_POSE_PIXEL_LIVE_FACTOR = 1.25
+_RELION_EM_BATCH_POSE_PIXEL_FRACTION = 0.035
+_RELION_EM_BATCH_POSE_PIXEL_WINDOW_FRACTION = 0.30
+_RELION_EM_BATCH_ACTIVE_SCORE_TILE_LIVE_FACTOR = 4.0
+_RELION_EM_BATCH_ACTIVE_SCORE_TILE_FRACTION = 0.10
 _RELION_EM_BATCH_TRANSLATION_TILE_FRACTION = 0.35
 _RELION_EM_BATCH_RUNTIME_TRANSLATION_TILE_FRACTION = 0.17
 _RELION_EM_BATCH_MAX_TRANSLATION_TILE_GB = 14.0
@@ -55,7 +61,11 @@ class _RelionEMBatchPlan:
     gpu_used_estimate_gb: float
     runtime_free_estimate_gb: float
     projection_block_gb: float
+    active_score_tile_budget_gb: float
+    active_score_tile_gb: float
+    pose_pixel_tile_gb: float
     translation_tile_gb: float
+    score_pixel_count: int
 
 
 def _safe_int(value, default):
@@ -63,6 +73,19 @@ def _safe_int(value, default):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _active_half_spectrum_pixels(image_shape, current_size: int | None) -> int:
+    full_half_pixels = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
+    if current_size is None:
+        return full_half_pixels
+    radius = max(0, int(current_size) // 2)
+    if radius <= 0:
+        return 1
+    row_freq = np.minimum(np.arange(int(image_shape[0])), int(image_shape[0]) - np.arange(int(image_shape[0])))
+    col_freq = np.arange(int(image_shape[1]) // 2 + 1)
+    keep = row_freq[:, None] * row_freq[:, None] + col_freq[None, :] * col_freq[None, :] <= radius * radius
+    return max(1, min(full_half_pixels, int(np.count_nonzero(keep))))
 
 
 def _estimate_relion_em_batch_sizes(
@@ -76,6 +99,7 @@ def _estimate_relion_em_batch_sizes(
     padding_factor: int,
     n_classes: int = 1,
     gpu_memory_gb: float | None = None,
+    current_size: int | None = None,
 ) -> _RelionEMBatchPlan:
     """Choose EM microbatch sizes from pose-grid, image, class, and GPU size."""
     # Indirection through iteration_loop module so test monkeypatches on
@@ -144,35 +168,109 @@ def _estimate_relion_em_batch_sizes(
 
     score_image_cap = max(1, score_float_budget // max(n_rot * n_trans * n_classes, 1))
     full_half_pixels = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
+    score_half_pixels = _active_half_spectrum_pixels(image_shape, current_size)
+    active_score_tile_budget_gb = max(
+        _RELION_EM_BATCH_MIN_PROJECTION_GB,
+        min(
+            projection_budget_gb,
+            gpu_memory_gb * _RELION_EM_BATCH_ACTIVE_SCORE_TILE_FRACTION,
+            usable_from_runtime_gb * _RELION_EM_BATCH_ACTIVE_SCORE_TILE_FRACTION,
+        ),
+    )
+    active_score_bytes_per_image = max(
+        1,
+        int(
+            np.ceil(
+                n_trans
+                * score_half_pixels
+                * np.dtype(np.complex128).itemsize
+                * n_classes
+                * _RELION_EM_BATCH_ACTIVE_SCORE_TILE_LIVE_FACTOR,
+            )
+        ),
+    )
+    active_score_image_cap = max(1, int(active_score_tile_budget_gb * 1e9 // active_score_bytes_per_image))
     translation_bytes_per_image = max(
         1,
         2 * n_trans * full_half_pixels * np.dtype(np.complex64).itemsize * n_classes,
     )
     translation_image_cap = max(1, int(translation_tile_budget_gb * 1e9 // translation_bytes_per_image))
-    image_batch = min(requested_image_batch_size, score_image_cap, translation_image_cap)
+    image_batch = min(requested_image_batch_size, score_image_cap, translation_image_cap, active_score_image_cap)
 
     score_rotation_cap = max(1, score_float_budget // max(image_batch * n_trans * n_classes, 1))
+    projection_half_pixels = full_half_pixels if current_size is None else score_half_pixels
     projection_bytes_per_rotation = max(
         1,
         int(
             np.ceil(
-                full_half_pixels
+                projection_half_pixels
                 * np.dtype(np.complex64).itemsize
                 * n_classes
                 * _RELION_EM_BATCH_PROJECTION_LIVE_FACTOR,
-            )
+            ),
         ),
     )
     projection_rotation_cap = max(1, int(projection_budget_gb * 1e9 // projection_bytes_per_rotation))
-    rotation_cap = min(score_rotation_cap, projection_rotation_cap)
+    score_matmul_bytes_per_rotation = max(
+        1,
+        int(
+            np.ceil(
+                score_half_pixels
+                * np.dtype(np.complex64).itemsize
+                * n_classes
+                * _RELION_EM_BATCH_SCORE_MATMUL_LIVE_FACTOR,
+            )
+        ),
+    )
+    score_matmul_rotation_cap = max(1, int(projection_budget_gb * 1e9 // score_matmul_bytes_per_rotation))
+    active_window_fraction = score_half_pixels / max(1, full_half_pixels)
+    if active_window_fraction > _RELION_EM_BATCH_POSE_PIXEL_WINDOW_FRACTION:
+        pose_pixel_budget_gb = max(
+            _RELION_EM_BATCH_MIN_PROJECTION_GB,
+            min(
+                projection_budget_gb,
+                gpu_memory_gb * _RELION_EM_BATCH_POSE_PIXEL_FRACTION,
+                usable_from_runtime_gb * _RELION_EM_BATCH_RUNTIME_FREE_FRACTION,
+            ),
+        )
+    else:
+        pose_pixel_budget_gb = projection_budget_gb
+    # Dense scoring can materialize a rotation x translation x active-pixel
+    # complex tile. JAX runs with x64 enabled, so budget this as complex128.
+    # This is load-bearing for 100k/256 K=1 global searches: otherwise the
+    # planner allows the full 36,864-rotation block and XLA tries to allocate
+    # a 22 GiB pose-pixel tile in one shot.
+    pose_pixel_bytes_per_rotation = max(
+        1,
+        int(
+            np.ceil(
+                n_trans
+                * score_half_pixels
+                * np.dtype(np.complex128).itemsize
+                * n_classes
+                * _RELION_EM_BATCH_POSE_PIXEL_LIVE_FACTOR,
+            )
+        ),
+    )
+    pose_pixel_rotation_cap = max(1, int(pose_pixel_budget_gb * 1e9 // pose_pixel_bytes_per_rotation))
+    rotation_cap = min(
+        score_rotation_cap,
+        projection_rotation_cap,
+        score_matmul_rotation_cap,
+        pose_pixel_rotation_cap,
+    )
 
     if requested_rotation_block_size >= 64:
-        rotation_block = max(64, min(requested_rotation_block_size, rotation_cap))
+        rotation_block = min(requested_rotation_block_size, rotation_cap)
+        if rotation_cap >= 64:
+            rotation_block = max(64, rotation_block)
     else:
         rotation_block = min(requested_rotation_block_size, rotation_cap)
     rotation_block = max(1, min(rotation_block, n_rot))
 
     projection_block_gb = rotation_block * projection_bytes_per_rotation / 1e9
+    active_score_tile_gb = image_batch * active_score_bytes_per_image / 1e9
+    pose_pixel_tile_gb = rotation_block * pose_pixel_bytes_per_rotation / 1e9
     translation_tile_gb = image_batch * translation_bytes_per_image / 1e9
     return _RelionEMBatchPlan(
         image_batch_size=int(image_batch),
@@ -185,7 +283,11 @@ def _estimate_relion_em_batch_sizes(
         gpu_used_estimate_gb=float(gpu_used_gb),
         runtime_free_estimate_gb=float(runtime_free_gb),
         projection_block_gb=float(projection_block_gb),
+        active_score_tile_budget_gb=float(active_score_tile_budget_gb),
+        active_score_tile_gb=float(active_score_tile_gb),
+        pose_pixel_tile_gb=float(pose_pixel_tile_gb),
         translation_tile_gb=float(translation_tile_gb),
+        score_pixel_count=int(score_half_pixels),
     )
 
 

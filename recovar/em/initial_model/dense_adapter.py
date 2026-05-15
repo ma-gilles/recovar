@@ -45,6 +45,7 @@ _ENGINE_DEFAULTS: dict[str, Any] = {
     "reconstruction_subtract_projected_reference": True,
 }
 _INACTIVE_CLASS_LOG_PRIOR = -1.0e30
+_EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
 _SPARSE_PASS2_CONTROL_KEYS = {
     "adaptive_fraction",
     "max_significants",
@@ -337,14 +338,14 @@ def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int)
     return np.asarray(ftu.half_volume_to_full_volume(half, (n, n, n)), dtype=np.complex128)
 
 
-def reference_to_relion_projector_dense_means(
+def reference_to_relion_projector_half_maps(
     references: np.ndarray,
     *,
     current_size: int,
     padding_factor: int = 1,
     interpolator: int = 1,
-) -> np.ndarray:
-    """Convert recovar-frame references through RELION's ``Projector`` setup (data_dim=2, scaled by ``-N^2``)."""
+) -> tuple[np.ndarray, int]:
+    """Convert recovar-frame references to RELION ``Projector::data`` half maps."""
     from recovar.relion_bind import _relion_bind_core as bind
     from recovar.utils.helpers import recovar_volume_to_relion
 
@@ -352,10 +353,11 @@ def reference_to_relion_projector_dense_means(
     if refs.ndim != 4:
         raise ValueError(f"references must have shape (K, N, N, N), got {refs.shape}")
     n = int(refs.shape[-1])
-    means = []
+    halves = []
+    r_max_values = []
     for ref in refs:
         ref_relion = np.asarray(recovar_volume_to_relion(ref), dtype=np.float64)
-        projector_data, *_ = bind.compute_fourier_transform_map(
+        projector_data, *_unused, r_max, _padding_factor_out, _interpolator_out = bind.compute_fourier_transform_map(
             ref_relion,
             n,
             int(padding_factor),
@@ -364,6 +366,19 @@ def reference_to_relion_projector_dense_means(
             True,
             2,
         )
+        halves.append(np.asarray(projector_data, dtype=np.complex64))
+        r_max_values.append(int(r_max))
+    if len(set(r_max_values)) != 1:
+        raise ValueError(f"RELION projector maps disagree on r_max: {r_max_values}")
+    return np.asarray(halves, dtype=np.complex64), int(r_max_values[0])
+
+
+def relion_projector_half_maps_to_dense_means(projector_half_maps: np.ndarray, ori_size: int) -> np.ndarray:
+    """Embed RELION ``Projector::data`` maps into dense recovar scoring volumes."""
+
+    n = int(ori_size)
+    means = []
+    for projector_data in np.asarray(projector_half_maps):
         dense = _relion_projector_to_dense_volume(np.asarray(projector_data), n)
         # RECOVAR_DENSE_MEANS_SCALE diag override (see project_k2_c2_cc_root_cause_2026_05_03).
         tok = (os.environ.get("RECOVAR_DENSE_MEANS_SCALE") or "-N2").strip()
@@ -372,6 +387,27 @@ def reference_to_relion_projector_dense_means(
             scale = float(tok)
         means.append(dense.reshape(-1) * scale)
     return np.asarray(means, dtype=np.complex64)
+
+
+def reference_to_relion_projector_dense_means(
+    references: np.ndarray,
+    *,
+    current_size: int,
+    padding_factor: int = 1,
+    interpolator: int = 1,
+) -> np.ndarray:
+    """Convert recovar-frame references through RELION's ``Projector`` setup (data_dim=2, scaled by ``-N^2``)."""
+
+    projector_half_maps, _r_max = reference_to_relion_projector_half_maps(
+        references,
+        current_size=current_size,
+        padding_factor=padding_factor,
+        interpolator=interpolator,
+    )
+    return relion_projector_half_maps_to_dense_means(
+        projector_half_maps,
+        int(np.asarray(references).shape[-1]),
+    )
 
 
 def _dense_rotations_for_config(rotations: Any, config: DenseInitialModelEstepConfig) -> np.ndarray:
@@ -403,6 +439,22 @@ _SPARSE_PASS2_RESULT_FIELDS: tuple[tuple[str, type], ...] = (
     ("best_pose_translations", np.float32),
     ("best_pose_rotation_ids", np.int32),
 )
+
+
+def _add_accumulator_weight_meta(meta: dict[str, Any], accumulators: list[VdamAccumulator], K: int) -> None:
+    """Record RELION BPref weight totals used to normalize class prior updates."""
+
+    sums = np.zeros(int(K), dtype=np.float64)
+    halfset_sums: dict[int, np.ndarray] = {}
+    for accum in accumulators:
+        class_idx = int(accum.class_idx)
+        halfset_idx = int(accum.halfset_idx)
+        value = float(np.sum(np.asarray(accum.weight, dtype=np.float64)))
+        sums[class_idx] += value
+        halfset_sums.setdefault(halfset_idx, np.zeros(int(K), dtype=np.float64))[class_idx] += value
+    meta["class_bpref_weight_sums"] = sums
+    for halfset_idx, values in sorted(halfset_sums.items()):
+        meta[f"halfset_{halfset_idx}_class_bpref_weight_sums"] = values
 
 
 def _sparse_pass2_estep_meta(
@@ -485,18 +537,16 @@ def _initial_model_pass2_layout(layout):
     )
 
 
-def _class_local_rotation_log_prior(class_rotation_log_prior, layout) -> np.ndarray | None:
-    if class_rotation_log_prior is None:
-        return None
-    prior = np.asarray(class_rotation_log_prior, dtype=np.float32)
-    parent_ids = np.asarray(getattr(layout, "rotation_posterior_ids_flat", None), dtype=np.int64)
-    if parent_ids.size != int(layout.rotation_log_priors_flat.shape[0]):
-        raise ValueError("local layout is missing coarse parent rotation ids for class priors")
-    if prior.ndim != 2 or prior.shape[1] <= int(np.max(parent_ids, initial=-1)):
+def _class_pass2_rotation_log_prior(group_kwargs: dict[str, Any], class_index: int) -> np.ndarray | None:
+    class_prior = group_kwargs.get("class_rotation_log_prior")
+    if class_prior is None:
+        return group_kwargs.get("rotation_log_prior")
+    prior = np.asarray(class_prior, dtype=np.float32)
+    if prior.ndim != 2 or int(class_index) >= int(prior.shape[0]):
         raise ValueError(
             f"class_rotation_log_prior must have shape (n_classes, n_coarse_rotations), got {prior.shape}",
         )
-    return prior[:, parent_ids]
+    return prior[int(class_index)]
 
 
 def _run_sparse_pass2_initial_model_estep(
@@ -508,6 +558,8 @@ def _run_sparse_pass2_initial_model_estep(
     groups: list[tuple[int, np.ndarray]],
     means,
     mean_variance,
+    relion_projector_half_by_class: np.ndarray | None = None,
+    relion_projector_r_max: int | None = None,
     engine_kwargs: dict[str, Any],
 ) -> DenseInitialModelEstepResult:
     """Run RELION-style coarse significance plus exact-local K-class pass-2."""
@@ -524,6 +576,9 @@ def _run_sparse_pass2_initial_model_estep(
     pass1_time_s = 0.0
     pass2_time_s = 0.0
     n_significant_by_image: list[np.ndarray] = []
+    use_exact_relion_projector = relion_projector_half_by_class is not None
+    if use_exact_relion_projector and relion_projector_r_max is None:
+        raise ValueError("relion_projector_r_max is required with relion_projector_half_by_class")
 
     coarse_translations = _coarse_translations_from_config(config, options)
     translation_step = float(options.get("translation_step", _translation_step_from_grid(coarse_translations)))
@@ -543,11 +598,9 @@ def _run_sparse_pass2_initial_model_estep(
             random_perturbation,
             relion_angular_sampling_deg(healpix_order),
         ).astype(np.float32, copy=False)
-    coarse_rotations_for_dense = (
-        _relion_projector_dense_rotations(coarse_rotations)
-        if config.relion_projector_frame
-        else np.asarray(coarse_rotations, dtype=np.float32)
-    )
+    coarse_rotations_for_dense = np.asarray(coarse_rotations, dtype=np.float32)
+    if config.relion_projector_frame and not use_exact_relion_projector:
+        coarse_rotations_for_dense = _relion_projector_dense_rotations(coarse_rotations)
     accumulators: list[VdamAccumulator] = []
     halfset_results: dict[int, Any] = {}
 
@@ -604,6 +657,8 @@ def _run_sparse_pass2_initial_model_estep(
             do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
             square_window=bool(group_kwargs.get("square_window", False)),
             use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
+            relion_projector_half=relion_projector_half_by_class,
+            relion_projector_r_max=relion_projector_r_max,
         )
         (
             _sig_rot_any,
@@ -616,18 +671,6 @@ def _run_sparse_pass2_initial_model_estep(
         pass1_time_s += time.time() - t0
         n_significant_by_image.append(np.asarray(_n_sig_all, dtype=np.int32))
 
-        # Per-image union of class-wise significant samples; None if any class is full-support.
-        union_significant_samples = []
-        for i in range(int(image_indices.size)):
-            cls = [significant_sample_indices[k][i] for k in range(state.K)]
-            if any(s is None for s in cls):
-                union_significant_samples.append(None)
-                continue
-            arrs = [np.asarray(s, dtype=np.int32) for s in cls if np.asarray(s).size]
-            union_significant_samples.append(
-                np.unique(np.concatenate(arrs)).astype(np.int32, copy=False) if arrs else np.empty(0, dtype=np.int32)
-            )
-
         # RELION reuses the coarse pass-1 pdf_offset for all oversampled pass-2 children.
         pass2_translation_log_prior = pass1_translation_log_prior
         pass2_fine_translation_log_prior = None
@@ -638,30 +681,30 @@ def _run_sparse_pass2_initial_model_estep(
             else:
                 pass2_fine_translation_log_prior = fallback
 
-        local_layout = build_pass2_hypothesis_layout(
-            union_significant_samples,
-            n_coarse_rotations,
-            int(coarse_translations.shape[0]),
-            healpix_order,
-            coarse_translations,
-            oversampling_order=oversampling_order,
-            translation_step=translation_step,
-            rotation_log_prior=group_kwargs.get("rotation_log_prior"),
-            translation_log_prior=pass2_translation_log_prior,
-            fine_translation_log_prior=pass2_fine_translation_log_prior,
-            random_perturbation=random_perturbation,
-            rotation_index_order="relion_hidden",
-        )
-        class_local_rotation_log_prior = _class_local_rotation_log_prior(
-            group_kwargs.get("class_rotation_log_prior"),
-            local_layout,
-        )
-        if config.relion_projector_frame:
-            local_layout = replace(
-                local_layout,
-                rotations_flat=_relion_projector_dense_rotations(local_layout.rotations_flat),
+        local_layouts = []
+        for class_index in range(state.K):
+            class_layout = build_pass2_hypothesis_layout(
+                significant_sample_indices[class_index],
+                n_coarse_rotations,
+                int(coarse_translations.shape[0]),
+                healpix_order,
+                coarse_translations,
+                oversampling_order=oversampling_order,
+                translation_step=translation_step,
+                rotation_log_prior=_class_pass2_rotation_log_prior(group_kwargs, class_index),
+                translation_log_prior=pass2_translation_log_prior,
+                fine_translation_log_prior=pass2_fine_translation_log_prior,
+                random_perturbation=random_perturbation,
+                rotation_index_order="relion_hidden",
+                allow_empty=True,
             )
-        local_layout = _initial_model_pass2_layout(local_layout)
+            if config.relion_projector_frame and not use_exact_relion_projector:
+                class_layout = replace(
+                    class_layout,
+                    rotations_flat=_relion_projector_dense_rotations(class_layout.rotations_flat),
+                )
+            local_layouts.append(_initial_model_pass2_layout(class_layout))
+        local_layout = tuple(local_layouts)
 
         t0 = time.time()
         result = run_local_k_class_em(
@@ -692,11 +735,18 @@ def _run_sparse_pass2_initial_model_estep(
             mstep_relion_x_half=bool(config.relion_bpref_frame),
             reconstruct_significant_only=True,
             adaptive_fraction=adaptive_fraction,
-            max_significants=max_significants,
+            # RELION's gradient InitialModel cap defines the coarse pass-1
+            # support only. Fine pass-2 reconstruction uses adaptive_fraction
+            # without reapplying maximum_significants.
+            max_significants=-1,
+            unify_local_bucket_sizes=True,
+            stats_use_reconstruction_probs=True,
+            class_posterior_sums_from_noise=False,
             return_profile=return_profile,
             return_best_pose_details=True,
             translation_prior_centers=group_kwargs.get("translation_prior_centers"),
-            class_local_rotation_log_prior=class_local_rotation_log_prior,
+            relion_projector_half=relion_projector_half_by_class,
+            relion_projector_r_max=relion_projector_r_max,
         )
         pass2_time_s += time.time() - t0
         halfset_results[int(halfset_idx)] = result
@@ -712,12 +762,14 @@ def _run_sparse_pass2_initial_model_estep(
             )
         )
 
+    meta = _sparse_pass2_estep_meta(
+        halfset_results,
+        {int(group_index): np.asarray(image_ids, dtype=np.int64) for group_index, image_ids in groups},
+    )
+    _add_accumulator_weight_meta(meta, accumulators, state.K)
     out = DenseInitialModelEstepResult(
         accumulators=accumulators,
-        meta=_sparse_pass2_estep_meta(
-            halfset_results,
-            {int(group_index): np.asarray(image_ids, dtype=np.int64) for group_index, image_ids in groups},
-        ),
+        meta=meta,
         halfset_results=halfset_results,
     )
     if return_profile:
@@ -750,19 +802,28 @@ def reference_to_dense_means(references: np.ndarray) -> np.ndarray:
 def _resolve_class_inputs(
     state: InitialModelState,
     config: DenseInitialModelEstepConfig,
-) -> tuple[Any, Any]:
+) -> tuple[Any, Any, np.ndarray | None, int | None]:
+    relion_projector_half_by_class = None
+    relion_projector_r_max = None
     if config.means is not None:
         means = config.means
     elif config.relion_projector_frame:
-        means = reference_to_relion_projector_dense_means(
+        projector_half_by_class, projector_r_max = reference_to_relion_projector_half_maps(
             state.Iref,
             current_size=state.current_size if state.current_size > 0 else state.ori_size,
             padding_factor=config.padding_factor,
         )
+        means = relion_projector_half_maps_to_dense_means(
+            projector_half_by_class,
+            int(state.ori_size),
+        )
+        if os.environ.get(_EXACT_RELION_PROJECTOR_ENV, "").strip().lower() in {"1", "true", "yes"}:
+            relion_projector_half_by_class = projector_half_by_class
+            relion_projector_r_max = projector_r_max
     else:
         means = reference_to_dense_means(state.Iref)
     mean_variance = config.mean_variance if config.mean_variance is not None else np.abs(np.asarray(means)) ** 2
-    return means, mean_variance
+    return means, mean_variance, relion_projector_half_by_class, relion_projector_r_max
 
 
 def _empty_accumulator(state: InitialModelState, class_idx: int, halfset_idx: int) -> VdamAccumulator:
@@ -841,6 +902,7 @@ def _arrays_to_accumulators(
 def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
     meta: dict[str, Any] = {"halfset_ids": tuple(sorted(halfset_results))}
     class_posterior_sums = None
+    class_reconstruction_support_sums = None
     class_direction_posterior_sums = None
     noise_totals: dict[str, Any] | None = None
     for h, result in halfset_results.items():
@@ -848,6 +910,13 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
             sums = np.asarray(result.class_posterior_sums, dtype=np.float64)
             meta[f"halfset_{h}_class_posterior_sums"] = sums
             class_posterior_sums = sums if class_posterior_sums is None else class_posterior_sums + sums
+        per_class_noise = getattr(result, "noise_stats", None)
+        if per_class_noise is not None:
+            support = np.asarray([float(stats.sumw) for stats in per_class_noise], dtype=np.float64)
+            meta[f"halfset_{h}_class_reconstruction_support_sums"] = support
+            class_reconstruction_support_sums = (
+                support if class_reconstruction_support_sums is None else class_reconstruction_support_sums + support
+            )
         if getattr(result, "class_assignments", None) is not None:
             meta[f"halfset_{h}_class_assignments"] = np.asarray(result.class_assignments, dtype=np.int32)
         stats = getattr(result, "stats", None)
@@ -889,6 +958,8 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
             )
     if class_posterior_sums is not None:
         meta["class_posterior_sums"] = class_posterior_sums
+    if class_reconstruction_support_sums is not None:
+        meta["class_reconstruction_support_sums"] = class_reconstruction_support_sums
     if class_direction_posterior_sums is not None:
         meta["class_direction_posterior_sums"] = class_direction_posterior_sums
     if noise_totals is not None:
@@ -915,7 +986,10 @@ def run_dense_initial_model_estep(
         pseudo_halfsets=state.pseudo_halfsets,
     )
     engine_kwargs = _dense_engine_kwargs(state, config)
-    means, mean_variance = _resolve_class_inputs(state, config)
+    means, mean_variance, relion_projector_half_by_class, relion_projector_r_max = _resolve_class_inputs(
+        state,
+        config,
+    )
     dense_rotations = _dense_rotations_for_config(config.rotations, config)
 
     if bool(engine_kwargs.get("sparse_pass2", False)):
@@ -927,6 +1001,8 @@ def run_dense_initial_model_estep(
             groups=groups,
             means=means,
             mean_variance=mean_variance,
+            relion_projector_half_by_class=relion_projector_half_by_class,
+            relion_projector_r_max=relion_projector_r_max,
             engine_kwargs=engine_kwargs,
         )
 
@@ -992,6 +1068,7 @@ def run_dense_initial_model_estep(
             max_posterior.append(np.asarray(pmax, dtype=np.float32))
 
     meta = _estep_meta(halfset_results)
+    _add_accumulator_weight_meta(meta, accumulators, state.K)
     if selected_particle_ids:
         meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
     for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:

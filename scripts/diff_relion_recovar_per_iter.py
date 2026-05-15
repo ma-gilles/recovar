@@ -137,6 +137,12 @@ def load_relion_iter(relion_dir, it):
     out["optimiser"] = parse_relion_optimiser(relion_dir / f"run_it{nnn}_optimiser.star")
     out["model_h1"] = parse_relion_model(relion_dir / f"run_it{nnn}_half1_model.star")
     out["model_h2"] = parse_relion_model(relion_dir / f"run_it{nnn}_half2_model.star")
+    if out["model_h1"] is None and out["model_h2"] is None:
+        # 3D classification writes one run_itNNN_model.star instead of
+        # auto-refine half-model STARs. Use it for K-class diagnostics.
+        model = parse_relion_model(relion_dir / f"run_it{nnn}_model.star")
+        out["model_h1"] = model
+        out["model_h2"] = model
     data_path = relion_dir / f"run_it{nnn}_data.star"
     out["data"] = starfile.read(str(data_path)) if data_path.exists() else None
     return out
@@ -249,7 +255,36 @@ def extract_relion_per_shell(relion_iter, half):
 def load_recovar(npz_path):
     if not npz_path.exists():
         return None
-    return np.load(npz_path, allow_pickle=False)
+    # K-class refinement outputs may include object-scalar None placeholders
+    # for metrics that are not defined at a given iteration.
+    return np.load(npz_path, allow_pickle=True)
+
+
+def _recovar_per_shell_array(recovar, key):
+    """Return a numeric 1-D recovar per-shell array, or None if unavailable.
+
+    For K-class outputs, arrays are stored as (K, n_shells). This diagnostic
+    script compares against RELION's model_class_1 table, so use class 1.
+    """
+    if key not in recovar.files:
+        return None
+    arr = np.asarray(recovar[key])
+    if arr.dtype == object:
+        if arr.shape == () and arr.item() is None:
+            return None
+        try:
+            arr = np.asarray(arr.item())
+        except ValueError:
+            return None
+    try:
+        arr = np.asarray(arr, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if arr.ndim == 0:
+        return None
+    if arr.ndim > 1:
+        arr = arr[0]
+    return arr
 
 
 def extract_recovar_scalars(recovar, it):
@@ -306,26 +341,31 @@ def extract_recovar_per_shell(recovar, it):
     sigma2_key = f"tau2_sigma2_iter_{nnn}"
     tau2_fsc_key = f"tau2_fsc_used_iter_{nnn}"
     ssnr_key = f"tau2_ssnr_iter_{nnn}"
-    if fsc_key in recovar.files:
-        out["FSC_gold_std"] = np.asarray(recovar[fsc_key], dtype=np.float64)
-    if dvp_key in recovar.files:
-        out["DataVsPriorRatio"] = np.asarray(recovar[dvp_key], dtype=np.float64)
-    if sig_key in recovar.files:
-        try:
-            out["_sig_counts"] = np.asarray(recovar[sig_key], dtype=np.float64)
-        except ValueError:
-            pass
-    if noise_key in recovar.files:
-        out["Sigma2Noise"] = np.asarray(recovar[noise_key], dtype=np.float64)
-    if tau2_key in recovar.files:
-        out["ReferenceTau2"] = np.asarray(recovar[tau2_key], dtype=np.float64)
-    if sigma2_key in recovar.files:
-        out["ReferenceSigma2"] = np.asarray(recovar[sigma2_key], dtype=np.float64)
-    if tau2_fsc_key in recovar.files:
-        out["Tau2FscUsed"] = np.asarray(recovar[tau2_fsc_key], dtype=np.float64)
+    fsc = _recovar_per_shell_array(recovar, fsc_key)
+    if fsc is not None:
+        out["FSC_gold_std"] = fsc
+    dvp = _recovar_per_shell_array(recovar, dvp_key)
+    if dvp is not None:
+        out["DataVsPriorRatio"] = dvp
+    sig_counts = _recovar_per_shell_array(recovar, sig_key)
+    if sig_counts is not None:
+        out["_sig_counts"] = sig_counts
+    noise = _recovar_per_shell_array(recovar, noise_key)
+    if noise is not None:
+        out["Sigma2Noise"] = noise
+    tau2 = _recovar_per_shell_array(recovar, tau2_key)
+    if tau2 is not None:
+        out["ReferenceTau2"] = tau2
+    sigma2 = _recovar_per_shell_array(recovar, sigma2_key)
+    if sigma2 is not None:
+        out["ReferenceSigma2"] = sigma2
+    tau2_fsc = _recovar_per_shell_array(recovar, tau2_fsc_key)
+    if tau2_fsc is not None:
+        out["Tau2FscUsed"] = tau2_fsc
         out["FSC_gold_std"] = out["Tau2FscUsed"]
-    if ssnr_key in recovar.files:
-        out["SsnrMap"] = np.asarray(recovar[ssnr_key], dtype=np.float64)
+    ssnr = _recovar_per_shell_array(recovar, ssnr_key)
+    if ssnr is not None:
+        out["SsnrMap"] = ssnr
         out["DataVsPriorRatio"] = out["SsnrMap"]
     return out if out else None
 

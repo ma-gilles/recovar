@@ -210,6 +210,17 @@ class TestSignificanceMaskFraction:
             # may keep more or fewer depending on boundary effects.
             assert kept_frac >= 0.5 - 1e-6, f"Image {i}: kept fraction {kept_frac:.4f} < 0.5"
 
+    def test_relion_strictly_exceeds_adaptive_fraction(self):
+        """RELION keeps stepping when cumulative mass is exactly the target."""
+        w = jnp.array([[0.5, 0.25, 0.25]], dtype=jnp.float32)
+
+        mask, n_sig = find_significant_mask(w, adaptive_fraction=0.5, max_significants=-1)
+
+        # RELION's loop breaks on `frac_weight > adaptive_fraction * exp_sum_weight`,
+        # so the exact 0.5 boundary does not stop at the first sample.
+        np.testing.assert_array_equal(np.asarray(mask), np.array([[True, True, True]]))
+        np.testing.assert_array_equal(np.asarray(n_sig), np.array([3], dtype=np.int32))
+
     def test_single_dominant(self):
         """When one sample has ~100% weight, mask should select just that one."""
         n_images = 2
@@ -356,10 +367,12 @@ class TestSignificanceMaskCap:
         )
 
         assert int(n_sig_capped[0]) == 2
-        assert int(n_sig_uncapped[0]) == 4
+        # Top 4 sum to exactly 0.90; RELION only stops once the cumulative
+        # mass is strictly greater than the adaptive target.
+        assert int(n_sig_uncapped[0]) == 5
         assert np.array_equal(
             np.asarray(mask_uncapped[0], dtype=bool),
-            np.array([True, True, True, True, False, False]),
+            np.array([True, True, True, True, True, False]),
         )
 
 

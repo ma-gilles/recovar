@@ -176,13 +176,18 @@ class DenseScoreConstraints:
         end: int,
         batch_count: int,
         rotation_block_size: int,
+        rows=None,
     ):
-        actual_count = int(end - start)
+        if rows is None:
+            rows = np.arange(int(start), int(end), dtype=np.int64)
+        else:
+            rows = np.asarray(rows, dtype=np.int64).reshape(-1)
+        actual_count = int(rows.size)
         batch_count = int(batch_count)
         if self.rotation_log_prior is None:
             rotation_prior = jnp.zeros((batch_count, rotation_block_size), dtype=jnp.float32)
         elif self.per_image_rotation_prior:
-            rotation_prior = self.rotation_log_prior[start:end, r0:r1]
+            rotation_prior = self.rotation_log_prior[rows, r0:r1]
             if batch_count != actual_count:
                 rotation_prior = jnp.pad(
                     rotation_prior,
@@ -198,7 +203,7 @@ class DenseScoreConstraints:
         if self.translation_log_prior is None:
             translation_prior = jnp.zeros((batch_count, self.n_trans), dtype=jnp.float32)
         elif self.per_image_translation_prior:
-            translation_prior = self.translation_log_prior[start:end]
+            translation_prior = self.translation_log_prior[rows]
             if batch_count != actual_count:
                 translation_prior = jnp.pad(
                     translation_prior,
@@ -214,6 +219,8 @@ class DenseScoreConstraints:
         if self.candidate_mask is None:
             candidate_mask = jnp.ones((rotation_block_size, self.n_trans), dtype=bool)
         elif _is_lazy_candidate_mask(self.candidate_mask):
+            if rows.size != 0 and not np.array_equal(rows, np.arange(int(start), int(end), dtype=np.int64)):
+                raise ValueError("lazy per-image rotation_translation_mask requires batches in selected-image order")
             candidate_mask = self.candidate_mask.block_mask(
                 r0=r0,
                 r1=r1,
@@ -223,7 +230,7 @@ class DenseScoreConstraints:
                 rotation_block_size=rotation_block_size,
             )
         elif self.per_image_candidate_mask:
-            candidate_mask = self.candidate_mask[start:end, r0:r1, :]
+            candidate_mask = self.candidate_mask[rows, r0:r1, :]
             if batch_count != actual_count:
                 candidate_mask = jnp.pad(
                     candidate_mask,

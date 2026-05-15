@@ -193,6 +193,24 @@ def _resolve_tau2_fudge(n_classes, cli_tau2_fudge, relion_init_tau2_fudge):
     return 1.0, "RELION auto-refine default"
 
 
+def _resolve_replay_normcorr(perturb_replay_relion_dir, replay_relion_normcorr):
+    """Default normcorr replay on only for explicit RELION replay runs."""
+    if replay_relion_normcorr is not None:
+        return bool(replay_relion_normcorr)
+    return perturb_replay_relion_dir is not None
+
+
+def _default_refinement_subsets(n_images, seed, n_classes):
+    """Return default dataset splits for RELION-style refinement."""
+
+    indices = np.arange(int(n_images), dtype=np.int64)
+    if int(n_classes) > 1:
+        return indices, np.empty(0, dtype=np.int64)
+    rng = np.random.RandomState(seed)
+    rng.shuffle(indices)
+    return np.sort(indices[: int(n_images) // 2]), np.sort(indices[int(n_images) // 2 :])
+
+
 def _refine_sampling_kwargs(args, init_healpix_order):
     """Return sampling kwargs forwarded from the CLI into ``refine_single_volume``."""
     return {
@@ -217,8 +235,9 @@ def _build_replay_iteration_overrides(
     """Build per-iter replay overrides keyed on recovar iteration index.
 
     For each recovar iteration k >= 1 (i.e. iter 2 onwards in RELION terms),
-    reads RELION's run_it{k:03d}_data.star + half1/half2 model.star and
-    builds an override dict containing:
+    reads RELION's run_it{k:03d}_data.star + half1/half2 model.star
+    (or the shared Class3D run_it{k:03d}_model.star) and builds an
+    override dict containing:
       * image_corrections: per-image (avg_norm/normcorr) * group_scale
       * scale_corrections: per-image group_scale alone
 
@@ -250,16 +269,30 @@ def _build_replay_iteration_overrides(
         data_star = relion_dir / f"run_it{relion_iter:03d}_data.star"
         model_h1 = relion_dir / f"run_it{relion_iter:03d}_half1_model.star"
         model_h2 = relion_dir / f"run_it{relion_iter:03d}_half2_model.star"
-        if not data_star.exists() or not model_h1.exists() or not model_h2.exists():
+        model_shared = relion_dir / f"run_it{relion_iter:03d}_model.star"
+        if model_h1.exists() and model_h2.exists():
+            model_paths = (model_h1, model_h2)
+        elif model_shared.exists():
+            model_paths = (model_shared, model_shared)
+        else:
+            model_paths = None
+        if not data_star.exists() or model_paths is None:
+            missing = []
+            if not data_star.exists():
+                missing.append(str(data_star))
+            if model_paths is None:
+                missing.append(f"{model_h1} + {model_h2} or {model_shared}")
             logger.warning(
-                "Replay override for recovar iter %d: missing %s — leaving unset", recovar_iter + 1, data_star
+                "Replay override for recovar iter %d: missing %s — leaving unset",
+                recovar_iter + 1,
+                "; ".join(missing),
             )
             continue
 
         data = _sf.read(str(data_star))
         parts = data["particles"] if isinstance(data, dict) else data
-        m1 = _sf.read(str(model_h1))
-        m2 = _sf.read(str(model_h2))
+        m1 = _sf.read(str(model_paths[0]))
+        m2 = _sf.read(str(model_paths[1]))
 
         names = list(parts["rlnImageName"])
         idx_to_pos = {_idx(names[i]): i for i in range(len(names))}
@@ -558,12 +591,20 @@ def main():
     )
     parser.add_argument(
         "--replay_relion_normcorr",
+        dest="replay_relion_normcorr",
         action="store_true",
-        default=False,
+        default=None,
         help="If set together with --perturb_replay_relion_dir, also inject "
         "RELION's per-iter rlnNormCorrection / rlnGroupScaleCorrection into "
-        "recovar's E-step at iter 2+. Useful for parity diagnostics; not yet "
-        "demonstrated to improve quality on the 5k 128² fixture.",
+        "recovar's E-step at iter 2+. This is the default when "
+        "--perturb_replay_relion_dir is set.",
+    )
+    parser.add_argument(
+        "--no-replay_relion_normcorr",
+        dest="replay_relion_normcorr",
+        action="store_false",
+        help="Disable RELION normCorrection / group-scale replay while still "
+        "using other per-iteration replay overrides.",
     )
     parser.add_argument("--init_resolution", type=float, default=30.0, help="Initial resolution (Angstrom)")
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
@@ -695,6 +736,8 @@ def main():
 
     # ---- Create half-sets ----
     n_images = ds.n_units
+    if args.n_classes < 1:
+        raise SystemExit(f"--n_classes must be >= 1, got {args.n_classes}")
 
     if args.relion_half_sets is not None:
         # Use RELION's half-set split from rlnRandomSubset
@@ -729,11 +772,12 @@ def main():
         half2_idx = np.where(our_subsets == 2)[0]
         logger.info("Using RELION half-set split: %d (subset=1) + %d (subset=2)", len(half1_idx), len(half2_idx))
     else:
-        indices = np.arange(n_images)
-        rng = np.random.RandomState(args.seed)
-        rng.shuffle(indices)
-        half1_idx = np.sort(indices[: n_images // 2])
-        half2_idx = np.sort(indices[n_images // 2 :])
+        half1_idx, half2_idx = _default_refinement_subsets(n_images, args.seed, args.n_classes)
+        if args.n_classes > 1:
+            logger.info(
+                "Using RELION Class3D all-data split: %d particles + empty second accumulator",
+                len(half1_idx),
+            )
 
     ds_half1 = ds.subset(half1_idx)
     ds_half2 = ds.subset(half2_idx)
@@ -762,8 +806,6 @@ def main():
     # at low frequencies.
     from recovar.utils.helpers import load_mrc as _load_mrc
 
-    if args.n_classes < 1:
-        raise SystemExit(f"--n_classes must be >= 1, got {args.n_classes}")
     if args.n_classes == 1:
         init_mrc_path = os.path.join(args.data_dir, "reference_init.mrc")
         init_vol_real = _load_mrc(init_mrc_path).astype(np.float32)
@@ -971,10 +1013,15 @@ def main():
     # injects RELION's per-iter sigma_offset (parity-critical: recovar's iter-1
     # does not run the C1 sigma_offset update so iter-2 would otherwise use the
     # 10 Å default — 6× too wide vs RELION ~1.6 Å — depressing iter-2 Pmax by
-    # ~22%). Per-image normCorrection / group scale replay remains opt-in via
-    # --replay_relion_normcorr (it can hurt corr_vs_GT in some configurations).
+    # ~22%). Per-image normCorrection / group-scale replay is part of strict
+    # RELION replay and can be disabled with --no-replay_relion_normcorr for
+    # diagnostics.
     replay_iteration_overrides = None
     if args.perturb_replay_relion_dir is not None:
+        replay_normcorr = _resolve_replay_normcorr(
+            args.perturb_replay_relion_dir,
+            args.replay_relion_normcorr,
+        )
         replay_iteration_overrides = _build_replay_iteration_overrides(
             args.perturb_replay_relion_dir,
             half1_idx,
@@ -982,7 +1029,7 @@ def main():
             args.max_iter,
             ds_voxel=ds.voxel_size,
             ds_grid=ds.grid_size,
-            include_normcorr=bool(args.replay_relion_normcorr),
+            include_normcorr=replay_normcorr,
         )
 
     effective_tau2_fudge, tau2_fudge_source = _resolve_tau2_fudge(

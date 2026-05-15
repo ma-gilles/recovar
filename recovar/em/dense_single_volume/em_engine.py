@@ -163,6 +163,52 @@ def _dense_big_jit_disabled_reason(
     return None
 
 
+def _batch_parameter_rows(
+    value,
+    *,
+    batch_indices: np.ndarray,
+    start: int,
+    end: int,
+    selected_image_count: int,
+    source_image_count: int,
+    selected_position: dict[int, int] | None = None,
+    name: str,
+):
+    if value is None:
+        return None
+    array = np.asarray(value)
+    if array.ndim == 0:
+        return array
+    batch_indices = np.asarray(batch_indices, dtype=np.int64)
+    first_axis = int(array.shape[0])
+    if first_axis == int(selected_image_count) and first_axis != int(source_image_count):
+        if selected_position is not None:
+            rows = np.asarray([selected_position[int(idx)] for idx in batch_indices], dtype=np.int64)
+            return array[rows]
+        return array[int(start) : int(end)]
+    if first_axis == int(source_image_count):
+        return array[batch_indices]
+    if first_axis == int(selected_image_count):
+        if selected_position is not None:
+            rows = np.asarray([selected_position[int(idx)] for idx in batch_indices], dtype=np.int64)
+            return array[rows]
+        return array[int(start) : int(end)]
+    if first_axis == int(batch_indices.size):
+        return array
+    raise ValueError(
+        f"{name} must be full-dataset, selected-image, or batch shaped; "
+        f"got first axis {first_axis} for batch {batch_indices.size}, "
+        f"selected {selected_image_count}, source {source_image_count}",
+    )
+
+
+def normalized_cc_score_inverse_power(batch_norm, *, score_real_dtype):
+    """Return 1/Xi2 in score precision before translation-tile broadcasts."""
+
+    inv_xi2 = 1.0 / jnp.maximum(batch_norm, jnp.asarray(1e-30, dtype=batch_norm.dtype))
+    return inv_xi2.astype(score_real_dtype)
+
+
 _DENSE_TIMING_FIELDS = (
     "batch_fetch_s",
     "preprocess_s",
@@ -657,6 +703,7 @@ def run_em(
     sparse_pass2: bool = True,
     disable_adjoint_y: bool = False,
     disable_adjoint_ctf: bool = False,
+    score_only: bool = False,
     relion_half_volume_mstep: bool = False,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
@@ -748,6 +795,10 @@ def run_em(
     disable_adjoint_ctf : bool
         Experimental ablation flag. When True, skip the CTF adjoint
         accumulation into ``Ft_ctf``.
+    score_only : bool
+        Internal probe mode for K-class coarse scoring. Requires both adjoints
+        disabled and skips the second pass after collecting log-evidence and
+        best-pose assignments from pass 1.
     relion_half_volume_mstep : bool
         When True, accumulate M-step sufficient statistics in RECOVAR's packed
         half-volume layout using the RELION half-image fold/conjugation
@@ -761,7 +812,17 @@ def run_em(
     n_trans = translations.shape[0]
     image_indices = np.arange(experiment_dataset.n_units) if image_indices is None else np.asarray(image_indices)
     n_images = image_indices.size
+    source_image_count = int(getattr(experiment_dataset, "n_units", n_images))
+    selected_position = {int(idx): pos for pos, idx in enumerate(np.asarray(image_indices, dtype=np.int64).tolist())}
     class_log_prior = float(class_log_prior)
+    score_only = bool(score_only)
+    if score_only:
+        if not (disable_adjoint_y and disable_adjoint_ctf):
+            raise ValueError("score_only requires disable_adjoint_y=True and disable_adjoint_ctf=True")
+        if accumulate_noise:
+            raise ValueError("score_only cannot be combined with accumulate_noise=True")
+        if normalization_log_evidence is not None:
+            raise ValueError("score_only does not support external normalization_log_evidence")
     normalization_log_evidence_np = None
     if normalization_log_evidence is not None:
         normalization_log_evidence_np = np.asarray(normalization_log_evidence, dtype=np.float64)
@@ -930,7 +991,7 @@ def run_em(
     elif use_dense_big_jit:
         logger.info("Dense big-JIT enabled for dense/global rotation buckets")
 
-    def _dense_score_constraint_blocks(r0: int, r1: int, start: int, end: int, batch_count: int):
+    def _dense_score_constraint_blocks(r0: int, r1: int, start: int, end: int, batch_count: int, rows=None):
         (
             rotation_prior_block,
             translation_prior_block,
@@ -941,6 +1002,7 @@ def run_em(
             r1=r1,
             start=start,
             end=end,
+            rows=rows,
             batch_count=batch_count,
             rotation_block_size=rotation_block_size,
         )
@@ -1011,8 +1073,23 @@ def run_em(
         timing.batch_fetch_s += time.time() - batch_fetch_t0
         actual_batch_size = len(indices)
         batch_indices_np = np.asarray(indices)
+        batch_rows_np = np.asarray([selected_position[int(idx)] for idx in batch_indices_np], dtype=np.int64)
         end_idx = start_idx + actual_batch_size
-        integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, indices, batch=batch_data)
+        batch_image_pre_shifts_np = _batch_parameter_rows(
+            image_pre_shifts,
+            batch_indices=batch_indices_np,
+            start=start_idx,
+            end=end_idx,
+            selected_image_count=n_images,
+            source_image_count=source_image_count,
+            selected_position=selected_position,
+            name="image_pre_shifts",
+        )
+        integer_pre_shifts = integer_pre_shifts_or_none(
+            batch_image_pre_shifts_np,
+            np.arange(actual_batch_size, dtype=np.int64),
+            batch=batch_data,
+        )
         real_space_pre_shift_applied = integer_pre_shifts is not None
         if real_space_pre_shift_applied:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
@@ -1032,7 +1109,7 @@ def run_em(
         if translation_prior_centers_np is not None:
             centers = translation_prior_centers_for_images(
                 translation_prior_centers_np,
-                np.arange(start_idx, end_idx, dtype=np.int64),
+                batch_rows_np,
                 batch_size=actual_batch_size,
             )
             translation_sqdist_ang = translation_sqdist_angstrom(
@@ -1042,7 +1119,7 @@ def run_em(
             )
             if use_dense_big_jit and batch_size != actual_batch_size:
                 translation_sqdist_ang = pad_axis(translation_sqdist_ang, 0, batch_size, value=0)
-        projection_cache = None if use_dense_big_jit else []
+        projection_cache = None if (use_dense_big_jit or score_only) else []
         block_max_per_image = [] if sparse_pass2 else None
         block_pose_counts = [] if sparse_pass2 else None
 
@@ -1064,6 +1141,9 @@ def run_em(
                 config,
                 score_with_masked_images,
                 window_indices=cc_window_indices,
+                score_complex_dtype=precision_policy.score_complex_dtype,
+                score_real_dtype=precision_policy.score_real_dtype,
+                norm_real_dtype=precision_policy.normalization_real_dtype,
             )
         else:
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
@@ -1074,20 +1154,28 @@ def run_em(
                 translations,
                 config,
                 score_with_masked_images,
+                score_complex_dtype=precision_policy.score_complex_dtype,
+                score_real_dtype=precision_policy.score_real_dtype,
+                norm_real_dtype=precision_policy.normalization_real_dtype,
             )
             ctf2_half_score = None
-        shifted_recon_half = (
-            _prepare_reconstruction_batch(
-                experiment_dataset,
-                batch_data,
-                ctf_params,
-                noise_variance_half,
-                translations,
-                config,
+        if score_only:
+            shifted_recon_half = shifted_half
+        else:
+            shifted_recon_half = (
+                _prepare_reconstruction_batch(
+                    experiment_dataset,
+                    batch_data,
+                    ctf_params,
+                    noise_variance_half,
+                    translations,
+                    config,
+                    score_complex_dtype=precision_policy.score_complex_dtype,
+                    score_real_dtype=precision_policy.score_real_dtype,
+                )
+                if (score_with_masked_images or relion_firstiter_score_mode == "normalized_cc")
+                else shifted_half
             )
-            if (score_with_masked_images or relion_firstiter_score_mode == "normalized_cc")
-            else shifted_half
-        )
         if sync_timers:
             _block_until_ready(shifted_half, shifted_recon_half)
 
@@ -1095,7 +1183,16 @@ def run_em(
 
         score_prep_t0 = time.time()
         if scale_corrections is not None:
-            batch_scale_np = np.asarray(scale_corrections, dtype=np.float32)[batch_indices_np]
+            batch_scale_np = _batch_parameter_rows(
+                scale_corrections,
+                batch_indices=batch_indices_np,
+                start=start_idx,
+                end=end_idx,
+                selected_image_count=n_images,
+                source_image_count=source_image_count,
+                selected_position=selected_position,
+                name="scale_corrections",
+            ).astype(np.float32, copy=False)
             if use_dense_big_jit and batch_size != actual_batch_size:
                 batch_scale_np = pad_axis(batch_scale_np, 0, batch_size, value=1)
             batch_scale = jnp.asarray(batch_scale_np)
@@ -1111,7 +1208,16 @@ def run_em(
         # the per-image correction across n_trans copies.
         image_only_corr = None
         if image_corrections is not None:
-            batch_corr_np = np.asarray(image_corrections, dtype=np.float32)[batch_indices_np]
+            batch_corr_np = _batch_parameter_rows(
+                image_corrections,
+                batch_indices=batch_indices_np,
+                start=start_idx,
+                end=end_idx,
+                selected_image_count=n_images,
+                source_image_count=source_image_count,
+                selected_position=selected_position,
+                name="image_corrections",
+            ).astype(np.float32, copy=False)
             if use_dense_big_jit and batch_size != actual_batch_size:
                 batch_corr_np = pad_axis(batch_corr_np, 0, batch_size, value=1)
             batch_corr = jnp.asarray(batch_corr_np)
@@ -1152,8 +1258,8 @@ def run_em(
         # Integral RELION old-offsets were already applied to the real-space
         # image with zero fill before FFT. Keep the Fourier-phase path for
         # non-integral pre-shifts.
-        if image_pre_shifts is not None and not real_space_pre_shift_applied:
-            batch_shifts_np = np.asarray(image_pre_shifts, dtype=np.float32)[batch_indices_np]
+        if batch_image_pre_shifts_np is not None and not real_space_pre_shift_applied:
+            batch_shifts_np = np.asarray(batch_image_pre_shifts_np, dtype=np.float32)
             if use_dense_big_jit and batch_size != actual_batch_size:
                 batch_shifts_np = pad_axis(batch_shifts_np, 0, batch_size, value=0)
             phase_expanded = tiled_half_image_phase_factors(image_shape, batch_shifts_np, n_trans)
@@ -1167,7 +1273,10 @@ def run_em(
             # returns shifted_half = Fimg*CTF*shift directly (matches RELION
             # ml_optimiser.cpp:8758-8774 Frefctf path) — no divide-then-
             # multiply 1/CTF anywhere. Apply 1/Xi2 here for both terms.
-            inv_xi2 = 1.0 / jnp.maximum(batch_norm, jnp.asarray(1e-30, dtype=batch_norm.dtype))
+            inv_xi2 = normalized_cc_score_inverse_power(
+                batch_norm,
+                score_real_dtype=precision_policy.score_real_dtype,
+            )
             score_weight_half = ctf2_half_score * inv_xi2
             shifted_score_half = shifted_half * jnp.repeat(inv_xi2, n_trans, axis=0)
         else:
@@ -1176,7 +1285,7 @@ def run_em(
 
         external_log_Z = None
         if normalization_log_evidence_np is not None:
-            batch_log_evidence_np = normalization_log_evidence_np[start_idx:end_idx]
+            batch_log_evidence_np = normalization_log_evidence_np[batch_rows_np]
             if batch_size != actual_batch_size:
                 batch_log_evidence_np = pad_axis(batch_log_evidence_np, 0, batch_size, value=0)
             log_score_offset = (-0.5 * jnp.squeeze(batch_norm, axis=1)).astype(
@@ -1275,6 +1384,16 @@ def run_em(
                 ready_values.append(shifted_masked_for_noise)
             _block_until_ready(*ready_values)
         timing.score_prep_s += time.time() - score_prep_t0
+        batch_score_constraint_blocks = (
+            lambda r0, r1, start, end, batch_count, _rows=batch_rows_np: _dense_score_constraint_blocks(
+                r0,
+                r1,
+                start,
+                end,
+                batch_count,
+                rows=_rows,
+            )
+        )
         dense_big_jit_runner = _DenseBigJitBatchRunner(
             shifted_score_half=shifted_score_half,
             batch_norm=batch_norm,
@@ -1288,7 +1407,7 @@ def run_em(
                 window_spec,
                 n_half=n_half,
             ),
-            score_constraint_blocks=_dense_score_constraint_blocks,
+            score_constraint_blocks=batch_score_constraint_blocks,
             start_idx=start_idx,
             end_idx=end_idx,
             batch_size=batch_size,
@@ -1330,7 +1449,7 @@ def run_em(
                     dense_result.block_max,
                     dense_result.block_sum_exp,
                 )
-                if relion_firstiter_winner_take_all:
+                if relion_firstiter_winner_take_all or score_only:
                     improved = dense_result.block_best > best_score_pass1
                     best_score_pass1 = jnp.where(improved, dense_result.block_best, best_score_pass1)
                     best_argmax_pass1 = jnp.where(
@@ -1459,7 +1578,14 @@ def run_em(
                 translation_prior_block,
                 candidate_mask_block,
                 valid_rotation_mask,
-            ) = _dense_score_constraint_blocks(block.r0, block.r1, start_idx, end_idx, batch_size)
+            ) = _dense_score_constraint_blocks(
+                block.r0,
+                block.r1,
+                start_idx,
+                end_idx,
+                batch_size,
+                rows=batch_rows_np,
+            )
             scores = apply_dense_score_constraints(
                 scores,
                 rotation_prior_block,
@@ -1486,7 +1612,7 @@ def run_em(
                 _block_until_ready(scores)
             timing.pass1_postprocess_s += time.time() - pass1_postprocess_t0
 
-            if relion_firstiter_winner_take_all:
+            if relion_firstiter_winner_take_all or score_only:
                 block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
                 block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
                 improved = block_best > best_score_pass1
@@ -1502,6 +1628,35 @@ def run_em(
         log_Z = max_s + jnp.log(sum_exp)  # (batch_size,)
         if external_log_Z is not None:
             log_Z = external_log_Z
+        if score_only:
+            best_score_actual = best_score_pass1[:actual_batch_size]
+            if return_stats:
+                stats_finalize_t0 = time.time()
+                log_score_offset = -0.5 * jnp.squeeze(batch_norm[:actual_batch_size], axis=1)
+                log_Z_actual = log_Z[:actual_batch_size]
+                if relion_firstiter_winner_take_all:
+                    pmax = jnp.ones_like(best_score_pass1)
+                else:
+                    both_neg_inf = jnp.isneginf(best_score_pass1) & jnp.isneginf(log_Z)
+                    pmax = jnp.where(both_neg_inf, 0.0, jnp.exp(best_score_pass1 - log_Z))
+                log_evidence_per_image[batch_rows_np] = np.asarray(
+                    log_Z_actual.astype(jnp.float64) + log_score_offset.astype(jnp.float64),
+                    dtype=log_evidence_per_image.dtype,
+                )
+                best_log_score_per_image[batch_rows_np] = np.asarray(
+                    best_score_actual.astype(jnp.float64) + log_score_offset.astype(jnp.float64),
+                    dtype=best_log_score_per_image.dtype,
+                )
+                max_posterior_per_image[batch_rows_np] = np.asarray(
+                    pmax[:actual_batch_size],
+                    dtype=max_posterior_per_image.dtype,
+                )
+                if sync_timers:
+                    _block_until_ready(log_Z, best_score_pass1, pmax)
+                timing.stats_finalize_s += time.time() - stats_finalize_t0
+            hard_assignment[batch_rows_np] = np.asarray(best_argmax_pass1[:actual_batch_size])
+            start_idx = end_idx
+            continue
         skip_pass2_block = np.zeros(n_blocks, dtype=bool)
         pass2_skipmask_t0 = time.time()
         if block_max_per_image:
@@ -1663,7 +1818,14 @@ def run_em(
                 translation_prior_block,
                 candidate_mask_block,
                 valid_rotation_mask,
-            ) = _dense_score_constraint_blocks(block.r0, block.r1, start_idx, end_idx, batch_size)
+            ) = _dense_score_constraint_blocks(
+                block.r0,
+                block.r1,
+                start_idx,
+                end_idx,
+                batch_size,
+                rows=batch_rows_np,
+            )
             scores = apply_dense_score_constraints(
                 scores,
                 rotation_prior_block,
@@ -1876,15 +2038,15 @@ def run_em(
             # CC-mode delta between best_score values survives the addition of
             # the much-larger image_power-scaled log_score_offset. Float32
             # rounding here would quantize per-class K=2 differences to 0.
-            log_evidence_per_image[start_idx:end_idx] = np.asarray(
+            log_evidence_per_image[batch_rows_np] = np.asarray(
                 (log_Z_actual.astype(jnp.float64) + log_score_offset.astype(jnp.float64)),
                 dtype=log_evidence_per_image.dtype,
             )
-            best_log_score_per_image[start_idx:end_idx] = np.asarray(
+            best_log_score_per_image[batch_rows_np] = np.asarray(
                 (best_score_actual.astype(jnp.float64) + log_score_offset.astype(jnp.float64)),
                 dtype=best_log_score_per_image.dtype,
             )
-            max_posterior_per_image[start_idx:end_idx] = np.asarray(
+            max_posterior_per_image[batch_rows_np] = np.asarray(
                 pmax[:actual_batch_size],
                 dtype=max_posterior_per_image.dtype,
             )
@@ -1892,13 +2054,15 @@ def run_em(
                 _block_until_ready(log_Z, best_score, pmax)
             timing.stats_finalize_s += time.time() - stats_finalize_t0
 
-        hard_assignment[start_idx:end_idx] = np.asarray(best_argmax[:actual_batch_size])
+        hard_assignment[batch_rows_np] = np.asarray(best_argmax[:actual_batch_size])
         start_idx = end_idx
 
     # -- SOLVE --
     from recovar.reconstruction import relion_functions
 
-    if relion_half_volume_mstep:
+    if score_only:
+        new_mean = None
+    elif relion_half_volume_mstep:
         Ft_y, Ft_ctf = enforce_half_volume_x0(
             Ft_y,
             Ft_ctf,
@@ -1907,8 +2071,9 @@ def run_em(
             label="Dense",
         )
         Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
+        new_mean = None
 
-    if reconstruction_padding_factor > 1:
+    elif reconstruction_padding_factor > 1:
         new_mean = None
     else:
         solve_t0 = time.time()

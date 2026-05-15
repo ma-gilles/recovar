@@ -14,6 +14,7 @@ from recovar.em.initial_model.dense_adapter import (
     _estep_meta,
     _initial_model_pass2_layout,
     _relion_projector_to_dense_volume,
+    _resolve_class_inputs,
     _resolve_sparse_pass1_current_size,
     class_log_priors_from_state,
     reference_to_dense_means,
@@ -188,10 +189,18 @@ def test_estep_meta_aggregates_noise_stats_for_model_updates():
     halfset_results = {
         0: SimpleNamespace(
             class_posterior_sums=np.asarray([1.0, 2.0], dtype=np.float32),
+            noise_stats=(
+                _fake_noise_stats(0.0, 0.25, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+                _fake_noise_stats(0.0, 0.75, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+            ),
             aggregate_noise_stats=_fake_noise_stats(10.0, 3.0, [1.0, 2.0, 3.0], [4.0, 5.0, 6.0]),
         ),
         1: SimpleNamespace(
             class_posterior_sums=np.asarray([3.0, 4.0], dtype=np.float32),
+            noise_stats=(
+                _fake_noise_stats(0.0, 1.25, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+                _fake_noise_stats(0.0, 1.75, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+            ),
             aggregate_noise_stats=_fake_noise_stats(20.0, 7.0, [7.0, 8.0, 9.0], [10.0, 11.0, 12.0]),
         ),
     }
@@ -201,6 +210,9 @@ def test_estep_meta_aggregates_noise_stats_for_model_updates():
     assert meta["wsum_sigma2_offset"] == pytest.approx(30.0)
     assert meta["sigma2_offset_sumw"] == pytest.approx(10.0)
     assert meta["noise_sumw"] == pytest.approx(10.0)
+    np.testing.assert_allclose(meta["class_reconstruction_support_sums"], [1.5, 2.5])
+    np.testing.assert_allclose(meta["halfset_0_class_reconstruction_support_sums"], [0.25, 0.75])
+    np.testing.assert_allclose(meta["halfset_1_class_reconstruction_support_sums"], [1.25, 1.75])
     np.testing.assert_allclose(meta["wsum_sigma2_noise"], [8.0, 10.0, 12.0])
     np.testing.assert_allclose(meta["wsum_img_power"], [14.0, 16.0, 18.0])
     np.testing.assert_allclose(meta["halfset_0_wsum_sigma2_noise"], [1.0, 2.0, 3.0])
@@ -527,6 +539,70 @@ def test_reference_to_relion_projector_dense_means_uses_relion_projector_frame(m
     }
 
 
+def test_relion_projector_projection_dense_scale_matches_embedded_means(monkeypatch):
+    import jax.numpy as jnp
+
+    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+
+    raw = jnp.asarray([[1.0 + 2.0j, -3.0 + 0.5j]], dtype=jnp.complex64)
+
+    def fake_project(*args, **kwargs):
+        return raw
+
+    monkeypatch.setattr(
+        projection_helpers,
+        "project_relion_projector_half_spectrum_centered_rows",
+        fake_project,
+    )
+
+    rotations = np.eye(3, dtype=np.float32)[None]
+    proj, proj_abs2 = projection_helpers.compute_relion_projector_projections_block(
+        np.zeros((3, 3, 2), dtype=np.complex64),
+        rotations,
+        (4, 4),
+        r_max=1,
+        centered_rows=True,
+        dense_scale=True,
+    )
+
+    expected = np.asarray(raw) * -16.0
+    np.testing.assert_allclose(np.asarray(proj), expected)
+    np.testing.assert_allclose(np.asarray(proj_abs2), np.abs(expected) ** 2)
+
+
+def test_resolve_class_inputs_relion_projector_keeps_exact_path_opt_in(monkeypatch):
+    projector_half = np.ones((1, 3, 3, 2), dtype=np.complex64)
+    dense_means = np.full((1, 8**3), 2.0 + 0.5j, dtype=np.complex64)
+
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.reference_to_relion_projector_half_maps",
+        lambda *args, **kwargs: (projector_half, 2),
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.relion_projector_half_maps_to_dense_means",
+        lambda *args, **kwargs: dense_means,
+    )
+    state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=4)
+    config = DenseInitialModelEstepConfig(
+        noise_variance=np.ones(8 * 8, dtype=np.float32),
+        rotations=np.eye(3, dtype=np.float32)[None],
+        translations=np.zeros((1, 2), dtype=np.float32),
+        relion_projector_frame=True,
+    )
+
+    means, _mean_variance, exact_half, exact_rmax = _resolve_class_inputs(state, config)
+
+    np.testing.assert_array_equal(means, dense_means)
+    assert exact_half is None
+    assert exact_rmax is None
+
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR", "1")
+    _means, _mean_variance, exact_half, exact_rmax = _resolve_class_inputs(state, config)
+
+    np.testing.assert_array_equal(exact_half, projector_half)
+    assert exact_rmax == 2
+
+
 def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
     calls = []
 
@@ -575,6 +651,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["pass1_translations"] = np.asarray(translations).copy()
         calls["pass1_prior"] = np.asarray(kwargs["translation_log_prior"], dtype=np.float32).copy()
         calls["pass1_current_size"] = kwargs["current_size"]
+        calls["pass1_max_significants"] = kwargs["max_significants"]
         n_images = int(dataset.n_images)
         n_rot = int(np.asarray(rotations).shape[0])
         significant = [[np.array([0], dtype=np.int32) for _ in range(n_images)]]
@@ -607,7 +684,9 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
 
     def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
         del means, mean_variance, noise_variance, disc_type
-        calls["local_n_global_rotations"] = int(local_layout.n_global_rotations)
+        assert isinstance(local_layout, tuple)
+        calls["local_layout_count"] = len(local_layout)
+        calls["local_n_global_rotations"] = int(local_layout[0].n_global_rotations)
         calls["local_pre_shifts"] = np.asarray(kwargs["image_pre_shifts"], dtype=np.float32).copy()
         calls["local_current_size"] = kwargs["current_size"]
         calls["local_has_reconstruct_with_masked_images"] = "reconstruct_with_masked_images" in kwargs
@@ -618,6 +697,10 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["local_has_recon_exact_radius"] = "recon_exact_radius" in kwargs
         calls["local_mstep_subtract_ctf_projection"] = kwargs["mstep_subtract_ctf_projection"]
         calls["local_mstep_relion_x_half"] = kwargs["mstep_relion_x_half"]
+        calls["local_max_significants"] = kwargs["max_significants"]
+        calls["local_unify_bucket_sizes"] = kwargs["unify_local_bucket_sizes"]
+        calls["local_stats_use_reconstruction_probs"] = kwargs["stats_use_reconstruction_probs"]
+        calls["local_class_posterior_sums_from_noise"] = kwargs["class_posterior_sums_from_noise"]
         return _fake_result(n_classes=1, n=8, n_images=int(dataset.n_units), n_groups=1)
 
     monkeypatch.setattr(
@@ -671,6 +754,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
             "pass1_current_size": 6,
             "translation_log_prior": fine_prior,
             "coarse_translation_log_prior": coarse_prior,
+            "max_significants": 100,
             "image_pre_shifts": pre_shifts,
             "reconstruct_with_masked_images": True,
             "reconstruction_subtract_projected_reference": True,
@@ -687,12 +771,14 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     np.testing.assert_allclose(calls["pass1_translations"], coarse_translations)
     np.testing.assert_allclose(calls["pass1_prior"], coarse_prior[[1, 3]])
     assert calls["pass1_current_size"] == 6
+    assert calls["pass1_max_significants"] == 100
     assert calls["local_current_size"] == state.current_size
     assert calls["rotation_perturbation"] == (0.25, 60.0)
     assert np.max(calls["pass1_rotations"]) > 6.0
     np.testing.assert_allclose(calls["pass2_parent_prior"], coarse_prior[[1, 3]])
     assert calls["fine_prior"] is None
     np.testing.assert_allclose(calls["local_pre_shifts"], pre_shifts[[1, 3]])
+    assert calls["local_layout_count"] == 1
     assert calls["local_n_global_rotations"] == 1
     assert calls["local_has_reconstruct_with_masked_images"] is False
     assert calls["local_has_reconstruction_subtract_projected_reference"] is False
@@ -700,6 +786,10 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_has_recon_exact_radius"] is False
     assert calls["local_mstep_subtract_ctf_projection"] is True
     assert calls["local_mstep_relion_x_half"] is False
+    assert calls["local_max_significants"] == -1
+    assert calls["local_unify_bucket_sizes"] is True
+    assert calls["local_stats_use_reconstruction_probs"] is True
+    assert calls["local_class_posterior_sums_from_noise"] is False
     assert result.meta["sparse_pass2"] is True
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
@@ -707,7 +797,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
 
 
 def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypatch):
-    calls = {}
+    calls = {"layouts": []}
 
     def fake_significance(dataset, means, noise_variance, rotations, translations, disc_type, **kwargs):
         del noise_variance, translations, disc_type
@@ -727,10 +817,17 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
 
     def fake_build_layout(significant_samples, *args, **kwargs):
         del args
-        calls["significant_samples"] = [np.asarray(samples, dtype=np.int32).copy() for samples in significant_samples]
-        calls["pass2_parent_prior"] = np.asarray(kwargs["translation_log_prior"], dtype=np.float32).copy()
-        calls["fine_prior"] = kwargs["fine_translation_log_prior"]
-        calls["rotation_index_order"] = kwargs["rotation_index_order"]
+        calls["layouts"].append(
+            {
+                "significant_samples": [
+                    np.asarray(samples, dtype=np.int32).copy() for samples in significant_samples
+                ],
+                "pass2_parent_prior": np.asarray(kwargs["translation_log_prior"], dtype=np.float32).copy(),
+                "fine_prior": kwargs["fine_translation_log_prior"],
+                "rotation_index_order": kwargs["rotation_index_order"],
+                "allow_empty": kwargs["allow_empty"],
+            }
+        )
         return LocalHypothesisLayout(
             n_global_rotations=1,
             n_pixels=1,
@@ -746,10 +843,14 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
         )
 
     def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
-        del noise_variance, local_layout, disc_type
+        del noise_variance, disc_type
         calls["pass2_means_shape"] = np.asarray(means).shape
         calls["pass2_mean_variance_shape"] = np.asarray(mean_variance).shape
         calls["pass2_class_log_priors"] = np.asarray(kwargs["class_log_priors"], dtype=np.float64).copy()
+        calls["local_layout_count"] = len(local_layout)
+        calls["has_class_local_rotation_log_prior"] = "class_local_rotation_log_prior" in kwargs
+        calls["local_stats_use_reconstruction_probs"] = kwargs["stats_use_reconstruction_probs"]
+        calls["local_class_posterior_sums_from_noise"] = kwargs["class_posterior_sums_from_noise"]
         return _fake_result(n_classes=2, n=8, n_images=int(dataset.n_units), n_groups=1)
 
     monkeypatch.setattr(
@@ -803,11 +904,20 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
     assert calls["pass2_mean_variance_shape"] == (2, 8**3)
     np.testing.assert_allclose(calls["pass1_class_log_priors"], np.log([0.8, 0.2]))
     np.testing.assert_allclose(calls["pass2_class_log_priors"], np.log([0.8, 0.2]))
-    np.testing.assert_allclose(calls["pass2_parent_prior"], fine_prior[[1, 3]])
-    assert calls["fine_prior"] is None
-    assert calls["rotation_index_order"] == "relion_hidden"
-    np.testing.assert_array_equal(calls["significant_samples"][0], [0, 1])
-    np.testing.assert_array_equal(calls["significant_samples"][1], [0, 1])
+    assert calls["local_layout_count"] == 2
+    assert calls["has_class_local_rotation_log_prior"] is False
+    assert calls["local_stats_use_reconstruction_probs"] is True
+    assert calls["local_class_posterior_sums_from_noise"] is False
+    assert len(calls["layouts"]) == 2
+    for layout_call in calls["layouts"]:
+        np.testing.assert_allclose(layout_call["pass2_parent_prior"], fine_prior[[1, 3]])
+        assert layout_call["fine_prior"] is None
+        assert layout_call["rotation_index_order"] == "relion_hidden"
+        assert layout_call["allow_empty"] is True
+    np.testing.assert_array_equal(calls["layouts"][0]["significant_samples"][0], [0])
+    np.testing.assert_array_equal(calls["layouts"][0]["significant_samples"][1], [0])
+    np.testing.assert_array_equal(calls["layouts"][1]["significant_samples"][0], [1])
+    np.testing.assert_array_equal(calls["layouts"][1]["significant_samples"][1], [1])
     assert [(a.halfset_idx, a.class_idx) for a in result.accumulators] == [(0, 0), (0, 1)]
     np.testing.assert_allclose(result.meta["class_posterior_sums"], [0.0, 1.0])
     np.testing.assert_allclose(

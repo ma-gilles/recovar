@@ -31,6 +31,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -92,11 +93,14 @@ _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH = 1_000_000
 _DEFAULT_SCORE_ONLY_MAX_HYPOTHESES_PER_MICROBATCH = 1_250_000
 _DEFAULT_MAX_TRANSLATION_TILE_BYTES = 384 * 1024**2
 # Scale sparse pass-2 bucket sizes from physical GPU memory and active score
-# pixels. A 100k/256 K=4 H100/A100 probe was safe around 5M hypotheses and
-# saved ~280s/iteration versus the old ~1.2M cap; smaller GPUs scale down.
-_AUTO_SCORE_ONLY_HYPOTHESIS_DEVICE_FRACTION = 0.320
+# pixels. The fused K-class path is launch-bound at 100k/256 unless it uses
+# larger chunks; these fractions still scale down on smaller GPUs.
+_AUTO_SCORE_ONLY_HYPOTHESIS_DEVICE_FRACTION = 0.640
 _AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION = 0.305
+_AUTO_FUSED_KCLASS_FULL_HYPOTHESIS_DEVICE_FRACTION = 0.610
 _AUTO_TRANSLATION_TILE_DEVICE_FRACTION = 0.020
+_AUTO_EXTERNAL_NORMALIZATION_TRANSLATION_TILE_DEVICE_FRACTION = 0.014
+_AUTO_FUSED_KCLASS_TRANSLATION_TILE_DEVICE_FRACTION = 0.007
 _AUTO_PROJECTION_CACHE_DEVICE_FRACTION = 0.040
 _MAX_HYPOTHESES_ENV = "RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES"
 _SCORE_ONLY_MAX_HYPOTHESES_ENV = "RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES"
@@ -105,6 +109,22 @@ _PROJECTION_CACHE_MAX_BYTES_ENV = "RECOVAR_SPARSE_PASS2_PROJECTION_CACHE_MAX_BYT
 _DEFAULT_PROJECTION_CACHE_MAX_BYTES = 3 * 1024**3
 
 _native_mstep_dump_counter = 0
+
+
+class SparseKClassPass2FusedResult(NamedTuple):
+    """K-class sparse pass-2 result normalized over the joint class x pose grid."""
+
+    class_log_evidence: np.ndarray
+    class_score_log_z: np.ndarray
+    Ft_y: tuple[np.ndarray, ...]
+    Ft_ctf: tuple[np.ndarray, ...]
+    per_class_hard_assignments: np.ndarray
+    per_class_stats: tuple
+    noise_stats: tuple | None
+    per_class_best_pose_rotations: tuple[np.ndarray, ...] | None
+    per_class_best_pose_translations: tuple[np.ndarray, ...] | None
+    per_class_best_pose_rotation_ids: tuple[np.ndarray, ...] | None
+    profile_summary: dict
 
 
 def _maybe_dump_native_half_mstep(
@@ -331,6 +351,66 @@ def _bucket_pass2_inputs(
     return buckets
 
 
+def _bucket_sparse_k_class_pass2_inputs(
+    per_image_inputs_by_class,
+    n_fine_trans,
+    *,
+    rotation_block_size_for_quantization=5000,
+    max_hypotheses_per_microbatch=_DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
+    max_images_per_microbatch=2048,
+):
+    """Group images by the largest padded class support in a fused K-class pass."""
+
+    n_classes = len(per_image_inputs_by_class)
+    if n_classes == 0:
+        return []
+    n_images = len(per_image_inputs_by_class[0]["oversampled_rots"])
+    if n_images == 0:
+        return []
+    bucket_sizes_by_class = []
+    for per_image_inputs in per_image_inputs_by_class:
+        if len(per_image_inputs["oversampled_rots"]) != n_images:
+            raise ValueError("All classes must have the same image count for fused sparse pass-2")
+        counts = np.asarray(
+            [rots.shape[0] for rots in per_image_inputs["oversampled_rots"]],
+            dtype=np.int64,
+        )
+        bucket_sizes_by_class.append(
+            np.asarray(
+                [
+                    _exact_bucket_rotation_size(int(count), rotation_block_size_for_quantization)
+                    for count in counts
+                ],
+                dtype=np.int64,
+            )
+        )
+    fused_bucket_sizes = np.max(np.stack(bucket_sizes_by_class, axis=0), axis=0)
+    processing_order = np.argsort(fused_bucket_sizes, kind="stable").astype(np.int64)
+    unique_bucket_sizes = np.unique(fused_bucket_sizes[processing_order])
+
+    buckets = []
+    for bucket_size in unique_bucket_sizes:
+        bucket_size = int(bucket_size)
+        bucket_image_indices = processing_order[fused_bucket_sizes[processing_order] == bucket_size]
+        cap_by_hypotheses = max(
+            1,
+            int(max_hypotheses_per_microbatch)
+            // max(1, int(n_classes) * bucket_size * int(n_fine_trans)),
+        )
+        max_per_chunk = max(1, min(int(max_images_per_microbatch), cap_by_hypotheses))
+        for start in range(0, bucket_image_indices.shape[0], max_per_chunk):
+            buckets.append(
+                {
+                    "bucket_size": bucket_size,
+                    "image_indices": np.asarray(
+                        bucket_image_indices[start : start + max_per_chunk],
+                        dtype=np.int64,
+                    ),
+                }
+            )
+    return buckets
+
+
 def _optional_positive_int_env(name: str) -> int | None:
     raw = os.environ.get(name)
     if raw is None or raw == "":
@@ -426,16 +506,18 @@ def _device_memory_limit_bytes() -> int | None:
 def _auto_hypotheses_per_microbatch(
     *,
     score_only: bool,
+    fused_k_class: bool = False,
     n_score_pixels: int | None,
     device_memory_bytes: int | None,
 ) -> int | None:
     if device_memory_bytes is None or n_score_pixels is None or int(n_score_pixels) <= 0:
         return None
-    fraction = (
-        _AUTO_SCORE_ONLY_HYPOTHESIS_DEVICE_FRACTION
-        if score_only
-        else _AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION
-    )
+    if score_only:
+        fraction = _AUTO_SCORE_ONLY_HYPOTHESIS_DEVICE_FRACTION
+    elif fused_k_class:
+        fraction = _AUTO_FUSED_KCLASS_FULL_HYPOTHESIS_DEVICE_FRACTION
+    else:
+        fraction = _AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION
     # The score kernel's dominant live block scales with candidate count times
     # active Fourier pixels. This keeps larger windows and smaller GPUs from
     # inheriting the same candidate cap as low-resolution H100 runs.
@@ -449,6 +531,7 @@ def _max_hypotheses_per_microbatch_for_pass(
     use_window: bool,
     has_external_normalization: bool,
     dump_pass2_operands: bool,
+    fused_k_class: bool = False,
     n_score_pixels: int | None = None,
     device_memory_bytes: int | None = None,
 ) -> int:
@@ -458,6 +541,7 @@ def _max_hypotheses_per_microbatch_for_pass(
             return override
         auto = _auto_hypotheses_per_microbatch(
             score_only=True,
+            fused_k_class=False,
             n_score_pixels=n_score_pixels,
             device_memory_bytes=device_memory_bytes,
         )
@@ -467,19 +551,31 @@ def _max_hypotheses_per_microbatch_for_pass(
         return override
     auto = _auto_hypotheses_per_microbatch(
         score_only=False,
+        fused_k_class=fused_k_class,
         n_score_pixels=n_score_pixels,
         device_memory_bytes=device_memory_bytes,
     )
     return int(auto) if auto is not None else _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH
 
 
-def _max_translation_tile_bytes_for_pass(device_memory_bytes: int | None = None) -> int:
+def _max_translation_tile_bytes_for_pass(
+    device_memory_bytes: int | None = None,
+    *,
+    has_external_normalization: bool = False,
+    fused_k_class: bool = False,
+) -> int:
     override = _optional_positive_int_env(_MAX_TRANSLATION_TILE_BYTES_ENV)
     if override is not None:
         return override
     if device_memory_bytes is None:
         return _DEFAULT_MAX_TRANSLATION_TILE_BYTES
-    return max(1, int(float(device_memory_bytes) * _AUTO_TRANSLATION_TILE_DEVICE_FRACTION))
+    if fused_k_class:
+        fraction = _AUTO_FUSED_KCLASS_TRANSLATION_TILE_DEVICE_FRACTION
+    elif has_external_normalization:
+        fraction = _AUTO_EXTERNAL_NORMALIZATION_TRANSLATION_TILE_DEVICE_FRACTION
+    else:
+        fraction = _AUTO_TRANSLATION_TILE_DEVICE_FRACTION
+    return max(1, int(float(device_memory_bytes) * fraction))
 
 
 def _projection_cache_max_bytes_for_pass(device_memory_bytes: int | None = None) -> int:
@@ -714,6 +810,20 @@ def _logsumexp_pass2_bucket_score_only(scores):
     has_mass = has_finite_score & (sum_exp > 0) & jnp.isfinite(sum_exp)
     safe_sum_exp = jnp.where(has_mass, sum_exp, 1.0)
     return jnp.where(has_mass, safe_best_log_score + jnp.log(safe_sum_exp), -jnp.inf)
+
+
+@jax.jit
+def _logsumexp_class_log_z(class_log_z):
+    """Stable logsumexp over class-local sparse score normalizers."""
+
+    finite = jnp.isfinite(class_log_z)
+    max_value = jnp.max(jnp.where(finite, class_log_z, -jnp.inf), axis=0)
+    has_finite = jnp.isfinite(max_value)
+    shifted = jnp.where(finite & has_finite[None, :], class_log_z - max_value[None, :], -jnp.inf)
+    exp_terms = jnp.exp(shifted)
+    exp_terms = jnp.where(jnp.isfinite(exp_terms), exp_terms, 0.0)
+    sum_exp = jnp.sum(exp_terms, axis=0)
+    return jnp.where(has_finite & (sum_exp > 0.0), max_value + jnp.log(sum_exp), -jnp.inf)
 
 
 @jax.jit
@@ -1262,7 +1372,11 @@ def compute_pass2_stats_sparse_bucketed(
         n_score_pixels=budget_window_spec.n_score,
         device_memory_bytes=device_memory_bytes,
     )
-    max_translation_tile_bytes = _max_translation_tile_bytes_for_pass(device_memory_bytes)
+    has_external_normalization = normalization_log_z is not None or normalization_other_score_log_z is not None
+    max_translation_tile_bytes = _max_translation_tile_bytes_for_pass(
+        device_memory_bytes,
+        has_external_normalization=has_external_normalization,
+    )
     max_images_per_microbatch = _max_images_for_translation_tile(
         image_shape,
         n_fine_trans,
@@ -1967,3 +2081,806 @@ def compute_pass2_stats_sparse_bucketed(
     if accumulate_noise:
         result = result + (merged_noise_stats,)
     return result
+
+
+def _shared_k_class_noise_variance(noise_variance, n_classes: int):
+    noise_np = np.asarray(noise_variance)
+    if noise_np.ndim >= 2 and int(noise_np.shape[0]) == int(n_classes):
+        first = noise_np[0]
+        if not np.allclose(noise_np, first[None, ...], rtol=0.0, atol=0.0):
+            return None
+        return first
+    return noise_variance
+
+
+def compute_k_class_pass2_stats_sparse_fused(
+    experiment_dataset,
+    volumes,
+    mean_variance,
+    noise_variance,
+    translations,
+    significant_sample_indices_by_class,
+    *,
+    rotation_log_priors_by_class,
+    nside_level,
+    disc_type,
+    oversampling_order,
+    current_size,
+    translation_step=None,
+    score_with_masked_images=False,
+    return_stats=True,
+    accumulate_noise=False,
+    translation_log_prior=None,
+    half_spectrum_scoring=False,
+    projection_padding_factor=1,
+    reconstruction_padding_factor=1,
+    image_corrections=None,
+    scale_corrections=None,
+    image_pre_shifts=None,
+    use_float64_scoring=False,
+    translation_prior_centers=None,
+    do_gridding_correction=False,
+    square_window=False,
+    random_perturbation=0.0,
+    rotation_block_size_for_quantization=5000,
+    fine_rotations_override=None,
+    fine_rotation_parent_override=None,
+    fine_translations_override=None,
+    fine_translation_parent_override=None,
+    relion_half_volume_mstep=False,
+    relion_firstiter_score_mode="gaussian",
+    relion_firstiter_winner_take_all=False,
+) -> SparseKClassPass2FusedResult:
+    """Evaluate K-class sparse pass-2 in one joint class-normalized sweep.
+
+    This mirrors RELION's fine-pass semantics: all class-local scores are
+    normalized by one per-image class x pose denominator before M-step
+    accumulation.  The exact fused implementation currently requires a shared
+    class noise model; callers should fall back to the existing per-class path
+    when noise differs by class.
+    """
+
+    from recovar.em.sampling import (
+        get_oversampled_translation_grid,
+        rotation_grid_size,
+    )
+
+    if not return_stats:
+        raise ValueError("fused sparse K-class pass-2 requires return_stats=True")
+    if relion_firstiter_score_mode not in {"gaussian", "normalized_cc"}:
+        raise ValueError(
+            "relion_firstiter_score_mode must be 'gaussian' or 'normalized_cc', "
+            f"got {relion_firstiter_score_mode!r}",
+        )
+
+    volumes = jnp.asarray(volumes)
+    n_classes = int(volumes.shape[0])
+    if len(significant_sample_indices_by_class) != n_classes:
+        raise ValueError("significant_sample_indices_by_class must match class count")
+    if len(rotation_log_priors_by_class) != n_classes:
+        raise ValueError("rotation_log_priors_by_class must match class count")
+    shared_noise_variance = _shared_k_class_noise_variance(noise_variance, n_classes)
+    if shared_noise_variance is None:
+        raise NotImplementedError("fused sparse K-class pass-2 requires shared class noise variance")
+
+    n_images = int(experiment_dataset.n_units)
+    n_coarse_trans = int(np.asarray(translations).shape[0])
+    n_coarse_rot = rotation_grid_size(nside_level)
+    image_shape = experiment_dataset.image_shape
+    volume_shape = experiment_dataset.volume_shape
+    H, W = image_shape
+    n_half = H * (W // 2 + 1)
+    winner_take_all = bool(relion_firstiter_winner_take_all)
+    window_spec_kwargs = {}
+    if relion_firstiter_score_mode == "normalized_cc":
+        window_spec_kwargs = {
+            "score_square": True,
+            "score_include_dc": True,
+        }
+    budget_window_spec = make_fourier_window_spec(
+        image_shape,
+        current_size,
+        n_half,
+        square=square_window,
+        include_recon_window=True,
+        **window_spec_kwargs,
+    )
+    device_memory_bytes = _device_memory_limit_bytes()
+
+    if reconstruction_padding_factor > 1:
+        recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
+    else:
+        recon_volume_shape = volume_shape
+    use_half_volume_mstep = bool(relion_half_volume_mstep)
+    recon_accum_shape = half_volume_accumulator_shape(recon_volume_shape) if use_half_volume_mstep else recon_volume_shape
+    recon_volume_size = int(np.prod(recon_accum_shape))
+    recon_accum_dtype = experiment_dataset.dtype
+
+    mean_for_proj_by_class = []
+    proj_volume_shape = volume_shape
+    for class_index in range(n_classes):
+        class_volume = volumes[class_index]
+        if projection_padding_factor > 1:
+            from recovar.reconstruction.relion_functions import pad_volume_for_projection
+
+            mean_for_proj, proj_volume_shape = pad_volume_for_projection(
+                class_volume,
+                volume_shape,
+                projection_padding_factor,
+                do_gridding_correction=do_gridding_correction,
+                current_size=current_size,
+            )
+        else:
+            mean_for_proj = class_volume
+        mean_for_proj_by_class.append(mean_for_proj)
+
+    translations_np = np.asarray(translations, dtype=np.float32)
+    if translation_step is None:
+        unique_vals = np.unique(translations_np)
+        diffs = np.diff(np.sort(unique_vals))
+        diffs = diffs[diffs > 1e-6]
+        translation_step = float(diffs.min()) if diffs.size else 1.0
+    if fine_translations_override is None and fine_translation_parent_override is None:
+        fine_translations, fine_translation_parent = get_oversampled_translation_grid(
+            translations_np,
+            translation_step,
+            oversampling_order=oversampling_order,
+        )
+        fine_translations = np.asarray(fine_translations, dtype=np.float32)
+        fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
+    elif fine_translations_override is not None and fine_translation_parent_override is not None:
+        fine_translations = np.asarray(fine_translations_override, dtype=np.float32)
+        fine_translation_parent = np.asarray(fine_translation_parent_override, dtype=np.int32)
+    else:
+        raise ValueError(
+            "fine_translations_override and fine_translation_parent_override must be provided together",
+        )
+    n_fine_trans = int(fine_translations.shape[0])
+
+    translation_prior_centers_np = validate_translation_prior_centers(
+        translation_prior_centers,
+        n_images=n_images,
+        n_dims=translations_np.shape[1],
+    )
+    if translation_log_prior is None:
+        fine_translation_prior_2d = None
+    else:
+        translation_log_prior_np = np.asarray(translation_log_prior, dtype=np.float32)
+        if translation_log_prior_np.ndim == 1:
+            fine_tp = translation_log_prior_np[fine_translation_parent]
+            fine_translation_prior_2d = np.broadcast_to(fine_tp, (n_images, n_fine_trans)).astype(
+                np.float32,
+                copy=False,
+            )
+        elif translation_log_prior_np.ndim == 2:
+            fine_translation_prior_2d = translation_log_prior_np[:, fine_translation_parent].astype(
+                np.float32,
+                copy=False,
+            )
+        else:
+            raise ValueError(
+                f"translation_log_prior must be 1D or 2D, got {translation_log_prior_np.ndim} dimensions",
+            )
+
+    prep_t0 = time.time()
+    per_image_inputs_by_class = [
+        _prepare_per_image_pass2_inputs(
+            significant_sample_indices_by_class[class_index],
+            n_coarse_rot=n_coarse_rot,
+            n_coarse_trans=n_coarse_trans,
+            nside_level=nside_level,
+            oversampling_order=oversampling_order,
+            n_fine_trans=n_fine_trans,
+            fine_translation_parent=fine_translation_parent,
+            rotation_log_prior=rotation_log_priors_by_class[class_index],
+            random_perturbation=random_perturbation,
+            fine_rotations_override=fine_rotations_override,
+            fine_rotation_parent_override=fine_rotation_parent_override,
+        )
+        for class_index in range(n_classes)
+    ]
+    prep_s = time.time() - prep_t0
+    local_rot_counts = [
+        int(rots.shape[0])
+        for per_image_inputs in per_image_inputs_by_class
+        for rots in per_image_inputs["oversampled_rots"]
+    ]
+    valid_candidate_counts = [
+        int(np.asarray(mask).sum())
+        for per_image_inputs in per_image_inputs_by_class
+        for mask in per_image_inputs["candidate_mask"]
+    ]
+
+    max_hypotheses_per_microbatch = _max_hypotheses_per_microbatch_for_pass(
+        score_only=False,
+        use_window=budget_window_spec.use_window,
+        has_external_normalization=False,
+        dump_pass2_operands=bool(os.environ.get("RECOVAR_PASS2_DUMP_DIR")),
+        fused_k_class=True,
+        n_score_pixels=budget_window_spec.n_score,
+        device_memory_bytes=device_memory_bytes,
+    )
+    max_translation_tile_bytes = _max_translation_tile_bytes_for_pass(
+        device_memory_bytes,
+        fused_k_class=True,
+    )
+    max_images_per_microbatch = _max_images_for_translation_tile(
+        image_shape,
+        n_fine_trans,
+        max_tile_bytes=max_translation_tile_bytes,
+    )
+    bucket_t0 = time.time()
+    buckets = _bucket_sparse_k_class_pass2_inputs(
+        per_image_inputs_by_class,
+        n_fine_trans=n_fine_trans,
+        rotation_block_size_for_quantization=rotation_block_size_for_quantization,
+        max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
+        max_images_per_microbatch=max_images_per_microbatch,
+    )
+    bucket_s = time.time() - bucket_t0
+    logger.info(
+        "Sparse fused K-class pass-2 bucketing: %d images x %d classes -> %d buckets (%s; "
+        "max_hypotheses_per_microbatch=%d, max_images_per_microbatch=%d, "
+        "max_translation_tile_bytes=%d, n_score_pixels=%d, device_memory_gib=%.2f)",
+        n_images,
+        n_classes,
+        len(buckets),
+        _bucket_summary(buckets),
+        max_hypotheses_per_microbatch,
+        max_images_per_microbatch,
+        max_translation_tile_bytes,
+        int(budget_window_spec.n_score),
+        (-1.0 if device_memory_bytes is None else device_memory_bytes / float(1024**3)),
+    )
+    logger.info(
+        "Sparse fused K-class pass-2 setup timing: hypothesis_prep=%.2fs bucket=%.2fs",
+        prep_s,
+        bucket_s,
+    )
+
+    Ft_y_total = [jnp.zeros(recon_volume_size, dtype=recon_accum_dtype) for _ in range(n_classes)]
+    Ft_ctf_total = [jnp.zeros(recon_volume_size, dtype=recon_accum_dtype) for _ in range(n_classes)]
+    class_hard_assignments = np.empty((n_classes, n_images), dtype=np.int32)
+    best_rotations = [np.empty((n_images, 3, 3), dtype=np.float32) for _ in range(n_classes)]
+    best_rotation_indices = [np.empty(n_images, dtype=np.int64) for _ in range(n_classes)]
+    class_log_evidence = np.empty((n_classes, n_images), dtype=np.float64)
+    class_score_log_z = np.empty((n_classes, n_images), dtype=np.float64)
+    best_log_score = np.empty((n_classes, n_images), dtype=np.float64)
+    max_posterior = np.empty((n_classes, n_images), dtype=np.float32)
+    rotation_posterior_sums = np.zeros((n_classes, n_coarse_rot), dtype=np.float64)
+
+    noise_wsum_total = [None] * n_classes
+    noise_img_power_total = [None] * n_classes
+    noise_sumw_total = np.zeros(n_classes, dtype=np.float64)
+    noise_sigma2_offset_total = np.zeros(n_classes, dtype=np.float64)
+    if accumulate_noise:
+        n_shells = image_shape[0] // 2 + 1
+        noise_wsum_total = [np.zeros(n_shells, dtype=np.float64) for _ in range(n_classes)]
+        noise_img_power_total = [np.zeros(n_shells, dtype=np.float64) for _ in range(n_classes)]
+
+    config = ForwardModelConfig.from_dataset(
+        experiment_dataset,
+        disc_type=disc_type,
+        process_fn=experiment_dataset.process_images,
+    )
+    precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
+    window_spec = make_fourier_window_spec(
+        image_shape,
+        current_size,
+        n_half,
+        square=square_window,
+        include_recon_window=True,
+        **window_spec_kwargs,
+    )
+    use_window = window_spec.use_window
+    window_indices_np = window_spec.score_indices_np
+    window_indices = window_spec.score_indices
+    recon_window_indices = window_spec.recon_indices
+    n_windowed = window_spec.n_score
+    n_recon_windowed = window_spec.n_recon
+
+    half_weights = make_scoring_half_image_weights(
+        image_shape,
+        relion_half_sum=half_spectrum_scoring,
+    )
+    half_weights_windowed = window_spec.score_values(half_weights)
+    if use_float64_scoring:
+        half_weights = half_weights.astype(jnp.float64)
+        half_weights_windowed = window_spec.score_values(half_weights)
+    direct_half_weights = half_weights_windowed if use_window else half_weights
+
+    noise_variance_half = noise_utils.to_batched_half_pixel_noise(shared_noise_variance, image_shape).squeeze()
+    if accumulate_noise:
+        shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
+        shell_indices_noise = window_spec.recon_values(shell_indices_half)
+        noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
+
+    projection_cache_by_class = [None] * n_classes
+    dump_pass2_operands = bool(os.environ.get("RECOVAR_PASS2_DUMP_DIR"))
+    if fine_rotations_override is not None and not dump_pass2_operands:
+        n_fine_rot = int(np.asarray(fine_rotations_override).shape[0])
+        transient_projection_bytes = n_fine_rot * n_half * np.dtype(np.complex64).itemsize
+        if not use_window:
+            transient_projection_bytes += n_fine_rot * n_half * np.dtype(np.float32).itemsize
+        max_projection_cache_bytes = _projection_cache_max_bytes_for_pass(device_memory_bytes)
+        if transient_projection_bytes * n_classes <= max_projection_cache_bytes * n_classes:
+            for class_index in range(n_classes):
+                cache_t0 = time.time()
+                projection_kwargs = window_spec.projection_kwargs(return_abs2=False if use_window else None)
+                proj_half_cache_flat, proj_abs2_cache_flat = _compute_projections_block(
+                    mean_for_proj_by_class[class_index],
+                    jnp.asarray(fine_rotations_override, dtype=jnp.float32),
+                    image_shape,
+                    proj_volume_shape,
+                    disc_type,
+                    **projection_kwargs,
+                )
+                if use_window:
+                    recon_cache = proj_half_cache_flat[:, recon_window_indices]
+                    projection_cache_by_class[class_index] = {
+                        "score": proj_half_cache_flat[:, window_indices],
+                        "recon": recon_cache,
+                        "recon_abs2": jnp.abs(recon_cache) ** 2,
+                    }
+                    del proj_half_cache_flat
+                else:
+                    projection_cache_by_class[class_index] = {
+                        "score": proj_half_cache_flat,
+                        "recon": proj_half_cache_flat,
+                        "recon_abs2": proj_abs2_cache_flat,
+                    }
+                logger.info(
+                    "Sparse fused K-class pass-2 projection cache: class %d cached %d fine rotations in %.2fs "
+                    "(estimated transient %.2f GiB)",
+                    class_index + 1,
+                    n_fine_rot,
+                    time.time() - cache_t0,
+                    transient_projection_bytes / float(1024**3),
+                )
+        else:
+            logger.info(
+                "Sparse fused K-class pass-2 projection cache skipped: estimated class transient %.2f GiB "
+                "exceeds cap %.2f GiB",
+                transient_projection_bytes / float(1024**3),
+                max_projection_cache_bytes / float(1024**3),
+            )
+
+    bucket_group_stats = _bucket_group_stats(buckets)
+    last_bucket_size_logged = None
+    group_t0 = None
+    overall_t0 = time.time()
+    for bucket_meta in buckets:
+        image_indices = np.asarray(bucket_meta["image_indices"], dtype=np.int64)
+        class_bucket_arrays = [
+            _build_bucket_arrays(bucket_meta, per_image_inputs_by_class[class_index], n_fine_trans)
+            for class_index in range(n_classes)
+        ]
+        bucket_size = int(bucket_meta["bucket_size"])
+        if bucket_size != last_bucket_size_logged:
+            if last_bucket_size_logged is not None and group_t0 is not None:
+                prev_chunks, prev_images = bucket_group_stats[last_bucket_size_logged]
+                prev_wall = time.time() - group_t0
+                logger.info(
+                    "Sparse fused K-class pass-2 bucket group done: bucket_size=%d chunks=%d images=%d wall=%.1fs images/s=%.1f",
+                    last_bucket_size_logged,
+                    prev_chunks,
+                    prev_images,
+                    prev_wall,
+                    prev_images / max(prev_wall, 1e-9),
+                )
+            group_chunks, group_images = bucket_group_stats[bucket_size]
+            logger.info(
+                "Sparse fused K-class pass-2 bucket group start: bucket_size=%d chunks=%d images=%d",
+                bucket_size,
+                group_chunks,
+                group_images,
+            )
+            last_bucket_size_logged = bucket_size
+            group_t0 = time.time()
+        batch = int(image_indices.shape[0])
+        batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, image_indices)
+        batch_data = jnp.asarray(batch_data)
+        if not np.array_equal(np.asarray(fetched_indices), image_indices):
+            fetched_indices_np = np.asarray(fetched_indices)
+            reordered = []
+            for arrays in class_bucket_arrays:
+                (
+                    rotations,
+                    rotation_indices,
+                    log_prior,
+                    candidate_mask,
+                    parent_map_padded,
+                    actual_counts,
+                ) = _reorder_to_indices(
+                    fetched_indices_np,
+                    image_indices,
+                    arrays["rotations"],
+                    arrays["rotation_indices"],
+                    arrays["log_prior"],
+                    arrays["candidate_mask"],
+                    arrays["parent_map"],
+                    arrays["actual_counts"],
+                )
+                reordered.append(
+                    {
+                        "image_indices": fetched_indices_np,
+                        "bucket_size": arrays["bucket_size"],
+                        "actual_counts": actual_counts,
+                        "rotations": rotations,
+                        "rotation_indices": rotation_indices,
+                        "log_prior": log_prior,
+                        "candidate_mask": candidate_mask,
+                        "parent_map": parent_map_padded,
+                    }
+                )
+            class_bucket_arrays = reordered
+            image_indices = fetched_indices_np
+
+        translation_sqdist_ang = None
+        if translation_prior_centers_np is not None:
+            centers = translation_prior_centers_for_images(
+                translation_prior_centers_np,
+                image_indices,
+                batch_size=batch,
+            )
+            translation_sqdist_ang = translation_sqdist_angstrom(
+                fine_translations,
+                centers,
+                experiment_dataset.voxel_size,
+            )
+        if fine_translation_prior_2d is None:
+            bucket_translation_prior = jnp.zeros((batch, n_fine_trans), dtype=jnp.float32)
+        else:
+            bucket_translation_prior = jnp.asarray(fine_translation_prior_2d[image_indices], dtype=jnp.float32)
+
+        (
+            shifted_score_half,
+            shifted_recon_half,
+            batch_norm,
+            ctf2_over_nv_half,
+            ctf2_over_nv_half_with_dc,
+            shifted_score_half_with_dc,
+            processed_score_half_for_noise,
+            shifted_corrected_score_half,
+        ) = _prepare_bucket_io(
+            experiment_dataset,
+            batch_data,
+            ctf_params,
+            image_indices,
+            noise_variance_half,
+            fine_translations,
+            config,
+            n_fine_trans,
+            score_with_masked_images,
+            half_spectrum_scoring,
+            image_corrections,
+            scale_corrections,
+            image_pre_shifts,
+            use_float64_scoring,
+            return_direct_scoring_io=True,
+            score_only=False,
+            score_mode=relion_firstiter_score_mode,
+            window_indices=window_indices,
+        )
+        if use_window:
+            ctf2_over_nv_score = ctf2_over_nv_half[:, window_indices]
+            shifted_corrected_score = shifted_corrected_score_half[:, window_indices]
+            shifted_score = shifted_score_half[:, window_indices]
+            shifted_recon = shifted_recon_half[:, recon_window_indices]
+            ctf2_over_nv_recon = ctf2_over_nv_half_with_dc[:, recon_window_indices]
+            shifted_noise = shifted_score_half_with_dc[:, recon_window_indices]
+        else:
+            ctf2_over_nv_score = ctf2_over_nv_half
+            shifted_corrected_score = shifted_corrected_score_half
+            shifted_score = shifted_score_half
+            shifted_recon = shifted_recon_half
+            ctf2_over_nv_recon = ctf2_over_nv_half_with_dc
+            shifted_noise = shifted_score_half_with_dc
+
+        shifted_corrected_score_split = shifted_corrected_score.reshape(batch, n_fine_trans, -1)
+        scores_by_class = []
+        class_score_log_z_bucket = []
+        flat_rotations_by_class = []
+        proj_for_noise_by_class = []
+        proj_abs2_by_class = []
+        for class_index, arrays in enumerate(class_bucket_arrays):
+            class_bucket_size = int(arrays["bucket_size"])
+            flat_rotations = flatten_bucket_rotations(jnp.asarray(arrays["rotations"]))
+            flat_rotations_by_class.append(flat_rotations)
+            cache = projection_cache_by_class[class_index]
+            if cache is not None:
+                rotation_indices_jax = jnp.asarray(arrays["rotation_indices"], dtype=jnp.int32)
+                proj_half = cache["score"][rotation_indices_jax]
+                proj_for_noise = cache["recon"][rotation_indices_jax]
+                proj_abs2_for_noise = cache["recon_abs2"][rotation_indices_jax]
+            else:
+                projection_kwargs = window_spec.projection_kwargs(return_abs2=False if use_window else None)
+                proj_half_flat, proj_abs2_half_flat = _compute_projections_block(
+                    mean_for_proj_by_class[class_index],
+                    flat_rotations,
+                    image_shape,
+                    proj_volume_shape,
+                    disc_type,
+                    **projection_kwargs,
+                )
+                if use_window:
+                    proj_half = proj_half_flat[:, window_indices].reshape(batch, class_bucket_size, n_windowed)
+                    proj_for_noise = proj_half_flat[:, recon_window_indices].reshape(
+                        batch,
+                        class_bucket_size,
+                        n_recon_windowed,
+                    )
+                    proj_abs2_for_noise = jnp.abs(proj_for_noise) ** 2
+                else:
+                    proj_half = proj_half_flat.reshape(batch, class_bucket_size, n_half)
+                    proj_abs2_for_noise = proj_abs2_half_flat.reshape(batch, class_bucket_size, n_half)
+                    proj_for_noise = proj_half
+            proj_for_noise, proj_abs2_for_noise = precision_policy.cast_local_noise_projection_scores(
+                proj_for_noise,
+                proj_abs2_for_noise,
+            )
+            if relion_firstiter_score_mode == "normalized_cc":
+                scores = _score_pass2_bucket_normalized_cc(
+                    shifted_corrected_score_split,
+                    ctf2_over_nv_score,
+                    proj_half,
+                    direct_half_weights,
+                    jnp.asarray(arrays["candidate_mask"]),
+                )
+            else:
+                scores = _score_pass2_bucket_relion_gpu_diff2(
+                    shifted_corrected_score_split,
+                    ctf2_over_nv_score,
+                    proj_half,
+                    direct_half_weights,
+                    jnp.asarray(arrays["log_prior"]),
+                    bucket_translation_prior,
+                    jnp.asarray(arrays["candidate_mask"]),
+                )
+            scores_by_class.append(scores)
+            class_score_log_z_bucket.append(_logsumexp_pass2_bucket_score_only(scores))
+            proj_for_noise_by_class.append(proj_for_noise)
+            proj_abs2_by_class.append(proj_abs2_for_noise)
+
+        global_score_log_z_bucket = _logsumexp_class_log_z(jnp.stack(class_score_log_z_bucket, axis=0))
+        log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+        shifted_recon_split = shifted_recon.reshape(batch, n_fine_trans, -1)
+        if accumulate_noise:
+            batch_img_power = jnp.sum(jnp.abs(processed_score_half_for_noise) ** 2, axis=0).astype(jnp.float32)
+            batch_img_power_shells = jnp.zeros(n_shells, dtype=jnp.float32)
+            batch_img_power_shells = batch_img_power_shells.at[shell_indices_half].add(batch_img_power)
+            batch_img_power_shells_np = np.asarray(batch_img_power_shells, dtype=np.float64)
+            shifted_noise_split = (
+                shifted_noise.reshape(batch, n_fine_trans, -1)
+                if half_spectrum_scoring
+                else shifted_score.reshape(batch, n_fine_trans, -1)
+            )
+
+        for class_index, arrays in enumerate(class_bucket_arrays):
+            log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
+                _normalize_pass2_bucket_with_log_z(
+                    scores_by_class[class_index],
+                    global_score_log_z_bucket.astype(scores_by_class[class_index].real.dtype),
+                )
+            )
+            if winner_take_all:
+                probs = _winner_take_all_bucket_probs(
+                    scores_by_class[class_index],
+                    best_argmax,
+                    best_log_score_bucket,
+                )
+                max_posterior_bucket = jnp.where(
+                    jnp.isfinite(best_log_score_bucket),
+                    jnp.ones_like(max_posterior_bucket),
+                    jnp.zeros_like(max_posterior_bucket),
+                )
+            summed = compute_local_weighted_sums(probs, shifted_recon_split)
+            ctf_probs = compute_local_ctf_sums(probs, ctf2_over_nv_recon)
+            if use_window:
+                Ft_y_total[class_index] = _adjoint_slice_volume_windowed(
+                    flatten_bucket_rows(summed),
+                    recon_window_indices,
+                    flat_rotations_by_class[class_index],
+                    Ft_y_total[class_index],
+                    image_shape,
+                    recon_volume_shape,
+                    "linear_interp",
+                    True,
+                    use_half_volume_mstep,
+                    float(current_size // 2),
+                )
+                Ft_ctf_total[class_index] = _adjoint_slice_volume_windowed(
+                    flatten_bucket_rows(ctf_probs),
+                    recon_window_indices,
+                    flat_rotations_by_class[class_index],
+                    Ft_ctf_total[class_index],
+                    image_shape,
+                    recon_volume_shape,
+                    "linear_interp",
+                    True,
+                    use_half_volume_mstep,
+                    float(current_size // 2),
+                )
+            else:
+                Ft_y_total[class_index] = _adjoint_slice_volume_half(
+                    flatten_bucket_rows(summed),
+                    flat_rotations_by_class[class_index],
+                    Ft_y_total[class_index],
+                    image_shape,
+                    recon_volume_shape,
+                    "linear_interp",
+                    True,
+                    use_half_volume_mstep,
+                )
+                Ft_ctf_total[class_index] = _adjoint_slice_volume_half(
+                    flatten_bucket_rows(ctf_probs),
+                    flat_rotations_by_class[class_index],
+                    Ft_ctf_total[class_index],
+                    image_shape,
+                    recon_volume_shape,
+                    "linear_interp",
+                    True,
+                    use_half_volume_mstep,
+                )
+            if accumulate_noise:
+                if translation_sqdist_ang is not None:
+                    translation_posterior = np.asarray(jnp.sum(probs, axis=1), dtype=np.float64)
+                    noise_sigma2_offset_total[class_index] += float(
+                        np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
+                    )
+                noise_img_power_total[class_index] += batch_img_power_shells_np
+                noise_sumw_total[class_index] += float(batch)
+                summed_masked_noise = compute_local_weighted_sums(probs, shifted_noise_split)
+                block_noise_shells, _, _ = _compute_noise_block(
+                    flatten_bucket_rows(proj_for_noise_by_class[class_index]),
+                    flatten_bucket_rows(proj_abs2_by_class[class_index]),
+                    flatten_bucket_rows(summed_masked_noise),
+                    flatten_bucket_rows(ctf_probs),
+                    noise_variance_for_noise,
+                    shell_indices_noise,
+                    n_shells,
+                )
+                noise_wsum_total[class_index] += np.asarray(block_noise_shells, dtype=np.float64)
+
+            actual_counts_arr = np.asarray(arrays["actual_counts"], dtype=np.int64)
+            best_argmax_np = np.asarray(best_argmax, dtype=np.int64)
+            best_rot_idx = best_argmax_np // n_fine_trans
+            best_trans_idx = best_argmax_np % n_fine_trans
+            if np.any(best_rot_idx >= actual_counts_arr):
+                bad = np.flatnonzero(best_rot_idx >= actual_counts_arr)
+                raise RuntimeError(
+                    "Fused sparse K-class pass-2: best rotation index points into padding for "
+                    f"class {class_index + 1}, images {bad.tolist()}",
+                )
+            best_log_score_np = np.asarray(best_log_score_bucket, dtype=np.float64)
+            max_posterior_np = np.asarray(max_posterior_bucket, dtype=np.float32)
+            class_log_z_np = np.asarray(class_score_log_z_bucket[class_index], dtype=np.float64)
+            probs_sum_t = np.asarray(jnp.sum(probs, axis=-1), dtype=np.float64)
+            for row, image_idx in enumerate(image_indices.tolist()):
+                r = int(best_rot_idx[row])
+                t = int(best_trans_idx[row])
+                fine_rot_idx = int(per_image_inputs_by_class[class_index]["oversampled_rot_indices"][image_idx][r])
+                class_hard_assignments[class_index, image_idx] = fine_rot_idx * n_fine_trans + t
+                best_rotations[class_index][image_idx] = per_image_inputs_by_class[class_index]["oversampled_rots"][
+                    image_idx
+                ][r]
+                best_rotation_indices[class_index][image_idx] = fine_rot_idx
+                if np.isfinite(class_log_z_np[row]):
+                    class_log_evidence[class_index, image_idx] = float(class_log_z_np[row] + log_score_offset[row])
+                    class_score_log_z[class_index, image_idx] = float(class_log_z_np[row])
+                else:
+                    class_log_evidence[class_index, image_idx] = -np.inf
+                    class_score_log_z[class_index, image_idx] = -np.inf
+                best_log_score[class_index, image_idx] = float(best_log_score_np[row] + log_score_offset[row])
+                max_posterior[class_index, image_idx] = float(max_posterior_np[row])
+                cnt = int(actual_counts_arr[row])
+                if cnt == 0:
+                    continue
+                unique_rot_image = per_image_inputs_by_class[class_index]["unique_rot"][image_idx]
+                parent_map_image = per_image_inputs_by_class[class_index]["parent_map"][image_idx]
+                coarse_rot_indices = unique_rot_image[parent_map_image]
+                np.add.at(
+                    rotation_posterior_sums[class_index],
+                    coarse_rot_indices,
+                    probs_sum_t[row, :cnt],
+                )
+
+    if last_bucket_size_logged is not None and group_t0 is not None:
+        group_chunks, group_images = bucket_group_stats[last_bucket_size_logged]
+        group_wall = time.time() - group_t0
+        logger.info(
+            "Sparse fused K-class pass-2 bucket group done: bucket_size=%d chunks=%d images=%d wall=%.1fs images/s=%.1f",
+            last_bucket_size_logged,
+            group_chunks,
+            group_images,
+            group_wall,
+            group_images / max(group_wall, 1e-9),
+        )
+
+    em_wall = time.time() - overall_t0
+    logger.info(
+        "Sparse fused K-class pass-2: %d images, %d classes, %d buckets, %.2fs E+M; "
+        "median local rot=%d, mean local rot=%.1f, median valid candidates/image=%d",
+        n_images,
+        n_classes,
+        len(buckets),
+        em_wall,
+        int(np.median(local_rot_counts)) if local_rot_counts else 0,
+        float(np.mean(local_rot_counts)) if local_rot_counts else 0.0,
+        int(np.median(valid_candidate_counts)) if valid_candidate_counts else 0,
+    )
+
+    Ft_y_out = []
+    Ft_ctf_out = []
+    for class_index in range(n_classes):
+        class_Ft_y = Ft_y_total[class_index]
+        class_Ft_ctf = Ft_ctf_total[class_index]
+        if use_half_volume_mstep:
+            _maybe_dump_native_half_mstep(
+                class_Ft_y,
+                class_Ft_ctf,
+                current_size=current_size,
+                n_images=n_images,
+                recon_volume_shape=recon_volume_shape,
+                stage=f"fused_class{class_index + 1}_pre_x0",
+            )
+            class_Ft_y, class_Ft_ctf = enforce_half_volume_x0(
+                class_Ft_y,
+                class_Ft_ctf,
+                recon_volume_shape,
+                logger=logger,
+                label=f"Sparse fused K-class pass-2 class {class_index + 1}",
+            )
+            _maybe_dump_native_half_mstep(
+                class_Ft_y,
+                class_Ft_ctf,
+                current_size=current_size,
+                n_images=n_images,
+                recon_volume_shape=recon_volume_shape,
+                stage=f"fused_class{class_index + 1}_post_x0",
+            )
+            class_Ft_y, class_Ft_ctf = half_volume_accumulators_to_full(
+                class_Ft_y,
+                class_Ft_ctf,
+                recon_volume_shape,
+            )
+        Ft_y_out.append(np.asarray(jax.device_get(class_Ft_y)))
+        Ft_ctf_out.append(np.asarray(jax.device_get(class_Ft_ctf)))
+
+    per_class_stats = tuple(
+        make_relion_stats(
+            log_evidence_per_image=class_log_evidence[class_index],
+            best_log_score_per_image=best_log_score[class_index],
+            max_posterior_per_image=max_posterior[class_index],
+            rotation_posterior_sums=rotation_posterior_sums[class_index],
+        )
+        for class_index in range(n_classes)
+    )
+    noise_stats = None
+    if accumulate_noise:
+        noise_stats = tuple(
+            make_noise_stats(
+                wsum_sigma2_noise=noise_wsum_total[class_index],
+                wsum_img_power=noise_img_power_total[class_index],
+                wsum_sigma2_offset=float(noise_sigma2_offset_total[class_index]),
+                sumw=float(noise_sumw_total[class_index]),
+            )
+            for class_index in range(n_classes)
+        )
+    best_translations = tuple(
+        fine_translations[class_hard_assignments[class_index] % n_fine_trans]
+        for class_index in range(n_classes)
+    )
+    return SparseKClassPass2FusedResult(
+        class_log_evidence=class_log_evidence,
+        class_score_log_z=class_score_log_z,
+        Ft_y=tuple(Ft_y_out),
+        Ft_ctf=tuple(Ft_ctf_out),
+        per_class_hard_assignments=class_hard_assignments,
+        per_class_stats=per_class_stats,
+        noise_stats=noise_stats,
+        per_class_best_pose_rotations=tuple(best_rotations),
+        per_class_best_pose_translations=best_translations,
+        per_class_best_pose_rotation_ids=tuple(best_rotation_indices),
+        profile_summary={"sparse_kclass_fused_s": np.float64(em_wall)},
+    )

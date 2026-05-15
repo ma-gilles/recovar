@@ -66,6 +66,7 @@ def select_vdam_subset(
     subset_size: int,
     optics_group_by_particle: Sequence[int],
     pseudo_halfsets: bool,
+    halfset_particle_ids: np.ndarray | None = None,
 ) -> SubsetPlan:
     """Per-iteration plan: prefix-N of shuffle, stable-sort by optics group, BPref halfset assignment.
 
@@ -75,9 +76,24 @@ def select_vdam_subset(
         raise ValueError(
             f"subset_size={subset_size} out of range for nr_particles={shuffled_particle_ids.size}; resolve -1 first"
         )
-    sorted_prefix = _stable_sort_by_optics_group(shuffled_particle_ids[:subset_size], optics_group_by_particle)
+    prefix = np.asarray(shuffled_particle_ids[:subset_size], dtype=np.int64)
+    if prefix.size == 0:
+        sorted_prefix = prefix
+        sorted_halfset_source = prefix
+    else:
+        keys = np.asarray([optics_group_by_particle[int(p)] for p in prefix], dtype=np.int64)
+        stable_order = np.argsort(keys, kind="stable")
+        sorted_prefix = prefix[stable_order]
+        if halfset_particle_ids is None:
+            halfset_source = prefix
+        else:
+            halfset_source = np.asarray(halfset_particle_ids, dtype=np.int64)
+            if halfset_source.shape != np.asarray(shuffled_particle_ids).shape:
+                raise ValueError("halfset_particle_ids must match shuffled_particle_ids shape")
+            halfset_source = halfset_source[:subset_size]
+        sorted_halfset_source = halfset_source[stable_order]
     halfsets = (
-        assign_pseudo_halfsets_for_particle_ids(sorted_prefix)
+        assign_pseudo_halfsets_for_particle_ids(sorted_halfset_source)
         if pseudo_halfsets
         else np.zeros(sorted_prefix.size, dtype=np.int8)
     )

@@ -127,6 +127,20 @@ class TestSelectVdamSubset:
         assert plan.particle_ids.tolist() == [5, 0, 3, 4, 1, 2]
         assert plan.halfset_ids.tolist() == [1, 0, 1, 0, 1, 0]
 
+    def test_halfsets_can_follow_relion_internal_ids_after_external_sort(self):
+        shuffled = np.array([5, 0, 3, 4, 1, 2], dtype=np.int64)
+        internal_ids = np.arange(6, dtype=np.int64)
+        og = [0, 1, 0, 1, 0, 1]
+        plan = select_vdam_subset(
+            shuffled,
+            subset_size=6,
+            optics_group_by_particle=og,
+            pseudo_halfsets=True,
+            halfset_particle_ids=internal_ids,
+        )
+        assert plan.particle_ids.tolist() == [0, 4, 2, 5, 3, 1]
+        assert plan.halfset_ids.tolist() == [1, 1, 1, 0, 0, 0]
+
     def test_halfsets_all_zero_when_not_pseudo(self):
         shuffled = np.array([0, 1, 2, 3], dtype=np.int64)
         og = [0] * 4

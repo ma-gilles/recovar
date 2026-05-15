@@ -19,6 +19,8 @@ against RELION's `run_itNNN_*` fixture is exercised in Phase 4.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -164,6 +166,22 @@ class TestStepsizeParity:
             )
             assert abs(py_val - cpp_val) < 1e-12
 
+    def test_short_initial_model_schedule_uses_relion_integer_division(self, bind):
+        phases = compute_phase_lengths(4, 0.3, 0.2)
+        assert phases.grad_ini_iter == 1
+        assert phases.grad_inbetween_iter == 3
+
+        for it in [0, 1, 2, 3, 4]:
+            py_val = compute_stepsize(iter=it, phase_lengths=phases, is_3d_model=True, ref_dim=3)
+            cpp_val = bind.vdam_compute_stepsize(
+                it,
+                phases.grad_ini_iter,
+                phases.grad_inbetween_iter,
+                True,
+                3,
+            )
+            assert abs(py_val - cpp_val) < 1e-12, f"iter={it}: py={py_val} cpp={cpp_val}"
+
 
 class TestTau2FudgeParity:
     def test_3d_initial_model_default_scheme(self, bind):
@@ -229,6 +247,30 @@ class TestTau2FudgeParity:
                 4.0,
             )
             assert abs(py_val - cpp_val) < 1e-12
+
+    def test_short_initial_model_tau_schedule_preserves_relion_nan(self, bind):
+        phases = compute_phase_lengths(4, 0.3, 0.2)
+        assert phases.grad_ini_iter == 1
+        assert phases.grad_inbetween_iter == 3
+
+        py_val = compute_tau2_fudge(
+            iter=1,
+            phase_lengths=phases,
+            is_3d_model=True,
+            ref_dim=3,
+            tau2_fudge_arg=4.0,
+        )
+        cpp_val = bind.vdam_compute_tau2_fudge(
+            1,
+            phases.grad_ini_iter,
+            phases.grad_inbetween_iter,
+            True,
+            3,
+            False,
+            4.0,
+        )
+        assert math.isnan(py_val)
+        assert math.isnan(cpp_val)
 
 
 def test_projector_power_spectrum_smoke(bind):

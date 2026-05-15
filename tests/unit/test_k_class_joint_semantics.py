@@ -1024,6 +1024,100 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
     assert isinstance(result.Ft_ctf, np.ndarray)
 
 
+def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypatch):
+    """Avoid duplicating the most expensive class in the current sparse scheme."""
+
+    from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
+    from recovar.em.sampling import rotation_grid_size
+
+    calls = []
+    n_classes = 3
+    n_images = 2
+    n_coarse_rot = rotation_grid_size(1)
+    n_fine_rot = rotation_grid_size(2)
+    score_log_z = [
+        np.asarray([1.0, 2.0], dtype=np.float64),
+        np.asarray([4.0, 1.0], dtype=np.float64),
+        np.asarray([0.5, 3.0], dtype=np.float64),
+    ]
+
+    class TinyDataset:
+        n_units = n_images
+
+    def fake_compute_pass2_stats_sparse(
+        _dataset,
+        volume,
+        _mean_variance,
+        _noise_variance,
+        _translations,
+        _significant_sample_indices,
+        **kwargs,
+    ):
+        class_index = int(np.asarray(volume)[0].real)
+        calls.append((class_index, kwargs))
+        stats = make_relion_stats(
+            log_evidence_per_image=np.full(n_images, float(class_index), dtype=np.float64),
+            best_log_score_per_image=np.full(n_images, float(class_index), dtype=np.float64),
+            max_posterior_per_image=np.full(n_images, 0.5, dtype=np.float32),
+            rotation_posterior_sums=np.zeros(n_coarse_rot, dtype=np.float32),
+        )
+        if kwargs.get("return_score_log_z_only"):
+            return np.full(n_images, float(class_index), dtype=np.float64), score_log_z[class_index]
+        common = (
+            jnp.zeros_like(volume),
+            jnp.zeros_like(volume),
+            np.zeros(n_images, dtype=np.int32),
+            np.repeat(np.eye(3, dtype=np.float32)[None], n_images, axis=0),
+            np.zeros((n_images, 2), dtype=np.float32),
+            np.zeros(n_images, dtype=np.int32),
+            stats,
+        )
+        if kwargs.get("return_score_log_z"):
+            return common + (score_log_z[class_index],)
+        return common
+
+    monkeypatch.setattr(oversampling_module, "compute_pass2_stats_sparse", fake_compute_pass2_stats_sparse)
+
+    _run_sparse_k_class_adaptive_pass2(
+        TinyDataset(),
+        jnp.asarray(
+            [
+                [0, 0, 0, 0],
+                [1, 0, 0, 0],
+                [2, 0, 0, 0],
+            ],
+            dtype=jnp.complex64,
+        ),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(4, dtype=jnp.float32),
+        np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
+        np.zeros((1, 2), dtype=np.float32),
+        np.repeat(np.eye(3, dtype=np.float32)[None], n_fine_rot, axis=0),
+        np.repeat(np.arange(n_coarse_rot, dtype=np.int64), n_fine_rot // n_coarse_rot),
+        np.zeros((2, 2), dtype=np.float32),
+        np.asarray([0, 0], dtype=np.int64),
+        [
+            [np.asarray([0], dtype=np.int32)] * n_images,
+            [np.asarray([0, 1, 2, 3, 4], dtype=np.int32)] * n_images,
+            [np.asarray([0, 1], dtype=np.int32)] * n_images,
+        ],
+        "linear_interp",
+        class_log_priors=np.log(np.full(n_classes, 1.0 / n_classes, dtype=np.float64)),
+        accumulate_noise=False,
+        return_best_pose_details=False,
+        oversampling_order=1,
+        random_perturbation=0.0,
+        engine_kwargs={"relion_half_volume_mstep": True},
+    )
+
+    assert [class_index for class_index, _ in calls] == [0, 2, 1, 0, 2]
+    other_log_z = np.logaddexp(score_log_z[0], score_log_z[2])
+    global_log_z = np.logaddexp(other_log_z, score_log_z[1])
+    np.testing.assert_allclose(calls[2][1]["normalization_other_score_log_z"], other_log_z)
+    np.testing.assert_allclose(calls[3][1]["normalization_log_z"], global_log_z)
+    np.testing.assert_allclose(calls[4][1]["normalization_log_z"], global_log_z)
+
+
 def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
     """RELION perturbs oversampled translations by random_perturbation * offset_step.
 

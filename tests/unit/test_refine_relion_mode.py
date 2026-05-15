@@ -368,9 +368,11 @@ def test_relion_em_batch_sizing_clamps_highres_projection_tiles():
         gpu_memory_gb=80.0,
     )
 
-    assert 1 <= plan.image_batch_size <= 250
-    assert 64 <= plan.rotation_block_size < 20000
+    assert plan.image_batch_size == 4
+    assert plan.rotation_block_size == 13
     assert plan.projection_block_gb <= plan.projection_budget_gb
+    assert plan.pose_pixel_tile_gb < 3.0
+    assert plan.active_score_tile_gb <= plan.active_score_tile_budget_gb
     assert plan.translation_tile_gb <= plan.translation_tile_budget_gb
 
 
@@ -387,9 +389,10 @@ def test_relion_em_batch_sizing_does_not_pad_beyond_actual_rotation_grid():
         gpu_memory_gb=80.0,
     )
 
-    assert plan.image_batch_size == 250
-    assert 64 <= plan.rotation_block_size <= 4608
+    assert plan.image_batch_size == 46
+    assert plan.rotation_block_size == 65
     assert plan.projection_block_gb <= plan.projection_budget_gb
+    assert plan.active_score_tile_gb <= plan.active_score_tile_budget_gb
 
 
 def test_relion_em_batch_sizing_uses_runtime_gpu_occupancy(monkeypatch):
@@ -450,9 +453,11 @@ def test_relion_em_batch_sizing_caps_dense_big_jit_score_workspace(monkeypatch):
         gpu_memory_gb=None,
     )
 
-    assert plan.image_batch_size == 64
-    assert 64 <= plan.rotation_block_size < 8192
+    assert plan.image_batch_size == 50
+    assert plan.rotation_block_size == 146
     assert plan.projection_block_gb <= plan.projection_budget_gb
+    assert plan.pose_pixel_tile_gb < 3.0
+    assert plan.active_score_tile_gb <= plan.active_score_tile_budget_gb
     assert plan.gpu_used_estimate_gb == pytest.approx(41.0)
 
 
@@ -492,8 +497,9 @@ def test_relion_em_batch_sizing_clamps_highres_translation_tiles():
         gpu_memory_gb=80.0,
     )
 
-    assert 1 <= plan.image_batch_size < 250
-    assert plan.rotation_block_size == 1024
+    assert plan.image_batch_size == 9
+    assert plan.rotation_block_size == 13
+    assert plan.pose_pixel_tile_gb < 3.0
     assert plan.translation_tile_gb <= plan.translation_tile_budget_gb
 
 
@@ -837,12 +843,36 @@ def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods():
     )
 
     bucket_sizes = sorted(int(bucket.bucket_rotation_count) for bucket in buckets)
-    assert bucket_sizes == [1408, 1536]
-    assert [int(bucket.bucket_image_count) for bucket in buckets] == [10, 10]
-    np.testing.assert_array_equal(buckets[0].actual_rotation_counts, np.array([1368, 1392], dtype=np.int32))
-    np.testing.assert_array_equal(buckets[1].actual_rotation_counts, np.array([1416], dtype=np.int32))
+    assert bucket_sizes == [1536]
+    assert [int(bucket.bucket_image_count) for bucket in buckets] == [10]
+    np.testing.assert_array_equal(buckets[0].actual_rotation_counts, np.array([1368, 1392, 1416], dtype=np.int32))
     assert buckets[0].local_rotation_mask[0, :1368].all()
     assert not buckets[0].local_rotation_mask[0, 1368:].any()
+
+
+def test_bucket_local_hypothesis_layout_quantum_env_can_request_finer_tail_shapes(monkeypatch):
+    monkeypatch.setenv("RECOVAR_LOCAL_BUCKET_QUANTUM", "128")
+    layout = LocalHypothesisLayout(
+        n_global_rotations=2000,
+        n_pixels=768,
+        n_psi=16,
+        rotation_offsets=np.array([0, 1368, 2760, 4176], dtype=np.int64),
+        rotation_ids_flat=np.arange(4176, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (4176, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(4176, dtype=np.float32),
+        rotation_counts=np.array([1368, 1392, 1416], dtype=np.int32),
+        translation_grid=np.zeros((9, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((3, 9), dtype=np.float32),
+    )
+
+    buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=10,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=65536,
+    )
+
+    assert sorted(int(bucket.bucket_rotation_count) for bucket in buckets) == [1408, 1536]
 
 
 def test_bucket_local_hypothesis_layout_unify_env_collapses_shape_classes(monkeypatch):

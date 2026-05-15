@@ -294,7 +294,7 @@ class TestScheduleGoldenValues:
         kwargs = dict(phase_lengths=phase, is_3d_model=True, ref_dim=3)
         np.testing.assert_allclose(compute_stepsize(iter=0, **kwargs), 0.8999999127624282)
         np.testing.assert_allclose(compute_stepsize(iter=60, **kwargs), 0.8960395803545961)
-        np.testing.assert_allclose(compute_stepsize(iter=160, **kwargs), 0.5000003320867318)
+        np.testing.assert_allclose(compute_stepsize(iter=160, **kwargs), 0.5000003999996)
 
     def test_tau2_fudge_trajectory(self):
         phase = compute_phase_lengths(200, 0.3, 0.2)

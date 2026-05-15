@@ -516,11 +516,79 @@ def _run_sparse_k_class_adaptive_pass2(
         fine_translation_parent_override=trans_parent_map_np,
     )
 
+    if os.environ.get("RECOVAR_SPARSE_KCLASS_FUSED") == "1":
+        from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+            compute_k_class_pass2_stats_sparse_fused,
+        )
+
+        fused_t0 = time.time()
+        try:
+            fused = compute_k_class_pass2_stats_sparse_fused(
+                experiment_dataset,
+                means_array,
+                mean_variance,
+                noise_variance,
+                coarse_translations_np,
+                sig_sample_indices_by_class,
+                rotation_log_priors_by_class=[
+                    _class_rotation_prior(class_index) for class_index in range(n_classes)
+                ],
+                accumulate_noise=accumulate_noise,
+                **common,
+            )
+        except NotImplementedError as exc:
+            logger.info("Sparse fused K-class pass2 unavailable; falling back to 2K-1 sparse path: %s", exc)
+        else:
+            logger.info(
+                "Sparse fused K-class pass2 profile: classes=%d images=%d total=%.1fs",
+                n_classes,
+                _dataset_image_count(experiment_dataset),
+                time.time() - fused_t0,
+            )
+            return _assemble_result(
+                class_log_evidence=fused.class_log_evidence,
+                new_means=None,
+                Ft_y=fused.Ft_y,
+                Ft_ctf=fused.Ft_ctf,
+                per_class_hard_assignments=fused.per_class_hard_assignments,
+                per_class_stats=fused.per_class_stats,
+                noise_stats=fused.noise_stats,
+                per_class_best_pose_rotations=fused.per_class_best_pose_rotations,
+                per_class_best_pose_translations=fused.per_class_best_pose_translations,
+                per_class_best_pose_rotation_ids=fused.per_class_best_pose_rotation_ids,
+                profile_summary=fused.profile_summary,
+                host_accumulators=True,
+            )
+
+    def _support_work_units(samples_by_image) -> int:
+        total = 0
+        for samples in samples_by_image:
+            if samples is None:
+                total += n_rot_coarse * n_coarse_trans
+            else:
+                total += int(np.asarray(samples).size)
+        return int(total)
+
     class_log_evidence = [None] * n_classes
     class_score_log_z = [None] * n_classes
-    last_class_index = n_classes - 1
+    support_work = np.asarray(
+        [_support_work_units(samples) for samples in sig_sample_indices_by_class],
+        dtype=np.int64,
+    )
+    # The class selected here is evaluated once with
+    # ``normalization_other_score_log_z``; all other classes need a score-only
+    # probe plus a normalized M-step. Pick the largest support class so the
+    # current 2K-1 sparse scheme avoids duplicating the most expensive sweep.
+    # On ties, keep the historical last-class choice for stable tests/logs.
+    last_class_index = int(np.flatnonzero(support_work == support_work.max())[-1])
+    probe_class_indices = [idx for idx in range(n_classes) if idx != last_class_index]
+    logger.info(
+        "Sparse adaptive K-class pass2: single-pass class=%d support_work=%s",
+        last_class_index + 1,
+        support_work.tolist(),
+    )
     probe_t0 = time.time()
-    for class_index in range(last_class_index):
+    for class_index in probe_class_indices:
         output = compute_pass2_stats_sparse(
             experiment_dataset,
             means_array[class_index],
@@ -538,8 +606,11 @@ def _run_sparse_k_class_adaptive_pass2(
         log_evidence, score_log_z = output
         class_log_evidence[class_index] = np.asarray(log_evidence, dtype=np.float64)
         class_score_log_z[class_index] = np.asarray(score_log_z, dtype=np.float64)
-    if last_class_index > 0:
-        other_score_log_z = _logsumexp_np(np.stack(class_score_log_z[:last_class_index], axis=0), axis=0)
+    if probe_class_indices:
+        other_score_log_z = _logsumexp_np(
+            np.stack([class_score_log_z[idx] for idx in probe_class_indices], axis=0),
+            axis=0,
+        )
     else:
         other_score_log_z = np.full(_dataset_image_count(experiment_dataset), -np.inf, dtype=np.float64)
     probe_s = time.time() - probe_t0
@@ -592,7 +663,7 @@ def _run_sparse_k_class_adaptive_pass2(
     class_score_log_z[last_class_index] = last_score_log_z
     global_score_log_z = np.logaddexp(other_score_log_z, last_score_log_z)
 
-    for class_index in range(last_class_index):
+    for class_index in probe_class_indices:
         output = compute_pass2_stats_sparse(
             experiment_dataset,
             means_array[class_index],
@@ -611,7 +682,7 @@ def _run_sparse_k_class_adaptive_pass2(
         "Sparse adaptive K-class pass2 profile: classes=%d probe_classes=%d images=%d "
         "probe=%.1fs mstep=%.1fs total=%.1fs",
         n_classes,
-        last_class_index,
+        len(probe_class_indices),
         _dataset_image_count(experiment_dataset),
         probe_s,
         mstep_s,

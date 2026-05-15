@@ -632,10 +632,13 @@ class TestRunVdamIterations:
         assert np.all(np.isfinite(final.Iref))
         assert not np.array_equal(final.Iref, state.Iref)
 
-        # Schedules advance reasonably: tau2 starts near 1, ends < 4
+        # RELION uses integer division in the tau2-fudge sigmoid. For short
+        # runs with grad_inbetween_iter < 4, iter 1 evaluates 0/0 and stores
+        # NaN; later iterations jump to the requested tau2_fudge value.
         first = iter_log[0]
         last = iter_log[-1]
-        assert first["tau"] < last["tau"] or abs(first["tau"] - last["tau"]) < 1.0
+        assert np.isnan(first["tau"])
+        assert last["tau"] == pytest.approx(4.0)
 
     def test_respects_grad_em_tail(self, bind):
         ori = 16

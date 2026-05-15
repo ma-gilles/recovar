@@ -156,7 +156,9 @@ def collect_e_step(
     }
 
 
-def _voxel_magnitude(arr) -> np.ndarray:
+def _voxel_magnitude(arr) -> np.ndarray | None:
+    if arr is None:
+        return None
     a = np.asarray(arr)
     if np.iscomplexobj(a):
         return np.abs(a).astype(np.float32)

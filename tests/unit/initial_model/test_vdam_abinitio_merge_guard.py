@@ -134,6 +134,7 @@ def test_native_vdam_subset_order_uses_relion_sorted_idx_base_order():
 
     expected_driver_tokens = [
         "_micrograph_sort_order(main_star)",
+        "_experiment_read_order(main_star)",
         "particle_order=particle_order",
     ]
     missing = [token for token in expected_driver_tokens if token not in driver]
@@ -213,6 +214,7 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
     state = (REPO_ROOT / "recovar/em/initial_model/state.py").read_text()
     init = (REPO_ROOT / "recovar/em/initial_model/init.py").read_text()
     k_class = (REPO_ROOT / "recovar/em/dense_single_volume/k_class.py").read_text()
+    local_em = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
     bind = (REPO_ROOT / "recovar/relion_bind/initialmodel_bind.cpp").read_text()
     unit_tests = "\n".join(
         [
@@ -249,8 +251,16 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
             "def _class_direction_rotation_log_prior",
             "class_rotation_log_prior",
             "values[positive] / mean_pdf",
-            "class_local_rotation_log_prior=class_local_rotation_log_prior",
+            "rotation_log_prior=_class_pass2_rotation_log_prior(group_kwargs, class_index)",
+            "local_layout = tuple(local_layouts)",
+            "allow_empty=True",
             "rotation_log_prior=group_kwargs.get(\"class_rotation_log_prior\"",
+            "stats_use_reconstruction_probs=True",
+            "class_posterior_sums_from_noise=False",
+            "class_reconstruction_support_sums",
+            "class_bpref_weight_sums",
+            "class_posterior_sums_override",
+            "reconstruction_probs_sum_t if stats_use_reconstruction_probs else probs_sum_t",
         ],
         "relion_model_star_contract": [
             "data_model_pdf_orient_class_",
@@ -270,7 +280,9 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
             "test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state",
         ],
     }
-    haystack = "\n".join([driver, dense_adapter, iteration_loop, state, init, k_class, bind, unit_tests, guard_scripts])
+    haystack = "\n".join(
+        [driver, dense_adapter, iteration_loop, state, init, k_class, local_em, bind, unit_tests, guard_scripts]
+    )
     missing = {
         area: [token for token in tokens if token not in haystack]
         for area, tokens in expected_by_area.items()

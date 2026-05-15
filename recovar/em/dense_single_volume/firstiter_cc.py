@@ -18,7 +18,11 @@ from recovar.em.sampling import (
 
 # Mirrors iteration_loop's module-level constants so monkeypatches at either
 # module level still bind correctly.
-RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 8_000_000
+# Cap the temporary ``batch * n_trans * n_half`` reconstruction tile around
+# 2 GiB for complex64. The old 8M cap forced image_batch_size=8 on 128/256
+# K-class first-iteration runs and made 100k/256 completion benchmarks
+# several-fold slower than RELION despite ample A100/H100 memory.
+RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 268_435_456
 RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET = 2_000_000
 
 

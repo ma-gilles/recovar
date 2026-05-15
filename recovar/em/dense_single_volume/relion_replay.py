@@ -23,6 +23,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     healpix_angular_step,
 )
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
+    class_weights_from_direction_prior,
     infer_direction_prior_healpix_order,
     normalize_class_direction_prior,
     normalize_class_direction_prior_per_half,
@@ -134,6 +135,7 @@ class ReplayOverrideResult:
     previous_noise_radial: Any
     current_sigma_offset_angstrom: float
     replay_meta: dict | None  # parsed sampling.star (or None); used downstream by perturbation apply
+    class_weights: np.ndarray | None = None
 
 
 def apply_iter_replay_overrides(
@@ -185,6 +187,7 @@ def apply_iter_replay_overrides(
     _model_star = None
     _model_meta = None
     _replay_meta = None
+    _replay_class_weights = None
 
     if perturb_replay_relion_dir is not None:
         _star = os.path.join(
@@ -332,12 +335,27 @@ def apply_iter_replay_overrides(
                         f"run_it{_prior_iter:03d}_half{_half_idx + 1}_model.star",
                     )
                     if not os.path.exists(_prior_star):
-                        continue
+                        if not k_class_enabled:
+                            continue
+                        # Class3D writes one shared model.star rather than
+                        # auto-refine-style half-model STAR files.  During
+                        # strict replay, use that shared direction prior for
+                        # both RECOVAR halfsets.
+                        _prior_star = os.path.join(
+                            perturb_replay_relion_dir,
+                            f"run_it{_prior_iter:03d}_model.star",
+                        )
+                        if not os.path.exists(_prior_star):
+                            continue
                     _relion_direction_prior = (
                         _il.read_relion_direction_priors(_prior_star, n_classes)
                         if k_class_enabled
                         else _il.read_relion_direction_prior(_prior_star)
                     )
+                    if k_class_enabled:
+                        inferred_weights = class_weights_from_direction_prior(_relion_direction_prior, n_classes)
+                        if inferred_weights is not None:
+                            _replay_class_weights = inferred_weights
                     _relion_direction_prior_order = infer_direction_prior_healpix_order(
                         _relion_direction_prior[0] if k_class_enabled else _relion_direction_prior
                     )
@@ -457,6 +475,10 @@ def apply_iter_replay_overrides(
         _replay_dir_prior = iter_replay_override.get("direction_prior")
         if _replay_dir_prior is not None:
             if k_class_enabled:
+                inferred_weights = class_weights_from_direction_prior(_replay_dir_prior, n_classes)
+                if inferred_weights is not None:
+                    _replay_class_weights = inferred_weights
+            if k_class_enabled:
                 replay_priors = normalize_class_direction_prior_per_half(_replay_dir_prior, n_classes)
             else:
                 replay_priors = normalize_direction_prior_per_half(_replay_dir_prior)
@@ -522,4 +544,5 @@ def apply_iter_replay_overrides(
         previous_noise_radial=previous_noise_radial,
         current_sigma_offset_angstrom=current_sigma_offset_angstrom,
         replay_meta=_replay_meta,
+        class_weights=_replay_class_weights,
     )

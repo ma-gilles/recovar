@@ -19,12 +19,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import recovar.em.initial_model.m_step as m_step
 from recovar.em.initial_model import (
     initialise_denovo_state,
 )
 from recovar.em.initial_model.init import initialise_data_vs_prior_from_references, seed_noise_from_mavg
 from recovar.em.initial_model.m_step import (
     VdamAccumulator,
+    _grad_min_resol_shell_from_state,
     vdam_m_step,
     vdam_m_step_single_class,
 )
@@ -58,6 +60,80 @@ def _make_accumulator(k: int, h: int, ori_size: int, seed: int, min_weight: floa
     # accumulators have weights ~ N_particles * CTF^2/sigma^2 >> 1.
     weight = rng.uniform(min_weight, min_weight * 10.0, size=(Nz_pad, Ny_pad, Nx_pad_half)).astype(np.float64)
     return VdamAccumulator(data=data, weight=weight, class_idx=k, halfset_idx=h)
+
+
+def test_default_grad_min_resol_shell_matches_relion_initialmodel_default():
+    state = initialise_denovo_state(
+        ori_size=256,
+        pixel_size=2.125,
+        K=1,
+        nr_iter=4,
+        n_directions=48,
+        pseudo_halfsets=True,
+    )
+
+    assert _grad_min_resol_shell_from_state(state, None) == 27.0
+    assert _grad_min_resol_shell_from_state(state, 0.0) == 0.0
+
+
+def test_m_step_matches_relion_fsc_routing_for_ssnr_and_reconstruct(monkeypatch):
+    ori = 16
+    state = initialise_denovo_state(
+        ori_size=ori,
+        pixel_size=1.0,
+        K=2,
+        nr_iter=10,
+        n_directions=12,
+        pseudo_halfsets=False,
+    )
+    state.fsc_halves_class[0] = np.linspace(0.0, 0.25, ori // 2 + 1, dtype=np.float64)
+    state.fsc_halves_class[1] = np.linspace(0.5, 0.75, ori // 2 + 1, dtype=np.float64)
+    state.Iref[1] = np.random.default_rng(0).standard_normal((ori, ori, ori))
+    captured = {}
+
+    class FakeBindings:
+        @staticmethod
+        def vdam_reweight_grad(data, weight, *_args):
+            return np.asarray(data)
+
+        @staticmethod
+        def vdam_first_moment(data, old, *_args, **_kwargs):
+            return np.asarray(old)
+
+        @staticmethod
+        def vdam_apply_momenta(data_h0, *_args):
+            return np.asarray(data_h0), np.zeros(ori // 2 + 1, dtype=np.float64)
+
+        @staticmethod
+        def vdam_update_ssnr_arrays_from_bpref(weight, fsc, tau2, *_args):
+            captured["ssnr_fsc"] = np.asarray(fsc, dtype=np.float64).copy()
+            shells = ori // 2 + 1
+            return (
+                np.asarray(tau2, dtype=np.float64),
+                np.ones(shells, dtype=np.float64),
+                np.ones(shells, dtype=np.float64),
+                np.ones(shells, dtype=np.float64),
+            )
+
+        @staticmethod
+        def vdam_reconstruct_grad(iref_relion, _post_data, _weight, fsc, *_args):
+            captured["reconstruct_fsc"] = np.asarray(fsc, dtype=np.float64).copy()
+            return np.asarray(iref_relion)
+
+    monkeypatch.setattr(m_step, "_get_bindings", lambda: FakeBindings)
+    accum = _make_accumulator(k=1, h=0, ori_size=ori, seed=4)
+
+    vdam_m_step_single_class(
+        state,
+        k=1,
+        accum_h0=accum,
+        accum_h1=None,
+        grad_current_stepsize=0.5,
+        tau2_fudge_factor=4.0,
+    )
+
+    np.testing.assert_allclose(captured["ssnr_fsc"], state.fsc_halves_class[0])
+    np.testing.assert_allclose(captured["reconstruct_fsc"], state.fsc_halves_class[1])
 
 
 class TestMstepSingleClass:
@@ -162,6 +238,46 @@ class TestMstepSingleClass:
         np.testing.assert_array_equal(new_state.Igrad2[0].imag[mask_updated], 0.0)
         assert np.all(new_state.Igrad2[0].real[mask_updated] >= 0.0)
         assert np.any(new_state.data_vs_prior_class[0] > 1.0)
+
+    def test_inactive_class_with_tiny_weight_is_preserved(self, bind):
+        ori = 16
+        state = initialise_denovo_state(
+            ori_size=ori,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=10,
+            n_directions=12,
+            pseudo_halfsets=True,
+        )
+        rng = np.random.default_rng(42)
+        state.Iref[0] = rng.standard_normal((ori, ori, ori))
+        state.Igrad1[:] = rng.standard_normal(state.Igrad1.shape) + 1j * rng.standard_normal(state.Igrad1.shape)
+
+        a0 = _make_accumulator(k=0, h=0, ori_size=ori, seed=1, min_weight=1e-12)
+        a1 = _make_accumulator(k=0, h=1, ori_size=ori, seed=2, min_weight=1e-12)
+
+        iref_before = state.Iref.copy()
+        igrad1_before = state.Igrad1.copy()
+        igrad2_before = state.Igrad2.copy()
+        tau2_before = state.tau2_class.copy()
+        sigma2_before = state.sigma2_class.copy()
+        data_vs_prior_before = state.data_vs_prior_class.copy()
+
+        new_state = vdam_m_step_single_class(
+            state,
+            k=0,
+            accum_h0=a0,
+            accum_h1=a1,
+            grad_current_stepsize=0.5,
+            tau2_fudge_factor=1.0,
+        )
+
+        np.testing.assert_array_equal(new_state.Iref, iref_before)
+        np.testing.assert_array_equal(new_state.Igrad1, igrad1_before)
+        np.testing.assert_array_equal(new_state.Igrad2, igrad2_before)
+        np.testing.assert_array_equal(new_state.tau2_class, tau2_before)
+        np.testing.assert_array_equal(new_state.sigma2_class, sigma2_before)
+        np.testing.assert_array_equal(new_state.data_vs_prior_class, data_vs_prior_before)
 
     def test_input_state_unchanged(self, bind):
         ori = 16

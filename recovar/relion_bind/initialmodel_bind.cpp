@@ -565,7 +565,9 @@ static double vdam_compute_stepsize(
         if (inflate <= 0.)
             throw std::runtime_error("Invalid inflate value for grad_stepsize_scheme");
         RFLOAT x = (RFLOAT)iter;
-        RFLOAT a = grad_inbetween_iter / 2.0;
+        // RELION assigns `float a = grad_inbetween_iter/2`, so C++ integer
+        // division happens before conversion to RFLOAT.
+        RFLOAT a = (RFLOAT)(grad_inbetween_iter / 2);
         RFLOAT b = (RFLOAT)grad_ini_iter;
         RFLOAT scale = 1. / (std::pow(10.0, (x - b - a / 2.) / (a / 4.)) + 1.);
         return (_stepsize * inflate) * scale + _stepsize * (1 - scale);
@@ -616,7 +618,10 @@ static double vdam_compute_tau2_fudge(
         if (deflate <= 0.)
             throw std::runtime_error("Invalid deflate value for tau2_fudge_scheme");
         RFLOAT x = (RFLOAT)iter;
-        RFLOAT a = grad_inbetween_iter / 4.0;
+        // RELION assigns `float a = grad_inbetween_iter/4`. Short runs can
+        // therefore hit a=0 and intentionally propagate NaN through the
+        // sigmoid, matching InitialModel model.star output.
+        RFLOAT a = (RFLOAT)(grad_inbetween_iter / 4);
         RFLOAT b = (RFLOAT)grad_ini_iter;
         RFLOAT scale = 1. / (std::pow(10.0, (x - b - a / 2.) / (a / 4.)) + 1.);
         return (_fudge / deflate) * scale + _fudge * (1 - scale);
@@ -660,7 +665,8 @@ static py::array_t<double> vdam_bootstrap_iref(
     int padding_factor,   // 1 for InitialModel GUI, 2 for auto-refine
     int interpolator,     // TRILINEAR
     int current_size,     // 1/getResolution(ROUND(0.07*ori_size)); -1 => no windowing
-    long minimum_nr_particles  // cap per optics group (RELION default 1000 for 2D)
+    long minimum_nr_particles,  // cap per optics group (RELION default 1000 for 2D)
+    py::object particle_seed_ids_obj
 ) {
     auto img_buf = images.request();
     if (img_buf.ndim != 3)
@@ -702,9 +708,30 @@ static py::array_t<double> vdam_bootstrap_iref(
     if (todo < nr_classes * 5) todo = nr_classes * 5;  // fn_ref == None floor
     if (todo > N) todo = N;
 
+    std::vector<long> particle_seed_ids;
+    if (!particle_seed_ids_obj.is_none()) {
+        py::array_t<long, py::array::c_style | py::array::forcecast> seed_arr =
+            py::array_t<long, py::array::c_style | py::array::forcecast>::ensure(particle_seed_ids_obj);
+        if (!seed_arr) {
+            throw std::runtime_error("particle_seed_ids must be a 1D integer array");
+        }
+        auto seed_buf = seed_arr.request();
+        if (seed_buf.ndim != 1) {
+            throw std::runtime_error("particle_seed_ids must be a 1D integer array");
+        }
+        if (seed_buf.shape[0] < todo) {
+            throw std::runtime_error("particle_seed_ids must contain at least minimum_nr_particles entries");
+        }
+        const long* seed_ptr = (const long*)seed_buf.ptr;
+        particle_seed_ids.assign(seed_ptr, seed_ptr + seed_buf.shape[0]);
+    }
+
     for (long part_id_sorted = 0; part_id_sorted < todo; part_id_sorted++) {
-        // 1. Per-particle RNG reset.
-        init_random_generator(random_seed + (int)part_id_sorted);
+        // 1. Per-particle RNG reset. RELION uses mydata.sorted_idx in
+        // internal particle-table id space, not the original STAR row id
+        // (ml_optimiser.cpp::calculateSumOfPowerSpectraAndAverageImage).
+        long part_id_for_seed = particle_seed_ids.empty() ? part_id_sorted : particle_seed_ids[part_id_sorted];
+        init_random_generator(random_seed + (int)part_id_for_seed);
 
         // 2-4. Random Euler draws
         RFLOAT rot  = rnd_unif() * 360.0;
@@ -1438,6 +1465,7 @@ per-class arrays.
           py::arg("interpolator") = TRILINEAR,
           py::arg("current_size") = -1,
           py::arg("minimum_nr_particles") = 1000,
+          py::arg("particle_seed_ids") = py::none(),
           R"doc(
 Run the RELION InitialModel bootstrap (ml_optimiser.cpp:3127-3205 +
 reconstruct at :3265) end-to-end in C++. Returns the reconstructed

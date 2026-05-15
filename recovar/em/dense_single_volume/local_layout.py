@@ -46,23 +46,15 @@ def _exact_bucket_rotation_size(local_rotation_count: int, rotation_block_size: 
                 minimum=16,
             ),
         )
-    # ``RECOVAR_LOCAL_BUCKET_QUANTUM`` (default 64 = engine_cap//8) lets
-    # callers coarsen the large-bucket quantization to reduce the number
-    # of distinct JIT compile shapes that accumulate over long ab-initio
-    # trajectories. At 50k particles × 256² the local engine's bucket
-    # cardinality varies iter-to-iter (significance pruning shrinks the
-    # candidate set), and each unique padded count triggers a fresh
-    # ``run_local_bucket_big_jit`` compilation whose scratch buffers
-    # eventually fragment the GPU heap. Raising the quantum to e.g. 512
-    # collapses the {65..4608} range into ~9 shapes instead of ~70.
-    # Memory cost: more rotation padding per bucket. Off by default.
-    import os
-
+    # ``RECOVAR_LOCAL_BUCKET_QUANTUM`` lets callers override the large-bucket
+    # quantization. By default tie the quantum to the exact-local engine cap:
+    # coarse enough to avoid many tail bucket shapes, but still bounded by the
+    # same hypothesis/tile memory caps that chunk each bucket.
     env_quantum = os.environ.get("RECOVAR_LOCAL_BUCKET_QUANTUM", "")
     if env_quantum:
         large_bucket_quantum = max(1, int(env_quantum))
     else:
-        large_bucket_quantum = max(64, engine_cap // 8)
+        large_bucket_quantum = max(64, engine_cap // 2)
     return int(
         coarse_bucket(
             local_rotation_count,
@@ -606,6 +598,7 @@ def bucket_local_hypothesis_layout(
     rotation_block_size: int,
     *,
     max_hypotheses_per_microbatch: int = 32768,
+    unify_bucket_sizes: bool | None = None,
 ) -> list[LocalBucketSpec]:
     """Bucket images by exact local-rotation count for static-shape execution."""
 
@@ -621,7 +614,9 @@ def bucket_local_hypothesis_layout(
     # significant rotation counts vary widely across iters) into 1, removing
     # per-bucket JIT compilation overhead. Memory cost: smaller-significance
     # images carry extra rotation padding.
-    if bucket_sizes.size and os.environ.get("RECOVAR_LOCAL_BUCKET_UNIFY", "").lower() in {"1", "true", "yes", "on"}:
+    if unify_bucket_sizes is None:
+        unify_bucket_sizes = os.environ.get("RECOVAR_LOCAL_BUCKET_UNIFY", "").lower() in {"1", "true", "yes", "on"}
+    if bucket_sizes.size and bool(unify_bucket_sizes):
         bucket_sizes = np.full_like(bucket_sizes, int(bucket_sizes.max()))
     processing_order = np.lexsort((layout.rotation_counts, bucket_sizes)).astype(np.int32)
     bucket_specs: list[LocalBucketSpec] = []

@@ -158,6 +158,20 @@ def _preprocess_test_batch(
         translations,
         config,
         score_with_masked_images=score_with_masked_images,
+        score_complex_dtype=jnp.complex64,
+        score_real_dtype=jnp.float32,
+        norm_real_dtype=jnp.float64,
+    )
+
+
+def _compute_jax_projections_block(volume, rotations, image_shape, volume_shape, disc_type):
+    return _compute_projections_block(
+        volume,
+        rotations,
+        image_shape,
+        volume_shape,
+        disc_type,
+        relion_texture_interp=False,
     )
 
 
@@ -385,7 +399,7 @@ class TestEStepHalfMatchesFull:
             config,
         )
 
-        proj_half, proj_abs2_half = _compute_projections_block(
+        proj_half, proj_abs2_half = _compute_jax_projections_block(
             volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp"
         )
         half_weights = make_half_image_weights(IMAGE_SHAPE)
@@ -455,7 +469,7 @@ class TestEStepHalfMatchesFull:
             translations,
             config,
         )
-        proj_half, proj_abs2_half = _compute_projections_block(
+        proj_half, proj_abs2_half = _compute_jax_projections_block(
             volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp"
         )
         half_weights = make_half_image_weights(IMAGE_SHAPE)
@@ -1486,6 +1500,100 @@ class TestFullIterationHalfMatches:
         np.testing.assert_allclose(np.asarray(no_y_ft_ctf), np.asarray(base_ft_ctf), atol=1e-6, rtol=1e-6)
         np.testing.assert_allclose(np.asarray(no_ctf_ft_y), np.asarray(base_ft_y), atol=1e-6, rtol=1e-6)
         np.testing.assert_allclose(np.asarray(no_ctf_ft_ctf), 0.0, atol=1e-7, rtol=1e-7)
+
+    def test_score_only_probe_matches_full_disabled_adjoint_scores(self, seeded_inputs):
+        """K-class score probes should skip pass 2 without changing evidence."""
+        s = seeded_inputs
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+        common_kwargs = dict(
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            current_size=4,
+            sparse_pass2=False,
+            return_stats=True,
+            disable_adjoint_y=True,
+            disable_adjoint_ctf=True,
+            relion_firstiter_score_mode="normalized_cc",
+            relion_firstiter_winner_take_all=True,
+        )
+
+        full = run_em(
+            s["dataset"],
+            s["volume"],
+            mean_variance,
+            s["noise_variance"],
+            np.array(s["rotations"]),
+            np.array(s["translations"]),
+            "linear_interp",
+            **common_kwargs,
+        )
+        probe = run_em(
+            s["dataset"],
+            s["volume"],
+            mean_variance,
+            s["noise_variance"],
+            np.array(s["rotations"]),
+            np.array(s["translations"]),
+            "linear_interp",
+            score_only=True,
+            **common_kwargs,
+        )
+
+        assert probe[0] is None
+        np.testing.assert_array_equal(np.asarray(probe[1]), np.asarray(full[1]))
+        np.testing.assert_allclose(np.asarray(probe[2]), 0.0, atol=1e-7, rtol=1e-7)
+        np.testing.assert_allclose(np.asarray(probe[3]), 0.0, atol=1e-7, rtol=1e-7)
+        np.testing.assert_allclose(probe[4].log_evidence_per_image, full[4].log_evidence_per_image)
+        np.testing.assert_allclose(probe[4].best_log_score_per_image, full[4].best_log_score_per_image)
+        np.testing.assert_allclose(probe[4].max_posterior_per_image, full[4].max_posterior_per_image)
+
+    def test_score_only_skips_reconstruction_preprocess(self, seeded_inputs, monkeypatch):
+        s = seeded_inputs
+
+        def _fail_prepare_reconstruction_batch(*_args, **_kwargs):
+            raise AssertionError("score_only should not prepare reconstruction batches")
+
+        monkeypatch.setattr(
+            em_engine_module,
+            "_prepare_reconstruction_batch",
+            _fail_prepare_reconstruction_batch,
+        )
+
+        result = run_em(
+            s["dataset"],
+            s["volume"],
+            np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0,
+            s["noise_variance"],
+            np.array(s["rotations"]),
+            np.array(s["translations"]),
+            "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            current_size=4,
+            sparse_pass2=False,
+            return_stats=True,
+            disable_adjoint_y=True,
+            disable_adjoint_ctf=True,
+            relion_firstiter_score_mode="normalized_cc",
+            relion_firstiter_winner_take_all=True,
+            score_only=True,
+        )
+
+        assert result[0] is None
+
+    def test_score_only_requires_disabled_adjoints(self, seeded_inputs):
+        s = seeded_inputs
+        with pytest.raises(ValueError, match="score_only requires"):
+            run_em(
+                s["dataset"],
+                s["volume"],
+                np.ones(VOLUME_SIZE, dtype=np.float32),
+                s["noise_variance"],
+                np.array(s["rotations"]),
+                np.array(s["translations"]),
+                "linear_interp",
+                score_only=True,
+            )
 
     def test_profile_timing_sync_runs_only_when_requested(self, seeded_inputs, monkeypatch):
         """Timing barriers should be inserted only for profiling runs."""

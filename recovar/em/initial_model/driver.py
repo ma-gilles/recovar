@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -50,6 +50,10 @@ RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN = 1
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_ORIENTATIONS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES = 9999999.0
+RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS = 100
+# Suppress sub-centiparticle support leakage from the dense sparse-pass
+# adapter while keeping RELION's real small-support update path active.
+RELION_INITIALMODEL_MIN_EFFECTIVE_CLASS_SUPPORT = 1.0e-2
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -214,13 +218,19 @@ def _initial_model_mrc_from_prefix(outputname: str) -> str:
 
 
 def _micrograph_sort_order(main_star) -> np.ndarray:
-    """RELION reads InitialModel particles in stable micrograph-name order."""
+    """RELION's InitialModel ``sorted_idx`` follows Experiment::read order."""
 
-    n = len(main_star)
-    if "_rlnMicrographName" not in main_star.columns:
-        return np.arange(n, dtype=np.int64)
-    names = np.asarray(main_star["_rlnMicrographName"].astype(str).to_numpy())
-    return np.argsort(names, kind="stable").astype(np.int64, copy=False)
+    return _experiment_read_order(main_star)
+
+
+def _experiment_read_order(main_star) -> np.ndarray:
+    """RELION Experiment::read order used by bootstrap/noise initialisation."""
+
+    mic_col = _star_column(main_star, "_rlnMicrographName")
+    if mic_col is None:
+        return np.arange(len(main_star), dtype=np.int64)
+    mic_names = mic_col.astype(str).to_numpy()
+    return np.asarray(sorted(range(len(mic_names)), key=lambda i: mic_names[i]), dtype=np.int64)
 
 
 def _optics_group_indices(main_star) -> np.ndarray:
@@ -443,6 +453,85 @@ def _initial_sampling_state(opts: NativeInitialModelOptions, *, pixel_size: floa
 
 def _native_initialmodel_do_grad(state: InitialModelState, iteration: int) -> bool:
     return ((int(state.nr_iter) - int(iteration)) >= DEFAULT_GRAD_EM_ITERS) and not bool(state.has_converged)
+
+
+def _active_relion_initialmodel_max_significants(state: InitialModelState, *, do_grad: bool) -> int:
+    """Runtime maximum_significants used by RELION gradient InitialModel."""
+
+    if not bool(do_grad):
+        return -1
+    return int(RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS) * int(state.K)
+
+
+def _apply_effective_class_support_floor(result, state: InitialModelState):
+    """Drop sub-particle reconstruction support before the RELION M-step branch."""
+
+    if int(state.K) <= 1:
+        return result
+    posterior_sums = result.meta.get("class_posterior_sums")
+    bpref_weight_sums = result.meta.get("class_bpref_weight_sums")
+    support = result.meta.get("class_reconstruction_support_sums", posterior_sums)
+    if support is None:
+        return result
+    support = np.asarray(support, dtype=np.float64)
+    if support.shape != (int(state.K),):
+        return result
+    active = support >= RELION_INITIALMODEL_MIN_EFFECTIVE_CLASS_SUPPORT
+    if np.all(active):
+        return result
+
+    accumulators = []
+    for accum in result.accumulators:
+        if active[int(accum.class_idx)]:
+            accumulators.append(accum)
+        else:
+            accumulators.append(
+                replace(
+                    accum,
+                    data=np.zeros_like(accum.data),
+                    weight=np.zeros_like(accum.weight),
+                )
+            )
+
+    meta = dict(result.meta)
+    meta["class_reconstruction_support_sums_raw"] = support
+    meta["class_effective_support_active"] = active
+    meta["class_reconstruction_support_sums"] = np.where(active, support, 0.0)
+    if posterior_sums is not None:
+        posterior_sums = np.asarray(posterior_sums, dtype=np.float64)
+        if posterior_sums.shape == active.shape:
+            meta["class_posterior_sums_raw"] = posterior_sums
+            posterior_for_update = np.where(active, posterior_sums, 0.0)
+            if bpref_weight_sums is not None:
+                bpref_weight_sums = np.asarray(bpref_weight_sums, dtype=np.float64)
+                if bpref_weight_sums.shape == active.shape:
+                    meta["class_bpref_weight_sums_raw"] = bpref_weight_sums
+                    masked_bpref = np.where(active, bpref_weight_sums, 0.0)
+                    bpref_total = float(np.sum(masked_bpref))
+                    posterior_total = float(np.sum(posterior_for_update))
+                    if bpref_total > 0.0 and posterior_total > 0.0:
+                        posterior_for_update = masked_bpref * (posterior_total / bpref_total)
+            meta["class_posterior_sums"] = posterior_for_update
+    if bpref_weight_sums is not None:
+        bpref_weight_sums = np.asarray(bpref_weight_sums, dtype=np.float64)
+        if bpref_weight_sums.shape == active.shape:
+            meta["class_bpref_weight_sums"] = np.where(active, bpref_weight_sums, 0.0)
+    for key in tuple(meta):
+        if key.startswith("halfset_") and key.endswith("_class_reconstruction_support_sums"):
+            half_sums = np.asarray(meta[key], dtype=np.float64)
+            if half_sums.shape == active.shape:
+                meta[key] = np.where(active, half_sums, 0.0)
+        if key.startswith("halfset_") and key.endswith("_class_posterior_sums"):
+            half_sums = np.asarray(meta[key], dtype=np.float64)
+            if half_sums.shape == active.shape:
+                meta[f"{key}_raw"] = half_sums
+                meta[key] = np.where(active, half_sums, 0.0)
+    if (direction_sums := meta.get("class_direction_posterior_sums")) is not None:
+        direction_sums = np.asarray(direction_sums, dtype=np.float64).copy()
+        direction_sums[~active] = 0.0
+        meta["class_direction_posterior_sums"] = direction_sums
+
+    return replace(result, accumulators=accumulators, meta=meta)
 
 
 def _should_update_native_sampling(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
@@ -870,6 +959,34 @@ def _class_direction_rotation_log_prior(state: InitialModelState, healpix_order:
     return out.astype(np.float32)
 
 
+def _expand_class_rotation_log_prior_for_dense_fine_grid(
+    class_rotation_log_prior: np.ndarray,
+    sampling_plan: NativeSamplingPlan,
+) -> np.ndarray:
+    """Broadcast coarse direction priors onto dense oversampled rotations."""
+
+    prior = np.asarray(class_rotation_log_prior, dtype=np.float32)
+    if int(sampling_plan.oversampling) <= 0:
+        return prior
+    if prior.ndim != 2:
+        raise ValueError(f"class_rotation_log_prior must be 2D, got {prior.ndim} dimensions")
+
+    _rotations, parent_map = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
+        np.arange(prior.shape[1], dtype=np.int64),
+        parent_nside_level=int(sampling_plan.healpix_order),
+        oversampling_order=int(sampling_plan.oversampling),
+        random_perturbation=float(sampling_plan.random_perturbation),
+    )
+    parent_map = np.asarray(parent_map, dtype=np.int64)
+    expected = int(np.asarray(sampling_plan.rotations).shape[0])
+    if parent_map.shape != (expected,):
+        raise ValueError(
+            "oversampled rotation parent map shape does not match dense rotations: "
+            f"got {parent_map.shape}, expected ({expected},)",
+        )
+    return prior[:, parent_map].astype(np.float32, copy=False)
+
+
 def _dense_estep_config(
     dataset,
     opts: NativeInitialModelOptions,
@@ -1023,8 +1140,16 @@ def _native_expectation_step(
             sigma_offset_angstrom=sigma_offset_angstrom,
             class_log_priors=np.zeros(int(state.K), dtype=np.float64),
         )
-        config.engine_kwargs["class_rotation_log_prior"] = _class_direction_rotation_log_prior(
-            state, int(sampling_plan.healpix_order)
+        class_rotation_log_prior = _class_direction_rotation_log_prior(state, int(sampling_plan.healpix_order))
+        if not bool(config.engine_kwargs.get("sparse_pass2", False)):
+            class_rotation_log_prior = _expand_class_rotation_log_prior_for_dense_fine_grid(
+                class_rotation_log_prior,
+                sampling_plan,
+            )
+        config.engine_kwargs["class_rotation_log_prior"] = class_rotation_log_prior
+        config.engine_kwargs.setdefault(
+            "max_significants",
+            _active_relion_initialmodel_max_significants(state, do_grad=do_grad),
         )
         config.engine_kwargs["debug_iteration"] = iteration
         previous_translations = np.asarray(particle_state.translation_offsets, dtype=np.float32).copy()
@@ -1032,6 +1157,7 @@ def _native_expectation_step(
         result = run_dense_initial_model_estep(
             dataset, state, config, particle_ids=particle_ids, halfset_ids=halfset_ids
         )
+        result = _apply_effective_class_support_floor(result, state)
         result.meta.update(
             random_perturbation=float(sampling_plan.random_perturbation),
             n_rotations=int(sampling_plan.rotations.shape[0]),
@@ -1042,6 +1168,7 @@ def _native_expectation_step(
             offset_step_px=float(sampling_plan.offset_step_px),
             offset_range_angstrom=float(sampling_plan.offset_range_angstrom),
             offset_step_angstrom=float(sampling_plan.offset_step_angstrom),
+            max_significants=int(config.engine_kwargs.get("max_significants", -1)),
             sigma_offset_angstrom=sigma_offset_angstrom,
             sigma2_offset_before=float(state.sigma2_offset),
         )
@@ -1151,7 +1278,7 @@ def _initial_state_from_particles(
 ) -> tuple[InitialModelState, np.ndarray]:
     ori_size = int(dataset.grid_size)
     pixel_size = float(dataset.voxel_size)
-    order = _micrograph_sort_order(main_star)
+    order = _experiment_read_order(main_star)
     optics_group_by_particle = _optics_group_indices(main_star)
     nr_optics_groups = int(np.unique(optics_group_by_particle).size)
     if nr_optics_groups != 1:

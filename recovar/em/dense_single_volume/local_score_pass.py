@@ -143,15 +143,27 @@ def score_local_bucket_abs2_weighted_on_demand(
 def normalize_local_scores(scores):
     """Return exact per-image log normalizer, posterior, and argmax."""
 
+    return _normalize_scores(scores, use_float64=True)
+
+
+def _normalize_scores(scores, *, use_float64: bool):
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
-    log_shift = best_log_score[:, None, None]
-    probs = jnp.exp((scores - log_shift).astype(jnp.float64))
-    sum_exp = jnp.sum(probs.reshape(scores.shape[0], -1), axis=1)
+    has_valid_sample = jnp.isfinite(best_log_score)
+    safe_best = jnp.where(has_valid_sample, best_log_score, 0.0)
+    exp_dtype = jnp.float64 if use_float64 else scores.dtype
+    shifted_exp = jnp.exp((scores - safe_best[:, None, None]).astype(exp_dtype))
+    shifted_exp = jnp.where(has_valid_sample[:, None, None], shifted_exp, 0.0)
+    sum_exp = jnp.sum(shifted_exp.reshape(scores.shape[0], -1), axis=1)
     log_Z = best_log_score + jnp.log(sum_exp)
-    probs = jnp.exp(scores - log_Z[:, None, None])
+    log_Z = jnp.where(has_valid_sample, log_Z, -jnp.inf)
+    safe_log_Z = jnp.where(has_valid_sample, log_Z, 0.0)
+    probs = jnp.exp((scores - safe_log_Z[:, None, None]).astype(exp_dtype))
+    probs = jnp.where(has_valid_sample[:, None, None], probs, 0.0)
     best_argmax = jnp.argmax(flat_scores, axis=1)
-    max_posterior = jnp.exp(best_log_score - log_Z)
+    best_argmax = jnp.where(has_valid_sample, best_argmax, 0)
+    max_posterior = jnp.exp((best_log_score - safe_log_Z).astype(exp_dtype))
+    max_posterior = jnp.where(has_valid_sample, max_posterior, 0.0)
     return log_Z, probs, best_log_score, best_argmax, max_posterior
 
 
@@ -159,11 +171,20 @@ def normalize_local_scores(scores):
 def normalize_local_scores_with_log_z(scores, log_z):
     """Normalize local scores with an externally computed full-grid log-Z."""
 
+    return _normalize_scores_with_log_z(scores, log_z)
+
+
+def _normalize_scores_with_log_z(scores, log_z):
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
-    probs = jnp.exp(scores - log_z[:, None, None])
+    has_valid_sample = jnp.isfinite(best_log_score) & jnp.isfinite(log_z)
+    safe_log_z = jnp.where(has_valid_sample, log_z, 0.0)
+    probs = jnp.exp(scores - safe_log_z[:, None, None])
+    probs = jnp.where(has_valid_sample[:, None, None], probs, 0.0)
     best_argmax = jnp.argmax(flat_scores, axis=1)
-    max_posterior = jnp.exp(best_log_score - log_z)
+    best_argmax = jnp.where(has_valid_sample, best_argmax, 0)
+    max_posterior = jnp.exp(best_log_score - safe_log_z)
+    max_posterior = jnp.where(has_valid_sample, max_posterior, 0.0)
     return log_z, probs, best_log_score, best_argmax, max_posterior
 
 
@@ -171,28 +192,14 @@ def normalize_local_scores_with_log_z(scores, log_z):
 def normalize_local_scores_float32(scores):
     """Return local posterior statistics without upcasting to float64."""
 
-    flat_scores = scores.reshape(scores.shape[0], -1)
-    best_log_score = jnp.max(flat_scores, axis=1)
-    log_shift = best_log_score[:, None, None]
-    probs = jnp.exp(scores - log_shift)
-    sum_exp = jnp.sum(probs.reshape(scores.shape[0], -1), axis=1)
-    log_Z = best_log_score + jnp.log(sum_exp)
-    probs = jnp.exp(scores - log_Z[:, None, None])
-    best_argmax = jnp.argmax(flat_scores, axis=1)
-    max_posterior = jnp.exp(best_log_score - log_Z)
-    return log_Z, probs, best_log_score, best_argmax, max_posterior
+    return _normalize_scores(scores, use_float64=False)
 
 
 @jax.jit
 def normalize_local_scores_with_log_z_float32(scores, log_z):
     """Normalize local scores with an externally computed full-grid log-Z without x64."""
 
-    flat_scores = scores.reshape(scores.shape[0], -1)
-    best_log_score = jnp.max(flat_scores, axis=1)
-    probs = jnp.exp(scores - log_z[:, None, None])
-    best_argmax = jnp.argmax(flat_scores, axis=1)
-    max_posterior = jnp.exp(best_log_score - log_z)
-    return log_z, probs, best_log_score, best_argmax, max_posterior
+    return _normalize_scores_with_log_z(scores, log_z)
 
 
 def compute_reconstruction_support(probs, adaptive_fraction=0.999, max_significants=-1):
@@ -210,7 +217,23 @@ def compute_reconstruction_support(probs, adaptive_fraction=0.999, max_significa
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
     )
+    has_posterior_mass = jnp.sum(flat_probs, axis=1) > 0.0
+    significant_flat = jnp.where(has_posterior_mass[:, None], significant_flat, False)
+    n_significant_samples = jnp.where(has_posterior_mass, n_significant_samples, 0)
     significant_samples = significant_flat.reshape(probs.shape)
+    significant_rotations = jnp.any(significant_samples, axis=-1)
+    return significant_samples, significant_rotations, n_significant_samples
+
+
+def compute_reconstruction_support_from_threshold(probs, threshold):
+    """Return RELION-style support from a per-image global probability cutoff."""
+
+    flat_probs = probs.reshape(probs.shape[0], -1)
+    threshold = jnp.asarray(threshold, dtype=probs.dtype).reshape((probs.shape[0], 1, 1))
+    has_posterior_mass = jnp.sum(flat_probs, axis=1) > 0.0
+    significant_samples = (probs > 0.0) & (probs >= threshold)
+    significant_samples = jnp.where(has_posterior_mass[:, None, None], significant_samples, False)
+    n_significant_samples = jnp.sum(significant_samples.reshape(probs.shape[0], -1), axis=1).astype(jnp.int32)
     significant_rotations = jnp.any(significant_samples, axis=-1)
     return significant_samples, significant_rotations, n_significant_samples
 
@@ -222,6 +245,9 @@ def _compute_reconstruction_support_full_sort_jit(probs, adaptive_fraction=0.999
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
     )
+    has_posterior_mass = jnp.sum(flat_probs, axis=1) > 0.0
+    significant_flat = jnp.where(has_posterior_mass[:, None], significant_flat, False)
+    n_significant_samples = jnp.where(has_posterior_mass, n_significant_samples, 0)
     significant_samples = significant_flat.reshape(probs.shape)
     significant_rotations = jnp.any(significant_samples, axis=-1)
     return significant_samples, significant_rotations, n_significant_samples
@@ -248,6 +274,7 @@ def fused_score_normalize_mstep_abs2_on_demand(
     sample_mask,
     shifted_recon_split,
     ctf2_over_nv_recon,
+    reconstruction_probability_threshold=None,
     *,
     half_spectrum_scoring: bool,
     use_float64_normalization: bool,
@@ -278,33 +305,31 @@ def fused_score_normalize_mstep_abs2_on_demand(
         sample_mask,
     )
 
-    flat_scores = scores.reshape(scores.shape[0], -1)
-    best_log_score = jnp.max(flat_scores, axis=1)
-    if use_float64_normalization:
-        log_shift = best_log_score[:, None, None]
-        shifted_exp = jnp.exp((scores - log_shift).astype(jnp.float64))
-        sum_exp = jnp.sum(shifted_exp.reshape(scores.shape[0], -1), axis=1)
-        log_Z = best_log_score + jnp.log(sum_exp)
-        probs = jnp.exp(scores - log_Z[:, None, None])
-    else:
-        log_shift = best_log_score[:, None, None]
-        shifted_exp = jnp.exp(scores - log_shift)
-        sum_exp = jnp.sum(shifted_exp.reshape(scores.shape[0], -1), axis=1)
-        log_Z = best_log_score + jnp.log(sum_exp)
-        probs = jnp.exp(scores - log_Z[:, None, None])
-    best_argmax = jnp.argmax(flat_scores, axis=1)
-    max_posterior = jnp.exp(best_log_score - log_Z)
+    log_Z, probs, best_log_score, best_argmax, max_posterior = _normalize_scores(
+        scores,
+        use_float64=use_float64_normalization,
+    )
 
     if reconstruct_significant_only:
-        (
-            reconstruction_sample_mask,
-            reconstruction_rotation_mask,
-            n_significant_samples,
-        ) = _compute_reconstruction_support_full_sort_jit(
-            probs,
-            adaptive_fraction=adaptive_fraction,
-            max_significants=max_significants,
-        )
+        if reconstruction_probability_threshold is None:
+            (
+                reconstruction_sample_mask,
+                reconstruction_rotation_mask,
+                n_significant_samples,
+            ) = _compute_reconstruction_support_full_sort_jit(
+                probs,
+                adaptive_fraction=adaptive_fraction,
+                max_significants=max_significants,
+            )
+        else:
+            (
+                reconstruction_sample_mask,
+                reconstruction_rotation_mask,
+                n_significant_samples,
+            ) = compute_reconstruction_support_from_threshold(
+                probs,
+                reconstruction_probability_threshold,
+            )
         reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
     else:
         reconstruction_rotation_mask = rotation_mask

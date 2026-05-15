@@ -159,7 +159,7 @@ _EM_RAW_IMAGE_CACHE_DEFAULT_MAX_GB = 16.0
 logger = logging.getLogger(__name__)
 
 RELION_SCORE_TENSOR_FLOAT_BUDGET = 200_000_000
-RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 8_000_000
+RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 268_435_456
 RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET = 2_000_000
 RELION_MAX_FULL_GRID_ORDER = 4
 EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS = 3_000_000
@@ -272,7 +272,7 @@ def _scatter_dense_k_class_result(
         rot_post = np.asarray(stats.rotation_posterior_sums, dtype=np.float64)
         if rot_post.shape[0] == n_rot_coarse:
             per_class_rot_post_coarse.append(rot_post)
-        elif relion_firstiter_cc_this_iter and adaptive_os_local > 0:
+        elif rot_pmap_for_collapse is not None and adaptive_os_local > 0:
             coarse_post = np.zeros(n_rot_coarse, dtype=np.float64)
             np.add.at(
                 coarse_post,
@@ -299,6 +299,22 @@ def _scatter_dense_k_class_result(
         k_class_result.stats,
         k_class_result.aggregate_noise_stats,
     )
+
+
+def _collapse_fine_pose_assignments_to_coarse(
+    pose_assignments,
+    *,
+    rot_parent_map,
+    trans_parent_map,
+    n_trans_coarse: int,
+    n_trans_fine: int,
+):
+    pose = np.asarray(pose_assignments, dtype=np.int64)
+    rot_idx = pose // int(n_trans_fine)
+    trans_idx = pose % int(n_trans_fine)
+    coarse_rot = np.asarray(rot_parent_map, dtype=np.int64)[rot_idx]
+    coarse_trans = np.asarray(trans_parent_map, dtype=np.int64)[trans_idx]
+    return (coarse_rot * int(n_trans_coarse) + coarse_trans).astype(np.int32, copy=False)
 
 
 @dataclass
@@ -393,6 +409,19 @@ class PerHalfOutputs:
         if hs.pose_rotation_eulers is not None:
             self.pose_rotation_eulers[idx] = hs.pose_rotation_eulers
 
+
+def _combine_optional_half_accumulators(left, right, *, label: str):
+    """Combine half accumulators, treating an empty Class3D half as absent."""
+
+    if left is None:
+        if right is None:
+            raise RuntimeError(f"{label} accumulators are missing for both halves")
+        return right
+    if right is None:
+        return left
+    return left + right
+
+
 def _score_kclass_firstiter_cc_pass2(
     *,
     experiment_dataset,
@@ -436,30 +465,10 @@ def _score_kclass_firstiter_cc_pass2(
     3. ``log_label`` — "" for adaptive site, "(non-adaptive site) " for
        single-pass.
 
-    Returns ``(k_class_result, rot_pmap_for_collapse, adaptive_os_local)``.
+    Returns ``(k_class_result, rot_pmap, trans_pmap, n_trans_fine, adaptive_os)``.
     """
 
     adaptive_os_local = int(state.adaptive_oversampling)
-    firstiter_image_batch_size = min(
-        image_batch_size,
-        _safe_firstiter_cc_image_batch_size(
-            current_translations.shape[0],
-            image_shape_k,
-        ),
-    )
-    if firstiter_image_batch_size != image_batch_size:
-        logger.info(
-            "STRICT-PARITY: clamping iter-1 winner-take-all image_batch_size from %d to %d",
-            image_batch_size,
-            firstiter_image_batch_size,
-        )
-    if update_em_kwargs_image_batch_size:
-        em_kwargs["image_batch_size"] = firstiter_image_batch_size
-    logger.info(
-        "STRICT-PARITY %srouting iter-1 K-class through run_dense_k_class_em_adaptive (oversampling=%d)",
-        log_label,
-        adaptive_os_local,
-    )
     (
         coarse_rot,
         coarse_trans,
@@ -475,6 +484,29 @@ def _score_kclass_firstiter_cc_pass2(
         adaptive_os_local,
         float(state.translation_step),
         random_perturbation,
+    )
+    requested_firstiter_image_batch_size = int(em_kwargs.get("image_batch_size", image_batch_size))
+    firstiter_image_batch_size = min(
+        requested_firstiter_image_batch_size,
+        _safe_firstiter_cc_image_batch_size(
+            fine_trans.shape[0],
+            image_shape_k,
+        ),
+    )
+    if firstiter_image_batch_size != requested_firstiter_image_batch_size:
+        logger.info(
+            "STRICT-PARITY: clamping iter-1 winner-take-all image_batch_size from %d to %d",
+            requested_firstiter_image_batch_size,
+            firstiter_image_batch_size,
+        )
+    if update_em_kwargs_image_batch_size:
+        em_kwargs["image_batch_size"] = firstiter_image_batch_size
+    firstiter_em_kwargs = dict(em_kwargs)
+    firstiter_em_kwargs["sparse_pass2"] = True
+    logger.info(
+        "STRICT-PARITY %srouting iter-1 K-class through sparse run_dense_k_class_em_adaptive (oversampling=%d)",
+        log_label,
+        adaptive_os_local,
     )
     extra: dict = {}
     if coarse_current_size is not None:
@@ -499,9 +531,9 @@ def _score_kclass_firstiter_cc_pass2(
         firstiter_cc_pass2_only_best_coarse=True,
         skip_significance_pruning=True,
         **extra,
-        **em_kwargs,
+        **firstiter_em_kwargs,
     )
-    return k_class_result, rot_pmap, adaptive_os_local
+    return k_class_result, rot_pmap, trans_pmap, int(fine_trans.shape[0]), adaptive_os_local
 
 
 def _score_half_dense(
@@ -535,6 +567,7 @@ def _score_half_dense(
     disable_adjoint_y: bool,
     disable_adjoint_ctf: bool,
     safe_batch_sizes,
+    max_significants,
     # K-class scatter targets (mutated in place):
     noise_stats_per_half_per_class,
     class_assignments,
@@ -580,6 +613,7 @@ def _score_half_dense(
     safe_ibs, safe_rbs = safe_batch_sizes(
         effective_rotations.shape[0],
         current_translations.shape[0],
+        current_size_for_batch=cs_for_engine,
     )
     em_kwargs = {
         **_DENSE_EM_STATIC_KWARGS,
@@ -602,18 +636,27 @@ def _score_half_dense(
     if k_class_enabled:
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K-class refine does not support adjoint ablation flags")
+        em_kwargs["relion_half_volume_mstep"] = True
         if k_class_image_batch_size_override is not None:
             em_kwargs["image_batch_size"] = k_class_image_batch_size_override
         if k_class_rotation_block_size_override is not None:
             em_kwargs["rotation_block_size"] = k_class_rotation_block_size_override
         rot_pmap_for_collapse = None
+        trans_pmap_for_collapse = None
+        n_trans_fine_for_collapse = None
         adaptive_os_local = 0
         # STRICT-PARITY: at iter 1 with --firstiter_cc, route through the
         # adaptive 2-pass engine so iter-1 matches RELION's
         # expectationOneParticle pass-2 masked-to-best-coarse semantics
         # (ml_optimiser.cpp:9181-9207).
         if relion_firstiter_cc_this_iter:
-            k_class_result, rot_pmap_for_collapse, adaptive_os_local = _score_kclass_firstiter_cc_pass2(
+            (
+                k_class_result,
+                rot_pmap_for_collapse,
+                trans_pmap_for_collapse,
+                n_trans_fine_for_collapse,
+                adaptive_os_local,
+            ) = _score_kclass_firstiter_cc_pass2(
                 experiment_dataset=experiment_dataset,
                 mean=means_k,
                 mean_variance=mean_variance,
@@ -633,6 +676,52 @@ def _score_half_dense(
                 fine_current_size=firstiter_fine_current_size,
                 log_label=firstiter_log_label,
                 update_em_kwargs_image_batch_size=firstiter_updates_em_kwargs_ibs,
+            )
+        elif firstiter_coarse_current_size is not None and int(state.adaptive_oversampling) > 0:
+            adaptive_os_local = int(state.adaptive_oversampling)
+            (
+                coarse_rot,
+                coarse_trans,
+                fine_rot,
+                fine_trans,
+                rot_pmap_for_collapse,
+                trans_pmap_for_collapse,
+            ) = _build_firstiter_cc_pass2_grids(
+                effective_rotations,
+                current_translations,
+                base_translations,
+                int(current_healpix_order),
+                adaptive_os_local,
+                float(state.translation_step),
+                random_perturbation,
+            )
+            n_trans_fine_for_collapse = int(fine_trans.shape[0])
+            logger.info(
+                "RELION adaptive K-class routing through sparse run_dense_k_class_em_adaptive (oversampling=%d)",
+                adaptive_os_local,
+            )
+            adaptive_em_kwargs = dict(em_kwargs)
+            adaptive_em_kwargs["sparse_pass2"] = True
+            k_class_result = run_dense_k_class_em_adaptive(
+                experiment_dataset,
+                means_k,
+                mean_variance,
+                noise_variance_k,
+                coarse_rot,
+                coarse_trans,
+                fine_rot,
+                fine_trans,
+                rot_pmap_for_collapse,
+                trans_pmap_for_collapse,
+                disc_type,
+                class_log_priors=class_log_priors,
+                accumulate_noise=True,
+                adaptive_fraction=0.999,
+                max_significants=-1 if max_significants is None else int(max_significants),
+                coarse_current_size=firstiter_coarse_current_size,
+                fine_current_size=firstiter_fine_current_size,
+                return_best_pose_details=return_best_pose_details,
+                **adaptive_em_kwargs,
             )
         else:
             k_class_result = run_dense_k_class_em(
@@ -664,12 +753,22 @@ def _score_half_dense(
             best_pose_translations=best_pose_translations,
             require_best_pose_details=return_best_pose_details,
         )
+        coarse_ha_k = None
+        if trans_pmap_for_collapse is not None and n_trans_fine_for_collapse is not None:
+            coarse_ha_k = _collapse_fine_pose_assignments_to_coarse(
+                ha_k,
+                rot_parent_map=rot_pmap_for_collapse,
+                trans_parent_map=trans_pmap_for_collapse,
+                n_trans_coarse=current_translations.shape[0],
+                n_trans_fine=n_trans_fine_for_collapse,
+            )
         return HalfScoreResult(
             ha=ha_k,
             Ft_y=Ft_y_k,
             Ft_ctf=Ft_ctf_k,
             em_stats=em_stats_k,
             noise_stats=noise_stats_k,
+            coarse_ha=coarse_ha_k,
         )
 
     _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
@@ -1426,7 +1525,7 @@ def _run_relion_iteration_loop(
 
     padded_volume_shape = tuple(d * PADDING_FACTOR for d in volume_shape)
 
-    def _safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None):
+    def _safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None, current_size_for_batch=None):
         """Reduce batch sizes for large pose grids to avoid GPU OOM."""
         plan = _estimate_relion_em_batch_sizes(
             requested_image_batch_size=image_batch_size,
@@ -1437,13 +1536,15 @@ def _run_relion_iteration_loop(
             volume_shape=volume_shape,
             padding_factor=PADDING_FACTOR,
             n_classes=n_classes if classes is None else classes,
+            current_size=current_size_for_batch,
         )
         if plan.image_batch_size != image_batch_size or plan.rotation_block_size != rotation_block_size:
             logger.info(
                 "RELION EM batch sizing: requested image_batch_size=%d rotation_block_size=%d; "
                 "using image_batch_size=%d rotation_block_size=%d "
-                "(n_rot=%d n_trans=%d K=%d, score_budget=%.1fM floats, "
-                "projection_tile=%.2f/%.2f GB, translation_tile=%.2f/%.2f GB, "
+                "(n_rot=%d n_trans=%d K=%d, score_budget=%.1fM floats, score_pixels=%d, "
+                "projection_tile=%.2f/%.2f GB, active_score_tile=%.2f/%.2f GB, "
+                "pose_pixel_tile=%.2f GB, translation_tile=%.2f/%.2f GB, "
                 "persistent_est=%.2f GB, usable_est=%.2f GB, gpu_used_est=%.2f GB)",
                 image_batch_size,
                 rotation_block_size,
@@ -1453,8 +1554,12 @@ def _run_relion_iteration_loop(
                 int(n_trans),
                 int(n_classes if classes is None else classes),
                 plan.score_float_budget / 1e6,
+                plan.score_pixel_count,
                 plan.projection_block_gb,
                 plan.projection_budget_gb,
+                plan.active_score_tile_gb,
+                plan.active_score_tile_budget_gb,
+                plan.pose_pixel_tile_gb,
                 plan.translation_tile_gb,
                 plan.translation_tile_budget_gb,
                 plan.persistent_estimate_gb,
@@ -1833,6 +1938,13 @@ def _run_relion_iteration_loop(
         previous_noise_radial_per_half = replay_result.previous_noise_radial_per_half
         previous_noise_radial = replay_result.previous_noise_radial
         current_sigma_offset_angstrom = replay_result.current_sigma_offset_angstrom
+        if k_class_enabled and replay_result.class_weights is not None:
+            class_weights = np.asarray(replay_result.class_weights, dtype=np.float64)
+            class_log_priors = np.log(class_weights)
+            logger.info(
+                "Replay override: class priors <- direction-prior row sums (%s)",
+                ", ".join(f"class {idx + 1}={weight:.4f}" for idx, weight in enumerate(class_weights)),
+            )
 
         sigma_offset_used_trajectory.append(float(current_sigma_offset_angstrom))
         current_sizes.append(cs)
@@ -2160,6 +2272,7 @@ def _run_relion_iteration_loop(
                     current_translations.shape[0],
                     classes=n_classes,
                     image_shape_for_batch=experiment_datasets[k].image_shape,
+                    current_size_for_batch=cs_for_engine,
                 )
                 k_class_image_batch_size = min(
                     k_class_base_ibs,
@@ -2246,8 +2359,12 @@ def _run_relion_iteration_loop(
                     if k_class_enabled
                     else (int(np.prod(padded_volume_shape)),)
                 )
-                Ft_y_k = jnp.zeros(accumulator_shape, dtype=jnp.complex128)
-                Ft_ctf_k = jnp.zeros(accumulator_shape, dtype=jnp.complex128)
+                if k_class_enabled:
+                    Ft_y_k = None
+                    Ft_ctf_k = None
+                else:
+                    Ft_y_k = jnp.zeros(accumulator_shape, dtype=jnp.complex128)
+                    Ft_ctf_k = jnp.zeros(accumulator_shape, dtype=jnp.complex128)
                 ha_k = np.zeros(0, dtype=np.int32)
                 class_assignments[k] = np.zeros(0, dtype=np.int32)
                 class_posterior_per_half[k] = np.zeros(n_classes, dtype=np.float32)
@@ -2271,6 +2388,9 @@ def _run_relion_iteration_loop(
                     Ft_ctf=Ft_ctf_k,
                     em_stats=em_stats_k,
                     noise_stats=noise_stats_k,
+                    best_pose_rotations=np.zeros((0, 3, 3), dtype=np.float32),
+                    best_pose_rotation_eulers=np.zeros((0, 3), dtype=np.float32),
+                    best_pose_translations=np.zeros((0, current_translations.shape[1]), dtype=np.float32),
                 )
                 per_half.update_from(k, empty_result)
                 if k == 0:
@@ -2378,6 +2498,7 @@ def _run_relion_iteration_loop(
                     disable_adjoint_y=disable_adjoint_y,
                     disable_adjoint_ctf=disable_adjoint_ctf,
                     safe_batch_sizes=_safe_batch_sizes,
+                    max_significants=max_significants,
                     noise_stats_per_half_per_class=noise_stats_per_half_per_class,
                     class_assignments=class_assignments,
                     class_posterior_per_half=class_posterior_per_half,
@@ -2401,7 +2522,7 @@ def _run_relion_iteration_loop(
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
                 pose_rotation_eulers[k] = effective_rotation_eulers
-                coarse_ha[k] = ha_k
+                coarse_ha[k] = adaptive_result.coarse_ha if adaptive_result.coarse_ha is not None else ha_k
                 score_result = adaptive_result
 
             else:
@@ -2436,6 +2557,7 @@ def _run_relion_iteration_loop(
                     disable_adjoint_y=disable_adjoint_y,
                     disable_adjoint_ctf=disable_adjoint_ctf,
                     safe_batch_sizes=_safe_batch_sizes,
+                    max_significants=max_significants,
                     noise_stats_per_half_per_class=noise_stats_per_half_per_class,
                     class_assignments=class_assignments,
                     class_posterior_per_half=class_posterior_per_half,
@@ -2570,8 +2692,8 @@ def _run_relion_iteration_loop(
         # map). Mirrors the ``XMIPP_MAX(low_resol_join_halves,
         # 1./mymodel.current_resolution)`` in RELION's source.
         if k_class_enabled:
-            Ft_y_combined = Ft_y_0 + Ft_y_1
-            Ft_ctf_combined = Ft_ctf_0 + Ft_ctf_1
+            Ft_y_combined = _combine_optional_half_accumulators(Ft_y_0, Ft_y_1, label="Ft_y")
+            Ft_ctf_combined = _combine_optional_half_accumulators(Ft_ctf_0, Ft_ctf_1, label="Ft_ctf")
         elif low_resol_join_halves_angstrom is not None and low_resol_join_halves_angstrom > 0:
             prev_res_angstrom = None
             if pixel_resolutions:
@@ -2698,8 +2820,16 @@ def _run_relion_iteration_loop(
                         previous_mean_half0=np.asarray(previous_means[0][class_idx], dtype=np.complex64),
                         previous_mean_half1=np.asarray(previous_means[1][class_idx], dtype=np.complex64),
                         Ft_y_combined=np.asarray(Ft_y_combined[class_idx], dtype=np.complex64),
-                        Ft_ctf_0=np.asarray(Ft_ctf_0[class_idx], dtype=np.complex64),
-                        Ft_ctf_1=np.asarray(Ft_ctf_1[class_idx], dtype=np.complex64),
+                        Ft_ctf_0=(
+                            np.asarray(Ft_ctf_0[class_idx], dtype=np.complex64)
+                            if Ft_ctf_0 is not None
+                            else np.empty(0, dtype=np.complex64)
+                        ),
+                        Ft_ctf_1=(
+                            np.asarray(Ft_ctf_1[class_idx], dtype=np.complex64)
+                            if Ft_ctf_1 is not None
+                            else np.empty(0, dtype=np.complex64)
+                        ),
                         Ft_ctf_combined=np.asarray(Ft_ctf_combined[class_idx], dtype=np.complex64),
                         tau2_shells=np.asarray(tau2_shells_recovar_frame_k, dtype=np.float64),
                         tau2_shells_relion=np.asarray(tau2_update_details_k["tau2_shells"], dtype=np.float64),
@@ -3523,6 +3653,7 @@ def _run_relion_iteration_loop(
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
             safe_batch_sizes=_safe_batch_sizes,
+            max_significants=max_significants,
             noise_stats_per_half_per_class=final_outs.noise_stats_per_class,
             class_assignments=final_outs.class_assignments,
             class_posterior_per_half=final_outs.class_posterior,

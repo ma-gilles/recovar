@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import partial
 
 import jax
@@ -76,6 +77,7 @@ def compute_relion_projector_projections_block(
     padding_factor: int = 1,
     return_abs2: bool = True,
     centered_rows: bool = False,
+    dense_scale: bool = False,
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block."""
 
@@ -95,6 +97,13 @@ def compute_relion_projector_projections_block(
             int(r_max),
             int(padding_factor),
         )
+    if dense_scale:
+        token = (os.environ.get("RECOVAR_DENSE_MEANS_SCALE") or "-N2").strip()
+        n = int(image_shape[0])
+        scale = {"-N2": -(n**2), "N2": float(n**2)}.get(token)
+        if scale is None:
+            raise ValueError(f"Unsupported RECOVAR_DENSE_MEANS_SCALE={token!r}")
+        proj_half = proj_half * scale
     proj_abs2_half = jnp.abs(proj_half) ** 2 if return_abs2 else None
     return proj_half, proj_abs2_half
 

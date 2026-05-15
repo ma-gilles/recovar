@@ -73,6 +73,7 @@ def compute_bootstrap_iref_via_cpp(
     padding_factor: int = 1,
     current_size: int = -1,
     minimum_nr_particles: int = 1000,
+    particle_seed_ids: np.ndarray | None = None,
 ) -> np.ndarray:
     """Run the full RELION InitialModel bootstrap in C++; returns Iref in recovar frame."""
     from recovar.relion_bind import _relion_bind_core as bind
@@ -81,6 +82,7 @@ def compute_bootstrap_iref_via_cpp(
     if current_size <= 0:
         # RELION wsum_model.current_size = ROUND(0.07 * ori_size) (shell count, not Å).
         current_size = int(np.floor(0.07 * ori_size + 0.5))
+    seed_ids = None if particle_seed_ids is None else np.ascontiguousarray(particle_seed_ids, dtype=np.int64)
 
     iref_relion = np.asarray(
         bind.vdam_bootstrap_iref(
@@ -104,6 +106,7 @@ def compute_bootstrap_iref_via_cpp(
             1,  # TRILINEAR
             current_size,
             minimum_nr_particles,
+            seed_ids,
         )
     )
     return np.asarray([relion_volume_to_recovar(vol) for vol in iref_relion], dtype=np.float64)

@@ -496,13 +496,14 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
 @pytest.mark.integration
 @pytest.mark.slow
 def test_em_parity_fast_k1_perturbreplay(tmp_path):
-    """K=1 cold-start with --perturb_replay_relion_dir at 5k 128² for 3 iters.
+    """K=1 cold-start with RELION replay metadata at 5k 128² for 3 iters.
 
     Stricter companion to test_em_parity_fast_k1_coldstart that pins the
     perturbation drift component by reading RELION's per-iter
-    SamplingPerturbInstance values from the reference run. recovar still
-    runs its own E/M/sigma_offset/tau2/FSC machinery — only the HEALPix
-    grid jitter is matched to RELION.
+    SamplingPerturbInstance values from the reference run. In replay mode,
+    run_full_refinement.py also injects RELION's per-iter normCorrection and
+    group-scale corrections by default. recovar still runs its own E/M,
+    sigma_offset, tau2, and FSC machinery.
 
     Pass criteria (tighter than coldstart since perturbation drift is
     eliminated):
@@ -629,11 +630,13 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
     Compares per-class halfmaps against RELION's run_it003_class00X.mrc
     using Hungarian matching to absorb class permutations.
 
-    This is the non-oracle cold-start parity target: use RELION-like Class3D
-    sampling (firstiter_cc + adaptive_oversampling=1 + perturb replay) but do
-    NOT pass --relion_init_dir. Any remaining gap should come from RECOVAR not
-    reproducing RELION's initial state from first principles, not from testing
-    a deliberately different search grid.
+    This is the cold-start parity target with RELION search-grid and per-image
+    correction replay: use RELION-like Class3D sampling (firstiter_cc +
+    adaptive_oversampling=1 + perturb replay) but do NOT pass
+    --relion_init_dir. Any remaining gap should come from RECOVAR not
+    reproducing RELION's initial model/noise/tau/sigma state from first
+    principles, not from testing a deliberately different search grid or
+    normalization stream.
 
     Pass criteria:
       * worst per-class corr ≥ 0.997
@@ -757,7 +760,8 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
         spectrum + per-class rlnReferenceTau2 + rlnTau2FudgeFactor +
         rlnSigmaOffsetsAngst instead of bootstrapping from images
       * --perturb_replay_relion_dir : recovar uses RELION's per-iter
-        SamplingPerturbInstance values for HEALPix grid jitter
+        SamplingPerturbInstance values for HEALPix grid jitter and, by
+        default, per-iter normCorrection / group-scale corrections
       * --firstiter_cc : recovar's iter-1 uses normalized-CC + winner-take-all,
         AND iteration_loop.py routes the iter-1 K-class M-step through
         run_dense_k_class_em_adaptive with firstiter_cc_pass2_only_best_coarse=True
@@ -939,10 +943,11 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
     the run_dense_k_class_em_adaptive plumbing.
 
     Pass criteria (calibrated after Class3D M-step + post-mask parity):
-      * worst per-class corr ≥ 0.985    (observed 0.9898)
-      * mean (Hungarian-matched) ≥ 0.994 (observed 0.9952)
-    Reaching a stable 0.999 requires the remaining per-particle assignment
-    parity audit rather than further M-step approximation.
+      * worst per-class corr ≥ 0.985
+      * mean (Hungarian-matched) ≥ 0.994
+    With RELION normCorrection replay enabled, this fixture currently reaches
+    the 0.9996+ per-class band; lower values usually indicate replay metadata
+    or adaptive K-class routing regressed.
 
     Walltime ~3-4 min on A100 (oversampled grid is more expensive per iter).
     """

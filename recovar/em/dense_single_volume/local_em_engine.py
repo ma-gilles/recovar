@@ -37,12 +37,14 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
 )
 from recovar.em.dense_single_volume.helpers.jax_runtime import block_until_ready as _block_until_ready
 from recovar.em.dense_single_volume.helpers.preprocessing import (
+    _cast_shift_inputs,
     apply_half_translation_phases as _apply_half_translation_phases,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     half_translation_phase_table as _half_translation_phase_table,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
+    _norm_inputs,
     process_half_image,
     resolve_image_mask_for_half_preprocess,
 )
@@ -121,6 +123,7 @@ from recovar.em.dense_single_volume.local_layout import (
 )
 from recovar.em.dense_single_volume.local_score_pass import (
     compute_reconstruction_support,
+    compute_reconstruction_support_from_threshold,
     fused_score_normalize_mstep_abs2_on_demand,
     normalize_local_scores,
     normalize_local_scores_float32,
@@ -244,6 +247,7 @@ def _project_local_bucket(
             padding_factor=int(projection_padding_factor),
             return_abs2=False,
             centered_rows=True,
+            dense_scale=True,
         )
     elif (
         window_spec.use_window
@@ -613,6 +617,9 @@ def _prepare_local_exact_bucket(
     processed_half_cache: _LocalProcessedHalfCache | None = None,
     timer: dict[str, float] | None = None,
     synchronize_profile: bool = False,
+    score_complex_dtype=None,
+    score_real_dtype=None,
+    norm_real_dtype=None,
 ):
     """Prepare score, reconstruction, and noise inputs for one local bucket.
 
@@ -658,7 +665,11 @@ def _prepare_local_exact_bucket(
 
     ctf_t0 = time.time()
     ctf_half = config.compute_ctf_half(ctf_params)
-    ctf2_over_nv_half = ctf_half**2 / noise_variance_half
+    ctf2_over_nv_ctf = ctf_half.astype(score_real_dtype) if score_real_dtype is not None else ctf_half
+    ctf2_over_nv_noise = (
+        noise_variance_half.astype(score_real_dtype) if score_real_dtype is not None else noise_variance_half
+    )
+    ctf2_over_nv_half = ctf2_over_nv_ctf**2 / ctf2_over_nv_noise
     if synchronize_profile:
         _block_until_ready(ctf2_over_nv_half)
     if timer is not None:
@@ -678,16 +689,30 @@ def _prepare_local_exact_bucket(
             timer["cache_fetch_s"] += time.time() - cache_fetch_t0
 
     shift_score_t0 = time.time()
-    score_weighted_half = processed_score_half * ctf_half / noise_variance_half
-    shifted_score_half = _apply_half_translation_phases(score_weighted_half, translation_phases_half)
+    shift_processed_score_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
+        processed_score_half,
+        ctf_half,
+        noise_variance_half,
+        translation_phases_half,
+        score_complex_dtype=score_complex_dtype,
+        score_real_dtype=score_real_dtype,
+    )
+    score_weighted_half = shift_processed_score_half * shift_ctf_half / shift_noise_half
+    shifted_score_half = _apply_half_translation_phases(score_weighted_half, shift_phases_half)
     if synchronize_profile:
         _block_until_ready(shifted_score_half)
     if timer is not None:
         timer["tile_shift_score_s"] += time.time() - shift_score_t0
 
     norm_t0 = time.time()
+    norm_processed_score_half, norm_noise_half, norm_weights = _norm_inputs(
+        processed_score_half,
+        noise_variance_half,
+        norm_half_weights,
+        norm_real_dtype=norm_real_dtype,
+    )
     batch_norm = jnp.sum(
-        (jnp.abs(processed_score_half) ** 2 / noise_variance_half) * norm_half_weights[None, :],
+        (jnp.abs(norm_processed_score_half) ** 2 / norm_noise_half) * norm_weights[None, :],
         axis=-1,
         keepdims=True,
     ).real
@@ -715,8 +740,16 @@ def _prepare_local_exact_bucket(
                 timer["cache_fetch_s"] += time.time() - cache_fetch_t0
 
         shift_recon_t0 = time.time()
-        recon_weighted_half = processed_recon_half * ctf_half / noise_variance_half
-        shifted_recon_half = _apply_half_translation_phases(recon_weighted_half, translation_phases_half)
+        shift_processed_recon_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
+            processed_recon_half,
+            ctf_half,
+            noise_variance_half,
+            translation_phases_half,
+            score_complex_dtype=score_complex_dtype,
+            score_real_dtype=score_real_dtype,
+        )
+        recon_weighted_half = shift_processed_recon_half * shift_ctf_half / shift_noise_half
+        shifted_recon_half = _apply_half_translation_phases(recon_weighted_half, shift_phases_half)
         if synchronize_profile:
             _block_until_ready(shifted_recon_half)
         if timer is not None:
@@ -827,9 +860,14 @@ def run_local_em_exact(
     class_log_prior: float = 0.0,
     normalization_log_evidence: np.ndarray | None = None,
     translation_prior_centers: np.ndarray | None = None,
+    unify_local_bucket_sizes: bool | None = None,
+    stats_use_reconstruction_probs: bool = False,
+    reconstruction_probability_threshold: np.ndarray | None = None,
+    return_reconstruction_probability_values: bool = False,
 ):
     """Run exact local EM over per-image local hypothesis sets."""
 
+    return_profile = bool(return_profile or return_reconstruction_probability_values)
     overall_t0 = time.time()
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
@@ -854,6 +892,18 @@ def run_local_em_exact(
             )
     if normalization_log_z_np is not None and normalization_log_evidence_np is not None:
         raise ValueError("Provide only one of normalization_log_z or normalization_log_evidence")
+    reconstruction_probability_threshold_np = None
+    if reconstruction_probability_threshold is not None:
+        reconstruction_probability_threshold_np = np.asarray(reconstruction_probability_threshold, dtype=np.float64)
+        if reconstruction_probability_threshold_np.shape != (n_images,):
+            raise ValueError(
+                "reconstruction_probability_threshold must have shape "
+                f"({n_images},), got {reconstruction_probability_threshold_np.shape}",
+            )
+        if not np.all(np.isfinite(reconstruction_probability_threshold_np)):
+            raise ValueError("reconstruction_probability_threshold must be finite")
+        if np.any(reconstruction_probability_threshold_np < 0.0):
+            raise ValueError("reconstruction_probability_threshold must be non-negative")
     translation_prior_centers_np = validate_translation_prior_centers(
         translation_prior_centers,
         n_images=n_images,
@@ -1043,6 +1093,23 @@ def run_local_em_exact(
         best_pose_translations=best_pose_translations,
         best_pose_rotation_ids=best_pose_rotation_ids,
     )
+    reconstruction_probability_values_by_image = (
+        [[] for _ in range(n_images)] if return_reconstruction_probability_values else None
+    )
+
+    def _collect_reconstruction_probability_values(image_indices, posterior_probs):
+        """Collect unpruned positive posterior values for global support thresholding."""
+
+        if reconstruction_probability_values_by_image is None:
+            return
+        image_indices_np = np.asarray(image_indices, dtype=np.int32)
+        probs_np = np.asarray(posterior_probs, dtype=np.float32).reshape(len(image_indices_np), -1)
+        for row, image_index in enumerate(image_indices_np):
+            values = probs_np[row]
+            values = values[values > 0.0]
+            if values.size:
+                reconstruction_probability_values_by_image[int(image_index)].append(values.copy())
+
     max_hypotheses_per_microbatch = _exact_local_max_hypotheses_per_microbatch(
         max_hypotheses_per_microbatch,
         n_windowed,
@@ -1055,6 +1122,7 @@ def run_local_em_exact(
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
         max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
+        unify_bucket_sizes=unify_local_bucket_sizes,
     )
     timing.bucket_build_s += time.time() - bucket_build_t0
 
@@ -1112,6 +1180,7 @@ def run_local_em_exact(
     use_big_jit_buckets = (
         (not use_relion_projector)
         and not disable_big_jit_buckets
+        and not return_reconstruction_probability_values
         and not debug_score_dump_filter_matches
         and not (accumulate_noise and debug_noise_dump_dir is not None)
         and not processed_half_cache_preferred
@@ -1321,6 +1390,14 @@ def run_local_em_exact(
                 shell_indices_noise_arg = disabled_noise_shell_indices
                 noise_variance_for_noise_arg = noise_variance_half
                 n_shells_arg = 1
+            if reconstruction_probability_threshold_np is None:
+                reconstruction_probability_threshold_arg = jnp.zeros((batch_size,), dtype=jnp.float32)
+                has_reconstruction_probability_threshold = False
+            else:
+                threshold_values = reconstruction_probability_threshold_np[bucket_image_indices]
+                threshold_values = pad_axis(threshold_values, 0, batch_size, value=np.inf)
+                reconstruction_probability_threshold_arg = jnp.asarray(threshold_values, dtype=jnp.float64)
+                has_reconstruction_probability_threshold = True
 
             projection_max_r_big_jit = window_spec.dense_big_jit_max_r()
             return_big_jit_mstep_tensors = sparse_big_jit_backprojection and (
@@ -1364,6 +1441,7 @@ def run_local_em_exact(
                 jnp.asarray(valid_image_mask),
                 normalization_log_z_arg,
                 normalization_log_evidence_arg,
+                reconstruction_probability_threshold_arg,
                 config,
                 mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,
@@ -1394,6 +1472,7 @@ def run_local_em_exact(
                 n_shells=n_shells_arg,
                 has_normalization_log_z=normalization_log_z_np is not None,
                 has_normalization_log_evidence=normalization_log_evidence_np is not None,
+                has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
             )
             if return_big_jit_mstep_tensors:
                 (
@@ -1411,6 +1490,7 @@ def run_local_em_exact(
                     best_argmax,
                     max_posterior,
                     probs_sum_t,
+                    reconstruction_probs_sum_t,
                     n_significant_samples,
                     reconstruction_rotation_mask,
                     reconstruction_row_count_jax,
@@ -1433,6 +1513,7 @@ def run_local_em_exact(
                     best_argmax,
                     max_posterior,
                     probs_sum_t,
+                    reconstruction_probs_sum_t,
                     n_significant_samples,
                     reconstruction_rotation_mask,
                     reconstruction_row_count_jax,
@@ -1449,6 +1530,7 @@ def run_local_em_exact(
                     best_argmax,
                     max_posterior,
                     probs_sum_t,
+                    reconstruction_probs_sum_t,
                     n_significant_samples,
                     reconstruction_rotation_mask,
                     reconstruction_row_count_jax,
@@ -1562,6 +1644,12 @@ def run_local_em_exact(
                 timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
 
             postprocess_t0 = time.time()
+            stats_probs_sum_t = reconstruction_probs_sum_t if stats_use_reconstruction_probs else probs_sum_t
+            stats_probs_sum_t_np = (
+                None
+                if probs_sum_t_np is None
+                else np.asarray(stats_probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+            )
             significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
                 image_indices=unpadded_bucket.image_indices,
                 local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
@@ -1579,7 +1667,11 @@ def run_local_em_exact(
                 log_Z=log_Z[:unpadded_batch_size],
                 best_log_score=best_log_score[:unpadded_batch_size],
                 max_posterior=max_posterior[:unpadded_batch_size],
-                probs_sum_t=probs_sum_t[:unpadded_batch_size] if probs_sum_t_np is None else probs_sum_t_np,
+                probs_sum_t=(
+                    stats_probs_sum_t[:unpadded_batch_size]
+                    if stats_probs_sum_t_np is None
+                    else stats_probs_sum_t_np
+                ),
                 n_significant_samples=n_significant_samples[:unpadded_batch_size],
                 collect_profile_stats=collect_profile_stats,
                 reconstruction_row_count=reconstruction_row_count,
@@ -1624,6 +1716,9 @@ def run_local_em_exact(
             processed_half_cache=processed_half_cache,
             timer=preprocess_profile if return_profile else None,
             synchronize_profile=return_profile,
+            score_complex_dtype=precision_policy.score_complex_dtype,
+            score_real_dtype=precision_policy.score_real_dtype,
+            norm_real_dtype=precision_policy.normalization_real_dtype,
         )
         if scale_corrections is not None:
             batch_scale = jnp.asarray(scale_corrections[np.asarray(bucket.image_indices)])
@@ -1720,7 +1815,13 @@ def run_local_em_exact(
             fused_score_mstep_enabled
             and normalization_log_z_np is None
             and normalization_log_evidence_np is None
+            and reconstruction_probability_threshold_np is None
             and not debug_score_dump_filter_matches
+        )
+        threshold_for_bucket = (
+            None
+            if reconstruction_probability_threshold_np is None
+            else jnp.asarray(reconstruction_probability_threshold_np[np.asarray(bucket.image_indices)], dtype=jnp.float64)
         )
         if can_use_fused_score_mstep:
             fused_t0 = time.time()
@@ -1749,6 +1850,7 @@ def run_local_em_exact(
                 None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
                 shifted_recon_split,
                 ctf2_over_nv_recon,
+                None,
                 half_spectrum_scoring=half_spectrum_scoring,
                 use_float64_normalization=use_float64_normalization,
                 reconstruct_significant_only=reconstruct_significant_only,
@@ -1866,13 +1968,21 @@ def run_local_em_exact(
 
             significance_t0 = time.time()
             if reconstruct_significant_only:
-                reconstruction_sample_mask, reconstruction_rotation_mask, n_significant_samples = (
-                    compute_reconstruction_support(
-                        probs,
-                        adaptive_fraction=adaptive_fraction,
-                        max_significants=max_significants,
+                if threshold_for_bucket is None:
+                    reconstruction_sample_mask, reconstruction_rotation_mask, n_significant_samples = (
+                        compute_reconstruction_support(
+                            probs,
+                            adaptive_fraction=adaptive_fraction,
+                            max_significants=max_significants,
+                        )
                     )
-                )
+                else:
+                    reconstruction_sample_mask, reconstruction_rotation_mask, n_significant_samples = (
+                        compute_reconstruction_support_from_threshold(
+                            probs,
+                            threshold_for_bucket,
+                        )
+                    )
                 reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
             else:
                 reconstruction_rotation_mask = jnp.asarray(bucket.local_rotation_mask)
@@ -1931,6 +2041,8 @@ def run_local_em_exact(
             timing.mstep_s += time.time() - mstep_t0
             scores = None
 
+        _collect_reconstruction_probability_values(bucket.image_indices, probs)
+
         pack_t0 = time.time()
         probs_sum_t_np = None
         if reconstruct_significant_only:
@@ -1940,6 +2052,11 @@ def run_local_em_exact(
             reconstruction_rotation_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)
         transfer_t0 = time.time()
         probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+        stats_probs_sum_t_np = (
+            np.asarray(reconstruction_probs_sum_t, dtype=np.float64)
+            if stats_use_reconstruction_probs
+            else probs_sum_t_np
+        )
         transfer_profile["mstep_posterior_sum_to_host_s"] += time.time() - transfer_t0
         (
             reconstruction_take_indices,
@@ -2125,7 +2242,7 @@ def run_local_em_exact(
             log_Z=log_Z,
             best_log_score=best_log_score,
             max_posterior=max_posterior,
-            probs_sum_t=probs_sum_t if probs_sum_t_np is None else probs_sum_t_np,
+            probs_sum_t=stats_probs_sum_t_np,
             n_significant_samples=n_significant_samples,
             collect_profile_stats=collect_profile_stats,
             reconstruction_row_count=reconstruction_row_count,
@@ -2297,6 +2414,11 @@ def run_local_em_exact(
         ),
         "n_windowed": np.int32(n_windowed),
     }
+    if reconstruction_probability_values_by_image is not None:
+        profile_summary["reconstruction_probability_values_by_image"] = tuple(
+            np.concatenate(values).astype(np.float32, copy=False) if values else np.zeros(0, dtype=np.float32)
+            for values in reconstruction_probability_values_by_image
+        )
     return _local_em_return_tuple(
         Ft_y,
         Ft_ctf,

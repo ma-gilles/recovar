@@ -27,7 +27,9 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _normalize_pass2_bucket,
     _normalize_pass2_bucket_with_log_z,
+    _score_pass2_bucket_normalized_cc,
     _score_pass2_bucket_relion_gpu_diff2,
+    _winner_take_all_bucket_probs,
 )
 
 pytestmark = pytest.mark.unit
@@ -281,6 +283,56 @@ def test_sparse_pass2_score_matches_direct_diff2_for_finite_inputs():
     np.testing.assert_allclose(np.asarray(scores), expected, atol=5e-5, rtol=5e-5)
 
 
+def test_sparse_pass2_normalized_cc_score_matches_dense_formula():
+    rng = np.random.default_rng(456)
+    batch, n_rot, n_trans, n_half = 2, 3, 4, 5
+    shifted = (
+        rng.normal(size=(batch, n_trans, n_half)) + 1j * rng.normal(size=(batch, n_trans, n_half))
+    ).astype(np.complex64)
+    score_weight = rng.uniform(0.2, 1.4, size=(batch, n_half)).astype(np.float32)
+    proj = (
+        rng.normal(size=(batch, n_rot, n_half)) + 1j * rng.normal(size=(batch, n_rot, n_half))
+    ).astype(np.complex64)
+    half_weights = np.array([1.0, 2.0, 2.0, 2.0, 1.0], dtype=np.float32)
+    mask = np.ones((batch, n_rot, n_trans), dtype=bool)
+    mask[1, 2, 3] = False
+
+    scores = _score_pass2_bucket_normalized_cc(
+        jnp.asarray(shifted),
+        jnp.asarray(score_weight),
+        jnp.asarray(proj),
+        jnp.asarray(half_weights),
+        jnp.asarray(mask),
+    )
+
+    expected = np.empty((batch, n_rot, n_trans), dtype=np.float32)
+    for b in range(batch):
+        weighted_proj = proj[b] * half_weights[None, :]
+        cross = -2.0 * np.einsum("tn,rn->rt", np.conj(shifted[b]), weighted_proj).real
+        norms = np.einsum("n,rn,n->r", score_weight[b], np.abs(proj[b]) ** 2, half_weights)
+        expected[b] = (-0.5 * cross) / np.sqrt(np.maximum(norms[:, None], 1e-30))
+    expected = np.where(mask, expected, -np.inf)
+
+    np.testing.assert_allclose(np.asarray(scores), expected, atol=5e-5, rtol=5e-5)
+    assert np.isneginf(float(np.asarray(scores[1, 2, 3])))
+
+
+def test_sparse_pass2_winner_take_all_bucket_probs_are_one_hot():
+    scores = jnp.array(
+        [
+            [[1.0, 4.0], [3.0, 2.0]],
+            [[-jnp.inf, -jnp.inf], [-jnp.inf, -jnp.inf]],
+        ],
+        dtype=jnp.float32,
+    )
+    _, _, best_log_score, best_argmax, _ = _normalize_pass2_bucket(scores)
+
+    probs = _winner_take_all_bucket_probs(scores, best_argmax, best_log_score)
+
+    np.testing.assert_array_equal(np.asarray(probs[0]), np.asarray([[0.0, 1.0], [0.0, 0.0]], dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(probs[1]), np.zeros((2, 2), dtype=np.float32))
+
+
 def test_sparse_pass2_score_masks_nonfinite_direct_diff2_candidates():
     """Overflowed direct-diff candidates should become impossible, not NaN."""
     scores = _score_pass2_bucket_relion_gpu_diff2(
@@ -369,6 +421,9 @@ class TestSparsePass2Bucketed:
         scale_corrections=None,
         image_pre_shifts=None,
         translation_prior_centers=None,
+        current_size=None,
+        relion_firstiter_score_mode="gaussian",
+        relion_firstiter_winner_take_all=False,
     ):
         ds, vol, mv, nv, trans, nside = self._common_args(sig_indices)
 
@@ -376,7 +431,7 @@ class TestSparsePass2Bucketed:
             nside_level=nside,
             disc_type="linear_interp",
             oversampling_order=oversampling_order,
-            current_size=None,
+            current_size=current_size,
             rotation_log_prior=rotation_log_prior,
             translation_log_prior=translation_log_prior,
             return_stats=return_stats,
@@ -388,6 +443,8 @@ class TestSparsePass2Bucketed:
             scale_corrections=scale_corrections,
             image_pre_shifts=image_pre_shifts,
             translation_prior_centers=translation_prior_centers,
+            relion_firstiter_score_mode=relion_firstiter_score_mode,
+            relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
         )
 
         out_ref = _compute_pass2_stats_sparse_perimage_reference(ds, vol, mv, nv, trans, sig_indices, **common_kwargs)
@@ -544,6 +601,8 @@ class TestSparsePass2Bucketed:
             use_float64_scoring=True,
         )
         _compare_outputs(out_ref, out_bucket, atol=1e-4, rtol=1e-4)
+        assert np.asarray(out_bucket[6].log_evidence_per_image).dtype == np.float64
+        assert np.asarray(out_bucket[6].best_log_score_per_image).dtype == np.float64
 
     def test_with_image_corrections_match(self):
         """Per-image image_corrections + scale_corrections + pre_shifts must match.
@@ -576,3 +635,26 @@ class TestSparsePass2Bucketed:
             image_pre_shifts=image_pre_shifts,
         )
         _compare_outputs(out_ref, out_bucket, atol=1e-4, rtol=1e-4)
+
+    def test_firstiter_cc_winner_take_all_match(self):
+        """Sparse normalized-CC WTA must match dense per-image run_em."""
+
+        sig_indices = [
+            np.array([0], dtype=np.int32),
+            np.array([1], dtype=np.int32),
+            np.array([2], dtype=np.int32),
+        ]
+        image_corrections = np.asarray([1.0, 0.9, 1.1], dtype=np.float32)
+        scale_corrections = np.asarray([1.0, 1.05, 0.95], dtype=np.float32)
+        out_ref, out_bucket = self._run_both(
+            sig_indices,
+            return_stats=True,
+            score_with_masked_images=True,
+            half_spectrum_scoring=True,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            current_size=6,
+            relion_firstiter_score_mode="normalized_cc",
+            relion_firstiter_winner_take_all=True,
+        )
+        _compare_outputs(out_ref, out_bucket, atol=2e-5, rtol=2e-5)

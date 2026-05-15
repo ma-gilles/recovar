@@ -12,8 +12,9 @@ RELION's approach:
   rotations' children at oversampled angles using a larger Fourier window.
 
 The significance criterion matches RELION's ``adaptive_fraction``: keep
-the smallest set of (rotation, translation) samples that together contribute
->= adaptive_fraction of total posterior weight.  Cap at max_significants
+the smallest set of (rotation, translation) samples whose cumulative weight is
+strictly greater than ``adaptive_fraction`` of the total posterior weight.
+Cap at max_significants
 to bound memory/compute (RELION's --maxsig semantics, counting SAMPLES
 not just orientations -- see C5 in plan_relion_parity.md).
 
@@ -61,7 +62,9 @@ def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_
     """Find significant orientation x translation pairs per image.
 
     For each image, identifies the smallest set of (rotation, translation)
-    samples whose cumulative posterior weight >= adaptive_fraction of total.
+    samples whose cumulative posterior weight is strictly greater than
+    ``adaptive_fraction`` of total, matching RELION's
+    ``frac_weight > adaptive_fraction * exp_sum_weight`` check.
     Caps at max_significants per image.
 
     Parameters
@@ -92,9 +95,15 @@ def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_
     # Fraction of total weight accumulated so far
     frac = cumsum / jnp.maximum(total, 1e-30)
 
-    # Find the index where we first exceed adaptive_fraction
-    # argmax on a boolean gives the first True index
-    threshold_idx = jnp.argmax(frac >= adaptive_fraction, axis=-1)
+    # Find the index where we first strictly exceed adaptive_fraction. RELION
+    # uses `>` rather than `>=`; if no value strictly crosses the target, the
+    # loop finishes at the smallest nonzero weight.
+    crosses = frac > adaptive_fraction
+    threshold_idx = jnp.where(
+        jnp.any(crosses, axis=-1),
+        jnp.argmax(crosses, axis=-1),
+        weights_flat.shape[-1] - 1,
+    )
 
     # RELION treats maximum_significants <= 0 as "no cap".
     if max_significants is not None and int(max_significants) > 0:
@@ -126,7 +135,12 @@ def _find_significant_mask_topk(weights_flat, adaptive_fraction=0.999, max_signi
     cumsum = jnp.cumsum(top_weights, axis=-1)
     total = weights_flat.sum(axis=-1, keepdims=True)
     frac = cumsum / jnp.maximum(total, 1e-30)
-    threshold_idx = jnp.argmax(frac >= adaptive_fraction, axis=-1)
+    crosses = frac > adaptive_fraction
+    threshold_idx = jnp.where(
+        jnp.any(crosses, axis=-1),
+        jnp.argmax(crosses, axis=-1),
+        int(topk) - 1,
+    )
 
     if max_significants is not None and int(max_significants) > 0:
         threshold_idx = jnp.minimum(threshold_idx, int(max_significants) - 1)
@@ -136,7 +150,11 @@ def _find_significant_mask_topk(weights_flat, adaptive_fraction=0.999, max_signi
             dtype=bool,
         )
     else:
-        topk_covers_threshold = frac[:, -1] >= adaptive_fraction
+        topk_covers_threshold = jnp.any(crosses, axis=-1) | jnp.full(
+            (n_images,),
+            int(topk) == int(weights_flat.shape[-1]),
+            dtype=bool,
+        )
 
     threshold_val = top_weights[jnp.arange(n_images), threshold_idx]
     mask = weights_flat >= threshold_val[:, None]
@@ -553,6 +571,18 @@ def compute_pass2_stats_sparse(
     random_perturbation=0.0,
     translation_prior_centers=None,
     normalization_log_z=None,
+    normalization_other_score_log_z=None,
+    return_score_log_z=False,
+    return_score_log_z_only=False,
+    disable_adjoint_y=False,
+    disable_adjoint_ctf=False,
+    fine_rotations_override=None,
+    fine_rotation_parent_override=None,
+    fine_translations_override=None,
+    fine_translation_parent_override=None,
+    relion_half_volume_mstep=False,
+    relion_firstiter_score_mode="gaussian",
+    relion_firstiter_winner_take_all=False,
     use_perimage_reference=False,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
@@ -574,7 +604,22 @@ def compute_pass2_stats_sparse(
     parity; it can be selected by setting ``use_perimage_reference=True``.
     The two paths must produce identical outputs (modulo float rounding).
     """
-    if not use_perimage_reference:
+    if use_perimage_reference and (return_score_log_z or return_score_log_z_only):
+        raise NotImplementedError("score-logZ returns are only implemented for the bucketed sparse pass-2 path")
+    full_grid_reference = (
+        all(samples is None for samples in significant_sample_indices)
+        and not return_score_log_z
+        and not return_score_log_z_only
+        and normalization_log_z is None
+        and normalization_other_score_log_z is None
+        and fine_rotations_override is None
+        and fine_rotation_parent_override is None
+        and fine_translations_override is None
+        and fine_translation_parent_override is None
+        and relion_firstiter_score_mode == "gaussian"
+        and not relion_firstiter_winner_take_all
+    )
+    if not use_perimage_reference and not full_grid_reference:
         from .sparse_pass2_bucketed import compute_pass2_stats_sparse_bucketed
 
         return compute_pass2_stats_sparse_bucketed(
@@ -606,6 +651,18 @@ def compute_pass2_stats_sparse(
             square_window=square_window,
             random_perturbation=random_perturbation,
             normalization_log_z=normalization_log_z,
+            normalization_other_score_log_z=normalization_other_score_log_z,
+            return_score_log_z=return_score_log_z,
+            return_score_log_z_only=return_score_log_z_only,
+            disable_adjoint_y=disable_adjoint_y,
+            disable_adjoint_ctf=disable_adjoint_ctf,
+            fine_rotations_override=fine_rotations_override,
+            fine_rotation_parent_override=fine_rotation_parent_override,
+            fine_translations_override=fine_translations_override,
+            fine_translation_parent_override=fine_translation_parent_override,
+            relion_half_volume_mstep=relion_half_volume_mstep,
+            relion_firstiter_score_mode=relion_firstiter_score_mode,
+            relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
         )
 
     return _compute_pass2_stats_sparse_perimage_reference(
@@ -637,6 +694,12 @@ def compute_pass2_stats_sparse(
         square_window=square_window,
         random_perturbation=random_perturbation,
         normalization_log_z=normalization_log_z,
+        normalization_other_score_log_z=normalization_other_score_log_z,
+        disable_adjoint_y=disable_adjoint_y,
+        disable_adjoint_ctf=disable_adjoint_ctf,
+        relion_half_volume_mstep=relion_half_volume_mstep,
+        relion_firstiter_score_mode=relion_firstiter_score_mode,
+        relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
     )
 
 
@@ -670,6 +733,12 @@ def _compute_pass2_stats_sparse_perimage_reference(
     square_window=False,
     random_perturbation=0.0,
     normalization_log_z=None,
+    normalization_other_score_log_z=None,
+    disable_adjoint_y=False,
+    disable_adjoint_ctf=False,
+    relion_half_volume_mstep=False,
+    relion_firstiter_score_mode="gaussian",
+    relion_firstiter_winner_take_all=False,
 ):
     """Per-image reference implementation for sparse pass-2.
 
@@ -691,6 +760,10 @@ def _compute_pass2_stats_sparse_perimage_reference(
         raise NotImplementedError(
             "normalization_log_z is only implemented for the bucketed sparse pass-2 path",
         )
+    if normalization_other_score_log_z is not None:
+        raise NotImplementedError(
+            "normalization_other_score_log_z is only implemented for the bucketed sparse pass-2 path",
+        )
 
     n_images = experiment_dataset.n_units
     n_coarse_trans = int(np.asarray(translations).shape[0])
@@ -707,8 +780,11 @@ def _compute_pass2_stats_sparse_perimage_reference(
     max_posterior = None
     rotation_posterior_sums = None
     if return_stats:
-        log_evidence = np.empty(n_images, dtype=np.float32)
-        best_log_score = np.empty(n_images, dtype=np.float32)
+        # K-class assignment depends on small inter-class score deltas after
+        # adding a large image-power offset. Keep these in float64 like dense
+        # run_em.
+        log_evidence = np.empty(n_images, dtype=np.float64)
+        best_log_score = np.empty(n_images, dtype=np.float64)
         max_posterior = np.empty(n_images, dtype=np.float32)
         rotation_posterior_sums = np.zeros(n_coarse_rot, dtype=np.float64)
 
@@ -841,6 +917,11 @@ def _compute_pass2_stats_sparse_perimage_reference(
             use_float64_scoring=use_float64_scoring,
             do_gridding_correction=do_gridding_correction,
             square_window=square_window,
+            disable_adjoint_y=disable_adjoint_y,
+            disable_adjoint_ctf=disable_adjoint_ctf,
+            relion_half_volume_mstep=relion_half_volume_mstep,
+            relion_firstiter_score_mode=relion_firstiter_score_mode,
+            relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
         )
 
         # Unpack return based on flags

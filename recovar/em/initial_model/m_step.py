@@ -14,6 +14,9 @@ import numpy as np
 
 from .state import InitialModelState, half_slot_index
 
+XMIPP_EQUAL_ACCURACY: float = 1e-6
+RELION_DEFAULT_GRAD_MIN_RESOL_ANGSTROM: float = 20.0
+
 
 def _get_bindings():
     """Import the RELION binding module; raise a clear error if unbuilt."""
@@ -52,6 +55,37 @@ def _r_max_from_state(state: InitialModelState, padding_factor: int) -> int:
     return state.current_size // 2
 
 
+def _relion_resolution_shell(ori_size: int, pixel_size: float, resolution_angstrom: float) -> int:
+    """RELION ``MlModel::getPixelFromResolution(1./resolution_angstrom)``."""
+    if resolution_angstrom <= 0.0:
+        raise ValueError(f"resolution_angstrom must be positive, got {resolution_angstrom}")
+    shell = float(ori_size) * float(pixel_size) / float(resolution_angstrom)
+    return int(np.floor(shell + 0.5)) if shell >= 0.0 else -int(np.floor(-shell + 0.5))
+
+
+def _grad_min_resol_shell_from_state(
+    state: InitialModelState,
+    grad_min_resol_shell: float | None,
+) -> float:
+    """Default ``reconstructGrad`` min-resol shell from RELION InitialModel."""
+    if grad_min_resol_shell is not None:
+        return float(grad_min_resol_shell)
+    return float(
+        _relion_resolution_shell(
+            int(state.ori_size),
+            float(state.pixel_size),
+            RELION_DEFAULT_GRAD_MIN_RESOL_ANGSTROM,
+        )
+    )
+
+
+def _has_relion_reconstruction_weight(state: InitialModelState, k: int, accum_h0: VdamAccumulator) -> bool:
+    """RELION only reconstructs classes with active prior and nonzero BPref weight."""
+    if float(np.asarray(state.pdf_class, dtype=np.float64)[k]) <= 0.0:
+        return False
+    return float(np.sum(np.asarray(accum_h0.weight, dtype=np.float64))) > XMIPP_EQUAL_ACCURACY
+
+
 def vdam_m_step_single_class(
     state: InitialModelState,
     k: int,
@@ -60,7 +94,7 @@ def vdam_m_step_single_class(
     *,
     grad_current_stepsize: float,
     tau2_fudge_factor: float,
-    grad_min_resol_shell: float = 0.0,
+    grad_min_resol_shell: float | None = None,
     padding_factor: int = 1,
 ) -> InitialModelState:
     """VDAM M-step for one class (per-class loop matches RELION's binding shape).
@@ -74,10 +108,13 @@ def vdam_m_step_single_class(
         raise ValueError("pseudo_halfsets=True requires accum_h1")
     if not state.pseudo_halfsets and accum_h1 is not None:
         raise ValueError("pseudo_halfsets=False must have accum_h1=None")
+    if not _has_relion_reconstruction_weight(state, k, accum_h0):
+        return state
 
     bind = _get_bindings()
     ori_size = state.ori_size
     r_max = _r_max_from_state(state, padding_factor)
+    min_resol_shell = _grad_min_resol_shell_from_state(state, grad_min_resol_shell)
     # backprojector.h:335/343 EMA defaults
     mu_first, mu_second = 0.9, 0.999
 
@@ -187,6 +224,8 @@ def vdam_m_step_single_class(
     new_sigma2_class = state.sigma2_class.copy()
     new_fourier_coverage_class = state.fourier_coverage_class.copy()
     new_data_vs_prior_class = state.data_vs_prior_class.copy()
+    # RELION's gradient InitialModel path routes class 0 FSC into the common
+    # updateSSNRarrays call, then passes per-class FSC to reconstructGrad below.
     fsc_for_ssnr = np.asarray(state.fsc_halves_class[0], dtype=np.float64)
     # K=1: avg(h0,h1) matches RELION's unified BPref weight (HEALPix 1→2 at iter-10).
     # K>1: h0/h1 per-class accumulators are asymmetric, so averaging regresses K=4 CC.
@@ -241,7 +280,7 @@ def vdam_m_step_single_class(
                 padding_factor,
                 1,
                 r_max,
-                grad_min_resol_shell,
+                min_resol_shell,
                 False,
                 True,
                 mom1_noise_power,
@@ -268,7 +307,7 @@ def vdam_m_step(
     *,
     grad_current_stepsize: float,
     tau2_fudge_factor: float,
-    grad_min_resol_shell: float = 0.0,
+    grad_min_resol_shell: float | None = None,
     padding_factor: int = 1,
 ) -> InitialModelState:
     """Full VDAM M-step over K classes.

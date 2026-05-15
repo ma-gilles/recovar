@@ -419,6 +419,7 @@ def select_subset_for_iter(
     """
     if particle_order is None:
         base_order = np.arange(int(nr_particles), dtype=np.int64)
+        base_halfset_ids = base_order
     else:
         base_order = np.asarray(particle_order, dtype=np.int64)
         if base_order.shape != (int(nr_particles),):
@@ -429,9 +430,16 @@ def select_subset_for_iter(
             or np.any(base_order >= nr_particles)
         ):
             raise ValueError("particle_order must be a permutation of particle ids [0, nr_particles)")
+        # RELION's InitialModel pseudo-halfset routing uses the global particle
+        # table row from ``mydata.sorted_idx``:
+        # ``iproj_offset = (part_id % 2) * nr_classes`` in storeWeightedSums.
+        # ``particle_order`` is RECOVAR's copy of that sorted_idx list, so use
+        # the dataset-row parity rather than the sorted-position parity.
+        base_halfset_ids = base_order
 
     if int(random_seed) == 0:
         shuffled = base_order.copy()
+        shuffled_halfset_ids = base_halfset_ids.copy()
     else:
         # C++ binding does std::shuffle byte-exact vs RELION; Python is a fallback.
         try:
@@ -443,6 +451,7 @@ def select_subset_for_iter(
         except (ImportError, AttributeError):
             permutation = randomise_particles_order(nr_particles, rnd_unif_factory(random_seed + iter))
         shuffled = base_order[permutation]
+        shuffled_halfset_ids = base_halfset_ids[permutation]
     subset_size = state.subset_size if state.subset_size != -1 else nr_particles
     # `-1` (all particles) still needs to be translated via select_vdam_subset
     pseudo = do_grad and pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=False)
@@ -451,6 +460,7 @@ def select_subset_for_iter(
         subset_size=subset_size,
         optics_group_by_particle=optics_group_by_particle,
         pseudo_halfsets=pseudo,
+        halfset_particle_ids=shuffled_halfset_ids,
     )
     new_state = replace(state)
     new_state.subset_particle_ids = plan.particle_ids

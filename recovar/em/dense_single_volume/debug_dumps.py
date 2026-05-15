@@ -28,6 +28,12 @@ from recovar.em.sampling import rotation_grid_size
 logger = logging.getLogger(__name__)
 
 
+def _dump_array_or_empty(arr):
+    if arr is None:
+        return np.empty(0, dtype=np.float32)
+    return np.asarray(arr)
+
+
 def _save_iteration_intermediates(
     save_dir: str,
     *,
@@ -59,10 +65,10 @@ def _save_iteration_intermediates(
     from recovar.output.output import save_volume
 
     os.makedirs(save_dir, exist_ok=True)
-    np.save(os.path.join(save_dir, f"it{iteration:03d}_Ft_y_0.npy"), np.asarray(Ft_y_0))
-    np.save(os.path.join(save_dir, f"it{iteration:03d}_Ft_y_1.npy"), np.asarray(Ft_y_1))
-    np.save(os.path.join(save_dir, f"it{iteration:03d}_Ft_ctf_0.npy"), np.asarray(Ft_ctf_0))
-    np.save(os.path.join(save_dir, f"it{iteration:03d}_Ft_ctf_1.npy"), np.asarray(Ft_ctf_1))
+    np.save(os.path.join(save_dir, f"it{iteration:03d}_Ft_y_0.npy"), _dump_array_or_empty(Ft_y_0))
+    np.save(os.path.join(save_dir, f"it{iteration:03d}_Ft_y_1.npy"), _dump_array_or_empty(Ft_y_1))
+    np.save(os.path.join(save_dir, f"it{iteration:03d}_Ft_ctf_0.npy"), _dump_array_or_empty(Ft_ctf_0))
+    np.save(os.path.join(save_dir, f"it{iteration:03d}_Ft_ctf_1.npy"), _dump_array_or_empty(Ft_ctf_1))
     for k_half in range(2):
         class_indices_to_save = range(n_classes) if k_class_enabled else (None,)
         for class_idx in class_indices_to_save:

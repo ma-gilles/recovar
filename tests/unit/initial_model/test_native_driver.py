@@ -13,6 +13,8 @@ import pytest
 import recovar.em.initial_model.driver as driver
 from recovar.data_io.starfile import read_star
 from recovar.em.initial_model import initialise_denovo_state
+from recovar.em.initial_model.dense_adapter import DenseInitialModelEstepResult
+from recovar.em.initial_model.m_step import VdamAccumulator
 
 SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_ab_initio.py"
 
@@ -33,15 +35,26 @@ def _load_run_ab_initio():
     return module
 
 
-def test_micrograph_sort_order_is_stable():
+def test_micrograph_sort_order_matches_relion_experiment_order():
     main = pd.DataFrame(
         {
-            "_rlnMicrographName": ["b", "a", "b", "a"],
-            "_rlnImageName": ["1@s.mrcs", "2@s.mrcs", "3@s.mrcs", "4@s.mrcs"],
+            "_rlnMicrographName": ["1", "2", "10", "100", "11"],
+            "_rlnImageName": ["1@s.mrcs", "2@s.mrcs", "3@s.mrcs", "4@s.mrcs", "5@s.mrcs"],
         }
     )
 
-    assert driver._micrograph_sort_order(main).tolist() == [1, 3, 0, 2]
+    assert driver._micrograph_sort_order(main).tolist() == [0, 2, 3, 4, 1]
+
+
+def test_experiment_read_order_uses_micrograph_lexicographic_order():
+    main = pd.DataFrame(
+        {
+            "_rlnMicrographName": ["1", "2", "10", "100", "11"],
+            "_rlnImageName": ["1@s.mrcs", "2@s.mrcs", "3@s.mrcs", "4@s.mrcs", "5@s.mrcs"],
+        }
+    )
+
+    assert driver._experiment_read_order(main).tolist() == [0, 2, 3, 4, 1]
 
 
 def test_translation_log_prior_matches_relion_pdf_offset_scaling():
@@ -216,6 +229,67 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
 
 
+def test_active_relion_initialmodel_max_significants_matches_gradient_default():
+    state = initialise_denovo_state(ori_size=16, pixel_size=1.0, K=3, nr_iter=8, n_directions=1)
+
+    assert driver._active_relion_initialmodel_max_significants(state, do_grad=True) == 300
+    assert driver._active_relion_initialmodel_max_significants(state, do_grad=False) == -1
+
+
+def test_effective_class_support_floor_zeros_subparticle_accumulators():
+    state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=4, nr_iter=4, n_directions=1)
+
+    accumulators = []
+    for halfset_idx in (0, 1):
+        for class_idx in range(4):
+            accumulators.append(
+                VdamAccumulator(
+                    data=np.full((3, 3, 2), class_idx + 1, dtype=np.complex128),
+                    weight=np.full((3, 3, 2), class_idx + 1, dtype=np.float64),
+                    class_idx=class_idx,
+                    halfset_idx=halfset_idx,
+                )
+            )
+    result = DenseInitialModelEstepResult(
+        accumulators=accumulators,
+        meta={
+            "selected_particle_ids": np.asarray([13, 10, 12, 11], dtype=np.int64),
+            "class_assignments": np.zeros(4, dtype=np.int32),
+            "class_posterior_sums": np.asarray([12.0, 4.0, 3.0, 0.0], dtype=np.float64),
+            "halfset_0_class_posterior_sums": np.asarray([6.0, 1.5, 1.0, 0.0], dtype=np.float64),
+            "halfset_1_class_posterior_sums": np.asarray([6.0, 2.5, 2.0, 0.0], dtype=np.float64),
+            "class_reconstruction_support_sums": np.asarray([12.0, 0.0017, 3.0, 0.0], dtype=np.float64),
+            "halfset_0_class_reconstruction_support_sums": np.asarray([6.0, 0.0017, 1.0, 0.0], dtype=np.float64),
+            "halfset_1_class_reconstruction_support_sums": np.asarray([6.0, 0.0, 2.0, 0.0], dtype=np.float64),
+            "class_bpref_weight_sums": np.asarray([90.0, 8.0, 30.0, 0.0], dtype=np.float64),
+            "class_direction_posterior_sums": np.ones((4, 2), dtype=np.float64),
+        },
+        halfset_results={},
+    )
+
+    masked = driver._apply_effective_class_support_floor(result, state)
+
+    np.testing.assert_array_equal(masked.meta["class_effective_support_active"], [True, False, True, False])
+    np.testing.assert_allclose(masked.meta["class_reconstruction_support_sums_raw"], [12.0, 0.0017, 3.0, 0.0])
+    np.testing.assert_allclose(masked.meta["class_posterior_sums_raw"], [12.0, 4.0, 3.0, 0.0])
+    np.testing.assert_allclose(masked.meta["class_bpref_weight_sums_raw"], [90.0, 8.0, 30.0, 0.0])
+    np.testing.assert_allclose(masked.meta["class_bpref_weight_sums"], [90.0, 0.0, 30.0, 0.0])
+    np.testing.assert_allclose(masked.meta["class_posterior_sums"], [11.25, 0.0, 3.75, 0.0])
+    np.testing.assert_allclose(masked.meta["class_reconstruction_support_sums"], [12.0, 0.0, 3.0, 0.0])
+    np.testing.assert_allclose(masked.meta["halfset_0_class_posterior_sums_raw"], [6.0, 1.5, 1.0, 0.0])
+    np.testing.assert_allclose(masked.meta["halfset_0_class_posterior_sums"], [6.0, 0.0, 1.0, 0.0])
+    np.testing.assert_allclose(masked.meta["halfset_1_class_posterior_sums"], [6.0, 0.0, 2.0, 0.0])
+    np.testing.assert_allclose(masked.meta["halfset_0_class_reconstruction_support_sums"], [6.0, 0.0, 1.0, 0.0])
+    np.testing.assert_allclose(masked.meta["halfset_1_class_reconstruction_support_sums"], [6.0, 0.0, 2.0, 0.0])
+    np.testing.assert_allclose(masked.meta["class_direction_posterior_sums"][[1, 3]], 0.0)
+    for accum in masked.accumulators:
+        if accum.class_idx in (1, 3):
+            assert not np.any(accum.weight)
+            assert not np.any(accum.data)
+        else:
+            assert np.any(accum.weight)
+
+
 def test_random_perturbation_override_is_fixed():
     opts = driver.NativeInitialModelOptions(
         fn_img="particles.star",
@@ -254,6 +328,7 @@ def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch):
         assert kwargs["ori_size"] == 8
         assert kwargs["nr_classes"] == 1
         assert kwargs["particle_diameter_ang"] == 16.0
+        assert kwargs.get("particle_seed_ids") is None
         return raw_iref.copy()
 
     def fake_postprocess(iref, **kwargs):
@@ -712,6 +787,107 @@ def test_native_expectation_step_records_sampling_changes_each_gradient_iteratio
     assert meta["sampling_updated"] is False
     assert meta["current_changes_optimal_offsets_angstrom"] == pytest.approx(2.0)
     assert sampling_state.current_changes_optimal_offsets_angstrom == pytest.approx(2.0)
+
+
+def test_native_expectation_step_expands_class_rotation_prior_for_dense_fallback(monkeypatch):
+    captured = {}
+
+    monkeypatch.setenv("RECOVAR_DISABLE_SPARSE_PASS2", "1")
+
+    def fake_build_sampling_plan(opts, *, iteration, sampling_state=None):
+        return driver.NativeSamplingPlan(
+            rotations=np.zeros((4, 3, 3), dtype=np.float32),
+            translations=np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
+            random_perturbation=0.0,
+            healpix_order=1,
+            oversampling=1,
+            offset_range_px=1.0,
+            offset_step_px=1.0,
+            offset_range_angstrom=1.0,
+            offset_step_angstrom=1.0,
+        )
+
+    def fake_class_direction_rotation_log_prior(state, healpix_order):
+        assert healpix_order == 1
+        return np.asarray([[0.25, 0.75]], dtype=np.float32)
+
+    def fake_expand(prior, sampling_plan):
+        assert sampling_plan.oversampling == 1
+        np.testing.assert_allclose(prior, np.asarray([[0.25, 0.75]], dtype=np.float32))
+        return np.asarray([[0.25, 0.75, 0.25, 0.75]], dtype=np.float32)
+
+    def fake_run_dense(dataset, state, config, *, particle_ids, halfset_ids):
+        captured["sparse_pass2"] = bool(config.engine_kwargs["sparse_pass2"])
+        captured["max_significants"] = int(config.engine_kwargs["max_significants"])
+        captured["class_rotation_log_prior"] = np.asarray(config.engine_kwargs["class_rotation_log_prior"])
+        return SimpleNamespace(
+            accumulators=[],
+            meta={
+                "selected_particle_ids": np.asarray([0, 1], dtype=np.int64),
+                "pose_assignments": np.asarray([1, 0], dtype=np.int32),
+                "class_assignments": np.asarray([0, 0], dtype=np.int32),
+                "max_posterior_per_image": np.asarray([0.8, 0.7], dtype=np.float32),
+            },
+        )
+
+    monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
+    monkeypatch.setattr(driver, "_class_direction_rotation_log_prior", fake_class_direction_rotation_log_prior)
+    monkeypatch.setattr(driver, "_expand_class_rotation_log_prior_for_dense_fine_grid", fake_expand)
+    monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
+
+    opts = driver.NativeInitialModelOptions(fn_img="particles.star", oversampling=1)
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.zeros((2, 2), dtype=np.float32),
+        class_assignments=np.zeros(2, dtype=np.int32),
+        max_posterior=np.zeros(2, dtype=np.float32),
+        pose_assignments=np.full(2, -1, dtype=np.int32),
+    )
+    state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=1, n_directions=1)
+    expectation_step = driver._native_expectation_step(
+        SimpleNamespace(voxel_size=2.0, n_images=2),
+        opts,
+        np.ones(5, dtype=np.float32),
+        particle_state,
+    )
+
+    _accumulators, _meta = expectation_step(state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
+
+    assert captured["sparse_pass2"] is False
+    assert captured["max_significants"] == 100
+    np.testing.assert_allclose(
+        captured["class_rotation_log_prior"],
+        np.asarray([[0.25, 0.75, 0.25, 0.75]], dtype=np.float32),
+    )
+
+
+def test_expand_class_rotation_prior_for_dense_fine_grid_uses_parent_map(monkeypatch):
+    prior = np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+    parent_map = np.asarray([0, 0, 1, 1, 2, 2], dtype=np.int64)
+
+    def fake_oversampled(parent_rotation_indices, parent_nside_level, oversampling_order, *, random_perturbation):
+        np.testing.assert_array_equal(parent_rotation_indices, np.arange(3, dtype=np.int64))
+        assert parent_nside_level == 2
+        assert oversampling_order == 1
+        assert random_perturbation == pytest.approx(0.125)
+        return np.zeros((6, 3, 3), dtype=np.float32), parent_map
+
+    monkeypatch.setattr(
+        driver.sampling,
+        "get_oversampled_relion_hidden_rotation_grid_from_samples",
+        fake_oversampled,
+    )
+
+    plan = driver.NativeSamplingPlan(
+        rotations=np.zeros((6, 3, 3), dtype=np.float32),
+        translations=np.zeros((1, 2), dtype=np.float32),
+        random_perturbation=0.125,
+        healpix_order=2,
+        oversampling=1,
+    )
+
+    expanded = driver._expand_class_rotation_log_prior_for_dense_fine_grid(prior, plan)
+
+    np.testing.assert_allclose(expanded, prior[:, parent_map])
 
 
 def test_dense_estep_config_splits_fine_and_coarse_translation_priors():

@@ -18,7 +18,9 @@ import pytest
 
 from scripts.run_full_refinement import (
     _build_replay_iteration_overrides,
+    _default_refinement_subsets,
     _parse_relion_tau2_fudge,
+    _resolve_replay_normcorr,
     _resolve_tau2_fudge,
 )
 
@@ -85,6 +87,28 @@ def test_tau2_fudge_resolver_matches_relion_mode_defaults():
     assert _resolve_tau2_fudge(4, None, None) == (4.0, "RELION Class3D default")
     assert _resolve_tau2_fudge(4, 2.5, None) == (2.5, "explicit CLI")
     assert _resolve_tau2_fudge(4, 2.5, 4.0) == (4.0, "RELION it000 optimiser")
+
+
+def test_replay_normcorr_defaults_to_strict_replay_only():
+    assert _resolve_replay_normcorr(None, None) is False
+    assert _resolve_replay_normcorr("/relion/run", None) is True
+    assert _resolve_replay_normcorr("/relion/run", False) is False
+    assert _resolve_replay_normcorr(None, True) is True
+
+
+def test_default_refinement_subsets_keep_gold_standard_for_k1():
+    half1, half2 = _default_refinement_subsets(9, seed=3, n_classes=1)
+
+    assert half1.shape == (4,)
+    assert half2.shape == (5,)
+    np.testing.assert_array_equal(np.sort(np.concatenate([half1, half2])), np.arange(9))
+
+
+def test_default_refinement_subsets_use_all_data_once_for_class3d():
+    half1, half2 = _default_refinement_subsets(9, seed=3, n_classes=4)
+
+    np.testing.assert_array_equal(half1, np.arange(9))
+    assert half2.size == 0
 
 
 @pytest.mark.skipif(not FIXTURE.exists(), reason=f"fixture missing: {FIXTURE}")
@@ -176,3 +200,52 @@ def test_replay_overrides_include_normcorr_adds_image_corrections():
     h1, h2 = overrides[1]["image_corrections"]
     assert h1.shape == (2515,)
     assert h2.shape == (2485,)
+
+
+def test_replay_overrides_use_shared_class3d_model_star(tmp_path):
+    pd = pytest.importorskip("pandas")
+    starfile = pytest.importorskip("starfile")
+
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": [
+                "1@particles.mrcs",
+                "2@particles.mrcs",
+                "3@particles.mrcs",
+                "4@particles.mrcs",
+            ],
+            "rlnNormCorrection": [1.0, 2.0, 4.0, 5.0],
+            "rlnGroupNumber": [1, 2, 1, 2],
+        }
+    )
+    model_general = pd.DataFrame(
+        {
+            "rlnNormCorrectionAverage": [3.0],
+            "rlnSigmaOffsetsAngst": [6.5],
+        }
+    )
+    model_groups = pd.DataFrame({"rlnGroupScaleCorrection": [10.0, 20.0]})
+    starfile.write({"particles": particles}, tmp_path / "run_it001_data.star")
+    starfile.write(
+        {"model_general": model_general, "model_groups": model_groups},
+        tmp_path / "run_it001_model.star",
+    )
+
+    overrides = _build_replay_iteration_overrides(
+        tmp_path,
+        half1_idx=np.asarray([0, 2], dtype=np.int64),
+        half2_idx=np.asarray([1, 3], dtype=np.int64),
+        max_iter=2,
+        ds_voxel=1.0,
+        ds_grid=8,
+        include_normcorr=True,
+    )
+
+    assert overrides[0] is None
+    assert overrides[1]["translation_sigma_angstrom"] == pytest.approx(6.5)
+    h1, h2 = overrides[1]["image_corrections"]
+    np.testing.assert_allclose(h1, np.asarray([30.0, 7.5], dtype=np.float32))
+    np.testing.assert_allclose(h2, np.asarray([30.0, 12.0], dtype=np.float32))
+    s1, s2 = overrides[1]["scale_corrections"]
+    np.testing.assert_allclose(s1, np.asarray([10.0, 10.0], dtype=np.float32))
+    np.testing.assert_allclose(s2, np.asarray([20.0, 20.0], dtype=np.float32))

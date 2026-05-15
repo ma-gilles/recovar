@@ -21,6 +21,38 @@ def apply_half_translation_phases(weighted_half, translation_phases_half):
     )
 
 
+def _cast_shift_inputs(
+    processed_half,
+    ctf_half,
+    noise_variance_half=None,
+    translation_phases_half=None,
+    *,
+    score_complex_dtype=None,
+    score_real_dtype=None,
+):
+    if score_complex_dtype is not None:
+        processed_half = processed_half.astype(score_complex_dtype)
+        if translation_phases_half is not None:
+            translation_phases_half = translation_phases_half.astype(score_complex_dtype)
+    if score_real_dtype is not None:
+        ctf_half = ctf_half.astype(score_real_dtype)
+        if noise_variance_half is not None:
+            noise_variance_half = noise_variance_half.astype(score_real_dtype)
+    return processed_half, ctf_half, noise_variance_half, translation_phases_half
+
+
+def _norm_inputs(processed_half, noise_variance_half=None, half_weights=None, *, norm_real_dtype=None):
+    if norm_real_dtype is None:
+        return processed_half, noise_variance_half, half_weights
+    norm_complex_dtype = jnp.complex128 if norm_real_dtype == jnp.float64 else jnp.complex64
+    processed_half = processed_half.astype(norm_complex_dtype)
+    if noise_variance_half is not None:
+        noise_variance_half = noise_variance_half.astype(norm_real_dtype)
+    if half_weights is not None:
+        half_weights = half_weights.astype(norm_real_dtype)
+    return processed_half, noise_variance_half, half_weights
+
+
 def process_half_image(
     experiment_dataset,
     batch,
@@ -60,6 +92,10 @@ def preprocess_batch(
     translations,
     config,
     score_with_masked_images=False,
+    *,
+    score_complex_dtype=None,
+    score_real_dtype=None,
+    norm_real_dtype=None,
 ):
     """Preprocess one dense image batch for E-step scoring."""
 
@@ -72,15 +108,31 @@ def preprocess_batch(
         config,
         score_with_masked_images,
     )
-    score_weighted_half = processed_half * ctf_half / noise_variance_half
-    shifted_half = apply_half_translation_phases(score_weighted_half, translation_phases_half)
+    shift_processed_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
+        processed_half,
+        ctf_half,
+        noise_variance_half,
+        translation_phases_half,
+        score_complex_dtype=score_complex_dtype,
+        score_real_dtype=score_real_dtype,
+    )
+    score_weighted_half = shift_processed_half * shift_ctf_half / shift_noise_half
+    shifted_half = apply_half_translation_phases(score_weighted_half, shift_phases_half)
     half_weights = make_half_image_weights(config.image_shape)
+    norm_processed_half, norm_noise_half, norm_half_weights = _norm_inputs(
+        processed_half,
+        noise_variance_half,
+        half_weights,
+        norm_real_dtype=norm_real_dtype,
+    )
     batch_norm = jnp.sum(
-        (jnp.abs(processed_half) ** 2 / noise_variance_half) * half_weights[None, :],
+        (jnp.abs(norm_processed_half) ** 2 / norm_noise_half) * norm_half_weights[None, :],
         axis=-1,
         keepdims=True,
     ).real
-    ctf2_over_nv_half = ctf_half**2 / noise_variance_half
+    weight_ctf_half = shift_ctf_half if score_real_dtype is not None else ctf_half
+    weight_noise_half = shift_noise_half if score_real_dtype is not None else noise_variance_half
+    ctf2_over_nv_half = weight_ctf_half**2 / weight_noise_half
     return shifted_half, batch_norm, ctf2_over_nv_half
 
 
@@ -91,6 +143,9 @@ def prepare_reconstruction_batch(
     noise_variance,
     translations,
     config,
+    *,
+    score_complex_dtype=None,
+    score_real_dtype=None,
 ):
     """Preprocess one dense image batch for the unmasked M-step path."""
 
@@ -103,7 +158,18 @@ def prepare_reconstruction_batch(
         config,
         False,
     )
-    return apply_half_translation_phases(processed_half * ctf_half / noise_variance_half, translation_phases_half)
+    shift_processed_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
+        processed_half,
+        ctf_half,
+        noise_variance_half,
+        translation_phases_half,
+        score_complex_dtype=score_complex_dtype,
+        score_real_dtype=score_real_dtype,
+    )
+    return apply_half_translation_phases(
+        shift_processed_half * shift_ctf_half / shift_noise_half,
+        shift_phases_half,
+    )
 
 
 def preprocess_batch_firstiter_cc(
@@ -115,6 +181,10 @@ def preprocess_batch_firstiter_cc(
     config,
     score_with_masked_images=False,
     window_indices=None,
+    *,
+    score_complex_dtype=None,
+    score_real_dtype=None,
+    norm_real_dtype=None,
 ):
     """Preprocess one dense image batch for RELION's iter-1 normalized CC scoring.
 
@@ -148,18 +218,33 @@ def preprocess_batch_firstiter_cc(
     # `Fimg * CTF * shift` directly here to match RELION's path and avoid the
     # 1/CTF inversion at low-CTF pixels (which was thresholded to 0 below
     # |CTF|<1e-8 and could lose precision near the threshold).
-    shifted_half = apply_half_translation_phases(
-        processed_half * ctf_half,
-        translation_phases_half,
+    shift_processed_half, shift_ctf_half, _, shift_phases_half = _cast_shift_inputs(
+        processed_half,
+        ctf_half,
+        translation_phases_half=translation_phases_half,
+        score_complex_dtype=score_complex_dtype,
+        score_real_dtype=score_real_dtype,
     )
-    abs2_half = jnp.abs(processed_half) ** 2
+    shifted_half = apply_half_translation_phases(
+        shift_processed_half * shift_ctf_half,
+        shift_phases_half,
+    )
+    norm_processed_half, _, _ = _norm_inputs(
+        processed_half,
+        norm_real_dtype=norm_real_dtype,
+    )
+    abs2_half = jnp.abs(norm_processed_half) ** 2
     if window_indices is not None:
         windowed_abs2 = abs2_half[:, window_indices]
         image_power = jnp.sum(windowed_abs2, axis=-1, keepdims=True).real
     else:
         image_power = jnp.sum(abs2_half, axis=-1, keepdims=True).real
-    ctf2_half = ctf_half**2
-    ctf2_over_nv_half = ctf2_half / noise_variance_half
+    weight_ctf_half = shift_ctf_half if score_real_dtype is not None else ctf_half
+    weight_noise_half = (
+        noise_variance_half.astype(score_real_dtype) if score_real_dtype is not None else noise_variance_half
+    )
+    ctf2_half = weight_ctf_half**2
+    ctf2_over_nv_half = ctf2_half / weight_noise_half
     return shifted_half, image_power, ctf2_half, ctf2_over_nv_half
 
 
