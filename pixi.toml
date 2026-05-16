@@ -49,7 +49,6 @@ typing_extensions = "*"
 
 # profiling
 nvtx = ">=0.2.13"
-psutil = "*"
 
 # Testing
 pytest = ">=8.0"
