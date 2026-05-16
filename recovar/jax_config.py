@@ -9,24 +9,35 @@ import os
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", ".90")
 
-# Robustness: when XLA picks a Triton GEMM and its autotuner can't find a
-# valid config (common on MIG slices, smaller GPUs, and uncommon einsum
-# shapes), fall back to cuBLAS automatically instead of failing with
-# "No valid config found". Triton GEMM is otherwise faster on full A100/
-# H100, so we keep it enabled and only force the fallback.
+# Robustness: when XLA picks a Triton GEMM and its autotuner can't find
+# a valid config (observed on MIG 3g.40gb slices for the
+# (P=20100, n_pcs=200, n_pcs=200) float32 cross_terms einsum in
+# compute_projected_covariance, slurm 8279410), the run errors out
+# with "No valid config found!".
 #
-# See:
+# ``--xla_gpu_cublas_fallback=true`` was tried (slurm 8287256) and did
+# NOT recover — that flag only kicks in for *performance* fallback
+# (cuBLAS when faster), not for *failure* fallback. To handle the
+# autotuner failure we have to disable Triton GEMM entirely so XLA
+# emits cuBLAS calls directly.
+#
+# Triton GEMM is typically 0-20% faster than cuBLAS for recovar's
+# matmul shapes on full A100/H100; we trade that small win for
+# cross-device robustness (MIG slices, smaller GPUs, exotic shapes).
+# Recovar's primary bottleneck is FFTs and the custom CUDA backproject
+# kernel, not the float32 gemm in proj-cov, so the perf cost is small.
+#
+# Users on full GPUs who want the Triton speed-up can re-enable it
+# via ``XLA_FLAGS=--xla_gpu_enable_triton_gemm=true`` before launching.
+#
+# References:
 #   https://github.com/NVIDIA/JAX-Toolbox/issues/317
 #   https://github.com/google-deepmind/alphafold3/issues/240
 #   https://docs.jax.dev/en/latest/gpu_performance_tips.html
-#
-# Triggered by recovar's compute_projected_covariance:
-#   jit(_reduce_covariance_inner_explicit)/bpk,bpl->pkl/dot_general
-# which produces a (P, n_pcs, n_pcs) float32 tensor (P = n_pcs(n_pcs+1)/2).
 _existing_flags = os.environ.get("XLA_FLAGS", "")
-if "xla_gpu_cublas_fallback" not in _existing_flags:
-    fallback_flag = "--xla_gpu_cublas_fallback=true"
-    os.environ["XLA_FLAGS"] = f"{_existing_flags} {fallback_flag}".strip() if _existing_flags else fallback_flag
+if "xla_gpu_enable_triton_gemm" not in _existing_flags:
+    triton_off = "--xla_gpu_enable_triton_gemm=false"
+    os.environ["XLA_FLAGS"] = f"{_existing_flags} {triton_off}".strip() if _existing_flags else triton_off
 
 import jax
 
