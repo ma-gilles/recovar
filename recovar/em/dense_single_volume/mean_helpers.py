@@ -321,12 +321,18 @@ def _reconstruct_and_postprocess_means(
     relion_firstiter_cc_this_iter: bool,
     relion_firstiter_ini_high_angstrom,
     relion_width_mask_edge: int,
+    relion_fmask_edge: int,
 ) -> None:
     """Run one iteration's regularized reconstruction + post-processing.
 
     Mutates ``means`` in place. Performs Wiener reconstruction (per-class for
     K>1, per-half for K=1), optional pre-mask debug dump, RELION solvent
     flatten, and iter-1 firstiter_cc low-pass filter.
+
+    ``relion_width_mask_edge`` is the real-space mask edge (RELION's
+    ``--maskedge`` = 5). ``relion_fmask_edge`` is the Fourier mask edge for
+    the iter-1 ``ini_high`` low-pass filter (RELION's ``WIDTH_FMASK_EDGE`` = 2).
+    Mixing the two produces a softer Fourier filter than RELION applies.
     """
 
     _t_recon = time.time()
@@ -416,7 +422,7 @@ def _reconstruct_and_postprocess_means(
                             volume_shape,
                             cryo.voxel_size,
                             relion_firstiter_ini_high_angstrom,
-                            filter_edgewidth=relion_width_mask_edge,
+                            filter_edgewidth=relion_fmask_edge,
                         )
                         for class_idx in range(n_classes)
                     ],
@@ -428,7 +434,7 @@ def _reconstruct_and_postprocess_means(
                     volume_shape,
                     cryo.voxel_size,
                     relion_firstiter_ini_high_angstrom,
-                    filter_edgewidth=relion_width_mask_edge,
+                    filter_edgewidth=relion_fmask_edge,
                 )
     if relion_firstiter_cc_this_iter and relion_firstiter_ini_high_angstrom is not None:
         logger.info(

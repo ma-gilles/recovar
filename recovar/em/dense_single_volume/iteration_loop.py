@@ -1366,6 +1366,12 @@ def _run_relion_iteration_loop(
     # edge-taper mask (window_mask(D, 0.85, 0.99)) is too tight — it tapers
     # at 54 px vs RELION's 64 px for a 128-px box.
     RELION_WIDTH_MASK_EDGE = 5
+    # Width of the Fourier-mask raised-cosine for ``initialLowPassFilterReferences``
+    # / ``ini_high`` (RELION's ``WIDTH_FMASK_EDGE`` macro at
+    # ``ml_optimiser.h:91``). This is a Fourier-shell width, NOT to be conflated
+    # with the real-space ``--maskedge`` mask edge above. They have different
+    # semantic units and different RELION defaults (2 vs 5).
+    RELION_WIDTH_FMASK_EDGE = 2
 
     for ds in experiment_datasets:
         backend = _image_backend(ds)
@@ -2978,6 +2984,7 @@ def _run_relion_iteration_loop(
             relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
             relion_firstiter_ini_high_angstrom=relion_firstiter_ini_high_angstrom,
             relion_width_mask_edge=RELION_WIDTH_MASK_EDGE,
+            relion_fmask_edge=RELION_WIDTH_FMASK_EDGE,
         )
         _parity_dump.mark_stage(iteration, "recon")
 

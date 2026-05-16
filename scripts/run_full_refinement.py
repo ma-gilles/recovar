@@ -173,13 +173,29 @@ def _load_relion_max_significants(optimiser_star_path):
 
 
 def _parse_relion_tau2_fudge(text):
-    """Extract RELION's tau2_fudge from an optimiser STAR text block."""
-    match = re.search(r"_(?:rlnTau2FudgeFactor|rlnTau2FudgeArg)\s+(\S+)", text)
-    if match is None:
-        match = re.search(r"(?:rlnTau2FudgeFactor|rlnTau2FudgeArg)\s+(\S+)", text)
+    """Extract RELION's tau2_fudge from a model or optimiser STAR text block.
+
+    ``_rlnTau2FudgeFactor`` (model.star) is the value RELION actually used.
+    ``_rlnTau2FudgeArg`` (optimiser.star) is the user's --tau2_fudge CLI
+    value, or -1 when the user did not pass --tau2_fudge (RELION binary
+    default kicks in: 1.0 for auto-refine, 4.0 for Class3D). Passing -1
+    downstream inverts the Wiener regularization (``inv_tau = 1 /
+    (pf^3 * tau2_fudge * tau)``) — that produces a corrupt iter-1
+    reconstruction and collapses iter-2+ ``ave_Pmax`` even though iter-1
+    Pmax is at RELION parity. Prefer ``Factor`` over ``Arg`` and treat
+    a non-positive ``Arg`` as "unset" so ``_resolve_tau2_fudge`` falls
+    back to the K-class default.
+    """
+    match = re.search(r"_?rlnTau2FudgeFactor\s+(\S+)", text)
+    if match is not None:
+        return float(match.group(1))
+    match = re.search(r"_?rlnTau2FudgeArg\s+(\S+)", text)
     if match is None:
         return None
-    return float(match.group(1))
+    val = float(match.group(1))
+    if val <= 0.0:
+        return None
+    return val
 
 
 def _resolve_tau2_fudge(n_classes, cli_tau2_fudge, relion_init_tau2_fudge):
@@ -659,6 +675,20 @@ def main():
         "auto_refine 3D-Auto-refine uses Gaussian scoring at iter 1 by default).",
     )
     parser.add_argument(
+        "--apply-initial-lowpass",
+        dest="apply_initial_lowpass",
+        action="store_true",
+        default=False,
+        help="Apply RELION's ``initialLowPassFilterReferences`` to the init "
+        "reference at ``--init_resolution`` before iter-1 expectation. "
+        "RELION's ml_optimiser.cpp::initialLowPassFilterReferences runs "
+        "whenever ``--ini_high > 0`` regardless of --firstiter_cc. recovar "
+        "previously only mirrored that under --firstiter_cc, which left an "
+        "iter-1 reconstruction gap on K=1 auto-refine fixtures built with "
+        "``--ini_high 30`` and no ``--firstiter_cc``. Default off for backward "
+        "compatibility; turn on for RELION-parity runs against such fixtures.",
+    )
+    parser.add_argument(
         "--n_classes",
         type=int,
         default=1,
@@ -806,6 +836,37 @@ def main():
     # at low frequencies.
     from recovar.utils.helpers import load_mrc as _load_mrc
 
+    # RELION's ``initialLowPassFilterReferences`` (ml_optimiser.cpp:3556) low-
+    # pass-filters mymodel.Iref in place at startup, gated only on
+    # ``ini_high > 0`` (not on ``--firstiter_cc``). With ``--apply-initial-
+    # lowpass``, mirror that behavior: apply LP at ``--init_resolution`` to
+    # the reference before iter-1 expectation. The Fourier mask edge is
+    # RELION's ``WIDTH_FMASK_EDGE = 2`` (see ml_optimiser.h:91), NOT the
+    # real-space ``--maskedge = 5`` — those are distinct quantities.
+    _RELION_FMASK_EDGE = 2
+
+    def _apply_ini_high_lowpass(vol_ft_flat, volume_shape, voxel_size, ini_high):
+        from recovar.heterogeneity.locres import low_pass_filter_map
+
+        return np.asarray(
+            low_pass_filter_map(
+                jnp.asarray(vol_ft_flat).reshape(volume_shape),
+                volume_shape[0],
+                float(ini_high),
+                float(voxel_size),
+                int(_RELION_FMASK_EDGE),
+                do_highpass_instead=False,
+                volume_shape=volume_shape,
+            )
+        ).astype(np.complex64).reshape(-1)
+
+    _apply_ini_lowpass = bool(getattr(args, "apply_initial_lowpass", False))
+    _ini_high_for_lowpass = (
+        float(args.init_resolution)
+        if _apply_ini_lowpass and float(args.init_resolution) > 0.0
+        else None
+    )
+
     if args.n_classes == 1:
         init_mrc_path = os.path.join(args.data_dir, "reference_init.mrc")
         init_vol_real = _load_mrc(init_mrc_path).astype(np.float32)
@@ -813,6 +874,14 @@ def main():
             f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
         )
         init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
+        if _ini_high_for_lowpass is not None:
+            init_vol_ft = _apply_ini_high_lowpass(
+                init_vol_ft, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
+            )
+            logger.info(
+                "Applied RELION initialLowPassFilterReferences to init reference: ini_high=%.2f A, fmask_edge=%d shells",
+                _ini_high_for_lowpass, _RELION_FMASK_EDGE,
+            )
         logger.info("Initial volume loaded: shape=%s", init_vol_real.shape)
     else:
         if args.init_class_volumes:
@@ -830,8 +899,17 @@ def main():
                 f"Class {k + 1} volume shape mismatch at {p}: {vol_real.shape} vs {ds.volume_shape}"
             )
             vol_ft = np.array(ftu.get_dft3(jnp.asarray(vol_real))).astype(np.complex64).reshape(-1)
+            if _ini_high_for_lowpass is not None:
+                vol_ft = _apply_ini_high_lowpass(
+                    vol_ft, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
+                )
             per_class_ft.append(vol_ft)
             logger.info("Class %d initial volume loaded from %s", k + 1, p)
+        if _ini_high_for_lowpass is not None:
+            logger.info(
+                "Applied RELION initialLowPassFilterReferences to %d init references: ini_high=%.2f A, fmask_edge=%d shells",
+                args.n_classes, _ini_high_for_lowpass, _RELION_FMASK_EDGE,
+            )
         # Stack to (K, V); refine_single_volume._normalize_initial_means handles the
         # per-half broadcast.
         init_vol_ft = np.stack(per_class_ft, axis=0)
@@ -967,15 +1045,26 @@ def main():
                 utils.make_radial_image(_relion_tau2, ds.volume_shape, extend_last_frequency=True)
             ).reshape(-1)
             logger.info("STRICT-PARITY: replaced bootstrapped tau2 with RELION it000 spectrum (K=1)")
-        # Tau2 fudge factor + sigma_offset from optimiser.star.
+        # Tau2 fudge factor: prefer _rlnTau2FudgeFactor from model.star
+        # (the actual value RELION used) over _rlnTau2FudgeArg from
+        # optimiser.star (the CLI flag, which is -1 when the user did not
+        # pass --tau2_fudge and RELION applied the binary default).
+        _it0_model_text = _it0_model_path.read_text()
+        relion_init_tau2_fudge = _parse_relion_tau2_fudge(_it0_model_text)
+        if relion_init_tau2_fudge is not None:
+            logger.info(
+                "STRICT-PARITY: tau2_fudge from RELION it000 model.star: %.3f",
+                relion_init_tau2_fudge,
+            )
         if _it0_optim_path.exists():
             _opt_text = _it0_optim_path.read_text()
-            relion_init_tau2_fudge = _parse_relion_tau2_fudge(_opt_text)
-            if relion_init_tau2_fudge is not None:
-                logger.info(
-                    "STRICT-PARITY: --tau2_fudge override from RELION it000 optimiser: %.3f",
-                    relion_init_tau2_fudge,
-                )
+            if relion_init_tau2_fudge is None:
+                relion_init_tau2_fudge = _parse_relion_tau2_fudge(_opt_text)
+                if relion_init_tau2_fudge is not None:
+                    logger.info(
+                        "STRICT-PARITY: --tau2_fudge override from RELION it000 optimiser: %.3f",
+                        relion_init_tau2_fudge,
+                    )
             _m_so = _re.search(r"_rlnSigmaOffsetsAngst\s+(\S+)", _opt_text)
             if _m_so is not None:
                 relion_init_sigma_offset_angstrom = float(_m_so.group(1))

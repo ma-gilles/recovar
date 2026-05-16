@@ -82,6 +82,41 @@ def test_relion_tau2_fudge_parser_accepts_factor_label():
     assert _parse_relion_tau2_fudge(text) == pytest.approx(1.0)
 
 
+def test_relion_tau2_fudge_parser_maps_arg_negative_one_to_none():
+    """RELION's ``_rlnTau2FudgeArg=-1`` (in optimiser.star) is the sentinel
+    for "user did not pass --tau2_fudge". RELION's ml_optimiser.cpp:881-882
+    resolves it as ``tau2_fudge_factor = tau2_fudge_arg > 0 ? arg : 1``,
+    i.e. -1 → 1.0 (the auto-refine binary default; Class3D's 4.0 comes from
+    the GUI which always passes --tau2_fudge 4.0 — see
+    pipeline_jobs.cpp::initialiseClass3DJob). The recovar parser must
+    return None so _resolve_tau2_fudge falls back to the K-class default.
+    Passing -1 downstream inverts the Wiener regularization
+    (``inv_tau = 1 / (pf^3 * tau2_fudge * tau)`` becomes negative) which
+    corrupts iter-1's reconstruction and collapses iter-2+ ave_Pmax —
+    diagnosed on K=1 100k/256 replay job 8255968 (iter1 Pmax=0.94 at
+    RELION parity, then iter2=0.32 vs RELION 0.98)."""
+    text = """
+data_optimiser_general
+
+_rlnDoSplitRandomHalves                                  1
+_rlnTau2FudgeArg                                          -1.000000
+"""
+    assert _parse_relion_tau2_fudge(text) is None
+
+
+def test_relion_tau2_fudge_parser_prefers_factor_over_arg():
+    """When both labels appear in the same text (combined parse), the
+    Factor field from model.star is authoritative (actual value used)
+    while Arg from optimiser.star is just the CLI input. RELION never
+    writes both into the same file, but the parser must still prefer
+    Factor to be robust."""
+    text = """
+_rlnTau2FudgeFactor 1.000000
+_rlnTau2FudgeArg    -1.000000
+"""
+    assert _parse_relion_tau2_fudge(text) == pytest.approx(1.0)
+
+
 def test_tau2_fudge_resolver_matches_relion_mode_defaults():
     assert _resolve_tau2_fudge(1, None, None) == (1.0, "RELION auto-refine default")
     assert _resolve_tau2_fudge(4, None, None) == (4.0, "RELION Class3D default")

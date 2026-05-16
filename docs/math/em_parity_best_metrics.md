@@ -23,13 +23,12 @@ least 256x256 images, compared against RELION for accuracy and speed.
 
 ## Accepted Best Runs
 
-No accepted >=100k, >=256x256 completion benchmark has been recorded in this
-ledger yet.
-
 | Case | Date | Commit | Fixture | Particles | Box | RELION baseline | RECOVAR run | Accuracy status | Speed status | Notes |
 |------|------|--------|---------|-----------|-----|-----------------|-------------|-----------------|--------------|-------|
-| K=1 | pending | pending | pending | >=100k | >=256 | pending | pending | pending | pending | Populate after the first accepted completion benchmark. |
-| K=4 | pending | pending | pending | >=100k | >=256 | pending | pending | pending | pending | Populate after the first accepted completion benchmark. |
+| K=1 os=0 strict | 2026-05-16 | a2108b77 + tau2_fudge fix (uncommitted) | pdb_k1_g256_n100000_completion_20260512_171123 (noise=0.001 bf=0) | 100k | 256³ | relion_autorefine_k1_it015_os0_bayes_clean9d9, wall ~17h | job 8280489, wall 74398s = 20:39h | **machine-precision parity** (recovar↔RELION FSC = 1.0 in first 30 shells; merged corr 0.999802) — same | 1.21× slower — worse | Strict no-oversampling regime; noise=0.001 fixture saturates vs GT (both RELION and recovar 0.7829 corr vs GT) |
+| K=4 Class3D | 2026-05-16 | a2108b77 + tau2_fudge fix (uncommitted) | ribosembly_k4_g256_n100000_completion_20260512_171123 (noise=1.0 bf=80) | 100k | 256³ | relion_class3d_k4_it015_clean9d9, wall 2h09m | job 8290126, wall 23133s = 6h26m | mean per-class corr **0.9943**, worst 0.9934, no class permutation; FSC vs RELION never drops below 0.143 — close to parity but **recovar outperforms RELION ~1-2Å @0.5 vs GT** (parity smell — investigate post-processing) | 3.0× slower — worse | Realistic-noise fixture; recovar map quality matches but slightly diverges from RELION's exact output |
+| K=1 os=1 (GUI default, noise=0.001) | running | — | pdb_k1_g256_n100000_completion_20260512_171123 | 100k | 256³ | relion_autorefine_k1_it015_os1_redo (8290127 partial, 16 iters, res=4.28A converged) | job 8312443 (running) | pending | pending | adaptive 2-pass; final maps pending |
+| K=1 os=1 (noise=1.0 bf=80) | pending | — | pdb_k1_g256_n100000_noise1_bf80_20260516 (generated 2026-05-16, job 8313939, 5:16) | 100k | 256³ | job 8314160 (pending) | job 8314161 (chained) | pending | pending | New realistic-noise K=1 fixture matching K=4's noise regime |
 
 ## Required Metric Template
 
