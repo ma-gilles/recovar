@@ -74,6 +74,31 @@ def _npz_scalar_to_float(npz, key):
     return float(np.asarray(npz[key]))
 
 
+def _pose_history_half_arrays(iter_entry, *, dtype=np.float32):
+    if iter_entry is None:
+        return None
+    if not isinstance(iter_entry, (list, tuple)):
+        return [np.asarray(iter_entry, dtype=dtype)]
+    return [None if arr is None else np.asarray(arr, dtype=dtype) for arr in iter_entry]
+
+
+def _pose_history_by_image(iter_entry, half_indices, n_images, trailing_shape, *, dtype=np.float32):
+    half_arrays = _pose_history_half_arrays(iter_entry, dtype=dtype)
+    if half_arrays is None or all(arr is None for arr in half_arrays):
+        return None
+    out = np.full((int(n_images), *trailing_shape), np.nan, dtype=dtype)
+    for half_idx, arr in zip(half_indices, half_arrays):
+        if arr is None:
+            continue
+        half_idx = np.asarray(half_idx, dtype=np.int64)
+        if arr.shape[0] != half_idx.shape[0]:
+            raise ValueError(
+                f"Pose history length {arr.shape[0]} does not match half-set index length {half_idx.shape[0]}"
+            )
+        out[half_idx] = arr
+    return out
+
+
 def _read_timing_npz(npz_path: Path) -> dict:
     with np.load(npz_path, allow_pickle=False) as npz:
         row = {
@@ -650,6 +675,14 @@ def main():
         "<data_dir>/reference_init_class00{1..K}.mrc when omitted.",
     )
     parser.add_argument(
+        "--init_volume",
+        default=None,
+        help=(
+            "Initial reference volume for K=1. Defaults to "
+            "<data_dir>/reference_init.mrc when omitted."
+        ),
+    )
+    parser.add_argument(
         "--timing_dir",
         default=None,
         help=(
@@ -765,13 +798,13 @@ def main():
     if args.n_classes < 1:
         raise SystemExit(f"--n_classes must be >= 1, got {args.n_classes}")
     if args.n_classes == 1:
-        init_mrc_path = os.path.join(args.data_dir, "reference_init.mrc")
+        init_mrc_path = args.init_volume or os.path.join(args.data_dir, "reference_init.mrc")
         init_vol_real = _load_mrc(init_mrc_path).astype(np.float32)
         assert init_vol_real.shape == ds.volume_shape, (
             f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
         )
         init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
-        logger.info("Initial volume loaded: shape=%s", init_vol_real.shape)
+        logger.info("Initial volume loaded from %s: shape=%s", init_mrc_path, init_vol_real.shape)
     else:
         if args.init_class_volumes:
             class_paths = [p.strip() for p in args.init_class_volumes.split(",")]
@@ -1156,6 +1189,44 @@ def main():
     if "pmax_per_image_history" in result:
         for i, pmax in enumerate(result["pmax_per_image_history"]):
             save_dict[f"pmax_per_image_iter_{i:03d}"] = np.asarray(pmax, dtype=np.float32)
+
+    half_indices = [
+        np.asarray(half1_idx, dtype=np.int64),
+        np.asarray(half2_idx, dtype=np.int64),
+    ]
+    for i, iter_eulers in enumerate(result.get("best_rotation_eulers_history", [])):
+        half_arrays = _pose_history_half_arrays(iter_eulers, dtype=np.float32)
+        if half_arrays is None or all(arr is None for arr in half_arrays):
+            continue
+        compact = []
+        for k, arr in enumerate(half_arrays):
+            if arr is None:
+                continue
+            save_dict[f"best_rotation_eulers_iter_{i:03d}_half{k}"] = arr
+            compact.append(arr)
+        if compact:
+            save_dict[f"best_rotation_eulers_iter_{i:03d}"] = np.concatenate(compact, axis=0)
+        by_image = _pose_history_by_image(iter_eulers, half_indices, n_images, (3,), dtype=np.float32)
+        if by_image is not None:
+            save_dict[f"best_rotation_eulers_by_image_iter_{i:03d}"] = by_image
+            save_dict["best_rotation_eulers_final_by_image"] = by_image
+
+    for i, iter_trans in enumerate(result.get("best_translations_history", [])):
+        half_arrays = _pose_history_half_arrays(iter_trans, dtype=np.float32)
+        if half_arrays is None or all(arr is None for arr in half_arrays):
+            continue
+        compact = []
+        for k, arr in enumerate(half_arrays):
+            if arr is None:
+                continue
+            save_dict[f"best_translations_iter_{i:03d}_half{k}"] = arr
+            compact.append(arr)
+        if compact:
+            save_dict[f"best_translations_iter_{i:03d}"] = np.concatenate(compact, axis=0)
+        by_image = _pose_history_by_image(iter_trans, half_indices, n_images, (2,), dtype=np.float32)
+        if by_image is not None:
+            save_dict[f"best_translations_by_image_iter_{i:03d}"] = by_image
+            save_dict["best_translations_final_by_image"] = by_image
 
     # Save final merged volume (Fourier space)
     save_dict["final_mean_ft"] = np.asarray(result["mean"])

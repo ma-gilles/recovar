@@ -252,6 +252,34 @@ def loading_row_norm_variance_prior(
     return np.repeat(prior[:, None], columns.shape[1], axis=1).astype(np.float32)
 
 
+def pipeline_variance_W_prior(
+    pipeline_variance_half: np.ndarray,
+    *,
+    q: int,
+    divide_by_q: bool = True,
+    floor: float = 0.0,
+    scale: float = 1.0,
+) -> np.ndarray:
+    """Wrap a pipeline-saved per-half-voxel (or per-shell) signal variance into a W prior.
+
+    The recovar pipeline saves per-Fourier-voxel signal-variance arrays in
+    ``params.pkl['variance_est']`` (``'prior'`` and ``'combined'`` keys). When
+    re-exported into a PPCA init NPZ by ``prepare_ppca_init_from_pipeline_output_v2.py``
+    the array is already flattened in half-spectrum order and matches the EM
+    refinement's per-voxel W prior layout. To produce the ``(half_size, q)``
+    array the M-step expects, we repeat the same prior across q columns. By
+    default the per-PC variance budget is the total signal variance divided
+    by q so that ``sum_k |W[xi, k]|^2`` matches the pipeline's estimate.
+    """
+    arr = np.asarray(pipeline_variance_half, dtype=np.float64).reshape(-1)
+    if divide_by_q and q > 0:
+        arr = arr / float(q)
+    arr = arr * float(scale)
+    if floor > 0.0:
+        arr = np.maximum(arr, float(floor))
+    return np.repeat(arr.astype(np.float32)[:, None], int(q), axis=1)
+
+
 def volume_power_variance_prior(
     volume: np.ndarray,
     *,

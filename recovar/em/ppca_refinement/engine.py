@@ -69,6 +69,10 @@ class PosteriorDiagnostics(NamedTuple):
     best_log_score_per_image: jax.Array
     rotation_posterior_sums: jax.Array
     max_posterior_per_image: jax.Array
+    top_rotation_idx: jax.Array
+    top_translation_idx: jax.Array
+    top_log_score_per_image: jax.Array
+    top_posterior_per_image: jax.Array
 
 
 class DenseScoreStats(NamedTuple):
@@ -78,6 +82,27 @@ class DenseScoreStats(NamedTuple):
     best_log_score_per_image: jax.Array
     best_rotation_idx: jax.Array
     best_translation_idx: jax.Array
+
+
+class DenseScoreTensorStats(NamedTuple):
+    """Score tensor plus scalar summaries for one dense PPCA pose block."""
+
+    score: jax.Array
+    logZ: jax.Array
+    best_log_score_per_image: jax.Array
+    best_rotation_idx: jax.Array
+    best_translation_idx: jax.Array
+
+
+def _top_pose_diagnostics_from_score_flat(score_flat, logZ, n_rot: int, top_pose_count: int):
+    """Return top-k pose diagnostics for a flattened ``(translation, rotation)`` score axis."""
+
+    k = max(1, min(int(top_pose_count), int(score_flat.shape[-1])))
+    top_scores, top_flat = jax.lax.top_k(score_flat, k)
+    top_rot = (top_flat % int(n_rot)).astype(jnp.int32)
+    top_trans = (top_flat // int(n_rot)).astype(jnp.int32)
+    top_prob = jnp.exp(top_scores - jnp.asarray(logZ)[:, None]).astype(jnp.float32)
+    return top_rot, top_trans, top_scores.astype(jnp.float32), top_prob
 
 
 def _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm):
@@ -208,7 +233,7 @@ def _add_pose_log_prior(score, pose_log_prior):
     return score + jnp.swapaxes(jnp.asarray(pose_log_prior), -1, -2)
 
 
-@partial(jax.jit, static_argnames=("significance_threshold",))
+@partial(jax.jit, static_argnames=("significance_threshold", "top_pose_count"))
 def dense_pose_ppca_E_step_blocked(
     Y1,
     proj_aug,
@@ -217,6 +242,7 @@ def dense_pose_ppca_E_step_blocked(
     pose_log_prior=None,
     *,
     significance_threshold: float = 1e-3,
+    top_pose_count: int = 1,
 ):
     """Run a dense PPCA E-step on one static block.
 
@@ -244,6 +270,12 @@ def dense_pose_ppca_E_step_blocked(
     gamma = jnp.exp(score - logZ[:, None, None])
     best_flat = jnp.argmax(score_flat, axis=-1)
     pmax = jnp.max(gamma.reshape(B, T * R), axis=-1)
+    top_rot, top_trans, top_scores, top_prob = _top_pose_diagnostics_from_score_flat(
+        score_flat,
+        logZ,
+        R,
+        top_pose_count,
+    )
     diagnostics = PosteriorDiagnostics(
         logZ=logZ,
         pmax=pmax,
@@ -253,6 +285,10 @@ def dense_pose_ppca_E_step_blocked(
         best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
         rotation_posterior_sums=jnp.sum(gamma, axis=(0, 1)).astype(jnp.float32),
         max_posterior_per_image=pmax,
+        top_rotation_idx=top_rot,
+        top_translation_idx=top_trans,
+        top_log_score_per_image=top_scores,
+        top_posterior_per_image=top_prob,
     )
     alpha_aug_acc = jnp.einsum("btr,btrp->bp", gamma.astype(alpha.dtype), alpha)
     G_aug_tri_acc = jnp.einsum("btr,btrk->bk", gamma.astype(G_tri.dtype), G_tri)
@@ -293,6 +329,42 @@ def dense_pose_ppca_score_stats_blocked(
     )
 
 
+@jax.jit
+def dense_pose_ppca_score_tensor_stats_blocked(
+    Y1,
+    proj_aug,
+    ctf2_over_noise,
+    y_norm,
+    pose_log_prior=None,
+):
+    """Return the full score tensor and score summaries for one dense block."""
+
+    B, T, _F = jnp.asarray(Y1).shape
+    R, _P, _ = jnp.asarray(proj_aug).shape
+    if pose_log_prior is not None and jnp.asarray(pose_log_prior).shape != (B, R, T):
+        raise ValueError(f"pose_log_prior shape {jnp.asarray(pose_log_prior).shape} != ({B}, {R}, {T})")
+    y_stats = _per_pose_stats_block(
+        jnp.asarray(Y1),
+        jnp.asarray(proj_aug),
+        jnp.asarray(ctf2_over_noise),
+        jnp.asarray(y_norm),
+    )
+    score_pre, _alpha, _G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
+        *y_stats,
+        return_moments=False,
+    )
+    score = _add_pose_log_prior(score_pre, pose_log_prior)
+    score_flat = score.reshape(B, T * R)
+    best_flat = jnp.argmax(score_flat, axis=-1)
+    return DenseScoreTensorStats(
+        score=score,
+        logZ=jax.scipy.special.logsumexp(score_flat, axis=-1),
+        best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
+        best_rotation_idx=(best_flat % R).astype(jnp.int32),
+        best_translation_idx=(best_flat // R).astype(jnp.int32),
+    )
+
+
 def dense_pose_ppca_logZ_blocked(
     Y1,
     proj_aug,
@@ -318,6 +390,7 @@ def _score_gamma_and_moments(
     pose_log_prior,
     significance_threshold: float,
     normalization_logZ=None,
+    top_pose_count: int = 1,
 ):
     y_stats = _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm)
     score_pre, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
@@ -335,6 +408,12 @@ def _score_gamma_and_moments(
     gamma = jnp.exp(score - logZ[:, None, None])
     best_flat = jnp.argmax(score_flat, axis=-1)
     pmax = jnp.max(gamma.reshape(B, T * R), axis=-1)
+    top_rot, top_trans, top_scores, top_prob = _top_pose_diagnostics_from_score_flat(
+        score_flat,
+        logZ,
+        R,
+        top_pose_count,
+    )
     diagnostics = PosteriorDiagnostics(
         logZ=logZ,
         pmax=pmax,
@@ -344,6 +423,10 @@ def _score_gamma_and_moments(
         best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
         rotation_posterior_sums=jnp.sum(gamma, axis=(0, 1)).astype(jnp.float32),
         max_posterior_per_image=pmax,
+        top_rotation_idx=top_rot,
+        top_translation_idx=top_trans,
+        top_log_score_per_image=top_scores,
+        top_posterior_per_image=top_prob,
     )
     return gamma, alpha, G_tri, diagnostics
 
@@ -519,6 +602,7 @@ def accumulate_pose_ppca_block_cached(
         "backprojection_max_r",
         "image_shape",
         "volume_shape",
+        "top_pose_count",
     ),
 )
 def fused_dense_pose_ppca_block(
@@ -541,6 +625,7 @@ def fused_dense_pose_ppca_block(
     recon_window_indices=None,
     use_recon_window: bool = False,
     backprojection_max_r=None,
+    top_pose_count: int = 1,
 ):
     """Fuse dense PPCA pass 2 with augmented half-volume backprojection.
 
@@ -599,6 +684,7 @@ def fused_dense_pose_ppca_block(
         pose_log_prior,
         significance_threshold,
         normalization_logZ=normalization_logZ,
+        top_pose_count=top_pose_count,
     )
     rhs_dtype = rhs_volume.dtype
     lhs_dtype = lhs_tri_volume.dtype
