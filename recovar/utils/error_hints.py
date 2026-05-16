@@ -401,9 +401,6 @@ def _hint_xla_autotuner_failed(ctx: DiagnosticContext, raw_text: str) -> ErrorHi
         suggestions=[
             'export XLA_FLAGS="$XLA_FLAGS --xla_gpu_autotune_level=0" && recovar pipeline ... '
             "(disables ALL XLA autotuning; ~5-15% slower but eliminates this class of failure)",
-            "OR retry with a slightly different --gpu-gb (the picker may then choose a "
-            "different n_pcs whose shape doesn't trigger the gap)",
-            "OR pass --no-adaptive-n-pcs to keep n_pcs=200 (the most-tested shape)",
         ],
         diagnostic_context=_format_memory_context(ctx),
     )
