@@ -91,6 +91,29 @@ def test_nonmonomial_target_eval_combines_coefficients():
     np.testing.assert_allclose(lpr.evaluate_local_polynomial_target_coefficients(theta), theta[:, 0])
 
 
+def test_local_poly_singular_voxel_solve_uses_min_norm_fallback():
+    class _Dataset:
+        volume_shape = (4, 4, 4)
+
+    cryo = _Dataset()
+    half_volume_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(cryo.volume_shape)))
+    lhs = np.zeros((1, 2, 2, half_volume_size), dtype=np.float32)
+    rhs = np.zeros((1, 2, half_volume_size), dtype=np.complex64)
+
+    coeffs, diagnostics = lpr.solve_local_polynomial_fourier_coefficients(
+        lhs,
+        rhs,
+        cryo,
+        pol_reg_matrices=np.zeros((1, 2, 2), dtype=np.float32),
+        upsampling_factor=1,
+        return_diagnostics=True,
+    )
+
+    assert coeffs.shape == rhs.shape
+    np.testing.assert_allclose(coeffs, 0.0)
+    assert diagnostics[0]["pinv_fallback_voxel_count"] > 0
+
+
 def test_weighted_cholesky_basis_whitens_local_quadrature_cloud():
     latent_diff = np.linspace(-1.0, 1.0, 25).astype(np.float32)
     latent_precision = np.full(latent_diff.shape, 4.0, dtype=np.float32)
