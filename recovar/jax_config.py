@@ -39,6 +39,25 @@ if "xla_gpu_enable_triton_gemm" not in _existing_flags:
     triton_off = "--xla_gpu_enable_triton_gemm=false"
     os.environ["XLA_FLAGS"] = f"{_existing_flags} {triton_off}".strip() if _existing_flags else triton_off
 
+# Persistent JAX compilation cache. Set RECOVAR_JAX_CACHE_DIR or
+# JAX_COMPILATION_CACHE_DIR before import to use a custom path. Disable with
+# RECOVAR_DISABLE_JAX_CACHE=1. Cache contents are large XLA modules keyed by
+# compute graph hash — safe to delete; recovar will rebuild on next run.
+# Measured 2026-05-11: cut K=1 50k/256 4-iter wall from 171s → 75s (56%) on
+# second run by skipping repeated iter-1 JIT compile.
+_jax_cache_disabled = os.environ.get("RECOVAR_DISABLE_JAX_CACHE", "").lower() in {"1", "true", "yes", "on"}
+if not _jax_cache_disabled and not os.environ.get("JAX_COMPILATION_CACHE_DIR"):
+    _default_cache_dir = os.environ.get(
+        "RECOVAR_JAX_CACHE_DIR",
+        os.path.expanduser("~/.cache/recovar/jax_compile"),
+    )
+    os.environ["JAX_COMPILATION_CACHE_DIR"] = _default_cache_dir
+    os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
+    try:
+        os.makedirs(_default_cache_dir, exist_ok=True)
+    except OSError:
+        pass
+
 import jax
 
 jax.config.update("jax_enable_x64", True)

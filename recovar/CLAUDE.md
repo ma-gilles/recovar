@@ -1,5 +1,61 @@
 # RECOVAR Source Code Conventions
 
+## ⚠ Critical conventions — always loaded, do NOT reinvent
+
+Two convention pitfalls that have repeatedly cost days of debugging in
+this repo:
+
+### FFT / MRC volume I/O
+Volumes live FLAT and in **CENTERED Fourier space** (DC at array center).
+Real-space volumes are **CENTERED** (origin at `[N/2, N/2, N/2]`).
+
+Use these helpers in `recovar.utils.helpers` and `recovar.core.fourier_transform_utils`:
+- `load_mrc(path)` / `write_mrc(path, vol)` — recovar/cryoSPARC/cryoDRGN frame
+- `load_relion_volume(path)` — load a RELION MRC, convert to recovar frame
+- `save_volume(flat_ft, path, ...)` — write a flat centered-FT volume
+- `ftu.get_dft3(real)` / `ftu.get_idft3(ft)` — centered 3D FFT pair
+- `ftu.get_dft2` / `ftu.get_idft2` — centered 2D FFT pair
+
+NEVER write raw `np.fft.fftn(np.fft.ifftshift(...))` or raw
+`mrcfile.open(...).data` for 3D volumes — these omit the
+`(2, 1, 0)` axis transpose AND/OR an outer `fftshift`, silently
+corrupting projections (DC reads as Nyquist, ~2400× amplitude error
+at low frequencies).
+
+### RELION ↔ recovar volume axis flip
+recovar and RELION use different real-space axis conventions:
+```python
+vol_recovar = -np.transpose(vol_relion, (2, 1, 0))   # negate + swap X<->Z
+```
+The negation is paired with `R_to_relion` / `R_from_relion`; both are
+correct as written. Do NOT "fix" them.
+
+When loading a **RELION-produced** MRC for FSC against a recovar
+reconstruction, use `load_relion_volume(path)`, NOT `load_mrc(path)` —
+the latter is for recovar/cryoSPARC frame and leaves RELION volumes in
+the wrong frame, producing FSC ≈ 0 against the matching recovar volume.
+
+`tests/unit/test_relion_volume_convention.py` pins all these helpers and
+will fail loudly if any future PR removes one of them. **Do not skip
+fixing the test if it breaks** — that test exists because the helpers
+were silently deleted in commit 4703c634 (2026-04-01) and the
+documentation in `recovar/em/CLAUDE.md` was left referencing them, which
+cost ~25 wasted commits over the next year (see
+`docs/relion_parity_commit_audit.md`).
+
+## Subdirectory developer guides (loaded lazily on file read)
+
+The recovar repo has module-specific CLAUDE.md files that load only
+when Claude reads a file in the corresponding subtree. Read them
+explicitly if a task spans multiple modules without touching their
+files:
+- `recovar/em/CLAUDE.md` — EM module: RELION-parity plan, engine
+  performance, more on the volume conventions, test rules
+- `recovar/cuda/CLAUDE.md` — CUDA kernel coordinate convention (k0=row,
+  k1=col), build via pixi, JAX FFI headers
+- `recovar/gui_v2/CLAUDE.md` — GUI v2 architecture
+- `tests/CLAUDE.md` — test conventions, baseline rules
+
 ## JAX / Equinox Patterns
 
 ### Static vs Dynamic

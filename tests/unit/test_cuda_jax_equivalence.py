@@ -152,6 +152,114 @@ def test_project_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
     )
 
 
+@pytest.mark.parametrize("order,half_vol,half_img", _ALL_COMBOS)
+@pytest.mark.parametrize("N", [16, 32])
+def test_project_indexed_matches_full_project_gather(order, half_vol, half_img, N, gpu_device):
+    """Indexed CUDA project must match full CUDA project gathered at the same pixels."""
+    _skip_if_no_cuda()
+    from recovar.cuda_backproject import project, project_indexed
+    import recovar.core.fourier_transform_utils as ftu
+
+    rng = np.random.default_rng(2026)
+    n_images = 7
+    image_shape = (N, N)
+    volume_shape = (N, N, N)
+    n_pixels = N * (N // 2 + 1) if half_img else N * N
+    # Include boundary and interior pixels, intentionally unsorted, to verify
+    # compact output order follows the caller's index order.
+    pixel_indices = np.array(
+        [0, n_pixels - 1, n_pixels // 2, 3, min(17, n_pixels - 1), max(0, n_pixels - 5)],
+        dtype=np.int32,
+    )
+
+    rots = jnp.array(_random_rotations(n_images, rng))
+    if half_vol:
+        vol_real = jnp.array(rng.standard_normal(volume_shape).astype(np.float32))
+        vol_full = ftu.get_dft3(vol_real).ravel()
+        vol = ftu.full_volume_to_half_volume(vol_full.reshape(volume_shape), volume_shape).ravel()
+    else:
+        vol = jnp.array((rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64))
+
+    with jax.default_device(gpu_device):
+        vol_gpu = jax.device_put(vol)
+        rots_gpu = jax.device_put(rots)
+        idx_gpu = jax.device_put(jnp.asarray(pixel_indices, dtype=jnp.int32))
+        full = project(
+            vol_gpu,
+            rots_gpu,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_vol,
+            half_image=half_img,
+            max_r=None,
+        )
+        indexed = project_indexed(
+            vol_gpu,
+            idx_gpu,
+            rots_gpu,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_vol,
+            half_image=half_img,
+            max_r=None,
+        )
+
+    np.testing.assert_allclose(
+        np.asarray(indexed),
+        np.asarray(full)[:, pixel_indices],
+        atol=1e-5,
+        rtol=1e-5,
+        err_msg=f"project_indexed != gathered project for order={order}, half_vol={half_vol}, half_img={half_img}",
+    )
+
+
+@pytest.mark.parametrize("half_img", [False, True])
+def test_project_indexed_matches_full_project_gather_with_max_r(half_img, gpu_device):
+    """Indexed projection must preserve the full-projection radius clipping contract."""
+    _skip_if_no_cuda()
+    from recovar.cuda_backproject import project, project_indexed
+
+    rng = np.random.default_rng(2027)
+    N = 32
+    n_images = 4
+    image_shape = (N, N)
+    volume_shape = (N, N, N)
+    n_pixels = N * (N // 2 + 1) if half_img else N * N
+    pixel_indices = np.arange(0, n_pixels, max(1, n_pixels // 13), dtype=np.int32)
+    rots = jnp.array(_random_rotations(n_images, rng))
+    vol = jnp.array((rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64))
+
+    with jax.default_device(gpu_device):
+        vol_gpu = jax.device_put(vol)
+        rots_gpu = jax.device_put(rots)
+        idx_gpu = jax.device_put(jnp.asarray(pixel_indices, dtype=jnp.int32))
+        full = project(
+            vol_gpu,
+            rots_gpu,
+            image_shape,
+            volume_shape,
+            order=1,
+            half_volume=False,
+            half_image=half_img,
+            max_r=8.0,
+        )
+        indexed = project_indexed(
+            vol_gpu,
+            idx_gpu,
+            rots_gpu,
+            image_shape,
+            volume_shape,
+            order=1,
+            half_volume=False,
+            half_image=half_img,
+            max_r=8.0,
+        )
+
+    np.testing.assert_allclose(np.asarray(indexed), np.asarray(full)[:, pixel_indices], atol=1e-5, rtol=1e-5)
+
+
 # ── Backprojection (adjoint): CUDA vs JAX VJP ───────────────────────
 
 

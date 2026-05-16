@@ -13,7 +13,6 @@ from typing import Callable
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 
@@ -182,7 +181,7 @@ def evaluate_ctf(freqs, ctf_params):
     bfactor = ctf_params[:, CTFParamIndex.BFACTOR, None]
     contrast = ctf_params[:, CTFParamIndex.CONTRAST, None]
 
-    lam = 12.2642598 / jnp.sqrt(volt * (1.0 + volt * 9.78475598e-7))
+    lam = 12.2643247 / jnp.sqrt(volt * (1.0 + volt * 0.978466e-6))
 
     # Shared frequency grid — (n_pixels,)
     x = freqs[:, 0]

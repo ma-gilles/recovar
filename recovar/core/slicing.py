@@ -60,17 +60,14 @@ def _resolve_max_r(max_r, image_shape):
 
 
 def _cuda_max_r(max_r, image_shape, volume_shape):
-    """Scale max_r from image coordinates to volume coordinates for CUDA.
+    """Return the image-space max_r expected by the CUDA wrapper.
 
-    The CUDA kernel computes pixel frequencies in volume-space coordinates
-    (scaled by ``upsampling = volume_shape[0] // image_shape[0]``), so
-    ``max_r`` must be scaled to match.  The JAX ``relion_interp`` path
-    uses image-space coordinates and needs no scaling.
+    ``recovar.cuda_backproject`` owns the conversion from image coordinates
+    to CUDA's padded-volume coordinates because it already has the FFI
+    ``upsampling`` attribute. Scaling here as well would widen the Fourier
+    support by another factor of ``upsampling``.
     """
-    if max_r is None:
-        return None
-    upsampling = volume_shape[0] // image_shape[0]
-    return max_r * upsampling
+    return max_r
 
 
 # ── Dispatch ─────────────────────────────────────────────────────────
@@ -215,7 +212,15 @@ def _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, 
 
 
 def slice_volume(
-    volume, rotation_matrices, image_shape, volume_shape, disc_type, half_volume=False, half_image=False, max_r=_AUTO
+    volume,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_volume=False,
+    half_image=False,
+    max_r=_AUTO,
+    relion_texture_interp=False,
 ):
     """Project volume to images via interpolation.
 
@@ -248,6 +253,7 @@ def slice_volume(
                 half_volume,
                 half_image,
                 _cuda_max_r(max_r, image_shape, volume_shape),
+                relion_texture_interp,
             )
         except TypeError:
             pass  # JVP through custom_vjp not supported — fall through to JAX
@@ -278,7 +284,15 @@ def slice_volume(
 
 
 def batch_slice_volume(
-    volumes, rotation_matrices, image_shape, volume_shape, disc_type, half_volume=False, half_image=False, max_r=_AUTO
+    volumes,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_volume=False,
+    half_image=False,
+    max_r=_AUTO,
+    relion_texture_interp=False,
 ):
     """Project a batch of volumes to images.
 
@@ -309,6 +323,7 @@ def batch_slice_volume(
             half_volume=half_volume,
             half_image=half_image,
             max_r=_cuda_max_r(max_r, image_shape, volume_shape),
+            relion_texture_interp=relion_texture_interp,
         )
     return jax.vmap(
         lambda v: slice_volume(
@@ -320,6 +335,7 @@ def batch_slice_volume(
             half_volume=half_volume,
             half_image=half_image,
             max_r=max_r,
+            relion_texture_interp=relion_texture_interp,
         )
     )(volumes)
 
@@ -397,6 +413,154 @@ def adjoint_slice_volume(
         slices, rotation_matrices, image_shape, volume_shape, half_image=half_image, half_volume=half_volume
     )
     return result if volume is None else result + volume
+
+
+def adjoint_slice_volume_indexed(
+    slices,
+    pixel_indices,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    volume=None,
+    half_image=False,
+    half_volume=False,
+    max_r=_AUTO,
+    relion_x_half=False,
+):
+    """Adjoint slice extraction from a compact indexed pixel layout.
+
+    ``pixel_indices`` contains flattened pixel locations in the original image
+    grid (or packed half-image grid when ``half_image=True``). This is useful
+    for Fourier-windowed paths that gather a compact subset of frequencies.
+    """
+    slices = jnp.asarray(slices)
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if slices.ndim != 2:
+        raise ValueError(f"Expected indexed slices with shape (n_images, n_pixels), got {tuple(slices.shape)}")
+    if slices.shape[1] != pixel_indices.shape[0]:
+        raise ValueError(
+            f"Indexed slices have {slices.shape[1]} pixels per image but pixel_indices has "
+            f"{pixel_indices.shape[0]} entries"
+        )
+
+    max_r = _resolve_max_r(max_r, image_shape)
+    order = decide_order(disc_type)
+
+    if _use_cuda_backproject(order):
+        from recovar.cuda_backproject import backproject_indexed
+
+        vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+        if volume is None:
+            volume = jnp.zeros(int(np.prod(vol_shape)), dtype=slices.dtype)
+        out_dtype = jnp.result_type(slices, volume)
+        slices = slices.astype(out_dtype)
+        volume = volume.astype(out_dtype)
+        return backproject_indexed(
+            volume,
+            slices,
+            pixel_indices,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
+            max_r=_cuda_max_r(max_r, image_shape, volume_shape),
+            relion_x_half=relion_x_half,
+        )
+
+    if relion_x_half:
+        raise NotImplementedError("relion_x_half indexed adjoint requires the CUDA backproject kernel")
+
+    H, W = image_shape
+    grid_shape = (H, W // 2 + 1) if half_image else (H, W)
+    n_pixels_full = int(np.prod(grid_shape))
+    full_slices = jnp.zeros((slices.shape[0], n_pixels_full), dtype=slices.dtype)
+    full_slices = full_slices.at[:, pixel_indices].set(slices)
+    return adjoint_slice_volume(
+        full_slices,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        disc_type,
+        volume=volume,
+        half_image=half_image,
+        half_volume=half_volume,
+        max_r=max_r,
+    )
+
+
+def batch_adjoint_slice_volume_indexed(
+    slices,
+    pixel_indices,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    volumes=None,
+    half_image=False,
+    half_volume=False,
+    max_r=_AUTO,
+    relion_x_half=False,
+):
+    """Batched indexed adjoint slice extraction for shared rotations."""
+    slices = jnp.asarray(slices)
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if slices.ndim != 3:
+        raise ValueError(
+            "Expected batched indexed slices with shape "
+            f"(batch, n_images, n_pixels), got {tuple(slices.shape)}",
+        )
+    if slices.shape[-1] != pixel_indices.shape[0]:
+        raise ValueError(
+            f"Indexed slices have {slices.shape[-1]} pixels per image but pixel_indices has "
+            f"{pixel_indices.shape[0]} entries",
+        )
+
+    max_r = _resolve_max_r(max_r, image_shape)
+    order = decide_order(disc_type)
+    vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+    vol_flat = int(np.prod(vol_shape))
+    if volumes is None:
+        volumes = jnp.zeros((slices.shape[0], vol_flat), dtype=slices.dtype)
+
+    if _use_cuda_backproject(order):
+        from recovar.cuda_backproject import batch_backproject_indexed
+
+        out_dtype = jnp.result_type(slices, volumes)
+        return batch_backproject_indexed(
+            volumes.astype(out_dtype),
+            slices.astype(out_dtype),
+            pixel_indices,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
+            max_r=_cuda_max_r(max_r, image_shape, volume_shape),
+            relion_x_half=relion_x_half,
+        )
+
+    if relion_x_half:
+        raise NotImplementedError("relion_x_half indexed adjoint requires the CUDA backproject kernel")
+
+    return jax.vmap(
+        lambda sl, vol: adjoint_slice_volume_indexed(
+            sl,
+            pixel_indices,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            disc_type,
+            volume=vol,
+            half_image=half_image,
+            half_volume=half_volume,
+            max_r=max_r,
+            relion_x_half=relion_x_half,
+        )
+    )(slices, volumes)
 
 
 def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape, half_image=False, half_volume=False):
@@ -602,7 +766,9 @@ __all__ = [
     "slice_volume",
     "batch_slice_volume",
     "adjoint_slice_volume",
+    "adjoint_slice_volume_indexed",
     "batch_adjoint_slice_volume",
+    "batch_adjoint_slice_volume_indexed",
     "precompute_cubic_coefficients",
     "precompute_cubic_coefficients_half",
     "slice_from_cubic_coefficients",

@@ -1,0 +1,81 @@
+{
+  "source_branch_artifacts": {
+    "late_full_bad": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/_agent_scratch/local_profile_full5k_it014_late_v1",
+    "late_full_fixed": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/_agent_scratch/late_it014_full5k_maskfix_v1",
+    "late_full_fixed_log": "/scratch/gpfs/GILLES/mg6942/slurmo/recovar-late-replay-7288799.out"
+  },
+  "late_full_before_fix": {
+    "recovar_ave_pmax": 0.4758841119,
+    "relion_ave_pmax": 0.3245866848,
+    "ave_pmax_gap": 0.1512974271,
+    "mean_abs_pmax_diff": 0.1602249668,
+    "pmax_corr": 0.7546786006
+  },
+  "late_full_after_fix": {
+    "recovar_ave_pmax": 0.3245294973,
+    "relion_ave_pmax": 0.3245866848,
+    "ave_pmax_gap": -5.71875e-05,
+    "mean_abs_pmax_diff": 0.0055527548,
+    "median_abs_pmax_diff": 0.0044897006,
+    "max_abs_pmax_diff": 0.0282227426,
+    "pmax_corr": 0.997325317
+  },
+  "late_full_after_fix_map_metrics": {
+    "merged_map_corr_recovar_vs_relion": 0.9999,
+    "half1_corr_recovar_vs_relion": 0.999838,
+    "half2_corr_recovar_vs_relion": 0.999842,
+    "recovar_half1_gt_corr": 0.959933,
+    "relion_half1_gt_corr": 0.959874,
+    "recovar_half2_gt_corr": 0.959693,
+    "relion_half2_gt_corr": 0.959656,
+    "recovar_merged_gt_corr": 0.966514,
+    "relion_merged_gt_corr": 0.966607
+  },
+  "phase01_sparse_pass2_grouped_union_current_branch": {
+    "job_id": 7299927,
+    "output_dir": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2/_agent_scratch/late_it014_full5k_grouped_union_local_v6_skipfinal",
+    "log_path": "/scratch/gpfs/GILLES/mg6942/slurmo/recovar-late-replay-7299927.out",
+    "elapsed_s": 666.4997045993805,
+    "recovar_ave_pmax": 0.3245294973,
+    "relion_ave_pmax": 0.3245866848,
+    "ave_pmax_gap": -5.7187589e-05,
+    "mean_abs_pmax_diff": 0.0055527547,
+    "pmax_corr": 0.997325317,
+    "merged_map_corr_recovar_vs_relion": 0.9999
+  },
+  "phase01_sparse_pass2_exact_v1_regression_before_fix": {
+    "output_dir": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2/_agent_scratch/late_it014_full5k_exact_v1_local_v6_skipfinal",
+    "log_path": "/scratch/gpfs/GILLES/mg6942/slurmo/recovar-late-replay-7299991.out",
+    "recovar_ave_pmax": 0.32626200072467326,
+    "relion_ave_pmax": 0.3245866848,
+    "ave_pmax_gap": 0.001675315924673272,
+    "mean_abs_pmax_diff": 0.006794281352026557,
+    "pmax_corr": 0.9905568597323662
+  },
+  "phase01_sparse_pass2_exact_v1_current_branch": {
+    "job_id": 7301876,
+    "output_dir": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2/_agent_scratch/late_it014_full5k_exact_v1_local_v8_skipfinal",
+    "log_path": "/scratch/gpfs/GILLES/mg6942/slurmo/recovar-late-replay-7301876.out",
+    "elapsed_s": 725.945170879364,
+    "recovar_ave_pmax": 0.3245294973,
+    "relion_ave_pmax": 0.3245866848,
+    "ave_pmax_gap": -5.7187589e-05,
+    "mean_abs_pmax_diff": 0.0055527547,
+    "pmax_corr": 0.997325317,
+    "merged_map_corr_recovar_vs_relion": 0.9999
+  },
+  "phase01_sparse_pass2_tiny_exact_v1_regression": {
+    "output_dir": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2/_agent_scratch/debug_outlier055_exact_v1",
+    "log_path": "/scratch/gpfs/GILLES/mg6942/slurmo/dbg055-exact-7301265.out",
+    "recovar_ave_pmax": 0.446466,
+    "relion_ave_pmax": 0.339328,
+    "ave_pmax_gap": 0.107138
+  },
+  "phase01_sparse_pass2_tiny_exact_v1_fixed_local": {
+    "output_dir": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2/_agent_scratch/debug_outlier055_exact_v2_local",
+    "log_path": "/scratch/gpfs/GILLES/mg6942/slurmo/dbg055-exact-local-v2.log",
+    "recovar_ave_pmax": 0.3416,
+    "relion_ave_pmax": 0.339328,
+    "ave_pmax_gap": 0.002272
+  }
+}

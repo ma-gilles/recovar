@@ -1,0 +1,901 @@
+diff --git a/src/ml_optimiser.cpp b/src/ml_optimiser.cpp
+index fb33d84..2feef27 100644
+--- a/src/ml_optimiser.cpp
++++ b/src/ml_optimiser.cpp
+@@ -73,6 +73,148 @@
+ static omp_lock_t global_mutex2[NR_CLASS_MUTEXES] = {};
+ static omp_lock_t global_mutex;
+ 
++// ---- Env-gated operand dump infrastructure (zero cost when RELION_DUMP_DIR is unset) ----
++static bool __relion_dump_enabled = false;
++static std::string __relion_dump_dir = "";
++static long __relion_dump_target_sorted = -1;  // sorted particle index to dump
++static long __relion_dump_target_part_id = -1; // original part_id to dump
++static long __relion_dump_target_stack_index = -1; // stack index from rlnImageName to dump
++static bool __relion_dump_init_done = false;
++
++static void __relion_dump_init() {
++    if (__relion_dump_init_done) return;
++    __relion_dump_init_done = true;
++    const char* env = getenv("RELION_DUMP_DIR");
++    if (env && strlen(env) > 0) {
++        __relion_dump_enabled = true;
++        __relion_dump_dir = std::string(env);
++        const char* target = getenv("RELION_DUMP_PART");
++        const char* target_part_id = getenv("RELION_DUMP_PART_ID");
++        const char* target_stack_index = getenv("RELION_DUMP_STACK_INDEX");
++        __relion_dump_target_sorted = target ? atol(target) : 0;
++        __relion_dump_target_part_id = target_part_id ? atol(target_part_id) : -1;
++        __relion_dump_target_stack_index = target_stack_index ? atol(target_stack_index) : -1;
++        std::cerr << "[DUMP] enabled: dir=" << __relion_dump_dir
++                  << " target_sorted_part=" << __relion_dump_target_sorted
++                  << " target_part_id=" << __relion_dump_target_part_id
++                  << " target_stack_index=" << __relion_dump_target_stack_index << std::endl;
++    }
++}
++
++static bool __relion_dump_matches_particle(const Experiment& mydata, long int part_id)
++{
++    __relion_dump_init();
++    if (!__relion_dump_enabled)
++        return false;
++    if (__relion_dump_target_stack_index >= 0)
++    {
++        FileName fn_img = mydata.particles[part_id].name;
++        FileName fn_stack;
++        long int imgno = -1;
++        fn_img.decompose(imgno, fn_stack);
++        if (imgno == __relion_dump_target_stack_index)
++            return true;
++    }
++    if (__relion_dump_target_part_id >= 0 && part_id == __relion_dump_target_part_id)
++        return true;
++    return __relion_dump_target_part_id < 0 && part_id == mydata.sorted_idx[__relion_dump_target_sorted];
++}
++
++// Write a MultidimArray<RFLOAT> as raw binary: [ydim:i32][xdim:i32][data:RFLOAT*ydim*xdim]
++static void __relion_dump_real(const std::string& name, const MultidimArray<RFLOAT>& arr) {
++    if (!__relion_dump_enabled) return;
++    std::string path = __relion_dump_dir + "/" + name + ".bin";
++    std::ofstream f(path, std::ios::binary);
++    int32_t ydim = YSIZE(arr), xdim = XSIZE(arr);
++    f.write(reinterpret_cast<const char*>(&ydim), sizeof(int32_t));
++    f.write(reinterpret_cast<const char*>(&xdim), sizeof(int32_t));
++    f.write(reinterpret_cast<const char*>(arr.data), (long)ydim * xdim * sizeof(RFLOAT));
++    f.close();
++    std::cerr << "[DUMP] " << name << " shape=(" << ydim << "," << xdim << ")" << std::endl;
++}
++
++// Write a MultidimArray<Complex> as raw binary: [ydim:i32][xdim:i32][data:Complex*ydim*xdim]
++// Complex is stored as (re,im) pairs of RFLOAT
++static void __relion_dump_complex(const std::string& name, const MultidimArray<Complex>& arr) {
++    if (!__relion_dump_enabled) return;
++    std::string path = __relion_dump_dir + "/" + name + ".bin";
++    std::ofstream f(path, std::ios::binary);
++    int32_t ydim = YSIZE(arr), xdim = XSIZE(arr);
++    f.write(reinterpret_cast<const char*>(&ydim), sizeof(int32_t));
++    f.write(reinterpret_cast<const char*>(&xdim), sizeof(int32_t));
++    f.write(reinterpret_cast<const char*>(arr.data), (long)ydim * xdim * sizeof(Complex));
++    f.close();
++    std::cerr << "[DUMP] " << name << " complex shape=(" << ydim << "," << xdim << ")" << std::endl;
++}
++
++// Write a single RFLOAT scalar
++static void __relion_dump_scalar(const std::string& name, RFLOAT val) {
++    if (!__relion_dump_enabled) return;
++    std::string path = __relion_dump_dir + "/" + name + ".bin";
++    std::ofstream f(path, std::ios::binary);
++    f.write(reinterpret_cast<const char*>(&val), sizeof(RFLOAT));
++    f.close();
++    std::cerr << "[DUMP] " << name << " = " << val << std::endl;
++}
++
++// Write a 1D flat array (e.g., exp_Mweight)
++static void __relion_dump_flat(const std::string& name, const MultidimArray<RFLOAT>& arr) {
++    if (!__relion_dump_enabled) return;
++    std::string path = __relion_dump_dir + "/" + name + ".bin";
++    std::ofstream f(path, std::ios::binary);
++    int32_t ndim = MULTIDIM_SIZE(arr);
++    f.write(reinterpret_cast<const char*>(&ndim), sizeof(int32_t));
++    f.write(reinterpret_cast<const char*>(arr.data), (long)ndim * sizeof(RFLOAT));
++    f.close();
++    std::cerr << "[DUMP] " << name << " flat size=" << ndim << std::endl;
++}
++
++static void __relion_dump_vector_real(const std::string& name, const std::vector<RFLOAT>& values) {
++    if (!__relion_dump_enabled) return;
++    std::string path = __relion_dump_dir + "/" + name + ".bin";
++    std::ofstream f(path, std::ios::binary);
++    int32_t ndim = values.size();
++    f.write(reinterpret_cast<const char*>(&ndim), sizeof(int32_t));
++    if (ndim > 0)
++        f.write(reinterpret_cast<const char*>(values.data()), (long)ndim * sizeof(RFLOAT));
++    f.close();
++    std::cerr << "[DUMP] " << name << " vector_real size=" << ndim << std::endl;
++}
++
++static void __relion_dump_vector_int(const std::string& name, const std::vector<int>& values) {
++    if (!__relion_dump_enabled) return;
++    std::string path = __relion_dump_dir + "/" + name + ".bin";
++    std::ofstream f(path, std::ios::binary);
++    int32_t ndim = values.size();
++    f.write(reinterpret_cast<const char*>(&ndim), sizeof(int32_t));
++    if (ndim > 0)
++        f.write(reinterpret_cast<const char*>(values.data()), (long)ndim * sizeof(int));
++    f.close();
++    std::cerr << "[DUMP] " << name << " vector_int size=" << ndim << std::endl;
++}
++
++// Write a header text file with all dimensional metadata
++static void __relion_dump_header(const std::string& name,
++    int exp_current_image_size, int nr_dir, int nr_psi, int nr_trans,
++    int nr_oversampled_rot, int nr_oversampled_trans, int nr_classes,
++    RFLOAT pixel_size, int ori_size, int current_size) {
++    if (!__relion_dump_enabled) return;
++    std::string path = __relion_dump_dir + "/" + name + ".txt";
++    std::ofstream f(path);
++    f << "exp_current_image_size=" << exp_current_image_size << std::endl;
++    f << "nr_dir=" << nr_dir << std::endl;
++    f << "nr_psi=" << nr_psi << std::endl;
++    f << "nr_trans=" << nr_trans << std::endl;
++    f << "nr_oversampled_rot=" << nr_oversampled_rot << std::endl;
++    f << "nr_oversampled_trans=" << nr_oversampled_trans << std::endl;
++    f << "nr_classes=" << nr_classes << std::endl;
++    f << "pixel_size=" << pixel_size << std::endl;
++    f << "ori_size=" << ori_size << std::endl;
++    f << "current_size=" << current_size << std::endl;
++    f.close();
++}
++// ---- End dump infrastructure ----
++
+ /** ========================== Threaded parallelization of expectation === */
+ 
+ void globalThreadExpectationSomeParticles(void *self, int thread_id)
+@@ -2800,6 +2942,31 @@ void MlOptimiser::calculateSumOfPowerSpectraAndAverageImage(MultidimArray<RFLOAT
+     {
+         wsum_model.current_size  = mymodel.getPixelFromResolution(1./ini_high);
+     }
++
++    // ---- RECOVAR DEBUG DUMP: wsum_model.current_size trace ----
++    {
++        const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++        if (dbg_dir != NULL)
++        {
++            char path[1024];
++            snprintf(path, sizeof(path), "%s/bootstrap_current_size.txt", dbg_dir);
++            FILE* f = fopen(path, "w");
++            if (f) {
++                fprintf(f, "wsum_model.current_size=%d\n", wsum_model.current_size);
++                fprintf(f, "mymodel.current_size=%d\n", mymodel.current_size);
++                fprintf(f, "mymodel.ori_size=%d\n", mymodel.ori_size);
++                fprintf(f, "mymodel.pixel_size=%f\n", (float)mymodel.pixel_size);
++                fprintf(f, "ROUND_0.07_ori=%d\n", (int)ROUND(0.07 * mymodel.ori_size));
++                fprintf(f, "mymodel.getResolution_shell=%.8e\n", (double)mymodel.getResolution(ROUND(0.07 * mymodel.ori_size)));
++                fprintf(f, "1/getResolution=%f\n", (float)(1.0/mymodel.getResolution(ROUND(0.07 * mymodel.ori_size))));
++                fprintf(f, "ini_high=%f\n", (float)ini_high);
++                fprintf(f, "mymodel.padding_factor=%f\n", (float)mymodel.padding_factor);
++                fprintf(f, "wsum_model.padding_factor=%f\n", (float)wsum_model.padding_factor);
++                fclose(f);
++            }
++        }
++    }
++
+     wsum_model.initZeros();
+ 
+     bool is_done_all_optics_groups = false;
+@@ -3044,6 +3211,34 @@ void MlOptimiser::calculateSumOfPowerSpectraAndAverageImage(MultidimArray<RFLOAT
+                     ctf.getFftwImage(Fctf, mymodel.ori_size, mymodel.ori_size, mymodel.pixel_size,
+                                      ctf_phase_flipped, only_flip_phases, intact_ctf_first_peak, true, do_ctf_padding);
+ 
++                    // ---- RECOVAR DEBUG: dump first 3 particles' Fimg+Fctf+A before set2DFFT ----
++                    {
++                        const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++                        if (dbg_dir != NULL && nr_particles_done < 3) {
++                            char p[1024]; FILE* f;
++                            snprintf(p, sizeof(p), "%s/p%ld_Fimg_preCTF.bin", dbg_dir, (long)nr_particles_done);
++                            f = fopen(p, "wb");
++                            if (f) { long nz=1, ny=YSIZE(Fimg), nx=XSIZE(Fimg);
++                              fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
++                              fwrite(Fimg.data, sizeof(Complex), ny*nx, f); fclose(f); }
++                            snprintf(p, sizeof(p), "%s/p%ld_Fctf.bin", dbg_dir, (long)nr_particles_done);
++                            f = fopen(p, "wb");
++                            if (f) { long nz=1, ny=YSIZE(Fctf), nx=XSIZE(Fctf);
++                              fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
++                              fwrite(Fctf.data, sizeof(RFLOAT), ny*nx, f); fclose(f); }
++                            snprintf(p, sizeof(p), "%s/p%ld_A_euler.txt", dbg_dir, (long)nr_particles_done);
++                            f = fopen(p, "w");
++                            if (f) {
++                                for (int ri=0; ri<3; ri++)
++                                    for (int ci=0; ci<3; ci++)
++                                        fprintf(f, "A[%d][%d]=%.12e\n", ri, ci, (double)MAT_ELEM(A, ri, ci));
++                                fprintf(f, "part_id=%ld\n", part_id);
++                                fprintf(f, "optics_group=%ld\n", optics_group);
++                                fclose(f);
++                            }
++                        }
++                    }
++
+                     FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fimg)
+                     {
+                         DIRECT_MULTIDIM_ELEM(Fimg, n) *= DIRECT_MULTIDIM_ELEM(Fctf, n);
+@@ -3119,8 +3314,78 @@ void MlOptimiser::setSigmaNoiseEstimatesAndSetAverageImage(MultidimArray<RFLOAT>
+         {
+ 
+             MultidimArray<RFLOAT> dummy;
++
++            // ---- RECOVAR DEBUG DUMP: BPref state BEFORE reconstruct ----
++            {
++                const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++                if (dbg_dir != NULL)
++                {
++                    char path[1024];
++                    snprintf(path, sizeof(path), "%s/bpref_c%d_data_before.bin", dbg_dir, iclass);
++                    FILE* f = fopen(path, "wb");
++                    if (f) {
++                        long nzd = ZSIZE(wsum_model.BPref[iclass].data);
++                        long nyd = YSIZE(wsum_model.BPref[iclass].data);
++                        long nxd = XSIZE(wsum_model.BPref[iclass].data);
++                        fwrite(&nzd, sizeof(long), 1, f);
++                        fwrite(&nyd, sizeof(long), 1, f);
++                        fwrite(&nxd, sizeof(long), 1, f);
++                        fwrite(wsum_model.BPref[iclass].data.data,
++                               sizeof(Complex), nzd * nyd * nxd, f);
++                        fclose(f);
++                    }
++                    snprintf(path, sizeof(path), "%s/bpref_c%d_weight_before.bin", dbg_dir, iclass);
++                    f = fopen(path, "wb");
++                    if (f) {
++                        long nzw = ZSIZE(wsum_model.BPref[iclass].weight);
++                        long nyw = YSIZE(wsum_model.BPref[iclass].weight);
++                        long nxw = XSIZE(wsum_model.BPref[iclass].weight);
++                        fwrite(&nzw, sizeof(long), 1, f);
++                        fwrite(&nyw, sizeof(long), 1, f);
++                        fwrite(&nxw, sizeof(long), 1, f);
++                        fwrite(wsum_model.BPref[iclass].weight.data,
++                               sizeof(RFLOAT), nzw * nyw * nxw, f);
++                        fclose(f);
++                    }
++                    snprintf(path, sizeof(path), "%s/bpref_c%d_meta.txt", dbg_dir, iclass);
++                    f = fopen(path, "w");
++                    if (f) {
++                        fprintf(f, "padding_factor=%f\n", (float)wsum_model.BPref[iclass].padding_factor);
++                        fprintf(f, "pad_size=%d\n", wsum_model.BPref[iclass].pad_size);
++                        fprintf(f, "r_max=%d\n", wsum_model.BPref[iclass].r_max);
++                        fprintf(f, "ori_size=%d\n", wsum_model.BPref[iclass].ori_size);
++                        fprintf(f, "interpolator=%d\n", wsum_model.BPref[iclass].interpolator);
++                        fprintf(f, "skip_gridding=%d\n", wsum_model.BPref[iclass].skip_gridding);
++                        fclose(f);
++                    }
++                }
++            }
++
+             (wsum_model.BPref[iclass]).reconstruct(mymodel.Iref[iclass], gridding_nr_iter, false, dummy);
+-                        refs_are_ctf_corrected = true;
++
++            // ---- RECOVAR DEBUG DUMP: Iref AFTER reconstruct ----
++            {
++                const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++                if (dbg_dir != NULL)
++                {
++                    char path[1024];
++                    snprintf(path, sizeof(path), "%s/iref_c%d_after_reconstruct.bin", dbg_dir, iclass);
++                    FILE* f = fopen(path, "wb");
++                    if (f) {
++                        long nzi = ZSIZE(mymodel.Iref[iclass]);
++                        long nyi = YSIZE(mymodel.Iref[iclass]);
++                        long nxi = XSIZE(mymodel.Iref[iclass]);
++                        fwrite(&nzi, sizeof(long), 1, f);
++                        fwrite(&nyi, sizeof(long), 1, f);
++                        fwrite(&nxi, sizeof(long), 1, f);
++                        fwrite(mymodel.Iref[iclass].data,
++                               sizeof(RFLOAT), nzi * nyi * nxi, f);
++                        fclose(f);
++                    }
++                }
++            }
++
++            refs_are_ctf_corrected = true;
+         }
+     }
+ 
+@@ -4666,6 +4931,204 @@ void MlOptimiser::expectationOneParticle(long int part_id_sorted, int thread_id)
+         #pragma omp barrier
+ #endif
+ 
++        // ---- RECOVAR DEBUG ESTEP DUMP: preprocessed Fimg/Fctf/Minvsigma2 per particle ----
++        // Captured BEFORE storeWeightedSums runs, after getFourierTransformsAndCtfs +
++        // precalculateShiftedImagesCtfsAndInvSigma2s. Lets us bypass our preprocessing
++        // and inject RELION-exact preprocessed arrays into our scorer.
++        {
++            const char* estep_dir = std::getenv("RECOVAR_DEBUG_ESTEP_DIR");
++            if (estep_dir != NULL && iter == 1 && part_id < 3) {
++                char p[1024]; FILE* f;
++                // Dump first translation's shifted Fimg per image (one optics group)
++                if (!exp_local_Fimgs_shifted.empty() && !exp_local_Fimgs_shifted[0].empty()) {
++                    const auto& Fimg_t0 = exp_local_Fimgs_shifted[0][0];
++                    snprintf(p, sizeof(p), "%s/p%ld_local_Fimg_shifted_t0.bin", estep_dir, part_id);
++                    f = fopen(p, "wb");
++                    if (f) {
++                        long nz = ZSIZE(Fimg_t0), ny = YSIZE(Fimg_t0), nx = XSIZE(Fimg_t0);
++                        fwrite(&nz, sizeof(long), 1, f);
++                        fwrite(&ny, sizeof(long), 1, f);
++                        fwrite(&nx, sizeof(long), 1, f);
++                        fwrite(Fimg_t0.data, sizeof(Complex), nz * ny * nx, f);
++                        fclose(f);
++                    }
++                }
++                if (!exp_local_Fctf.empty()) {
++                    const auto& Fctf_l = exp_local_Fctf[0];
++                    snprintf(p, sizeof(p), "%s/p%ld_local_Fctf.bin", estep_dir, part_id);
++                    f = fopen(p, "wb");
++                    if (f) {
++                        long nz = ZSIZE(Fctf_l), ny = YSIZE(Fctf_l), nx = XSIZE(Fctf_l);
++                        fwrite(&nz, sizeof(long), 1, f);
++                        fwrite(&ny, sizeof(long), 1, f);
++                        fwrite(&nx, sizeof(long), 1, f);
++                        fwrite(Fctf_l.data, sizeof(RFLOAT), nz * ny * nx, f);
++                        fclose(f);
++                    }
++                }
++                if (MULTIDIM_SIZE(exp_local_Minvsigma2) > 0) {
++                    snprintf(p, sizeof(p), "%s/p%ld_local_Minvsigma2.bin", estep_dir, part_id);
++                    f = fopen(p, "wb");
++                    if (f) {
++                        long nz = ZSIZE(exp_local_Minvsigma2), ny = YSIZE(exp_local_Minvsigma2), nx = XSIZE(exp_local_Minvsigma2);
++                        fwrite(&nz, sizeof(long), 1, f);
++                        fwrite(&ny, sizeof(long), 1, f);
++                        fwrite(&nx, sizeof(long), 1, f);
++                        fwrite(exp_local_Minvsigma2.data, sizeof(RFLOAT), nz * ny * nx, f);
++                        fclose(f);
++                    }
++                }
++                // Also dump Fimg pre-mask + Fimg + Fctf at full storage size (these
++                // are pre-shift, post-CTF/normcorr/scale).
++                if (!exp_Fimg.empty()) {
++                    const auto& F = exp_Fimg[0];
++                    snprintf(p, sizeof(p), "%s/p%ld_Fimg.bin", estep_dir, part_id);
++                    f = fopen(p, "wb");
++                    if (f) {
++                        long nz = ZSIZE(F), ny = YSIZE(F), nx = XSIZE(F);
++                        fwrite(&nz, sizeof(long), 1, f);
++                        fwrite(&ny, sizeof(long), 1, f);
++                        fwrite(&nx, sizeof(long), 1, f);
++                        fwrite(F.data, sizeof(Complex), nz * ny * nx, f);
++                        fclose(f);
++                    }
++                }
++                // Non-masked Fimg used by RELION's M-step BPref accumulation
++                if (!exp_Fimg_nomask.empty()) {
++                    const auto& F = exp_Fimg_nomask[0];
++                    snprintf(p, sizeof(p), "%s/p%ld_Fimg_nomask.bin", estep_dir, part_id);
++                    f = fopen(p, "wb");
++                    if (f) {
++                        long nz = ZSIZE(F), ny = YSIZE(F), nx = XSIZE(F);
++                        fwrite(&nz, sizeof(long), 1, f);
++                        fwrite(&ny, sizeof(long), 1, f);
++                        fwrite(&nx, sizeof(long), 1, f);
++                        fwrite(F.data, sizeof(Complex), nz * ny * nx, f);
++                        fclose(f);
++                    }
++                }
++            }
++        }
++
++        // ---- RECOVAR DEBUG ESTEP DUMP: per-particle posterior table + sampling ----
++        // Captures everything needed to bit-exact reproduce iter-1 BPref accumulation
++        // outside of RELION (Phase A of the deep-exploration parity plan).
++        {
++            const char* estep_dir = std::getenv("RECOVAR_DEBUG_ESTEP_DIR");
++            if (estep_dir != NULL && iter == 1 && part_id < 3)
++            {
++                long int xnr_dir   = sampling.NrDirections(0, &exp_pointer_dir_nonzeroprior);
++                long int xnr_psi   = sampling.NrPsiSamplings(0, &exp_pointer_psi_nonzeroprior);
++                long int xnr_trans = sampling.NrTranslationalSamplings();
++                long int xnr_orot  = sampling.oversamplingFactorOrientations(exp_current_oversampling);
++                long int xnr_otra  = sampling.oversamplingFactorTranslations(exp_current_oversampling);
++                char p[1024]; FILE* f;
++                // Posterior table
++                snprintf(p, sizeof(p), "%s/p%ld_exp_Mweight.bin", estep_dir, part_id);
++                f = fopen(p, "wb");
++                if (f) {
++                    long dims[6] = { (long)mymodel.nr_classes, xnr_dir, xnr_psi, xnr_trans, xnr_orot, xnr_otra };
++                    fwrite(dims, sizeof(long), 6, f);
++                    fwrite(MULTIDIM_ARRAY(exp_Mweight), sizeof(RFLOAT), MULTIDIM_SIZE(exp_Mweight), f);
++                    fclose(f);
++                }
++                // Significant + min_diff2 + sum_weight scalars
++                snprintf(p, sizeof(p), "%s/p%ld_estep_meta.txt", estep_dir, part_id);
++                f = fopen(p, "w");
++                if (f) {
++                    fprintf(f, "exp_significant_weight=%.12e\n", (double)exp_significant_weight);
++                    fprintf(f, "exp_sum_weight=%.12e\n", (double)exp_sum_weight);
++                    fprintf(f, "exp_max_weight=%.12e\n", (double)exp_max_weight);
++                    fprintf(f, "exp_min_diff2=%.12e\n", (double)exp_min_diff2);
++                    fprintf(f, "exp_current_oversampling=%d\n", (int)exp_current_oversampling);
++                    fprintf(f, "nr_dir=%ld\n", xnr_dir);
++                    fprintf(f, "nr_psi=%ld\n", xnr_psi);
++                    fprintf(f, "nr_trans=%ld\n", xnr_trans);
++                    fprintf(f, "nr_oversampled_rot=%ld\n", xnr_orot);
++                    fprintf(f, "nr_oversampled_trans=%ld\n", xnr_otra);
++                    fprintf(f, "iter=%d\n", iter);
++                    fprintf(f, "do_firstiter_cc=%d\n", (int)(do_firstiter_cc ? 1 : 0));
++                    fclose(f);
++                }
++                // Dump every (dir, psi, oversampled-rot) combination's rotation matrix
++                // by replaying the same path storeWeightedSums uses.
++                snprintf(p, sizeof(p), "%s/p%ld_oversampled_rotations.bin", estep_dir, part_id);
++                f = fopen(p, "wb");
++                FILE* fa = NULL;
++                {
++                    char pa[1024];
++                    snprintf(pa, sizeof(pa), "%s/p%ld_oversampled_eulers.bin", estep_dir, part_id);
++                    fa = fopen(pa, "wb");
++                }
++                if (f) {
++                    long n_orient = xnr_dir * xnr_psi;
++                    long n_per = xnr_orot;
++                    long header[3] = { n_orient, n_per, 9 };
++                    fwrite(header, sizeof(long), 3, f);
++                    if (fa) { long h2[3] = { n_orient, n_per, 3 }; fwrite(h2, sizeof(long), 3, fa); }
++                    std::vector<RFLOAT> ovr_rot, ovr_tilt, ovr_psi;
++                    for (long idir = 0; idir < xnr_dir; idir++) {
++                        for (long ipsi = 0; ipsi < xnr_psi; ipsi++) {
++                            sampling.getOrientations(idir, ipsi, exp_current_oversampling,
++                                                     ovr_rot, ovr_tilt, ovr_psi,
++                                                     exp_pointer_dir_nonzeroprior, exp_directions_prior,
++                                                     exp_pointer_psi_nonzeroprior, exp_psi_prior);
++                            for (size_t k = 0; k < ovr_rot.size(); k++) {
++                                Matrix2D<RFLOAT> A;
++                                Euler_angles2matrix(ovr_rot[k], ovr_tilt[k], ovr_psi[k], A);
++                                double row[9];
++                                for (int rr = 0; rr < 3; rr++)
++                                    for (int cc = 0; cc < 3; cc++)
++                                        row[rr*3+cc] = (double)MAT_ELEM(A, rr, cc);
++                                fwrite(row, sizeof(double), 9, f);
++                                if (fa) {
++                                    double e[3] = { (double)ovr_rot[k], (double)ovr_tilt[k], (double)ovr_psi[k] };
++                                    fwrite(e, sizeof(double), 3, fa);
++                                }
++                            }
++                        }
++                    }
++                    fclose(f);
++                    if (fa) fclose(fa);
++                }
++                // Also dump perturbation parameters used this iter
++                {
++                    char p2[1024];
++                    snprintf(p2, sizeof(p2), "%s/p%ld_perturbation.txt", estep_dir, part_id);
++                    FILE* fp = fopen(p2, "w");
++                    if (fp) {
++                        fprintf(fp, "random_perturbation=%.12e\n", (double)sampling.random_perturbation);
++                        fprintf(fp, "perturbation_factor=%.12e\n", (double)sampling.perturbation_factor);
++                        fprintf(fp, "psi_step=%.12e\n", (double)sampling.psi_step);
++                        fprintf(fp, "offset_step=%.12e\n", (double)sampling.offset_step);
++                        fprintf(fp, "angular_sampling=%.12e\n", (double)sampling.getAngularSampling());
++                        fclose(fp);
++                    }
++                }
++                // Dump translations (after oversampling)
++                snprintf(p, sizeof(p), "%s/p%ld_oversampled_translations.bin", estep_dir, part_id);
++                f = fopen(p, "wb");
++                if (f) {
++                    std::vector<RFLOAT> ovr_x, ovr_y, ovr_z;
++                    long n_trans = xnr_trans;
++                    long n_per = xnr_otra;
++                    long header[3] = { n_trans, n_per, 3 };
++                    fwrite(header, sizeof(long), 3, f);
++                    for (long itrans = 0; itrans < xnr_trans; itrans++) {
++                        sampling.getTranslationsInPixel(itrans, exp_current_oversampling,
++                                                       mydata.getOpticsPixelSize(0),
++                                                       ovr_x, ovr_y, ovr_z);
++                        for (size_t k = 0; k < ovr_x.size(); k++) {
++                            double t[3] = { (double)ovr_x[k], (double)ovr_y[k],
++                                            ovr_z.size() > k ? (double)ovr_z[k] : 0.0 };
++                            fwrite(t, sizeof(double), 3, f);
++                        }
++                    }
++                    fclose(f);
++                }
++            }
++        }
++
+         storeWeightedSums(part_id, ibody, exp_current_oversampling, metadata_offset,
+                 exp_idir_min, exp_idir_max, exp_ipsi_min, exp_ipsi_max,
+                 exp_itrans_min, exp_itrans_max, exp_iclass_min, exp_iclass_max,
+@@ -4995,6 +5458,89 @@ void MlOptimiser::maximization()
+                 else
+                 {
+                     if(do_grad) {
++                        // ---- RECOVAR DEBUG DUMP: M-step inputs + output ----
++                        {
++                            const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++                            if (dbg_dir != NULL && iter == 1)
++                            {
++                                char path[1024];
++                                snprintf(path, sizeof(path),
++                                         "%s/mstep_it%d_c%d_iref_before.bin",
++                                         dbg_dir, iter, iclass);
++                                FILE* f = fopen(path, "wb");
++                                if (f) {
++                                    long nz = ZSIZE(mymodel.Iref[iclass]);
++                                    long ny = YSIZE(mymodel.Iref[iclass]);
++                                    long nx = XSIZE(mymodel.Iref[iclass]);
++                                    fwrite(&nz, sizeof(long), 1, f);
++                                    fwrite(&ny, sizeof(long), 1, f);
++                                    fwrite(&nx, sizeof(long), 1, f);
++                                    fwrite(mymodel.Iref[iclass].data,
++                                           sizeof(RFLOAT), nz*ny*nx, f);
++                                    fclose(f);
++                                }
++                                snprintf(path, sizeof(path),
++                                         "%s/mstep_it%d_c%d_bpref_data.bin",
++                                         dbg_dir, iter, iclass);
++                                f = fopen(path, "wb");
++                                if (f) {
++                                    long nz = ZSIZE(wsum_model.BPref[iclass].data);
++                                    long ny = YSIZE(wsum_model.BPref[iclass].data);
++                                    long nx = XSIZE(wsum_model.BPref[iclass].data);
++                                    fwrite(&nz, sizeof(long), 1, f);
++                                    fwrite(&ny, sizeof(long), 1, f);
++                                    fwrite(&nx, sizeof(long), 1, f);
++                                    fwrite(wsum_model.BPref[iclass].data.data,
++                                           sizeof(Complex), nz*ny*nx, f);
++                                    fclose(f);
++                                }
++                                snprintf(path, sizeof(path),
++                                         "%s/mstep_it%d_c%d_bpref_weight.bin",
++                                         dbg_dir, iter, iclass);
++                                f = fopen(path, "wb");
++                                if (f) {
++                                    long nz = ZSIZE(wsum_model.BPref[iclass].weight);
++                                    long ny = YSIZE(wsum_model.BPref[iclass].weight);
++                                    long nx = XSIZE(wsum_model.BPref[iclass].weight);
++                                    fwrite(&nz, sizeof(long), 1, f);
++                                    fwrite(&ny, sizeof(long), 1, f);
++                                    fwrite(&nx, sizeof(long), 1, f);
++                                    fwrite(wsum_model.BPref[iclass].weight.data,
++                                           sizeof(RFLOAT), nz*ny*nx, f);
++                                    fclose(f);
++                                }
++                                snprintf(path, sizeof(path),
++                                         "%s/mstep_it%d_c%d_meta.txt",
++                                         dbg_dir, iter, iclass);
++                                f = fopen(path, "w");
++                                if (f) {
++                                    fprintf(f, "grad_current_stepsize=%f\n",
++                                            (float)grad_current_stepsize);
++                                    fprintf(f, "effective_stepsize=%f\n",
++                                            (float)(grad_current_stepsize *
++                                             (1-std::exp(-(3*mymodel.nr_classes+10)
++                                              *mymodel.pdf_class[iclass]))));
++                                    fprintf(f, "tau2_fudge_factor=%f\n",
++                                            (float)mymodel.tau2_fudge_factor);
++                                    fprintf(f, "grad_min_resol=%f\n",
++                                            (float)grad_min_resol);
++                                    fprintf(f, "min_resol_shell=%d\n",
++                                            mymodel.getPixelFromResolution(1./grad_min_resol));
++                                    fprintf(f, "do_split_random_halves=%d\n",
++                                            do_split_random_halves ? 1 : 0);
++                                    fprintf(f, "bpref_padding_factor=%f\n",
++                                            (float)wsum_model.BPref[iclass].padding_factor);
++                                    fprintf(f, "bpref_pad_size=%d\n",
++                                            wsum_model.BPref[iclass].pad_size);
++                                    fprintf(f, "bpref_r_max=%d\n",
++                                            wsum_model.BPref[iclass].r_max);
++                                    fprintf(f, "bpref_skip_gridding=%d\n",
++                                            wsum_model.BPref[iclass].skip_gridding);
++                                    fclose(f);
++                                }
++                            }
++                        }
++
+                         (wsum_model.BPref[iclass]).reconstructGrad(
+                                 mymodel.Iref[iclass],
+                                 mymodel.fsc_halves_class[iclass],
+@@ -5003,6 +5549,30 @@ void MlOptimiser::maximization()
+                                 mymodel.getPixelFromResolution(1./grad_min_resol),
+                                 do_split_random_halves,
+                                 (iclass == 0));
++
++                        // ---- RECOVAR DEBUG DUMP: Iref after M-step ----
++                        {
++                            const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++                            if (dbg_dir != NULL && iter == 1)
++                            {
++                                char path[1024];
++                                snprintf(path, sizeof(path),
++                                         "%s/mstep_it%d_c%d_iref_after.bin",
++                                         dbg_dir, iter, iclass);
++                                FILE* f = fopen(path, "wb");
++                                if (f) {
++                                    long nz = ZSIZE(mymodel.Iref[iclass]);
++                                    long ny = YSIZE(mymodel.Iref[iclass]);
++                                    long nx = XSIZE(mymodel.Iref[iclass]);
++                                    fwrite(&nz, sizeof(long), 1, f);
++                                    fwrite(&ny, sizeof(long), 1, f);
++                                    fwrite(&nx, sizeof(long), 1, f);
++                                    fwrite(mymodel.Iref[iclass].data,
++                                           sizeof(RFLOAT), nz*ny*nx, f);
++                                    fclose(f);
++                                }
++                            }
++                        }
+                     }
+                     else
+                         (wsum_model.BPref[iclass]).reconstruct(mymodel.Iref[iclass],
+@@ -5380,7 +5950,56 @@ int MlOptimiser::maximizationGradientParameters() {
+         {
+             if ((wsum_model.BPref[iclass].weight).sum() > XMIPP_EQUAL_ACCURACY)
+             {
++                // ---- RECOVAR DEBUG DUMP: pre-pipeline state ----
++                {
++                    const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++                    if (dbg_dir != NULL && iter == 1)
++                    {
++                        char p[1024]; FILE* f;
++                        #define DUMP_C3(nm, arr) do { \
++                            snprintf(p, sizeof(p), "%s/pipe_it%d_c%d_" nm ".bin", dbg_dir, iter, iclass); \
++                            f = fopen(p, "wb"); \
++                            if (f) { long nz=ZSIZE(arr), ny=YSIZE(arr), nx=XSIZE(arr); \
++                              fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f); \
++                              fwrite((arr).data, sizeof(Complex), nz*ny*nx, f); fclose(f); } \
++                        } while(0)
++                        #define DUMP_R3(nm, arr) do { \
++                            snprintf(p, sizeof(p), "%s/pipe_it%d_c%d_" nm ".bin", dbg_dir, iter, iclass); \
++                            f = fopen(p, "wb"); \
++                            if (f) { long nz=ZSIZE(arr), ny=YSIZE(arr), nx=XSIZE(arr); \
++                              fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f); \
++                              fwrite((arr).data, sizeof(RFLOAT), nz*ny*nx, f); fclose(f); } \
++                        } while(0)
++                        DUMP_C3("bp_data_pre_reweight", wsum_model.BPref[iclass].data);
++                        DUMP_R3("bp_weight", wsum_model.BPref[iclass].weight);
++                        DUMP_C3("Igrad1_pre", mymodel.Igrad1[iclass]);
++                        DUMP_C3("Igrad2_pre", mymodel.Igrad2[iclass]);
++                        if (grad_pseudo_halfsets) {
++                            int ih = iclass + mymodel.nr_classes;
++                            DUMP_C3("bp_data_h_pre_reweight", wsum_model.BPref[ih].data);
++                            DUMP_R3("bp_weight_h", wsum_model.BPref[ih].weight);
++                            DUMP_C3("Igrad1_h_pre", mymodel.Igrad1[ih]);
++                        }
++                        snprintf(p, sizeof(p), "%s/pipe_it%d_c%d_flags.txt", dbg_dir, iter, iclass);
++                        f = fopen(p, "w");
++                        if (f) {
++                            fprintf(f, "grad_pseudo_halfsets=%d\n", grad_pseudo_halfsets ? 1:0);
++                            fprintf(f, "nr_classes=%d\n", mymodel.nr_classes);
++                            fprintf(f, "mu=%f\n", (float)mu);
++                            fclose(f);
++                        }
++                    }
++                }
++
+                 wsum_model.BPref[iclass].reweightGrad();
++
++                {
++                    const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++                    if (dbg_dir != NULL && iter == 1) {
++                        char p[1024]; FILE* f;
++                        DUMP_C3("bp_data_post_reweight", wsum_model.BPref[iclass].data);
++                    }
++                }
+                 wsum_model.BPref[iclass].getFristMoment(
+                         mymodel.Igrad1[iclass]);
+ 
+@@ -5410,6 +6029,33 @@ int MlOptimiser::maximizationGradientParameters() {
+                             mymodel.Igrad2[iclass]);
+                 }
+ 
++                // ---- RECOVAR DEBUG DUMP: post-pipeline state ----
++                {
++                    const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++                    if (dbg_dir != NULL && iter == 1) {
++                        char p[1024]; FILE* f;
++                        DUMP_C3("Igrad1_post", mymodel.Igrad1[iclass]);
++                        DUMP_C3("Igrad2_post", mymodel.Igrad2[iclass]);
++                        DUMP_C3("bp_data_post_applymomenta", wsum_model.BPref[iclass].data);
++                        if (grad_pseudo_halfsets) {
++                            int ih = iclass + mymodel.nr_classes;
++                            DUMP_C3("Igrad1_h_post", mymodel.Igrad1[ih]);
++                            DUMP_C3("bp_data_h_post_reweight", wsum_model.BPref[ih].data);
++                        }
++                        // mom1_noise_power is a member of BackProjector
++                        snprintf(p, sizeof(p), "%s/pipe_it%d_c%d_mom1_noise_power.bin", dbg_dir, iter, iclass);
++                        f = fopen(p, "wb");
++                        if (f) {
++                            long nz=1, ny=1, nx=XSIZE(wsum_model.BPref[iclass].mom1_noise_power);
++                            fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
++                            if (nx > 0) fwrite(wsum_model.BPref[iclass].mom1_noise_power.data, sizeof(RFLOAT), nx, f);
++                            fclose(f);
++                        }
++                        #undef DUMP_C3
++                        #undef DUMP_R3
++                    }
++                }
++
+                 RFLOAT avg_grad(0);
+                 for (unsigned i = 0; i < wsum_model.BPref[iclass].data.nzyxdim; i++)
+                     avg_grad += norm(wsum_model.BPref[iclass].data.data[i]);
+@@ -6878,6 +7524,21 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
+                     if (ires > 0 && ires_remapped < XSIZE(mymodel.sigma2_noise[optics_group]))
+                         DIRECT_MULTIDIM_ELEM(exp_local_Minvsigma2, n) = 1. / (sigma2_fudge * DIRECT_A1D_ELEM(mymodel.sigma2_noise[optics_group], ires_remapped));
+                 }
++
++                // ---- DUMP POINT 1: preprocessing operands ----
++                __relion_dump_init();
++                if (__relion_dump_enabled && !is_for_store_wsums
++                    && __relion_dump_matches_particle(mydata, part_id))
++                {
++                    __relion_dump_complex("Fimg_unweighted", Fimg);
++                    __relion_dump_real("Fctf", exp_local_Fctf[0]);
++                    __relion_dump_real("Minvsigma2", exp_local_Minvsigma2);
++                    __relion_dump_scalar("exp_highres_Xi2",
++                        (exp_local_sqrtXi2.size() > 0) ? exp_local_sqrtXi2[0] * exp_local_sqrtXi2[0] : 0.);
++                    // Also dump sigma2_noise for this optics group
++                    __relion_dump_real("sigma2_noise", mymodel.sigma2_noise[optics_group]);
++                    __relion_dump_scalar("sigma2_fudge", sigma2_fudge);
++                }
+             }
+ 
+         }
+@@ -7060,6 +7721,18 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
+             }
+         }
+     }
++
++    // ---- DUMP POINT 1b: shifted image at translation 0, img_id 0 ----
++    if (__relion_dump_enabled && !is_for_store_wsums
++        && __relion_dump_matches_particle(mydata, part_id)
++        && exp_local_Fimgs_shifted.size() > 0
++        && exp_local_Fimgs_shifted[0].size() > 0)
++    {
++        __relion_dump_complex("Fimg_shifted_t0", exp_local_Fimgs_shifted[0][0]);
++        __relion_dump_scalar("old_offset_x_precalc", XX(exp_old_offset));
++        __relion_dump_scalar("old_offset_y_precalc", YY(exp_old_offset));
++    }
++
+ #ifdef TIMING
+     if (part_id == mydata.sorted_idx[exp_my_first_part_id])
+     {
+@@ -7299,6 +7972,57 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
+                                     }
+                                 }
+ 
++                                // ---- DUMP POINT 2: reference projection for first orientation ----
++                                if (__relion_dump_enabled && iorient == 0 && iover_rot == 0 && img_id == 0
++                                    && __relion_dump_matches_particle(mydata, part_id))
++                                {
++                                    __relion_dump_complex("Fref_orient0", Fref);
++                                    __relion_dump_complex("Frefctf_orient0", Frefctf);
++                                    __relion_dump_scalar("scale_correction", do_scale_correction ? mymodel.scale_correction[group_id] : 1.0);
++                                    // Dump the Euler angles for this orientation
++                                    __relion_dump_scalar("orient0_rot", oversampled_rot[iover_rot]);
++                                    __relion_dump_scalar("orient0_tilt", oversampled_tilt[iover_rot]);
++                                    __relion_dump_scalar("orient0_psi", oversampled_psi[iover_rot]);
++                                }
++
++                                // ---- RECOVAR ESTEP DUMP: Fref + Frefctf for orient 0 first 3 particles ----
++                                {
++                                    const char* est_dir = std::getenv("RECOVAR_DEBUG_ESTEP_DIR");
++                                    if (est_dir != NULL && iter == 1 && iorient == 0 && iover_rot == 0
++                                        && img_id == 0 && part_id < 3)
++                                    {
++                                        char p[1024]; FILE* f;
++                                        snprintf(p, sizeof(p), "%s/p%ld_Fref_orient0.bin", est_dir, part_id);
++                                        f = fopen(p, "wb");
++                                        if (f) {
++                                            long nz = ZSIZE(Fref), ny = YSIZE(Fref), nx = XSIZE(Fref);
++                                            fwrite(&nz, sizeof(long), 1, f);
++                                            fwrite(&ny, sizeof(long), 1, f);
++                                            fwrite(&nx, sizeof(long), 1, f);
++                                            fwrite(Fref.data, sizeof(Complex), nz * ny * nx, f);
++                                            fclose(f);
++                                        }
++                                        snprintf(p, sizeof(p), "%s/p%ld_Frefctf_orient0.bin", est_dir, part_id);
++                                        f = fopen(p, "wb");
++                                        if (f) {
++                                            long nz = ZSIZE(Frefctf), ny = YSIZE(Frefctf), nx = XSIZE(Frefctf);
++                                            fwrite(&nz, sizeof(long), 1, f);
++                                            fwrite(&ny, sizeof(long), 1, f);
++                                            fwrite(&nx, sizeof(long), 1, f);
++                                            fwrite(Frefctf.data, sizeof(Complex), nz * ny * nx, f);
++                                            fclose(f);
++                                        }
++                                        snprintf(p, sizeof(p), "%s/p%ld_orient0.txt", est_dir, part_id);
++                                        f = fopen(p, "w");
++                                        if (f) {
++                                            fprintf(f, "rot=%.12e\n", (double)oversampled_rot[iover_rot]);
++                                            fprintf(f, "tilt=%.12e\n", (double)oversampled_tilt[iover_rot]);
++                                            fprintf(f, "psi=%.12e\n", (double)oversampled_psi[iover_rot]);
++                                            fclose(f);
++                                        }
++                                    }
++                                }
++
+                                 long int ihidden = iorientclass * exp_nr_trans;
+                                 for (long int itrans = exp_itrans_min; itrans <= exp_itrans_max; itrans++, ihidden++)
+                                 {
+@@ -7691,6 +8415,22 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
+         } // end if mymodel.pdf_class[iclass] > 0.
+     } // end loop iclass
+ 
++    // ---- DUMP POINT 3: raw diff2 scores (exp_Mweight before exponentiation) ----
++    if (__relion_dump_enabled
++        && __relion_dump_matches_particle(mydata, part_id))
++    {
++        __relion_dump_flat("exp_Mweight_diff2", exp_Mweight);
++        __relion_dump_scalar("exp_min_diff2", exp_min_diff2);
++        __relion_dump_header("dimensions",
++            0 /*filled by precalc*/, (int)exp_nr_dir, (int)exp_nr_psi, (int)exp_nr_trans,
++            (int)exp_nr_oversampled_rot, (int)exp_nr_oversampled_trans,
++            exp_iclass_max - exp_iclass_min + 1,
++            mydata.getImagePixelSize(part_id), mymodel.ori_size, mymodel.current_size);
++        // Also dump the exp_highres_Xi2_img for this particle
++        if (exp_highres_Xi2_img.size() > 0)
++            __relion_dump_scalar("exp_highres_Xi2_img0", exp_highres_Xi2_img[0]);
++    }
++
+ #ifdef TIMING
+     if (part_id == mydata.sorted_idx[exp_my_first_part_id])
+     {
+@@ -8228,6 +8968,40 @@ void MlOptimiser::convertAllSquaredDifferencesToWeights(long int part_id, int ib
+     }
+     exp_significant_weight = my_significant_weight;
+ 
++    // ---- DUMP POINT 4: posterior weights ----
++    if (__relion_dump_enabled
++        && __relion_dump_matches_particle(mydata, part_id))
++    {
++        __relion_dump_flat("exp_Mweight_posterior", exp_Mweight);
++        __relion_dump_scalar("exp_sum_weight", exp_sum_weight);
++        __relion_dump_scalar("exp_significant_weight", exp_significant_weight);
++        __relion_dump_scalar("exp_min_diff2_final", exp_min_diff2);
++        // Dump pdf_direction for class 0 (the direction prior from model)
++        if (mymodel.pdf_direction.size() > 0)
++            __relion_dump_real("pdf_direction", mymodel.pdf_direction[0]);
++        // Dump old_offset for this particle
++        __relion_dump_scalar("old_offset_x", XX(exp_old_offset));
++        __relion_dump_scalar("old_offset_y", YY(exp_old_offset));
++        __relion_dump_scalar("sigma2_offset", my_sigma2_offset_x);
++        __relion_dump_scalar("offset_norm", my_offset_norm);
++        __relion_dump_vector_int("pointer_dir_nonzeroprior", exp_pointer_dir_nonzeroprior);
++        __relion_dump_vector_real("directions_prior", exp_directions_prior);
++        __relion_dump_vector_int("pointer_psi_nonzeroprior", exp_pointer_psi_nonzeroprior);
++        __relion_dump_vector_real("psi_prior", exp_psi_prior);
++        __relion_dump_scalar("exp_current_oversampling", (RFLOAT)exp_current_oversampling);
++        // Dump translation grid
++        {
++            long int nr_t = sampling.NrTranslationalSamplings();
++            MultidimArray<RFLOAT> trans_x(nr_t), trans_y(nr_t);
++            for (long int it = 0; it < nr_t; it++) {
++                DIRECT_A1D_ELEM(trans_x, it) = sampling.translations_x[it];
++                DIRECT_A1D_ELEM(trans_y, it) = sampling.translations_y[it];
++            }
++            __relion_dump_flat("translations_x", trans_x);
++            __relion_dump_flat("translations_y", trans_y);
++        }
++    }
++
+ #ifdef TIMING
+     if (part_id == mydata.sorted_idx[exp_my_first_part_id])
+     {
+@@ -9064,6 +9838,20 @@ void MlOptimiser::storeWeightedSums(long int part_id, int ibody,
+     // Also store sum of Pmax
+     thr_sum_Pmax += DIRECT_A2D_ELEM(exp_metadata, metadata_offset, METADATA_PMAX);
+ 
++    // ---- DUMP POINT 5: final Pmax and normalization for target particle ----
++    if (__relion_dump_enabled
++        && __relion_dump_matches_particle(mydata, part_id))
++    {
++        __relion_dump_scalar("Pmax", DIRECT_A2D_ELEM(exp_metadata, metadata_offset, METADATA_PMAX));
++        __relion_dump_scalar("dLL", dLL);
++        __relion_dump_scalar("exp_sum_weight_final", exp_sum_weight);
++        __relion_dump_scalar("exp_min_diff2_storeW", exp_min_diff2);
++        // Dump norm correction for this particle
++        RFLOAT old_nc = DIRECT_A2D_ELEM(exp_metadata, metadata_offset, METADATA_NORM);
++        __relion_dump_scalar("old_norm_correction", old_nc);
++        std::cerr << "[DUMP] All dumps complete for sorted particle " << __relion_dump_target_sorted << std::endl;
++    }
++
+     // Now, inside a global_mutex, update the other weighted sums among all threads
+     if (!do_skip_maximization)
+     {
