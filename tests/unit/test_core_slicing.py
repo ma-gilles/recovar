@@ -225,8 +225,18 @@ def test_slice_volume_max_r_matches_windowed_projection():
         atol=1e-5,
         rtol=1e-5,
     )
-    outside = np.setdiff1d(np.arange(proj_full.shape[1], dtype=np.int32), window_indices)
-    assert np.allclose(proj_clipped[:, outside], 0.0, atol=1e-6)
+    # ``max_r`` is a spherical cutoff, NOT the RELION half-layout window;
+    # the latter additionally excludes the negative boundary row
+    # (ky=-current_size//2) and redundant kx=0 negatives, both of which
+    # can still sit inside the sphere ``r ≤ max_r`` and so are not zeroed
+    # by ``slice_volume``. Check the true sphere boundary instead.
+    from recovar.em.dense_single_volume.helpers.fourier_window import (
+        make_frequency_coords_half_np,
+    )
+    coords = make_frequency_coords_half_np(image_shape)
+    r2 = (coords ** 2).sum(axis=1)
+    outside_sphere = np.where(r2 > (current_size // 2 + 0.5) ** 2)[0].astype(np.int32)
+    assert np.allclose(proj_clipped[:, outside_sphere], 0.0, atol=1e-6)
 
 
 def test_slice_volume_cubic_with_precomputed_spline_coefficients():

@@ -566,8 +566,10 @@ def test_relion_projector_projection_dense_scale_matches_embedded_means(monkeypa
     )
 
     expected = np.asarray(raw) * -16.0
-    np.testing.assert_allclose(np.asarray(proj), expected)
-    np.testing.assert_allclose(np.asarray(proj_abs2), np.abs(expected) ** 2)
+    # float32 round-trip through jnp / jax has ~1 ULP relative error; the
+    # default rtol=1e-7 of assert_allclose is too tight for float32.
+    np.testing.assert_allclose(np.asarray(proj), expected, rtol=1e-5, atol=1e-4)
+    np.testing.assert_allclose(np.asarray(proj_abs2), np.abs(expected) ** 2, rtol=1e-5, atol=1e-3)
 
 
 def test_resolve_class_inputs_relion_projector_keeps_exact_path_opt_in(monkeypatch):

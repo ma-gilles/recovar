@@ -5,6 +5,7 @@ Only tests argument registration via add_args() – no actual EM execution.
 """
 
 import argparse
+import sys
 from types import SimpleNamespace
 
 import numpy as np
