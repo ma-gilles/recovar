@@ -13,11 +13,10 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-import time
 from pathlib import Path
 from typing import AsyncGenerator
 
-from sqlalchemy import event, text
+from sqlalchemy import event
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -34,10 +33,61 @@ logger = logging.getLogger(__name__)
 _engines: dict[str, tuple] = {}
 
 
-def _set_wal_mode(dbapi_conn, connection_record):
-    """Enable WAL journal mode on every new SQLite connection."""
+# Filesystem types where SQLite's WAL shared-memory file is unsafe — its
+# memory-mapped -wal/-shm files corrupt or fail to lock over the network. On
+# these we fall back to a network-safe rollback journal so the project DB just
+# works wherever the user put their project (e.g. /scratch/gpfs), with no
+# action on their part.
+_NETWORK_FS_PREFIXES = (
+    "nfs",
+    "gpfs",
+    "lustre",
+    "cifs",
+    "smb",
+    "fuse.sshfs",
+    "fuse.glusterfs",
+    "beegfs",
+    "ceph",
+    "9p",
+)
+
+
+def _is_network_fs(path: Path) -> bool:
+    """Best-effort: is *path* on a network filesystem? Reads ``/proc/mounts``
+    and matches the longest mount point covering the path. Returns ``False``
+    when it can't tell (e.g. no ``/proc/mounts`` on non-Linux)."""
+    try:
+        mounts = Path("/proc/mounts").read_text().splitlines()
+    except OSError:
+        return False
+    target = str(path.resolve())
+    best_mount = ""
+    best_fstype = ""
+    for line in mounts:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        mountpoint, fstype = parts[1], parts[2]
+        if target == mountpoint or target.startswith(mountpoint.rstrip("/") + "/"):
+            if len(mountpoint) >= len(best_mount):
+                best_mount, best_fstype = mountpoint, fstype.lower()
+    return any(best_fstype == p or best_fstype.startswith(p) for p in _NETWORK_FS_PREFIXES)
+
+
+def _choose_journal_mode(db_path: Path) -> str:
+    """WAL on local disk (fast, concurrent reads); a network-safe rollback
+    journal on NFS/GPFS/Lustre/etc."""
+    try:
+        return "TRUNCATE" if _is_network_fs(db_path) else "WAL"
+    except Exception:  # pragma: no cover - defensive; never block DB open
+        return "WAL"
+
+
+def _apply_pragmas(dbapi_conn, journal_mode: str) -> None:
+    """Set journal mode, a lock wait, and foreign keys on a new connection."""
     cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute(f"PRAGMA journal_mode={journal_mode}")
+    cursor.execute("PRAGMA busy_timeout=10000")  # wait up to 10s on a lock instead of erroring
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
 
@@ -54,10 +104,19 @@ async def init_db(db_path: Path) -> async_sessionmaker[AsyncSession]:
     url = f"sqlite+aiosqlite:///{key}"
     engine = create_async_engine(url, echo=False)
 
-    # WAL mode via synchronous event (aiosqlite proxies to a background thread)
+    journal_mode = _choose_journal_mode(db_path)
+    if journal_mode != "WAL":
+        logger.warning(
+            "Project database is on a network filesystem; using %s journal "
+            "instead of WAL (WAL is unsafe over NFS/GPFS/Lustre): %s",
+            journal_mode,
+            key,
+        )
+
+    # Pragmas applied via synchronous event (aiosqlite proxies to a thread).
     @event.listens_for(engine.sync_engine, "connect")
     def on_connect(dbapi_conn, connection_record):
-        _set_wal_mode(dbapi_conn, connection_record)
+        _apply_pragmas(dbapi_conn, journal_mode)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

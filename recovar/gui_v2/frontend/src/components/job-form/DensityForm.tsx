@@ -3,10 +3,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
-import { FileBrowser } from "../file-browser/FileBrowser";
+import { PipelineOutputPicker } from "./PipelineOutputPicker";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
@@ -26,7 +25,6 @@ export function DensityForm({
 }: DensityFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
   const [resultDir, setResultDir] = useState(prefilledResultDir ?? "");
-  const [showResultDirBrowser, setShowResultDirBrowser] = useState(false);
   const [pcaDim, setPcaDim] = useState("4");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -60,37 +58,11 @@ export function DensityForm({
     },
   });
 
+  const missingFields = [!resultDir && "Result Directory"].filter(Boolean) as string[];
+
   return (
     <div className="space-y-4">
-      <div className="space-y-1">
-        <div className="flex items-center gap-1">
-          <Label>Result Directory</Label>
-          <TooltipIcon text={tooltips["density.result_dir"]} />
-        </div>
-        <div className="flex gap-2">
-          <PathInput
-            value={resultDir}
-            onChange={setResultDir}
-            directoryOnly
-            placeholder="/path/to/pipeline/output"
-            className="font-mono"
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowResultDirBrowser(!showResultDirBrowser)}
-          >
-            Browse
-          </Button>
-        </div>
-        {showResultDirBrowser && (
-          <FileBrowser
-            initialPath={resultDir || "/scratch/gpfs"}
-            selectDirectory
-            onSelect={(path) => { setResultDir(path); setShowResultDirBrowser(false); }}
-          />
-        )}
-      </div>
+      <PipelineOutputPicker value={resultDir} onChange={setResultDir} tooltip={tooltips["density.result_dir"]} />
 
       <div className="space-y-1">
         <div className="flex items-center gap-1">
@@ -151,7 +123,7 @@ export function DensityForm({
               type="number"
               value={numDiscPoints}
               onChange={(e) => setNumDiscPoints(e.target.value)}
-              placeholder="Auto"
+              placeholder="Auto (50/100/200 by dim)"
             />
           </div>
 
@@ -179,6 +151,9 @@ export function DensityForm({
       )}
 
       {/* Submit */}
+      {missingFields.length > 0 && (
+        <p className="text-xs text-amber-400">Required to submit: {missingFields.join(", ")}</p>
+      )}
       <div className="flex items-center justify-between pt-2">
         {mutation.isError && (
           <span className="text-sm text-red-400">{(mutation.error as Error).message}</span>

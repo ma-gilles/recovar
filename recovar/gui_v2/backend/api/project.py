@@ -1,6 +1,7 @@
 """Project REST API.
 
 Endpoints:
+    GET    /api/projects            — List known (registered) projects
     POST   /api/projects            — Create a new project
     GET    /api/projects/:id        — Get project with jobs
     POST   /api/projects/:id/scan   — Scan/import existing pipeline outputs
@@ -9,9 +10,11 @@ Endpoints:
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from recovar.gui_v2.backend.config import get_db_path
+from recovar.gui_v2.backend.config import get_db_path, iso_utc
 from recovar.gui_v2.backend.db import get_session, init_db, with_write_retry
 from recovar.gui_v2.backend.models.job import Job, JobStatus
 from recovar.gui_v2.backend.models.project import Project
@@ -45,8 +48,10 @@ class CreateProjectRequest(BaseModel):
     @field_validator("path")
     @classmethod
     def path_must_be_absolute(cls, v: str) -> str:
+        # Expand "~" so users can type e.g. ~/projects/foo.
+        v = os.path.expanduser(v.strip())
         if not os.path.isabs(v):
-            raise ValueError("path must be absolute")
+            raise ValueError("path must be absolute (or start with ~)")
         return v
 
 
@@ -55,6 +60,11 @@ class ProjectResponse(BaseModel):
     path: str
     name: str
     created: str  # ISO 8601
+
+
+class ProjectListItem(BaseModel):
+    id: str
+    path: str
 
 
 class JobSummary(BaseModel):
@@ -84,8 +94,11 @@ class ScanRequest(BaseModel):
     @field_validator("scan_path")
     @classmethod
     def scan_path_must_be_absolute(cls, v: str) -> str:
+        # Expand "~" so users can type e.g. ~/mytigress/. After expansion it
+        # must be absolute (a bare relative path is still rejected).
+        v = os.path.expanduser(v.strip())
         if not os.path.isabs(v):
-            raise ValueError("scan_path must be absolute")
+            raise ValueError("scan_path must be absolute (or start with ~)")
         return v
 
 
@@ -115,20 +128,114 @@ async def _get_project_session(project_path: str):
 
 
 # ---------------------------------------------------------------------------
-# Module-level project registry (in-memory, rebuilt on scan)
+# Module-level project registry (in-memory, persisted to disk)
 # ---------------------------------------------------------------------------
 
-# Maps project_id -> project_path for quick lookups.
-# In Phase 1 this is populated by create/scan operations.
+# Maps project_id -> project_path for quick lookups.  Populated by
+# create/open operations and rehydrated from a persisted index on startup so
+# that job/subset lookups and the startup reconcile survive a server restart.
 _project_registry: dict[str, str] = {}
 
 
+def _index_path() -> Path:
+    """Location of the persisted known-projects index.
+
+    Honors ``XDG_CONFIG_HOME``; falls back to ``~/.config/recovar``.
+    """
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+        os.path.expanduser("~"), ".config"
+    )
+    return Path(base) / "recovar" / "projects.json"
+
+
+def _load_persisted_index() -> dict[str, str]:
+    """Read the persisted project_id -> path map, or {} on any failure."""
+    path = _index_path()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    # Keep only well-formed string entries.
+    return {
+        str(k): str(v)
+        for k, v in data.items()
+        if isinstance(k, str) and isinstance(v, str)
+    }
+
+
+def _save_persisted_index() -> None:
+    """Atomically write the in-memory registry to the persisted index.
+
+    Failures are logged but never raised — persistence is best-effort and must
+    not break project create/open.
+    """
+    path = _index_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(_project_registry, fh, indent=2, sort_keys=True)
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    except OSError:
+        logger.warning("Could not persist project index to %s", path, exc_info=True)
+
+
+def load_persisted_projects() -> int:
+    """Rehydrate ``_project_registry`` from the persisted index.
+
+    Mutates the existing dict in place (consumers import it by reference).
+    Entries whose path or project DB no longer exists are dropped.  Returns
+    the number of projects loaded.  Safe to call multiple times.
+    """
+    persisted = _load_persisted_index()
+    loaded = 0
+    changed = False
+    for project_id, project_path in persisted.items():
+        if not get_db_path(project_path).exists():
+            changed = True  # stale entry — prune it on next save
+            continue
+        if _project_registry.get(project_id) != project_path:
+            _project_registry[project_id] = project_path
+            changed = True
+        loaded += 1
+    if changed:
+        _save_persisted_index()
+    return loaded
+
+
 def _register_project(project_id: str, project_path: str) -> None:
-    _project_registry[project_id] = project_path
+    if _project_registry.get(project_id) != project_path:
+        _project_registry[project_id] = project_path
+        _save_persisted_index()
 
 
 def get_project_path(project_id: str) -> str | None:
-    return _project_registry.get(project_id)
+    path = _project_registry.get(project_id)
+    if path is not None:
+        return path
+    # Not in memory (e.g. registered by another process, or registry not yet
+    # hydrated this run): consult the persisted index lazily.
+    persisted = _load_persisted_index()
+    path = persisted.get(project_id)
+    if path is not None:
+        _project_registry[project_id] = path
+    return path
+
+
+# Hydrate the registry from disk at import so registry-iterating consumers
+# (job/subset lookups) and the startup reconcile work after a server restart,
+# even before any project is explicitly opened this run.
+try:
+    load_persisted_projects()
+except Exception:  # pragma: no cover - never block import on a bad index
+    logger.warning("Failed to load persisted project index", exc_info=True)
 
 
 async def _load_project_by_id(project_id: str) -> tuple[Project, AsyncSession]:
@@ -156,6 +263,20 @@ async def _load_project_by_id(project_id: str) -> tuple[Project, AsyncSession]:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get("", response_model=list[ProjectListItem])
+async def list_projects() -> list[ProjectListItem]:
+    """List known projects (id + path) from the persisted registry.
+
+    Lets the frontend rediscover/re-register projects after a server restart.
+    Entries whose project DB no longer exists are pruned.
+    """
+    load_persisted_projects()
+    return [
+        ProjectListItem(id=pid, path=ppath)
+        for pid, ppath in sorted(_project_registry.items(), key=lambda kv: kv[1])
+    ]
 
 
 @router.post("", response_model=ProjectResponse, status_code=201)
@@ -187,7 +308,7 @@ async def create_project(req: CreateProjectRequest) -> ProjectResponse:
                 id=existing.id,
                 path=existing.path,
                 name=existing.name,
-                created=existing.created_at.isoformat(),
+                created=iso_utc(existing.created_at),
             )
 
         # Create new project record
@@ -202,7 +323,7 @@ async def create_project(req: CreateProjectRequest) -> ProjectResponse:
             id=project.id,
             path=project.path,
             name=project.name,
-            created=project.created_at.isoformat(),
+            created=iso_utc(project.created_at),
         )
 
 
@@ -237,8 +358,8 @@ async def get_project(project_id: str) -> ProjectDetailResponse:
                 type=j.type,
                 status=j.status,
                 output_dir=j.output_dir,
-                created=j.created_at.isoformat(),
-                completed=j.completed_at.isoformat() if j.completed_at else None,
+                created=iso_utc(j.created_at),
+                completed=iso_utc(j.completed_at),
                 slurm_id=j.slurm_id,
                 error=j.error,
             )
@@ -249,7 +370,7 @@ async def get_project(project_id: str) -> ProjectDetailResponse:
             id=project.id,
             path=project.path,
             name=project.name,
-            created=project.created_at.isoformat(),
+            created=iso_utc(project.created_at),
             jobs=jobs,
             disk_usage_bytes=disk_usage_bytes,
             disk_usage_total=disk_usage_total,
@@ -268,7 +389,7 @@ async def scan_project(project_id: str, req: ScanRequest) -> ScanResponse:
     project, session = await _load_project_by_id(project_id)
 
     try:
-        scan_path = os.path.abspath(req.scan_path)
+        scan_path = os.path.abspath(os.path.expanduser(req.scan_path))
         if not os.path.isdir(scan_path):
             raise HTTPException(
                 status_code=400,

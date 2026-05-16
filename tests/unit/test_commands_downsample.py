@@ -232,8 +232,8 @@ def test_main_registers_gpu_memory_cap():
     parser.add_argument("particles")
     parser.add_argument("-D", "--target-D", type=int, required=True)
     parser.add_argument("-o", "--outdir", required=True)
-    parser.add_argument("--gpu-gb", "--gpu-memory", dest="gpu_memory", type=float, default=None)
-    action = parser._option_string_actions["--gpu-gb"]
+    parser.add_argument("--gpu-budget-gb", "--gpu-memory", dest="gpu_memory", type=float, default=None)
+    action = parser._option_string_actions["--gpu-budget-gb"]
     assert action.dest == "gpu_memory"
 
 

@@ -163,7 +163,7 @@ def test_pipeline_spa_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb",
+        "--gpu-budget-gb",
         "8",
     ]
     _run(cmd)
@@ -233,7 +233,7 @@ def test_pipeline_cryo_et_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb",
+        "--gpu-budget-gb",
         "8",
     ]
     _run(cmd)
@@ -295,7 +295,7 @@ def test_pipeline_cryo_et_radial_per_tilt_noise_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb",
+        "--gpu-budget-gb",
         "8",
     ]
     _run(cmd)
@@ -352,7 +352,7 @@ def test_pipeline_cryo_et_premultiplied_ctf_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb",
+        "--gpu-budget-gb",
         "8",
     ]
     _run(cmd)
@@ -412,7 +412,7 @@ def test_pipeline_cryo_et_radial_per_tilt_premultiplied_ctf_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb",
+        "--gpu-budget-gb",
         "8",
     ]
     _run(cmd)
@@ -468,7 +468,7 @@ def test_pipeline_spa_radial_noise_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb",
+        "--gpu-budget-gb",
         "8",
     ]
     _run(cmd)

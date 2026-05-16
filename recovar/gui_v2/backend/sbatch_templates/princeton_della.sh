@@ -8,7 +8,7 @@
 
 # ── Environment ──
 export PYTHONNOUSERSITE=1
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_PREALLOCATE=true
 {{ tmpdir_block }}
 export PATH={{ pixi_bin_dir }}:$PATH
 {{ extra_exports }}

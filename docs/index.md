@@ -20,25 +20,31 @@ hide:
 
 ## Why RECOVAR?
 
-- **Highest resolution** on [CryoBench](https://cryobench.cs.princeton.edu) across multiple datasets
-- **Conformational density** and free-energy landscape estimation
+- **Highest resolution** on [CryoBench](https://cryobench.cs.princeton.edu)
+- **Conformational density** estimation in latent space
 - **Cryo-ET support** for tilt-series heterogeneity analysis
 - **Web GUI** with interactive latent-space exploration and sub-particle selection
 - **Direct input** from RELION (`.star`) and cryoSPARC (`.cs`) -- no format conversion
-- **No hallucinations** -- kernel regression produces transparent, verifiable volumes
+- **No generative model** -- volumes come from kernel regression on your particles, not a neural network
 
 !!! info "What you need before starting"
     RECOVAR starts **after consensus refinement** in RELION or cryoSPARC. You need:
 
     1. A particle stack with poses and CTF — a RELION `.star` file or cryoSPARC `.cs` file
     2. A solvent mask (`.mrc`) — or let RECOVAR generate one automatically
-    3. An NVIDIA GPU (any Volta or newer — V100, RTX 20/30/40-series, A100, H100)
+    3. An NVIDIA GPU, Volta or newer (V100, RTX 20/30/40-series, A100, H100) — 16+ GB of VRAM is recommended, though smaller cards work with `--downsample` and `--lazy`
 
     RECOVAR outputs: mean reconstruction, variance maps, eigenvolumes, latent coordinates, k-means cluster volumes, UMAP embeddings, and trajectories — all exportable back to RELION/cryoSPARC.
 
 ---
 
 ## Example output
+
+In the Web GUI you can color particles by cluster, lasso a subset, and generate a volume at any point with a click:
+
+![Interactive latent-space explorer in the Web GUI](_static/gui/16_latent_explorer.png)
+
+RECOVAR also writes diagnostic plots and volumes:
 
 <div class="example-outputs" markdown>
 
@@ -48,7 +54,7 @@ hide:
 
 </div>
 
-*Inspect results directly in the browser -- 3D volume viewer with adjustable isosurface threshold:*
+Inspect any volume in the browser, with an adjustable isosurface threshold:
 
 ![3D volume viewer in the GUI](_static/gui/homepage_volume_viewer.png)
 
@@ -56,7 +62,7 @@ hide:
 
 ## Typical workflow
 
-The easiest way to use RECOVAR is through the [Web GUI](guide/gui.md) -- launch it with `recovar gui`, then create jobs, explore the latent space, and generate volumes all from your browser.
+Launch the [Web GUI](guide/gui.md) with `recovar gui` to create jobs, explore the latent space, and generate volumes in the browser.
 
 Or use the command line:
 

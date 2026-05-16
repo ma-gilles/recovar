@@ -2,19 +2,22 @@
 
 After the pipeline finishes, use `recovar analyze` to generate volumes, compute k-means clusters, create trajectories, and run UMAP.
 
-!!! example "Choose your workflow: :octicons-terminal-16: **CLI** or :material-monitor: **GUI**"
-    This page has tabbed instructions for both the **command line** and the **web GUI**. Click the tab headers below each section to switch. Your choice is remembered across all pages. [How to launch the GUI →](gui.md#launching-the-gui)
+Instructions below are tabbed for the **CLI** and the **GUI**.
 
 ## Submitting an analyze job
 
 === ":material-monitor: GUI"
 
-    ![Analyze job form](../../_static/gui/14_analyze_form.png)
+    ![Analyze job form](../_static/gui/14_analyze_form.png)
 
     1. From a completed pipeline job, click **Analyze this pipeline output** in Suggested Next Steps (auto-fills the result directory)
     2. Or click **+ New Job** > **Analyze** and browse to the pipeline output directory
     3. Set zdim, k-means clusters, and trajectories
-    4. Click **Submit Analyze Job**
+    4. Optionally expand **Advanced** to tune **n-bins** and **maskrad-fraction** (the kernel-regression knobs that trade resolution for speed)
+    5. Click **Submit Analyze Job**
+
+    !!! tip "Quick Analyze"
+        The **Quick Analyze** button submits the same job with `n-bins=10` and `maskrad-fraction=10`, making the cluster-center volumes roughly 40x faster to compute at lower resolution. UMAP and k-means are unchanged.
 
 === ":octicons-terminal-16: CLI"
 
@@ -28,30 +31,36 @@ This generates:
 - UMAP embedding of the latent space
 - Trajectories between cluster pairs (if requested)
 
-Results are saved to `output/analysis_10/`.
+Results are saved next to the pipeline output, in `result_dir/analysis_10/` (here `result_dir` is `output`). With `--no-z-regularization`, the suffix changes and results go to `result_dir/analysis_10_noreg/`.
 
 ## Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--zdim` | Required | Latent dimension (single integer) |
-| `-o` | Auto | Output directory (default: `result_dir/output/analysis_{zdim}/`) |
+| `--zdim` | Auto | Latent dimension (single integer). If the pipeline produced only one embedding, it is used automatically; otherwise you must set this |
+| `-o` | Auto | Output directory (default: `result_dir/analysis_{zdim}/`, or `analysis_{zdim}_noreg/` with `--no-z-regularization`) |
 | `--n-clusters` | 20 | Number of k-means clusters |
 | `--n-trajectories` | 0 | Number of trajectories between cluster pairs |
 | `--n-vols-along-path` | 6 | Volumes per trajectory |
 | `--Bfactor` | 0 | B-factor sharpening |
 | `--n-bins` | 50 | Bins for kernel regression |
+| `--maskrad-fraction` | 20 | Kernel radius = `grid_size / maskrad-fraction`. Lower it for noisier data, raise it for low-resolution data |
+| `--n-min-particles` | 100 | Minimum particles per bin for kernel regression |
 | `--skip-umap` | False | Skip UMAP (faster for large datasets) |
 | `--skip-centers` | False | Skip generating cluster center volumes |
 | `--lazy` | False | Lazy loading for large datasets |
-| `--no-z-regularization` | False | Use unregularized latent variables |
+| `--no-z-regularization` | False | Use unregularized latent variables (changes output suffix to `_noreg`) |
 
 !!! tip "How to choose zdim"
-    Look at the eigenvalue spectrum plot. Choose the zdim where eigenvalues start to flatten -- this is where signal transitions to noise. Typical values: 2-4 for simple motions, 10-20 for complex heterogeneity.
+    The algorithms are generally not very sensitive to the number of eigenvectors (PCs) — with one exception, density estimation (see below). For general exploratory analysis — seeing how many clusters are in the data, whether there are outliers, the overall distribution — **zdim 20** is a typical choice.
+
+    Sometimes it is preferable to use as few PCs as possible while still capturing most of the variance. A reasonably reliable way to do this is to look at the **eigenvolumes** (in the GUI, or in the plots the pipeline writes): where they start to look like noise, you can drop those components.
+
+    For **density estimation** you typically need a focus mask and as few PCs as you can — up to 4 — and there it is particularly important to choose well.
 
 !!! tip "What to inspect first after analyze"
     1. **Mean map** — is the reconstruction sensible? Open `mean_filt.mrc` in ChimeraX
-    2. **Eigenvalue spectrum** — how many modes before it flattens? That's your signal
+    2. **Eigenvolumes** — which show real structure, and which look like noise? The noisy ones can be dropped when picking zdim
     3. **PCA scatter** — isolated clusters or continuous gradients?
     4. **K-means volumes** — do the differences correspond to real density changes?
     5. **UMAP** — does it confirm the structure seen in PCA?
@@ -88,12 +97,15 @@ recovar compute_state output -o volumes \
 | `--particles` | Same | Different particle stack for higher resolution |
 | `--datadir` | Same | Path prefix for particle paths |
 
+!!! tip "Fast volume estimation"
+    Volumes come from kernel regression, and the speed/resolution tradeoff is set by `--n-bins` and `--maskrad-fraction`. Lowering both (e.g. `--n-bins 10 --maskrad-fraction 10`) makes volumes roughly 40x faster to compute at lower resolution — handy for a quick preview before a full-resolution run. This applies to both `compute_state` and `analyze`. In the GUI, the **Analyze** form bundles it into the one-click **Quick Analyze** button.
+
 ## Computing trajectories
 
-Use `compute_trajectory` to compute high-density (low free-energy) paths through latent space:
+Use `compute_trajectory` to compute high-density paths through latent space:
 
 ```bash
-recovar compute_trajectory output -o trajectory --zdim=10 \
+recovar compute_trajectory output -o trajectory --zdim=4 \
     --density density/data/deconv_density_knee.pkl \
     --endpts centers.txt --ind 0,1
 ```
@@ -112,19 +124,19 @@ Choose one of:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--zdim` | Required | Latent dimension |
+| `--zdim` | Auto | Latent dimension. Inferred from the embedding when only one is present; set it when several are available |
 | `--density` | None | Density file for high-density path |
 | `--n-vols-along-path` | 6 | Number of volumes along the path |
 | `--Bfactor` | 0 | B-factor sharpening |
 | `--n-bins` | 50 | Bins for kernel regression |
 
 !!! tip
-    The `--density` option is important for computing paths that follow high-density (low free-energy) regions. Generate density with `estimate_conformational_density`.
+    The `--density` option is important for computing paths that follow high-density regions. Generate density with `estimate_conformational_density`.
 
 ## Viewing results
 
 !!! tip "Interactive exploration"
-    Use `recovar gui` to explore results interactively in your browser — view scatter plots, click to generate volumes, and inspect 3D renderings. See the [GUI Guide](gui.md).
+    Use `recovar gui` to explore results in your browser. See the [GUI Guide](gui.md).
 
 ### Volume files
 
@@ -157,7 +169,3 @@ Load the trajectory volumes as a series in ChimeraX to create conformational mov
 ```
 open state000.mrc state001.mrc state002.mrc ... as_series
 ```
-
-## Example output
-
-See the [Tutorial](tutorial.md) for a complete worked example with all output plots from `recovar analyze` on EMPIAR-10076.

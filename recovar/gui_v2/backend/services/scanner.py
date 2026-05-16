@@ -152,8 +152,15 @@ def _is_analyze_output(job_dir: str) -> bool:
 def _detect_job_type_from_dir(type_dir_name: str, job_dir: str) -> str | None:
     """Infer the job type from the parent directory name and contents.
 
-    First checks job.json's ``command`` field (authoritative), then falls
-    back to matching the directory name against the registry.
+    Resolution order:
+    1. ``job.json``'s ``command`` field — authoritative when present.
+    2. Directory name against the registry / known list — handles the
+       canonical ``Pipeline``, ``Analyze``, etc. layout.
+    3. Structural fingerprint — if the directory has the markers of a
+       pipeline output (``model/metadata.json`` or ``model/params.pkl``)
+       or an analyze output (``data/`` + ``plots/`` or ``kmeans/``),
+       classify it accordingly. This catches ad-hoc CLI runs created
+       with arbitrary ``-o`` paths like ``pipeline_output_clean_main``.
     """
     try:
         from recovar.project.registry import JOB_TYPES, get_job_type
@@ -161,19 +168,17 @@ def _detect_job_type_from_dir(type_dir_name: str, job_dir: str) -> str | None:
         JOB_TYPES = {}
         get_job_type = lambda _: None  # noqa: E731
 
-    # Primary: read job.json and use the command field to look up type
+    # 1. job.json command field
     job_data = _read_job_json(job_dir)
     if job_data and job_data.get("command"):
         jt = get_job_type(job_data["command"])
         if jt is not None:
             return jt.name
 
-    # Fallback: match directory name against registry
+    # 2. Directory name match
     for jt in JOB_TYPES.values():
         if jt.dir_name == type_dir_name:
             return jt.name
-
-    # Last resort: hardcoded known names
     known_dirs = {
         "Pipeline": "Pipeline",
         "Analyze": "Analyze",
@@ -189,7 +194,15 @@ def _detect_job_type_from_dir(type_dir_name: str, job_dir: str) -> str | None:
         "PipelineWithOutliers": "PipelineWithOutliers",
         "ReconstructExternal": "ReconstructExternal",
     }
-    return known_dirs.get(type_dir_name)
+    if type_dir_name in known_dirs:
+        return known_dirs[type_dir_name]
+
+    # 3. Structural fingerprint
+    if _is_pipeline_output(job_dir):
+        return "Pipeline"
+    if _is_analyze_output(job_dir):
+        return "Analyze"
+    return None
 
 
 def _scan_job_dir(type_name: str, job_dir: str) -> ScannedJob:
@@ -252,6 +265,57 @@ def _scan_job_dir(type_name: str, job_dir: str) -> ScannedJob:
     )
 
 
+# Subdirectories of a pipeline output that hold its own artifacts rather than
+# nested jobs.  Skipping them keeps the nested walk cheap and stops artifact
+# directories (``data/`` + ``plots/``) from tripping the structural fingerprint.
+_PIPELINE_ARTIFACT_DIRS = frozenset(
+    {
+        "model",
+        "output",
+        "downsampled",
+        "_diagnostics",
+        "volumes",
+        "plots",
+        "data",
+        "kmeans",
+    }
+)
+
+
+def _scan_nested_job_dirs(pipeline_dir: str) -> list[ScannedJob]:
+    """Find downstream jobs written *inside* a pipeline output directory.
+
+    ``analyze`` and the other downstream commands default to writing into
+    the pipeline directory they consume (``<pipeline>/Analyze/``,
+    ``<pipeline>/analysis_N/``), which is one level below where the
+    project walk looks.
+    """
+    pipeline_dir = os.path.abspath(pipeline_dir)
+    nested: list[ScannedJob] = []
+    try:
+        entries = sorted(os.listdir(pipeline_dir))
+    except OSError as exc:
+        logger.warning("Cannot list %s: %s", pipeline_dir, exc)
+        return nested
+
+    for name in entries:
+        if name in _PIPELINE_ARTIFACT_DIRS:
+            continue
+        sub_dir = os.path.join(pipeline_dir, name)
+        if not os.path.isdir(sub_dir):
+            continue
+        job_type = _detect_job_type_from_dir(name, sub_dir)
+        # A nested "Pipeline" would be a pipeline inside a pipeline: out of
+        # scope, and descending into it risks unbounded recursion.
+        if job_type is None or job_type == "Pipeline":
+            continue
+        scanned = _scan_job_dir(job_type, sub_dir)
+        if pipeline_dir not in scanned.parent_job_dirs:
+            scanned.parent_job_dirs.append(pipeline_dir)
+        nested.append(scanned)
+    return nested
+
+
 def scan_project_directory(project_dir: str) -> list[ScannedJob]:
     """Scan a project directory for existing job outputs.
 
@@ -288,6 +352,7 @@ def scan_project_directory(project_dir: str) -> list[ScannedJob]:
     # Pipeline/job_NNNN/).
     if _is_pipeline_output(project_dir):
         results.append(_scan_job_dir("Pipeline", project_dir))
+        results.extend(_scan_nested_job_dirs(project_dir))
 
     for type_dir_name in top_entries:
         type_dir = os.path.join(project_dir, type_dir_name)
@@ -315,6 +380,8 @@ def scan_project_directory(project_dir: str) -> list[ScannedJob]:
 
             scanned = _scan_job_dir(job_type, job_dir)
             results.append(scanned)
+            if job_type == "Pipeline":
+                results.extend(_scan_nested_job_dirs(job_dir))
             found_job_dir = True
 
         # If no job_NNNN subdirectories found, check if the type
@@ -326,6 +393,19 @@ def scan_project_directory(project_dir: str) -> list[ScannedJob]:
                 or _is_analyze_output(type_dir)
             ):
                 results.append(_scan_job_dir(job_type, type_dir))
+                if job_type == "Pipeline":
+                    results.extend(_scan_nested_job_dirs(type_dir))
+
+    # A job can be reachable twice (nested walk plus the top-level walk
+    # of a flat project whose root is itself a pipeline output).
+    seen: set[str] = set()
+    deduped: list[ScannedJob] = []
+    for job in results:
+        if job.output_dir in seen:
+            continue
+        seen.add(job.output_dir)
+        deduped.append(job)
+    results = deduped
 
     # Sort by creation time (oldest first)
     results.sort(key=lambda s: s.created_at or datetime.datetime.min)
@@ -354,7 +434,10 @@ def scan_arbitrary_directory(scan_path: str) -> list[ScannedJob]:
 
     # First check if this IS a pipeline output directly
     if _is_pipeline_output(scan_path):
-        return [_scan_job_dir("Pipeline", scan_path)]
+        return [
+            _scan_job_dir("Pipeline", scan_path),
+            *_scan_nested_job_dirs(scan_path),
+        ]
 
     # Check if it's an analyze output directly
     if _is_analyze_output(scan_path):

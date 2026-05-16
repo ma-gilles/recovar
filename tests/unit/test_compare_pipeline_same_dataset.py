@@ -18,11 +18,11 @@ def _load_compare_module():
 
 def test_sanitize_pipeline_extra_args_drops_very_low_memory_option():
     mod = _load_compare_module()
-    args = ["--mask", "from_halfmaps", "--very-low-memory-option", "--gpu-gb", "20", "--correct-contrast"]
+    args = ["--mask", "from_halfmaps", "--very-low-memory-option", "--gpu-budget-gb", "20", "--correct-contrast"]
     out = mod.sanitize_pipeline_extra_args(args)
     assert "--very-low-memory-option" not in out
     # Keep unrelated args untouched.
-    assert out == ["--mask", "from_halfmaps", "--gpu-gb", "20", "--correct-contrast"]
+    assert out == ["--mask", "from_halfmaps", "--gpu-budget-gb", "20", "--correct-contrast"]
 
 
 def test_main_strips_very_low_memory_from_pipeline_commands(monkeypatch, tmp_path):
@@ -60,7 +60,7 @@ def test_main_strips_very_low_memory_from_pipeline_commands(monkeypatch, tmp_pat
         "--output-base",
         str(tmp_path / "out"),
         "--pipeline-extra-args",
-        "--mask from_halfmaps --noise-model radial --correct-contrast --very-low-memory-option --gpu-gb 20",
+        "--mask from_halfmaps --noise-model radial --correct-contrast --very-low-memory-option --gpu-budget-gb 20",
     ]
     monkeypatch.setattr(sys, "argv", argv)
 
@@ -70,4 +70,4 @@ def test_main_strips_very_low_memory_from_pipeline_commands(monkeypatch, tmp_pat
     assert len(pipeline_cmds) == 2
     for cmd in pipeline_cmds:
         assert "--very-low-memory-option" not in cmd
-        assert "--gpu-gb" in cmd
+        assert "--gpu-budget-gb" in cmd

@@ -130,7 +130,15 @@ class Tomogram:
         # --- Tilt-level metadata (same for all particles sharing this Tomogram) ---
         mic_names = tilt_df["_rlnMicrographName"].values
         pre_exposure = tilt_df["_rlnMicrographPreExposure"].values.astype(float)
-        ctf_scale = tilt_df["_rlnCtfScalefactor"].values.astype(float)
+        # RELION-like tilt-series STAR files produced by external alignment
+        # pipelines may omit the per-tilt ice-thickness scale. RELION 5's
+        # tomography reconstruction initializes a missing scale to cos(Y tilt),
+        # and cryoDRGN follows the same convention. RECOVAR's downstream tilt
+        # loader expects the output column to be present.
+        if "_rlnCtfScalefactor" in tilt_df.columns:
+            ctf_scale = tilt_df["_rlnCtfScalefactor"].values.astype(float)
+        else:
+            ctf_scale = np.cos(np.deg2rad(tilt_df["_rlnTomoYTilt"].values.astype(float)))
         stage_tilt = tilt_df["_rlnTomoNominalStageTiltAngle"].values.astype(float)
 
         # --- Build flat arrays for the output DataFrame ---
@@ -157,6 +165,10 @@ class Tomogram:
                 "_rlnDefocusAngle": dfa_all.ravel(),
                 "_rlnImageName": img_name_flat,
                 "_rlnMicrographName": mic_flat,
+                # Every RELION 5 micrograph row represents one physical tilt.
+                # Also expose that identity under RECOVAR's canonical name so
+                # micrograph-level outlier detection can group its particles.
+                "_rlnTiltName": mic_flat,
                 "_rlnCtfScalefactor": ctf_scale_flat,
                 "_rlnGroupName": group_flat,
                 "_rlnAngleRot": euler_all[:, :, 0].ravel(),

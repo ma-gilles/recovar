@@ -20,7 +20,7 @@ from pathlib import Path
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy import select
 
-from recovar.gui_v2.backend.api.jobs import _get_job, get_executor
+from recovar.gui_v2.backend.api.jobs import _get_job, get_executor_for_job
 from recovar.gui_v2.backend.api.project import get_project_path
 from recovar.gui_v2.backend.config import get_db_path
 from recovar.gui_v2.backend.db import init_db
@@ -112,9 +112,10 @@ async def job_stream(
         except Exception:
             pass
 
-    # Find log file
+    # Find log file. Use the job's OWN executor (PID-based local vs SLURM id);
+    # the server default would query the wrong backend for a mixed-mode host.
     log_path: Path | None = None
-    executor = get_executor()
+    executor = get_executor_for_job(job)
     if job.executor_handle:
         log_path = await executor.log_path(job.executor_handle)
     if log_path is None and job.executor_handle:
@@ -170,7 +171,12 @@ async def job_stream(
                 continue
 
             try:
-                new_status = await executor.status(job.executor_handle)
+                # Local jobs need the working dir to read run.exitcode on exit;
+                # otherwise a finished local PID reports UNKNOWN.
+                if job.output_dir and hasattr(executor, "status_with_dir"):
+                    new_status = await executor.status_with_dir(job.executor_handle, job.output_dir)
+                else:
+                    new_status = await executor.status(job.executor_handle)
             except Exception:
                 continue
 

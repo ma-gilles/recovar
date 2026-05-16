@@ -12,6 +12,7 @@ import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
+import { useProject } from "../../lib/project-context";
 
 interface DownsampleFormProps {
   projectId: string;
@@ -25,6 +26,7 @@ export function DownsampleForm({
   onSubmitted,
 }: DownsampleFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
+  const { project } = useProject();
   const [particles, setParticles] = useState(prefilledParticles ?? "");
   const [showParticlesBrowser, setShowParticlesBrowser] = useState(false);
   const [targetD, setTargetD] = useState("128");
@@ -62,6 +64,11 @@ export function DownsampleForm({
 
   const canSubmit = particles.length > 0 && targetDValid;
 
+  const missingFields = [
+    !particles.length && "Particles",
+    !targetD.length && "Target Box Size",
+  ].filter(Boolean) as string[];
+
   return (
     <div className="space-y-4">
       <div className="space-y-1">
@@ -87,7 +94,7 @@ export function DownsampleForm({
         </div>
         {showParticlesBrowser && (
           <FileBrowser
-            initialPath={particles ? particles.split("/").slice(0, -1).join("/") || "/" : "/scratch/gpfs"}
+            initialPath={particles ? particles.split("/").slice(0, -1).join("/") || "/" : project?.path || "/scratch/gpfs"}
             accept={[".star", ".cs", ".mrcs", ".txt"]}
             onSelect={(path) => { setParticles(path); setShowParticlesBrowser(false); }}
           />
@@ -171,6 +178,9 @@ export function DownsampleForm({
       )}
 
       {/* Submit */}
+      {missingFields.length > 0 && (
+        <p className="text-xs text-amber-400">Required to submit: {missingFields.join(", ")}</p>
+      )}
       <div className="flex items-center justify-between pt-2">
         {mutation.isError && (
           <span className="text-sm text-red-400">{(mutation.error as Error).message}</span>

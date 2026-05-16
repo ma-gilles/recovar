@@ -75,7 +75,15 @@ export function HistogramPanel({
 
     // Build bins: if we have labels, build per-cluster stacked bins
     const hasLabels = labels != null;
-    const nClusters = hasLabels ? Math.max(...Array.from(labels!)) + 1 : 1;
+    // Compute the max label with a loop — spreading ~200k entries into
+    // Math.max(...) overflows V8's argument limit (RangeError) on large datasets.
+    let maxLabel = 0;
+    if (hasLabels) {
+      for (let i = 0; i < labels!.length; i++) {
+        if (labels![i] > maxLabel) maxLabel = labels![i];
+      }
+    }
+    const nClusters = hasLabels ? maxLabel + 1 : 1;
     // bins[cluster][bin]
     const bins: number[][] = Array.from({ length: nClusters }, () => new Array(NUM_BINS).fill(0));
     const selectedBins = new Array(NUM_BINS).fill(0);

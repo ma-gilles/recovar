@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useParams, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -9,7 +9,6 @@ import {
   Box,
   Image,
   ChevronRight,
-  ChevronDown,
   Copy,
   XCircle,
   X,
@@ -17,7 +16,6 @@ import {
   EyeOff,
   RefreshCw,
   ZoomIn,
-  Pin,
 } from "lucide-react";
 import { clsx } from "clsx";
 import {
@@ -31,32 +29,32 @@ import {
   reconcileJob,
   getChartData,
   type JobDetail,
+  type ProjectDetail,
   type VolumeEntry,
   type PlotEntry,
   type SuggestedNext,
   type SbatchScript,
   type ChartData,
 } from "../../lib/api/client";
+import { fetchExploreTarget } from "../../lib/api/embeddings";
 import Plot from "react-plotly.js";
 import { useProject } from "../../lib/project-context";
 import { VolumeViewer, type PinnedVolume } from "../../components/volume-viewer/VolumeViewer";
+import {
+  VolumeCategoryGroup,
+  CATEGORY_ORDER,
+  COLLAPSED_BY_DEFAULT,
+  isHiddenVolume,
+  naturalCompare,
+  formatJobType,
+  jobTypeToUrlSlug,
+} from "../../components/volume-viewer/volumeCategories";
+import { MaskWizard } from "../../components/mask-wizard/MaskWizard";
 import { MAX_PINNED_VOLUMES } from "../../lib/constants";
 import { StatusBadge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Spinner } from "../../components/ui/spinner";
 import { LogViewer } from "../../components/log-viewer/LogViewer";
-
-/** Maps PascalCase job type names to URL-friendly snake_case slugs. */
-const TYPE_URL_MAP: Record<string, string> = {
-  Pipeline: "pipeline",
-  Analyze: "analyze",
-  ComputeState: "compute_state",
-  ComputeTrajectory: "compute_trajectory",
-  Density: "density",
-  StableStates: "stable_states",
-  ReconstructState: "reconstruct_state",
-  ReconstructTrajectory: "reconstruct_trajectory",
-};
 
 const tabs = [
   { id: "overview", label: "Overview", icon: Clock },
@@ -133,7 +131,7 @@ function OverviewTab({
         </div>
         <div className="space-y-1">
           <span className="text-xs text-zinc-500">Type</span>
-          <p className="text-sm capitalize">{job.type.replace("_", " ")}</p>
+          <p className="text-sm capitalize">{formatJobType(job.type)}</p>
         </div>
         <div className="space-y-1">
           <span className="text-xs text-zinc-500">Created</span>
@@ -180,7 +178,7 @@ function OverviewTab({
             <p className="font-mono text-sm text-zinc-300">{job.output_dir}</p>
             <button
               className="inline-flex items-center rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-              onClick={() => navigator.clipboard.writeText(job.output_dir!)}
+              onClick={() => navigator.clipboard?.writeText(job.output_dir!).catch(() => undefined)}
               title="Copy path"
               aria-label="Copy output directory path"
             >
@@ -210,7 +208,7 @@ function OverviewTab({
                 key={s.type}
                 to="/jobs/new"
                 search={{
-                  type: TYPE_URL_MAP[s.type] ?? s.type.toLowerCase(),
+                  type: jobTypeToUrlSlug(s.type),
                   result_dir: (s.prefilled_params?.result_dir as string) || undefined,
                   density: (s.prefilled_params?.density as string) || undefined,
                   input: (s.prefilled_params?.input as string) || undefined,
@@ -275,17 +273,7 @@ function buildCloneSearchParams(job: JobDetail): {
   particles: string | undefined;
   params: string | undefined;
 } {
-  const typeMap: Record<string, string> = {
-    Pipeline: "pipeline",
-    Analyze: "analyze",
-    ComputeState: "compute_state",
-    ComputeTrajectory: "compute_trajectory",
-    Density: "density",
-    StableStates: "stable_states",
-    Postprocess: "postprocess",
-    Downsample: "downsample",
-  };
-  const type = typeMap[job.type] ?? job.type.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
+  const type = jobTypeToUrlSlug(job.type);
   const p = job.params ?? {};
   return {
     type,
@@ -353,7 +341,7 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
                     {isLong && (
                       <button
                         className="ml-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-                        onClick={() => navigator.clipboard.writeText(display)}
+                        onClick={() => navigator.clipboard?.writeText(display).catch(() => undefined)}
                         title="Copy value"
                         aria-label={`Copy ${key} value`}
                       >
@@ -374,187 +362,11 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Volume filtering & display helpers
-// ---------------------------------------------------------------------------
-
-/** Patterns matching "uninteresting" volumes hidden by default. */
-const HIDDEN_PATTERNS = [/_half[0-9]/, /_unfil/, /halfmap/, /unfiltered/i, /^sampling\.mrc$/i];
-
-/** Returns true if a volume name matches the hidden-by-default patterns. */
-function isHiddenVolume(name: string): boolean {
-  const lower = name.toLowerCase();
-  return HIDDEN_PATTERNS.some((pat) => pat.test(lower));
-}
-
-/**
- * Build a display name for a volume.  If `needsDisambiguation` is true
- * (i.e. another volume in the same list has an identical filename),
- * prepend the parent directory.
- */
-function volumeDisplayName(v: VolumeEntry, needsDisambiguation: boolean): string {
-  if (!needsDisambiguation) return v.name;
-  const parts = v.path.replace(/\\/g, "/").split("/");
-  if (parts.length >= 2) {
-    return `${parts[parts.length - 2]}/${v.name}`;
-  }
-  return v.name;
-}
-
-/** Human-readable labels for volume categories. */
-const CATEGORY_LABELS: Record<string, string> = {
-  mean: "Mean Reconstruction",
-  eigen: "Eigenvolumes",
-  variance: "Variance Map",
-  halfmap: "Half-maps (raw)",
-  mask: "Masks",
-  kmeans_center: "K-means Centers",
-  trajectory: "Trajectory Volumes",
-  reconstruction: "Reconstructed States",
-  density: "Density / Deconvolved",
-  other: "Other",
-};
-
-/** Canonical ordering for category groups. */
-const CATEGORY_ORDER: string[] = [
-  "mean",
-  "eigen",
-  "variance",
-  "kmeans_center",
-  "trajectory",
-  "reconstruction",
-  "density",
-  "mask",
-  "other",
-  "halfmap",
-];
-
-/** Categories collapsed by default. */
-const COLLAPSED_BY_DEFAULT = new Set(["halfmap", "other"]);
-
-/**
- * Natural sort comparator: splits on numeric boundaries so that
- * "vol_2" sorts before "vol_10".
- */
-function naturalCompare(a: string, b: string): number {
-  const re = /(\d+)/g;
-  const aParts = a.split(re);
-  const bParts = b.split(re);
-  const len = Math.min(aParts.length, bParts.length);
-  for (let i = 0; i < len; i++) {
-    const aNum = Number(aParts[i]);
-    const bNum = Number(bParts[i]);
-    if (!isNaN(aNum) && !isNaN(bNum)) {
-      if (aNum !== bNum) return aNum - bNum;
-    } else {
-      const cmp = (aParts[i] ?? "").localeCompare(bParts[i] ?? "");
-      if (cmp !== 0) return cmp;
-    }
-  }
-  return aParts.length - bParts.length;
-}
-
-function VolumeCategoryGroup({
-  cat,
-  vols,
-  selectedVolume,
-  onSelect,
-  ambiguousNames,
-  defaultCollapsed,
-  pinnedPaths,
-  onPin,
-  onUnpin,
-  pinDisabled,
-}: {
-  cat: string;
-  vols: VolumeEntry[];
-  selectedVolume: string | null;
-  onSelect: (path: string) => void;
-  ambiguousNames: Set<string>;
-  defaultCollapsed: boolean;
-  pinnedPaths?: Set<string>;
-  onPin?: (path: string, name: string) => void;
-  onUnpin?: (path: string) => void;
-  pinDisabled?: boolean;
-}): React.JSX.Element {
-  const [open, setOpen] = useState(!defaultCollapsed);
-
-  return (
-    <div>
-      <button
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-1.5 py-1.5 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-300 outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-950 rounded"
-      >
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-        )}
-        {CATEGORY_LABELS[cat] ?? cat}
-        <span className="font-normal normal-case tracking-normal text-zinc-600">
-          ({vols.length})
-        </span>
-      </button>
-      {open && (
-        <div className="ml-5 space-y-px">
-          {vols.map((v) => {
-            const displayName = volumeDisplayName(v, ambiguousNames.has(v.name));
-            const active = selectedVolume === v.path;
-            return (
-              <div
-                key={v.path}
-                className={clsx(
-                  "flex items-center gap-2 rounded px-2 py-1 text-sm",
-                  active
-                    ? "bg-blue-500/15 text-blue-300"
-                    : "text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
-                )}
-                title={v.path}
-              >
-                <button
-                  className="flex flex-1 items-center gap-2 text-left min-w-0"
-                  onClick={() => onSelect(v.path)}
-                >
-                  <Box className="h-3.5 w-3.5 shrink-0 text-sky-400" />
-                  <span className="truncate">{displayName}</span>
-                </button>
-                <span className="shrink-0 text-xs text-zinc-600">
-                  {(v.size_bytes / 1e6).toFixed(1)} MB
-                </span>
-                {onPin && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const isPinned = pinnedPaths?.has(v.path);
-                      if (isPinned) onUnpin?.(v.path);
-                      else onPin(v.path, v.name);
-                    }}
-                    className={clsx(
-                      "shrink-0",
-                      pinnedPaths?.has(v.path)
-                        ? "text-blue-400"
-                        : "text-zinc-600 hover:text-zinc-300"
-                    )}
-                    disabled={pinDisabled && !pinnedPaths?.has(v.path)}
-                    aria-label={pinnedPaths?.has(v.path) ? `Unpin ${displayName}` : `Pin ${displayName}`}
-                  >
-                    <Pin className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
+function VolumesTab({ jobId, projectId }: { jobId: string; projectId: string }): React.JSX.Element {
   const [selectedVolume, setSelectedVolume] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [pinnedVolumes, setPinnedVolumes] = useState<PinnedVolume[]>([]);
+  const [maskSource, setMaskSource] = useState<{ path: string; name: string } | null>(null);
   const { data: volumes, isLoading } = useQuery<VolumeEntry[]>({
     queryKey: ["job-volumes", jobId],
     queryFn: () => getJobVolumes(jobId),
@@ -680,9 +492,18 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
             onPin={handlePin}
             onUnpin={handleUnpin}
             pinDisabled={pinnedVolumes.length >= MAX_PINNED_VOLUMES}
+            onMakeMask={(path, name) => setMaskSource({ path, name })}
           />
         ))}
       </div>
+
+      <MaskWizard
+        open={maskSource !== null}
+        onClose={() => setMaskSource(null)}
+        sourcePath={maskSource?.path ?? ""}
+        sourceName={maskSource?.name ?? ""}
+        projectId={projectId}
+      />
     </div>
   );
 }
@@ -710,12 +531,32 @@ function detectChartName(filename: string): string | null {
   return null;
 }
 
+/** Cryo-EM acronyms that should stay fully upper-cased in captions. */
+const PLOT_CAPTION_ACRONYMS = new Set([
+  "fsc",
+  "pca",
+  "umap",
+  "ctf",
+  "pc",
+  "snr",
+  "ssnr",
+  "2d",
+  "3d",
+]);
+
 /** Derive a human-readable caption from a plot filename. */
 function plotCaption(filename: string): string {
   return filename
     .replace(/\.[^.]+$/, "")       // strip extension
     .replace(/[_-]+/g, " ")        // underscores/hyphens to spaces
-    .replace(/\b\w/g, (c) => c.toUpperCase()); // title-case each word
+    .split(/\s+/)
+    .filter((w) => w.length > 0)
+    .map((w) =>
+      PLOT_CAPTION_ACRONYMS.has(w.toLowerCase())
+        ? w.toUpperCase()
+        : w.charAt(0).toUpperCase() + w.slice(1)
+    )
+    .join(" ");
 }
 
 function PlotCell({
@@ -778,16 +619,18 @@ function InteractiveChartWithFallback({
   chartName: string;
   onFallback: () => void;
 }): React.JSX.Element | null {
-  const { data, isLoading } = useQuery<ChartData | null>({
+  const { data, isLoading, isError } = useQuery<ChartData | null>({
     queryKey: ["chart-data", jobId, chartName],
     queryFn: () => getChartData(jobId, chartName),
     retry: false,
     staleTime: Infinity,
   });
 
-  // data is undefined while loading, null when endpoint returned non-OK
+  // undefined while loading; null when the endpoint returned non-OK (e.g. 404);
+  // isError if the request threw. Any of these -> fall back to the static PNG so
+  // the "Loading chart..." spinner is never terminal.
   const unavailable =
-    data === null || (data !== undefined && data.traces.length === 0);
+    isError || data === null || (data !== undefined && data.traces.length === 0);
 
   useEffect(() => {
     if (unavailable) {
@@ -803,7 +646,7 @@ function InteractiveChartWithFallback({
     );
   }
 
-  if (!data || data.traces.length === 0) {
+  if (unavailable || !data) {
     return null;
   }
 
@@ -931,6 +774,80 @@ function PlotsTab({ jobId }: { jobId: string }): React.JSX.Element {
   );
 }
 
+/**
+ * Dropdown that lets the user pick another job of the same type from
+ * the active project, then navigates to /compare?jobs=<this>,<that>.
+ */
+function CompareWithDropdown({
+  currentJob,
+  project,
+}: {
+  currentJob: JobDetail;
+  project: { id: string } | null;
+}): React.JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent): void {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  const { data: projectDetail } = useQuery<ProjectDetail>({
+    queryKey: ["project", project?.id],
+    queryFn: () => getProject(project!.id),
+    enabled: open && !!project?.id,
+  });
+
+  const candidates = useMemo(() => {
+    if (!projectDetail) return [] as ProjectDetail["jobs"];
+    return projectDetail.jobs.filter(
+      (j) => j.id !== currentJob.id && j.type === currentJob.type
+    );
+  }, [projectDetail, currentJob.id, currentJob.type]);
+
+  return (
+    <div ref={ref} className="relative">
+      <Button variant="outline" size="sm" onClick={() => setOpen((o) => !o)}>
+        Compare with…
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-1 max-h-72 w-72 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
+          {!projectDetail ? (
+            <p className="px-3 py-2 text-xs text-zinc-500">Loading…</p>
+          ) : candidates.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-zinc-500">
+              No other {formatJobType(currentJob.type)} jobs in this project.
+            </p>
+          ) : (
+            candidates.map((j) => (
+              <Link
+                key={j.id}
+                to="/compare"
+                search={{ jobs: `${currentJob.id},${j.id}` }}
+                onClick={() => setOpen(false)}
+                className="block px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50"
+                title={j.output_dir}
+              >
+                <span className="block truncate">
+                  {j.output_dir.split("/").slice(-2).join("/")}
+                </span>
+                <span className="text-[10px] text-zinc-500">{j.status} · {new Date(j.created).toLocaleDateString()}</span>
+              </Link>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function JobDetailPage(): React.JSX.Element {
   const { jobId } = useParams({ from: "/jobs/$jobId" });
   const [activeTab, setActiveTab] = useState<TabId>("overview");
@@ -950,6 +867,14 @@ export function JobDetailPage(): React.JSX.Element {
     queryKey: ["job-suggestions", jobId],
     queryFn: () => getSuggestedNext(jobId),
     enabled: job?.status === "completed",
+  });
+
+  // For Density jobs, resolve the Analyze/Pipeline job to open in the explorer
+  // (density jobs have no embeddings of their own).
+  const { data: exploreTargetId } = useQuery<string | null>({
+    queryKey: ["explore-target", jobId],
+    queryFn: () => fetchExploreTarget(jobId),
+    enabled: job?.status === "completed" && job?.type?.toLowerCase() === "density",
   });
 
   const { project, setProject } = useProject();
@@ -980,6 +905,14 @@ export function JobDetailPage(): React.JSX.Element {
   const handleReconcile = useCallback(() => {
     reconcileMutation.mutate();
   }, [reconcileMutation]);
+
+  const cancelMutation = useMutation({
+    mutationFn: () => cancelJob(jobId),
+    onSuccess: () => {
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["project"] });
+    },
+  });
 
   const handleStatusChange = useCallback(
     (_status: string) => {
@@ -1018,20 +951,26 @@ export function JobDetailPage(): React.JSX.Element {
             <ArrowLeft className="h-4 w-4" />
           </Link>
           <h1 className="text-xl font-semibold capitalize">
-            {job.type.replace("_", " ")}
+            {formatJobType(job.type)}
           </h1>
           <StatusBadge status={job.status} />
         </div>
         <div className="flex items-center gap-2">
           {!isTerminal && (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => cancelJob(jobId).then(() => refetch())}
-            >
-              <XCircle className="h-3.5 w-3.5" />
-              Cancel
-            </Button>
+            <div className="flex flex-col items-end gap-1">
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => cancelMutation.mutate()}
+                disabled={cancelMutation.isPending}
+              >
+                <XCircle className="h-3.5 w-3.5" />
+                {cancelMutation.isPending ? "Cancelling…" : "Cancel"}
+              </Button>
+              {cancelMutation.isError && (
+                <span className="text-xs text-red-400">Failed to cancel job.</span>
+              )}
+            </div>
           )}
           {isTerminal && (job.type.toLowerCase() === "pipeline" || job.type.toLowerCase() === "analyze") && (
             <Link to="/explore/$jobId" params={{ jobId }}>
@@ -1040,6 +979,14 @@ export function JobDetailPage(): React.JSX.Element {
               </Button>
             </Link>
           )}
+          {isTerminal && job.type.toLowerCase() === "density" && exploreTargetId && (
+            <Link to="/explore/$jobId" params={{ jobId: exploreTargetId }}>
+              <Button variant="default" size="sm">
+                Explore Latent Space
+              </Button>
+            </Link>
+          )}
+          <CompareWithDropdown currentJob={job} project={project} />
         </div>
       </div>
 
@@ -1082,7 +1029,7 @@ export function JobDetailPage(): React.JSX.Element {
           <LogViewer jobId={jobId} jobStatus={job.status} onStatusChange={handleStatusChange} />
         )}
         {activeTab === "params" && <ParamsTab job={job} />}
-        {activeTab === "volumes" && <VolumesTab jobId={jobId} />}
+        {activeTab === "volumes" && <VolumesTab jobId={jobId} projectId={job.project_id} />}
         {activeTab === "plots" && <PlotsTab jobId={jobId} />}
       </div>
     </div>

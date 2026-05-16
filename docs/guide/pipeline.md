@@ -2,14 +2,13 @@
 
 The RECOVAR pipeline takes particle images and a mask, then computes the mean reconstruction, covariance, principal components, and embeddings.
 
-!!! example "Choose your workflow: :octicons-terminal-16: **CLI** or :material-monitor: **GUI**"
-    This page has tabbed instructions for both the **command line** and the **web GUI**. Click the tab headers below each section to switch. Your choice is remembered across all pages. [How to launch the GUI →](gui.md#launching-the-gui)
+Instructions below are tabbed for the **CLI** and the **GUI**. [How to launch the GUI →](gui.md#launching-the-gui)
 
 ## Submitting a pipeline job
 
 === ":material-monitor: GUI"
 
-    ![Pipeline job form](../../_static/gui/06_new_job_pipeline.png)
+    ![Pipeline job form](../_static/gui/06_new_job_pipeline.png)
 
     1. Click **+ New Job** in the sidebar
     2. Select **Pipeline** from the Job Type dropdown
@@ -29,8 +28,12 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
     # cryoSPARC cs file
     recovar pipeline particles.cs --mask mask.mrc --datadir /project/ --project .
 
-    # With downsampling
+    # The pipeline downsamples to a box size of 256 by default.
+    # Pick a different target box size (e.g. 128 for faster runs):
     recovar pipeline particles.star --mask mask.mrc --downsample 128 --project .
+
+    # Or keep the original box size (disable the default downsampling):
+    recovar pipeline particles.star --mask mask.mrc --no-downsample --project .
 
     # Standalone explicit output directory (still supported)
     recovar pipeline particles.star -o output --mask mask.mrc
@@ -52,24 +55,32 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
 
 === ":material-monitor: GUI"
 
-    ![Advanced pipeline options](../../_static/gui/06c_advanced.png)
+    ![Advanced pipeline options](../_static/gui/06c_advanced.png)
+
+    **Focus Mask** is a top-level field (just below Solvent Mask) — browse to a custom focus mask for targeted heterogeneity, or leave it empty.
 
     Expand the **Advanced** section in the job form to set:
 
+    - **Output Name** -- name for the job directory (auto-generated if blank)
     - **zdim** -- PCA dimensions (default: 1,2,4,10,20)
-    - **Downsample** -- target box size (e.g., 128)
-    - **Lazy loading** -- for large datasets
-    - **Correct image scale** -- amplitude scaling correction
-    - **Focus Mask** -- browse to a custom focus mask
-    - **Tilt series** -- enable for cryo-ET data
+    - **Downsample** -- target box size (default: 256)
+    - **Lazy loading** -- stream images from disk for large datasets
+    - **Correct image scale** -- estimate and correct amplitude scaling
+    - **Do-over with contrast** -- recompute after the scale correction (appears only when Correct image scale is on)
+    - **Tilt series** -- enable for cryo-ET data (reveals the cryo-ET panel below)
+    - **Data Directory** and **Strip Prefix** -- path overrides for resolving image filenames
 
-    Under **Rarely Used**: Poses, CTF, N Images, Halfsets.
+    Under **Rarely Used**: Halfset indices (`.pkl`), N Images, Poses, CTF, and Indices (`--ind`).
+
+    !!! note "GUI defaults differ slightly from the CLI"
+        The GUI turns **Correct image scale** and **Lazy loading** on by default, whereas the CLI leaves both off. Uncheck them to match the CLI behavior.
 
 === ":octicons-terminal-16: CLI"
 
     | Flag | Default | Description |
     |------|---------|-------------|
-    | `--downsample D` | None | Downsample images to box size D (pre-downsamples to disk) |
+    | `--downsample D` | 256 | Downsample images to box size D before processing (pre-downsamples to disk). Skipped automatically if images are already at or below this size |
+    | `--no-downsample` | — | Disable the default downsampling and run at the original box size |
     | `--poses` | Auto | Poses file (`.pkl`). Auto-extracted from `.star`/`.cs` |
     | `--ctf` | Auto | CTF file (`.pkl`). Auto-extracted from `.star`/`.cs` |
     | `--focus-mask` | None | Focus mask for targeted heterogeneity |
@@ -84,7 +95,7 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
 
 === ":material-server-network: SLURM Cluster"
 
-    ![SLURM settings](../../_static/gui/06h_slurm_settings.png)
+    ![SLURM settings](../_static/gui/06h_slurm_settings.png)
 
     When submitting to SLURM (either from the GUI or CLI on a cluster), configure:
 
@@ -102,7 +113,7 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
 
 === ":material-desktop-tower: Local GPU"
 
-    ![Local GPU settings](../../_static/gui/06g_local_selected.png)
+    ![Local GPU settings](../_static/gui/06g_local_selected.png)
 
     Run directly on the current machine's GPUs without SLURM:
 
@@ -137,18 +148,17 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
 |------|---------|-------------|
 | `--noise-model` | radial | Noise model: `radial` or `white` |
 | `--mean-fn` | triangular | Mean function: `triangular` or `triangular_reg` |
-| `--gpu-gb` | All | GPU memory limit in GB |
+| `--gpu-budget-gb` | All | Soft GPU memory budget in GB for RECOVAR batch planning |
 | `--n-gpus` | All | Number of GPUs to use |
 | `--keep-intermediate` | False | Save intermediate results |
 | `--accept-cpu` | False | Allow running without GPU |
 | `--ignore-zero-frequency` | False | Useful if images are normalized to zero mean |
 | `--low-memory-option` | False | Lower memory for covariance estimation |
 | `--very-low-memory-option` | False | Lowest memory for covariance estimation |
-| `--premultiplied-ctf` | False | Input images have pre-multiplied CTF |
 
 ## Multi-GPU (experimental)
 
-Multi-GPU support parallelizes the covariance estimation step across GPUs. This is the most expensive step of the pipeline, so multi-GPU can significantly reduce total runtime for large datasets.
+Multi-GPU parallelizes the covariance estimation step across GPUs. Because that is the most expensive step, multi-GPU reduces runtime on large datasets.
 
 ```bash
 # Use all available GPUs
@@ -164,8 +174,8 @@ recovar pipeline particles.star -o output --mask mask.mrc --multi-gpu --n-gpus 4
 ### GPU memory and device selection
 
 ```bash
-# Limit memory per GPU (useful on shared machines)
-recovar pipeline particles.star -o output --mask mask.mrc --gpu-gb 8
+# Plan for a smaller per-GPU budget (useful on shared machines)
+recovar pipeline particles.star -o output --mask mask.mrc --gpu-budget-gb 8
 
 # Select specific GPUs by ID
 CUDA_VISIBLE_DEVICES=0,2 recovar pipeline particles.star -o output --mask mask.mrc --multi-gpu
@@ -176,13 +186,22 @@ XLA_PYTHON_CLIENT_PREALLOCATE=false recovar pipeline ...
 
 ## Cryo-ET options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tilt-series` | False | Use tilt-series data |
-| `--tilt-series-ctf` | Auto | CTF model: `cryoem`, `relion5`, `warp` |
-| `--dose-per-tilt` | From file | Dose per tilt |
-| `--angle-per-tilt` | From file | Angle per tilt |
-| `--ntilts` | All | Number of tilts per series |
+=== ":material-monitor: GUI"
+
+    ![Pipeline form with cryo-ET options](../_static/gui/06d_pipeline_tilt.png)
+
+    Tick **Tilt series** in the Advanced section to switch the pipeline into cryo-ET mode. This reveals a cryo-ET panel, which expects a RELION5 2D-tilt star file (produced by `recovar parse_relion5_tomo`) — per-tilt dose, tilt angles, and CTF are read automatically from that star. The one common override exposed here is **Max tilts** (`--ntilts`), which limits how many tilts per series are used.
+
+=== ":octicons-terminal-16: CLI"
+
+    | Flag | Default | Description |
+    |------|---------|-------------|
+    | `--tilt-series` | False | Use tilt-series data |
+    | `--tilt-series-ctf` | Auto | CTF model: `cryoem`, `relion5`, `warp` |
+    | `--dose-per-tilt` | From file | Dose per tilt |
+    | `--angle-per-tilt` | From file | Angle per tilt |
+    | `--ntilts` | All | Number of tilts per series |
+    | `--premultiplied-ctf` | False | Input images have pre-multiplied CTF |
 
 See [Cryo-ET](cryo-et.md) for details.
 
@@ -194,9 +213,9 @@ output/
   command.txt              # Command that was run
   run.log                  # Full log
   README.txt               # Human-readable output summary
-  downsampled/             # Pre-downsampled images (if --downsample used)
-    particles.128.mrcs
-    particles.128.star
+  downsampled/             # Pre-downsampled images (created unless --no-downsample)
+    particles.256.mrcs
+    particles.256.star
   model/                   # Internal model data
     params.pkl             # Pipeline parameters
     zdim_4/                # Per-zdim embedding directories
@@ -222,7 +241,7 @@ When using the **project system** (`--project`), pipeline output is placed into 
 
 === ":material-monitor: GUI"
 
-    ![Completed pipeline job](../../_static/gui/07_job_completed.png)
+    ![Completed pipeline job](../_static/gui/07_job_completed.png)
 
     After the pipeline completes, the job detail page shows:
 
@@ -233,21 +252,14 @@ When using the **project system** (`--project`), pipeline output is placed into 
 
 === ":octicons-terminal-16: CLI"
 
-    See the [Tutorial](tutorial.md) for a full worked example with real pipeline output and plots on EMPIAR-10076 (50S ribosome, 131k particles).
+    The pipeline writes diagnostic plots and volumes under the output directory — see the `output/plots/` and `output/volumes/` subfolders above. Open the `.mrc` volumes in ChimeraX and the `.png` plots in any image viewer.
 
 ## Tips
 
-!!! tip "Recommended starting parameters"
-    - **Downsample**: 128 for speed, 256 for quality
-    - **zdim**: Start with `1,2,4,10,20` (default). For publication, also try `--zdim 40`
-    - **n-images**: Use 10000-50000 for initial exploration, all images for final run
-    - **--correct-contrast**: Always enable this unless you know your data is already contrast-corrected
-
-!!! tip "Quick setup check"
-    Use `--only-mean` for a fast run that only computes the mean reconstruction. This verifies your data, mask, and CTF are correct before committing to a full run.
-
-!!! tip "Large datasets"
-    For datasets > 500k particles, use `--lazy` for lazy loading and `--downsample 128` for speed. Consider `--n-images 100000` for initial exploration.
-
-!!! tip "Memory"
-    If you run out of GPU memory, try `--low-memory-option` or `--very-low-memory-option`. You can also limit memory with `--gpu-gb 8`.
+- **Downsample**: 256 by default; drop to 128 for faster runs, or `--no-downsample` to keep the original box size.
+- **zdim**: the default `1,2,4,10,20` is usually enough; for publication you can also try `--zdim 40`.
+- **n-images**: 10000-50000 for initial exploration, all images for the final run.
+- **--correct-contrast**: enable unless the data is already contrast-corrected.
+- **Quick check**: `--only-mean` computes only the mean reconstruction — a fast way to verify data, mask, and CTF before a full run.
+- **Large datasets** (>500k particles): `--lazy` plus `--downsample 128`.
+- **Out of GPU memory**: `--low-memory-option` or `--very-low-memory-option`, or set `--gpu-budget-gb 8`.

@@ -1,0 +1,304 @@
+"""Unit tests for the error_hints classifier."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+pytestmark = [pytest.mark.unit]
+
+
+def _ctx_with(monkeypatch, **overrides):
+    """Return a DiagnosticContext patched with whatever the test cares about."""
+    from recovar.utils import error_hints
+
+    base = error_hints.DiagnosticContext()
+    for k, v in overrides.items():
+        setattr(base, k, v)
+    return base
+
+
+def test_oom_hint_diagnoses_and_recommends_one_fix():
+    """With an empty context (no physical info, no plan), we fall through
+    to the generic branch and recommend --gpu-budget-gb + --adaptive-n-pcs.
+    The hint must NOT lecture the user to undo deliberate flags."""
+    from recovar.utils import error_hints
+
+    text = "XlaRuntimeError: RESOURCE_EXHAUSTED: failed to allocate 12.34 GiB"
+    hint = error_hints.classify_text(text, error_hints.DiagnosticContext())
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+    blob = "\n".join(hint.suggestions)
+    assert "--gpu-budget-gb" in blob
+    assert "--adaptive-n-pcs" in blob
+    # Should not tell the user to unset their own deliberate choice.
+    assert "unset RECOVAR_DISABLE_CUDA" not in blob
+
+
+def test_oom_hint_when_gpu_occupied_recommends_switching_gpus():
+    """nvidia-smi enumerated a competing PID → diagnose 'another process' and
+    recommend CUDA_VISIBLE_DEVICES, NOT a wall of budget knobs.
+
+    Updated 2026-05-15: requires CONFIRMED PID evidence. Without
+    enumerated PIDs we now (conservatively) fall through to case 3
+    (generic OOM) rather than misattribute. Driver clarification: the
+    previous heuristic fired on 'physical_free<<total + empty PID list',
+    which under slurm cgroup isolation often hid recovar itself."""
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        physical_total_gb=80.0,
+        physical_free_gb=1.5,
+        physical_processes=[
+            {"pid": 99999, "name": "other_user.py", "used_mb": 78_000},
+        ],
+    )
+    hint = error_hints.classify_text("XlaRuntimeError: RESOURCE_EXHAUSTED: failed to allocate 12.34 GiB", ctx)
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+    assert "another process" in hint.summary.lower() or "hogging" in hint.summary.lower()
+    blob = "\n".join(hint.suggestions)
+    assert "CUDA_VISIBLE_DEVICES" in blob
+    assert "--low-memory-option" not in blob
+    assert "--very-low-memory-option" not in blob
+
+
+def test_oom_hint_when_gpu_occupied_but_no_pid_enumerated_falls_through():
+    """When the GPU appears occupied (free << total) but nvidia-smi
+    enumerated NO compute PIDs (cgroup/slurm isolation case), do NOT
+    misdiagnose as 'another process'. Fall through to case 3 (generic)
+    so the user isn't told to switch GPUs when really it's just
+    recovar itself whose PID wasn't enumerated."""
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        physical_total_gb=80.0,
+        physical_free_gb=1.5,  # appears 78.5 GB used by "someone"
+        physical_processes=[],  # but nvidia-smi enumerated nothing
+    )
+    hint = error_hints.classify_text("RESOURCE_EXHAUSTED: failed to allocate 12.34 GiB", ctx)
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+    # Case 3 (generic) — NOT case 1 (other-process).
+    assert "another process" not in hint.summary.lower()
+    blob = "\n".join(hint.suggestions)
+    assert "--gpu-budget-gb" in blob
+
+
+def test_oom_hint_when_planner_predicted_oom_recommends_adaptive():
+    """planner predicted_peak > effective_budget → recommend --adaptive-n-pcs."""
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        physical_total_gb=80.0,
+        physical_free_gb=78.0,  # GPU is quiet — not the conflict case
+        last_memory_plan={
+            "budget": {"effective_budget_gb": 20.0, "requested_gb": 20.0},
+            "predicted_peak_gb_total": 51.0,  # planner already warned
+        },
+    )
+    hint = error_hints.classify_text("CUDA_ERROR_OUT_OF_MEMORY", ctx)
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+    blob = "\n".join(hint.suggestions)
+    assert "--adaptive-n-pcs" in blob
+    # We picked the right single recommendation, not the kitchen sink.
+    assert "CUDA_VISIBLE_DEVICES" not in blob
+
+
+def test_oom_hint_when_disable_cuda_is_set_does_not_tell_user_to_unset_it():
+    """custom_cuda_disabled=True is informational — user set it on purpose.
+    The hint MUST NOT recommend unsetting RECOVAR_DISABLE_CUDA. It should
+    recommend the actionable flags (--gpu-budget-gb, --adaptive-n-pcs) and mention
+    the fallback as context only."""
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        backend="jax_fallback",
+        custom_cuda_disabled=True,
+        physical_total_gb=80.0,
+        physical_free_gb=78.0,  # quiet GPU — case 1 should not fire
+    )
+    hint = error_hints.classify_text("CUDA_ERROR_OUT_OF_MEMORY", ctx)
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+    blob = "\n".join(hint.suggestions)
+    # Actionable suggestions:
+    assert "--gpu-budget-gb" in blob
+    assert "--adaptive-n-pcs" in blob
+    # Should NOT lecture about undoing the user's deliberate choice.
+    assert "unset RECOVAR_DISABLE_CUDA" not in blob
+    assert "build_custom_cuda" not in blob
+    # The fallback is mentioned in the cause as context only.
+    assert "fallback" in hint.likely_cause.lower()
+
+
+def test_oom_when_other_process_detected_recommends_switching_gpu():
+    """nvidia-smi enumerated another process holding GPU memory →
+    suggest CUDA_VISIBLE_DEVICES + lowering --gpu-budget-gb."""
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        physical_total_gb=80.0,
+        physical_free_gb=15.0,
+        physical_processes=[
+            {"pid": 99999, "name": "other.py", "used_mb": 60_000},
+        ],
+    )
+    hint = error_hints.classify_text("CUDA_ERROR_OUT_OF_MEMORY", ctx)
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+    blob = "\n".join(hint.suggestions)
+    assert "CUDA_VISIBLE_DEVICES" in blob
+    assert "--gpu-budget-gb" in blob
+    assert "another process" in hint.summary.lower() or "another process" in hint.likely_cause.lower()
+
+
+def test_conflicting_process_when_free_is_tiny(monkeypatch):
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        physical_total_gb=80.0,
+        physical_free_gb=10.0,
+        physical_processes=[{"pid": 99999, "name": "other.py", "used_mb": 60_000}],
+        last_memory_plan={"budget": {"requested_gb": 70.0}},
+    )
+    hint = error_hints.classify_text(
+        "some unrelated runtime error",  # not OOM, but conflict is obvious
+        ctx,
+    )
+    assert hint is not None
+    assert hint.category == "conflicting_gpu_process"
+    blob = " ".join(hint.suggestions)
+    assert "CUDA_VISIBLE_DEVICES" in blob
+
+
+def test_custom_cuda_unavailable():
+    from recovar.utils import error_hints
+
+    text = (
+        "RuntimeError: RECOVAR's preferred custom CUDA backproject/project "
+        "extension is unavailable. Last error: cannot find libcuda_backproject.so"
+    )
+    hint = error_hints.classify_text(text, error_hints.DiagnosticContext())
+    assert hint is not None
+    assert hint.category == "custom_cuda_unavailable"
+    blob = " ".join(hint.suggestions)
+    assert "build_custom_cuda" in blob
+
+
+def test_xla_autotuner_no_valid_config_hint():
+    """XLA autotuner 'No valid config found' should be classified as
+    xla_autotuner_failed (not OOM) and recommend xla_gpu_autotune_level=0
+    as the broad-hammer override."""
+    from recovar.utils import error_hints
+
+    text = (
+        "jax.errors.JaxRuntimeError: INTERNAL: Autotuning failed for HLO: "
+        "%input_transpose_fusion = f32[19306,19306]{1,0} fusion(%cholesky.7.0), "
+        'kind=kInput, metadata={op_name="jit(_solve)/jit(_cholesky)/transpose"} '
+        "with error: NOT_FOUND: No valid config found!"
+    )
+    hint = error_hints.classify_text(text, error_hints.DiagnosticContext())
+    assert hint is not None
+    assert hint.category == "xla_autotuner_failed"
+    # Must surface the offending op and shape
+    assert "_cholesky" in hint.likely_cause or "_cholesky" in str(hint.diagnostic_context)
+    blob = " ".join(hint.suggestions)
+    assert "xla_gpu_autotune_level=0" in blob
+    # Should not be misclassified as OOM
+    assert hint.category != "gpu_oom"
+
+
+def test_cpu_fallback():
+    from recovar.utils import error_hints
+
+    text = "No GPU/TPU found, falling back to CPU."
+    hint = error_hints.classify_text(text, error_hints.DiagnosticContext())
+    assert hint is not None
+    assert hint.category == "cpu_fallback_needed"
+
+
+def test_dataset_path_error():
+    from recovar.utils import error_hints
+
+    exc = FileNotFoundError("foo.mrcs")
+    ctx = error_hints.DiagnosticContext()
+    hint = error_hints.classify_exception(exc, ctx)
+    assert hint is not None
+    assert hint.category == "dataset_path_error"
+    # Must NOT suggest GPU memory flags for a path error.
+    blob = "\n".join(hint.suggestions)
+    assert "--gpu-budget-gb" not in blob
+    assert "--adaptive-n-pcs" not in blob
+    assert "check_paths" in blob
+
+
+def test_disk_quota_error_not_misclassified_as_gpu_conflict():
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        physical_total_gb=80.0,
+        physical_free_gb=10.0,
+        physical_processes=[{"pid": 99999, "name": "other.py", "used_mb": 60_000}],
+        last_memory_plan={"budget": {"requested_gb": 70.0}},
+    )
+    text = "OSError: [Errno 122] Disk quota exceeded"
+    hint = error_hints.classify_text(text, ctx)
+    assert hint is not None
+    assert hint.category == "disk_space_exhausted"
+    blob = "\n".join(hint.suggestions)
+    assert "output directory" in blob
+    assert "CUDA_VISIBLE_DEVICES" not in blob
+    assert "--gpu-budget-gb" not in blob
+
+
+def test_unrecognized_returns_none_when_no_conflict():
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext()  # no physical info
+    hint = error_hints.classify_text("totally unrelated random error string", ctx)
+    assert hint is None
+
+
+def test_format_hint_emits_delimiter_and_recover_section():
+    from recovar.utils import error_hints
+
+    hint = error_hints.classify_text("RESOURCE_EXHAUSTED: out of memory", error_hints.DiagnosticContext())
+    out = error_hints.format_error_hint(hint)
+    assert "═" * 10 in out
+    assert "TO RECOVER" in out
+    assert hint.summary in out
+
+
+def test_write_hint_log(tmp_path):
+    from recovar.utils import error_hints
+
+    hint = error_hints.classify_text("RESOURCE_EXHAUSTED", error_hints.DiagnosticContext())
+    p = error_hints.write_hint_log(hint, tmp_path)
+    assert p.exists()
+    payload = json.loads(p.read_text())
+    assert payload["category"] == "gpu_oom"
+
+
+def test_classify_subprocess_failure_uses_combined_text():
+    from recovar.utils import error_hints
+
+    stdout = "ok\nstill ok\n"
+    stderr = "Error: CUDA_ERROR_OUT_OF_MEMORY at line 99"
+    hint = error_hints.classify_subprocess_failure(stderr, stdout, error_hints.DiagnosticContext())
+    assert hint is not None
+    assert hint.category == "gpu_oom"
+
+
+def test_oom_hint_does_not_recommend_disabling_preallocate():
+    """The user explicitly does not want XLA_PYTHON_CLIENT_PREALLOCATE=false
+    surfaced as a recommendation. Their RECOVAR budgeting story relies on
+    JAX preallocation being on so the planner reads a stable bytes_limit."""
+    from recovar.utils import error_hints
+
+    hint = error_hints.classify_text("RESOURCE_EXHAUSTED: out of memory", error_hints.DiagnosticContext())
+    assert hint is not None
+    blob = " ".join(hint.suggestions) + " " + hint.likely_cause
+    assert "XLA_PYTHON_CLIENT_PREALLOCATE" not in blob

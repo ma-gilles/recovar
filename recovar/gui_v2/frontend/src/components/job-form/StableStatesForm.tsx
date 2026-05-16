@@ -12,6 +12,7 @@ import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
+import { useProject } from "../../lib/project-context";
 
 interface StableStatesFormProps {
   projectId: string;
@@ -25,6 +26,7 @@ export function StableStatesForm({
   onSubmitted,
 }: StableStatesFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
+  const { project } = useProject();
   const [density, setDensity] = useState(prefilledDensity ?? "");
   const [showDensityBrowser, setShowDensityBrowser] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -54,6 +56,8 @@ export function StableStatesForm({
     },
   });
 
+  const missingFields = [!density && "Density File"].filter(Boolean) as string[];
+
   return (
     <div className="space-y-4">
       <div className="space-y-1">
@@ -79,7 +83,7 @@ export function StableStatesForm({
         </div>
         {showDensityBrowser && (
           <FileBrowser
-            initialPath={density ? density.split("/").slice(0, -1).join("/") || "/" : "/scratch/gpfs"}
+            initialPath={density ? density.split("/").slice(0, -1).join("/") || "/" : (project?.path ?? "/scratch/gpfs")}
             accept={[".pkl"]}
             onSelect={(path) => { setDensity(path); setShowDensityBrowser(false); }}
           />
@@ -134,6 +138,9 @@ export function StableStatesForm({
       )}
 
       {/* Submit */}
+      {missingFields.length > 0 && (
+        <p className="text-xs text-amber-400">Required to submit: {missingFields.join(", ")}</p>
+      )}
       <div className="flex items-center justify-between pt-2">
         {mutation.isError && (
           <span className="text-sm text-red-400">{(mutation.error as Error).message}</span>

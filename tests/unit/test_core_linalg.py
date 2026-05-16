@@ -12,6 +12,40 @@ pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
+# batched Fourier helpers
+# ---------------------------------------------------------------------------
+
+
+class TestBatchedFourierHelpers:
+    def test_batch_idft3_overwrite_reuses_input(self, monkeypatch):
+        x = np.arange(12, dtype=np.complex64).reshape(4, 3)
+        original = x.copy()
+
+        def fake_idft3(block, vec_shape):
+            assert vec_shape == (2, 2, 1)
+            return np.asarray(block) + 10
+
+        monkeypatch.setattr(linalg, "idft3", fake_idft3)
+
+        out = linalg.batch_idft3(x, (2, 2, 1), batch_size=2, overwrite=True)
+
+        assert out is x
+        np.testing.assert_allclose(out, original + 10)
+
+    def test_batch_idft3_default_preserves_input(self, monkeypatch):
+        x = np.arange(12, dtype=np.complex64).reshape(4, 3)
+        original = x.copy()
+
+        monkeypatch.setattr(linalg, "idft3", lambda block, vec_shape: np.asarray(block) + 5)
+
+        out = linalg.batch_idft3(x, (2, 2, 1), batch_size=2)
+
+        assert out is not x
+        np.testing.assert_allclose(x, original)
+        np.testing.assert_allclose(out, original + 5)
+
+
+# ---------------------------------------------------------------------------
 # batch_st_end
 # ---------------------------------------------------------------------------
 

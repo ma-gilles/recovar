@@ -5,9 +5,14 @@
 
 export interface EmbeddingMeta {
   n_particles: number;
+  /** True dataset size before any subsampling (== n_particles when not subsampled). */
+  n_particles_total: number;
+  /** True when only a uniform subsample of the dataset is returned. */
+  subsampled: boolean;
   zdim: number;
   has_umap: boolean;
   has_kmeans: boolean;
+  has_kmeans_centers: boolean;
   n_clusters: number;
 }
 
@@ -17,6 +22,11 @@ export interface EmbeddingData {
   umapCoords: Float32Array | null; // n x 2
   kmeansLabels: Int32Array | null; // n x 1
   kmeansCenters: Float32Array | null; // k x zdim
+  /**
+   * When subsampled, maps each returned (subsampled) position i to its original
+   * particle index. null when the full dataset is returned (identity mapping).
+   */
+  origIndices: Int32Array | null; // n x 1
 }
 
 export async function fetchEmbeddings(jobId: string, zdim: number): Promise<EmbeddingData> {
@@ -29,7 +39,15 @@ export async function fetchEmbeddings(jobId: string, zdim: number): Promise<Embe
   if (!metaHeader) {
     throw new Error("Missing X-Embedding-Meta header");
   }
-  const meta: EmbeddingMeta = JSON.parse(metaHeader);
+  const rawMeta = JSON.parse(metaHeader);
+  // Backfill fields that older backends may omit, keeping the parser robust.
+  const meta: EmbeddingMeta = {
+    ...rawMeta,
+    n_particles_total: rawMeta.n_particles_total ?? rawMeta.n_particles,
+    subsampled: rawMeta.subsampled ?? false,
+    // Centers used to be gated on has_kmeans; fall back to that for compatibility.
+    has_kmeans_centers: rawMeta.has_kmeans_centers ?? rawMeta.has_kmeans,
+  };
 
   const buffer = await resp.arrayBuffer();
   let offset = 0;
@@ -54,13 +72,22 @@ export async function fetchEmbeddings(jobId: string, zdim: number): Promise<Embe
     offset += n * 4;
   }
 
-  // K-means centers: k x zdim float32 (if present)
+  // K-means centers: k x zdim float32 (if present).  Gated on centers presence
+  // (independent of labels) so centers-only data still renders.
   let kmeansCenters: Float32Array | null = null;
-  if (meta.has_kmeans && meta.n_clusters > 0) {
+  if (meta.has_kmeans_centers && meta.n_clusters > 0) {
     kmeansCenters = new Float32Array(buffer, offset, meta.n_clusters * meta.zdim);
+    offset += meta.n_clusters * meta.zdim * 4;
   }
 
-  return { meta, pcaCoords, umapCoords, kmeansLabels, kmeansCenters };
+  // Original particle indices: n x 1 int32 (only when subsampled).
+  let origIndices: Int32Array | null = null;
+  if (meta.subsampled) {
+    origIndices = new Int32Array(buffer, offset, n);
+    offset += n * 4;
+  }
+
+  return { meta, pcaCoords, umapCoords, kmeansLabels, kmeansCenters, origIndices };
 }
 
 export async function fetchAvailableEmbeddings(
@@ -102,6 +129,18 @@ export async function fetchRelatedDensityJobs(jobId: string): Promise<RelatedDen
   const resp = await fetch(`/api/jobs/${jobId}/related-density`);
   if (!resp.ok) return [];
   return resp.json();
+}
+
+/**
+ * Resolve which job to open in the latent-space explorer for a given job.
+ * Density jobs resolve to the Analyze/Pipeline job that produced their
+ * embeddings; Analyze/Pipeline jobs resolve to themselves.
+ */
+export async function fetchExploreTarget(jobId: string): Promise<string | null> {
+  const resp = await fetch(`/api/jobs/${jobId}/explore-target`);
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  return data?.target_job_id ?? null;
 }
 
 export interface DensityData {

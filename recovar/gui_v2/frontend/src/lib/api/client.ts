@@ -126,6 +126,7 @@ export interface SystemInfo {
   executor_mode: string;
   recovar_version: string;
   gpu_count: number;
+  gpu_list?: { index: number; name: string }[];
   hostname: string;
   disk?: { path: string; total: number; used: number; free: number } | null;
 }
@@ -170,6 +171,17 @@ export function createProject(path: string, name: string): Promise<Project> {
 
 export function getProject(id: string): Promise<ProjectDetail> {
   return request(`/projects/${id}`);
+}
+
+export interface ProjectListItem {
+  id: string;
+  path: string;
+  name?: string;
+}
+
+/** All projects currently registered with the server (for the project switcher). */
+export function listProjects(): Promise<ProjectListItem[]> {
+  return request("/projects");
 }
 
 export function scanProject(
@@ -217,11 +229,11 @@ export function submitJob(
 }
 
 export function getJob(id: string): Promise<JobDetail> {
-  return request(`/jobs/${id}`);
+  return request(`/jobs/${encodeURIComponent(id)}`);
 }
 
 export function cancelJob(id: string): Promise<{ status: string }> {
-  return request(`/jobs/${id}/cancel`, { method: "POST" });
+  return request(`/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
 }
 
 export interface ReconcileResult {
@@ -233,23 +245,23 @@ export interface ReconcileResult {
 }
 
 export function reconcileJob(id: string): Promise<ReconcileResult> {
-  return request(`/jobs/${id}/reconcile`, { method: "POST" });
+  return request(`/jobs/${encodeURIComponent(id)}/reconcile`, { method: "POST" });
 }
 
 export function deleteJob(id: string): Promise<void> {
-  return request(`/jobs/${id}`, { method: "DELETE" });
+  return request(`/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function getJobVolumes(id: string): Promise<VolumeEntry[]> {
-  return request(`/jobs/${id}/volumes`);
+  return request(`/jobs/${encodeURIComponent(id)}/volumes`);
 }
 
 export function getJobPlots(id: string): Promise<PlotEntry[]> {
-  return request(`/jobs/${id}/plots`);
+  return request(`/jobs/${encodeURIComponent(id)}/plots`);
 }
 
 export function getSuggestedNext(id: string): Promise<SuggestedNext[]> {
-  return request(`/jobs/${id}/suggested-next`);
+  return request(`/jobs/${encodeURIComponent(id)}/suggested-next`);
 }
 
 // --- Files ---
@@ -301,7 +313,7 @@ export function createSubset(data: {
 }
 
 export function listSubsets(projectId: string): Promise<SubsetEntry[]> {
-  return request(`/subsets?project_id=${projectId}`);
+  return request(`/subsets?project_id=${encodeURIComponent(projectId)}`);
 }
 
 export function deleteSubset(id: string): Promise<void> {
@@ -314,11 +326,13 @@ export function getSubsetProvenance(id: string): Promise<SubsetProvenance> {
 
 export function exportSubsetStar(
   subsetId: string,
-  particlesStar: string
+  particlesStar?: string | null
 ): Promise<{ path: string; n_particles: number }> {
+  // When no native .star is known the backend resolves the dataset from the
+  // subset's source job and builds a star from particles/poses/ctf.
   return request(`/subsets/${subsetId}/export-star`, {
     method: "POST",
-    body: JSON.stringify({ particles_star: particlesStar }),
+    body: JSON.stringify({ particles_star: particlesStar ?? "" }),
   });
 }
 
@@ -340,10 +354,32 @@ export function previewSbatchScript(req: SbatchPreviewRequest): Promise<SbatchPr
   });
 }
 
+export interface GenerateTestDatasetRequest {
+  output_dir: string;
+  image_size?: number;
+  n_images?: number;
+  seed?: number | null;
+}
+
+export interface GenerateTestDatasetResponse {
+  output_dir: string;
+  files_created: string[];
+  duration_seconds: number;
+}
+
+export function generateTestDataset(
+  req: GenerateTestDatasetRequest
+): Promise<GenerateTestDatasetResponse> {
+  return request("/system/generate-test-dataset", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
 // --- Jobs (extended) ---
 
 export function getJobSbatchScript(id: string): Promise<SbatchScript> {
-  return request(`/jobs/${id}/sbatch-script`);
+  return request(`/jobs/${encodeURIComponent(id)}/sbatch-script`);
 }
 
 // --- Settings ---
@@ -407,6 +443,7 @@ export interface LocalDefaultsUpdate {
   gpus?: string;
   setup_command?: string;
   env_vars?: Record<string, string>;
+  preallocate_gpu?: boolean;
 }
 
 export function getLocalDefaultsLayered(projectDir?: string): Promise<LocalDefaultsLayered> {
@@ -435,6 +472,131 @@ export function updateProjectLocalDefaults(
   });
 }
 
+// --- Masks ---
+
+export interface EraseSphere {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+}
+
+export interface EraseBox {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+  z0: number;
+  z1: number;
+}
+
+export interface MaskParams {
+  source_path: string;
+  threshold?: number | null;
+  lowpass_sigma?: number | null;
+  extend?: number | null;
+  soft_edge: number;
+  cleanup: boolean;
+  erase_spheres?: EraseSphere[];
+  erase_boxes?: EraseBox[];
+  keep_top_segments?: number | null;
+}
+
+export interface SegmentInfoResponse {
+  n_segments: number;
+  total_voxels: number;
+  top_sizes: number[];
+}
+
+export function segmentInfo(
+  params: MaskParams
+): Promise<SegmentInfoResponse> {
+  return request(`/masks/segment-info`, {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export interface MaskInfo {
+  name: string;
+  path: string;
+  size_bytes: number;
+  modified: string;
+}
+
+export interface SaveMaskRequest extends MaskParams {
+  project_id: string;
+  output_name: string;
+}
+
+/**
+ * Build a URL for the mask preview endpoint. Uses POST so we cannot
+ * use a plain <img src=...>. Returns a fetch helper that resolves to
+ * an object URL the caller can drop into <img>.
+ */
+export async function previewMask(
+  params: MaskParams & { axis?: 0 | 1 | 2; idx?: number | null }
+): Promise<{ url: string; coverage: number; shape: number[] }> {
+  const resp = await fetch(`${BASE}/masks/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!resp.ok) {
+    throw new ApiError(resp.status, await resp.text());
+  }
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const coverage = parseFloat(resp.headers.get("X-Mask-Coverage") ?? "0");
+  const shapeStr = resp.headers.get("X-Volume-Shape") ?? "";
+  const shape = shapeStr ? shapeStr.split(",").map((n) => parseInt(n, 10)) : [];
+  return { url, coverage, shape };
+}
+
+export function saveMask(req: SaveMaskRequest): Promise<MaskInfo> {
+  return request(`/masks/save`, { method: "POST", body: JSON.stringify(req) });
+}
+
+export function listProjectMasks(projectId: string): Promise<MaskInfo[]> {
+  return request(`/masks/by-project/${projectId}`);
+}
+
+export interface BooleanOpRequest {
+  project_id: string;
+  mask_a: string;
+  mask_b: string;
+  op: "union" | "intersect" | "subtract";
+  output_name: string;
+}
+
+export function maskBooleanOp(req: BooleanOpRequest): Promise<MaskInfo> {
+  return request(`/masks/boolean-op`, {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export interface PreviewVolumeResponse {
+  path: string;
+  voxel_size: number;
+  shape: number[];
+}
+
+export function previewMaskVolume(
+  params: MaskParams & { project_id: string }
+): Promise<PreviewVolumeResponse> {
+  return request(`/masks/preview-volume`, {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export function deletePreviewMaskVolume(path: string): Promise<{ deleted: boolean }> {
+  return request(`/masks/preview-volume?path=${encodeURIComponent(path)}`, {
+    method: "DELETE",
+  });
+}
+
 // --- Charts ---
 
 export interface ChartData {
@@ -448,7 +610,7 @@ export async function getChartData(
   name: string,
 ): Promise<ChartData | null> {
   const resp = await fetch(
-    `${BASE}/jobs/${jobId}/chart-data?name=${encodeURIComponent(name)}`,
+    `${BASE}/jobs/${encodeURIComponent(jobId)}/chart-data?name=${encodeURIComponent(name)}`,
     { headers: { "Content-Type": "application/json" } },
   );
   if (!resp.ok) {

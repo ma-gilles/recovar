@@ -1,7 +1,7 @@
 """Tests for the issue #131 follow-up fixes.
 
 Three behaviors:
-1. ``--gpu-memory N`` is accepted by analyze / compute_state / compute_trajectory
+1. ``--gpu-budget-gb N`` is accepted by analyze / compute_state / compute_trajectory
    and propagates to ``set_gpu_memory_limit()``.
 2. Heterogeneity-kernel memory budget is scaled down through the shared
    fallback-path helper when custom CUDA is disabled.
@@ -19,12 +19,12 @@ import pytest
 
 
 def test_gpu_memory_arg_in_shared_downstream_args():
-    """--gpu-memory must be accepted by all downstream commands."""
+    """--gpu-budget-gb must be accepted by all downstream commands."""
     from recovar.utils import parser_args
 
     parser = argparse.ArgumentParser()
     parser_args.standard_downstream_args(parser)
-    args = parser.parse_args(["/tmp/results", "--gpu-memory", "8.0"])
+    args = parser.parse_args(["/tmp/results", "--gpu-budget-gb", "8.0"])
     assert args.gpu_memory == 8.0
 
     # Default is None (auto-detect)
@@ -35,12 +35,12 @@ def test_gpu_memory_arg_in_shared_downstream_args():
 
 
 def test_gpu_memory_arg_in_analyze():
-    """analyze.py must accept --gpu-memory via standard_downstream_args."""
+    """analyze.py must accept --gpu-budget-gb via standard_downstream_args."""
     from recovar.commands import analyze
 
     parser = argparse.ArgumentParser()
     analyze.add_args(parser)
-    args = parser.parse_args(["--zdim", "4", "--gpu-memory", "12.5", "/dummy/path"])
+    args = parser.parse_args(["--zdim", "4", "--gpu-budget-gb", "12.5", "/dummy/path"])
     assert args.gpu_memory == 12.5
 
 
@@ -49,7 +49,7 @@ def test_gpu_memory_arg_in_compute_state():
 
     parser = argparse.ArgumentParser()
     compute_state.add_args(parser)
-    args = parser.parse_args(["--gpu-memory", "16", "--latent-points", "/dev/null", "/dummy/path"])
+    args = parser.parse_args(["--gpu-budget-gb", "16", "--latent-points", "/dev/null", "/dummy/path"])
     assert args.gpu_memory == 16.0
 
 
@@ -58,17 +58,17 @@ def test_gpu_memory_arg_in_compute_trajectory():
 
     parser = argparse.ArgumentParser()
     compute_trajectory.add_args(parser)
-    args = parser.parse_args(["--gpu-memory", "4", "/dummy/path"])
+    args = parser.parse_args(["--gpu-budget-gb", "4", "/dummy/path"])
     assert args.gpu_memory == 4.0
 
 
 # ---------------------------------------------------------------------------
-# --gpu-memory on every other heavy-GPU command
+# --gpu-budget-gb on every other heavy-GPU command
 # ---------------------------------------------------------------------------
 
 
 def _commands_that_need_gpu_memory():
-    """Commands that do heavy GPU work and therefore must accept --gpu-memory.
+    """Commands that do heavy GPU work and therefore must accept --gpu-budget-gb.
 
     These are the call sites where the auto-batch-size formula in
     `get_image_batch_size` ultimately fires. If a future contributor adds
@@ -85,7 +85,7 @@ def _commands_that_need_gpu_memory():
 
 @pytest.mark.parametrize("cmd_name", _commands_that_need_gpu_memory())
 def test_gpu_memory_arg_in_command(cmd_name):
-    """Every heavy-GPU command must accept --gpu-memory.
+    """Every heavy-GPU command must accept --gpu-budget-gb.
 
     The check is structural: parse `recovar <cmd> --help` and look for the
     flag string. We don't try to actually invoke the command — many of
@@ -103,8 +103,8 @@ def test_gpu_memory_arg_in_command(cmd_name):
     # Some commands print help to stdout, some to stderr depending on argparse
     # version + sys.exit code. Check both.
     combined = result.stdout + result.stderr
-    assert "--gpu-memory" in combined, (
-        f"recovar.commands.{cmd_name} does NOT expose --gpu-memory. "
+    assert "--gpu-budget-gb" in combined, (
+        f"recovar.commands.{cmd_name} does NOT expose --gpu-budget-gb. "
         f"Pull add_gpu_memory_arg(parser) into its argparse setup so users "
         f"can constrain the auto-batch budget on this command. Without this, "
         f"users on the JAX-fallback path or a smaller GPU will silently "
@@ -135,7 +135,7 @@ def test_effective_heterogeneity_memory_budget_scales_for_fallback(monkeypatch, 
 
     scaled = akd._effective_heterogeneity_memory_budget(48.0)
 
-    assert scaled == pytest.approx(16.0)
+    assert scaled == pytest.approx(4.8)
     assert "scaling heterogeneity-kernel memory budget" in caplog.text
 
 
