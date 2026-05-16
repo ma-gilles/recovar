@@ -33,6 +33,14 @@ class PostprocessConfig:
     Wraps the 8 kwargs previously sprawling across every EM-iteration entry
     point. ``strategy="none"`` disables postprocess entirely; the other fields
     are only consulted when the strategy enables masking / grid correction.
+
+    ``external_mask_volume`` (optional) replaces the built-in spherical soft
+    mask with an arbitrary real-space mask of shape ``volume_shape``. This is
+    how the pipeline's dilated solvent mask is plumbed in: pass it through and
+    the mean is masked with background fill outside the mask, while W columns
+    are zeroed outside (when strategy is ``mean_and_w_mask``). Background-fill
+    behavior follows from the mask's binary support; soft transitions can be
+    encoded directly in ``external_mask_volume`` if desired.
     """
 
     strategy: str = "mean_and_w_mask"
@@ -43,6 +51,7 @@ class PostprocessConfig:
     gridding_order: int = 1
     gridding_correct: str = "radial"
     bandlimit_max_r: float | None = None
+    external_mask_volume: np.ndarray | None = None
 
 
 class PPCAPostprocessResult(NamedTuple):
@@ -171,11 +180,20 @@ def postprocess_ppca_half_volumes(
     ``mean_and_w_mask``
         Default. Apply the mean postprocess above and soft-mask every W column
         with zero background outside the mask.
+    ``w_only_mask``
+        Soft-mask every W column with zero background outside the mask; leave
+        the mean unchanged. Use this when the mean should pass through the
+        solver/postprocess without any mask or background-fill (e.g., to
+        preserve image-likelihood-fitted DC and solvent contributions in mu)
+        but W must be confined to the structure region.
     """
 
     strategy = str(strategy)
-    if strategy not in {"none", "mean_only", "mean_and_w_mask"}:
-        raise ValueError(f"postprocess strategy must be 'none', 'mean_only', or 'mean_and_w_mask', got {strategy!r}")
+    if strategy not in {"none", "mean_only", "mean_and_w_mask", "w_only_mask"}:
+        raise ValueError(
+            "postprocess strategy must be 'none', 'mean_only', 'mean_and_w_mask', or 'w_only_mask', "
+            f"got {strategy!r}"
+        )
     if gridding_correct not in {"radial", "square"}:
         raise ValueError(f"gridding_correct must be 'radial' or 'square', got {gridding_correct!r}")
 
@@ -202,26 +220,59 @@ def postprocess_ppca_half_volumes(
     if strategy == "none":
         return PPCAPostprocessResult(mu_half=mu_half, W_half=W_half, diagnostics=diagnostics)
 
-    soft_mask, background_weight = _soft_mask_and_background_weights(
-        volume_shape,
-        mask_radius_px=mask_radius_px,
-        cosine_width_px=float(cosine_width_px),
-        dtype=mu_half.real.dtype,
-    )
+    external_mask = cfg.external_mask_volume
+    if external_mask is not None:
+        ext = jnp.asarray(external_mask, dtype=mu_half.real.dtype)
+        if tuple(ext.shape) != volume_shape:
+            raise ValueError(
+                f"external_mask_volume shape {ext.shape} != volume_shape {volume_shape}"
+            )
+        # Binary or pre-softened mask; bg = 1 - mask, so the mean's background
+        # fill blends from inside (mask=1) to outside (mask=0) seamlessly with
+        # any soft transition encoded in the external mask itself.
+        soft_mask = ext
+        background_weight = (1.0 - ext).astype(mu_half.real.dtype)
+        diagnostics["postprocess_mask_source"] = "external_mask_volume"
+    else:
+        soft_mask, background_weight = _soft_mask_and_background_weights(
+            volume_shape,
+            mask_radius_px=mask_radius_px,
+            cosine_width_px=float(cosine_width_px),
+            dtype=mu_half.real.dtype,
+        )
+        diagnostics["postprocess_mask_source"] = "soft_radius"
     diagnostics["postprocess_mask_mean"] = float(jnp.mean(soft_mask))
 
-    if strategy == "mean_only" or W_half.shape[1] == 0:
-        half_stack = mu_half[None, :]
-    else:
-        half_stack = jnp.concatenate([mu_half[None, :], jnp.swapaxes(W_half, 0, 1)], axis=0)
+    # Decide which volumes to put through the masking/grid-correction stack.
+    # The stack order is [mu, W_0, ..., W_{q-1}]; rows we don't touch are
+    # simply not included so they bypass mask + grid correction entirely.
+    apply_to_mu = strategy in {"mean_only", "mean_and_w_mask"}
+    apply_to_W = strategy in {"mean_and_w_mask", "w_only_mask"} and W_half.shape[1] > 0
+    if not apply_to_mu and not apply_to_W:
+        return PPCAPostprocessResult(mu_half=mu_half, W_half=W_half, diagnostics=diagnostics)
+
+    stack_parts = []
+    if apply_to_mu:
+        stack_parts.append(mu_half[None, :])
+    if apply_to_W:
+        stack_parts.append(jnp.swapaxes(W_half, 0, 1))
+    half_stack = jnp.concatenate(stack_parts, axis=0)
     real_stack = _half_stack_to_real(half_stack, volume_shape)
 
-    bg_weight_sum = jnp.sum(background_weight)
-    safe_bg_weight_sum = jnp.where(bg_weight_sum > 0.0, bg_weight_sum, 1.0)
-    mean_background = jnp.sum(real_stack[0] * background_weight) / safe_bg_weight_sum
-    processed_stack = real_stack.at[0].set(soft_mask * real_stack[0] + background_weight * mean_background)
-    if strategy == "mean_and_w_mask" and W_half.shape[1] > 0:
-        processed_stack = processed_stack.at[1:].set(soft_mask[None, :, :, :] * real_stack[1:])
+    cursor = 0
+    if apply_to_mu:
+        bg_weight_sum = jnp.sum(background_weight)
+        safe_bg_weight_sum = jnp.where(bg_weight_sum > 0.0, bg_weight_sum, 1.0)
+        mean_background = jnp.sum(real_stack[cursor] * background_weight) / safe_bg_weight_sum
+        real_stack = real_stack.at[cursor].set(
+            soft_mask * real_stack[cursor] + background_weight * mean_background
+        )
+        cursor += 1
+    if apply_to_W:
+        n_W = int(W_half.shape[1])
+        real_stack = real_stack.at[cursor : cursor + n_W].set(
+            soft_mask[None, :, :, :] * real_stack[cursor : cursor + n_W]
+        )
 
     if grid_correct:
         kernel = _gridding_kernel(
@@ -229,11 +280,11 @@ def postprocess_ppca_half_volumes(
             gridding_padding_factor=float(gridding_padding_factor),
             gridding_order=int(gridding_order),
             gridding_correct=str(gridding_correct),
-            dtype=processed_stack.dtype,
+            dtype=real_stack.dtype,
         )
-        processed_stack = processed_stack / kernel[None, :, :, :]
+        real_stack = real_stack / kernel[None, :, :, :]
 
-    half_out = _real_stack_to_half(processed_stack)
+    half_out = _real_stack_to_half(real_stack)
     if bandlimit_max_r is not None:
         bandlimit_mask = _half_volume_frequency_mask(
             volume_shape,
@@ -242,6 +293,16 @@ def postprocess_ppca_half_volumes(
         )
         half_out = half_out * bandlimit_mask[None, :]
         diagnostics["postprocess_bandlimit_fraction"] = float(jnp.mean(bandlimit_mask))
-    mu_out = half_out[0].astype(mu_half.dtype)
-    W_out = jnp.swapaxes(half_out[1:].astype(W_half.dtype), 0, 1) if strategy == "mean_and_w_mask" else W_half
+
+    cursor = 0
+    if apply_to_mu:
+        mu_out = half_out[cursor].astype(mu_half.dtype)
+        cursor += 1
+    else:
+        mu_out = mu_half
+    if apply_to_W:
+        n_W = int(W_half.shape[1])
+        W_out = jnp.swapaxes(half_out[cursor : cursor + n_W].astype(W_half.dtype), 0, 1)
+    else:
+        W_out = W_half
     return PPCAPostprocessResult(mu_half=mu_out, W_half=W_out, diagnostics=diagnostics)

@@ -10,7 +10,13 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.ppca_refinement.config import GeometryConfig, ScheduleConfig, ScoringConfig
+from recovar.em.ppca_refinement.config import (
+    GeometryConfig,
+    PoseSelectionConfig,
+    ScheduleConfig,
+    ScoringConfig,
+    SparsePass2Config,
+)
 from recovar.em.ppca_refinement.dense_dataset import run_dense_ppca_halfset_fused_em_iteration
 from recovar.em.ppca_refinement.local_dataset import run_local_ppca_halfset_fused_em_iteration
 from recovar.em.ppca_refinement.schedule import (
@@ -103,9 +109,15 @@ def _combined_best_pose_ids(pose_diagnostics, n_trans: int) -> np.ndarray:
     best = []
     for key in ("halfset0", "halfset1"):
         halfset_pose = pose_diagnostics.get(key, {})
-        if "best_rotation_idx" not in halfset_pose or "best_translation_idx" not in halfset_pose:
+        if "best_rotation_id" in halfset_pose:
+            rot_key = "best_rotation_id"
+        elif "best_rotation_idx" in halfset_pose:
+            rot_key = "best_rotation_idx"
+        else:
             continue
-        rot = np.asarray(halfset_pose["best_rotation_idx"], dtype=np.int64)
+        if "best_translation_idx" not in halfset_pose:
+            continue
+        rot = np.asarray(halfset_pose[rot_key], dtype=np.int64)
         trans = np.asarray(halfset_pose["best_translation_idx"], dtype=np.int64)
         best.append(rot * int(n_trans) + trans)
     if not best:
@@ -183,6 +195,8 @@ def run_dense_ppca_refinement_loop(
     square_window: bool = False,
     mstep_chunk_size: int | None = None,
     image_scale_corrections: np.ndarray | None = None,
+    pose_selection: PoseSelectionConfig | None = None,
+    top_pose_count: int = 1,
 ) -> tuple[PoseMarginalPPCAEMState, list[PPCARefinementIterationRecord]]:
     """Run dense halfset PPCA refinement iterations with gold-standard gating."""
 
@@ -219,6 +233,8 @@ def run_dense_ppca_refinement_loop(
                 square_window=square_window,
                 image_scale_corrections=image_scale_corrections,
             ),
+            pose_selection=pose_selection,
+            top_pose_count=top_pose_count,
             disc_type=disc_type,
         )
         best_pose_indices = _combined_best_pose_ids(updated.pose_diagnostics, n_trans)
@@ -307,7 +323,12 @@ def run_local_ppca_refinement_loop(
     half_spectrum_scoring: bool = False,
     square_window: bool = False,
     mstep_chunk_size: int | None = None,
+    local_image_shard_count: int = 1,
+    local_mstep_top_k: int = 0,
+    local_mstep_min_pmax: float = 0.999,
     image_scale_corrections: np.ndarray | None = None,
+    pose_selection: PoseSelectionConfig | None = None,
+    top_pose_count: int = 1,
 ) -> tuple[PoseMarginalPPCAEMState, list[PPCARefinementIterationRecord]]:
     """Run exact-local halfset PPCA refinement iterations behind the same gate."""
 
@@ -339,6 +360,7 @@ def run_local_ppca_refinement_loop(
                 image_batch_size=2,
                 rotation_block_size=512,
                 mstep_chunk_size=mstep_chunk_size,
+                local_image_shard_count=int(local_image_shard_count),
             ),
             scoring=ScoringConfig(
                 score_with_masked_images=score_with_masked_images,
@@ -346,6 +368,13 @@ def run_local_ppca_refinement_loop(
                 square_window=square_window,
                 image_scale_corrections=image_scale_corrections,
             ),
+            sparse_pass2=SparsePass2Config(
+                enabled=int(local_mstep_top_k) > 0,
+                local_mstep_top_k=int(local_mstep_top_k),
+                local_mstep_min_pmax=float(local_mstep_min_pmax),
+            ),
+            pose_selection=pose_selection,
+            top_pose_count=top_pose_count,
             disc_type=disc_type,
         )
         best_pose_indices = _combined_best_pose_ids(updated.pose_diagnostics, n_trans)

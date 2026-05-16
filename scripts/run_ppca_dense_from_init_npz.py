@@ -749,6 +749,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--image-batch-size", type=int, default=50)
     parser.add_argument("--rotation-block-size", type=int, default=512)
+    parser.add_argument("--top-p-poses", type=int, default=1)
     parser.add_argument("--mstep-chunk-size", type=int, default=65536)
     parser.add_argument(
         "--sparse-pass2",
@@ -1151,6 +1152,7 @@ def main() -> None:
             rotation_translation_mask=rotation_translation_mask,
             freeze_mean=freeze_mean,
             skip_empty_pose_blocks=rotation_translation_mask is not None,
+            top_pose_count=int(args.top_p_poses),
         )
         jax.block_until_ready(result.mu_half)
         jax.block_until_ready(result.W_half)
@@ -1305,13 +1307,34 @@ def main() -> None:
         raise SystemExit("no iterations were run")
 
     final_npz = output_dir / "final_ppca_dense.npz"
-    np.savez_compressed(
-        final_npz,
-        mu_half=np.asarray(final_result.mu_half),
-        W_half=np.asarray(final_result.W_half),
-        best_rotation_idx=np.asarray(final_result.diagnostics["best_rotation_idx"]),
-        best_translation_idx=np.asarray(final_result.diagnostics["best_translation_idx"]),
-    )
+    final_best_rotation_idx = np.asarray(final_result.diagnostics["best_rotation_idx"], dtype=np.int64)
+    final_best_translation_idx = np.asarray(final_result.diagnostics["best_translation_idx"], dtype=np.int64)
+    rotations_np = np.asarray(rotations, dtype=np.float32)
+    translations_np = np.asarray(translations, dtype=np.float32)
+    final_payload = {
+        "mu_half": np.asarray(final_result.mu_half),
+        "W_half": np.asarray(final_result.W_half),
+        "best_rotation_idx": final_best_rotation_idx.astype(np.int32),
+        "best_translation_idx": final_best_translation_idx.astype(np.int32),
+        "best_rotation_matrix": rotations_np[final_best_rotation_idx],
+        "best_translation": translations_np[final_best_translation_idx],
+        "image_indices": np.asarray(image_indices, dtype=np.int32),
+        "rotation_grid": rotations_np,
+        "translation_grid": translations_np,
+        "healpix_order": np.int32(prev_iter_hp_order if prev_iter_hp_order is not None else target_hp_order),
+    }
+    for key in (
+        "top_rotation_idx",
+        "top_rotation_id",
+        "top_translation_idx",
+        "top_log_score",
+        "top_log_score_per_image",
+        "top_posterior",
+        "top_posterior_per_image",
+    ):
+        if key in final_result.diagnostics:
+            final_payload[key] = np.asarray(final_result.diagnostics[key])
+    np.savez_compressed(final_npz, **final_payload)
 
     written_mrcs = []
     if args.save_mrc:

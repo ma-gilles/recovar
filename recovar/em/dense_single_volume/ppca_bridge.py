@@ -30,10 +30,10 @@ def _ppca_best_pose_ids_from_diagnostics(pose_diagnostics: dict, n_translations:
     best = []
     for key in ("halfset0", "halfset1"):
         diag = pose_diagnostics.get(key, {})
-        if "best_rotation_idx" in diag:
-            rot_key = "best_rotation_idx"
-        elif "best_rotation_id" in diag:
+        if "best_rotation_id" in diag:
             rot_key = "best_rotation_id"
+        elif "best_rotation_idx" in diag:
+            rot_key = "best_rotation_idx"
         else:
             continue
         if "best_translation_idx" not in diag:

@@ -15,19 +15,36 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
 import jax.numpy as jnp
-from run_ppca_dense_from_init_npz import (
-    _default_current_size_schedule,
-    _default_healpix_order_schedule,
-    _half_size,
-    _jsonable,
-    _load_init,
-    _load_noise_variance,
-    _load_simulation_info,
-    _parse_int_schedule,
-    _regularization_penalty,
-    _schedule_value,
-    _write_half_volume_mrc,
-)
+try:
+    from run_ppca_dense_from_init_npz import (
+        _default_current_size_schedule,
+        _default_healpix_order_schedule,
+        _half_size,
+        _jsonable,
+        _load_init,
+        _load_noise_variance,
+        _load_simulation_info,
+        _parse_int_schedule,
+        _regularization_penalty,
+        _schedule_value,
+        _write_half_volume_mrc,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "run_ppca_dense_from_init_npz":
+        raise
+    from scripts.run_ppca_dense_from_init_npz import (
+        _default_current_size_schedule,
+        _default_healpix_order_schedule,
+        _half_size,
+        _jsonable,
+        _load_init,
+        _load_noise_variance,
+        _load_simulation_info,
+        _parse_int_schedule,
+        _regularization_penalty,
+        _schedule_value,
+        _write_half_volume_mrc,
+    )
 
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
@@ -35,10 +52,15 @@ from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     ScheduleConfig,
     ScoringConfig,
+    SparsePass2Config,
 )
 from recovar.em.ppca_refinement.dense_dataset import coerce_augmented_half_volumes
+from recovar.em.ppca_refinement.highres_refinement import build_top_p_local_hypothesis_layout
 from recovar.em.ppca_refinement.initialization import loading_row_norm_variance_prior, volume_power_variance_prior
-from recovar.em.ppca_refinement.local_dataset import run_local_ppca_fused_em_iteration
+from recovar.em.ppca_refinement.local_dataset import (
+    run_local_ppca_fused_em_iteration,
+    run_local_ppca_pose_scoring_iteration,
+)
 from recovar.em.ppca_refinement.mean_regularization import (
     KCLASS_RELION_MINRES_MAP,
     MeanRegularizationConfig,
@@ -53,6 +75,7 @@ from recovar.em.ppca_refinement.refinement_loop import (
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.em.sampling import build_local_search_grid_metadata, get_rotation_grid_at_order, get_translation_grid
 from recovar.reconstruction import regularization as _regularization
+from recovar.utils import helpers as utils
 
 
 def _run_local_with_halfset_fsc_schedule(
@@ -211,6 +234,8 @@ def _run_local_with_halfset_fsc_schedule(
         fsc_threshold=float(args.fsc_threshold),
         current_size_growth_factor=float(args.current_size_growth_factor),
         mstep_chunk_size=int(args.mstep_chunk_size),
+        local_mstep_top_k=int(args.local_mstep_top_k),
+        local_mstep_min_pmax=float(args.local_mstep_min_pmax),
         image_scale_corrections=image_scale_corrections,
     )
     elapsed_s = float(time.time() - t_loop)
@@ -340,11 +365,18 @@ def _prior_rotations_from_pose_npz(
     if source == "auto":
         source = "result-matrices" if "best_rotation_matrix" in pose_npz else "healpix"
     if source == "result-matrices":
-        if "best_rotation_matrix" not in pose_npz:
-            raise ValueError("--prior-rotation-source=result-matrices requires best_rotation_matrix in --pose-npz")
-        rotations = np.asarray(pose_npz["best_rotation_matrix"], dtype=np.float32)
+        if "best_rotation_matrix" in pose_npz:
+            rotations = np.asarray(pose_npz["best_rotation_matrix"], dtype=np.float32)
+        elif "best_rotation_eulers_final_by_image" in pose_npz:
+            eulers = np.asarray(pose_npz["best_rotation_eulers_final_by_image"], dtype=np.float64)
+            rotations = np.asarray(utils.R_from_relion(eulers, degrees=True), dtype=np.float32)
+        else:
+            raise ValueError(
+                "--prior-rotation-source=result-matrices requires best_rotation_matrix "
+                "or best_rotation_eulers_final_by_image in --pose-npz"
+            )
         if rotations.shape[0] < n_images:
-            raise ValueError(f"best_rotation_matrix has {rotations.shape[0]} rows, need {n_images}")
+            raise ValueError(f"pose rotations have {rotations.shape[0]} rows, need {n_images}")
         return rotations[:n_images]
     best_idx = np.asarray(pose_npz["best_rotation_idx"], dtype=np.int64)[:n_images]
     candidates = _candidate_rotations(
@@ -376,6 +408,11 @@ def _translations_from_source(args, simulation_info, n_images: int):
 def _prior_translations_from_pose_npz(pose_npz, translations: np.ndarray, n_images: int) -> np.ndarray:
     if "best_translation" in pose_npz:
         best = np.asarray(pose_npz["best_translation"], dtype=np.float32)
+    elif "best_translations_final_by_image" in pose_npz:
+        best = np.asarray(pose_npz["best_translations_final_by_image"], dtype=np.float32)
+    else:
+        best = None
+    if best is not None:
         if best.shape[0] < n_images:
             raise ValueError(f"best_translation has {best.shape[0]} rows, need {n_images}")
         return best[:n_images]
@@ -383,6 +420,101 @@ def _prior_translations_from_pose_npz(pose_npz, translations: np.ndarray, n_imag
     if int(np.max(best_idx, initial=0)) >= int(translations.shape[0]):
         raise ValueError("best_translation_idx exceeds translation candidate count")
     return np.asarray(translations, dtype=np.float32)[best_idx]
+
+
+def _top_p_local_layout_from_pose_npz(
+    pose_npz,
+    *,
+    top_pose_count: int,
+    n_images: int,
+    prior_healpix_order: int,
+    local_healpix_order: int,
+    translations: np.ndarray,
+    sigma_rot_deg: float,
+    sigma_psi_deg: float,
+    sigma_offset_angstrom: float,
+    voxel_size: float,
+    grid_metadata: dict,
+):
+    if int(top_pose_count) <= 1:
+        return None
+    if "top_translation_idx" not in pose_npz:
+        return None
+    rot_key = "top_rotation_id" if "top_rotation_id" in pose_npz else "top_rotation_idx"
+    if rot_key not in pose_npz:
+        return None
+    top_rot = np.asarray(pose_npz[rot_key], dtype=np.int64)
+    top_trans = np.asarray(pose_npz["top_translation_idx"], dtype=np.int64)
+    if top_rot.ndim != 2 or top_trans.ndim != 2:
+        return None
+    if top_rot.shape[0] < n_images or top_trans.shape[0] < n_images:
+        raise ValueError(f"top-p pose arrays have {top_rot.shape[0]} rows, need {n_images}")
+    top_width = min(int(top_pose_count), int(top_rot.shape[1]), int(top_trans.shape[1]))
+    if top_width <= 1:
+        return None
+    top_rot = top_rot[:n_images, :top_width]
+    top_trans = top_trans[:n_images, :top_width]
+    top_rotation_matrices = None
+    if "top_rotation_matrix" in pose_npz:
+        top_rotation_matrices = np.asarray(pose_npz["top_rotation_matrix"], dtype=np.float32)
+        if top_rotation_matrices.ndim != 4 or top_rotation_matrices.shape[-2:] != (3, 3):
+            raise ValueError(f"top_rotation_matrix must have shape [N,P,3,3], got {top_rotation_matrices.shape}")
+        if top_rotation_matrices.shape[0] < n_images or top_rotation_matrices.shape[1] < top_width:
+            raise ValueError(
+                "top_rotation_matrix has insufficient rows/columns: "
+                f"{top_rotation_matrices.shape}, need at least ({n_images}, {top_width})"
+            )
+        top_rotation_matrices = top_rotation_matrices[:n_images, :top_width]
+    center_rotation_grid = (
+        np.asarray(pose_npz["rotation_grid"], dtype=np.float32)
+        if "rotation_grid" in pose_npz
+        else np.asarray(get_rotation_grid_at_order(int(prior_healpix_order)), dtype=np.float32)
+    )
+    target_rotation_grid = np.asarray(get_rotation_grid_at_order(int(local_healpix_order)), dtype=np.float32)
+    return build_top_p_local_hypothesis_layout(
+        top_rot,
+        top_trans,
+        center_rotation_grid=center_rotation_grid,
+        top_rotation_matrices=top_rotation_matrices,
+        target_rotation_grid=target_rotation_grid,
+        healpix_order=int(local_healpix_order),
+        translations=np.asarray(translations, dtype=np.float32),
+        sigma_rot=np.deg2rad(float(sigma_rot_deg)),
+        sigma_psi=np.deg2rad(float(sigma_psi_deg)),
+        sigma_offset_angstrom=float(sigma_offset_angstrom),
+        voxel_size=float(voxel_size),
+        grid_metadata=grid_metadata,
+    )
+
+
+def _image_ordered_pose_arrays(diagnostics: dict) -> tuple[dict[str, np.ndarray], np.ndarray]:
+    """Return per-image pose diagnostics sorted back to dataset image order."""
+
+    image_indices = np.asarray(diagnostics["image_indices"], dtype=np.int64)
+    inv_perm = np.argsort(image_indices).astype(np.int64)
+    arrays: dict[str, np.ndarray] = {
+        "best_rotation_idx": np.asarray(diagnostics["best_rotation_idx"])[inv_perm],
+        "best_rotation_id": np.asarray(diagnostics["best_rotation_id"])[inv_perm],
+        "best_rotation_matrix": np.asarray(diagnostics["best_rotation_matrix"], dtype=np.float32)[inv_perm],
+        "best_translation_idx": np.asarray(diagnostics["best_translation_idx"])[inv_perm],
+        "best_translation": np.asarray(diagnostics["best_translation"], dtype=np.float32)[inv_perm],
+    }
+    optional_keys = (
+        "top_rotation_idx",
+        "top_rotation_id",
+        "top_rotation_matrix",
+        "top_translation_idx",
+        "top_log_score",
+        "top_log_score_per_image",
+        "top_posterior",
+        "top_posterior_per_image",
+        "max_posterior_per_image",
+        "n_significant_per_image",
+    )
+    for key in optional_keys:
+        if key in diagnostics:
+            arrays[key] = np.asarray(diagnostics[key])[inv_perm]
+    return arrays, image_indices[inv_perm]
 
 
 def _parse_args() -> argparse.Namespace:
@@ -433,10 +565,27 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--current-size", type=int, default=64)
     parser.add_argument("--current-size-schedule", default=None)
     parser.add_argument("--freeze-mean-iters", type=int, default=0)
+    parser.add_argument(
+        "--pose-only",
+        action="store_true",
+        help="Score the exact-local support and save pose diagnostics without updating mean or W.",
+    )
     parser.add_argument("--image-batch-size", type=int, default=2)
     parser.add_argument("--rotation-block-size", type=int, default=512)
+    parser.add_argument("--top-p-poses", type=int, default=1)
     parser.add_argument("--max-hypotheses-per-microbatch", type=int, default=32768)
     parser.add_argument("--mstep-chunk-size", type=int, default=65536)
+    parser.add_argument(
+        "--local-mstep-top-k",
+        type=int,
+        default=0,
+        help=(
+            "When >0, exact-local PPCA still scores the full local support but "
+            "backprojects only the top-k poses for buckets whose pmax is at least "
+            "--local-mstep-min-pmax. Default 0 preserves the exact M-step."
+        ),
+    )
+    parser.add_argument("--local-mstep-min-pmax", type=float, default=0.999)
     parser.add_argument("--mean-prior-variance", type=float, default=1.0)
     parser.add_argument("--W-prior-variance", type=float, default=1.0)
     parser.add_argument("--mean-regularization-style", choices=("relion-tau", "variance"), default="relion-tau")
@@ -621,20 +770,36 @@ def main() -> None:
                 flush=True,
             )
         freeze_mean = iter_idx <= int(args.freeze_mean_iters)
-        local_layout = build_local_hypothesis_layout(
-            prior_rotations,
-            None,
-            np.deg2rad(float(args.sigma_rot_deg)),
-            np.deg2rad(float(args.sigma_psi_deg)),
-            int(iter_local_hp_order),
-            translations,
-            prior_translations,
-            float(args.sigma_offset_angstrom),
-            None,
-            float(getattr(dataset, "voxel_size", 1.0)),
+        local_layout_source = "top_p" if int(args.top_p_poses) > 1 else "top1"
+        local_layout = _top_p_local_layout_from_pose_npz(
+            pose_npz,
+            top_pose_count=int(args.top_p_poses),
+            n_images=n_images,
+            prior_healpix_order=int(args.prior_healpix_order),
+            local_healpix_order=int(iter_local_hp_order),
+            translations=translations,
+            sigma_rot_deg=float(args.sigma_rot_deg),
+            sigma_psi_deg=float(args.sigma_psi_deg),
+            sigma_offset_angstrom=float(args.sigma_offset_angstrom),
+            voxel_size=float(getattr(dataset, "voxel_size", 1.0)),
             grid_metadata=local_grid_metadata,
-            translation_prior_reference_translations=translations,
         )
+        if local_layout is None:
+            local_layout_source = "top1"
+            local_layout = build_local_hypothesis_layout(
+                prior_rotations,
+                None,
+                np.deg2rad(float(args.sigma_rot_deg)),
+                np.deg2rad(float(args.sigma_psi_deg)),
+                int(iter_local_hp_order),
+                translations,
+                prior_translations,
+                float(args.sigma_offset_angstrom),
+                None,
+                float(getattr(dataset, "voxel_size", 1.0)),
+                grid_metadata=local_grid_metadata,
+                translation_prior_reference_translations=translations,
+            )
         fixed_mean_half = None
         if freeze_mean:
             fixed_mean_half = coerce_augmented_half_volumes(
@@ -646,6 +811,83 @@ def main() -> None:
             )[0][0]
 
         t0 = time.time()
+        if bool(args.pose_only):
+            result = run_local_ppca_pose_scoring_iteration(
+                dataset,
+                current_mu,
+                current_W,
+                noise_variance=noise_variance,
+                local_layout=local_layout,
+                geometry=GeometryConfig(current_size=iter_current_size, q=q, volume_domain=volume_domain),
+                schedule=ScheduleConfig(
+                    image_batch_size=int(args.image_batch_size),
+                    rotation_block_size=int(args.rotation_block_size),
+                    mstep_chunk_size=int(args.mstep_chunk_size),
+                ),
+                scoring=ScoringConfig(image_scale_corrections=image_scale_corrections),
+                mean_reg=MeanRegularizationConfig(
+                    style=str(args.mean_regularization_style).replace("-", "_"),
+                    tau2_fudge=float(args.mean_tau2_fudge),
+                    minres_map=int(args.mean_minres_map),
+                ),
+                image_indices=image_indices,
+                max_hypotheses_per_microbatch=int(args.max_hypotheses_per_microbatch),
+                top_pose_count=int(args.top_p_poses),
+            )
+            jax.block_until_ready(result.diagnostics["best_rotation_matrix"])
+            elapsed_s = float(time.time() - t0)
+            pose_arrays, image_indices_imgord = _image_ordered_pose_arrays(result.diagnostics)
+            iter_npz = output_dir / f"iter{iter_idx:03d}.npz"
+            np.savez_compressed(
+                iter_npz,
+                mu_half=np.asarray(current_mu),
+                W_half=np.asarray(current_W),
+                image_indices=image_indices_imgord,
+                log_likelihood=np.asarray(result.diagnostics["log_likelihood"]),
+                logZ_mean=np.asarray(result.diagnostics["logZ_mean"]),
+                pmax_mean=np.asarray(result.diagnostics["pmax_mean"]),
+                nsig_mean=np.asarray(result.diagnostics["nsig_mean"]),
+                **pose_arrays,
+            )
+            iter_summary = {
+                "iteration": iter_idx,
+                "elapsed_s": elapsed_s,
+                "npz_path": iter_npz,
+                "current_size": int(iter_current_size),
+                "mean_frozen": True,
+                "pose_only": True,
+                "local_rotation_count_min": int(np.min(local_layout.rotation_counts)) if local_layout.n_images else 0,
+                "local_rotation_count_median": float(np.median(local_layout.rotation_counts))
+                if local_layout.n_images
+                else 0.0,
+                "local_rotation_count_max": int(np.max(local_layout.rotation_counts)) if local_layout.n_images else 0,
+                "local_layout_source": local_layout_source,
+                "diagnostics": {
+                    "log_likelihood": float(result.diagnostics["log_likelihood"]),
+                    "logZ_mean": float(result.diagnostics["logZ_mean"]),
+                    "pmax_mean": float(result.diagnostics["pmax_mean"]),
+                    "nsig_mean": float(result.diagnostics["nsig_mean"]),
+                    "n_images_accumulated": int(result.diagnostics.get("n_images", len(image_indices_imgord))),
+                    "mstep_mode": str(result.diagnostics.get("mstep_mode", "pose_only_no_mstep")),
+                },
+                "output_stats": {
+                    "mu_half_finite": bool(np.all(np.isfinite(np.asarray(current_mu)))),
+                    "W_half_finite": bool(np.all(np.isfinite(np.asarray(current_W)))),
+                    "mu_half_rms": float(jnp.sqrt(jnp.mean(jnp.abs(current_mu) ** 2))),
+                    "W_half_rms": float(jnp.sqrt(jnp.mean(jnp.abs(current_W) ** 2))) if q else 0.0,
+                },
+            }
+            iter_summaries.append(iter_summary)
+            print(json.dumps(_jsonable(iter_summary), indent=2, sort_keys=True), flush=True)
+            prior_rotations = pose_arrays["best_rotation_matrix"]
+            prior_translations = pose_arrays["best_translation"]
+            pose_npz = dict(pose_arrays)
+            pose_npz["rotation_grid"] = get_rotation_grid_at_order(int(iter_local_hp_order))
+            prev_iter_local_hp_order = int(iter_local_hp_order)
+            prev_iter_current_size = int(iter_current_size)
+            final_result = result
+            continue
+
         result = run_local_ppca_fused_em_iteration(
             dataset,
             current_mu,
@@ -675,9 +917,15 @@ def main() -> None:
                 mstep_chunk_size=int(args.mstep_chunk_size),
             ),
             scoring=ScoringConfig(image_scale_corrections=image_scale_corrections),
+            sparse_pass2=SparsePass2Config(
+                enabled=int(args.local_mstep_top_k) > 0,
+                local_mstep_top_k=int(args.local_mstep_top_k),
+                local_mstep_min_pmax=float(args.local_mstep_min_pmax),
+            ),
             image_indices=image_indices,
             max_hypotheses_per_microbatch=int(args.max_hypotheses_per_microbatch),
             fixed_mean_half=fixed_mean_half,
+            top_pose_count=int(args.top_p_poses),
         )
         jax.block_until_ready(result.mu_half)
         jax.block_until_ready(result.W_half)
@@ -706,29 +954,20 @@ def main() -> None:
         # Bucketization permutes per-image fields; image_indices is the permutation.
         # Sort all per-image diagnostics back into image (dataset) order before
         # saving and before feeding back to the next iteration.
-        bucket_image_indices = np.asarray(result.diagnostics["image_indices"], dtype=np.int64)
-        inv_perm = np.argsort(bucket_image_indices).astype(np.int64)
-        best_rotation_matrix = np.asarray(result.diagnostics["best_rotation_matrix"], dtype=np.float32)[inv_perm]
-        best_translation = np.asarray(result.diagnostics["best_translation"], dtype=np.float32)[inv_perm]
-        best_rotation_idx_imgord = np.asarray(result.diagnostics["best_rotation_idx"])[inv_perm]
-        best_rotation_id_imgord = np.asarray(result.diagnostics["best_rotation_id"])[inv_perm]
-        best_translation_idx_imgord = np.asarray(result.diagnostics["best_translation_idx"])[inv_perm]
-        image_indices_imgord = bucket_image_indices[inv_perm]
+        pose_arrays, image_indices_imgord = _image_ordered_pose_arrays(result.diagnostics)
+        best_rotation_matrix = pose_arrays["best_rotation_matrix"]
+        best_translation = pose_arrays["best_translation"]
         iter_npz = output_dir / f"iter{iter_idx:03d}.npz"
         np.savez_compressed(
             iter_npz,
             mu_half=np.asarray(result.mu_half),
             W_half=np.asarray(result.W_half),
-            best_rotation_idx=best_rotation_idx_imgord,
-            best_rotation_id=best_rotation_id_imgord,
-            best_rotation_matrix=best_rotation_matrix,
-            best_translation_idx=best_translation_idx_imgord,
-            best_translation=best_translation,
             image_indices=image_indices_imgord,
             log_likelihood=np.asarray(result.diagnostics["log_likelihood"]),
             logZ_mean=np.asarray(result.diagnostics["logZ_mean"]),
             pmax_mean=np.asarray(result.diagnostics["pmax_mean"]),
             nsig_mean=np.asarray(result.diagnostics["nsig_mean"]),
+            **pose_arrays,
         )
         iter_summary = {
             "iteration": iter_idx,
@@ -741,6 +980,7 @@ def main() -> None:
             if local_layout.n_images
             else 0.0,
             "local_rotation_count_max": int(np.max(local_layout.rotation_counts)) if local_layout.n_images else 0,
+            "local_layout_source": local_layout_source,
             "diagnostics": {
                 "log_likelihood": float(result.diagnostics["log_likelihood"]),
                 "logZ_mean": float(result.diagnostics["logZ_mean"]),
@@ -759,6 +999,17 @@ def main() -> None:
                 "mstep_objective_postprocess_delta_per_image": float(
                     result.diagnostics.get("mstep_objective_postprocess_delta_per_image", float("nan"))
                 ),
+                "local_mstep_top_k": int(result.diagnostics.get("local_mstep_top_k", 0)),
+                "local_mstep_topk_min_pmax": float(result.diagnostics.get("local_mstep_topk_min_pmax", 0.0)),
+                "local_mstep_topk_buckets": int(result.diagnostics.get("local_mstep_topk_buckets", 0)),
+                "local_mstep_exact_buckets": int(result.diagnostics.get("local_mstep_exact_buckets", 0)),
+                "local_mstep_topk_bucket_fraction": float(
+                    result.diagnostics.get("local_mstep_topk_bucket_fraction", 0.0)
+                ),
+                "local_mstep_retained_mass_mean": float(
+                    result.diagnostics.get("local_mstep_retained_mass_mean", 1.0)
+                ),
+                "local_mstep_omitted_mass_max": float(result.diagnostics.get("local_mstep_omitted_mass_max", 0.0)),
             },
             "output_stats": {
                 "mu_half_finite": bool(np.all(np.isfinite(np.asarray(result.mu_half)))),
@@ -775,6 +1026,8 @@ def main() -> None:
         volume_domain = "fourier_half"
         prior_rotations = best_rotation_matrix
         prior_translations = best_translation
+        pose_npz = dict(pose_arrays)
+        pose_npz["rotation_grid"] = get_rotation_grid_at_order(int(iter_local_hp_order))
         prev_iter_local_hp_order = int(iter_local_hp_order)
         prev_iter_current_size = int(iter_current_size)
         final_result = result
@@ -782,38 +1035,40 @@ def main() -> None:
     if final_result is None:
         raise SystemExit("no iterations were run")
 
-    final_bucket_image_indices = np.asarray(final_result.diagnostics["image_indices"], dtype=np.int64)
-    final_inv_perm = np.argsort(final_bucket_image_indices).astype(np.int64)
     final_npz = output_dir / "final_ppca_local.npz"
+    final_pose_arrays, final_image_indices = _image_ordered_pose_arrays(final_result.diagnostics)
+    if bool(args.pose_only):
+        final_mu_half = np.asarray(current_mu)
+        final_W_half = np.asarray(current_W)
+    else:
+        final_mu_half = np.asarray(final_result.mu_half)
+        final_W_half = np.asarray(final_result.W_half)
     np.savez_compressed(
         final_npz,
-        mu_half=np.asarray(final_result.mu_half),
-        W_half=np.asarray(final_result.W_half),
-        best_rotation_idx=np.asarray(final_result.diagnostics["best_rotation_idx"])[final_inv_perm],
-        best_rotation_id=np.asarray(final_result.diagnostics["best_rotation_id"])[final_inv_perm],
-        best_rotation_matrix=np.asarray(final_result.diagnostics["best_rotation_matrix"])[final_inv_perm],
-        best_translation_idx=np.asarray(final_result.diagnostics["best_translation_idx"])[final_inv_perm],
-        best_translation=np.asarray(final_result.diagnostics["best_translation"])[final_inv_perm],
-        image_indices=final_bucket_image_indices[final_inv_perm],
+        mu_half=final_mu_half,
+        W_half=final_W_half,
+        image_indices=final_image_indices,
+        **final_pose_arrays,
     )
 
     written_mrcs = []
     if args.save_mrc:
         voxel_size = float(getattr(dataset, "voxel_size", 1.0))
         mean_path = output_dir / "final_mu.mrc"
-        _write_half_volume_mrc(mean_path, final_result.mu_half, dataset.volume_shape, voxel_size=voxel_size)
+        _write_half_volume_mrc(mean_path, final_mu_half, dataset.volume_shape, voxel_size=voxel_size)
         written_mrcs.append(mean_path)
         for pc_idx in range(q):
             pc_path = output_dir / f"final_W{pc_idx + 1:02d}.mrc"
-            _write_half_volume_mrc(pc_path, final_result.W_half[:, pc_idx], dataset.volume_shape, voxel_size=voxel_size)
+            _write_half_volume_mrc(pc_path, final_W_half[:, pc_idx], dataset.volume_shape, voxel_size=voxel_size)
             written_mrcs.append(pc_path)
 
     summary = {
         "passed": bool(
-            np.all(np.isfinite(np.asarray(final_result.mu_half)))
-            and np.all(np.isfinite(np.asarray(final_result.W_half)))
-            and int(final_result.stats.n_images) == n_images
+            np.all(np.isfinite(final_mu_half))
+            and np.all(np.isfinite(final_W_half))
+            and int(final_image_indices.shape[0]) == n_images
         ),
+        "mode": "local_pose_only" if bool(args.pose_only) else "local_em",
         "data_star": Path(args.data_star),
         "simulation_info": None if args.simulation_info is None else Path(args.simulation_info),
         "init_npz": Path(args.init_npz),
@@ -836,6 +1091,7 @@ def main() -> None:
         "image_scale_source": str(args.image_scale_source),
         "current_size_schedule": current_size_schedule,
         "freeze_mean_iters": int(args.freeze_mean_iters),
+        "pose_only": bool(args.pose_only),
         "image_batch_size": int(args.image_batch_size),
         "rotation_block_size": int(args.rotation_block_size),
         "max_hypotheses_per_microbatch": int(args.max_hypotheses_per_microbatch),

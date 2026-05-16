@@ -34,6 +34,11 @@ def build_iteration_diagnostics(
     nsig_values,
     best_rotations,
     best_translations,
+    top_rotations=None,
+    top_rotation_ids=None,
+    top_translations=None,
+    top_log_scores=None,
+    top_posteriors=None,
     log_likelihood: float,
     n_images: int,
     mean_reg: MeanRegularizationConfig,
@@ -66,6 +71,8 @@ def build_iteration_diagnostics(
         "nsig_mean": float(jnp.mean(jnp.concatenate(nsig_values))) if nsig_values else float("nan"),
         "log_likelihood": float(log_likelihood),
         "logZ_mean": float(log_likelihood / n_images) if n_images else float("nan"),
+        "max_posterior_per_image": _concat_or_empty(pmax_values, dtype=jnp.float32),
+        "n_significant_per_image": _concat_or_empty(nsig_values),
         "best_rotation_idx": _concat_or_empty(best_rotations),
         "best_translation_idx": _concat_or_empty(best_translations),
         "mean_regularization_style": str(mean_reg.style),
@@ -75,6 +82,37 @@ def build_iteration_diagnostics(
         "image_scale_min": float(image_scale_min),
         "image_scale_max": float(image_scale_max),
     }
+    if top_rotations is not None:
+        diagnostics["top_rotation_idx"] = (
+            jnp.concatenate(top_rotations, axis=0) if top_rotations else jnp.zeros((0, 1), dtype=jnp.int32)
+        )
+    if top_rotation_ids is not None:
+        diagnostics["top_rotation_id"] = (
+            jnp.concatenate(top_rotation_ids, axis=0) if top_rotation_ids else jnp.zeros((0, 1), dtype=jnp.int32)
+        )
+    if top_translations is not None:
+        diagnostics["top_translation_idx"] = (
+            jnp.concatenate(top_translations, axis=0) if top_translations else jnp.zeros((0, 1), dtype=jnp.int32)
+        )
+    if top_log_scores is not None:
+        top_log_score = (
+            jnp.concatenate(top_log_scores, axis=0) if top_log_scores else jnp.zeros((0, 1), dtype=jnp.float32)
+        )
+        diagnostics["top_log_score"] = top_log_score
+        diagnostics["top_log_score_per_image"] = top_log_score
+    if top_posteriors is not None:
+        top_posterior = (
+            jnp.concatenate(top_posteriors, axis=0) if top_posteriors else jnp.zeros((0, 1), dtype=jnp.float32)
+        )
+        diagnostics["top_posterior"] = top_posterior
+        diagnostics["top_posterior_per_image"] = top_posterior
+    if top_rotations is not None or top_rotation_ids is not None or top_translations is not None:
+        top_width_source = diagnostics.get(
+            "top_rotation_id",
+            diagnostics.get("top_rotation_idx", jnp.zeros((0, 1), dtype=jnp.int32)),
+        )
+        diagnostics["top_p_poses"] = int(top_width_source.shape[-1])
+        diagnostics["top_pose_count"] = int(top_width_source.shape[-1])
     if extras:
         diagnostics.update(extras)
     return diagnostics

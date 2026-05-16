@@ -265,12 +265,13 @@ class TestConfigDataclassDefaults:
     def test_ScheduleConfig_defaults(self):
         cls = ppca_config.ScheduleConfig
         names = [f.name for f in fields(cls)]
-        assert names == ["image_batch_size", "rotation_block_size", "mstep_chunk_size"]
+        assert names == ["image_batch_size", "rotation_block_size", "mstep_chunk_size", "local_image_shard_count"]
         defaults = {f.name: _resolve_default(f) for f in fields(cls)}
         assert defaults == {
             "image_batch_size": 500,
             "rotation_block_size": 5000,
             "mstep_chunk_size": None,
+            "local_image_shard_count": 1,
         }
 
     def test_ScoringConfig_defaults(self):
@@ -297,11 +298,13 @@ class TestConfigDataclassDefaults:
     def test_SparsePass2Config_defaults(self):
         cls = ppca_config.SparsePass2Config
         names = [f.name for f in fields(cls)]
-        assert names == ["enabled", "log_threshold"]
+        assert names == ["enabled", "log_threshold", "local_mstep_top_k", "local_mstep_min_pmax"]
         defaults = {f.name: _resolve_default(f) for f in fields(cls)}
         assert defaults["enabled"] is True
         # log_threshold == ln(1e-6) == -6 * ln(10) ≈ -13.815510557964274
         assert defaults["log_threshold"] == pytest.approx(np.log(1e-6))
+        assert defaults["local_mstep_top_k"] == 0
+        assert defaults["local_mstep_min_pmax"] == pytest.approx(0.999)
 
     def test_all_configs_frozen(self):
         """All four configs must be frozen dataclasses so mutation

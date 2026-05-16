@@ -131,6 +131,22 @@ def _resolve_prior_rotations(prior_rotations: np.ndarray, healpix_order: int, gr
     return prior_eulers, prior_rotation_mats
 
 
+def _local_selector_chunk_size(n_images: int, n_pixels: int, n_psi: int, use_direction: bool, use_psi: bool) -> int:
+    explicit = os.environ.get("RECOVAR_LOCAL_SELECTOR_CHUNK_SIZE", "")
+    if explicit:
+        return max(1, min(int(n_images), int(explicit)))
+
+    max_elements = int(os.environ.get("RECOVAR_LOCAL_SELECTOR_MAX_ELEMENTS", "16000000"))
+    per_image_elements = 0
+    if use_direction:
+        per_image_elements += int(n_pixels)
+    if use_psi:
+        per_image_elements += int(n_psi)
+    if per_image_elements <= 0:
+        return max(1, int(n_images))
+    return max(1, min(int(n_images), max_elements // per_image_elements))
+
+
 def _build_factorized_local_entries(
     prior_rotations: np.ndarray,
     healpix_order: int,
@@ -160,53 +176,74 @@ def _build_factorized_local_entries(
     cutoff_dir_deg = 3.0 * biggest_sigma_deg
     cutoff_psi_deg = 3.0 * sigma_psi_deg
 
-    if sigma_rot_deg > 0.0:
-        dots = np.clip(prior_dir_vecs @ dir_vecs.T, -1.0, 1.0)
-        diffang = np.rad2deg(np.arccos(dots))
-    else:
-        diffang = None
-
-    if sigma_psi_deg > 0.0:
-        diffpsi = _wrapped_abs_diff_deg(psi_deg_grid[None, :], prior_psi_deg[:, None])
-    else:
-        diffpsi = None
-
     rotation_ids_parts: list[np.ndarray] = []
     log_prior_parts: list[np.ndarray] = []
-    counts = np.zeros(prior_eulers.shape[0], dtype=np.int32)
-    offsets = np.zeros(prior_eulers.shape[0] + 1, dtype=np.int64)
+    n_images = int(prior_eulers.shape[0])
+    counts = np.zeros(n_images, dtype=np.int32)
+    offsets = np.zeros(n_images + 1, dtype=np.int64)
+    chunk_size = _local_selector_chunk_size(
+        n_images,
+        n_pixels,
+        int(grid_metadata["n_psi"]),
+        sigma_rot_deg > 0.0,
+        sigma_psi_deg > 0.0,
+    )
+    running_offset = 0
 
-    for image_idx in range(prior_eulers.shape[0]):
+    for chunk_start in range(0, n_images, chunk_size):
+        chunk_stop = min(n_images, chunk_start + chunk_size)
         if sigma_rot_deg > 0.0:
-            dir_mask = diffang[image_idx] < cutoff_dir_deg
-            dir_indices = np.flatnonzero(dir_mask).astype(np.int64)
-            if dir_indices.size == 0:
-                dir_indices = np.array([int(np.argmin(diffang[image_idx]))], dtype=np.int64)
-                dir_log_prior = np.zeros(1, dtype=np.float32)
-            else:
-                dir_log_prior = _normalized_log_weights(diffang[image_idx, dir_indices], biggest_sigma_deg)
+            dots = np.clip(prior_dir_vecs[chunk_start:chunk_stop] @ dir_vecs.T, -1.0, 1.0)
+            diffang_chunk = np.rad2deg(np.arccos(dots))
         else:
-            dir_indices = np.arange(n_pixels, dtype=np.int64)
-            dir_log_prior = np.full(n_pixels, -np.log(max(n_pixels, 1)), dtype=np.float32)
+            diffang_chunk = None
 
         if sigma_psi_deg > 0.0:
-            psi_mask = diffpsi[image_idx] < cutoff_psi_deg
-            psi_indices = np.flatnonzero(psi_mask).astype(np.int64)
-            if psi_indices.size == 0:
-                psi_indices = np.array([int(np.argmin(diffpsi[image_idx]))], dtype=np.int64)
-                psi_log_prior = np.zeros(1, dtype=np.float32)
-            else:
-                psi_log_prior = _normalized_log_weights(diffpsi[image_idx, psi_indices], sigma_psi_deg)
+            diffpsi_chunk = _wrapped_abs_diff_deg(
+                psi_deg_grid[None, :],
+                prior_psi_deg[chunk_start:chunk_stop, None],
+            )
         else:
-            psi_indices = np.arange(int(grid_metadata["n_psi"]), dtype=np.int64)
-            psi_log_prior = np.full(psi_indices.shape[0], -np.log(max(psi_indices.shape[0], 1)), dtype=np.float32)
+            diffpsi_chunk = None
 
-        local_ids = (psi_indices[:, None] * n_pixels + dir_indices[None, :]).reshape(-1).astype(np.int32)
-        local_log_prior = (psi_log_prior[:, None] + dir_log_prior[None, :]).reshape(-1).astype(np.float32)
-        counts[image_idx] = int(local_ids.shape[0])
-        offsets[image_idx + 1] = offsets[image_idx] + local_ids.shape[0]
-        rotation_ids_parts.append(local_ids)
-        log_prior_parts.append(local_log_prior)
+        for local_idx, image_idx in enumerate(range(chunk_start, chunk_stop)):
+            if sigma_rot_deg > 0.0:
+                diffang_i = diffang_chunk[local_idx]
+                dir_mask = diffang_i < cutoff_dir_deg
+                dir_indices = np.flatnonzero(dir_mask).astype(np.int64)
+                if dir_indices.size == 0:
+                    dir_indices = np.array([int(np.argmin(diffang_i))], dtype=np.int64)
+                    dir_log_prior = np.zeros(1, dtype=np.float32)
+                else:
+                    dir_log_prior = _normalized_log_weights(diffang_i[dir_indices], biggest_sigma_deg)
+            else:
+                dir_indices = np.arange(n_pixels, dtype=np.int64)
+                dir_log_prior = np.full(n_pixels, -np.log(max(n_pixels, 1)), dtype=np.float32)
+
+            if sigma_psi_deg > 0.0:
+                diffpsi_i = diffpsi_chunk[local_idx]
+                psi_mask = diffpsi_i < cutoff_psi_deg
+                psi_indices = np.flatnonzero(psi_mask).astype(np.int64)
+                if psi_indices.size == 0:
+                    psi_indices = np.array([int(np.argmin(diffpsi_i))], dtype=np.int64)
+                    psi_log_prior = np.zeros(1, dtype=np.float32)
+                else:
+                    psi_log_prior = _normalized_log_weights(diffpsi_i[psi_indices], sigma_psi_deg)
+            else:
+                psi_indices = np.arange(int(grid_metadata["n_psi"]), dtype=np.int64)
+                psi_log_prior = np.full(
+                    psi_indices.shape[0],
+                    -np.log(max(psi_indices.shape[0], 1)),
+                    dtype=np.float32,
+                )
+
+            local_ids = (psi_indices[:, None] * n_pixels + dir_indices[None, :]).reshape(-1).astype(np.int32)
+            local_log_prior = (psi_log_prior[:, None] + dir_log_prior[None, :]).reshape(-1).astype(np.float32)
+            counts[image_idx] = int(local_ids.shape[0])
+            running_offset += int(local_ids.shape[0])
+            offsets[image_idx + 1] = running_offset
+            rotation_ids_parts.append(local_ids)
+            log_prior_parts.append(local_log_prior)
 
     rotation_ids_flat = (
         np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)

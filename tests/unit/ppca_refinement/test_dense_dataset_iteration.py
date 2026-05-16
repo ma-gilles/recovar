@@ -651,6 +651,105 @@ def test_exact_local_subset_layout_matches_dense_subset(tiny_inputs):
     np.testing.assert_array_equal(np.asarray(local.diagnostics["image_indices"]), image_indices)
 
 
+def test_exact_local_image_sharded_accumulation_matches_monolithic(tiny_inputs):
+    dataset, mu, W, rotations, translations = tiny_inputs
+    mean_prior = jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0
+    W_prior = jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0
+    layout = _all_retained_local_layout(dataset, rotations, translations)
+    common_kwargs = dict(
+        mean_prior=mean_prior,
+        W_prior=W_prior,
+        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
+        local_layout=layout,
+        enforce_x0=False,
+        geometry=GeometryConfig(volume_domain="fourier_half"),
+        scoring=ScoringConfig(image_scale_corrections=np.asarray([1.7, 0.5, 1.2, 0.9], dtype=np.float32)),
+    )
+    monolithic = run_local_ppca_fused_em_iteration(
+        dataset,
+        mu,
+        W,
+        schedule=ScheduleConfig(mstep_chunk_size=8, image_batch_size=2),
+        **common_kwargs,
+    )
+    sharded = run_local_ppca_fused_em_iteration(
+        dataset,
+        mu,
+        W,
+        schedule=ScheduleConfig(mstep_chunk_size=8, image_batch_size=2, local_image_shard_count=2),
+        **common_kwargs,
+    )
+
+    np.testing.assert_allclose(np.asarray(sharded.stats.rhs), np.asarray(monolithic.stats.rhs), rtol=2e-5, atol=2e-5)
+    np.testing.assert_allclose(
+        np.asarray(sharded.stats.lhs_tri),
+        np.asarray(monolithic.stats.lhs_tri),
+        rtol=2e-5,
+        atol=2e-5,
+    )
+    np.testing.assert_allclose(np.asarray(sharded.mu_half), np.asarray(monolithic.mu_half), rtol=2e-5, atol=2e-5)
+    np.testing.assert_allclose(np.asarray(sharded.W_half), np.asarray(monolithic.W_half), rtol=2e-5, atol=2e-5)
+    assert sharded.diagnostics["local_image_sharded"] is True
+    assert sharded.diagnostics["local_image_shard_count"] == 2
+    np.testing.assert_array_equal(
+        np.sort(np.asarray(sharded.diagnostics["image_indices"])),
+        np.sort(np.asarray(monolithic.diagnostics["image_indices"])),
+    )
+
+
+def test_exact_local_topk_mstep_falls_back_when_posteriors_not_peaked(tiny_inputs):
+    dataset, mu, W, rotations, translations = tiny_inputs
+    mean_prior = jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0
+    W_prior = jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0
+    layout = _all_retained_local_layout(dataset, rotations, translations)
+    common_kwargs = dict(
+        mean_prior=mean_prior,
+        W_prior=W_prior,
+        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
+        local_layout=layout,
+        enforce_x0=False,
+        geometry=GeometryConfig(volume_domain="fourier_half"),
+        schedule=ScheduleConfig(mstep_chunk_size=8, image_batch_size=2),
+    )
+    exact = run_local_ppca_fused_em_iteration(dataset, mu, W, **common_kwargs)
+    fallback = run_local_ppca_fused_em_iteration(
+        dataset,
+        mu,
+        W,
+        sparse_pass2=SparsePass2Config(enabled=True, local_mstep_top_k=1, local_mstep_min_pmax=1.0),
+        **common_kwargs,
+    )
+
+    np.testing.assert_allclose(np.asarray(fallback.stats.rhs), np.asarray(exact.stats.rhs), rtol=2e-5, atol=2e-5)
+    np.testing.assert_allclose(np.asarray(fallback.stats.lhs_tri), np.asarray(exact.stats.lhs_tri), rtol=2e-5, atol=2e-5)
+    assert fallback.diagnostics["local_mstep_topk_buckets"] == 0
+    assert fallback.diagnostics["local_mstep_exact_buckets"] > 0
+
+
+def test_exact_local_topk_mstep_records_retained_mass(tiny_inputs):
+    dataset, mu, W, rotations, translations = tiny_inputs
+    result = run_local_ppca_fused_em_iteration(
+        dataset,
+        mu,
+        W,
+        mean_prior=jnp.ones((HALF_VOL,), dtype=jnp.float32) * 10.0,
+        W_prior=jnp.ones((HALF_VOL, 1), dtype=jnp.float32) * 5.0,
+        noise_variance=jnp.ones((N_HALF,), dtype=jnp.float32),
+        local_layout=_all_retained_local_layout(dataset, rotations, translations),
+        enforce_x0=False,
+        geometry=GeometryConfig(volume_domain="fourier_half"),
+        schedule=ScheduleConfig(mstep_chunk_size=8, image_batch_size=2),
+        sparse_pass2=SparsePass2Config(enabled=True, local_mstep_top_k=1, local_mstep_min_pmax=0.0),
+    )
+
+    assert result.diagnostics["local_mstep_top_k"] == 1
+    assert result.diagnostics["local_mstep_topk_buckets"] > 0
+    retained = np.asarray(result.diagnostics["local_mstep_retained_mass_per_image"])
+    assert retained.shape == (dataset.n_images,)
+    assert np.all(retained > 0)
+    assert np.all(retained <= 1.0 + 1e-6)
+
+
 def test_exact_local_refinement_loop_uses_same_resolution_gate(tiny_inputs):
     dataset, mu, W, rotations, translations = tiny_inputs
     halfsets = (dataset.get_halfset(0), dataset.get_halfset(1))
