@@ -7,7 +7,6 @@ import os
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import mrcfile
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
@@ -505,9 +504,7 @@ def generate_synthetic_dataset(
     # Save outputs
     particles_file = output_folder + f"/particles.{grid_size}.mrcs"
 
-    with mrcfile.new(particles_file, overwrite=True) as mrc:
-        mrc.set_data(main_image_stack.astype(image_dtype))
-        mrc.voxel_size = voxel_size
+    utils.write_mrc_stack(particles_file, main_image_stack, voxel_size=voxel_size, dtype=image_dtype)
     poses = (rots.astype(np.float32), trans.astype(np.float32))
     utils.pickle_dump(poses, output_folder + "/poses.pkl")
     save_ctf_params(output_folder, grid_size, ctf_params, voxel_size)
