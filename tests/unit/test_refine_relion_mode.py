@@ -1226,6 +1226,18 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
 
 
 def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
+    # Pin GPU memory queries so the batch-size clamp is deterministic.
+    # ``_estimate_relion_em_batch_sizes`` reads
+    # ``iteration_loop.utils.get_gpu_memory_total/_used``; without pinning,
+    # the clamp behavior depends on prior test JAX allocations — the test
+    # passes in isolation (and on H100 / A100-80 in the dev branch where
+    # ``get_gpu_memory_total`` returned ~42 GB) but fails after the full
+    # suite when the queries return stale or inconsistent values. The 42 GB
+    # / 0 GB-used pair is the historical isolation reading that this test
+    # was originally calibrated against.
+    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 42.0)
+    monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 0.0)
+
     class HighresDataset:
         image_shape = (384, 384)
         image_size = 384 * 384
