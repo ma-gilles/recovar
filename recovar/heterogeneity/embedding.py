@@ -407,6 +407,8 @@ def get_coords_in_basis_and_contrast_3(
             # For SPA, always index outputs by image ids. In the contrast
             # do-over pass the per-batch particle ids may be stale or
             # malformed, but batch_image_ind is the validated dataset order.
+            # (Original notes: batch_image_ind is a validated int32 host copy;
+            # particle_ids was unreliable under GPU memory pressure — see #71.)
             target_ind = batch_image_ind
             xs[target_ind] = xs_single
             estimated_contrasts[batch_image_ind] = contrast_single

@@ -193,6 +193,48 @@ class TestSmoothCircularMask:
         assert center >= edge
 
 
+class TestRelionSoftImageMask:
+    def test_matches_smooth_circular_mask_parameterization(self):
+        image_size = 128
+        pixel_size = 4.25
+        particle_diameter_ang = 200.0
+        width_mask_edge_px = 5.0
+
+        result = mask.relion_soft_image_mask(
+            image_size=image_size,
+            pixel_size=pixel_size,
+            particle_diameter_ang=particle_diameter_ang,
+            width_mask_edge_px=width_mask_edge_px,
+        )
+        expected = mask.smooth_circular_mask(
+            image_size=image_size,
+            radius=particle_diameter_ang / (2.0 * pixel_size),
+            thickness=width_mask_edge_px,
+        )
+        np.testing.assert_allclose(result, expected)
+
+    def test_radius_tracks_relion_particle_diameter(self):
+        image_size = 128
+        pixel_size = 4.25
+        particle_diameter_ang = 200.0
+        width_mask_edge_px = 5.0
+
+        result = mask.relion_soft_image_mask(
+            image_size=image_size,
+            pixel_size=pixel_size,
+            particle_diameter_ang=particle_diameter_ang,
+            width_mask_edge_px=width_mask_edge_px,
+        )
+
+        half = image_size // 2
+        radius_px = particle_diameter_ang / (2.0 * pixel_size)
+        inside = int(np.floor(radius_px)) - 1
+        outside = int(np.ceil(radius_px + width_mask_edge_px)) + 1
+
+        assert result[half, half + inside] == pytest.approx(1.0, abs=1e-6)
+        assert result[half, half + outside] == pytest.approx(0.0, abs=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # window_mask
 # ---------------------------------------------------------------------------
@@ -337,6 +379,52 @@ class TestSoftMaskOutsideMap:
         result, m = mask.soft_mask_outside_map(vol, radius=4, cosine_width=2)
         assert float(jnp.min(m)) >= 0.0
         assert float(jnp.max(m)) <= 1.0 + 1e-5
+
+    def test_matches_relion_background_weighting(self):
+        shape = (9, 9, 9)
+        radius = 2.5
+        cosine_width = 2.0
+        vol = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+
+        coords = np.asarray(
+            fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False)
+        ).reshape(shape + (3,))
+        r = np.linalg.norm(coords, axis=-1)
+        radius_p = radius + cosine_width
+        raised_cos = 0.5 + 0.5 * np.cos(np.pi * (radius_p - r) / cosine_width)
+        protein_weight = np.zeros(shape, dtype=np.float32)
+        protein_weight = np.where(r < radius, 1.0, protein_weight)
+        protein_weight = np.where((r >= radius) & (r <= radius_p), 1.0 - raised_cos, protein_weight)
+        background_weight = np.zeros(shape, dtype=np.float32)
+        background_weight = np.where(r > radius_p, 1.0, background_weight)
+        background_weight = np.where((r >= radius) & (r <= radius_p), raised_cos, background_weight)
+        avg_bg = np.sum(vol * background_weight) / np.sum(background_weight)
+        expected = protein_weight * vol + background_weight * avg_bg
+
+        result, returned_mask = mask.soft_mask_outside_map(jnp.asarray(vol), radius=radius, cosine_width=cosine_width)
+
+        np.testing.assert_allclose(np.asarray(result), expected, rtol=1e-6, atol=1e-5)
+        np.testing.assert_allclose(np.asarray(returned_mask), protein_weight, rtol=1e-6, atol=1e-6)
+
+    def test_raised_cosine_mask_matches_relion_solvent_flatten_mask(self):
+        shape = (9, 9, 9)
+        radius = 2.5
+        width = 2.0
+        coords = np.asarray(
+            fourier_transform_utils.get_k_coordinate_of_each_pixel_3d(shape, voxel_size=1, scaled=False)
+        ).reshape(shape + (3,))
+        r = np.linalg.norm(coords, axis=-1)
+        expected = np.zeros(shape, dtype=np.float32)
+        expected = np.where(r < radius, 1.0, expected)
+        expected = np.where(
+            (r >= radius) & (r <= radius + width),
+            0.5 - 0.5 * np.cos(np.pi * (radius + width - r) / width),
+            expected,
+        )
+
+        result = mask.raised_cosine_mask(shape, radius=radius, radius_p=radius + width, offset=jnp.zeros(3))
+
+        np.testing.assert_allclose(np.asarray(result), expected, rtol=1e-6, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------

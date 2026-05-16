@@ -363,8 +363,11 @@ _ffi_lock = threading.Lock()
 
 # FFI target name constants
 _TARGET_BACKPROJECT = "cuda_backproject"
+_TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
 _TARGET_PROJECT = "cuda_project"
+_TARGET_PROJECT_INDEXED = "cuda_project_indexed"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
+_TARGET_BATCH_BACKPROJECT_INDEXED = "cuda_batch_backproject_indexed"
 _TARGET_BATCH_PROJECT = "cuda_batch_project"
 _TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
 _TARGET_FUSED_BP = "cuda_fused_bp"
@@ -592,8 +595,23 @@ def _ensure_ffi():
         if _loaded_lib_path:
             _preflight_check(pathlib.Path(_loaded_lib_path))
         jax.ffi.register_ffi_target(_TARGET_BACKPROJECT, jax.ffi.pycapsule(lib.Backproject), platform="CUDA")
+        jax.ffi.register_ffi_target(
+            _TARGET_BACKPROJECT_INDEXED,
+            jax.ffi.pycapsule(lib.BackprojectIndexed),
+            platform="CUDA",
+        )
         jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
+        jax.ffi.register_ffi_target(
+            _TARGET_PROJECT_INDEXED,
+            jax.ffi.pycapsule(lib.ProjectIndexed),
+            platform="CUDA",
+        )
         jax.ffi.register_ffi_target(_TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA")
+        jax.ffi.register_ffi_target(
+            _TARGET_BATCH_BACKPROJECT_INDEXED,
+            jax.ffi.pycapsule(lib.BatchBackprojectIndexed),
+            platform="CUDA",
+        )
         jax.ffi.register_ffi_target(_TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA")
         jax.ffi.register_ffi_target(
             _TARGET_BATCH_BP_INTERLEAVED, jax.ffi.pycapsule(lib.BatchBackprojectInterleaved), platform="CUDA"
@@ -605,6 +623,7 @@ def _ensure_ffi():
 
 
 _cuda_ok = None  # cached result: None = not checked, True/False = result
+_texture_debug_keys = set()
 
 
 def cuda_available() -> bool:
@@ -700,7 +719,13 @@ def _encode_max_r(max_r):
 
 
 def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r=None):
-    """Compute the shared FFI scalar keyword arguments (used by all 4 targets)."""
+    """Compute shared FFI scalar keyword arguments.
+
+    ``max_r`` is in image Fourier-pixel coordinates, matching
+    ``recovar.core.slicing`` and ``relion_interp``. The CUDA kernels compare
+    against coordinates already multiplied by ``upsampling``, so encode the
+    radius in padded-volume coordinates here and nowhere else.
+    """
     ih, iw_full = image_shape
     N0, N1, N2 = volume_shape
     ups = N0 // ih
@@ -717,11 +742,30 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
             half_volume=np.int64(int(half_volume)),
             half_image=np.int64(int(half_image)),
             full_image_w=np.int64(iw_full),
-            max_r2_x4=_encode_max_r(max_r),
+            max_r2_x4=_encode_max_r(None if max_r is None else float(max_r) * float(ups)),
         ),
         ih,
         iw_eff,
     )
+
+
+def _project_ffi_kwargs(
+    image_shape,
+    volume_shape,
+    order,
+    half_volume,
+    half_image,
+    max_r=None,
+    relion_texture_interp: bool = False,
+):
+    """FFI kwargs for forward projection.
+
+    ``relion_texture_interp=True`` enables CUDA texture interpolation for
+    full-volume order-1 projections, matching RELION's accelerated projector.
+    """
+    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["relion_texture_interp"] = np.int64(int(relion_texture_interp))
+    return kw, ih, iw_eff
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
@@ -774,8 +818,87 @@ def backproject(
     )(images, rot6, volume, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def project(
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
+def backproject_indexed(
+    volume: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+    relion_x_half: bool = False,
+) -> jax.Array:
+    """Back-project images whose pixels are stored in a compact indexed layout.
+
+    ``pixel_indices`` contains the flattened pixel positions in the original
+    image grid (or packed half-image grid when ``half_image=True``). The kernel
+    interprets ``images[:, j]`` as the value at ``pixel_indices[j]``.
+    """
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    if relion_x_half and not (half_volume and half_image):
+        raise ValueError("relion_x_half requires half_volume=True and half_image=True")
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["relion_fold_x"] = np.int64(int(relion_x_half))
+    if relion_x_half:
+        # The CUDA half-volume scatter packs its last coordinate. RELION's
+        # BackProjector packs the Fourier x-axis, which is RECOVAR axis 0.
+        # Reorder coordinates to kernel layout (z, y, x) so the packed last
+        # axis is the RELION/RECOVAR-x half-axis.
+        rotation_matrices = rotation_matrices[..., [2, 1, 0]]
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_BACKPROJECT_INDEXED,
+        out_type,
+        input_output_aliases={3: 0},
+        vmap_method="sequential",
+    )(images, pixel_indices, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
+def batch_backproject_indexed(
+    volumes: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+    relion_x_half: bool = False,
+) -> jax.Array:
+    """Back-project compact indexed images into a batch of volumes."""
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    if relion_x_half and not (half_volume and half_image):
+        raise ValueError("relion_x_half requires half_volume=True and half_image=True")
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["relion_fold_x"] = np.int64(int(relion_x_half))
+    if relion_x_half:
+        rotation_matrices = rotation_matrices[..., [2, 1, 0]]
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_BATCH_BACKPROJECT_INDEXED,
+        out_type,
+        input_output_aliases={3: 0},
+        vmap_method="sequential",
+    )(images, pixel_indices, rot6, volumes, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))
+def _project_impl(
     volume: jax.Array,
     rotation_matrices: jax.Array,
     image_shape: Tuple[int, int] = (0, 0),
@@ -784,6 +907,7 @@ def project(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    relion_texture_interp: bool = False,
 ) -> jax.Array:
     """Project *volume* to 2D images.
 
@@ -799,7 +923,15 @@ def project(
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw, ih, iw_eff = _project_ffi_kwargs(
+        image_shape,
+        volume_shape,
+        order,
+        half_volume,
+        half_image,
+        max_r,
+        relion_texture_interp=relion_texture_interp,
+    )
     n_images = rotation_matrices.shape[0]
     n_pixels = ih * iw_eff
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
@@ -810,6 +942,94 @@ def project(
         out_type,
         vmap_method="sequential",
     )(volume, rot6, **kw)
+
+
+def project(
+    volume: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+    relion_texture_interp: bool = False,
+) -> jax.Array:
+    """Project *volume* to 2D images.
+
+    ``relion_texture_interp=True`` uses RELION-style CUDA texture
+    interpolation where the FFI backend supports it. The flag is forwarded as
+    a static argument so manual and texture traces cannot alias in JAX caches.
+    """
+    global _texture_debug_keys
+    debug_key = (
+        relion_texture_interp,
+        getattr(volume, "dtype", None),
+        order,
+        half_volume,
+        half_image,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+    if os.environ.get("RECOVAR_DEBUG_TEXTURE_PROJECT", "0") == "1" and debug_key not in _texture_debug_keys:
+        print(
+            "[RECOVAR_TEXTURE_PROJECT]",
+            f"enabled={relion_texture_interp}",
+            f"dtype={getattr(volume, 'dtype', None)}",
+            f"order={order}",
+            f"half_volume={half_volume}",
+            f"half_image={half_image}",
+            f"image_shape={image_shape}",
+            f"volume_shape={volume_shape}",
+            f"max_r={max_r}",
+            flush=True,
+        )
+        _texture_debug_keys.add(debug_key)
+    return _project_impl(
+        volume,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        order,
+        half_volume,
+        half_image,
+        max_r,
+        relion_texture_interp,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
+def project_indexed(
+    volume: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+) -> jax.Array:
+    """Project only the requested flattened image pixels.
+
+    ``pixel_indices`` contains flattened pixel positions in the original full
+    image grid, or the packed half-image grid when ``half_image=True``. The
+    output stores those pixels compactly as ``(n_images, len(pixel_indices))``.
+    """
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    n_images = rotation_matrices.shape[0]
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
+    out_type = jax.ShapeDtypeStruct((n_images, pixel_indices.shape[0]), volume.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_PROJECT_INDEXED,
+        out_type,
+        vmap_method="sequential",
+    )(volume, pixel_indices, rot6, **kw)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -998,7 +1218,7 @@ def per_image_backproject(
     )
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))
 def batch_project(
     volumes: jax.Array,
     rotation_matrices: jax.Array,
@@ -1008,6 +1228,7 @@ def batch_project(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    relion_texture_interp: bool = False,
 ) -> jax.Array:
     """Project a batch of volumes to 2D images via vmap over single-volume project.
 
@@ -1048,6 +1269,7 @@ def batch_project(
             half_volume=half_volume,
             half_image=half_image,
             max_r=max_r,
+            relion_texture_interp=relion_texture_interp,
         )
     )(volumes)
 

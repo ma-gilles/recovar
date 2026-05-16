@@ -1,0 +1,71 @@
+{
+  "fixture": "5k_128_normalized",
+  "fixture_path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized",
+  "relion_ref_dir": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0",
+  "gpu": "NVIDIA A100-SXM4-80GB",
+  "config": {
+    "init_iter": 0,
+    "max_iter": 14,
+    "local_engine": "exact_v1",
+    "use_global_significant_support": true,
+    "image_batch_size": 1,
+    "adaptive_oversample_order": 0,
+    "adaptive_fraction": 0.999,
+    "max_significants": -1,
+    "local_search": false,
+    "image_size_box": 128,
+    "voxel_size_angstrom": 4.25,
+    "n_particles": 5000
+  },
+  "per_iter_seconds_total": {
+    "1": 72.4,
+    "2": 290.1,
+    "3": 106.7,
+    "4": 78.8,
+    "5": 60.7,
+    "6": 51.4,
+    "7": 41.3,
+    "8": 47.3,
+    "9": 52.1,
+    "10": 58.8,
+    "11": 59.8,
+    "12": 71.0,
+    "13": 84.9,
+    "14": 780.0
+  },
+  "per_iter_seconds_stages": {
+    "1": {"e_step": 51.1, "recon": 69.5, "fsc": 71.9, "noise_update": 72.4},
+    "2": {"e_step": 282.6, "recon": 288.0, "fsc": 290.0, "noise_update": 290.1},
+    "3": {"e_step": 105.6, "recon": 106.5, "fsc": 106.6, "noise_update": 106.6},
+    "4": {"e_step": 77.7, "recon": 78.6, "fsc": 78.7, "noise_update": 78.8},
+    "5": {"e_step": 59.5, "recon": 60.4, "fsc": 60.5, "noise_update": 60.6},
+    "6": {"e_step": 50.2, "recon": 51.1, "fsc": 51.3, "noise_update": 51.4},
+    "7": {"e_step": 40.0, "recon": 41.0, "fsc": 41.2, "noise_update": 41.2},
+    "8": {"e_step": 46.3, "recon": 47.2, "fsc": 47.2, "noise_update": 47.3},
+    "9": {"e_step": 50.9, "recon": 51.9, "fsc": 52.0, "noise_update": 52.1},
+    "10": {"e_step": 57.7, "recon": 58.7, "fsc": 58.8, "noise_update": 58.8},
+    "11": {"e_step": 58.5, "recon": 59.5, "fsc": 59.6, "noise_update": 59.7},
+    "12": {"e_step": 69.9, "recon": 70.8, "fsc": 70.9, "noise_update": 71.0},
+    "13": {"e_step": 83.8, "recon": 84.7, "fsc": 84.8, "noise_update": 84.9},
+    "14": {"e_step": 720.0, "recon": 725.0, "fsc": 726.0, "noise_update": 731.0, "convergence": 736.0}
+  },
+  "tolerance_multiplier": 2.0,
+  "regression_threshold_multiplier": 3.0,
+  "source": [
+    "/scratch/gpfs/GILLES/mg6942/_agent_scratch/parity/5k_parity_after_8fbb0319_local_20260428_164620/parity_dump/iter_001.npz (iter 1, wall_time_s=72.3667, A100-80GB, local PID 1750532)",
+    "/scratch/gpfs/GILLES/mg6942/_agent_scratch/parity/5k_parity_after_8fbb0319_local_20260428_164620/parity_dump/iter_002.npz and iter_003.npz (iters 2-3, wall_time_s=290.1093/106.6584, A100-80GB, local PID 1750532)",
+    "/scratch/gpfs/GILLES/mg6942/_agent_scratch/parity/5k_parity_after_8fbb0319_local_20260428_164620/parity_dump/iter_004.npz through iter_013.npz (iters 4-13, wall_time_s=78.8468/60.6545/51.4001/41.2858/47.3288/52.0663/58.8275/59.7837/71.0289/84.9329, A100-80GB)",
+    "/scratch/gpfs/GILLES/mg6942/_agent_scratch/parity/5k_parity_after_8fbb0319_local_20260428_164620/benchmark_ledger.json (completed_iterations=13)",
+    "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/_agent_scratch/5k_parity_after_8fbb0319_local_20260428_164620/local_5k_20260428_165037.out",
+    "Notes from project_use_global_significant_support_path.md (per-image Python loop, image_batch_size=1, current_size=56)",
+    "Late-iter timings copied from perf_baseline_5k_128_a100.json (iters 4+)"
+  ],
+  "notes": [
+    "Workload: cold global pass2 with use_global_significant_support starting from --iter 0.",
+    "Iters 1-13 were replaced with completed 2026-04-28 local 5k timing dumps. These completed dumps predate the convergence-stage ordering fix and do not contain measured convergence stamps, so no convergence baselines are synthesized for measured iters.",
+    "Stage entries are cumulative parity_dump mark_stage stamps since iteration start. Non-measured entries preserve the prior estimated stage durations, converted to cumulative marker values.",
+    "Iters 4+ mirror perf_baseline_5k_128_a100.json (local search regime) where real data is available.",
+    "Iter 14 remains extrapolated because the completed 2026-04-28 run stopped after RELION iter 13. Reset once a real iter-14 dump completes successfully.",
+    "Iter index in this file is the RELION iter index (init_relion_iteration=0 + recovar_iteration + 1)."
+  ]
+}
