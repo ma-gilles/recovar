@@ -390,6 +390,7 @@ def _run_compute_state(args, out: Path, pipeline_dir: Path, latent_point: np.nda
         apply_global_filtering=False,
         fsc_mask_radius=None,
         fsc_mask_edgewidth=None,
+        gpu_memory=args.pipeline_gpu_memory,
         latent_points=str(latent_path),
         save_all_estimates=bool(args.compute_state_save_all_estimates),
         kernel_regression_mode=str(args.compute_state_kernel_regression_mode),

@@ -740,6 +740,43 @@ def _sample_normal_equation_condition(lhs, rho, pol_reg_matrix, max_samples=4096
     }
 
 
+def _solve_local_poly_gram_chunk(gram, rhs, *, pinv_chunk_size=4096):
+    """Solve batched tiny systems, falling back to min-norm solutions for singular voxels."""
+    try:
+        return np.linalg.solve(gram, rhs[..., None])[..., 0], 0, 0
+    except np.linalg.LinAlgError:
+        pass
+
+    n_systems = int(gram.shape[0])
+    if n_systems == 0:
+        return rhs.copy(), 0, 0
+    if n_systems <= int(pinv_chunk_size):
+        theta = np.einsum(
+            "...rs,...s->...r",
+            np.linalg.pinv(gram, hermitian=True),
+            rhs,
+            optimize=True,
+        )
+        return theta, n_systems, 1
+
+    midpoint = n_systems // 2
+    left, left_voxels, left_chunks = _solve_local_poly_gram_chunk(
+        gram[:midpoint],
+        rhs[:midpoint],
+        pinv_chunk_size=pinv_chunk_size,
+    )
+    right, right_voxels, right_chunks = _solve_local_poly_gram_chunk(
+        gram[midpoint:],
+        rhs[midpoint:],
+        pinv_chunk_size=pinv_chunk_size,
+    )
+    return (
+        np.concatenate([left, right], axis=0),
+        left_voxels + right_voxels,
+        left_chunks + right_chunks,
+    )
+
+
 def solve_local_polynomial_fourier_coefficients(
     lhs_all,
     rhs_all,
@@ -802,22 +839,28 @@ def solve_local_polynomial_fourier_coefficients(
             )
         ).reshape(-1).astype(np.float32)
         rho = np.maximum(reg_filter - lhs[0, 0], 0.0).astype(np.float32)
+        diagnostic = None
         if return_diagnostics:
-            diagnostics.append(
-                {
-                    "bandwidth_index": int(bw_idx),
-                    **_sample_normal_equation_condition(lhs, rho, pol_reg_matrix),
-                }
-            )
+            diagnostic = {
+                "bandwidth_index": int(bw_idx),
+                **_sample_normal_equation_condition(lhs, rho, pol_reg_matrix),
+                "pinv_fallback_voxel_count": 0,
+                "pinv_fallback_chunk_count": 0,
+            }
         for start in range(0, half_volume_size, solve_chunk_size):
             stop = min(start + solve_chunk_size, half_volume_size)
             gram = np.moveaxis(lhs[:, :, start:stop], -1, 0).astype(np.float32, copy=True)
             gram = 0.5 * (gram + np.swapaxes(gram, 1, 2))
             gram += rho[start:stop, None, None] * pol_reg_matrix[None, :, :]
             rhs_chunk = np.moveaxis(rhs[:, start:stop], -1, 0)
-            theta = np.linalg.solve(gram, rhs_chunk[..., None])[..., 0]
+            theta, fallback_voxels, fallback_chunks = _solve_local_poly_gram_chunk(gram, rhs_chunk)
+            if diagnostic is not None:
+                diagnostic["pinv_fallback_voxel_count"] += int(fallback_voxels)
+                diagnostic["pinv_fallback_chunk_count"] += int(fallback_chunks)
             coeffs[bw_idx, :, start:stop] = np.moveaxis(theta, 0, -1)
         coeffs[bw_idx] *= valid_half.astype(coeffs.real.dtype)[None, :]
+        if diagnostic is not None:
+            diagnostics.append(diagnostic)
     if return_diagnostics:
         return coeffs, diagnostics
     return coeffs
