@@ -169,9 +169,21 @@ _PATH_PATTERNS = [
     )
 ]
 
+_XLA_AUTOTUNER_PATTERNS = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"Autotuning failed.*No valid config found",
+        r"gemm_fusion_autotuner.*No valid config",
+    )
+]
+
 
 def _looks_like_oom(text: str) -> bool:
     return any(p.search(text) for p in _OOM_PATTERNS)
+
+
+def _looks_like_xla_autotuner(text: str) -> bool:
+    return any(p.search(text) for p in _XLA_AUTOTUNER_PATTERNS)
 
 
 def _looks_like_cuda_build(text: str) -> bool:
@@ -356,6 +368,47 @@ def _hint_conflicting_process(ctx: DiagnosticContext) -> ErrorHint:
     )
 
 
+def _hint_xla_autotuner_failed(ctx: DiagnosticContext, raw_text: str) -> ErrorHint:
+    """XLA's autotuner couldn't find a valid kernel config for some fusion.
+
+    The Triton GEMM subtype is already disabled by default in
+    ``recovar.jax_config`` (``--xla_gpu_enable_triton_gemm=false``), so
+    a remaining hit here is the non-Triton autotuner failing on a
+    particular shape — observed on full A100 at the (P, P) Cholesky
+    transpose in compute_projected_covariance for certain n_pcs values
+    (e.g. P=19306 at n_pcs=196). This is an XLA/JAX upstream gap, not a
+    recovar bug.
+    """
+    # Try to surface the failing op + shape for the user.
+    op_match = re.search(r'op_name="([^"]+)"', raw_text)
+    shape_match = re.search(r"f32\[[\d,\s]+\]|f16\[[\d,\s]+\]|bf16\[[\d,\s]+\]", raw_text)
+    op = op_match.group(1) if op_match else "(unknown op)"
+    shape = shape_match.group(0) if shape_match else "(unknown shape)"
+    return ErrorHint(
+        category="xla_autotuner_failed",
+        summary="JAX/XLA autotuner could not find a valid kernel config — known JAX upstream bug.",
+        likely_cause=(
+            f"XLA tried to autotune a fusion at op `{op}` with shape "
+            f"`{shape}` and reported `No valid config found!`. This is "
+            "not an OOM or a recovar bug — XLA's autotuner has gaps at "
+            "specific shape values that happen to be hit by RECOVAR's "
+            "(P, P) packed-covariance matrix where P = n_pcs(n_pcs+1)/2. "
+            "Adjacent n_pcs values (and adjacent budgets) work fine — "
+            "only this specific shape triggers the gap. See: "
+            "https://github.com/NVIDIA/JAX-Toolbox/issues/317 "
+            "https://github.com/google-deepmind/alphafold3/issues/240"
+        ),
+        suggestions=[
+            'export XLA_FLAGS="$XLA_FLAGS --xla_gpu_autotune_level=0" && recovar pipeline ... '
+            "(disables ALL XLA autotuning; ~5-15% slower but eliminates this class of failure)",
+            "OR retry with a slightly different --gpu-gb (the picker may then choose a "
+            "different n_pcs whose shape doesn't trigger the gap)",
+            "OR pass --no-adaptive-n-pcs to keep n_pcs=200 (the most-tested shape)",
+        ],
+        diagnostic_context=_format_memory_context(ctx),
+    )
+
+
 def _hint_custom_cuda_unavailable(ctx: DiagnosticContext) -> ErrorHint:
     return ErrorHint(
         category="custom_cuda_unavailable",
@@ -422,6 +475,11 @@ def classify_text(text: str, context: DiagnosticContext | None = None) -> ErrorH
         return None
     ctx = context or collect_context()
 
+    # Check XLA autotuner failure BEFORE OOM — the autotuner error
+    # message sometimes contains substrings that match OOM patterns
+    # (e.g. "fusion" near "allocation"). Specific pattern wins.
+    if _looks_like_xla_autotuner(text):
+        return _hint_xla_autotuner_failed(ctx, text)
     if _looks_like_oom(text):
         return _hint_gpu_oom(ctx)
     if _looks_like_cuda_build(text):

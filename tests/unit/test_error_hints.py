@@ -188,6 +188,29 @@ def test_custom_cuda_unavailable():
     assert "build_custom_cuda" in blob
 
 
+def test_xla_autotuner_no_valid_config_hint():
+    """XLA autotuner 'No valid config found' should be classified as
+    xla_autotuner_failed (not OOM) and recommend xla_gpu_autotune_level=0
+    as the broad-hammer override."""
+    from recovar.utils import error_hints
+
+    text = (
+        "jax.errors.JaxRuntimeError: INTERNAL: Autotuning failed for HLO: "
+        "%input_transpose_fusion = f32[19306,19306]{1,0} fusion(%cholesky.7.0), "
+        'kind=kInput, metadata={op_name="jit(_solve)/jit(_cholesky)/transpose"} '
+        "with error: NOT_FOUND: No valid config found!"
+    )
+    hint = error_hints.classify_text(text, error_hints.DiagnosticContext())
+    assert hint is not None
+    assert hint.category == "xla_autotuner_failed"
+    # Must surface the offending op and shape
+    assert "_cholesky" in hint.likely_cause or "_cholesky" in str(hint.diagnostic_context)
+    blob = " ".join(hint.suggestions)
+    assert "xla_gpu_autotune_level=0" in blob
+    # Should not be misclassified as OOM
+    assert hint.category != "gpu_oom"
+
+
 def test_cpu_fallback():
     from recovar.utils import error_hints
 
