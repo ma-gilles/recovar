@@ -1898,6 +1898,7 @@ def standard_recovar_pipeline(args):
         picked_frequencies=picked_frequencies,
         input_args=args,
         extras=result_extras,
+        mean_prior=mean_prior,
     )
 
     output.save_pipeline_results(

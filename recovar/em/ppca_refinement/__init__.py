@@ -26,10 +26,21 @@ from .initialization import (
     real_volume_to_centered_fourier_half,
 )
 from .fixture_validation import KClassPPCAFixtureValidation, validate_kclass_to_ppca_initialization
+from .highres_refinement import (
+    HighresPPCARefinementResult,
+    build_top_p_local_hypothesis_layout,
+    build_top_p_local_hypothesis_layouts_from_diagnostics,
+    initialize_state_from_pipeline_ppca,
+    run_adaptive_ppca_halfset_fused_em_iteration,
+    run_highres_ppca_refinement_from_pipeline_ppca,
+    run_highres_ppca_refinement_with_kclass_pose_hierarchy,
+)
 from .local_dataset import (
     iter_local_ppca_dataset_blocks,
     run_local_ppca_fused_em_iteration,
     run_local_ppca_halfset_fused_em_iteration,
+    run_local_ppca_halfset_pose_scoring_iteration,
+    run_local_ppca_pose_scoring_iteration,
 )
 from .refinement_loop import (
     HalfsetMeanComparison,
@@ -46,6 +57,14 @@ from .schedule import (
     evaluate_halfset_resolution_gate,
     loading_subspace_agreement,
 )
+from .pose_selection import (
+    TopPoseSelection,
+    merge_top_p_pose_scores,
+    pack_pose_ids,
+    select_distinct_top_poses,
+    top_p_from_score_block,
+    top_pose_candidate_count,
+)
 from .state import PoseMarginalPPCAEMState
 
 __all__ = [
@@ -55,6 +74,7 @@ __all__ = [
     "DensePPCAFusedEMResult",
     "HalfsetResolutionGateDecision",
     "HalfsetMeanComparison",
+    "HighresPPCARefinementResult",
     "KClassPPCAFixtureValidation",
     "PPCAInitialization",
     "PPCARefinementIterationRecord",
@@ -68,21 +88,35 @@ __all__ = [
     "fused_dense_pose_ppca_block",
     "empirical_weighted_covariance",
     "evaluate_halfset_resolution_gate",
+    "build_top_p_local_hypothesis_layout",
+    "build_top_p_local_hypothesis_layouts_from_diagnostics",
     "initialize_ppca_from_gt_volumes",
     "initialize_ppca_from_kclass_volumes",
+    "initialize_state_from_pipeline_ppca",
     "iter_local_ppca_dataset_blocks",
     "loading_subspace_agreement",
     "iter_dense_ppca_dataset_blocks",
     "real_volume_to_centered_fourier",
     "real_volume_to_centered_fourier_half",
     "propose_next_current_size",
+    "pack_pose_ids",
+    "select_distinct_top_poses",
+    "top_p_from_score_block",
+    "top_pose_candidate_count",
+    "merge_top_p_pose_scores",
+    "run_adaptive_ppca_halfset_fused_em_iteration",
     "run_dense_ppca_fused_em_iteration",
     "run_dense_ppca_halfset_fused_em_iteration",
     "run_dense_ppca_refinement_loop",
     "run_dense_ppca_fused_refinement_blocks",
+    "run_highres_ppca_refinement_from_pipeline_ppca",
+    "run_highres_ppca_refinement_with_kclass_pose_hierarchy",
     "run_local_ppca_fused_em_iteration",
     "run_local_ppca_halfset_fused_em_iteration",
+    "run_local_ppca_halfset_pose_scoring_iteration",
+    "run_local_ppca_pose_scoring_iteration",
     "run_local_ppca_refinement_loop",
+    "TopPoseSelection",
     "compute_pose_change_fraction",
     "validate_kclass_to_ppca_initialization",
 ]

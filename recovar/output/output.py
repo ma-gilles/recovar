@@ -312,6 +312,7 @@ def build_params_dict(
     picked_frequencies,
     input_args,
     extras=None,
+    mean_prior=None,
 ):
     """Build the params dict saved as ``model/params.pkl``.
 
@@ -384,6 +385,14 @@ def build_params_dict(
         'variance_est': variance_est,
         'variance_fsc': variance_fsc,
         'noise_p_variance_est': noise_p_variance_est,
+        # ``mean_prior`` is the per-Fourier-voxel signal-variance prior the
+        # pipeline derived from the mean half-maps via FSC (the same array
+        # that ``compute_regularized_covariance_columns`` feeds into the
+        # covariance Wiener filter as ``regularization_init = (mean_prior +
+        # epsilon) * REG_INIT_MULTIPLIER / cov_noise``). Saving it lets the
+        # downstream PPCA refinement build a W prior in the same Wiener
+        # shape rather than re-deriving one from the init W's row norms.
+        'mean_prior': None if mean_prior is None else np.asarray(mean_prior),
         'covariance_options': covariance_options,
         'column_fscs': column_fscs,
         'picked_frequencies': picked_frequencies,

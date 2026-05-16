@@ -787,6 +787,42 @@ def test_build_local_hypothesis_layout_factorized_matches_per_image_selector():
         )
 
 
+def test_build_local_hypothesis_layout_factorized_chunking_preserves_support(monkeypatch):
+    healpix_order = 3
+    grid_metadata = build_local_search_grid_metadata(healpix_order)
+    rotation_grid = get_relion_rotation_grid(healpix_order).astype(np.float32)
+    prior_eulers = np.array(
+        [
+            [12.0, 40.0, 3.0],
+            [91.0, 65.0, 29.0],
+            [177.0, 23.0, 144.0],
+            [240.0, 81.0, 271.0],
+        ],
+        dtype=np.float32,
+    )
+    kwargs = dict(
+        sigma_rot=np.deg2rad(7.5),
+        sigma_psi=np.deg2rad(7.5),
+        healpix_order=healpix_order,
+        translations=np.zeros((9, 2), dtype=np.float32),
+        prior_translations=np.zeros((prior_eulers.shape[0], 2), dtype=np.float32),
+        sigma_offset_angstrom=1.0,
+        offset_range_pixels=1.0,
+        voxel_size=1.0,
+        grid_metadata=grid_metadata,
+    )
+
+    monkeypatch.delenv("RECOVAR_LOCAL_SELECTOR_CHUNK_SIZE", raising=False)
+    full_layout = build_local_hypothesis_layout(prior_eulers, rotation_grid, **kwargs)
+    monkeypatch.setenv("RECOVAR_LOCAL_SELECTOR_CHUNK_SIZE", "1")
+    chunked_layout = build_local_hypothesis_layout(prior_eulers, rotation_grid, **kwargs)
+
+    np.testing.assert_array_equal(chunked_layout.rotation_offsets, full_layout.rotation_offsets)
+    np.testing.assert_array_equal(chunked_layout.rotation_counts, full_layout.rotation_counts)
+    np.testing.assert_array_equal(chunked_layout.rotation_ids_flat, full_layout.rotation_ids_flat)
+    np.testing.assert_allclose(chunked_layout.rotation_log_priors_flat, full_layout.rotation_log_priors_flat)
+
+
 def test_selected_rotation_matrices_match_full_perturbed_grid():
     healpix_order = 2
     random_perturbation = 0.25
