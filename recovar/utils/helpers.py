@@ -164,6 +164,65 @@ def get_size_in_gb(x):
     return x.size * x.itemsize / 1e9
 
 
+def _mrc_file_dtype(dtype):
+    mode = mrcfile.utils.mode_from_dtype(np.dtype(dtype))
+    return np.dtype(mrcfile.utils.dtype_from_mode(mode))
+
+
+def write_mrc_stack_header(file, shape, voxel_size=None, dtype=np.float32):
+    """Write an MRC image-stack header without memory-mapping the data."""
+    if len(shape) != 3:
+        raise ValueError(f"MRC stack shape must be 3D, got {shape}")
+    n_images, height, width = (int(dim) for dim in shape)
+    if n_images < 0 or height <= 0 or width <= 0:
+        raise ValueError(f"Invalid MRC stack shape: {shape}")
+
+    file_dtype = _mrc_file_dtype(dtype)
+    with mrcfile.new(file, overwrite=True) as mrc:
+        header = mrc.header
+        header.mode = mrcfile.utils.mode_from_dtype(file_dtype)
+        header.ispg = 0
+        header.nx = header.mx = width
+        header.ny = header.my = height
+        header.nz = n_images
+        header.mz = 1
+        mrc.reset_header_stats()
+        if voxel_size is not None:
+            mrc.voxel_size = voxel_size
+
+
+def write_mrc_stack_chunk(file_obj, start_index, images, dtype=np.float32):
+    """Write a contiguous chunk into an MRC stack created by write_mrc_stack_header."""
+    images = np.asarray(images)
+    if images.ndim != 3:
+        raise ValueError(f"MRC stack chunks must be 3D, got shape {images.shape}")
+    if start_index < 0:
+        raise ValueError(f"start_index must be non-negative, got {start_index}")
+
+    file_dtype = _mrc_file_dtype(dtype)
+    image_stride = int(images.shape[-2] * images.shape[-1] * file_dtype.itemsize)
+    offset = 1024 + int(start_index) * image_stride
+    chunk = np.asarray(images, dtype=file_dtype, order="C")
+    file_obj.seek(offset)
+    file_obj.write(chunk.tobytes(order="C"))
+
+
+def write_mrc_stack(file, stack, voxel_size=None, dtype=None, chunk_size=1024):
+    """Write an MRC image stack sequentially, avoiding a giant mmap flush."""
+    stack = np.asarray(stack)
+    if stack.ndim != 3:
+        raise ValueError(f"MRC stack must be 3D, got shape {stack.shape}")
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    dtype = stack.dtype if dtype is None else np.dtype(dtype)
+    write_mrc_stack_header(file, stack.shape, voxel_size=voxel_size, dtype=dtype)
+    with open(file, "r+b", buffering=0) as stack_file:
+        for start in range(0, stack.shape[0], int(chunk_size)):
+            end = min(stack.shape[0], start + int(chunk_size))
+            write_mrc_stack_chunk(stack_file, start, stack[start:end], dtype=dtype)
+
+
 def write_mrc(file, ar, voxel_size=None):
     # This is to agree with the cryosparc/cryoDRGN convention
     if ar.ndim == 3 and np.isclose(ar.shape, ar.shape[0]).all():
