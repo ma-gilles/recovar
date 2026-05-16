@@ -735,6 +735,10 @@ def compute_variance(
     disc_type="",
     noise_ind_subset=None,
 ):
+    """Estimate per-voxel Fourier signal variance and FSC-derived RELION taus.
+
+    See docs/math/ppca_variance_prior_notes.md.
+    """
     st = time.time()
 
     # Run variance kernel for each half-set.
@@ -775,7 +779,17 @@ def compute_variance(
     variance = {f"corrected{i}": _safe_div(signal[i], ctf_w[i]) for i in range(2)}
 
     lhs = (ctf_w[0] + ctf_w[1]) / 2
-    variance_prior, fsc, _ = regularization.compute_fsc_prior_gpu_v2(
+    prior_total_signal, fsc_total_signal, prior_avg_total_signal = regularization.compute_fsc_prior_gpu_v2(
+        dataset.volume_shape,
+        variance["corrected0"],
+        variance["corrected1"],
+        lhs,
+        jnp.ones(dataset.volume_size, dtype=dataset.dtype_real) * np.inf,
+        frequency_shift=jnp.array([0, 0, 0]),
+        upsampling_factor=1,
+        substract_shell_mean=False,
+    )
+    prior_shell_subtracted, fsc_shell_subtracted, prior_avg_shell_subtracted = regularization.compute_fsc_prior_gpu_v2(
         dataset.volume_shape,
         variance["corrected0"],
         variance["corrected1"],
@@ -791,12 +805,18 @@ def compute_variance(
             reg_lhs = relion_functions.adjust_regularization_relion_style(
                 ctf_w[i],
                 dataset.volume_shape,
-                tau=variance_prior,
+                tau=prior_shell_subtracted,
             )
             variance[f"corrected{i}"] = _safe_div(signal[i], reg_lhs)
 
     variance["combined"] = (variance["corrected0"] + variance["corrected1"]) / 2
-    variance["prior"] = _to_cpu(variance_prior)
+    variance["prior"] = _to_cpu(prior_shell_subtracted)
+    variance["prior_total_signal"] = _to_cpu(prior_total_signal)
+    variance["prior_shell_subtracted"] = _to_cpu(prior_shell_subtracted)
+    variance["fsc_total_signal"] = _to_cpu(fsc_total_signal)
+    variance["fsc_shell_subtracted"] = _to_cpu(fsc_shell_subtracted)
+    variance["prior_avg_total_signal"] = _to_cpu(prior_avg_total_signal)
+    variance["prior_avg_shell_subtracted"] = _to_cpu(prior_avg_shell_subtracted)
     variance["lhs"] = lhs
     variance = {k: _to_cpu(v).real for k, v in variance.items()}
 
@@ -805,8 +825,8 @@ def compute_variance(
     logger.info("time to compute variance: %.1fs", time.time() - st)
     return (
         variance,
-        _to_cpu(variance_prior).real,
-        _to_cpu(fsc).real,
+        _to_cpu(prior_shell_subtracted).real,
+        _to_cpu(fsc_shell_subtracted).real,
         _to_cpu(lhs).real,
         _to_cpu(noise_p_variance_est).real,
     )

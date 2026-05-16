@@ -366,6 +366,9 @@ _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_PROJECT = "cuda_project"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_PROJECT = "cuda_batch_project"
+_TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
+_TARGET_FUSED_BP = "cuda_fused_bp"
+_TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
 
 
 _preflight_ok: bool | None = None  # None = not checked yet
@@ -592,6 +595,11 @@ def _ensure_ffi():
         jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
         jax.ffi.register_ffi_target(_TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA")
         jax.ffi.register_ffi_target(_TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA")
+        jax.ffi.register_ffi_target(
+            _TARGET_BATCH_BP_INTERLEAVED, jax.ffi.pycapsule(lib.BatchBackprojectInterleaved), platform="CUDA"
+        )
+        jax.ffi.register_ffi_target(_TARGET_FUSED_BP, jax.ffi.pycapsule(lib.FusedBackproject), platform="CUDA")
+        jax.ffi.register_ffi_target(_TARGET_PER_IMAGE_BP, jax.ffi.pycapsule(lib.PerImageBackproject), platform="CUDA")
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
 
@@ -853,6 +861,141 @@ def batch_backproject(
         input_output_aliases={2: 0},
         vmap_method="sequential",
     )(images, rot6, volumes, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5))
+def batch_backproject_interleaved(
+    volumes: jax.Array,
+    images: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    max_r: float | None = None,
+) -> jax.Array:
+    """Back-project images into interleaved volumes: output ``(half_vol, batch)``.
+
+    Like ``batch_backproject`` but output is ``(n_voxels_half, batch_size)``
+    instead of ``(batch_size, n_voxels_half)``.  All batch entries for the
+    same voxel are contiguous → ~30× better L2 cache utilization for large
+    batch sizes (e.g. 210 PPCA upper-tri channels).
+
+    Only supports: real data (float32/64), half_volume=True, trilinear, full images.
+    """
+    _ensure_ffi()
+    N0, N1, N2 = volume_shape
+    H, W = image_shape
+    ups = N0 // H
+    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    # Ensure images dtype matches volumes (kernel dispatches on volume dtype)
+    images = images.astype(volumes.dtype)
+    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_BATCH_BP_INTERLEAVED,
+        out_type,
+        input_output_aliases={2: 0},
+        vmap_method="sequential",
+    )(images, rot6, volumes, image_h=H, image_w=W, vol_n0=N0, vol_n1=N1, vol_n2=N2, upsampling=ups, max_r2_x4=max_r2_x4)
+
+
+@functools.partial(jax.jit, static_argnums=(4, 5, 6))
+def fused_backproject(
+    volumes: jax.Array,
+    base_images: jax.Array,
+    weight_matrix: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    max_r: float | None = None,
+) -> jax.Array:
+    """Fused backproject: base_images × weight_matrix → interleaved volumes.
+
+    Reads ``base_images[n, pix]`` (e.g. ctf²) and ``weight_matrix[n, ch]``
+    (e.g. smz_tri) separately, multiplying inside the CUDA kernel.
+    Eliminates the ``(n_ch, n_img, n_pix)`` intermediate tensor.
+
+    Input bandwidth: ~50 MB vs ~3.4 GB for the unfused path at 256³.
+
+    Parameters
+    ----------
+    volumes : ``(half_vol, n_channels)`` float32 — zero-initialized output
+    base_images : ``(n_images, n_pixels)`` float32 — per-pixel per-image values
+    weight_matrix : ``(n_images, n_channels)`` float32 — per-image per-channel weights
+    rotation_matrices : ``(n_images, 3, 3)`` — shared rotations
+
+    Returns ``(half_vol, n_channels)`` accumulated result.
+    """
+    _ensure_ffi()
+    N0, N1, N2 = volume_shape
+    H, W = image_shape
+    ups = N0 // H
+    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    base_images = base_images.astype(volumes.dtype)
+    weight_matrix = weight_matrix.astype(volumes.dtype)
+    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_FUSED_BP,
+        out_type,
+        input_output_aliases={3: 0},
+        vmap_method="sequential",
+    )(
+        base_images,
+        weight_matrix,
+        rot6,
+        volumes,
+        image_h=H,
+        image_w=W,
+        vol_n0=N0,
+        vol_n1=N1,
+        vol_n2=N2,
+        upsampling=ups,
+        max_r2_x4=max_r2_x4,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5))
+def per_image_backproject(
+    volumes: jax.Array,
+    base_images: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    max_r: float | None = None,
+) -> jax.Array:
+    """Per-image backproject: output ``(half_vol, n_images)``.
+
+    Each image scatters to its own column — near-zero atomicAdd contention.
+    Follow with GEMM to reduce: ``result @ smz_tri → (half_vol, n_ch)``.
+    """
+    _ensure_ffi()
+    N0, N1, N2 = volume_shape
+    H, W = image_shape
+    ups = N0 // H
+    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    base_images = base_images.astype(volumes.dtype)
+    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_PER_IMAGE_BP,
+        out_type,
+        input_output_aliases={2: 0},
+        vmap_method="sequential",
+    )(
+        base_images,
+        rot6,
+        volumes,
+        image_h=H,
+        image_w=W,
+        vol_n0=N0,
+        vol_n1=N1,
+        vol_n2=N2,
+        upsampling=ups,
+        max_r2_x4=max_r2_x4,
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
