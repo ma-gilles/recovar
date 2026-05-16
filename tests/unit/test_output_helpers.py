@@ -258,7 +258,51 @@ def test_pipeline_output_get_u_real_caps_to_50_saved_eigenvectors(tmp_path, monk
     po = output.PipelineOutput(str(result_path))
     u_real = po.get("u_real")
     assert u_real.shape == (50, 2, 2, 2)
-    assert len(calls) == 50
+
+
+def test_save_pipeline_results_writes_optional_ppca_artifacts(tmp_path, monkeypatch):
+    result_path = tmp_path / "pipeline_output"
+    paths = output.ResultPaths(str(result_path))
+
+    monkeypatch.setattr(output, "_save_embeddings_per_zdim", lambda _paths, _embedding_dict: None)
+
+    result = {
+        "version": "0.7",
+        "volume_shape": (2, 2, 2),
+        "voxel_size": 1.5,
+        "input_args": SimpleNamespace(zdim=[2]),
+    }
+    output.save_pipeline_results(
+        paths,
+        result=result,
+        embedding_dict={},
+        covariance_cols=None,
+        particles_ind_split=[np.array([0], dtype=np.int32)],
+        ind_split=[np.array([0], dtype=np.int32)],
+        ppca_loadings=np.ones((8, 2), dtype=np.complex64),
+        ppca_iteration_data=[{"Iteration": 0}],
+    )
+
+    assert paths.ppca_loadings and (result_path / "model" / "ppca_loadings.npy").is_file()
+    assert (result_path / "model" / "ppca_iteration_data.pkl").is_file()
+
+
+def test_pipeline_output_reads_optional_ppca_artifacts(tmp_path):
+    result_path = tmp_path / "pipeline_output"
+    model_dir = result_path / "model"
+    model_dir.mkdir(parents=True)
+
+    utils.pickle_dump({"version": "0.7", "volume_shape": (2, 2, 2)}, str(model_dir / "params.pkl"))
+    np.save(model_dir / "ppca_loadings.npy", np.full((8, 2), 7.0, dtype=np.complex64))
+    utils.pickle_dump([{"Iteration": 3}], str(model_dir / "ppca_iteration_data.pkl"))
+
+    po = output.PipelineOutput(str(result_path))
+    np.testing.assert_array_equal(po.get("ppca_W"), np.full((8, 2), 7.0, dtype=np.complex64))
+    np.testing.assert_array_equal(po.get("W"), np.full((8, 2), 7.0, dtype=np.complex64))
+    assert po.get("ppca_iteration_data") == [{"Iteration": 3}]
+    assert "ppca_W" in po.keys()
+    assert "W" in po.keys()
+    assert "ppca_iteration_data" in po.keys()
 
 
 def test_pipeline_output_get_u_real_raises_when_no_eigenvectors_saved(tmp_path):

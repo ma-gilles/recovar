@@ -5,6 +5,22 @@
 ### NEVER widen tolerance to make tests pass
 Do not change `_TOL`, `tol_frac`, `HIGH_VARIANCE_TOKENS`, or add skip/ignore logic for specific metrics. If a test fails, **fix the code**, not the test. You may **suggest** a tolerance change and wait for explicit approval, but never implement it unilaterally.
 
+### Float64 companion required when tolerance is loosened
+If a new or modified test must use a tolerance wider than machine-epsilon (e.g. `atol=1e-5` for float32 code), **add a float64 companion test** that runs the same comparison with tighter tolerances (e.g. `atol=1e-7`). The companion proves the gap is floating-point rounding, not an algorithmic bug. Pattern:
+```python
+def test_foo():
+    """Float32 test — tolerance limited by single precision."""
+    d = make_data(float_dtype=np.float32)
+    compare(d, atol=1e-5)
+
+def test_foo_f64():
+    """Float64 companion — proves float32 gaps are rounding noise."""
+    jax.config.update("jax_enable_x64", True)
+    d = make_data(float_dtype=np.float64)
+    compare(d, atol=1e-7)  # ≥3 orders tighter
+```
+The f64 test must tighten **by at least 3 orders of magnitude**. If it cannot, the gap is algorithmic, not numerical — fix the code instead.
+
 ### NEVER modify files in `tests/baselines/`
 Baselines are ground truth generated from the OLD published recovar code (`~/recovar`) with PDB volumes and GT mask. They represent the correct behavior of the published algorithm. Modifying them silently accepts regressions. Only exception: the user explicitly says "regenerate the baseline for X".
 

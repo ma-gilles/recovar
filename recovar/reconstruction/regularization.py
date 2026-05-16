@@ -300,6 +300,11 @@ def downsample_lhs(lhs, volume_shape, upsampling_factor=1):
 def compute_fsc_prior_gpu_v2(
     volume_shape, image0, image1, lhs, prior, frequency_shift, substract_shell_mean=False, upsampling_factor=1
 ):
+    """Compute a RELION-style shell regularization tau from half-set FSC.
+
+    This returns a reconstruction regularizer, not the raw shell signal
+    variance. See docs/math/ppca_variance_prior_notes.md.
+    """
     epsilon = jax_config.FSC_ZERO_THRESHOLD
     # FSC top:
     fsc_raw = get_fsc_gpu(image0, image1, volume_shape, substract_shell_mean, frequency_shift)

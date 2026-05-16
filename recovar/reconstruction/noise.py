@@ -1160,9 +1160,17 @@ def get_average_residual_square_v2(
     subset_fn=None,
 ):
 
-    if basis.shape[0] != experiment_dataset.volume_size:
+    # Auto-convert half-Fourier basis to full-Fourier (the canonical form
+    # ppca.EM now returns is half-Fourier; this consumer was written for the
+    # legacy full-Fourier shape and is updated to accept either).
+    from recovar.core import fourier_transform_utils as _ftu
+    half_vol_size = int(np.prod(_ftu.volume_shape_to_half_volume_shape(experiment_dataset.volume_shape)))
+    if basis.shape[0] == half_vol_size:
+        basis = _ftu.half_volume_to_full_volume(np.asarray(basis).T, experiment_dataset.volume_shape).T
+    elif basis.shape[0] != experiment_dataset.volume_size:
         raise ValueError(
-            f"input u should be volume_size x basis_size, got {basis.shape[0]} != {experiment_dataset.volume_size}"
+            f"input u should be volume_size or half_vol_size x basis_size, "
+            f"got {basis.shape[0]} (expected {experiment_dataset.volume_size} or {half_vol_size})"
         )
     st_time = time.time()
     basis = np.asarray(basis[:, : basis_coordinates.shape[-1]]).T

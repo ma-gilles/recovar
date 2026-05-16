@@ -10,9 +10,8 @@ Architecture:
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional, Tuple
+from typing import Optional
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 from numpy.typing import NDArray
@@ -20,13 +19,13 @@ from numpy.typing import NDArray
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core import mask
+from recovar.data_io.image_metadata import ImageMetadata
 from recovar.data_io.image_sources import (
     BackendImageSource,
     ImageSource,
     ImageSourceInfo,
     create_image_source,
 )
-from recovar.data_io.image_metadata import ImageMetadata
 from recovar.output import plot_utils
 
 logger = logging.getLogger(__name__)
@@ -34,10 +33,8 @@ logger = logging.getLogger(__name__)
 from recovar.data_io._index_utils import (
     DatasetIndexLayout,
     normalize_image_indices,
-    normalize_indices,
 )
 from recovar.data_io.image_loader import ImageLoader
-
 
 _SENTINEL = object()
 
@@ -699,8 +696,8 @@ class CryoEMDataset:
         Returns:
             Predicted images in real space if spatial=True, otherwise in Fourier space
         """
-        from recovar.core.configs import ForwardModelConfig
         import recovar.core.forward as core_forward
+        from recovar.core.configs import ForwardModelConfig
 
         config = ForwardModelConfig.from_dataset(self, disc_type="linear_interp")
         predicted_images = core_forward.forward_model(
