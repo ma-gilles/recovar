@@ -367,7 +367,12 @@ def adjoint_slice_volume(
     slices = _normalize_slices(slices, image_shape, half_image)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
-    assert order <= 1, "Cubic backprojection is NOT supported for adjoint_slice_volume" ## DO NOT CHANGE THIS ASSERTION
+    # Cubic (order >= 2) is supported via _vjp_adjoint_cubic below.
+    # The defensive "assert order <= 1" that lived here briefly was added on a
+    # branch that pre-dated the cubic VJP path and is now stale; both
+    # ``test_adjoint_slice_volume_cubic_adjointness`` and
+    # ``test_adjoint_cubic_half_volume_includes_spline_coefficients`` exercise
+    # the cubic adjoint path.
 
     # CUDA backproject (order 0/1 only)
     if _use_cuda_backproject(order):

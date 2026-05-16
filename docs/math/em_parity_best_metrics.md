@@ -23,6 +23,10 @@ least 256x256 images, compared against RELION for accuracy and speed.
 
 ## Accepted Best Runs
 
+Scope contract: only ``>=100k, >=256x256`` runs (both K=1 and K=4) qualify
+as completion-benchmark evidence here. Smaller fixtures live in
+``tests/baselines/em_parity_*`` and are listed separately for reference.
+
 | Case | Date | Commit | Fixture | Particles | Box | RELION baseline | RECOVAR run | Accuracy status | Speed status | Notes |
 |------|------|--------|---------|-----------|-----|-----------------|-------------|-----------------|--------------|-------|
 | K=1 os=0 strict | 2026-05-16 | a2108b77 + tau2_fudge fix (uncommitted) | pdb_k1_g256_n100000_completion_20260512_171123 (noise=0.001 bf=0) | 100k | 256³ | relion_autorefine_k1_it015_os0_bayes_clean9d9, wall ~17h | job 8280489, wall 74398s = 20:39h | **machine-precision parity** (recovar↔RELION FSC = 1.0 in first 30 shells; merged corr 0.999802) — same | 1.21× slower — worse | Strict no-oversampling regime; noise=0.001 fixture saturates vs GT (both RELION and recovar 0.7829 corr vs GT) |

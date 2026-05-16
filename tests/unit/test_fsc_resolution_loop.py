@@ -83,6 +83,22 @@ def _identity_process(batch, apply_image_mask=False):
     return batch
 
 
+def _identity_process_half(batch, apply_image_mask=False):
+    """Half-spectrum passthrough: full centered FT → packed Hermitian half.
+
+    Dense-EM's preprocessing (recovar/em/dense_single_volume/helpers/
+    preprocessing.py:63) reads ``experiment_dataset.process_images_half``
+    and expects the packed half-image layout
+    ``(batch, H * (W // 2 + 1))``. The mock stores full-spectrum FT images
+    of shape ``(batch, H * W)`` so we map them through
+    ``full_image_to_half_image`` here.
+    """
+    _ = apply_image_mask
+    from recovar.core import fourier_transform_utils as _ftu
+
+    return _ftu.full_image_to_half_image(batch, IMAGE_SHAPE)
+
+
 class MockDataset:
     """Minimal mock of CryoEMDataset for unit testing the refinement loop.
 
@@ -103,6 +119,11 @@ class MockDataset:
         self.CTF_params = np.zeros((n_images, 9), dtype=np.float32)
         self.ctf_evaluator = staticmethod(_identity_ctf)
         self.process_images = staticmethod(_identity_process)
+        # Dense-EM preprocessing (recovar/em/dense_single_volume/helpers/
+        # preprocessing.py:63) now reads ``process_images_half`` rather than
+        # ``process_images``. The half-image variant returns the packed
+        # half-spectrum layout (H * (W // 2 + 1) pixels per image).
+        self.process_images_half = staticmethod(_identity_process_half)
         self.premultiplied_ctf = False
 
         self._images = np.zeros((n_images, IMAGE_SIZE), dtype=np.complex64)

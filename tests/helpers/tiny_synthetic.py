@@ -127,6 +127,18 @@ class TinyFTImageStack:
         # Keep this trace-friendly for jitted covariance code paths.
         return image
 
+    def process_images_half(self, image, apply_image_mask=False):
+        """Half-spectrum variant required by dense-EM preprocessing.
+
+        ``recovar/em/dense_single_volume/helpers/preprocessing.py:63`` and the
+        ``ParticleImageBackend.process_images_half`` plumbing now route
+        through this method. Images here are already centered FT in flat
+        ``(n_images, D*D)`` layout; remap to packed half-spectrum
+        ``(n_images, D*(D//2+1))`` for parity with the production backend.
+        """
+        _ = apply_image_mask
+        return fourier_transform_utils.full_image_to_half_image(image, self.image_shape)
+
 
 class TinyRadialNoise:
     def __init__(self, image_size):
