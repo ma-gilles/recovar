@@ -64,8 +64,17 @@ def _env_flag(name: str) -> bool:
 
 
 def custom_cuda_requested() -> bool:
-    """Return True unless the user explicitly disables custom CUDA."""
-    return not _env_flag(_DISABLE_CUSTOM_CUDA_ENV)
+    """Return True unless the user explicitly disables custom CUDA.
+
+    Routes through ``recovar.utils.cuda_env`` so the canonical
+    ``RECOVAR_DISABLE_CUDA`` env var and the common typo
+    ``RECOVAR_CUDA_DISABLE`` produce a single consistent signal (and a
+    one-time warning when only the typo is set).
+    """
+    from recovar.utils.cuda_env import custom_cuda_disabled_from_env
+
+    disabled, _ = custom_cuda_disabled_from_env()
+    return not disabled
 
 
 _CACHE_ROOT_FALLBACK_WARNED = False

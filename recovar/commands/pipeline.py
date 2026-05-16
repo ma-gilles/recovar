@@ -249,13 +249,6 @@ def add_args(parser: argparse.ArgumentParser):
     # ── Performance / GPU ──────────────────────────────────────────────────
     perf = parser.add_argument_group("Performance")
     perf.add_argument(
-        "--gpu-gb",
-        default=None,
-        type=float,
-        dest="gpu_memory",
-        help="GPU memory to use in GB (default: all)",
-    )
-    perf.add_argument(
         "--multi-gpu",
         action="store_true",
         dest="multi_gpu",
@@ -274,26 +267,14 @@ def add_args(parser: argparse.ArgumentParser):
         action="store_true",
         help="Accept running on CPU if no GPU is found",
     )
-    perf.add_argument(
-        "--low-memory-option",
-        dest="low_memory_option",
-        action="store_true",
-        help="Use lower memory options for covariance estimation",
-    )
-    perf.add_argument(
-        "--very-low-memory-option",
-        dest="very_low_memory_option",
-        action="store_true",
-        help="Use lowest memory options for covariance estimation",
-    )
-    perf.add_argument(
-        "--adaptive-memory",
-        dest="adaptive_memory",
-        action="store_true",
-        help="Adapt number of PCs to available GPU memory. By default, "
-        "200 PCs are used regardless of GPU size for reproducibility. "
-        "This flag reduces n_pcs on smaller GPUs to avoid OOM.",
-    )
+    # Memory planning flags: --gpu-budget-gb, --low-memory-option,
+    # --very-low-memory-option, --adaptive-memory / --adaptive-n-pcs,
+    # --memory-profile, --fail-on-memory-exceed, --memory-safety-fraction.
+    # Diagnostics (memory_plan.json, memory_trace.jsonl, args.json,
+    # allocator_env.json) are always-on under <outdir>/_diagnostics/.
+    from recovar.utils.parser_args import add_memory_planning_args as _add_mem_args
+
+    _add_mem_args(parser)
 
     # ── Advanced / debugging ─────────────────────────────────────────────
     adv = parser.add_argument_group("Advanced")
@@ -757,9 +738,16 @@ def standard_recovar_pipeline(args):
 
     logger.info(args)
 
+    # Push the soft budget into ``set_gpu_memory_limit`` early so any code
+    # that runs before the dataset is loaded (notably ``downsample_to_disk``)
+    # uses the user's --gpu-budget-gb. The MemoryPlanner overwrites it later with
+    # the effective_budget once we know grid_size.
     if args.gpu_memory is not None:
         utils.set_gpu_memory_limit(args.gpu_memory)
-        logger.info("GPU memory limited to %.1f GB (requested via --gpu-gb)", args.gpu_memory)
+        logger.info(
+            "GPU memory budget requested: %.1f GB (--gpu-budget-gb). The planner will refine this once the dataset is loaded.",
+            args.gpu_memory,
+        )
 
     # --- Resolve downsample target ---
     _resolve_downsample(args)
@@ -841,20 +829,29 @@ def standard_recovar_pipeline(args):
     ## The current way to just have two of these objects around which is not great.
     ds = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split, lazy=args.lazy)
 
-    ## TODO: log this. Also document it better. Also I'd like a warning or something if I say "allocate this much" and peak gpu memory ends up being more than that
-    ## So that it can be fixed in the future
-    gpu_memory = utils.get_gpu_memory_total()
-    volume_shape = ds.volume_shape
+    # --- Build the centralized memory plan ---
+    from recovar.utils.cuda_env import log_backend
+    from recovar.utils.parser_args import apply_memory_planning_args
 
-    ## TODO: a big one: I want batch size logic to be separated from rest of utils,
-    # and have a better/more transparent way this is done, to make future development easier
-    ## Right now, all these numbers were basically found "by hand" by trying to maximize gpu memory, without
-    ## breaking, but it is  not robust
-    ## Also, I would like some slightly better formatting/more informational logging here
-    batch_size = utils.get_image_batch_size(ds.grid_size, gpu_memory)
-    logger.info("image batch size: %s", batch_size)
-    logger.info("volume batch size: %s", utils.get_vol_batch_size(ds.grid_size, gpu_memory))
-    logger.info("column batch size: %s", utils.get_column_batch_size(ds.grid_size, gpu_memory))
+    log_backend(logger)
+    plan, mem_trace = apply_memory_planning_args(
+        args,
+        command="pipeline",
+        grid_size=ds.grid_size,
+        n_images=ds.n_images,
+        outdir=args.outdir,
+        logger=logger,
+        desired_n_pcs=200,
+    )
+    gpu_memory = plan.budget.effective_budget_gb
+    volume_shape = ds.volume_shape
+    batch_size = plan.image_batch_size
+    logger.info(
+        "image batch size: %s, volume batch size: %s, column batch size: %s",
+        plan.image_batch_size,
+        plan.volume_batch_size,
+        plan.column_batch_size,
+    )
     logger.info("number of images: %s", ds.n_images)
     logger.info("image size: %sx%s", ds.grid_size, ds.grid_size)
     utils.report_memory_device(logger=logger)
@@ -928,6 +925,8 @@ def standard_recovar_pipeline(args):
         else:
             raise ValueError(f"mean function {args.mean_fn} not recognized")
         utils.report_memory_device(logger=logger)
+        if mem_trace is not None:
+            mem_trace.record("after_mean")
 
         # --- Check sign and uninvert if needed ---
         _check_uninvert_data(means, ds, args)
@@ -1026,6 +1025,33 @@ def standard_recovar_pipeline(args):
             adaptive_n_pcs=adaptive,
         )
 
+        # Override with the centralized memory plan's n_pcs choice. When
+        # adaptive-n-pcs is set the planner already consulted the
+        # calibration table; otherwise this is a no-op (200).
+        if plan.n_pcs_to_compute != covariance_options.get("n_pcs_to_compute"):
+            logger.info(
+                "Memory plan overriding covariance n_pcs: %s -> %s (calibration_status=%s)",
+                covariance_options.get("n_pcs_to_compute"),
+                plan.n_pcs_to_compute,
+                plan.calibration_status,
+            )
+            covariance_options["n_pcs_to_compute"] = plan.n_pcs_to_compute
+
+        # Sweep-only override: validate_memory_formulas.py sets this env
+        # var to force a specific n_pcs per cell. Not user-facing.
+        _force_n_pcs = os.environ.get("RECOVAR_DEBUG_FORCE_N_PCS")
+        if _force_n_pcs:
+            try:
+                _force_val = int(_force_n_pcs)
+                logger.info(
+                    "RECOVAR_DEBUG_FORCE_N_PCS overriding covariance n_pcs: %s -> %s",
+                    covariance_options.get("n_pcs_to_compute"),
+                    _force_val,
+                )
+                covariance_options["n_pcs_to_compute"] = _force_val
+            except ValueError:
+                logger.warning("RECOVAR_DEBUG_FORCE_N_PCS=%r is not an int — ignoring", _force_n_pcs)
+
         if args.low_memory_option:
             logger.info("Using low-memory covariance options (reduced sampling, adaptive n_pcs)")
             covariance_options["sampling_n_cols"] = 50
@@ -1085,6 +1111,9 @@ def standard_recovar_pipeline(args):
         u = {"rescaled": np.concatenate(u, axis=1), "real": None}
         s = {"rescaled": np.concatenate(s, axis=0), "real": None}
         options.ignore_zero_frequency = ignore_zero_frequency
+
+        if mem_trace is not None:
+            mem_trace.record("after_covariance")
 
         # Validate PCA results
         if not np.all(np.isfinite(u["rescaled"])):
@@ -1165,20 +1194,51 @@ def standard_recovar_pipeline(args):
 
     logger.info("embedding time: %s", time.time() - st_time)
     utils.report_memory_device()
+    if mem_trace is not None:
+        mem_trace.record("after_embedding")
+
     peak_gpu_gb = utils.get_peak_gpu_memory_used(device=0)
     logger.info("peak GPU memory used: %s", peak_gpu_gb)
+
+    # End-of-run memory budget check.
+    # Production: warn-and-continue.
+    # Test mode (--fail-on-memory-exceed): exit non-zero with structured
+    # summary if peak > requested * 1.05.
     if args.gpu_memory is not None and peak_gpu_gb is not None:
         try:
-            peak_val = float(peak_gpu_gb) if not isinstance(peak_gpu_gb, (int, float)) else peak_gpu_gb
-            if peak_val > args.gpu_memory:
-                logger.warning(
-                    "Peak GPU usage (%.1f GB) exceeded --gpu-gb limit (%.1f GB). "
-                    "Consider increasing --gpu-gb or reducing batch sizes.",
-                    peak_val,
-                    args.gpu_memory,
-                )
+            peak_val = float(peak_gpu_gb)
         except (TypeError, ValueError):
-            pass  # peak_gpu_gb may not be numeric on all backends
+            peak_val = None
+
+        # Honor RECOVAR_DEBUG_FORCE_PEAK_GB so unit tests can deterministically
+        # trigger the over-budget code path.
+        from recovar.utils.memory_planner import _debug_force_peak_gb as _force
+
+        forced = _force()
+        if forced is not None:
+            peak_val = float(forced)
+            logger.info("RECOVAR_DEBUG_FORCE_PEAK_GB=%.2f overriding observed peak", forced)
+
+        if peak_val is not None and peak_val > args.gpu_memory:
+            slack_limit = args.gpu_memory * 1.05
+            if peak_val > slack_limit and getattr(args, "fail_on_memory_exceed", False):
+                msg = (
+                    "Peak GPU usage %.2f GB exceeded the requested --gpu-budget-gb=%.2f "
+                    "GB (slack limit %.2f GB). --fail-on-memory-exceed is set; "
+                    "exiting non-zero. To recover, increase --gpu-budget-gb, add "
+                    "--adaptive-n-pcs, or use --low-memory-option / "
+                    "--very-low-memory-option."
+                ) % (peak_val, args.gpu_memory, slack_limit)
+                logger.error(msg)
+                raise SystemExit(2)
+            logger.warning(
+                "Peak GPU usage (%.2f GB) exceeded --gpu-budget-gb=%.2f GB. The run "
+                "completed; if this was a test, pass --fail-on-memory-exceed "
+                "to surface this as a non-zero exit. Otherwise consider raising "
+                "--gpu-budget-gb or adding --adaptive-n-pcs / --low-memory-option.",
+                peak_val,
+                args.gpu_memory,
+            )
 
     # --- Handle complement mask trimming ---
     if args.use_complement_mask:

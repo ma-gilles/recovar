@@ -6,14 +6,39 @@ function that uses ``argparse`` for its own argument parsing.
 
 See ``[project.scripts]`` in ``pyproject.toml`` for the console-script
 entry that invokes :func:`main_commands`.
+
+Two responsibilities live here that have to run BEFORE the subcommand
+module is imported (i.e. before any ``import jax`` happens):
+
+1. CUDA env-var typo detection: emit the ``RECOVAR_CUDA_DISABLE`` ->
+   ``RECOVAR_DISABLE_CUDA`` warning eagerly so users see it before
+   anything else.
+2. Hint-last error wrapping: when the subcommand fails, the captured
+   traceback is printed first, then the formatted ``ErrorHint``, so
+   the actionable advice stays at the tail of the log.
+
+``--gpu-budget-gb`` is handled by argparse inside the subcommand —
+it is a soft batch-size hint, NOT a JAX-level memory cap. Users on
+shared / workstation GPUs who hit OOM with JAX's default
+preallocation should ``export XLA_PYTHON_CLIENT_PREALLOCATE=false``;
+that's a JAX deployment-mode question orthogonal to RECOVAR's
+batch-size budget.
 """
+
+from __future__ import annotations
 
 import importlib
 import logging
 import os
 import sys
+import traceback
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand dispatch
+# ---------------------------------------------------------------------------
 
 
 def _print_available_commands(available_cmds, file=None):
@@ -22,6 +47,43 @@ def _print_available_commands(available_cmds, file=None):
     print("Available commands:", file=file)
     for cmd in available_cmds:
         print(f"  {cmd}", file=file)
+
+
+def _eager_typo_warning() -> None:
+    """Trigger the RECOVAR_CUDA_DISABLE typo detection eagerly.
+
+    Calling ``custom_cuda_disabled_from_env`` here surfaces the warning
+    (if any) at the top of stderr instead of waiting until something
+    inside the pipeline reads the env var.
+    """
+    try:
+        from recovar.utils.cuda_env import custom_cuda_disabled_from_env
+
+        custom_cuda_disabled_from_env()
+    except Exception as exc:
+        logger.debug("Eager typo-warning probe failed: %s", exc)
+
+
+def _run_with_error_hints(mod) -> None:
+    """Run ``mod.main()`` and emit a hint-last error report on failure."""
+    try:
+        mod.main()
+    except SystemExit:
+        raise
+    except BaseException as exc:
+        traceback.print_exc(file=sys.stderr)
+        try:
+            from recovar.utils import error_hints
+
+            ctx = error_hints.collect_context()
+            hint = error_hints.classify_exception(exc, ctx)
+            if hint is not None:
+                sys.stderr.write("\n")
+                sys.stderr.write(error_hints.format_error_hint(hint))
+                sys.stderr.flush()
+        except Exception as inner:
+            logger.debug("Error-hint formatting failed: %s", inner)
+        sys.exit(1)
 
 
 def main_commands() -> None:
@@ -43,6 +105,10 @@ def main_commands() -> None:
         _print_available_commands(available_cmds)
         sys.exit(1)
 
+    # Pre-import housekeeping that must run before jax_config.py loads:
+    # surface the RECOVAR_CUDA_DISABLE typo warning eagerly.
+    _eager_typo_warning()
+
     # Remove the subcommand from sys.argv so the subcommand's parser
     # doesn't see it.
     sys.argv = [sys.argv[0]] + sys.argv[2:]
@@ -55,7 +121,7 @@ def main_commands() -> None:
         sys.exit(1)
 
     if hasattr(mod, "main"):
-        mod.main()
+        _run_with_error_hints(mod)
     else:
         print(f"Module {module_name} does not define a main() function.", file=sys.stderr)
         sys.exit(1)
