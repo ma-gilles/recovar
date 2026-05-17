@@ -200,6 +200,7 @@ def write_oracle_pipeline_output(
     premultiplied_ctf: bool = False,
     noise_model: str = "radial",
     split_random_seed: int = 0,
+    lazy: bool = False,
 ) -> dict:
     """Write a fake pipeline output that ``compute_state`` can consume.
 
@@ -236,6 +237,8 @@ def write_oracle_pipeline_output(
         Which noise-model branch to advertise in the saved ``input_args``.
     split_random_seed : int
         Seed for the pipeline-style random halfset split.
+    lazy : bool
+        If true, keep particle images on disk and load batches on demand.
 
     Returns
     -------
@@ -298,7 +301,7 @@ def write_oracle_pipeline_output(
         focus_mask_path=None if focus_mask is None else Path(paths.focus_mask_volume),
     )
 
-    dataset = halfset_io.load_halfset_dataset_from_args(input_args, lazy=False, ind_split=halfsets_split)
+    dataset = halfset_io.load_halfset_dataset_from_args(input_args, lazy=lazy, ind_split=halfsets_split)
 
     noise_variance_radial = np.asarray(sim_info["noise_variance"], dtype=np.float32).reshape(-1)
     if noise_variance_radial.size == 0:

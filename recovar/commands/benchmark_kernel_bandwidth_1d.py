@@ -333,6 +333,7 @@ def _run_oracle_pipeline(
         focus_mask=focus_mask,
         premultiplied_ctf=bool(args.premultiplied_ctf),
         noise_model="radial" if args.noise_model == "radial1" else args.noise_model,
+        lazy=bool(args.lazy),
     )
     _write_json(pipeline_dir / "oracle_pipeline_info.json", summary)
     return pipeline_dir
