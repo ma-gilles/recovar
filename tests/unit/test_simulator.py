@@ -10,6 +10,42 @@ from recovar import core
 pytestmark = pytest.mark.unit
 
 
+def test_noise_rng_stream_is_independent_of_processing_batch_size():
+    key = simulator.jax.random.PRNGKey(0)
+    subkeys = []
+    for _ in range(2):
+        key, subkey = simulator.jax.random.split(key)
+        subkeys.append(subkey)
+
+    noise_image = np.ones((4, 4), dtype=np.float32)
+    expected = np.concatenate(
+        [
+            np.asarray(simulator.make_noise_batch(subkeys[0], noise_image, (5, 4, 4))),
+            np.asarray(simulator.make_noise_batch(subkeys[1], noise_image, (3, 4, 4))),
+        ],
+        axis=0,
+    )
+
+    pieces = []
+    for batch_st, batch_end in [(0, 3), (3, 6), (6, 8)]:
+        pieces.append(
+            np.asarray(
+                simulator.make_noise_batch_from_rng_stream(
+                    subkeys,
+                    noise_rng_batch_size=5,
+                    batch_st=batch_st,
+                    batch_end=batch_end,
+                    n_images=8,
+                    noise_image=noise_image,
+                    images_batch_shape=(batch_end - batch_st, 4, 4),
+                )
+            )
+        )
+
+    actual = np.concatenate(pieces, axis=0)
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
+
+
 def test_set_constant_ctf_sets_expected_columns():
     params = np.arange(2 * 11, dtype=np.float32).reshape(2, 11)
     out = simulator.set_constant_ctf(params.copy())
