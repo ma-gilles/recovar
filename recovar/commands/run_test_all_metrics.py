@@ -38,6 +38,7 @@ HIGHER_IS_BETTER_TOKENS = (
 )
 
 DEFAULT_OUTPUT_DIRNAME = "recovar_test_all_metrics"
+GENERATED_DATASET_REFERENCE_GPU_MEMORY_GB = 76
 
 
 def default_output_dir():
@@ -46,6 +47,14 @@ def default_output_dir():
     if tmp_root:
         return str(Path(tmp_root) / DEFAULT_OUTPUT_DIRNAME)
     return os.path.join("/tmp", DEFAULT_OUTPUT_DIRNAME)
+
+
+def generated_dataset_noise_rng_batch_size(grid_size, disc_type):
+    """Stable simulator RNG chunk size for generated regression datasets."""
+    mult = 0.5 if "cubic" in disc_type else 5
+    return utils.safe_batch_size(
+        mult * utils.get_image_batch_size(grid_size, GENERATED_DATASET_REFERENCE_GPU_MEMORY_GB)
+    )
 
 
 # Set up logging configuration
@@ -204,6 +213,8 @@ def make_big_test_dataset(
     volume_distribution /= np.sum(volume_distribution)
 
     voxel_size = 4.25 * 128 / grid_size
+    disc_type = "cubic"
+    noise_rng_batch_size = generated_dataset_noise_rng_batch_size(grid_size, disc_type)
     _image_stack, sim_info = simulator.generate_synthetic_dataset(
         output_folder,
         voxel_size,
@@ -221,10 +232,11 @@ def make_big_test_dataset(
         trailing_zero_format_in_vol_name=True,
         noise_scale_std=0.0,
         contrast_std=contrast_std,
-        disc_type="cubic",
+        disc_type=disc_type,
         n_tilts=n_tilts,
         premultiplied_ctf=premultiplied_ctf,
         noise_increase_per_tilt=noise_increase_per_tilt,
+        noise_rng_batch_size=noise_rng_batch_size,
     )
 
     logging.info("Finished generating dataset %s", output_folder)
