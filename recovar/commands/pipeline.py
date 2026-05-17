@@ -542,8 +542,20 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
             disc_type="linear_interp",
         )
     else:
+        # The noise estimator's inner kernel (_average_residual_square_explicit)
+        # allocates ~117 MB / image of working memory at grid=256 (mask FFTs,
+        # residual buffers, image_masks). The picker's image_batch_size scales
+        # as 4·gpu_gb at grid=256, so at gpu_gb≥40 the batch becomes >160
+        # and the kernel OOMs (slurm 8333303, 2026-05-16). The picker doesn't
+        # model the noise kernel separately; cap the batch here so the noise
+        # phase never exceeds ~12 GB working set at grid=256.
+        noise_batch = batch_size
+        if dataset.grid_size >= 256:
+            # ~80 images at grid=256 keeps the working set under 10 GB on
+            # any GPU; for grid=128 the original batch is already safe.
+            noise_batch = min(batch_size, 64)
         radial_ub_noise_var, _, _ = noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(
-            dataset, means.combined, dilated_volume_mask, batch_size
+            dataset, means.combined, dilated_volume_mask, noise_batch
         )
     logger.info("time to upper bound noise is %s", time.time() - noise_time)
 
