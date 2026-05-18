@@ -23,6 +23,7 @@ import functools
 import logging
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -277,6 +278,46 @@ def _build_lock_path(lib_path: pathlib.Path) -> pathlib.Path:
     return lib_path.parent / _BUILD_LOCKFILE
 
 
+def _discover_system_nvcc() -> str | None:
+    """Find nvcc in common system install locations across Linux distros.
+
+    Last-resort cluster-agnostic fallback for users who didn't ``module load``
+    or set ``CUDA_HOME``. Returns the highest-version nvcc found, or None.
+    Covers:
+      - ``/usr/local/cuda*`` (RHEL/CentOS/Della-style symlinks + versioned dirs)
+      - ``/opt/cuda*`` (Arch, some HPC)
+      - ``/opt/nvidia/cuda*`` (some HPC)
+      - ``/usr/lib/nvidia-cuda-toolkit/bin/nvcc`` (Debian/Ubuntu apt)
+    """
+    candidates: list[pathlib.Path] = []
+    for pattern in (
+        "/usr/local/cuda*/bin/nvcc",
+        "/opt/cuda*/bin/nvcc",
+        "/opt/nvidia/cuda*/bin/nvcc",
+    ):
+        candidates.extend(pathlib.Path("/").glob(pattern.lstrip("/")))
+    candidates.append(pathlib.Path("/usr/lib/nvidia-cuda-toolkit/bin/nvcc"))
+    candidates = [p for p in candidates if p.is_file() and os.access(p, os.X_OK)]
+    if not candidates:
+        return None
+
+    def _version_key(p: pathlib.Path) -> tuple[int, int, str]:
+        # Sort by versioned dir name (e.g. cuda-13.2, cuda-12.8), highest first.
+        # Falls back to lexicographic for unversioned (cuda symlink).
+        parent = p.parent.parent.name  # ".../cuda-13.2/bin/nvcc" → "cuda-13.2"
+        suffix = parent.split("-", 1)[-1] if "-" in parent else ""
+        parts = suffix.split(".") if suffix else []
+        try:
+            major = int(parts[0]) if len(parts) >= 1 else -1
+            minor = int(parts[1]) if len(parts) >= 2 else -1
+        except ValueError:
+            major, minor = -1, -1
+        return (major, minor, str(p))
+
+    candidates.sort(key=_version_key, reverse=True)
+    return str(candidates[0])
+
+
 def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: bool = False) -> pathlib.Path:
     """Build RECOVAR's preferred custom CUDA extension and return its path."""
     import sys
@@ -298,11 +339,33 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
 
     lib_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Building %s", lib_path)
+    make_env = os.environ.copy()
+    # If the user hasn't surfaced nvcc through any of the Makefile's normal
+    # discovery channels (NVCC/CUDACXX/PATH/LOCAL_CUDA_PATH/CUDA_HOME/CUDA_PATH),
+    # do a last-resort sweep of common system install paths. This makes
+    # ``import recovar; cuda_available()`` Just Work on most clusters without
+    # requiring ``module load cudatoolkit`` first.
+    nvcc_already_visible = (
+        make_env.get("NVCC")
+        or make_env.get("CUDACXX")
+        or shutil.which("nvcc")
+        or any(
+            os.access(os.path.join(make_env.get(var, ""), "bin", "nvcc"), os.X_OK)
+            for var in ("LOCAL_CUDA_PATH", "CUDA_HOME", "CUDA_PATH")
+            if make_env.get(var)
+        )
+    )
+    if not nvcc_already_visible:
+        discovered = _discover_system_nvcc()
+        if discovered is not None:
+            logger.info("Discovered nvcc at %s (system fallback)", discovered)
+            make_env["NVCC"] = discovered
+
     make_cmd = ["make"]
     if force or stale:
         make_cmd.append("-B")
     make_cmd.extend(["-C", str(_LIB_DIR), f"PYTHON={sys.executable}", f"LIB={lib_path}"])
-    subprocess.check_call(make_cmd)
+    subprocess.check_call(make_cmd, env=make_env)
     if not lib_path.exists():
         raise RuntimeError(f"Build failed — {lib_path} not found")
     _auto_build_attempted = True
