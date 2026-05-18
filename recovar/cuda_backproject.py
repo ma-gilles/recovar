@@ -182,13 +182,39 @@ def _candidate_lib_paths() -> list[pathlib.Path]:
     return candidates
 
 
-def _lib_is_stale(lib_path: pathlib.Path) -> bool:
-    """Return True if the lib's mtime is older than the source files.
+def _lib_missing_required_symbols(lib_path: pathlib.Path) -> str | None:
+    """Return the name of the first missing required symbol, or None if all present.
 
-    Catches the case where a user installed before a kernel/Makefile fix
-    landed (e.g. issue #131's Blackwell widening): without this check,
-    `_existing_lib_path()` would happily return the stale cached `.so`
-    forever, and the user would never pick up the new arch coverage.
+    Catches binary/source skew that mtime alone misses: e.g. ``~/.cache`` holds an
+    ``.so`` built last week from an older ``.cu`` that didn't export
+    ``BackprojectIndexed``, and today's ``cuda_backproject.py`` registers FFI
+    targets that need it. The mtime check sees ``cached .so newer than source``
+    and reuses it; ``_ensure_ffi`` then crashes deep inside ``ctypes.__getattr__``,
+    ``cuda_available()`` silently returns False, and the user runs on the slow
+    JAX fallback without warning. Dlopen + symbol lookup catches this cheaply.
+    """
+    try:
+        lib = ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_LOCAL)
+    except OSError:
+        # Can't even dlopen — treat as binary-incompatible.
+        return "<dlopen failed>"
+    for _target, symbol in _FFI_REGISTRATIONS:
+        if not hasattr(lib, symbol):
+            return symbol
+    return None
+
+
+def _lib_is_stale(lib_path: pathlib.Path) -> bool:
+    """Return True if the lib's mtime is older than the source files OR if
+    it's missing a symbol that the current ``cuda_backproject.py`` expects.
+
+    Catches:
+      - mtime skew: user installed before a kernel/Makefile fix landed (e.g.
+        issue #131's Blackwell widening).
+      - binary skew: cached ``.so`` from an older branch doesn't export a
+        symbol the current source requires (e.g. ``BackprojectIndexed``).
+        Without this check ``_ensure_ffi`` would crash inside ``ctypes`` and
+        ``cuda_available()`` would silently fall back to JAX.
     """
     try:
         lib_mtime = lib_path.stat().st_mtime
@@ -201,6 +227,15 @@ def _lib_is_stale(lib_path: pathlib.Path) -> bool:
                 return True
         except OSError:
             continue
+    missing = _lib_missing_required_symbols(lib_path)
+    if missing is not None:
+        logger.info(
+            "RECOVAR CUDA library %s is missing symbol '%s' required by the "
+            "current source — will rebuild.",
+            lib_path,
+            missing,
+        )
+        return True
     return False
 
 
@@ -372,6 +407,23 @@ _TARGET_BATCH_PROJECT = "cuda_batch_project"
 _TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
 _TARGET_FUSED_BP = "cuda_fused_bp"
 _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
+
+# Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
+# Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
+# to verify a cached .so is binary-compatible with the current source. When the kernel
+# adds/removes a symbol, update this tuple — that automatically invalidates stale caches.
+_FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
+    (_TARGET_BACKPROJECT, "Backproject"),
+    (_TARGET_BACKPROJECT_INDEXED, "BackprojectIndexed"),
+    (_TARGET_PROJECT, "Project"),
+    (_TARGET_PROJECT_INDEXED, "ProjectIndexed"),
+    (_TARGET_BATCH_BACKPROJECT, "BatchBackproject"),
+    (_TARGET_BATCH_BACKPROJECT_INDEXED, "BatchBackprojectIndexed"),
+    (_TARGET_BATCH_PROJECT, "BatchProject"),
+    (_TARGET_BATCH_BP_INTERLEAVED, "BatchBackprojectInterleaved"),
+    (_TARGET_FUSED_BP, "FusedBackproject"),
+    (_TARGET_PER_IMAGE_BP, "PerImageBackproject"),
+)
 
 
 _preflight_ok: bool | None = None  # None = not checked yet
@@ -594,30 +646,8 @@ def _ensure_ffi():
         # Preflight: check that the .so covers this GPU before FFI registration
         if _loaded_lib_path:
             _preflight_check(pathlib.Path(_loaded_lib_path))
-        jax.ffi.register_ffi_target(_TARGET_BACKPROJECT, jax.ffi.pycapsule(lib.Backproject), platform="CUDA")
-        jax.ffi.register_ffi_target(
-            _TARGET_BACKPROJECT_INDEXED,
-            jax.ffi.pycapsule(lib.BackprojectIndexed),
-            platform="CUDA",
-        )
-        jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
-        jax.ffi.register_ffi_target(
-            _TARGET_PROJECT_INDEXED,
-            jax.ffi.pycapsule(lib.ProjectIndexed),
-            platform="CUDA",
-        )
-        jax.ffi.register_ffi_target(_TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA")
-        jax.ffi.register_ffi_target(
-            _TARGET_BATCH_BACKPROJECT_INDEXED,
-            jax.ffi.pycapsule(lib.BatchBackprojectIndexed),
-            platform="CUDA",
-        )
-        jax.ffi.register_ffi_target(_TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA")
-        jax.ffi.register_ffi_target(
-            _TARGET_BATCH_BP_INTERLEAVED, jax.ffi.pycapsule(lib.BatchBackprojectInterleaved), platform="CUDA"
-        )
-        jax.ffi.register_ffi_target(_TARGET_FUSED_BP, jax.ffi.pycapsule(lib.FusedBackproject), platform="CUDA")
-        jax.ffi.register_ffi_target(_TARGET_PER_IMAGE_BP, jax.ffi.pycapsule(lib.PerImageBackproject), platform="CUDA")
+        for target, symbol in _FFI_REGISTRATIONS:
+            jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(getattr(lib, symbol)), platform="CUDA")
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
 
