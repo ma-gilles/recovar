@@ -4377,6 +4377,121 @@ class TestRelionModeSmokeTest:
             atol=1e-6,
         )
 
+    @pytest.mark.parametrize(
+        "with_image_corr,with_scale_corr,with_pre_shifts",
+        [
+            (False, False, False),  # baseline
+            (True,  False, False),  # image only
+            (False, True,  False),  # scale only
+            (False, False, True),   # shifts only
+            (True,  True,  False),  # image + scale
+            (True,  False, True),   # image + shifts
+            (False, True,  True),   # scale + shifts
+            (True,  True,  True),   # all three (original failing case)
+        ],
+    )
+    def test_k_class_gaussian_significance_matches_per_class_run_em(
+        self,
+        half_datasets,
+        init_volume,
+        with_image_corr,
+        with_scale_corr,
+        with_pre_shifts,
+    ):
+        """Joint gaussian K-class significance must match per-class run_em scoring.
+
+        Companion to test_k_class_firstiter_cc_significance_matches_per_class_run_em,
+        but for the gaussian score_mode that InitialModel uses for iter-2+ scoring.
+        Parametrized across (corrections, priors) to isolate where the K-class
+        gaussian path diverges from em_engine.run_em on identical inputs.
+        """
+        dataset = half_datasets[0]
+        means = jnp.stack([init_volume, init_volume * jnp.asarray(1.01, dtype=init_volume.dtype)])
+        rotations = _make_rotations(5, seed=41)
+        translations = jnp.array(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, -1.0]],
+            dtype=jnp.float32,
+        )
+        noise = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+        tau = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
+        # Priors are always on — the [False-True] case in the prior bisect
+        # established that priors do NOT break parity, so the residual is
+        # purely in the corrections.
+        class_log_priors = np.log(np.array([0.55, 0.45], dtype=np.float64))
+        rotation_log_prior = np.stack(
+            [
+                np.linspace(0.0, -0.2, rotations.shape[0], dtype=np.float32),
+                np.linspace(-0.1, 0.1, rotations.shape[0], dtype=np.float32),
+            ],
+            axis=0,
+        )
+        image_corrections = np.array([0.8, 1.2], dtype=np.float32) if with_image_corr else None
+        scale_corrections = np.array([1.1, 0.9], dtype=np.float32) if with_scale_corr else None
+        image_pre_shifts = np.array([[1.5, -0.5], [-1.0, 1.25]], dtype=np.float32) if with_pre_shifts else None
+        common_kwargs = dict(
+            image_batch_size=dataset.n_units,
+            rotation_block_size=rotations.shape[0],
+            current_size=6,
+            score_with_masked_images=True,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            half_spectrum_scoring=True,
+            projection_padding_factor=2,
+            use_float64_scoring=True,
+        )
+
+        expected_hard = []
+        expected_best = []
+        for class_index in range(means.shape[0]):
+            result = run_em(
+                dataset,
+                means[class_index],
+                tau,
+                noise,
+                rotations,
+                translations,
+                "linear_interp",
+                return_stats=True,
+                accumulate_noise=False,
+                disable_adjoint_y=True,
+                disable_adjoint_ctf=True,
+                score_only=True,
+                class_log_prior=float(class_log_priors[class_index]),
+                rotation_log_prior=rotation_log_prior[class_index],
+                **common_kwargs,
+            )
+            expected_hard.append(np.asarray(result[1], dtype=np.int32))
+            expected_best.append(np.asarray(result[4].best_log_score_per_image, dtype=np.float32))
+
+        *_, full_stats = _compute_k_class_significance_batched(
+            dataset,
+            means,
+            noise,
+            rotations,
+            translations,
+            "linear_interp",
+            class_log_priors=class_log_priors,
+            adaptive_fraction=1.0,
+            max_significants=1,
+            rotation_log_prior=rotation_log_prior,
+            collect_significance=False,
+            return_class_best=True,
+            score_mode="gaussian",
+            **common_kwargs,
+        )
+
+        np.testing.assert_array_equal(
+            np.asarray(full_stats["class_hard_assignments"], dtype=np.int32),
+            np.stack(expected_hard, axis=0),
+        )
+        np.testing.assert_allclose(
+            np.asarray(full_stats["class_best_log_score_per_image"], dtype=np.float32),
+            np.stack(expected_best, axis=0),
+            rtol=1e-6,
+            atol=1e-6,
+        )
+
     def test_k_class_significance_dump_emits_target_files(
         self,
         half_datasets,

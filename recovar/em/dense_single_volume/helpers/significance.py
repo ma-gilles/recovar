@@ -895,14 +895,23 @@ def _compute_significance_batched(
                 score_with_masked_images,
             )
 
+        batch_scale = None
+        if scale_corrections is not None:
+            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
+
         if image_corrections is not None:
             batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
             corr_expanded = jnp.repeat(batch_corr, n_trans)
             shifted_half = shifted_half * corr_expanded[:, None]
-            batch_norm = batch_norm * (batch_corr**2)[:, None]
+            # ``image_corrections`` carries ``(avg_norm/normcorr)*scale``;
+            # the image-only ``|F_img|^2`` term must drop ``scale`` so it is
+            # not double-counted with the reference-side ``ctf2 *= scale^2``
+            # below. Matches em_engine._relion_image_correction_factors and
+            # ``ml_optimiser.cpp:6240,7298,8516``.
+            norm_corr = batch_corr if batch_scale is None else batch_corr / batch_scale
+            batch_norm = batch_norm * (norm_corr**2)[:, None]
 
-        if scale_corrections is not None:
-            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
+        if batch_scale is not None:
             ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
 
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
@@ -1553,7 +1562,17 @@ def _compute_k_class_significance_batched(
             batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
             corr_expanded = jnp.repeat(batch_corr, n_trans)
             shifted_half = shifted_half * corr_expanded[:, None]
-            norm_corr = batch_corr if score_mode != "normalized_cc" or batch_scale is None else batch_corr / batch_scale
+            # ``image_corrections`` carries ``(avg_norm/normcorr) * scale``;
+            # ``scale_corrections`` carries ``scale``. The image-only
+            # ``|F_img|^2`` term must be weighted by ``(avg_norm/normcorr)^2``
+            # alone — divide ``batch_corr`` by ``batch_scale`` to isolate it.
+            # Otherwise ``batch_norm`` picks up an extra ``scale^2`` that is
+            # already accounted for on the reference side via
+            # ``ctf2_over_nv_half *= batch_scale^2`` below, double-counting
+            # ``scale^2`` in the Wiener score offset. See
+            # ``em_engine._relion_image_correction_factors`` and
+            # ``ml_optimiser.cpp:6240,7298,8516``.
+            norm_corr = batch_corr if batch_scale is None else batch_corr / batch_scale
             batch_norm = batch_norm * (norm_corr**2)[:, None]
         if batch_scale is not None:
             ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
