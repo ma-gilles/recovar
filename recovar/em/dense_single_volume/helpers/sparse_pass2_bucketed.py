@@ -466,6 +466,20 @@ def _nvidia_smi_visible_device_memory_bytes(output: str, visible_devices: str | 
 def _device_memory_limit_bytes() -> int | None:
     """Return selected accelerator memory, preferring physical GPU memory."""
 
+    # ``RECOVAR_SPARSE_PASS2_DEVICE_MEMORY_GB`` overrides the nvidia-smi probe.
+    # Useful when running ``RECOVAR_USE_FLOAT64_*=1`` because the autotuner's
+    # bytes-per-pixel constants are still hardcoded to ``complex64.itemsize``,
+    # so the autotuner under-estimates double-precision memory by 2× and OOMs.
+    # Set to ``device_gb / 2`` (e.g. ``40`` for an 80 GB A100) for float64.
+    _override = os.environ.get("RECOVAR_SPARSE_PASS2_DEVICE_MEMORY_GB")
+    if _override is not None:
+        try:
+            override_gb = float(_override.strip())
+            if override_gb > 0:
+                return int(override_gb * (1024 ** 3))
+        except ValueError:
+            pass
+
     try:
         query = subprocess.run(
             [
