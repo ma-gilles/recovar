@@ -221,13 +221,28 @@ PROJECTION_PADDING_FACTOR = 2
 # Dense ``run_em`` kwargs that are identical for every E-step in RELION mode.
 # Per-iter and per-half values are layered on top at each call site via
 # ``{**_DENSE_EM_STATIC_KWARGS, ...}``.
+import os as _os_for_f64
+
 _DENSE_EM_STATIC_KWARGS: dict = {
     "score_with_masked_images": True,
     "half_spectrum_scoring": True,
     "projection_padding_factor": PROJECTION_PADDING_FACTOR,
     "reconstruction_padding_factor": PADDING_FACTOR,
-    "use_float64_scoring": False,
-    "use_float64_projections": False,
+    # Default float32. Set ``RECOVAR_USE_FLOAT64_SCORING=1`` /
+    # ``RECOVAR_USE_FLOAT64_PROJECTIONS=1`` to upgrade to double precision.
+    # Diagnostic: K=4 100k/256² shows growing per-iter drift (8e-4 at it4→it5
+    # rising to 19e-4 at it14→it15 vs RELION), pattern consistent with
+    # single-precision accumulating in the K-class M-step + projector at high
+    # ``current_size``. Flipping these to True for the dense K-class path
+    # should remove that precision floor at ~2× wall cost.
+    "use_float64_scoring": bool(
+        _os_for_f64.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower()
+        in {"1", "true", "yes", "on"}
+    ),
+    "use_float64_projections": bool(
+        _os_for_f64.environ.get("RECOVAR_USE_FLOAT64_PROJECTIONS", "0").strip().lower()
+        in {"1", "true", "yes", "on"}
+    ),
     "do_gridding_correction": True,
     "square_window": RELION_FOURIER_WINDOW_SQUARE,
     "sparse_pass2": False,
