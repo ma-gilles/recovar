@@ -651,7 +651,16 @@ def _score_half_dense(
     if k_class_enabled:
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K-class refine does not support adjoint ablation flags")
-        em_kwargs["relion_half_volume_mstep"] = True
+        # ``RECOVAR_K_CLASS_FULL_VOLUME_MSTEP=1`` flips K-class to use the
+        # full-volume backproject accumulator instead of the Hermitian
+        # half-volume path. Diagnostic: K=4 100k/256² single-step parity vs
+        # RELION sits at 0.998 with the half-volume default; this knob lets
+        # us A/B test whether the half-volume accumulator structure carries
+        # the structural bias to RELION's full-volume reconstruction.
+        em_kwargs["relion_half_volume_mstep"] = not bool(
+            _os_for_f64.environ.get("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", "0").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
         if k_class_image_batch_size_override is not None:
             em_kwargs["image_batch_size"] = k_class_image_batch_size_override
         if k_class_rotation_block_size_override is not None:
