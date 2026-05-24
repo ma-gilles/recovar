@@ -1177,7 +1177,7 @@ def main():
         init_mean_variance=mean_variance,
         rotations=rotations,
         translations=translations_jnp,
-        disc_type="linear_interp",
+        disc_type=os.environ.get("RECOVAR_DISC_TYPE_OVERRIDE", "linear_interp"),
         max_iter=args.max_iter,
         image_batch_size=args.image_batch_size,
         rotation_block_size=args.rotation_block_size,

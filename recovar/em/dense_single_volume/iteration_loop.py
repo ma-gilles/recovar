@@ -725,7 +725,14 @@ def _score_half_dense(
                 adaptive_os_local,
             )
             adaptive_em_kwargs = dict(em_kwargs)
-            adaptive_em_kwargs["sparse_pass2"] = True
+            # ``RECOVAR_K_CLASS_DENSE_PASS2=1`` swaps K-class adaptive
+            # oversampling from sparse-bucketed pass-2 to dense pass-2.
+            # Diagnostic: tests whether the sparse-bucket reduction order
+            # carries a structural bias vs the dense in-place reduction.
+            adaptive_em_kwargs["sparse_pass2"] = not bool(
+                _os_for_f64.environ.get("RECOVAR_K_CLASS_DENSE_PASS2", "0").strip().lower()
+                in {"1", "true", "yes", "on"}
+            )
             k_class_result = run_dense_k_class_em_adaptive(
                 experiment_dataset,
                 means_k,
