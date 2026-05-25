@@ -42,6 +42,7 @@ BASE_ROOT="${BASE_ROOT:-$SCRATCH_ROOT/spike_fullatom_consistency_grid256_noise10
 SHARED_ROOT="${SHARED_ROOT:-$SCRATCH_ROOT/spike_fullatom_consistency_grid256_noise100_b80_shared}"
 SHARED_RAW="$SHARED_ROOT/01_raw_volumes"
 OUT_ROOT="$BASE_ROOT/$N_LABEL"
+RUN_DIR="$OUT_ROOT/runs/${N_LABEL}_seed0000"
 PDB_DIR="${PDB_DIR:-/projects/CRYOEM/singerlab/mg6942/spike_morph_pdbs}"
 MASK="${MASK:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_direct_volume_shell_metrics_20260523/full_gt_vols_plus_masks_20260524/masks/broad_mask.mrc}"
 AGENT_ID="spike-fa-noise${NOISE_LEVEL}-b${RENDER_BFACTOR}-${SLURM_ARRAY_JOB_ID}-${SLURM_ARRAY_TASK_ID}"
@@ -49,7 +50,7 @@ AGENT_ID="spike-fa-noise${NOISE_LEVEL}-b${RENDER_BFACTOR}-${SLURM_ARRAY_JOB_ID}-
 export TMPDIR="${TMPDIR:-$SCRATCH_ROOT/tmp/${AGENT_ID}}"
 export PIXI_HOME="${PIXI_HOME:-$SCRATCH_ROOT/pixi_home/${AGENT_ID}}"
 export RATTLER_CACHE_DIR="${RATTLER_CACHE_DIR:-$SCRATCH_ROOT/rattler_cache/${AGENT_ID}}"
-mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR" "$OUT_ROOT/shared/01_raw_volumes" "$SHARED_RAW"
+mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR" "$RUN_DIR/01_raw_volumes" "$SHARED_RAW"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 export PYTHONNOUSERSITE=1
@@ -70,6 +71,7 @@ echo "HOST=$(hostname)"
 echo "WORKDIR=$WORKDIR"
 echo "BASE_ROOT=$BASE_ROOT"
 echo "OUT_ROOT=$OUT_ROOT"
+echo "RUN_DIR=$RUN_DIR"
 echo "SHARED_RAW=$SHARED_RAW"
 echo "PDB_DIR=$PDB_DIR"
 echo "MASK=$MASK"
@@ -149,23 +151,26 @@ if [[ "$raw_count" -ne 100 ]]; then
   exit 2
 fi
 
-ln -sfn "$SHARED_RAW"/vol*.mrc "$OUT_ROOT/shared/01_raw_volumes"/
+ln -sfn "$SHARED_RAW"/vol*.mrc "$RUN_DIR/01_raw_volumes"/
 
-/usr/bin/time -v "$PIXI_PY" -m recovar.commands.spike_consistency \
-  --output-dir "$OUT_ROOT" \
-  --mask "$MASK" \
+/usr/bin/time -v "$PIXI_PY" -m recovar.commands.spike_walkthrough \
+  --output-dir "$RUN_DIR" \
   --pdb-dir "$PDB_DIR" \
   --grid-size 256 \
   --render-voxel-size 1.25 \
+  --voxel-size 1.25 \
   --render-bfactor "$RENDER_BFACTOR" \
-  --n-images-list "$N_IMAGES" \
+  --n-images "$N_IMAGES" \
   --noise-level "$NOISE_LEVEL" \
   --bfactor 0 \
   --zdim 4 \
+  --target-state 50 \
   --seed 0 \
   --lazy \
   --low-memory-option \
   --pipeline-gpu-memory 55 \
-  --compute-state-save-all-estimates
+  --compute-state-save-all-estimates \
+  --use-oracle-pipeline \
+  --no-kernel-report
 
 echo "END=$(date -Is)"
