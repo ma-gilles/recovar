@@ -122,6 +122,67 @@ def test_get_all_copied_columns_shapes():
     assert all_freqs.shape[0] == all_cols.shape[1]
 
 
+def test_expanded_real_column_count_includes_hermitian_copies():
+    volume_shape = (4, 4, 4)
+    freqs = np.array(
+        [
+            [0, 0, 0],
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 1, 0],
+        ]
+    )
+    picked = np.asarray(core.frequencies_to_vec_indices(freqs, volume_shape))
+
+    assert pc._expanded_real_column_count(picked, volume_shape) == 5
+
+
+def test_randomized_real_svd_caps_sketch_to_expanded_columns(monkeypatch):
+    volume_shape = (4, 4, 4)
+    vol_size = int(np.prod(volume_shape))
+    picked = np.asarray(
+        core.frequencies_to_vec_indices(
+            np.array(
+                [
+                    [0, 0, 0],
+                    [1, 0, 0],
+                    [0, 1, 0],
+                ]
+            ),
+            volume_shape,
+        )
+    )
+    expanded_count = pc._expanded_real_column_count(picked, volume_shape)
+
+    def fake_right_matvec(test_mat, *args, **kwargs):
+        assert test_mat.shape == (vol_size, expanded_count)
+        return np.eye(vol_size, expanded_count, dtype=np.float32)
+
+    def fake_left_matvec(q, *args, **kwargs):
+        assert q.shape == (vol_size, expanded_count)
+        return np.eye(expanded_count, dtype=np.float32)
+
+    monkeypatch.setattr(pc, "right_matvec_with_spatial_Sigma", fake_right_matvec)
+    monkeypatch.setattr(pc, "left_matvec_with_spatial_Sigma", fake_left_matvec)
+    monkeypatch.setattr(pc.linalg, "batch_dft3", lambda q, volume_shape, vol_batch_size: np.asarray(q))
+    monkeypatch.setattr(pc.linalg, "blockwise_A_X", lambda a, x, memory_to_use=None: np.asarray(a) @ np.asarray(x))
+
+    q, s, v = pc.randomized_real_svd_of_columns(
+        columns=np.ones((vol_size, picked.size), dtype=np.complex64),
+        picked_frequency_indices=picked,
+        volume_mask=np.ones(vol_size, dtype=np.float32),
+        volume_shape=volume_shape,
+        vol_batch_size=1,
+        test_size=10,
+        gpu_memory_to_use=8,
+        random_seed=5,
+    )
+
+    assert q.shape == (vol_size, expanded_count)
+    assert s.shape == (expanded_count,)
+    assert v.shape == (expanded_count, expanded_count)
+
+
 def test_get_cov_svds_delegates_to_randomized_svd(monkeypatch):
     called = {}
 

@@ -619,6 +619,11 @@ def left_matvec_with_spatial_Sigma(
 report_memory = True
 
 
+def _expanded_real_column_count(picked_frequency_indices, volume_shape):
+    picked_frequencies = np.asarray(core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape))
+    return int(picked_frequency_indices.size + np.count_nonzero(picked_frequencies[:, 0] > 0))
+
+
 @nvtx.annotate("randomized_real_svd_of_columns", color="red", domain=NVTX_DOMAIN_PCA)
 def randomized_real_svd_of_columns(
     columns,
@@ -636,6 +641,15 @@ def randomized_real_svd_of_columns(
     # memory_to_use = utils.get_gpu_memory_total() - 5
     utils.report_memory_device(logger=logger)
     picked_frequencies = core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape)
+    expanded_column_count = _expanded_real_column_count(picked_frequency_indices, volume_shape)
+    if test_size > expanded_column_count:
+        logger.info(
+            "Reducing randomized SVD sketch size from %s to %s to match expanded covariance columns",
+            test_size,
+            expanded_column_count,
+        )
+        test_size = expanded_column_count
+
     smaller_size = int(2 * (np.max(np.abs(picked_frequencies)) + 1))
     smaller_vol_shape = tuple(3 * [smaller_size])
 
