@@ -7,8 +7,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=04:00:00
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/%x_%A_%a.out
-#SBATCH --error=/scratch/gpfs/GILLES/mg6942/slurmo/%x_%A_%a.err
+#SBATCH --output=slurm-%x-%A_%a.out
+#SBATCH --error=slurm-%x-%A_%a.err
 
 set -eo pipefail
 set +u
@@ -16,10 +16,12 @@ module purge
 module load relion/5.0.1/gcc-11.5.0-gpu
 set -u
 
+USER_NAME="${USER:-$(id -un)}"
+SCRATCH_ROOT="${SCRATCH_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/${USER_NAME}/recovar_spike}"
 export PYTHONNOUSERSITE=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
-export TORCH_HOME="${TORCH_HOME:-/scratch/gpfs/CRYOEM/gilleslab/tmp/modelangelo_torch_home_mg6942}"
-export TMPDIR="${TMPDIR:-/scratch/gpfs/CRYOEM/gilleslab/tmp/modelangelo_fixed_b_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
+export TORCH_HOME="${TORCH_HOME:-$SCRATCH_ROOT/modelangelo_torch_home}"
+export TMPDIR="${TMPDIR:-$SCRATCH_ROOT/tmp/modelangelo_fixed_b_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
 mkdir -p "$TMPDIR" "$TORCH_HOME"
 
 ROOT="${ROOT:?Set ROOT to the ModelAngelo experiment output directory}"

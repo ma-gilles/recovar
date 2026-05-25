@@ -7,20 +7,22 @@
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
 #SBATCH --array=0-1%2
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/%x_%A_%a.out
-#SBATCH --error=/scratch/gpfs/GILLES/mg6942/slurmo/%x_%A_%a.err
+#SBATCH --output=slurm-%x-%A_%a.out
+#SBATCH --error=slurm-%x-%A_%a.err
 
 set -euo pipefail
 
+USER_NAME="${USER:-$(id -un)}"
+SCRATCH_ROOT="${SCRATCH_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/${USER_NAME}/recovar_spike}"
 ZDIMS=(1 8)
 ZDIM="${ZDIMS[$SLURM_ARRAY_TASK_ID]}"
 
 SOURCE_RUN="${SOURCE_RUN:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_consistency_grid256_noise10_b100_parallel_20260516/n00100000/runs/n00100000_seed0000}"
-BENCH_ROOT="${BENCH_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_method_benchmark_100k_20260517}"
+BENCH_ROOT="${BENCH_ROOT:-$SCRATCH_ROOT/spike_fullatom_method_benchmark_100k}"
 OUTDIR="$BENCH_ROOT/cryodrgn/zdim${ZDIM}"
 DATASET="$SOURCE_RUN/03_dataset"
 
-export TMPDIR="${TMPDIR:-/scratch/gpfs/CRYOEM/gilleslab/tmp/cryodrgn_100k_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
+export TMPDIR="${TMPDIR:-$SCRATCH_ROOT/tmp/cryodrgn_100k_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
 mkdir -p "$TMPDIR" "$OUTDIR" "$BENCH_ROOT/logs"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
@@ -62,4 +64,3 @@ fi
 
 echo "done=$(date -Is)"
 find "$OUTDIR" -maxdepth 1 -type f | sort
-

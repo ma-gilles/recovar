@@ -8,20 +8,24 @@
 #SBATCH --mem=256G
 #SBATCH --time=72:00:00
 #SBATCH --array=0-1%2
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/%x_%A_%a.out
-#SBATCH --error=/scratch/gpfs/GILLES/mg6942/slurmo/%x_%A_%a.err
+#SBATCH --output=slurm-%x-%A_%a.out
+#SBATCH --error=slurm-%x-%A_%a.err
 
 set -euo pipefail
 
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd -P)}"
+USER_NAME="${USER:-$(id -un)}"
+SCRATCH_ROOT="${SCRATCH_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/${USER_NAME}/recovar_spike}"
+WORKDIR="${WORKDIR:-$SUBMIT_DIR}"
 ZDIMS=(1 6)
 ZDIM="${ZDIMS[$SLURM_ARRAY_TASK_ID]}"
 
 SOURCE_RUN="${SOURCE_RUN:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_consistency_grid256_noise10_b100_parallel_20260516/n00100000/runs/n00100000_seed0000}"
-BENCH_ROOT="${BENCH_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_method_benchmark_100k_20260517}"
+BENCH_ROOT="${BENCH_ROOT:-$SCRATCH_ROOT/spike_fullatom_method_benchmark_100k}"
 OUTDIR="$BENCH_ROOT/dynamight/zdim${ZDIM}"
 DYNAMIGHT_PYDEPS="${DYNAMIGHT_PYDEPS:-/scratch/gpfs/CRYOEM/gilleslab/tmp/relion_dynamight_pydeps_20260517}"
 
-export TMPDIR="${TMPDIR:-/scratch/gpfs/CRYOEM/gilleslab/tmp/dynamight_100k_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
+export TMPDIR="${TMPDIR:-$SCRATCH_ROOT/tmp/dynamight_100k_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
 mkdir -p "$TMPDIR" "$OUTDIR" "$BENCH_ROOT/logs"
 
 unset PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
@@ -58,7 +62,7 @@ if [[ -f "$OUTDIR/checkpoints/checkpoint_final.pt" && "${OVERWRITE:-0}" != "1" ]
   exit 0
 fi
 
-/usr/bin/time -v python "$SLURM_SUBMIT_DIR/scripts/experiments/spike_fullatom_method_benchmark/run_dynamight_optimize_direct.py" \
+/usr/bin/time -v python "$WORKDIR/scripts/experiments/spike_fullatom_method_benchmark/run_dynamight_optimize_direct.py" \
   --refinement-star-file "$SOURCE_RUN/03_dataset/particles.star" \
   --output-directory "$OUTDIR" \
   --initial-model "$SOURCE_RUN/06_pipeline/output/volumes/mean.mrc" \

@@ -1,5 +1,10 @@
 # Spike Full-Atom State Sweeps
 
+For a fresh-clone, student-facing reproduction guide, start with
+`STUDENT_RUNBOOK.md`. It shows how to set a per-user scratch root, build the
+pixi environment, run a smoke job, run the dataset-size sweep, postprocess
+metrics, and optionally launch ModelAngelo.
+
 Scratch root for the current B100 full-atom spike dataset-size experiments:
 
 ```text
