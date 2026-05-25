@@ -1049,7 +1049,7 @@ def standard_recovar_pipeline(args):
             )
             covariance_options["n_pcs_to_compute"] = plan.n_pcs_to_compute
 
-        # Sweep-only override: validate_memory_formulas.py sets this env
+        # Debug-only override: external sweep harnesses can set this env
         # var to force a specific n_pcs per cell. Not user-facing.
         _force_n_pcs = os.environ.get("RECOVAR_DEBUG_FORCE_N_PCS")
         if _force_n_pcs:

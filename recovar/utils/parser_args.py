@@ -370,9 +370,8 @@ def apply_memory_planning_args(
     # injected JAX memory_stats() + nvidia-smi subprocess calls at
     # every phase boundary; that turned out to perturb noisy outlier
     # regression metrics enough to fail the cryo-ET long test even
-    # though the trace itself doesn't change pipeline math. The
-    # validation sweep (which DOES want the trace) still gets it
-    # because validate_memory_formulas.py sets ``--memory-profile``
+    # though the trace itself doesn't change pipeline math. External
+    # sweep harnesses that want the trace can set ``--memory-profile``
     # explicitly per cell.
     trace = None
     if outdir is not None:
