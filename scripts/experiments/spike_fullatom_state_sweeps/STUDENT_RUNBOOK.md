@@ -113,6 +113,7 @@ MASK=/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_direct_volume_shell_metri
 noise_level=100
 render_bfactor=80
 target_state=50
+pipeline=oracle basis/embedding path (`--use-oracle-pipeline`)
 ```
 
 Override with environment variables only if one of those paths is unreadable.
