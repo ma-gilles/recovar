@@ -287,6 +287,52 @@ def main():
         ),
     )
     parser.add_argument(
+        "--refinement_strategy",
+        default="relion_dense",
+        choices=("relion_dense", "relion_local", "cryosparc_bnb"),
+        help=(
+            "Pose-refinement strategy. 'relion_dense' (default) is the existing "
+            "RELION-parity path. 'cryosparc_bnb' routes K=1 through the new "
+            "cryoSPARC branch-and-bound support selector."
+        ),
+    )
+    parser.add_argument(
+        "--bnb_subdivision_mode",
+        default="fixed_grid",
+        choices=("fixed_grid", "axis_angle_hierarchical", "paper_faithful"),
+        help=(
+            "When --refinement_strategy cryosparc_bnb is set: "
+            "'fixed_grid' prunes a fixed pose grid (no subdivision; fast bound-math check); "
+            "'axis_angle_hierarchical' subdivides on a SHARED grid + per-image mask; "
+            "'paper_faithful' is per-image-ragged BnB matching cryoSPARC Suppl Note 2."
+        ),
+    )
+    parser.add_argument("--bnb_initial_fourier_radius", type=int, default=12)
+    parser.add_argument("--bnb_posterior_tail_tol", type=float, default=1e-6)
+    parser.add_argument(
+        "--bnb_n_subdivisions",
+        type=int,
+        default=7,
+        help=(
+            "Paper-faithful only: number of axis/shift subdivision stages. "
+            "Total = n_subdivisions + 1 evaluation passes. With cone init at "
+            "~11° spacing, n_subdivisions=3 reaches ~1.4° final precision; "
+            "=5 reaches ~0.35°; =7 reaches ~0.09° (paper precision)."
+        ),
+    )
+    parser.add_argument(
+        "--bnb_prior_cone_radius_deg",
+        type=float,
+        default=None,
+        help=(
+            "When set (paper_faithful mode only), each image's stage-0 cells "
+            "live in a cone of this half-angle around its previous-best pose "
+            "instead of the full SO(3) cube. Matches RELION's local-search "
+            "cone (22.5 deg). Leave None for ab-initio / iter-1."
+        ),
+    )
+    parser.add_argument("--bnb_prior_shift_radius_px", type=float, default=5.0)
+    parser.add_argument(
         "--max_particles", type=int, default=None, help="Subsample to at most N particles (N/2 per half)"
     )
     parser.add_argument(
@@ -1028,6 +1074,32 @@ def main():
 
     # ---- Run ----
     print(f"\nRunning {args.max_iter} iterations...")
+    print(f"  Refinement strategy: {args.refinement_strategy}")
+    if args.refinement_strategy == "cryosparc_bnb":
+        from recovar.em.dense_single_volume.bnb import BranchBoundOptions
+        bnb_options = BranchBoundOptions(
+            enabled=True,
+            subdivision_mode=args.bnb_subdivision_mode,
+            n_subdivisions=int(args.bnb_n_subdivisions),
+            initial_fourier_radius=int(args.bnb_initial_fourier_radius),
+            posterior_tail_tol=float(args.bnb_posterior_tail_tol),
+            prior_cone_radius_deg=(
+                float(args.bnb_prior_cone_radius_deg)
+                if args.bnb_prior_cone_radius_deg is not None
+                else None
+            ),
+            prior_shift_radius_px=float(args.bnb_prior_shift_radius_px),
+        )
+        if bnb_options.prior_cone_radius_deg is not None:
+            print(
+                f"  BnB cone-from-prior: cone={bnb_options.prior_cone_radius_deg}deg, "
+                f"shift={bnb_options.prior_shift_radius_px}px"
+            )
+        print(f"  BnB subdivision_mode: {bnb_options.subdivision_mode}")
+        print(f"  BnB initial_fourier_radius: {bnb_options.initial_fourier_radius}")
+        print(f"  BnB posterior_tail_tol: {bnb_options.posterior_tail_tol}")
+    else:
+        bnb_options = None
     t0 = time.time()
     result = refine_single_volume(
         experiment_datasets=[ds_half1, ds_half2],
@@ -1074,6 +1146,8 @@ def main():
         first_iteration_score_mode=args.first_iteration_score_mode,
         first_iteration_reconstruction_mode=args.first_iteration_reconstruction_mode,
         force_max_iter_after_convergence=args.force_max_iter_after_convergence,
+        refinement_strategy=args.refinement_strategy,
+        bnb_options=bnb_options,
     )
     elapsed = time.time() - t0
     completed_iters = len(result.get("current_sizes", []))

@@ -232,6 +232,93 @@ def test_em_parity_fast_k1_replay(tmp_path):
 @pytest.mark.gpu
 @pytest.mark.integration
 @pytest.mark.slow
+def test_em_parity_fast_k1_replay_bnb(tmp_path):
+    """K=1 128² 5k iter-3→4 replay with --refinement_strategy cryosparc_bnb.
+
+    Same fixture and thresholds as ``test_em_parity_fast_k1_replay``, but
+    routes pose refinement through the BnB engine. The BnB engine delegates
+    its final E+M+noise to ``run_local_em_exact`` over the retained support;
+    with the default schedule (L_schedule reaches L_max in 1-2 stages on
+    the 128² fixture) every candidate survives the pruning step and the
+    result should match the dense path to the same threshold.
+
+    Pass criteria (same as the dense K=1 replay):
+      * ``corr(half1, RELION it004 half1) ≥ 0.999``
+      * ``corr(half2, RELION it004 half2) ≥ 0.999``
+      * ``|recovar.ave_Pmax − RELION.ave_Pmax| < 1e-3``
+    """
+    _assert_parity_ancestors_or_skip()
+    _require_fixture(PARITY_SCRIPT, K1_RELION_DIR, K1_DATA_STAR, K1_GT_VOLUME)
+
+    output_dir = tmp_path / "k1_replay_bnb"
+    output_dir.mkdir()
+
+    cmd = [
+        sys.executable,
+        str(PARITY_SCRIPT),
+        "--relion_dir", str(K1_RELION_DIR),
+        "--data_star", str(K1_DATA_STAR),
+        "--iter", "3",
+        "--max_iter", "1",
+        "--gt_volume", str(K1_GT_VOLUME),
+        "--output_dir", str(output_dir),
+        "--refinement_strategy", "cryosparc_bnb",
+        "--bnb_subdivision_mode", "fixed_grid",
+    ]
+    logger.info("K=1 BnB replay cmd: %s", " ".join(cmd))
+    t0 = time.time()
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=gpu_subprocess_env())
+    elapsed = time.time() - t0
+
+    if proc.returncode == 2:
+        pytest.fail(
+            "Parity provenance gate failed (exit 2). The worktree is missing "
+            "required parity-fix commits.\nstdout:\n" + proc.stdout + "\nstderr:\n" + proc.stderr
+        )
+    assert proc.returncode == 0, (
+        f"run_multi_iter_parity.py --refinement_strategy cryosparc_bnb exited "
+        f"{proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+
+    npz = np.load(output_dir / "refinement_results.npz")
+    half1_corr = float(npz["final_half1_corr_vs_relion"])
+    half2_corr = float(npz["final_half2_corr_vs_relion"])
+    recovar_pmax = float(np.asarray(npz["ave_Pmax_trajectory"], dtype=np.float64)[0])
+    relion_pmax_reference = 0.9735
+    pmax_abs_diff = abs(recovar_pmax - relion_pmax_reference)
+
+    print(file=sys.stderr, flush=True)
+    print("=== K=1 BnB replay parity (iter 3→4 vs RELION it004) ===", file=sys.stderr, flush=True)
+    print(f"  half1_corr_vs_relion={half1_corr:.6f}", file=sys.stderr, flush=True)
+    print(f"  half2_corr_vs_relion={half2_corr:.6f}", file=sys.stderr, flush=True)
+    print(f"  pmax_abs_diff={pmax_abs_diff:.6f}", file=sys.stderr, flush=True)
+    print(f"  walltime_s={elapsed:.1f}", file=sys.stderr, flush=True)
+
+    payload = {
+        "k1_replay_bnb_half1_corr_vs_relion": half1_corr,
+        "k1_replay_bnb_half2_corr_vs_relion": half2_corr,
+        "k1_replay_bnb_pmax_recovar": recovar_pmax,
+        "k1_replay_bnb_pmax_relion_reference": relion_pmax_reference,
+        "k1_replay_bnb_pmax_abs_diff": pmax_abs_diff,
+        "k1_replay_bnb_walltime_s": elapsed,
+    }
+    ledger = _write_quality_ledger("k1_replay_bnb", payload)
+    logger.info("K=1 BnB replay ledger: %s", ledger)
+
+    assert half1_corr >= 0.999, (
+        f"K=1 BnB replay half1 corr {half1_corr:.6f} below threshold 0.999."
+    )
+    assert half2_corr >= 0.999, (
+        f"K=1 BnB replay half2 corr {half2_corr:.6f} below threshold 0.999."
+    )
+    assert pmax_abs_diff < 1e-3, (
+        f"K=1 BnB replay |ΔPmax| {pmax_abs_diff:.6f} exceeds threshold 1e-3."
+    )
+
+
+@pytest.mark.gpu
+@pytest.mark.integration
+@pytest.mark.slow
 def test_em_parity_fast_kclass_replay(tmp_path):
     """K=2 128² 5k iter-0→1 replay against the pdb_k2 RELION Class3D reference.
 

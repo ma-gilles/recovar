@@ -204,6 +204,17 @@ def _refine_sampling_kwargs(args, init_healpix_order):
     }
 
 
+def _build_bnb_options_from_args(args):
+    """Build a ``BranchBoundOptions`` from the CLI flags."""
+    from recovar.em.dense_single_volume.bnb import BranchBoundOptions
+
+    return BranchBoundOptions(
+        enabled=True,
+        initial_fourier_radius=int(args.bnb_initial_fourier_radius),
+        posterior_tail_tol=float(args.bnb_posterior_tail_tol),
+    )
+
+
 def _build_replay_iteration_overrides(
     relion_dir,
     half1_idx,
@@ -663,6 +674,30 @@ def main():
         default=None,
         help="Optional JSON path for an auto-refine quality/performance ledger.",
     )
+    parser.add_argument(
+        "--refinement_strategy",
+        default="relion_dense",
+        choices=("relion_dense", "relion_local", "cryosparc_bnb"),
+        help=(
+            "Pose-refinement strategy. 'relion_dense' (default) is the "
+            "RELION-parity dense/adaptive-oversampling path. "
+            "'cryosparc_bnb' enables the cryoSPARC-style branch-and-bound "
+            "E-step support selector for K=1 refinement (Phase-4 hookup; "
+            "K-class falls back to relion_dense with a warning)."
+        ),
+    )
+    parser.add_argument(
+        "--bnb_initial_fourier_radius",
+        type=int,
+        default=12,
+        help="cryoSPARC BnB initial low-frequency radius L_0 (default 12 per paper).",
+    )
+    parser.add_argument(
+        "--bnb_posterior_tail_tol",
+        type=float,
+        default=1e-6,
+        help="cryoSPARC BnB per-image upper bound on omitted posterior mass.",
+    )
     args = parser.parse_args()
 
     if args.timing_dir:
@@ -1033,6 +1068,12 @@ def main():
         n_classes=args.n_classes,
         emulate_relion_firstiter_cc=bool(args.firstiter_cc),
         relion_firstiter_ini_high_angstrom=(args.init_resolution if args.firstiter_cc else None),
+        refinement_strategy=args.refinement_strategy,
+        bnb_options=(
+            _build_bnb_options_from_args(args)
+            if args.refinement_strategy == "cryosparc_bnb"
+            else None
+        ),
     )
 
     total_time = time.time() - t_start

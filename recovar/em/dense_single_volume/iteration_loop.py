@@ -26,6 +26,10 @@ from recovar.em.dense_single_volume.batch_planning import (
     _image_backend,
     _maybe_cache_raw_image_loaders,
 )
+from recovar.em.dense_single_volume.bnb import (
+    BranchBoundOptions,
+    run_bnb_em_k1,
+)
 from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.firstiter_cc import (
     _build_firstiter_cc_pass2_grids,
@@ -908,6 +912,106 @@ def _score_half_local(
     )
 
 
+def _score_half_bnb_k1(
+    *,
+    k: int,
+    experiment_dataset,
+    means_k,
+    mean_variance,
+    noise_variance_k,
+    effective_rotations,
+    current_translations,
+    disc_type,
+    image_batch_size: int,
+    rotation_block_size: int,
+    rotation_log_prior_k,
+    translation_log_prior,
+    translation_search_base,
+    trans_prior_center_for_engine,
+    image_corrections_k,
+    scale_corrections_k,
+    cs_for_engine,
+    bnb_options: BranchBoundOptions,
+    best_pose_rotations,
+    best_pose_rotation_eulers,
+    best_pose_translations,
+    prior_rotations_k=None,
+    prior_translations_k=None,
+) -> HalfScoreResult:
+    """cryoSPARC BnB K=1 scoring for one half-set.
+
+    Phase-4 hookup: runs ``run_bnb_em_k1`` over the existing recovar
+    rotation/translation grid (no axis-angle subdivision yet — Phase 5
+    swaps in the paper-faithful hierarchy). The exact final E-step +
+    M-step + noise accumulation are delegated to ``run_local_em_exact``,
+    so output shape matches the local-search path.
+    """
+    rotations_np = np.asarray(effective_rotations, dtype=np.float32)
+    translations_np = np.asarray(current_translations, dtype=np.float32)
+
+    bnb_ret = run_bnb_em_k1(
+        experiment_dataset,
+        means_k,
+        mean_variance,
+        noise_variance_k,
+        rotations_np,
+        translations_np,
+        disc_type,
+        current_size=cs_for_engine,
+        options=bnb_options,
+        image_batch_size=image_batch_size,
+        rotation_block_size=rotation_block_size,
+        rotation_log_prior=(
+            None if rotation_log_prior_k is None else np.asarray(rotation_log_prior_k, dtype=np.float32)
+        ),
+        translation_log_prior=(
+            None if translation_log_prior is None else np.asarray(translation_log_prior, dtype=np.float32)
+        ),
+        image_corrections=image_corrections_k,
+        scale_corrections=scale_corrections_k,
+        image_pre_shifts=translation_search_base,
+        translation_prior_centers=trans_prior_center_for_engine,
+        accumulate_noise=True,
+        return_best_pose_details=True,
+        half_spectrum_scoring=True,
+        score_with_masked_images=True,
+        projection_padding_factor=PROJECTION_PADDING_FACTOR,
+        reconstruction_padding_factor=PADDING_FACTOR,
+        prior_rotations=prior_rotations_k,
+        prior_translations=prior_translations_k,
+    )
+    # run_local_em_exact return tuple (return_best_pose_details=True,
+    # accumulate_noise=True):
+    #   0=Ft_y, 1=Ft_ctf, 2=hard_assignment, 3=best_pose_rotations,
+    #   4=best_pose_translations, 5=best_pose_rotation_ids, 6=relion_stats,
+    #   7=noise_stats
+    Ft_y_k = bnb_ret[0]
+    Ft_ctf_k = bnb_ret[1]
+    ha_k = bnb_ret[2]
+    best_rots_k = bnb_ret[3]
+    best_trans_k = bnb_ret[4]
+    em_stats_k = bnb_ret[6]
+    noise_stats_k = bnb_ret[7]
+
+    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
+    best_pose_rotation_eulers[k] = utils.R_to_relion(
+        np.asarray(best_rots_k),
+        degrees=True,
+    ).astype(np.float32)
+    best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
+
+    return HalfScoreResult(
+        ha=ha_k,
+        Ft_y=Ft_y_k,
+        Ft_ctf=Ft_ctf_k,
+        em_stats=em_stats_k,
+        noise_stats=noise_stats_k,
+        best_pose_rotations=best_pose_rotations[k],
+        best_pose_rotation_eulers=best_pose_rotation_eulers[k],
+        best_pose_translations=best_pose_translations[k],
+    )
+
+
 def refine_single_volume(
     experiment_datasets,
     init_volume,
@@ -962,6 +1066,8 @@ def refine_single_volume(
     force_max_iter_after_convergence=False,
     n_classes=1,
     init_class_log_priors=None,
+    refinement_strategy: str = "relion_dense",
+    bnb_options: BranchBoundOptions | None = None,
     options=None,
 ):
     """Multi-iteration RELION-parity EM refinement.
@@ -1123,6 +1229,9 @@ def refine_single_volume(
 
         disc_type = options.disc_type
 
+        refinement_strategy = options.refinement_strategy
+        bnb_options = options.bnb
+
     if relion_current_sizes is not None and len(relion_current_sizes) == 0:
         raise ValueError("relion_current_sizes must be non-empty when provided")
 
@@ -1178,6 +1287,8 @@ def refine_single_volume(
         force_max_iter_after_convergence=force_max_iter_after_convergence,
         n_classes=n_classes,
         init_class_log_priors=init_class_log_priors,
+        refinement_strategy=refinement_strategy,
+        bnb_options=bnb_options,
     )
 
 
@@ -1238,6 +1349,8 @@ def _run_relion_iteration_loop(
     force_max_iter_after_convergence=False,
     n_classes=1,
     init_class_log_priors=None,
+    refinement_strategy: str = "relion_dense",
+    bnb_options: BranchBoundOptions | None = None,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -1259,6 +1372,20 @@ def _run_relion_iteration_loop(
 
     def _mark_setup_phase(name: str) -> None:
         setup_phase_seconds[name] = time.time() - setup_t0
+
+    if bnb_options is None:
+        bnb_options = BranchBoundOptions()
+    if refinement_strategy not in ("relion_dense", "relion_local", "cryosparc_bnb"):
+        raise ValueError(
+            f"refinement_strategy must be one of relion_dense, relion_local, "
+            f"cryosparc_bnb; got {refinement_strategy!r}",
+        )
+    if refinement_strategy == "cryosparc_bnb" and not bnb_options.enabled:
+        # Auto-enable BnB when the strategy is requested but the dataclass
+        # is still at its default (enabled=False).
+        bnb_options = BranchBoundOptions(
+            **{**{f.name: getattr(bnb_options, f.name) for f in bnb_options.__dataclass_fields__.values()}, "enabled": True}
+        )
 
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape
@@ -2099,7 +2226,22 @@ def _run_relion_iteration_loop(
         # Two modes: single-pass (adaptive_oversampling=0) or two-pass
         # coarse/fine (adaptive_oversampling>=1).
         iter_sig_counts = None
-        use_adaptive = state.adaptive_oversampling > 0 and not use_local and effective_rotations.shape[0] > 16
+        # cryoSPARC BnB dispatch: takes precedence over local/adaptive/dense
+        # for K=1 only (Phase 4). K-class falls through to the existing dense
+        # path with a warning.
+        use_bnb = (
+            bool(getattr(bnb_options, "enabled", False))
+            and refinement_strategy == "cryosparc_bnb"
+            and not k_class_enabled
+            and not relion_firstiter_cc_this_iter
+            and not firstiter_winner_take_all_this_iter
+        )
+        if refinement_strategy == "cryosparc_bnb" and k_class_enabled:
+            logger.warning(
+                "cryosparc_bnb refinement_strategy ignored: K-class is not "
+                "supported by BnB in Phase 4; falling back to dense.",
+            )
+        use_adaptive = state.adaptive_oversampling > 0 and not use_local and not use_bnb and effective_rotations.shape[0] > 16
         # Track the rotation grids used for pose extraction.
         # When adaptive oversampling is active, ha_k indices refer to the
         # oversampled grid (from pass 2), not effective_rotations.
@@ -2306,7 +2448,63 @@ def _run_relion_iteration_loop(
                     original_image_indices=np.zeros(0, dtype=np.int64),
                 )
                 continue
-            if use_local:
+            if use_bnb:
+                # Pass per-image previous-best pose into BnB so the
+                # per-image-ragged engine can initialise from a cone around
+                # the prior instead of the full SO(3) cube. The dense+local
+                # path uses the same cone (radius 22.5° at sigma_rot=7.5°);
+                # without this, BnB at refined-pose iters wastes ~16× work.
+                # Source the prior from `relion_half_inputs.previous_best_rotation_eulers[k]`
+                # which is populated by the RELION replay (the local-search path
+                # uses the same source).
+                _prev_eulers_k = relion_half_inputs.previous_best_rotation_eulers[k]
+                prior_rotations_k = (
+                    utils.R_from_relion(np.asarray(_prev_eulers_k), degrees=True).astype(np.float32)
+                    if _prev_eulers_k is not None
+                    else None
+                )
+                prior_translations_k = (
+                    relion_half_inputs.previous_best_translations[k]
+                    if relion_half_inputs.previous_best_translations[k] is not None
+                    else best_pose_translations[k]
+                )
+                bnb_result = _score_half_bnb_k1(
+                    k=k,
+                    experiment_dataset=experiment_datasets[k],
+                    means_k=means[k],
+                    mean_variance=mean_variance,
+                    noise_variance_k=noise_variance_k,
+                    effective_rotations=effective_rotations,
+                    current_translations=current_translations,
+                    disc_type=disc_type,
+                    image_batch_size=image_batch_size,
+                    rotation_block_size=rotation_block_size,
+                    rotation_log_prior_k=rotation_log_prior_k,
+                    translation_log_prior=translation_log_prior,
+                    translation_search_base=translation_search_base,
+                    trans_prior_center_for_engine=trans_prior_center_for_engine,
+                    image_corrections_k=relion_half_inputs.image_corrections[k],
+                    scale_corrections_k=relion_half_inputs.scale_corrections[k],
+                    cs_for_engine=cs_for_engine,
+                    bnb_options=bnb_options,
+                    best_pose_rotations=best_pose_rotations,
+                    best_pose_rotation_eulers=best_pose_rotation_eulers,
+                    best_pose_translations=best_pose_translations,
+                    prior_rotations_k=prior_rotations_k,
+                    prior_translations_k=prior_translations_k,
+                )
+                ha_k = bnb_result.ha
+                Ft_y_k = bnb_result.Ft_y
+                Ft_ctf_k = bnb_result.Ft_ctf
+                em_stats_k = bnb_result.em_stats
+                noise_stats_k = bnb_result.noise_stats
+                noise_stats_per_half[k] = noise_stats_k
+                pose_rotations[k] = effective_rotations
+                pose_rotation_eulers[k] = effective_rotation_eulers
+                coarse_ha[k] = ha_k
+                score_result = bnb_result
+
+            elif use_local:
                 local_result = _score_half_local(
                     k=k,
                     experiment_dataset=experiment_datasets[k],

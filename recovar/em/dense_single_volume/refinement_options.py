@@ -14,8 +14,9 @@ across iterations without copy-on-write surprises.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
+from recovar.em.dense_single_volume.bnb.options import BranchBoundOptions
 from recovar.em.dense_single_volume.helpers.convergence import LOCAL_SEARCH_HEALPIX_ORDER
 
 
@@ -136,6 +137,8 @@ class RefinementOptions:
     replay: ReplayState = field(default_factory=ReplayState)
     debug: EngineDebugOptions = field(default_factory=EngineDebugOptions)
     batching: RefinementBatching = field(default_factory=RefinementBatching)
+    bnb: BranchBoundOptions = field(default_factory=BranchBoundOptions)
+    refinement_strategy: Literal["relion_dense", "relion_local", "cryosparc_bnb"] = "relion_dense"
     disc_type: str = "linear_interp"
 
 
@@ -149,4 +152,5 @@ __all__ = [
     "ReplayState",
     "RefinementBatching",
     "RefinementOptions",
+    "BranchBoundOptions",
 ]
