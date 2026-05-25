@@ -22,30 +22,33 @@
 #SBATCH --mem=900G
 #SBATCH --time=96:00:00
 #SBATCH --array=0-4%5
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/%x-%A_%a.out
-#SBATCH --error=/scratch/gpfs/GILLES/mg6942/slurmo/%x-%A_%a.err
+#SBATCH --output=slurm-%x-%A_%a.out
+#SBATCH --error=slurm-%x-%A_%a.err
 
 set -euo pipefail
 
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd -P)}"
+USER_NAME="${USER:-$(id -un)}"
+SCRATCH_ROOT="${SCRATCH_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/${USER_NAME}/recovar_spike}"
 N_IMAGES_VALUES_STR="${N_IMAGES_VALUES_STR:-10000 30000 100000 300000 1000000}"
 read -r -a N_IMAGES_VALUES <<< "$N_IMAGES_VALUES_STR"
 N_IMAGES="${N_IMAGES_VALUES[$SLURM_ARRAY_TASK_ID]}"
 N_LABEL="$(printf 'n%08d' "$N_IMAGES")"
 
-WORKDIR="${WORKDIR:-/scratch/gpfs/GILLES/mg6942/recovar_wt_spike_consistency_20260514_104555}"
+WORKDIR="${WORKDIR:-$SUBMIT_DIR}"
 NOISE_LEVEL="${NOISE_LEVEL:-100.0}"
 RENDER_BFACTOR="${RENDER_BFACTOR:-80}"
-BASE_ROOT="${BASE_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_consistency_grid256_noise100_b80_parallel_20260518}"
-SHARED_ROOT="${SHARED_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_consistency_grid256_noise100_b80_shared_20260518}"
+BASE_ROOT="${BASE_ROOT:-$SCRATCH_ROOT/spike_fullatom_consistency_grid256_noise100_b80_parallel}"
+SHARED_ROOT="${SHARED_ROOT:-$SCRATCH_ROOT/spike_fullatom_consistency_grid256_noise100_b80_shared}"
 SHARED_RAW="$SHARED_ROOT/01_raw_volumes"
 OUT_ROOT="$BASE_ROOT/$N_LABEL"
 PDB_DIR="${PDB_DIR:-/projects/CRYOEM/singerlab/mg6942/spike_morph_pdbs}"
-MASK="${MASK:-/scratch/gpfs/GILLES/mg6942/runs/spike_consistency_grid256_noise10_scaling_20260516/volumes_finished_dataset_size/mask_in_grid.mrc}"
+MASK="${MASK:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_direct_volume_shell_metrics_20260523/full_gt_vols_plus_masks_20260524/masks/broad_mask.mrc}"
 AGENT_ID="spike-fa-noise${NOISE_LEVEL}-b${RENDER_BFACTOR}-${SLURM_ARRAY_JOB_ID}-${SLURM_ARRAY_TASK_ID}"
 
-export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/${AGENT_ID}"
-export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/${AGENT_ID}"
-export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/${AGENT_ID}"
+export TMPDIR="${TMPDIR:-$SCRATCH_ROOT/tmp/${AGENT_ID}}"
+export PIXI_HOME="${PIXI_HOME:-$SCRATCH_ROOT/pixi_home/${AGENT_ID}}"
+export RATTLER_CACHE_DIR="${RATTLER_CACHE_DIR:-$SCRATCH_ROOT/rattler_cache/${AGENT_ID}}"
 mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR" "$OUT_ROOT/shared/01_raw_volumes" "$SHARED_RAW"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV

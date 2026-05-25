@@ -7,23 +7,26 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/%x-%j.out
-#SBATCH --error=/scratch/gpfs/GILLES/mg6942/slurmo/%x-%j.err
+#SBATCH --output=slurm-%x-%j.out
+#SBATCH --error=slurm-%x-%j.err
 
 set -euo pipefail
 
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd -P)}"
+USER_NAME="${USER:-$(id -un)}"
+SCRATCH_ROOT="${SCRATCH_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/${USER_NAME}/recovar_spike}"
 ROOT="${ROOT:?Set ROOT to the dataset-size sweep root}"
 LABEL="${LABEL:-$(basename "$ROOT")}"
-WORKDIR="${WORKDIR:-/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar}"
+WORKDIR="${WORKDIR:-$SUBMIT_DIR}"
 TARGET_STATE="${TARGET_STATE:-50}"
 VOXEL_SIZE="${VOXEL_SIZE:-1.25}"
-MASK="${MASK:-/scratch/gpfs/GILLES/mg6942/runs/spike_consistency_grid256_noise10_scaling_20260516/volumes_finished_dataset_size/mask_in_grid.mrc}"
+MASK="${MASK:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_direct_volume_shell_metrics_20260523/full_gt_vols_plus_masks_20260524/masks/broad_mask.mrc}"
 MEAN_SUB_DIR="${MEAN_SUB_DIR:-$ROOT/mean_subtracted_metrics_20260518_r12}"
 
 AGENT_ID="spike-fa-post-${SLURM_JOB_ID}"
-export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/${AGENT_ID}"
-export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/${AGENT_ID}"
-export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/${AGENT_ID}"
+export TMPDIR="${TMPDIR:-$SCRATCH_ROOT/tmp/${AGENT_ID}}"
+export PIXI_HOME="${PIXI_HOME:-$SCRATCH_ROOT/pixi_home/${AGENT_ID}}"
+export RATTLER_CACHE_DIR="${RATTLER_CACHE_DIR:-$SCRATCH_ROOT/rattler_cache/${AGENT_ID}}"
 mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV

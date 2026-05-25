@@ -7,19 +7,22 @@
 #SBATCH --mem=900G
 #SBATCH --time=72:00:00
 #SBATCH --array=0-5%6
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/%x-%A_%a.out
-#SBATCH --error=/scratch/gpfs/GILLES/mg6942/slurmo/%x-%A_%a.err
+#SBATCH --output=slurm-%x-%A_%a.out
+#SBATCH --error=slurm-%x-%A_%a.err
 
 set -euo pipefail
 
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd -P)}"
+USER_NAME="${USER:-$(id -un)}"
+SCRATCH_ROOT="${SCRATCH_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/${USER_NAME}/recovar_spike}"
 N_IMAGES_VALUES_STR="${N_IMAGES_VALUES_STR:-10000 30000 100000 300000 1000000 3000000}"
 read -r -a N_IMAGES_VALUES <<< "$N_IMAGES_VALUES_STR"
 N_IMAGES="${N_IMAGES_VALUES[$SLURM_ARRAY_TASK_ID]}"
 N_LABEL="$(printf 'n%08d' "$N_IMAGES")"
 
-WORKDIR="${WORKDIR:-/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar}"
+WORKDIR="${WORKDIR:-$SUBMIT_DIR}"
 SOURCE_ROOT="${SOURCE_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_consistency_grid256_noise10_b100_parallel_20260516}"
-STATE_ROOT="${STATE_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_consistency_grid256_noise10_b100_state0025_reuse_20260517}"
+STATE_ROOT="${STATE_ROOT:-$SCRATCH_ROOT/spike_fullatom_consistency_grid256_noise10_b100_state0025_reuse}"
 TARGET_STATE="${TARGET_STATE:-25}"
 ZDIM="${ZDIM:-4}"
 GPU_MEMORY="${GPU_MEMORY:-55}"
@@ -31,9 +34,9 @@ TARGET_PATH="$RUN_DIR/target_latent_point_state$(printf '%04d' "$TARGET_STATE").
 TARGET_STATE_LABEL="$(printf 's%04d' "$TARGET_STATE")"
 AGENT_ID="spike-fa-${TARGET_STATE_LABEL}-cs-${SLURM_ARRAY_JOB_ID}-${SLURM_ARRAY_TASK_ID}"
 
-export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/${AGENT_ID}"
-export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/${AGENT_ID}"
-export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/${AGENT_ID}"
+export TMPDIR="${TMPDIR:-$SCRATCH_ROOT/tmp/${AGENT_ID}}"
+export PIXI_HOME="${PIXI_HOME:-$SCRATCH_ROOT/pixi_home/${AGENT_ID}}"
+export RATTLER_CACHE_DIR="${RATTLER_CACHE_DIR:-$SCRATCH_ROOT/rattler_cache/${AGENT_ID}}"
 mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR" "$RUN_DIR"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
