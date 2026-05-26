@@ -31,6 +31,28 @@ SMOKE_SHARED="${SMOKE_SHARED:-$RECOVAR_STUDENT_ROOT/spike_smoke_noise100_b80_sha
 mkdir -p "$RECOVAR_STUDENT_ROOT/slurmo"
 cd "$RECOVAR_CHECKOUT"
 
+print_sweep_paths() {
+  local root="$1"
+  local shared="$2"
+  local image_counts="$3"
+  local count
+  local run_label
+
+  echo
+  echo "Outputs will be written under:"
+  echo "  $root"
+  echo "Shared setup/cache output:"
+  echo "  $shared"
+  echo "Slurm logs:"
+  echo "  $RECOVAR_STUDENT_ROOT/slurmo"
+  echo "Per-size run directories:"
+  for count in $image_counts; do
+    printf -v run_label "n%08d" "$count"
+    echo "  $root/$run_label/runs/${run_label}_seed0000"
+  done
+  echo
+}
+
 submit_compute_sweep() {
   local array_spec="$1"
   local root="$2"
@@ -87,18 +109,28 @@ resolve_plot100k_run_dir() {
 
 case "$ACTION" in
   smoke)
-    echo "Submitting one 10k smoke run -> $SMOKE_ROOT"
+    echo "Submitting one 10k smoke run"
+    print_sweep_paths "$SMOKE_ROOT" "$SMOKE_SHARED" "10000"
     submit_compute_sweep "0-0" "$SMOKE_ROOT" "$SMOKE_SHARED" "10000"
     ;;
   full)
     read -r -a image_counts <<< "$N_IMAGES_VALUES_STR"
     last_index=$((${#image_counts[@]} - 1))
-    echo "Submitting full sweep -> $FULL_ROOT"
+    echo "Submitting full sweep"
     echo "Image counts: $N_IMAGES_VALUES_STR"
+    print_sweep_paths "$FULL_ROOT" "$FULL_SHARED" "$N_IMAGES_VALUES_STR"
     submit_compute_sweep "0-${last_index}%3" "$FULL_ROOT" "$FULL_SHARED" "$N_IMAGES_VALUES_STR"
     ;;
   postprocess)
-    echo "Submitting postprocess -> $FULL_ROOT/plots"
+    echo "Submitting postprocess"
+    echo
+    echo "Postprocess reads:"
+    echo "  $FULL_ROOT"
+    echo "Postprocess writes plots under:"
+    echo "  $FULL_ROOT/plots"
+    echo "Slurm logs:"
+    echo "  $RECOVAR_STUDENT_ROOT/slurmo"
+    echo
     sbatch \
       --output="$RECOVAR_STUDENT_ROOT/slurmo/%x-%j.out" \
       --error="$RECOVAR_STUDENT_ROOT/slurmo/%x-%j.err" \
@@ -107,7 +139,13 @@ case "$ACTION" in
     ;;
   plot100k)
     plot_run_dir="$(resolve_plot100k_run_dir)"
-    echo "Plotting compute_state shell metrics for $plot_run_dir"
+    echo "Plotting compute_state shell metrics"
+    echo
+    echo "Plot input run:"
+    echo "  $plot_run_dir"
+    echo "Plot output directory:"
+    echo "  $plot_run_dir/plots/compute_state_shell_metrics"
+    echo
     "$RECOVAR_CHECKOUT/.pixi/envs/default/bin/python" \
       scripts/experiments/spike_fullatom_state_sweeps/plot_compute_state_shell_metrics.py \
       --run-dir "$plot_run_dir"
