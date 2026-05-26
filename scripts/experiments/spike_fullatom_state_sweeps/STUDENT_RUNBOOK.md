@@ -3,23 +3,22 @@
 This is intentionally script-first. The student should not copy a page of
 `sbatch` commands by hand.
 
-## 1. Download And Set Up
+## 1. Clone And Set Up
 
 From a login node:
 
 ```bash
-mkdir -p /scratch/gpfs/CRYOEM/gilleslab/tmp/$USER/spike_student_bootstrap
-cd /scratch/gpfs/CRYOEM/gilleslab/tmp/$USER/spike_student_bootstrap
+STUDENT_ROOT=/scratch/gpfs/CRYOEM/gilleslab/tmp/$USER/spike_fullatom_student
+mkdir -p "$STUDENT_ROOT/clone"
+git clone --branch codex/kernel-bandwidth-student-clean \
+  git@github.com:ma-gilles/recovar.git "$STUDENT_ROOT/clone/recovar"
 
-curl -L -o download_student_spike_experiment.sh \
-  https://raw.githubusercontent.com/ma-gilles/recovar/codex/kernel-bandwidth-student-clean/scripts/experiments/spike_fullatom_state_sweeps/download_student_spike_experiment.sh
-
-bash download_student_spike_experiment.sh /scratch/gpfs/CRYOEM/gilleslab/tmp/$USER/spike_fullatom_student
+"$STUDENT_ROOT/clone/recovar/scripts/experiments/spike_fullatom_state_sweeps/download_student_spike_experiment.sh" \
+  "$STUDENT_ROOT"
 ```
 
-This clones `ma-gilles/recovar`, checks out
-`codex/kernel-bandwidth-student-clean`, builds pixi, builds the CUDA
-backprojector, checks imports, and writes:
+This checks out `codex/kernel-bandwidth-student-clean`, builds pixi, builds
+the CUDA backprojector, checks imports, and writes:
 
 ```text
 /scratch/gpfs/CRYOEM/gilleslab/tmp/$USER/spike_fullatom_student/student_spike_env.sh

@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Download this RECOVAR branch and build the pixi environment for the spike
+# Set up this RECOVAR branch and build the pixi environment for the spike
 # full-atom experiments on Della.
 #
 # Fresh-start usage:
-#   curl -L -o download_student_spike_experiment.sh \
-#     https://raw.githubusercontent.com/ma-gilles/recovar/codex/kernel-bandwidth-student-clean/scripts/experiments/spike_fullatom_state_sweeps/download_student_spike_experiment.sh
-#   bash download_student_spike_experiment.sh /scratch/gpfs/CRYOEM/gilleslab/tmp/$USER/spike_fullatom_student
+#   STUDENT_ROOT=/scratch/gpfs/CRYOEM/gilleslab/tmp/$USER/spike_fullatom_student
+#   mkdir -p "$STUDENT_ROOT/clone"
+#   git clone --branch codex/kernel-bandwidth-student-clean \
+#     git@github.com:ma-gilles/recovar.git "$STUDENT_ROOT/clone/recovar"
+#   "$STUDENT_ROOT/clone/recovar/scripts/experiments/spike_fullatom_state_sweeps/download_student_spike_experiment.sh" \
+#     "$STUDENT_ROOT"
 
 set -euo pipefail
 
