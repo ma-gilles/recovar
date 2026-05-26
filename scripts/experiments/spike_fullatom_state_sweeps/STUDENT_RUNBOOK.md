@@ -60,9 +60,15 @@ $RECOVAR_STUDENT_ROOT/spike_fullatom_consistency_grid256_noise100_b80/
 After the 100k run exists:
 
 ```bash
-$RECOVAR_CHECKOUT/.pixi/envs/default/bin/python \
-  $RECOVAR_CHECKOUT/scripts/experiments/spike_fullatom_state_sweeps/plot_compute_state_shell_metrics.py \
-  --run-dir "$RECOVAR_STUDENT_ROOT/spike_fullatom_consistency_grid256_noise100_b80/n00100000/runs/n00100000_seed0000"
+$RECOVAR_CHECKOUT/scripts/experiments/spike_fullatom_state_sweeps/run_student_spike_experiment.sh plot100k
+```
+
+`plot100k` uses the standard full-sweep location by default. If the run was
+launched into a custom root, point it at the exact run directory:
+
+```bash
+PLOT_RUN_DIR=/path/to/n00100000_seed0000 \
+  $RECOVAR_CHECKOUT/scripts/experiments/spike_fullatom_state_sweeps/run_student_spike_experiment.sh plot100k
 ```
 
 This writes:
@@ -75,12 +81,6 @@ This writes:
 
 The plot shows masked FSC vs GT, relative Fourier error per shell, log-scale
 relative error, and cumulative relative error.
-
-Shortcut:
-
-```bash
-$RECOVAR_CHECKOUT/scripts/experiments/spike_fullatom_state_sweeps/run_student_spike_experiment.sh plot100k
-```
 
 ## 4. Download Results
 

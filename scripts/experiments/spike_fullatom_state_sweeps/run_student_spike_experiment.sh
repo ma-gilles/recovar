@@ -9,6 +9,9 @@
 
 set -euo pipefail
 
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
+export PYTHONNOUSERSITE=1
+
 ACTION="${1:-smoke}"
 
 RECOVAR_CHECKOUT="${RECOVAR_CHECKOUT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)}"
@@ -41,6 +44,47 @@ submit_compute_sweep() {
     scripts/experiments/spike_fullatom_state_sweeps/submit_fullatom_noise100_b80_dataset_size.sbatch
 }
 
+resolve_plot100k_run_dir() {
+  local state_file="07_compute_state/state000_unfil.mrc"
+  if [[ -n "${PLOT_RUN_DIR:-}" ]]; then
+    if [[ ! -f "$PLOT_RUN_DIR/$state_file" ]]; then
+      echo "PLOT_RUN_DIR does not contain $state_file: $PLOT_RUN_DIR" >&2
+      exit 2
+    fi
+    echo "$PLOT_RUN_DIR"
+    return
+  fi
+
+  local default_run_dir="$FULL_ROOT/n00100000/runs/n00100000_seed0000"
+  if [[ -f "$default_run_dir/$state_file" ]]; then
+    echo "$default_run_dir"
+    return
+  fi
+
+  local candidates=()
+  while IFS= read -r state_path; do
+    candidate="$(dirname "$(dirname "$state_path")")"
+    candidates+=("$candidate")
+  done < <(
+    find "$RECOVAR_STUDENT_ROOT" -maxdepth 8 -type f \
+      -path "*/n00100000/runs/n00100000_seed0000/$state_file" | sort
+  )
+
+  if [[ "${#candidates[@]}" -eq 1 ]]; then
+    echo "${candidates[0]}"
+    return
+  fi
+
+  if [[ "${#candidates[@]}" -eq 0 ]]; then
+    echo "Could not find a completed 100k run dir with $state_file at $default_run_dir or under $RECOVAR_STUDENT_ROOT." >&2
+  else
+    echo "Found multiple completed 100k run dirs under $RECOVAR_STUDENT_ROOT:" >&2
+    printf '  %s\n' "${candidates[@]}" >&2
+  fi
+  echo "Set PLOT_RUN_DIR=/path/to/n00100000_seed0000 or FULL_ROOT=/path/to/sweep-root and retry." >&2
+  exit 2
+}
+
 case "$ACTION" in
   smoke)
     echo "Submitting one 10k smoke run -> $SMOKE_ROOT"
@@ -62,9 +106,11 @@ case "$ACTION" in
       scripts/experiments/spike_fullatom_state_sweeps/postprocess_fullatom_dataset_size.sbatch
     ;;
   plot100k)
+    plot_run_dir="$(resolve_plot100k_run_dir)"
+    echo "Plotting compute_state shell metrics for $plot_run_dir"
     "$RECOVAR_CHECKOUT/.pixi/envs/default/bin/python" \
       scripts/experiments/spike_fullatom_state_sweeps/plot_compute_state_shell_metrics.py \
-      --run-dir "$FULL_ROOT/n00100000/runs/n00100000_seed0000"
+      --run-dir "$plot_run_dir"
     ;;
   *)
     echo "Unknown action: $ACTION" >&2
