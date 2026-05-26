@@ -55,6 +55,9 @@ Results go here:
 $RECOVAR_STUDENT_ROOT/spike_fullatom_consistency_grid256_noise100_b80/
 ```
 
+The run script prints the exact output root, Slurm log directory, and
+per-size run directories before it submits jobs.
+
 ## 3. Plot One Compute-State Result
 
 After the 100k run exists:
