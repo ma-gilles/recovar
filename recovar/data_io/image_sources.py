@@ -15,7 +15,6 @@ from typing import Literal, Optional
 
 import numpy as np
 
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.data_io import image_backends
 from recovar.data_io._index_utils import DatasetIndexLayout, normalize_indices
 
@@ -183,8 +182,7 @@ class ImageSource:
         raise NotImplementedError
 
     def process_images_half(self, images, apply_image_mask=False):
-        processed = self.process_images(images, apply_image_mask=apply_image_mask)
-        return fourier_transform_utils.full_image_to_half_image(processed, self.image_shape)
+        raise NotImplementedError("ImageSource subclasses must implement native process_images_half")
 
     def iter_batches(
         self,
@@ -281,10 +279,9 @@ class BackendImageSource(ImageSource):
         return self.backend.process_images(images, apply_image_mask=apply_image_mask)
 
     def process_images_half(self, images, apply_image_mask=False):
-        if hasattr(self.backend, "process_images_half"):
-            return self.backend.process_images_half(images, apply_image_mask=apply_image_mask)
-        processed = self.backend.process_images(images, apply_image_mask=apply_image_mask)
-        return fourier_transform_utils.full_image_to_half_image(processed, self.image_shape)
+        if not hasattr(self.backend, "process_images_half"):
+            raise ValueError("Image backend must implement native process_images_half")
+        return self.backend.process_images_half(images, apply_image_mask=apply_image_mask)
 
     def iter_batches(
         self,

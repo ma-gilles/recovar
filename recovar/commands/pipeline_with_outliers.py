@@ -97,9 +97,12 @@ def run_pipeline_with_outlier_removal():
         help="Which indices to save (default: both)",
     )
 
-    from recovar.utils.parser_args import add_gpu_memory_arg, apply_gpu_memory_arg
+    from recovar.utils.parser_args import (
+        add_memory_planning_args,
+        apply_gpu_memory_arg,
+    )
 
-    add_gpu_memory_arg(parser)
+    add_memory_planning_args(parser)
 
     args = parser.parse_args()
 

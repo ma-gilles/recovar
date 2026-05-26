@@ -147,7 +147,16 @@ mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 
-PIXI_PY="\$(pixi run which python)"
+# Prefer the pre-installed env to avoid ``pixi run`` triggering a fresh
+# pixi install on every Slurm worker (Della cryoem-partition compute nodes
+# intermittently fail DNS to conda.anaconda.org; isolating PIXI_HOME per
+# job forces re-download every time).  Fall back to ``pixi run`` only if
+# the env hasn't been seeded on the login node.
+if [[ -x "${WORKDIR}/.pixi/envs/default/bin/python" ]]; then
+    PIXI_PY="${WORKDIR}/.pixi/envs/default/bin/python"
+else
+    PIXI_PY="\$(pixi run which python)"
+fi
 export PATH="\$(dirname "\$PIXI_PY"):\$PATH"
 
 # Provenance gate
@@ -159,7 +168,7 @@ assert '.pixi/envs/default/' in str(pathlib.Path(jax.__file__).resolve()), 'WRON
 print('ENV_OK — devices:', jax.devices())
 "
 
-pixi run python -m pytest ${pytest_args} --junitxml=${XML_OUT} || true
+"\$PIXI_PY" -m pytest ${pytest_args} --junitxml=${XML_OUT} || true
 EOF
 
     chmod +x "$SCRIPT"
@@ -196,7 +205,13 @@ export RATTLER_CACHE_DIR="${WORKDIR}/.tmp/rattler_cache_\${SLURM_JOB_ID}"
 mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 
-PIXI_PY="\$(pixi run which python)"
+# Same fallback as worker jobs: prefer pre-installed env to avoid
+# spurious DNS-bound ``pixi install`` invocations on compute nodes.
+if [[ -x "${WORKDIR}/.pixi/envs/default/bin/python" ]]; then
+    PIXI_PY="${WORKDIR}/.pixi/envs/default/bin/python"
+else
+    PIXI_PY="\$(pixi run which python)"
+fi
 "\$PIXI_PY" scripts/summarize_test_results.py ${RESULTS_DIR}/${TAG}_*.xml
 EOF
 

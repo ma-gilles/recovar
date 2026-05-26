@@ -11,10 +11,12 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
 from recovar.core import mask
-from recovar.data_io import halfsets
+from recovar.data_io import cryoem_dataset, halfsets
 from recovar.heterogeneity import covariance_estimation, embedding, principal_components
 from recovar.output import output
 from recovar.output.output_paths import ResultPaths
+from recovar.ppca import ppca as ppca_module
+from recovar.ppca import prior_estimation as ppca_prior_estimation
 from recovar.reconstruction import homogeneous, noise
 from recovar.utils.helpers import RobustFileHandler as _RobustFileHandler
 from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
@@ -249,13 +251,6 @@ def add_args(parser: argparse.ArgumentParser):
     # ── Performance / GPU ──────────────────────────────────────────────────
     perf = parser.add_argument_group("Performance")
     perf.add_argument(
-        "--gpu-gb",
-        default=None,
-        type=float,
-        dest="gpu_memory",
-        help="GPU memory to use in GB (default: all)",
-    )
-    perf.add_argument(
         "--multi-gpu",
         action="store_true",
         dest="multi_gpu",
@@ -274,26 +269,14 @@ def add_args(parser: argparse.ArgumentParser):
         action="store_true",
         help="Accept running on CPU if no GPU is found",
     )
-    perf.add_argument(
-        "--low-memory-option",
-        dest="low_memory_option",
-        action="store_true",
-        help="Use lower memory options for covariance estimation",
-    )
-    perf.add_argument(
-        "--very-low-memory-option",
-        dest="very_low_memory_option",
-        action="store_true",
-        help="Use lowest memory options for covariance estimation",
-    )
-    perf.add_argument(
-        "--adaptive-memory",
-        dest="adaptive_memory",
-        action="store_true",
-        help="Adapt number of PCs to available GPU memory. By default, "
-        "200 PCs are used regardless of GPU size for reproducibility. "
-        "This flag reduces n_pcs on smaller GPUs to avoid OOM.",
-    )
+    # Memory planning flags: --gpu-budget-gb, --low-memory-option,
+    # --very-low-memory-option, --adaptive-memory / --adaptive-n-pcs,
+    # --memory-profile, --fail-on-memory-exceed, --memory-safety-fraction.
+    # Diagnostics (memory_plan.json, memory_trace.jsonl, args.json,
+    # allocator_env.json) are always-on under <outdir>/_diagnostics/.
+    from recovar.utils.parser_args import add_memory_planning_args as _add_mem_args
+
+    _add_mem_args(parser)
 
     # ── Advanced / debugging ─────────────────────────────────────────────
     adv = parser.add_argument_group("Advanced")
@@ -345,6 +328,138 @@ def add_args(parser: argparse.ArgumentParser):
         dest="keep_intermediate",
         action="store_true",
         help="Save intermediate results (for debugging)",
+    )
+    adv.add_argument(
+        "--use-ppca",
+        dest="use_ppca",
+        action="store_true",
+        help="Refine the covariance basis with PPCA EM before exporting embeddings.",
+    )
+    adv.add_argument(
+        "--ppca-em-iters",
+        dest="ppca_em_iters",
+        type=int,
+        default=20,
+        help="Number of PPCA EM refinement iterations when --use-ppca is enabled.",
+    )
+    adv.add_argument(
+        "--ppca-zdim",
+        dest="ppca_zdim",
+        type=int,
+        default=10,
+        help="Single latent dimension to use when --use-ppca is enabled.",
+    )
+    adv.add_argument(
+        "--ppca-use-gridding-correction",
+        dest="ppca_use_gridding_correction",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply gridding correction inside the PPCA refinement path.",
+    )
+    adv.add_argument(
+        "--ppca-contrast-mode",
+        dest="ppca_contrast_mode",
+        choices=["auto", "none", "profile", "marginalize"],
+        default="auto",
+        help="PPCA contrast handling. 'auto' maps to marginalize when --correct-contrast is on, else none.",
+    )
+    adv.add_argument(
+        "--ppca-projected-covariance",
+        dest="ppca_projected_covariance",
+        action="store_true",
+        help=(
+            "Single-shot projected-covariance refinement at the last EM iter. "
+            "Equivalent to --ppca-projcov-every=EM_iter --ppca-projcov-start=EM_iter-1."
+        ),
+    )
+    adv.add_argument(
+        "--ppca-projcov-every",
+        dest="ppca_projcov_every",
+        type=int,
+        default=0,
+        help=(
+            "Run projected-covariance refinement every Nth EM iter (0 = never). "
+            "If both this and --ppca-projected-covariance are set, this wins."
+        ),
+    )
+    adv.add_argument(
+        "--ppca-projcov-start",
+        dest="ppca_projcov_start",
+        type=int,
+        default=0,
+        help="First EM iter (0-indexed) at which projcov is allowed.",
+    )
+    adv.add_argument(
+        "--ppca-refitb-every",
+        dest="ppca_refitb_every",
+        type=int,
+        default=0,
+        help="Run RefitB (latent covariance refit by EM) every Nth EM iter (0 = never).",
+    )
+    adv.add_argument(
+        "--ppca-refitb-start",
+        dest="ppca_refitb_start",
+        type=int,
+        default=0,
+        help="First EM iter (0-indexed) at which RefitB is allowed.",
+    )
+    adv.add_argument(
+        "--ppca-refitb-inner-iters",
+        dest="ppca_refitb_inner_iters",
+        type=int,
+        default=3,
+        help="Number of B-only EM steps inside each RefitB pass.",
+    )
+    adv.add_argument(
+        "--ppca-refitb-kappa",
+        dest="ppca_refitb_kappa",
+        type=float,
+        default=0.0,
+        help="Inverse-Wishart-style ridge strength on B in RefitB (0 = unregularised).",
+    )
+    adv.add_argument(
+        "--ppca-effective-zdim",
+        dest="ppca_effective_zdim",
+        type=int,
+        default=0,
+        help=(
+            "Use only the top K PCs at embedding time (trailing eigenvalues are "
+            "floored to ~0, so the per-image MAP gives z≈0 for those dims). "
+            "PPCA still fits the full --ppca-zdim basis; this only changes how "
+            "the embedding solver weights the components. 0 = use all (default)."
+        ),
+    )
+    adv.add_argument(
+        "--ppca-embed-use-em-contrasts",
+        dest="ppca_embed_use_em_contrasts",
+        action="store_true",
+        help=(
+            "Use EM's marginalized posterior contrasts at embedding time instead "
+            "of re-profiling. Only effective when --ppca-contrast-mode=marginalize. "
+            "Avoids the profile-MAP bias that over-estimates contrast."
+        ),
+    )
+    adv.add_argument(
+        "--ppca-update-noise",
+        dest="ppca_update_noise",
+        action="store_true",
+        help=(
+            "Update the radial noise model during PPCA EM iterations using "
+            "whitened residual power. Inspired by RELION's per-iteration "
+            "sigma2_noise update. Uses EMA smoothing (alpha=0.5)."
+        ),
+    )
+    adv.add_argument(
+        "--ppca-pcs-per-mask",
+        dest="ppca_pcs_per_mask",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated list of how many PCs to assign to each mask. "
+            "E.g. '5,5' assigns PCs 0-4 to mask 0 and PCs 5-9 to mask 1. "
+            "Requires --use-complement-mask or multiple masks. "
+            "If omitted, PCs are split evenly across masks."
+        ),
     )
     adv.add_argument(
         "--test-covar-options",
@@ -673,6 +788,365 @@ def _compute_embeddings(means, u, s, dataset, volume_mask, options, gpu_memory, 
     return (latent_coords, latent_coords_noreg, latent_precision, latent_precision_noreg, contrasts, contrasts_noreg)
 
 
+def _resolve_ppca_contrast_mode(args):
+    """Resolve the PPCA contrast mode from CLI args."""
+    if getattr(args, "ppca_contrast_mode", "auto") != "auto":
+        return args.ppca_contrast_mode
+    return "marginalize" if getattr(args, "correct_contrast", False) else "none"
+
+
+def _resolve_ppca_contrast_grid(contrast_mode):
+    """Return PPCA contrast quadrature nodes and weights.
+
+    Uses Gauss-Legendre quadrature on [0, 2] (matching the covariance path's
+    default contrast interval) with 32 nodes.
+
+    Returns
+    -------
+    (nodes, weights) : tuple of np.ndarray or (None, None)
+    """
+    if contrast_mode == "none":
+        return None, None
+    from recovar.ppca.contrast_posterior import make_contrast_quadrature
+
+    nodes, weights = make_contrast_quadrature(
+        rule="gauss_legendre",
+        interval=(0.0, 2.0),
+    )
+    return np.asarray(nodes, dtype=np.float32), np.asarray(weights, dtype=np.float32)
+
+
+def _resolve_ppca_zdim(args):
+    """Return the single latent dimension used by the direct PPCA pipeline path."""
+    basis_size = int(getattr(args, "ppca_zdim", 10))
+    if basis_size <= 0:
+        raise ValueError(f"--ppca-zdim must be positive, got {basis_size}")
+    return basis_size
+
+
+def _configure_ppca_single_zdim(args, options):
+    """Force pipeline metadata/options into the single-zdim PPCA contract."""
+    basis_size = _resolve_ppca_zdim(args)
+    args.zdim = [basis_size]
+    options.zs_dim_to_test = [basis_size]
+    return basis_size
+
+
+def _make_ppca_initial_loading(volume_size, basis_size, seed=0, init_scale=0.01, volume_shape=None):
+    """Build a deterministic random PPCA loading initialization in half-Fourier space.
+
+    ``ppca.EM`` consumes ``W_initial`` as a half-Fourier (Hermitian-packed) array of
+    shape ``(half_vol_size, basis_size)``. Historically this helper returned a real
+    matrix of shape ``(volume_size, basis_size)``, which ``EM_step_half`` then
+    *index-sliced* via ``full_volume_to_half_volume`` — that helper is a Hermitian
+    pack on a centered Fourier array, so feeding it a real matrix produces structurally
+    garbage "Fourier" coefficients (no Hermitian symmetry, no spectral structure).
+    PPCA from that init reliably collapses every PC past ~3.
+
+    The fix: draw a random real volume per column, DFT it to centered Fourier, then
+    Hermitian-pack to half-volume. ``volume_shape`` must be supplied so we know how
+    to reshape; for backwards compatibility we infer a cubic shape from
+    ``volume_size`` if it's omitted.
+    """
+    rng = np.random.default_rng(seed)
+    if volume_shape is None:
+        side = int(round(volume_size ** (1.0 / 3.0)))
+        if side**3 != int(volume_size):
+            raise ValueError(f"volume_size={volume_size} is not a perfect cube; pass volume_shape explicitly")
+        volume_shape = (side, side, side)
+    volume_shape = tuple(int(s) for s in volume_shape)
+    from recovar.core import fourier_transform_utils as _ftu
+
+    half_vol_size = int(np.prod(_ftu.volume_shape_to_half_volume_shape(volume_shape)))
+    W_half = np.empty((half_vol_size, int(basis_size)), dtype=np.complex64)
+    for j in range(int(basis_size)):
+        real_vol = rng.standard_normal(volume_shape).astype(np.float32) * float(init_scale)
+        ft_full = _ftu.get_dft3(real_vol)
+        W_half[:, j] = _ftu.full_volume_to_half_volume(ft_full, volume_shape).reshape(-1)
+    return W_half
+
+
+def _rescale_ppca_posteriors(expected_zs, second_moment_zs, eigenvalues):
+    """Map PPCA latents into the covariance-PCA coordinate convention.
+
+    Covariance-PCA stores scale on the latent coordinates. PPCA stores the
+    same scale on ``W = U diag(sqrt(lambda))``. To make downstream consumers
+    interchangeable, convert ``z`` to ``x = diag(sqrt(lambda)) z`` and return
+    the corresponding posterior covariance in that same space.
+    """
+    expected_zs = np.asarray(expected_zs)
+    second_moment_zs = np.asarray(second_moment_zs)
+    eigvals = np.maximum(np.asarray(eigenvalues, dtype=np.float32), 0.0)
+    scale = np.sqrt(eigvals).astype(np.float32)
+
+    mean_x = expected_zs * scale[None, :]
+    cov_z = second_moment_zs - np.einsum("ni,nj->nij", expected_zs, np.conj(expected_zs))
+    cov_x = cov_z * scale[None, :, None] * scale[None, None, :]
+    cov_x = 0.5 * (cov_x + np.swapaxes(np.conj(cov_x), -1, -2))
+    return np.asarray(mean_x.real, dtype=np.float32), np.asarray(cov_x.real, dtype=np.float32)
+
+
+def _build_ppca_embedding_outputs(expected_zs, second_moment_zs, eigenvalues, mean_c, basis_size):
+    """Build PipelineOutput-compatible embedding dictionaries from PPCA posteriors."""
+    coords, covariances = _rescale_ppca_posteriors(
+        np.asarray(expected_zs)[:, :basis_size],
+        np.asarray(second_moment_zs)[:, :basis_size, :basis_size],
+        np.asarray(eigenvalues)[:basis_size],
+    )
+    contrasts = np.asarray(mean_c, dtype=np.float32)
+    latent_coords = {basis_size: coords}
+    latent_covariances = {basis_size: covariances}
+    contrast_dict = {basis_size: contrasts}
+    return (
+        latent_coords,
+        dict(latent_coords),
+        latent_covariances,
+        dict(latent_covariances),
+        contrast_dict,
+        dict(contrast_dict),
+    )
+
+
+def _as_pipeline_basis_dtype(arr):
+    """Downcast PPCA basis outputs to the dtypes expected by pipeline output code."""
+    arr = np.asarray(arr)
+    return arr.astype(np.complex64 if np.iscomplexobj(arr) else np.float32)
+
+
+def _run_ppca_refinement(
+    dataset,
+    means,
+    focus_mask,
+    dilated_volume_mask,
+    options,
+    args,
+    batch_size,
+    gpu_memory,
+    covariance_options,
+    focus_masks,
+    zdim_for_rest,
+):
+    """Run PPCA EM and return pipeline-compatible arrays.
+
+    With ``--ppca-projected-covariance`` (i.e. ``args.ppca_projected_covariance``)
+    a single projected-covariance refinement is folded into the *last* EM
+    iteration via :func:`recovar.ppca.ppca.EM`'s ``projcov_every`` parameter.
+    Without that flag, this is plain PPCA EM. Both modes share the same code
+    path; the only differences are:
+
+    * how embeddings are derived (the projcov rotation invalidates the EM
+      posteriors, so embeddings are recomputed via ``_compute_embeddings``);
+    * the ``"postprocess"`` / ``"embedding_source"`` info tags written into
+      ``ppca_info`` for downstream provenance.
+    """
+    basis_size = int(np.max(options.zs_dim_to_test))
+    if basis_size <= 0:
+        raise ValueError(f"PPCA basis size must be positive, got {basis_size}")
+
+    if getattr(args, "tilt_series", False):
+        raise ValueError("PPCA pipeline mode does not support --tilt-series yet")
+
+    # Multi-mask support: build masks array and PC assignment
+    ppca_masks = None
+    ppca_pc_mask_assignment = None
+    if len(focus_masks) > 1:
+        ppca_masks = np.array([np.asarray(m, dtype=np.float32) for m in focus_masks])
+        pcs_per_mask_str = getattr(args, "ppca_pcs_per_mask", None)
+        if pcs_per_mask_str is not None:
+            pcs_per_mask = [int(x) for x in pcs_per_mask_str.split(",")]
+            if len(pcs_per_mask) != len(focus_masks):
+                raise ValueError(
+                    f"--ppca-pcs-per-mask has {len(pcs_per_mask)} entries but there are {len(focus_masks)} masks"
+                )
+            if sum(pcs_per_mask) != basis_size:
+                raise ValueError(f"--ppca-pcs-per-mask sums to {sum(pcs_per_mask)} but --ppca-zdim is {basis_size}")
+            assignment = []
+            for mask_idx, n_pcs in enumerate(pcs_per_mask):
+                assignment.extend([mask_idx] * n_pcs)
+            ppca_pc_mask_assignment = np.array(assignment, dtype=np.int32)
+        # else: EM() will default to even split
+
+    logger.warning("PPCA pipeline mode currently uses the provisional hybrid-shell prior. This should be tightened up.")
+
+    contrast_mode = _resolve_ppca_contrast_mode(args)
+    contrast_grid, contrast_weights = _resolve_ppca_contrast_grid(contrast_mode)
+    W_init = _make_ppca_initial_loading(dataset.volume_size, basis_size, volume_shape=dataset.volume_shape)
+    prior_info = ppca_prior_estimation.estimate_hybrid_shell_prior_from_data(
+        dataset,
+        means.combined,
+        basis_size,
+        dataset.volume_shape,
+        batch_size,
+    )
+
+    em_iter = int(getattr(args, "ppca_em_iters", 20))
+
+    # ── Resolve projcov flags ────────────────────────────────────────────
+    # --ppca-projcov-every wins if set; otherwise --ppca-projected-covariance
+    # is the legacy "single-shot at the last iter" shorthand.
+    projcov_every_arg = int(getattr(args, "ppca_projcov_every", 0))
+    projcov_start_arg = int(getattr(args, "ppca_projcov_start", 0))
+    legacy_oneshot = bool(getattr(args, "ppca_projected_covariance", False))
+    if projcov_every_arg > 0:
+        projcov_every = projcov_every_arg
+        projcov_start = projcov_start_arg
+    elif legacy_oneshot:
+        projcov_every = em_iter
+        projcov_start = em_iter - 1
+    else:
+        projcov_every = 0
+        projcov_start = 0
+
+    # ── Resolve refitb flags ─────────────────────────────────────────────
+    refitb_every = int(getattr(args, "ppca_refitb_every", 0))
+    refitb_start = int(getattr(args, "ppca_refitb_start", 0))
+    refitb_inner_iters = int(getattr(args, "ppca_refitb_inner_iters", 3))
+    refitb_kappa = float(getattr(args, "ppca_refitb_kappa", 0.0))
+
+    rebakes_basis = projcov_every > 0 or refitb_every > 0
+
+    ppca_update_noise = bool(getattr(args, "ppca_update_noise", False))
+
+    (
+        U_ppca,
+        S_ppca,
+        W_ppca,
+        expected_zs,
+        second_moment_zs,
+        iteration_data,
+        posterior_info,
+    ) = ppca_module.EM(
+        dataset,
+        means.combined,
+        W_init,
+        prior_info["W_prior"],
+        EM_iter=em_iter,
+        disc_type_mean="cubic",
+        disc_type="linear_interp",
+        disc_type_u=covariance_options["disc_type_u"],
+        return_iteration_data=True,
+        return_posterior_info=True,
+        volume_mask=np.asarray(focus_mask, dtype=np.float32),
+        dilated_volume_mask=dilated_volume_mask,
+        contrast_mode=contrast_mode,
+        contrast_grid=contrast_grid,
+        contrast_weights=contrast_weights,
+        projcov_every=projcov_every,
+        projcov_start=projcov_start,
+        refitb_every=refitb_every,
+        refitb_start=refitb_start,
+        refitb_inner_iters=refitb_inner_iters,
+        refitb_kappa=refitb_kappa,
+        gpu_memory_to_use=gpu_memory,
+        masks=ppca_masks,
+        pc_mask_assignment=ppca_pc_mask_assignment,
+        update_noise=ppca_update_noise,
+    )
+
+    half_vol_size = int(np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)))
+    U_full = U_ppca
+    if U_full.shape[0] == half_vol_size:
+        U_full = fourier_transform_utils.half_volume_to_full_volume(np.asarray(U_full).T, dataset.volume_shape).T
+    U_full = _as_pipeline_basis_dtype(U_full)
+    u_rescaled = U_full
+
+    use_em_contrasts = (
+        bool(getattr(args, "ppca_embed_use_em_contrasts", False))
+        and contrast_mode == "marginalize"
+        and posterior_info is not None
+        and posterior_info.get("mean_c") is not None
+    )
+
+    if use_em_contrasts:
+        # Use EM's marginalized posterior contrasts directly, bypassing the
+        # profile-MAP grid search. The EM posteriors (z, c) are consistent
+        # with each other; re-profiling would discard the logdet correction
+        # and over-estimate contrast.
+        logger.info("PPCA: using EM marginalized contrasts for embedding (--ppca-embed-use-em-contrasts)")
+        (
+            latent_coords,
+            latent_coords_noreg,
+            latent_precision,
+            latent_precision_noreg,
+            contrasts,
+            contrasts_noreg,
+        ) = _build_ppca_embedding_outputs(expected_zs, second_moment_zs, S_ppca, posterior_info["mean_c"], basis_size)
+        embedding_source = "em_posteriors"
+    else:
+        # Default: re-profile contrasts via the embedding grid search.
+        # This is the same path the covariance pipeline uses, guaranteeing
+        # ``latent_coords`` is in the covariance-PCA "true alpha" convention.
+        u = {"rescaled": U_full, "real": None}
+
+        # ── Optional: truncate trailing PCs at embed time (off by default) ──
+        s_for_embed = np.asarray(S_ppca, dtype=np.float32).copy()
+        eff_zdim = int(getattr(args, "ppca_effective_zdim", 0))
+        if eff_zdim > 0 and eff_zdim < basis_size:
+            s_for_embed[eff_zdim:] = 1e-12
+            logger.info(
+                "PPCA: --ppca-effective-zdim=%d; floored trailing %d eigenvalues for embedding",
+                eff_zdim,
+                basis_size - eff_zdim,
+            )
+
+        s = {"rescaled": s_for_embed, "real": None}
+        (
+            latent_coords,
+            latent_coords_noreg,
+            latent_precision,
+            latent_precision_noreg,
+            contrasts,
+            contrasts_noreg,
+        ) = _compute_embeddings(
+            means,
+            u,
+            s,
+            dataset,
+            np.asarray(focus_mask, dtype=np.float32),
+            options,
+            gpu_memory,
+            focus_masks,
+            zdim_for_rest,
+            args,
+        )
+
+        if projcov_every > 0 and refitb_every > 0:
+            embedding_source = "projcov+refitb"
+        elif projcov_every > 0:
+            embedding_source = "projected_covariance"
+        elif refitb_every > 0:
+            embedding_source = "refitb"
+        else:
+            embedding_source = "compute_embeddings"
+
+    logger.info(
+        "PPCA solve complete: q=%d iters=%d projcov_every=%d refitb_every=%d contrast_mode=%s",
+        basis_size,
+        em_iter,
+        projcov_every,
+        refitb_every,
+        contrast_mode,
+    )
+    return {
+        "u_rescaled": u_rescaled,
+        "s_rescaled": np.asarray(S_ppca, dtype=np.float32),
+        "W": _as_pipeline_basis_dtype(W_ppca),
+        "iteration_data": iteration_data,
+        "prior_info": prior_info,
+        "basis_size": basis_size,
+        "contrast_mode": contrast_mode,
+        "prior_mode": "hybrid_shell",
+        "embedding_source": embedding_source,
+        "latent_coords": latent_coords,
+        "latent_coords_noreg": latent_coords_noreg,
+        "latent_precision": latent_precision,
+        "latent_precision_noreg": latent_precision_noreg,
+        "contrasts": contrasts,
+        "contrasts_noreg": contrasts_noreg,
+        "em_mean_c": posterior_info.get("mean_c") if posterior_info else None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
@@ -714,7 +1188,14 @@ def standard_recovar_pipeline(args):
     if args.mask.endswith(".mrc"):
         args.mask = os.path.abspath(args.mask)
 
-    if (not args.accept_cpu) and (not utils.jax_has_gpu()):
+    has_gpu = utils.jax_has_gpu()
+    if getattr(args, "use_ppca", False) and (not has_gpu):
+        raise ValueError(
+            "--use-ppca currently requires a CUDA GPU. "
+            "The PPCA E/M-step path uses CUDA FFI backprojection kernels and does not yet support CPU-only runs."
+        )
+
+    if (not args.accept_cpu) and (not has_gpu):
         raise ValueError(
             "No GPU found. Set --accept-cpu if you really want to run on CPU (probably not). More likely, you want to check that JAX has been properly installed with GPU support."
         )
@@ -757,9 +1238,16 @@ def standard_recovar_pipeline(args):
 
     logger.info(args)
 
+    # Push the soft budget into ``set_gpu_memory_limit`` early so any code
+    # that runs before the dataset is loaded (notably ``downsample_to_disk``)
+    # uses the user's --gpu-budget-gb. The MemoryPlanner overwrites it later with
+    # the effective_budget once we know grid_size.
     if args.gpu_memory is not None:
         utils.set_gpu_memory_limit(args.gpu_memory)
-        logger.info("GPU memory limited to %.1f GB (requested via --gpu-gb)", args.gpu_memory)
+        logger.info(
+            "GPU memory budget requested: %.1f GB (--gpu-budget-gb). The planner will refine this once the dataset is loaded.",
+            args.gpu_memory,
+        )
 
     # --- Resolve downsample target ---
     _resolve_downsample(args)
@@ -835,26 +1323,38 @@ def standard_recovar_pipeline(args):
         logger.info("  Datadir: %s", dataset_spec.datadir)
 
     options = utils.make_algorithm_options(args)
+    if getattr(args, "use_ppca", False):
+        ppca_zdim = _configure_ppca_single_zdim(args, options)
+        logger.info("PPCA mode enabled: overriding latent dimensions to single zdim=%d", ppca_zdim)
 
     ## TODO this is a big one, so do with care. I wonder if there is a better way to handle this logic.
     ## Could we instead store 'one' dataset and the indices instead of two different objects, then do a clevery use of iterators
     ## The current way to just have two of these objects around which is not great.
     ds = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split, lazy=args.lazy)
 
-    ## TODO: log this. Also document it better. Also I'd like a warning or something if I say "allocate this much" and peak gpu memory ends up being more than that
-    ## So that it can be fixed in the future
-    gpu_memory = utils.get_gpu_memory_total()
-    volume_shape = ds.volume_shape
+    # --- Build the centralized memory plan ---
+    from recovar.utils.cuda_env import log_backend
+    from recovar.utils.parser_args import apply_memory_planning_args
 
-    ## TODO: a big one: I want batch size logic to be separated from rest of utils,
-    # and have a better/more transparent way this is done, to make future development easier
-    ## Right now, all these numbers were basically found "by hand" by trying to maximize gpu memory, without
-    ## breaking, but it is  not robust
-    ## Also, I would like some slightly better formatting/more informational logging here
-    batch_size = utils.get_image_batch_size(ds.grid_size, gpu_memory)
-    logger.info("image batch size: %s", batch_size)
-    logger.info("volume batch size: %s", utils.get_vol_batch_size(ds.grid_size, gpu_memory))
-    logger.info("column batch size: %s", utils.get_column_batch_size(ds.grid_size, gpu_memory))
+    log_backend(logger)
+    plan, mem_trace = apply_memory_planning_args(
+        args,
+        command="pipeline",
+        grid_size=ds.grid_size,
+        n_images=ds.n_images,
+        outdir=args.outdir,
+        logger=logger,
+        desired_n_pcs=200,
+    )
+    gpu_memory = plan.budget.effective_budget_gb
+    volume_shape = ds.volume_shape
+    batch_size = plan.image_batch_size
+    logger.info(
+        "image batch size: %s, volume batch size: %s, column batch size: %s",
+        plan.image_batch_size,
+        plan.volume_batch_size,
+        plan.column_batch_size,
+    )
     logger.info("number of images: %s", ds.n_images)
     logger.info("image size: %sx%s", ds.grid_size, ds.grid_size)
     utils.report_memory_device(logger=logger)
@@ -873,6 +1373,10 @@ def standard_recovar_pipeline(args):
 
     # --- Contrast correction repeat logic ---
     n_repeats = 2 if args.do_over_with_contrast else 1
+    if getattr(args, "use_ppca", False):
+        if args.do_over_with_contrast:
+            logger.info("PPCA refinement handles contrast inside EM; disabling pipeline do-over loop.")
+        n_repeats = 1
     if args.do_over_with_contrast and not args.correct_contrast:
         logger.warning("Do over with contrast, but contrast correction is off. Setting contrast correction to on")
         args.correct_contrast = True
@@ -898,6 +1402,9 @@ def standard_recovar_pipeline(args):
 
     contrasts_for_second = None
     est_contrasts = None
+    ppca_loadings = None
+    ppca_iteration_data = None
+    ppca_info = None
     for repeat in range(n_repeats):
         if repeat == 1:
             ndim = 10 if 10 in options.zs_dim_to_test else int(np.median(options.zs_dim_to_test))
@@ -928,6 +1435,8 @@ def standard_recovar_pipeline(args):
         else:
             raise ValueError(f"mean function {args.mean_fn} not recognized")
         utils.report_memory_device(logger=logger)
+        if mem_trace is not None:
+            mem_trace.record("after_mean")
 
         # --- Check sign and uninvert if needed ---
         _check_uninvert_data(means, ds, args)
@@ -1026,6 +1535,33 @@ def standard_recovar_pipeline(args):
             adaptive_n_pcs=adaptive,
         )
 
+        # Override with the centralized memory plan's n_pcs choice. When
+        # adaptive-n-pcs is set the planner already consulted the
+        # calibration table; otherwise this is a no-op (200).
+        if plan.n_pcs_to_compute != covariance_options.get("n_pcs_to_compute"):
+            logger.info(
+                "Memory plan overriding covariance n_pcs: %s -> %s (calibration_status=%s)",
+                covariance_options.get("n_pcs_to_compute"),
+                plan.n_pcs_to_compute,
+                plan.calibration_status,
+            )
+            covariance_options["n_pcs_to_compute"] = plan.n_pcs_to_compute
+
+        # Sweep-only override: validate_memory_formulas.py sets this env
+        # var to force a specific n_pcs per cell. Not user-facing.
+        _force_n_pcs = os.environ.get("RECOVAR_DEBUG_FORCE_N_PCS")
+        if _force_n_pcs:
+            try:
+                _force_val = int(_force_n_pcs)
+                logger.info(
+                    "RECOVAR_DEBUG_FORCE_N_PCS overriding covariance n_pcs: %s -> %s",
+                    covariance_options.get("n_pcs_to_compute"),
+                    _force_val,
+                )
+                covariance_options["n_pcs_to_compute"] = _force_val
+            except ValueError:
+                logger.warning("RECOVAR_DEBUG_FORCE_N_PCS=%r is not an int — ignoring", _force_n_pcs)
+
         if args.low_memory_option:
             logger.info("Using low-memory covariance options (reduced sampling, adaptive n_pcs)")
             covariance_options["sampling_n_cols"] = 50
@@ -1055,38 +1591,93 @@ def standard_recovar_pipeline(args):
         n_pcs_to_keep = np.max(np.append(options.zs_dim_to_test, 50))
 
         ignore_zero_frequency = options.ignore_zero_frequency
-        for idx, focus_mask in enumerate(focus_masks):
-            u_this, s_this, covariance_cols, picked_frequencies, column_fscs = (
-                principal_components.estimate_principal_components(
-                    ds,
-                    options,
-                    means,
-                    mean_prior,
-                    focus_mask,
-                    dilated_volume_mask,
-                    valid_idx,
-                    batch_size,
-                    gpu_memory_to_use=gpu_memory,
-                    covariance_options=covariance_options,
-                    variance_estimate=variance_est["combined"],
-                    use_reg_mean_in_contrast=args.use_reg_mean_in_contrast,
-                    use_multi_gpu=args.multi_gpu,
-                    n_gpus=args.n_gpus,
-                )
+        if getattr(args, "use_ppca", False):
+            ppca_result = _run_ppca_refinement(
+                ds,
+                means,
+                focus_masks[-1],
+                dilated_volume_mask,
+                options,
+                args,
+                batch_size,
+                gpu_memory,
+                covariance_options,
+                focus_masks,
+                zdim_for_rest,
             )
-            if idx == num_foc_masks - 1:
-                s.append(s_this["rescaled"][:n_pcs_to_keep].copy())
-                u.append(u_this["rescaled"][:, :n_pcs_to_keep].copy())
-            else:
-                s.append(s_this["rescaled"][:zdim_for_rest].copy())
-                u.append(u_this["rescaled"][:, :zdim_for_rest].copy())
-            del u_this, s_this
+            u = {"rescaled": ppca_result["u_rescaled"], "real": None}
+            s = {"rescaled": ppca_result["s_rescaled"], "real": None}
+            covariance_cols = None
+            picked_frequencies = None
+            column_fscs = None
+            ppca_loadings = ppca_result["W"]
+            ppca_iteration_data = ppca_result["iteration_data"]
+            latent_coords = ppca_result["latent_coords"]
+            latent_coords_noreg = ppca_result["latent_coords_noreg"]
+            latent_precision = ppca_result["latent_precision"]
+            latent_precision_noreg = ppca_result["latent_precision_noreg"]
+            est_contrasts = ppca_result["contrasts"]
+            est_contrasts_noreg = ppca_result["contrasts_noreg"]
+            ppca_info = {
+                "basis_size": int(ppca_result["basis_size"]),
+                "contrast_mode": ppca_result["contrast_mode"],
+                "prior_mode": ppca_result["prior_mode"],
+                "em_iters": int(args.ppca_em_iters),
+                "ppca_projcov_every": int(getattr(args, "ppca_projcov_every", 0)),
+                "ppca_projcov_start": int(getattr(args, "ppca_projcov_start", 0)),
+                "ppca_refitb_every": int(getattr(args, "ppca_refitb_every", 0)),
+                "ppca_refitb_start": int(getattr(args, "ppca_refitb_start", 0)),
+                "ppca_refitb_inner_iters": int(getattr(args, "ppca_refitb_inner_iters", 3)),
+                "ppca_refitb_kappa": float(getattr(args, "ppca_refitb_kappa", 0.0)),
+                "ppca_effective_zdim": int(getattr(args, "ppca_effective_zdim", 0)),
+                "embedding_source": ppca_result["embedding_source"],
+            }
+        else:
+            for idx, focus_mask in enumerate(focus_masks):
+                u_this, s_this, covariance_cols, picked_frequencies, column_fscs = (
+                    principal_components.estimate_principal_components(
+                        ds,
+                        options,
+                        means,
+                        mean_prior,
+                        focus_mask,
+                        dilated_volume_mask,
+                        valid_idx,
+                        batch_size,
+                        gpu_memory_to_use=gpu_memory,
+                        covariance_options=covariance_options,
+                        variance_estimate=variance_est["combined"],
+                        use_reg_mean_in_contrast=args.use_reg_mean_in_contrast,
+                        use_multi_gpu=args.multi_gpu,
+                        n_gpus=args.n_gpus,
+                    )
+                )
+                if idx == num_foc_masks - 1:
+                    s.append(s_this["rescaled"][:n_pcs_to_keep].copy())
+                    u.append(u_this["rescaled"][:, :n_pcs_to_keep].copy())
+                else:
+                    s.append(s_this["rescaled"][:zdim_for_rest].copy())
+                    u.append(u_this["rescaled"][:, :zdim_for_rest].copy())
+                del u_this, s_this
 
-        u = {"rescaled": np.concatenate(u, axis=1), "real": None}
-        s = {"rescaled": np.concatenate(s, axis=0), "real": None}
-        options.ignore_zero_frequency = ignore_zero_frequency
+            u = {"rescaled": np.concatenate(u, axis=1), "real": None}
+            s = {"rescaled": np.concatenate(s, axis=0), "real": None}
+            options.ignore_zero_frequency = ignore_zero_frequency
 
-        # Validate PCA results
+            # --- Compute embeddings ---
+            (
+                latent_coords,
+                latent_coords_noreg,
+                latent_precision,
+                latent_precision_noreg,
+                est_contrasts,
+                est_contrasts_noreg,
+            ) = _compute_embeddings(means, u, s, ds, volume_mask, options, gpu_memory, focus_masks, zdim_for_rest, args)
+
+        if mem_trace is not None:
+            mem_trace.record("after_covariance")
+
+        # Validate basis/results
         if not np.all(np.isfinite(u["rescaled"])):
             raise ValueError("u contains non-finite values")
         if not np.all(np.isfinite(s["rescaled"])):
@@ -1112,16 +1703,6 @@ def standard_recovar_pipeline(args):
             if "rescaled_no_contrast" in u:
                 del u["rescaled_no_contrast"]
             covariance_cols = None
-
-        # --- Compute embeddings ---
-        (
-            latent_coords,
-            latent_coords_noreg,
-            latent_precision,
-            latent_precision_noreg,
-            est_contrasts,
-            est_contrasts_noreg,
-        ) = _compute_embeddings(means, u, s, ds, volume_mask, options, gpu_memory, focus_masks, zdim_for_rest, args)
 
         ## Make sure this makes sense
         if repeat == 1:
@@ -1165,20 +1746,51 @@ def standard_recovar_pipeline(args):
 
     logger.info("embedding time: %s", time.time() - st_time)
     utils.report_memory_device()
+    if mem_trace is not None:
+        mem_trace.record("after_embedding")
+
     peak_gpu_gb = utils.get_peak_gpu_memory_used(device=0)
     logger.info("peak GPU memory used: %s", peak_gpu_gb)
+
+    # End-of-run memory budget check.
+    # Production: warn-and-continue.
+    # Test mode (--fail-on-memory-exceed): exit non-zero with structured
+    # summary if peak > requested * 1.05.
     if args.gpu_memory is not None and peak_gpu_gb is not None:
         try:
-            peak_val = float(peak_gpu_gb) if not isinstance(peak_gpu_gb, (int, float)) else peak_gpu_gb
-            if peak_val > args.gpu_memory:
-                logger.warning(
-                    "Peak GPU usage (%.1f GB) exceeded --gpu-gb limit (%.1f GB). "
-                    "Consider increasing --gpu-gb or reducing batch sizes.",
-                    peak_val,
-                    args.gpu_memory,
-                )
+            peak_val = float(peak_gpu_gb)
         except (TypeError, ValueError):
-            pass  # peak_gpu_gb may not be numeric on all backends
+            peak_val = None
+
+        # Honor RECOVAR_DEBUG_FORCE_PEAK_GB so unit tests can deterministically
+        # trigger the over-budget code path.
+        from recovar.utils.memory_planner import _debug_force_peak_gb as _force
+
+        forced = _force()
+        if forced is not None:
+            peak_val = float(forced)
+            logger.info("RECOVAR_DEBUG_FORCE_PEAK_GB=%.2f overriding observed peak", forced)
+
+        if peak_val is not None and peak_val > args.gpu_memory:
+            slack_limit = args.gpu_memory * 1.05
+            if peak_val > slack_limit and getattr(args, "fail_on_memory_exceed", False):
+                msg = (
+                    "Peak GPU usage %.2f GB exceeded the requested --gpu-budget-gb=%.2f "
+                    "GB (slack limit %.2f GB). --fail-on-memory-exceed is set; "
+                    "exiting non-zero. To recover, increase --gpu-budget-gb, add "
+                    "--adaptive-n-pcs, or use --low-memory-option / "
+                    "--very-low-memory-option."
+                ) % (peak_val, args.gpu_memory, slack_limit)
+                logger.error(msg)
+                raise SystemExit(2)
+            logger.warning(
+                "Peak GPU usage (%.2f GB) exceeded --gpu-budget-gb=%.2f GB. The run "
+                "completed; if this was a test, pass --fail-on-memory-exceed "
+                "to surface this as a non-zero exit. Otherwise consider raising "
+                "--gpu-budget-gb or adding --adaptive-n-pcs / --low-memory-option.",
+                peak_val,
+                args.gpu_memory,
+            )
 
     # --- Handle complement mask trimming ---
     if args.use_complement_mask:
@@ -1258,6 +1870,17 @@ def standard_recovar_pipeline(args):
 
     args.halfsets = paths.particles_halfsets
 
+    heterogeneity_method = "covariance"
+    if getattr(args, "use_ppca", False):
+        heterogeneity_method = (
+            "ppca_projected_covariance" if getattr(args, "ppca_projected_covariance", False) else "ppca"
+        )
+    result_extras = {
+        "heterogeneity_method": heterogeneity_method,
+    }
+    if ppca_info is not None:
+        result_extras["ppca_info"] = ppca_info
+
     result = output.build_params_dict(
         volume_shape=volume_shape,
         voxel_size=ds.voxel_size,
@@ -1274,6 +1897,8 @@ def standard_recovar_pipeline(args):
         column_fscs=column_fscs,
         picked_frequencies=picked_frequencies,
         input_args=args,
+        extras=result_extras,
+        mean_prior=mean_prior,
     )
 
     output.save_pipeline_results(
@@ -1284,6 +1909,8 @@ def standard_recovar_pipeline(args):
         particles_ind_split,
         ind_split,
         zs_full=zs_full if args.use_complement_mask else None,
+        ppca_loadings=ppca_loadings,
+        ppca_iteration_data=ppca_iteration_data,
     )
 
     logger.info("total time: %s", time.time() - st_time)

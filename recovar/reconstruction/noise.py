@@ -782,6 +782,188 @@ def estimate_noise_level_no_masks(
     return estimated_noise
 
 
+def estimate_initial_noise_spectrum_from_unaligned_images(
+    experiment_dataset,
+    image_subset,
+    batch_size,
+    *,
+    apply_image_mask=False,
+):
+    """Approximate RELION's initial sigma2_noise estimate from particle spectra.
+
+    RELION initializes ``sigma2_noise`` from the average particle power spectrum
+    minus the power spectrum of the average image before the first refinement
+    iteration. This helper mirrors that structure for the benchmark harness so
+    the first E-step starts from a comparable likelihood scale.
+
+    Pass ``apply_image_mask=True`` to multiply each image by
+    ``experiment_dataset.image_mask`` before the FFT. This is **required** when
+    the downstream E-step also uses masked images (RELION-mode refinement),
+    because the noise spectrum must match the masking convention of the chi²
+    formula. Without it, recovar's chi² is ~3.3-6× too small at the matched
+    pose grid, collapsing the iter-1 posterior compared to RELION (verified
+    2026-04-08, see ``tmp/check_sigma2_mask.py``).
+
+    The returned spectrum is in **recovar's native FFT units**, i.e. it has the
+    same scale as ``|process_images(batch)|^2``. Downstream consumers (the
+    engine, ``make_radial_noise``, the M-step likelihood) all operate in these
+    same units, so the noise variance and the image power must agree
+    numerically. Do **not** rescale by ``(H*W)^2`` to "RELION units" — recovar
+    never converts the images, and the resulting per-pixel SNR² becomes
+    ``(H*W)^2`` too large, collapsing every posterior to a single rotation
+    (Pmax → 1.0). See ``tmp/diagnose_pmax_gap.py`` for the diagnostic that
+    pinned this in 2026-04-08.
+    """
+    from recovar.reconstruction import regularization
+
+    if image_subset is None:
+        image_subset = np.arange(experiment_dataset.n_images, dtype=np.int32)
+    image_subset = np.asarray(image_subset, dtype=np.int32)
+    if image_subset.size == 0:
+        raise ValueError("image_subset must contain at least one image")
+
+    batch_size = int(min(batch_size, image_subset.size))
+    sum_radial_power = None
+    sum_images = None
+    n_images = 0
+
+    for (
+        batch,
+        _rotation_matrices,
+        _translations,
+        _ctf_params,
+        _noise_variance,
+        _particle_indices,
+        _image_indices,
+    ) in experiment_dataset.iter_batches(batch_size, indices=image_subset):
+        batch = experiment_dataset.process_images(
+            batch, apply_image_mask=apply_image_mask,
+        )
+        batch_radial_power = regularization.batch_average_over_shells(
+            jnp.abs(batch) ** 2,
+            experiment_dataset.image_shape,
+            0,
+        )
+        batch_sum_images = jnp.sum(batch, axis=0)
+
+        if sum_radial_power is None:
+            sum_radial_power = jnp.sum(batch_radial_power, axis=0)
+            sum_images = batch_sum_images
+        else:
+            sum_radial_power = sum_radial_power + jnp.sum(batch_radial_power, axis=0)
+            sum_images = sum_images + batch_sum_images
+        n_images += int(batch.shape[0])
+
+    if n_images <= 0:
+        raise RuntimeError("No images were processed for initial noise estimation")
+
+    average_particle_power = sum_radial_power / float(n_images)
+    average_image = sum_images / float(n_images)
+    average_image_power = regularization.average_over_shells(
+        jnp.abs(average_image) ** 2,
+        experiment_dataset.image_shape,
+        0,
+    )
+
+    sigma2_noise = np.asarray(
+        0.5 * (average_particle_power - average_image_power),
+        dtype=np.float32,
+    )
+
+    positive_mask = sigma2_noise > 0
+    if not np.any(positive_mask):
+        logger.warning(
+            "Initial noise estimate had no positive shells; falling back to the particle power spectrum",
+        )
+        sigma2_noise = np.asarray(0.5 * average_particle_power, dtype=np.float32)
+        positive_mask = sigma2_noise > 0
+
+    if np.any(~positive_mask):
+        for idx in range(sigma2_noise.shape[0]):
+            if sigma2_noise[idx] > 0:
+                continue
+            replacement = None
+            if idx > 0 and sigma2_noise[idx - 1] > 0:
+                replacement = sigma2_noise[idx - 1]
+            else:
+                for jdx in range(idx + 1, sigma2_noise.shape[0]):
+                    if sigma2_noise[jdx] > 0:
+                        replacement = sigma2_noise[jdx]
+                        break
+            sigma2_noise[idx] = replacement if replacement is not None else 1.0
+
+    return jnp.asarray(sigma2_noise)
+
+
+def normalize_wsum_to_sigma2_noise(wsum_sigma2_noise, wsum_img_power, sumw, image_shape):
+    """Convert posterior-weighted noise accumulators to per-shell noise variance.
+
+    Implements RELION's M-step noise update from ``maximizationOtherParameters``
+    (ml_optimiser.cpp:5246-5285)::
+
+        sigma2_noise[s] = wsum_total[s] / (2 * sumw * Npix_per_shell[s])
+
+    where ``wsum_total = wsum_sigma2_noise + wsum_img_power`` is the total
+    posterior-weighted squared residual (A2 - 2*XA + P_img), ``sumw`` is the
+    total number of images processed, and ``Npix_per_shell`` counts
+    half-spectrum pixels per shell.
+
+    The factor of 2 accounts for the real and imaginary components of each
+    complex Fourier coefficient (RELION convention: sigma2 is per-component
+    variance).
+
+    Parameters
+    ----------
+    wsum_sigma2_noise : array, shape (n_shells,)
+        Accumulated A2 - 2*XA per shell from ``_compute_noise_block``.
+    wsum_img_power : array, shape (n_shells,)
+        Accumulated |img|^2 per shell (P_img term).
+    sumw : float
+        Total posterior weight (= number of images when posteriors sum to 1).
+    image_shape : tuple of int
+        2-D image dimensions, e.g. ``(128, 128)``.
+
+    Returns
+    -------
+    sigma2_noise : jnp.ndarray, shape (n_shells,)
+        Per-shell noise variance in **recovar's native FFT units**, ready to
+        be fed back into the engine. Same scale as ``|process_images|^2``.
+    """
+    from recovar.em.dense_single_volume.helpers.half_spectrum import make_relion_noise_shell_indices_half
+
+    wsum_sigma2_noise = jnp.asarray(wsum_sigma2_noise, dtype=jnp.float32)
+    wsum_img_power = jnp.asarray(wsum_img_power, dtype=jnp.float32)
+    n_shells = image_shape[0] // 2 + 1
+
+    shell_indices = make_relion_noise_shell_indices_half(image_shape)
+    Npix_per_shell = jnp.zeros(n_shells, dtype=jnp.float32)
+    Npix_per_shell = Npix_per_shell.at[shell_indices].add(jnp.ones_like(shell_indices, dtype=jnp.float32))
+
+    total_wsum = wsum_sigma2_noise + wsum_img_power
+    sigma2 = total_wsum / (2.0 * sumw * jnp.maximum(Npix_per_shell, 1.0))
+
+    # NOTE: The output is in **recovar's native FFT units**, not "RELION
+    # units". Both ``wsum_sigma2_noise`` and ``wsum_img_power`` are accumulated
+    # from ``|process_images(batch)|^2``-scaled quantities (the engine never
+    # converts), so the resulting sigma2 already lives in the same units as
+    # the engine's image power. A previous version divided by ``(H*W)^2`` to
+    # "convert to RELION units" — that was wrong: the engine then re-uses this
+    # sigma2 in ``processed * CTF / sigma2``, and the divide blows up chi² by
+    # ``(H*W)^2``, collapsing every posterior to a single rotation
+    # (``Pmax → 1.0``). See ``estimate_initial_noise_spectrum_from_unaligned_images``
+    # docstring and ``tmp/diagnose_pmax_gap.py``.
+
+    # Floor at 1e-15 (RELION ml_optimiser.cpp:5279)
+    sigma2 = jnp.maximum(sigma2, 1e-15)
+
+    # Fill zeros from previous shell (RELION ml_optimiser.cpp:5281-5284)
+    sigma2_np = np.asarray(sigma2, dtype=np.float32)
+    for i in range(1, len(sigma2_np)):
+        if sigma2_np[i] < 1e-14 and sigma2_np[i - 1] > 1e-14:
+            sigma2_np[i] = sigma2_np[i - 1]
+    return jnp.asarray(sigma2_np)
+
+
 def batch_make_radial_noise(average_image_PS, image_shape):
     return jax.vmap(lambda amp: make_radial_noise(amp, image_shape))(average_image_PS)
 
@@ -1160,9 +1342,17 @@ def get_average_residual_square_v2(
     subset_fn=None,
 ):
 
-    if basis.shape[0] != experiment_dataset.volume_size:
+    # Auto-convert half-Fourier basis to full-Fourier (the canonical form
+    # ppca.EM now returns is half-Fourier; this consumer was written for the
+    # legacy full-Fourier shape and is updated to accept either).
+    from recovar.core import fourier_transform_utils as _ftu
+    half_vol_size = int(np.prod(_ftu.volume_shape_to_half_volume_shape(experiment_dataset.volume_shape)))
+    if basis.shape[0] == half_vol_size:
+        basis = _ftu.half_volume_to_full_volume(np.asarray(basis).T, experiment_dataset.volume_shape).T
+    elif basis.shape[0] != experiment_dataset.volume_size:
         raise ValueError(
-            f"input u should be volume_size x basis_size, got {basis.shape[0]} != {experiment_dataset.volume_size}"
+            f"input u should be volume_size or half_vol_size x basis_size, "
+            f"got {basis.shape[0]} (expected {experiment_dataset.volume_size} or {half_vol_size})"
         )
     st_time = time.time()
     basis = np.asarray(basis[:, : basis_coordinates.shape[-1]]).T

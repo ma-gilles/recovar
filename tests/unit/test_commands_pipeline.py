@@ -8,6 +8,7 @@ import argparse
 import sys
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 pytest.importorskip("jax")  # pipeline.py imports jax at module level
@@ -48,9 +49,14 @@ def test_pipeline_registers_zdim():
     assert "--zdim" in actions
 
 
-def test_pipeline_registers_output_name():
+def test_pipeline_registers_use_ppca():
     actions = _parser_with_pipeline_args()._option_string_actions
-    assert "--output-name" in actions
+    assert "--use-ppca" in actions
+    assert "--ppca-em-iters" in actions
+    assert "--ppca-zdim" in actions
+    assert "--ppca-use-gridding-correction" in actions
+    assert "--ppca-contrast-mode" in actions
+    assert "--ppca-projected-covariance" in actions
 
 
 def test_pipeline_zdim_default_is_list():
@@ -196,6 +202,181 @@ def test_standard_pipeline_estimates_initial_noise_from_halfset_zero(monkeypatch
 
     with pytest.raises(RuntimeError, match="noise-estimate-stop"):
         pipeline_cmd.standard_recovar_pipeline(args)
+
+
+def test_standard_pipeline_rejects_ppca_without_gpu(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline_cmd.utils, "jax_has_gpu", lambda: False)
+
+    args = SimpleNamespace(
+        outdir=str(tmp_path / "pipeline_out"),
+        particles="particles.star",
+        poses="poses.pkl",
+        ctf="ctf.pkl",
+        mask="mask.mrc",
+        accept_cpu=True,
+        use_ppca=True,
+    )
+
+    with pytest.raises(ValueError, match="--use-ppca currently requires a CUDA GPU"):
+        pipeline_cmd.standard_recovar_pipeline(args)
+
+
+def test_resolve_ppca_contrast_mode_auto():
+    assert (
+        pipeline_cmd._resolve_ppca_contrast_mode(
+            SimpleNamespace(ppca_contrast_mode="auto", correct_contrast=False)
+        )
+        == "none"
+    )
+    assert (
+        pipeline_cmd._resolve_ppca_contrast_mode(
+            SimpleNamespace(ppca_contrast_mode="auto", correct_contrast=True)
+        )
+        == "marginalize"
+    )
+    assert (
+        pipeline_cmd._resolve_ppca_contrast_mode(
+            SimpleNamespace(ppca_contrast_mode="profile", correct_contrast=False)
+        )
+        == "profile"
+    )
+
+
+def test_configure_ppca_single_zdim_overrides_options():
+    args = SimpleNamespace(ppca_zdim=7, zdim=[1, 2, 4])
+    options = SimpleNamespace(zs_dim_to_test=[1, 2, 4, 10])
+
+    out = pipeline_cmd._configure_ppca_single_zdim(args, options)
+
+    assert out == 7
+    assert args.zdim == [7]
+    assert options.zs_dim_to_test == [7]
+
+
+def test_rescale_ppca_posteriors_matches_covariance_space_formula():
+    expected_zs = np.array([[1.0, 2.0], [0.5, -1.0]], dtype=np.float32)
+    second_moment_zs = np.array(
+        [
+            [[2.0, 2.5], [2.5, 6.0]],
+            [[1.0, -0.5], [-0.5, 3.0]],
+        ],
+        dtype=np.float32,
+    )
+    eigenvalues = np.array([9.0, 4.0], dtype=np.float32)
+
+    coords, covariances = pipeline_cmd._rescale_ppca_posteriors(expected_zs, second_moment_zs, eigenvalues)
+
+    scale = np.sqrt(eigenvalues)
+    expected_coords = expected_zs * scale[None, :]
+    cov_z = second_moment_zs - np.einsum("ni,nj->nij", expected_zs, expected_zs)
+    expected_cov = cov_z * scale[None, :, None] * scale[None, None, :]
+
+    np.testing.assert_allclose(coords, expected_coords)
+    np.testing.assert_allclose(covariances, expected_cov)
+
+
+def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
+    fake_dataset = SimpleNamespace(volume_shape=(2, 2, 2), volume_size=8)
+    means = SimpleNamespace(combined=np.zeros(8, dtype=np.complex64))
+    options = SimpleNamespace(zs_dim_to_test=[4])
+    args = SimpleNamespace(
+        ppca_zdim=4,
+        ppca_contrast_mode="auto",
+        correct_contrast=True,
+        ppca_em_iters=7,
+        use_complement_mask=False,
+        ppca_use_gridding_correction=True,
+        ppca_projected_covariance=False,
+        tilt_series=False,
+    )
+
+    prior_calls = {}
+    em_calls = {}
+
+    def _fake_prior(dataset, mean_estimate, npc, volume_shape, batch_size):
+        prior_calls["args"] = (dataset, mean_estimate, npc, volume_shape, batch_size)
+        return {"W_prior": np.full((8, npc), 3.0, dtype=np.float32)}
+
+    def _fake_em(dataset, mean_estimate, W_init, W_prior, **kwargs):
+        em_calls["dataset"] = dataset
+        em_calls["mean_estimate"] = mean_estimate
+        em_calls["W_init"] = W_init
+        em_calls["W_prior"] = W_prior
+        em_calls["kwargs"] = kwargs
+        q = W_init.shape[1]
+        expected_zs = np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32)
+        second_moment_zs = np.array(
+            [[
+                [2.0, 2.5, 0.0, 0.0],
+                [2.5, 6.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]],
+            dtype=np.float32,
+        )
+        return (
+            np.ones((8, q), dtype=np.complex128),
+            np.arange(1, q + 1, dtype=np.float64),
+            np.full((8, q), 5.0, dtype=np.complex128),
+            expected_zs,
+            second_moment_zs,
+            [{"Iteration": 0}],
+            {"mean_c": np.array([1.25], dtype=np.float32)},
+        )
+
+    def _fake_compute_embeddings(*args_, **kwargs_):
+        return (
+            {4: np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32) * np.sqrt(np.arange(1, 5, dtype=np.float32))[None, :]},
+            {4: np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32)},
+            {4: np.tile(np.eye(4, dtype=np.float32), (1, 1, 1))},
+            {4: np.tile(np.eye(4, dtype=np.float32), (1, 1, 1))},
+            {4: np.array([1.25], dtype=np.float32)},
+            {4: np.array([1.25], dtype=np.float32)},
+        )
+
+    monkeypatch.setattr(
+        pipeline_cmd.ppca_prior_estimation,
+        "estimate_hybrid_shell_prior_from_data",
+        _fake_prior,
+    )
+    monkeypatch.setattr(pipeline_cmd.ppca_module, "EM", _fake_em)
+    monkeypatch.setattr(pipeline_cmd, "_compute_embeddings", _fake_compute_embeddings)
+
+    out = pipeline_cmd._run_ppca_refinement(
+        fake_dataset,
+        means,
+        np.ones((2, 2, 2), dtype=np.float32),
+        np.ones((2, 2, 2), dtype=np.float32),  # dilated_volume_mask
+        options,
+        args,
+        batch_size=32,
+        gpu_memory=40,
+        covariance_options={
+            "disc_type": "linear_interp",
+            "disc_type_u": "linear_interp",
+            "mask_images_in_proj": True,
+        },
+        focus_masks=[np.ones((2, 2, 2), dtype=np.float32)],
+        zdim_for_rest=20,
+    )
+
+    assert prior_calls["args"][0] is fake_dataset
+    assert prior_calls["args"][2] == 4
+    assert prior_calls["args"][3] == (2, 2, 2)
+    assert prior_calls["args"][4] == 32
+    assert em_calls["W_init"].shape == (8, 4)
+    np.testing.assert_allclose(em_calls["W_prior"], np.full((8, 4), 3.0, dtype=np.float32))
+    assert em_calls["kwargs"]["contrast_mode"] == "marginalize"
+    assert em_calls["kwargs"]["EM_iter"] == 7
+    assert em_calls["kwargs"]["return_posterior_info"] is True
+    assert out["basis_size"] == 4
+    assert out["contrast_mode"] == "marginalize"
+    assert out["prior_mode"] == "hybrid_shell"
+    assert out["u_rescaled"].dtype == np.complex64
+    assert out["s_rescaled"].dtype == np.float32
+    assert out["W"].dtype == np.complex64
+    np.testing.assert_allclose(out["latent_coords"][4], np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32) * np.sqrt(np.arange(1, 5, dtype=np.float32))[None, :])
+    np.testing.assert_allclose(out["contrasts"][4], np.array([1.25], dtype=np.float32))
 
 
 def test_standard_pipeline_passes_gpu_limit_to_predownsample(monkeypatch, tmp_path):

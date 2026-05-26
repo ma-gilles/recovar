@@ -23,6 +23,7 @@ import functools
 import logging
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -64,8 +65,17 @@ def _env_flag(name: str) -> bool:
 
 
 def custom_cuda_requested() -> bool:
-    """Return True unless the user explicitly disables custom CUDA."""
-    return not _env_flag(_DISABLE_CUSTOM_CUDA_ENV)
+    """Return True unless the user explicitly disables custom CUDA.
+
+    Routes through ``recovar.utils.cuda_env`` so the canonical
+    ``RECOVAR_DISABLE_CUDA`` env var and the common typo
+    ``RECOVAR_CUDA_DISABLE`` produce a single consistent signal (and a
+    one-time warning when only the typo is set).
+    """
+    from recovar.utils.cuda_env import custom_cuda_disabled_from_env
+
+    disabled, _ = custom_cuda_disabled_from_env()
+    return not disabled
 
 
 _CACHE_ROOT_FALLBACK_WARNED = False
@@ -173,13 +183,39 @@ def _candidate_lib_paths() -> list[pathlib.Path]:
     return candidates
 
 
-def _lib_is_stale(lib_path: pathlib.Path) -> bool:
-    """Return True if the lib's mtime is older than the source files.
+def _lib_missing_required_symbols(lib_path: pathlib.Path) -> str | None:
+    """Return the name of the first missing required symbol, or None if all present.
 
-    Catches the case where a user installed before a kernel/Makefile fix
-    landed (e.g. issue #131's Blackwell widening): without this check,
-    `_existing_lib_path()` would happily return the stale cached `.so`
-    forever, and the user would never pick up the new arch coverage.
+    Catches binary/source skew that mtime alone misses: e.g. ``~/.cache`` holds an
+    ``.so`` built last week from an older ``.cu`` that didn't export
+    ``BackprojectIndexed``, and today's ``cuda_backproject.py`` registers FFI
+    targets that need it. The mtime check sees ``cached .so newer than source``
+    and reuses it; ``_ensure_ffi`` then crashes deep inside ``ctypes.__getattr__``,
+    ``cuda_available()`` silently returns False, and the user runs on the slow
+    JAX fallback without warning. Dlopen + symbol lookup catches this cheaply.
+    """
+    try:
+        lib = ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_LOCAL)
+    except OSError:
+        # Can't even dlopen — treat as binary-incompatible.
+        return "<dlopen failed>"
+    for _target, symbol in _FFI_REGISTRATIONS:
+        if not hasattr(lib, symbol):
+            return symbol
+    return None
+
+
+def _lib_is_stale(lib_path: pathlib.Path) -> bool:
+    """Return True if the lib's mtime is older than the source files OR if
+    it's missing a symbol that the current ``cuda_backproject.py`` expects.
+
+    Catches:
+      - mtime skew: user installed before a kernel/Makefile fix landed (e.g.
+        issue #131's Blackwell widening).
+      - binary skew: cached ``.so`` from an older branch doesn't export a
+        symbol the current source requires (e.g. ``BackprojectIndexed``).
+        Without this check ``_ensure_ffi`` would crash inside ``ctypes`` and
+        ``cuda_available()`` would silently fall back to JAX.
     """
     try:
         lib_mtime = lib_path.stat().st_mtime
@@ -192,6 +228,15 @@ def _lib_is_stale(lib_path: pathlib.Path) -> bool:
                 return True
         except OSError:
             continue
+    missing = _lib_missing_required_symbols(lib_path)
+    if missing is not None:
+        logger.info(
+            "RECOVAR CUDA library %s is missing symbol '%s' required by the "
+            "current source — will rebuild.",
+            lib_path,
+            missing,
+        )
+        return True
     return False
 
 
@@ -233,6 +278,46 @@ def _build_lock_path(lib_path: pathlib.Path) -> pathlib.Path:
     return lib_path.parent / _BUILD_LOCKFILE
 
 
+def _discover_system_nvcc() -> str | None:
+    """Find nvcc in common system install locations across Linux distros.
+
+    Last-resort cluster-agnostic fallback for users who didn't ``module load``
+    or set ``CUDA_HOME``. Returns the highest-version nvcc found, or None.
+    Covers:
+      - ``/usr/local/cuda*`` (RHEL/CentOS/Della-style symlinks + versioned dirs)
+      - ``/opt/cuda*`` (Arch, some HPC)
+      - ``/opt/nvidia/cuda*`` (some HPC)
+      - ``/usr/lib/nvidia-cuda-toolkit/bin/nvcc`` (Debian/Ubuntu apt)
+    """
+    candidates: list[pathlib.Path] = []
+    for pattern in (
+        "/usr/local/cuda*/bin/nvcc",
+        "/opt/cuda*/bin/nvcc",
+        "/opt/nvidia/cuda*/bin/nvcc",
+    ):
+        candidates.extend(pathlib.Path("/").glob(pattern.lstrip("/")))
+    candidates.append(pathlib.Path("/usr/lib/nvidia-cuda-toolkit/bin/nvcc"))
+    candidates = [p for p in candidates if p.is_file() and os.access(p, os.X_OK)]
+    if not candidates:
+        return None
+
+    def _version_key(p: pathlib.Path) -> tuple[int, int, str]:
+        # Sort by versioned dir name (e.g. cuda-13.2, cuda-12.8), highest first.
+        # Falls back to lexicographic for unversioned (cuda symlink).
+        parent = p.parent.parent.name  # ".../cuda-13.2/bin/nvcc" → "cuda-13.2"
+        suffix = parent.split("-", 1)[-1] if "-" in parent else ""
+        parts = suffix.split(".") if suffix else []
+        try:
+            major = int(parts[0]) if len(parts) >= 1 else -1
+            minor = int(parts[1]) if len(parts) >= 2 else -1
+        except ValueError:
+            major, minor = -1, -1
+        return (major, minor, str(p))
+
+    candidates.sort(key=_version_key, reverse=True)
+    return str(candidates[0])
+
+
 def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: bool = False) -> pathlib.Path:
     """Build RECOVAR's preferred custom CUDA extension and return its path."""
     import sys
@@ -254,11 +339,33 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
 
     lib_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Building %s", lib_path)
+    make_env = os.environ.copy()
+    # If the user hasn't surfaced nvcc through any of the Makefile's normal
+    # discovery channels (NVCC/CUDACXX/PATH/LOCAL_CUDA_PATH/CUDA_HOME/CUDA_PATH),
+    # do a last-resort sweep of common system install paths. This makes
+    # ``import recovar; cuda_available()`` Just Work on most clusters without
+    # requiring ``module load cudatoolkit`` first.
+    nvcc_already_visible = (
+        make_env.get("NVCC")
+        or make_env.get("CUDACXX")
+        or shutil.which("nvcc")
+        or any(
+            os.access(os.path.join(make_env.get(var, ""), "bin", "nvcc"), os.X_OK)
+            for var in ("LOCAL_CUDA_PATH", "CUDA_HOME", "CUDA_PATH")
+            if make_env.get(var)
+        )
+    )
+    if not nvcc_already_visible:
+        discovered = _discover_system_nvcc()
+        if discovered is not None:
+            logger.info("Discovered nvcc at %s (system fallback)", discovered)
+            make_env["NVCC"] = discovered
+
     make_cmd = ["make"]
     if force or stale:
         make_cmd.append("-B")
     make_cmd.extend(["-C", str(_LIB_DIR), f"PYTHON={sys.executable}", f"LIB={lib_path}"])
-    subprocess.check_call(make_cmd)
+    subprocess.check_call(make_cmd, env=make_env)
     if not lib_path.exists():
         raise RuntimeError(f"Build failed — {lib_path} not found")
     _auto_build_attempted = True
@@ -354,9 +461,32 @@ _ffi_lock = threading.Lock()
 
 # FFI target name constants
 _TARGET_BACKPROJECT = "cuda_backproject"
+_TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
 _TARGET_PROJECT = "cuda_project"
+_TARGET_PROJECT_INDEXED = "cuda_project_indexed"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
+_TARGET_BATCH_BACKPROJECT_INDEXED = "cuda_batch_backproject_indexed"
 _TARGET_BATCH_PROJECT = "cuda_batch_project"
+_TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
+_TARGET_FUSED_BP = "cuda_fused_bp"
+_TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
+
+# Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
+# Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
+# to verify a cached .so is binary-compatible with the current source. When the kernel
+# adds/removes a symbol, update this tuple — that automatically invalidates stale caches.
+_FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
+    (_TARGET_BACKPROJECT, "Backproject"),
+    (_TARGET_BACKPROJECT_INDEXED, "BackprojectIndexed"),
+    (_TARGET_PROJECT, "Project"),
+    (_TARGET_PROJECT_INDEXED, "ProjectIndexed"),
+    (_TARGET_BATCH_BACKPROJECT, "BatchBackproject"),
+    (_TARGET_BATCH_BACKPROJECT_INDEXED, "BatchBackprojectIndexed"),
+    (_TARGET_BATCH_PROJECT, "BatchProject"),
+    (_TARGET_BATCH_BP_INTERLEAVED, "BatchBackprojectInterleaved"),
+    (_TARGET_FUSED_BP, "FusedBackproject"),
+    (_TARGET_PER_IMAGE_BP, "PerImageBackproject"),
+)
 
 
 _preflight_ok: bool | None = None  # None = not checked yet
@@ -579,15 +709,14 @@ def _ensure_ffi():
         # Preflight: check that the .so covers this GPU before FFI registration
         if _loaded_lib_path:
             _preflight_check(pathlib.Path(_loaded_lib_path))
-        jax.ffi.register_ffi_target(_TARGET_BACKPROJECT, jax.ffi.pycapsule(lib.Backproject), platform="CUDA")
-        jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
-        jax.ffi.register_ffi_target(_TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA")
-        jax.ffi.register_ffi_target(_TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA")
+        for target, symbol in _FFI_REGISTRATIONS:
+            jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(getattr(lib, symbol)), platform="CUDA")
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
 
 
 _cuda_ok = None  # cached result: None = not checked, True/False = result
+_texture_debug_keys = set()
 
 
 def cuda_available() -> bool:
@@ -683,7 +812,13 @@ def _encode_max_r(max_r):
 
 
 def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r=None):
-    """Compute the shared FFI scalar keyword arguments (used by all 4 targets)."""
+    """Compute shared FFI scalar keyword arguments.
+
+    ``max_r`` is in image Fourier-pixel coordinates, matching
+    ``recovar.core.slicing`` and ``relion_interp``. The CUDA kernels compare
+    against coordinates already multiplied by ``upsampling``, so encode the
+    radius in padded-volume coordinates here and nowhere else.
+    """
     ih, iw_full = image_shape
     N0, N1, N2 = volume_shape
     ups = N0 // ih
@@ -700,11 +835,30 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
             half_volume=np.int64(int(half_volume)),
             half_image=np.int64(int(half_image)),
             full_image_w=np.int64(iw_full),
-            max_r2_x4=_encode_max_r(max_r),
+            max_r2_x4=_encode_max_r(None if max_r is None else float(max_r) * float(ups)),
         ),
         ih,
         iw_eff,
     )
+
+
+def _project_ffi_kwargs(
+    image_shape,
+    volume_shape,
+    order,
+    half_volume,
+    half_image,
+    max_r=None,
+    relion_texture_interp: bool = False,
+):
+    """FFI kwargs for forward projection.
+
+    ``relion_texture_interp=True`` enables CUDA texture interpolation for
+    full-volume order-1 projections, matching RELION's accelerated projector.
+    """
+    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["relion_texture_interp"] = np.int64(int(relion_texture_interp))
+    return kw, ih, iw_eff
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
@@ -757,8 +911,87 @@ def backproject(
     )(images, rot6, volume, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def project(
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
+def backproject_indexed(
+    volume: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+    relion_x_half: bool = False,
+) -> jax.Array:
+    """Back-project images whose pixels are stored in a compact indexed layout.
+
+    ``pixel_indices`` contains the flattened pixel positions in the original
+    image grid (or packed half-image grid when ``half_image=True``). The kernel
+    interprets ``images[:, j]`` as the value at ``pixel_indices[j]``.
+    """
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    if relion_x_half and not (half_volume and half_image):
+        raise ValueError("relion_x_half requires half_volume=True and half_image=True")
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["relion_fold_x"] = np.int64(int(relion_x_half))
+    if relion_x_half:
+        # The CUDA half-volume scatter packs its last coordinate. RELION's
+        # BackProjector packs the Fourier x-axis, which is RECOVAR axis 0.
+        # Reorder coordinates to kernel layout (z, y, x) so the packed last
+        # axis is the RELION/RECOVAR-x half-axis.
+        rotation_matrices = rotation_matrices[..., [2, 1, 0]]
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_BACKPROJECT_INDEXED,
+        out_type,
+        input_output_aliases={3: 0},
+        vmap_method="sequential",
+    )(images, pixel_indices, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
+def batch_backproject_indexed(
+    volumes: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+    relion_x_half: bool = False,
+) -> jax.Array:
+    """Back-project compact indexed images into a batch of volumes."""
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    if relion_x_half and not (half_volume and half_image):
+        raise ValueError("relion_x_half requires half_volume=True and half_image=True")
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["relion_fold_x"] = np.int64(int(relion_x_half))
+    if relion_x_half:
+        rotation_matrices = rotation_matrices[..., [2, 1, 0]]
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_BATCH_BACKPROJECT_INDEXED,
+        out_type,
+        input_output_aliases={3: 0},
+        vmap_method="sequential",
+    )(images, pixel_indices, rot6, volumes, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))
+def _project_impl(
     volume: jax.Array,
     rotation_matrices: jax.Array,
     image_shape: Tuple[int, int] = (0, 0),
@@ -767,6 +1000,7 @@ def project(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    relion_texture_interp: bool = False,
 ) -> jax.Array:
     """Project *volume* to 2D images.
 
@@ -782,7 +1016,15 @@ def project(
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw, ih, iw_eff = _project_ffi_kwargs(
+        image_shape,
+        volume_shape,
+        order,
+        half_volume,
+        half_image,
+        max_r,
+        relion_texture_interp=relion_texture_interp,
+    )
     n_images = rotation_matrices.shape[0]
     n_pixels = ih * iw_eff
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
@@ -793,6 +1035,94 @@ def project(
         out_type,
         vmap_method="sequential",
     )(volume, rot6, **kw)
+
+
+def project(
+    volume: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+    relion_texture_interp: bool = False,
+) -> jax.Array:
+    """Project *volume* to 2D images.
+
+    ``relion_texture_interp=True`` uses RELION-style CUDA texture
+    interpolation where the FFI backend supports it. The flag is forwarded as
+    a static argument so manual and texture traces cannot alias in JAX caches.
+    """
+    global _texture_debug_keys
+    debug_key = (
+        relion_texture_interp,
+        getattr(volume, "dtype", None),
+        order,
+        half_volume,
+        half_image,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+    if os.environ.get("RECOVAR_DEBUG_TEXTURE_PROJECT", "0") == "1" and debug_key not in _texture_debug_keys:
+        print(
+            "[RECOVAR_TEXTURE_PROJECT]",
+            f"enabled={relion_texture_interp}",
+            f"dtype={getattr(volume, 'dtype', None)}",
+            f"order={order}",
+            f"half_volume={half_volume}",
+            f"half_image={half_image}",
+            f"image_shape={image_shape}",
+            f"volume_shape={volume_shape}",
+            f"max_r={max_r}",
+            flush=True,
+        )
+        _texture_debug_keys.add(debug_key)
+    return _project_impl(
+        volume,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        order,
+        half_volume,
+        half_image,
+        max_r,
+        relion_texture_interp,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
+def project_indexed(
+    volume: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+) -> jax.Array:
+    """Project only the requested flattened image pixels.
+
+    ``pixel_indices`` contains flattened pixel positions in the original full
+    image grid, or the packed half-image grid when ``half_image=True``. The
+    output stores those pixels compactly as ``(n_images, len(pixel_indices))``.
+    """
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    n_images = rotation_matrices.shape[0]
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
+    out_type = jax.ShapeDtypeStruct((n_images, pixel_indices.shape[0]), volume.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_PROJECT_INDEXED,
+        out_type,
+        vmap_method="sequential",
+    )(volume, pixel_indices, rot6, **kw)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -846,7 +1176,142 @@ def batch_backproject(
     )(images, rot6, volumes, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
+@functools.partial(jax.jit, static_argnums=(3, 4, 5))
+def batch_backproject_interleaved(
+    volumes: jax.Array,
+    images: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    max_r: float | None = None,
+) -> jax.Array:
+    """Back-project images into interleaved volumes: output ``(half_vol, batch)``.
+
+    Like ``batch_backproject`` but output is ``(n_voxels_half, batch_size)``
+    instead of ``(batch_size, n_voxels_half)``.  All batch entries for the
+    same voxel are contiguous → ~30× better L2 cache utilization for large
+    batch sizes (e.g. 210 PPCA upper-tri channels).
+
+    Only supports: real data (float32/64), half_volume=True, trilinear, full images.
+    """
+    _ensure_ffi()
+    N0, N1, N2 = volume_shape
+    H, W = image_shape
+    ups = N0 // H
+    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    # Ensure images dtype matches volumes (kernel dispatches on volume dtype)
+    images = images.astype(volumes.dtype)
+    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_BATCH_BP_INTERLEAVED,
+        out_type,
+        input_output_aliases={2: 0},
+        vmap_method="sequential",
+    )(images, rot6, volumes, image_h=H, image_w=W, vol_n0=N0, vol_n1=N1, vol_n2=N2, upsampling=ups, max_r2_x4=max_r2_x4)
+
+
+@functools.partial(jax.jit, static_argnums=(4, 5, 6))
+def fused_backproject(
+    volumes: jax.Array,
+    base_images: jax.Array,
+    weight_matrix: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    max_r: float | None = None,
+) -> jax.Array:
+    """Fused backproject: base_images × weight_matrix → interleaved volumes.
+
+    Reads ``base_images[n, pix]`` (e.g. ctf²) and ``weight_matrix[n, ch]``
+    (e.g. smz_tri) separately, multiplying inside the CUDA kernel.
+    Eliminates the ``(n_ch, n_img, n_pix)`` intermediate tensor.
+
+    Input bandwidth: ~50 MB vs ~3.4 GB for the unfused path at 256³.
+
+    Parameters
+    ----------
+    volumes : ``(half_vol, n_channels)`` float32 — zero-initialized output
+    base_images : ``(n_images, n_pixels)`` float32 — per-pixel per-image values
+    weight_matrix : ``(n_images, n_channels)`` float32 — per-image per-channel weights
+    rotation_matrices : ``(n_images, 3, 3)`` — shared rotations
+
+    Returns ``(half_vol, n_channels)`` accumulated result.
+    """
+    _ensure_ffi()
+    N0, N1, N2 = volume_shape
+    H, W = image_shape
+    ups = N0 // H
+    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    base_images = base_images.astype(volumes.dtype)
+    weight_matrix = weight_matrix.astype(volumes.dtype)
+    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_FUSED_BP,
+        out_type,
+        input_output_aliases={3: 0},
+        vmap_method="sequential",
+    )(
+        base_images,
+        weight_matrix,
+        rot6,
+        volumes,
+        image_h=H,
+        image_w=W,
+        vol_n0=N0,
+        vol_n1=N1,
+        vol_n2=N2,
+        upsampling=ups,
+        max_r2_x4=max_r2_x4,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5))
+def per_image_backproject(
+    volumes: jax.Array,
+    base_images: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    max_r: float | None = None,
+) -> jax.Array:
+    """Per-image backproject: output ``(half_vol, n_images)``.
+
+    Each image scatters to its own column — near-zero atomicAdd contention.
+    Follow with GEMM to reduce: ``result @ smz_tri → (half_vol, n_ch)``.
+    """
+    _ensure_ffi()
+    N0, N1, N2 = volume_shape
+    H, W = image_shape
+    ups = N0 // H
+    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    base_images = base_images.astype(volumes.dtype)
+    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_PER_IMAGE_BP,
+        out_type,
+        input_output_aliases={2: 0},
+        vmap_method="sequential",
+    )(
+        base_images,
+        rot6,
+        volumes,
+        image_h=H,
+        image_w=W,
+        vol_n0=N0,
+        vol_n1=N1,
+        vol_n2=N2,
+        upsampling=ups,
+        max_r2_x4=max_r2_x4,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))
 def batch_project(
     volumes: jax.Array,
     rotation_matrices: jax.Array,
@@ -856,6 +1321,7 @@ def batch_project(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    relion_texture_interp: bool = False,
 ) -> jax.Array:
     """Project a batch of volumes to 2D images via vmap over single-volume project.
 
@@ -896,6 +1362,7 @@ def batch_project(
             half_volume=half_volume,
             half_image=half_image,
             max_r=max_r,
+            relion_texture_interp=relion_texture_interp,
         )
     )(volumes)
 

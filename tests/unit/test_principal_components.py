@@ -3,12 +3,13 @@ import pytest
 
 pytest.importorskip("jax")
 
-import recovar.heterogeneity.principal_components as pc
+from helpers.tiny_synthetic import make_tiny_cryo_dataset_with_images, make_tiny_simulation
+
 import recovar.core as core
+import recovar.heterogeneity.principal_components as pc
 from recovar.data_io import cryoem_dataset as dataset
 from recovar.reconstruction.homogeneous import MeanEstimate
 from recovar.utils.helpers import AlgorithmOptions
-from helpers.tiny_synthetic import make_tiny_simulation, make_tiny_cryo_dataset_with_images
 
 
 def _make_means(vol_size, dtype_real=np.float32, dtype_complex=np.complex64):
@@ -237,6 +238,8 @@ def test_get_cov_svds_passes_random_seed(monkeypatch):
 
 
 def test_projected_covariance_batch_size_uses_requested_gpu_budget(monkeypatch):
+    """``_projected_covariance_batch_size`` delegates to
+    ``get_embedding_batch_size`` with the legacy 2·P²·8B reservation."""
     calls = {}
 
     def fake_get_embedding_batch_size(basis, image_size, contrast_grid, zdim, gpu_memory):

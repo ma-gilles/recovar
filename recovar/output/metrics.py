@@ -15,10 +15,29 @@ logger = logging.getLogger(__name__)
 def captured_variance(test_v, U, s):
     """Compute cumulative captured variance of test vectors in a subspace.
 
+    Returns ``cumsum(norms)`` where ``norms[k] = sum_j s_j * |test_v[:,k]^T U[:,j]|²``.
+    For this to be the standard "captured variance" (i.e. ``test_v^T C test_v``
+    where ``C = U diag(s) U^T``), ``s`` must be **eigenvalues of C** (variances),
+    not singular values of any underlying matrix.
+
     Args:
-        test_v: Test vectors, shape (n_voxels, n_test).
+        test_v: Test vectors, shape (n_voxels, n_test). Should be column-orthonormal
+            for ``relative_variance_from_captured_variance`` to give ``≤ 1``.
         U: Eigenvector matrix, shape (n_voxels, n_pcs).
-        s: Eigenvalue array, shape (n_pcs,).
+        s: **Eigenvalue** array, shape (n_pcs,) — the variances along the columns
+            of ``U``. If you have singular values from ``np.linalg.svd``, square them
+            first.
+
+    NOTE on a historical convention bug: many existing call sites in this repo
+    (e.g. ``run_test_all_metrics.py``, the older ``compare_covariance_vs_ppca_pipeline``
+    code, several ``scripts/`` files) pass the raw output of ``gt.get_vol_svd()``
+    which returns **singular values**, not eigenvalues. With singular values the
+    formula returns a sqrt-weighted quantity that does NOT correspond to the
+    standard "fraction of variance captured", and the resulting numbers are
+    systematically smaller than the true variance fraction. The fix is to pass
+    ``s_gt ** 2`` at the call site. Several test baselines were generated under
+    the buggy convention; do not change those callers without regenerating
+    baselines.
 
     Returns:
         Cumulative captured variance array, shape (n_test,).

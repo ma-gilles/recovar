@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import recovar.core as core
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.slicing as core_slicing
+from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
 
 pytestmark = pytest.mark.unit
 
@@ -53,6 +54,7 @@ def _rotation_z(theta):
 def test_core_reexports_slicing_api():
     assert core.decide_order is core_slicing.decide_order
     assert core.adjoint_slice_volume is core_slicing.adjoint_slice_volume
+    assert core.adjoint_slice_volume_indexed is core_slicing.adjoint_slice_volume_indexed
 
 
 def test_decide_order_values():
@@ -127,6 +129,114 @@ def test_adjoint_slice_volume_half_image_matches_full_flat_input(monkeypatch):
         )
     )
     np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
+
+
+def test_adjoint_slice_volume_indexed_matches_rebuild_jax(monkeypatch):
+    monkeypatch.setattr(core_slicing, "_use_cuda_backproject", lambda order: False)
+
+    rng = np.random.default_rng(1234)
+    image_shape = (8, 8)
+    volume_shape = (8, 8, 8)
+    rots = np.stack(
+        [
+            np.eye(3, dtype=np.float32),
+            _rotation_z(np.pi / 6.0),
+        ],
+        axis=0,
+    )
+    real_images = rng.standard_normal((2,) + image_shape).astype(np.float32)
+    with jax.default_device(jax.devices("cpu")[0]):
+        half_images = np.asarray(fourier_transform_utils.get_dft2_real(real_images)).reshape(2, -1)
+    n_half = half_images.shape[1]
+    pixel_indices = np.sort(rng.choice(n_half, size=n_half // 2, replace=False).astype(np.int32))
+    windowed = half_images[:, pixel_indices]
+
+    indexed = np.asarray(
+        core_slicing.adjoint_slice_volume_indexed(
+            windowed,
+            pixel_indices,
+            rots,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            half_volume=True,
+        )
+    )
+
+    rebuilt = np.zeros_like(half_images)
+    rebuilt[:, pixel_indices] = windowed
+    rebuilt_out = np.asarray(
+        core_slicing.adjoint_slice_volume(
+            rebuilt,
+            rots,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            half_volume=True,
+        )
+    )
+    np.testing.assert_allclose(indexed, rebuilt_out, atol=1e-5, rtol=1e-5)
+
+
+def test_slice_volume_max_r_matches_windowed_projection():
+    rng = np.random.default_rng(321)
+    image_shape = (16, 16)
+    volume_shape = (16, 16, 16)
+    current_size = 8
+    rots = np.stack(
+        [
+            np.eye(3, dtype=np.float32),
+            _rotation_y(np.pi / 7.0),
+        ],
+        axis=0,
+    )
+    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+    vol_flat = np.asarray(fourier_transform_utils.get_dft3(real_vol)).reshape(-1)
+    window_indices, _ = make_fourier_window_indices_np(image_shape, current_size, square=False)
+
+    proj_full = np.asarray(
+        core_slicing.slice_volume(
+            vol_flat,
+            rots,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            max_r=None,
+        )
+    )
+    proj_clipped = np.asarray(
+        core_slicing.slice_volume(
+            vol_flat,
+            rots,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            max_r=current_size // 2 + 0.5,
+        )
+    )
+
+    np.testing.assert_allclose(
+        proj_clipped[:, window_indices],
+        proj_full[:, window_indices],
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    # ``max_r`` is a spherical cutoff, NOT the RELION half-layout window;
+    # the latter additionally excludes the negative boundary row
+    # (ky=-current_size//2) and redundant kx=0 negatives, both of which
+    # can still sit inside the sphere ``r ≤ max_r`` and so are not zeroed
+    # by ``slice_volume``. Check the true sphere boundary instead.
+    from recovar.em.dense_single_volume.helpers.fourier_window import (
+        make_frequency_coords_half_np,
+    )
+    coords = make_frequency_coords_half_np(image_shape)
+    r2 = (coords ** 2).sum(axis=1)
+    outside_sphere = np.where(r2 > (current_size // 2 + 0.5) ** 2)[0].astype(np.int32)
+    assert np.allclose(proj_clipped[:, outside_sphere], 0.0, atol=1e-6)
 
 
 def test_slice_volume_cubic_with_precomputed_spline_coefficients():
@@ -370,6 +480,48 @@ def test_adjoint_slice_volume_half_volume_jax_vjp_consistency(monkeypatch):
     )
     full_from_half = np.asarray(fourier_transform_utils.half_image_to_full_image(half_imgs, image_shape))
     out_half_ref = np.asarray(u_ref(jnp.asarray(full_from_half))[0])
+    np.testing.assert_allclose(out_half_direct, out_half_ref, atol=1e-5, rtol=1e-5)
+
+
+def test_adjoint_slice_volume_half_volume_out_of_plane_half_image_matches_vjp(monkeypatch):
+    monkeypatch.setattr(core_slicing, "_use_cuda_backproject", lambda order: False)
+
+    rng = np.random.default_rng(904)
+    image_shape = (8, 8)
+    volume_shape = (8, 8, 8)
+    rots = _random_rotations(rng, 2)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    half_size = int(np.prod(half_shape))
+
+    real_imgs = rng.standard_normal((2,) + image_shape).astype(np.float32)
+    half_imgs = np.asarray(fourier_transform_utils.get_dft2_real(real_imgs)).reshape(2, -1).astype(np.complex64)
+    weighted_half_imgs = half_imgs * np.asarray([[0.7], [1.3]], dtype=np.float32)
+
+    out_half_direct = np.asarray(
+        core_slicing.adjoint_slice_volume(
+            weighted_half_imgs,
+            rots,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            half_volume=True,
+            max_r=None,
+        )
+    )
+
+    f_ref = lambda hv: core_slicing.slice_volume(
+        fourier_transform_utils.half_volume_to_full_volume(hv, volume_shape),
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        max_r=None,
+    )
+    _, u_ref = jax.vjp(f_ref, jnp.zeros(half_size, dtype=jnp.complex64))
+    full_from_half = np.asarray(fourier_transform_utils.half_image_to_full_image(weighted_half_imgs, image_shape))
+    out_half_ref = np.asarray(u_ref(jnp.asarray(full_from_half))[0])
+
     np.testing.assert_allclose(out_half_direct, out_half_ref, atol=1e-5, rtol=1e-5)
 
 
@@ -682,6 +834,56 @@ def test_half_image_backprojection_matches_full_on_gpu(gpu_device):
             )
         )
     np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_adjoint_slice_volume_indexed_matches_rebuild_on_gpu(gpu_device):
+    device = gpu_device
+    rng = np.random.default_rng(1801)
+    image_shape = (8, 8)
+    volume_shape = (8, 8, 8)
+    rots = np.stack(
+        [
+            np.eye(3, dtype=np.float32),
+            _rotation_y(np.pi / 7.0),
+        ],
+        axis=0,
+    )
+    real_images = rng.standard_normal((2,) + image_shape).astype(np.float32)
+    with jax.default_device(jax.devices("cpu")[0]):
+        half_images = np.asarray(fourier_transform_utils.get_dft2_real(real_images)).reshape(2, -1)
+    n_half = half_images.shape[1]
+    pixel_indices = np.sort(rng.choice(n_half, size=n_half // 2, replace=False).astype(np.int32))
+    windowed = half_images[:, pixel_indices]
+
+    rebuilt = np.zeros_like(half_images)
+    rebuilt[:, pixel_indices] = windowed
+
+    with jax.default_device(device):
+        indexed = np.asarray(
+            core_slicing.adjoint_slice_volume_indexed(
+                jax.device_put(windowed),
+                jax.device_put(pixel_indices),
+                jax.device_put(rots),
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                disc_type="linear_interp",
+                half_image=True,
+                half_volume=True,
+            )
+        )
+        rebuilt_out = np.asarray(
+            core_slicing.adjoint_slice_volume(
+                jax.device_put(rebuilt),
+                jax.device_put(rots),
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                disc_type="linear_interp",
+                half_image=True,
+                half_volume=True,
+            )
+        )
+    np.testing.assert_allclose(indexed, rebuilt_out, atol=1e-5, rtol=1e-5)
 
 
 # ── Tests for half-volume → half-image projection (new code paths) ────

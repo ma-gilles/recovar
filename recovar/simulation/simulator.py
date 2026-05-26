@@ -7,7 +7,6 @@ import os
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import mrcfile
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
@@ -379,6 +378,145 @@ def get_noise_model(option, grid_size):
         return np.ones(grid_size // 2 - 1)
 
 
+def normalize_particles_relion_style_streaming(
+    images, bg_radius_px, chunk_size=1000, dtype_out=np.float32,
+):
+    """Memory-bounded variant of :func:`normalize_particles_relion_style`.
+
+    Designed to work with mmap'd MRC stacks: processes ``chunk_size``
+    particles at a time so the peak memory is
+
+        chunk_size * H * W * 8 bytes (float64 working copy)
+
+    instead of the full ``n_images * H * W * 8`` of the original. The
+    normalised pixels are written back into ``images`` in-place, so when
+    ``images`` is the ``.data`` attribute of an mmap'd ``mrcfile``, the
+    file on disk is updated directly without any auxiliary buffer the
+    size of the full stack.
+
+    Parameters mirror :func:`normalize_particles_relion_style`. Returns
+    the same ``(images, bg_means, bg_stds)`` triple, except ``images``
+    is the in-place mutated input rather than a fresh array.
+    """
+    images = np.asarray(images)
+    if images.ndim != 3:
+        raise ValueError(
+            f"streaming variant requires (N, H, W) input, got {images.shape}",
+        )
+    n_images, H, W = images.shape
+
+    if 2 * bg_radius_px > min(H, W):
+        raise ValueError(
+            f"bg_radius_px={bg_radius_px} is larger than half the image "
+            f"dimension ({min(H, W) // 2}); choose a smaller radius.",
+        )
+
+    yy, xx = np.indices((H, W))
+    cy, cx = H / 2 - 0.5, W / 2 - 0.5
+    bg_mask = ((yy - cy) ** 2 + (xx - cx) ** 2) > (bg_radius_px ** 2)
+    if bg_mask.sum() == 0:
+        raise ValueError(
+            f"Background mask is empty (bg_radius_px={bg_radius_px} too large).",
+        )
+
+    bg_means = np.empty(n_images, dtype=np.float64)
+    bg_stds = np.empty(n_images, dtype=np.float64)
+
+    for start in range(0, n_images, chunk_size):
+        end = min(start + chunk_size, n_images)
+        # Read chunk into RAM (mmap → ndarray copy via .astype, contiguous).
+        chunk = np.asarray(images[start:end]).astype(np.float64, copy=True)
+        bg_pixels = chunk[:, bg_mask]
+        bg_means_chunk = bg_pixels.mean(axis=1)
+        bg_stds_chunk = bg_pixels.std(axis=1)
+        bg_means[start:end] = bg_means_chunk
+        bg_stds[start:end] = bg_stds_chunk
+
+        bg_stds_safe = np.where(bg_stds_chunk > 1e-10, bg_stds_chunk, 1.0)
+        normalized_chunk = (
+            (chunk - bg_means_chunk[:, None, None])
+            / bg_stds_safe[:, None, None]
+        ).astype(dtype_out)
+        # Write back to mmap (or in-place into the input array).
+        images[start:end] = normalized_chunk
+
+    return images, bg_means, bg_stds
+
+
+def normalize_particles_relion_style(images, bg_radius_px):
+    """Apply RELION's per-particle background normalization to a stack of 2D images.
+
+    Mirrors ``normalise()`` in ``relion/src/image.cpp``: for each particle,
+    compute mean and stddev over pixels OUTSIDE the disk of radius ``bg_radius_px``,
+    then transform every pixel as ``(pixel - bg_mean) / bg_std``. After
+    normalization every particle has background mean ≈ 0 and stddev ≈ 1.
+
+    This is what RELION's ``relion_preprocess --norm`` produces and what
+    ``relion_refine`` expects as input. Recovar's simulator does NOT apply this
+    by default; pass ``relion_normalize=True`` to ``generate_synthetic_dataset``
+    to enable it for RELION-parity benchmarks.
+
+    Parameters
+    ----------
+    images : ndarray (N, H, W) or (N, H*W) float
+        Particle stack in real space.
+    bg_radius_px : int
+        Radius (in pixels, from image center) of the disk inside which pixels
+        are considered "particle"; pixels with ``r > bg_radius_px`` are treated
+        as background.
+
+    Returns
+    -------
+    normalized : same shape as ``images``
+        Per-particle-normalized stack.
+    bg_means : (N,) ndarray
+        Per-particle background means used for the subtraction.
+    bg_stds : (N,) ndarray
+        Per-particle background standard deviations used for the scaling.
+    """
+    images = np.asarray(images)
+    orig_shape = images.shape
+    if images.ndim == 2:  # (N, H*W)
+        side = int(round(np.sqrt(images.shape[1])))
+        if side * side != images.shape[1]:
+            raise ValueError(
+                f"Cannot infer square image shape from {images.shape}; "
+                f"pass a (N, H, W) array instead."
+            )
+        H = W = side
+        images_2d = images.reshape(-1, H, W)
+    elif images.ndim == 3:  # (N, H, W)
+        H, W = images.shape[1:]
+        images_2d = images
+    else:
+        raise ValueError(f"Expected 2D or 3D image stack, got shape {orig_shape}")
+
+    if 2 * bg_radius_px > min(H, W):
+        raise ValueError(
+            f"bg_radius_px={bg_radius_px} is larger than half the image dimension "
+            f"({min(H, W) // 2}); choose a smaller radius."
+        )
+
+    yy, xx = np.indices((H, W))
+    cy, cx = H / 2 - 0.5, W / 2 - 0.5
+    bg_mask = ((yy - cy) ** 2 + (xx - cx) ** 2) > (bg_radius_px ** 2)
+    if bg_mask.sum() == 0:
+        raise ValueError(
+            f"Background mask is empty (bg_radius_px={bg_radius_px} too large)."
+        )
+
+    images_2d = images_2d.astype(np.float64, copy=False)
+    bg_pixels = images_2d[:, bg_mask]  # (N, n_bg)
+    bg_means = bg_pixels.mean(axis=1)  # (N,)
+    bg_stds = bg_pixels.std(axis=1)    # (N,)
+
+    # Avoid divide-by-zero
+    bg_stds_safe = np.where(bg_stds > 1e-10, bg_stds, 1.0)
+    normalized = (images_2d - bg_means[:, None, None]) / bg_stds_safe[:, None, None]
+
+    return normalized.reshape(orig_shape).astype(np.float32), bg_means, bg_stds
+
+
 def generate_synthetic_dataset(
     output_folder,
     voxel_size,
@@ -408,8 +546,81 @@ def generate_synthetic_dataset(
     create_nested_structure=False,
     nested_prefix="Extract/job193",
     percent_tilt_series_outliers=0.0,
+    relion_normalize=False,
+    relion_bg_radius_px=None,
+    streaming_mmap=False,
+    streaming_chunk_size=1000,
+    noise_rng_batch_size=None,
 ):
+    """Generate a synthetic cryo-EM particle dataset.
+
+    Parameters
+    ----------
+    relion_normalize : bool, default False
+        If True, apply RELION-style per-particle background normalization
+        (mean subtraction + per-particle scale division using pixels outside
+        ``relion_bg_radius_px``) to the full image stack AFTER generation,
+        and update ``scale_vol`` to track the new global scaling. This makes
+        the dataset directly compatible with ``relion_refine_mpi`` without
+        needing ``--firstiter_cc``. Off by default; only enable when
+        benchmarking against RELION.
+    relion_bg_radius_px : int, optional
+        Background radius in pixels (used only when ``relion_normalize=True``).
+        Defaults to ``round(0.375 * grid_size)`` which matches the RELION GUI
+        ``relion_preprocess`` extract job default for a particle that fills
+        ~75% of the box.
+    streaming_mmap : bool, default False
+        If True, pre-allocate the output ``particles.{grid_size}.mrcs`` file
+        as an mmap'd MRC stack BEFORE simulation starts. The simulator then
+        writes batches directly to disk via the mmap, and the post-processing
+        (image offset, RELION normalization) operates on the mmap in chunks.
+        Bounds peak memory to ``streaming_chunk_size * H * W * 8`` bytes
+        (~2 GB for chunk_size=1000 at box=512) instead of holding the full
+        ``n_images * H * W * 4`` stack (~314 GB for 300k @ box 512).
+
+        Required for large datasets (≥100k particles at box ≥256). Forces
+        ``image_dtype=float32`` because the on-disk file is the same memory
+        as the simulator working buffer (no float16 cast at the end).
+
+        NOTE: incompatible with ``put_extra_particles=True`` and
+        ``percent_outliers > 0`` and ``rescale_noise`` (when
+        ``relion_normalize=False``) — those code paths build a SECOND
+        in-memory stack and add it to the main one, which defeats the
+        memory bound. The streaming path raises if these are set.
+    streaming_chunk_size : int, default 1000
+        Chunk size for the streaming post-processing (RELION normalization
+        and image offset). Memory peak per chunk is
+        ``chunk_size * H * W * 8 bytes``.
+    noise_rng_batch_size : int, optional
+        Batch size used only to advance the random-noise stream. When omitted,
+        it matches the image processing batch size. Supplying a fixed value
+        keeps generated noise independent of GPU-memory-driven processing
+        batch changes.
+    """
     from recovar.output import output
+
+    if streaming_mmap:
+        if put_extra_particles:
+            raise ValueError(
+                "streaming_mmap is incompatible with put_extra_particles=True "
+                "(extra particles allocate a second full stack).",
+            )
+        if percent_outliers > 0:
+            raise ValueError(
+                "streaming_mmap is incompatible with percent_outliers > 0 "
+                "(outlier path allocates a second full stack).",
+            )
+        if not relion_normalize:
+            raise ValueError(
+                "streaming_mmap currently requires relion_normalize=True "
+                "(the rescale_noise probe path with relion_normalize=False "
+                "still allocates a full stack and a 10-image probe).",
+            )
+        if image_offset_n_std != 0.0:
+            raise ValueError(
+                "streaming_mmap is incompatible with image_offset_n_std != 0 "
+                "(the offset step needs the full mean over the stack).",
+            )
 
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize=False)
@@ -431,8 +642,39 @@ def generate_synthetic_dataset(
     noise_variance = get_noise_model(noise_model, grid_size) / 50000 * noise_level
 
     mrc_file = None
+    streaming_particles_path = None
+    if streaming_mmap:
+        # Pre-allocate the output MRC stack as an mmap'd file. Subsequent
+        # calls to ``simulate_data`` will write directly to disk via the
+        # mmap and ``normalize_particles_relion_style_streaming`` will read
+        # / write back in fixed-size chunks. The on-disk dtype is float32
+        # (no float16 cast at the end) so the same memory page acts as
+        # both the simulator working buffer and the final output.
+        streaming_particles_path = output_folder + f"/particles.{grid_size}.mrcs"
+        if image_dtype != np.float32:
+            logger.info(
+                "streaming_mmap: forcing image_dtype to float32 (was %s); "
+                "the on-disk file is the simulator working buffer.",
+                image_dtype,
+            )
+            image_dtype = np.float32
+        logger.info(
+            "streaming_mmap: pre-allocating %s as %dx%dx%d float32 (~%.1f GB)",
+            streaming_particles_path, n_images, grid_size, grid_size,
+            n_images * grid_size * grid_size * 4 / 1024**3,
+        )
+        mrc_file = mrcfile.new_mmap(
+            streaming_particles_path,
+            shape=(n_images, grid_size, grid_size),
+            mrc_mode=2,  # float32
+            overwrite=True,
+        )
+        mrc_file.voxel_size = voxel_size
 
-    rescale_noise = True
+    # When relion_normalize is on, we skip the probe-based pre-rescale
+    # (the scale will come from the per-particle bg statistics of the FULL
+    # generated stack instead). When off, behavior is unchanged.
+    rescale_noise = not relion_normalize
     if rescale_noise:
         # Dont use premultiplied_ctf for
         main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, _ = generate_simulated_dataset(
@@ -453,6 +695,7 @@ def generate_synthetic_dataset(
             image_offset_n_std=image_offset_n_std,
             per_particle_contrast=per_particle_contrast,
             premultiplied_ctf=False,
+            noise_rng_batch_size=noise_rng_batch_size,
         )
         norm_image_square = np.mean(main_image_stack**2)
         norm_image = norm_image_square
@@ -484,7 +727,56 @@ def generate_synthetic_dataset(
         premultiplied_ctf=premultiplied_ctf,
         noise_increase_per_tilt=noise_increase_per_tilt,
         percent_tilt_series_outliers=percent_tilt_series_outliers,
+        noise_rng_batch_size=noise_rng_batch_size,
     )
+
+    if relion_normalize:
+        # Apply RELION-style per-particle background normalization to the
+        # full stack, then derive a single global vol scale from the
+        # per-particle inverse stds (so the GT volume can be loaded at the
+        # same scale via load_heterogeneous_reconstruction).
+        bg_radius_px = (
+            relion_bg_radius_px
+            if relion_bg_radius_px is not None
+            else int(round(0.375 * grid_size))
+        )
+        logger.info(
+            "RELION-style normalization: per-particle bg subtract+scale "
+            "with bg_radius_px=%d (streaming=%s, chunk_size=%d)",
+            bg_radius_px, streaming_mmap, streaming_chunk_size,
+        )
+        if streaming_mmap:
+            # Operate on the mmap'd MRC data in fixed-size chunks. Memory
+            # peak: ~chunk_size * grid_size² * 8 bytes (float64 working
+            # copy). For chunk_size=1000 at box=512 that's ~2 GB.
+            main_image_stack, bg_means, bg_stds = normalize_particles_relion_style_streaming(
+                main_image_stack, bg_radius_px, chunk_size=streaming_chunk_size,
+                dtype_out=np.float32,
+            )
+        else:
+            main_image_stack, bg_means, bg_stds = normalize_particles_relion_style(
+                main_image_stack, bg_radius_px,
+            )
+        mean_inv_std = float(np.mean(1.0 / np.maximum(bg_stds, 1e-10)))
+        logger.info(
+            "Per-particle bg stats: mean(bg_mean)=%.4e, std(bg_mean)=%.4e, "
+            "mean(bg_std)=%.4e, std(bg_std)=%.4e, mean(1/bg_std)=%.4e",
+            bg_means.mean(), bg_means.std(), bg_stds.mean(), bg_stds.std(),
+            mean_inv_std,
+        )
+        # Track the cumulative volume scale and rescale noise_variance for
+        # downstream consumers (recovar's refine init reads noise_variance
+        # from simulation_info and uses it as the iter-0 sigma2_noise).
+        scale_vol = scale_vol * mean_inv_std
+        noise_variance = noise_variance * (mean_inv_std ** 2)
+        # Record the per-particle stats so we can audit / re-derive later.
+        simulation_info["relion_normalize"] = True
+        simulation_info["relion_bg_radius_px"] = bg_radius_px
+        simulation_info["relion_bg_mean_mean"] = float(bg_means.mean())
+        simulation_info["relion_bg_mean_std"] = float(bg_means.std())
+        simulation_info["relion_bg_std_mean"] = float(bg_stds.mean())
+        simulation_info["relion_bg_std_std"] = float(bg_stds.std())
+        simulation_info["relion_mean_inv_bg_std"] = mean_inv_std
 
     # Add additional simulation parameters that weren't set in generate_simulated_dataset
     additional_params = {
@@ -505,9 +797,7 @@ def generate_synthetic_dataset(
     # Save outputs
     particles_file = output_folder + f"/particles.{grid_size}.mrcs"
 
-    with mrcfile.new(particles_file, overwrite=True) as mrc:
-        mrc.set_data(main_image_stack.astype(image_dtype))
-        mrc.voxel_size = voxel_size
+    utils.write_mrc_stack(particles_file, main_image_stack, voxel_size=voxel_size, dtype=image_dtype)
     poses = (rots.astype(np.float32), trans.astype(np.float32))
     utils.pickle_dump(poses, output_folder + "/poses.pkl")
     save_ctf_params(output_folder, grid_size, ctf_params, voxel_size)
@@ -595,6 +885,7 @@ def generate_simulated_dataset(
     premultiplied_ctf=False,
     noise_increase_per_tilt=None,
     percent_tilt_series_outliers=0.0,
+    noise_rng_batch_size=None,
 ):
 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -690,6 +981,14 @@ def generate_simulated_dataset(
     # cubic interpolation uses ~4x more GPU memory per image than linear
     mult = 0.5 if "cubic" in disc_type else 5
     batch_size = int(mult * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total()))
+    if noise_rng_batch_size is None:
+        noise_rng_batch_size = batch_size
+    noise_rng_batch_size = utils.safe_batch_size(noise_rng_batch_size)
+    logger.info(
+        "Simulation batch sizes: processing=%d, noise_rng=%d",
+        batch_size,
+        noise_rng_batch_size,
+    )
 
     main_image_stack = simulate_data(
         main_dataset,
@@ -703,6 +1002,7 @@ def generate_simulated_dataset(
         disc_type=disc_type,
         mrc_file=mrc_file,
         premultiplied_ctf=premultiplied_ctf,
+        noise_rng_batch_size=noise_rng_batch_size,
     )
 
     image_means = np.mean(main_image_stack, axis=(-1, -2))
@@ -743,6 +1043,7 @@ def generate_simulated_dataset(
             mrc_file=None,
             pad_before_translate=True,
             premultiplied_ctf=premultiplied_ctf,
+            noise_rng_batch_size=noise_rng_batch_size,
         )
 
         main_image_stack += extra_particles_image_stack
@@ -781,6 +1082,7 @@ def generate_simulated_dataset(
             disc_type=disc_type,
             mrc_file=None,
             premultiplied_ctf=premultiplied_ctf,
+            noise_rng_batch_size=noise_rng_batch_size,
         )
 
         ind_outliers = np.random.choice(n_images, n_outlier_images, replace=False)
@@ -833,6 +1135,7 @@ def generate_simulated_dataset(
             disc_type=disc_type,
             mrc_file=None,
             premultiplied_ctf=premultiplied_ctf,
+            noise_rng_batch_size=noise_rng_batch_size,
         )
         main_image_stack[image_indices_tilt_series_outliers] = tilt_outlier_image_stack
 
@@ -859,6 +1162,8 @@ def generate_simulated_dataset(
         "dose_per_tilt": dose_per_tilt if n_tilts > 0 else None,
         "angle_per_tilt": angle_per_tilt if n_tilts > 0 else None,
         "n_tilts": n_tilts if n_tilts > 0 else None,
+        "simulation_batch_size": batch_size,
+        "simulation_noise_rng_batch_size": noise_rng_batch_size,
     }
 
     return main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups
@@ -892,6 +1197,7 @@ def simulate_data(
     pad_before_translate=False,
     Bfactor=100,
     premultiplied_ctf=False,
+    noise_rng_batch_size=None,
 ):
 
     if disc_type == "pdb":
@@ -915,6 +1221,9 @@ def simulate_data(
         logger.debug("gt_vols_norm: %s", gt_vols_norm)
 
     key = jax.random.PRNGKey(seed)
+    if noise_rng_batch_size is None:
+        noise_rng_batch_size = batch_size
+    noise_rng_batch_size = utils.safe_batch_size(noise_rng_batch_size)
     # A little bit of a hack to account for the fact that noise is complex but goes to real
     noise_variance_mod = noise_variance.copy()
     noise_image = noise.make_radial_noise(noise_variance_mod, experiment_dataset.image_shape).reshape(
@@ -932,6 +1241,10 @@ def simulate_data(
     for vol_idx, vol in enumerate(volumes):
         img_indices = np.nonzero(image_assignments == vol_idx)[0]
         n_images = img_indices.size
+        noise_subkeys = []
+        for _ in range(0, int(np.ceil(n_images / noise_rng_batch_size))):
+            key, subkey = jax.random.split(key)
+            noise_subkeys.append(subkey)
 
         if disc_type == "nufft":
             vol_real = fourier_transform_utils.get_idft3(vol.reshape(experiment_dataset.volume_shape))
@@ -1054,9 +1367,18 @@ def simulate_data(
                 ## AND THE MAGIC NUMBER IS... (to make things consistent with the non-premultiplied CTF case)
                 noise_image = noise_image * upsample_factor**2
 
-                # Make big noise
-                key, subkey = jax.random.split(key)
-                noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
+                # Make big noise. The RNG stream can be tied to a fixed
+                # reference chunk size so generated datasets do not change
+                # when GPU-memory-driven processing batches change.
+                noise_batch = make_noise_batch_from_rng_stream(
+                    noise_subkeys,
+                    noise_rng_batch_size,
+                    batch_st,
+                    batch_end,
+                    n_images,
+                    noise_image,
+                    images_batch.shape,
+                )
                 noise_batch *= per_image_noise_scale[indices][..., None, None]
                 images_batch *= per_image_contrast[indices][..., None, None]
 
@@ -1092,8 +1414,15 @@ def simulate_data(
                     images_batch.reshape([-1, *experiment_dataset.image_shape])
                 )
                 images_batch = images_batch.real
-                key, subkey = jax.random.split(key)
-                noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
+                noise_batch = make_noise_batch_from_rng_stream(
+                    noise_subkeys,
+                    noise_rng_batch_size,
+                    batch_st,
+                    batch_end,
+                    n_images,
+                    noise_image,
+                    images_batch.shape,
+                )
                 noise_batch *= per_image_noise_scale[indices][..., None, None]
                 images_batch *= per_image_contrast[indices][..., None, None]
 
@@ -1105,10 +1434,11 @@ def simulate_data(
     logger.info("Discretizing with: %s", disc_type)
     logger.info("Done generating data")
 
-    if mrc_file is not None:
-        return mrc_file
-    else:
-        return output_array
+    # Always return the underlying ndarray (not the mrcfile object) so that
+    # downstream callers can do np.mean / slicing without special-casing.
+    # When mrc_file is provided, output_array is mrc_file.data which is
+    # already an mmap'd ndarray view; the file stays open via mrc_file.
+    return output_array
 
 
 def make_noise_batch(subkey, noise_image, images_batch_shape):
@@ -1119,6 +1449,39 @@ def make_noise_batch(subkey, noise_image, images_batch_shape):
     noise_batch_ft *= jnp.sqrt(noise_image)
     noise_batch = fourier_transform_utils.get_idft2(noise_batch_ft.reshape(images_batch_shape)).real
     return noise_batch
+
+
+def make_noise_batch_from_rng_stream(
+    noise_subkeys,
+    noise_rng_batch_size,
+    batch_st,
+    batch_end,
+    n_images,
+    noise_image,
+    images_batch_shape,
+):
+    """Return noise for a processing batch from a fixed reference RNG stream."""
+    if batch_end <= batch_st:
+        raise ValueError("batch_end must be greater than batch_st")
+
+    first_rng_batch = batch_st // noise_rng_batch_size
+    last_rng_batch = (batch_end - 1) // noise_rng_batch_size
+    image_shape = tuple(images_batch_shape[-2:])
+    pieces = []
+
+    for rng_batch_idx in range(first_rng_batch, last_rng_batch + 1):
+        rng_st = rng_batch_idx * noise_rng_batch_size
+        rng_end = min((rng_batch_idx + 1) * noise_rng_batch_size, n_images)
+        rng_shape = (rng_end - rng_st, *image_shape)
+        rng_noise = make_noise_batch(noise_subkeys[rng_batch_idx], noise_image, rng_shape)
+
+        slice_st = max(batch_st, rng_st) - rng_st
+        slice_end = min(batch_end, rng_end) - rng_st
+        pieces.append(rng_noise[slice_st:slice_end])
+
+    if len(pieces) == 1:
+        return pieces[0]
+    return jnp.concatenate(pieces, axis=0)
 
 
 # ============================================================================

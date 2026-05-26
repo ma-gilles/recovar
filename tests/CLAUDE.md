@@ -5,6 +5,22 @@
 ### NEVER widen tolerance to make tests pass
 Do not change `_TOL`, `tol_frac`, `HIGH_VARIANCE_TOKENS`, or add skip/ignore logic for specific metrics. If a test fails, **fix the code**, not the test. You may **suggest** a tolerance change and wait for explicit approval, but never implement it unilaterally.
 
+### Float64 companion required when tolerance is loosened
+If a new or modified test must use a tolerance wider than machine-epsilon (e.g. `atol=1e-5` for float32 code), **add a float64 companion test** that runs the same comparison with tighter tolerances (e.g. `atol=1e-7`). The companion proves the gap is floating-point rounding, not an algorithmic bug. Pattern:
+```python
+def test_foo():
+    """Float32 test — tolerance limited by single precision."""
+    d = make_data(float_dtype=np.float32)
+    compare(d, atol=1e-5)
+
+def test_foo_f64():
+    """Float64 companion — proves float32 gaps are rounding noise."""
+    jax.config.update("jax_enable_x64", True)
+    d = make_data(float_dtype=np.float64)
+    compare(d, atol=1e-7)  # ≥3 orders tighter
+```
+The f64 test must tighten **by at least 3 orders of magnitude**. If it cannot, the gap is algorithmic, not numerical — fix the code instead.
+
 ### NEVER modify files in `tests/baselines/`
 Baselines are ground truth generated from the OLD published recovar code (`~/recovar`) with PDB volumes and GT mask. They represent the correct behavior of the published algorithm. Modifying them silently accepts regressions. Only exception: the user explicitly says "regenerate the baseline for X".
 
@@ -24,10 +40,27 @@ Use `logging.info()` or `sys.stderr` for regression comparison tables — NOT `p
 | `slow` | `--run-slow` | Takes more than a few seconds |
 | `tiny_metrics` | `--run-tiny-metrics` | Quick quality check (32^3, ~800 images) |
 | `long_test` | `--long-test` | Full regression suite (128^3, 50k images, 6-12h) |
+| `gpu_memory_matrix` | `--long-test` | 14-cell GPU memory matrix (7 budgets x 2 backends); also exposed via `scripts/run_gpu_memory_matrix.sh` |
 
 `--long-test` implies `--run-integration`, `--run-slow`, `--run-gpu`.
 
+The `gpu_memory_matrix` marker exists alongside `long_test` so the
+GPU integration matrix can be selected explicitly (e.g.
+`pytest -m gpu_memory_matrix --long-test`) or driven from the Slurm
+submitter for parallel cells.
+
 All data is generated synthetically — no external downloads needed.
+
+### Fast EM Guardrail
+
+For dense/local EM refactor work, run:
+`pixi run test-em-fast-guard`
+
+This CPU-default guardrail runs tiny deterministic dense big-JIT, local exact
+EM, Fourier-window, dtype-policy, and helper-path tests. It is intended to
+finish in under about 60 seconds without the 5k parity dataset. To run it on a
+local GPU, check `nvidia-smi` first and then use
+`EM_FAST_GUARD_BACKEND=gpu pixi run test-em-fast-guard`.
 
 ## Baseline Management
 

@@ -7,6 +7,14 @@ RECOVAR analyzes conformational heterogeneity in cryo-EM/cryo-ET datasets using 
 2. **Performance** — optimize for GPU (speed, memory). Batch sizing, half-spectrum layouts, CUDA FFI.
 3. **Clarity** — simple, readable code. Small targeted diffs. No drive-by formatting.
 
+## Code Readability
+- Prefer the shortest correct implementation that is easy to audit.
+- Do not trade correctness, accuracy, or GPU performance for brevity.
+- Replace large inline blocks, long argument lists, and repeated loop setup with small named helpers or simple data containers.
+- Remove flags and branches when one clear path should exist. If modes are genuinely different, split them into separate helpers instead of threading conditionals through the hot path.
+- Do not add fallbacks or failsafes that hide bugs. Validate assumptions early and fail loudly.
+- Keep TODOs until the issue is actually fixed; when resolving one, remove only that TODO and mention the replacement in the summary or commit.
+
 ## Architecture
 
 ```
@@ -65,7 +73,62 @@ See `tests/CLAUDE.md` for full testing rules (critical — read before modifying
 - Small targeted diffs. Do not commit large artifacts (checkpoints, datasets, binaries).
 - Never force-push unless explicitly asked.
 
+## Worktree & Branch Hygiene — MANDATORY before running tests
+
+This repo has many parallel worktrees (`/scratch/gpfs/GILLES/mg6942/recovar_wt_*`)
+and parity work that lives on long-lived branches not yet merged to `dev`.
+Worktree directory names lie: a directory named `recovar_wt_parity_branch_*`
+may have been re-checked out to an unrelated branch by a previous session.
+Mixing up branches has cost days of debugging — apply these rules every time:
+
+**Before running ANY test or benchmark in a worktree, always print:**
+```bash
+git -C <worktree> rev-parse HEAD          # commit you're actually on
+git -C <worktree> symbolic-ref --short HEAD || echo "<detached>"
+git -C <worktree> status --porcelain      # uncommitted state
+python -c "import recovar; print(recovar.__file__)"  # confirm import path
+```
+The provenance gate must show: `recovar.__file__` inside the worktree, JAX
+inside `.pixi/envs/default`, and a recognized commit/branch.
+
+**Cite commits, not branches, in memory and reports.** Branch tips move
+constantly; commit hashes are immutable. `claude/relion-parity-flag-audit
+at e120cdfc` is reproducible. `the parity branch` is not.
+
+**For parity work specifically**, `scripts/run_multi_iter_parity.py` now
+prints a provenance banner and asserts known load-bearing parity commits
+are in HEAD's ancestry. If it exits with code 2, the worktree is missing a
+required fix and any "broken parity" result is not a regression — it's the
+wrong branch. Switch branches before debugging deeper.
+
+**Pre-PR parity smoke** (3 minutes, machine-precision check):
+```bash
+pixi run python scripts/run_multi_iter_parity.py \
+  --relion_dir /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0 \
+  --data_star  /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles.star \
+  --iter 3 --max_iter 1 \
+  --gt_volume /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/reference_gt.mrc \
+  --output_dir /tmp/parity_check
+```
+Pass criterion: `Final half1/half2 vs RELION it004 corr ≥ 0.999`. Anything
+below that means kernel parity has regressed. Run before any push that
+touches `recovar/em/`.
+
 ## Before Pushing / Creating a PR — MANDATORY
+
+**Scope first. Pick the right rule for your PR:**
+
+- **EM / refinement / initial-volume PRs** (any change confined to
+  `recovar/em/`, the parity scripts, or EM-only tests): follow the EM-scoped
+  test set in `recovar/em/CLAUDE.md`. **Do NOT run the full long-test or
+  `extract_regression_tables.py`** — those measure SPA/ET pipeline metrics
+  that EM-only changes do not move and cost hours of GPU time per run. The
+  EM CLAUDE.md explicitly forbids them for this scope.
+- **Cross-cutting / non-EM PRs** (touching `heterogeneity/`, `commands/`,
+  `output/`, `data_io/`, `reconstruction/` outside EM use, GUI, or CI):
+  follow the long-test rule below.
+
+### Long-test rule (cross-cutting / non-EM PRs only)
 
 1. Rebase on `dev`: `git fetch origin && git rebase origin/dev`
 2. Run the **full long-test suite** via parallel Slurm submission:
@@ -79,10 +142,19 @@ See `tests/CLAUDE.md` for full testing rules (critical — read before modifying
 4. If any test fails → **do not push**. Fix and resubmit.
 5. Only push and create PR after **all tests pass including long-test**.
 
-## PR Description — MANDATORY Format
+If a PR genuinely touches both EM and non-EM code, ask the user whether
+to expand to the long-test before running it. Don't run it speculatively.
 
-Every PR description **must** include quality and performance comparison
-tables extracted from the long-test results. Run:
+## PR Description — MANDATORY Format (cross-cutting / non-EM PRs)
+
+For EM-scoped PRs, paste the EM-parity result table from
+`scripts/run_multi_iter_parity.py` (or the new EM-parity regression test
+ledgers under `tests/baselines/em_parity_*`) instead of the SPA/ET tables.
+The long-test extractor below is for cross-cutting PRs only.
+
+For cross-cutting / non-EM PRs, every PR description **must** include
+quality and performance comparison tables extracted from the long-test
+results. Run:
 ```bash
 pixi run python scripts/extract_regression_tables.py
 ```
@@ -122,6 +194,13 @@ lower memory is better. Flag regressions > 10%.
 ```
 
 Use ↑ for increases, ↓ for decreases. Mark regressions > 10% as **REGRESSED**.
+
+## Math Documentation
+
+Math docs live in `docs/math/` as Markdown with LaTeX. Rules:
+- **Docs link to code**: every doc must include a "Code references" section at the bottom listing the implementing files/functions with relative paths (e.g. `recovar/reconstruction/pcg_mean.py:pcg_mstep`).
+- **Code links to docs**: every function that implements a documented formulation must include a docstring reference back to the doc (e.g. `See docs/math/masked_mstep.md § Hard mask`).
+- Keep both directions up to date when either changes.
 
 ## End of Task
 

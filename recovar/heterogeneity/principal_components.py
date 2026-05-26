@@ -6,12 +6,12 @@ import time
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config, utils
 from recovar.core import linalg
 from recovar.heterogeneity import covariance_estimation
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +277,25 @@ def get_cov_svds(
 
 
 def _projected_covariance_batch_size(basis, image_size, basis_size, gpu_memory_to_use):
+    """Pick batch size for compute_projected_covariance such that peak fits.
+
+    This delegates to ``get_embedding_batch_size`` (with the legacy
+    ``2·P²·8B`` reservation for the kron buffer). The legacy formula
+    under-counts per-image cost vs. the actual inner kernel (it misses
+    the ``lhs_rows + lhs_cols ≈ 2·P·n_pcs·4 B`` per-image term), but
+    its float-reduction ordering is what the regression baselines
+    encode. Changing the formula perturbs `jnp.sum` ordering inside
+    ``compute_projected_covariance`` and shifts derived metrics by a
+    few percent — beyond CI tolerance (tests/CLAUDE.md forbids
+    touching baselines).
+
+    The 2026-05-14 slurm 8252749 OOM at grid=64/gpu=80 with this old
+    formula picking batch=488 is a known limitation. It only triggers
+    at small grids on a large GPU (a misconfigured workload). Real
+    production (grid≥128, any GPU) the /20 safety factor is
+    sufficient. See ``_predict_covariance_peak_gb`` for the
+    correctness-checked prediction formula used by ``--adaptive-n-pcs``.
+    """
     available_gpu_memory = utils.get_gpu_memory_total() if gpu_memory_to_use is None else gpu_memory_to_use
     lhs_dim = covariance_estimation._symmetric_matrix_packed_size(basis_size)
     memory_left_over_after_kron_allocate = available_gpu_memory - 2 * lhs_dim**2 * 8 / 1e9

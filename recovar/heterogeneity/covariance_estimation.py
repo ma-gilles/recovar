@@ -110,52 +110,119 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
 
     gpu_memory = utils.get_gpu_memory_total()
 
-    if adaptive_n_pcs and grid_size is not None:
-        volume_size = grid_size**3
-        dtype_size = 8  # bytes for complex64
-        available_memory_gb = gpu_memory * 0.7
-        base_memory_coefficient = 75 / (200**4)
-        basis_memory_coefficient = volume_size * dtype_size / 1e9
+    # Empirical workload-ceiling for covariance peak memory.
+    #
+    # ---------------- Peak-GB prediction for compute_projected_covariance ----------------
+    #
+    # Walk of ``_reduce_covariance_inner_explicit`` +
+    # ``_projected_covariance_packed_lhs_batch`` gives three dominant terms:
+    #
+    #   basis            = n_pcs × grid³ × 8 B           (complex64 PCs; persistent)
+    #   AUs + AUs_noise  = 2 × n_pcs × batch × grid²/2 × 8 B
+    #                                                     (per-batch projections;
+    #                                                      both alive at peak)
+    #   n⁴ packed mats   = (P·n² + P²) × 4 B  where P = n(n+1)/2
+    #                       cross_terms (P, n, n)  float32
+    #                       packed_lhs  (P, P)     float32
+    #                                                     (already in upper-tri
+    #                                                      packed form — no further
+    #                                                      compression possible)
+    #
+    # Multiplicative slack on the analytic peak prediction. Calibrated
+    # from per-chunk fork-per-cell sweep 2026-05-14
+    # (_agent_scratch/chunk_floor_measurements.json) using device_put-only
+    # allocations (no `+ 1` artifact). Projected covariance:
+    # measured / predicted across 13 cells spanning {grid=64,128,256} x
+    # {n_pcs=50,100,200} x {batch=1,16,64}: min=1.00 max=1.03.
+    #
+    # 1.30 = measured 1.03 + ~25% headroom for runtime-only costs the
+    # pure-allocator harness doesn't capture (XLA scratch, JIT cache,
+    # FFT plans, activation buffers).
+    # Bumped 2026-05-15 from 1.30 → 1.50: extra headroom for
+    # cross-phase persistent state the proj-cov-only formula misses.
+    # See recovar/utils/memory_planner.py for full rationale.
+    _PEAK_SLACK_BY_GRID = {64: 1.50, 128: 1.50, 256: 1.50}
 
+    def _peak_slack(g: int) -> float:
+        return _PEAK_SLACK_BY_GRID.get(g, 1.50)
+
+    def _estimate_peak_gb(n_pcs_val: int, g: int, budget_gb: float) -> tuple[float, float, float, float]:
+        """Predict peak GPU memory for compute_projected_covariance.
+
+        Returns (basis_gb, n4_packed_gb, aus_gb, total_gb_with_slack).
+        ``batch_size`` is derived from the same logic
+        ``_projected_covariance_batch_size`` uses at runtime so the
+        prediction matches the actual batch size.
+        """
+        half_img = (g * g) // 2
+        P = n_pcs_val * (n_pcs_val + 1) // 2
+        image_size = g * g
+
+        basis_gb = n_pcs_val * (g**3) * 8 / 1e9
+        n4_packed_gb = (P * n_pcs_val * n_pcs_val + P * P) * 4 / 1e9
+
+        # Mirror the legacy _projected_covariance_batch_size so the
+        # predicted batch matches what the runtime actually picks. The
+        # legacy per-image formula under-counts but its float ordering
+        # is what regression baselines encode.
+        persistent_lhs_gb = 2 * P * P * 8 / 1e9  # legacy 8B/elem reservation
+        remaining_gb = budget_gb - basis_gb - persistent_lhs_gb
+        if remaining_gb <= 0:
+            batch_size = 1
+        else:
+            per_image_bytes = (image_size * max(n_pcs_val, 4) + n_pcs_val * n_pcs_val) * 8
+            batch_size = max(1, int(remaining_gb / (per_image_bytes / 1e9) / 20))
+
+        aus_gb = 2 * n_pcs_val * batch_size * half_img * 8 / 1e9
+        # lhs_rows + lhs_cols: each (batch, P, n_pcs) float32 — dominant
+        # transient at large batch_size.
+        lhs_rows_cols_gb = 2 * batch_size * P * n_pcs_val * 4 / 1e9
+        raw_peak = basis_gb + n4_packed_gb + aus_gb + lhs_rows_cols_gb
+        return basis_gb, n4_packed_gb, aus_gb + lhs_rows_cols_gb, raw_peak * _peak_slack(g)
+
+    if adaptive_n_pcs and grid_size is not None:
         n_pcs = 200
         for n_pcs in range(200, 0, -1):
-            base_memory = base_memory_coefficient * (n_pcs**4)
-            basis_memory = basis_memory_coefficient * n_pcs
-            if base_memory + basis_memory <= available_memory_gb:
+            basis_memory, n4_gb, aus_gb, total = _estimate_peak_gb(n_pcs, grid_size, gpu_memory)
+            if total <= gpu_memory:
                 break
         else:
             n_pcs = 50
 
         logger.info(
             "Adaptive n_pcs: using %s PCs for covariance computation "
-            "(GPU memory: %.1f GB, grid_size: %s, estimated memory: %.1f GB)",
+            "(GPU budget: %.1f GB, grid_size: %s, predicted peak: %.1f GB = "
+            "(basis %.2f + n4_packed %.2f + AUs %.2f) × slack)",
             n_pcs,
             gpu_memory,
             grid_size,
-            base_memory + basis_memory,
+            total,
+            basis_memory,
+            n4_gb,
+            aus_gb,
         )
     else:
         n_pcs = 200
 
         # Estimate memory usage so we can warn if it might OOM
         if grid_size is not None:
-            volume_size = grid_size**3
-            dtype_size = 8
-            base_memory_gb = (75 / (200**4)) * (n_pcs**4)
-            basis_memory_gb = volume_size * dtype_size * n_pcs / 1e9
-            total_memory_gb = base_memory_gb + basis_memory_gb
+            basis_memory_gb, n4_gb, aus_gb, total_memory_gb = _estimate_peak_gb(n_pcs, grid_size, gpu_memory)
             logger.info(
                 "Using %s PCs for covariance computation "
-                "(GPU memory: %.1f GB, grid_size: %s, estimated memory: %.1f GB)",
+                "(GPU budget: %.1f GB, grid_size: %s, predicted peak: %.1f GB = "
+                "(basis %.2f + n4_packed %.2f + AUs %.2f) × slack(grid))",
                 n_pcs,
                 gpu_memory,
                 grid_size,
                 total_memory_gb,
+                basis_memory_gb,
+                n4_gb,
+                aus_gb,
             )
-            if total_memory_gb > gpu_memory * 0.8:
+            if total_memory_gb > gpu_memory:
                 logger.warning(
-                    "Estimated memory (%.1f GB) may exceed available GPU memory (%.1f GB). "
-                    "If you get OOM errors, use --low-memory-option to adaptively reduce n_pcs.",
+                    "Predicted peak (%.1f GB) exceeds GPU budget (%.1f GB). "
+                    "If you get OOM, use --adaptive-n-pcs or --gpu-gb <smaller>.",
                     total_memory_gb,
                     gpu_memory,
                 )
@@ -668,6 +735,10 @@ def compute_variance(
     disc_type="",
     noise_ind_subset=None,
 ):
+    """Estimate per-voxel Fourier signal variance and FSC-derived RELION taus.
+
+    See docs/math/ppca_variance_prior_notes.md.
+    """
     st = time.time()
 
     # Run variance kernel for each half-set.
@@ -708,7 +779,17 @@ def compute_variance(
     variance = {f"corrected{i}": _safe_div(signal[i], ctf_w[i]) for i in range(2)}
 
     lhs = (ctf_w[0] + ctf_w[1]) / 2
-    variance_prior, fsc, _ = regularization.compute_fsc_prior_gpu_v2(
+    prior_total_signal, fsc_total_signal, prior_avg_total_signal = regularization.compute_fsc_prior_gpu_v2(
+        dataset.volume_shape,
+        variance["corrected0"],
+        variance["corrected1"],
+        lhs,
+        jnp.ones(dataset.volume_size, dtype=dataset.dtype_real) * np.inf,
+        frequency_shift=jnp.array([0, 0, 0]),
+        upsampling_factor=1,
+        substract_shell_mean=False,
+    )
+    prior_shell_subtracted, fsc_shell_subtracted, prior_avg_shell_subtracted = regularization.compute_fsc_prior_gpu_v2(
         dataset.volume_shape,
         variance["corrected0"],
         variance["corrected1"],
@@ -724,12 +805,18 @@ def compute_variance(
             reg_lhs = relion_functions.adjust_regularization_relion_style(
                 ctf_w[i],
                 dataset.volume_shape,
-                tau=variance_prior,
+                tau=prior_shell_subtracted,
             )
             variance[f"corrected{i}"] = _safe_div(signal[i], reg_lhs)
 
     variance["combined"] = (variance["corrected0"] + variance["corrected1"]) / 2
-    variance["prior"] = _to_cpu(variance_prior)
+    variance["prior"] = _to_cpu(prior_shell_subtracted)
+    variance["prior_total_signal"] = _to_cpu(prior_total_signal)
+    variance["prior_shell_subtracted"] = _to_cpu(prior_shell_subtracted)
+    variance["fsc_total_signal"] = _to_cpu(fsc_total_signal)
+    variance["fsc_shell_subtracted"] = _to_cpu(fsc_shell_subtracted)
+    variance["prior_avg_total_signal"] = _to_cpu(prior_avg_total_signal)
+    variance["prior_avg_shell_subtracted"] = _to_cpu(prior_avg_shell_subtracted)
     variance["lhs"] = lhs
     variance = {k: _to_cpu(v).real for k, v in variance.items()}
 
@@ -738,8 +825,8 @@ def compute_variance(
     logger.info("time to compute variance: %.1fs", time.time() - st)
     return (
         variance,
-        _to_cpu(variance_prior).real,
-        _to_cpu(fsc).real,
+        _to_cpu(prior_shell_subtracted).real,
+        _to_cpu(fsc_shell_subtracted).real,
         _to_cpu(lhs).real,
         _to_cpu(noise_p_variance_est).real,
     )
