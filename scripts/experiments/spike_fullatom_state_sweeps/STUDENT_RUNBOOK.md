@@ -17,8 +17,8 @@ git clone --branch codex/kernel-bandwidth-student-clean \
   "$STUDENT_ROOT"
 ```
 
-This checks out `codex/kernel-bandwidth-student-clean`, builds pixi, builds
-the CUDA backprojector, checks imports, and writes:
+The setup script uses that fresh clone, builds pixi, builds the CUDA
+backprojector, checks imports, and writes:
 
 ```text
 /scratch/gpfs/CRYOEM/gilleslab/tmp/$USER/spike_fullatom_student/student_spike_env.sh
@@ -41,6 +41,7 @@ What those do:
 | `smoke` | one 10k-image test run |
 | `full` | 10k, 30k, 100k, 300k, 1M image sweep |
 | `postprocess` | FSC/resolution/mean-subtracted plots |
+| `plot100k` | shell metrics for the completed 100k compute_state map |
 
 Logs go here:
 
@@ -84,7 +85,7 @@ This writes:
 The plot shows masked FSC vs GT, relative Fourier error per shell, log-scale
 relative error, and cumulative relative error.
 
-## 4. Download Results
+## 4. Optional: Copy Results Locally
 
 Run from a local machine:
 

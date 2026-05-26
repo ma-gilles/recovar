@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Set up this RECOVAR branch and build the pixi environment for the spike
-# full-atom experiments on Della.
+# Set up a fresh RECOVAR checkout and build the pixi environment for the
+# spike full-atom experiments on Della.
 #
 # Fresh-start usage:
 #   STUDENT_ROOT=/scratch/gpfs/CRYOEM/gilleslab/tmp/$USER/spike_fullatom_student
@@ -13,27 +13,27 @@
 set -euo pipefail
 
 STUDENT_ROOT="${1:-/scratch/gpfs/CRYOEM/gilleslab/tmp/${USER}/spike_fullatom_student}"
-REPO_URL="${REPO_URL:-git@github.com:ma-gilles/recovar.git}"
-BRANCH="${BRANCH:-codex/kernel-bandwidth-student-clean}"
-CHECKOUT="$STUDENT_ROOT/clone/recovar"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+CHECKOUT="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
+EXPECTED_BRANCH="${EXPECTED_BRANCH:-codex/kernel-bandwidth-student-clean}"
 
 # Shared read-only inputs used by the current full-atom spike experiment.
 PDB_DIR="${PDB_DIR:-/projects/CRYOEM/singerlab/mg6942/spike_morph_pdbs}"
 DEFAULT_MASK="${DEFAULT_MASK:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_direct_volume_shell_metrics_20260523/full_gt_vols_plus_masks_20260524/masks/broad_mask.mrc}"
 
-mkdir -p "$STUDENT_ROOT"/{clone,slurmo,tmp,pixi_home,rattler_cache,inputs}
-
 if [[ ! -d "$CHECKOUT/.git" ]]; then
-  if ! git clone "$REPO_URL" "$CHECKOUT"; then
-    echo "SSH clone failed; retrying with HTTPS." >&2
-    git clone "https://github.com/ma-gilles/recovar.git" "$CHECKOUT"
-  fi
-else
-  git -C "$CHECKOUT" fetch origin
+  echo "This setup script must be run from a git clone of RECOVAR: $CHECKOUT" >&2
+  exit 2
 fi
 
-git -C "$CHECKOUT" checkout "$BRANCH"
-git -C "$CHECKOUT" pull --ff-only origin "$BRANCH"
+current_branch="$(git -C "$CHECKOUT" branch --show-current)"
+if [[ "$current_branch" != "$EXPECTED_BRANCH" ]]; then
+  echo "Expected branch $EXPECTED_BRANCH, but checkout is on $current_branch." >&2
+  echo "Clone with: git clone --branch $EXPECTED_BRANCH git@github.com:ma-gilles/recovar.git ..." >&2
+  exit 2
+fi
+
+mkdir -p "$STUDENT_ROOT"/{clone,slurmo,tmp,pixi_home,rattler_cache}
 
 cd "$CHECKOUT"
 

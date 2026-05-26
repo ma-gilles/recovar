@@ -6,6 +6,7 @@
 #   $RECOVAR_CHECKOUT/scripts/experiments/spike_fullatom_state_sweeps/run_student_spike_experiment.sh smoke
 #   $RECOVAR_CHECKOUT/scripts/experiments/spike_fullatom_state_sweeps/run_student_spike_experiment.sh full
 #   $RECOVAR_CHECKOUT/scripts/experiments/spike_fullatom_state_sweeps/run_student_spike_experiment.sh postprocess
+#   $RECOVAR_CHECKOUT/scripts/experiments/spike_fullatom_state_sweeps/run_student_spike_experiment.sh plot100k
 
 set -euo pipefail
 
@@ -84,6 +85,7 @@ resolve_plot100k_run_dir() {
   fi
 
   local candidates=()
+  local candidate
   while IFS= read -r state_path; do
     candidate="$(dirname "$(dirname "$state_path")")"
     candidates+=("$candidate")
