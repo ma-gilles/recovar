@@ -173,12 +173,15 @@ def test_write_oracle_pipeline_output_skeleton(monkeypatch, tmp_path):
         lambda *_a, **_kw: fake_dataset,
     )
 
-    # Stub the embedding step to return shape-checked outputs.
+    # Stub the embedding step to return shape-checked outputs and distinguish
+    # regularized from noreg calls by whether the spectrum is finite.
     def fake_embed(mean, u, s, basis_size, dataset, mask, gpu_memory, **kwargs):
         n = 4
-        zs = np.tile(np.arange(basis_size, dtype=np.float32)[None, :], (n, 1))
-        cov = np.tile(np.eye(basis_size, dtype=np.float32)[None, :, :], (n, 1, 1))
-        contrasts = np.ones(n, dtype=np.float32)
+        is_noreg = bool(np.all(np.isinf(s)))
+        offset = 10.0 if is_noreg else 0.0
+        zs = np.tile(np.arange(basis_size, dtype=np.float32)[None, :] + offset, (n, 1))
+        cov = np.tile((1.0 + offset) * np.eye(basis_size, dtype=np.float32)[None, :, :], (n, 1, 1))
+        contrasts = np.full(n, 2.0 if is_noreg else 1.0, dtype=np.float32)
         return zs, cov, contrasts, None
 
     monkeypatch.setattr(oracle_pipeline.embedding, "get_per_image_embedding", fake_embed)
@@ -226,8 +229,17 @@ def test_write_oracle_pipeline_output_skeleton(monkeypatch, tmp_path):
     # particles assigned, the array length equals n_particles and rows are
     # in sorted-original order.
     saved_zs = np.load(pipeline_dir / "model" / "zdim_1" / "latent_coords.npy")
+    saved_zs_noreg = np.load(pipeline_dir / "model" / "zdim_1" / "latent_coords_noreg.npy")
+    saved_precision = np.load(pipeline_dir / "model" / "zdim_1" / "latent_precision.npy")
+    saved_precision_noreg = np.load(pipeline_dir / "model" / "zdim_1" / "latent_precision_noreg.npy")
+    saved_contrasts = np.load(pipeline_dir / "model" / "zdim_1" / "contrasts.npy")
+    saved_contrasts_noreg = np.load(pipeline_dir / "model" / "zdim_1" / "contrasts_noreg.npy")
     assert saved_zs.shape == (4, 1)
     assert not np.isnan(saved_zs).any()
+    np.testing.assert_allclose(saved_zs_noreg, saved_zs + 10.0)
+    np.testing.assert_allclose(saved_precision_noreg, saved_precision * 11.0)
+    np.testing.assert_allclose(saved_contrasts, np.ones(4, dtype=np.float32))
+    np.testing.assert_allclose(saved_contrasts_noreg, np.full(4, 2.0, dtype=np.float32))
 
 
 def test_write_oracle_pipeline_output_rejects_all_outliers(monkeypatch, tmp_path):

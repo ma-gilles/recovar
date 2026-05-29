@@ -64,6 +64,15 @@ def _select_epoch(paths: Iterable[Path], requested_epoch: int | None) -> list[Pa
     return selected
 
 
+def _parse_labels(value: str | None) -> list[int] | None:
+    if value is None:
+        return None
+    labels = [int(part.strip()) for part in value.split(",") if part.strip()]
+    if not labels:
+        raise ValueError("--labels must contain at least one integer label")
+    return labels
+
+
 def _cryodrgn_sources(bench_root: Path, requested_epoch: int | None) -> list[EmbeddingSource]:
     sources: list[EmbeddingSource] = []
     for path in _select_epoch((bench_root / "cryodrgn").glob("zdim*/z.*.pkl"), requested_epoch):
@@ -141,9 +150,21 @@ def _generic_sources(bench_root: Path, method: str, labels_size: int) -> list[Em
     return sources
 
 
-def _write_means(source: EmbeddingSource, labels: np.ndarray, out_root: Path) -> Path:
+def _write_means(
+    source: EmbeddingSource,
+    labels: np.ndarray,
+    out_root: Path,
+    label_subset: list[int] | None = None,
+) -> Path:
     labels = np.asarray(labels)
-    unique_labels = np.unique(labels)
+    if label_subset is None:
+        unique_labels = np.unique(labels)
+    else:
+        observed = set(int(x) for x in np.unique(labels))
+        missing = [label for label in label_subset if label not in observed]
+        if missing:
+            raise ValueError(f"Requested labels not present in state assignments: {missing}")
+        unique_labels = np.asarray(label_subset, dtype=labels.dtype)
     if source.array.shape[0] != labels.shape[0]:
         raise ValueError(
             f"{source.path} has {source.array.shape[0]} rows, but labels have {labels.shape[0]} rows"
@@ -195,6 +216,7 @@ def main() -> None:
     parser.add_argument("--bench-root", type=Path, default=DEFAULT_BENCH_ROOT)
     parser.add_argument("--out-root", type=Path, default=None, help="Default: BENCH_ROOT/evaluation")
     parser.add_argument("--cryodrgn-epoch", type=int, default=None, help="Use a specific cryoDRGN z.N.pkl epoch.")
+    parser.add_argument("--labels", default=None, help="Comma-separated GT labels to average, e.g. 0,25,50. Default: all labels.")
     parser.add_argument(
         "--methods",
         nargs="+",
@@ -205,8 +227,11 @@ def main() -> None:
 
     labels_path = args.source_run / "03_dataset" / "state_assignment.npy"
     labels = np.load(labels_path)
+    label_subset = _parse_labels(args.labels)
     out_root = args.out_root or (args.bench_root / "evaluation")
     print(f"labels={labels_path} shape={labels.shape} n_unique={np.unique(labels).size}")
+    if label_subset is not None:
+        print(f"label_subset={label_subset}")
 
     sources: list[EmbeddingSource] = []
     if "cryodrgn" in args.methods:
@@ -219,7 +244,7 @@ def main() -> None:
         print("No mean embeddings written; no ready method embeddings were found.")
         return
     for source in sources:
-        _write_means(source, labels, out_root)
+        _write_means(source, labels, out_root, label_subset)
 
 
 if __name__ == "__main__":

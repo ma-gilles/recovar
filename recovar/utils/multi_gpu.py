@@ -191,6 +191,8 @@ def compute_H_B_multi_gpu(
         ...     options=options
         ... )
     """
+    image_subset = kwargs.pop("image_subset", None)
+
     # Get available GPUs
     devices = get_available_gpus()
 
@@ -210,11 +212,20 @@ def compute_H_B_multi_gpu(
     if n_gpus == 1:
         logger.info("Single GPU mode - calling compute_H_B directly")
         with jax.default_device(devices[0]):
-            return compute_H_B_fn(experiment_dataset, **kwargs)
+            return compute_H_B_fn(experiment_dataset, image_subset=image_subset, **kwargs)
 
     # Split images across GPUs
-    n_images = experiment_dataset.n_images
-    image_indices_per_gpu = split_indices_for_gpus(n_images, n_gpus)
+    if image_subset is None:
+        image_indices = np.arange(experiment_dataset.n_images)
+    else:
+        image_indices = np.asarray(image_subset)
+    image_indices_per_gpu = np.array_split(image_indices, n_gpus)
+    logger.info(
+        "Split %s items across %s GPUs: sizes = %s",
+        image_indices.size,
+        n_gpus,
+        [len(indices) for indices in image_indices_per_gpu],
+    )
 
     # Compute in parallel
     start_time = time.time()

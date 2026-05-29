@@ -335,7 +335,7 @@ def write_oracle_pipeline_output(
     }
 
     for zdim in requested_zdims:
-        logger.info("Oracle embedding for zdim=%d", zdim)
+        logger.info("Oracle regularized embedding for zdim=%d", zdim)
         zs, cov_zs, est_contrasts, _ = embedding.get_per_image_embedding(
             oracle["mean"],
             oracle["u"],
@@ -352,12 +352,31 @@ def write_oracle_pipeline_output(
         zs = np.asarray(zs, dtype=np.float32)
         cov_zs = np.asarray(cov_zs, dtype=np.float32)
         contrasts_arr = np.asarray(est_contrasts, dtype=np.float32).reshape(-1)
+
+        logger.info("Oracle noreg embedding for zdim=%d", zdim)
+        zs_noreg, cov_zs_noreg, est_contrasts_noreg, _ = embedding.get_per_image_embedding(
+            oracle["mean"],
+            oracle["u"],
+            np.full_like(oracle["s"], np.inf, dtype=np.float32),
+            zdim,
+            dataset,
+            flat_volume_mask,
+            gpu_memory,
+            disc_type=disc_type,
+            contrast_option="none",
+            compute_covariances=True,
+            ignore_zero_frequency=False,
+        )
+        zs_noreg = np.asarray(zs_noreg, dtype=np.float32)
+        cov_zs_noreg = np.asarray(cov_zs_noreg, dtype=np.float32)
+        contrasts_noreg_arr = np.asarray(est_contrasts_noreg, dtype=np.float32).reshape(-1)
+
         embedding_dict["latent_coords"][zdim] = zs
-        embedding_dict["latent_coords_noreg"][zdim] = zs
+        embedding_dict["latent_coords_noreg"][zdim] = zs_noreg
         embedding_dict["latent_precision"][zdim] = cov_zs
-        embedding_dict["latent_precision_noreg"][zdim] = cov_zs
+        embedding_dict["latent_precision_noreg"][zdim] = cov_zs_noreg
         embedding_dict["contrasts"][zdim] = contrasts_arr
-        embedding_dict["contrasts_noreg"][zdim] = contrasts_arr
+        embedding_dict["contrasts_noreg"][zdim] = contrasts_noreg_arr
 
     _save_embeddings_per_zdim(Path(paths.model_dir), embedding_dict, sorted_particle_indices)
 

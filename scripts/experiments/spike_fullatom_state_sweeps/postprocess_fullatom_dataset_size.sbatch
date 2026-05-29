@@ -22,6 +22,8 @@ TARGET_STATE="${TARGET_STATE:-50}"
 VOXEL_SIZE="${VOXEL_SIZE:-1.25}"
 MASK="${MASK:-/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_direct_volume_shell_metrics_20260523/full_gt_vols_plus_masks_20260524/masks/broad_mask.mrc}"
 MEAN_SUB_DIR="${MEAN_SUB_DIR:-$ROOT/mean_subtracted_metrics_20260518_r12}"
+ESTIMATE_RELPATH="${ESTIMATE_RELPATH:-07_compute_state/state000_unfil.mrc}"
+MASK_RELPATH="${MASK_RELPATH:-05_masks/focus_mask_moving.mrc}"
 
 AGENT_ID="spike-fa-post-${SLURM_JOB_ID}"
 export TMPDIR="${TMPDIR:-$SCRATCH_ROOT/tmp/${AGENT_ID}}"
@@ -41,12 +43,15 @@ echo "root=$ROOT"
 echo "label=$LABEL"
 echo "mask=$MASK"
 echo "target_state=$TARGET_STATE"
+echo "estimate_relpath=$ESTIMATE_RELPATH"
+echo "mean_sub_mask_relpath=$MASK_RELPATH"
 echo "python=$PIXI_PY"
 
 "$PIXI_PY" scripts/experiments/spike_fullatom_state_sweeps/score_dataset_size_fsc_vs_gt.py \
   --root "$ROOT" \
   --label "$LABEL" \
   --target-state "$TARGET_STATE" \
+  --estimate-relpath "$ESTIMATE_RELPATH" \
   --mask "$MASK" \
   --voxel-size "$VOXEL_SIZE"
 
@@ -54,6 +59,8 @@ echo "python=$PIXI_PY"
   --root "$ROOT" \
   --out-dir "$MEAN_SUB_DIR" \
   --target-state "$TARGET_STATE" \
+  --estimate-relpath "$ESTIMATE_RELPATH" \
+  --mask-relpath "$MASK_RELPATH" \
   --voxel-size "$VOXEL_SIZE" \
   --locres-sampling-A 12 \
   --locres-radius-A 12 \
