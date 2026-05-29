@@ -333,7 +333,7 @@ def _run_oracle_pipeline(
         focus_mask=focus_mask,
         premultiplied_ctf=bool(args.premultiplied_ctf),
         noise_model="radial" if args.noise_model == "radial1" else args.noise_model,
-        lazy=bool(args.lazy),
+        lazy=bool(getattr(args, "lazy", False)),
     )
     _write_json(pipeline_dir / "oracle_pipeline_info.json", summary)
     return pipeline_dir
@@ -368,6 +368,7 @@ def _run_compute_state(args, out: Path, pipeline_dir: Path, latent_point: np.nda
     compute_state_dir = out / "07_compute_state"
     latent_path = out / "target_latent_point.txt"
     np.savetxt(latent_path, np.asarray(latent_point, dtype=np.float32))
+    kernel_regression_mode = getattr(args, "compute_state_kernel_regression_mode", "standard")
 
     compute_state_args = argparse.Namespace(
         result_dir=str(pipeline_dir),
@@ -379,7 +380,7 @@ def _run_compute_state(args, out: Path, pipeline_dir: Path, latent_point: np.nda
         n_min_particles=int(args.compute_state_n_min_particles),
         zdim1=(latent_point.shape[1] == 1),
         no_z_regularization=False,
-        lazy=bool(args.lazy),
+        lazy=bool(getattr(args, "lazy", False)),
         particles=None,
         datadir=None,
         strip_prefix=None,
@@ -388,10 +389,10 @@ def _run_compute_state(args, out: Path, pipeline_dir: Path, latent_point: np.nda
         fsc_mask_edgewidth=None,
         latent_points=str(latent_path),
         save_all_estimates=bool(args.compute_state_save_all_estimates),
-        kernel_regression_mode=str(args.compute_state_kernel_regression_mode),
-        deconv_lambda_grid=args.compute_state_deconv_lambda_grid,
-        local_poly_degree=int(args.compute_state_local_poly_degree),
-        local_poly_bandwidth_multipliers=args.compute_state_local_poly_bandwidth_multipliers,
+        kernel_regression_mode=str(kernel_regression_mode),
+        deconv_lambda_grid=getattr(args, "compute_state_deconv_lambda_grid", None),
+        local_poly_degree=int(getattr(args, "compute_state_local_poly_degree", 3)),
+        local_poly_bandwidth_multipliers=getattr(args, "compute_state_local_poly_bandwidth_multipliers", None),
     )
     logger.info("Running recovar compute_state at %s", latent_path)
     compute_state_cmd.compute_state(compute_state_args)
@@ -441,18 +442,18 @@ def run_walkthrough(args, out: Path) -> dict:
         pipeline_dir = _run_oracle_pipeline(args, out, mask_paths, sim_info, voxel_size)
     else:
         pipeline_dir = _run_pipeline(args, out, mask_paths)
-    target_coords_entry = (
-        "latent_coords_noreg"
-        if args.compute_state_kernel_regression_mode in ("deconvolved", "local_poly")
-        else "latent_coords"
-    )
-    latent_point = _middle_state_latent_point(
-        pipeline_dir,
-        sim_info,
-        target_state,
-        args.zdim,
-        coords_entry=target_coords_entry,
-    )
+    kernel_regression_mode = getattr(args, "compute_state_kernel_regression_mode", "standard")
+    target_coords_entry = "latent_coords_noreg" if kernel_regression_mode in ("deconvolved", "local_poly") else "latent_coords"
+    if target_coords_entry == "latent_coords":
+        latent_point = _middle_state_latent_point(pipeline_dir, sim_info, target_state, args.zdim)
+    else:
+        latent_point = _middle_state_latent_point(
+            pipeline_dir,
+            sim_info,
+            target_state,
+            args.zdim,
+            coords_entry=target_coords_entry,
+        )
     compute_state_dir = _run_compute_state(args, out, pipeline_dir, latent_point)
 
     summary = {

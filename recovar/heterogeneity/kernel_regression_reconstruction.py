@@ -344,7 +344,11 @@ def _pad_image_weight_matrix_for_fixed_batch(image_weights, current_batch_size, 
 
 
 def _can_use_cuda_per_image_backproject(config: ForwardModelConfig) -> bool:
-    return custom_cuda_requested() and jax.default_backend() == "gpu" and core.decide_order(config.disc_type) <= 1
+    # dev2's per-image CUDA entry point backprojects full real images into an
+    # interleaved ``(half_vol, n_images)`` buffer.  This helper accumulates
+    # complex half-spectrum data terms, so keep the generic weighted path until
+    # the fast path is ported to the dev2 CUDA API.
+    return False
 
 
 def backproject_weight_sets_from_fft(
