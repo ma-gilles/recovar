@@ -75,6 +75,7 @@ def main() -> None:
     parser.add_argument("--workspace", default=None)
     parser.add_argument("--workspace-title", default="spike fullatom 100k method benchmark 20260517")
     parser.add_argument("--train-mask", type=Path, default=None)
+    parser.add_argument("--train-mask-psize", type=float, default=None)
     parser.add_argument("--import-lane", default="24hrs")
     parser.add_argument("--gpu-lane", default="48hrs-a100")
     parser.add_argument("--submit", action="store_true")
@@ -88,6 +89,9 @@ def main() -> None:
     if train_mask is None:
         binned_mask = bench_root / "manifests/volume_mask_union_box128.mrc"
         train_mask = binned_mask if binned_mask.exists() else source_run / "05_masks/volume_mask_union.mrc"
+    train_mask_psize = args.train_mask_psize
+    if train_mask_psize is None:
+        train_mask_psize = 2.5 if train_mask.name.endswith("_box128.mrc") else 1.25
     out_dir = bench_root / "cryosparc_3dflex"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -149,7 +153,7 @@ def main() -> None:
         params={
             "volume_blob_path": str(train_mask),
             "volume_out_name": "mask",
-            "volume_psize": 1.25,
+            "volume_psize": train_mask_psize,
         },
         title="Import training mask",
     )
@@ -168,6 +172,8 @@ def main() -> None:
             "bench_root": str(bench_root),
             "import_lane": args.import_lane,
             "gpu_lane": args.gpu_lane,
+            "train_mask": str(train_mask),
+            "train_mask_psize": train_mask_psize,
             "submitted": False,
             "jobs": {name: job.uid for name, job in jobs.items()},
         }
@@ -228,6 +234,8 @@ def main() -> None:
         "bench_root": str(bench_root),
         "import_lane": args.import_lane,
         "gpu_lane": args.gpu_lane,
+        "train_mask": str(train_mask),
+        "train_mask_psize": train_mask_psize,
         "submitted": bool(args.submit),
         "jobs": {name: job.uid for name, job in jobs.items()},
         "dynamic_outputs": {

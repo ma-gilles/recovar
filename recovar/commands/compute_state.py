@@ -166,6 +166,15 @@ def add_args(parser: argparse.ArgumentParser):
         help="Latent kernel-regression mode for compute_state volume reconstruction.",
     )
     parser.add_argument(
+        "--embedding-option",
+        choices=("cov_dist", "llh", "dist"),
+        default="cov_dist",
+        help=(
+            "Distance used for standard kernel regression. cov_dist uses the stored latent precision, "
+            "llh uses the full latent log-likelihood, and dist uses identity precision in latent space."
+        ),
+    )
+    parser.add_argument(
         "--deconv-lambda-grid",
         type=str,
         default=None,
@@ -222,6 +231,7 @@ def compute_state(args):
     n_min_particles = getattr(args, "n_min_particles", None)
     save_all_estimates = bool(getattr(args, "save_all_estimates", False))
     kernel_regression_mode = getattr(args, "kernel_regression_mode", "standard") or "standard"
+    embedding_option = getattr(args, "embedding_option", "cov_dist") or "cov_dist"
     deconv_lambda_grid = _parse_deconv_lambda_grid(getattr(args, "deconv_lambda_grid", None))
     local_poly_degree = int(getattr(args, "local_poly_degree", 3))
     local_poly_bandwidth_multipliers = _parse_local_poly_bandwidth_multipliers(
@@ -348,6 +358,7 @@ def compute_state(args):
         n_bins=n_bins,
         maskrad_fraction=maskrad_fraction,
         n_min_particles=n_min_particles,
+        embedding_option=embedding_option,
         save_all_estimates=save_all_estimates,
         apply_global_filtering=apply_global_filtering,
         fsc_mask=fsc_mask,

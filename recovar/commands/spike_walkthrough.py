@@ -291,6 +291,8 @@ def _run_pipeline(args, out: Path, mask_paths: dict[str, str]) -> Path:
         "--no-correct-contrast",
         "--noise-model",
         "radial" if args.noise_model == "radial1" else args.noise_model,
+        "--zdim",
+        str(args.zdim),
     ]
     if args.lazy:
         pipeline_cmd.append("--lazy")
@@ -383,7 +385,7 @@ def _run_compute_state(args, out: Path, pipeline_dir: Path, latent_point: np.nda
         maskrad_fraction=float(args.compute_state_maskrad_fraction),
         n_min_particles=int(args.compute_state_n_min_particles),
         zdim1=(latent_point.shape[1] == 1),
-        no_z_regularization=False,
+        no_z_regularization=bool(args.compute_state_no_z_regularization),
         lazy=bool(args.lazy),
         particles=None,
         datadir=None,
@@ -549,7 +551,7 @@ def run_walkthrough(args, out: Path) -> dict:
         pipeline_dir = _run_pipeline(args, out, mask_paths)
     target_coords_entry = (
         "latent_coords_noreg"
-        if args.compute_state_kernel_regression_mode in ("deconvolved", "local_poly")
+        if args.compute_state_no_z_regularization or args.compute_state_kernel_regression_mode in ("deconvolved", "local_poly")
         else "latent_coords"
     )
     latent_point = _target_state_latent_point(
@@ -702,6 +704,11 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--compute-state-maskrad-fraction", type=float, default=20.0)
     parser.add_argument("--compute-state-n-min-particles", type=int, default=100)
     parser.add_argument("--compute-state-save-all-estimates", action="store_true")
+    parser.add_argument(
+        "--compute-state-no-z-regularization",
+        action="store_true",
+        help="Pass --no-z-regularization to compute_state and target latent_coords_noreg.",
+    )
     parser.add_argument(
         "--kernel-report",
         action=argparse.BooleanOptionalAction,

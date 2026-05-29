@@ -22,7 +22,10 @@ BENCH_ROOT="${BENCH_ROOT:-$SCRATCH_ROOT/spike_fullatom_method_benchmark_100k}"
 OUTDIR="$BENCH_ROOT/cryodrgn/zdim${ZDIM}"
 DATASET="$SOURCE_RUN/03_dataset"
 
-export TMPDIR="${TMPDIR:-$SCRATCH_ROOT/tmp/cryodrgn_100k_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}}"
+DRGN_TMP_ROOT="${DRGN_TMP_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/tmp}"
+export TMPDIR="${TMPDIR:-$DRGN_TMP_ROOT/drgn100k_${SLURM_JOB_ID:-manual}}"
+export TMP="$TMPDIR"
+export TEMP="$TMPDIR"
 mkdir -p "$TMPDIR" "$OUTDIR" "$BENCH_ROOT/logs"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
@@ -42,6 +45,7 @@ echo "start=$(date -Is)"
 echo "source_run=$SOURCE_RUN"
 echo "outdir=$OUTDIR"
 echo "zdim=$ZDIM"
+echo "tmpdir=$TMPDIR"
 echo "cryodrgn=$(which cryodrgn)"
 nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits || true
 

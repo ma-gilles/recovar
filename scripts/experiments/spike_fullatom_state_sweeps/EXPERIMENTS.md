@@ -11,6 +11,75 @@ Scratch root for the current B100 full-atom spike dataset-size experiments:
 /scratch/gpfs/CRYOEM/gilleslab/tmp
 ```
 
+## Noise30/B80 Real Pipeline 1M/3M
+
+Purpose: run the actual `pipeline.py` embedding, not source-oracle, on the
+existing noise30/B80 1M and 3M datasets with the moving focus mask. This is the
+comparison target for the source-oracle/controlled-embedding diagnostics.
+
+Submission script:
+
+```text
+scripts/experiments/spike_fullatom_state_sweeps/submit_true_pipeline_noise30_b80_1m_3m_fullmem.sbatch
+```
+
+Submitted May 28:
+
+```text
+8879640  spfa-n30-real-pipe  array 0-1: 1M, 3M
+```
+
+Important settings:
+
+```text
+pipeline: zdim4, radial noise model, lazy image loading
+mask: <run>/05_masks/volume_mask_union.mrc
+focus mask: <run>/05_masks/focus_mask_moving.mrc
+compute_state: zdim4 reg/cov_dist, 50 bins, save all estimates, Bfactor 0
+low-memory flags: none
+```
+
+Outputs:
+
+```text
+<noise30-root>/n01000000/runs/n01000000_seed0000/06_pipeline_true_recovar_h100_fullmem_movingfocus_20260527
+<noise30-root>/n01000000/runs/n01000000_seed0000/07_compute_state_true_recovar_h100_fullmem_movingfocus_zdim4_reg_lazy
+
+<noise30-root>/n03000000/runs/n03000000_seed0000/06_pipeline_true_recovar_h100_fullmem_movingfocus_20260527
+<noise30-root>/n03000000/runs/n03000000_seed0000/07_compute_state_true_recovar_h100_fullmem_movingfocus_zdim4_reg_lazy
+```
+
+The 1M path already existed and is reused by the script; the 3M path was missing
+when this job was submitted.
+
+## Reproducible Diagnostic Plots
+
+Current reusable postprocess scripts for the oracle/noise debugging runs:
+
+```bash
+pixi run python scripts/experiments/spike_fullatom_state_sweeps/plot_noise1_sweep_with_gt_nearest.py
+pixi run python scripts/experiments/spike_fullatom_state_sweeps/plot_oracle_debug_embedding_variants.py --zdim both
+pixi run python scripts/experiments/spike_fullatom_state_sweeps/plot_oracle_3m_all50_bandwidths.py
+```
+
+The first script plots the completed noise=1 30k/100k/300k/1M sweep with the
+best unfiltered compute_state candidate across all 50 estimates and a
+nearest-1000 GT-mixture control. The GT control is built from
+`04_ground_truth/gt_volNNNN.mrc`, not `gt_volumes_used_by_simulator.npy`,
+because the stack is not in the same map convention as the FSC target MRCs.
+
+The all-50 script plots every unfiltered source-oracle zdim4/reg bandwidth
+candidate for the 3M/noise30 run, overlaid with the final compute_state output
+and the nearest-100 GT-mixture control selected from the saved
+`heterogeneity_distances.txt`.
+
+Current output roots:
+
+```text
+/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_direct_volume_shell_metrics_20260523/noise1_sweep_gt_nearest_repro_20260528
+/scratch/gpfs/CRYOEM/gilleslab/tmp/spike_fullatom_direct_volume_shell_metrics_20260523/oracle_debug_embedding_variants_repro_20260528
+```
+
 ## State 50 Baseline
 
 Purpose: original dataset-size sweep targeting state 50.
