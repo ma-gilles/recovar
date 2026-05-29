@@ -7,6 +7,7 @@ import warnings
 import numpy as np
 
 from recovar.heterogeneity import embedding
+from recovar.heterogeneity import local_polynomial_regression
 from recovar.output import output as o
 from recovar.utils import parser_args
 
@@ -114,6 +115,36 @@ def _get_embedding_components(pipeline_output, zdim, coords_entry, precision_ent
     )
 
 
+def _parse_deconv_lambda_grid(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",") if p.strip()]
+        if not parts:
+            raise ValueError("--deconv-lambda-grid must contain at least one value")
+        values = np.asarray([float(p) for p in parts], dtype=np.float32)
+    else:
+        values = np.asarray(value, dtype=np.float32).reshape(-1)
+    if values.size == 0 or not np.all(np.isfinite(values)) or np.any(values <= 0):
+        raise ValueError(f"--deconv-lambda-grid must contain finite positive values, got {value}")
+    return values
+
+
+def _parse_local_poly_bandwidth_multipliers(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",") if p.strip()]
+        if not parts:
+            raise ValueError("--local-poly-bandwidth-multipliers must contain at least one value")
+        values = np.asarray([float(p) for p in parts], dtype=np.float32)
+    else:
+        values = np.asarray(value, dtype=np.float32).reshape(-1)
+    if values.size == 0 or not np.all(np.isfinite(values)) or np.any(values <= 0):
+        raise ValueError(f"--local-poly-bandwidth-multipliers must contain finite positive values, got {value}")
+    return values
+
+
 def add_args(parser: argparse.ArgumentParser):
     parser = parser_args.standard_downstream_args(parser)
 
@@ -127,6 +158,63 @@ def add_args(parser: argparse.ArgumentParser):
         "--save-all-estimates",
         action="store_true",
         help="Save all estimates. This is useful for debugging.",
+    )
+    parser.add_argument(
+        "--kernel-regression-mode",
+        choices=("standard", "deconvolved", "local_poly"),
+        default="standard",
+        help="Latent kernel-regression mode for compute_state volume reconstruction.",
+    )
+    parser.add_argument(
+        "--embedding-option",
+        choices=("cov_dist", "llh", "dist"),
+        default="cov_dist",
+        help=(
+            "Distance used for standard kernel regression. cov_dist uses the stored latent precision, "
+            "llh uses the full latent log-likelihood, and dist uses identity precision in latent space."
+        ),
+    )
+    parser.add_argument(
+        "--deconv-lambda-grid",
+        type=str,
+        default=None,
+        help="Comma-separated lambda grid for --kernel-regression-mode deconvolved.",
+    )
+    parser.add_argument(
+        "--local-poly-degree",
+        type=int,
+        default=3,
+        help="Polynomial degree for --kernel-regression-mode local_poly.",
+    )
+    parser.add_argument(
+        "--local-poly-bandwidth-multipliers",
+        type=str,
+        default=None,
+        help="Comma-separated positive bandwidth multipliers for --kernel-regression-mode local_poly.",
+    )
+    parser.add_argument(
+        "--local-poly-basis",
+        choices=local_polynomial_regression.LOCAL_POLY_BASIS_OPTIONS,
+        default=local_polynomial_regression.DEFAULT_LOCAL_POLY_BASIS,
+        help="Polynomial basis for --kernel-regression-mode local_poly.",
+    )
+    parser.add_argument(
+        "--local-poly-pol-reg-type",
+        choices=local_polynomial_regression.LOCAL_POLY_POL_REG_TYPES,
+        default="none",
+        help="Polynomial coefficient/derivative regularization for --kernel-regression-mode local_poly.",
+    )
+    parser.add_argument(
+        "--local-poly-pol-reg-eta",
+        type=float,
+        default=0.0,
+        help="Strength for local polynomial coefficient/derivative regularization.",
+    )
+    parser.add_argument(
+        "--local-poly-pol-reg-power",
+        type=float,
+        default=2.0,
+        help="Power for --local-poly-pol-reg-type coeff.",
     )
 
     return parser
@@ -142,6 +230,17 @@ def compute_state(args):
     maskrad_fraction = getattr(args, "maskrad_fraction", 20)
     n_min_particles = getattr(args, "n_min_particles", None)
     save_all_estimates = bool(getattr(args, "save_all_estimates", False))
+    kernel_regression_mode = getattr(args, "kernel_regression_mode", "standard") or "standard"
+    embedding_option = getattr(args, "embedding_option", "cov_dist") or "cov_dist"
+    deconv_lambda_grid = _parse_deconv_lambda_grid(getattr(args, "deconv_lambda_grid", None))
+    local_poly_degree = int(getattr(args, "local_poly_degree", 3))
+    local_poly_bandwidth_multipliers = _parse_local_poly_bandwidth_multipliers(
+        getattr(args, "local_poly_bandwidth_multipliers", None)
+    )
+    local_poly_basis = getattr(args, "local_poly_basis", local_polynomial_regression.DEFAULT_LOCAL_POLY_BASIS)
+    local_poly_pol_reg_type = getattr(args, "local_poly_pol_reg_type", "none")
+    local_poly_pol_reg_eta = float(getattr(args, "local_poly_pol_reg_eta", 0.0))
+    local_poly_pol_reg_power = float(getattr(args, "local_poly_pol_reg_power", 2.0))
     apply_global_filtering = bool(getattr(args, "apply_global_filtering", False))
     fsc_mask_radius = getattr(args, "fsc_mask_radius", None)
     fsc_mask_edgewidth = getattr(args, "fsc_mask_edgewidth", None)
@@ -183,6 +282,30 @@ def compute_state(args):
         if target_zs.ndim == 1:
             logger.warning("Did you mean to use --zdim1?")
             target_zs = target_zs[None]
+
+    if kernel_regression_mode == "deconvolved":
+        if zdim != 1:
+            raise NotImplementedError(f"Deconvolved kernel regression only supports zdim=1; got zdim={zdim}")
+        if not no_z_regularization:
+            logger.info("Using noreg latent coordinates/precision for deconvolved kernel regression.")
+        no_z_regularization = True
+    elif kernel_regression_mode == "local_poly":
+        if zdim != 1:
+            raise NotImplementedError(f"local_poly kernel regression only supports zdim=1; got zdim={zdim}")
+        max_degree = 8
+        if local_poly_degree < 0 or local_poly_degree > max_degree:
+            raise ValueError(f"--local-poly-degree must be between 0 and {max_degree}, got {local_poly_degree}")
+        local_polynomial_regression._validate_local_poly_basis(local_poly_basis)
+        local_polynomial_regression._validate_pol_reg_type(local_poly_pol_reg_type)
+        if local_poly_pol_reg_eta < 0 or not np.isfinite(local_poly_pol_reg_eta):
+            raise ValueError("--local-poly-pol-reg-eta must be finite and nonnegative")
+        if not np.isfinite(local_poly_pol_reg_power):
+            raise ValueError("--local-poly-pol-reg-power must be finite")
+        if not no_z_regularization:
+            logger.info("Using noreg latent coordinates/precision for local_poly kernel regression.")
+        no_z_regularization = True
+    elif kernel_regression_mode != "standard":
+        raise ValueError(f"Unknown kernel_regression_mode={kernel_regression_mode!r}")
 
     # Select reg vs noreg entry names
     coords_entry = "latent_coords_noreg" if no_z_regularization else "latent_coords"
@@ -235,11 +358,20 @@ def compute_state(args):
         n_bins=n_bins,
         maskrad_fraction=maskrad_fraction,
         n_min_particles=n_min_particles,
+        embedding_option=embedding_option,
         save_all_estimates=save_all_estimates,
         apply_global_filtering=apply_global_filtering,
         fsc_mask=fsc_mask,
         fsc_mask_radius=fsc_mask_radius,
         fsc_mask_edgewidth=fsc_mask_edgewidth,
+        kernel_regression_mode=kernel_regression_mode,
+        deconv_lambda_grid=deconv_lambda_grid,
+        local_poly_degree=local_poly_degree,
+        local_poly_bandwidth_multipliers=local_poly_bandwidth_multipliers,
+        local_poly_basis=local_poly_basis,
+        local_poly_pol_reg_type=local_poly_pol_reg_type,
+        local_poly_pol_reg_eta=local_poly_pol_reg_eta,
+        local_poly_pol_reg_power=local_poly_pol_reg_power,
     )
 
 

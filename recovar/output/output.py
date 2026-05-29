@@ -683,7 +683,32 @@ def plot_umap(output_folder, zs, centers):
 
 
 
-def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state"):
+def compute_and_save_reweighted(
+    dataset,
+    path_subsampled,
+    zs,
+    cov_zs,
+    output_folder,
+    B_factor,
+    n_bins=30,
+    n_min_particles=100,
+    embedding_option="cov_dist",
+    save_all_estimates=False,
+    maskrad_fraction=20,
+    apply_global_filtering=False,
+    fsc_mask=None,
+    fsc_mask_radius=None,
+    fsc_mask_edgewidth=None,
+    vol_prefix="state",
+    kernel_regression_mode="standard",
+    deconv_lambda_grid=None,
+    local_poly_degree=3,
+    local_poly_bandwidth_multipliers=None,
+    local_poly_basis="monomial",
+    local_poly_pol_reg_type="none",
+    local_poly_pol_reg_eta=0.0,
+    local_poly_pol_reg_power=2.0,
+):
     """Compute reweighted volume estimates and save with standardized organization.
 
     Primary volumes (filtered, half-maps) are placed directly in
@@ -703,8 +728,15 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
         n_min_particles = 100
 
     mkdir_safe(output_folder)
-    from recovar.heterogeneity import heterogeneity_volume, latent_density
+    from recovar.heterogeneity import (
+        deconvolved_kernel_regression,
+        heterogeneity_volume,
+        latent_density,
+        local_polynomial_regression,
+    )
     n_vols = path_subsampled.shape[0]
+    if kernel_regression_mode not in ("standard", "deconvolved", "local_poly"):
+        raise ValueError(f"Unknown kernel_regression_mode={kernel_regression_mode!r}")
 
     for k in range(n_vols):
         vol_paths = VolumeOutputPaths(output_folder, vol_prefix, k)
@@ -727,10 +759,76 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
 
         heterogeneity_distances = ds.split_halfset_array(
             heterogeneity_distances, per_particle=ds.tilt_series_flag)
+        deconv_latent_differences = None
+        deconv_latent_precision = None
+        local_poly_latent_differences = None
+        local_poly_latent_precision = None
+        if kernel_regression_mode == "deconvolved":
+            if ndim != 1:
+                raise NotImplementedError(f"Deconvolved kernel regression only supports zdim=1; got ndim={ndim}")
+            zs_1d = np.asarray(zs, dtype=np.float32)
+            if zs_1d.ndim == 1:
+                zs_1d = zs_1d[:, None]
+            latent_differences = np.asarray(zs_1d[:, :1] - latent_points[:, :1], dtype=np.float32)
+            latent_precision = deconvolved_kernel_regression._coerce_1d_latent_precision(cov_zs)
+            deconv_latent_differences = ds.split_halfset_array(
+                latent_differences[:, 0],
+                per_particle=ds.tilt_series_flag,
+            )
+            deconv_latent_precision = ds.split_halfset_array(
+                latent_precision,
+                per_particle=ds.tilt_series_flag,
+            )
+        elif kernel_regression_mode == "local_poly":
+            if ndim != 1:
+                raise NotImplementedError(f"local_poly kernel regression only supports zdim=1; got ndim={ndim}")
+            zs_1d = np.asarray(zs, dtype=np.float32)
+            if zs_1d.ndim == 1:
+                zs_1d = zs_1d[:, None]
+            latent_differences = np.asarray(zs_1d[:, :1] - latent_points[:, :1], dtype=np.float32)
+            latent_precision = local_polynomial_regression.coerce_1d_latent_precision(cov_zs)
+            local_poly_latent_differences = ds.split_halfset_array(
+                latent_differences[:, 0],
+                per_particle=ds.tilt_series_flag,
+            )
+            local_poly_latent_precision = ds.split_halfset_array(
+                latent_precision,
+                per_particle=ds.tilt_series_flag,
+            )
 
         locres_maskrad = ds.grid_size * ds.voxel_size / maskrad_fraction
         logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
-        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, vol_paths, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely', use_fast_rfft=True)
+        heterogeneity_volume.make_volumes_kernel_estimate_local(
+            heterogeneity_distances,
+            ds,
+            vol_paths,
+            ndim,
+            n_bins,
+            B_factor,
+            tau=None,
+            n_min_particles=n_min_particles,
+            locres_sampling=locres_maskrad,
+            locres_maskrad=locres_maskrad,
+            locres_edgwidth=0,
+            upsampling_for_ests=1,
+            use_mask_ests=False,
+            grid_correct_ests=False,
+            save_all_estimates=save_all_estimates,
+            metric_used="locshellmost_likely",
+            use_fast_rfft=True,
+            kernel_regression_mode=kernel_regression_mode,
+            deconv_latent_differences=deconv_latent_differences,
+            deconv_latent_precision=deconv_latent_precision,
+            deconv_lambda_grid=deconv_lambda_grid,
+            local_poly_degree=local_poly_degree,
+            local_poly_bandwidth_multipliers=local_poly_bandwidth_multipliers,
+            local_poly_latent_differences=local_poly_latent_differences,
+            local_poly_latent_precision=local_poly_latent_precision,
+            local_poly_basis=local_poly_basis,
+            local_poly_pol_reg_type=local_poly_pol_reg_type,
+            local_poly_pol_reg_eta=local_poly_pol_reg_eta,
+            local_poly_pol_reg_power=local_poly_pol_reg_power,
+        )
 
         logger.info("Done with volume %d: %s", k, vol_paths.stem)
 

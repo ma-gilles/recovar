@@ -97,7 +97,7 @@ def test_run_test_dataset_custom_cuda_path(tmp_path):
 def test_run_test_dataset_jax_fallback_path(tmp_path):
     """Issue #131 regression: with RECOVAR_DISABLE_CUDA=1 forcing the JAX
     fallback, the heterogeneity-kernel auto-batch must be small enough to
-    fit. Without the fix in adaptive_kernel_discretization.py (which
+    fit. Without the fix in kernel_regression_reconstruction.py (which
     scales the budget down 3x when DISABLE_CUDA is set), this OOMs on
     every GPU regardless of VRAM size.
     """
@@ -122,7 +122,7 @@ def test_run_test_dataset_jax_fallback_path(tmp_path):
             "Issue #131 regression: the heterogeneity-kernel batch size is "
             "probably overshooting the JAX-fallback path's memory budget. "
             "Check the 3x scale-down logic in "
-            "recovar/heterogeneity/adaptive_kernel_discretization.py.\n"
+            "recovar/heterogeneity/kernel_regression_reconstruction.py.\n"
             f"--- batch-size lines ---\n{chr(10).join(het_lines)}\n"
             f"--- OOM lines ---\n{chr(10).join(oom_lines[:5])}\n"
             f"--- last 30 lines stdout ---\n"
@@ -140,6 +140,6 @@ def test_run_test_dataset_jax_fallback_path(tmp_path):
     assert "scaling heterogeneity-kernel memory budget" in _result_text(result), (
         "RECOVAR_DISABLE_CUDA=1 was set but the heterogeneity-kernel "
         "scale-down log line did not fire. Either the env-var check in "
-        "adaptive_kernel_discretization.py is broken, or some upstream "
+        "kernel_regression_reconstruction.py is broken, or some upstream "
         "consumer bypassed the kernel entirely."
     )

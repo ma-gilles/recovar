@@ -539,6 +539,60 @@ def post_process_from_filter_v2(
     return vol.astype(F_ty_flat.dtype)
 
 
+@functools.partial(jax.jit, static_argnums=[1, 2, 3, 4, 5, 6, 7, 8, 9])
+def post_process_predivided_fourier_volume(
+    fourier_volume,
+    og_volume_shape,
+    volume_upsampling_factor,
+    kernel="triangular",
+    use_spherical_mask=True,
+    grid_correct=True,
+    gridding_correct="square",
+    kernel_width=1,
+    return_real_space=False,
+    input_half_volume=True,
+):
+    """Post-process a Fourier volume that has already been divided by its filter.
+
+    This is the post-division part of :func:`post_process_from_filter_v2`.
+    It expands packed half-volume input when needed, inverse DFTs, crops to the
+    original size, optionally masks and gridding-corrects, and either returns a
+    real-space volume or the post-processed Fourier volume.
+    """
+    upsampled_volume_shape = tuple(3 * [og_volume_shape[0] * volume_upsampling_factor])
+    if input_half_volume is None:
+        input_half_volume = _infer_half_volume_layout(fourier_volume, upsampled_volume_shape)
+
+    if input_half_volume:
+        packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
+        fourier_flat, _ = _as_flat_single_volume(fourier_volume, packed_shape)
+        fourier_flat = fourier_transform_utils.half_volume_to_full_volume(
+            fourier_flat,
+            upsampled_volume_shape,
+        ).reshape(-1)
+    else:
+        fourier_flat, _ = _as_flat_single_volume(fourier_volume, upsampled_volume_shape)
+
+    vol = fourier_transform_utils.get_idft3(fourier_flat.reshape(upsampled_volume_shape))
+    vol = padding.unpad_volume_spatial_domain(vol, upsampled_volume_shape[0] - og_volume_shape[0])
+
+    if use_spherical_mask:
+        vol, _ = mask.soft_mask_outside_map(vol, cosine_width=3)
+
+    if grid_correct:
+        order = 1 if kernel == "triangular" else 0
+        grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
+        vol, _ = grid_fn(
+            vol.reshape(og_volume_shape), og_volume_shape[0], volume_upsampling_factor / kernel_width, order=order
+        )
+
+    if return_real_space:
+        return vol.real.astype(fourier_flat.real.dtype)
+
+    vol = fourier_transform_utils.get_dft3(vol.reshape(og_volume_shape))
+    return vol.astype(fourier_flat.dtype)
+
+
 def relion_reconstruct(
     cryo,
     noise_variance,

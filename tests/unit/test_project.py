@@ -34,6 +34,7 @@ class TestRegistry:
             "extract_image_subset_from_kmeans",
             "pipeline_with_outliers",
             "reconstruct_from_external_embedding",
+            "benchmark_kernel_bandwidth_1d",
         }
         assert expected.issubset(set(JOB_TYPES.keys()))
 

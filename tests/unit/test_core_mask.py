@@ -7,8 +7,8 @@ from scipy.ndimage import binary_dilation, distance_transform_edt
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-import recovar.core.mask as mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.core.mask as mask
 import recovar.utils as utils
 
 pytestmark = pytest.mark.unit
@@ -435,6 +435,32 @@ class TestMakeUnionGtMask:
         soft, binary = mask.make_union_gt_mask([vol], vol_shape)
         assert soft.shape == vol_shape
 
+    def test_dilation_iters_zero_skips_dilation(self):
+        """``dilation_iters=0`` should skip dilation entirely.
+
+        scipy.ndimage.binary_dilation with ``iterations<1`` iterates until no
+        change (filling everything for a connected mask). The wrapper should
+        treat zero/negative values as "skip dilation" so a tight binary mask
+        is preserved.
+        """
+        from scipy.ndimage import gaussian_filter
+
+        vol_shape = (32, 32, 32)
+        vol = np.zeros(vol_shape, dtype=np.float32)
+        vol[16, 16, 16] = 100.0
+        vol = gaussian_filter(vol, sigma=2.0)
+
+        _, binary_zero = mask.make_union_gt_mask([vol], vol_shape, dilation_iters=0)
+        _, binary_one = mask.make_union_gt_mask([vol], vol_shape, dilation_iters=1)
+
+        # If iter=0 fell through to scipy's "iterate until no change" branch,
+        # the mask would cover ~the whole connected component.
+        assert binary_zero.sum() < vol_shape[0] ** 3 // 2, (
+            f"dilation_iters=0 should be tight, got {binary_zero.sum()} voxels"
+        )
+        # And tight implies smaller than 1-iter dilation.
+        assert binary_zero.sum() < binary_one.sum()
+
 
 class TestMakeMask:
     """Tests for the standalone make_mask function."""
@@ -443,7 +469,7 @@ class TestMakeMask:
         rng = np.random.RandomState(seed)
         vol = np.zeros(shape, dtype=np.float32)
         s = signal_range
-        vol[s[0]:s[1], s[0]:s[1], s[0]:s[1]] = 5.0
+        vol[s[0] : s[1], s[0] : s[1], s[0] : s[1]] = 5.0
         return vol + rng.randn(*shape).astype(np.float32) * noise
 
     def test_output_shape_and_range(self):
@@ -509,6 +535,7 @@ class TestMakeMask:
 
     def test_mask_is_connected_with_cleanup(self):
         from scipy.ndimage import label as scipy_label
+
         vol = self._make_test_volume()
         result = mask.make_mask(vol, cleanup=True)
         binary = result > 0.5
@@ -591,3 +618,62 @@ class TestReferenceEquivalence:
         )
         np.testing.assert_array_equal(got_binary, exp_binary)
         np.testing.assert_allclose(got_soft, exp_soft)
+
+    def test_make_localized_moving_gt_mask_smooth_and_localized(self):
+        # Build 10 GT volumes on a 24^3 grid. Place a static blob at one
+        # location and a moving (different sign each frame) blob at another
+        # — the focus mask should localize on the moving blob, not the
+        # static one, and it should be smooth (have a soft cosine edge).
+        rng = np.random.default_rng(0)
+        N = 24
+        shape = (N, N, N)
+        n_vols = 10
+        vols = rng.standard_normal((n_vols, *shape), dtype=np.float32) * 0.01
+
+        # Static blob (centered): not in the focus mask, but contributes to envelope.
+        vols[:, 8:12, 8:12, 8:12] += 5.0
+
+        # Moving blob: varies sign across frames → high per-voxel std.
+        scale = np.linspace(-1.0, 1.0, n_vols, dtype=np.float32)
+        vols[:, 16:20, 16:20, 16:20] += scale[:, None, None, None] * 10.0
+
+        soft, binary = mask.make_localized_moving_gt_mask(
+            vols,
+            volume_shape=shape,
+            percentile=90.0,
+            lowpass_sigma=1.0,
+            extend=1,
+            soft_edge=2,
+        )
+
+        assert soft.shape == shape
+        assert binary.shape == shape
+        assert soft.dtype == np.float32
+        # Soft cosine edge → some intermediate (0,1) values exist.
+        assert (soft > 1e-3).sum() > binary.sum(), "soft edge should add taper voxels"
+        assert soft.max() <= 1.0 + 1e-5
+        assert soft.min() >= 0.0
+        # Localizes on the moving blob, not the static one.
+        moving_core = binary[16:20, 16:20, 16:20]
+        static_core = binary[8:12, 8:12, 8:12]
+        assert moving_core.sum() > 0, "moving blob should be in focus mask"
+        assert static_core.sum() == 0, "static blob should not be in focus mask"
+
+    def test_make_localized_moving_gt_mask_higher_percentile_is_tighter(self):
+        rng = np.random.default_rng(1)
+        N = 24
+        shape = (N, N, N)
+        n_vols = 8
+        vols = rng.standard_normal((n_vols, *shape), dtype=np.float32) * 0.01
+        scale = np.linspace(-1.0, 1.0, n_vols, dtype=np.float32)
+        # A larger moving region so there are several "intensities" of motion.
+        vols[:, 4:20, 4:20, 4:20] += scale[:, None, None, None] * np.linspace(0.5, 5.0, 16)[None, :, None, None]
+
+        _, b90 = mask.make_localized_moving_gt_mask(
+            vols, volume_shape=shape, percentile=90.0, lowpass_sigma=1.0, extend=1, soft_edge=2
+        )
+        _, b99 = mask.make_localized_moving_gt_mask(
+            vols, volume_shape=shape, percentile=99.0, lowpass_sigma=1.0, extend=1, soft_edge=2
+        )
+        # p99 should be a (non-strict) subset of p90 in voxel count.
+        assert b99.sum() <= b90.sum()

@@ -6,20 +6,20 @@ import tempfile
 import numpy as np
 import pytest
 
+from recovar.simulation.pdb_utils import AtomGroup
 from recovar.simulation.trajectory_generation import (
-    CHAIN_GROUPS_5NRL,
-    HINGE_INDEX_5NRL,
     compute_bfactor_scaling,
     generate_conformation_2D,
     generate_trajectory_volumes,
+    path_arm_only,
     path_asymmetric,
+    path_head_only,
     path_symmetric,
     prepare_5nrl_subcomplexes,
     rigid_motion,
     split_atom_group_by_chains,
     stitched_path,
 )
-from recovar.simulation.pdb_utils import AtomGroup
 
 pytestmark = pytest.mark.unit
 
@@ -142,6 +142,25 @@ class TestPathFunctions:
         result = generate_conformation_2D(groups, 5, 10, pivot)
         # Ab (index 0) should not be rotated
         np.testing.assert_allclose(result[0], groups[0], atol=1e-14)
+
+    def test_path_arm_only_keeps_head_fixed(self, simple_groups):
+        groups, pivot = simple_groups
+        # Db (head) should be in the SAME pose at t=0 and t=20 (head fixed across the trajectory).
+        # Note: rot_around_x(0) is not identity (notebook offset of -10 deg), so we compare two
+        # different `t` values rather than to the input groups.
+        result_a = path_arm_only(0, groups, pivot)
+        result_b = path_arm_only(20, groups, pivot)
+        np.testing.assert_allclose(result_a[0], result_b[0], atol=1e-14)  # Ab unchanged
+        np.testing.assert_allclose(result_a[2], result_b[2], atol=1e-14)  # Db (head) unchanged
+        assert not np.allclose(result_a[1], result_b[1])  # B (arm) varies with t
+
+    def test_path_head_only_keeps_arm_fixed(self, simple_groups):
+        groups, pivot = simple_groups
+        result_a = path_head_only(0, groups, pivot)
+        result_b = path_head_only(20, groups, pivot)
+        np.testing.assert_allclose(result_a[0], result_b[0], atol=1e-14)  # Ab unchanged
+        np.testing.assert_allclose(result_a[1], result_b[1], atol=1e-14)  # B (arm) unchanged
+        assert not np.allclose(result_a[2], result_b[2])  # Db (head) varies with t
 
 
 # ---------------------------------------------------------------------------

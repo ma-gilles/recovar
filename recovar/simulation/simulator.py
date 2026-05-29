@@ -400,7 +400,7 @@ def generate_synthetic_dataset(
     n_tilts=-1,
     dose_per_tilt=3,
     angle_per_tilt=3,
-    image_dtype=np.float16,
+    image_dtype=np.float32,
     image_offset_n_std=0.0,
     per_particle_contrast=True,
     premultiplied_ctf=False,
@@ -461,30 +461,49 @@ def generate_synthetic_dataset(
         volumes = volumes / np.sqrt(norm_image)
         scale_vol = scale_vol / np.sqrt(norm_image)
 
-    main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups = generate_simulated_dataset(
-        volumes,
-        voxel_size,
-        volume_distribution,
-        n_images,
-        noise_variance,
-        noise_scale_std,
-        contrast_std,
-        put_extra_particles,
-        percent_outliers=percent_outliers,
-        dataset_param_generator=dataset_param_generator,
-        volume_radius=volume_radius,
-        outlier_volume=outlier_volume,
-        disc_type=disc_type,
-        mrc_file=mrc_file,
-        n_tilts=n_tilts,
-        dose_per_tilt=dose_per_tilt,
-        angle_per_tilt=angle_per_tilt,
-        image_offset_n_std=image_offset_n_std,
-        per_particle_contrast=per_particle_contrast,
-        premultiplied_ctf=premultiplied_ctf,
-        noise_increase_per_tilt=noise_increase_per_tilt,
-        percent_tilt_series_outliers=percent_tilt_series_outliers,
+    particles_file = output_folder + f"/particles.{grid_size}.mrcs"
+    _target_dtype = np.dtype(image_dtype)
+    _mrc_mode = mrcfile.utils.mode_from_dtype(_target_dtype)
+    logger.info(
+        "Streaming simulated particles directly to %s: dtype=%s mode=%d total=%d",
+        particles_file,
+        _target_dtype,
+        _mrc_mode,
+        int(n_images),
     )
+    with mrcfile.new_mmap(
+        particles_file,
+        shape=(int(n_images), int(grid_size), int(grid_size)),
+        mrc_mode=_mrc_mode,
+        overwrite=True,
+    ) as mrc:
+        main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups = generate_simulated_dataset(
+            volumes,
+            voxel_size,
+            volume_distribution,
+            n_images,
+            noise_variance,
+            noise_scale_std,
+            contrast_std,
+            put_extra_particles,
+            percent_outliers=percent_outliers,
+            dataset_param_generator=dataset_param_generator,
+            volume_radius=volume_radius,
+            outlier_volume=outlier_volume,
+            disc_type=disc_type,
+            mrc_file=mrc,
+            n_tilts=n_tilts,
+            dose_per_tilt=dose_per_tilt,
+            angle_per_tilt=angle_per_tilt,
+            image_offset_n_std=image_offset_n_std,
+            per_particle_contrast=per_particle_contrast,
+            premultiplied_ctf=premultiplied_ctf,
+            noise_increase_per_tilt=noise_increase_per_tilt,
+            percent_tilt_series_outliers=percent_tilt_series_outliers,
+        )
+        mrc.voxel_size = voxel_size
+        logger.info("Streaming simulated particles: file synced and closed")
+    main_image_stack = None
 
     # Add additional simulation parameters that weren't set in generate_simulated_dataset
     additional_params = {
@@ -502,12 +521,6 @@ def generate_synthetic_dataset(
     }
     simulation_info.update(additional_params)
 
-    # Save outputs
-    particles_file = output_folder + f"/particles.{grid_size}.mrcs"
-
-    with mrcfile.new(particles_file, overwrite=True) as mrc:
-        mrc.set_data(main_image_stack.astype(image_dtype))
-        mrc.voxel_size = voxel_size
     poses = (rots.astype(np.float32), trans.astype(np.float32))
     utils.pickle_dump(poses, output_folder + "/poses.pkl")
     save_ctf_params(output_folder, grid_size, ctf_params, voxel_size)
@@ -705,11 +718,15 @@ def generate_simulated_dataset(
         premultiplied_ctf=premultiplied_ctf,
     )
 
-    image_means = np.mean(main_image_stack, axis=(-1, -2))
-    image_mean_std = np.std(image_means)
-    logger.info("Image mean mean %s, image mean std: %s", np.mean(image_means), image_mean_std)
-    per_image_offset = np.random.randn(n_images) * image_mean_std * image_offset_n_std
-    main_image_stack += per_image_offset[:, None, None]
+    if image_offset_n_std != 0:
+        image_means = np.mean(main_image_stack, axis=(-1, -2))
+        image_mean_std = np.std(image_means)
+        logger.info("Image mean mean %s, image mean std: %s", np.mean(image_means), image_mean_std)
+        per_image_offset = np.random.randn(n_images) * image_mean_std * image_offset_n_std
+        main_image_stack += per_image_offset[:, None, None]
+    else:
+        per_image_offset = np.zeros(n_images, dtype=np.float32)
+        logger.info("Skipping per-image offset: image_offset_n_std=0")
 
     if put_extra_particles:
         # Make other particles with same ctf but different rots

@@ -206,6 +206,33 @@ def path_left_right(t, group_coords, fixed_pt):
     return coords
 
 
+def path_identity(t, group_coords, fixed_pt):
+    """No-rotation path: subcomplexes returned in their original PDB frame.
+
+    Independent of ``t``. Useful for generating a strictly-homogeneous
+    dataset (single canonical conformation) from the original 5nrl
+    coordinates so that an atomic-model file written from the same
+    coordinates aligns with the simulated volume.
+    """
+    del t
+    return [c.copy() for c in group_coords]
+
+
+def path_arm_only(t, group_coords, fixed_pt):
+    """Path where only the right arm (B) rotates; the head (Db) stays fixed.
+
+    Useful when you want a smaller moving region with a larger rotation
+    angle — exercises ``compute_state``'s focus mask on a localized swept
+    volume rather than the combined B+Db region used by ``path_symmetric``.
+    """
+    return generate_conformation_2D(group_coords, t, 0, fixed_pt)
+
+
+def path_head_only(t, group_coords, fixed_pt):
+    """Path where only the head (Db) rotates; the right arm (B) stays fixed."""
+    return generate_conformation_2D(group_coords, 0, t, fixed_pt)
+
+
 def stitched_path(t, group_coords, fixed_pt):
     """Two-segment path: symmetric up to t=35, then asymmetric reversal.
 
@@ -366,11 +393,11 @@ def generate_trajectory_volumes(
     str
         Volume prefix path (e.g. ``<dir>/vol`` for files vol0000.mrc, ...).
     """
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar import utils
+    from recovar.output import output as output_module
     from recovar.simulation import simulate_scattering_potential as ssp
     from recovar.simulation.pdb_utils import AtomGroup
-    from recovar.output import output as output_module
-    from recovar import utils
-    import recovar.core.fourier_transform_utils as ftu
 
     if voxel_size is None:
         voxel_size = 4.25 * 128 / grid_size
