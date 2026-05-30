@@ -301,7 +301,7 @@ def _run_pipeline(args, out: Path, mask_paths: dict[str, str]) -> Path:
     if args.very_low_memory_option:
         pipeline_cmd.append("--very-low-memory-option")
     if args.pipeline_gpu_memory is not None:
-        pipeline_cmd.extend(["--gpu-gb", str(args.pipeline_gpu_memory)])
+        pipeline_cmd.extend(["--gpu-budget-gb", str(args.pipeline_gpu_memory)])
     if args.premultiplied_ctf:
         pipeline_cmd.append("--premultiplied-ctf")
 
