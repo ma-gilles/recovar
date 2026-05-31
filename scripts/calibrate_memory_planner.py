@@ -78,9 +78,11 @@ def run_pipeline_cell(
     env = dict(os.environ)
     if backend == "jax_fallback":
         env["RECOVAR_DISABLE_CUDA"] = "1"
+        env.pop("RECOVAR_CUDA_DISABLE", None)
     else:
         env.pop("RECOVAR_DISABLE_CUDA", None)
         env.pop("RECOVAR_CUDA_DISABLE", None)
+    env["RECOVAR_DEBUG_FORCE_N_PCS"] = str(n_pcs)
 
     if command == "pipeline":
         cmd = [
@@ -98,19 +100,12 @@ def run_pipeline_cell(
             "--correct-contrast",
             "-o",
             str(out_dir / "pipeline_output"),
-            # Diagnostics are always-on now; no flag needed. Use
-            # --memory-profile if heavyweight JAX-profiler captures
-            # are wanted.
+            "--memory-profile",
             *extra_pipeline_args,
         ]
-        # Force the planner to use exactly n_pcs by pinning adaptive-n-pcs OFF
-        # and relying on covariance_estimation's default 200 path; for n_pcs
-        # < 200 we use --very-low-memory-option / a custom override is left
-        # to the future, since the sweep currently maps n_pcs in {4, 20, 50,
-        # 200}. For the prototype, we record peaks at the default 200 PC
-        # config and document partial coverage.
-        # TODO(calibrate): once a per-cell n_pcs override flag exists, plumb
-        # it through here to populate the {4, 20, 50, 200} grid fully.
+        # Sweep-only hook added by the PR: force the covariance n_pcs after
+        # normal planning so the cell label reflects the actual workload.
+        # This is intentionally not user-facing.
     elif command == "compute_state":
         # compute_state calibration: agent should populate this branch with
         # the right invocation once a baseline pipeline output is available.
@@ -129,8 +124,8 @@ def run_pipeline_cell(
     wall_time_s = time.time() - t0
 
     status = "ok" if result.returncode == 0 else "failed"
-    # Extract peaks from memory_trace.jsonl
-    trace_path = out_dir / "pipeline_output" / "memory_trace.jsonl"
+    # Extract peaks from _diagnostics/memory_trace.jsonl.
+    trace_path = out_dir / "pipeline_output" / "_diagnostics" / "memory_trace.jsonl"
     peak_total = None
     peak_by_phase: dict[str, float] = {}
     if trace_path.exists():

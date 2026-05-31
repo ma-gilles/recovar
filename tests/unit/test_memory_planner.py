@@ -520,7 +520,7 @@ def test_jax_fallback_deflates_legacy_budget(monkeypatch, tmp_path):
 
     ``apply_memory_planning_args`` must deflate the value handed to
     ``set_gpu_memory_limit`` (which drives the legacy batch-size
-    formulas) by a backend-specific divisor — 3.0 for jax_fallback,
+    formulas) by a backend-specific divisor — 5.0 for jax_fallback,
     1.0 for custom_cuda.
     """
     import argparse
@@ -555,8 +555,38 @@ def test_jax_fallback_deflates_legacy_budget(monkeypatch, tmp_path):
         outdir=tmp_path,
     )
     # Effective budget = min(60, jax_limit=80, physical_free-reserve=74) = 60.
-    # 60 GB / 3.0 = 20 GB handed to legacy formulas.
-    assert captured["value"] == pytest.approx(20.0, rel=0.02)
+    # 60 GB / 5.0 would be 12 GB, but PR-138 high-budget fallback cells
+    # need the formula budget capped at the largest passing cell (4.8 GB).
+    assert captured["value"] == pytest.approx(4.8, rel=0.02)
+
+
+def test_jax_fallback_deflates_central_plan_batch_sizes(monkeypatch):
+    """The centralized plan must also use the fallback divisor.
+
+    ``pipeline.py`` reads ``plan.image_batch_size`` directly, so only
+    deflating the legacy global helper is insufficient for modern callers.
+    """
+    _stub_helpers(monkeypatch, gpu_total=80.0)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)
+
+    from recovar.utils import cuda_env
+    from recovar.utils import memory_planner as mp
+
+    monkeypatch.setattr(cuda_env, "detect_backend", lambda: "jax_fallback")
+
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=128,
+        n_images=1000,
+        requested_gpu_gb=60.0,
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=False,
+    )
+
+    assert plan.budget.effective_budget_gb == pytest.approx(60.0)
+    # _stub_helpers image formula at grid=128 is int(gpu_memory * 16).
+    assert plan.image_batch_size == 76
 
 
 def test_custom_cuda_does_not_deflate_legacy_budget(monkeypatch, tmp_path):
@@ -600,6 +630,52 @@ def test_custom_cuda_does_not_deflate_legacy_budget(monkeypatch, tmp_path):
     # --gpu-budget-gb; but apply_memory_planning_args must stay a
     # no-op for the limit when no deflation is needed.)
     assert "value" not in captured
+
+
+def test_grid_256_column_batch_is_capped(monkeypatch):
+    """The planner caps 256^3 covariance-column batches to bound H/B accumulators."""
+    _stub_helpers(monkeypatch, gpu_total=76.0)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)
+    _stub_backend_custom(monkeypatch)
+
+    from recovar import utils as _helpers
+    from recovar.utils import memory_planner as mp
+
+    monkeypatch.setattr(_helpers, "get_column_batch_size", lambda _grid_size, _gpu_memory: 100)
+
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=256,
+        n_images=5000,
+        requested_gpu_gb=None,
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=True,
+    )
+    assert plan.column_batch_size == 50
+
+
+def test_grid_256_volume_batch_is_capped(monkeypatch):
+    """The planner caps 256^3 PCA FFT batches to bound XLA FFT temporaries."""
+    _stub_helpers(monkeypatch, gpu_total=76.0)
+    _stub_preflight(monkeypatch, total=80.0, free=78.0)
+    _stub_backend_custom(monkeypatch)
+
+    from recovar import utils as _helpers
+    from recovar.utils import memory_planner as mp
+
+    monkeypatch.setattr(_helpers, "get_vol_batch_size", lambda _grid_size, _gpu_memory: 50)
+
+    plan = mp.make_memory_plan(
+        command="pipeline",
+        grid_size=256,
+        n_images=5000,
+        requested_gpu_gb=None,
+        low_memory=False,
+        very_low_memory=False,
+        adaptive_n_pcs=True,
+    )
+    assert plan.volume_batch_size == 10
 
 
 # ---------------------------------------------------------------------------

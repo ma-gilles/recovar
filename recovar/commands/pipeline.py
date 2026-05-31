@@ -268,10 +268,11 @@ def add_args(parser: argparse.ArgumentParser):
         help="Accept running on CPU if no GPU is found",
     )
     # Memory planning flags: --gpu-budget-gb, --low-memory-option,
-    # --very-low-memory-option, --adaptive-memory / --adaptive-n-pcs,
+    # --very-low-memory-option, --adaptive-n-pcs,
     # --memory-profile, --fail-on-memory-exceed, --memory-safety-fraction.
-    # Diagnostics (memory_plan.json, memory_trace.jsonl, args.json,
-    # allocator_env.json) are always-on under <outdir>/_diagnostics/.
+    # memory_plan.json is always written under <outdir>/_diagnostics/;
+    # memory_trace.jsonl, args.json, and allocator_env.json are produced
+    # only when --memory-profile is set.
     from recovar.utils.parser_args import add_memory_planning_args as _add_mem_args
 
     _add_mem_args(parser)
@@ -752,8 +753,9 @@ def standard_recovar_pipeline(args):
 
     # Push the soft budget into ``set_gpu_memory_limit`` early so any code
     # that runs before the dataset is loaded (notably ``downsample_to_disk``)
-    # uses the user's --gpu-budget-gb. The MemoryPlanner overwrites it later with
-    # the effective_budget once we know grid_size.
+    # uses the user's --gpu-budget-gb. Once the dataset is loaded, the
+    # MemoryPlanner returns the effective budget used by the main pipeline
+    # and only mutates the global legacy limit for backend-specific deflation.
     if args.gpu_memory is not None:
         utils.set_gpu_memory_limit(args.gpu_memory)
         logger.info(
@@ -1048,6 +1050,7 @@ def standard_recovar_pipeline(args):
                 plan.calibration_status,
             )
             covariance_options["n_pcs_to_compute"] = plan.n_pcs_to_compute
+        covariance_options["column_batch_size"] = plan.column_batch_size
 
         # Debug-only override: external sweep harnesses can set this env
         # var to force a specific n_pcs per cell. Not user-facing.
@@ -1110,6 +1113,7 @@ def standard_recovar_pipeline(args):
                     use_reg_mean_in_contrast=args.use_reg_mean_in_contrast,
                     use_multi_gpu=args.multi_gpu,
                     n_gpus=args.n_gpus,
+                    vol_batch_size=plan.volume_batch_size,
                 )
             )
             if idx == num_foc_masks - 1:

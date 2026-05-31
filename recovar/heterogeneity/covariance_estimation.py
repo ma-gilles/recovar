@@ -222,7 +222,7 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
             if total_memory_gb > gpu_memory:
                 logger.warning(
                     "Predicted peak (%.1f GB) exceeds GPU budget (%.1f GB). "
-                    "If you get OOM, use --adaptive-n-pcs or --gpu-gb <smaller>.",
+                    "If you get OOM, use --adaptive-n-pcs or --gpu-budget-gb <smaller>.",
                     total_memory_gb,
                     gpu_memory,
                 )
@@ -254,9 +254,18 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
         "mask_images_in_proj": False,
         "mask_images_in_H_B": True,
         "downsample_from_fsc": False,
+        "column_batch_size": None,
     }
 
     return options
+
+
+def _column_batch_size_for_options(grid_size, gpu_memory, options):
+    """Return the covariance-column batch size, honoring planner overrides."""
+    configured = options.get("column_batch_size") if isinstance(options, dict) else None
+    if configured is not None:
+        return utils.safe_batch_size(int(configured))
+    return utils.get_column_batch_size(grid_size, gpu_memory)
 
 
 @nvtx.annotate("set_covariance_options", color="red")
@@ -425,7 +434,7 @@ def compute_regularized_covariance_columns_in_batch(
         *covariance_cols* is a dict with key ``'est_mask'`` and *fscs*
         contains per-column FSC curves.
     """
-    frequency_batch = utils.get_column_batch_size(dataset.grid_size, gpu_memory)
+    frequency_batch = _column_batch_size_for_options(dataset.grid_size, gpu_memory, options)
 
     covariance_cols = []
     fscs = []
@@ -1089,7 +1098,7 @@ def compute_H_B_for_halfset(
 
     # Batch sizes
     image_batch_size = utils.safe_batch_size(utils.get_image_batch_size(cryo.grid_size, gpu_memory))
-    column_batch_size = utils.get_column_batch_size(cryo.grid_size, gpu_memory)
+    column_batch_size = _column_batch_size_for_options(cryo.grid_size, gpu_memory, options)
 
     n_picked = picked_frequencies.size
     H_out = np.empty([volume_size, n_picked], dtype=cryo.dtype)

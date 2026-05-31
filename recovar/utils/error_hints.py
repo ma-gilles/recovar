@@ -22,6 +22,8 @@ Categories targeted:
     failed to load or build.
   * ``cpu_fallback_needed`` — no GPU detected and ``--accept-cpu`` not
     set.
+  * ``disk_space_exhausted`` — filesystem full / quota exceeded while
+    writing outputs or compiler temporaries.
   * ``dataset_path_error`` — ``FileNotFoundError`` / ``OSError`` on a
     dataset file.
 
@@ -34,6 +36,7 @@ codes.
 from __future__ import annotations
 
 import dataclasses
+import errno
 import logging
 import os
 import re
@@ -177,6 +180,17 @@ _XLA_AUTOTUNER_PATTERNS = [
     )
 ]
 
+_DISK_SPACE_PATTERNS = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"Disk quota exceeded",
+        r"No space left on device",
+        r"\[Errno 122\]",
+        r"\[Errno 28\]",
+        r"ptxas fatal\s+: Internal error: writing file",
+    )
+]
+
 
 def _looks_like_oom(text: str) -> bool:
     return any(p.search(text) for p in _OOM_PATTERNS)
@@ -198,6 +212,10 @@ def _looks_like_path_error(text: str) -> bool:
     if "FileNotFoundError" in text or "No such file or directory" in text:
         return True
     return any(p.search(text) for p in _PATH_PATTERNS)
+
+
+def _looks_like_disk_space(text: str) -> bool:
+    return any(p.search(text) for p in _DISK_SPACE_PATTERNS)
 
 
 def _conflicting_process_present(ctx: DiagnosticContext, requested_gb: float | None) -> bool:
@@ -239,13 +257,13 @@ def _hint_gpu_oom(ctx: DiagnosticContext) -> ErrorHint:
     Decision tree (first match wins, most specific to most generic):
 
       1. Another process is using a significant chunk of the GPU.
-         → fix: switch GPUs (CUDA_VISIBLE_DEVICES) or lower --gpu-gb.
+         → fix: switch GPUs (CUDA_VISIBLE_DEVICES) or lower --gpu-budget-gb.
 
       2. The planner already warned this would OOM (predicted_peak >
          budget, or covariance fixed allocations > 50% of budget).
-         → fix: --n-pcs-adaptive (the warning that fired pre-launch).
+         → fix: --adaptive-n-pcs (the warning that fired pre-launch).
 
-      3. Generic OOM. Suggest lowering --gpu-gb and/or --n-pcs-adaptive.
+      3. Generic OOM. Suggest lowering --gpu-budget-gb and/or --adaptive-n-pcs.
          If RECOVAR_DISABLE_CUDA=1 is set, mention it as informational
          (the fallback path uses more memory), but DO NOT tell the user
          to unset it — they set it deliberately.
@@ -279,7 +297,7 @@ def _hint_gpu_oom(ctx: DiagnosticContext) -> ErrorHint:
         )
         suggestions = [
             "CUDA_VISIBLE_DEVICES=<idx-of-free-gpu> recovar pipeline ...   (run on a different GPU)",
-            "OR lower the budget so RECOVAR fits beside the other process: --gpu-gb <smaller-N>",
+            "OR lower the budget so RECOVAR fits beside the other process: --gpu-budget-gb <smaller-N>",
             "OR stop / wait for the other GPU process (check `nvidia-smi`)",
         ]
         return ErrorHint(
@@ -311,7 +329,7 @@ def _hint_gpu_oom(ctx: DiagnosticContext) -> ErrorHint:
         )
         suggestions = [
             "recovar pipeline ... --adaptive-n-pcs   (planner auto-shrinks n_pcs to fit budget)",
-            "OR raise --gpu-gb if a larger GPU is available, or use a smaller --grid-size",
+            "OR raise --gpu-budget-gb if a larger GPU is available, or use a smaller --grid-size",
         ]
         return ErrorHint(
             category="gpu_oom",
@@ -335,7 +353,7 @@ def _hint_gpu_oom(ctx: DiagnosticContext) -> ErrorHint:
         )
     cause = " ".join(cause_parts)
     suggestions = [
-        "recovar pipeline ... --gpu-gb <smaller-N>   (tighter budget → planner shrinks batches)",
+        "recovar pipeline ... --gpu-budget-gb <smaller-N>   (tighter budget -> planner shrinks batches)",
         "OR recovar pipeline ... --adaptive-n-pcs   (if a pre-launch warning suggested it)",
     ]
     return ErrorHint(
@@ -461,6 +479,24 @@ def _hint_dataset_path(ctx: DiagnosticContext, raw_text: str) -> ErrorHint:
     )
 
 
+def _hint_disk_space(ctx: DiagnosticContext, raw_text: str) -> ErrorHint:
+    return ErrorHint(
+        category="disk_space_exhausted",
+        summary="RECOVAR could not write output because the filesystem is full or quota-limited.",
+        likely_cause=(
+            "The failing operation reported disk quota or free-space exhaustion while "
+            "writing RECOVAR outputs, JAX compiler temporaries, or CUDA build artifacts. "
+            "This is a storage/quota problem, not a GPU-memory problem."
+        ),
+        suggestions=[
+            "free space or choose an output directory on a filesystem with quota headroom",
+            "set TMPDIR, PIXI_HOME, RATTLER_CACHE_DIR, and RECOVAR_CUDA_CACHE_DIR to scratch paths with space",
+            "for test harnesses, delete generated cells/log-heavy outputs before rerunning",
+        ],
+        diagnostic_context={"raw_excerpt": raw_text[-400:] if raw_text else ""},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public classifier
 # ---------------------------------------------------------------------------
@@ -477,6 +513,8 @@ def classify_text(text: str, context: DiagnosticContext | None = None) -> ErrorH
     # (e.g. "fusion" near "allocation"). Specific pattern wins.
     if _looks_like_xla_autotuner(text):
         return _hint_xla_autotuner_failed(ctx, text)
+    if _looks_like_disk_space(text):
+        return _hint_disk_space(ctx, text)
     if _looks_like_oom(text):
         return _hint_gpu_oom(ctx)
     if _looks_like_cuda_build(text):
@@ -501,6 +539,8 @@ def classify_text(text: str, context: DiagnosticContext | None = None) -> ErrorH
 def classify_exception(exc: BaseException, context: DiagnosticContext | None = None) -> ErrorHint | None:
     """Classify a live exception by inspecting its repr + str."""
     text = f"{type(exc).__name__}: {exc!s}"
+    if isinstance(exc, OSError) and exc.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", 122)}:
+        return _hint_disk_space(context or collect_context(), text)
     if isinstance(exc, FileNotFoundError):
         return _hint_dataset_path(context or collect_context(), text)
     return classify_text(text, context)

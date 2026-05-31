@@ -90,7 +90,7 @@ def add_memory_planning_args(parser: argparse.ArgumentParser):
     """Add the full GPU-memory flag set for any heavy-GPU command.
 
     Adds:
-      - ``--gpu-budget-gb``                        budget (caps JAX + batch formulas)
+      - ``--gpu-budget-gb``                 soft RECOVAR batch-size budget
       - ``--low-memory-option``             halve batch sizes
       - ``--very-low-memory-option``        quarter batch sizes
       - ``--adaptive-n-pcs``                pick n_pcs to fit the budget
@@ -142,11 +142,10 @@ def add_memory_planning_args(parser: argparse.ArgumentParser):
             "--no-adaptive-n-pcs to force the legacy fixed-200-PCs behavior."
         ),
     )
-    # NOTE: ``--memory-diagnostics`` was removed. Diagnostics
-    # (memory_plan.json, memory_trace.jsonl, allocator_env.json,
-    # args.json) are ALWAYS written into ``<outdir>/_diagnostics/``.
-    # The cost is < 1 second per run and the diagnostic value is
-    # high enough that opt-in didn't make sense.
+    # NOTE: ``--memory-diagnostics`` was removed. memory_plan.json is
+    # always written into ``<outdir>/_diagnostics/``; memory_trace.jsonl,
+    # allocator_env.json, args.json, and profiler captures are produced
+    # by the explicit ``--memory-profile`` flag below.
     group.add_argument(
         "--memory-profile",
         dest="memory_profile",
@@ -259,8 +258,9 @@ def apply_memory_planning_args(
 
     Returns ``(plan, trace)`` where:
       - ``plan`` is a ``recovar.utils.memory_planner.MemoryPlan``
-      - ``trace`` is a ``MemoryTraceWriter`` (always-on; writes to
-        ``<outdir>/_diagnostics/memory_trace.jsonl``)
+      - ``trace`` is a ``MemoryTraceWriter``. It writes to
+        ``<outdir>/_diagnostics/memory_trace.jsonl`` only when
+        ``--memory-profile`` is set.
 
     Heavy-GPU commands then read ``plan.image_batch_size`` etc. directly
     instead of calling the legacy ``utils.get_*_batch_size`` formulas.
@@ -309,18 +309,17 @@ def apply_memory_planning_args(
     # backend == jax_fallback. The user's stated budget is unchanged;
     # only the value the batch-size formulas see is reduced.
     #
-    # Divisor = 3.0 chosen conservatively: at g=64 the observed overshoot
-    # was 1.42, so /1.5 would suffice there; at g=128/256 the formula
-    # OOMs even at /3.2, but we cap at 3.0 because going further would
-    # make small-budget jax_fallback runs run pathologically small
-    # batches. Users on tight jax_fallback configs should consider
-    # ``--low-memory-option`` for additional headroom.
-    _BACKEND_DIVISOR = {
-        "custom_cuda": 1.0,
-        "jax_fallback": 3.0,
-        "cpu": 1.0,
-    }
-    divisor = _BACKEND_DIVISOR.get(plan.budget.backend, 1.0)
+    # Divisor = 5.0 for jax_fallback after the PR-138 full memory matrix:
+    # at grid=128 / --gpu-budget-gb 8, divisor=3.0 still selected image
+    # batches whose mean-reconstruction step asked XLA for a 32.6 GiB
+    # temporary; divisor=4.0 avoided the OOM but still peaked at 9.0 GB,
+    # above the 8.4 GB contract threshold. /5 keeps the 8 GB cell under
+    # the production 5% slack. The PR-138 high-budget rerun then showed
+    # that fallback formula budgets above 4.8 GB grow image batches back
+    # into the same relion-kernel OOM path, so ``batch_budget_for_backend``
+    # also caps jax_fallback at 4.8 GB until calibrated tables cover this
+    # backend.
+    divisor = memory_planner.batch_budget_divisor_for_backend(plan.budget.backend)
     # ONLY override the global limit when the divisor is non-trivial.
     # Calling ``set_gpu_memory_limit`` unconditionally — even with the
     # planner's effective_budget — shifts batch sizes from "whatever
@@ -330,16 +329,33 @@ def apply_memory_planning_args(
     # leave the global alone so production paths are bit-identical to
     # dev.
     if divisor != 1.0:
-        legacy_budget = plan.budget.effective_budget_gb / divisor
+        legacy_budget = memory_planner.batch_budget_for_backend(
+            plan.budget.effective_budget_gb,
+            plan.budget.backend,
+        )
+        uncapped_legacy_budget = plan.budget.effective_budget_gb / divisor
+        cap_gb = memory_planner.batch_budget_cap_gb_for_backend(plan.budget.backend)
         if logger is not None:
-            logger.info(
-                "Deflating budget for legacy batch-size formulas: %.2f GB / %.2f = "
-                "%.2f GB (backend=%s; sweep 8020210 showed legacy overshoots otherwise)",
-                plan.budget.effective_budget_gb,
-                divisor,
-                legacy_budget,
-                plan.budget.backend,
-            )
+            if cap_gb is not None and legacy_budget < uncapped_legacy_budget:
+                logger.info(
+                    "Deflating/capping budget for legacy batch-size formulas: "
+                    "%.2f GB / %.2f = %.2f GB, capped at %.2f GB "
+                    "(backend=%s; PR-138 matrix showed larger fallback batches OOM)",
+                    plan.budget.effective_budget_gb,
+                    divisor,
+                    uncapped_legacy_budget,
+                    cap_gb,
+                    plan.budget.backend,
+                )
+            else:
+                logger.info(
+                    "Deflating budget for legacy batch-size formulas: %.2f GB / %.2f = "
+                    "%.2f GB (backend=%s; sweep 8020210 showed legacy overshoots otherwise)",
+                    plan.budget.effective_budget_gb,
+                    divisor,
+                    legacy_budget,
+                    plan.budget.backend,
+                )
         try:
             from recovar.utils import helpers as _helpers
 
@@ -482,9 +498,8 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze=False):
         help="Edge width of FSC mask (in Angstroms). If None, uses 10%% of fsc-mask-radius. Only used if fsc-mask-radius is specified.",
     )
 
-    # Full memory-planning surface (includes --gpu-budget-gb / --gpu-memory and
-    # all the new diagnostic / safety flags) so every downstream command
-    # exposes the same UX as ``recovar pipeline``.
+    # Full memory-planning surface so every downstream command exposes
+    # the same UX as ``recovar pipeline``.
     add_memory_planning_args(parser)
 
     return parser

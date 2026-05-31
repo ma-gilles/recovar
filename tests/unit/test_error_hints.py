@@ -21,7 +21,7 @@ def _ctx_with(monkeypatch, **overrides):
 
 def test_oom_hint_diagnoses_and_recommends_one_fix():
     """With an empty context (no physical info, no plan), we fall through
-    to the generic branch and recommend --gpu-gb + --adaptive-n-pcs.
+    to the generic branch and recommend --gpu-budget-gb + --adaptive-n-pcs.
     The hint must NOT lecture the user to undo deliberate flags."""
     from recovar.utils import error_hints
 
@@ -30,7 +30,7 @@ def test_oom_hint_diagnoses_and_recommends_one_fix():
     assert hint is not None
     assert hint.category == "gpu_oom"
     blob = "\n".join(hint.suggestions)
-    assert "--gpu-gb" in blob
+    assert "--gpu-budget-gb" in blob
     assert "--adaptive-n-pcs" in blob
     # Should not tell the user to unset their own deliberate choice.
     assert "unset RECOVAR_DISABLE_CUDA" not in blob
@@ -83,7 +83,7 @@ def test_oom_hint_when_gpu_occupied_but_no_pid_enumerated_falls_through():
     # Case 3 (generic) — NOT case 1 (other-process).
     assert "another process" not in hint.summary.lower()
     blob = "\n".join(hint.suggestions)
-    assert "--gpu-gb" in blob
+    assert "--gpu-budget-gb" in blob
 
 
 def test_oom_hint_when_planner_predicted_oom_recommends_adaptive():
@@ -110,7 +110,7 @@ def test_oom_hint_when_planner_predicted_oom_recommends_adaptive():
 def test_oom_hint_when_disable_cuda_is_set_does_not_tell_user_to_unset_it():
     """custom_cuda_disabled=True is informational — user set it on purpose.
     The hint MUST NOT recommend unsetting RECOVAR_DISABLE_CUDA. It should
-    recommend the actionable flags (--gpu-gb, --adaptive-n-pcs) and mention
+    recommend the actionable flags (--gpu-budget-gb, --adaptive-n-pcs) and mention
     the fallback as context only."""
     from recovar.utils import error_hints
 
@@ -125,7 +125,7 @@ def test_oom_hint_when_disable_cuda_is_set_does_not_tell_user_to_unset_it():
     assert hint.category == "gpu_oom"
     blob = "\n".join(hint.suggestions)
     # Actionable suggestions:
-    assert "--gpu-gb" in blob
+    assert "--gpu-budget-gb" in blob
     assert "--adaptive-n-pcs" in blob
     # Should NOT lecture about undoing the user's deliberate choice.
     assert "unset RECOVAR_DISABLE_CUDA" not in blob
@@ -136,7 +136,7 @@ def test_oom_hint_when_disable_cuda_is_set_does_not_tell_user_to_unset_it():
 
 def test_oom_when_other_process_detected_recommends_switching_gpu():
     """nvidia-smi enumerated another process holding GPU memory →
-    suggest CUDA_VISIBLE_DEVICES + lowering --gpu-gb."""
+    suggest CUDA_VISIBLE_DEVICES + lowering --gpu-budget-gb."""
     from recovar.utils import error_hints
 
     ctx = error_hints.DiagnosticContext(
@@ -151,7 +151,7 @@ def test_oom_when_other_process_detected_recommends_switching_gpu():
     assert hint.category == "gpu_oom"
     blob = "\n".join(hint.suggestions)
     assert "CUDA_VISIBLE_DEVICES" in blob
-    assert "--gpu-gb" in blob
+    assert "--gpu-budget-gb" in blob
     assert "another process" in hint.summary.lower() or "another process" in hint.likely_cause.lower()
 
 
@@ -233,6 +233,25 @@ def test_dataset_path_error():
     assert "--gpu-budget-gb" not in blob
     assert "--adaptive-n-pcs" not in blob
     assert "check_paths" in blob
+
+
+def test_disk_quota_error_not_misclassified_as_gpu_conflict():
+    from recovar.utils import error_hints
+
+    ctx = error_hints.DiagnosticContext(
+        physical_total_gb=80.0,
+        physical_free_gb=10.0,
+        physical_processes=[{"pid": 99999, "name": "other.py", "used_mb": 60_000}],
+        last_memory_plan={"budget": {"requested_gb": 70.0}},
+    )
+    text = "OSError: [Errno 122] Disk quota exceeded"
+    hint = error_hints.classify_text(text, ctx)
+    assert hint is not None
+    assert hint.category == "disk_space_exhausted"
+    blob = "\n".join(hint.suggestions)
+    assert "output directory" in blob
+    assert "CUDA_VISIBLE_DEVICES" not in blob
+    assert "--gpu-budget-gb" not in blob
 
 
 def test_unrecognized_returns_none_when_no_conflict():

@@ -22,9 +22,8 @@ returned. The error-hints classifier handles the OOM-vs-actionable-hint
 side at failure time.
 
 Calibration table loading is best-effort: if the JSON file is missing,
-``calibration_data`` is ``None`` and prediction-driven warnings + the
-adaptive-n_pcs algorithm degrade to "no prediction" (the run proceeds
-with the user's specified n_pcs).
+``calibration_data`` is ``None``. ``--adaptive-n-pcs`` then falls back
+to the analytic peak formula instead of becoming a no-op.
 """
 
 from __future__ import annotations
@@ -44,6 +43,43 @@ logger = logging.getLogger(__name__)
 # Slack multiplier baked into "will it fit" predictions. Single value
 # (single H100-derived calibration table); see PR description.
 PEAK_PREDICTION_SLACK = 1.2
+
+
+# Backend-specific divisor for empirical batch-size formulas. The user-facing
+# budget remains unchanged; this only tightens image/volume/column batch sizes
+# for backends with larger transient allocations.
+_BATCH_BUDGET_DIVISOR_BY_BACKEND: dict[Backend, float] = {
+    "custom_cuda": 1.0,
+    "jax_fallback": 5.0,
+    "cpu": 1.0,
+}
+
+# Upper bound for the budget fed to empirical batch-size formulas.
+# The PR-138 matrix showed jax_fallback is not monotonic-safe here: at
+# grid=128 the 24 GB cell passed with 4.8 GB handed to the formulas, but
+# the 40 GB cell handed over 8.0 GB and OOMed in the JAX relion kernel.
+_BATCH_BUDGET_CAP_GB_BY_BACKEND: dict[Backend, float] = {
+    "jax_fallback": 4.8,
+}
+
+
+def batch_budget_divisor_for_backend(backend: Backend) -> float:
+    """Return the divisor applied to batch-size formulas for ``backend``."""
+    return _BATCH_BUDGET_DIVISOR_BY_BACKEND.get(backend, 1.0)
+
+
+def batch_budget_cap_gb_for_backend(backend: Backend) -> float | None:
+    """Return the max formula budget for ``backend``, if one is needed."""
+    return _BATCH_BUDGET_CAP_GB_BY_BACKEND.get(backend)
+
+
+def batch_budget_for_backend(effective_budget_gb: float, backend: Backend) -> float:
+    """Budget to feed legacy empirical batch-size formulas."""
+    batch_budget_gb = effective_budget_gb / batch_budget_divisor_for_backend(backend)
+    cap_gb = batch_budget_cap_gb_for_backend(backend)
+    if cap_gb is not None:
+        batch_budget_gb = min(batch_budget_gb, cap_gb)
+    return batch_budget_gb
 
 
 # Reserve subtracted from physical_free before deriving effective budget.
@@ -517,14 +553,6 @@ def make_memory_plan(
         cuda_warnings=cuda_warnings,
     )
 
-    # Push the effective budget into the legacy ``set_gpu_memory_limit``
-    # global so any code path that still calls ``get_gpu_memory_total``
-    # sees the same number.
-    try:
-        _helpers.set_gpu_memory_limit(budget.effective_budget_gb)
-    except Exception as exc:
-        logger.debug("set_gpu_memory_limit failed: %s", exc)
-
     # Calibration lookup
     calibration_table = calibration_table or load_calibration_table()
     cells = calibration_table.cells_by_command.get(command, []) if calibration_table is not None else []
@@ -615,11 +643,23 @@ def make_memory_plan(
             budget.effective_budget_gb,
         )
 
-    # Batch sizes — keep the existing empirical formulas, fed with the
-    # effective budget. low_memory / very_low_memory tighten further.
-    image_batch = _helpers.get_image_batch_size(grid_size, budget.effective_budget_gb)
-    volume_batch = _helpers.get_vol_batch_size(grid_size, budget.effective_budget_gb)
-    column_batch = _helpers.get_column_batch_size(grid_size, budget.effective_budget_gb)
+    # Batch sizes — keep the existing empirical formulas, fed with a
+    # backend-aware budget. The user-facing effective budget remains the
+    # contract recorded in memory_plan.json; fallback-only deflation just
+    # prevents JAX fallback from choosing custom-CUDA-sized batches.
+    batch_budget_gb = batch_budget_for_backend(budget.effective_budget_gb, budget.backend)
+    image_batch = _helpers.get_image_batch_size(grid_size, batch_budget_gb)
+    volume_batch = _helpers.get_vol_batch_size(grid_size, batch_budget_gb)
+    column_batch = _helpers.get_column_batch_size(grid_size, batch_budget_gb)
+
+    # At grid=256 the legacy formulas are too aggressive on an 80 GB
+    # class GPU. 100-column covariance batches allocate 12.5 GiB H/B
+    # accumulators per halfset, and 50-volume PCA FFT batches can ask XLA
+    # for ~25 GiB temporaries. Keep the production 128^3 path unchanged,
+    # but cap 256^3+ batches to keep those transient allocations bounded.
+    if grid_size >= 256:
+        volume_batch = min(volume_batch, 10)
+        column_batch = min(column_batch, 50)
 
     if very_low_memory:
         image_batch = max(1, image_batch // 4)
@@ -661,10 +701,10 @@ def diagnostics_dir(outdir: str | Path) -> Path:
 
     Underscore prefix signals "internal/auxiliary" and tells users
     "no need to look here unless something went wrong." All
-    diagnostic artifacts (memory_plan.json, memory_trace.jsonl,
-    allocator_env.json, args.json, error_hint.json, profile dumps)
-    live under this directory. ``run.log`` stays at outdir root for
-    backward compatibility.
+    diagnostic artifacts (memory_plan.json, optional memory_trace.jsonl,
+    optional allocator_env.json / args.json, error_hint.json, profile
+    dumps) live under this directory. ``run.log`` stays at outdir root
+    for backward compatibility.
     """
     p = Path(outdir) / "_diagnostics"
     p.mkdir(parents=True, exist_ok=True)
@@ -688,7 +728,7 @@ class MemoryTraceWriter:
     """
 
     def __init__(self, outdir: str | Path, *, enabled: bool = True):
-        # Always lives in _diagnostics/ now (always-on; no flag).
+        # Trace files live in _diagnostics/ when memory profiling is enabled.
         self.path = diagnostics_dir(outdir) / "memory_trace.jsonl"
         self.enabled = enabled
         self._opened = False

@@ -285,7 +285,7 @@ def main():
         dest="gpu_memory",
         type=float,
         default=None,
-        help="Cap GPU memory used for auto batch sizing during downsampling",
+        help="Soft GPU memory budget in GB used for auto batch sizing during downsampling",
     )
     parser.add_argument(
         "--chunk-size",

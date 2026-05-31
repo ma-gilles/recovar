@@ -71,7 +71,7 @@ from conftest import gpu_subprocess_env
 subprocess.run(cmd, check=True, env=gpu_subprocess_env())
 ```
 
-This sets `XLA_PYTHON_CLIENT_PREALLOCATE=false`, auto-selects least-loaded GPU, and isolates Python paths.
+This sets `XLA_PYTHON_CLIENT_PREALLOCATE=false`, pins `XLA_PYTHON_CLIENT_MEM_FRACTION=.90` for reproducible baselines, auto-selects least-loaded GPU, and isolates Python paths.
 
 ## Key Environment Variables
 

@@ -772,6 +772,43 @@ def test_run_test_dataset_non_tilt_pipeline_paths_with_spaces(monkeypatch, tmp_p
     assert any(f"-o {pipeline_out} " in cmd for cmd in commands)
 
 
+def test_run_test_dataset_custom_synthetic_size_forwarded(monkeypatch, tmp_path):
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(" ".join(command) if isinstance(command, list) else command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_test_dataset.jax,
+        "devices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GPU check should not run with --cpu")),
+    )
+    monkeypatch.setattr(run_test_dataset.os.path, "exists", lambda _p: False)
+    monkeypatch.setattr(
+        run_test_dataset.sys,
+        "argv",
+        [
+            "run_test_dataset",
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            "--no-delete",
+            "--image-size",
+            "128",
+            "--n-images",
+            "2000",
+        ],
+    )
+
+    run_test_dataset.main()
+
+    assert any("make_test_dataset" in cmd and "--image-size 128" in cmd and "--n-images 2000" in cmd for cmd in commands)
+    particles = str(tmp_path / "test_dataset" / "particles.128.mrcs")
+    assert any(f"pipeline {particles} " in cmd for cmd in commands)
+
+
 def test_run_test_dataset_all_tests_quotes_reconstruct_paths_with_spaces(monkeypatch, tmp_path):
 
     commands = []

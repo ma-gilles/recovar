@@ -1218,7 +1218,11 @@ def _run_outlier_detection(args):
                 n_particles_per_cluster,
             )
 
-            # Run junk detection
+            # The adaptive FSC elbow can over-select on the tight score
+            # distributions produced by iterative cryo-ET outlier rounds.
+            # Keep standalone junk detection's wider default unchanged, but
+            # cap the wrapper path to avoid removing nearly every remaining
+            # particle after a successful first round.
             junk_particle_detection.junk_particle_detection(
                 recovar_result_dir=args.pipeline_output_dir,
                 output_folder=junk_output_dir,
@@ -1234,7 +1238,7 @@ def _run_outlier_detection(args):
                 percentile_threshold=25.0,
                 std_threshold=args.junk_threshold,
                 min_junk_fraction=0.1,
-                max_junk_fraction=0.8,
+                max_junk_fraction=0.55,
                 save_pipeline_indices=args.save_pipeline_indices,
                 output_format=args.output_format,
                 save_all_plots=save_all_plots,

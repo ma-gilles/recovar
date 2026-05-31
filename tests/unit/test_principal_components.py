@@ -123,6 +123,73 @@ def test_get_all_copied_columns_shapes():
     assert all_freqs.shape[0] == all_cols.shape[1]
 
 
+def test_expanded_real_column_count_includes_hermitian_copies():
+    volume_shape = (4, 4, 4)
+    freqs = np.array(
+        [
+            [0, 0, 0],
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 1, 0],
+        ]
+    )
+    picked = np.asarray(core.frequencies_to_vec_indices(freqs, volume_shape))
+
+    assert pc._expanded_real_column_count(picked, volume_shape) == 5
+
+
+def test_randomized_svd_block_memory_caps_large_grid_only():
+    assert pc._randomized_svd_block_memory_to_use(80, (128, 128, 128)) == 80
+    assert pc._randomized_svd_block_memory_to_use(80, (256, 256, 256)) == 16
+    assert pc._randomized_svd_block_memory_to_use(12, (256, 256, 256)) == 12
+
+
+def test_randomized_real_svd_caps_sketch_to_expanded_columns(monkeypatch):
+    volume_shape = (4, 4, 4)
+    vol_size = int(np.prod(volume_shape))
+    picked = np.asarray(
+        core.frequencies_to_vec_indices(
+            np.array(
+                [
+                    [0, 0, 0],
+                    [1, 0, 0],
+                    [0, 1, 0],
+                ]
+            ),
+            volume_shape,
+        )
+    )
+    expanded_count = pc._expanded_real_column_count(picked, volume_shape)
+
+    def fake_right_matvec(test_mat, *args, **kwargs):
+        assert test_mat.shape == (vol_size, expanded_count)
+        return np.eye(vol_size, expanded_count, dtype=np.float32)
+
+    def fake_left_matvec(q, *args, **kwargs):
+        assert q.shape == (vol_size, expanded_count)
+        return np.eye(expanded_count, dtype=np.float32)
+
+    monkeypatch.setattr(pc, "right_matvec_with_spatial_Sigma", fake_right_matvec)
+    monkeypatch.setattr(pc, "left_matvec_with_spatial_Sigma", fake_left_matvec)
+    monkeypatch.setattr(pc.linalg, "batch_dft3", lambda q, volume_shape, vol_batch_size: np.asarray(q))
+    monkeypatch.setattr(pc.linalg, "blockwise_A_X", lambda a, x, memory_to_use=None: np.asarray(a) @ np.asarray(x))
+
+    q, s, v = pc.randomized_real_svd_of_columns(
+        columns=np.ones((vol_size, picked.size), dtype=np.complex64),
+        picked_frequency_indices=picked,
+        volume_mask=np.ones(vol_size, dtype=np.float32),
+        volume_shape=volume_shape,
+        vol_batch_size=1,
+        test_size=10,
+        gpu_memory_to_use=8,
+        random_seed=5,
+    )
+
+    assert q.shape == (vol_size, expanded_count)
+    assert s.shape == (expanded_count,)
+    assert v.shape == (expanded_count, expanded_count)
+
+
 def test_get_cov_svds_delegates_to_randomized_svd(monkeypatch):
     called = {}
 
@@ -361,7 +428,11 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
         "n_pcs_to_compute": 2,
     }
 
-    monkeypatch.setattr(pc.utils, "get_vol_batch_size", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(
+        pc.utils,
+        "get_vol_batch_size",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("planner volume batch override ignored")),
+    )
     monkeypatch.setattr(
         pc.covariance_estimation,
         "compute_regularized_covariance_columns_in_batch",
@@ -371,14 +442,13 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
             np.array([0.1, 0.2]),
         ),
     )
-    monkeypatch.setattr(
-        pc,
-        "get_cov_svds",
-        lambda *args, **kwargs: (
-            np.ones((8, 2), dtype=np.float32),
-            np.array([2.0, 1.0], dtype=np.float32),
-        ),
-    )
+    captured = {}
+
+    def _fake_get_cov_svds(*args, **kwargs):
+        captured["vol_batch_size"] = args[4]
+        return np.ones((8, 2), dtype=np.float32), np.array([2.0, 1.0], dtype=np.float32)
+
+    monkeypatch.setattr(pc, "get_cov_svds", _fake_get_cov_svds)
     monkeypatch.setattr(
         pc,
         "pca_by_projected_covariance",
@@ -399,9 +469,11 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
         batch_size=1,
         gpu_memory_to_use=8,
         covariance_options=cov_options,
+        vol_batch_size=3,
     )
 
     assert u["rescaled"].shape == (8, 2)
+    assert captured["vol_batch_size"] == 3
     np.testing.assert_array_equal(s["rescaled"], np.array([2.0, 1.0], dtype=np.float32))
     np.testing.assert_array_equal(picked_frequencies, np.array([0, 1]))
     np.testing.assert_array_equal(column_fscs, np.array([0.1, 0.2]))

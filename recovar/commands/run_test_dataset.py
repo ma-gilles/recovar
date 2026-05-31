@@ -11,7 +11,7 @@ Three design contracts:
    downstream call by default. This wrapper exists to answer "is your
    install correct?", not to act as a science test — it has to finish
    even on a small or shared GPU. Pass ``--full-memory-test`` to opt
-   out and exercise the default 200-PC configuration.
+   out and exercise the fixed 200-PC, non-adaptive configuration.
 
 3. The set of subcommands that accept memory-planning flags is the
    single source of truth (``_COMMANDS_WITH_MEMORY_ARGS``). The
@@ -62,6 +62,8 @@ _COMMANDS_WITH_ACCEPT_CPU = frozenset({"pipeline", "pipeline_with_outliers"})
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run integration tests for recovar")
     parser.add_argument("--output-dir", "-o", default="/tmp/")
+    parser.add_argument("--n-images", type=int, default=None, help="Number of synthetic images to generate")
+    parser.add_argument("--image-size", type=int, default=64, help="Synthetic image size/grid size")
     parser.add_argument("--all-tests", action="store_true", help="Run all tests")
     parser.add_argument(
         "--full",
@@ -93,8 +95,8 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Disable the auto-add of --adaptive-n-pcs for inner pipeline calls. "
-            "Use this when you want the smoke test to exercise the default 200-PC "
-            "configuration even on a constrained --gpu-budget-gb budget."
+            "Use this when you want the smoke test to exercise the fixed 200-PC, "
+            "non-adaptive configuration even on a constrained --gpu-budget-gb budget."
         ),
     )
 
@@ -138,7 +140,7 @@ def _build_forward_argv(args: argparse.Namespace) -> list[str]:
     else:
         fwd.append("--no-adaptive-n-pcs")
 
-    # `--memory-diagnostics` was removed (always-on now). The new
+    # `--memory-diagnostics` was removed. The new
     # `--memory-profile` is heavyweight; only forward if explicitly set.
     if getattr(args, "memory_profile", False):
         fwd.append("--memory-profile")
@@ -161,6 +163,13 @@ def main():
     run_on_cpu = args.cpu
     dataset_dir = args.output_dir
     forward_argv = _build_forward_argv(args)
+    image_size = args.image_size
+    n_images = args.n_images
+
+    if image_size <= 0:
+        parser.error(f"--image-size must be positive, got {image_size}")
+    if n_images is not None and n_images <= 0:
+        parser.error(f"--n-images must be positive, got {n_images}")
 
     if run_on_cpu:
         # Force CPU-only mode in spawned subprocesses. This wrapper itself
@@ -220,9 +229,9 @@ def main():
         the inner ``recovar`` invocation exits non-zero from inside its
         own error wrapper.
 
-        The child env is forced through ``recovar_subprocess_env`` so it
-        gets ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` even when the user
-        didn't export it (issue #143).
+        The child env is built through ``recovar_subprocess_env`` so
+        parent XLA/JAX settings propagate consistently to every inner
+        recovar command (issue #143).
         """
         from recovar.utils.subprocess_helpers import recovar_subprocess_env
 
@@ -303,7 +312,9 @@ def main():
                 "make_test_dataset",
                 _p("tilt_test"),
                 "--n-images",
-                "10000",
+                str(n_images if n_images is not None else 10000),
+                "--image-size",
+                str(image_size),
                 "--tilt-series",
             ),
             "Generate a test dataset for tilt series",
@@ -381,14 +392,22 @@ def main():
 
     else:
         cleanup_paths.append(os.path.join(dataset_dir, "test_dataset"))
+        make_dataset_args = [
+            "make_test_dataset",
+            dataset_dir,
+            "--image-size",
+            str(image_size),
+        ]
+        if n_images is not None:
+            make_dataset_args.extend(["--n-images", str(n_images)])
         run_command(
-            _recovar_argv("make_test_dataset", dataset_dir),
+            _recovar_argv(*make_dataset_args),
             "Generate a small test dataset",
             "make_test_dataset",
         )
 
         common_pos = [
-            _p("test_dataset", "particles.64.mrcs"),
+            _p("test_dataset", f"particles.{image_size}.mrcs"),
             "--poses",
             _p("test_dataset", "poses.pkl"),
             "--ctf",
