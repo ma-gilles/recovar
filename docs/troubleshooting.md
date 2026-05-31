@@ -77,7 +77,7 @@ module load cudatoolkit/12.3
 Try these in order:
 
 1. **Downsample**: `--downsample 128` reduces memory by ~4x vs 256
-2. **Limit memory**: `--gpu-gb 8` to control allocation
+2. **Plan for less GPU memory**: `--gpu-budget-gb 8` to shrink RECOVAR batches
 3. **Low memory mode**: `--low-memory-option` or `--very-low-memory-option`
 4. **Lazy loading**: `--lazy` to avoid loading full dataset into RAM
 5. **Fewer images**: `--n-images 50000` for initial exploration
