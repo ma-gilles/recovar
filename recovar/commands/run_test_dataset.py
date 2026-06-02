@@ -229,15 +229,13 @@ def main():
         the inner ``recovar`` invocation exits non-zero from inside its
         own error wrapper.
 
-        The child env is built through ``recovar_subprocess_env`` so
-        parent XLA/JAX settings propagate consistently to every inner
+        ``subprocess.run`` inherits the current process environment by
+        default, so parent XLA/JAX settings propagate to every inner
         recovar command (issue #143).
         """
-        from recovar.utils.subprocess_helpers import recovar_subprocess_env
-
         logger.info("Running: %s", description)
         logger.info("Command: %s", " ".join(argv))
-        result = subprocess.run(argv, check=False, capture_output=True, text=True, env=recovar_subprocess_env())
+        result = subprocess.run(argv, check=False, capture_output=True, text=True)
         # Echo the child's output so the user sees it (capture_output silences
         # the stream by default).
         if result.stdout:
