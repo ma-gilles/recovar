@@ -408,7 +408,15 @@ def generate_synthetic_dataset(
     create_nested_structure=False,
     nested_prefix="Extract/job193",
     percent_tilt_series_outliers=0.0,
+    noise_rng_batch_size=None,
 ):
+    """
+    noise_rng_batch_size : int, optional
+        Batch size used only to advance the random-noise stream. When omitted,
+        it matches the image processing batch size. Supplying a fixed value
+        keeps generated noise independent of GPU-memory-driven processing
+        batch changes (issue #148 fix).
+    """
     from recovar.output import output
 
     output.mkdir_safe(output_folder)
@@ -484,6 +492,7 @@ def generate_synthetic_dataset(
         premultiplied_ctf=premultiplied_ctf,
         noise_increase_per_tilt=noise_increase_per_tilt,
         percent_tilt_series_outliers=percent_tilt_series_outliers,
+        noise_rng_batch_size=noise_rng_batch_size,
     )
 
     # Add additional simulation parameters that weren't set in generate_simulated_dataset
@@ -595,6 +604,7 @@ def generate_simulated_dataset(
     premultiplied_ctf=False,
     noise_increase_per_tilt=None,
     percent_tilt_series_outliers=0.0,
+    noise_rng_batch_size=None,
 ):
 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -690,6 +700,14 @@ def generate_simulated_dataset(
     # cubic interpolation uses ~4x more GPU memory per image than linear
     mult = 0.5 if "cubic" in disc_type else 5
     batch_size = int(mult * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total()))
+    if noise_rng_batch_size is None:
+        noise_rng_batch_size = batch_size
+    noise_rng_batch_size = utils.safe_batch_size(noise_rng_batch_size)
+    logger.info(
+        "Simulation batch sizes: processing=%d, noise_rng=%d",
+        batch_size,
+        noise_rng_batch_size,
+    )
 
     main_image_stack = simulate_data(
         main_dataset,
@@ -703,6 +721,7 @@ def generate_simulated_dataset(
         disc_type=disc_type,
         mrc_file=mrc_file,
         premultiplied_ctf=premultiplied_ctf,
+        noise_rng_batch_size=noise_rng_batch_size,
     )
 
     image_means = np.mean(main_image_stack, axis=(-1, -2))
@@ -743,6 +762,7 @@ def generate_simulated_dataset(
             mrc_file=None,
             pad_before_translate=True,
             premultiplied_ctf=premultiplied_ctf,
+            noise_rng_batch_size=noise_rng_batch_size,
         )
 
         main_image_stack += extra_particles_image_stack
@@ -781,6 +801,7 @@ def generate_simulated_dataset(
             disc_type=disc_type,
             mrc_file=None,
             premultiplied_ctf=premultiplied_ctf,
+            noise_rng_batch_size=noise_rng_batch_size,
         )
 
         ind_outliers = np.random.choice(n_images, n_outlier_images, replace=False)
@@ -833,6 +854,7 @@ def generate_simulated_dataset(
             disc_type=disc_type,
             mrc_file=None,
             premultiplied_ctf=premultiplied_ctf,
+            noise_rng_batch_size=noise_rng_batch_size,
         )
         main_image_stack[image_indices_tilt_series_outliers] = tilt_outlier_image_stack
 
@@ -859,6 +881,8 @@ def generate_simulated_dataset(
         "dose_per_tilt": dose_per_tilt if n_tilts > 0 else None,
         "angle_per_tilt": angle_per_tilt if n_tilts > 0 else None,
         "n_tilts": n_tilts if n_tilts > 0 else None,
+        "simulation_batch_size": batch_size,
+        "simulation_noise_rng_batch_size": noise_rng_batch_size,
     }
 
     return main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups
@@ -892,6 +916,7 @@ def simulate_data(
     pad_before_translate=False,
     Bfactor=100,
     premultiplied_ctf=False,
+    noise_rng_batch_size=None,
 ):
 
     if disc_type == "pdb":
@@ -915,6 +940,9 @@ def simulate_data(
         logger.debug("gt_vols_norm: %s", gt_vols_norm)
 
     key = jax.random.PRNGKey(seed)
+    if noise_rng_batch_size is None:
+        noise_rng_batch_size = batch_size
+    noise_rng_batch_size = utils.safe_batch_size(noise_rng_batch_size)
     # A little bit of a hack to account for the fact that noise is complex but goes to real
     noise_variance_mod = noise_variance.copy()
     noise_image = noise.make_radial_noise(noise_variance_mod, experiment_dataset.image_shape).reshape(
@@ -932,6 +960,10 @@ def simulate_data(
     for vol_idx, vol in enumerate(volumes):
         img_indices = np.nonzero(image_assignments == vol_idx)[0]
         n_images = img_indices.size
+        noise_subkeys = []
+        for _ in range(0, int(np.ceil(n_images / noise_rng_batch_size))):
+            key, subkey = jax.random.split(key)
+            noise_subkeys.append(subkey)
 
         if disc_type == "nufft":
             vol_real = fourier_transform_utils.get_idft3(vol.reshape(experiment_dataset.volume_shape))
@@ -1054,9 +1086,17 @@ def simulate_data(
                 ## AND THE MAGIC NUMBER IS... (to make things consistent with the non-premultiplied CTF case)
                 noise_image = noise_image * upsample_factor**2
 
-                # Make big noise
-                key, subkey = jax.random.split(key)
-                noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
+                # Make big noise from a fixed-chunk RNG stream so that
+                # processing-batch changes (GPU memory) don't perturb noise.
+                noise_batch = make_noise_batch_from_rng_stream(
+                    noise_subkeys,
+                    noise_rng_batch_size,
+                    batch_st,
+                    batch_end,
+                    n_images,
+                    noise_image,
+                    images_batch.shape,
+                )
                 noise_batch *= per_image_noise_scale[indices][..., None, None]
                 images_batch *= per_image_contrast[indices][..., None, None]
 
@@ -1092,8 +1132,15 @@ def simulate_data(
                     images_batch.reshape([-1, *experiment_dataset.image_shape])
                 )
                 images_batch = images_batch.real
-                key, subkey = jax.random.split(key)
-                noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
+                noise_batch = make_noise_batch_from_rng_stream(
+                    noise_subkeys,
+                    noise_rng_batch_size,
+                    batch_st,
+                    batch_end,
+                    n_images,
+                    noise_image,
+                    images_batch.shape,
+                )
                 noise_batch *= per_image_noise_scale[indices][..., None, None]
                 images_batch *= per_image_contrast[indices][..., None, None]
 
@@ -1119,6 +1166,47 @@ def make_noise_batch(subkey, noise_image, images_batch_shape):
     noise_batch_ft *= jnp.sqrt(noise_image)
     noise_batch = fourier_transform_utils.get_idft2(noise_batch_ft.reshape(images_batch_shape)).real
     return noise_batch
+
+
+def make_noise_batch_from_rng_stream(
+    noise_subkeys,
+    noise_rng_batch_size,
+    batch_st,
+    batch_end,
+    n_images,
+    noise_image,
+    images_batch_shape,
+):
+    """Return noise for a processing batch from a fixed reference RNG stream.
+
+    The RNG stream is chunked by ``noise_rng_batch_size`` (independent
+    of the processing ``batch_size``). For a processing batch spanning
+    [batch_st, batch_end), pulls the corresponding pieces from one or
+    more RNG chunks and concatenates them. This decouples generated
+    noise from GPU-memory-driven processing-batch shape changes
+    (issue #148 fix).
+    """
+    if batch_end <= batch_st:
+        raise ValueError("batch_end must be greater than batch_st")
+
+    first_rng_batch = batch_st // noise_rng_batch_size
+    last_rng_batch = (batch_end - 1) // noise_rng_batch_size
+    image_shape = tuple(images_batch_shape[-2:])
+    pieces = []
+
+    for rng_batch_idx in range(first_rng_batch, last_rng_batch + 1):
+        rng_st = rng_batch_idx * noise_rng_batch_size
+        rng_end = min((rng_batch_idx + 1) * noise_rng_batch_size, n_images)
+        rng_shape = (rng_end - rng_st, *image_shape)
+        rng_noise = make_noise_batch(noise_subkeys[rng_batch_idx], noise_image, rng_shape)
+
+        slice_st = max(batch_st, rng_st) - rng_st
+        slice_end = min(batch_end, rng_end) - rng_st
+        pieces.append(rng_noise[slice_st:slice_end])
+
+    if len(pieces) == 1:
+        return pieces[0]
+    return jnp.concatenate(pieces, axis=0)
 
 
 # ============================================================================

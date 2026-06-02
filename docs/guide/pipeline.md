@@ -137,7 +137,7 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
 |------|---------|-------------|
 | `--noise-model` | radial | Noise model: `radial` or `white` |
 | `--mean-fn` | triangular | Mean function: `triangular` or `triangular_reg` |
-| `--gpu-gb` | All | GPU memory limit in GB |
+| `--gpu-budget-gb` | All | Soft GPU memory budget in GB for RECOVAR batch planning |
 | `--n-gpus` | All | Number of GPUs to use |
 | `--keep-intermediate` | False | Save intermediate results |
 | `--accept-cpu` | False | Allow running without GPU |
@@ -164,8 +164,8 @@ recovar pipeline particles.star -o output --mask mask.mrc --multi-gpu --n-gpus 4
 ### GPU memory and device selection
 
 ```bash
-# Limit memory per GPU (useful on shared machines)
-recovar pipeline particles.star -o output --mask mask.mrc --gpu-gb 8
+# Plan for a smaller per-GPU budget (useful on shared machines)
+recovar pipeline particles.star -o output --mask mask.mrc --gpu-budget-gb 8
 
 # Select specific GPUs by ID
 CUDA_VISIBLE_DEVICES=0,2 recovar pipeline particles.star -o output --mask mask.mrc --multi-gpu
@@ -250,4 +250,4 @@ When using the **project system** (`--project`), pipeline output is placed into 
     For datasets > 500k particles, use `--lazy` for lazy loading and `--downsample 128` for speed. Consider `--n-images 100000` for initial exploration.
 
 !!! tip "Memory"
-    If you run out of GPU memory, try `--low-memory-option` or `--very-low-memory-option`. You can also limit memory with `--gpu-gb 8`.
+    If you run out of GPU memory, try `--low-memory-option` or `--very-low-memory-option`. You can also plan for a smaller budget with `--gpu-budget-gb 8`.

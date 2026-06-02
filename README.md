@@ -131,6 +131,51 @@ Or use the interactive wizard: `recovar quickstart`
 
 See the [quick start guide](https://ma-gilles.github.io/recovar/getting-started/quickstart/) for more examples.
 
+## GPU memory
+
+Every heavy-GPU command (`pipeline`, `analyze`, `compute_state`, `compute_trajectory`, `pipeline_with_outliers`, `reconstruct_from_external_embedding`, `junk_particle_detection`, `outlier_detection`, `run_test_dataset`) accepts the same memory-planning flags. They control RECOVAR's batch-size and PC choices — they do **not** cap JAX's allocation. JAX-level memory behavior is controlled separately via `XLA_PYTHON_CLIENT_MEM_FRACTION` and `XLA_PYTHON_CLIENT_PREALLOCATE`.
+
+```bash
+# Tell RECOVAR to size batches as if the GPU has only 40 GB available.
+# Useful when the GPU is shared, or you want to leave headroom for
+# another process. (Soft hint to RECOVAR; not a JAX cap.)
+recovar pipeline ... --gpu-budget-gb 40
+
+# Adapt n_pcs to the largest value that fits the budget (reproducible:
+# same flags + same dataset = same n_pcs).
+recovar pipeline ... --gpu-budget-gb 24 --adaptive-n-pcs
+
+# Tighten batch sizes further for tight budgets.
+recovar pipeline ... --gpu-budget-gb 12 --low-memory-option
+recovar pipeline ... --gpu-budget-gb 8  --very-low-memory-option
+
+# memory_plan.json is always written to <outdir>/_diagnostics/.
+# For per-phase memory_trace.jsonl, args.json, allocator_env.json,
+# and heavyweight JAX-profiler captures, add --memory-profile.
+recovar pipeline ... --gpu-budget-gb 40 --memory-profile
+```
+
+The planner never refuses to launch. If it predicts the run will exceed the budget (based on a calibrated peak-memory table when present, or the heuristic in `covariance_estimation` when absent), it logs a loud WARNING and launches anyway. If the run actually OOMs, the error message is followed by an actionable hint suggesting `--gpu-budget-gb`, `--adaptive-n-pcs`, `--low-memory-option`, etc. — the hint is the **last** thing on stderr so it doesn't get lost above the JAX traceback.
+
+The peak-memory table at `recovar/utils/memory_calibration_data.json` is **optional** — when present, the planner uses it to predict per-phase peaks (so the warning above is more accurate) and to drive `--adaptive-n-pcs`. When **absent**, `--adaptive-n-pcs` falls back to the same heuristic in `covariance_estimation.get_default_covariance_computation_options` that walks `n_pcs` down from 200 until predicted memory fits the budget. To populate the table on your hardware, run `scripts/submit_calibrate_memory_planner.sh` (Slurm) and then `pixi run python scripts/aggregate_memory_calibration.py`.
+
+`run_test_dataset` always splices `--adaptive-n-pcs` into its inner pipeline calls so the install-sanity test always finishes. Pass `--full-memory-test` if you specifically want the fixed 200-PC, non-adaptive configuration.
+
+### Workstation / shared-GPU OOM
+
+If you OOM on a workstation or shared GPU even after passing `--gpu-budget-gb`, the underlying cause is usually JAX's default *preallocation* behavior — JAX grabs ~90 % of physical VRAM on first allocation, regardless of what RECOVAR plans. This is orthogonal to RECOVAR's batch-size budget. The fix is a JAX env var:
+
+```bash
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+recovar pipeline ...
+```
+
+That makes JAX allocate on demand, so the run can succeed if the *actual* peak is smaller than `MEM_FRACTION × physical`. Recommended for any non-Slurm-exclusive GPU; for dedicated cluster allocations, leave preallocation on for the small startup-perf win.
+
+### CUDA-fallback env var
+
+The canonical CUDA-fallback env var is `RECOVAR_DISABLE_CUDA=1`. The common typo `RECOVAR_CUDA_DISABLE` is treated as an alias for the duration of the run, with a one-time warning telling you to rename it in your shell init.
+
 ## Documentation
 
 Full documentation is available at **[ma-gilles.github.io/recovar](https://ma-gilles.github.io/recovar)**:

@@ -3,12 +3,13 @@ import pytest
 
 pytest.importorskip("jax")
 
-import recovar.heterogeneity.principal_components as pc
+from helpers.tiny_synthetic import make_tiny_cryo_dataset_with_images, make_tiny_simulation
+
 import recovar.core as core
+import recovar.heterogeneity.principal_components as pc
 from recovar.data_io import cryoem_dataset as dataset
 from recovar.reconstruction.homogeneous import MeanEstimate
 from recovar.utils.helpers import AlgorithmOptions
-from helpers.tiny_synthetic import make_tiny_simulation, make_tiny_cryo_dataset_with_images
 
 
 def _make_means(vol_size, dtype_real=np.float32, dtype_complex=np.complex64):
@@ -137,6 +138,12 @@ def test_expanded_real_column_count_includes_hermitian_copies():
     assert pc._expanded_real_column_count(picked, volume_shape) == 5
 
 
+def test_randomized_svd_block_memory_caps_large_grid_only():
+    assert pc._randomized_svd_block_memory_to_use(80, (128, 128, 128)) == 80
+    assert pc._randomized_svd_block_memory_to_use(80, (256, 256, 256)) == 16
+    assert pc._randomized_svd_block_memory_to_use(12, (256, 256, 256)) == 12
+
+
 def test_randomized_real_svd_caps_sketch_to_expanded_columns(monkeypatch):
     volume_shape = (4, 4, 4)
     vol_size = int(np.prod(volume_shape))
@@ -237,6 +244,8 @@ def test_get_cov_svds_passes_random_seed(monkeypatch):
 
 
 def test_projected_covariance_batch_size_uses_requested_gpu_budget(monkeypatch):
+    """``_projected_covariance_batch_size`` delegates to
+    ``get_embedding_batch_size`` with the legacy 2·P²·8B reservation."""
     calls = {}
 
     def fake_get_embedding_batch_size(basis, image_size, contrast_grid, zdim, gpu_memory):
@@ -419,7 +428,11 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
         "n_pcs_to_compute": 2,
     }
 
-    monkeypatch.setattr(pc.utils, "get_vol_batch_size", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(
+        pc.utils,
+        "get_vol_batch_size",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("planner volume batch override ignored")),
+    )
     monkeypatch.setattr(
         pc.covariance_estimation,
         "compute_regularized_covariance_columns_in_batch",
@@ -429,14 +442,13 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
             np.array([0.1, 0.2]),
         ),
     )
-    monkeypatch.setattr(
-        pc,
-        "get_cov_svds",
-        lambda *args, **kwargs: (
-            np.ones((8, 2), dtype=np.float32),
-            np.array([2.0, 1.0], dtype=np.float32),
-        ),
-    )
+    captured = {}
+
+    def _fake_get_cov_svds(*args, **kwargs):
+        captured["vol_batch_size"] = args[4]
+        return np.ones((8, 2), dtype=np.float32), np.array([2.0, 1.0], dtype=np.float32)
+
+    monkeypatch.setattr(pc, "get_cov_svds", _fake_get_cov_svds)
     monkeypatch.setattr(
         pc,
         "pca_by_projected_covariance",
@@ -457,9 +469,11 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
         batch_size=1,
         gpu_memory_to_use=8,
         covariance_options=cov_options,
+        vol_batch_size=3,
     )
 
     assert u["rescaled"].shape == (8, 2)
+    assert captured["vol_batch_size"] == 3
     np.testing.assert_array_equal(s["rescaled"], np.array([2.0, 1.0], dtype=np.float32))
     np.testing.assert_array_equal(picked_frequencies, np.array([0, 1]))
     np.testing.assert_array_equal(column_fscs, np.array([0.1, 0.2]))

@@ -50,6 +50,15 @@ def test_gpu_subprocess_env_preserves_existing_xla_flags(monkeypatch):
     assert "--xla_force_host_platform_device_count=8" in tokens
 
 
+def test_gpu_subprocess_env_pins_regression_memory_fraction(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    monkeypatch.setenv("XLA_PYTHON_CLIENT_MEM_FRACTION", ".50")
+
+    env = _CONFTEST.gpu_subprocess_env()
+
+    assert env["XLA_PYTHON_CLIENT_MEM_FRACTION"] == ".90"
+
+
 def test_gpu_subprocess_env_enables_custom_cuda_when_test_lib_available(monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)

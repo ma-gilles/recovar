@@ -24,8 +24,14 @@ Use `logging.info()` or `sys.stderr` for regression comparison tables — NOT `p
 | `slow` | `--run-slow` | Takes more than a few seconds |
 | `tiny_metrics` | `--run-tiny-metrics` | Quick quality check (32^3, ~800 images) |
 | `long_test` | `--long-test` | Full regression suite (128^3, 50k images, 6-12h) |
+| `gpu_memory_matrix` | `--long-test` | 14-cell GPU memory matrix (7 budgets x 2 backends); also exposed via `scripts/run_gpu_memory_matrix.sh` |
 
 `--long-test` implies `--run-integration`, `--run-slow`, `--run-gpu`.
+
+The `gpu_memory_matrix` marker exists alongside `long_test` so the
+GPU integration matrix can be selected explicitly (e.g.
+`pytest -m gpu_memory_matrix --long-test`) or driven from the Slurm
+submitter for parallel cells.
 
 All data is generated synthetically — no external downloads needed.
 
@@ -65,7 +71,7 @@ from conftest import gpu_subprocess_env
 subprocess.run(cmd, check=True, env=gpu_subprocess_env())
 ```
 
-This sets `XLA_PYTHON_CLIENT_PREALLOCATE=false`, auto-selects least-loaded GPU, and isolates Python paths.
+This sets `XLA_PYTHON_CLIENT_PREALLOCATE=false`, pins `XLA_PYTHON_CLIENT_MEM_FRACTION=.90` for reproducible baselines, auto-selects least-loaded GPU, and isolates Python paths.
 
 ## Key Environment Variables
 
