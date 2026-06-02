@@ -42,9 +42,9 @@ for mode in $CUDA_MODES; do
     fi
 
     if [ "$mode" = "jax_fallback" ]; then
-      env_setup='export RECOVAR_DISABLE_CUDA=1; unset RECOVAR_CUDA_DISABLE'
+      env_setup='export RECOVAR_DISABLE_CUDA=1'
     else
-      env_setup='unset RECOVAR_DISABLE_CUDA RECOVAR_CUDA_DISABLE'
+      env_setup='unset RECOVAR_DISABLE_CUDA'
     fi
 
     cat > "$sbatch_script" <<EOF

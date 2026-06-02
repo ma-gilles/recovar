@@ -21,6 +21,11 @@ from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
 
 logger = logging.getLogger(__name__)
 
+_NOISE_UB_GB_PER_IMAGE_AT_GRID_256 = 0.117
+_NOISE_UB_WORKING_FRACTION = 0.15
+_NOISE_UB_MIN_WORKING_GB = 1.0
+_NOISE_UB_MAX_WORKING_GB = 12.0
+
 
 def add_args(parser: argparse.ArgumentParser):
 
@@ -487,7 +492,24 @@ def _check_uninvert_data(means, dataset, args):
 
 
 ## TODO I'd like to simplify the logic here in this function, seems confusing
-def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise_model):
+def _noise_upper_bound_batch_size(grid_size: int, batch_size: int, gpu_budget_gb: float | None) -> int:
+    """Cap the upper-bound-noise batch by a simple per-image memory model."""
+    batch_size = utils.safe_batch_size(batch_size)
+    if gpu_budget_gb is None:
+        return batch_size
+
+    per_image_gb = _NOISE_UB_GB_PER_IMAGE_AT_GRID_256 * (float(grid_size) / 256.0) ** 3
+    if per_image_gb <= 0:
+        return batch_size
+
+    working_gb = min(
+        _NOISE_UB_MAX_WORKING_GB,
+        max(_NOISE_UB_MIN_WORKING_GB, float(gpu_budget_gb) * _NOISE_UB_WORKING_FRACTION),
+    )
+    return utils.safe_batch_size(min(batch_size, int(working_gb / per_image_gb)))
+
+
+def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise_model, gpu_budget_gb=None):
     """Estimate radial noise variance from outside-mask and upper-bound methods.
 
     Returns a dict with all noise-related quantities needed by the pipeline.
@@ -543,18 +565,15 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
             disc_type="linear_interp",
         )
     else:
-        # The noise estimator's inner kernel (_average_residual_square_explicit)
-        # allocates ~117 MB / image of working memory at grid=256 (mask FFTs,
-        # residual buffers, image_masks). The picker's image_batch_size scales
-        # as 4·gpu_gb at grid=256, so at gpu_gb≥40 the batch becomes >160
-        # and the kernel OOMs (slurm 8333303, 2026-05-16). The picker doesn't
-        # model the noise kernel separately; cap the batch here so the noise
-        # phase never exceeds ~12 GB working set at grid=256.
-        noise_batch = batch_size
-        if dataset.grid_size >= 256:
-            # ~80 images at grid=256 keeps the working set under 10 GB on
-            # any GPU; for grid=128 the original batch is already safe.
-            noise_batch = min(batch_size, 64)
+        noise_batch = _noise_upper_bound_batch_size(dataset.grid_size, batch_size, gpu_budget_gb)
+        if noise_batch < batch_size:
+            logger.info(
+                "Capping upper-bound noise batch size from %d to %d for grid=%d and budget=%.2f GB",
+                batch_size,
+                noise_batch,
+                dataset.grid_size,
+                gpu_budget_gb,
+            )
         radial_ub_noise_var, _, _ = noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(
             dataset, means.combined, dilated_volume_mask, noise_batch
         )
@@ -1010,7 +1029,7 @@ def standard_recovar_pipeline(args):
         focus_masks = _build_focus_masks(args, means, volume_mask, volume_shape, ds)
 
         # --- Estimate noise ---
-        noise_result = _estimate_noise(ds, means, dilated_volume_mask, batch_size, args, noise_model)
+        noise_result = _estimate_noise(ds, means, dilated_volume_mask, batch_size, args, noise_model, gpu_memory)
         noise_var_used = noise_result["noise_var_used"]
         noise.update_noise_variance(noise_var_used, ds)
 

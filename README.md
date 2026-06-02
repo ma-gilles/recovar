@@ -174,7 +174,7 @@ That makes JAX allocate on demand, so the run can succeed if the *actual* peak i
 
 ### CUDA-fallback env var
 
-The canonical CUDA-fallback env var is `RECOVAR_DISABLE_CUDA=1`. The common typo `RECOVAR_CUDA_DISABLE` is treated as an alias for the duration of the run, with a one-time warning telling you to rename it in your shell init.
+The CUDA-fallback env var is `RECOVAR_DISABLE_CUDA=1`.
 
 ## Documentation
 

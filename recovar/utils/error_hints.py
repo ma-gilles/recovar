@@ -69,7 +69,6 @@ class DiagnosticContext:
     physical_free_gb: float | None = None
     physical_processes: list[dict[str, Any]] = field(default_factory=list)
     env_recovar_disable_cuda: str | None = None
-    env_recovar_cuda_disable_typo: str | None = None
     env_cuda_visible_devices: str | None = None
     last_trace_rows: list[dict[str, Any]] = field(default_factory=list)
 
@@ -106,7 +105,6 @@ def collect_context(*, last_memory_plan: dict[str, Any] | None = None) -> Diagno
         pass
 
     ctx.env_recovar_disable_cuda = os.environ.get("RECOVAR_DISABLE_CUDA")
-    ctx.env_recovar_cuda_disable_typo = os.environ.get("RECOVAR_CUDA_DISABLE")
     ctx.env_cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
 
     try:

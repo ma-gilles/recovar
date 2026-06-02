@@ -4,19 +4,16 @@ Used by scripts that shell out to ``recovar`` commands
 (``run_test_dataset``, ``quickstart``, GUI executors) so the spawned
 child inherits a consistent environment.
 
-History — ``XLA_PYTHON_CLIENT_PREALLOCATE``:
-  Earlier versions of this helper forced
-  ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` in every child to dodge a
-  shared-GPU OOM at child startup. That default was reverted
-  2026-05-23: forcing PREALLOCATE=false makes JAX allocate
-  on-demand, which is more vulnerable to allocator fragmentation
-  failures during later large single allocations (e.g. the
-  ~37 GB noise-estimator buffer at grid=256 / batch=320 — slurm
-  8333303). It also masks JAX's normal contiguous-pool behavior.
+Policy — ``XLA_PYTHON_CLIENT_PREALLOCATE``:
+  ``false`` is useful on shared GPUs because JAX allocates memory on
+  demand instead of reserving most VRAM up front. RECOVAR should not
+  force that policy globally, though: long pipeline phases can need
+  large contiguous allocations, and allocator behavior is part of the
+  user's deployment environment.
 
-  Now: the helper passes the parent's env through unchanged. Users
-  on shared GPUs who need PREALLOCATE=false can export it in their
-  shell; recovar no longer overrides their choice.
+  This helper therefore passes the parent's XLA environment through
+  unchanged. Test harnesses or users who want on-demand allocation can
+  set ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` before launching RECOVAR.
 """
 
 from __future__ import annotations

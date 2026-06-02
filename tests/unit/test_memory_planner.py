@@ -17,11 +17,7 @@ pytestmark = [pytest.mark.unit]
 @pytest.fixture(autouse=True)
 def _reset_planner_globals(monkeypatch):
     """Force a fresh backend probe per test."""
-    from recovar.utils import cuda_env
-
-    monkeypatch.setattr(cuda_env, "_warned_typo", False)
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
-    monkeypatch.delenv("RECOVAR_CUDA_DISABLE", raising=False)
 
 
 def _stub_helpers(monkeypatch, *, gpu_total: float = 80.0):

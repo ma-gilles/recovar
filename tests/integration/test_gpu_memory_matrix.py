@@ -48,7 +48,6 @@ def _run_cell(out_dir: Path, *, gpu_gb: int, backend: str) -> None:
         env["RECOVAR_DISABLE_CUDA"] = "1"
     else:
         env.pop("RECOVAR_DISABLE_CUDA", None)
-        env.pop("RECOVAR_CUDA_DISABLE", None)
 
     cmd = [
         sys.executable,

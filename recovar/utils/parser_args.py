@@ -223,7 +223,6 @@ def write_run_metadata(args, outdir, logger=None):
             "TF_GPU_ALLOCATOR",
             "CUDA_VISIBLE_DEVICES",
             "RECOVAR_DISABLE_CUDA",
-            "RECOVAR_CUDA_DISABLE",
             "JAX_PLATFORMS",
         ]
         env_record = {k: _os.environ.get(k) for k in env_keys}

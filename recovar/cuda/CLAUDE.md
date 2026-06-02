@@ -23,8 +23,6 @@ make CUDA_ARCH="-gencode arch=compute_60,code=sm_60 -gencode arch=compute_60,cod
 
 As a temporary alternative, `RECOVAR_DISABLE_CUDA=1` forces the slower JAX-native path (≈2x slower; matches recovar 0.4.5 behavior).
 
-The variable name is `RECOVAR_DISABLE_CUDA`. Users sometimes mistype it as `RECOVAR_CUDA_DISABLE`; in that case the typo is treated as an alias for the duration of the run and a one-time WARNING is logged telling the user to rename their shell init. Both variables set together: canonical wins. See `recovar/utils/cuda_env.py`.
-
 ## Runtime behavior
 `recovar/cuda_backproject.py` auto-builds the kernel into the cache-backed shared library path on first GPU use when needed. Standard GPU execution prefers RECOVAR's custom CUDA kernels by default because they are faster than the JAX fallback. If the custom build/load fails, RECOVAR raises a clear error. `RECOVAR_DISABLE_CUDA=1` forces the slower JAX GPU path.
 

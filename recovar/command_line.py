@@ -7,15 +7,11 @@ function that uses ``argparse`` for its own argument parsing.
 See ``[project.scripts]`` in ``pyproject.toml`` for the console-script
 entry that invokes :func:`main_commands`.
 
-Two responsibilities live here that have to run BEFORE the subcommand
-module is imported (i.e. before any ``import jax`` happens):
+One responsibility lives here around subcommand execution:
 
-1. CUDA env-var typo detection: emit the ``RECOVAR_CUDA_DISABLE`` ->
-   ``RECOVAR_DISABLE_CUDA`` warning eagerly so users see it before
-   anything else.
-2. Hint-last error wrapping: when the subcommand fails, the captured
-   traceback is printed first, then the formatted ``ErrorHint``, so
-   the actionable advice stays at the tail of the log.
+Hint-last error wrapping: when the subcommand fails, the captured
+traceback is printed first, then the formatted ``ErrorHint``, so
+the actionable advice stays at the tail of the log.
 
 ``--gpu-budget-gb`` is handled by argparse inside the subcommand —
 it is a soft batch-size hint, NOT a JAX-level memory cap. Users on
@@ -47,21 +43,6 @@ def _print_available_commands(available_cmds, file=None):
     print("Available commands:", file=file)
     for cmd in available_cmds:
         print(f"  {cmd}", file=file)
-
-
-def _eager_typo_warning() -> None:
-    """Trigger the RECOVAR_CUDA_DISABLE typo detection eagerly.
-
-    Calling ``custom_cuda_disabled_from_env`` here surfaces the warning
-    (if any) at the top of stderr instead of waiting until something
-    inside the pipeline reads the env var.
-    """
-    try:
-        from recovar.utils.cuda_env import custom_cuda_disabled_from_env
-
-        custom_cuda_disabled_from_env()
-    except Exception as exc:
-        logger.debug("Eager typo-warning probe failed: %s", exc)
 
 
 def _run_with_error_hints(mod) -> None:
@@ -104,10 +85,6 @@ def main_commands() -> None:
         print(f"Command '{cmd_name}' not found.", file=sys.stderr)
         _print_available_commands(available_cmds)
         sys.exit(1)
-
-    # Pre-import housekeeping that must run before jax_config.py loads:
-    # surface the RECOVAR_CUDA_DISABLE typo warning eagerly.
-    _eager_typo_warning()
 
     # Remove the subcommand from sys.argv so the subcommand's parser
     # doesn't see it.

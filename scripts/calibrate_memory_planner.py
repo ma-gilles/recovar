@@ -78,10 +78,8 @@ def run_pipeline_cell(
     env = dict(os.environ)
     if backend == "jax_fallback":
         env["RECOVAR_DISABLE_CUDA"] = "1"
-        env.pop("RECOVAR_CUDA_DISABLE", None)
     else:
         env.pop("RECOVAR_DISABLE_CUDA", None)
-        env.pop("RECOVAR_CUDA_DISABLE", None)
     env["RECOVAR_DEBUG_FORCE_N_PCS"] = str(n_pcs)
 
     if command == "pipeline":
