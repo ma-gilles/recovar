@@ -22,21 +22,19 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from recovar.gui_v2.backend.api.embeddings import router as embeddings_router
+from recovar.gui_v2.backend.api.files import configure_allowed_roots
 from recovar.gui_v2.backend.api.files import router as files_router
 from recovar.gui_v2.backend.api.jobs import router as jobs_router
 from recovar.gui_v2.backend.api.project import router as project_router
-from recovar.gui_v2.backend.api.subsets import router as subsets_router
 from recovar.gui_v2.backend.api.settings import router as settings_router
+from recovar.gui_v2.backend.api.subsets import router as subsets_router
 from recovar.gui_v2.backend.api.system import router as system_router
 from recovar.gui_v2.backend.api.volumes import router as volumes_router
 from recovar.gui_v2.backend.api.ws import router as ws_router
-from recovar.gui_v2.backend.api.files import configure_allowed_roots
-from recovar.gui_v2.backend.config import DB_FILENAME, DEFAULT_HOST, DEFAULT_PORT
+from recovar.gui_v2.backend.config import DEFAULT_HOST, DEFAULT_PORT
 from recovar.gui_v2.backend.db import close_all, init_db
 from recovar.gui_v2.backend.models.job import Job, JobStatus
-from recovar.gui_v2.backend.models.project import Project
 from recovar.gui_v2.backend.services.executor import (
-    SlurmExecutor,
     reconcile_jobs,
 )
 
@@ -52,11 +50,9 @@ async def _reconcile_on_startup() -> None:
     local status, updates the DB, and restarts background pollers for any
     that are still active.
     """
-    import os
     from recovar.gui_v2.backend.api.jobs import (
         _poll_job_status,
         _poll_tasks,
-        get_executor_for_job,
     )
     from recovar.gui_v2.backend.api.project import _project_registry
     from recovar.gui_v2.backend.config import get_db_path
@@ -80,16 +76,12 @@ async def _reconcile_on_startup() -> None:
         try:
             session_factory = await init_db(db_path)
         except Exception:
-            logger.exception(
-                "Startup reconcile: failed to open DB at %s", db_path
-            )
+            logger.exception("Startup reconcile: failed to open DB at %s", db_path)
             continue
 
         async with session_factory() as session:
             # Find all non-terminal jobs
-            stmt = select(Job).where(
-                Job.status.in_([JobStatus.RUNNING.value, JobStatus.QUEUED.value])
-            )
+            stmt = select(Job).where(Job.status.in_([JobStatus.RUNNING.value, JobStatus.QUEUED.value]))
             result = await session.execute(stmt)
             inflight = result.scalars().all()
 
@@ -119,9 +111,11 @@ async def _reconcile_on_startup() -> None:
             updates = []
             if slurm_jobs:
                 from recovar.gui_v2.backend.api.jobs import _get_slurm_executor
+
                 updates.extend(await reconcile_jobs(_get_slurm_executor(), slurm_jobs))
             if local_jobs:
                 from recovar.gui_v2.backend.api.jobs import _get_local_executor
+
                 updates.extend(await reconcile_jobs(_get_local_executor(), local_jobs))
 
             # Apply updates to DB
@@ -147,14 +141,14 @@ async def _reconcile_on_startup() -> None:
                     JobStatus.QUEUED.value,
                 ):
                     # Check if this job was updated to terminal
-                    was_updated = any(
-                        u["id"] == j.id for u in updates
-                    )
+                    was_updated = any(u["id"] == j.id for u in updates)
                     if not was_updated and j.id not in _poll_tasks:
                         poll_mode = "slurm" if j.slurm_id else "local"
                         task = asyncio.create_task(
                             _poll_job_status(
-                                j.id, j.executor_handle, project_path,
+                                j.id,
+                                j.executor_handle,
+                                project_path,
                                 executor_mode=poll_mode,
                                 working_dir=j.output_dir,
                             )
@@ -177,6 +171,7 @@ async def lifespan(app: FastAPI):
     # Configure file browser allowed roots.
     # Default: user home, /scratch, /tmp, and common HPC paths.
     import os
+
     default_roots = [
         os.path.expanduser("~"),
         "/tmp",
@@ -214,6 +209,21 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Any unhandled exception becomes a structured error instead of an opaque
+    # 500 with a bare traceback: the full traceback is logged server-side and
+    # the client gets a legible {error, detail, hint} it can show the user.
+    @app.exception_handler(Exception)
+    async def _unhandled_exception(request: Request, exc: Exception):
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "internal_error",
+                "detail": str(exc),
+                "hint": "See the GUI server log for the full traceback.",
+            },
+        )
 
     # Mount API routers
     app.include_router(project_router)

@@ -90,8 +90,24 @@ equinox = "==0.13.4"
 # CUDA dependencies for GPU acceleration
 pytorch = { version = ">=2.3.1", channel = "pytorch" }
 
+# Web GUI dependencies — mirror the pyproject.toml
+# [project.optional-dependencies].gui extra so `pixi run gui` works out of the
+# box AND the canonical pixi env exercises the same packages a
+# `pip install recovar[gui]` user gets. Keep this list in sync with the gui
+# extra in pyproject.toml (see issue #142 — a driver missing from one but
+# present in the other env masks the bug).
+[feature.gui.pypi-dependencies]
+fastapi = ">=0.111"
+uvicorn = { extras = ["standard"], version = ">=0.30" }
+python-multipart = ">=0.0.9"
+sqlalchemy = ">=2.0"
+aiosqlite = ">=0.19"
+aiofiles = ">=23.0"
+tomli_w = ">=1.0"
+jinja2 = ">=3.1"
+
 [environments]
-default = { features = ["cuda"] }
+default = { features = ["cuda", "gui"] }
 
 [tasks]
 # Install RECOVAR in editable mode without dependencies
@@ -104,6 +120,10 @@ test-recovar = "recovar run_test_dataset"
 
 # Quick smoke test: verifies the environment can import the package without running workloads.
 smoke-import-recovar = "python -c \"import recovar; print('recovar_import_ok')\""
+
+# Launch the web GUI (run install-recovar first). Use `pixi run gui --check`
+# for a readiness report (deps / GPU / SLURM / bind URL).
+gui = "recovar gui"
 check-changed-python = "bash ./scripts/check_changed_python.sh"
 install-git-hooks = "git config core.hooksPath .githooks && chmod +x .githooks/pre-push"
 

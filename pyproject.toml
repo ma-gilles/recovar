@@ -107,8 +107,10 @@ gui = [
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
     "sqlalchemy>=2.0",
+    "aiosqlite>=0.19",        # async SQLite driver for SQLAlchemy's sqlite+aiosqlite engine (db.py)
     "aiofiles>=23.0",
     "tomli_w>=1.0",
+    "jinja2>=3.1",            # user-supplied sbatch templates (executor.py::_render_jinja_template)
 ]
 # Development and testing
 dev = [
