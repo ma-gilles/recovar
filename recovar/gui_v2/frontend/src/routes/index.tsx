@@ -96,7 +96,11 @@ export function DashboardPage(): React.JSX.Element {
             <span>{sysInfo.hostname}</span>
             <span className="mx-1">|</span>
             <span>
-              {sysInfo.executor_mode === "slurm" ? "Cluster mode" : "Local mode"}
+              {sysInfo.executor_mode === "slurm"
+                ? "Cluster mode"
+                : sysInfo.executor_mode === "both"
+                  ? "SLURM + Local"
+                  : "Local mode"}
             </span>
             <span className="mx-1">|</span>
             <span>recovar {sysInfo.recovar_version}</span>
@@ -169,7 +173,7 @@ export function DashboardPage(): React.JSX.Element {
               </div>
               {showCreateBrowser && (
                 <FileBrowser
-                  initialPath="/scratch/gpfs/GILLES/mg6942"
+                  initialPath={createPath || "~"}
                   selectDirectory
                   onSelect={(p) => {
                     setCreatePath(p);
@@ -235,7 +239,7 @@ export function DashboardPage(): React.JSX.Element {
               </div>
               {showOpenBrowser && (
                 <FileBrowser
-                  initialPath="/scratch/gpfs/GILLES/mg6942"
+                  initialPath={openPath || "~"}
                   selectDirectory
                   onSelect={(p) => { setOpenPath(p); setShowOpenBrowser(false); }}
                 />
@@ -478,7 +482,7 @@ function ProjectDashboard({
           </div>
           {showScanBrowser && (
             <FileBrowser
-              initialPath={project.path}
+              initialPath={scanPath || project.path}
               selectDirectory
               onSelect={(p) => { setScanPath(p); setShowScanBrowser(false); }}
             />

@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from recovar.gui_v2.backend.api.project import get_project_path
-from recovar.gui_v2.backend.config import get_db_path
+from recovar.gui_v2.backend.config import get_db_path, iso_utc
 from recovar.gui_v2.backend.db import init_db
 from recovar.gui_v2.backend.models.subset import Subset
 
@@ -176,7 +176,7 @@ async def list_subsets(project_id: str = Query(...)) -> list[SubsetListEntry]:
                 source_job_id=s.source_job_id,
                 zdim=s.zdim,
                 method=s.method,
-                created=s.created_at.isoformat(),
+                created=iso_utc(s.created_at),
             )
             for s in subsets
         ]
@@ -201,7 +201,7 @@ async def get_subset(subset_id: str) -> SubsetDetailResponse:
                     source_job_id=subset.source_job_id,
                     zdim=subset.zdim,
                     method=subset.method,
-                    created=subset.created_at.isoformat(),
+                    created=iso_utc(subset.created_at),
                     ind_path=subset.ind_path,
                 )
 
@@ -267,7 +267,7 @@ async def get_subset_provenance(subset_id: str) -> SubsetProvenanceResponse:
                     source_job_name=source_job_name,
                     zdim=subset.zdim,
                     method=subset.method,
-                    created=subset.created_at.isoformat(),
+                    created=iso_utc(subset.created_at),
                     ind_path=subset.ind_path,
                     star_exports=star_exports,
                 )

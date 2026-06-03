@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from recovar.gui_v2.backend.api.project import get_project_path
-from recovar.gui_v2.backend.config import get_db_path
+from recovar.gui_v2.backend.config import get_db_path, iso_utc
 from recovar.gui_v2.backend.db import init_db
 from recovar.gui_v2.backend.models.job import Job, JobStatus
 from recovar.gui_v2.backend.services.command_builder import (
@@ -814,7 +814,7 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         id=job_id,
         type=job_type,
         status=JobStatus.RUNNING.value,
-        created=job.created_at.isoformat(),
+        created=iso_utc(job.created_at),
         handle=handle,
         slurm_id=handle if isinstance(executor, SlurmExecutor) else None,
         warnings=warnings,
@@ -859,8 +859,8 @@ async def get_job(job_id: str) -> JobDetailResponse:
             type=job.type,
             status=job.status,
             params=job.params,
-            created=job.created_at.isoformat(),
-            completed=job.completed_at.isoformat() if job.completed_at else None,
+            created=iso_utc(job.created_at),
+            completed=iso_utc(job.completed_at),
             handle=job.executor_handle,
             slurm_id=job.slurm_id,
             error=job.error,
@@ -1272,6 +1272,12 @@ def _format_cli_command(job: Job) -> str:
     parts = [f"recovar {job.type.lower()}"]
     for key, val in job.params.items():
         if key in ("outdir", "slurm_opts"):
+            continue
+        # Omit unset optionals so the command is runnable as shown. Skip only
+        # None and empty/blank strings — NOT meaningful falsy values: False
+        # booleans are emitted as bare flags below, and numeric 0 / -1 (e.g.
+        # `--n-images -1`) must be preserved.
+        if val is None or (isinstance(val, str) and val.strip() == ""):
             continue
         flag = f"--{key.replace('_', '-')}"
         if isinstance(val, bool):

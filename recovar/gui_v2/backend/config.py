@@ -3,6 +3,7 @@
 Single source of truth for constants referenced across backend and docs.
 """
 
+import datetime
 from pathlib import Path
 
 # Volume downsampling threshold. Volumes with any dimension > this value
@@ -43,3 +44,17 @@ DEFAULT_PORT: int = 8080
 def get_db_path(project_dir: str | Path) -> Path:
     """Return the SQLite database path for a project directory."""
     return Path(project_dir) / DB_FILENAME
+
+
+def iso_utc(dt: datetime.datetime | None) -> str | None:
+    """Serialize a naive-UTC datetime as ISO-8601 with a ``Z`` suffix.
+
+    Job/project/subset timestamps are stored as naive ``datetime.utcnow()``.
+    Emitting them without a timezone makes the browser's ``new Date(...)``
+    interpret them as *local* time, which produces a wrong "Created" display and
+    a bogus queued duration ("queued for 2 hours" immediately after submit).
+    Tagging them UTC fixes both, and the viewer's browser renders local time.
+    """
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=datetime.timezone.utc).isoformat().replace("+00:00", "Z")

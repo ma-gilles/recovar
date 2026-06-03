@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from recovar.gui_v2.backend.config import get_db_path
+from recovar.gui_v2.backend.config import get_db_path, iso_utc
 from recovar.gui_v2.backend.db import get_session, init_db, with_write_retry
 from recovar.gui_v2.backend.models.job import Job, JobStatus
 from recovar.gui_v2.backend.models.project import Project
@@ -45,8 +45,10 @@ class CreateProjectRequest(BaseModel):
     @field_validator("path")
     @classmethod
     def path_must_be_absolute(cls, v: str) -> str:
+        # Expand "~" so users can type e.g. ~/projects/foo.
+        v = os.path.expanduser(v.strip())
         if not os.path.isabs(v):
-            raise ValueError("path must be absolute")
+            raise ValueError("path must be absolute (or start with ~)")
         return v
 
 
@@ -84,8 +86,11 @@ class ScanRequest(BaseModel):
     @field_validator("scan_path")
     @classmethod
     def scan_path_must_be_absolute(cls, v: str) -> str:
+        # Expand "~" so users can type e.g. ~/mytigress/. After expansion it
+        # must be absolute (a bare relative path is still rejected).
+        v = os.path.expanduser(v.strip())
         if not os.path.isabs(v):
-            raise ValueError("scan_path must be absolute")
+            raise ValueError("scan_path must be absolute (or start with ~)")
         return v
 
 
@@ -187,7 +192,7 @@ async def create_project(req: CreateProjectRequest) -> ProjectResponse:
                 id=existing.id,
                 path=existing.path,
                 name=existing.name,
-                created=existing.created_at.isoformat(),
+                created=iso_utc(existing.created_at),
             )
 
         # Create new project record
@@ -202,7 +207,7 @@ async def create_project(req: CreateProjectRequest) -> ProjectResponse:
             id=project.id,
             path=project.path,
             name=project.name,
-            created=project.created_at.isoformat(),
+            created=iso_utc(project.created_at),
         )
 
 
@@ -237,8 +242,8 @@ async def get_project(project_id: str) -> ProjectDetailResponse:
                 type=j.type,
                 status=j.status,
                 output_dir=j.output_dir,
-                created=j.created_at.isoformat(),
-                completed=j.completed_at.isoformat() if j.completed_at else None,
+                created=iso_utc(j.created_at),
+                completed=iso_utc(j.completed_at),
                 slurm_id=j.slurm_id,
                 error=j.error,
             )
@@ -249,7 +254,7 @@ async def get_project(project_id: str) -> ProjectDetailResponse:
             id=project.id,
             path=project.path,
             name=project.name,
-            created=project.created_at.isoformat(),
+            created=iso_utc(project.created_at),
             jobs=jobs,
             disk_usage_bytes=disk_usage_bytes,
             disk_usage_total=disk_usage_total,
@@ -268,7 +273,7 @@ async def scan_project(project_id: str, req: ScanRequest) -> ScanResponse:
     project, session = await _load_project_by_id(project_id)
 
     try:
-        scan_path = os.path.abspath(req.scan_path)
+        scan_path = os.path.abspath(os.path.expanduser(req.scan_path))
         if not os.path.isdir(scan_path):
             raise HTTPException(
                 status_code=400,

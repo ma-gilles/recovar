@@ -778,16 +778,18 @@ function InteractiveChartWithFallback({
   chartName: string;
   onFallback: () => void;
 }): React.JSX.Element | null {
-  const { data, isLoading } = useQuery<ChartData | null>({
+  const { data, isLoading, isError } = useQuery<ChartData | null>({
     queryKey: ["chart-data", jobId, chartName],
     queryFn: () => getChartData(jobId, chartName),
     retry: false,
     staleTime: Infinity,
   });
 
-  // data is undefined while loading, null when endpoint returned non-OK
+  // undefined while loading; null when the endpoint returned non-OK (e.g. 404);
+  // isError if the request threw. Any of these -> fall back to the static PNG so
+  // the "Loading chart..." spinner is never terminal.
   const unavailable =
-    data === null || (data !== undefined && data.traces.length === 0);
+    isError || data === null || (data !== undefined && data.traces.length === 0);
 
   useEffect(() => {
     if (unavailable) {
@@ -803,7 +805,7 @@ function InteractiveChartWithFallback({
     );
   }
 
-  if (!data || data.traces.length === 0) {
+  if (unavailable || !data) {
     return null;
   }
 

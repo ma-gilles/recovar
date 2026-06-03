@@ -46,7 +46,7 @@ def add_allowed_root(root: str) -> None:
 
 def _check_path_allowed(path: str) -> None:
     """Raise 403 if *path* is outside all allowed roots."""
-    resolved = str(Path(path).resolve())
+    resolved = str(Path(os.path.expanduser(path)).resolve())
     for root in _allowed_roots:
         if resolved.startswith(root):
             return
@@ -119,7 +119,7 @@ def _file_type(name: str, is_dir: bool) -> str:
 @router.get("/serve")
 async def serve_file(path: str) -> FileResponse:
     """Serve a single file with the correct MIME type."""
-    abs_path = os.path.abspath(path)
+    abs_path = os.path.abspath(os.path.expanduser(path))
     _check_path_allowed(abs_path)
 
     if not os.path.isfile(abs_path):
@@ -131,7 +131,7 @@ async def serve_file(path: str) -> FileResponse:
 @router.get("/browse", response_model=list[FileEntry])
 async def browse(path: str) -> list[FileEntry]:
     """List contents of a directory."""
-    abs_path = os.path.abspath(path)
+    abs_path = os.path.abspath(os.path.expanduser(path))
     _check_path_allowed(abs_path)
 
     if not os.path.isdir(abs_path):
