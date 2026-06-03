@@ -1655,6 +1655,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#recovar.simulation.simulator.generate_synthetic_dataset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        generate_synthetic_dataset
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.simulation.simulator.make_noise_batch_from_rng_stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_noise_batch_from_rng_stream
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#recovar.simulation.simulator.simulate_batch" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1966,6 +1988,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#recovar.simulation.simulator.generate_synthetic_dataset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        generate_synthetic_dataset
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.simulation.simulator.make_noise_batch_from_rng_stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_noise_batch_from_rng_stream
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#recovar.simulation.simulator.simulate_batch" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2153,6 +2197,55 @@ theta: float or array-like
     Rotation matrices whose columns are [a, b, u], where u is the normalized
     viewing direction and (a,b) is an orthonormal basis of the plane ⟂ u,
     rotated by theta (right-hand rule about +u).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.simulation.simulator.generate_synthetic_dataset" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">generate_synthetic_dataset</span><span class="p">(</span><span class="n">output_folder</span><span class="p">,</span> <span class="n">voxel_size</span><span class="p">,</span> <span class="n">volumes_path_root</span><span class="p">,</span> <span class="n">n_images</span><span class="p">,</span> <span class="n">outlier_file_input</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">grid_size</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">volume_distribution</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">dataset_params_option</span><span class="o">=</span><span class="s1">&#39;dataset1&#39;</span><span class="p">,</span> <span class="n">noise_level</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">noise_model</span><span class="o">=</span><span class="s1">&#39;radial1&#39;</span><span class="p">,</span> <span class="n">put_extra_particles</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">percent_outliers</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">volume_radius</span><span class="o">=</span><span class="mf">0.9</span><span class="p">,</span> <span class="n">trailing_zero_format_in_vol_name</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">noise_scale_std</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">contrast_std</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">disc_type</span><span class="o">=</span><span class="s1">&#39;linear_interp&#39;</span><span class="p">,</span> <span class="n">n_tilts</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dose_per_tilt</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">angle_per_tilt</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">image_dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span> <span class="n">image_offset_n_std</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">per_particle_contrast</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">premultiplied_ctf</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">noise_increase_per_tilt</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">create_nested_structure</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">nested_prefix</span><span class="o">=</span><span class="s1">&#39;Extract/job193&#39;</span><span class="p">,</span> <span class="n">percent_tilt_series_outliers</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">noise_rng_batch_size</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.simulation.simulator.generate_synthetic_dataset" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+
+
+<details class="noise_rng_batch_size-" open>
+  <summary>int, optional</summary>
+  <p>Batch size used only to advance the random-noise stream. When omitted,
+it matches the image processing batch size. Supplying a fixed value
+keeps generated noise independent of GPU-memory-driven processing
+batch changes (issue #148 fix).</p>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.simulation.simulator.make_noise_batch_from_rng_stream" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">make_noise_batch_from_rng_stream</span><span class="p">(</span><span class="n">noise_subkeys</span><span class="p">,</span> <span class="n">noise_rng_batch_size</span><span class="p">,</span> <span class="n">batch_st</span><span class="p">,</span> <span class="n">batch_end</span><span class="p">,</span> <span class="n">n_images</span><span class="p">,</span> <span class="n">noise_image</span><span class="p">,</span> <span class="n">images_batch_shape</span><span class="p">)</span></code>
+
+<a href="#recovar.simulation.simulator.make_noise_batch_from_rng_stream" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return noise for a processing batch from a fixed reference RNG stream.</p>
+<p>The RNG stream is chunked by <code>noise_rng_batch_size</code> (independent
+of the processing <code>batch_size</code>). For a processing batch spanning
+[batch_st, batch_end), pulls the corresponding pieces from one or
+more RNG chunks and concatenates them. This decouples generated
+noise from GPU-memory-driven processing-batch shape changes
+(issue #148 fix).</p>
 
 
     </div>
