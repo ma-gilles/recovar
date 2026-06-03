@@ -1,5 +1,25 @@
 import argparse
+import math
 import os
+
+
+def positive_finite_gb(raw: str) -> float:
+    """argparse ``type`` for ``--gpu-budget-gb``: reject NaN / inf / non-positive.
+
+    Shared with the pre-import scanner in ``recovar.command_line`` so a
+    malformed budget fails the same way before AND after jax has been
+    imported. Without this, ``float("NaN")`` and ``float("0")`` slip
+    through, produce nonsensical XLA env values, and burn a Slurm hour.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"--gpu-budget-gb={raw!r} is not a number")
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError(f"--gpu-budget-gb={raw!r} is not finite (NaN or inf)")
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"--gpu-budget-gb={raw!r} must be > 0")
+    return value
 
 
 def add_project_arg(parser: argparse.ArgumentParser):
@@ -28,37 +48,351 @@ def add_output_name_arg(parser: argparse.ArgumentParser):
 
 
 def add_gpu_memory_arg(parser: argparse.ArgumentParser):
-    """Add ``--gpu-memory`` to any command that does heavy GPU work.
+    """Add ``--gpu-budget-gb`` to any heavy-GPU command.
 
-    The flag overrides the auto-detected GPU memory used by recovar's
-    auto-batch-size formulas. Lower it if the heterogeneity / kernel-
-    regression / backproject step OOMs on your GPU — particularly when
-    running with ``RECOVAR_DISABLE_CUDA=1`` (the JAX-native fallback uses
-    ~3x more memory per image than the custom CUDA kernel).
+    A SOFT budget for RECOVAR's auto-batch-size formulas. It does not
+    enforce anything against JAX directly — JAX's allocation behavior
+    is controlled separately by ``XLA_PYTHON_CLIENT_MEM_FRACTION`` and
+    ``XLA_PYTHON_CLIENT_PREALLOCATE``. Pass it when you want recovar
+    to plan smaller batches than your physical VRAM (e.g. on a shared
+    GPU or to leave headroom for another process).
     """
     parser.add_argument(
-        "--gpu-memory",
-        type=float,
+        "--gpu-budget-gb",
+        type=positive_finite_gb,
         default=None,
         dest="gpu_memory",
         help=(
-            "GPU memory budget in GB used by the auto-batch-size formula. "
-            "Default: detect via JAX. Lower than your physical VRAM if you "
-            "OOM (especially under RECOVAR_DISABLE_CUDA=1, where the "
-            "JAX-native fallback path needs ~3x more memory per image)."
+            "Soft GPU memory budget in GB used by RECOVAR's auto-batch-size "
+            "formula (positive finite). Default: full physical VRAM as "
+            "reported by JAX. Lower this on a constrained or shared GPU. "
+            "This is NOT a JAX-level cap — see XLA_PYTHON_CLIENT_MEM_FRACTION "
+            "and XLA_PYTHON_CLIENT_PREALLOCATE for that."
         ),
     )
     return parser
 
 
 def apply_gpu_memory_arg(args, logger=None) -> None:
-    """If ``--gpu-memory N`` was given, propagate to ``set_gpu_memory_limit``."""
+    """If ``--gpu-budget-gb`` was given, propagate to ``set_gpu_memory_limit``."""
     if getattr(args, "gpu_memory", None) is not None:
         from recovar.utils import helpers as _utils
 
         _utils.set_gpu_memory_limit(args.gpu_memory)
         if logger is not None:
-            logger.info("GPU memory budget set to %.1f GB via --gpu-memory", args.gpu_memory)
+            logger.info(
+                "GPU batch-size budget set to %.1f GB via --gpu-budget-gb",
+                args.gpu_memory,
+            )
+
+
+def add_memory_planning_args(parser: argparse.ArgumentParser):
+    """Add the full GPU-memory flag set for any heavy-GPU command.
+
+    Adds:
+      - ``--gpu-budget-gb``                 soft RECOVAR batch-size budget
+      - ``--low-memory-option``             halve batch sizes
+      - ``--very-low-memory-option``        quarter batch sizes
+      - ``--adaptive-n-pcs``                pick n_pcs to fit the budget
+                                            (reproducible: same flags +
+                                            dataset = same n_pcs)
+      - ``--memory-profile``                heavyweight jax.profiler captures
+                                            (always-on diagnostics live in
+                                            ``<outdir>/_diagnostics/``)
+      - ``--fail-on-memory-exceed``         test-only end-of-run assertion
+      - ``--memory-safety-fraction``        advanced multiplier (testing)
+
+    Hidden / test-only:
+      - ``--debug-fail-on-memory-exceed``   alias of --fail-on-memory-exceed
+        (reserved for the unit-test override env var)
+    """
+    if not any(a.dest == "gpu_memory" for a in parser._actions):
+        add_gpu_memory_arg(parser)
+
+    # Idempotency: callers may stack add_args (pipeline.add_args + a
+    # wrapper command, or standard_downstream_args + a custom helper).
+    # If we've already wired the planning flags, just return.
+    if any(a.dest == "low_memory_option" for a in parser._actions):
+        return parser
+
+    group = parser.add_argument_group("Memory planning")
+    group.add_argument(
+        "--low-memory-option",
+        dest="low_memory_option",
+        action="store_true",
+        help="Halve image/volume/column batch sizes to stretch a tight budget.",
+    )
+    group.add_argument(
+        "--very-low-memory-option",
+        dest="very_low_memory_option",
+        action="store_true",
+        help="Quarter image/volume/column batch sizes (more aggressive).",
+    )
+    group.add_argument(
+        "--adaptive-n-pcs",
+        dest="adaptive_memory",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Adaptively reduce the number of principal components to fit "
+            "the GPU memory budget. ON BY DEFAULT (was opt-in pre-2026-05-15). "
+            "The planner predicts peak memory for the (grid, n_pcs) cell and "
+            "walks n_pcs down from 200 until the prediction fits the budget. "
+            "Reproducible: same flags + same dataset = same n_pcs. Use "
+            "--no-adaptive-n-pcs to force the legacy fixed-200-PCs behavior."
+        ),
+    )
+    # NOTE: ``--memory-diagnostics`` was removed. memory_plan.json is
+    # always written into ``<outdir>/_diagnostics/``; memory_trace.jsonl,
+    # allocator_env.json, args.json, and profiler captures are produced
+    # by the explicit ``--memory-profile`` flag below.
+    group.add_argument(
+        "--memory-profile",
+        dest="memory_profile",
+        action="store_true",
+        help=(
+            "HEAVYWEIGHT: capture jax.profiler.save_device_memory_profile "
+            "snapshots at each phase boundary (~50-200 ms per phase plus "
+            "~5-50 MB profile files). Used by the validation sweep and "
+            "manual debugging; not needed for production runs."
+        ),
+    )
+    group.add_argument(
+        "--fail-on-memory-exceed",
+        dest="fail_on_memory_exceed",
+        action="store_true",
+        help=(
+            "Test-only: at end of run, assert max(jax_peak_gb) <= --gpu-budget-gb * 1.05; "
+            "exit non-zero with a structured failure summary if violated. "
+            "Does NOT abort mid-run."
+        ),
+    )
+    group.add_argument(
+        "--memory-safety-fraction",
+        dest="memory_safety_fraction",
+        type=float,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    return parser
+
+
+def write_run_metadata(args, outdir, logger=None):
+    """Write args.json and allocator_env.json into ``outdir/_diagnostics/``.
+
+    Records: serialized argparse Namespace, the JAX/XLA env vars in
+    effect, the canonical CUDA env var, and the recovar git head if
+    available. Captured at planner-construction time so two runs with
+    identical CLI flags but different shell env can be distinguished.
+    """
+    import json as _json
+    import os as _os
+    import subprocess as _subprocess
+
+    from recovar.utils.memory_planner import diagnostics_dir
+
+    diag = diagnostics_dir(outdir)
+
+    # args.json
+    try:
+        args_dict = {k: _serialize_value(v) for k, v in vars(args).items()}
+        # Resolve git head best-effort
+        try:
+            head = _subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            git_head = head.stdout.strip() if head.returncode == 0 else None
+        except Exception:
+            git_head = None
+        args_dict["__git_head__"] = git_head
+        (diag / "args.json").write_text(_json.dumps(args_dict, indent=2, default=str))
+    except Exception as exc:
+        if logger is not None:
+            logger.warning("Could not write args.json: %s", exc)
+
+    # allocator_env.json
+    try:
+        env_keys = [
+            "XLA_PYTHON_CLIENT_PREALLOCATE",
+            "XLA_PYTHON_CLIENT_MEM_FRACTION",
+            "XLA_PYTHON_CLIENT_ALLOCATOR",
+            "TF_GPU_ALLOCATOR",
+            "CUDA_VISIBLE_DEVICES",
+            "RECOVAR_DISABLE_CUDA",
+            "JAX_PLATFORMS",
+        ]
+        env_record = {k: _os.environ.get(k) for k in env_keys}
+        (diag / "allocator_env.json").write_text(_json.dumps(env_record, indent=2))
+    except Exception as exc:
+        if logger is not None:
+            logger.warning("Could not write allocator_env.json: %s", exc)
+
+
+def _serialize_value(v):
+    """Best-effort JSON-serializable representation."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, (list, tuple)):
+        return [_serialize_value(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _serialize_value(x) for k, x in v.items()}
+    return str(v)
+
+
+def apply_memory_planning_args(
+    args,
+    *,
+    command,
+    grid_size,
+    n_images,
+    outdir=None,
+    logger=None,
+    desired_n_pcs=200,
+):
+    """Build a MemoryPlan, write memory_plan.json, and return both helpers.
+
+    Returns ``(plan, trace)`` where:
+      - ``plan`` is a ``recovar.utils.memory_planner.MemoryPlan``
+      - ``trace`` is a ``MemoryTraceWriter``. It writes to
+        ``<outdir>/_diagnostics/memory_trace.jsonl`` only when
+        ``--memory-profile`` is set.
+
+    Heavy-GPU commands then read ``plan.image_batch_size`` etc. directly
+    instead of calling the legacy ``utils.get_*_batch_size`` formulas.
+    """
+    from recovar.utils import memory_planner
+
+    plan = memory_planner.make_memory_plan(
+        command=command,
+        grid_size=grid_size,
+        n_images=n_images,
+        requested_gpu_gb=getattr(args, "gpu_memory", None),
+        low_memory=bool(getattr(args, "low_memory_option", False)),
+        very_low_memory=bool(getattr(args, "very_low_memory_option", False)),
+        adaptive_n_pcs=bool(getattr(args, "adaptive_memory", False)),
+        desired_n_pcs=desired_n_pcs,
+    )
+
+    if logger is not None:
+        budget = plan.budget
+        logger.info(
+            "GPU memory plan: backend=%s, requested=%s GB, effective=%.2f GB "
+            "(source=%s), n_pcs=%d (calibration_status=%s)",
+            budget.backend,
+            f"{budget.requested_gb:.1f}" if budget.requested_gb else "auto",
+            budget.effective_budget_gb,
+            budget.source,
+            plan.n_pcs_to_compute,
+            plan.calibration_status,
+        )
+        for warn in budget.warnings:
+            logger.warning("memory plan warning: %s", warn)
+
+    # Backend-aware budget for legacy ``get_*_batch_size`` formulas.
+    #
+    # Saturation sweep (A100 80GB, slurm 8020210, 17 cells) showed the
+    # legacy formulas OVERSHOOT the budget under ``jax_fallback``:
+    #
+    #   - g=64 jax_fallback, --gpu-budget-gb 12 → observed peak 17 GB
+    #     (1.42× overshoot — would have OOMed under --fail-on-memory-exceed)
+    #   - g=128 jax_fallback at every tested budget (12, 24, 40, 76 GB)
+    #     → OOM (peak > budget always; formula refuses to shrink)
+    #   - g=256 jax_fallback → OOM at full 76 GB
+    #
+    # custom_cuda fits comfortably (ratios 0.09-0.72 across grids). So
+    # the fix is to deflate the budget HANDED TO LEGACY only when
+    # backend == jax_fallback. The user's stated budget is unchanged;
+    # only the value the batch-size formulas see is reduced.
+    #
+    # Divisor = 5.0 for jax_fallback after the PR-138 full memory matrix:
+    # at grid=128 / --gpu-budget-gb 8, divisor=3.0 still selected image
+    # batches whose mean-reconstruction step asked XLA for a 32.6 GiB
+    # temporary; divisor=4.0 avoided the OOM but still peaked at 9.0 GB,
+    # above the 8.4 GB contract threshold. /5 keeps the 8 GB cell under
+    # the production 5% slack. The PR-138 high-budget rerun then showed
+    # that fallback formula budgets above 4.8 GB grow image batches back
+    # into the same relion-kernel OOM path, so ``batch_budget_for_backend``
+    # also caps jax_fallback at 4.8 GB until calibrated tables cover this
+    # backend.
+    divisor = memory_planner.batch_budget_divisor_for_backend(plan.budget.backend)
+    # ONLY override the global limit when the divisor is non-trivial.
+    # Calling ``set_gpu_memory_limit`` unconditionally — even with the
+    # planner's effective_budget — shifts batch sizes from "whatever
+    # JAX reports as bytes_limit" to "effective_budget", and the
+    # noise-floor cryo-ET outlier metrics flip on that small a delta
+    # (slurm 8025670 captured it). For custom_cuda (divisor=1.0) we
+    # leave the global alone so production paths are bit-identical to
+    # dev.
+    if divisor != 1.0:
+        legacy_budget = memory_planner.batch_budget_for_backend(
+            plan.budget.effective_budget_gb,
+            plan.budget.backend,
+        )
+        uncapped_legacy_budget = plan.budget.effective_budget_gb / divisor
+        cap_gb = memory_planner.batch_budget_cap_gb_for_backend(plan.budget.backend)
+        if logger is not None:
+            if cap_gb is not None and legacy_budget < uncapped_legacy_budget:
+                logger.info(
+                    "Deflating/capping budget for legacy batch-size formulas: "
+                    "%.2f GB / %.2f = %.2f GB, capped at %.2f GB "
+                    "(backend=%s; PR-138 matrix showed larger fallback batches OOM)",
+                    plan.budget.effective_budget_gb,
+                    divisor,
+                    uncapped_legacy_budget,
+                    cap_gb,
+                    plan.budget.backend,
+                )
+            else:
+                logger.info(
+                    "Deflating budget for legacy batch-size formulas: %.2f GB / %.2f = "
+                    "%.2f GB (backend=%s; sweep 8020210 showed legacy overshoots otherwise)",
+                    plan.budget.effective_budget_gb,
+                    divisor,
+                    legacy_budget,
+                    plan.budget.backend,
+                )
+        try:
+            from recovar.utils import helpers as _helpers
+
+            _helpers.set_gpu_memory_limit(legacy_budget)
+        except Exception:
+            pass
+
+    if outdir is not None:
+        try:
+            memory_planner.write_memory_plan_json(plan, outdir)
+        except Exception as exc:
+            if logger is not None:
+                logger.warning("Could not write memory_plan.json: %s", exc)
+
+        # Run metadata is opt-in via --memory-profile so we don't fork
+        # `git rev-parse HEAD` on every nested pipeline call (each
+        # pipeline_with_outliers round calls apply_memory_planning_args
+        # afresh; subprocess calls per-round can perturb noisy outlier
+        # metrics — slurm 7985775 / 7990236 / 8000338 vs 7998510).
+        if getattr(args, "memory_profile", False):
+            try:
+                write_run_metadata(args, outdir, logger=logger)
+            except Exception as exc:
+                if logger is not None:
+                    logger.warning("Could not write run metadata: %s", exc)
+
+    # Memory trace is opt-in via --memory-profile. Always-on tracing
+    # injected JAX memory_stats() + nvidia-smi subprocess calls at
+    # every phase boundary; that turned out to perturb noisy outlier
+    # regression metrics enough to fail the cryo-ET long test even
+    # though the trace itself doesn't change pipeline math. External
+    # sweep harnesses that want the trace can set ``--memory-profile``
+    # explicitly per cell.
+    trace = None
+    if outdir is not None:
+        trace = memory_planner.MemoryTraceWriter(outdir, enabled=bool(getattr(args, "memory_profile", False)))
+
+    return plan, trace
 
 
 def standard_downstream_args(parser: argparse.ArgumentParser, analyze=False):
@@ -163,6 +497,8 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze=False):
         help="Edge width of FSC mask (in Angstroms). If None, uses 10%% of fsc-mask-radius. Only used if fsc-mask-radius is specified.",
     )
 
-    add_gpu_memory_arg(parser)
+    # Full memory-planning surface so every downstream command exposes
+    # the same UX as ``recovar pipeline``.
+    add_memory_planning_args(parser)
 
     return parser

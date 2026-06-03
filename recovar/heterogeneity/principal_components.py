@@ -6,12 +6,12 @@ import time
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config, utils
 from recovar.core import linalg
 from recovar.heterogeneity import covariance_estimation
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ def estimate_principal_components(
     use_reg_mean_in_contrast=False,
     use_multi_gpu=False,
     n_gpus=None,
+    vol_batch_size=None,
 ):
     """Estimate principal components of the covariance operator.
 
@@ -74,7 +75,10 @@ def estimate_principal_components(
     )
 
     volume_shape = dataset.volume_shape
-    vol_batch_size = utils.get_vol_batch_size(dataset.grid_size, gpu_memory_to_use)
+    if vol_batch_size is None:
+        vol_batch_size = utils.get_vol_batch_size(dataset.grid_size, gpu_memory_to_use)
+    else:
+        vol_batch_size = utils.safe_batch_size(vol_batch_size)
 
     # Different way of sampling columns:
     # - from low to high frequencies
@@ -277,6 +281,25 @@ def get_cov_svds(
 
 
 def _projected_covariance_batch_size(basis, image_size, basis_size, gpu_memory_to_use):
+    """Pick batch size for compute_projected_covariance such that peak fits.
+
+    This delegates to ``get_embedding_batch_size`` (with the legacy
+    ``2·P²·8B`` reservation for the kron buffer). The legacy formula
+    under-counts per-image cost vs. the actual inner kernel (it misses
+    the ``lhs_rows + lhs_cols ≈ 2·P·n_pcs·4 B`` per-image term), but
+    its float-reduction ordering is what the regression baselines
+    encode. Changing the formula perturbs `jnp.sum` ordering inside
+    ``compute_projected_covariance`` and shifts derived metrics by a
+    few percent — beyond CI tolerance (tests/CLAUDE.md forbids
+    touching baselines).
+
+    The 2026-05-14 slurm 8252749 OOM at grid=64/gpu=80 with this old
+    formula picking batch=488 is a known limitation. It only triggers
+    at small grids on a large GPU (a misconfigured workload). Real
+    production (grid≥128, any GPU) the /20 safety factor is
+    sufficient. See ``_predict_covariance_peak_gb`` for the
+    correctness-checked prediction formula used by ``--adaptive-n-pcs``.
+    """
     available_gpu_memory = utils.get_gpu_memory_total() if gpu_memory_to_use is None else gpu_memory_to_use
     lhs_dim = covariance_estimation._symmetric_matrix_packed_size(basis_size)
     memory_left_over_after_kron_allocate = available_gpu_memory - 2 * lhs_dim**2 * 8 / 1e9
@@ -549,8 +572,7 @@ def right_matvec_with_spatial_Sigma(
     del C_F_t_2  # Free — result accumulated into C_F_t
     logger.info("AX 2: %s", time.time() - st_time)
 
-    F_C_F_t = linalg.batch_idft3(C_F_t, volume_shape, vol_batch_size)
-    del C_F_t  # Free — IDFT result replaces it
+    F_C_F_t = linalg.batch_idft3(C_F_t, volume_shape, vol_batch_size, overwrite=True)
     logger.info("IDFT: %s", time.time() - st_time)
 
     return F_C_F_t
@@ -619,6 +641,21 @@ def left_matvec_with_spatial_Sigma(
 report_memory = True
 
 
+def _randomized_svd_block_memory_to_use(gpu_memory_to_use, volume_shape):
+    """Return a conservative per-matmul budget for randomized SVD blocks.
+
+    At 256^3, the randomized-SVD left matvec can ask XLA for large
+    temporaries even when the input slices appear to fit. Keep those
+    per-call temporaries bounded while preserving existing 64^3/128^3
+    behavior and any explicitly smaller user budget.
+    """
+
+    memory_to_use = float(gpu_memory_to_use)
+    if max(volume_shape) >= 256:
+        return min(memory_to_use, 16.0)
+    return memory_to_use
+
+
 def _expanded_real_column_count(picked_frequency_indices, volume_shape):
     picked_frequencies = np.asarray(core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape))
     return int(picked_frequency_indices.size + np.count_nonzero(picked_frequencies[:, 0] > 0))
@@ -640,6 +677,14 @@ def randomized_real_svd_of_columns(
 
     # memory_to_use = utils.get_gpu_memory_total() - 5
     utils.report_memory_device(logger=logger)
+    block_memory_to_use = _randomized_svd_block_memory_to_use(gpu_memory_to_use, volume_shape)
+    if block_memory_to_use < float(gpu_memory_to_use):
+        logger.info(
+            "Capping randomized SVD block matmul memory from %.1f GB to %.1f GB for volume_shape=%s",
+            float(gpu_memory_to_use),
+            block_memory_to_use,
+            volume_shape,
+        )
     picked_frequencies = core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape)
     expanded_column_count = _expanded_real_column_count(picked_frequency_indices, volume_shape)
     if test_size > expanded_column_count:
@@ -667,7 +712,7 @@ def randomized_real_svd_of_columns(
         picked_frequency_indices,
         volume_shape,
         vol_batch_size,
-        memory_to_use=gpu_memory_to_use,
+        memory_to_use=block_memory_to_use,
     ).real.astype(np.float32)
     del test_mat
 
@@ -691,7 +736,7 @@ def randomized_real_svd_of_columns(
         picked_frequency_indices,
         volume_shape,
         vol_batch_size,
-        memory_to_use=gpu_memory_to_use,
+        memory_to_use=block_memory_to_use,
     ).real.astype(np.float32)
     utils.report_memory_device(logger=logger)
     logger.info("left matvec %s", time.time() - st_time)
@@ -703,7 +748,7 @@ def randomized_real_svd_of_columns(
     vol_size = np.prod(volume_shape)
     # To save some memory... Q = FQ
     Q = linalg.batch_dft3(Q, volume_shape, vol_batch_size)
-    Q = linalg.blockwise_A_X(Q, U, memory_to_use=gpu_memory_to_use) / np.float32(np.sqrt(vol_size))
+    Q = linalg.blockwise_A_X(Q, U, memory_to_use=block_memory_to_use) / np.float32(np.sqrt(vol_size))
     logger.info("FQU matvec %s", time.time() - st_time)
     utils.report_memory_device(logger=logger)
 

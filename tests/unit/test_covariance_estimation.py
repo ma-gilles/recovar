@@ -18,6 +18,14 @@ from recovar.heterogeneity import covariance_core
 pytestmark = pytest.mark.unit
 
 
+def test_column_batch_size_honors_planner_override(monkeypatch):
+    monkeypatch.setattr(cov_est.utils, "get_column_batch_size", lambda _grid, _gpu: 100)
+
+    assert cov_est._column_batch_size_for_options(256, 76.0, {"column_batch_size": 50}) == 50
+    assert cov_est._column_batch_size_for_options(256, 76.0, {"column_batch_size": 0}) == 1
+    assert cov_est._column_batch_size_for_options(256, 76.0, {}) == 100
+
+
 def _make_batch_fields(*, images, ctf_params, rotation_matrices, translations, noise_variance):
     return SimpleNamespace(
         images=images,

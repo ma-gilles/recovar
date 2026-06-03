@@ -33,11 +33,13 @@ def _effective_heterogeneity_memory_budget(avail_gb):
     if custom_cuda_requested():
         return avail_gb
 
-    scaled_gb = max(1.0, avail_gb / 3.0)
+    from recovar.utils import memory_planner
+
+    scaled_gb = max(1.0, memory_planner.batch_budget_for_backend(avail_gb, "jax_fallback"))
     logger.info(
         "RECOVAR_DISABLE_CUDA is active - scaling heterogeneity-kernel "
-        "memory budget to 1/3 of available (%.1f GB) to account for the "
-        "JAX-native fallback path's higher per-image memory cost.",
+        "memory budget to %.1f GB to account for the JAX-native fallback "
+        "path's higher per-image memory cost.",
         scaled_gb,
     )
     return scaled_gb
