@@ -131,6 +131,39 @@ Or use the interactive wizard: `recovar quickstart`
 
 See the [quick start guide](https://ma-gilles.github.io/recovar/getting-started/quickstart/) for more examples.
 
+## Web GUI
+
+RECOVAR includes a browser-based GUI for launching jobs, exploring latent spaces,
+and viewing 3D volumes. It is a web app, so there are **two machines** and only one
+of them needs anything installed:
+
+| | **Backend** — runs `recovar gui` + the pipelines | **Viewer** — where the browser runs |
+|---|---|---|
+| Which machine | the Linux box with the GPU (a workstation, or an HPC login node) | your laptop/desktop, any OS |
+| Install | `pip install "recovar[gpu,gui]"` | **nothing** — just a modern browser |
+
+On the backend machine:
+
+```bash
+pip install "recovar[gpu,gui]"   # install into your environment
+recovar gui                      # start the server (picks a free port, opens your browser)
+```
+
+Prefer a fully pinned environment? Use `pixi install && pixi run gui` instead.
+Run `recovar gui --check` for a readiness report (dependencies, GPU, SLURM, the
+bind URL, and the exact SSH command).
+
+**Viewing from another machine** (e.g. an HPC login node): the server binds to
+`localhost`, so forward the port over SSH and open the URL — nothing is installed
+on the viewing machine:
+
+```bash
+ssh -L 8080:localhost:8080 user@your-cluster   # then open http://localhost:8080
+```
+
+The GUI auto-detects SLURM: when `sbatch` is on PATH you choose SLURM or local
+execution per job; otherwise jobs run on the local GPU.
+
 ## Documentation
 
 Full documentation is available at **[ma-gilles.github.io/recovar](https://ma-gilles.github.io/recovar)**:

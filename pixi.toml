@@ -121,9 +121,10 @@ test-recovar = "recovar run_test_dataset"
 # Quick smoke test: verifies the environment can import the package without running workloads.
 smoke-import-recovar = "python -c \"import recovar; print('recovar_import_ok')\""
 
-# Launch the web GUI (run install-recovar first). Use `pixi run gui --check`
-# for a readiness report (deps / GPU / SLURM / bind URL).
-gui = "recovar gui"
+# Launch the web GUI — one command. Ensures recovar is installed first, so
+# `pixi install && pixi run gui` just works. Use `pixi run gui --check` for a
+# readiness report (deps / GPU / SLURM / bind URL).
+gui = { cmd = "recovar gui", depends-on = ["install-recovar"] }
 check-changed-python = "bash ./scripts/check_changed_python.sh"
 install-git-hooks = "git config core.hooksPath .githooks && chmod +x .githooks/pre-push"
 
