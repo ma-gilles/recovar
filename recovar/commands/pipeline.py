@@ -144,10 +144,13 @@ def add_args(parser: argparse.ArgumentParser):
         help="Focus mask (.mrc)",
     )
     mk.add_argument(
+        "--dont-resmooth-mask",
         "--keep-input-mask",
         action="store_true",
-        dest="keep_input_mask",
-        help="Use input mask as-is (skip thresholding/softening)",
+        dest="dont_resmooth_mask",
+        help="Use the input mask verbatim, skipping recovar's threshold-at-0.5 and "
+        "cosine soft-edge. Only use this if your mask already has a soft edge; "
+        "otherwise recovar softens it for you. (--keep-input-mask is a deprecated alias.)",
     )
     mk.add_argument(
         "--use-complement-mask",
@@ -611,7 +614,7 @@ def _build_focus_masks(args, means, volume_mask, volume_shape, dataset):
     """Build focus masks and optional complement mask."""
     if args.focus_mask is not None:
         focus_mask, _ = mask.masking_options(
-            args.focus_mask, means, volume_shape, dataset.dtype_real, args.mask_dilate_iter, args.keep_input_mask
+            args.focus_mask, means, volume_shape, dataset.dtype_real, args.mask_dilate_iter, args.dont_resmooth_mask
         )
     else:
         focus_mask = volume_mask
@@ -978,7 +981,7 @@ def standard_recovar_pipeline(args):
             volume_shape,
             ds.dtype_real,
             args.mask_dilate_iter,
-            args.keep_input_mask,
+            args.dont_resmooth_mask,
             args.dilated_mask_dilation_iters,
         )
 
