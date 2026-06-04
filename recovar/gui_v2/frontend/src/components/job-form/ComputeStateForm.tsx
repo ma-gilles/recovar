@@ -83,6 +83,12 @@ export function ComputeStateForm({
   }
   const hasCoordMismatch = coordCountErrors.length > 0;
 
+  const missingFields = [
+    !resultDir && "Result Directory",
+    !zdim && "zdim",
+    !coordsValid && "Latent Coordinates",
+  ].filter(Boolean) as string[];
+
   return (
     <div className="space-y-4">
       <div className="space-y-1">
@@ -153,14 +159,19 @@ export function ComputeStateForm({
         <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
       )}
 
-      <div className="flex justify-end pt-2">
-        <Button
-          onClick={() => mutation.mutate()}
-          disabled={!resultDir || !zdim || !coordsValid || hasCoordMismatch}
-          loading={mutation.isPending}
-        >
-          {mutation.isPending ? "Submitting..." : "Compute State"}
-        </Button>
+      <div className="space-y-2 pt-2">
+        {missingFields.length > 0 && (
+          <p className="text-xs text-amber-400">Required to submit: {missingFields.join(", ")}</p>
+        )}
+        <div className="flex justify-end">
+          <Button
+            onClick={() => mutation.mutate()}
+            disabled={!resultDir || !zdim || !coordsValid || hasCoordMismatch}
+            loading={mutation.isPending}
+          >
+            {mutation.isPending ? "Submitting..." : "Compute State"}
+          </Button>
+        </div>
       </div>
       {mutation.isError && (
         <p className="text-sm text-red-400">{(mutation.error as Error).message}</p>

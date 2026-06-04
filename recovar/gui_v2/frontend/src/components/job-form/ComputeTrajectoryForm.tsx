@@ -78,6 +78,13 @@ export function ComputeTrajectoryForm({
     !zStartMismatch &&
     !zEndMismatch;
 
+  const missingFields = [
+    !resultDir.length && "Result Directory",
+    !zdim.length && "zdim",
+    !isValidCoords(zStart) && "Start Coordinates",
+    !isValidCoords(zEnd) && "End Coordinates",
+  ].filter(Boolean) as string[];
+
   return (
     <div className="space-y-4">
       <div className="space-y-1">
@@ -156,10 +163,15 @@ export function ComputeTrajectoryForm({
         <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
       )}
 
-      <div className="flex justify-end pt-2">
-        <Button onClick={() => mutation.mutate()} disabled={!canSubmit} loading={mutation.isPending}>
-          {mutation.isPending ? "Submitting..." : "Compute Trajectory"}
-        </Button>
+      <div className="space-y-2 pt-2">
+        {missingFields.length > 0 && (
+          <p className="text-xs text-amber-400">Required to submit: {missingFields.join(", ")}</p>
+        )}
+        <div className="flex justify-end">
+          <Button onClick={() => mutation.mutate()} disabled={!canSubmit} loading={mutation.isPending}>
+            {mutation.isPending ? "Submitting..." : "Compute Trajectory"}
+          </Button>
+        </div>
       </div>
       {mutation.isError && (
         <p className="text-sm text-red-400">{(mutation.error as Error).message}</p>

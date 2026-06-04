@@ -54,6 +54,8 @@ export function StableStatesForm({
     },
   });
 
+  const missingFields = [!density && "Density File"].filter(Boolean) as string[];
+
   return (
     <div className="space-y-4">
       <div className="space-y-1">
@@ -134,6 +136,9 @@ export function StableStatesForm({
       )}
 
       {/* Submit */}
+      {missingFields.length > 0 && (
+        <p className="text-xs text-amber-400">Required to submit: {missingFields.join(", ")}</p>
+      )}
       <div className="flex items-center justify-between pt-2">
         {mutation.isError && (
           <span className="text-sm text-red-400">{(mutation.error as Error).message}</span>

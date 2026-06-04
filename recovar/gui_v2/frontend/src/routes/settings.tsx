@@ -12,9 +12,7 @@ import {
   updateUserLocalDefaults,
   updateProjectLocalDefaults,
   getSystemInfo,
-  type SlurmDefaultsLayered,
   type SlurmDefaultsUpdate,
-  type LocalDefaultsLayered,
   type LocalDefaultsUpdate,
   type SystemInfo,
 } from "../lib/api/client";

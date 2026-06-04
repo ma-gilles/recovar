@@ -593,6 +593,28 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
             </div>
           )}
 
+          {colorBy === "kmeans" && embeddings && !embeddings.kmeansLabels && (
+            <div className="rounded-md border border-zinc-800 bg-black/50 px-4 py-3">
+              <p className="text-sm text-zinc-500">
+                No k-means clustering available.{" "}
+                <Link
+                  to="/jobs/new"
+                  search={{
+                    type: "analyze" as never,
+                    result_dir: resultDir as never,
+                    density: undefined,
+                    input: undefined,
+                    particles: undefined,
+                    params: undefined,
+                  }}
+                  className="text-blue-400 hover:text-blue-300 hover:underline"
+                >
+                  Run Analyze to generate clusters
+                </Link>
+              </p>
+            </div>
+          )}
+
           {/* Selection actions */}
           {selectedIndices.size > 0 && (
             <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-4 py-3 space-y-2">

@@ -1279,10 +1279,16 @@ def _format_cli_command(job: Job) -> str:
         # `--n-images -1`) must be preserved.
         if val is None or (isinstance(val, str) and val.strip() == ""):
             continue
+        if isinstance(val, (list, tuple)) and len(val) == 0:
+            continue
         flag = f"--{key.replace('_', '-')}"
         if isinstance(val, bool):
             if val:
                 parts.append(flag)
+        elif isinstance(val, (list, tuple)):
+            # e.g. zdim [1, 2, 4, 10, 20] -> "--zdim 1,2,4,10,20" (comma-joined,
+            # not the Python list repr "[1, 2, ...]" which isn't valid CLI input).
+            parts.append(f"{flag} {','.join(str(x) for x in val)}")
         else:
             parts.append(f"{flag} {val}")
     return " ".join(parts)

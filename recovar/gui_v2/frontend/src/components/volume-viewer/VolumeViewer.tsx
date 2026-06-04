@@ -64,7 +64,18 @@ export function VolumeViewer({
   const [internalPinned, setInternalPinned] = useState<PinnedVolume[]>([]);
   // Use controlled state if provided, otherwise internal
   const pinnedVolumes = controlledPinned ?? internalPinned;
-  const setPinnedVolumes = onPinnedVolumesChange ?? setInternalPinned;
+  const setPinnedVolumes = useCallback(
+    (next: PinnedVolume[] | ((prev: PinnedVolume[]) => PinnedVolume[])) => {
+      if (onPinnedVolumesChange) {
+        // Controlled: resolve the functional-updater form against current
+        // value before handing a plain array to the parent callback.
+        onPinnedVolumesChange(typeof next === "function" ? next(pinnedVolumes) : next);
+      } else {
+        setInternalPinned(next);
+      }
+    },
+    [onPinnedVolumesChange, pinnedVolumes],
+  );
   const [activeVolume, setActiveVolume] = useState<string | null>(initialVolumePath ?? null);
 
   // Sync activeVolume when the parent changes initialVolumePath (e.g. user
