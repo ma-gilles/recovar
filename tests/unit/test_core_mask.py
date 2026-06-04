@@ -591,3 +591,35 @@ class TestReferenceEquivalence:
         )
         np.testing.assert_array_equal(got_binary, exp_binary)
         np.testing.assert_allclose(got_soft, exp_soft)
+
+
+def test_keep_input_mask_dilated_not_all_ones(tmp_path):
+    """Regression: masking_options(keep_input_mask=True) must threshold before
+    dilation. A mask loaded from an .mrc carries ~1e-8 nonzero roundoff in
+    (almost) every voxel; binary_dilation treats any nonzero as foreground, so
+    without an explicit threshold the dilated solvent mask blows up to all-ones.
+    That all-ones mask silently corrupts the variance/covariance estimate
+    downstream (flat PCA spectrum, washed-out latent embedding).
+    """
+    N = 32
+    coords = np.indices((N, N, N)) - N / 2
+    r = np.sqrt((coords**2).sum(0))
+    blob = (r < 5).astype(np.float32)
+    # Mimic an .mrc loaded from disk: tiny nonzero roundoff almost everywhere.
+    soft = blob.copy()
+    soft[soft == 0] = 1e-8
+    soft[0, 0, 0] = -2.8e-8
+    mrc_path = tmp_path / "soft_mask.mrc"
+    utils.write_mrc(str(mrc_path), soft, voxel_size=1.0)
+
+    volume_mask, dilated_volume_mask = mask.masking_options(
+        str(mrc_path), None, (N, N, N), np.float32, 0, True, None
+    )
+
+    foreground = float(np.mean(np.asarray(dilated_volume_mask) > 0.5))
+    assert foreground < 0.5, (
+        f"dilated mask covers {foreground:.0%} of the box -- the un-thresholded "
+        "binary_dilation bug (all-ones dilated mask) has regressed"
+    )
+    # keep_input_mask keeps the raw input as the (soft) volume mask.
+    np.testing.assert_allclose(np.asarray(volume_mask), soft, rtol=0, atol=1e-6)

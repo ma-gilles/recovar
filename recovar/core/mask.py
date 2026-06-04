@@ -69,6 +69,12 @@ def masking_options(
 
         if keep_input_mask:
             volume_mask = input_mask
+            # Use a separate boolean base for dilation, keeping the (soft) input
+            # mask intact for soft masking. A mask loaded from an .mrc carries tiny
+            # (~1e-8) nonzero roundoff in almost every voxel, and binary_dilation
+            # treats any nonzero as foreground -- dilating the raw float directly
+            # blows the dilated mask up to all-ones.
+            dilation_base = input_mask > 0.5
         else:
             logger.info("Using input mask")
             if mask_dilation_iter > 0:
@@ -82,8 +88,9 @@ def masking_options(
             logger.info("Thresholding mask at 0.5 and softening with cosine kernel of radius %d pixels", kernel_size)
             input_mask = input_mask > 0.5
             volume_mask = soften_volume_mask(input_mask, kernel_size)
+            dilation_base = input_mask
 
-        dilated_volume_mask = binary_dilation(input_mask, iterations=dilated_mask_dilations_iter)
+        dilated_volume_mask = binary_dilation(dilation_base, iterations=dilated_mask_dilations_iter)
         dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
 
     elif volume_mask_option == "from_halfmaps":
@@ -116,8 +123,7 @@ def masking_options(
 # ---------------------------------------------------------------------------
 
 
-def make_mask(volume, *, threshold="auto", lowpass_sigma=None, extend=None,
-              soft_edge=3, cleanup=True):
+def make_mask(volume, *, threshold="auto", lowpass_sigma=None, extend=None, soft_edge=3, cleanup=True):
     """Create a solvent mask from a 3-D real-space volume.
 
     Follows the same conceptual pipeline as RELION's ``relion_mask_create``:
@@ -206,8 +212,9 @@ def make_mask(volume, *, threshold="auto", lowpass_sigma=None, extend=None,
         thresh_val = float(threshold)
 
     binary = (filtered > thresh_val) & radial
-    logger.info("Mask threshold: %.4g  (%.1f%% of voxels inside radial mask)",
-                thresh_val, 100.0 * binary.sum() / radial.sum())
+    logger.info(
+        "Mask threshold: %.4g  (%.1f%% of voxels inside radial mask)", thresh_val, 100.0 * binary.sum() / radial.sum()
+    )
 
     # --- 3. Morphological cleanup ---
     if cleanup:
@@ -260,8 +267,7 @@ def make_mask_from_half_maps(halfmap1, halfmap2, smax=3, method="auto", **kwargs
     """
     if method == "local_correlation":
         soft_edge = kwargs.get("soft_edge", 2)
-        return _make_mask_from_half_maps_local_corr(halfmap1, halfmap2, smax=smax,
-                                                     soft_edge=soft_edge)
+        return _make_mask_from_half_maps_local_corr(halfmap1, halfmap2, smax=smax, soft_edge=soft_edge)
 
     avg = (np.asarray(halfmap1) + np.asarray(halfmap2)) / 2.0
     return make_mask(avg, **kwargs)
