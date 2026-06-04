@@ -22,6 +22,8 @@ import vtkImageMarchingCubes from "@kitware/vtk.js/Filters/General/ImageMarching
 import vtkImageData from "@kitware/vtk.js/Common/DataModel/ImageData";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+import vtkCellPicker from "@kitware/vtk.js/Rendering/Core/CellPicker";
 
 // Side-effect import: register ALL OpenGL view-node factories needed for
 // geometry rendering.  The Geometry profile registers Camera, Renderer,
@@ -97,6 +99,14 @@ interface VtkViewerProps {
    * Null means the volume was served at full resolution.
    */
   onDownsampleInfo?: (info: DownsampleInfo | null) => void;
+  /**
+   * Optional click-to-pick callback. When set, every left-click in the
+   * 3D viewport runs a vtkCellPicker against all visible isosurfaces and
+   * the picked world position is delivered as ``(x, y, z)`` voxel
+   * coordinates (vtkImageData uses unit spacing/origin so world == voxel).
+   * Set to undefined to disable picking and restore plain camera control.
+   */
+  onPickWorld?: (xyz: [number, number, number]) => void;
 }
 
 // Design system palette: sky-400, rose-400, emerald-400, amber-400
@@ -213,10 +223,16 @@ function nx_ny_nz(vol: VolumeData): [number, number, number] {
 
 // ---- Component ----
 
-export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, activeCategory, preserveCamera = false, prefetchPaths, onDownsampleInfo }: VtkViewerProps): React.JSX.Element {
+export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, activeCategory, preserveCamera = false, prefetchPaths, onDownsampleInfo, onPickWorld }: VtkViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const renderContextRef = useRef<any>(null);
+  // Latest onPickWorld in a ref so the click handler always sees the
+  // current callback without re-binding the listener.
+  const onPickWorldRef = useRef(onPickWorld);
+  useEffect(() => {
+    onPickWorldRef.current = onPickWorld;
+  }, [onPickWorld]);
   const pipelinesRef = useRef<Map<string, VtkPipelineEntry>>(new Map());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const negSurfacesRef = useRef<{ actor: any; mapper: any; mc: any }[]>([]);
@@ -257,6 +273,37 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
       renderContextRef.current = grw;
 
+      // Click-to-pick: when an onPickWorld handler is registered, intercept
+      // left-clicks and run a vtkCellPicker pass against the renderer. The
+      // picker walks all visible actors (including marching-cubes meshes)
+      // and returns the world position of the closest hit. Because the
+      // vtkImageData is built with origin (0,0,0) and spacing (1,1,1),
+      // world coordinates ARE voxel coordinates.
+      const picker = vtkCellPicker.newInstance();
+      picker.setTolerance(0.005);
+      const onClick = (evt: MouseEvent) => {
+        const cb = onPickWorldRef.current;
+        if (!cb) return;
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        // vtk.js display coordinates: origin bottom-left, in canvas pixels.
+        const x = (evt.clientX - rect.left);
+        const y = rect.height - (evt.clientY - rect.top);
+        const renderer = grw.getRenderer();
+        picker.pick([x, y, 0], renderer);
+        const actors = picker.getActors();
+        if (!actors || actors.length === 0) return;
+        const pos = picker.getPickPosition();
+        if (!pos) return;
+        // Suppress the click from triggering camera reset / drag init.
+        evt.preventDefault();
+        evt.stopPropagation();
+        cb([pos[0], pos[1], pos[2]]);
+      };
+      // Use capture so we run before vtk.js's interactor swallows the event.
+      containerRef.current.addEventListener("click", onClick, { capture: true });
+
       // Handle resize
       const observer = new ResizeObserver((entries) => {
         for (const entry of entries) {
@@ -270,6 +317,10 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
       return () => {
         observer.disconnect();
+        if (containerRef.current) {
+          containerRef.current.removeEventListener("click", onClick, { capture: true } as unknown as EventListenerOptions);
+        }
+        try { picker.delete(); } catch { /* noop */ }
         // Clean up negative surface actors
         for (const neg of negSurfacesRef.current) {
           neg.actor.delete();

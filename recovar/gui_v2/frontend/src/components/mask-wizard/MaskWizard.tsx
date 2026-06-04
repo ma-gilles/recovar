@@ -1,0 +1,1032 @@
+import React, { useCallback, useEffect, useRef, useState, Suspense } from "react";
+import { Save, Loader2, Layers, Eraser, X, Undo2, Redo2, BoxSelect, Brush } from "lucide-react";
+import { Dialog } from "../ui/dialog";
+import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
+import {
+  previewMask,
+  previewMaskVolume,
+  deletePreviewMaskVolume,
+  saveMask,
+  segmentInfo,
+  ApiError,
+  type MaskParams,
+  type EraseSphere,
+  type EraseBox,
+} from "../../lib/api/client";
+
+// Lazy-load VtkViewer (vtk.js is heavy; only loaded when 3D mode is opened)
+const VtkViewer = React.lazy(() =>
+  import("../volume-viewer/VtkViewer").then((m) => ({ default: m.VtkViewer }))
+);
+
+interface MaskWizardProps {
+  open: boolean;
+  onClose: () => void;
+  sourcePath: string;
+  sourceName: string;
+  projectId: string;
+  onSaved?: (path: string) => void;
+}
+
+interface WizardState {
+  thresholdMode: "auto" | "manual";
+  threshold: number;
+  extend: number;
+  softEdge: number;
+  lowpassMode: "auto" | "manual";
+  lowpass: number;
+  cleanup: boolean;
+}
+
+const DEFAULT_STATE: WizardState = {
+  thresholdMode: "auto",
+  threshold: 0.02,
+  extend: 3,
+  softEdge: 6,
+  lowpassMode: "auto",
+  lowpass: 2,
+  cleanup: true,
+};
+
+/**
+ * Convert a click position on the slice preview to (x, y, z) voxel
+ * coordinates given the current slice axis and index. Returns null when
+ * the position is outside the image.
+ */
+function clientToSphere(
+  clientX: number,
+  clientY: number,
+  img: HTMLImageElement,
+  shape: number[],
+  axis: 0 | 1 | 2,
+  currentIdx: number,
+  radius: number
+): EraseSphere | null {
+  const rect = img.getBoundingClientRect();
+  const fx = (clientX - rect.left) / rect.width;
+  const fy = (clientY - rect.top) / rect.height;
+  if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+  // mrcfile loads data as [NZ, NY, NX] so shape=[nz, ny, nx].
+  // Backend renders the slice via:
+  //   axis=0 -> data[idx, :, :]   shape (NY, NX)  rows=Y cols=X
+  //   axis=1 -> data[:, idx, :]   shape (NZ, NX)  rows=Z cols=X
+  //   axis=2 -> data[:, :, idx]   shape (NZ, NY)  rows=Z cols=Y
+  let x = 0, y = 0, z = 0;
+  if (axis === 0) {
+    x = fx * shape[2];
+    y = fy * shape[1];
+    z = currentIdx;
+  } else if (axis === 1) {
+    x = fx * shape[2];
+    y = currentIdx;
+    z = fy * shape[0];
+  } else {
+    x = currentIdx;
+    y = fx * shape[1];
+    z = fy * shape[0];
+  }
+  return { x, y, z, r: radius };
+}
+
+function buildParams(
+  s: WizardState,
+  sourcePath: string,
+  eraseSpheres: EraseSphere[] = [],
+  eraseBoxes: EraseBox[] = [],
+  keepTopSegments: number | null = null
+): MaskParams {
+  return {
+    source_path: sourcePath,
+    threshold: s.thresholdMode === "auto" ? null : s.threshold,
+    lowpass_sigma: s.lowpassMode === "auto" ? null : s.lowpass,
+    extend: s.extend,
+    soft_edge: s.softEdge,
+    cleanup: s.cleanup,
+    erase_spheres: eraseSpheres,
+    erase_boxes: eraseBoxes,
+    keep_top_segments: keepTopSegments,
+  };
+}
+
+/**
+ * Guided mask creation modal. Wraps recovar.core.mask.make_mask through
+ * the /api/masks/preview and /api/masks/save endpoints.
+ */
+export function MaskWizard({
+  open,
+  onClose,
+  sourcePath,
+  sourceName,
+  projectId,
+  onSaved,
+}: MaskWizardProps): React.JSX.Element {
+  const [state, setState] = useState<WizardState>(DEFAULT_STATE);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [coverage, setCoverage] = useState<number | null>(null);
+  const [shape, setShape] = useState<number[] | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  const [outputName, setOutputName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedPath, setSavedPath] = useState<string | null>(null);
+
+  const [axis, setAxis] = useState<0 | 1 | 2>(2);
+  const [sliceIdx, setSliceIdx] = useState<number | null>(null);
+
+  const [viewMode, setViewMode] = useState<"slice" | "3d">("slice");
+  const [previewVolPath, setPreviewVolPath] = useState<string | null>(null);
+  const [vol3dLoading, setVol3dLoading] = useState(false);
+
+  const [eraseMode, setEraseMode] = useState(false);
+  const [eraseTool, setEraseTool] = useState<"brush" | "box">("brush");
+  const [eraseRadius, setEraseRadius] = useState(5);
+  const [eraseSpheres, setEraseSpheresRaw] = useState<EraseSphere[]>([]);
+  const [eraseBoxes, setEraseBoxesRaw] = useState<EraseBox[]>([]);
+  const [keepTopSegments, setKeepTopSegments] = useState<number | null>(null);
+  const [segmentInfoData, setSegmentInfoData] = useState<{
+    n_segments: number;
+    top_sizes: number[];
+  } | null>(null);
+  const [segmentLoading, setSegmentLoading] = useState(false);
+  // First-corner snapshot for box mode (cleared after the second click).
+  const [boxFirstCorner, setBoxFirstCorner] = useState<EraseSphere | null>(null);
+  // In-progress brush stroke (committed to eraseSpheres on mouseup as a
+  // single undo entry). brushPreview drives the live count.
+  const brushDragRef = useRef<{ active: boolean; sample: EraseSphere[] }>({
+    active: false,
+    sample: [],
+  });
+  const [brushPreview, setBrushPreview] = useState<EraseSphere[] | null>(null);
+  // Undo/redo history. Each entry is a snapshot of {spheres, boxes}
+  // BEFORE the change.
+  type EraseSnapshot = { spheres: EraseSphere[]; boxes: EraseBox[] };
+  const [erasePast, setErasePast] = useState<EraseSnapshot[]>([]);
+  const [eraseFuture, setEraseFuture] = useState<EraseSnapshot[]>([]);
+
+  const pushHistory = useCallback(
+    (prevSpheres: EraseSphere[], prevBoxes: EraseBox[]) => {
+      setErasePast((p) => [...p, { spheres: prevSpheres, boxes: prevBoxes }]);
+      setEraseFuture([]);
+    },
+    []
+  );
+
+  const setEraseSpheres = useCallback(
+    (next: EraseSphere[] | ((prev: EraseSphere[]) => EraseSphere[])) => {
+      setEraseSpheresRaw((prev) => {
+        const value = typeof next === "function" ? (next as (p: EraseSphere[]) => EraseSphere[])(prev) : next;
+        if (JSON.stringify(value) === JSON.stringify(prev)) return prev;
+        // Capture both arrays at the moment of the change.
+        setEraseBoxesRaw((boxesPrev) => {
+          pushHistory(prev, boxesPrev);
+          return boxesPrev;
+        });
+        return value;
+      });
+    },
+    [pushHistory]
+  );
+
+  const setEraseBoxes = useCallback(
+    (next: EraseBox[] | ((prev: EraseBox[]) => EraseBox[])) => {
+      setEraseBoxesRaw((prev) => {
+        const value = typeof next === "function" ? (next as (p: EraseBox[]) => EraseBox[])(prev) : next;
+        if (JSON.stringify(value) === JSON.stringify(prev)) return prev;
+        setEraseSpheresRaw((spheresPrev) => {
+          pushHistory(spheresPrev, prev);
+          return spheresPrev;
+        });
+        return value;
+      });
+    },
+    [pushHistory]
+  );
+
+  const undoErase = useCallback(() => {
+    setErasePast((past) => {
+      if (past.length === 0) return past;
+      const previous = past[past.length - 1];
+      setEraseSpheresRaw((curS) => {
+        setEraseBoxesRaw((curB) => {
+          setEraseFuture((f) => [...f, { spheres: curS, boxes: curB }]);
+          return previous.boxes;
+        });
+        return previous.spheres;
+      });
+      return past.slice(0, -1);
+    });
+  }, []);
+
+  const redoErase = useCallback(() => {
+    setEraseFuture((future) => {
+      if (future.length === 0) return future;
+      const next = future[future.length - 1];
+      setEraseSpheresRaw((curS) => {
+        setEraseBoxesRaw((curB) => {
+          setErasePast((p) => [...p, { spheres: curS, boxes: curB }]);
+          return next.boxes;
+        });
+        return next.spheres;
+      });
+      return future.slice(0, -1);
+    });
+  }, []);
+
+  // Debounced preview generation
+  const previewTokenRef = useRef(0);
+  const triggerPreview = useCallback(async () => {
+    if (!open) return;
+    const myToken = ++previewTokenRef.current;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const params = buildParams(state, sourcePath, eraseSpheres, eraseBoxes, keepTopSegments);
+      const result = await previewMask({
+        ...params,
+        axis,
+        idx: sliceIdx,
+      });
+      if (myToken !== previewTokenRef.current) {
+        URL.revokeObjectURL(result.url);
+        return;
+      }
+      setPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return result.url;
+      });
+      setCoverage(result.coverage);
+      setShape(result.shape);
+    } catch (e) {
+      if (myToken !== previewTokenRef.current) return;
+      const msg = e instanceof ApiError ? e.message : String(e);
+      setPreviewError(msg);
+    } finally {
+      if (myToken === previewTokenRef.current) setPreviewLoading(false);
+    }
+  }, [open, state, sourcePath, axis, sliceIdx, eraseSpheres, eraseBoxes, keepTopSegments]);
+
+  // Debounced 3D mask volume generation
+  const vol3dTokenRef = useRef(0);
+  const trigger3dPreview = useCallback(async () => {
+    if (!open) return;
+    const myToken = ++vol3dTokenRef.current;
+    setVol3dLoading(true);
+    try {
+      const result = await previewMaskVolume({
+        ...buildParams(state, sourcePath, eraseSpheres, eraseBoxes, keepTopSegments),
+        project_id: projectId,
+      });
+      if (myToken !== vol3dTokenRef.current) {
+        // A newer request superseded us — discard this output
+        deletePreviewMaskVolume(result.path).catch(() => undefined);
+        return;
+      }
+      setPreviewVolPath((prev) => {
+        if (prev && prev !== result.path) {
+          deletePreviewMaskVolume(prev).catch(() => undefined);
+        }
+        return result.path;
+      });
+    } catch (e) {
+      if (myToken !== vol3dTokenRef.current) return;
+      const msg = e instanceof ApiError ? e.message : String(e);
+      setPreviewError(msg);
+    } finally {
+      if (myToken === vol3dTokenRef.current) setVol3dLoading(false);
+    }
+  }, [open, state, sourcePath, projectId, eraseSpheres, eraseBoxes, keepTopSegments]);
+
+  // Auto-preview on open and on parameter changes (debounced 350ms).
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => {
+      if (viewMode === "slice") {
+        triggerPreview();
+      } else {
+        trigger3dPreview();
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [open, viewMode, triggerPreview, trigger3dPreview]);
+
+  // Reset state when modal opens with a new source
+  useEffect(() => {
+    if (open) {
+      setState(DEFAULT_STATE);
+      setOutputName(deriveDefaultName(sourceName));
+      setSavedPath(null);
+      setSaveError(null);
+      setSliceIdx(null);
+      setEraseSpheresRaw([]);
+      setEraseBoxesRaw([]);
+      setBoxFirstCorner(null);
+      setErasePast([]);
+      setEraseFuture([]);
+      setEraseMode(false);
+      setEraseTool("brush");
+      setKeepTopSegments(null);
+      setSegmentInfoData(null);
+      brushDragRef.current = { active: false, sample: [] };
+      setBrushPreview(null);
+    }
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sourcePath]);
+
+  // Clean up the server-side preview MRC when the modal closes
+  useEffect(() => {
+    if (open) return;
+    if (previewVolPath) {
+      deletePreviewMaskVolume(previewVolPath).catch(() => undefined);
+      setPreviewVolPath(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Cmd+Z / Cmd+Shift+Z (and Ctrl+Z / Ctrl+Y) for the eraser history.
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent): void {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      // Don't intercept if focus is in a text input that handles its own undo
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undoErase();
+      } else if ((k === "z" && e.shiftKey) || k === "y") {
+        e.preventDefault();
+        redoErase();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, undoErase, redoErase]);
+
+  const handleSave = useCallback(async () => {
+    if (!outputName.trim()) {
+      setSaveError("Enter an output name");
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const result = await saveMask({
+        ...buildParams(state, sourcePath, eraseSpheres, eraseBoxes, keepTopSegments),
+        project_id: projectId,
+        output_name: outputName.trim(),
+      });
+      setSavedPath(result.path);
+      onSaved?.(result.path);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      setSaveError(msg);
+    } finally {
+      setSaving(false);
+    }
+  }, [outputName, state, sourcePath, projectId, eraseSpheres, eraseBoxes, keepTopSegments, onSaved]);
+
+  const maxSlice = shape ? shape[axis] - 1 : 0;
+  const currentIdx = sliceIdx ?? (shape ? Math.floor(shape[axis] / 2) : 0);
+
+  return (
+    <Dialog open={open} onClose={onClose} className="!max-w-2xl">
+      <h2 className="mb-1 text-lg font-semibold text-zinc-100">Create Mask</h2>
+      <p className="mb-4 text-xs text-zinc-500">
+        From volume: <span className="text-zinc-300">{sourceName}</span>
+      </p>
+
+      <div className="grid grid-cols-2 gap-5">
+        {/* Left: preview */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex gap-1 rounded-md border border-zinc-700 p-0.5">
+              <button
+                onClick={() => setViewMode("slice")}
+                aria-pressed={viewMode === "slice"}
+                className={
+                  "rounded px-2 py-0.5 text-xs " +
+                  (viewMode === "slice" ? "bg-zinc-700 text-zinc-50" : "text-zinc-400")
+                }
+              >
+                <Layers className="inline h-3 w-3" /> Slice
+              </button>
+              <button
+                onClick={() => setViewMode("3d")}
+                aria-pressed={viewMode === "3d"}
+                className={
+                  "rounded px-2 py-0.5 text-xs " +
+                  (viewMode === "3d" ? "bg-zinc-700 text-zinc-50" : "text-zinc-400")
+                }
+              >
+                3D
+              </button>
+            </div>
+            {viewMode === "slice" && (
+              <div className="flex gap-1 rounded-md border border-zinc-700 p-0.5">
+                {(["X", "Y", "Z"] as const).map((label, i) => (
+                  <button
+                    key={label}
+                    onClick={() => {
+                      setAxis(i as 0 | 1 | 2);
+                      setSliceIdx(null);
+                    }}
+                    className={
+                      "rounded px-2 py-0.5 text-xs " +
+                      (axis === i ? "bg-zinc-700 text-zinc-50" : "text-zinc-400")
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div
+            className="relative flex items-center justify-center overflow-hidden rounded-lg border border-zinc-800 bg-black"
+            style={{ aspectRatio: "1 / 1", minHeight: 260 }}
+          >
+            {viewMode === "slice" ? (
+              previewError ? (
+                <p className="px-3 text-center text-xs text-red-400">{previewError}</p>
+              ) : previewUrl ? (
+                <img
+                  src={previewUrl}
+                  alt="Mask preview"
+                  className={
+                    "h-full w-full object-contain " +
+                    (eraseMode ? "cursor-crosshair select-none" : "")
+                  }
+                  style={{ imageRendering: "pixelated" }}
+                  draggable={false}
+                  onMouseDown={(e) => {
+                    if (!eraseMode || !shape || eraseTool !== "brush") return;
+                    e.preventDefault();
+                    const sph = clientToSphere(e.clientX, e.clientY, e.currentTarget, shape, axis, currentIdx, eraseRadius);
+                    if (!sph) return;
+                    brushDragRef.current = { active: true, sample: [sph] };
+                    setBrushPreview([sph]);
+                  }}
+                  onMouseMove={(e) => {
+                    if (!brushDragRef.current.active || !shape) return;
+                    const sph = clientToSphere(e.clientX, e.clientY, e.currentTarget, shape, axis, currentIdx, eraseRadius);
+                    if (!sph) return;
+                    // Throttle by minimum distance: skip if within r/2 of the last
+                    const last = brushDragRef.current.sample[brushDragRef.current.sample.length - 1];
+                    if (last) {
+                      const dx = sph.x - last.x;
+                      const dy = sph.y - last.y;
+                      const dz = sph.z - last.z;
+                      const minDist = eraseRadius * 0.5;
+                      if (dx * dx + dy * dy + dz * dz < minDist * minDist) return;
+                    }
+                    brushDragRef.current.sample.push(sph);
+                    setBrushPreview([...brushDragRef.current.sample]);
+                  }}
+                  onMouseUp={() => {
+                    if (!brushDragRef.current.active) return;
+                    const stroke = brushDragRef.current.sample;
+                    brushDragRef.current = { active: false, sample: [] };
+                    setBrushPreview(null);
+                    if (stroke.length > 0) {
+                      setEraseSpheres((prev) => [...prev, ...stroke]);
+                    }
+                  }}
+                  onMouseLeave={() => {
+                    if (!brushDragRef.current.active) return;
+                    const stroke = brushDragRef.current.sample;
+                    brushDragRef.current = { active: false, sample: [] };
+                    setBrushPreview(null);
+                    if (stroke.length > 0) {
+                      setEraseSpheres((prev) => [...prev, ...stroke]);
+                    }
+                  }}
+                  onClick={(e) => {
+                    if (!eraseMode || !shape || eraseTool !== "box") return;
+                    const sph = clientToSphere(e.clientX, e.clientY, e.currentTarget, shape, axis, currentIdx, eraseRadius);
+                    if (!sph) return;
+                    if (!boxFirstCorner) {
+                      // First corner — record and wait for the second click.
+                      setBoxFirstCorner(sph);
+                    } else {
+                      // Second corner — build the box. Depth is constrained
+                      // to the perpendicular axis ± eraseRadius (slab).
+                      const a = boxFirstCorner;
+                      const b = sph;
+                      const halfThick = eraseRadius;
+                      let z0 = Math.min(a.z, b.z);
+                      let z1 = Math.max(a.z, b.z);
+                      let x0 = Math.min(a.x, b.x);
+                      let x1 = Math.max(a.x, b.x);
+                      let y0 = Math.min(a.y, b.y);
+                      let y1 = Math.max(a.y, b.y);
+                      // For each axis where the user can't actually place a
+                      // different value (the perpendicular axis), expand by
+                      // ±halfThick to make a slab.
+                      if (axis === 0) {
+                        z0 -= halfThick;
+                        z1 += halfThick;
+                      } else if (axis === 1) {
+                        y0 -= halfThick;
+                        y1 += halfThick;
+                      } else {
+                        x0 -= halfThick;
+                        x1 += halfThick;
+                      }
+                      setEraseBoxes((prev) => [...prev, { x0, x1, y0, y1, z0, z1 }]);
+                      setBoxFirstCorner(null);
+                    }
+                  }}
+                />
+              ) : (
+                <Spinner label="Generating..." />
+              )
+            ) : previewVolPath ? (
+              <Suspense fallback={<Spinner label="Loading 3D viewer..." />}>
+                <VtkViewer
+                  activeVolume={sourcePath}
+                  activeSigma={3.0}
+                  pinnedVolumes={[
+                    {
+                      path: sourcePath,
+                      name: sourceName,
+                      threshold: 3.0,
+                      opacity: 0.4,
+                      visible: true,
+                      colorIndex: 0,
+                    },
+                    {
+                      path: previewVolPath,
+                      name: "mask",
+                      threshold: 0.5,
+                      opacity: 0.85,
+                      visible: true,
+                      colorIndex: 2,
+                    },
+                  ]}
+                  onPickWorld={
+                    eraseMode
+                      ? ([x, y, z]) =>
+                          setEraseSpheres((prev) => [
+                            ...prev,
+                            { x, y, z, r: eraseRadius },
+                          ])
+                      : undefined
+                  }
+                />
+              </Suspense>
+            ) : (
+              <Spinner label="Generating mask..." />
+            )}
+            {((viewMode === "slice" && previewLoading && previewUrl) ||
+              (viewMode === "3d" && vol3dLoading && previewVolPath)) && (
+              <div className="absolute right-2 top-2">
+                <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
+              </div>
+            )}
+          </div>
+          {shape && (
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-xs text-zinc-500">
+                <span className="w-10">Slice</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={maxSlice}
+                  value={currentIdx}
+                  onChange={(e) => setSliceIdx(parseInt(e.target.value))}
+                  className="flex-1"
+                />
+                <span className="w-12 text-right">{currentIdx} / {maxSlice}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs text-zinc-500">
+                <span>Shape: {shape.join(" x ")}</span>
+                {coverage !== null && (
+                  <span>Coverage: {(coverage * 100).toFixed(1)}%</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right: parameters */}
+        <div className="space-y-3 text-sm">
+          {/* Threshold */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                Threshold
+              </label>
+              <div className="flex gap-1 rounded-md border border-zinc-700 p-0.5">
+                {(["auto", "manual"] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setState((s) => ({ ...s, thresholdMode: m }))}
+                    className={
+                      "rounded px-2 py-0.5 text-xs " +
+                      (state.thresholdMode === m
+                        ? "bg-zinc-700 text-zinc-50"
+                        : "text-zinc-400")
+                    }
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {state.thresholdMode === "manual" ? (
+              <div className="flex items-center gap-2 text-xs text-zinc-500">
+                <input
+                  type="range"
+                  min={-0.5}
+                  max={2}
+                  step={0.001}
+                  value={state.threshold}
+                  onChange={(e) =>
+                    setState((s) => ({ ...s, threshold: parseFloat(e.target.value) }))
+                  }
+                  className="flex-1"
+                />
+                <span className="w-14 text-right text-zinc-300">
+                  {state.threshold.toFixed(3)}
+                </span>
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-600">Otsu auto-threshold</p>
+            )}
+          </div>
+
+          {/* Extend (dilate) */}
+          <div className="space-y-1">
+            <label className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+              Dilation: {state.extend} voxels
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={20}
+              step={1}
+              value={state.extend}
+              onChange={(e) =>
+                setState((s) => ({ ...s, extend: parseInt(e.target.value) }))
+              }
+              className="w-full"
+            />
+          </div>
+
+          {/* Soft edge */}
+          <div className="space-y-1">
+            <label className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+              Soft edge: {state.softEdge.toFixed(1)} voxels
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={20}
+              step={0.5}
+              value={state.softEdge}
+              onChange={(e) =>
+                setState((s) => ({ ...s, softEdge: parseFloat(e.target.value) }))
+              }
+              className="w-full"
+            />
+          </div>
+
+          {/* Lowpass */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                Lowpass smoothing
+              </label>
+              <div className="flex gap-1 rounded-md border border-zinc-700 p-0.5">
+                {(["auto", "manual"] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setState((s) => ({ ...s, lowpassMode: m }))}
+                    className={
+                      "rounded px-2 py-0.5 text-xs " +
+                      (state.lowpassMode === m
+                        ? "bg-zinc-700 text-zinc-50"
+                        : "text-zinc-400")
+                    }
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {state.lowpassMode === "manual" && (
+              <div className="flex items-center gap-2 text-xs text-zinc-500">
+                <input
+                  type="range"
+                  min={0}
+                  max={10}
+                  step={0.5}
+                  value={state.lowpass}
+                  onChange={(e) =>
+                    setState((s) => ({ ...s, lowpass: parseFloat(e.target.value) }))
+                  }
+                  className="flex-1"
+                />
+                <span className="w-12 text-right text-zinc-300">
+                  σ {state.lowpass.toFixed(1)}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Cleanup */}
+          <div className="flex items-center gap-2">
+            <input
+              id="mask-cleanup"
+              type="checkbox"
+              checked={state.cleanup}
+              onChange={(e) => setState((s) => ({ ...s, cleanup: e.target.checked }))}
+              className="h-3.5 w-3.5"
+            />
+            <label htmlFor="mask-cleanup" className="text-xs text-zinc-400">
+              Cleanup (fill holes, keep largest component)
+            </label>
+          </div>
+
+          {/* Segments (auto-segment) */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                Segments
+              </label>
+              <button
+                disabled={segmentLoading}
+                onClick={async () => {
+                  setSegmentLoading(true);
+                  try {
+                    const info = await segmentInfo(buildParams(state, sourcePath, eraseSpheres, eraseBoxes, null));
+                    setSegmentInfoData(info);
+                  } catch (e) {
+                    setSegmentInfoData(null);
+                    setSaveError(e instanceof ApiError ? e.message : String(e));
+                  } finally {
+                    setSegmentLoading(false);
+                  }
+                }}
+                className="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+              >
+                {segmentLoading ? "Analyzing…" : "Find segments"}
+              </button>
+            </div>
+            {segmentInfoData && (
+              <p className="text-xs text-zinc-500">
+                Found <span className="text-zinc-300">{segmentInfoData.n_segments}</span> connected component
+                {segmentInfoData.n_segments === 1 ? "" : "s"}.
+                {segmentInfoData.top_sizes.length > 0 && (
+                  <> Largest sizes: {segmentInfoData.top_sizes.slice(0, 5).join(", ")}{segmentInfoData.top_sizes.length > 5 ? "…" : ""}</>
+                )}
+              </p>
+            )}
+            <div className="flex items-center gap-2 text-xs text-zinc-500">
+              <span className="w-20">Keep top</span>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(1, segmentInfoData?.n_segments ?? 5)}
+                step={1}
+                value={keepTopSegments ?? 0}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value);
+                  setKeepTopSegments(v === 0 ? null : v);
+                }}
+                className="flex-1"
+              />
+              <span className="w-12 text-right text-zinc-300">
+                {keepTopSegments ?? "all"}
+              </span>
+            </div>
+          </div>
+
+          {/* Sphere eraser */}
+          <div className="border-t border-zinc-800 pt-3 space-y-1">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                Eraser
+              </label>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={undoErase}
+                  disabled={erasePast.length === 0}
+                  className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-30 disabled:hover:bg-transparent"
+                  aria-label="Undo eraser action (Cmd+Z)"
+                  title="Undo (Cmd/Ctrl+Z)"
+                >
+                  <Undo2 className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={redoErase}
+                  disabled={eraseFuture.length === 0}
+                  className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-30 disabled:hover:bg-transparent"
+                  aria-label="Redo eraser action (Cmd+Shift+Z)"
+                  title="Redo (Cmd/Ctrl+Shift+Z)"
+                >
+                  <Redo2 className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={() => setEraseMode((m) => !m)}
+                  className={
+                    "flex items-center gap-1 rounded px-2 py-0.5 text-xs " +
+                    (eraseMode
+                      ? "bg-rose-500/20 text-rose-300"
+                      : "border border-zinc-700 text-zinc-400 hover:text-zinc-200")
+                  }
+                  aria-pressed={eraseMode}
+                  title="Click on the slice to add a sphere that erases voxels from the mask"
+                >
+                  <Eraser className="h-3 w-3" /> {eraseMode ? "On" : "Off"}
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-zinc-500">
+              <span className="w-14">Radius</span>
+              <input
+                type="range"
+                min={1}
+                max={30}
+                step={1}
+                value={eraseRadius}
+                onChange={(e) => setEraseRadius(parseInt(e.target.value))}
+                className="flex-1"
+              />
+              <span className="w-10 text-right text-zinc-300">{eraseRadius}</span>
+            </div>
+            {eraseMode && (
+              <div className="flex gap-1 rounded-md border border-zinc-700 p-0.5">
+                <button
+                  onClick={() => {
+                    setEraseTool("brush");
+                    setBoxFirstCorner(null);
+                  }}
+                  aria-pressed={eraseTool === "brush"}
+                  className={
+                    "flex flex-1 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs " +
+                    (eraseTool === "brush"
+                      ? "bg-zinc-700 text-zinc-50"
+                      : "text-zinc-400")
+                  }
+                >
+                  <Brush className="h-3 w-3" /> Brush
+                </button>
+                <button
+                  onClick={() => setEraseTool("box")}
+                  aria-pressed={eraseTool === "box"}
+                  className={
+                    "flex flex-1 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs " +
+                    (eraseTool === "box"
+                      ? "bg-zinc-700 text-zinc-50"
+                      : "text-zinc-400")
+                  }
+                >
+                  <BoxSelect className="h-3 w-3" /> Box
+                </button>
+              </div>
+            )}
+            {eraseMode && (
+              <p className="text-xs text-rose-300/80">
+                {viewMode === "3d"
+                  ? "Click on the mask isosurface to drop an erase sphere at that point."
+                  : eraseTool === "brush"
+                  ? brushPreview
+                    ? `Painting brush stroke… ${brushPreview.length} point${brushPreview.length === 1 ? "" : "s"}`
+                    : "Click or drag on the slice preview to add erase spheres."
+                  : boxFirstCorner
+                  ? `First corner placed at (${boxFirstCorner.x.toFixed(0)}, ${boxFirstCorner.y.toFixed(0)}, ${boxFirstCorner.z.toFixed(0)}). Click the opposite corner.`
+                  : "Click two opposite corners on the slice to define a box (depth = ±radius)."}
+              </p>
+            )}
+            {eraseSpheres.length > 0 && (
+              <div className="max-h-24 space-y-0.5 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 p-1">
+                {eraseSpheres.map((s, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-1 text-[11px] text-zinc-400"
+                  >
+                    <span className="font-mono tabular-nums">
+                      ● ({s.x.toFixed(0)}, {s.y.toFixed(0)}, {s.z.toFixed(0)}) r={s.r}
+                    </span>
+                    <button
+                      onClick={() =>
+                        setEraseSpheres((prev) => prev.filter((_, j) => j !== i))
+                      }
+                      className="ml-auto rounded p-0.5 text-zinc-600 hover:bg-zinc-800 hover:text-rose-300"
+                      aria-label={`Remove erase sphere ${i + 1}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setEraseSpheres([])}
+                  className="w-full rounded py-0.5 text-[11px] text-zinc-500 hover:text-rose-300"
+                >
+                  Clear all spheres ({eraseSpheres.length})
+                </button>
+              </div>
+            )}
+            {eraseBoxes.length > 0 && (
+              <div className="max-h-24 space-y-0.5 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 p-1">
+                {eraseBoxes.map((b, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-1 text-[11px] text-zinc-400"
+                  >
+                    <span className="font-mono tabular-nums">
+                      ▢ x[{b.x0.toFixed(0)},{b.x1.toFixed(0)}] y[{b.y0.toFixed(0)},{b.y1.toFixed(0)}] z[{b.z0.toFixed(0)},{b.z1.toFixed(0)}]
+                    </span>
+                    <button
+                      onClick={() =>
+                        setEraseBoxes((prev) => prev.filter((_, j) => j !== i))
+                      }
+                      className="ml-auto rounded p-0.5 text-zinc-600 hover:bg-zinc-800 hover:text-rose-300"
+                      aria-label={`Remove erase box ${i + 1}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setEraseBoxes([])}
+                  className="w-full rounded py-0.5 text-[11px] text-zinc-500 hover:text-rose-300"
+                >
+                  Clear all boxes ({eraseBoxes.length})
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Output name */}
+          <div className="border-t border-zinc-800 pt-3 space-y-1">
+            <label className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+              Save as
+            </label>
+            <input
+              type="text"
+              value={outputName}
+              onChange={(e) => setOutputName(e.target.value)}
+              placeholder="mask_name"
+              className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-200 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+            />
+            <p className="text-xs text-zinc-600">
+              Saved to <code>&lt;project&gt;/Masks/</code>
+            </p>
+          </div>
+
+          {/* Status */}
+          {saveError && (
+            <p className="text-xs text-red-400" role="alert">
+              {saveError}
+            </p>
+          )}
+          {savedPath && (
+            <p className="text-xs text-emerald-400">
+              Saved: {savedPath.split("/").pop()}
+            </p>
+          )}
+
+          {/* Actions */}
+          <div className="flex gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={onClose}>
+              Close
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleSave}
+              disabled={saving || previewLoading}
+              className="ml-auto"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  Saving
+                </>
+              ) : (
+                <>
+                  <Save className="mr-1.5 h-3.5 w-3.5" />
+                  Save Mask
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+function deriveDefaultName(sourceName: string): string {
+  const stem = sourceName.replace(/\.mrc$/i, "");
+  return `mask_from_${stem}`.replace(/[^A-Za-z0-9_.-]/g, "_");
+}

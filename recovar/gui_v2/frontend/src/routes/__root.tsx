@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Outlet } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Sidebar } from "../components/sidebar/Sidebar";
+import { CommandPalette } from "../components/command-palette/CommandPalette";
 import { ErrorBoundary } from "../components/ui/error-boundary";
 import { useProject } from "../lib/project-context";
 import { getSystemInfo, type SystemInfo } from "../lib/api/client";
@@ -139,6 +140,7 @@ export function RootLayout(): React.JSX.Element {
           </div>
         </ErrorBoundary>
       </main>
+      <CommandPalette />
     </div>
   );
 }

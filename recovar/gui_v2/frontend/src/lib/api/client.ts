@@ -340,6 +340,28 @@ export function previewSbatchScript(req: SbatchPreviewRequest): Promise<SbatchPr
   });
 }
 
+export interface GenerateTestDatasetRequest {
+  output_dir: string;
+  image_size?: number;
+  n_images?: number;
+  seed?: number | null;
+}
+
+export interface GenerateTestDatasetResponse {
+  output_dir: string;
+  files_created: string[];
+  duration_seconds: number;
+}
+
+export function generateTestDataset(
+  req: GenerateTestDatasetRequest
+): Promise<GenerateTestDatasetResponse> {
+  return request("/system/generate-test-dataset", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
 // --- Jobs (extended) ---
 
 export function getJobSbatchScript(id: string): Promise<SbatchScript> {
@@ -432,6 +454,131 @@ export function updateProjectLocalDefaults(
   return request("/settings/local-defaults/project", {
     method: "PUT",
     body: JSON.stringify({ ...data, project_dir: projectDir }),
+  });
+}
+
+// --- Masks ---
+
+export interface EraseSphere {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+}
+
+export interface EraseBox {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+  z0: number;
+  z1: number;
+}
+
+export interface MaskParams {
+  source_path: string;
+  threshold?: number | null;
+  lowpass_sigma?: number | null;
+  extend?: number | null;
+  soft_edge: number;
+  cleanup: boolean;
+  erase_spheres?: EraseSphere[];
+  erase_boxes?: EraseBox[];
+  keep_top_segments?: number | null;
+}
+
+export interface SegmentInfoResponse {
+  n_segments: number;
+  total_voxels: number;
+  top_sizes: number[];
+}
+
+export function segmentInfo(
+  params: MaskParams
+): Promise<SegmentInfoResponse> {
+  return request(`/masks/segment-info`, {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export interface MaskInfo {
+  name: string;
+  path: string;
+  size_bytes: number;
+  modified: string;
+}
+
+export interface SaveMaskRequest extends MaskParams {
+  project_id: string;
+  output_name: string;
+}
+
+/**
+ * Build a URL for the mask preview endpoint. Uses POST so we cannot
+ * use a plain <img src=...>. Returns a fetch helper that resolves to
+ * an object URL the caller can drop into <img>.
+ */
+export async function previewMask(
+  params: MaskParams & { axis?: 0 | 1 | 2; idx?: number | null }
+): Promise<{ url: string; coverage: number; shape: number[] }> {
+  const resp = await fetch(`${BASE}/masks/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!resp.ok) {
+    throw new ApiError(resp.status, await resp.text());
+  }
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const coverage = parseFloat(resp.headers.get("X-Mask-Coverage") ?? "0");
+  const shapeStr = resp.headers.get("X-Volume-Shape") ?? "";
+  const shape = shapeStr ? shapeStr.split(",").map((n) => parseInt(n, 10)) : [];
+  return { url, coverage, shape };
+}
+
+export function saveMask(req: SaveMaskRequest): Promise<MaskInfo> {
+  return request(`/masks/save`, { method: "POST", body: JSON.stringify(req) });
+}
+
+export function listProjectMasks(projectId: string): Promise<MaskInfo[]> {
+  return request(`/masks/by-project/${projectId}`);
+}
+
+export interface BooleanOpRequest {
+  project_id: string;
+  mask_a: string;
+  mask_b: string;
+  op: "union" | "intersect" | "subtract";
+  output_name: string;
+}
+
+export function maskBooleanOp(req: BooleanOpRequest): Promise<MaskInfo> {
+  return request(`/masks/boolean-op`, {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export interface PreviewVolumeResponse {
+  path: string;
+  voxel_size: number;
+  shape: number[];
+}
+
+export function previewMaskVolume(
+  params: MaskParams & { project_id: string }
+): Promise<PreviewVolumeResponse> {
+  return request(`/masks/preview-volume`, {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export function deletePreviewMaskVolume(path: string): Promise<{ deleted: boolean }> {
+  return request(`/masks/preview-volume?path=${encodeURIComponent(path)}`, {
+    method: "DELETE",
   });
 }
 

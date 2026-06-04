@@ -26,6 +26,7 @@ from recovar.gui_v2.backend.api.embeddings import router as embeddings_router
 from recovar.gui_v2.backend.api.files import configure_allowed_roots
 from recovar.gui_v2.backend.api.files import router as files_router
 from recovar.gui_v2.backend.api.jobs import router as jobs_router
+from recovar.gui_v2.backend.api.masks import router as masks_router
 from recovar.gui_v2.backend.api.project import router as project_router
 from recovar.gui_v2.backend.api.settings import router as settings_router
 from recovar.gui_v2.backend.api.subsets import router as subsets_router
@@ -231,6 +232,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router)
     app.include_router(files_router)
     app.include_router(volumes_router)
+    app.include_router(masks_router)
     app.include_router(embeddings_router)
     app.include_router(subsets_router)
     app.include_router(settings_router)

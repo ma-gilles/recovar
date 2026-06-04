@@ -264,11 +264,14 @@ async def _get_job(job_id: str) -> tuple[Job, Any]:
     raise HTTPException(status_code=404, detail="Job not found")
 
 
-def _categorize_volume(name: str, rel_path: str = "") -> str:
+def _categorize_volume(name: str, rel_path: str = "", job_type: str = "") -> str:
     """Assign a display category to an MRC filename.
 
     *rel_path* is the path relative to the job output directory,
     used to detect subfolder structure (e.g. kmeans/, trajectories/).
+    *job_type* is the recovar job type (e.g. ``ReconstructTrajectory``),
+    used so dedicated trajectory/state jobs categorize their state*.mrc
+    files correctly even when the files sit directly at the job root.
     """
     lower = name.lower()
     rel_lower = rel_path.lower()
@@ -296,6 +299,10 @@ def _categorize_volume(name: str, rel_path: str = "") -> str:
     if "kmeans" in rel_lower or "center" in lower:
         return "kmeans_center"
     if "trajectory" in rel_lower or "traj" in rel_lower or "traj" in lower:
+        return "trajectory"
+
+    # Dedicated trajectory job: every state*.mrc at the job root is a frame.
+    if job_type in ("ReconstructTrajectory", "ComputeTrajectory") and "state" in lower:
         return "trajectory"
 
     if "state" in lower:
@@ -929,7 +936,7 @@ async def list_volumes(job_id: str) -> list[VolumeEntry]:
                 continue
             full = os.path.join(dirpath, fname)
             rel_path = os.path.join(rel_dir, fname)
-            category = _categorize_volume(fname, rel_path)
+            category = _categorize_volume(fname, rel_path, job.type)
             # Skip diagnostic volumes (not standalone viewable)
             if category in ("locres", "sampling"):
                 continue
@@ -982,44 +989,53 @@ async def suggested_next(job_id: str) -> list[SuggestedNext]:
         return suggestions
 
     if job.type == "Pipeline":
-        suggestions.append(
-            SuggestedNext(
-                type="Analyze",
-                label="Analyze this pipeline output",
-                prefilled_params={"result_dir": job.output_dir},
-            )
-        )
-        suggestions.append(
-            SuggestedNext(
-                type="Density",
-                label="Estimate conformational density",
-                prefilled_params={"result_dir": job.output_dir},
-            )
-        )
+        suggestions.append(SuggestedNext(
+            type="Analyze",
+            label="Analyze this pipeline output",
+            prefilled_params={"result_dir": job.output_dir},
+        ))
+        suggestions.append(SuggestedNext(
+            type="Density",
+            label="Estimate conformational density",
+            prefilled_params={"result_dir": job.output_dir},
+        ))
     elif job.type == "Analyze":
-        suggestions.append(
-            SuggestedNext(
-                type="ComputeState",
-                label="Compute volume at a latent point",
-                prefilled_params={"result_dir": (job.params or {}).get("result_dir", "")},
-            )
-        )
-        suggestions.append(
-            SuggestedNext(
-                type="ComputeTrajectory",
-                label="Compute trajectory between two points",
-                prefilled_params={"result_dir": (job.params or {}).get("result_dir", "")},
-            )
-        )
+        result_dir = (job.params or {}).get("result_dir", "")
+        suggestions.append(SuggestedNext(
+            type="ComputeState",
+            label="Compute volume at a latent point",
+            prefilled_params={"result_dir": result_dir},
+        ))
+        suggestions.append(SuggestedNext(
+            type="ComputeTrajectory",
+            label="Compute trajectory between two points",
+            prefilled_params={"result_dir": result_dir},
+        ))
+        suggestions.append(SuggestedNext(
+            type="Density",
+            label="Estimate conformational density (enables density-guided trajectories)",
+            prefilled_params={"result_dir": result_dir},
+        ))
     elif job.type == "Density":
-        density_pkl = os.path.join(job.output_dir, "data", "deconv_density_knee.pkl")
-        suggestions.append(
-            SuggestedNext(
-                type="StableStates",
-                label="Find stable states from density",
-                prefilled_params={"density": density_pkl},
-            )
+        density_pkl = os.path.join(
+            job.output_dir, "data", "deconv_density_knee.pkl"
         )
+        suggestions.append(SuggestedNext(
+            type="StableStates",
+            label="Find stable states from density",
+            prefilled_params={"density": density_pkl},
+        ))
+        # Density-guided trajectory: use this density file to follow the
+        # data manifold instead of straight-line interpolation in z-space.
+        suggestions.append(SuggestedNext(
+            type="ComputeTrajectory",
+            label="Compute density-guided trajectory using this density",
+            prefilled_params={
+                "result_dir": (job.params or {}).get("recovar_result_dir", "")
+                or (job.params or {}).get("result_dir", ""),
+                "density": density_pkl,
+            },
+        ))
 
     return suggestions
 
