@@ -212,34 +212,29 @@ async def validate_mrc(req: ValidateRequest) -> ValidateMrcResponse:
 
 
 def _parse_star_sync(path: str) -> ValidateStarResponse:
-    """Parse a .star file and return validation results."""
+    """Parse a .star file and return validation results.
+
+    Box size is derived exactly the way the pipeline derives it (via the
+    canonical ``StarFile`` reader): the optics-table ``_rlnImageSize`` for
+    RELION 3.1 files, otherwise the MRC header of the first referenced
+    particle stack. This makes the preview match what RECOVAR will actually
+    load. ``_rlnCoordinateX`` is the micrograph pick coordinate, NOT the box
+    size, and must never be used for this.
+    """
     try:
-        import starfile
-        data = starfile.read(path)
+        from recovar.data_io.starfile import StarFile
 
-        # starfile returns a DataFrame or dict of DataFrames
-        if isinstance(data, dict):
-            # Multi-block: look for particles block
-            for key in ("particles", "data_particles", ""):
-                if key in data:
-                    data = data[key]
-                    break
-            else:
-                # Use the largest DataFrame
-                data = max(data.values(), key=len)
+        sf = StarFile(path)
+        n_particles = len(sf)
 
-        n_particles = len(data)
-        columns = list(data.columns)
-
-        # Try to get box size from image dimensions
         box_size = None
-        for col in ("rlnImageSize", "rlnCoordinateX"):
-            if col in data.columns:
-                try:
-                    box_size = int(data[col].iloc[0])
-                except (ValueError, TypeError, IndexError):
-                    pass
-                break
+        resolution = sf.resolution
+        if resolution is not None and len(resolution) > 0:
+            box_size = int(resolution[0])
+
+        # Strip the single leading "_" so column names follow the RELION
+        # convention API consumers expect (e.g. "rlnImageName").
+        columns = [c[1:] if c.startswith("_") else c for c in map(str, sf.df.columns)]
 
         return ValidateStarResponse(
             valid=True,

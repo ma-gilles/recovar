@@ -43,12 +43,15 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
   const [downsample, setDownsample] = useState(String(p.downsample ?? "256"));
   const [lazy, setLazy] = useState(Boolean(p.lazy));
   const [correctContrast, setCorrectContrast] = useState(p.correct_contrast !== false);
+  const [doOverWithContrast, setDoOverWithContrast] = useState(p.do_over_with_contrast !== false);
   const [focusMask, setFocusMask] = useState(String(p.focus_mask ?? ""));
   const [datadir, setDatadir] = useState(String(p.datadir ?? ""));
   const [nImages, setNImages] = useState(p.n_images ? String(p.n_images) : "");
   const [halfsets, setHalfsets] = useState(String(p.halfsets ?? ""));
   const [poses, setPoses] = useState(String(p.poses ?? ""));
   const [ctf, setCtf] = useState(String(p.ctf ?? ""));
+  const [ind, setInd] = useState(String(p.ind ?? ""));
+  const [showIndBrowser, setShowIndBrowser] = useState(false);
   const [tiltSeries, setTiltSeries] = useState(Boolean(p.tilt_series));
   const [stripPrefix, setStripPrefix] = useState(String(p.strip_prefix ?? ""));
   const [outputName, setOutputName] = useState("");
@@ -68,8 +71,12 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
     if (zdim) params.zdim = zdim;
     if (downsample) params.downsample = parseInt(downsample);
     if (lazy) params.lazy = true;
-    if (correctContrast) params.correct_contrast = true;
+    if (correctContrast) {
+      params.correct_contrast = true;
+      params.do_over_with_contrast = doOverWithContrast;
+    }
     if (focusMask) params.focus_mask = focusMask;
+    if (ind) params.ind = ind;
     if (datadir) params.datadir = datadir;
     if (nImages) params.n_images = parseInt(nImages);
     if (halfsets) params.halfsets = halfsets;
@@ -81,7 +88,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
     if (slurmOpts && executorMode !== "local") params.slurm_opts = slurmOpts;
     if (localOpts && executorMode === "local") params.local_opts = localOpts;
     return params;
-  }, [particles, mask, maskPath, zdim, downsample, lazy, correctContrast, focusMask, datadir, nImages, halfsets, poses, ctf, tiltSeries, stripPrefix, outputName, slurmOpts]);
+  }, [particles, mask, maskPath, zdim, downsample, lazy, correctContrast, doOverWithContrast, focusMask, ind, datadir, nImages, halfsets, poses, ctf, tiltSeries, stripPrefix, outputName, slurmOpts, localOpts, executorMode]);
 
   const mutation = useMutation({
     mutationFn: () => submitJob(projectId, "pipeline", buildParams(), executorMode),
@@ -126,7 +133,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
           <PathInput
             value={particles}
             onChange={setParticles}
-            accept={[".star", ".cs", ".mrcs", ".mrc", ".txt"]}
+            accept={[".star", ".cs", ".mrcs", ".txt"]}
             placeholder="/path/to/particles.star"
             className="font-mono"
           />
@@ -141,7 +148,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
         {showParticleBrowser && (
           <FileBrowser
             initialPath={projectPath}
-            accept={[".star", ".cs", ".mrcs", ".mrc", ".txt"]}
+            accept={[".star", ".cs", ".mrcs", ".txt"]}
             onSelect={(path) => {
               setParticles(path);
               setShowParticleBrowser(false);
@@ -297,6 +304,18 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
               Correct image scale
               <TooltipIcon text={tooltips["pipeline.correct_contrast"]} />
             </label>
+            {correctContrast && (
+              <label className="flex items-center gap-2 text-sm text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={doOverWithContrast}
+                  onChange={(e) => setDoOverWithContrast(e.target.checked)}
+                  className="rounded border-zinc-600 bg-zinc-800"
+                />
+                Do-over with contrast
+                <TooltipIcon text={tooltips["pipeline.do_over_with_contrast"]} />
+              </label>
+            )}
             <label className="flex items-center gap-2 text-sm text-zinc-400">
               <input
                 type="checkbox"
@@ -338,10 +357,10 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
             <div className="ml-4 space-y-3 border-l border-zinc-800 pl-4">
               <div className="space-y-1">
                 <div className="flex items-center gap-1">
-                  <Label>Halfsets</Label>
+                  <Label>Halfset indices (.pkl)</Label>
                   <TooltipIcon text={tooltips["pipeline.halfsets"]} />
                 </div>
-                <Input value={halfsets} onChange={(e) => setHalfsets(e.target.value)} placeholder="Column name" />
+                <PathInput value={halfsets} onChange={setHalfsets} accept={[".pkl"]} placeholder="Optional halfset indices .pkl" className="font-mono" />
               </div>
 
               <div className="space-y-1">
@@ -366,6 +385,33 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
                   <TooltipIcon text={tooltips["pipeline.ctf"]} />
                 </div>
                 <PathInput value={ctf} onChange={setCtf} accept={[".pkl"]} placeholder="Optional .pkl path" className="font-mono" />
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <Label>Indices (--ind)</Label>
+                  <TooltipIcon text={tooltips["pipeline.ind"]} />
+                </div>
+                <div className="flex gap-2">
+                  <PathInput value={ind} onChange={setInd} accept={[".pkl"]} placeholder="Optional indices .pkl (subset)" className="font-mono" />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowIndBrowser(!showIndBrowser)}
+                  >
+                    Browse
+                  </Button>
+                </div>
+                {showIndBrowser && (
+                  <FileBrowser
+                    initialPath={projectPath}
+                    accept={[".pkl"]}
+                    onSelect={(path) => {
+                      setInd(path);
+                      setShowIndBrowser(false);
+                    }}
+                  />
+                )}
               </div>
             </div>
           )}

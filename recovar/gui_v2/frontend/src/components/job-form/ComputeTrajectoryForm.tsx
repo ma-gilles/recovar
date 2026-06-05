@@ -5,6 +5,7 @@ import { Input } from "../ui/input";
 import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
+import { PipelineOutputPicker } from "./PipelineOutputPicker";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
@@ -117,19 +118,7 @@ export function ComputeTrajectoryForm({
 
   return (
     <div className="space-y-4">
-      <div className="space-y-1">
-        <div className="flex items-center gap-1">
-          <Label>Result Directory</Label>
-          <TooltipIcon text={tooltips["compute_trajectory.result_dir"]} />
-        </div>
-        <PathInput
-          value={resultDir}
-          onChange={setResultDir}
-          directoryOnly
-          placeholder="/path/to/pipeline/output"
-          className="font-mono"
-        />
-      </div>
+      <PipelineOutputPicker value={resultDir} onChange={setResultDir} tooltip={tooltips["compute_trajectory.result_dir"]} />
 
       <div className="space-y-1">
         <div className="flex items-center gap-1">

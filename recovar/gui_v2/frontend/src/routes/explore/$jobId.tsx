@@ -1,13 +1,20 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Box, ChevronRight, ChevronDown, Eye, EyeOff } from "lucide-react";
+import { ArrowLeft, Box, Eye, EyeOff } from "lucide-react";
 import { clsx } from "clsx";
 import { getJob, getProject, getJobVolumes, type JobDetail, type VolumeEntry } from "../../lib/api/client";
 import { useProject } from "../../lib/project-context";
 import { Spinner } from "../../components/ui/spinner";
 import { LatentExplorer } from "../../components/latent-explorer/LatentExplorer";
 import { VolumeViewer } from "../../components/volume-viewer/VolumeViewer";
+import {
+  VolumeCategoryGroup,
+  CATEGORY_ORDER,
+  COLLAPSED_BY_DEFAULT,
+  isHiddenVolume,
+  naturalCompare,
+} from "../../components/volume-viewer/volumeCategories";
 
 /**
  * Resolve the particles .star file path from the job's parent pipeline job.
@@ -33,125 +40,6 @@ async function resolveParticlesStar(job: JobDetail): Promise<string | null> {
     }
   }
   return null;
-}
-
-// ---------------------------------------------------------------------------
-// Volume categorization helpers (mirrors jobs/$jobId.tsx VolumesTab logic)
-// ---------------------------------------------------------------------------
-
-const HIDDEN_PATTERNS = [/_half[0-9]/, /_unfil/, /halfmap/, /unfiltered/i, /^sampling\.mrc$/i];
-
-function isHiddenVolume(name: string): boolean {
-  return HIDDEN_PATTERNS.some((pat) => pat.test(name.toLowerCase()));
-}
-
-function volumeDisplayName(v: VolumeEntry, needsDisambiguation: boolean): string {
-  if (!needsDisambiguation) return v.name;
-  const parts = v.path.replace(/\\/g, "/").split("/");
-  if (parts.length >= 2) return `${parts[parts.length - 2]}/${v.name}`;
-  return v.name;
-}
-
-const CATEGORY_LABELS: Record<string, string> = {
-  mean: "Mean Reconstruction",
-  eigen: "Eigenvolumes",
-  variance: "Variance Map",
-  halfmap: "Half-maps (raw)",
-  mask: "Masks",
-  kmeans_center: "K-means Centers",
-  trajectory: "Trajectory Volumes",
-  reconstruction: "Reconstructed States",
-  density: "Density / Deconvolved",
-  other: "Other",
-};
-
-const CATEGORY_ORDER: string[] = [
-  "mean", "eigen", "variance", "kmeans_center", "trajectory",
-  "reconstruction", "density", "mask", "other", "halfmap",
-];
-
-const COLLAPSED_BY_DEFAULT = new Set(["halfmap", "other"]);
-
-function naturalCompare(a: string, b: string): number {
-  const re = /(\d+)/g;
-  const aParts = a.split(re);
-  const bParts = b.split(re);
-  const len = Math.min(aParts.length, bParts.length);
-  for (let i = 0; i < len; i++) {
-    const aNum = Number(aParts[i]);
-    const bNum = Number(bParts[i]);
-    if (!isNaN(aNum) && !isNaN(bNum)) {
-      if (aNum !== bNum) return aNum - bNum;
-    } else {
-      const cmp = (aParts[i] ?? "").localeCompare(bParts[i] ?? "");
-      if (cmp !== 0) return cmp;
-    }
-  }
-  return aParts.length - bParts.length;
-}
-
-function VolumeCategoryGroup({
-  cat,
-  vols,
-  selectedVolume,
-  onSelect,
-  ambiguousNames,
-  defaultCollapsed,
-}: {
-  cat: string;
-  vols: VolumeEntry[];
-  selectedVolume: string | null;
-  onSelect: (path: string) => void;
-  ambiguousNames: Set<string>;
-  defaultCollapsed: boolean;
-}): React.JSX.Element {
-  const [open, setOpen] = useState(!defaultCollapsed);
-
-  return (
-    <div>
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-1.5 py-1.5 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
-      >
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-        )}
-        {CATEGORY_LABELS[cat] ?? cat}
-        <span className="font-normal normal-case tracking-normal text-zinc-600">
-          ({vols.length})
-        </span>
-      </button>
-      {open && (
-        <div className="ml-5 space-y-px">
-          {vols.map((v) => {
-            const displayName = volumeDisplayName(v, ambiguousNames.has(v.name));
-            const active = selectedVolume === v.path;
-            return (
-              <button
-                key={v.path}
-                onClick={() => onSelect(v.path)}
-                className={clsx(
-                  "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm",
-                  active
-                    ? "bg-blue-500/15 text-blue-300"
-                    : "text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
-                )}
-                title={v.path}
-              >
-                <Box className="h-3.5 w-3.5 shrink-0 text-sky-400" />
-                <span className="truncate">{displayName}</span>
-                <span className="ml-auto shrink-0 text-xs text-zinc-600">
-                  {(v.size_bytes / 1e6).toFixed(1)} MB
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function CategorizedVolumesView({ volumes }: { volumes?: VolumeEntry[] }): React.JSX.Element {

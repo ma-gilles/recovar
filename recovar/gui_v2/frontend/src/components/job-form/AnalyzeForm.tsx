@@ -2,11 +2,10 @@ import { useState, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { Select } from "../ui/select";
 import { TooltipIcon } from "../ui/tooltip-icon";
-import { FileBrowser } from "../file-browser/FileBrowser";
+import { PipelineOutputPicker } from "./PipelineOutputPicker";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
@@ -28,9 +27,9 @@ export function AnalyzeForm({
 }: AnalyzeFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
   const [resultDir, setResultDir] = useState(prefilledResultDir ?? "");
-  const [showResultDirBrowser, setShowResultDirBrowser] = useState(false);
   const [zdim, setZdim] = useState(availableZdims?.[0]?.toString() ?? "4");
-  const [nClusters, setNClusters] = useState("40");
+  const [noZReg, setNoZReg] = useState(false);
+  const [nClusters, setNClusters] = useState("20");
   const [nTrajectories, setNTrajectories] = useState("0");
   const [outputName, setOutputName] = useState("");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
@@ -48,11 +47,12 @@ export function AnalyzeForm({
     };
     if (nClusters) params.n_clusters = parseInt(nClusters);
     if (nTrajectories) params.n_trajectories = parseInt(nTrajectories);
+    if (noZReg) params.no_z_regularization = true;
     if (outputName) params.output_name = outputName;
     if (slurmOpts) params.slurm_opts = slurmOpts;
       if (localOpts && executorMode === "local") params.local_opts = localOpts;
     return params;
-  }, [resultDir, zdim, nClusters, nTrajectories, outputName, slurmOpts]);
+  }, [resultDir, zdim, nClusters, nTrajectories, noZReg, outputName, slurmOpts, localOpts, executorMode]);
 
   const mutation = useMutation({
     mutationFn: () => submitJob(projectId, "analyze", buildParams(), executorMode),
@@ -84,35 +84,7 @@ export function AnalyzeForm({
 
   return (
     <div className="space-y-4">
-      <div className="space-y-1">
-        <div className="flex items-center gap-1">
-          <Label>Result Directory</Label>
-          <TooltipIcon text={tooltips["analyze.result_dir"]} />
-        </div>
-        <div className="flex gap-2">
-          <PathInput
-            value={resultDir}
-            onChange={setResultDir}
-            directoryOnly
-            placeholder="/path/to/pipeline/output"
-            className="font-mono"
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowResultDirBrowser(!showResultDirBrowser)}
-          >
-            Browse
-          </Button>
-        </div>
-        {showResultDirBrowser && (
-          <FileBrowser
-            initialPath={resultDir || "/scratch/gpfs"}
-            selectDirectory
-            onSelect={(path) => { setResultDir(path); setShowResultDirBrowser(false); }}
-          />
-        )}
-      </div>
+      <PipelineOutputPicker value={resultDir} onChange={setResultDir} tooltip={tooltips["analyze.result_dir"]} />
 
       <div className="space-y-1">
         <div className="flex items-center gap-1">
@@ -146,7 +118,7 @@ export function AnalyzeForm({
           type="number"
           value={nClusters}
           onChange={(e) => setNClusters(e.target.value)}
-          placeholder="40"
+          placeholder="20"
         />
       </div>
 
@@ -167,6 +139,17 @@ export function AnalyzeForm({
         <Label>Output Name</Label>
         <Input value={outputName} onChange={(e) => setOutputName(e.target.value)} placeholder="Auto-generated" />
       </div>
+
+      <label className="flex items-center gap-2 text-sm text-zinc-400">
+        <input
+          type="checkbox"
+          checked={noZReg}
+          onChange={(e) => setNoZReg(e.target.checked)}
+          className="rounded border-zinc-600 bg-zinc-800"
+        />
+        No z-regularization
+        <TooltipIcon text={tooltips["analyze.no_z_regularization"]} />
+      </label>
 
       {/* SLURM Settings */}
       <ExecutorSelector value={executorMode} onChange={setExecutorMode} />

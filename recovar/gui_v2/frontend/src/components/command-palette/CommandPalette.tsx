@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Box, FlaskConical, Settings as SettingsIcon, Wand2, Layers } from "lucide-react";
+import { Search, Box, FlaskConical, Home, Wand2, Layers } from "lucide-react";
 import { useProject } from "../../lib/project-context";
 import { getProject, listProjectMasks, type ProjectDetail, type MaskInfo } from "../../lib/api/client";
 
@@ -69,7 +69,7 @@ export function CommandPalette(): React.JSX.Element | null {
       id: "go-dashboard",
       label: "Dashboard",
       sub: "Project overview",
-      icon: <SettingsIcon className="h-4 w-4 text-zinc-400" />,
+      icon: <Home className="h-4 w-4 text-zinc-400" />,
       navigate: () => navigate({ to: "/" }),
     });
     items.push({
@@ -113,10 +113,10 @@ export function CommandPalette(): React.JSX.Element | null {
           label: m.name,
           sub: `Mask · ${(m.size_bytes / 1e6).toFixed(1)} MB`,
           icon: <Wand2 className="h-4 w-4 text-emerald-500" />,
-          // Masks don't have a dedicated detail page yet — copy path to clipboard
-          navigate: () => {
-            navigator.clipboard?.writeText(m.path).catch(() => undefined);
-          },
+          // Masks don't have a dedicated detail page — open the mask library
+          // so the user can preview / use it. (Silent clipboard copy gave no
+          // feedback and threw on insecure-context pages.)
+          navigate: () => navigate({ to: "/masks" }),
         });
       }
     }

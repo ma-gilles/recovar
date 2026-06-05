@@ -48,6 +48,19 @@ def _add_flag(cmd: list[str], flag: str, value: bool | None) -> None:
         cmd.append(flag)
 
 
+def _add_bool_optional(cmd: list[str], flag_base: str, value: bool | None) -> None:
+    """Emit ``--flag`` for True, ``--no-flag`` for False, nothing for None.
+
+    For argparse ``BooleanOptionalAction`` options (e.g. ``--do-over-with-contrast``)
+    where the default is context-dependent, so we only pass a flag when the
+    user has made an explicit choice.
+    """
+    if value is True:
+        cmd.append(f"--{flag_base}")
+    elif value is False:
+        cmd.append(f"--no-{flag_base}")
+
+
 def build_pipeline_command(params: dict[str, Any]) -> list[str]:
     """Build ``recovar pipeline`` command from validated parameters.
 
@@ -65,6 +78,7 @@ def build_pipeline_command(params: dict[str, Any]) -> list[str]:
     # Output
     _add_optional(cmd, "-o", params.get("outdir"))
     _add_optional(cmd, "--project", params.get("project"))
+    _add_optional(cmd, "--output-name", params.get("output_name"))
 
     # Zdim (list → comma-separated string)
     zdim = params.get("zdim")
@@ -81,12 +95,14 @@ def build_pipeline_command(params: dict[str, Any]) -> list[str]:
     _add_optional(cmd, "--strip-prefix", params.get("strip_prefix"))
     _add_optional(cmd, "--n-images", params.get("n_images"))
     _add_optional(cmd, "--halfsets", params.get("halfsets"))
+    _add_flag(cmd, "--tilt-series", params.get("tilt_series"))
     _add_optional(cmd, "--tilt-series-ctf", params.get("tilt_series_ctf"))
 
     # Processing flags
     _add_optional(cmd, "--downsample", params.get("downsample"))
     _add_flag(cmd, "--lazy", params.get("lazy"))
     _add_flag(cmd, "--correct-contrast", params.get("correct_contrast"))
+    _add_bool_optional(cmd, "do-over-with-contrast", params.get("do_over_with_contrast"))
     _add_optional(cmd, "--focus-mask", params.get("focus_mask"))
     _add_optional(cmd, "--Bfactor", params.get("Bfactor"))
     _add_optional(cmd, "--n-bins", params.get("n_bins"))
@@ -106,10 +122,12 @@ def build_analyze_command(params: dict[str, Any]) -> list[str]:
 
     # Optional
     _add_optional(cmd, "-o", params.get("outdir"))
+    _add_optional(cmd, "--output-name", params.get("output_name"))
     _add_optional(cmd, "--n-clusters", params.get("n_clusters"))
     _add_optional(cmd, "--n-trajectories", params.get("n_trajectories"))
     _add_optional(cmd, "--n-vols-along-path", params.get("n_vols_along_path"))
     _add_flag(cmd, "--skip-umap", params.get("skip_umap"))
+    _add_flag(cmd, "--no-z-regularization", params.get("no_z_regularization"))
 
     return cmd
 

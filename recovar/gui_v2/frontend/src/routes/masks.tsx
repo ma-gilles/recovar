@@ -52,6 +52,9 @@ export function MasksPage(): React.JSX.Element {
     onSuccess: (info) => {
       setLastSaved(info);
       setError(null);
+      // Clear the output name so a repeated op doesn't silently collide
+      // with the just-saved mask (the server-side default name differs).
+      setOutputName("");
       queryClient.invalidateQueries({ queryKey: ["project-masks", project?.id] });
     },
     onError: (e) => {
@@ -59,8 +62,10 @@ export function MasksPage(): React.JSX.Element {
     },
   });
 
-  const sameShape = !!selectedA && !!selectedB && selectedA !== selectedB;
-  const canRun = sameShape && outputName.trim().length > 0 && !opMutation.isPending;
+  // Both masks picked and distinct. (Shape compatibility is validated
+  // server-side and surfaced via `error`.)
+  const bothSelected = !!selectedA && !!selectedB && selectedA !== selectedB;
+  const canRun = bothSelected && outputName.trim().length > 0 && !opMutation.isPending;
 
   // Auto-derive a default output name when both masks are picked.
   const previewName = useMemo(() => {
@@ -180,7 +185,10 @@ export function MasksPage(): React.JSX.Element {
               <label className="text-xs text-zinc-500">Mask A</label>
               <select
                 value={selectedA}
-                onChange={(e) => setSelectedA(e.target.value)}
+                onChange={(e) => {
+                  setSelectedA(e.target.value);
+                  setLastSaved(null);
+                }}
                 className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-200"
               >
                 <option value="">— pick a mask —</option>
@@ -195,7 +203,10 @@ export function MasksPage(): React.JSX.Element {
               <label className="text-xs text-zinc-500">Operation</label>
               <select
                 value={op}
-                onChange={(e) => setOp(e.target.value as OpValue)}
+                onChange={(e) => {
+                  setOp(e.target.value as OpValue);
+                  setLastSaved(null);
+                }}
                 className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-200"
               >
                 {OPS.map((o) => (
@@ -212,7 +223,10 @@ export function MasksPage(): React.JSX.Element {
               <label className="text-xs text-zinc-500">Mask B</label>
               <select
                 value={selectedB}
-                onChange={(e) => setSelectedB(e.target.value)}
+                onChange={(e) => {
+                  setSelectedB(e.target.value);
+                  setLastSaved(null);
+                }}
                 className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-200"
               >
                 <option value="">— pick a mask —</option>

@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { Download, Target, Route, Crosshair, FileSpreadsheet, Play } from "lucide-react";
@@ -18,7 +18,6 @@ import { ScatterPanel } from "./ScatterPanel";
 import { HistogramPanel } from "./HistogramPanel";
 import { SelectionToolbar, type SelectionTool } from "./SelectionToolbar";
 import { SubsetProvenanceButton, SubsetProvenanceSummary } from "./SubsetProvenance";
-import { SUBSAMPLE_THRESHOLD, DISPLAY_SUBSAMPLE_SIZE } from "../../lib/constants";
 
 /**
  * Grid-based density estimation for 2D point data.
@@ -125,6 +124,9 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [useDensityGuided, setUseDensityGuided] = useState(false);
   const [liveSelectionCount, setLiveSelectionCount] = useState<number | null>(null);
+  // Which .star export is in flight: false = "Export .star", true = "Export All Except".
+  const [starExportInvert, setStarExportInvert] = useState<boolean | null>(null);
+  const queryClient = useQueryClient();
 
   // Available zdims
   const { data: available } = useQuery({
@@ -160,19 +162,6 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
     queryFn: () => fetchDensityValues(jobId, effectiveZdim!, activeDensityJob!.id),
     enabled: effectiveZdim !== null && !!activeDensityJob,
   });
-
-  // Subsample for display if needed
-  const displayIndices = useMemo(() => {
-    if (!embeddings) return null;
-    const n = embeddings.meta.n_particles;
-    if (n <= SUBSAMPLE_THRESHOLD) return null;
-    // Random subsample
-    const indices = new Uint32Array(DISPLAY_SUBSAMPLE_SIZE);
-    for (let i = 0; i < DISPLAY_SUBSAMPLE_SIZE; i++) {
-      indices[i] = Math.floor(Math.random() * n);
-    }
-    return indices;
-  }, [embeddings]);
 
   // PCA projection
   const pcaPoints = useMemo(() => {
@@ -348,6 +337,10 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
         indices: finalIndices,
       });
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["subsets", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+    },
   });
 
   // Combined: create subset + export .star in one click
@@ -369,6 +362,13 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
       const star = await exportSubsetStar(subset.id, particlesStar!);
       return { subset, star };
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["subsets", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+    },
+    onSettled: () => {
+      setStarExportInvert(null);
+    },
   });
 
   // Compute state/trajectory
@@ -379,6 +379,9 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
         zdim: effectiveZdim,
         ...params,
       }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+    },
   });
 
   if (!available) {
@@ -395,12 +398,20 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
         <p className="text-zinc-400">
           No analysis results found. Run <strong>Analyze</strong> on this pipeline output first.
         </p>
-        <a
-          href="/jobs/new"
+        <Link
+          to="/jobs/new"
+          search={{
+            type: "analyze",
+            result_dir: resultDir,
+            density: undefined,
+            input: undefined,
+            particles: undefined,
+            params: undefined,
+          }}
           className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500"
         >
           Run Analyze
-        </a>
+        </Link>
       </div>
     );
   }
@@ -477,18 +488,9 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
         {embeddings && (
           <span className="text-xs text-zinc-500">
             {embeddings.meta.n_particles.toLocaleString()} particles
-            {displayIndices && ` (showing ${DISPLAY_SUBSAMPLE_SIZE.toLocaleString()})`}
           </span>
         )}
       </div>
-
-      {displayIndices && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400">
-          Showing {(DISPLAY_SUBSAMPLE_SIZE / 1e6).toFixed(0)}M of{" "}
-          {(embeddings!.meta.n_particles / 1e6).toFixed(1)}M particles. Full dataset used for
-          selection export.
-        </div>
-      )}
 
       {isLoading ? (
         <div className="flex items-center justify-center py-20">
@@ -578,8 +580,8 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                 <Link
                   to="/jobs/new"
                   search={{
-                    type: "analyze" as never,
-                    result_dir: resultDir as never,
+                    type: "analyze",
+                    result_dir: resultDir,
                     density: undefined,
                     input: undefined,
                     particles: undefined,
@@ -600,8 +602,8 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                 <Link
                   to="/jobs/new"
                   search={{
-                    type: "analyze" as never,
-                    result_dir: resultDir as never,
+                    type: "analyze",
+                    result_dir: resultDir,
                     density: undefined,
                     input: undefined,
                     particles: undefined,
@@ -628,12 +630,14 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                     <Button
                       size="sm"
                       onClick={() => {
+                        setStarExportInvert(false);
                         oneClickStarMutation.mutate({
                           indices: Array.from(selectedIndices),
                           invert: false,
                         });
                       }}
-                      loading={oneClickStarMutation.isPending}
+                      loading={oneClickStarMutation.isPending && starExportInvert === false}
+                      disabled={oneClickStarMutation.isPending}
                     >
                       <FileSpreadsheet className="h-3.5 w-3.5" />
                       Export .star
@@ -644,12 +648,14 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                       variant="secondary"
                       size="sm"
                       onClick={() => {
+                        setStarExportInvert(true);
                         oneClickStarMutation.mutate({
                           indices: Array.from(selectedIndices),
                           invert: true,
                         });
                       }}
-                      loading={oneClickStarMutation.isPending}
+                      loading={oneClickStarMutation.isPending && starExportInvert === true}
+                      disabled={oneClickStarMutation.isPending}
                     >
                       Export All Except
                     </Button>
@@ -703,8 +709,8 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                 <Link
                   to="/jobs/new"
                   search={{
-                    type: "pipeline" as never,
-                    particles: oneClickStarMutation.data.star.path as never,
+                    type: "pipeline",
+                    particles: oneClickStarMutation.data.star.path,
                     result_dir: undefined,
                     density: undefined,
                     input: undefined,

@@ -22,7 +22,7 @@ DEFAULT_SLURM = {
     "account": "",
     "gpus": 1,
     "cpus": 4,
-    "memory": "300G",
+    "memory": "400G",
     "time": "12:00:00",
 }
 

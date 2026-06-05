@@ -543,12 +543,20 @@ async def _validate_job_params(
             except Exception as exc:
                 warnings.append(f"Could not validate mask dimensions: {exc}")
 
+    elif job_type == "StableStates":
+        density = params.get("density", "")
+        if not density:
+            errors.append("Density file is required (e.g. deconv_density_knee.pkl).")
+        elif not os.path.isfile(density):
+            errors.append(f"Density file not found: {density}")
+        elif not density.endswith(".pkl"):
+            errors.append(f"Density file must be a .pkl file: {density}")
+
     elif job_type in (
         "Analyze",
         "ComputeState",
         "ComputeTrajectory",
         "Density",
-        "StableStates",
     ):
         result_dir = params.get("result_dir", "")
         if result_dir and not os.path.isdir(result_dir):

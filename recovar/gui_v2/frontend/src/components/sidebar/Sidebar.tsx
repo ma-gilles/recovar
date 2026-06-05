@@ -26,6 +26,11 @@ import { Label } from "../ui/label";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { isEphemeralPath, EPHEMERAL_PATH_WARNING } from "../../lib/constants";
 
+// Viewport width (px) below which the sidebar auto-collapses. Single source of
+// truth for both the initial state and the matchMedia listener.
+const COLLAPSE_BREAKPOINT = 768;
+const COLLAPSE_MEDIA_QUERY = `(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`;
+
 // Status icon mapping per DESIGN-SYSTEM.md
 function StatusIcon({ status }: { status: string }): React.JSX.Element {
   switch (status) {
@@ -179,13 +184,13 @@ interface SidebarProps {
 }
 
 export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: SidebarProps): React.JSX.Element {
-  const [collapsed, setCollapsed] = useState(() => window.innerWidth < 768);
+  const [collapsed, setCollapsed] = useState(() => window.innerWidth < COLLAPSE_BREAKPOINT);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showOpenForm, setShowOpenForm] = useState(false);
 
   // Auto-collapse on narrow viewports
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)");
+    const mq = window.matchMedia(COLLAPSE_MEDIA_QUERY);
     const handler = (e: MediaQueryListEvent): void => {
       setCollapsed(e.matches);
     };
@@ -439,7 +444,7 @@ function ProjectFormOverlay({
 
           {showBrowser && (
             <FileBrowser
-              initialPath="/scratch/gpfs/GILLES/mg6942"
+              initialPath={path || "~"}
               selectDirectory
               onSelect={(selectedPath) => {
                 setPath(selectedPath);

@@ -1,6 +1,13 @@
 /** Maximum simultaneously pinned volumes in the viewer. */
 export const MAX_PINNED_VOLUMES = 4;
 
+/**
+ * Selectable view-resolution (downsample target box sizes) for the 3D viewer,
+ * in addition to "Auto" (server default) and "Full" (original resolution).
+ * Single source of truth — keep in sync with backend MAX_SERVE_DIM.
+ */
+export const VIEW_DIMS = [256, 128, 64];
+
 /** Subsample scatter plot above this particle count. */
 export const SUBSAMPLE_THRESHOLD = 2_000_000;
 

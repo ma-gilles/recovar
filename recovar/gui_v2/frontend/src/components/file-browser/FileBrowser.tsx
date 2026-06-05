@@ -61,8 +61,11 @@ export function FileBrowser({ initialPath, accept, selectDirectory, onSelect, on
         try {
           const result = await validateStar(entry.path);
           onValidation(result);
-        } catch {
-          onValidation({ valid: false, error: "Validation failed" });
+        } catch (err) {
+          onValidation({
+            valid: false,
+            error: err instanceof Error ? err.message : "Validation failed",
+          });
         }
       }
     },
@@ -127,7 +130,13 @@ export function FileBrowser({ initialPath, accept, selectDirectory, onSelect, on
         )}
         {error && (
           <div className="px-3 py-4 text-center text-sm text-red-400">
-            Failed to browse directory
+            <p>Failed to browse directory</p>
+            <p className="mt-1 break-words text-xs text-red-400/80">
+              {error instanceof Error ? error.message : String(error)}
+            </p>
+            <p className="mt-2 text-xs text-zinc-500">
+              Use the breadcrumb or Parent directory above to navigate elsewhere.
+            </p>
           </div>
         )}
         {filteredEntries?.length === 0 && !isLoading && (
@@ -143,7 +152,6 @@ export function FileBrowser({ initialPath, accept, selectDirectory, onSelect, on
             <button
               key={entry.path}
               onClick={() => handleClick(entry)}
-              onDoubleClick={() => entry.is_dir && navigateTo(entry.path)}
               className={clsx(
                 "flex w-full items-center gap-2 px-3 py-1.5 text-sm",
                 "hover:bg-zinc-800",

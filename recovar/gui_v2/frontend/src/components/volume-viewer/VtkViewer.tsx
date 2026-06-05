@@ -100,6 +100,12 @@ interface VtkViewerProps {
    */
   onDownsampleInfo?: (info: DownsampleInfo | null) => void;
   /**
+   * Target view resolution (downsample box size) requested from the server.
+   * null/undefined means "Auto" (server default, MAX_SERVE_DIM). Changing this
+   * re-fetches at the new resolution; caches are keyed by ``path@viewDim``.
+   */
+  viewDim?: number | null;
+  /**
    * Optional click-to-pick callback. When set, every left-click in the
    * 3D viewport runs a vtkCellPicker against all visible isosurfaces and
    * the picked world position is delivered as ``(x, y, z)`` voxel
@@ -221,9 +227,18 @@ function nx_ny_nz(vol: VolumeData): [number, number, number] {
   return [vol.nx, vol.ny, vol.nz];
 }
 
+/**
+ * Cache key for the pipeline/inflight/failed maps. The same path can be served
+ * at different resolutions (Auto / 256 / 128 / 64 / Full), so the resolution
+ * must be part of the key or switching it would show a stale-resolution mesh.
+ */
+function cacheKey(path: string, viewDim: number | null | undefined): string {
+  return `${path}@${viewDim ?? "auto"}`;
+}
+
 // ---- Component ----
 
-export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, activeCategory, preserveCamera = false, prefetchPaths, onDownsampleInfo, onPickWorld }: VtkViewerProps): React.JSX.Element {
+export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, activeCategory, preserveCamera = false, prefetchPaths, onDownsampleInfo, viewDim, onPickWorld }: VtkViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const renderContextRef = useRef<any>(null);
@@ -233,6 +248,12 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
   useEffect(() => {
     onPickWorldRef.current = onPickWorld;
   }, [onPickWorld]);
+  // Latest requested view resolution in a ref so ensurePipeline (a stable
+  // useCallback) can build the fetch URL and cache key without re-binding.
+  const viewDimRef = useRef(viewDim);
+  useEffect(() => {
+    viewDimRef.current = viewDim;
+  }, [viewDim]);
   const pipelinesRef = useRef<Map<string, VtkPipelineEntry>>(new Map());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const negSurfacesRef = useRef<{ actor: any; mapper: any; mc: any }[]>([]);
@@ -363,25 +384,30 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
   // Fetch and create pipeline for a volume
   const ensurePipeline = useCallback(async (path: string): Promise<VtkPipelineEntry | null> => {
+    // Resolve the requested resolution now; the cache key and fetch URL both
+    // depend on it so that switching resolution does not return a stale mesh.
+    const dim = viewDimRef.current;
+    const key = cacheKey(path, dim);
+
     // Already loaded
-    if (pipelinesRef.current.has(path)) {
-      return pipelinesRef.current.get(path)!;
+    if (pipelinesRef.current.has(key)) {
+      return pipelinesRef.current.get(key)!;
     }
 
     // Already failed — don't retry (avoids infinite loop)
-    if (failedPathsRef.current.has(path)) {
+    if (failedPathsRef.current.has(key)) {
       return null;
     }
 
     // Already being fetched — wait for the existing request
-    if (inflightRef.current.has(path)) {
-      return inflightRef.current.get(path)!;
+    if (inflightRef.current.has(key)) {
+      return inflightRef.current.get(key)!;
     }
 
     // Wrap the fetch in a promise tracked by inflightRef BEFORE any async
     // work starts, so concurrent callers see it immediately.
     const doFetch = async (): Promise<VtkPipelineEntry | null> => {
-    setLoading((prev) => new Set(prev).add(path));
+    setLoading((prev) => new Set(prev).add(key));
     setError(null);
 
     try {
@@ -393,8 +419,9 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       // Chromium when the response is large (>~4 MB) and served over an
       // SSH tunnel, because the browser tries to allocate the full buffer
       // before the Content-Length is known.  Streaming avoids this.
-      console.log(`VtkViewer: fetching volume: ${path}`);
-      const resp = await fetch(`/api/volumes/raw?path=${encodeURIComponent(path)}`, {
+      console.log(`VtkViewer: fetching volume: ${path} (dim=${dim ?? "auto"})`);
+      const dimParam = dim != null ? `&dim=${dim}` : "";
+      const resp = await fetch(`/api/volumes/raw?path=${encodeURIComponent(path)}${dimParam}`, {
         cache: "force-cache",
       });
       if (!resp.ok) {
@@ -434,6 +461,7 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       // Check for downsampling headers
       const isDownsampled = resp.headers.get("X-Volume-Downsampled") === "true";
       const originalShapeHeader = resp.headers.get("X-Original-Shape");
+      const servedDimHeader = resp.headers.get("X-Served-Dim");
 
       // Step 2: Parse the MRC header and data
       let volumeData: VolumeData;
@@ -444,11 +472,15 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
         throw new Error(`MRC parsing failed: ${parseMsg}`);
       }
 
-      // Attach downsampling metadata if the server downsampled this volume
+      // Attach downsampling metadata if the server downsampled this volume.
+      // Prefer the X-Served-Dim header (authoritative) over the parsed mesh
+      // dimensions for the served resolution; fall back to the volume dims.
       if (isDownsampled && originalShapeHeader) {
         const dims = originalShapeHeader.split(",").map(Number);
         const originalDim = Math.max(...dims);
-        const servedDim = Math.max(volumeData.nx, volumeData.ny, volumeData.nz);
+        const servedDim = servedDimHeader
+          ? Number(servedDimHeader)
+          : Math.max(volumeData.nx, volumeData.ny, volumeData.nz);
         volumeData.downsampleInfo = { servedDim, originalDim };
       }
 
@@ -483,19 +515,19 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
         volumeData,
       };
 
-      pipelinesRef.current.set(path, pipeline);
+      pipelinesRef.current.set(key, pipeline);
       console.log(`VtkViewer: pipeline ready for ${path} (${volumeData.nx}x${volumeData.ny}x${volumeData.nz})`);
       return pipeline;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("VtkViewer: pipeline error:", msg, err);
-      failedPathsRef.current.add(path);
+      failedPathsRef.current.add(key);
       setError(msg);
       return null;
     } finally {
       setLoading((prev) => {
         const next = new Set(prev);
-        next.delete(path);
+        next.delete(key);
         return next;
       });
     }
@@ -503,11 +535,11 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
     };
 
     const promise = doFetch();
-    inflightRef.current.set(path, promise);
+    inflightRef.current.set(key, promise);
     try {
       return await promise;
     } finally {
-      inflightRef.current.delete(path);
+      inflightRef.current.delete(key);
     }
   }, []);
 
@@ -527,8 +559,10 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
     const renderer = grw.getRenderer();
 
-    // Build a state key to avoid redundant updates
-    const stateKey = volumesToShow.map(
+    // Build a state key to avoid redundant updates. Include viewDim so that
+    // changing the view resolution forces a re-fetch/re-mesh instead of being
+    // short-circuited as "unchanged".
+    const stateKey = `@${viewDim ?? "auto"};` + volumesToShow.map(
       (v) => `${v.path}|${v.threshold}|${v.opacity}|${v.visible}|${v.colorIndex}|${v.category ?? ""}`
     ).join(";");
     if (stateKey === renderedStateRef.current) return;
@@ -644,7 +678,7 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [volumesToShow, ensurePipeline, preserveCamera, onDownsampleInfo]);
+  }, [volumesToShow, ensurePipeline, preserveCamera, onDownsampleInfo, viewDim]);
 
   // Pre-fetch upcoming trajectory frames in the background
   useEffect(() => {

@@ -50,12 +50,11 @@ def _downsample_volume(data, target_dim: int):
     return zoom(data, factors, order=1).astype(np.float32)
 
 
-def _volume_needs_downsample(path: str) -> bool:
-    """Check if a volume exceeds MAX_SERVE_DIM without loading full data."""
+def _volume_header_shape(path: str):
+    """Return the volume shape without loading the full data."""
     import mrcfile
     with mrcfile.open(path, mode="r") as mrc:
-        shape = mrc.data.shape
-    return any(d > MAX_SERVE_DIM for d in shape)
+        return tuple(mrc.data.shape)
 
 
 def _volume_to_mrc_bytes(data, voxel_size: float = 1.0) -> bytes:
@@ -125,11 +124,14 @@ def _render_slice_png(data, axis: int, idx: int) -> bytes:
 async def volume_raw(
     path: str = Query(..., description="Absolute path to MRC file"),
     full: bool = Query(False, description="Serve full resolution (skip downsampling)"),
+    dim: int | None = Query(None, description="target box size, e.g. 64/128/256"),
 ) -> Response:
     """Serve an MRC volume as binary.
 
-    Volumes exceeding MAX_SERVE_DIM in any dimension are downsampled
-    to MAX_SERVE_DIM^3 unless ``full=true``.
+    Volumes exceeding the target dimension in any axis are downsampled to
+    ``target^3``. The target defaults to MAX_SERVE_DIM and can be overridden
+    with the ``dim`` query param (Auto == MAX_SERVE_DIM). ``full=true`` always
+    serves the original resolution.
 
     When no downsampling is needed, the original file is served directly
     via FileResponse (zero-copy, no serialization overhead).
@@ -138,17 +140,35 @@ async def volume_raw(
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
 
+    header_shape = await asyncio.to_thread(_volume_header_shape, path)
+    max_dim = max(header_shape)
+
+    # Validate an explicit `dim`: positive even integer no larger than the
+    # volume. When omitted, fall back to MAX_SERVE_DIM (Auto behavior).
+    if dim is not None:
+        if dim <= 0 or dim % 2 != 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"dim must be a positive even integer, got {dim}",
+            )
+        if dim > max_dim:
+            raise HTTPException(
+                status_code=400,
+                detail=f"dim {dim} exceeds volume size {max_dim}",
+            )
+    target = dim if dim is not None else MAX_SERVE_DIM
+
     # Common headers that help the browser handle large binary responses,
     # especially over SSH tunnels where ERR_INSUFFICIENT_RESOURCES can occur
     # if Content-Length is missing or caching is disabled.
     cache_headers = {
         "Cache-Control": "private, max-age=3600, immutable",
-        "Access-Control-Expose-Headers": "Content-Length, X-Original-Shape, X-Volume-Downsampled",
+        "Access-Control-Expose-Headers": "Content-Length, X-Original-Shape, X-Volume-Downsampled, X-Served-Dim",
     }
 
     # Fast path: serve the original file directly when no downsampling needed.
-    needs_downsample = await asyncio.to_thread(_volume_needs_downsample, path)
-    if full or not needs_downsample:
+    # The served dimension is the original ``max_dim`` (not ``target``).
+    if full or max_dim <= target:
         file_size = os.path.getsize(path)
         return FileResponse(
             path,
@@ -157,13 +177,14 @@ async def volume_raw(
             headers={
                 **cache_headers,
                 "Content-Length": str(file_size),
+                "X-Served-Dim": str(max_dim),
             },
         )
 
     # Slow path: read, downsample, serialize via temp file.
     data, voxel_size = await asyncio.to_thread(_read_mrc_sync, path)
     original_shape = ",".join(str(d) for d in data.shape)
-    data = await asyncio.to_thread(_downsample_volume, data, MAX_SERVE_DIM)
+    data = await asyncio.to_thread(_downsample_volume, data, target)
     mrc_bytes = await asyncio.to_thread(_volume_to_mrc_bytes, data, voxel_size)
     return Response(
         content=mrc_bytes,
@@ -173,6 +194,7 @@ async def volume_raw(
             "Content-Length": str(len(mrc_bytes)),
             "X-Original-Shape": original_shape,
             "X-Volume-Downsampled": "true",
+            "X-Served-Dim": str(target),
         },
     )
 

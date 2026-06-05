@@ -21,11 +21,17 @@ export const tooltips: Record<string, string> = {
   "pipeline.n_images":
     "Limit the number of images to use. Useful for quick tests with a subset of the data.",
   "pipeline.halfsets":
-    "Column name for halfset assignment in the .star file.",
+    "Optional .pkl file with halfset indices (--halfsets). If omitted, reads _rlnRandomSubset from the star file, or splits the particles randomly.",
   "pipeline.poses":
     "Pre-computed poses in .pkl format (legacy). Usually auto-extracted from .star/.cs files.",
   "pipeline.ctf":
     "Pre-computed CTF parameters in .pkl format (legacy). Usually auto-extracted from .star/.cs files.",
+  "pipeline.ind":
+    "Optional indices .pkl selecting a subset of particles to use (--ind). Leave blank to use all particles.",
+  "pipeline.do_over_with_contrast":
+    "When correcting contrast, re-run the pipeline a second time using the estimated contrast (default). Turn off for a single, faster pass (--no-do-over-with-contrast).",
+  "analyze.no_z_regularization":
+    "Use the unregularized latent coordinates (--no-z-regularization) instead of the regularized embedding.",
   "pipeline.tilt_series":
     "Enable tilt-series mode for cryo-ET data.",
   "pipeline.strip_prefix":
@@ -35,13 +41,13 @@ export const tooltips: Record<string, string> = {
   "analyze.zdim":
     "Which latent dimension to analyze. Must be one of the zdim values computed by the pipeline.",
   "analyze.n_clusters":
-    "Number of k-means clusters for partitioning the latent space. Default 40. More clusters = finer partitioning but smaller per-cluster particle counts.",
+    "Number of k-means clusters for partitioning the latent space. Default 20. More clusters = finer partitioning but smaller per-cluster particle counts.",
   "analyze.n_trajectories":
     "Number of linear trajectories to compute through the latent space. Default 0 (skip). Each trajectory generates a series of volumes.",
   "compute_state.result_dir":
     "Pipeline output directory containing the model to use for volume reconstruction.",
   "compute_state.zdim":
-    "Latent dimension to use for reconstruction.",
+    "Used only to validate the number of latent coordinates you enter — it is not passed to the run. The actual latent dimension is inferred from the coordinate vector itself.",
   "compute_state.latent_coords":
     "Comma-separated latent coordinates specifying the point in z-space to reconstruct.",
   "compute_trajectory.result_dir":
@@ -111,7 +117,7 @@ export const tooltips: Record<string, string> = {
   "slurm.cpus":
     "Number of CPU cores to request. Default 4 is sufficient for most jobs. Increase for large lazy-loading jobs.",
   "slurm.memory":
-    "Memory to request (e.g., '300G', '64G'). Pipeline jobs on large datasets may need 300G+. Analyze jobs typically need less.",
+    "Memory to request (e.g., '400G', '64G'). Pipeline jobs on large datasets may need 400G+. Analyze jobs typically need less.",
   "slurm.time":
     "Wall-time limit in HH:MM:SS format. Job is killed if it exceeds this. Pipeline: 6-12h typical. Analyze: 1-4h typical.",
 };

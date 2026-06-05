@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, CheckCircle, Info, Plus, Trash2 } from "lucide-react";
 import { Input } from "../components/ui/input";
@@ -24,7 +24,7 @@ const SLURM_FIELDS: { key: keyof SlurmDefaultsUpdate; label: string; type: strin
   { key: "account", label: "Account", type: "text", placeholder: "leave blank for cluster default" },
   { key: "gpus", label: "GPUs", type: "number", placeholder: "1" },
   { key: "cpus", label: "CPUs", type: "number", placeholder: "4" },
-  { key: "memory", label: "Memory", type: "text", placeholder: "300G" },
+  { key: "memory", label: "Memory", type: "text", placeholder: "400G" },
   { key: "time", label: "Time Limit", type: "text", placeholder: "12:00:00" },
 ];
 
@@ -88,7 +88,7 @@ function LocalDefaultsForm({ title, description, filePath, values, onChange, onS
     queryFn: getSystemInfo,
     staleTime: 60_000,
   });
-  const gpuList = (sysInfo as any)?.gpu_list as { index: number; name: string }[] | undefined;
+  const gpuList = sysInfo?.gpu_list;
   const envEntries = Object.entries(values.env_vars ?? {});
 
   return (
@@ -221,6 +221,14 @@ export function SettingsPage(): React.JSX.Element {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<"slurm" | "local">("slurm");
 
+  // Track save-confirmation timers so they can be cleared on unmount.
+  const savedTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => savedTimers.current.forEach(clearTimeout), []);
+  const flashSaved = (setSaved: (v: boolean) => void) => {
+    setSaved(true);
+    savedTimers.current.push(setTimeout(() => setSaved(false), 3000));
+  };
+
   // SLURM data
   const { data: slurmData, isLoading: slurmLoading } = useQuery({
     queryKey: ["slurm-defaults-layered", project?.path],
@@ -289,8 +297,7 @@ export function SettingsPage(): React.JSX.Element {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["slurm-defaults"] });
       queryClient.invalidateQueries({ queryKey: ["slurm-defaults-layered"] });
-      setSlurmUserSaved(true);
-      setTimeout(() => setSlurmUserSaved(false), 3000);
+      flashSaved(setSlurmUserSaved);
     },
   });
   const slurmProjectMutation = useMutation({
@@ -298,24 +305,21 @@ export function SettingsPage(): React.JSX.Element {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["slurm-defaults"] });
       queryClient.invalidateQueries({ queryKey: ["slurm-defaults-layered"] });
-      setSlurmProjectSaved(true);
-      setTimeout(() => setSlurmProjectSaved(false), 3000);
+      flashSaved(setSlurmProjectSaved);
     },
   });
   const localUserMutation = useMutation({
     mutationFn: (vals: LocalDefaultsUpdate) => updateUserLocalDefaults(vals, project?.path),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["local-defaults-layered"] });
-      setLocalUserSaved(true);
-      setTimeout(() => setLocalUserSaved(false), 3000);
+      flashSaved(setLocalUserSaved);
     },
   });
   const localProjectMutation = useMutation({
     mutationFn: (vals: LocalDefaultsUpdate) => updateProjectLocalDefaults(project!.path, vals),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["local-defaults-layered"] });
-      setLocalProjectSaved(true);
-      setTimeout(() => setLocalProjectSaved(false), 3000);
+      flashSaved(setLocalProjectSaved);
     },
   });
 
@@ -398,12 +402,7 @@ export function SettingsPage(): React.JSX.Element {
               <div className="grid grid-cols-2 gap-3">
                 {SLURM_FIELDS.slice(0, 2).map(({ key, label, placeholder }) => (
                   <div key={key} className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <Label className="text-xs">{label}</Label>
-                      <span className={`rounded px-1.5 py-0.5 text-[10px] ${BADGE_STYLES[provenance(key, slurmData)]}`}>
-                        {provenance(key, slurmData)}
-                      </span>
-                    </div>
+                    <Label className="text-xs">{label}</Label>
                     <Input value={String(slurmUserValues[key] ?? "")} placeholder={placeholder} onChange={(e) => setSlurmUserValues({ ...slurmUserValues, [key]: e.target.value })} />
                   </div>
                 ))}
@@ -412,7 +411,7 @@ export function SettingsPage(): React.JSX.Element {
                 {SLURM_FIELDS.slice(2).map(({ key, label, type, placeholder }) => (
                   <div key={key} className="space-y-1">
                     <Label className="text-xs">{label}</Label>
-                    <Input type={type} value={String(slurmUserValues[key] ?? "")} placeholder={placeholder} onChange={(e) => setSlurmUserValues({ ...slurmUserValues, [key]: type === "number" ? parseInt(e.target.value) || undefined : e.target.value })} />
+                    <Input type={type} value={String(slurmUserValues[key] ?? "")} placeholder={placeholder} onChange={(e) => { const n = parseInt(e.target.value, 10); setSlurmUserValues({ ...slurmUserValues, [key]: type === "number" ? (e.target.value === "" ? undefined : (Number.isNaN(n) ? undefined : n)) : e.target.value }); }} />
                   </div>
                 ))}
               </div>
@@ -441,7 +440,7 @@ export function SettingsPage(): React.JSX.Element {
                 {SLURM_FIELDS.slice(2).map(({ key, label, type, placeholder }) => (
                   <div key={key} className="space-y-1">
                     <Label className="text-xs">{label}</Label>
-                    <Input type={type} value={String(slurmProjectValues[key] ?? "")} placeholder={placeholder} onChange={(e) => setSlurmProjectValues({ ...slurmProjectValues, [key]: type === "number" ? parseInt(e.target.value) || undefined : e.target.value })} />
+                    <Input type={type} value={String(slurmProjectValues[key] ?? "")} placeholder={placeholder} onChange={(e) => { const n = parseInt(e.target.value, 10); setSlurmProjectValues({ ...slurmProjectValues, [key]: type === "number" ? (e.target.value === "" ? undefined : (Number.isNaN(n) ? undefined : n)) : e.target.value }); }} />
                   </div>
                 ))}
               </div>

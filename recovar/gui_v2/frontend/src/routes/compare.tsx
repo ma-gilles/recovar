@@ -130,16 +130,28 @@ export function ComparePage(): React.JSX.Element {
   }
   if (error) {
     return (
-      <p className="text-sm text-red-400">
-        Failed to load: {(error as Error).message}
-      </p>
+      <div className="space-y-4">
+        <h1 className="text-xl font-semibold">Compare Jobs</h1>
+        <p className="text-sm text-red-400">
+          Failed to load: {(error as Error).message}
+        </p>
+        <Link to="/" className="text-sm text-blue-400 hover:underline">
+          ← Dashboard
+        </Link>
+      </div>
     );
   }
   if (jobs.length < 2) {
     return (
-      <p className="text-sm text-zinc-400">
-        Could not load enough jobs to compare ({jobs.length}/{jobIds.length}).
-      </p>
+      <div className="space-y-4">
+        <h1 className="text-xl font-semibold">Compare Jobs</h1>
+        <p className="text-sm text-zinc-400">
+          Could not load enough jobs to compare ({jobs.length}/{jobIds.length}).
+        </p>
+        <Link to="/" className="text-sm text-blue-400 hover:underline">
+          ← Dashboard
+        </Link>
+      </div>
     );
   }
 
@@ -213,6 +225,8 @@ function CompareInner({ jobs, paramRows, diffCount, sameCount }: CompareInnerPro
     queries: jobs.map((j) => ({
       queryKey: ["chart-data", j.id, "fsc"] as const,
       queryFn: () => getChartData(j.id, "fsc"),
+      retry: false,
+      staleTime: Infinity,
     })),
   });
   const fscOverlay = useMemo(() => {

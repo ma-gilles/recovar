@@ -151,6 +151,7 @@ export function MaskWizard({
     top_sizes: number[];
   } | null>(null);
   const [segmentLoading, setSegmentLoading] = useState(false);
+  const [segmentError, setSegmentError] = useState<string | null>(null);
   // First-corner snapshot for box mode (cleared after the second click).
   const [boxFirstCorner, setBoxFirstCorner] = useState<EraseSphere | null>(null);
   // In-progress brush stroke (committed to eraseSpheres on mouseup as a
@@ -369,6 +370,14 @@ export function MaskWizard({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, undoErase, redoErase]);
 
+  // Once a mask is saved, the primary action flips to "Done". Editing any
+  // parameter that changes the output (or the name) clears savedPath so the
+  // user can save the edited mask. (A no-op when savedPath is already null.)
+  useEffect(() => {
+    setSavedPath(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, outputName, eraseSpheres, eraseBoxes, keepTopSegments]);
+
   const handleSave = useCallback(async () => {
     if (!outputName.trim()) {
       setSaveError("Enter an output name");
@@ -545,7 +554,7 @@ export function MaskWizard({
                   }}
                 />
               ) : (
-                <Spinner label="Generating..." />
+                <Spinner label="Generating mask…" />
               )
             ) : previewVolPath ? (
               <Suspense fallback={<Spinner label="Loading 3D viewer..." />}>
@@ -582,7 +591,7 @@ export function MaskWizard({
                 />
               </Suspense>
             ) : (
-              <Spinner label="Generating mask..." />
+              <Spinner label="Generating mask…" />
             )}
             {((viewMode === "slice" && previewLoading && previewUrl) ||
               (viewMode === "3d" && vol3dLoading && previewVolPath)) && (
@@ -765,12 +774,13 @@ export function MaskWizard({
                 disabled={segmentLoading}
                 onClick={async () => {
                   setSegmentLoading(true);
+                  setSegmentError(null);
                   try {
                     const info = await segmentInfo(buildParams(state, sourcePath, eraseSpheres, eraseBoxes, null));
                     setSegmentInfoData(info);
                   } catch (e) {
                     setSegmentInfoData(null);
-                    setSaveError(e instanceof ApiError ? e.message : String(e));
+                    setSegmentError(e instanceof ApiError ? e.message : String(e));
                   } finally {
                     setSegmentLoading(false);
                   }
@@ -787,6 +797,11 @@ export function MaskWizard({
                 {segmentInfoData.top_sizes.length > 0 && (
                   <> Largest sizes: {segmentInfoData.top_sizes.slice(0, 5).join(", ")}{segmentInfoData.top_sizes.length > 5 ? "…" : ""}</>
                 )}
+              </p>
+            )}
+            {segmentError && (
+              <p className="text-xs text-red-400" role="alert">
+                {segmentError}
               </p>
             )}
             <div className="flex items-center gap-2 text-xs text-zinc-500">
@@ -1000,25 +1015,39 @@ export function MaskWizard({
             <Button variant="outline" size="sm" onClick={onClose}>
               Close
             </Button>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={handleSave}
-              disabled={saving || previewLoading}
-              className="ml-auto"
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  Saving
-                </>
-              ) : (
-                <>
-                  <Save className="mr-1.5 h-3.5 w-3.5" />
-                  Save Mask
-                </>
-              )}
-            </Button>
+            {savedPath ? (
+              // After a successful save the primary action becomes "Done"
+              // so re-clicking can't silently save the same mask again.
+              // Editing any parameter clears savedPath and restores Save.
+              <Button
+                variant="default"
+                size="sm"
+                onClick={onClose}
+                className="ml-auto"
+              >
+                Done
+              </Button>
+            ) : (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleSave}
+                disabled={saving || previewLoading}
+                className="ml-auto"
+              >
+                {saving ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    Saving
+                  </>
+                ) : (
+                  <>
+                    <Save className="mr-1.5 h-3.5 w-3.5" />
+                    Save Mask
+                  </>
+                )}
+              </Button>
+            )}
           </div>
         </div>
       </div>

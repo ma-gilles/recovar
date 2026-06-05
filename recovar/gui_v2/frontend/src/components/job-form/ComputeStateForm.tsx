@@ -4,9 +4,9 @@ import { Link } from "@tanstack/react-router";
 import { Crosshair } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
+import { PipelineOutputPicker } from "./PipelineOutputPicker";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
@@ -61,27 +61,15 @@ export function ComputeStateForm({
   const coordsValid = coords.length > 0 && coords.split(",").every((s) => !isNaN(parseFloat(s.trim())));
 
   const zdimNum = parseInt(zdim);
-  // Validate coordinate count per line: single-line comma-separated, or multi-line with one point per line
-  const coordLines = coords.trim().split(/\n/).filter((line) => line.trim().length > 0);
-  const coordCountErrors: Array<{ line: number; expected: number; got: number }> = [];
+  // Validate the coordinate count for a single point (one comma-separated vector).
+  let coordCountError: { expected: number; got: number } | null = null;
   if (coordsValid && !isNaN(zdimNum) && zdimNum > 0) {
-    if (coordLines.length > 1) {
-      // Multi-line: validate each line independently
-      coordLines.forEach((line, idx) => {
-        const count = line.split(",").filter((v) => v.trim().length > 0).length;
-        if (count !== zdimNum) {
-          coordCountErrors.push({ line: idx + 1, expected: zdimNum, got: count });
-        }
-      });
-    } else {
-      // Single line: validate total count
-      const count = coords.split(",").filter((v) => v.trim().length > 0).length;
-      if (count !== zdimNum) {
-        coordCountErrors.push({ line: 1, expected: zdimNum, got: count });
-      }
+    const count = coords.split(",").filter((v) => v.trim().length > 0).length;
+    if (count !== zdimNum) {
+      coordCountError = { expected: zdimNum, got: count };
     }
   }
-  const hasCoordMismatch = coordCountErrors.length > 0;
+  const hasCoordMismatch = coordCountError !== null;
 
   const missingFields = [
     !resultDir && "Result Directory",
@@ -91,23 +79,11 @@ export function ComputeStateForm({
 
   return (
     <div className="space-y-4">
-      <div className="space-y-1">
-        <div className="flex items-center gap-1">
-          <Label>Result Directory</Label>
-          <TooltipIcon text={tooltips["compute_state.result_dir"]} />
-        </div>
-        <PathInput
-          value={resultDir}
-          onChange={setResultDir}
-          directoryOnly
-          placeholder="/path/to/pipeline/output"
-          className="font-mono"
-        />
-      </div>
+      <PipelineOutputPicker value={resultDir} onChange={setResultDir} tooltip={tooltips["compute_state.result_dir"]} />
 
       <div className="space-y-1">
         <div className="flex items-center gap-1">
-          <Label>zdim</Label>
+          <Label>zdim (expected coordinate count)</Label>
           <TooltipIcon text={tooltips["compute_state.zdim"]} />
         </div>
         <Input
@@ -132,13 +108,11 @@ export function ComputeStateForm({
         {coords.length > 0 && !coordsValid && (
           <p className="text-xs text-red-400">Enter comma-separated numbers</p>
         )}
-        {hasCoordMismatch && coordCountErrors.map((err) => (
-          <p key={err.line} className="text-xs text-red-400">
-            {coordLines.length > 1
-              ? `Line ${err.line}: expected ${err.expected} coordinates, got ${err.got}`
-              : `Expected ${err.expected} coordinates, got ${err.got}`}
+        {coordCountError && (
+          <p className="text-xs text-red-400">
+            Expected {coordCountError.expected} coordinates, got {coordCountError.got}
           </p>
-        ))}
+        )}
         {exploreJobId && (
           <Link
             to="/explore/$jobId"

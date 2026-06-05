@@ -126,6 +126,7 @@ export interface SystemInfo {
   executor_mode: string;
   recovar_version: string;
   gpu_count: number;
+  gpu_list?: { index: number; name: string }[];
   hostname: string;
   disk?: { path: string; total: number; used: number; free: number } | null;
 }
@@ -217,11 +218,11 @@ export function submitJob(
 }
 
 export function getJob(id: string): Promise<JobDetail> {
-  return request(`/jobs/${id}`);
+  return request(`/jobs/${encodeURIComponent(id)}`);
 }
 
 export function cancelJob(id: string): Promise<{ status: string }> {
-  return request(`/jobs/${id}/cancel`, { method: "POST" });
+  return request(`/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
 }
 
 export interface ReconcileResult {
@@ -233,23 +234,23 @@ export interface ReconcileResult {
 }
 
 export function reconcileJob(id: string): Promise<ReconcileResult> {
-  return request(`/jobs/${id}/reconcile`, { method: "POST" });
+  return request(`/jobs/${encodeURIComponent(id)}/reconcile`, { method: "POST" });
 }
 
 export function deleteJob(id: string): Promise<void> {
-  return request(`/jobs/${id}`, { method: "DELETE" });
+  return request(`/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function getJobVolumes(id: string): Promise<VolumeEntry[]> {
-  return request(`/jobs/${id}/volumes`);
+  return request(`/jobs/${encodeURIComponent(id)}/volumes`);
 }
 
 export function getJobPlots(id: string): Promise<PlotEntry[]> {
-  return request(`/jobs/${id}/plots`);
+  return request(`/jobs/${encodeURIComponent(id)}/plots`);
 }
 
 export function getSuggestedNext(id: string): Promise<SuggestedNext[]> {
-  return request(`/jobs/${id}/suggested-next`);
+  return request(`/jobs/${encodeURIComponent(id)}/suggested-next`);
 }
 
 // --- Files ---
@@ -301,7 +302,7 @@ export function createSubset(data: {
 }
 
 export function listSubsets(projectId: string): Promise<SubsetEntry[]> {
-  return request(`/subsets?project_id=${projectId}`);
+  return request(`/subsets?project_id=${encodeURIComponent(projectId)}`);
 }
 
 export function deleteSubset(id: string): Promise<void> {
@@ -365,7 +366,7 @@ export function generateTestDataset(
 // --- Jobs (extended) ---
 
 export function getJobSbatchScript(id: string): Promise<SbatchScript> {
-  return request(`/jobs/${id}/sbatch-script`);
+  return request(`/jobs/${encodeURIComponent(id)}/sbatch-script`);
 }
 
 // --- Settings ---
@@ -595,7 +596,7 @@ export async function getChartData(
   name: string,
 ): Promise<ChartData | null> {
   const resp = await fetch(
-    `${BASE}/jobs/${jobId}/chart-data?name=${encodeURIComponent(name)}`,
+    `${BASE}/jobs/${encodeURIComponent(jobId)}/chart-data?name=${encodeURIComponent(name)}`,
     { headers: { "Content-Type": "application/json" } },
   );
   if (!resp.ok) {

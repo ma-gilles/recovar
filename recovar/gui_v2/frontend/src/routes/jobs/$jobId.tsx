@@ -9,7 +9,6 @@ import {
   Box,
   Image,
   ChevronRight,
-  ChevronDown,
   Copy,
   XCircle,
   X,
@@ -17,8 +16,6 @@ import {
   EyeOff,
   RefreshCw,
   ZoomIn,
-  Pin,
-  Wand2,
 } from "lucide-react";
 import { clsx } from "clsx";
 import {
@@ -42,24 +39,21 @@ import {
 import Plot from "react-plotly.js";
 import { useProject } from "../../lib/project-context";
 import { VolumeViewer, type PinnedVolume } from "../../components/volume-viewer/VolumeViewer";
+import {
+  VolumeCategoryGroup,
+  CATEGORY_ORDER,
+  COLLAPSED_BY_DEFAULT,
+  isHiddenVolume,
+  naturalCompare,
+  formatJobType,
+  jobTypeToUrlSlug,
+} from "../../components/volume-viewer/volumeCategories";
 import { MaskWizard } from "../../components/mask-wizard/MaskWizard";
 import { MAX_PINNED_VOLUMES } from "../../lib/constants";
 import { StatusBadge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Spinner } from "../../components/ui/spinner";
 import { LogViewer } from "../../components/log-viewer/LogViewer";
-
-/** Maps PascalCase job type names to URL-friendly snake_case slugs. */
-const TYPE_URL_MAP: Record<string, string> = {
-  Pipeline: "pipeline",
-  Analyze: "analyze",
-  ComputeState: "compute_state",
-  ComputeTrajectory: "compute_trajectory",
-  Density: "density",
-  StableStates: "stable_states",
-  ReconstructState: "reconstruct_state",
-  ReconstructTrajectory: "reconstruct_trajectory",
-};
 
 const tabs = [
   { id: "overview", label: "Overview", icon: Clock },
@@ -136,7 +130,7 @@ function OverviewTab({
         </div>
         <div className="space-y-1">
           <span className="text-xs text-zinc-500">Type</span>
-          <p className="text-sm capitalize">{job.type.replace("_", " ")}</p>
+          <p className="text-sm capitalize">{formatJobType(job.type)}</p>
         </div>
         <div className="space-y-1">
           <span className="text-xs text-zinc-500">Created</span>
@@ -183,7 +177,7 @@ function OverviewTab({
             <p className="font-mono text-sm text-zinc-300">{job.output_dir}</p>
             <button
               className="inline-flex items-center rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-              onClick={() => navigator.clipboard.writeText(job.output_dir!)}
+              onClick={() => navigator.clipboard?.writeText(job.output_dir!).catch(() => undefined)}
               title="Copy path"
               aria-label="Copy output directory path"
             >
@@ -213,7 +207,7 @@ function OverviewTab({
                 key={s.type}
                 to="/jobs/new"
                 search={{
-                  type: TYPE_URL_MAP[s.type] ?? s.type.toLowerCase(),
+                  type: jobTypeToUrlSlug(s.type),
                   result_dir: (s.prefilled_params?.result_dir as string) || undefined,
                   density: (s.prefilled_params?.density as string) || undefined,
                   input: (s.prefilled_params?.input as string) || undefined,
@@ -278,17 +272,7 @@ function buildCloneSearchParams(job: JobDetail): {
   particles: string | undefined;
   params: string | undefined;
 } {
-  const typeMap: Record<string, string> = {
-    Pipeline: "pipeline",
-    Analyze: "analyze",
-    ComputeState: "compute_state",
-    ComputeTrajectory: "compute_trajectory",
-    Density: "density",
-    StableStates: "stable_states",
-    Postprocess: "postprocess",
-    Downsample: "downsample",
-  };
-  const type = typeMap[job.type] ?? job.type.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
+  const type = jobTypeToUrlSlug(job.type);
   const p = job.params ?? {};
   return {
     type,
@@ -356,7 +340,7 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
                     {isLong && (
                       <button
                         className="ml-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-                        onClick={() => navigator.clipboard.writeText(display)}
+                        onClick={() => navigator.clipboard?.writeText(display).catch(() => undefined)}
                         title="Copy value"
                         aria-label={`Copy ${key} value`}
                       >
@@ -373,198 +357,6 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
         <p className="text-sm text-zinc-500">No parameters recorded.</p>
       )}
 
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Volume filtering & display helpers
-// ---------------------------------------------------------------------------
-
-/** Patterns matching "uninteresting" volumes hidden by default. */
-const HIDDEN_PATTERNS = [/_half[0-9]/, /_unfil/, /halfmap/, /unfiltered/i, /^sampling\.mrc$/i];
-
-/** Returns true if a volume name matches the hidden-by-default patterns. */
-function isHiddenVolume(name: string): boolean {
-  const lower = name.toLowerCase();
-  return HIDDEN_PATTERNS.some((pat) => pat.test(lower));
-}
-
-/**
- * Build a display name for a volume.  If `needsDisambiguation` is true
- * (i.e. another volume in the same list has an identical filename),
- * prepend the parent directory.
- */
-function volumeDisplayName(v: VolumeEntry, needsDisambiguation: boolean): string {
-  if (!needsDisambiguation) return v.name;
-  const parts = v.path.replace(/\\/g, "/").split("/");
-  if (parts.length >= 2) {
-    return `${parts[parts.length - 2]}/${v.name}`;
-  }
-  return v.name;
-}
-
-/** Human-readable labels for volume categories. */
-const CATEGORY_LABELS: Record<string, string> = {
-  mean: "Mean Reconstruction",
-  eigen: "Eigenvolumes",
-  variance: "Variance Map",
-  halfmap: "Half-maps (raw)",
-  mask: "Masks",
-  kmeans_center: "K-means Centers",
-  trajectory: "Trajectory Volumes",
-  reconstruction: "Reconstructed States",
-  density: "Density / Deconvolved",
-  other: "Other",
-};
-
-/** Canonical ordering for category groups. */
-const CATEGORY_ORDER: string[] = [
-  "mean",
-  "eigen",
-  "variance",
-  "kmeans_center",
-  "trajectory",
-  "reconstruction",
-  "density",
-  "mask",
-  "other",
-  "halfmap",
-];
-
-/** Categories collapsed by default. */
-const COLLAPSED_BY_DEFAULT = new Set(["halfmap", "other"]);
-
-/**
- * Natural sort comparator: splits on numeric boundaries so that
- * "vol_2" sorts before "vol_10".
- */
-function naturalCompare(a: string, b: string): number {
-  const re = /(\d+)/g;
-  const aParts = a.split(re);
-  const bParts = b.split(re);
-  const len = Math.min(aParts.length, bParts.length);
-  for (let i = 0; i < len; i++) {
-    const aNum = Number(aParts[i]);
-    const bNum = Number(bParts[i]);
-    if (!isNaN(aNum) && !isNaN(bNum)) {
-      if (aNum !== bNum) return aNum - bNum;
-    } else {
-      const cmp = (aParts[i] ?? "").localeCompare(bParts[i] ?? "");
-      if (cmp !== 0) return cmp;
-    }
-  }
-  return aParts.length - bParts.length;
-}
-
-function VolumeCategoryGroup({
-  cat,
-  vols,
-  selectedVolume,
-  onSelect,
-  ambiguousNames,
-  defaultCollapsed,
-  pinnedPaths,
-  onPin,
-  onUnpin,
-  pinDisabled,
-  onMakeMask,
-}: {
-  cat: string;
-  vols: VolumeEntry[];
-  selectedVolume: string | null;
-  onSelect: (path: string) => void;
-  ambiguousNames: Set<string>;
-  defaultCollapsed: boolean;
-  pinnedPaths?: Set<string>;
-  onPin?: (path: string, name: string) => void;
-  onUnpin?: (path: string) => void;
-  pinDisabled?: boolean;
-  onMakeMask?: (path: string, name: string) => void;
-}): React.JSX.Element {
-  const [open, setOpen] = useState(!defaultCollapsed);
-
-  return (
-    <div>
-      <button
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-1.5 py-1.5 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-300 outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-950 rounded"
-      >
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-        )}
-        {CATEGORY_LABELS[cat] ?? cat}
-        <span className="font-normal normal-case tracking-normal text-zinc-600">
-          ({vols.length})
-        </span>
-      </button>
-      {open && (
-        <div className="ml-5 space-y-px">
-          {vols.map((v) => {
-            const displayName = volumeDisplayName(v, ambiguousNames.has(v.name));
-            const active = selectedVolume === v.path;
-            return (
-              <div
-                key={v.path}
-                className={clsx(
-                  "flex items-center gap-2 rounded px-2 py-1 text-sm",
-                  active
-                    ? "bg-blue-500/15 text-blue-300"
-                    : "text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
-                )}
-                title={v.path}
-              >
-                <button
-                  className="flex flex-1 items-center gap-2 text-left min-w-0"
-                  onClick={() => onSelect(v.path)}
-                >
-                  <Box className="h-3.5 w-3.5 shrink-0 text-sky-400" />
-                  <span className="truncate">{displayName}</span>
-                </button>
-                <span className="shrink-0 text-xs text-zinc-600">
-                  {(v.size_bytes / 1e6).toFixed(1)} MB
-                </span>
-                {onPin && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const isPinned = pinnedPaths?.has(v.path);
-                      if (isPinned) onUnpin?.(v.path);
-                      else onPin(v.path, v.name);
-                    }}
-                    className={clsx(
-                      "shrink-0",
-                      pinnedPaths?.has(v.path)
-                        ? "text-blue-400"
-                        : "text-zinc-600 hover:text-zinc-300"
-                    )}
-                    disabled={pinDisabled && !pinnedPaths?.has(v.path)}
-                    aria-label={pinnedPaths?.has(v.path) ? `Unpin ${displayName}` : `Pin ${displayName}`}
-                  >
-                    <Pin className="h-3 w-3" />
-                  </button>
-                )}
-                {onMakeMask && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onMakeMask(v.path, v.name);
-                    }}
-                    className="shrink-0 rounded p-0.5 text-emerald-500 hover:bg-emerald-500/15 hover:text-emerald-300"
-                    aria-label={`Create mask from ${displayName}`}
-                    title="Create mask from this volume"
-                  >
-                    <Wand2 className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
@@ -1085,6 +877,14 @@ export function JobDetailPage(): React.JSX.Element {
     reconcileMutation.mutate();
   }, [reconcileMutation]);
 
+  const cancelMutation = useMutation({
+    mutationFn: () => cancelJob(jobId),
+    onSuccess: () => {
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["project"] });
+    },
+  });
+
   const handleStatusChange = useCallback(
     (_status: string) => {
       refetch();
@@ -1122,20 +922,26 @@ export function JobDetailPage(): React.JSX.Element {
             <ArrowLeft className="h-4 w-4" />
           </Link>
           <h1 className="text-xl font-semibold capitalize">
-            {job.type.replace("_", " ")}
+            {formatJobType(job.type)}
           </h1>
           <StatusBadge status={job.status} />
         </div>
         <div className="flex items-center gap-2">
           {!isTerminal && (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => cancelJob(jobId).then(() => refetch())}
-            >
-              <XCircle className="h-3.5 w-3.5" />
-              Cancel
-            </Button>
+            <div className="flex flex-col items-end gap-1">
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => cancelMutation.mutate()}
+                disabled={cancelMutation.isPending}
+              >
+                <XCircle className="h-3.5 w-3.5" />
+                {cancelMutation.isPending ? "Cancelling…" : "Cancel"}
+              </Button>
+              {cancelMutation.isError && (
+                <span className="text-xs text-red-400">Failed to cancel job.</span>
+              )}
+            </div>
           )}
           {isTerminal && (job.type.toLowerCase() === "pipeline" || job.type.toLowerCase() === "analyze") && (
             <Link to="/explore/$jobId" params={{ jobId }}>

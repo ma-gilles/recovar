@@ -174,7 +174,7 @@ export function DashboardPage(): React.JSX.Element {
                   <Input
                     value={createPath}
                     onChange={(e) => setCreatePath(e.target.value)}
-                    placeholder="/scratch/gpfs/GILLES/mg6942/my_project"
+                    placeholder="/scratch/gpfs/.../my_project"
                     className="font-mono"
                   />
                   <Button
