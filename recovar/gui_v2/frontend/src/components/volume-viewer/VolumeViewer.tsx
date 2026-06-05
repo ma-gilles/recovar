@@ -11,7 +11,7 @@ import { clsx } from "clsx";
 import { getVolumeInfo, type VolumeEntry } from "../../lib/api/client";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
-import { MAX_PINNED_VOLUMES, VIEW_DIMS } from "../../lib/constants";
+import { MAX_PINNED_VOLUMES, VIEW_DIMS, DEFAULT_VIEW_DIM } from "../../lib/constants";
 import { VtkErrorBoundary } from "./VtkErrorBoundary";
 import type { DownsampleInfo } from "./VtkViewer";
 
@@ -98,7 +98,7 @@ export function VolumeViewer({
   const [downsampleInfo, setDownsampleInfo] = useState<DownsampleInfo | null>(null);
   // Selected view resolution (downsample target). Defaults to 128 so volumes
   // load fast over slow/SSH links; users can switch to 256/Full for detail.
-  const [viewDim, setViewDim] = useState<number | null>(128);
+  const [viewDim, setViewDim] = useState<number | null>(DEFAULT_VIEW_DIM);
 
   // Debounce the sigma slider: commit the value to the renderer ~140ms after
   // the user stops dragging so re-meshing runs once instead of per tick.
@@ -172,7 +172,11 @@ export function VolumeViewer({
       setSliceIdx(0);
       setTrajectoryActive(false);
       setDownsampleInfo(null); // clear until new volume reports back
-      setViewDim(null); // reset to Auto; a stale dim may exceed the new volume
+      // Keep the fast downsampled default for every volume (the server clamps
+      // it up to the original size when the new volume is smaller, so it is
+      // always safe). Resetting to Auto here would silently make each
+      // subsequent volume load at full server resolution — slower over SSH.
+      setViewDim(DEFAULT_VIEW_DIM);
     },
     []
   );
@@ -302,9 +306,11 @@ export function VolumeViewer({
                     // Auto: server default (MAX_SERVE_DIM).
                     setViewDim(null);
                   } else if (v === "full") {
-                    // Full: request the original box size so the server serves
-                    // it via the fast path (max_dim <= target == max_dim).
-                    setViewDim(maxVolDim ?? null);
+                    // Full: request a target >= the original box size so the
+                    // server serves it via the fast path (max_dim <= target).
+                    // Round up to even because the server only accepts an even
+                    // `dim`; an odd box (e.g. 255) would otherwise 400.
+                    setViewDim(maxVolDim != null ? maxVolDim + (maxVolDim % 2) : null);
                   } else {
                     setViewDim(parseInt(v));
                   }

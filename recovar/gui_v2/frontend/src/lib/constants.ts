@@ -8,6 +8,13 @@ export const MAX_PINNED_VOLUMES = 4;
  */
 export const VIEW_DIMS = [256, 128, 64];
 
+/**
+ * Default 3D view resolution: a downsampled box so volumes render fast over
+ * SSH tunnels out of the box. The server clamps this up to the original size
+ * for smaller volumes, so it is always safe.
+ */
+export const DEFAULT_VIEW_DIM = 128;
+
 /** Subsample scatter plot above this particle count. */
 export const SUBSAMPLE_THRESHOLD = 2_000_000;
 

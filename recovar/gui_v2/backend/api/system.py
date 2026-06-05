@@ -158,8 +158,8 @@ async def slurm_defaults(project_dir: str | None = None) -> SlurmDefaultsRespons
         account=merged.get("account", ""),
         gpus=int(merged.get("gpus", 1)),
         cpus=int(merged.get("cpus", 4)),
-        memory=str(merged.get("memory", "300G")),
-        time=str(merged.get("time", "12:00:00")),
+        memory=str(merged.get("memory", "400G")),
+        time=str(merged.get("time", "08:00:00")),
         gpu_resource_spec=str(merged.get("gpu_resource_spec", "--gres=gpu:{gpus}")),
         template_path=merged.get("template_path") or None,
     )
