@@ -11,7 +11,6 @@ import shutil
 import subprocess
 import sys
 
-
 # ── Formatting helpers ──────────────────────────────────────────────────────
 
 _BOLD = "\033[1m"
@@ -300,7 +299,7 @@ def main():
     if gpu_gb:
         try:
             int(gpu_gb)
-            cmd_parts.extend(["--gpu-gb", gpu_gb])
+            cmd_parts.extend(["--gpu-budget-gb", gpu_gb])
         except ValueError:
             _warn(f"Invalid number '{gpu_gb}', using all available GPU memory.")
 

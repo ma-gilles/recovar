@@ -8,9 +8,9 @@ import jax.numpy as jnp
 import jax.scipy
 import numpy as np
 
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
 from recovar.core import mask as mask_fn
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
@@ -167,8 +167,25 @@ def local_resolution(
     i_fil = jnp.zeros_like(map1)
     local_resols, fscs = [], []
 
-    # /2: local resolution holds two maps simultaneously
-    vol_batch_size = utils.safe_batch_size(utils.get_vol_batch_size(map1.shape[0], utils.get_gpu_memory_total()) / 2)
+    # Each vmap iteration of compute_local_fsc[_v2] allocates ~6 complex64
+    # + ~4 real32 (B, grid^3) intermediates (mask, two masked maps, two
+    # DFTs, filter intermediate, ift_sum). At the production default
+    # (grid=256 / gpu=80), the legacy ``get_vol_batch_size/2`` gives
+    # batch=26 which fits in ~20-30 GB working set — fine.
+    #
+    # At small grids the ``(256/grid)^3`` factor in get_vol_batch_size
+    # explodes: at grid=64 / gpu=80 it returns 3368, /2 = 1684, which
+    # OOMs at 19.73 GB inside batch_compute_local_fsc (slurm 8266797,
+    # 2026-05-15). Empirically each vmap iteration costs ~70 MB at
+    # grid=64 (FFT scratch + intermediates), so 1684 batches → ~120 GB
+    # working set on a 80 GB device.
+    #
+    # Fix: use a tighter divisor at small grids while preserving the
+    # production /2 at grid ≥ 128.
+    grid = map1.shape[0]
+    gpu_total_gb = utils.get_gpu_memory_total()
+    divisor = 2 if grid >= 128 else 16
+    vol_batch_size = utils.safe_batch_size(utils.get_vol_batch_size(grid, gpu_total_gb) / divisor)
     n_batch = utils.get_number_of_index_batch(nr_samplings, vol_batch_size)
 
     for k in range(n_batch):
@@ -720,15 +737,18 @@ def expensive_local_error_with_cov(
 
     else:
         # Doesn't seem to be faster.
+        # Same small-grid OOM as local_resolution above: get_vol_batch_size
+        # scales as (256/grid)^3 and blows up at small grids. Apply the
+        # same divisor floor at grid < 128.
         if use_v2:
-            vol_batch_size = utils.safe_batch_size(
-                utils.get_vol_batch_size(noise_variance_small.shape[0], utils.get_gpu_memory_total())
-            )
+            _grid = noise_variance_small.shape[0]
+            _div = 1 if _grid >= 128 else 8
+            vol_batch_size = utils.safe_batch_size(utils.get_vol_batch_size(_grid, utils.get_gpu_memory_total()) / _div)
         else:
             # /4: noise estimation holds 4 volume-sized arrays (two maps + two noise arrays)
-            vol_batch_size = utils.safe_batch_size(
-                utils.get_vol_batch_size(noise_variance.shape[0], utils.get_gpu_memory_total()) / 4
-            )
+            _grid = noise_variance.shape[0]
+            _div = 4 if _grid >= 128 else 32
+            vol_batch_size = utils.safe_batch_size(utils.get_vol_batch_size(_grid, utils.get_gpu_memory_total()) / _div)
 
         if use_v3:
             # Divide by half the volume size to fit many small subvolumes in memory

@@ -63,6 +63,19 @@ def test_pipeline_zdim_default_is_list():
     assert len(zdim_action.default) > 0
 
 
+def test_noise_upper_bound_batch_size_scales_with_grid_and_budget():
+    requested = 304
+
+    assert pipeline_cmd._noise_upper_bound_batch_size(128, requested, 76.0) == requested
+
+    grid_256_large_budget = pipeline_cmd._noise_upper_bound_batch_size(256, requested, 76.0)
+    grid_512_large_budget = pipeline_cmd._noise_upper_bound_batch_size(512, requested, 76.0)
+    grid_256_small_budget = pipeline_cmd._noise_upper_bound_batch_size(256, requested, 8.0)
+
+    assert 1 <= grid_512_large_budget < grid_256_large_budget < requested
+    assert 1 <= grid_256_small_budget < grid_256_large_budget
+
+
 def test_pipeline_registers_poses():
     actions = _parser_with_pipeline_args()._option_string_actions
     assert "--poses" in actions

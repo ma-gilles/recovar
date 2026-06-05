@@ -89,16 +89,43 @@ def quality_table(current_scores_path, baseline_scores_path, label):
     return "\n".join(lines)
 
 
+def _current_gpu_name(cur_data):
+    """Best-effort GPU name from a current perf record."""
+    hw = cur_data.get("hardware") if isinstance(cur_data, dict) else None
+    if isinstance(hw, dict) and hw.get("gpu_name"):
+        return hw["gpu_name"]
+    stages = cur_data.get("stages") if isinstance(cur_data, dict) else None
+    if isinstance(stages, dict) and stages.get("gpu_name"):
+        return stages["gpu_name"]
+    return None
+
+
+def _select_baseline_record(base, current_gpu_name=None):
+    """Pick the baseline matching the current GPU when available."""
+    if not isinstance(base, dict):
+        return {}
+    if "stages" in base:
+        return base
+    if current_gpu_name and current_gpu_name in base:
+        return base[current_gpu_name]
+    for preferred in ("NVIDIA H100 80GB HBM3", "NVIDIA A100-SXM4-80GB"):
+        if preferred in base:
+            return base[preferred]
+    for value in base.values():
+        if isinstance(value, dict) and "stages" in value:
+            return value
+    return {}
+
+
 def perf_table(baseline_perf_path, current_perf_path, label):
     """Generate performance comparison table with actual timings."""
     if not os.path.exists(baseline_perf_path):
         return f"### {label} Performance — baseline not found\n"
 
     base = _load_json(baseline_perf_path)
-    hw = base.get("NVIDIA H100 80GB HBM3", base.get("NVIDIA A100-SXM4-80GB", {}))
-    base_stages = hw.get("stages", {})
 
     # Load current perf record (saved by the test)
+    cur_data = {}
     cur_stages = {}
     if current_perf_path and os.path.exists(current_perf_path):
         cur_data = _load_json(current_perf_path)
@@ -110,6 +137,10 @@ def perf_table(baseline_perf_path, current_perf_path, label):
                 if isinstance(v, dict) and "stages" in v:
                     cur_stages = v["stages"]
                     break
+
+    current_gpu = _current_gpu_name(cur_data)
+    hw = _select_baseline_record(base, current_gpu)
+    base_stages = hw.get("stages", {})
 
     lines = [f"### {label} Performance"]
     lines.append("| Stage | Metric | Baseline | Current | Change | Status |")
@@ -138,7 +169,12 @@ def perf_table(baseline_perf_path, current_perf_path, label):
                     change_str = f"{pct:+.1f}% ({direction})"
                 else:
                     change_str = f"{pct:+.1f}%"
-                status = "**REGRESSED**" if pct > 10 and lower_better else "OK"
+                meaningful_baseline = (
+                    (metric == "GPU_memory" and base_val > 0.1)
+                    or (metric == "CPU_memory" and base_val > 0.5)
+                    or metric == "wall_time"
+                )
+                status = "**REGRESSED**" if pct > 10 and lower_better and meaningful_baseline else "OK"
                 lines.append(f"| {stage_name} | {metric} | {base_val:.1f}{unit} | {cur_val:.1f}{unit} | {change_str} | {status} |")
             else:
                 lines.append(f"| {stage_name} | {metric} | {base_val:.1f}{unit} | — | — | — |")

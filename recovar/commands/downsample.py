@@ -280,12 +280,12 @@ def main():
     parser.add_argument("--strip-prefix", default=None, help="Prefix to strip from paths in star file")
     parser.add_argument("--batch-size", type=int, default=1000, help="Number of images per batch (default: 1000)")
     parser.add_argument(
-        "--gpu-gb",
+        "--gpu-budget-gb",
         "--gpu-memory",
         dest="gpu_memory",
         type=float,
         default=None,
-        help="Cap GPU memory used for auto batch sizing during downsampling",
+        help="Soft GPU memory budget in GB used for auto batch sizing during downsampling",
     )
     parser.add_argument(
         "--chunk-size",
