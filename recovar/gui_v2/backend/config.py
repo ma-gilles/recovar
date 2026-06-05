@@ -23,7 +23,7 @@ DEFAULT_SLURM = {
     "gpus": 1,
     "cpus": 4,
     "memory": "400G",
-    "time": "12:00:00",
+    "time": "08:00:00",
 }
 
 # Default local-execution settings.

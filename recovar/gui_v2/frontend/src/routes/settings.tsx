@@ -25,7 +25,7 @@ const SLURM_FIELDS: { key: keyof SlurmDefaultsUpdate; label: string; type: strin
   { key: "gpus", label: "GPUs", type: "number", placeholder: "1" },
   { key: "cpus", label: "CPUs", type: "number", placeholder: "4" },
   { key: "memory", label: "Memory", type: "text", placeholder: "400G" },
-  { key: "time", label: "Time Limit", type: "text", placeholder: "12:00:00" },
+  { key: "time", label: "Time Limit", type: "text", placeholder: "08:00:00" },
 ];
 
 function provenance(

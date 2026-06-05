@@ -41,7 +41,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
   // Advanced fields
   const [zdim, setZdim] = useState(String(p.zdim ?? "1,2,4,10,20"));
   const [downsample, setDownsample] = useState(String(p.downsample ?? "256"));
-  const [lazy, setLazy] = useState(Boolean(p.lazy));
+  const [lazy, setLazy] = useState(p.lazy !== false);
   const [correctContrast, setCorrectContrast] = useState(p.correct_contrast !== false);
   const [doOverWithContrast, setDoOverWithContrast] = useState(p.do_over_with_contrast !== false);
   const [focusMask, setFocusMask] = useState(String(p.focus_mask ?? ""));
