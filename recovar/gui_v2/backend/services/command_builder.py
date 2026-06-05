@@ -107,6 +107,14 @@ def build_pipeline_command(params: dict[str, Any]) -> list[str]:
     _add_optional(cmd, "--Bfactor", params.get("Bfactor"))
     _add_optional(cmd, "--n-bins", params.get("n_bins"))
 
+    # Memory planning (matches recovar.utils.parser_args.add_memory_planning_args).
+    # --adaptive-n-pcs is ON by default in recovar; --gpu-budget-gb + the low-memory
+    # knobs let large box-256 runs fit a budget instead of OOMing.
+    _add_optional(cmd, "--gpu-budget-gb", params.get("gpu_budget_gb"))
+    _add_bool_optional(cmd, "adaptive-n-pcs", params.get("adaptive_n_pcs"))
+    _add_flag(cmd, "--low-memory-option", params.get("low_memory_option"))
+    _add_flag(cmd, "--very-low-memory-option", params.get("very_low_memory_option"))
+
     return cmd
 
 
