@@ -11,6 +11,7 @@ import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob, validateJob, type ValidationResult } from "../../lib/api/client";
+import { Zap, ChevronDown, ChevronRight } from "lucide-react";
 
 interface AnalyzeFormProps {
   projectId: string;
@@ -32,6 +33,9 @@ export function AnalyzeForm({
   const [nClusters, setNClusters] = useState("20");
   const [nTrajectories, setNTrajectories] = useState("0");
   const [outputName, setOutputName] = useState("");
+  const [nBins, setNBins] = useState("");
+  const [maskradFraction, setMaskradFraction] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
   const [executorMode, setExecutorMode] = useState<string | null>(null);
   const [localOpts, setLocalOpts] = useState<LocalOpts | null>(null);
@@ -40,47 +44,60 @@ export function AnalyzeForm({
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
 
-  const buildParams = useCallback((): Record<string, unknown> => {
+  const buildParams = useCallback((overrides?: Record<string, unknown>): Record<string, unknown> => {
     const params: Record<string, unknown> = {
       result_dir: resultDir,
       zdim: parseInt(zdim),
     };
     if (nClusters) params.n_clusters = parseInt(nClusters);
     if (nTrajectories) params.n_trajectories = parseInt(nTrajectories);
+    if (nBins) params.n_bins = parseInt(nBins);
+    if (maskradFraction) params.maskrad_fraction = parseFloat(maskradFraction);
     if (noZReg) params.no_z_regularization = true;
     if (outputName) params.output_name = outputName;
     if (slurmOpts) params.slurm_opts = slurmOpts;
-      if (localOpts && executorMode === "local") params.local_opts = localOpts;
-    return params;
-  }, [resultDir, zdim, nClusters, nTrajectories, noZReg, outputName, slurmOpts, localOpts, executorMode]);
+    if (localOpts && executorMode === "local") params.local_opts = localOpts;
+    return overrides ? { ...params, ...overrides } : params;
+  }, [resultDir, zdim, nClusters, nTrajectories, nBins, maskradFraction, noZReg, outputName, slurmOpts, localOpts, executorMode]);
 
   const mutation = useMutation({
-    mutationFn: () => submitJob(projectId, "analyze", buildParams(), executorMode),
+    mutationFn: (params: Record<string, unknown>) => submitJob(projectId, "analyze", params, executorMode),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       onSubmitted?.(data.id);
     },
   });
 
-  const handleSubmit = useCallback(async () => {
+  const handleSubmit = useCallback(async (overrides?: Record<string, unknown>) => {
     setValidationErrors([]);
     setValidationWarnings([]);
     setValidating(true);
     try {
-      const result: ValidationResult = await validateJob(projectId, "analyze", buildParams());
+      const params = buildParams(overrides);
+      const result: ValidationResult = await validateJob(projectId, "analyze", params);
       if (!result.valid) {
         setValidationErrors(result.errors);
         setValidationWarnings(result.warnings);
         return;
       }
       setValidationWarnings(result.warnings);
-      mutation.mutate();
+      mutation.mutate(params);
     } catch {
-      mutation.mutate();
+      mutation.mutate(buildParams(overrides));
     } finally {
       setValidating(false);
     }
   }, [projectId, buildParams, mutation]);
+
+  // "Quick Analyze": issue #14 preset — fast, lower-resolution center volumes
+  // (n-bins 50->10 ~5x, maskrad-fraction 20->10 ~8x; ~40x overall). UMAP and
+  // k-means are unchanged. Reflects the values in the form, then submits.
+  const handleQuickSubmit = useCallback(() => {
+    setNBins("10");
+    setMaskradFraction("10");
+    setShowAdvanced(true);
+    void handleSubmit({ n_bins: 10, maskrad_fraction: 10 });
+  }, [handleSubmit]);
 
   return (
     <div className="space-y-4">
@@ -151,6 +168,46 @@ export function AnalyzeForm({
         <TooltipIcon text={tooltips["analyze.no_z_regularization"]} />
       </label>
 
+      {/* Advanced: kernel-regression speed/quality knobs (issue #14) */}
+      <div>
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((s) => !s)}
+          className="flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-300"
+        >
+          {showAdvanced ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          Advanced
+        </button>
+        {showAdvanced && (
+          <div className="ml-4 mt-2 grid grid-cols-2 gap-3 border-l border-zinc-800 pl-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-1">
+                <Label>n-bins</Label>
+                <TooltipIcon text={tooltips["analyze.n_bins"]} />
+              </div>
+              <Input
+                type="number"
+                value={nBins}
+                onChange={(e) => setNBins(e.target.value)}
+                placeholder="50"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-1">
+                <Label>maskrad-fraction</Label>
+                <TooltipIcon text={tooltips["analyze.maskrad_fraction"]} />
+              </div>
+              <Input
+                type="number"
+                value={maskradFraction}
+                onChange={(e) => setMaskradFraction(e.target.value)}
+                placeholder="20"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* SLURM Settings */}
       <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
       {executorMode === "local" ? (
@@ -179,9 +236,18 @@ export function AnalyzeForm({
         {mutation.isError && (
           <span className="text-sm text-red-400">{(mutation.error as Error).message}</span>
         )}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
           <Button
-            onClick={handleSubmit}
+            variant="outline"
+            onClick={handleQuickSubmit}
+            disabled={!resultDir || !zdim || validating || mutation.isPending}
+            title="Fast, lower-resolution center volumes: n-bins=10, maskrad-fraction=10 (~40x faster). UMAP and k-means unchanged."
+          >
+            <Zap className="h-4 w-4" />
+            Quick Analyze
+          </Button>
+          <Button
+            onClick={() => handleSubmit()}
             disabled={!resultDir || !zdim}
             loading={validating || mutation.isPending}
           >

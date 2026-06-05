@@ -44,6 +44,10 @@ export const tooltips: Record<string, string> = {
     "Number of k-means clusters for partitioning the latent space. Default 20. More clusters = finer partitioning but smaller per-cluster particle counts.",
   "analyze.n_trajectories":
     "Number of linear trajectories to compute through the latent space. Default 0 (skip). Each trajectory generates a series of volumes.",
+  "analyze.n_bins":
+    "Number of bins for kernel regression (default 50). Lower values produce faster but lower-resolution volumes. Quick Analyze uses 10 (~5x faster).",
+  "analyze.maskrad_fraction":
+    "Kernel-regression mask radius = grid_size / this value (default 20). Lower values use a larger radius — faster but lower-resolution volumes. Quick Analyze uses 10 (~8x faster).",
   "compute_state.result_dir":
     "Pipeline output directory containing the model to use for volume reconstruction.",
   "compute_state.zdim":

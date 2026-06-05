@@ -134,6 +134,11 @@ def build_analyze_command(params: dict[str, Any]) -> list[str]:
     _add_optional(cmd, "--n-clusters", params.get("n_clusters"))
     _add_optional(cmd, "--n-trajectories", params.get("n_trajectories"))
     _add_optional(cmd, "--n-vols-along-path", params.get("n_vols_along_path"))
+    # Kernel-regression speed/quality knobs (see issue #14): lower n-bins and
+    # maskrad-fraction trade resolution for a large speedup on the k-means
+    # center volumes. The "Quick Analyze" button sets both to 10.
+    _add_optional(cmd, "--n-bins", params.get("n_bins"))
+    _add_optional(cmd, "--maskrad-fraction", params.get("maskrad_fraction"))
     _add_flag(cmd, "--skip-umap", params.get("skip_umap"))
     _add_flag(cmd, "--no-z-regularization", params.get("no_z_regularization"))
 
