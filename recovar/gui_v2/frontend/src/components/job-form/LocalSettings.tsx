@@ -10,6 +10,7 @@ export interface LocalOpts {
   gpus: string;
   setup_command: string;
   env_vars: Record<string, string>;
+  preallocate_gpu: boolean;
 }
 
 interface LocalSettingsProps {
@@ -36,6 +37,7 @@ export function LocalSettings({ value, onChange }: LocalSettingsProps): React.JS
     gpus: "all",
     setup_command: "",
     env_vars: {},
+    preallocate_gpu: true,
   };
 
   // Initialize value on first render
@@ -122,6 +124,18 @@ export function LocalSettings({ value, onChange }: LocalSettingsProps): React.JS
               />
             )}
           </div>
+
+          {/* Preallocate GPU memory */}
+          <label className="flex items-center gap-2 text-sm text-zinc-400">
+            <input
+              type="checkbox"
+              checked={current.preallocate_gpu !== false}
+              onChange={(e) => update("preallocate_gpu", e.target.checked)}
+              className="rounded border-zinc-600 bg-zinc-800"
+            />
+            Preallocate GPU memory
+            <TooltipIcon text="Reserve one contiguous block of GPU memory up front (XLA_PYTHON_CLIENT_PREALLOCATE). Recommended ON for a dedicated GPU — it avoids fragmentation out-of-memory errors on large jobs (e.g. the box-256 PCA basis needs ~27 GB contiguous). Turn OFF only to share the GPU with other processes." />
+          </label>
 
           {/* Setup Command */}
           <div className="space-y-1">

@@ -31,6 +31,11 @@ DEFAULT_LOCAL = {
     "gpus": "all",           # "all", "0", "0,1", etc.
     "setup_command": "",     # Shell command to run before the pipeline (e.g. "module load cuda")
     "env_vars": {},          # Extra environment variables as {key: value}
+    # Preallocate one contiguous JAX GPU arena (XLA_PYTHON_CLIENT_PREALLOCATE).
+    # ON by default (matches JAX's own default): reserving the arena up front
+    # avoids GPU-memory *fragmentation* OOMs on large jobs (e.g. the box-256 PCA
+    # basis needs ~27 GB contiguous). Turn OFF only to share a GPU with others.
+    "preallocate_gpu": True,
 }
 
 # Write retry delays (ms) for SQLite "database is locked" errors.

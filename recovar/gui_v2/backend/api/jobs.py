@@ -768,7 +768,6 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
     executor = get_executor(chosen_mode)
     env = {
         "PYTHONNOUSERSITE": "1",
-        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
     }
 
     # Resolve effective slurm opts: built-in defaults ← user-global toml ←
@@ -788,6 +787,15 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
     form_local_opts = params.get("local_opts") or {}
     if isinstance(form_local_opts, dict):
         merged_local_opts.update(form_local_opts)
+
+    # Preallocate one contiguous JAX GPU arena by default. This avoids GPU-memory
+    # fragmentation OOMs on large jobs (the box-256 PCA basis is a single ~27 GB
+    # contiguous tensor; on-demand allocation fragments and fails to place it even
+    # with tens of GB free). Turn off (preallocate_gpu=False) only to share a GPU.
+    # An explicit XLA_PYTHON_CLIENT_PREALLOCATE in env_vars still wins (set later).
+    env["XLA_PYTHON_CLIENT_PREALLOCATE"] = (
+        "true" if merged_local_opts.get("preallocate_gpu", True) else "false"
+    )
 
     try:
         handle = await executor.submit(
