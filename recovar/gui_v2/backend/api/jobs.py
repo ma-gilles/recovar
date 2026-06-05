@@ -1158,6 +1158,18 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
         elif actual == ExecJobStatus.FAILED:
             error_msg = "Job failed (detected on manual reconcile)."
 
+        # The local executor only sees that the PID is gone, not its exit code,
+        # so it reports a dead process as COMPLETED. Read the run.exitcode the
+        # job wrapper wrote so an OOM'd/failed job is shown as failed, not green.
+        if actual == ExecJobStatus.COMPLETED and job.output_dir:
+            try:
+                code = int((Path(job.output_dir) / "run.exitcode").read_text().strip())
+                if code != 0:
+                    actual = ExecJobStatus.FAILED
+                    error_msg = f"Process exited with code {code}."
+            except (OSError, ValueError):
+                pass
+
         new_status = actual.value
         changed = new_status != previous_status
 

@@ -137,6 +137,12 @@ export function MaskWizard({
   const [sliceIdx, setSliceIdx] = useState<number | null>(null);
 
   const [viewMode, setViewMode] = useState<"slice" | "3d">("slice");
+  // 3D view: render resolution (downsample for speed over slow/SSH links) and
+  // the source-volume contour level. pickScale maps served (downsampled) voxel
+  // coords back to full-res so eraser clicks land in the right place.
+  const [viewDim, setViewDim] = useState<number | null>(128);
+  const [contour3d, setContour3d] = useState(3.0);
+  const [pickScale, setPickScale] = useState(1);
   const [previewVolPath, setPreviewVolPath] = useState<string | null>(null);
   const [vol3dLoading, setVol3dLoading] = useState(false);
 
@@ -560,12 +566,16 @@ export function MaskWizard({
               <Suspense fallback={<Spinner label="Loading 3D viewer..." />}>
                 <VtkViewer
                   activeVolume={sourcePath}
-                  activeSigma={3.0}
+                  activeSigma={contour3d}
+                  viewDim={viewDim}
+                  onDownsampleInfo={(info) =>
+                    setPickScale(info && info.servedDim ? info.originalDim / info.servedDim : 1)
+                  }
                   pinnedVolumes={[
                     {
                       path: sourcePath,
                       name: sourceName,
-                      threshold: 3.0,
+                      threshold: contour3d,
                       opacity: 0.4,
                       visible: true,
                       colorIndex: 0,
@@ -584,7 +594,7 @@ export function MaskWizard({
                       ? ([x, y, z]) =>
                           setEraseSpheres((prev) => [
                             ...prev,
-                            { x, y, z, r: eraseRadius },
+                            { x: x * pickScale, y: y * pickScale, z: z * pickScale, r: eraseRadius },
                           ])
                       : undefined
                   }
@@ -602,18 +612,50 @@ export function MaskWizard({
           </div>
           {shape && (
             <div className="space-y-1">
-              <div className="flex items-center gap-2 text-xs text-zinc-500">
-                <span className="w-10">Slice</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={maxSlice}
-                  value={currentIdx}
-                  onChange={(e) => setSliceIdx(parseInt(e.target.value))}
-                  className="flex-1"
-                />
-                <span className="w-12 text-right">{currentIdx} / {maxSlice}</span>
-              </div>
+              {viewMode === "slice" ? (
+                <div className="flex items-center gap-2 text-xs text-zinc-500">
+                  <span className="w-10">Slice</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={maxSlice}
+                    value={currentIdx}
+                    onChange={(e) => setSliceIdx(parseInt(e.target.value))}
+                    className="flex-1"
+                  />
+                  <span className="w-12 text-right">{currentIdx} / {maxSlice}</span>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-xs text-zinc-500">
+                    <span className="w-10">Contour</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={10}
+                      step={0.1}
+                      value={contour3d}
+                      onChange={(e) => setContour3d(parseFloat(e.target.value))}
+                      className="flex-1"
+                    />
+                    <span className="w-12 text-right">{contour3d.toFixed(1)}σ</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-zinc-500">
+                    <span className="w-10">Res</span>
+                    <select
+                      value={viewDim ?? "auto"}
+                      onChange={(e) => setViewDim(e.target.value === "auto" ? null : parseInt(e.target.value))}
+                      className="rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-xs text-zinc-200"
+                    >
+                      <option value="auto">Auto</option>
+                      <option value="256">256</option>
+                      <option value="128">128</option>
+                      <option value="64">64</option>
+                    </select>
+                    <span className="text-[10px] text-zinc-600">lower = faster rendering</span>
+                  </div>
+                </div>
+              )}
               <div className="flex items-center justify-between text-xs text-zinc-500">
                 <span>Shape: {shape.join(" x ")}</span>
                 {coverage !== null && (

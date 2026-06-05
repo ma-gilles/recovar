@@ -96,8 +96,9 @@ export function VolumeViewer({
   const [committedSigma, setCommittedSigma] = useState(3.0);
   const [maxSlice, setMaxSlice] = useState(128);
   const [downsampleInfo, setDownsampleInfo] = useState<DownsampleInfo | null>(null);
-  // Selected view resolution (downsample target). null == Auto (server default).
-  const [viewDim, setViewDim] = useState<number | null>(null);
+  // Selected view resolution (downsample target). Defaults to 128 so volumes
+  // load fast over slow/SSH links; users can switch to 256/Full for detail.
+  const [viewDim, setViewDim] = useState<number | null>(128);
 
   // Debounce the sigma slider: commit the value to the renderer ~140ms after
   // the user stops dragging so re-meshing runs once instead of per tick.

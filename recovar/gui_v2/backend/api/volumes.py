@@ -143,19 +143,15 @@ async def volume_raw(
     header_shape = await asyncio.to_thread(_volume_header_shape, path)
     max_dim = max(header_shape)
 
-    # Validate an explicit `dim`: positive even integer no larger than the
-    # volume. When omitted, fall back to MAX_SERVE_DIM (Auto behavior).
-    if dim is not None:
-        if dim <= 0 or dim % 2 != 0:
-            raise HTTPException(
-                status_code=400,
-                detail=f"dim must be a positive even integer, got {dim}",
-            )
-        if dim > max_dim:
-            raise HTTPException(
-                status_code=400,
-                detail=f"dim {dim} exceeds volume size {max_dim}",
-            )
+    # Validate an explicit `dim`: positive even integer. A `dim` larger than the
+    # volume is clamped (the fast path below serves the original) rather than
+    # rejected, so a default like 128 is always safe even for smaller volumes.
+    # When omitted, fall back to MAX_SERVE_DIM (Auto behavior).
+    if dim is not None and (dim <= 0 or dim % 2 != 0):
+        raise HTTPException(
+            status_code=400,
+            detail=f"dim must be a positive even integer, got {dim}",
+        )
     target = dim if dim is not None else MAX_SERVE_DIM
 
     # Common headers that help the browser handle large binary responses,
