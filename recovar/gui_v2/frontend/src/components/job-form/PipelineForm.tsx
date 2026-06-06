@@ -53,6 +53,10 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
   const [ind, setInd] = useState(String(p.ind ?? ""));
   const [showIndBrowser, setShowIndBrowser] = useState(false);
   const [tiltSeries, setTiltSeries] = useState(Boolean(p.tilt_series));
+  // Cryo-ET: input is a RELION5 2D-tilt star (from `recovar parse_relion5_tomo`);
+  // per-tilt dose, angles, and CTF are read automatically from that star. The
+  // one common override worth exposing is --ntilts (limit the number of tilts).
+  const [ntilts, setNtilts] = useState(p.ntilts ? String(p.ntilts) : "");
   const [stripPrefix, setStripPrefix] = useState(String(p.strip_prefix ?? ""));
   const [outputName, setOutputName] = useState("");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
@@ -82,13 +86,16 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
     if (halfsets) params.halfsets = halfsets;
     if (poses) params.poses = poses;
     if (ctf) params.ctf = ctf;
-    if (tiltSeries) params.tilt_series = true;
+    if (tiltSeries) {
+      params.tilt_series = true;
+      if (ntilts) params.ntilts = parseInt(ntilts);
+    }
     if (stripPrefix) params.strip_prefix = stripPrefix;
     if (outputName) params.output_name = outputName;
     if (slurmOpts && executorMode !== "local") params.slurm_opts = slurmOpts;
     if (localOpts && executorMode === "local") params.local_opts = localOpts;
     return params;
-  }, [particles, mask, maskPath, zdim, downsample, lazy, correctContrast, doOverWithContrast, focusMask, ind, datadir, nImages, halfsets, poses, ctf, tiltSeries, stripPrefix, outputName, slurmOpts, localOpts, executorMode]);
+  }, [particles, mask, maskPath, zdim, downsample, lazy, correctContrast, doOverWithContrast, focusMask, ind, datadir, nImages, halfsets, poses, ctf, tiltSeries, ntilts, stripPrefix, outputName, slurmOpts, localOpts, executorMode]);
 
   const mutation = useMutation({
     mutationFn: () => submitJob(projectId, "pipeline", buildParams(), executorMode),
@@ -328,6 +335,23 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
               <TooltipIcon text={tooltips["pipeline.tilt_series"]} />
             </label>
           </div>
+
+          {/* Cryo-ET / tilt-series — only when Tilt series is on */}
+          {tiltSeries && (
+            <div className="ml-4 space-y-2 border-l border-zinc-800 pl-4">
+              <p className="text-xs text-zinc-500">
+                Expects a RELION5 2D-tilt star (from <code>recovar parse_relion5_tomo</code>).
+                Per-tilt dose, tilt angles, and CTF are read automatically from the star.
+              </p>
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <Label>Max tilts</Label>
+                  <TooltipIcon text={tooltips["pipeline.ntilts"]} />
+                </div>
+                <Input type="number" min={1} value={ntilts} onChange={(e) => setNtilts(e.target.value)} placeholder="all tilts" />
+              </div>
+            </div>
+          )}
 
           <div className="space-y-1">
             <div className="flex items-center gap-1">

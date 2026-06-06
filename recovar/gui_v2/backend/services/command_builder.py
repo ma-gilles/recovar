@@ -114,6 +114,13 @@ def build_pipeline_command(params: dict[str, Any]) -> list[str]:
     _add_optional(cmd, "--halfsets", params.get("halfsets"))
     _add_flag(cmd, "--tilt-series", params.get("tilt_series"))
     _add_optional(cmd, "--tilt-series-ctf", params.get("tilt_series_ctf"))
+    # Cryo-ET / tilt-series (recovar pipeline "Tilt series" group; see
+    # docs/guide/cryo-et.md). Dose/angle/CTF are auto-read from the RELION5
+    # 2D-tilt star; these optional overrides are emitted only when set.
+    _add_optional(cmd, "--tomograms", params.get("tomograms"))
+    _add_optional(cmd, "--ntilts", params.get("ntilts"))
+    _add_optional(cmd, "--dose-per-tilt", params.get("dose_per_tilt"))
+    _add_optional(cmd, "--angle-per-tilt", params.get("angle_per_tilt"))
 
     # Processing flags
     _add_optional(cmd, "--downsample", params.get("downsample"))

@@ -33,7 +33,9 @@ export const tooltips: Record<string, string> = {
   "analyze.no_z_regularization":
     "Use the unregularized latent coordinates (--no-z-regularization) instead of the regularized embedding.",
   "pipeline.tilt_series":
-    "Enable tilt-series mode for cryo-ET data.",
+    "Enable tilt-series mode for cryo-ET data. Input should be a RELION5 2D-tilt star (from `recovar parse_relion5_tomo`); per-tilt dose, angles, and CTF are read automatically from it.",
+  "pipeline.ntilts":
+    "Maximum number of tilts per tilt series to use (--ntilts). Leave blank to use all tilts; lower it to drop poor-quality high-tilt images.",
   "pipeline.strip_prefix":
     "Prefix to strip from particle image paths in the .star file.",
   "analyze.result_dir":
