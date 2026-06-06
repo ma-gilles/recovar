@@ -12,6 +12,7 @@ import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
+import { useProject } from "../../lib/project-context";
 
 interface StableStatesFormProps {
   projectId: string;
@@ -25,6 +26,7 @@ export function StableStatesForm({
   onSubmitted,
 }: StableStatesFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
+  const { project } = useProject();
   const [density, setDensity] = useState(prefilledDensity ?? "");
   const [showDensityBrowser, setShowDensityBrowser] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -81,7 +83,7 @@ export function StableStatesForm({
         </div>
         {showDensityBrowser && (
           <FileBrowser
-            initialPath={density ? density.split("/").slice(0, -1).join("/") || "/" : "/scratch/gpfs"}
+            initialPath={density ? density.split("/").slice(0, -1).join("/") || "/" : (project?.path ?? "/scratch/gpfs")}
             accept={[".pkl"]}
             onSelect={(path) => { setDensity(path); setShowDensityBrowser(false); }}
           />

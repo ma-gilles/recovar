@@ -6,11 +6,15 @@ import type { SelectionTool } from "./SelectionToolbar";
 const CROSSHAIR_SIZE = 8;
 const CROSSHAIR_COLOR = "#facc15"; // yellow-400
 
-// D3 categorical 10 colors for k-means clusters
+// D3 tab20 categorical colors for k-means clusters. RECOVAR's default k-means
+// uses 20 clusters, so a 20-entry palette keeps clusters/centers distinct
+// (a 10-color palette made clusters 0/10, 1/11, ... share a color).
 const CLUSTER_COLORS = [
-  [31, 119, 180], [255, 127, 14], [44, 160, 44], [214, 39, 40],
-  [148, 103, 189], [140, 86, 75], [227, 119, 194], [127, 127, 127],
-  [188, 189, 34], [23, 190, 207],
+  [31, 119, 180], [174, 199, 232], [255, 127, 14], [255, 187, 120],
+  [44, 160, 44], [152, 223, 138], [214, 39, 40], [255, 152, 150],
+  [148, 103, 189], [197, 176, 213], [140, 86, 75], [196, 156, 148],
+  [227, 119, 194], [247, 182, 210], [127, 127, 127], [199, 199, 199],
+  [188, 189, 34], [219, 219, 141], [23, 190, 207], [158, 218, 229],
 ];
 
 /**
@@ -76,6 +80,12 @@ interface ScatterPanelProps {
   onHover?: (index: number | null) => void;
   /** Called during selection drawing with the live count of points inside the shape */
   onLiveSelectionCount?: (count: number | null) => void;
+  /**
+   * True total number of particles in the dataset. When the plotted points are a
+   * uniform subsample (totalPoints > rendered point count), this is surfaced in the
+   * accessible label so assistive tech is not told the subsampled count is the total.
+   */
+  totalPoints?: number;
 }
 
 /**
@@ -99,6 +109,7 @@ export function ScatterPanel({
   hoveredIndex = null,
   onHover,
   onLiveSelectionCount,
+  totalPoints,
 }: ScatterPanelProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -594,6 +605,14 @@ export function ScatterPanel({
 
   const isSelecting = activeTool !== null || isDrawing;
 
+  // Word the accessible label to reflect the true dataset size. When the plotted
+  // points are a uniform subsample, say so rather than reporting the capped count
+  // as if it were the total.
+  const ariaLabel =
+    totalPoints != null && totalPoints > n
+      ? `${title} scatter plot showing a uniform subsample of ${n} of ${totalPoints} particles`
+      : `${title} scatter plot with ${n} points`;
+
   return (
     <div className="flex flex-col">
       <div className="mb-1 text-xs font-medium text-zinc-400">{title}</div>
@@ -605,7 +624,7 @@ export function ScatterPanel({
           ref={canvasRef}
           className="w-full h-full"
           role="img"
-          aria-label={`${title} scatter plot with ${n} points`}
+          aria-label={ariaLabel}
         />
         <canvas
           ref={overlayRef}
@@ -613,6 +632,8 @@ export function ScatterPanel({
             "absolute inset-0 w-full h-full",
             isSelecting && "cursor-crosshair"
           )}
+          role="application"
+          aria-label={`${title} selection overlay. Selection, point picking, and hover are mouse-only; keyboard interaction is not yet supported.`}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}

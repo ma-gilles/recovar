@@ -43,6 +43,12 @@ export function LogViewer({ jobId, jobStatus, onStatusChange }: LogViewerProps):
   }, [jobId, jobStatus]);
 
   useEffect(() => {
+    // Do not open a stream for terminal jobs: the backend sends one
+    // reconnect_sync then closes, and the client would reconnect forever.
+    // The REST fallback above already populates the log for terminal jobs.
+    const isTerminal = jobStatus === "completed" || jobStatus === "failed" || jobStatus === "cancelled";
+    if (isTerminal) return;
+
     const callbacks: JobStreamCallbacks = {
       onLogLine: (data: LogLineData) => {
         setLines((prev) => [...prev, data.line]);
@@ -54,9 +60,10 @@ export function LogViewer({ jobId, jobStatus, onStatusChange }: LogViewerProps):
         setProgress(data);
       },
       onReconnectSync: (data) => {
-        if (data.log_tail.length > 0) {
-          setLines(data.log_tail);
-        }
+        // log_tail is only the last ~50 lines; treat it as backfill, not a
+        // replacement, so a reconnect after a network blip does not truncate
+        // the accumulated scrollback (or clobber the REST-loaded log).
+        setLines((prev) => (prev.length === 0 ? data.log_tail : prev));
         onStatusChange?.(data.status);
       },
       onConnectionChange: (isConnected: boolean) => {
@@ -69,11 +76,20 @@ export function LogViewer({ jobId, jobStatus, onStatusChange }: LogViewerProps):
       streamRef.current?.close();
       streamRef.current = null;
     };
-  }, [jobId, onStatusChange]);
+  }, [jobId, jobStatus, onStatusChange]);
 
   useEffect(() => {
     scrollToBottom();
   }, [lines, scrollToBottom]);
+
+  // Clear the progress bar once the job reaches a terminal state so a stale
+  // "Pass N/N" line does not keep the bar pinned after the phase has finished.
+  useEffect(() => {
+    const isTerminal = jobStatus === "completed" || jobStatus === "failed" || jobStatus === "cancelled";
+    if (isTerminal) {
+      setProgress(null);
+    }
+  }, [jobStatus]);
 
   const handleScroll = useCallback(() => {
     if (!containerRef.current) return;
@@ -150,7 +166,7 @@ export function LogViewer({ jobId, jobStatus, onStatusChange }: LogViewerProps):
         <div className="h-1 w-full bg-zinc-800">
           <div
             className="h-1 bg-blue-500 transition-all"
-            style={{ width: `${(progress.step / progress.total) * 100}%` }}
+            style={{ width: `${Math.min(100, (progress.step / progress.total) * 100)}%` }}
           />
         </div>
       )}

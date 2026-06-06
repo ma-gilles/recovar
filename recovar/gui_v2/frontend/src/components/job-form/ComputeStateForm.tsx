@@ -1,7 +1,5 @@
 import { useState, useCallback } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import { Crosshair } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -11,15 +9,13 @@ import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
-import { submitJob } from "../../lib/api/client";
+import { getSystemInfo, submitJob } from "../../lib/api/client";
 
 interface ComputeStateFormProps {
   projectId: string;
   prefilledResultDir?: string;
   prefilledZdim?: number;
   prefilledCoords?: number[];
-  /** Job ID for linking to the Explore view to pick coordinates interactively */
-  exploreJobId?: string;
   onSubmitted?: (jobId: string) => void;
 }
 
@@ -28,7 +24,6 @@ export function ComputeStateForm({
   prefilledResultDir,
   prefilledZdim,
   prefilledCoords,
-  exploreJobId,
   onSubmitted,
 }: ComputeStateFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
@@ -40,6 +35,16 @@ export function ComputeStateForm({
   const [localOpts, setLocalOpts] = useState<LocalOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
+  const { data: sysInfo } = useQuery({
+    queryKey: ["system-info"],
+    queryFn: getSystemInfo,
+    staleTime: 60_000,
+  });
+  // The job runs locally either when the user explicitly picks "local" or when
+  // the host is local-only (ExecutorSelector renders nothing and never sets the
+  // mode). In both cases we must show LocalSettings and send local_opts.
+  const showLocal = executorMode === "local" || sysInfo?.executor_mode === "local";
+
   const mutation = useMutation({
     mutationFn: () => {
       const latentPoints = coords.split(",").map((s) => parseFloat(s.trim()));
@@ -49,7 +54,7 @@ export function ComputeStateForm({
         latent_points: latentPoints,
       };
       if (slurmOpts) params.slurm_opts = slurmOpts;
-      if (localOpts && executorMode === "local") params.local_opts = localOpts;
+      if (localOpts && showLocal) params.local_opts = localOpts;
       return submitJob(projectId, "compute_state", params, executorMode);
     },
     onSuccess: (data) => {
@@ -83,7 +88,7 @@ export function ComputeStateForm({
 
       <div className="space-y-1">
         <div className="flex items-center gap-1">
-          <Label>zdim (expected coordinate count)</Label>
+          <Label>zdim (latent dimension)</Label>
           <TooltipIcon text={tooltips["compute_state.zdim"]} />
         </div>
         <Input
@@ -113,21 +118,11 @@ export function ComputeStateForm({
             Expected {coordCountError.expected} coordinates, got {coordCountError.got}
           </p>
         )}
-        {exploreJobId && (
-          <Link
-            to="/explore/$jobId"
-            params={{ jobId: exploreJobId }}
-            className="inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300"
-          >
-            <Crosshair className="h-3.5 w-3.5" />
-            Select point in Explore view
-          </Link>
-        )}
       </div>
 
       {/* SLURM Settings */}
       <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
-      {executorMode === "local" ? (
+      {showLocal ? (
         <LocalSettings value={localOpts} onChange={setLocalOpts} />
       ) : (
         <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />

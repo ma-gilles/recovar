@@ -48,7 +48,9 @@ def _check_path_allowed(path: str) -> None:
     """Raise 403 if *path* is outside all allowed roots."""
     resolved = str(Path(os.path.expanduser(path)).resolve())
     for root in _allowed_roots:
-        if resolved.startswith(root):
+        # Compare on path boundaries, not raw string prefixes, so that a
+        # sibling directory ("/tmpsecret" when root is "/tmp") cannot escape.
+        if resolved == root or resolved.startswith(root + os.sep):
             return
     raise HTTPException(
         status_code=403,

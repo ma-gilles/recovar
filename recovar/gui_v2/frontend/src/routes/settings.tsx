@@ -148,6 +148,20 @@ function LocalDefaultsForm({ title, description, filePath, values, onChange, onS
         </div>
       </div>
 
+      {/* Preallocate GPU memory */}
+      <div className="mt-3 space-y-1">
+        <label className="flex items-center gap-2 text-xs text-zinc-400">
+          <input
+            type="checkbox"
+            checked={values.preallocate_gpu !== false}
+            onChange={(e) => onChange({ ...values, preallocate_gpu: e.target.checked })}
+            className="rounded border-zinc-600 bg-zinc-800"
+          />
+          Preallocate GPU memory
+        </label>
+        <p className="text-[10px] text-zinc-600">Reserve one contiguous block of GPU memory up front (XLA_PYTHON_CLIENT_PREALLOCATE). Recommended ON for a dedicated GPU; turn OFF only to share the GPU with other processes.</p>
+      </div>
+
       {/* Setup command */}
       <div className="mt-3 space-y-1">
         <Label className="text-xs">Setup command</Label>
@@ -253,6 +267,17 @@ export function SettingsPage(): React.JSX.Element {
   const [localProjectValues, setLocalProjectValues] = useState<LocalDefaultsUpdate | null>(null);
   const [localProjectSaved, setLocalProjectSaved] = useState(false);
 
+  // Reset form state when the active project changes so the null-guarded
+  // initializers below re-seed from the freshly fetched layered data. Without
+  // this, switching projects would leave the editable forms frozen at the
+  // previous project's values while the heading/summary show the new project.
+  useEffect(() => {
+    setSlurmUserValues(null);
+    setSlurmProjectValues(null);
+    setLocalUserValues(null);
+    setLocalProjectValues(null);
+  }, [project?.path]);
+
   // Initialize SLURM form values
   if (slurmData && slurmUserValues === null) {
     setSlurmUserValues({
@@ -281,6 +306,7 @@ export function SettingsPage(): React.JSX.Element {
       gpus: String(localData.user.gpus ?? ""),
       setup_command: String(localData.user.setup_command ?? ""),
       env_vars: (localData.user.env_vars as Record<string, string>) ?? {},
+      preallocate_gpu: localData.user.preallocate_gpu as boolean | undefined,
     });
   }
   if (localData && project && localProjectValues === null) {
@@ -288,6 +314,7 @@ export function SettingsPage(): React.JSX.Element {
       gpus: String(localData.project.gpus ?? ""),
       setup_command: String(localData.project.setup_command ?? ""),
       env_vars: (localData.project.env_vars as Record<string, string>) ?? {},
+      preallocate_gpu: localData.project.preallocate_gpu as boolean | undefined,
     });
   }
 
@@ -366,6 +393,9 @@ export function SettingsPage(): React.JSX.Element {
       </div>
 
       {/* ── SLURM tab ── */}
+      {tab === "slurm" && !slurmData && (
+        <p className="text-sm text-zinc-500">Loading...</p>
+      )}
       {tab === "slurm" && slurmData && (
         <div className="space-y-4">
           {/* Effective summary */}
@@ -458,7 +488,10 @@ export function SettingsPage(): React.JSX.Element {
       )}
 
       {/* ── Local GPU tab ── */}
-      {tab === "local" && (
+      {tab === "local" && !localData && (
+        <p className="text-sm text-zinc-500">Loading...</p>
+      )}
+      {tab === "local" && localData && (
         <div className="space-y-4">
           {/* Effective summary */}
           {localData && (
@@ -475,6 +508,10 @@ export function SettingsPage(): React.JSX.Element {
                 <span>
                   <span className="text-zinc-500">Setup:</span>{" "}
                   <span className="text-zinc-200">{localData.effective.setup_command ? String(localData.effective.setup_command) : "(none)"}</span>
+                </span>
+                <span>
+                  <span className="text-zinc-500">Preallocate GPU:</span>{" "}
+                  <span className="text-zinc-200">{localData.effective.preallocate_gpu === false ? "off" : "on"}</span>
                 </span>
                 {Object.keys(localData.effective.env_vars as Record<string, string> ?? {}).length > 0 && (
                   <span>

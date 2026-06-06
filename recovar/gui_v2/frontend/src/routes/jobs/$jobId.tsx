@@ -530,12 +530,32 @@ function detectChartName(filename: string): string | null {
   return null;
 }
 
+/** Cryo-EM acronyms that should stay fully upper-cased in captions. */
+const PLOT_CAPTION_ACRONYMS = new Set([
+  "fsc",
+  "pca",
+  "umap",
+  "ctf",
+  "pc",
+  "snr",
+  "ssnr",
+  "2d",
+  "3d",
+]);
+
 /** Derive a human-readable caption from a plot filename. */
 function plotCaption(filename: string): string {
   return filename
     .replace(/\.[^.]+$/, "")       // strip extension
     .replace(/[_-]+/g, " ")        // underscores/hyphens to spaces
-    .replace(/\b\w/g, (c) => c.toUpperCase()); // title-case each word
+    .split(/\s+/)
+    .filter((w) => w.length > 0)
+    .map((w) =>
+      PLOT_CAPTION_ACRONYMS.has(w.toLowerCase())
+        ? w.toUpperCase()
+        : w.charAt(0).toUpperCase() + w.slice(1)
+    )
+    .join(" ");
 }
 
 function PlotCell({
@@ -802,7 +822,7 @@ function CompareWithDropdown({
             <p className="px-3 py-2 text-xs text-zinc-500">Loading…</p>
           ) : candidates.length === 0 ? (
             <p className="px-3 py-2 text-xs text-zinc-500">
-              No other {currentJob.type} jobs in this project.
+              No other {formatJobType(currentJob.type)} jobs in this project.
             </p>
           ) : (
             candidates.map((j) => (

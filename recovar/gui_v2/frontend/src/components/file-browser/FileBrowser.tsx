@@ -9,7 +9,7 @@ import {
   FileImage,
 } from "lucide-react";
 import { clsx } from "clsx";
-import { browseFiles, validateStar, type FileEntry } from "../../lib/api/client";
+import { ApiError, browseFiles, validateStar, type FileEntry } from "../../lib/api/client";
 import { Spinner } from "../ui/spinner";
 
 const typeIcons: Record<string, typeof File> = {
@@ -18,6 +18,17 @@ const typeIcons: Record<string, typeof File> = {
   mrcs: FileImage,
   cs: Database,
 };
+
+/**
+ * Format a byte count using the same binary (base-1024) convention as
+ * PathInput's formatSize, so both file pickers report identical sizes.
+ */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
 
 interface FileBrowserProps {
   initialPath: string;
@@ -56,16 +67,23 @@ export function FileBrowser({ initialPath, accept, selectDirectory, onSelect, on
       // File selected
       onSelect(entry.path);
 
-      // Validate .star files
-      if (onValidation && entry.type === "star") {
-        try {
-          const result = await validateStar(entry.path);
-          onValidation(result);
-        } catch (err) {
-          onValidation({
-            valid: false,
-            error: err instanceof Error ? err.message : "Validation failed",
-          });
+      // Validate .star files. For any other selected file, signal that
+      // validation does not apply so the caller can clear stale info from
+      // a previously selected .star (otherwise it would be misattributed
+      // to the newly selected non-star file).
+      if (onValidation) {
+        if (entry.type === "star") {
+          try {
+            const result = await validateStar(entry.path);
+            onValidation(result);
+          } catch (err) {
+            onValidation({
+              valid: false,
+              error: err instanceof Error ? err.message : "Validation failed",
+            });
+          }
+        } else {
+          onValidation({ valid: null });
         }
       }
     },
@@ -130,10 +148,22 @@ export function FileBrowser({ initialPath, accept, selectDirectory, onSelect, on
         )}
         {error && (
           <div className="px-3 py-4 text-center text-sm text-red-400">
-            <p>Failed to browse directory</p>
+            <p>
+              {error instanceof ApiError && error.status === 403
+                ? "This directory is outside the allowed locations"
+                : "Failed to browse directory"}
+            </p>
             <p className="mt-1 break-words text-xs text-red-400/80">
               {error instanceof Error ? error.message : String(error)}
             </p>
+            {currentPath !== initialPath && (
+              <button
+                onClick={() => navigateTo(initialPath)}
+                className="mt-2 rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50"
+              >
+                Back to start
+              </button>
+            )}
             <p className="mt-2 text-xs text-zinc-500">
               Use the breadcrumb or Parent directory above to navigate elsewhere.
             </p>
@@ -162,7 +192,7 @@ export function FileBrowser({ initialPath, accept, selectDirectory, onSelect, on
               <span className="truncate">{entry.name}</span>
               {!entry.is_dir && (
                 <span className="ml-auto shrink-0 text-xs text-zinc-600">
-                  {(entry.size / 1e6).toFixed(1)} MB
+                  {formatSize(entry.size)}
                 </span>
               )}
             </button>

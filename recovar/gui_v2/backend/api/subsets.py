@@ -331,11 +331,20 @@ async def export_star(
             status_code=400, detail=f"Failed to parse star file: {exc}",
         )
 
-    if indices.max() >= len(particles_df):
+    if indices.size == 0:
+        raise HTTPException(
+            status_code=400, detail="Subset has no particle indices to export",
+        )
+    # Validate against the FULL star file.  Subset indices are original particle
+    # indices (the Explore view maps any subsampled selection back through the
+    # original-index array before creating the subset), so a valid index must
+    # fall within [0, len(particles_df)).
+    if indices.min() < 0 or indices.max() >= len(particles_df):
+        bad = int(indices.max()) if indices.max() >= len(particles_df) else int(indices.min())
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Subset index {indices.max()} out of range "
+                f"Subset index {bad} out of range "
                 f"(star file has {len(particles_df)} particles)"
             ),
         )

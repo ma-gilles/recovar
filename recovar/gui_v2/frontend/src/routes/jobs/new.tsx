@@ -18,11 +18,30 @@ const JOB_TYPES = [
   { value: "analyze", label: "Analyze" },
   { value: "compute_state", label: "Compute State" },
   { value: "compute_trajectory", label: "Compute Trajectory" },
-  { value: "density", label: "Density Estimation" },
+  { value: "density", label: "Density" },
   { value: "stable_states", label: "Stable States" },
   { value: "postprocess", label: "Postprocess" },
   { value: "downsample", label: "Downsample" },
 ] as const;
+
+// Some job types (e.g. ReconstructState/ReconstructTrajectory, created by the
+// scanner and the ComputeState→ReconstructState mapping) have URL slugs that
+// have no dedicated form. They are reconstructions of the same kind of job, so
+// route them to the matching Compute* form instead of rendering a blank card.
+const JOB_TYPE_ALIASES: Record<string, string> = {
+  reconstruct_state: "compute_state",
+  reconstruct_trajectory: "compute_trajectory",
+};
+
+/** Safely parse a JSON value from a URL search param, returning undefined on failure. */
+function safeParseJson(value: string | undefined): unknown {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
 
 export function NewJobPage(): React.JSX.Element {
   const navigate = useNavigate();
@@ -38,8 +57,11 @@ export function NewJobPage(): React.JSX.Element {
   const [jobType, setJobType] = useState<string>(() => {
     const raw = searchParams.type ?? "pipeline";
     // Normalize: URL may use "Pipeline" but option values are lowercase
-    const found = JOB_TYPES.find((t) => t.value === raw.toLowerCase() || t.label === raw);
-    return found ? found.value : raw.toLowerCase();
+    const slug = raw.toLowerCase();
+    // Map reconstruct_* aliases onto their backing Compute* forms.
+    const normalized = JOB_TYPE_ALIASES[slug] ?? slug;
+    const found = JOB_TYPES.find((t) => t.value === normalized || t.label === raw);
+    return found ? found.value : normalized;
   });
 
   if (!project) {
@@ -88,7 +110,7 @@ export function NewJobPage(): React.JSX.Element {
               projectId={project.id}
               projectPath={project.path}
               onSubmitted={handleSubmitted}
-              prefilledParams={searchParams.params ? JSON.parse(searchParams.params) : undefined}
+              prefilledParams={safeParseJson(searchParams.params) as Record<string, unknown> | undefined}
             />
           )}
           {jobType === "analyze" && (

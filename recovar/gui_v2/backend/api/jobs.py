@@ -20,6 +20,7 @@ import glob
 import logging
 import os
 import pickle
+import re
 from pathlib import Path
 from typing import Any
 
@@ -281,7 +282,7 @@ def _categorize_volume(name: str, rel_path: str = "", job_type: str = "") -> str
         return "locres"
 
     # Sampling maps are diagnostic, not standalone viewable volumes
-    if lower == "sampling.mrc" or "sampling" in lower:
+    if "sampling" in lower:
         return "sampling"
 
     if "mean" in lower:
@@ -290,7 +291,9 @@ def _categorize_volume(name: str, rel_path: str = "", job_type: str = "") -> str
         return "eigen"
     if "variance" in lower:
         return "variance"
-    if "half" in lower and "unfil" in lower:
+    # Half-maps: unfiltered half-maps (e.g. half_unfil.mrc) or numbered
+    # half-maps (e.g. half1.mrc, half_map_2.mrc, halfmap_1.mrc).
+    if "half" in lower and ("unfil" in lower or re.search(r"half[_\-]?(?:map[_\-]?)?[12]\b", lower)):
         return "halfmap"
     if "mask" in lower:
         return "mask"
@@ -590,7 +593,10 @@ async def _validate_job_params(
         usage = os.statvfs(project_path)
         free_gb = (usage.f_frsize * usage.f_bavail) / (1024**3)
         if free_gb < 50:
-            warnings.append(f"Less than {free_gb:.0f} GB free on disk. Jobs may fail if space runs out.")
+            warnings.append(
+                f"Only {free_gb:.0f} GB free on disk (below the 50 GB recommended). "
+                "Jobs may fail if space runs out."
+            )
     except OSError:
         pass
 
@@ -715,7 +721,10 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         usage = os.statvfs(project_path)
         free_gb = (usage.f_frsize * usage.f_bavail) / (1024**3)
         if free_gb < 50:
-            warnings.append(f"Less than {free_gb:.0f} GB free on disk. Jobs may fail if space runs out.")
+            warnings.append(
+                f"Only {free_gb:.0f} GB free on disk (below the 50 GB recommended). "
+                "Jobs may fail if space runs out."
+            )
     except OSError:
         pass
 
@@ -907,7 +916,7 @@ async def cancel_job(job_id: str) -> dict:
             )
 
         if job.executor_handle:
-            executor = get_executor()
+            executor = get_executor_for_job(job)
             await executor.cancel(job.executor_handle)
 
         job.status = JobStatus.CANCELLED.value
@@ -928,6 +937,23 @@ async def cancel_job(job_id: str) -> dict:
 async def delete_job(job_id: str) -> None:
     job, session = await _get_job(job_id)
     try:
+        # If the job is still active, cancel the underlying executor handle so
+        # we don't orphan a running process / SLURM allocation with no way to
+        # track it. Mirror cancel_job's executor selection.
+        is_active = job.status in (JobStatus.RUNNING.value, JobStatus.QUEUED.value)
+        if is_active and job.executor_handle:
+            try:
+                executor = get_executor_for_job(job)
+                await executor.cancel(job.executor_handle)
+            except Exception:
+                logger.exception("Failed to cancel executor for deleted job %s", job_id)
+
+        # Always cancel the background poller so it doesn't keep polling and
+        # try to update a row that no longer exists.
+        poll_task = _poll_tasks.pop(job_id, None)
+        if poll_task:
+            poll_task.cancel()
+
         await session.delete(job)
         await session.commit()
     finally:
@@ -1069,7 +1095,7 @@ async def get_job_logs(job_id: str) -> LogResponse:
     await session.close()
 
     # Try executor log path first
-    executor = get_executor()
+    executor = get_executor_for_job(job)
     log_path = None
     if job.executor_handle:
         log_path = await executor.log_path(job.executor_handle)
@@ -1127,7 +1153,7 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
                 changed=False,
             )
 
-        # No executor handle — cannot query SLURM
+        # No executor handle — cannot query the executor
         if not job.executor_handle:
             job.status = JobStatus.FAILED.value
             job.error = "No executor handle — cannot check status."
@@ -1141,9 +1167,13 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
                 error=job.error,
             )
 
-        # Query the real executor status
-        executor = get_executor()
-        actual = await executor.status(job.executor_handle)
+        # Query the real executor status (using the job's own executor, not
+        # the server default — a local job must not be polled via SLURM).
+        executor = get_executor_for_job(job)
+        if job.output_dir and hasattr(executor, "status_with_dir"):
+            actual = await executor.status_with_dir(job.executor_handle, job.output_dir)
+        else:
+            actual = await executor.status(job.executor_handle)
 
         is_terminal = actual in (
             ExecJobStatus.COMPLETED,
@@ -1154,7 +1184,10 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
         error_msg: str | None = None
         if actual == ExecJobStatus.UNKNOWN:
             actual = ExecJobStatus.FAILED
-            error_msg = "Job status unknown — SLURM may have purged the record."
+            if job.slurm_id:
+                error_msg = "Job status unknown — SLURM may have purged the record."
+            else:
+                error_msg = "Job status unknown — the process is gone and no exit code was recorded."
         elif actual == ExecJobStatus.FAILED:
             error_msg = "Job failed (detected on manual reconcile)."
 
@@ -1196,7 +1229,16 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
 
                     project_path = _project_registry.get(job.project_id)
                     if project_path:
-                        task = asyncio.create_task(_poll_job_status(job_id, job.executor_handle, project_path))
+                        poll_mode = "slurm" if job.slurm_id else "local"
+                        task = asyncio.create_task(
+                            _poll_job_status(
+                                job_id,
+                                job.executor_handle,
+                                project_path,
+                                executor_mode=poll_mode,
+                                working_dir=job.output_dir,
+                            )
+                        )
                         _poll_tasks[job_id] = task
 
         return ReconcileResponse(
@@ -1250,7 +1292,13 @@ async def preview_sbatch_script(req: SbatchPreviewRequest) -> SbatchPreviewRespo
             "Account is blank — `#SBATCH --account` will be omitted; the cluster's default account will be used."
         )
     if opts.get("gpus", 1) == 0:
-        warnings.append("gpus=0 — `#SBATCH --gres=gpu:N` will be omitted (CPU-only job).")
+        # Name the directive from the effective gpu_resource_spec — sites may
+        # override the default --gres=gpu:{gpus} with --gpus={gpus} etc.
+        gpu_spec = opts.get("gpu_resource_spec") or "--gres=gpu:{gpus}"
+        gpu_directive = gpu_spec.split("=", 1)[0] if "=" in gpu_spec else gpu_spec
+        warnings.append(
+            f"gpus=0 — the GPU directive (`#SBATCH {gpu_directive}`) will be omitted (CPU-only job)."
+        )
 
     try:
         script = _render_sbatch_script(
@@ -1309,13 +1357,35 @@ async def get_sbatch_script(job_id: str) -> SbatchScriptResponse:
     )
 
 
+# Map the normalized internal job type to its real ``recovar`` CLI subcommand.
+# Mirrors the subcommands used by the command builders (command_builder.py).
+_JOB_TYPE_TO_SUBCOMMAND: dict[str, str] = {
+    "Pipeline": "pipeline",
+    "Analyze": "analyze",
+    "ComputeState": "compute_state",
+    "ComputeTrajectory": "compute_trajectory",
+    "Density": "estimate_conformational_density",
+    "StableStates": "estimate_stable_states",
+    "Postprocess": "postprocess",
+    "Downsample": "downsample",
+}
+
+# Params that are job metadata or are turned into coordinate files by the real
+# command — they must NOT be emitted verbatim as CLI flags (they would render
+# bogus flags like ``--latent-points 0.1,0.2`` or ``--executor local``).
+_NON_CLI_PARAM_KEYS = frozenset(
+    {"outdir", "slurm_opts", "local_opts", "executor", "latent_points", "z_start", "z_end"}
+)
+
+
 def _format_cli_command(job: Job) -> str:
     """Format a reconstructed CLI command from job params for display."""
     if not job.params:
         return f"# No parameters recorded for {job.type} job."
-    parts = [f"recovar {job.type.lower()}"]
+    subcommand = _JOB_TYPE_TO_SUBCOMMAND.get(job.type, job.type.lower())
+    parts = [f"recovar {subcommand}"]
     for key, val in job.params.items():
-        if key in ("outdir", "slurm_opts"):
+        if key in _NON_CLI_PARAM_KEYS:
             continue
         # Omit unset optionals so the command is runnable as shown. Skip only
         # None and empty/blank strings — NOT meaningful falsy values: False
@@ -1335,6 +1405,19 @@ def _format_cli_command(job: Job) -> str:
             parts.append(f"{flag} {','.join(str(x) for x in val)}")
         else:
             parts.append(f"{flag} {val}")
+
+    # Coordinate lists are written to files by the real command, not passed
+    # inline. Reconstruct the file-based flags so the displayed command matches
+    # what actually ran (the coord files live in the job output directory).
+    if job.type == "ComputeState" and job.params.get("latent_points"):
+        coords_file = os.path.join(job.output_dir, "latent_points.txt")
+        parts.append(f"--latent-points {coords_file}")
+    elif job.type == "ComputeTrajectory":
+        if job.params.get("z_start"):
+            parts.append(f"--z_st {os.path.join(job.output_dir, 'z_start.txt')}")
+        if job.params.get("z_end"):
+            parts.append(f"--z_end {os.path.join(job.output_dir, 'z_end.txt')}")
+
     return " ".join(parts)
 
 

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { clsx } from "clsx";
@@ -118,6 +118,7 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
   const [pcaAxisY, setPcaAxisY] = useState(1);
   const [colorBy, setColorBy] = useState<"none" | "kmeans" | "density" | "deconvolved">("kmeans");
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [lastSelectionPanel, setLastSelectionPanel] = useState<"pca" | "umap">("pca");
   const [selectionTool, setSelectionTool] = useState<SelectionTool | null>(null);
   const [markers, setMarkers] = useState<MarkerPoint[]>([]);
   const [showComputeDialog, setShowComputeDialog] = useState(false);
@@ -155,6 +156,22 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
   });
 
   const activeDensityJob = relatedDensityJobs?.[0] ?? null;
+
+  // Keep the PC axis selectors within range when zdim changes, and avoid X==Y.
+  useEffect(() => {
+    if (effectiveZdim == null) return;
+    const maxAxis = effectiveZdim - 1;
+    if (pcaAxisX > maxAxis) setPcaAxisX(0);
+    if (pcaAxisY > maxAxis) setPcaAxisY(Math.min(1, maxAxis));
+  }, [effectiveZdim, pcaAxisX, pcaAxisY]);
+
+  // If the deconvolved-density option disappears (related density job refetched
+  // to empty), reset colorBy so the Select control and plot stay consistent.
+  useEffect(() => {
+    if (colorBy === "deconvolved" && !activeDensityJob) {
+      setColorBy("kmeans");
+    }
+  }, [colorBy, activeDensityJob]);
 
   // Deconvolved density values from a linked density job
   const { data: deconvolvedDensity } = useQuery({
@@ -245,7 +262,7 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
     const zdim = embeddings.meta.zdim;
     const out = new Float32Array(nClusters * 2);
     for (let c = 0; c < nClusters; c++) {
-      let bestIdx = 0;
+      let bestIdx = -1;
       let bestDist = Infinity;
       for (let i = 0; i < nParticles; i++) {
         if (embeddings.kmeansLabels[i] !== c) continue;
@@ -259,8 +276,15 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
           bestIdx = i;
         }
       }
-      out[c * 2] = embeddings.umapCoords[bestIdx * 2];
-      out[c * 2 + 1] = embeddings.umapCoords[bestIdx * 2 + 1];
+      if (bestIdx < 0) {
+        // No (subsampled) particle belongs to this cluster — omit the center
+        // rather than drawing it at an arbitrary location (particle 0).
+        out[c * 2] = NaN;
+        out[c * 2 + 1] = NaN;
+      } else {
+        out[c * 2] = embeddings.umapCoords[bestIdx * 2];
+        out[c * 2 + 1] = embeddings.umapCoords[bestIdx * 2 + 1];
+      }
     }
     return out;
   }, [embeddings]);
@@ -311,29 +335,64 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
     [embeddings, markers]
   );
 
-  // Selection handler (lasso, rectangle, polygon all produce the same output)
-  const handleSelect = useCallback((indices: number[]) => {
+  // Selection handler (lasso, rectangle, polygon all produce the same output).
+  // Tracks which panel the selection came from so subset provenance is accurate.
+  const handleSelect = useCallback((indices: number[], panel: "pca" | "umap") => {
     setSelectedIndices(new Set(indices));
+    setLastSelectionPanel(panel);
   }, []);
+
+  const handlePcaSelect = useCallback((indices: number[]) => handleSelect(indices, "pca"), [handleSelect]);
+  const handleUmapSelect = useCallback((indices: number[]) => handleSelect(indices, "umap"), [handleSelect]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedIndices(new Set());
   }, []);
 
+  // Map selected (subsampled) positions to real particle indices, applying the
+  // invert ("Export All Except") complement over the TRUE dataset size.  When
+  // not subsampled, origIndices is null and positions ARE the real indices.
+  const resolveExportIndices = useCallback(
+    (selectedPositions: number[], invert: boolean): number[] => {
+      if (!embeddings) return [];
+      const { origIndices, meta } = embeddings;
+      const toReal = (pos: number): number => (origIndices ? origIndices[pos] : pos);
+      if (!invert) {
+        return selectedPositions.map(toReal);
+      }
+      // Complement: every real particle index NOT in the selection.
+      const selectedReal = new Set(selectedPositions.map(toReal));
+      const total = meta.n_particles_total;
+      const out: number[] = [];
+      for (let i = 0; i < total; i++) {
+        if (!selectedReal.has(i)) out.push(i);
+      }
+      return out;
+    },
+    [embeddings]
+  );
+
+  // Provenance method describing where/how the current selection was made.
+  const buildSelectionMethod = useCallback(
+    () => ({
+      type: selectionTool ?? "lasso",
+      plot: lastSelectionPanel,
+      ...(lastSelectionPanel === "pca" ? { axes: [pcaAxisX, pcaAxisY] } : {}),
+      vertices: [],
+    }),
+    [selectionTool, lastSelectionPanel, pcaAxisX, pcaAxisY]
+  );
+
   // Subset export mutation
   const subsetMutation = useMutation({
     mutationFn: (params: { name: string; indices: number[]; invert: boolean }) => {
-      const finalIndices = params.invert
-        ? Array.from({ length: embeddings!.meta.n_particles }, (_, i) => i).filter(
-            (i) => !new Set(params.indices).has(i)
-          )
-        : params.indices;
+      const finalIndices = resolveExportIndices(params.indices, params.invert);
       return createSubset({
         project_id: projectId,
         name: params.name,
         source_job_id: jobId,
         zdim: effectiveZdim ?? undefined,
-        method: { type: selectionTool ?? "lasso", plot: "pca", axes: [pcaAxisX, pcaAxisY], vertices: [] },
+        method: buildSelectionMethod(),
         indices: finalIndices,
       });
     },
@@ -346,17 +405,13 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
   // Combined: create subset + export .star in one click
   const oneClickStarMutation = useMutation({
     mutationFn: async (params: { indices: number[]; invert: boolean }) => {
-      const finalIndices = params.invert
-        ? Array.from({ length: embeddings!.meta.n_particles }, (_, i) => i).filter(
-            (i) => !new Set(params.indices).has(i)
-          )
-        : params.indices;
+      const finalIndices = resolveExportIndices(params.indices, params.invert);
       const subset = await createSubset({
         project_id: projectId,
         name: `subset_${Date.now()}`,
         source_job_id: jobId,
         zdim: effectiveZdim ?? undefined,
-        method: { type: selectionTool ?? "lasso", plot: "pca", axes: [pcaAxisX, pcaAxisY], vertices: [] },
+        method: buildSelectionMethod(),
         indices: finalIndices,
       });
       const star = await exportSubsetStar(subset.id, particlesStar!);
@@ -440,32 +495,34 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
           </Select>
         </div>
 
-        <div className="flex items-center gap-1">
-          <span className="text-xs text-zinc-500">X:</span>
-          <Select
-            className="w-20"
-            value={pcaAxisX.toString()}
-            onChange={(e) => setPcaAxisX(parseInt(e.target.value))}
-          >
-            {axisOptions.map((i) => (
-              <option key={i} value={i}>
-                PC{i + 1}
-              </option>
-            ))}
-          </Select>
-          <span className="text-xs text-zinc-500">Y:</span>
-          <Select
-            className="w-20"
-            value={pcaAxisY.toString()}
-            onChange={(e) => setPcaAxisY(parseInt(e.target.value))}
-          >
-            {axisOptions.map((i) => (
-              <option key={i} value={i}>
-                PC{i + 1}
-              </option>
-            ))}
-          </Select>
-        </div>
+        {effectiveZdim !== 1 && (
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-zinc-500">X:</span>
+            <Select
+              className="w-20"
+              value={pcaAxisX.toString()}
+              onChange={(e) => setPcaAxisX(parseInt(e.target.value))}
+            >
+              {axisOptions.map((i) => (
+                <option key={i} value={i} disabled={i === pcaAxisY}>
+                  PC{i + 1}
+                </option>
+              ))}
+            </Select>
+            <span className="text-xs text-zinc-500">Y:</span>
+            <Select
+              className="w-20"
+              value={pcaAxisY.toString()}
+              onChange={(e) => setPcaAxisY(parseInt(e.target.value))}
+            >
+              {axisOptions.map((i) => (
+                <option key={i} value={i} disabled={i === pcaAxisX}>
+                  PC{i + 1}
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
 
         <div className="flex items-center gap-1">
           <span className="text-xs text-zinc-500">Color:</span>
@@ -487,10 +544,21 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
 
         {embeddings && (
           <span className="text-xs text-zinc-500">
-            {embeddings.meta.n_particles.toLocaleString()} particles
+            {(embeddings.meta.subsampled
+              ? embeddings.meta.n_particles_total
+              : embeddings.meta.n_particles
+            ).toLocaleString()} particles
           </span>
         )}
       </div>
+
+      {embeddings?.meta.subsampled && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
+          Showing a uniform subsample of {embeddings.meta.n_particles.toLocaleString()} of{" "}
+          {embeddings.meta.n_particles_total.toLocaleString()} particles. Plots reflect the
+          subsample; selections and exports are mapped back to the original particle indices.
+        </div>
+      )}
 
       {isLoading ? (
         <div className="flex items-center justify-center py-20">
@@ -538,7 +606,7 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                 xLabel={`PC${pcaAxisX + 1}`}
                 yLabel={`PC${pcaAxisY + 1}`}
                 title="PCA Projection"
-                onSelect={handleSelect}
+                onSelect={handlePcaSelect}
                 onPointClick={handlePointClick}
                 selectedIndices={selectedIndices}
                 panelId="pca"
@@ -558,10 +626,12 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                 centerDensityValues={colorBy === "deconvolved" ? deconvolvedDensity?.centerDensity ?? undefined : undefined}
                 xLabel="UMAP 1"
                 yLabel="UMAP 2"
-                title={umapSourceZdim != null && umapSourceZdim !== effectiveZdim
+                title={umapSourceZdim == null
+                  ? "UMAP Projection"
+                  : umapSourceZdim !== effectiveZdim
                   ? `UMAP Projection (from zdim=${umapSourceZdim} analysis)`
                   : `UMAP Projection (zdim=${effectiveZdim})`}
-                onSelect={handleSelect}
+                onSelect={handleUmapSelect}
                 onPointClick={handlePointClick}
                 selectedIndices={selectedIndices}
                 panelId="umap"
@@ -799,7 +869,7 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                     loading={computeMutation.isPending}
                   >
                     <Target className="h-3.5 w-3.5" />
-                    Compute State
+                    {markers.length === 2 ? "Compute State at marker 1" : "Compute State"}
                   </Button>
                 )}
                 {markers.length === 2 && (

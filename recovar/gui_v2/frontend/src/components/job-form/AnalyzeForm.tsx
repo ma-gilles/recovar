@@ -55,7 +55,7 @@ export function AnalyzeForm({
     if (maskradFraction) params.maskrad_fraction = parseFloat(maskradFraction);
     if (noZReg) params.no_z_regularization = true;
     if (outputName) params.output_name = outputName;
-    if (slurmOpts) params.slurm_opts = slurmOpts;
+    if (slurmOpts && executorMode !== "local") params.slurm_opts = slurmOpts;
     if (localOpts && executorMode === "local") params.local_opts = localOpts;
     return overrides ? { ...params, ...overrides } : params;
   }, [resultDir, zdim, nClusters, nTrajectories, nBins, maskradFraction, noZReg, outputName, slurmOpts, localOpts, executorMode]);
@@ -98,6 +98,11 @@ export function AnalyzeForm({
     setShowAdvanced(true);
     void handleSubmit({ n_bins: 10, maskrad_fraction: 10 });
   }, [handleSubmit]);
+
+  const missingFields = [
+    !resultDir && "Result Directory",
+    !zdim && "zdim",
+  ].filter(Boolean) as string[];
 
   return (
     <div className="space-y-4">
@@ -232,6 +237,9 @@ export function AnalyzeForm({
         </div>
       )}
 
+      {missingFields.length > 0 && (
+        <p className="text-xs text-amber-400">Required to submit: {missingFields.join(", ")}</p>
+      )}
       <div className="flex items-center justify-between pt-2">
         {mutation.isError && (
           <span className="text-sm text-red-400">{(mutation.error as Error).message}</span>

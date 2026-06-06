@@ -250,7 +250,18 @@ export function ExplorePage(): React.JSX.Element {
           projectId={projectId}
           resultDir={((job.params as Record<string, unknown> | null)?.result_dir as string) ?? job.output_dir ?? ""}
           particlesStar={particlesStar}
-          analyzeZdim={((job.params as Record<string, unknown> | null)?.zdim as number) ?? null}
+          analyzeZdim={(() => {
+            // Analyze jobs store a single numeric zdim; pipeline jobs store a
+            // comma-separated string ("1,2,4") which is not a single analysis
+            // zdim, so don't surface it in the UMAP title.
+            const z = (job.params as Record<string, unknown> | null)?.zdim;
+            if (typeof z === "number") return z;
+            if (typeof z === "string" && !z.includes(",")) {
+              const n = parseInt(z, 10);
+              return Number.isFinite(n) ? n : null;
+            }
+            return null;
+          })()}
         />
       ) : (
         <CategorizedVolumesView volumes={volumes} />

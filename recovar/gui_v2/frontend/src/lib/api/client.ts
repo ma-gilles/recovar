@@ -430,6 +430,7 @@ export interface LocalDefaultsUpdate {
   gpus?: string;
   setup_command?: string;
   env_vars?: Record<string, string>;
+  preallocate_gpu?: boolean;
 }
 
 export function getLocalDefaultsLayered(projectDir?: string): Promise<LocalDefaultsLayered> {

@@ -123,7 +123,7 @@ export function DensityForm({
               type="number"
               value={numDiscPoints}
               onChange={(e) => setNumDiscPoints(e.target.value)}
-              placeholder="Auto"
+              placeholder="Auto (50/100/200 by dim)"
             />
           </div>
 

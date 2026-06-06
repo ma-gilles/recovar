@@ -76,10 +76,13 @@ export function ComputeTrajectoryForm({
   const countCoords = (s: string): number =>
     s.split(",").filter((v) => v.trim().length > 0).length;
   const zdimNum = parseInt(zdim);
+  const zdimValid = !isNaN(zdimNum) && zdimNum > 0;
   const zStartCount = zStart.length > 0 ? countCoords(zStart) : 0;
   const zEndCount = zEnd.length > 0 ? countCoords(zEnd) : 0;
-  const zStartMismatch = isValidCoords(zStart) && !isNaN(zdimNum) && zdimNum > 0 && zStartCount !== zdimNum;
-  const zEndMismatch = isValidCoords(zEnd) && !isNaN(zdimNum) && zdimNum > 0 && zEndCount !== zdimNum;
+  const zStartMismatch = isValidCoords(zStart) && zdimValid && zStartCount !== zdimNum;
+  const zEndMismatch = isValidCoords(zEnd) && zdimValid && zEndCount !== zdimNum;
+  const nVolsNum = parseInt(nVols);
+  const nVolsValid = !isNaN(nVolsNum) && nVolsNum > 0;
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -103,17 +106,19 @@ export function ComputeTrajectoryForm({
 
   const canSubmit =
     resultDir.length > 0 &&
-    zdim.length > 0 &&
+    zdimValid &&
     isValidCoords(zStart) &&
     isValidCoords(zEnd) &&
     !zStartMismatch &&
-    !zEndMismatch;
+    !zEndMismatch &&
+    nVolsValid;
 
   const missingFields = [
     !resultDir.length && "Result Directory",
-    !zdim.length && "zdim",
+    !zdimValid && "zdim",
     !isValidCoords(zStart) && "Start Coordinates",
     !isValidCoords(zEnd) && "End Coordinates",
+    !nVolsValid && "Volumes Along Path",
   ].filter(Boolean) as string[];
 
   return (
@@ -172,6 +177,9 @@ export function ComputeTrajectoryForm({
           <TooltipIcon text={tooltips["compute_trajectory.n_vols"]} />
         </div>
         <Input type="number" value={nVols} onChange={(e) => setNVols(e.target.value)} placeholder="6" />
+        {nVols.length > 0 && !nVolsValid && (
+          <p className="text-xs text-red-400">Enter a positive integer</p>
+        )}
       </div>
 
       {/* Density (optional) — when provided, the trajectory follows the
@@ -180,14 +188,16 @@ export function ComputeTrajectoryForm({
       <div className="space-y-1">
         <div className="flex items-center gap-1">
           <Label>Density (optional)</Label>
-          <TooltipIcon text="Pass a deconvolved density pkl from a Density job. The trajectory will follow the density manifold instead of a straight line in z-space. Leave empty for linear interpolation." />
+          <TooltipIcon text={tooltips["compute_trajectory.density"]} />
         </div>
         {densityChoices.length > 0 && (
           <select
             value={
-              densityChoices.find((c) => c.path === densityPath)?.id ?? ""
+              densityChoices.find((c) => c.path === densityPath)?.id ??
+              (densityPath.trim() ? "__custom__" : "")
             }
             onChange={(e) => {
+              if (e.target.value === "__custom__") return;
               const sel = densityChoices.find((c) => c.id === e.target.value);
               setDensityPath(sel?.path ?? "");
             }}
@@ -199,18 +209,23 @@ export function ComputeTrajectoryForm({
                 {c.label}
               </option>
             ))}
+            {densityPath.trim() &&
+              !densityChoices.some((c) => c.path === densityPath) && (
+                <option value="__custom__">Custom path (set below)</option>
+              )}
           </select>
         )}
         <PathInput
           value={densityPath}
           onChange={setDensityPath}
+          accept={[".pkl"]}
           placeholder="/path/to/deconv_density_knee.pkl (or leave empty)"
           className="font-mono"
         />
         {densityChoices.length === 0 && (
           <p className="text-xs text-zinc-600">
-            No completed Density jobs in this project. Run an Estimate
-            Conformational Density job first to enable density-guided trajectories.
+            No completed Density jobs found in this project — pick one from the
+            list, or enter a density .pkl path manually above.
           </p>
         )}
       </div>

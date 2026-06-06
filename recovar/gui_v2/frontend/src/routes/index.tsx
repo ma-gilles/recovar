@@ -18,6 +18,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { StatusBadge } from "../components/ui/badge";
 import { FileBrowser } from "../components/file-browser/FileBrowser";
+import { formatJobType } from "../components/volume-viewer/volumeCategories";
 import { isEphemeralPath, EPHEMERAL_PATH_WARNING } from "../lib/constants";
 
 export function DashboardPage(): React.JSX.Element {
@@ -98,9 +99,9 @@ export function DashboardPage(): React.JSX.Element {
             <span className="mx-1">|</span>
             <span>
               {sysInfo.executor_mode === "slurm"
-                ? "Cluster mode"
+                ? "SLURM mode"
                 : sysInfo.executor_mode === "both"
-                  ? "SLURM + Local"
+                  ? "SLURM + Local mode"
                   : "Local mode"}
             </span>
             <span className="mx-1">|</span>
@@ -443,7 +444,8 @@ function ProjectDashboard({
   const pipelineCount = jobs.filter((j) => j.type === "Pipeline").length;
   const analyzeCount = jobs.filter((j) => j.type === "Analyze").length;
   const otherCount = jobs.length - pipelineCount - analyzeCount;
-  const runningCount = jobs.filter((j) => j.status === "running" || j.status === "queued").length;
+  const runningCount = jobs.filter((j) => j.status === "running").length;
+  const queuedCount = jobs.filter((j) => j.status === "queued").length;
   const lastModified = jobs.length > 0
     ? new Date(Math.max(...jobs.map((j) => new Date(j.completed ?? j.created).getTime()))).toLocaleString()
     : null;
@@ -511,6 +513,12 @@ function ProjectDashboard({
             {runningCount} job{runningCount > 1 ? "s" : ""} running
           </span>
         )}
+        {queuedCount > 0 && (
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-zinc-500" />
+            {queuedCount} job{queuedCount > 1 ? "s" : ""} queued
+          </span>
+        )}
         {lastModified && (
           <span>Last activity: {lastModified}</span>
         )}
@@ -566,8 +574,8 @@ function ProjectDashboard({
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium capitalize">
-                        {j.type.replace(/_/g, " ")}
+                      <span className="text-sm font-medium">
+                        {formatJobType(j.type)}
                       </span>
                       <StatusBadge status={j.status} />
                     </div>

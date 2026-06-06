@@ -56,7 +56,9 @@ export function PostprocessForm({
       if (fscMask) params.fsc_mask = fscMask;
       if (applyMask) params.apply_mask = applyMask;
       if (batch) params.batch = true;
-      if (estimateBFactor) params.estimate_B_factor = true;
+      // Manual B-factor takes precedence over estimation (CLI ignores the
+      // estimated value when one is supplied), so don't send estimate flag then.
+      if (estimateBFactor && !bFactor) params.estimate_B_factor = true;
       if (local) params.local = true;
       if (slurmOpts) params.slurm_opts = slurmOpts;
       if (localOpts && executorMode === "local") params.local_opts = localOpts;
@@ -113,6 +115,11 @@ export function PostprocessForm({
           onChange={(e) => setBFactor(e.target.value)}
           placeholder="None (no sharpening)"
         />
+        {bFactor && estimateBFactor && (
+          <p className="text-xs text-amber-400">
+            Manual B-factor overrides estimation; the estimated value will be ignored.
+          </p>
+        )}
       </div>
 
       {/* Advanced Section */}
@@ -205,12 +212,16 @@ export function PostprocessForm({
               Batch processing
               <TooltipIcon text={tooltips["postprocess.batch"]} />
             </label>
-            <label className="flex items-center gap-2 text-sm text-zinc-400">
+            <label
+              className={`flex items-center gap-2 text-sm ${bFactor ? "text-zinc-600" : "text-zinc-400"}`}
+              title={bFactor ? "Disabled: a manual B-factor is set and overrides estimation." : undefined}
+            >
               <input
                 type="checkbox"
-                checked={estimateBFactor}
+                checked={estimateBFactor && !bFactor}
+                disabled={!!bFactor}
                 onChange={(e) => setEstimateBFactor(e.target.checked)}
-                className="rounded border-zinc-600 bg-zinc-800"
+                className="rounded border-zinc-600 bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
               />
               Estimate B-factor
               <TooltipIcon text={tooltips["postprocess.estimate_B_factor"]} />

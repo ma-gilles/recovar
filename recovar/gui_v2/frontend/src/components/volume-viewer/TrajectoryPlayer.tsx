@@ -157,7 +157,7 @@ export function TrajectoryPlayer({
           className="w-16"
           aria-label="Playback speed"
         />
-        <span className="text-xs text-zinc-400 w-10">{fps}fps</span>
+        <span className="text-xs text-zinc-400 w-10">{fps.toFixed(1)} fps</span>
       </div>
     </div>
   );

@@ -186,18 +186,26 @@ export function VolumeViewer({
       if (pinnedVolumes.length >= MAX_PINNED_VOLUMES) return;
       if (pinnedVolumes.some((v) => v.path === path)) return;
       const category = volumes?.find((v) => v.path === path)?.category;
-      setPinnedVolumes((prev) => [
-        ...prev,
-        {
-          path,
-          name,
-          threshold: 3.0,
-          opacity: 0.8,
-          visible: true,
-          colorIndex: prev.length,
-          category,
-        },
-      ]);
+      setPinnedVolumes((prev) => {
+        // Pick the lowest unused color index rather than prev.length, so that
+        // after an unpin + re-pin we never collide with a still-pinned volume's
+        // color (prev.length is not necessarily a free slot).
+        const used = new Set(prev.map((v) => v.colorIndex));
+        let colorIndex = 0;
+        while (used.has(colorIndex)) colorIndex++;
+        return [
+          ...prev,
+          {
+            path,
+            name,
+            threshold: 3.0,
+            opacity: 0.8,
+            visible: true,
+            colorIndex,
+            category,
+          },
+        ];
+      });
     },
     [pinnedVolumes, volumes]
   );
@@ -278,23 +286,35 @@ export function VolumeViewer({
 
           {viewMode === "3d" && activeVolume && (
             <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-400">Sigma</span>
-              <input
-                type="range"
-                min={0}
-                max={10}
-                step={0.1}
-                value={activeSigma}
-                onChange={(e) => setActiveSigma(parseFloat(e.target.value))}
-                className="w-40"
-              />
-              <span className="text-xs text-zinc-300 w-10">{activeSigma.toFixed(1)}σ</span>
+              {/* The toolbar contour slider only drives the active (unpinned)
+                  volume. Once any volume is pinned, VtkViewer renders the
+                  pinned set and the per-pin sliders take over, so hide this
+                  control to avoid a no-op slider. */}
+              {pinnedVolumes.length === 0 && (
+                <>
+                  <span className="text-xs text-zinc-400">Contour (σ)</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={10}
+                    step={0.1}
+                    value={activeSigma}
+                    onChange={(e) => setActiveSigma(parseFloat(e.target.value))}
+                    className="w-40"
+                  />
+                  <span className="text-xs text-zinc-300 w-10">{activeSigma.toFixed(1)}σ</span>
+                </>
+              )}
               <span className="text-xs text-zinc-400">Resolution</span>
               <select
                 value={
                   viewDim == null
                     ? "auto"
-                    : maxVolDim != null && viewDim >= maxVolDim
+                    : // Use strict ">" so an exact-size selection (e.g. picking
+                      // 256 for a 256³ box) keeps its numeric label instead of
+                      // collapsing to "Full". A target above the box size means
+                      // the server serves full resolution, which is "Full".
+                      maxVolDim != null && viewDim > maxVolDim
                       ? "full"
                       : VIEW_DIMS.includes(viewDim)
                         ? String(viewDim)
@@ -389,13 +409,28 @@ export function VolumeViewer({
         {volInfo && (
           <div className="flex items-center gap-4 text-xs text-zinc-500">
             <span>Shape: {volInfo.shape.join(" x ")}</span>
-            <span>Voxel: {volInfo.voxel_size.toFixed(2)} A</span>
+            {/* When the 3D view is downsampled, the effective voxel size of what
+                is rendered grows by originalDim/servedDim; otherwise show the
+                source file's voxel size. */}
+            <span>
+              Voxel:{" "}
+              {(viewMode === "3d" && downsampleInfo
+                ? (volInfo.voxel_size * downsampleInfo.originalDim) /
+                  downsampleInfo.servedDim
+                : volInfo.voxel_size
+              ).toFixed(2)}{" "}
+              Å
+            </span>
             <span>
               Range: [{volInfo.min.toFixed(3)}, {volInfo.max.toFixed(3)}]
             </span>
-            {downsampleInfo && (
+            {/* Downsampling only happens in the 3D view; slices are always
+                served at full resolution, so hide the badge in slice mode. Show
+                the true per-axis original shape so non-cubic boxes are not
+                mislabeled as a cube. */}
+            {viewMode === "3d" && downsampleInfo && (
               <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-amber-400">
-                Viewing at {downsampleInfo.servedDim}&sup3; (original: {downsampleInfo.originalDim}&sup3;)
+                Viewing at {downsampleInfo.servedDim}&sup3; (original: {volInfo.shape.join("×")})
               </span>
             )}
           </div>
@@ -436,7 +471,7 @@ export function VolumeViewer({
                   </div>
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-1 text-xs text-zinc-500">
-                      <span className="w-12">Sigma</span>
+                      <span className="w-12">Contour</span>
                       <input
                         type="range"
                         min={0}
@@ -446,7 +481,7 @@ export function VolumeViewer({
                         onChange={(e) => updatePinned(pv.path, { threshold: parseFloat(e.target.value) })}
                         className="flex-1"
                       />
-                      <span className="w-8 text-right">{pv.threshold.toFixed(1)}</span>
+                      <span className="w-8 text-right">{pv.threshold.toFixed(1)}σ</span>
                     </div>
                     <div className="flex items-center gap-1 text-xs text-zinc-500">
                       <span className="w-12">Opacity</span>

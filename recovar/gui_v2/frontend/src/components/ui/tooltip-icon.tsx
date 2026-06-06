@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { HelpCircle } from "lucide-react";
 
 interface TooltipIconProps {
@@ -7,6 +7,7 @@ interface TooltipIconProps {
 
 export function TooltipIcon({ text }: TooltipIconProps): React.JSX.Element {
   const [show, setShow] = useState(false);
+  const tooltipId = useId();
 
   return (
     <span className="relative inline-block">
@@ -17,12 +18,23 @@ export function TooltipIcon({ text }: TooltipIconProps): React.JSX.Element {
         onMouseLeave={() => setShow(false)}
         onFocus={() => setShow(true)}
         onBlur={() => setShow(false)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && show) {
+            e.stopPropagation();
+            setShow(false);
+          }
+        }}
         aria-label="Help"
+        aria-describedby={show ? tooltipId : undefined}
       >
         <HelpCircle className="h-3.5 w-3.5" />
       </button>
       {show && (
-        <div className="absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-md bg-zinc-800 p-2 text-xs text-zinc-300 shadow-lg">
+        <div
+          id={tooltipId}
+          role="tooltip"
+          className="absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-md bg-zinc-800 p-2 text-xs text-zinc-300 shadow-lg"
+        >
           {text}
           <div className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-zinc-800" />
         </div>

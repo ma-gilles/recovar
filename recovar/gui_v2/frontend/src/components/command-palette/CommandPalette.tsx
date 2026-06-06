@@ -18,11 +18,19 @@ interface CommandItem {
  * Ctrl+K. Fuzzy-substring search across the active project's jobs and
  * masks plus a few static actions (new job, dashboard, etc.).
  */
+// Stable ids so the input (combobox) can reference the listbox and the
+// currently-highlighted option via aria-controls / aria-activedescendant.
+const LISTBOX_ID = "command-palette-listbox";
+const optionId = (index: number): string => `command-palette-option-${index}`;
+
 export function CommandPalette(): React.JSX.Element | null {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // Element focused before the palette opened, restored on close.
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
   const navigate = useNavigate();
   const { project } = useProject();
 
@@ -40,13 +48,20 @@ export function CommandPalette(): React.JSX.Element | null {
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  // Reset state when opened.
+  // Reset state when opened, and save/restore focus around the modal.
   useEffect(() => {
     if (open) {
       setQuery("");
       setActiveIndex(0);
+      // Remember what was focused so we can restore it on close.
+      lastFocusedRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
       // Focus on next tick so the input is mounted.
       setTimeout(() => inputRef.current?.focus(), 0);
+      return () => {
+        // Restore focus to the previously-focused element when closing.
+        lastFocusedRef.current?.focus();
+      };
     }
   }, [open]);
 
@@ -152,15 +167,45 @@ export function CommandPalette(): React.JSX.Element | null {
       }}
     >
       <div
+        ref={dialogRef}
         className="w-full max-w-xl rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl"
         role="dialog"
+        aria-modal="true"
         aria-label="Command palette"
+        onKeyDown={(e) => {
+          // Trap Tab focus within the dialog so it never escapes to the
+          // background page behind the overlay.
+          if (e.key !== "Tab") return;
+          const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          );
+          if (!focusable || focusable.length === 0) return;
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          const activeEl = document.activeElement;
+          if (e.shiftKey) {
+            if (activeEl === first || !dialogRef.current?.contains(activeEl)) {
+              e.preventDefault();
+              last.focus();
+            }
+          } else if (activeEl === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }}
       >
         <div className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2">
           <Search className="h-4 w-4 text-zinc-500" />
           <input
             ref={inputRef}
             value={query}
+            role="combobox"
+            aria-expanded
+            aria-controls={LISTBOX_ID}
+            aria-autocomplete="list"
+            aria-activedescendant={
+              filtered[activeIndex] ? optionId(activeIndex) : undefined
+            }
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "ArrowDown") {
@@ -181,15 +226,22 @@ export function CommandPalette(): React.JSX.Element | null {
             ESC
           </kbd>
         </div>
-        <ul className="max-h-[50vh] overflow-y-auto p-1" role="listbox">
+        <ul
+          id={LISTBOX_ID}
+          className="max-h-[50vh] overflow-y-auto p-1"
+          role="listbox"
+          aria-label="Search results"
+        >
           {filtered.length === 0 ? (
             <li className="px-3 py-6 text-center text-sm text-zinc-500">No matches</li>
           ) : (
             filtered.map((item, i) => (
               <li key={item.id}>
                 <button
+                  id={optionId(i)}
                   role="option"
                   aria-selected={i === activeIndex}
+                  tabIndex={-1}
                   onClick={() => runItem(item)}
                   onMouseEnter={() => setActiveIndex(i)}
                   className={

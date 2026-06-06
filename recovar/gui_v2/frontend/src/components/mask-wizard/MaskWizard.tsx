@@ -281,6 +281,7 @@ export function MaskWizard({
     if (!open) return;
     const myToken = ++vol3dTokenRef.current;
     setVol3dLoading(true);
+    setPreviewError(null);
     try {
       const result = await previewMaskVolume({
         ...buildParams(state, sourcePath, eraseSpheres, eraseBoxes, keepTopSegments),
@@ -291,6 +292,10 @@ export function MaskWizard({
         deletePreviewMaskVolume(result.path).catch(() => undefined);
         return;
       }
+      // preview-volume returns the volume shape; set it so the 3D Contour/Res
+      // controls and the Shape readout render even if the slice preview hasn't
+      // run yet.
+      setShape(result.shape);
       setPreviewVolPath((prev) => {
         if (prev && prev !== result.path) {
           deletePreviewMaskVolume(prev).catch(() => undefined);
@@ -338,6 +343,17 @@ export function MaskWizard({
       setSegmentInfoData(null);
       brushDragRef.current = { active: false, sample: [] };
       setBrushPreview(null);
+      // Clear display state from any previous source so a reopened wizard
+      // doesn't flash the prior volume's image/shape/coverage/errors until
+      // the new debounced preview lands.
+      setPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+      setPreviewError(null);
+      setCoverage(null);
+      setShape(null);
+      setSegmentError(null);
     }
     return () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -452,6 +468,8 @@ export function MaskWizard({
                       setAxis(i as 0 | 1 | 2);
                       setSliceIdx(null);
                     }}
+                    aria-pressed={axis === i}
+                    aria-label={`View ${label} axis slices`}
                     className={
                       "rounded px-2 py-0.5 text-xs " +
                       (axis === i ? "bg-zinc-700 text-zinc-50" : "text-zinc-400")
@@ -469,7 +487,7 @@ export function MaskWizard({
           >
             {viewMode === "slice" ? (
               previewError ? (
-                <p className="px-3 text-center text-xs text-red-400">{previewError}</p>
+                <p className="px-3 text-center text-xs text-red-400" role="alert">{previewError}</p>
               ) : previewUrl ? (
                 <img
                   src={previewUrl}
@@ -562,6 +580,8 @@ export function MaskWizard({
               ) : (
                 <Spinner label="Generating mask…" />
               )
+            ) : previewError ? (
+              <p className="px-3 text-center text-xs text-red-400" role="alert">{previewError}</p>
             ) : previewVolPath ? (
               <Suspense fallback={<Spinner label="Loading 3D viewer..." />}>
                 <VtkViewer
@@ -621,6 +641,7 @@ export function MaskWizard({
                     max={maxSlice}
                     value={currentIdx}
                     onChange={(e) => setSliceIdx(parseInt(e.target.value))}
+                    aria-label="Slice index"
                     className="flex-1"
                   />
                   <span className="w-12 text-right">{currentIdx} / {maxSlice}</span>
@@ -636,6 +657,7 @@ export function MaskWizard({
                       step={0.1}
                       value={contour3d}
                       onChange={(e) => setContour3d(parseFloat(e.target.value))}
+                      aria-label="3D contour level in sigma"
                       className="flex-1"
                     />
                     <span className="w-12 text-right">{contour3d.toFixed(1)}σ</span>
@@ -658,7 +680,10 @@ export function MaskWizard({
               )}
               <div className="flex items-center justify-between text-xs text-zinc-500">
                 <span>Shape: {shape.join(" x ")}</span>
-                {coverage !== null && (
+                {/* Coverage is computed only by the slice preview; the 3D
+                    preview-volume endpoint doesn't return it, so hide it in 3D
+                    rather than show a stale value. */}
+                {viewMode === "slice" && coverage !== null && (
                   <span>Coverage: {(coverage * 100).toFixed(1)}%</span>
                 )}
               </div>
@@ -679,6 +704,7 @@ export function MaskWizard({
                   <button
                     key={m}
                     onClick={() => setState((s) => ({ ...s, thresholdMode: m }))}
+                    aria-pressed={state.thresholdMode === m}
                     className={
                       "rounded px-2 py-0.5 text-xs " +
                       (state.thresholdMode === m
@@ -702,6 +728,7 @@ export function MaskWizard({
                   onChange={(e) =>
                     setState((s) => ({ ...s, threshold: parseFloat(e.target.value) }))
                   }
+                  aria-label="Mask threshold"
                   className="flex-1"
                 />
                 <span className="w-14 text-right text-zinc-300">
@@ -727,6 +754,7 @@ export function MaskWizard({
               onChange={(e) =>
                 setState((s) => ({ ...s, extend: parseInt(e.target.value) }))
               }
+              aria-label="Dilation in voxels"
               className="w-full"
             />
           </div>
@@ -745,6 +773,7 @@ export function MaskWizard({
               onChange={(e) =>
                 setState((s) => ({ ...s, softEdge: parseFloat(e.target.value) }))
               }
+              aria-label="Soft edge width in voxels"
               className="w-full"
             />
           </div>
@@ -760,6 +789,7 @@ export function MaskWizard({
                   <button
                     key={m}
                     onClick={() => setState((s) => ({ ...s, lowpassMode: m }))}
+                    aria-pressed={state.lowpassMode === m}
                     className={
                       "rounded px-2 py-0.5 text-xs " +
                       (state.lowpassMode === m
@@ -772,7 +802,7 @@ export function MaskWizard({
                 ))}
               </div>
             </div>
-            {state.lowpassMode === "manual" && (
+            {state.lowpassMode === "manual" ? (
               <div className="flex items-center gap-2 text-xs text-zinc-500">
                 <input
                   type="range"
@@ -783,12 +813,15 @@ export function MaskWizard({
                   onChange={(e) =>
                     setState((s) => ({ ...s, lowpass: parseFloat(e.target.value) }))
                   }
+                  aria-label="Lowpass smoothing sigma in voxels"
                   className="flex-1"
                 />
                 <span className="w-12 text-right text-zinc-300">
                   σ {state.lowpass.toFixed(1)}
                 </span>
               </div>
+            ) : (
+              <p className="text-xs text-zinc-600">Auto sigma (max(2, N/64) voxels)</p>
             )}
           </div>
 
@@ -858,10 +891,15 @@ export function MaskWizard({
                   const v = parseInt(e.target.value);
                   setKeepTopSegments(v === 0 ? null : v);
                 }}
+                aria-label="Number of largest segments to keep"
                 className="flex-1"
               />
-              <span className="w-12 text-right text-zinc-300">
-                {keepTopSegments ?? "all"}
+              <span className="w-20 text-right text-zinc-300">
+                {keepTopSegments == null
+                  ? "all"
+                  : segmentInfoData != null && keepTopSegments > segmentInfoData.n_segments
+                  ? `${keepTopSegments} (only ${segmentInfoData.n_segments} found)`
+                  : keepTopSegments}
               </span>
             </div>
           </div>
@@ -900,7 +938,11 @@ export function MaskWizard({
                       : "border border-zinc-700 text-zinc-400 hover:text-zinc-200")
                   }
                   aria-pressed={eraseMode}
-                  title="Click on the slice to add a sphere that erases voxels from the mask"
+                  title={
+                    viewMode === "3d"
+                      ? "Click the mask isosurface to drop an erase sphere"
+                      : "Click or drag on the slice to erase voxels from the mask"
+                  }
                 >
                   <Eraser className="h-3 w-3" /> {eraseMode ? "On" : "Off"}
                 </button>
@@ -915,11 +957,12 @@ export function MaskWizard({
                 step={1}
                 value={eraseRadius}
                 onChange={(e) => setEraseRadius(parseInt(e.target.value))}
+                aria-label="Eraser radius in voxels"
                 className="flex-1"
               />
               <span className="w-10 text-right text-zinc-300">{eraseRadius}</span>
             </div>
-            {eraseMode && (
+            {eraseMode && viewMode === "slice" && (
               <div className="flex gap-1 rounded-md border border-zinc-700 p-0.5">
                 <button
                   onClick={() => {
@@ -1074,7 +1117,7 @@ export function MaskWizard({
                 variant="default"
                 size="sm"
                 onClick={handleSave}
-                disabled={saving || previewLoading}
+                disabled={saving || previewLoading || vol3dLoading}
                 className="ml-auto"
               >
                 {saving ? (

@@ -156,15 +156,16 @@ export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledPar
             onValidation={(result) => setValidationInfo(result)}
           />
         )}
-        {validationInfo?.n_particles && (
+        {validationInfo?.n_particles != null && (
           <div className="text-xs text-zinc-400">
-            {validationInfo.n_particles.toLocaleString()} particles, box size {validationInfo.box_size}
+            {validationInfo.n_particles.toLocaleString()} particles
+            {validationInfo.box_size != null && `, box size ${validationInfo.box_size} px`}
           </div>
         )}
         {validationInfo?.error && (
           <div className="text-xs text-red-400">{validationInfo.error}</div>
         )}
-        {validationInfo?.n_particles && validationInfo.n_particles < 10000 && (
+        {validationInfo?.n_particles != null && validationInfo.n_particles < 10000 && (
           <div className="text-xs text-amber-400">
             Only {validationInfo.n_particles.toLocaleString()} particles. Results may be unreliable below ~10K.
           </div>

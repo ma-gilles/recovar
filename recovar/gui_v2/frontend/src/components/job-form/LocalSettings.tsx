@@ -81,7 +81,7 @@ export function LocalSettings({ value, onChange }: LocalSettingsProps): React.JS
                     : "border-zinc-700 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300"
                 }`}
               >
-                All ({sysInfo?.gpu_count ?? "?"} GPUs)
+                All ({sysInfo?.gpu_count ?? "?"} GPU{sysInfo?.gpu_count === 1 ? "" : "s"})
               </button>
               {gpuList?.map((gpu) => {
                 const id = String(gpu.index);

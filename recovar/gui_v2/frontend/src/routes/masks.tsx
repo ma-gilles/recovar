@@ -40,6 +40,18 @@ export function MasksPage(): React.JSX.Element {
     enabled: !!project?.id,
   });
 
+  // Auto-derive a default output name when both masks are picked.
+  const previewName = useMemo(() => {
+    if (!selectedA || !selectedB) return "";
+    const stem = (p: string) => p.split("/").pop()!.replace(/\.mrc$/i, "");
+    const sym = op === "union" ? "or" : op === "intersect" ? "and" : "minus";
+    return `${stem(selectedA)}_${sym}_${stem(selectedB)}`;
+  }, [selectedA, selectedB, op]);
+
+  // The name actually submitted: the typed value, or the derived default
+  // (matching the input placeholder) when the field is left blank.
+  const effectiveName = outputName.trim() || previewName;
+
   const opMutation = useMutation({
     mutationFn: () =>
       maskBooleanOp({
@@ -47,7 +59,7 @@ export function MasksPage(): React.JSX.Element {
         mask_a: selectedA,
         mask_b: selectedB,
         op,
-        output_name: outputName.trim(),
+        output_name: effectiveName,
       }),
     onSuccess: (info) => {
       setLastSaved(info);
@@ -65,15 +77,9 @@ export function MasksPage(): React.JSX.Element {
   // Both masks picked and distinct. (Shape compatibility is validated
   // server-side and surfaced via `error`.)
   const bothSelected = !!selectedA && !!selectedB && selectedA !== selectedB;
-  const canRun = bothSelected && outputName.trim().length > 0 && !opMutation.isPending;
-
-  // Auto-derive a default output name when both masks are picked.
-  const previewName = useMemo(() => {
-    if (!selectedA || !selectedB) return "";
-    const stem = (p: string) => p.split("/").pop()!.replace(/\.mrc$/i, "");
-    const sym = op === "union" ? "or" : op === "intersect" ? "and" : "minus";
-    return `${stem(selectedA)}_${sym}_${stem(selectedB)}`;
-  }, [selectedA, selectedB, op]);
+  // An empty field falls back to the derived previewName (shown as the
+  // placeholder), so Run is enabled as long as some non-empty name exists.
+  const canRun = bothSelected && effectiveName.length > 0 && !opMutation.isPending;
 
   if (!project) {
     return (
@@ -171,6 +177,13 @@ export function MasksPage(): React.JSX.Element {
         </div>
       )}
 
+      {masks && masks.length === 1 && (
+        <div className="rounded-lg border border-dashed border-zinc-800 p-4 text-center text-xs text-zinc-500">
+          Add a second mask (via the green wand icon on a job's Volumes tab) to
+          enable boolean operations.
+        </div>
+      )}
+
       {/* Boolean ops */}
       {masks && masks.length >= 2 && (
         <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900 p-5">
@@ -249,6 +262,12 @@ export function MasksPage(): React.JSX.Element {
               />
               <p className="text-[11px] text-zinc-600">
                 Saved to <code>&lt;project&gt;/Masks/</code>
+                {previewName && !outputName.trim() && (
+                  <>
+                    {" "}
+                    Leave blank to use <code>{previewName}</code>.
+                  </>
+                )}
               </p>
             </div>
             <Button onClick={() => opMutation.mutate()} disabled={!canRun}>

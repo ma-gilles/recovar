@@ -29,7 +29,7 @@ const EPHEMERAL_PREFIXES = ["/tmp/", "/tmp", "/dev/shm/", "/dev/shm"];
 
 /**
  * Returns true if the given path is under an ephemeral/temporary directory
- * that will be deleted when the server restarts.
+ * that may be cleared when the machine reboots (or by tmp-cleaners).
  */
 export function isEphemeralPath(path: string): boolean {
   const normalized = path.replace(/\/+$/, ""); // strip trailing slashes
@@ -40,4 +40,4 @@ export function isEphemeralPath(path: string): boolean {
 
 /** Warning message for ephemeral project paths. */
 export const EPHEMERAL_PATH_WARNING =
-  "This directory is temporary and will be deleted when the server restarts. Choose a path on scratch or a persistent filesystem.";
+  "This directory is temporary and may be cleared when the machine reboots. Choose a path on scratch or a persistent filesystem.";

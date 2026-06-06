@@ -144,6 +144,14 @@ def _sanitize_output_name(name: str) -> str:
         raise HTTPException(status_code=400, detail="Output name is empty")
     if not base.lower().endswith(".mrc"):
         base = base + ".mrc"
+    if base.startswith("."):
+        # A leading dot would hide the saved mask from list_project_masks and,
+        # for '.preview_*', collide with the disposable preview-file convention
+        # (delete_preview_volume). Disallow it.
+        raise HTTPException(
+            status_code=400,
+            detail="Output name must not start with a '.'",
+        )
     stem = base[:-4]
     if not _SAFE_NAME_RE.match(stem):
         raise HTTPException(

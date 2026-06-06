@@ -17,6 +17,8 @@ import {
   FolderPlus,
   AlertTriangle,
   Settings,
+  Wand2,
+  Search,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { getProject, createProject, ApiError, type ProjectDetail, type JobSummary } from "../../lib/api/client";
@@ -292,6 +294,22 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
               <Plus className="h-4 w-4" />
               New Job
             </Link>
+            {/* Command-palette trigger (also opens with Cmd/Ctrl+K). Dispatches
+                the same keydown the global listener handles, so no shared state. */}
+            <button
+              type="button"
+              onClick={() =>
+                window.dispatchEvent(
+                  new KeyboardEvent("keydown", { key: "k", metaKey: true, ctrlKey: true, bubbles: true })
+                )
+              }
+              className="mt-2 flex w-full items-center gap-2 rounded-md border border-zinc-800 px-3 py-1.5 text-xs text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"
+              title="Search jobs, masks, and actions"
+            >
+              <Search className="h-3.5 w-3.5" />
+              <span>Search…</span>
+              <kbd className="ml-auto rounded border border-zinc-700 px-1 text-[10px] text-zinc-500">⌘K</kbd>
+            </button>
           </div>
 
           {/* Job tree */}
@@ -354,8 +372,18 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
         </>
       )}
 
-      {/* Settings link */}
+      {/* Masks + Settings links */}
       <div className="border-t border-zinc-800 p-2">
+        {projectId && (
+          <Link
+            to="/masks"
+            className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
+            activeProps={{ className: "bg-zinc-700/50 text-zinc-50" }}
+          >
+            <Wand2 className="h-3.5 w-3.5" />
+            Masks
+          </Link>
+        )}
         <Link
           to="/settings"
           className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"

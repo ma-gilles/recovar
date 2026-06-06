@@ -64,7 +64,8 @@ function useServerHealth(): ConnStatus {
   return status;
 }
 
-const FIVE_GB = 5 * 1024 * 1024 * 1024;
+// Decimal GB (1e9) to match the "GB" banner label and the Sidebar's /1e9 disk display.
+const FIVE_GB = 5 * 1e9;
 
 export function RootLayout(): React.JSX.Element {
   const { project, setProject, staleProjectMessage, dismissStaleMessage } = useProject();
@@ -97,13 +98,21 @@ export function RootLayout(): React.JSX.Element {
           <div className="mx-auto max-w-[1400px]">
             {/* WebSocket / server connectivity banners */}
             {connStatus === "reconnecting" && (
-              <div className="mb-4 flex items-center gap-3 rounded-lg border border-yellow-600/50 bg-yellow-950/50 px-4 py-3 text-sm text-yellow-200">
+              <div
+                role="status"
+                aria-live="polite"
+                className="mb-4 flex items-center gap-3 rounded-lg border border-yellow-600/50 bg-yellow-950/50 px-4 py-3 text-sm text-yellow-200"
+              >
                 <WifiOff className="h-4 w-4 shrink-0 text-yellow-400" />
                 <span className="flex-1">Reconnecting to server...</span>
               </div>
             )}
             {connStatus === "unreachable" && (
-              <div className="mb-4 flex items-center gap-3 rounded-lg border border-red-600/50 bg-red-950/50 px-4 py-3 text-sm text-red-200">
+              <div
+                role="alert"
+                aria-live="assertive"
+                className="mb-4 flex items-center gap-3 rounded-lg border border-red-600/50 bg-red-950/50 px-4 py-3 text-sm text-red-200"
+              >
                 <WifiOff className="h-4 w-4 shrink-0 text-red-400" />
                 <span className="flex-1">Cannot reach server. Check your SSH tunnel.</span>
               </div>

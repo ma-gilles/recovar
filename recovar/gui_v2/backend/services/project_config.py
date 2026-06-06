@@ -18,8 +18,8 @@ TOML structure (all keys optional)::
     account   = "myacct"
     gpus      = 1
     cpus      = 4
-    memory    = "300G"
-    time      = "12:00:00"
+    memory    = "400G"
+    time      = "08:00:00"
     gpu_resource_spec = "--gres=gpu:{gpus}"
     template_path     = "/abs/path/to/my_template.sh"
 
@@ -130,7 +130,14 @@ def resolve_slurm_defaults_layered(
 
 
 def _save_toml_slurm(path: Path, values: dict[str, Any]) -> None:
-    """Update the [slurm] section of a TOML file, preserving other sections."""
+    """Update the [slurm] table of a TOML file.
+
+    Preserves both sibling top-level tables (e.g. ``[local]``) and any
+    keys within ``[slurm]`` that the Settings form does not send
+    (``gpu_resource_spec``, ``template_path``, ``[slurm.template_vars]``,
+    etc.): the cleaned form values are merged into the existing table
+    rather than replacing it wholesale.
+    """
     import tomli_w
 
     existing: dict[str, Any] = {}
@@ -138,7 +145,11 @@ def _save_toml_slurm(path: Path, values: dict[str, Any]) -> None:
         existing = _load_toml(path)
 
     clean = {k: v for k, v in values.items() if v != "" and v is not None}
-    existing["slurm"] = clean
+    section = existing.get("slurm")
+    if not isinstance(section, dict):
+        section = {}
+    section.update(clean)
+    existing["slurm"] = section
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
@@ -218,13 +229,21 @@ def resolve_local_defaults_layered(
 
 
 def save_user_local_defaults(values: dict[str, Any]) -> None:
-    """Write local-execution defaults to the user-global config file."""
+    """Write local-execution defaults to the user-global config file.
+
+    Merges the cleaned form values into the existing ``[local]`` table so
+    non-form keys (e.g. ``preallocate_gpu``) are preserved.
+    """
     path = _user_config_path()
     existing: dict[str, Any] = {}
     if path.is_file():
         existing = _load_toml(path)
     clean = {k: v for k, v in values.items() if v != "" and v is not None}
-    existing["local"] = clean
+    section = existing.get("local")
+    if not isinstance(section, dict):
+        section = {}
+    section.update(clean)
+    existing["local"] = section
     import tomli_w
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
@@ -234,13 +253,21 @@ def save_user_local_defaults(values: dict[str, Any]) -> None:
 def save_project_local_defaults(
     project_dir: str | Path, values: dict[str, Any]
 ) -> None:
-    """Write local-execution defaults to the per-project recovar.toml."""
+    """Write local-execution defaults to the per-project recovar.toml.
+
+    Merges the cleaned form values into the existing ``[local]`` table so
+    non-form keys (e.g. ``preallocate_gpu``) are preserved.
+    """
     path = Path(project_dir) / PROJECT_CONFIG_FILENAME
     existing: dict[str, Any] = {}
     if path.is_file():
         existing = _load_toml(path)
     clean = {k: v for k, v in values.items() if v != "" and v is not None}
-    existing["local"] = clean
+    section = existing.get("local")
+    if not isinstance(section, dict):
+        section = {}
+    section.update(clean)
+    existing["local"] = section
     import tomli_w
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:

@@ -12,6 +12,7 @@ import { ExecutorSelector } from "./ExecutorSelector";
 import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
+import { useProject } from "../../lib/project-context";
 
 interface DownsampleFormProps {
   projectId: string;
@@ -25,6 +26,7 @@ export function DownsampleForm({
   onSubmitted,
 }: DownsampleFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
+  const { project } = useProject();
   const [particles, setParticles] = useState(prefilledParticles ?? "");
   const [showParticlesBrowser, setShowParticlesBrowser] = useState(false);
   const [targetD, setTargetD] = useState("128");
@@ -92,7 +94,7 @@ export function DownsampleForm({
         </div>
         {showParticlesBrowser && (
           <FileBrowser
-            initialPath={particles ? particles.split("/").slice(0, -1).join("/") || "/" : "/scratch/gpfs"}
+            initialPath={particles ? particles.split("/").slice(0, -1).join("/") || "/" : project?.path || "/scratch/gpfs"}
             accept={[".star", ".cs", ".mrcs", ".txt"]}
             onSelect={(path) => { setParticles(path); setShowParticlesBrowser(false); }}
           />

@@ -259,6 +259,9 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
   const negSurfacesRef = useRef<{ actor: any; mapper: any; mc: any }[]>([]);
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  // Bumped by the error-banner Retry button to force the sync effect to
+  // re-attempt a previously-failed fetch at the same resolution.
+  const [retryNonce, setRetryNonce] = useState(0);
   const [webglFailed, setWebglFailed] = useState(false);
   // Track the last rendered state to avoid redundant re-renders
   const renderedStateRef = useRef<string>("");
@@ -552,6 +555,22 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
   const hasEigenVolume = volumesToShow.some((v) => v.visible && v.category === "eigen");
 
+  // Retry after a transient fetch/parse failure. failedPathsRef permanently
+  // records every failed path@dim to break infinite retry loops, which means a
+  // transient blip would otherwise leave the volume unrecoverable at the same
+  // resolution. The Retry button clears the failed keys for the currently
+  // shown volumes, resets the rendered-state guard so the sync effect re-runs,
+  // and bumps retryNonce to force that effect to fire.
+  const handleRetry = useCallback(() => {
+    const dim = viewDimRef.current;
+    for (const v of volumesToShow) {
+      failedPathsRef.current.delete(cacheKey(v.path, dim));
+    }
+    renderedStateRef.current = "";
+    setError(null);
+    setRetryNonce((n) => n + 1);
+  }, [volumesToShow]);
+
   // Sync pipelines with volumesToShow
   useEffect(() => {
     const grw = renderContextRef.current;
@@ -576,9 +595,27 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       );
       if (cancelled) return;
 
-      // Report downsampling status for the active (first) volume
-      if (onDownsampleInfo && entries.length > 0 && entries[0]) {
-        onDownsampleInfo(entries[0].volumeData.downsampleInfo ?? null);
+      // Clear any stale error banner once every needed pipeline has loaded.
+      // ensurePipeline's setError(null) only runs when it actually fetches, so
+      // switching to an already-cached volume after a previous failure would
+      // otherwise leave the old error visible over a correct render.
+      if (entries.length > 0 && entries.every((e) => e !== null)) {
+        setError(null);
+      }
+
+      // Report downsampling status for the volume the info row describes.
+      // VolumeViewer's Shape/Voxel/Range row tracks the active volume, so the
+      // badge must describe that same volume. When pinned volumes are shown,
+      // entries[0] is pinnedVolumes[0] (which may differ from activeVolume),
+      // so prefer the entry whose path matches activeVolume; fall back to the
+      // first loaded entry.
+      if (onDownsampleInfo && entries.length > 0) {
+        const activeIdx = activeVolume != null
+          ? volumesToShow.findIndex((v) => v.path === activeVolume)
+          : -1;
+        const infoEntry =
+          (activeIdx >= 0 ? entries[activeIdx] : null) ?? entries[0];
+        onDownsampleInfo(infoEntry ? infoEntry.volumeData.downsampleInfo ?? null : null);
       }
 
       // Remove all actors first
@@ -678,7 +715,7 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [volumesToShow, ensurePipeline, preserveCamera, onDownsampleInfo, viewDim]);
+  }, [volumesToShow, ensurePipeline, preserveCamera, onDownsampleInfo, viewDim, activeVolume, retryNonce]);
 
   // Pre-fetch upcoming trajectory frames in the background
   useEffect(() => {
@@ -742,8 +779,17 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
       {/* Overlay: error */}
       {error && (
-        <div className="absolute bottom-2 left-2 right-2 rounded bg-red-900/80 px-3 py-2 text-xs text-red-200">
-          {error}
+        <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between gap-2 rounded bg-red-900/80 px-3 py-2 text-xs text-red-200">
+          <span>{error}</span>
+          {hasVolumes && (
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="shrink-0 rounded border border-red-400/50 px-2 py-0.5 text-red-100 hover:bg-red-800/80"
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
     </div>

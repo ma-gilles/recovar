@@ -25,6 +25,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from recovar.gui_v2.backend.config import DEFAULT_SLURM
+
 logger = logging.getLogger(__name__)
 
 
@@ -205,7 +207,11 @@ class SlurmExecutor(Executor):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await proc.communicate()
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"scancel failed (rc={proc.returncode}): {stderr.decode().strip()}"
+            )
         logger.info("Cancelled SLURM job %s", handle)
 
     async def log_path(self, handle: str) -> Path | None:
@@ -346,6 +352,14 @@ class LocalExecutor(Executor):
             "EXIT_CODE=$?",
             "",
             f"echo $EXIT_CODE > {shlex.quote(rc_file)}",
+            # Emit an explicit completion marker so status_with_dir can
+            # classify a finished job even if the exit-code file write was
+            # lost (e.g. disk full, killed between writes).
+            'if [ "$EXIT_CODE" -eq 0 ]; then',
+            '    echo "Job completed: rc=$EXIT_CODE"',
+            "else",
+            '    echo "Job failed: rc=$EXIT_CODE"',
+            "fi",
             "exit $EXIT_CODE",
         ])
 
@@ -424,8 +438,9 @@ class LocalExecutor(Executor):
             except (ValueError, OSError):
                 pass
 
-        # No exit code file but process is gone — check if run.log has
-        # the "Job completed" or "Job failed" marker
+        # No exit code file but process is gone — fall back to the
+        # "Job completed:" / "Job failed:" markers the wrapper writes
+        # (see submit), or a Python "Traceback" in the tail.
         log_file = os.path.join(working_dir, "run.log")
         if os.path.isfile(log_file):
             try:
@@ -550,9 +565,9 @@ def _build_slurm_directives(
     if not cpus or cpus < 1:
         cpus = 4
     if not memory:
-        memory = "300G"
+        memory = DEFAULT_SLURM["memory"]
     if not time:
-        time = "12:00:00"
+        time = DEFAULT_SLURM["time"]
 
     lines: list[str] = [f"#SBATCH --job-name={job_name}"]
     if partition:
@@ -619,8 +634,8 @@ def _render_sbatch_script(
     account: str = "",
     gpus: int = 1,
     cpus: int = 4,
-    memory: str = "300G",
-    time: str = "12:00:00",
+    memory: str = DEFAULT_SLURM["memory"],
+    time: str = DEFAULT_SLURM["time"],
     cache_dir: str | None = None,
     raw_directives: str | None = None,
     gpu_resource_spec: str = "--gres=gpu:{gpus}",

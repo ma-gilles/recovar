@@ -13,16 +13,17 @@ interface VtkErrorBoundaryProps {
 
 interface VtkErrorBoundaryState {
   hasError: boolean;
+  message: string | null;
 }
 
 export class VtkErrorBoundary extends React.Component<VtkErrorBoundaryProps, VtkErrorBoundaryState> {
   constructor(props: VtkErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, message: null };
   }
 
-  static getDerivedStateFromError(_error: Error): VtkErrorBoundaryState {
-    return { hasError: true };
+  static getDerivedStateFromError(error: Error): VtkErrorBoundaryState {
+    return { hasError: true, message: error?.message ?? null };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
@@ -35,7 +36,8 @@ export class VtkErrorBoundary extends React.Component<VtkErrorBoundaryProps, Vtk
       return (
         <div className="flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 p-8" style={{ minHeight: 400 }}>
           <p className="text-sm text-amber-400">
-            3D rendering requires WebGL. Your browser does not support it. Using slice view instead.
+            3D rendering failed. Falling back to slice view.
+            {this.state.message ? ` (${this.state.message})` : ""}
           </p>
         </div>
       );

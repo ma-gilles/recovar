@@ -87,6 +87,7 @@ def _load_embeddings_sync(
         "umap_coords": None,
         "kmeans_labels": None,
         "kmeans_centers": None,
+        "orig_indices": None,
         "n_particles": 0,
         "n_particles_total": 0,
         "subsampled": False,
@@ -166,6 +167,37 @@ def _load_embeddings_sync(
                 logger.warning("Failed to load k-means from %s: %s", kmeans_path, exc)
                 # Non-fatal: continue without k-means
 
+    # ----- Validate per-particle array lengths against pca_coords -----
+    # umap_coords and kmeans_labels come from independent pkl files that may
+    # have been produced by a different analysis run.  If their row count does
+    # not match pca_coords, the binary layout (and any index-based subsampling
+    # below) would desync, so drop the mismatched array with a warning rather
+    # than serving corrupt offsets to the frontend parser.
+    if result["pca_coords"] is not None:
+        n_pca = result["pca_coords"].shape[0]
+        if (
+            result["umap_coords"] is not None
+            and result["umap_coords"].shape[0] != n_pca
+        ):
+            logger.warning(
+                "Dropping UMAP coords: row count %d != PCA count %d (zdim=%d)",
+                result["umap_coords"].shape[0],
+                n_pca,
+                zdim,
+            )
+            result["umap_coords"] = None
+        if (
+            result["kmeans_labels"] is not None
+            and result["kmeans_labels"].shape[0] != n_pca
+        ):
+            logger.warning(
+                "Dropping k-means labels: row count %d != PCA count %d (zdim=%d)",
+                result["kmeans_labels"].shape[0],
+                n_pca,
+                zdim,
+            )
+            result["kmeans_labels"] = None
+
     # ----- Pad or trim k-means centers to match requested zdim -----
     # The analyze job may have been run at a different zdim than the requested
     # one, so the k-means centers may have a different dimensionality.
@@ -199,6 +231,9 @@ def _load_embeddings_sync(
         if result["kmeans_labels"] is not None:
             result["kmeans_labels"] = result["kmeans_labels"][indices]
         # kmeans_centers are NOT subsampled (they are cluster centers, not per-particle)
+        # Record the original (pre-subsample) particle indices so the frontend can
+        # map subsampled positions back to real particle indices for exports.
+        result["orig_indices"] = indices.astype(np.int32)
         result["n_particles"] = max_particles
         result["subsampled"] = True
 
@@ -289,11 +324,14 @@ async def get_embeddings(
     Binary format (float32/int32, row-major):
         [pca_coords: n x zdim] [umap_coords: n x 2 | empty]
         [kmeans_labels: n x 1 int32 | empty] [kmeans_centers: k x zdim | empty]
+        [orig_indices: n x 1 int32 | empty]
 
     If the particle count exceeds ``MAX_EMBEDDING_PARTICLES``, the data is
     uniformly subsampled and the response includes
     ``X-Embedding-Subsampled: true`` with the original count in
-    ``X-Embedding-Total-Particles``.
+    ``X-Embedding-Total-Particles``.  In that case ``orig_indices`` maps each
+    returned (subsampled) position back to its original particle index so that
+    index-based exports (.ind/.star) reference the correct particles.
     """
     job, session = await _get_job(job_id)
     await session.close()
@@ -326,6 +364,12 @@ async def get_embeddings(
         )
 
     # Common metadata included in every response format.
+    #
+    # ``has_kmeans`` reflects the presence of per-particle labels, while
+    # ``has_kmeans_centers`` reflects the presence of cluster centers.  These
+    # are decoupled because a kmeans_result.pkl may contain centers without
+    # labels (or vice versa); the binary parser keys each section on the
+    # matching flag so the layout stays in sync with what was actually appended.
     meta = {
         "n_particles": data["n_particles"],
         "n_particles_total": data["n_particles_total"],
@@ -333,6 +377,7 @@ async def get_embeddings(
         "zdim": zdim,
         "has_umap": data["umap_coords"] is not None,
         "has_kmeans": data["kmeans_labels"] is not None,
+        "has_kmeans_centers": data["kmeans_centers"] is not None,
         "n_clusters": (int(data["kmeans_centers"].shape[0]) if data["kmeans_centers"] is not None else 0),
     }
 
@@ -344,6 +389,7 @@ async def get_embeddings(
             "umap_coords": (data["umap_coords"].tolist() if data["umap_coords"] is not None else None),
             "kmeans_labels": (data["kmeans_labels"].tolist() if data["kmeans_labels"] is not None else None),
             "kmeans_centers": (data["kmeans_centers"].tolist() if data["kmeans_centers"] is not None else None),
+            "orig_indices": (data["orig_indices"].tolist() if data["orig_indices"] is not None else None),
         }
         return Response(
             content=json.dumps(json_data),
@@ -362,6 +408,11 @@ async def get_embeddings(
 
     if data["kmeans_centers"] is not None:
         parts.append(data["kmeans_centers"].tobytes())
+
+    # Original particle indices for the subsample (int32, n x 1), appended last
+    # so the frontend can map subsampled positions back to real particle indices.
+    if data["orig_indices"] is not None:
+        parts.append(data["orig_indices"].tobytes())
 
     body = b"".join(parts)
 

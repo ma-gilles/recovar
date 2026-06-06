@@ -14,6 +14,7 @@ import {
   type VolumeEntry,
 } from "../lib/api/client";
 import { Spinner } from "../components/ui/spinner";
+import { formatJobType } from "../components/volume-viewer/volumeCategories";
 
 // Design system colors matching the volume overlay (sky/rose/emerald/amber).
 const JOB_COLORS = ["#38bdf8", "#fb7185", "#34d399", "#fbbf24"];
@@ -242,8 +243,8 @@ function CompareInner({ jobs, paramRows, diffCount, sameCount }: CompareInnerPro
           marker: { color, ...(trace.marker as object | undefined) },
           name:
             data.traces.length > 1
-              ? `${jobs[i].type} #${i + 1} · ${trace.name ?? `curve ${ti}`}`
-              : `${jobs[i].type} #${i + 1}`,
+              ? `${formatJobType(jobs[i].type)} #${i + 1} · ${trace.name ?? `curve ${ti}`}`
+              : `${formatJobType(jobs[i].type)} #${i + 1}`,
         });
       });
     });
@@ -277,7 +278,7 @@ function CompareInner({ jobs, paramRows, diffCount, sameCount }: CompareInnerPro
           rep
             ? {
                 path: rep.path,
-                name: `${jobs[i].type} (${rep.name})`,
+                name: `${formatJobType(jobs[i].type)} (${rep.name})`,
                 threshold: 3.0,
                 opacity: 0.6,
                 visible: true,
@@ -321,7 +322,7 @@ function CompareInner({ jobs, paramRows, diffCount, sameCount }: CompareInnerPro
                     className="block truncate font-medium text-blue-300 hover:underline"
                     title={j.output_dir}
                   >
-                    {j.type}
+                    {formatJobType(j.type)}
                   </Link>
                   <p className="truncate text-xs text-zinc-500" title={j.output_dir}>
                     {j.output_dir.split("/").slice(-2).join("/")}
@@ -408,13 +409,13 @@ function CompareInner({ jobs, paramRows, diffCount, sameCount }: CompareInnerPro
                       style={{ backgroundColor: JOB_COLORS[i % JOB_COLORS.length] }}
                     />
                     <span className="truncate text-zinc-400">
-                      {jobs[i].type} · {jobs[i].output_dir.split("/").slice(-1)[0]}
+                      {formatJobType(jobs[i].type)} · {jobs[i].output_dir.split("/").slice(-1)[0]}
                     </span>
                   </div>
                   {p ? (
                     <img
                       src={`/api/files/serve?path=${encodeURIComponent(p.path)}`}
-                      alt={`FSC for ${jobs[i].type}`}
+                      alt={`FSC for ${formatJobType(jobs[i].type)}`}
                       className="w-full rounded border border-zinc-800 bg-black"
                     />
                   ) : (
@@ -438,7 +439,7 @@ function CompareInner({ jobs, paramRows, diffCount, sameCount }: CompareInnerPro
                 plot_bgcolor: "rgba(24,24,27,1)",
                 font: { color: "#a1a1aa", size: 12 },
                 xaxis: {
-                  title: "Spatial frequency shell",
+                  title: "Spatial frequency shell (index)",
                   gridcolor: "#3f3f46",
                   zerolinecolor: "#52525b",
                 },
@@ -476,7 +477,7 @@ function CompareInner({ jobs, paramRows, diffCount, sameCount }: CompareInnerPro
                 <th className="w-44 px-3 py-2 text-left font-medium text-zinc-500">Key</th>
                 {jobs.map((j) => (
                   <th key={j.id} className="px-3 py-2 text-left text-zinc-500">
-                    {j.type}
+                    {formatJobType(j.type)}
                   </th>
                 ))}
               </tr>
