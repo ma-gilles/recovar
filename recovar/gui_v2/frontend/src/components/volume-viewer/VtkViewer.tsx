@@ -311,9 +311,13 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
         const container = containerRef.current;
         if (!container) return;
         const rect = container.getBoundingClientRect();
-        // vtk.js display coordinates: origin bottom-left, in canvas pixels.
-        const x = (evt.clientX - rect.left);
-        const y = rect.height - (evt.clientY - rect.top);
+        // vtk.js display coordinates: origin bottom-left, in DEVICE pixels.
+        // grw.resize() sizes the render window to clientSize × devicePixelRatio,
+        // so the picker expects device pixels — scale the CSS-pixel click by DPR
+        // (otherwise picks are offset/halved on retina screens and miss the mesh).
+        const dpr = window.devicePixelRatio || 1;
+        const x = (evt.clientX - rect.left) * dpr;
+        const y = (rect.height - (evt.clientY - rect.top)) * dpr;
         const renderer = grw.getRenderer();
         picker.pick([x, y, 0], renderer);
         const actors = picker.getActors();
