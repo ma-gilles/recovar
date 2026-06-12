@@ -89,12 +89,14 @@ You can then import `particles_subset.star` back into RELION or cryoSPARC for fo
 
 ## Using the GUI
 
-In the web GUI's **Latent Space Explorer** (available after running Analyze), you can interactively select particles using lasso, rectangle, or polygon tools:
+In the web GUI's **Latent Space Explorer** (available after running Analyze), you can pick particles interactively with the lasso, rectangle, or polygon tools -- no command line needed.
+
+![Selecting particles in the Latent Space Explorer](../_static/gui/16_latent_explorer.png)
 
 1. Open a completed pipeline or analyze job and click **Explore Latent Space**
 2. Use the selection tools to draw a region on the PCA or UMAP scatter plot
 3. The number of selected particles is displayed immediately
-4. Click **Export .star** to save the selected particles as a RELION-compatible `.star` file, or **Export .ind** to save particle indices
+4. Click **Export .star** to save the selected particles as a RELION-compatible `.star` file (if the source job has no `.star` to copy from, the GUI exports a `.ind` index file instead)
 5. A link to **rerun pipeline** with the exported subset appears for one-click re-processing
 
 This provides a visual, interactive alternative to the CLI-based k-means cluster extraction described above. See the [GUI Guide](gui.md) for details.

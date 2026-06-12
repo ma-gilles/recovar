@@ -94,6 +94,8 @@ This shows which paths resolve, which use automatic fallbacks, and which are mis
 !!! tip "GUI file browser"
     The [web GUI](gui.md) includes a file browser for selecting particle files, masks, and index files without typing paths. When you select a `.star` or `.cs` file, the GUI validates it immediately — showing particle count, pixel size, and available columns.
 
+![The GUI file browser](../_static/gui/06b_file_browser.png)
+
 ## Auto-extraction details
 
 When no `--poses` or `--ctf` pkl files are provided, RECOVAR automatically extracts:

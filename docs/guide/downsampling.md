@@ -1,18 +1,29 @@
 # Downsampling
 
-If your images are larger than 256x256 pixels, downsampling significantly speeds up the pipeline without meaningfully affecting results at the resolutions relevant for heterogeneity analysis.
+Downsampling shrinks the image box size before processing. It significantly speeds up the pipeline without meaningfully affecting results at the resolutions relevant for heterogeneity analysis.
+
+!!! info "The pipeline downsamples to 256 by default"
+    `recovar pipeline` runs with `--downsample 256`, so images larger than 256x256 are automatically downsampled to a box size of 256. If your images are already at or below 256, the step is skipped. To run at the original box size, pass `--no-downsample`.
 
 ## Automatic downsampling (recommended)
 
-Use `--downsample D` with the pipeline inside a project:
+You don't need to do anything to get the default behavior — running the pipeline inside a project already downsamples to 256. To choose a different target box size, pass `--downsample D`:
 
 ```bash
 recovar init_project my_project
 cd my_project
+
+# Default: downsamples to a box size of 256
+recovar pipeline particles.star --mask mask.mrc --project .
+
+# Pick a different target box size (e.g. 128 for faster runs)
 recovar pipeline particles.star --mask mask.mrc --downsample 128 --project .
+
+# Keep the original box size
+recovar pipeline particles.star --mask mask.mrc --no-downsample --project .
 ```
 
-The pipeline automatically:
+When downsampling is enabled, the pipeline automatically:
 
 1. Pre-downsamples all images to disk in the shared project cache (`Cache/downsample/...`)
 2. Runs the pipeline on the downsampled images in the numbered Pipeline job directory
@@ -39,11 +50,14 @@ recovar pipeline downsampled/particles.128.star -o output --mask mask.mrc
 
 | Flag | Description |
 |------|-------------|
-| `-D`, `--target-D` | Target box size (must be even) |
+| `-D`, `--target-D` | Target box size (must be even). Required |
 | `-o`, `--outdir` | Output directory (optional in project mode; shared project cache is still used when available) |
+| `--project` | Project root. Lets the output land in the shared project cache and be tracked as a job |
+| `--output-name` | Human-readable name for the resulting job |
 | `--datadir` | Base directory for image paths |
 | `--strip-prefix` | Strip prefix from paths |
 | `--batch-size` | Images per batch (default: 1000) |
+| `--gpu-budget-gb`, `--gpu-memory` | Soft GPU memory budget in GB for auto batch sizing |
 
 ### Output files
 
@@ -94,7 +108,7 @@ The box size must be even and no larger than the original image size.
 
 In the web GUI (`recovar gui`), you can downsample in two ways:
 
-- **As part of a Pipeline job**: expand **Advanced** options and set the **Downsample** field to your target box size (e.g., 128). The pipeline handles caching automatically.
-- **As a standalone job**: click **+ New Job**, select **Downsample** from the Job Type dropdown, browse to your particle file, and set the target box size.
+- **As part of a Pipeline job**: expand **Advanced** options and set the **Downsample** field (it defaults to 256). The pipeline handles caching automatically.
+- **As a standalone job**: click **+ New Job**, select **Downsample** from the Job Type dropdown, browse to your particle file, and set the **Target Box Size** (defaults to 128). Its **Advanced** section holds Data Directory, Strip Prefix, and Batch Size (default 1000).
 
 See the [GUI Guide](gui.md) for project setup and job submission.

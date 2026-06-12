@@ -8,14 +8,16 @@ RECOVAR includes a browser-based GUI for launching jobs, exploring latent spaces
 recovar gui
 ```
 
-This starts a local web server (default: `http://localhost:8080`). Open the URL in your browser.
+This starts a local web server (default: `http://localhost:8080`) and opens it in your default browser. Pass `--no-browser` to skip that (handy over SSH).
 
 ### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | 8080 | Port to bind to |
+| `--port` | 8080 | Port to bind to (auto-advances to the next free port if it is taken) |
 | `--host` | 127.0.0.1 | Host to bind to (`0.0.0.0` for remote access) |
+| `--no-browser` | False | Don't auto-open a browser — use this for remote/SSH sessions |
+| `--check` | False | Print a readiness report (dependencies, GPUs) and exit |
 | `--reload` | False | Auto-reload for development |
 
 ### Remote access via SSH
@@ -39,15 +41,15 @@ The tunnel forwards traffic so the remote server appears local. If port 8080 is 
 
 ### First Launch
 
-When you first open the GUI, you will see the initial dashboard with no project loaded. The sidebar offers two actions: **Create Project** and **Open Project**. The system info bar at the top shows the hostname, execution mode (Local or SLURM), recovar version, and available GPUs.
+When you first open the GUI, you will see the initial dashboard with no project loaded. The empty state offers three actions: **Create Project**, **Open Project**, and **Tutorial Dataset** -- the last one generates a small example dataset and opens it as a project, a zero-setup way to try the interface. The system info bar at the top shows the hostname, execution mode (`Local mode`, `SLURM mode`, or `SLURM + Local mode`), the recovar version, and available GPUs.
 
-![Initial Dashboard](../../_static/gui/01_initial_dashboard.png)
+![Initial Dashboard](../_static/gui/01_initial_dashboard.png)
 
 ### Creating a Project
 
 Click **Create Project** in the sidebar or in the main content area. A dialog opens with a built-in file browser that lets you navigate the filesystem.
 
-![Create Project Dialog](../../_static/gui/02_create_project.png)
+![Create Project Dialog](../_static/gui/02_create_project.png)
 
 To create a project:
 
@@ -63,23 +65,25 @@ The GUI creates a `recovar_project.db` SQLite file in that directory.
 
 Click **Open Project** to open a directory that already contains a recovar project.
 
-![Open Project Dialog](../../_static/gui/03_open_project.png)
+![Open Project Dialog](../_static/gui/03_open_project.png)
 
 
 ## Dashboard
 
 Once a project is open, the dashboard shows a complete overview of your work.
 
-![Dashboard with Project](../../_static/gui/04_dashboard.png)
+![Dashboard with Project](../_static/gui/04_dashboard.png)
 
 Key areas:
 
-- **Sidebar job tree** (left) -- All jobs organized by type with color-coded status icons
-- **Job count cards** -- Quick summary of total jobs and counts per type
-- **Run Pipeline / Scan for Jobs** -- Start a new pipeline job or import existing CLI outputs
-- **Recent Jobs** -- Chronological list with status badges
-- **Disk usage** (bottom-left) -- Filesystem usage monitor
-- **Settings** (bottom-left) -- Configure SLURM and local execution defaults
+- **Sidebar job tree** (left) -- all jobs organized by type with color-coded status icons
+- **Search** (⌘K / Ctrl+K) -- a command palette to jump to any job, mask, or action
+- **Job count cards** -- quick summary of total jobs and counts per type
+- **Run Pipeline / Scan for Jobs** -- start a new pipeline job or import existing CLI outputs
+- **Recent Jobs** -- chronological list with status badges
+- **Masks** (bottom-left) -- the project's mask library (see [Masks](masks.md#using-the-gui))
+- **Disk usage** (bottom-left) -- filesystem usage monitor
+- **Settings** (bottom-left) -- configure SLURM and local execution defaults
 
 
 ## Settings
@@ -88,7 +92,7 @@ The Settings page (gear icon at the bottom of the sidebar) lets you configure de
 
 ### SLURM Cluster Tab
 
-![Settings - SLURM](../../_static/gui/05_settings_slurm.png)
+![Settings - SLURM](../_static/gui/05_settings_slurm.png)
 
 Three sections with cascading priority:
 
@@ -98,7 +102,7 @@ Three sections with cascading priority:
 
 ### Local GPU Tab
 
-![Settings - Local GPU](../../_static/gui/05b_settings_local_gpu.png)
+![Settings - Local GPU](../_static/gui/05b_settings_local_gpu.png)
 
 Same layered structure with GPU-specific options:
 
@@ -135,38 +139,45 @@ Click any job in the sidebar to view its details. The job detail page has multip
 
 **Completed job:**
 
-![Completed Job](../../_static/gui/07_job_completed.png)
+![Completed Job](../_static/gui/07_job_completed.png)
 
 **Running job:**
 
-![Running Job](../../_static/gui/13_job_running.png)
+![Running Job](../_static/gui/13_job_running.png)
 
 **Failed job:**
 
-![Failed Job](../../_static/gui/12_job_failed.png)
+![Failed Job](../_static/gui/12_job_failed.png)
 
 
 ## Clone Job Flow
 
 From the **Parameters** tab of any job, click **Clone Job** to open a new form with all parameters pre-filled. Modify what you need and resubmit.
 
-![Cloned Form](../../_static/gui/19_cloned_form.png)
+![Cloned Form](../_static/gui/19_cloned_form.png)
 
 
 ## Exploring Results
 
 ### Latent Space Explorer
 
-After running an Analyze job, click **Explore Latent Space** to open the interactive explorer:
+After running an Analyze job, click **Explore Latent Space** to open the interactive explorer. The PCA and UMAP projections sit side by side; color the particles by k-means cluster to see how the conformational landscape breaks apart.
 
-- **PCA and UMAP** projections side by side (50K+ points at 60 fps via WebGL)
+![Latent space explorer -- PCA and UMAP colored by k-means cluster](../_static/gui/16_latent_explorer.png)
+
+- **PCA and UMAP** projections side by side (handles hundreds of thousands of particles; very large datasets are automatically subsampled for smooth display)
 - **Color by** k-means cluster, point density, or deconvolved conformational density
-- **Click** a particle or k-means center to see its coordinates and generate a volume
-- **Lasso / rectangle / polygon selection** to select particles and export `.star` or `.ind` files (see [Extracting Subsets](extracting-subsets.md#using-the-gui))
+- **Click** a particle or k-means center to see its coordinates and generate a volume on the fly
+- **Lasso / rectangle / polygon selection** to pick particles and export a `.star` or `.ind` subset (see [Extracting Subsets](extracting-subsets.md#using-the-gui))
 
 ### 3D Volume Viewer
 
-View isosurface renderings of any volume directly in the browser with adjustable sigma threshold, slice views, and side-by-side comparison of up to 4 volumes.
+View isosurface renderings of any volume directly in the browser. Adjust the **Contour (σ)** threshold and **Opacity**, switch between **3D** and **Slice** views, and choose a render **Resolution** (Auto / 256 / 128 / 64 / Full) for faster interaction over slow connections. Use the **Pin** button next to any volume to overlay up to four volumes in one scene and compare them.
+
+
+## Masks
+
+Click **Masks** at the bottom of the sidebar to open the project's mask library. From there you can review every mask and combine masks with boolean operations (union, intersect, subtract). To create a new one, click the green wand icon on any volume in a job's **Volumes** tab to launch the interactive **Mask Wizard** -- a guided tool for drawing a solvent or focus mask with live threshold, dilation, and soft-edge previews. See [Masks](masks.md#using-the-gui) for the full workflow.
 
 
 ## GUI vs CLI Workflow
@@ -189,7 +200,7 @@ The GUI mirrors the CLI workflow, adding interactivity:
 
 ## Jobs Survive GUI Restarts
 
-Jobs submitted through the GUI (both SLURM and local) are tracked in the project database. If the GUI server restarts, it reconnects to all in-flight jobs automatically -- no work is lost.
+Jobs submitted through the GUI are tracked in the project database. **SLURM jobs** run on the cluster independently of the GUI, so they keep going if the server restarts and are picked back up automatically. **Local GPU jobs** run as child processes of the server: the GUI reconciles their final status (completed or failed) when it restarts, but a local job that was still running when the server was killed will not resume.
 
 
 ## Requirements
@@ -200,6 +211,6 @@ The GUI requires FastAPI, uvicorn, SQLAlchemy, and a few other packages, which a
 pip install "recovar[gui]"
 ```
 
-This installs the `gui` extra, which includes `fastapi`, `uvicorn`, `python-multipart`, `sqlalchemy`, `aiofiles`, and `tomli_w` (for writing TOML settings files).
+This installs the `gui` extra, which includes `fastapi`, `uvicorn`, `python-multipart`, `sqlalchemy`, `aiosqlite`, `aiofiles`, `jinja2`, and `tomli_w` (for writing TOML settings files).
 
 The frontend is pre-built and bundled -- no Node.js required at runtime.

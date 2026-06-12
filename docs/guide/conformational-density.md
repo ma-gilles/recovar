@@ -52,8 +52,8 @@ Without `--density`, trajectories follow straight lines in latent space. With de
 
 ## Using the GUI
 
-In the web GUI (`recovar gui`), click **+ New Job** and select **Density Estimation** from the Job Type dropdown. Set the result directory (path to pipeline output), PCA dimension, and latent dimension, then submit.
+In the web GUI (`recovar gui`), click **New Job** and select **Density** from the Job Type dropdown. Pick a completed pipeline job in the output picker, set the **PCA Dimension**, and (optionally) set **Z Dimension Used** under the **Advanced** section. Click **Estimate Density** to submit.
 
-You can also reach density estimation from a completed pipeline job's **Suggested Next Steps** by clicking **Estimate conformational density**, which pre-fills the result directory.
+You can also reach density estimation from a completed pipeline job's **Next Steps**, which pre-fills the pipeline output for you.
 
 After density estimation completes, use the **Latent Space Explorer** to color particles by conformational density and visually identify stable states.

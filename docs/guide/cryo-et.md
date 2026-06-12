@@ -5,6 +5,14 @@ RECOVAR supports tilt-series data for cryo-ET heterogeneity analysis. One practi
 !!! warning "Experimental"
     Cryo-ET support is newer than SPA support and may be less stable. No paper has been published on this feature yet.
 
+## Using the GUI
+
+In the [Web GUI](gui.md) cryo-ET is just a checkbox. In the **Pipeline** form, point **Particles** at your RELION5 2D-tilt star (produced by `recovar parse_relion5_tomo`, see [below](#importing-from-relion5)), expand **Advanced**, and tick **Tilt series**. A cryo-ET panel appears -- per-tilt dose, tilt angles, and the CTF model are read automatically from the star, so the only common knob is **Max tilts** (how many tilts per series to use).
+
+![Pipeline form with the Tilt series option enabled](../_static/gui/06d_pipeline_tilt.png)
+
+The rest of this page covers the same workflow from the command line.
+
 ## Importing from RELION5
 
 If your data was processed in RELION5 (tilt-series alignment + particle extraction), use `parse_relion5_tomo` to convert to RECOVAR's 2D tilt format:
@@ -23,7 +31,7 @@ This reads the RELION5 3D tomography metadata and produces a 2D STAR file where 
 - `tomograms.star` from a Polish or Tomograms job (contains tilt-series geometry)
 - `particles.star` from an Extract or Refine job (contains 3D particle positions and orientations)
 
-Tilt image dimensions are auto-detected from the MRC headers. Use `--tilt-dim W H` to override if needed.
+Tilt image dimensions are auto-detected from the MRC headers.
 
 !!! note "Credits"
     Projection geometry adapted from [relion2cryodrgn](https://github.com/zhonge/cryodrgn) by Ryan Feathers (Princeton/Zhong lab), based on code by Bogdan Toader (MRC-LMB/RELION team).
@@ -55,7 +63,7 @@ The input is a 2D STAR file with tilt-series metadata (one row per particle per 
 | `relion5` | RELION 5 tilt-series CTF with dose weighting |
 | `warp` | Warp-style CTF |
 
-The default is `relion5` for tilt-series data and `cryoem` otherwise.
+The default is `relion5` for tilt-series data and `cryoem` otherwise. For RELION5 input the default is correct, which is why the GUI does not expose this setting. `warp` is experimental.
 
 ## With focus mask
 

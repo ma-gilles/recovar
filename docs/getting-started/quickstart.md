@@ -8,7 +8,7 @@ Before starting, make sure you have:
 |---|---|
 | **Particle stack** | A `.star` file (RELION) or `.cs` file (cryoSPARC) with CTF parameters |
 | **Mask** | A `.mrc` binary mask covering your molecule of interest |
-| **GPU** | NVIDIA GPU with 16+ GB VRAM (40+ GB recommended for large datasets) |
+| **GPU** | An NVIDIA GPU (Volta or newer). 16+ GB VRAM is recommended; less works for smaller boxes or with `--downsample` / `--lazy` (40+ GB helps for large datasets at 256px) |
 | **RECOVAR installed** | `pip install "recovar[gpu]"` for pipeline use; add `pip install "recovar[gui]"` for GUI support. See [Installation](installation.md) for details |
 
 !!! tip "Timing"
@@ -19,7 +19,7 @@ Before starting, make sure you have:
 ## Run your first job
 
 ??? info "Key terms"
-    - **zdim**: Number of latent-space dimensions. Start with 10. Higher = more detail but slower.
+    - **zdim**: Number of latent-space dimensions. A first run with `zdim=4` is a good default (it's what the GUI uses); increase to 10 or 20 to resolve finer heterogeneity at the cost of speed.
     - **K-means**: Groups particles into representative conformational states.
     - **UMAP**: 2D visualization of the latent space for exploring heterogeneity.
     - **Eigenvalues**: Measure how much variance each principal component captures. Sharp drop = clear signal.
@@ -42,14 +42,14 @@ Before starting, make sure you have:
     ![Pipeline job form](../_static/gui/06_new_job_pipeline.png)
 
     1. Click **Create Project** and choose a directory
-    2. Click **+ New Job** > **Pipeline**
+    2. Click **New Job** > **Pipeline**
     3. Browse to your particles file (`.star` or `.cs`)
     4. Select a mask (or use Auto/Sphere)
     5. Click **Submit Pipeline Job**
 
     **3. Analyze results**
 
-    Once the pipeline completes, click **Analyze this pipeline output** in Suggested Next Steps. Set zdim (try 10) and click **Submit Analyze Job**.
+    Once the pipeline completes, click **Analyze this pipeline output** in **Next Steps**. The zdim defaults to 4 (good for a first look — raise it to 10 or 20 for finer detail), then click **Submit Analyze Job**.
 
     **4. Explore**
 
@@ -99,20 +99,21 @@ Before starting, make sure you have:
 
 ??? note "Expected output after each step"
 
-    **After `recovar init_project`:** Creates the project directory with a `recovar_project.db` metadata file.
+    **After `recovar init_project`:** Creates the project directory with a `project.json` index file.
 
     **After `recovar pipeline`:** Creates `Pipeline/job_0001/` containing:
 
-    - `mean_half1.mrc`, `mean_half2.mrc` -- half-map mean reconstructions
-    - `cov_coeffs.pkl` -- covariance matrix coefficients
-    - `svd/` -- eigenvalues and eigenvectors
-    - `pipeline_output.json` -- run metadata and parameters
+    - `output/volumes/mean.mrc`, `mean_half1_unfil.mrc`, `mean_half2_unfil.mrc` -- mean reconstruction and half-maps
+    - `output/volumes/eigen_pos0000.mrc`, ... and `variance*.mrc` -- eigenvolumes and variance maps
+    - `output/plots/` -- diagnostic plots (eigenvalue spectrum, etc.)
+    - `model/` -- internal results: `params.pkl`, `embeddings.pkl`, and per-zdim coordinates under `model/zdim_<N>/`
+    - `job.json`, `command.txt`, `run.log` -- run metadata
 
-    **After `recovar analyze`:** Creates `Analyze/job_0001/` containing:
+    **After `recovar analyze`:** Creates `Analyze/job_0001/` (or `analysis_<zdim>/` when run with `-o`) containing:
 
     - `kmeans/center000.mrc`, `center001.mrc`, ... -- cluster center volumes
-    - `umap.pkl` -- UMAP embedding coordinates
-    - `z_values.pkl` -- per-particle latent coordinates
+    - `data/kmeans_result.pkl` -- k-means labels and centers
+    - `plots/PCA/`, `plots/umap/` -- PC scatter and UMAP plots
 
 ---
 

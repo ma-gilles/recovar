@@ -25,20 +25,26 @@ hide:
 - **Cryo-ET support** for tilt-series heterogeneity analysis
 - **Web GUI** with interactive latent-space exploration and sub-particle selection
 - **Direct input** from RELION (`.star`) and cryoSPARC (`.cs`) -- no format conversion
-- **No hallucinations** -- kernel regression produces transparent, verifiable volumes
+- **No generative model** -- volumes come straight from kernel regression on your particles, so they stay transparent and verifiable
 
 !!! info "What you need before starting"
     RECOVAR starts **after consensus refinement** in RELION or cryoSPARC. You need:
 
     1. A particle stack with poses and CTF — a RELION `.star` file or cryoSPARC `.cs` file
     2. A solvent mask (`.mrc`) — or let RECOVAR generate one automatically
-    3. An NVIDIA GPU (any Volta or newer — V100, RTX 20/30/40-series, A100, H100)
+    3. An NVIDIA GPU, Volta or newer (V100, RTX 20/30/40-series, A100, H100) — 16+ GB of VRAM is recommended, though smaller cards work with `--downsample` and `--lazy`
 
     RECOVAR outputs: mean reconstruction, variance maps, eigenvolumes, latent coordinates, k-means cluster volumes, UMAP embeddings, and trajectories — all exportable back to RELION/cryoSPARC.
 
 ---
 
 ## Example output
+
+The Web GUI turns the latent space into something you can explore -- color particles by conformational cluster, lasso a subset, and generate a volume at any point with a click:
+
+![Interactive latent-space explorer in the Web GUI](_static/gui/16_latent_explorer.png)
+
+RECOVAR also writes the standard diagnostic plots and volumes you would expect:
 
 <div class="example-outputs" markdown>
 
@@ -48,7 +54,7 @@ hide:
 
 </div>
 
-*Inspect results directly in the browser -- 3D volume viewer with adjustable isosurface threshold:*
+Inspect any volume directly in the browser -- a 3D viewer with an adjustable isosurface threshold, no ChimeraX round-trip needed:
 
 ![3D volume viewer in the GUI](_static/gui/homepage_volume_viewer.png)
 

@@ -22,7 +22,7 @@ A typical RECOVAR workflow:
 - Poses (auto-extracted from `.star`/`.cs`, or a `.pkl` file)
 - CTF parameters (auto-extracted from `.star`/`.cs`, or a `.pkl` file)
 - A solvent mask (`.mrc` file, or `sphere` / `from_halfmaps`)
-- A GPU (NVIDIA, 12+ GB VRAM recommended)
+- An NVIDIA GPU (Volta or newer); 16+ GB VRAM recommended (less works for smaller boxes or with `--downsample` / `--lazy`)
 
 ---
 
@@ -55,7 +55,7 @@ recovar pipeline particles.256.mrcs \
     ```
 
 !!! tip "GUI alternative"
-    In the GUI, click **New Job** :material-plus:, select **Pipeline**, browse to your particle file, select a mask, and click **Submit**. The GUI auto-detects the file format and validates inputs before submission. See [GUI: Submitting Jobs](gui.md#submitting-jobs).
+    In the GUI, click **New Job** :material-plus:, select **Pipeline**, browse to your particle file, select a mask, and click **Submit Pipeline Job**. The GUI auto-detects the file format and validates inputs before submission. See [GUI: Submitting Jobs](gui.md#submitting-jobs).
 
 #### Key pipeline outputs
 
@@ -99,11 +99,11 @@ The isolated cluster 0 represents junk or a distinct species. Exclude it and re-
 # Exclude cluster 0, keep clusters 1-19
 recovar extract_image_subset_from_kmeans \
     output/analysis_20/data/kmeans_result.pkl \
-    subset_ind \
+    subset_ind.pkl \
     0 -i
 ```
 
-The indices are written to `subset_ind/indices.pkl`.
+The output positional must end in `.pkl`. The selected indices are written to `subset_ind.pkl`.
 
 ### Step 4: Re-run pipeline on the subset
 
@@ -111,7 +111,7 @@ The indices are written to `subset_ind/indices.pkl`.
 recovar pipeline particles.256.mrcs \
     --poses poses.pkl --ctf ctf.pkl \
     --mask recovar_masks/mask_10076.mrc \
-    --ind subset_ind/indices.pkl \
+    --ind subset_ind.pkl \
     -o output_subset
 ```
 
@@ -136,7 +136,7 @@ With the outlier removed, all 20 clusters now sample the main conformational lan
 ### View volumes
 
 ```bash
-# View k-means cluster center volumes (1-indexed, zero-padded)
+# View k-means cluster center volumes (0-indexed, zero-padded)
 chimerax output_subset/analysis_20/kmeans/center000.mrc center001.mrc ...
 
 # View a trajectory as a conformational movie
@@ -147,7 +147,7 @@ chimerax output_subset/analysis_20/traj000/state000.mrc state001.mrc ...
     Instead of viewing static plots and loading volumes manually, the RECOVAR GUI provides an interactive workflow:
 
     - **Latent space explorer** — view PCA scatter plots and UMAP embeddings interactively. Click on any point to generate a volume on the fly.
-    - **3D volume viewer** — view isosurface renderings directly in the browser with adjustable threshold. Ctrl+click to overlay multiple volumes.
+    - **3D volume viewer** — view isosurface renderings directly in the browser with adjustable threshold. Use the **Pin** button (pin icon) next to a volume in the list to overlay several volumes at once.
     - **Trajectory builder** — select two points in the scatter plot to compute a trajectory between them and animate the conformational transition.
 
     See the [GUI Guide](gui.md) for full details.
@@ -304,13 +304,13 @@ Now open **http://localhost:8080** in your local browser — the SSH tunnel make
 
 Once the GUI is open, create a project (or open an existing one) and use **Scan for Existing Jobs** to import your pipeline outputs. The dashboard shows all your jobs at a glance:
 
-![Dashboard with project](../../_static/gui/04_dashboard.png)
+![Dashboard with project](../_static/gui/04_dashboard.png)
 
 The sidebar lists all jobs organized by type with color-coded status indicators. Click any job to view its details, logs, volumes, and plots.
 
 When a pipeline job completes, the job detail page shows quick preview plots and suggested next steps:
 
-![Completed pipeline job](../../_static/gui/07_job_completed.png)
+![Completed pipeline job](../_static/gui/07_job_completed.png)
 
 Click **Analyze this pipeline output** to pre-fill an analyze job, or **Explore Latent Space** to open the interactive latent space explorer.
 
@@ -371,8 +371,8 @@ output/analysis_<zdim>/
 | Init project | `recovar init_project my_project` |
 | Run pipeline | `recovar pipeline <particles> -o out --mask mask.mrc` |
 | Analyze | `recovar analyze out --zdim=10 --n-clusters=20` |
-| Extract subset | `recovar extract_image_subset_from_kmeans data/kmeans_result.pkl subset_dir 0 -i` |
-| Re-run on subset | `recovar pipeline <particles> -o out2 --ind subset_dir/indices.pkl` |
+| Extract subset | `recovar extract_image_subset_from_kmeans data/kmeans_result.pkl subset.pkl 0 -i` |
+| Re-run on subset | `recovar pipeline <particles> -o out2 --ind subset.pkl` |
 | Density estimation | `recovar estimate_conformational_density out --pca_dim=4` |
 | Trajectory | `recovar compute_trajectory out -o traj --density density.pkl --endpts centers.txt` |
 | Custom volumes | `recovar compute_state out -o vols --latent-points coords.txt` |

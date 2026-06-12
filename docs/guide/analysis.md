@@ -9,12 +9,16 @@ After the pipeline finishes, use `recovar analyze` to generate volumes, compute 
 
 === ":material-monitor: GUI"
 
-    ![Analyze job form](../../_static/gui/14_analyze_form.png)
+    ![Analyze job form](../_static/gui/14_analyze_form.png)
 
     1. From a completed pipeline job, click **Analyze this pipeline output** in Suggested Next Steps (auto-fills the result directory)
     2. Or click **+ New Job** > **Analyze** and browse to the pipeline output directory
     3. Set zdim, k-means clusters, and trajectories
-    4. Click **Submit Analyze Job**
+    4. Optionally expand **Advanced** to tune **n-bins** and **maskrad-fraction** (the kernel-regression knobs that trade resolution for speed)
+    5. Click **Submit Analyze Job**
+
+    !!! tip "Quick Analyze"
+        The **Quick Analyze** button submits the same job with `n-bins=10` and `maskrad-fraction=10`, which makes the cluster-center volumes roughly 40x faster to compute at a lower resolution. UMAP and k-means clustering are unchanged. It's a good way to preview the conformational landscape before running a full-resolution analysis.
 
 === ":octicons-terminal-16: CLI"
 
@@ -28,23 +32,25 @@ This generates:
 - UMAP embedding of the latent space
 - Trajectories between cluster pairs (if requested)
 
-Results are saved to `output/analysis_10/`.
+Results are saved next to the pipeline output, in `result_dir/analysis_10/` (here `result_dir` is `output`). With `--no-z-regularization`, the suffix changes and results go to `result_dir/analysis_10_noreg/`.
 
 ## Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--zdim` | Required | Latent dimension (single integer) |
-| `-o` | Auto | Output directory (default: `result_dir/output/analysis_{zdim}/`) |
+| `--zdim` | Auto | Latent dimension (single integer). If the pipeline produced only one embedding, it is used automatically; otherwise you must set this |
+| `-o` | Auto | Output directory (default: `result_dir/analysis_{zdim}/`, or `analysis_{zdim}_noreg/` with `--no-z-regularization`) |
 | `--n-clusters` | 20 | Number of k-means clusters |
 | `--n-trajectories` | 0 | Number of trajectories between cluster pairs |
 | `--n-vols-along-path` | 6 | Volumes per trajectory |
 | `--Bfactor` | 0 | B-factor sharpening |
 | `--n-bins` | 50 | Bins for kernel regression |
+| `--maskrad-fraction` | 20 | Kernel radius = `grid_size / maskrad-fraction`. Lower it for noisier data, raise it for low-resolution data |
+| `--n-min-particles` | 100 | Minimum particles per bin for kernel regression |
 | `--skip-umap` | False | Skip UMAP (faster for large datasets) |
 | `--skip-centers` | False | Skip generating cluster center volumes |
 | `--lazy` | False | Lazy loading for large datasets |
-| `--no-z-regularization` | False | Use unregularized latent variables |
+| `--no-z-regularization` | False | Use unregularized latent variables (changes output suffix to `_noreg`) |
 
 !!! tip "How to choose zdim"
     Look at the eigenvalue spectrum plot. Choose the zdim where eigenvalues start to flatten -- this is where signal transitions to noise. Typical values: 2-4 for simple motions, 10-20 for complex heterogeneity.
@@ -112,7 +118,7 @@ Choose one of:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--zdim` | Required | Latent dimension |
+| `--zdim` | Auto | Latent dimension. Inferred from the embedding when only one is present; set it when several are available |
 | `--density` | None | Density file for high-density path |
 | `--n-vols-along-path` | 6 | Number of volumes along the path |
 | `--Bfactor` | 0 | B-factor sharpening |

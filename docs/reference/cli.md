@@ -139,7 +139,7 @@ recovar downsample particles.star -D 128 --project . --output-name particles_d12
 | `--datadir` | None | Base directory for image paths |
 | `--strip-prefix` | None | Strip prefix from paths |
 | `--batch-size` | 1000 | Images per batch |
-| `--chunk-size` | None | Split output into chunks of this many images |
+| `--chunk-size` | None | Accepted but not yet wired up — output is always a single stack |
 
 See [Downsampling](../guide/downsampling.md) for details.
 
@@ -156,11 +156,11 @@ recovar compute_state result_dir -o volumes --latent-points coords.txt [options]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--latent-points` | Required | Coordinates file (`.txt`) |
-| `-o` | Required | Output directory |
+| `-o`, `--outdir` | Auto (project mode) | Output directory; auto-numbered when a project is active |
 | `--Bfactor` | 0 | B-factor sharpening |
 | `--n-bins` | 50 | Bins for kernel regression |
 | `--maskrad-fraction` | 20 | Kernel radius = `grid_size / value` |
-| `--n-min-particles` | 100 | Minimum particles for regression |
+| `--n-min-particles` | None (100 internally) | Minimum particles for regression |
 | `--particles` | Same | Higher-resolution particle stack |
 | `--datadir` | Same | Path prefix for particles |
 | `--zdim1` | False | Enable for 1D latent space |
@@ -188,8 +188,8 @@ recovar compute_trajectory result_dir -o trajectory --zdim=10 \
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--zdim` | Required | Latent dimension |
-| `-o` | Required | Output directory |
+| `--zdim` | Auto | Latent dimension; inferred if only one is available, otherwise pass it explicitly |
+| `-o`, `--outdir` | Auto (project mode) | Output directory; auto-numbered when a project is active |
 | `--density` | None | Density file for high-density path |
 | `--n-vols-along-path` | 6 | Volumes along the path |
 | `--Bfactor` | 0 | B-factor sharpening |
@@ -243,17 +243,17 @@ Selection (one required):
 Extract particles from k-means clusters.
 
 ```bash
-recovar extract_image_subset_from_kmeans kmeans_result.pkl output_dir indices [-i]
+recovar extract_image_subset_from_kmeans kmeans_result.pkl subset.pkl 0,1,2 [-i]
 ```
 
-Output is written to `output_dir/indices.pkl`.
+The positional order is `<centers.pkl> <output.pkl> <indices>`. The output path **must end in `.pkl`**.
 
 | Argument | Description |
 |----------|-------------|
 | `kmeans_result.pkl` | Path to `data/kmeans_result.pkl` from analyze |
-| `output_dir` | Output directory (indices saved as `indices.pkl` inside) |
-| `indices` | Comma-separated cluster indices |
-| `-i` | Invert selection |
+| `output.pkl` | Output `.pkl` file for the selected indices. In project mode, pass `--project` and the file is auto-placed as `indices.pkl` in a numbered job directory |
+| `indices` | Comma-separated cluster indices (e.g. `0,1,2`) |
+| `-i`, `--inverse` | Invert selection (keep clusters *not* listed) |
 
 ---
 
@@ -273,8 +273,9 @@ recovar parse_relion5_tomo \
 | `-t`, `--tomograms` | Required | RELION5 `tomograms.star` (from Polish or Tomograms job) |
 | `-p`, `--particles` | Required | RELION5 `particles.star` (from Extract or Refine job) |
 | `-o`, `--output` | `particles_2d.star` | Output 2D STAR file |
-| `--tilt-dim` | Auto | Tilt image dimensions in pixels (auto-detected from MRC headers) |
 | `-v`, `--verbose` | False | Enable verbose logging |
+
+Tilt image dimensions and pixel size are read from the optics table in `particles.star` — there is no flag to set them.
 
 See [Cryo-ET](../guide/cryo-et.md#importing-from-relion5) for usage details.
 
@@ -290,9 +291,11 @@ recovar gui [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | 8080 | Port to bind to |
+| `--port` | 8080 | Port to bind to (the next free port is used if it is busy) |
 | `--host` | 127.0.0.1 | Bind address (`0.0.0.0` for remote access) |
 | `--reload` | False | Auto-reload for development |
+| `--no-browser` | False | Do not auto-open a browser on launch |
+| `--check` | False | Diagnose GUI dependencies, GPU, and SLURM availability, then exit |
 
 See the [GUI Guide](../guide/gui.md) for full documentation.
 
@@ -311,7 +314,7 @@ recovar init_project [directory] [--name "Project Name"]
 | `directory` | `.` | Directory to initialize (created if needed) |
 | `--name` | Directory name | Human-readable project name |
 
-Creates a `recovar_project.db` file in the directory. Subsequent commands using `--project` will auto-generate numbered job directories (e.g. `Pipeline/job_0001/`, `Analyze/job_0001/`).
+Creates a `project.json` index file in the directory. Subsequent commands using `--project` will auto-generate numbered job directories (e.g. `Pipeline/job_0001/`, `Analyze/job_0001/`). (When you open the same directory in the web GUI, the GUI additionally maintains its own `recovar_project.db`.)
 
 ---
 
@@ -332,7 +335,7 @@ recovar project_status [directory] [--tree]
 
 ## Common flag: `--project`
 
-All commands that produce output accept `--project <dir>` to enable project mode. This is the recommended way to run RECOVAR. When active, output directories are auto-generated, downstream commands may omit `result_dir` to use the latest completed Pipeline job, and RECOVAR stores human-readable job names alongside the numbered directories. If you run from within a project directory (containing `recovar_project.db`), it is auto-detected without needing the flag.
+All commands that produce output accept `--project <dir>` to enable project mode. This is the recommended way to run RECOVAR. When active, output directories are auto-generated, downstream commands may omit `result_dir` to use the latest completed Pipeline job, and RECOVAR stores human-readable job names alongside the numbered directories. If you run from within a project directory (containing `project.json`), it is auto-detected without needing the flag.
 
 Each job creates `job.json`, `command.txt`, `run.log`, and `README.txt` metadata files.
 

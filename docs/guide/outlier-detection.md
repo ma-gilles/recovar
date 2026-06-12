@@ -31,12 +31,22 @@ recovar pipeline_with_outliers particles.star -o output --mask mask.mrc
 
 ## Using results
 
-Both commands output indices of detected outliers/junk. You can use these to filter your dataset:
+Both commands output indices of detected outliers/junk under their `data/` subdirectory.
+`outlier_detection` writes the combined indices to
+`data/combined_results/`, with one file per zdim used (default `zdim=4`):
+
+- `combined_image_outliers_4.pkl` — image-level outlier indices (always written)
+- `combined_image_inliers_4.pkl` — the complementary inlier indices
+- `combined_particle_outliers_4.pkl` / `combined_particle_inliers_4.pkl` — particle-level indices (written for tilt-series, or whenever particle outliers are found)
+
+The inlier file is the most convenient input to `--ind` for a clean re-run.
+You can also filter a star file directly:
 
 ```python
 import pickle, starfile
 
-with open("outlier_output/outlier_indices.pkl", "rb") as f:
+outlier_dir = "outlier_output/data/combined_results"
+with open(f"{outlier_dir}/combined_image_outliers_4.pkl", "rb") as f:
     outlier_idx = pickle.load(f)
 
 data = starfile.read("particles.star")
@@ -44,3 +54,10 @@ mask = ~data["particles"].index.isin(outlier_idx)
 data["particles"] = data["particles"][mask]
 starfile.write(data, "particles_cleaned.star")
 ```
+
+!!! tip "Re-run on the clean subset"
+    Pass the inlier indices straight to the pipeline instead of editing the star file:
+    ```bash
+    recovar pipeline particles.star -o output_clean --mask mask.mrc \
+        --ind outlier_output/data/combined_results/combined_image_inliers_4.pkl
+    ```
