@@ -507,6 +507,62 @@ async def get_related_density(job_id: str) -> list[dict]:
     return related
 
 
+@router.get("/{job_id}/explore-target")
+async def get_explore_target(job_id: str) -> dict:
+    """Resolve which job to open in the latent-space explorer for ``job_id``.
+
+    Density jobs have no embeddings of their own, so this finds the Analyze job
+    (preferred) or Pipeline job that produced the embeddings the density was
+    estimated on.  Analyze/Pipeline jobs resolve to themselves.  Returns
+    ``{"target_job_id": <id or None>}``.
+    """
+    job, session = await _get_job(job_id)
+    await session.close()
+
+    jtype = job.type or ""
+    if jtype in ("Analyze", "Pipeline"):
+        return {"target_job_id": job.id}
+    if jtype != "Density":
+        return {"target_job_id": None}
+
+    params = job.params or {}
+    result_dir = params.get("result_dir") or params.get("recovar_result_dir")
+    if not result_dir:
+        return {"target_job_id": None}
+    target = str(Path(result_dir).resolve())
+
+    from recovar.gui_v2.backend.api.project import get_project_path
+
+    project_path = get_project_path(job.project_id)
+    if not project_path:
+        return {"target_job_id": None}
+
+    db_path = get_db_path(project_path)
+    session_factory = await init_db(db_path)
+    async with session_factory() as db_session:
+        stmt = (
+            select(Job)
+            .where(Job.project_id == job.project_id)
+            .where(Job.status == JobStatus.COMPLETED.value)
+        )
+        result = await db_session.execute(stmt)
+        jobs = result.scalars().all()
+
+    # Prefer an Analyze job whose result_dir matches the density's pipeline dir.
+    for j in jobs:
+        if j.type != "Analyze":
+            continue
+        rd = (j.params or {}).get("result_dir")
+        if rd and str(Path(rd).resolve()) == target:
+            return {"target_job_id": j.id}
+    # Fall back to the Pipeline job that produced this output directory.
+    for j in jobs:
+        if j.type == "Pipeline" and str(Path(j.output_dir).resolve()) == target:
+            return {"target_job_id": j.id}
+
+    return {"target_job_id": None}
+
+
 def _evaluate_density_sync(
     pipeline_dir: str,
     density_output_dir: str,

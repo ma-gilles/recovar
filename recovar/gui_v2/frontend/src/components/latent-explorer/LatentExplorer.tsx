@@ -414,7 +414,7 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
         method: buildSelectionMethod(),
         indices: finalIndices,
       });
-      const star = await exportSubsetStar(subset.id, particlesStar!);
+      const star = await exportSubsetStar(subset.id, particlesStar);
       return { subset, star };
     },
     onSuccess: () => {
@@ -695,59 +695,57 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                   {selectedIndices.size.toLocaleString()} particles selected
                 </span>
                 <div className="ml-auto flex gap-2">
-                  {/* Primary action: export filtered .star in one click */}
-                  {particlesStar && particlesStar.endsWith(".star") && (
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        setStarExportInvert(false);
-                        oneClickStarMutation.mutate({
-                          indices: Array.from(selectedIndices),
-                          invert: false,
-                        });
-                      }}
-                      loading={oneClickStarMutation.isPending && starExportInvert === false}
-                      disabled={oneClickStarMutation.isPending}
-                    >
-                      <FileSpreadsheet className="h-3.5 w-3.5" />
-                      Export .star
-                    </Button>
-                  )}
-                  {particlesStar && particlesStar.endsWith(".star") && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        setStarExportInvert(true);
-                        oneClickStarMutation.mutate({
-                          indices: Array.from(selectedIndices),
-                          invert: true,
-                        });
-                      }}
-                      loading={oneClickStarMutation.isPending && starExportInvert === true}
-                      disabled={oneClickStarMutation.isPending}
-                    >
-                      Export All Except
-                    </Button>
-                  )}
-                  {/* Fallback: .ind export when no .star available */}
-                  {(!particlesStar || !particlesStar.endsWith(".star")) && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        subsetMutation.mutate({
-                          name: `subset_${Date.now()}`,
-                          indices: Array.from(selectedIndices),
-                          invert: false,
-                        });
-                      }}
-                      loading={subsetMutation.isPending}
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      Export .ind
-                    </Button>
-                  )}
+                  {/* Export the selection as a filtered .star.  When the dataset
+                      has no native star file, the backend builds one from the
+                      particles/poses/ctf recorded on the source job. */}
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setStarExportInvert(false);
+                      oneClickStarMutation.mutate({
+                        indices: Array.from(selectedIndices),
+                        invert: false,
+                      });
+                    }}
+                    loading={oneClickStarMutation.isPending && starExportInvert === false}
+                    disabled={oneClickStarMutation.isPending || subsetMutation.isPending}
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5" />
+                    Export .star
+                  </Button>
+                  {/* Export the selection as a .ind index file (pickle of ints) */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      subsetMutation.mutate({
+                        name: `subset_${Date.now()}`,
+                        indices: Array.from(selectedIndices),
+                        invert: false,
+                      });
+                    }}
+                    loading={subsetMutation.isPending}
+                    disabled={oneClickStarMutation.isPending || subsetMutation.isPending}
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Export .ind
+                  </Button>
+                  {/* Export everything EXCEPT the selection, as a .star */}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      setStarExportInvert(true);
+                      oneClickStarMutation.mutate({
+                        indices: Array.from(selectedIndices),
+                        invert: true,
+                      });
+                    }}
+                    loading={oneClickStarMutation.isPending && starExportInvert === true}
+                    disabled={oneClickStarMutation.isPending || subsetMutation.isPending}
+                  >
+                    Export All Except
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -757,11 +755,11 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, ana
                   </Button>
                 </div>
               </div>
-              {!particlesStar && (
-                <p className="text-xs text-zinc-500">
-                  No source .star file found. Export creates an index file (.ind) with selected particle indices.
-                </p>
-              )}
+              <p className="text-xs text-zinc-500">
+                <span className="font-medium">.star</span> is a filtered RELION star file
+                {!particlesStar && " (built from the dataset's particles/poses/ctf)"};{" "}
+                <span className="font-medium">.ind</span> is a pickle of the selected particle indices.
+              </p>
             </div>
           )}
 

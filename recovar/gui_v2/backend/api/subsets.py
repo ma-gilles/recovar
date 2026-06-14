@@ -85,7 +85,10 @@ class SubsetProvenanceResponse(BaseModel):
 
 
 class ExportStarRequest(BaseModel):
-    particles_star: str
+    # Optional: when omitted/empty, the source dataset is resolved from the
+    # subset's source job (and a star is constructed from .mrcs+poses+ctf if
+    # the dataset has no native .star file).
+    particles_star: str | None = None
 
 
 class ExportStarResponse(BaseModel):
@@ -275,6 +278,137 @@ async def get_subset_provenance(subset_id: str) -> SubsetProvenanceResponse:
     raise HTTPException(status_code=404, detail="Subset not found")
 
 
+def _build_full_star_from_dataset(
+    particles_path: str, poses_path: str, ctf_path: str, out_path: str,
+) -> str:
+    """Construct a full .star file for a .mrcs dataset from poses/ctf pkls.
+
+    Uses recovar's own cryoDRGN-format writer so the result round-trips through
+    ``read_star``.  Writes every particle in original order; callers filter to a
+    subset afterwards by positional index.  Runs in a worker thread (blocking).
+    """
+    from recovar.utils.helpers import write_starfile_from_cryodrgn_format
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    # Write to a temp path first so a concurrent/interrupted build never leaves a
+    # truncated star that later reads as valid-but-short.
+    tmp_path = out_path + ".tmp"
+    write_starfile_from_cryodrgn_format(
+        ctf_path, poses_path, particles_path, tmp_path,
+    )
+    os.replace(tmp_path, out_path)
+    return out_path
+
+
+async def _resolve_source_star(
+    subset_obj, project_path: str, session_factory, given_star: str | None,
+):
+    """Resolve a full .star to filter a subset from, plus an optional index map.
+
+    Returns ``(star_path, index_map)``.  ``index_map`` (when not ``None``) maps
+    analyzed-dataset positions — the index space of the stored subset — to rows
+    of the returned star.  It is needed when the star is *constructed* from a
+    ``.mrcs`` dataset's full poses/ctf but the pipeline analyzed only an
+    ``--ind`` subset: row ``index_map[i]`` of the full star is analyzed particle
+    ``i``.  ``None`` means the subset indices address the star rows directly.
+
+    Resolution order:
+      1. An explicit, valid ``given_star`` (the dataset's native star file).
+      2. The ``particles`` recorded on the source job (or its parent Pipeline)
+         when that is itself a ``.star``.
+      3. A star constructed from a ``.mrcs`` dataset's particles + poses + ctf
+         pkls (cached under ``<project>/subsets/.star_cache``), with an index
+         map derived from the pipeline's ``--ind`` when present.
+
+    Returns ``(None, None)`` if no source can be determined.
+    """
+    if given_star and os.path.isfile(given_star) and given_star.endswith(".star"):
+        return given_star, None
+
+    from recovar.gui_v2.backend.models.job import Job
+
+    particles = poses = ctf = ind = None
+    pipeline_dir = None
+    async with session_factory() as session:
+        src = None
+        if subset_obj.source_job_id:
+            src = (
+                await session.execute(
+                    select(Job).where(Job.id == subset_obj.source_job_id)
+                )
+            ).scalar_one_or_none()
+        if src is not None:
+            p = src.params or {}
+            if src.type == "Pipeline":
+                particles = p.get("particles")
+                poses = p.get("poses")
+                ctf = p.get("ctf")
+                ind = p.get("ind")
+                pipeline_dir = src.output_dir
+            else:
+                # Analyze (and similar) jobs record the pipeline they ran on.
+                pipeline_dir = p.get("result_dir") or src.output_dir
+        # Fall back to the Pipeline job that produced this output directory.
+        if not particles and pipeline_dir:
+            pj = (
+                await session.execute(
+                    select(Job)
+                    .where(Job.project_id == subset_obj.project_id)
+                    .where(Job.type == "Pipeline")
+                    .where(Job.output_dir == pipeline_dir)
+                )
+            ).scalar_one_or_none()
+            if pj is not None:
+                pp = pj.params or {}
+                particles = pp.get("particles")
+                poses = pp.get("poses")
+                ctf = pp.get("ctf")
+                ind = pp.get("ind")
+
+    if particles and str(particles).endswith(".star") and os.path.isfile(particles):
+        return particles, None
+
+    if (
+        particles and poses and ctf
+        and os.path.isfile(particles)
+        and os.path.isfile(poses)
+        and os.path.isfile(ctf)
+    ):
+        import asyncio
+        import hashlib
+
+        cache_dir = os.path.join(project_path, "subsets", ".star_cache")
+        base = "".join(
+            c if c.isalnum() or c in "-_." else "_"
+            for c in os.path.basename(str(particles))
+        )
+        # Disambiguate by the full absolute path so same-named particle files in
+        # different pipelines never collide on the same cached star.
+        digest = hashlib.sha1(
+            os.path.abspath(str(particles)).encode("utf-8")
+        ).hexdigest()[:12]
+        out_path = os.path.join(cache_dir, f"{base}.{digest}.star")
+        if not os.path.isfile(out_path):
+            await asyncio.to_thread(
+                _build_full_star_from_dataset, particles, poses, ctf, out_path,
+            )
+
+        # The constructed star holds the FULL stack in original order, but the
+        # subset indices address the analyzed dataset.  When the pipeline ran on
+        # an --ind subset, map analyzed position i -> original star row ind[i].
+        index_map = None
+        if ind and os.path.isfile(str(ind)):
+            try:
+                with open(str(ind), "rb") as f:
+                    index_map = np.asarray(pickle.load(f), dtype=np.int64)
+            except Exception as exc:  # noqa: BLE001 — bad ind shouldn't 500
+                logger.warning("Ignoring unreadable --ind file %s: %s", ind, exc)
+                index_map = None
+        return out_path, index_map
+
+    return None, None
+
+
 @router.post("/{subset_id}/export-star", response_model=ExportStarResponse)
 async def export_star(
     subset_id: str, req: ExportStarRequest,
@@ -298,14 +432,17 @@ async def export_star(
     if subset_obj is None:
         raise HTTPException(status_code=404, detail="Subset not found")
 
-    if not os.path.isfile(req.particles_star):
+    source_star, index_map = await _resolve_source_star(
+        subset_obj, project_path, session_factory, req.particles_star,
+    )
+    if source_star is None:
         raise HTTPException(
             status_code=400,
-            detail=f"Particles star file not found: {req.particles_star}",
-        )
-    if not req.particles_star.endswith(".star"):
-        raise HTTPException(
-            status_code=400, detail="particles_star must be a .star file",
+            detail=(
+                "Could not resolve a particle source for this subset. Provide a "
+                ".star dataset, or ensure the source job records its "
+                "particles/poses/ctf so a star file can be built."
+            ),
         )
 
     if not os.path.isfile(subset_obj.ind_path):
@@ -325,7 +462,7 @@ async def export_star(
         )
 
     try:
-        particles_df, optics_df = read_star(req.particles_star)
+        particles_df, optics_df = read_star(source_star)
     except Exception as exc:
         raise HTTPException(
             status_code=400, detail=f"Failed to parse star file: {exc}",
@@ -335,12 +472,30 @@ async def export_star(
         raise HTTPException(
             status_code=400, detail="Subset has no particle indices to export",
         )
+
+    # When the star was built from a full .mrcs stack but the pipeline analyzed
+    # an --ind subset, the stored indices address the analyzed dataset; map them
+    # through ind to the corresponding rows of the full star.
+    if index_map is not None:
+        if indices.min() < 0 or indices.max() >= len(index_map):
+            bad = int(indices.max()) if indices.max() >= len(index_map) else int(indices.min())
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Subset index {bad} out of range "
+                    f"(analyzed dataset has {len(index_map)} particles)"
+                ),
+            )
+        row_indices = index_map[indices]
+    else:
+        row_indices = indices
+
     # Validate against the FULL star file.  Subset indices are original particle
     # indices (the Explore view maps any subsampled selection back through the
     # original-index array before creating the subset), so a valid index must
     # fall within [0, len(particles_df)).
-    if indices.min() < 0 or indices.max() >= len(particles_df):
-        bad = int(indices.max()) if indices.max() >= len(particles_df) else int(indices.min())
+    if row_indices.min() < 0 or row_indices.max() >= len(particles_df):
+        bad = int(row_indices.max()) if row_indices.max() >= len(particles_df) else int(row_indices.min())
         raise HTTPException(
             status_code=400,
             detail=(
@@ -348,7 +503,7 @@ async def export_star(
                 f"(star file has {len(particles_df)} particles)"
             ),
         )
-    filtered_df = particles_df.iloc[indices].reset_index(drop=True)
+    filtered_df = particles_df.iloc[row_indices].reset_index(drop=True)
 
     subsets_dir = os.path.join(project_path, "subsets")
     os.makedirs(subsets_dir, exist_ok=True)

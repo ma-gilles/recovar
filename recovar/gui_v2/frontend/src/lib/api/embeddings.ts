@@ -131,6 +131,18 @@ export async function fetchRelatedDensityJobs(jobId: string): Promise<RelatedDen
   return resp.json();
 }
 
+/**
+ * Resolve which job to open in the latent-space explorer for a given job.
+ * Density jobs resolve to the Analyze/Pipeline job that produced their
+ * embeddings; Analyze/Pipeline jobs resolve to themselves.
+ */
+export async function fetchExploreTarget(jobId: string): Promise<string | null> {
+  const resp = await fetch(`/api/jobs/${jobId}/explore-target`);
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  return data?.target_job_id ?? null;
+}
+
 export interface DensityData {
   particleDensity: Float32Array;
   centerDensity: Float32Array | null;

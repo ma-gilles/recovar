@@ -36,6 +36,7 @@ import {
   type SbatchScript,
   type ChartData,
 } from "../../lib/api/client";
+import { fetchExploreTarget } from "../../lib/api/embeddings";
 import Plot from "react-plotly.js";
 import { useProject } from "../../lib/project-context";
 import { VolumeViewer, type PinnedVolume } from "../../components/volume-viewer/VolumeViewer";
@@ -868,6 +869,14 @@ export function JobDetailPage(): React.JSX.Element {
     enabled: job?.status === "completed",
   });
 
+  // For Density jobs, resolve the Analyze/Pipeline job to open in the explorer
+  // (density jobs have no embeddings of their own).
+  const { data: exploreTargetId } = useQuery<string | null>({
+    queryKey: ["explore-target", jobId],
+    queryFn: () => fetchExploreTarget(jobId),
+    enabled: job?.status === "completed" && job?.type?.toLowerCase() === "density",
+  });
+
   const { project, setProject } = useProject();
 
   // Auto-restore project context when navigating directly to a job page
@@ -965,6 +974,13 @@ export function JobDetailPage(): React.JSX.Element {
           )}
           {isTerminal && (job.type.toLowerCase() === "pipeline" || job.type.toLowerCase() === "analyze") && (
             <Link to="/explore/$jobId" params={{ jobId }}>
+              <Button variant="default" size="sm">
+                Explore Latent Space
+              </Button>
+            </Link>
+          )}
+          {isTerminal && job.type.toLowerCase() === "density" && exploreTargetId && (
+            <Link to="/explore/$jobId" params={{ jobId: exploreTargetId }}>
               <Button variant="default" size="sm">
                 Explore Latent Space
               </Button>

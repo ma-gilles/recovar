@@ -315,11 +315,13 @@ export function getSubsetProvenance(id: string): Promise<SubsetProvenance> {
 
 export function exportSubsetStar(
   subsetId: string,
-  particlesStar: string
+  particlesStar?: string | null
 ): Promise<{ path: string; n_particles: number }> {
+  // When no native .star is known the backend resolves the dataset from the
+  // subset's source job and builds a star from particles/poses/ctf.
   return request(`/subsets/${subsetId}/export-star`, {
     method: "POST",
-    body: JSON.stringify({ particles_star: particlesStar }),
+    body: JSON.stringify({ particles_star: particlesStar ?? "" }),
   });
 }
 
