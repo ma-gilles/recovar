@@ -136,7 +136,7 @@ export function MaskWizard({
   const [axis, setAxis] = useState<0 | 1 | 2>(2);
   const [sliceIdx, setSliceIdx] = useState<number | null>(null);
 
-  const [viewMode, setViewMode] = useState<"slice" | "3d">("slice");
+  const [viewMode, setViewMode] = useState<"slice" | "3d">("3d");
   // 3D view: render resolution (downsample for speed over slow/SSH links) and
   // the source-volume contour level. pickScale maps served (downsampled) voxel
   // coords back to full-res so eraser clicks land in the right place.

@@ -173,6 +173,17 @@ export function getProject(id: string): Promise<ProjectDetail> {
   return request(`/projects/${id}`);
 }
 
+export interface ProjectListItem {
+  id: string;
+  path: string;
+  name?: string;
+}
+
+/** All projects currently registered with the server (for the project switcher). */
+export function listProjects(): Promise<ProjectListItem[]> {
+  return request("/projects");
+}
+
 export function scanProject(
   projectId: string,
   scanPath: string

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   Plus,
   ChevronDown,
@@ -21,7 +21,7 @@ import {
   Search,
 } from "lucide-react";
 import { clsx } from "clsx";
-import { getProject, createProject, ApiError, type ProjectDetail, type JobSummary } from "../../lib/api/client";
+import { getProject, createProject, listProjects, ApiError, type ProjectDetail, type JobSummary } from "../../lib/api/client";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -189,6 +189,8 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
   const [collapsed, setCollapsed] = useState(() => window.innerWidth < COLLAPSE_BREAKPOINT);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showOpenForm, setShowOpenForm] = useState(false);
+  const [showSwitcher, setShowSwitcher] = useState(false);
+  const navigate = useNavigate();
 
   // Auto-collapse on narrow viewports
   useEffect(() => {
@@ -219,6 +221,14 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
       onProjectNotFound?.();
     }
   }, [projectError, onProjectNotFound]);
+
+  // All registered projects — powers the in-sidebar project switcher.
+  const { data: allProjects } = useQuery({
+    queryKey: ["projects-list"],
+    queryFn: listProjects,
+    enabled: !!projectId,
+    refetchInterval: 15000,
+  });
 
   const knownTypes = ["Pipeline", "Analyze", "ComputeState", "ReconstructState", "StableStates", "ComputeTrajectory", "ReconstructTrajectory", "Density"];
   const pipelineJobs = project?.jobs.filter((j) => j.type === "Pipeline") ?? [];
@@ -316,9 +326,60 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
           <nav className="flex-1 overflow-y-auto py-2">
             {project ? (
               <div className="space-y-1">
-                <div className="flex items-center gap-2 px-3 py-1 text-xs text-zinc-500">
-                  <FolderOpen className="h-3 w-3" />
-                  <span className="truncate">{project.name}</span>
+                <div className="relative px-3 py-1">
+                  <button
+                    onClick={() => setShowSwitcher((s) => !s)}
+                    className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                    title="Switch project"
+                  >
+                    <FolderOpen className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{project.name}</span>
+                    <ChevronDown className="ml-auto h-3 w-3 shrink-0" />
+                  </button>
+                  {showSwitcher && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-20"
+                        onClick={() => setShowSwitcher(false)}
+                      />
+                      <div className="absolute left-2 right-2 z-30 mt-1 max-h-72 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
+                        {(allProjects ?? []).map((p) => {
+                          const nm = p.name || p.path.split("/").filter(Boolean).pop() || p.path;
+                          const active = p.id === projectId;
+                          return (
+                            <button
+                              key={p.id}
+                              onClick={() => {
+                                setShowSwitcher(false);
+                                if (!active) {
+                                  onProjectCreated?.({ id: p.id, path: p.path, name: nm });
+                                  navigate({ to: "/" });
+                                }
+                              }}
+                              className={clsx(
+                                "block w-full truncate px-3 py-1.5 text-left text-xs hover:bg-zinc-800",
+                                active ? "text-blue-400" : "text-zinc-300"
+                              )}
+                              title={p.path}
+                            >
+                              {active ? "● " : ""}
+                              {nm}
+                            </button>
+                          );
+                        })}
+                        <button
+                          onClick={() => {
+                            setShowSwitcher(false);
+                            setShowCreateForm(false);
+                            setShowOpenForm(true);
+                          }}
+                          className="block w-full border-t border-zinc-800 px-3 py-1.5 text-left text-xs text-zinc-400 hover:bg-zinc-800"
+                        >
+                          + Open another project…
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
                 <div className="border-t border-zinc-800 pt-1">
                   <JobSection title="Pipeline" jobs={pipelineJobs} alwaysShow />
