@@ -512,6 +512,7 @@ def _evaluate_density_sync(
     density_output_dir: str,
     zdim: int,
     pca_dim: int,
+    analyze_dir: str | None = None,
     max_particles: int = MAX_EMBEDDING_PARTICLES,
 ) -> dict:
     """Evaluate the deconvolved density grid at each particle's PCA coords.
@@ -538,7 +539,7 @@ def _evaluate_density_sync(
     alpha = float(density_data.get("alpha", 0.0))
 
     # Load PCA coords using the same logic as _load_embeddings_sync.
-    embeddings = _load_embeddings_sync(pipeline_dir, zdim, analyze_dir=None, max_particles=max_particles)
+    embeddings = _load_embeddings_sync(pipeline_dir, zdim, analyze_dir=analyze_dir, max_particles=max_particles)
     pca_coords = embeddings["pca_coords"]
     if pca_coords is None:
         raise _EmbeddingLoadError(f"No PCA coordinates found for zdim={zdim}")
@@ -568,7 +569,12 @@ def _evaluate_density_sync(
         )
     else:
         particle_points = pca_coords[:, :pca_dim].astype(np.float64)
-    particle_density = interpolator(particle_points).astype(np.float64)
+    # Some particles can have NaN latent coordinates (e.g. failed/outlier
+    # embeddings). The interpolator returns NaN for those, and a single NaN
+    # would poison np.max() below -> max_val=NaN -> the WHOLE density array
+    # becomes NaN. Map NaN coords to density 0 so they color as lowest density
+    # instead of breaking the entire overlay.
+    particle_density = np.nan_to_num(interpolator(particle_points).astype(np.float64), nan=0.0)
 
     # Evaluate at k-means centers if available.
     center_density = np.array([], dtype=np.float64)
@@ -583,7 +589,7 @@ def _evaluate_density_sync(
             )
         else:
             center_points = kmeans_centers[:, :pca_dim].astype(np.float64)
-        center_density = interpolator(center_points).astype(np.float64)
+        center_density = np.nan_to_num(interpolator(center_points).astype(np.float64), nan=0.0)
         n_clusters = kmeans_centers.shape[0]
 
     # Normalize all values to [0, 1].
@@ -661,6 +667,7 @@ async def get_embeddings_density(
             density_job.output_dir,
             zdim,
             pca_dim,
+            job.output_dir if job.type == "Analyze" else None,
         )
     except _EmbeddingLoadError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
