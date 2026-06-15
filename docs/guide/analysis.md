@@ -96,7 +96,7 @@ recovar compute_state output -o volumes \
 
 ## Computing trajectories
 
-Use `compute_trajectory` to compute high-density (low free-energy) paths through latent space:
+Use `compute_trajectory` to compute high-density paths through latent space:
 
 ```bash
 recovar compute_trajectory output -o trajectory --zdim=10 \
@@ -125,7 +125,7 @@ Choose one of:
 | `--n-bins` | 50 | Bins for kernel regression |
 
 !!! tip
-    The `--density` option is important for computing paths that follow high-density (low free-energy) regions. Generate density with `estimate_conformational_density`.
+    The `--density` option is important for computing paths that follow high-density regions. Generate density with `estimate_conformational_density`.
 
 ## Viewing results
 

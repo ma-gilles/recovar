@@ -9,6 +9,7 @@ set -uo pipefail
 
 PYTHON="${PYTHON:-python3}"
 BRANCH="${1:-claude/gui-bugfixes}"
+EXTRA="${EXTRA:-gui}"   # e.g. gui  or  gpu,gui
 URL="git+https://github.com/ma-gilles/recovar.git@${BRANCH}"
 PORT="${PORT:-8199}"
 WORK="$(mktemp -d -t recovar-branchinstall-XXXXXX)"
@@ -26,10 +27,12 @@ VBIN="$WORK/venv/bin"
 export PYTHONNOUSERSITE=1
 "$VPY" -m pip install -q --upgrade pip >/dev/null 2>&1
 
-note "cold install: pip install 'recovar[gui] @ $URL'  (no cache, build-isolated — exactly what a user runs)"
-if ! "$VPY" -m pip install --no-cache-dir "recovar[gui] @ ${URL}" 2>&1 | tail -3; then
+note "cold install: pip install 'recovar[${EXTRA}] @ $URL'  (no cache, build-isolated — exactly what a user runs)"
+if ! "$VPY" -m pip install --no-cache-dir "recovar[${EXTRA}] @ ${URL}" 2>&1 | tail -3; then
   bad "pip install from branch failed"; rm -rf "$WORK"; exit 1
 fi
+note "jax devices (GPU available?)"
+"$VPY" -c "import jax; print('    devices:', jax.devices())" 2>&1 | grep -iE "devices:|Cuda|cpu|error" | head -3 || bad "jax import failed"
 
 note "is the 'recovar' command on PATH?"
 [ -x "$VBIN/recovar" ] && echo "    yes: $VBIN/recovar" || bad "recovar console-script missing"

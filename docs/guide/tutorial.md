@@ -3,7 +3,7 @@
 This tutorial walks through two complete RECOVAR analyses on paper datasets with real output plots.
 
 - **EMPIAR-10076** (50S ribosome): pipeline, analyze, identify an outlier cluster, extract a clean subset, re-run
-- **EMPIAR-10180** (spliceosome): pipeline with filtered particles, analyze, conformational density estimation, trajectory computation
+- **EMPIAR-10180** (spliceosome): pipeline with filtered particles, analyze
 
 ## Overview
 
@@ -156,7 +156,7 @@ chimerax output_subset/analysis_20/traj000/state000.mrc state001.mrc ...
 
 ## EMPIAR-10180: Pre-catalytic Spliceosome
 
-**Dataset**: Pre-catalytic spliceosome (327,490 particles, 256 x 256 px), with richer conformational heterogeneity. This example demonstrates the full pipeline including conformational density estimation and trajectory computation.
+**Dataset**: Pre-catalytic spliceosome (327,490 particles, 256 x 256 px), with richer conformational heterogeneity. This example shows the pipeline with a focus mask and pre-filtered particles on a larger dataset.
 
 - **Reference**: Plaschka et al. (2017) *Nature* 546:617-621
 
@@ -201,60 +201,9 @@ recovar analyze output --zdim=4 --n-clusters=20 --n-trajectories=2
 
 ![10180 UMAP](../img/examples/10180/umap_kmeans_centers.png)
 
-### Step 3: Estimate conformational density
+### Next steps
 
-Conformational density estimation maps the free-energy landscape by deconvolving the particle distribution in latent space.
-
-```bash
-recovar estimate_conformational_density output \
-    --pca_dim=4 --z_dim_used=4
-```
-
-| Flag | Purpose |
-|------|---------|
-| `--pca_dim=4` | Estimate density in 4D PCA subspace |
-| `--z_dim_used=4` | Use the 4D latent embedding |
-
-This produces density estimates at different regularization levels in `output/density/`. The `data/deconv_density_knee.pkl` file uses the recommended "knee" regularization.
-
-### Step 4: Compute a trajectory
-
-Using the density landscape, compute a minimum free-energy path between two conformational states:
-
-```bash
-recovar compute_trajectory output \
-    -o output/trajectory_density \
-    --zdim=4 \
-    --density output/density/data/deconv_density_knee.pkl \
-    --endpts output/analysis_4/kmeans/centers.txt \
-
-    --ind 0,19
-```
-
-| Flag | Purpose |
-|------|---------|
-| `--density` | Deconvolved density for path planning |
-| `--endpts` | K-means center coordinates file |
-| `--ind 0,19` | Use centers 0 and 19 as trajectory endpoints |
-
-This generates volumes along the minimum free-energy path:
-
-```
-output/trajectory_density/
-├── state000.mrc ... state005.mrc   # Volumes along the path
-├── state000_half1_unfil.mrc ...    # Half-maps for FSC
-├── diagnostics/state000/           # Per-volume diagnostics
-└── latent_coords.txt               # Latent coordinates of each state
-```
-
-View the trajectory in ChimeraX:
-
-```bash
-chimerax output/trajectory_density/state*.mrc
-```
-
-!!! tip "GUI alternative for trajectories"
-    In the GUI's **Latent Space Explorer**, you can select two points directly on the scatter plot to define trajectory endpoints and compute volumes along the path — no need to look up cluster indices or coordinate files. The volumes appear in the 3D viewer automatically.
+From a completed analysis you can estimate the conformational density and compute density-guided trajectories. See [Conformational Density](conformational-density.md) for those commands.
 
 ---
 

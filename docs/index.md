@@ -21,7 +21,7 @@ hide:
 ## Why RECOVAR?
 
 - **Highest resolution** on [CryoBench](https://cryobench.cs.princeton.edu) across multiple datasets
-- **Conformational density** and free-energy landscape estimation
+- **Conformational density** estimation in latent space
 - **Cryo-ET support** for tilt-series heterogeneity analysis
 - **Web GUI** with interactive latent-space exploration and sub-particle selection
 - **Direct input** from RELION (`.star`) and cryoSPARC (`.cs`) -- no format conversion

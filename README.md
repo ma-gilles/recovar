@@ -1,6 +1,6 @@
 # RECOVAR: Tools for cryo-EM heterogeneity analysis
 
-RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. It reconstructs high-resolution volumes, estimates conformational density and low free-energy motions, and automatically identifies image subsets associated with specific volume features.
+RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. It reconstructs high-resolution volumes, estimates conformational density in latent space, and automatically identifies image subsets associated with specific volume features.
 
 **[Full Documentation](https://ma-gilles.github.io/recovar)** | **[Paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122)** | **[Talk](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)**
 
@@ -13,7 +13,7 @@ RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. I
 - **High resolution** — top performer on [CryoBench](https://cryobench.cs.princeton.edu)
 - **Direct input** — accepts RELION `.star` and cryoSPARC `.cs` files (no preprocessing needed)
 - **Image-to-volume attribution** — extract images that produced a specific volume feature
-- **Conformational density** — estimate free energy landscapes
+- **Conformational density** — estimate the conformational density in latent space
 - **Focus masks** — targeted heterogeneity analysis
 - **Cryo-ET support** — tilt-series data with focus masks
 - **Transparent volume generation** — kernel regression produces no hallucinations

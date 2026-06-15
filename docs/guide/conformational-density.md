@@ -2,12 +2,8 @@
 
 RECOVAR can estimate the probability density of conformations in the latent space. This enables:
 
-- Free energy estimation (free energy = -kT ln(density))
 - Identification of stable conformational states
 - High-density trajectory computation
-
-!!! tip "Worked example"
-    The [Tutorial](tutorial.md#step-3-estimate-conformational-density) demonstrates conformational density estimation on EMPIAR-10180 (spliceosome), including trajectory computation through the density landscape.
 
 ## Estimating density
 
@@ -33,11 +29,11 @@ recovar estimate_stable_states density_output/data/deconv_density_knee.pkl \
     -o stable_states
 ```
 
-Identifies local minima in the free energy landscape. The first argument is the density `.pkl` file produced by `estimate_conformational_density`.
+Identifies local maxima of the conformational density. The first argument is the density `.pkl` file produced by `estimate_conformational_density`.
 
 ## Using density for trajectories
 
-The density can guide trajectory computation to follow low free-energy paths:
+The density can guide trajectory computation to follow high-density paths:
 
 ```bash
 recovar compute_trajectory output -o trajectory --zdim=10 \
@@ -45,7 +41,7 @@ recovar compute_trajectory output -o trajectory --zdim=10 \
     --endpts centers.txt --ind 0,1
 ```
 
-Without `--density`, trajectories follow straight lines in latent space. With density, they curve to follow high-density (low free-energy) regions.
+Without `--density`, trajectories follow straight lines in latent space. With density, they curve to follow high-density regions.
 
 !!! tip "GUI alternative"
     In the GUI's latent space explorer, you can select two points on the scatter plot to compute a trajectory interactively. See the [GUI Guide](gui.md#latent-space-explorer).
