@@ -1877,17 +1877,34 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>pipeline_with_outliers<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc
 </code></pre></div>
 <h2 id="using-results">Using results<a class="headerlink" href="#using-results" title="Permanent link">&para;</a></h2>
-<p>Both commands output indices of detected outliers/junk. You can use these to filter your dataset:</p>
+<p>Both commands output indices of detected outliers/junk under their <code>data/</code> subdirectory.
+<code>outlier_detection</code> writes the combined indices to
+<code>data/combined_results/</code>, with one file per zdim used (default <code>zdim=4</code>):</p>
+<ul>
+<li><code>combined_image_outliers_4.pkl</code> — image-level outlier indices (always written)</li>
+<li><code>combined_image_inliers_4.pkl</code> — the complementary inlier indices</li>
+<li><code>combined_particle_outliers_4.pkl</code> / <code>combined_particle_inliers_4.pkl</code> — particle-level indices (written for tilt-series, or whenever particle outliers are found)</li>
+</ul>
+<p>The inlier file is the most convenient input to <code>--ind</code> for a clean re-run.
+You can also filter a star file directly:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pickle</span><span class="o">,</span><span class="w"> </span><span class="nn">starfile</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;outlier_output/outlier_indices.pkl&quot;</span><span class="p">,</span> <span class="s2">&quot;rb&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">outlier_idx</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">data</span> <span class="o">=</span> <span class="n">starfile</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;particles.star&quot;</span><span class="p">)</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="n">mask</span> <span class="o">=</span> <span class="o">~</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;particles&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="n">outlier_idx</span><span class="p">)</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="n">data</span><span class="p">[</span><span class="s2">&quot;particles&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;particles&quot;</span><span class="p">][</span><span class="n">mask</span><span class="p">]</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="n">starfile</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="s2">&quot;particles_cleaned.star&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">outlier_dir</span> <span class="o">=</span> <span class="s2">&quot;outlier_output/data/combined_results&quot;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">outlier_dir</span><span class="si">}</span><span class="s2">/combined_image_outliers_4.pkl&quot;</span><span class="p">,</span> <span class="s2">&quot;rb&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">outlier_idx</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="n">data</span> <span class="o">=</span> <span class="n">starfile</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;particles.star&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="n">mask</span> <span class="o">=</span> <span class="o">~</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;particles&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="n">outlier_idx</span><span class="p">)</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="n">data</span><span class="p">[</span><span class="s2">&quot;particles&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;particles&quot;</span><span class="p">][</span><span class="n">mask</span><span class="p">]</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="n">starfile</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="s2">&quot;particles_cleaned.star&quot;</span><span class="p">)</span>
 </code></pre></div>
+<div class="admonition tip">
+<p class="admonition-title">Re-run on the clean subset</p>
+<p>Pass the inlier indices straight to the pipeline instead of editing the star file:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output_clean<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span>--ind<span class="w"> </span>outlier_output/data/combined_results/combined_image_inliers_4.pkl
+</code></pre></div></p>
+</div>
 
 
 

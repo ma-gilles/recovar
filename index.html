@@ -1899,11 +1899,11 @@
 <h2 id="why-recovar">Why RECOVAR?<a class="headerlink" href="#why-recovar" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Highest resolution</strong> on <a href="https://cryobench.cs.princeton.edu">CryoBench</a> across multiple datasets</li>
-<li><strong>Conformational density</strong> and free-energy landscape estimation</li>
+<li><strong>Conformational density</strong> estimation in latent space</li>
 <li><strong>Cryo-ET support</strong> for tilt-series heterogeneity analysis</li>
 <li><strong>Web GUI</strong> with interactive latent-space exploration and sub-particle selection</li>
 <li><strong>Direct input</strong> from RELION (<code>.star</code>) and cryoSPARC (<code>.cs</code>) -- no format conversion</li>
-<li><strong>No hallucinations</strong> -- kernel regression produces transparent, verifiable volumes</li>
+<li><strong>No generative model</strong> -- volumes come straight from kernel regression on your particles, so they stay transparent and verifiable</li>
 </ul>
 <div class="admonition info">
 <p class="admonition-title">What you need before starting</p>
@@ -1911,12 +1911,15 @@
 <ol>
 <li>A particle stack with poses and CTF — a RELION <code>.star</code> file or cryoSPARC <code>.cs</code> file</li>
 <li>A solvent mask (<code>.mrc</code>) — or let RECOVAR generate one automatically</li>
-<li>An NVIDIA GPU (any Volta or newer — V100, RTX 20/30/40-series, A100, H100)</li>
+<li>An NVIDIA GPU, Volta or newer (V100, RTX 20/30/40-series, A100, H100) — 16+ GB of VRAM is recommended, though smaller cards work with <code>--downsample</code> and <code>--lazy</code></li>
 </ol>
 <p>RECOVAR outputs: mean reconstruction, variance maps, eigenvolumes, latent coordinates, k-means cluster volumes, UMAP embeddings, and trajectories — all exportable back to RELION/cryoSPARC.</p>
 </div>
 <hr />
 <h2 id="example-output">Example output<a class="headerlink" href="#example-output" title="Permanent link">&para;</a></h2>
+<p>The Web GUI turns the latent space into something you can explore -- color particles by conformational cluster, lasso a subset, and generate a volume at any point with a click:</p>
+<p><img alt="Interactive latent-space explorer in the Web GUI" src="_static/gui/16_latent_explorer.png" /></p>
+<p>RECOVAR also writes the standard diagnostic plots and volumes you would expect:</p>
 <div class="example-outputs">
 <table>
 <thead>
@@ -1933,7 +1936,7 @@
 </tbody>
 </table>
 </div>
-<p><em>Inspect results directly in the browser -- 3D volume viewer with adjustable isosurface threshold:</em></p>
+<p>Inspect any volume directly in the browser -- a 3D viewer with an adjustable isosurface threshold, no ChimeraX round-trip needed:</p>
 <p><img alt="3D volume viewer in the GUI" src="_static/gui/homepage_volume_viewer.png" /></p>
 <hr />
 <h2 id="typical-workflow">Typical workflow<a class="headerlink" href="#typical-workflow" title="Permanent link">&para;</a></h2>

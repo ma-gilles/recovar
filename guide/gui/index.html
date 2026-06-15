@@ -1002,6 +1002,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#masks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Masks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#gui-vs-cli-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2206,6 +2217,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#masks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Masks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#gui-vs-cli-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2263,7 +2285,7 @@
 <h2 id="launching-the-gui">Launching the GUI<a class="headerlink" href="#launching-the-gui" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>gui
 </code></pre></div>
-<p>This starts a local web server (default: <code>http://localhost:8080</code>). Open the URL in your browser.</p>
+<p>This starts a local web server (default: <code>http://localhost:8080</code>) and opens it in your default browser. Pass <code>--no-browser</code> to skip that (handy over SSH).</p>
 <h3 id="options">Options<a class="headerlink" href="#options" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -2277,12 +2299,22 @@
 <tr>
 <td><code>--port</code></td>
 <td>8080</td>
-<td>Port to bind to</td>
+<td>Port to bind to (auto-advances to the next free port if it is taken)</td>
 </tr>
 <tr>
 <td><code>--host</code></td>
 <td>127.0.0.1</td>
 <td>Host to bind to (<code>0.0.0.0</code> for remote access)</td>
+</tr>
+<tr>
+<td><code>--no-browser</code></td>
+<td>False</td>
+<td>Don't auto-open a browser — use this for remote/SSH sessions</td>
+</tr>
+<tr>
+<td><code>--check</code></td>
+<td>False</td>
+<td>Print a readiness report (dependencies, GPUs) and exit</td>
 </tr>
 <tr>
 <td><code>--reload</code></td>
@@ -2304,7 +2336,7 @@
 <p>The tunnel forwards traffic so the remote server appears local. If port 8080 is taken, use a different port in both the SSH command and <code>recovar gui --port &lt;port&gt;</code>.</p>
 <h2 id="getting-started">Getting Started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h2>
 <h3 id="first-launch">First Launch<a class="headerlink" href="#first-launch" title="Permanent link">&para;</a></h3>
-<p>When you first open the GUI, you will see the initial dashboard with no project loaded. The sidebar offers two actions: <strong>Create Project</strong> and <strong>Open Project</strong>. The system info bar at the top shows the hostname, execution mode (Local or SLURM), recovar version, and available GPUs.</p>
+<p>When you first open the GUI, you will see the initial dashboard with no project loaded. The empty state offers three actions: <strong>Create Project</strong>, <strong>Open Project</strong>, and <strong>Tutorial Dataset</strong> -- the last one generates a small example dataset and opens it as a project, a zero-setup way to try the interface. The system info bar at the top shows the hostname, execution mode (<code>Local mode</code>, <code>SLURM mode</code>, or <code>SLURM + Local mode</code>), the recovar version, and available GPUs.</p>
 <p><img alt="Initial Dashboard" src="../../_static/gui/01_initial_dashboard.png" /></p>
 <h3 id="creating-a-project">Creating a Project<a class="headerlink" href="#creating-a-project" title="Permanent link">&para;</a></h3>
 <p>Click <strong>Create Project</strong> in the sidebar or in the main content area. A dialog opens with a built-in file browser that lets you navigate the filesystem.</p>
@@ -2325,12 +2357,14 @@
 <p><img alt="Dashboard with Project" src="../../_static/gui/04_dashboard.png" /></p>
 <p>Key areas:</p>
 <ul>
-<li><strong>Sidebar job tree</strong> (left) -- All jobs organized by type with color-coded status icons</li>
-<li><strong>Job count cards</strong> -- Quick summary of total jobs and counts per type</li>
-<li><strong>Run Pipeline / Scan for Jobs</strong> -- Start a new pipeline job or import existing CLI outputs</li>
-<li><strong>Recent Jobs</strong> -- Chronological list with status badges</li>
-<li><strong>Disk usage</strong> (bottom-left) -- Filesystem usage monitor</li>
-<li><strong>Settings</strong> (bottom-left) -- Configure SLURM and local execution defaults</li>
+<li><strong>Sidebar job tree</strong> (left) -- all jobs organized by type with color-coded status icons</li>
+<li><strong>Search</strong> (⌘K / Ctrl+K) -- a command palette to jump to any job, mask, or action</li>
+<li><strong>Job count cards</strong> -- quick summary of total jobs and counts per type</li>
+<li><strong>Run Pipeline / Scan for Jobs</strong> -- start a new pipeline job or import existing CLI outputs</li>
+<li><strong>Recent Jobs</strong> -- chronological list with status badges</li>
+<li><strong>Masks</strong> (bottom-left) -- the project's mask library (see <a href="../masks/#using-the-gui">Masks</a>)</li>
+<li><strong>Disk usage</strong> (bottom-left) -- filesystem usage monitor</li>
+<li><strong>Settings</strong> (bottom-left) -- configure SLURM and local execution defaults</li>
 </ul>
 <h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
 <p>The Settings page (gear icon at the bottom of the sidebar) lets you configure default values for SLURM and local GPU execution. These defaults are pre-filled into every new job form.</p>
@@ -2383,15 +2417,18 @@
 <p><img alt="Cloned Form" src="../../_static/gui/19_cloned_form.png" /></p>
 <h2 id="exploring-results">Exploring Results<a class="headerlink" href="#exploring-results" title="Permanent link">&para;</a></h2>
 <h3 id="latent-space-explorer">Latent Space Explorer<a class="headerlink" href="#latent-space-explorer" title="Permanent link">&para;</a></h3>
-<p>After running an Analyze job, click <strong>Explore Latent Space</strong> to open the interactive explorer:</p>
+<p>After running an Analyze job, click <strong>Explore Latent Space</strong> to open the interactive explorer. The PCA and UMAP projections sit side by side; color the particles by k-means cluster to see how the conformational landscape breaks apart.</p>
+<p><img alt="Latent space explorer -- PCA and UMAP colored by k-means cluster" src="../../_static/gui/16_latent_explorer.png" /></p>
 <ul>
-<li><strong>PCA and UMAP</strong> projections side by side (50K+ points at 60 fps via WebGL)</li>
+<li><strong>PCA and UMAP</strong> projections side by side (handles hundreds of thousands of particles; very large datasets are automatically subsampled for smooth display)</li>
 <li><strong>Color by</strong> k-means cluster, point density, or deconvolved conformational density</li>
-<li><strong>Click</strong> a particle or k-means center to see its coordinates and generate a volume</li>
-<li><strong>Lasso / rectangle / polygon selection</strong> to select particles and export <code>.star</code> or <code>.ind</code> files (see <a href="../extracting-subsets/#using-the-gui">Extracting Subsets</a>)</li>
+<li><strong>Click</strong> a particle or k-means center to see its coordinates and generate a volume on the fly</li>
+<li><strong>Lasso / rectangle / polygon selection</strong> to pick particles and export a <code>.star</code> or <code>.ind</code> subset (see <a href="../extracting-subsets/#using-the-gui">Extracting Subsets</a>)</li>
 </ul>
 <h3 id="3d-volume-viewer">3D Volume Viewer<a class="headerlink" href="#3d-volume-viewer" title="Permanent link">&para;</a></h3>
-<p>View isosurface renderings of any volume directly in the browser with adjustable sigma threshold, slice views, and side-by-side comparison of up to 4 volumes.</p>
+<p>View isosurface renderings of any volume directly in the browser. Adjust the <strong>Contour (σ)</strong> threshold and <strong>Opacity</strong>, switch between <strong>3D</strong> and <strong>Slice</strong> views, and choose a render <strong>Resolution</strong> (Auto / 256 / 128 / 64 / Full) for faster interaction over slow connections. Use the <strong>Pin</strong> button next to any volume to overlay up to four volumes in one scene and compare them.</p>
+<h2 id="masks">Masks<a class="headerlink" href="#masks" title="Permanent link">&para;</a></h2>
+<p>Click <strong>Masks</strong> at the bottom of the sidebar to open the project's mask library. From there you can review every mask and combine masks with boolean operations (union, intersect, subtract). To create a new one, click the green wand icon on any volume in a job's <strong>Volumes</strong> tab to launch the interactive <strong>Mask Wizard</strong> -- a guided tool for drawing a solvent or focus mask with live threshold, dilation, and soft-edge previews. See <a href="../masks/#using-the-gui">Masks</a> for the full workflow.</p>
 <h2 id="gui-vs-cli-workflow">GUI vs CLI Workflow<a class="headerlink" href="#gui-vs-cli-workflow" title="Permanent link">&para;</a></h2>
 <p>The GUI mirrors the CLI workflow, adding interactivity:</p>
 <table>
@@ -2437,12 +2474,12 @@
 <p>The GUI and CLI work on the same output directories. You can run <code>pipeline</code> and <code>analyze</code> from the command line, then launch <code>recovar gui</code> and scan the directory to explore the results interactively. Or do everything through the GUI.</p>
 </div>
 <h2 id="jobs-survive-gui-restarts">Jobs Survive GUI Restarts<a class="headerlink" href="#jobs-survive-gui-restarts" title="Permanent link">&para;</a></h2>
-<p>Jobs submitted through the GUI (both SLURM and local) are tracked in the project database. If the GUI server restarts, it reconnects to all in-flight jobs automatically -- no work is lost.</p>
+<p>Jobs submitted through the GUI are tracked in the project database. <strong>SLURM jobs</strong> run on the cluster independently of the GUI, so they keep going if the server restarts and are picked back up automatically. <strong>Local GPU jobs</strong> run as child processes of the server: the GUI reconciles their final status (completed or failed) when it restarts, but a local job that was still running when the server was killed will not resume.</p>
 <h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
 <p>The GUI requires FastAPI, uvicorn, SQLAlchemy, and a few other packages, which are all included when you install with:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;recovar[gui]&quot;</span>
 </code></pre></div>
-<p>This installs the <code>gui</code> extra, which includes <code>fastapi</code>, <code>uvicorn</code>, <code>python-multipart</code>, <code>sqlalchemy</code>, <code>aiofiles</code>, and <code>tomli_w</code> (for writing TOML settings files).</p>
+<p>This installs the <code>gui</code> extra, which includes <code>fastapi</code>, <code>uvicorn</code>, <code>python-multipart</code>, <code>sqlalchemy</code>, <code>aiosqlite</code>, <code>aiofiles</code>, <code>jinja2</code>, and <code>tomli_w</code> (for writing TOML settings files).</p>
 <p>The frontend is pre-built and bundled -- no Node.js required at runtime.</p>
 
 

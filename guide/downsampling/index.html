@@ -1959,14 +1959,26 @@
 
 
 <h1 id="downsampling">Downsampling<a class="headerlink" href="#downsampling" title="Permanent link">&para;</a></h1>
-<p>If your images are larger than 256x256 pixels, downsampling significantly speeds up the pipeline without meaningfully affecting results at the resolutions relevant for heterogeneity analysis.</p>
+<p>Downsampling shrinks the image box size before processing. It significantly speeds up the pipeline without meaningfully affecting results at the resolutions relevant for heterogeneity analysis.</p>
+<div class="admonition info">
+<p class="admonition-title">The pipeline downsamples to 256 by default</p>
+<p><code>recovar pipeline</code> runs with <code>--downsample 256</code>, so images larger than 256x256 are automatically downsampled to a box size of 256. If your images are already at or below 256, the step is skipped. To run at the original box size, pass <code>--no-downsample</code>.</p>
+</div>
 <h2 id="automatic-downsampling-recommended">Automatic downsampling (recommended)<a class="headerlink" href="#automatic-downsampling-recommended" title="Permanent link">&para;</a></h2>
-<p>Use <code>--downsample D</code> with the pipeline inside a project:</p>
+<p>You don't need to do anything to get the default behavior — running the pipeline inside a project already downsamples to 256. To choose a different target box size, pass <code>--downsample D</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>init_project<span class="w"> </span>my_project
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>my_project
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--downsample<span class="w"> </span><span class="m">128</span><span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Default: downsamples to a box size of 256</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># Pick a different target box size (e.g. 128 for faster runs)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--downsample<span class="w"> </span><span class="m">128</span><span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># Keep the original box size</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--no-downsample<span class="w"> </span>--project<span class="w"> </span>.
 </code></pre></div>
-<p>The pipeline automatically:</p>
+<p>When downsampling is enabled, the pipeline automatically:</p>
 <ol>
 <li>Pre-downsamples all images to disk in the shared project cache (<code>Cache/downsample/...</code>)</li>
 <li>Runs the pipeline on the downsampled images in the numbered Pipeline job directory</li>
@@ -1995,11 +2007,19 @@
 <tbody>
 <tr>
 <td><code>-D</code>, <code>--target-D</code></td>
-<td>Target box size (must be even)</td>
+<td>Target box size (must be even). Required</td>
 </tr>
 <tr>
 <td><code>-o</code>, <code>--outdir</code></td>
 <td>Output directory (optional in project mode; shared project cache is still used when available)</td>
+</tr>
+<tr>
+<td><code>--project</code></td>
+<td>Project root. Lets the output land in the shared project cache and be tracked as a job</td>
+</tr>
+<tr>
+<td><code>--output-name</code></td>
+<td>Human-readable name for the resulting job</td>
 </tr>
 <tr>
 <td><code>--datadir</code></td>
@@ -2012,6 +2032,10 @@
 <tr>
 <td><code>--batch-size</code></td>
 <td>Images per batch (default: 1000)</td>
+</tr>
+<tr>
+<td><code>--gpu-budget-gb</code>, <code>--gpu-memory</code></td>
+<td>Soft GPU memory budget in GB for auto batch sizing</td>
 </tr>
 </tbody>
 </table>
@@ -2073,8 +2097,8 @@
 <h2 id="using-the-gui">Using the GUI<a class="headerlink" href="#using-the-gui" title="Permanent link">&para;</a></h2>
 <p>In the web GUI (<code>recovar gui</code>), you can downsample in two ways:</p>
 <ul>
-<li><strong>As part of a Pipeline job</strong>: expand <strong>Advanced</strong> options and set the <strong>Downsample</strong> field to your target box size (e.g., 128). The pipeline handles caching automatically.</li>
-<li><strong>As a standalone job</strong>: click <strong>+ New Job</strong>, select <strong>Downsample</strong> from the Job Type dropdown, browse to your particle file, and set the target box size.</li>
+<li><strong>As part of a Pipeline job</strong>: expand <strong>Advanced</strong> options and set the <strong>Downsample</strong> field (it defaults to 256). The pipeline handles caching automatically.</li>
+<li><strong>As a standalone job</strong>: click <strong>+ New Job</strong>, select <strong>Downsample</strong> from the Job Type dropdown, browse to your particle file, and set the <strong>Target Box Size</strong> (defaults to 128). Its <strong>Advanced</strong> section holds Data Directory, Strip Prefix, and Batch Size (default 1000).</li>
 </ul>
 <p>See the <a href="../gui/">GUI Guide</a> for project setup and job submission.</p>
 

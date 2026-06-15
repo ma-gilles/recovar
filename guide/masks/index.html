@@ -1081,6 +1081,34 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#using-the-gui-the-mask-wizard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using the GUI: the Mask Wizard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Using the GUI: the Mask Wizard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#erasing-parts-of-a-mask" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Erasing parts of a mask
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#solvent-mask" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1818,6 +1846,34 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#using-the-gui-the-mask-wizard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using the GUI: the Mask Wizard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Using the GUI: the Mask Wizard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#erasing-parts-of-a-mask" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Erasing parts of a mask
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#solvent-mask" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1906,6 +1962,29 @@
 
 <h1 id="masks">Masks<a class="headerlink" href="#masks" title="Permanent link">&para;</a></h1>
 <p>A real-space mask is important to boost SNR by focusing the analysis on the region of interest.</p>
+<h2 id="using-the-gui-the-mask-wizard">Using the GUI: the Mask Wizard<a class="headerlink" href="#using-the-gui-the-mask-wizard" title="Permanent link">&para;</a></h2>
+<p>The easiest way to make a solvent or focus mask is the built-in <strong>Mask Wizard</strong>. Open any job's <strong>Volumes</strong> tab and click the green wand icon on a volume (usually the mean reconstruction) to launch it.</p>
+<p><img alt="Mask Wizard -- slice view with live preview and controls" src="../../_static/gui/20_mask_wizard.png" /></p>
+<p>The wizard builds a mask from the volume and previews it live as you adjust:</p>
+<ul>
+<li><strong>Threshold</strong> -- automatic (Otsu) or a manual density cutoff</li>
+<li><strong>Dilation</strong> -- expand the mask outward by a number of voxels</li>
+<li><strong>Soft edge</strong> -- width of the cosine falloff at the mask boundary</li>
+<li><strong>Lowpass smoothing</strong> -- automatic or manual, to smooth the surface</li>
+<li><strong>Cleanup</strong> -- fill interior holes and keep only the largest connected component</li>
+<li><strong>Segments</strong> -- run connected-component analysis and keep the <em>N</em> largest blobs</li>
+</ul>
+<p>Switch between the <strong>Slice</strong> view (scroll through X / Y / Z planes with the green mask overlaid) and the <strong>3D</strong> isosurface view:</p>
+<p><img alt="Mask Wizard -- 3D isosurface view" src="../../_static/gui/21_mask_wizard_3d.png" /></p>
+<h3 id="erasing-parts-of-a-mask">Erasing parts of a mask<a class="headerlink" href="#erasing-parts-of-a-mask" title="Permanent link">&para;</a></h3>
+<p>To carve a region out -- for example, to keep only one domain for a focus mask -- turn on the <strong>Eraser</strong>:</p>
+<ul>
+<li>In <strong>3D</strong>, click on the mask surface to drop an erase sphere (radius set by the slider).</li>
+<li>In <strong>Slice</strong>, use the <strong>Brush</strong> to paint over regions, or the <strong>Box</strong> tool to remove a slab.</li>
+<li>Undo and redo with the toolbar buttons or Cmd/Ctrl+Z.</li>
+</ul>
+<p>Click <strong>Save Mask</strong> to write the result to <code>&lt;project&gt;/Masks/</code>. It is then available as a solvent or focus mask in any new Pipeline job, and in the <strong>Masks</strong> library (sidebar), where you can combine masks with union / intersect / subtract.</p>
+<p>The rest of this page covers the equivalent command-line options.</p>
 <h2 id="solvent-mask">Solvent mask<a class="headerlink" href="#solvent-mask" title="Permanent link">&para;</a></h2>
 <p>Most consensus reconstruction software outputs a solvent mask. Use it directly:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc
@@ -1949,7 +2028,8 @@
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--mask<span class="o">=</span>sphere<span class="w"> </span>--focus-mask<span class="w"> </span>focus_mask.mrc
 </code></pre></div>
 <h3 id="creating-a-focus-mask">Creating a focus mask<a class="headerlink" href="#creating-a-focus-mask" title="Permanent link">&para;</a></h3>
-<p>You can create a focus mask in UCSF Chimera or ChimeraX:</p>
+<p>The quickest way is the <a href="#using-the-gui-the-mask-wizard">Mask Wizard</a> above: open the mean reconstruction, set a threshold, and use the eraser to keep only your region of interest.</p>
+<p>You can also build one in UCSF Chimera or ChimeraX:</p>
 <ol>
 <li>Open your consensus map</li>
 <li>Select the region of interest</li>
@@ -1957,10 +2037,6 @@
 <li>Save as <code>.mrc</code></li>
 </ol>
 <p>See <a href="https://guide.cryosparc.com/processing-data/tutorials-and-case-studies/mask-selection-and-generation-in-ucsf-chimera">cryoSPARC's guide on mask generation</a> for step-by-step instructions.</p>
-<div class="admonition tip">
-<p class="admonition-title">GUI mask selection</p>
-<p>In the <a href="../gui/">web GUI</a>, you can browse and select mask files when creating a pipeline job — or choose <code>from_halfmaps</code> / <code>sphere</code> from a dropdown.</p>
-</div>
 <h2 id="mask-dilation">Mask dilation<a class="headerlink" href="#mask-dilation" title="Permanent link">&para;</a></h2>
 <p>To expand a mask by a few pixels:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span><span class="se">\</span>

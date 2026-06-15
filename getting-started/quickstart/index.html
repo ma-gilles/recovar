@@ -1888,7 +1888,7 @@
 </tr>
 <tr>
 <td><strong>GPU</strong></td>
-<td>NVIDIA GPU with 16+ GB VRAM (40+ GB recommended for large datasets)</td>
+<td>An NVIDIA GPU (Volta or newer). 16+ GB VRAM is recommended; less works for smaller boxes or with <code>--downsample</code> / <code>--lazy</code> (40+ GB helps for large datasets at 256px)</td>
 </tr>
 <tr>
 <td><strong>RECOVAR installed</strong></td>
@@ -1905,7 +1905,7 @@
 <details class="info">
 <summary>Key terms</summary>
 <ul>
-<li><strong>zdim</strong>: Number of latent-space dimensions. Start with 10. Higher = more detail but slower.</li>
+<li><strong>zdim</strong>: Number of latent-space dimensions. A first run with <code>zdim=4</code> is a good default (it's what the GUI uses); increase to 10 or 20 to resolve finer heterogeneity at the cost of speed.</li>
 <li><strong>K-means</strong>: Groups particles into representative conformational states.</li>
 <li><strong>UMAP</strong>: 2D visualization of the latent space for exploring heterogeneity.</li>
 <li><strong>Eigenvalues</strong>: Measure how much variance each principal component captures. Sharp drop = clear signal.</li>
@@ -1924,13 +1924,13 @@
 <p><img alt="Pipeline job form" src="../../_static/gui/06_new_job_pipeline.png" /></p>
 <ol>
 <li>Click <strong>Create Project</strong> and choose a directory</li>
-<li>Click <strong>+ New Job</strong> &gt; <strong>Pipeline</strong></li>
+<li>Click <strong>New Job</strong> &gt; <strong>Pipeline</strong></li>
 <li>Browse to your particles file (<code>.star</code> or <code>.cs</code>)</li>
 <li>Select a mask (or use Auto/Sphere)</li>
 <li>Click <strong>Submit Pipeline Job</strong></li>
 </ol>
 <p><strong>3. Analyze results</strong></p>
-<p>Once the pipeline completes, click <strong>Analyze this pipeline output</strong> in Suggested Next Steps. Set zdim (try 10) and click <strong>Submit Analyze Job</strong>.</p>
+<p>Once the pipeline completes, click <strong>Analyze this pipeline output</strong> in <strong>Next Steps</strong>. The zdim defaults to 4 (good for a first look — raise it to 10 or 20 for finer detail), then click <strong>Submit Analyze Job</strong>.</p>
 <p><strong>4. Explore</strong></p>
 <p>The GUI shows eigenvalue spectra, UMAP scatter plots, and lets you click to generate volumes at any point in latent space. See the <a href="../../guide/gui/">GUI Guide</a> for details.</p>
 </div>
@@ -1966,19 +1966,20 @@
 </div>
 <details class="note">
 <summary>Expected output after each step</summary>
-<p><strong>After <code>recovar init_project</code>:</strong> Creates the project directory with a <code>recovar_project.db</code> metadata file.</p>
+<p><strong>After <code>recovar init_project</code>:</strong> Creates the project directory with a <code>project.json</code> index file.</p>
 <p><strong>After <code>recovar pipeline</code>:</strong> Creates <code>Pipeline/job_0001/</code> containing:</p>
 <ul>
-<li><code>mean_half1.mrc</code>, <code>mean_half2.mrc</code> -- half-map mean reconstructions</li>
-<li><code>cov_coeffs.pkl</code> -- covariance matrix coefficients</li>
-<li><code>svd/</code> -- eigenvalues and eigenvectors</li>
-<li><code>pipeline_output.json</code> -- run metadata and parameters</li>
+<li><code>output/volumes/mean.mrc</code>, <code>mean_half1_unfil.mrc</code>, <code>mean_half2_unfil.mrc</code> -- mean reconstruction and half-maps</li>
+<li><code>output/volumes/eigen_pos0000.mrc</code>, ... and <code>variance*.mrc</code> -- eigenvolumes and variance maps</li>
+<li><code>output/plots/</code> -- diagnostic plots (eigenvalue spectrum, etc.)</li>
+<li><code>model/</code> -- internal results: <code>params.pkl</code>, <code>embeddings.pkl</code>, and per-zdim coordinates under <code>model/zdim_&lt;N&gt;/</code></li>
+<li><code>job.json</code>, <code>command.txt</code>, <code>run.log</code> -- run metadata</li>
 </ul>
-<p><strong>After <code>recovar analyze</code>:</strong> Creates <code>Analyze/job_0001/</code> containing:</p>
+<p><strong>After <code>recovar analyze</code>:</strong> Creates <code>Analyze/job_0001/</code> (or <code>analysis_&lt;zdim&gt;/</code> when run with <code>-o</code>) containing:</p>
 <ul>
 <li><code>kmeans/center000.mrc</code>, <code>center001.mrc</code>, ... -- cluster center volumes</li>
-<li><code>umap.pkl</code> -- UMAP embedding coordinates</li>
-<li><code>z_values.pkl</code> -- per-particle latent coordinates</li>
+<li><code>data/kmeans_result.pkl</code> -- k-means labels and centers</li>
+<li><code>plots/PCA/</code>, <code>plots/umap/</code> -- PC scatter and UMAP plots</li>
 </ul>
 </details>
 <hr />

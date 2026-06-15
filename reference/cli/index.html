@@ -2682,7 +2682,7 @@
 <tr>
 <td><code>--chunk-size</code></td>
 <td>None</td>
-<td>Split output into chunks of this many images</td>
+<td>Accepted but not yet wired up — output is always a single stack</td>
 </tr>
 </tbody>
 </table>
@@ -2707,9 +2707,9 @@
 <td>Coordinates file (<code>.txt</code>)</td>
 </tr>
 <tr>
-<td><code>-o</code></td>
-<td>Required</td>
-<td>Output directory</td>
+<td><code>-o</code>, <code>--outdir</code></td>
+<td>Auto (project mode)</td>
+<td>Output directory; auto-numbered when a project is active</td>
 </tr>
 <tr>
 <td><code>--Bfactor</code></td>
@@ -2728,7 +2728,7 @@
 </tr>
 <tr>
 <td><code>--n-min-particles</code></td>
-<td>100</td>
+<td>None (100 internally)</td>
 <td>Minimum particles for regression</td>
 </tr>
 <tr>
@@ -2789,13 +2789,13 @@
 <tbody>
 <tr>
 <td><code>--zdim</code></td>
-<td>Required</td>
-<td>Latent dimension</td>
+<td>Auto</td>
+<td>Latent dimension; inferred if only one is available, otherwise pass it explicitly</td>
 </tr>
 <tr>
-<td><code>-o</code></td>
-<td>Required</td>
-<td>Output directory</td>
+<td><code>-o</code>, <code>--outdir</code></td>
+<td>Auto (project mode)</td>
+<td>Output directory; auto-numbered when a project is active</td>
 </tr>
 <tr>
 <td><code>--density</code></td>
@@ -2905,9 +2905,9 @@
 <hr />
 <h2 id="extract_image_subset_from_kmeans"><code>extract_image_subset_from_kmeans</code><a class="headerlink" href="#extract_image_subset_from_kmeans" title="Permanent link">&para;</a></h2>
 <p>Extract particles from k-means clusters.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>recovar<span class="w"> </span>extract_image_subset_from_kmeans<span class="w"> </span>kmeans_result.pkl<span class="w"> </span>output_dir<span class="w"> </span>indices<span class="w"> </span><span class="o">[</span>-i<span class="o">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>recovar<span class="w"> </span>extract_image_subset_from_kmeans<span class="w"> </span>kmeans_result.pkl<span class="w"> </span>subset.pkl<span class="w"> </span><span class="m">0</span>,1,2<span class="w"> </span><span class="o">[</span>-i<span class="o">]</span>
 </code></pre></div>
-<p>Output is written to <code>output_dir/indices.pkl</code>.</p>
+<p>The positional order is <code>&lt;centers.pkl&gt; &lt;output.pkl&gt; &lt;indices&gt;</code>. The output path <strong>must end in <code>.pkl</code></strong>.</p>
 <table>
 <thead>
 <tr>
@@ -2921,16 +2921,16 @@
 <td>Path to <code>data/kmeans_result.pkl</code> from analyze</td>
 </tr>
 <tr>
-<td><code>output_dir</code></td>
-<td>Output directory (indices saved as <code>indices.pkl</code> inside)</td>
+<td><code>output.pkl</code></td>
+<td>Output <code>.pkl</code> file for the selected indices. In project mode, pass <code>--project</code> and the file is auto-placed as <code>indices.pkl</code> in a numbered job directory</td>
 </tr>
 <tr>
 <td><code>indices</code></td>
-<td>Comma-separated cluster indices</td>
+<td>Comma-separated cluster indices (e.g. <code>0,1,2</code>)</td>
 </tr>
 <tr>
-<td><code>-i</code></td>
-<td>Invert selection</td>
+<td><code>-i</code>, <code>--inverse</code></td>
+<td>Invert selection (keep clusters <em>not</em> listed)</td>
 </tr>
 </tbody>
 </table>
@@ -2967,17 +2967,13 @@
 <td>Output 2D STAR file</td>
 </tr>
 <tr>
-<td><code>--tilt-dim</code></td>
-<td>Auto</td>
-<td>Tilt image dimensions in pixels (auto-detected from MRC headers)</td>
-</tr>
-<tr>
 <td><code>-v</code>, <code>--verbose</code></td>
 <td>False</td>
 <td>Enable verbose logging</td>
 </tr>
 </tbody>
 </table>
+<p>Tilt image dimensions and pixel size are read from the optics table in <code>particles.star</code> — there is no flag to set them.</p>
 <p>See <a href="../../guide/cryo-et/#importing-from-relion5">Cryo-ET</a> for usage details.</p>
 <hr />
 <h2 id="gui"><code>gui</code><a class="headerlink" href="#gui" title="Permanent link">&para;</a></h2>
@@ -2996,7 +2992,7 @@
 <tr>
 <td><code>--port</code></td>
 <td>8080</td>
-<td>Port to bind to</td>
+<td>Port to bind to (the next free port is used if it is busy)</td>
 </tr>
 <tr>
 <td><code>--host</code></td>
@@ -3007,6 +3003,16 @@
 <td><code>--reload</code></td>
 <td>False</td>
 <td>Auto-reload for development</td>
+</tr>
+<tr>
+<td><code>--no-browser</code></td>
+<td>False</td>
+<td>Do not auto-open a browser on launch</td>
+</tr>
+<tr>
+<td><code>--check</code></td>
+<td>False</td>
+<td>Diagnose GUI dependencies, GPU, and SLURM availability, then exit</td>
 </tr>
 </tbody>
 </table>
@@ -3037,7 +3043,7 @@
 </tr>
 </tbody>
 </table>
-<p>Creates a <code>recovar_project.db</code> file in the directory. Subsequent commands using <code>--project</code> will auto-generate numbered job directories (e.g. <code>Pipeline/job_0001/</code>, <code>Analyze/job_0001/</code>).</p>
+<p>Creates a <code>project.json</code> index file in the directory. Subsequent commands using <code>--project</code> will auto-generate numbered job directories (e.g. <code>Pipeline/job_0001/</code>, <code>Analyze/job_0001/</code>). (When you open the same directory in the web GUI, the GUI additionally maintains its own <code>recovar_project.db</code>.)</p>
 <hr />
 <h2 id="project_status"><code>project_status</code><a class="headerlink" href="#project_status" title="Permanent link">&para;</a></h2>
 <p>Show status of all jobs in a project.</p>
@@ -3066,7 +3072,7 @@
 </table>
 <hr />
 <h2 id="common-flag-project">Common flag: <code>--project</code><a class="headerlink" href="#common-flag-project" title="Permanent link">&para;</a></h2>
-<p>All commands that produce output accept <code>--project &lt;dir&gt;</code> to enable project mode. This is the recommended way to run RECOVAR. When active, output directories are auto-generated, downstream commands may omit <code>result_dir</code> to use the latest completed Pipeline job, and RECOVAR stores human-readable job names alongside the numbered directories. If you run from within a project directory (containing <code>recovar_project.db</code>), it is auto-detected without needing the flag.</p>
+<p>All commands that produce output accept <code>--project &lt;dir&gt;</code> to enable project mode. This is the recommended way to run RECOVAR. When active, output directories are auto-generated, downstream commands may omit <code>result_dir</code> to use the latest completed Pipeline job, and RECOVAR stores human-readable job names alongside the numbered directories. If you run from within a project directory (containing <code>project.json</code>), it is auto-detected without needing the flag.</p>
 <p>Each job creates <code>job.json</code>, <code>command.txt</code>, <code>run.log</code>, and <code>README.txt</code> metadata files.</p>
 <h3 id="project-directory-naming">Project directory naming<a class="headerlink" href="#project-directory-naming" title="Permanent link">&para;</a></h3>
 <table>

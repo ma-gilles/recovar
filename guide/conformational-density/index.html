@@ -1861,14 +1861,9 @@
 <h1 id="conformational-density">Conformational Density<a class="headerlink" href="#conformational-density" title="Permanent link">&para;</a></h1>
 <p>RECOVAR can estimate the probability density of conformations in the latent space. This enables:</p>
 <ul>
-<li>Free energy estimation (free energy = -kT ln(density))</li>
 <li>Identification of stable conformational states</li>
 <li>High-density trajectory computation</li>
 </ul>
-<div class="admonition tip">
-<p class="admonition-title">Worked example</p>
-<p>The <a href="../tutorial/#step-3-estimate-conformational-density">Tutorial</a> demonstrates conformational density estimation on EMPIAR-10180 (spliceosome), including trajectory computation through the density landscape.</p>
-</div>
 <h2 id="estimating-density">Estimating density<a class="headerlink" href="#estimating-density" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>estimate_conformational_density<span class="w"> </span>output<span class="w"> </span>--pca_dim<span class="o">=</span><span class="m">4</span><span class="w"> </span>--z_dim_used<span class="o">=</span><span class="m">4</span>
 </code></pre></div>
@@ -1907,21 +1902,21 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>estimate_stable_states<span class="w"> </span>density_output/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>-o<span class="w"> </span>stable_states
 </code></pre></div>
-<p>Identifies local minima in the free energy landscape. The first argument is the density <code>.pkl</code> file produced by <code>estimate_conformational_density</code>.</p>
+<p>Identifies local maxima of the conformational density. The first argument is the density <code>.pkl</code> file produced by <code>estimate_conformational_density</code>.</p>
 <h2 id="using-density-for-trajectories">Using density for trajectories<a class="headerlink" href="#using-density-for-trajectories" title="Permanent link">&para;</a></h2>
-<p>The density can guide trajectory computation to follow low free-energy paths:</p>
+<p>The density can guide trajectory computation to follow high-density paths:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>compute_trajectory<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>trajectory<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--density<span class="w"> </span>density_output/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span>--endpts<span class="w"> </span>centers.txt<span class="w"> </span>--ind<span class="w"> </span><span class="m">0</span>,1
 </code></pre></div>
-<p>Without <code>--density</code>, trajectories follow straight lines in latent space. With density, they curve to follow high-density (low free-energy) regions.</p>
+<p>Without <code>--density</code>, trajectories follow straight lines in latent space. With density, they curve to follow high-density regions.</p>
 <div class="admonition tip">
 <p class="admonition-title">GUI alternative</p>
 <p>In the GUI's latent space explorer, you can select two points on the scatter plot to compute a trajectory interactively. See the <a href="../gui/#latent-space-explorer">GUI Guide</a>.</p>
 </div>
 <h2 id="using-the-gui">Using the GUI<a class="headerlink" href="#using-the-gui" title="Permanent link">&para;</a></h2>
-<p>In the web GUI (<code>recovar gui</code>), click <strong>+ New Job</strong> and select <strong>Density Estimation</strong> from the Job Type dropdown. Set the result directory (path to pipeline output), PCA dimension, and latent dimension, then submit.</p>
-<p>You can also reach density estimation from a completed pipeline job's <strong>Suggested Next Steps</strong> by clicking <strong>Estimate conformational density</strong>, which pre-fills the result directory.</p>
+<p>In the web GUI (<code>recovar gui</code>), click <strong>New Job</strong> and select <strong>Density</strong> from the Job Type dropdown. Pick a completed pipeline job in the output picker, set the <strong>PCA Dimension</strong>, and (optionally) set <strong>Z Dimension Used</strong> under the <strong>Advanced</strong> section. Click <strong>Estimate Density</strong> to submit.</p>
+<p>You can also reach density estimation from a completed pipeline job's <strong>Next Steps</strong>, which pre-fills the pipeline output for you.</p>
 <p>After density estimation completes, use the <strong>Latent Space Explorer</strong> to color particles by conformational density and visually identify stable states.</p>
 
 
