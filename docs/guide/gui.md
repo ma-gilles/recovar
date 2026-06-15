@@ -81,7 +81,7 @@ Key areas:
 - **Job count cards** -- quick summary of total jobs and counts per type
 - **Run Pipeline / Scan for Jobs** -- start a new pipeline job or import existing CLI outputs
 - **Recent Jobs** -- chronological list with status badges
-- **Masks** (bottom-left) -- the project's mask library (see [Masks](masks.md#using-the-gui))
+- **Masks** (bottom-left) -- the project's mask library (see [Masks](masks.md#using-the-gui-the-mask-wizard))
 - **Disk usage** (bottom-left) -- filesystem usage monitor
 - **Settings** (bottom-left) -- configure SLURM and local execution defaults
 
@@ -115,8 +115,8 @@ Same layered structure with GPU-specific options:
 
 Click **+ New Job** in the sidebar or the dashboard. Each job type has its own form. For detailed screenshots and field descriptions, see the relevant guide page:
 
-- **Pipeline** -- See [Running the Pipeline](pipeline.md#using-the-gui)
-- **Analyze** -- See [Analyzing Results](analysis.md#using-the-gui)
+- **Pipeline** -- See [Running the Pipeline](pipeline.md#submitting-a-pipeline-job)
+- **Analyze** -- See [Analyzing Results](analysis.md#submitting-an-analyze-job)
 - **Downsample** -- See [Downsampling](downsampling.md#using-the-gui)
 - **Density Estimation** -- See [Conformational Density](conformational-density.md#using-the-gui)
 - **Compute State** -- Generate a 3D volume at a specific latent coordinate
@@ -177,7 +177,7 @@ View isosurface renderings of any volume directly in the browser. Adjust the **C
 
 ## Masks
 
-Click **Masks** at the bottom of the sidebar to open the project's mask library. From there you can review every mask and combine masks with boolean operations (union, intersect, subtract). To create a new one, click the green wand icon on any volume in a job's **Volumes** tab to launch the interactive **Mask Wizard** -- a guided tool for drawing a solvent or focus mask with live threshold, dilation, and soft-edge previews. See [Masks](masks.md#using-the-gui) for the full workflow.
+Click **Masks** at the bottom of the sidebar to open the project's mask library. From there you can review every mask and combine masks with boolean operations (union, intersect, subtract). To create a new one, click the green wand icon on any volume in a job's **Volumes** tab to launch the interactive **Mask Wizard** -- a guided tool for drawing a solvent or focus mask with live threshold, dilation, and soft-edge previews. See [Masks](masks.md#using-the-gui-the-mask-wizard) for the full workflow.
 
 
 ## GUI vs CLI Workflow
