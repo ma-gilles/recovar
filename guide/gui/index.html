@@ -2362,7 +2362,7 @@
 <li><strong>Job count cards</strong> -- quick summary of total jobs and counts per type</li>
 <li><strong>Run Pipeline / Scan for Jobs</strong> -- start a new pipeline job or import existing CLI outputs</li>
 <li><strong>Recent Jobs</strong> -- chronological list with status badges</li>
-<li><strong>Masks</strong> (bottom-left) -- the project's mask library (see <a href="../masks/#using-the-gui">Masks</a>)</li>
+<li><strong>Masks</strong> (bottom-left) -- the project's mask library (see <a href="../masks/#using-the-gui-the-mask-wizard">Masks</a>)</li>
 <li><strong>Disk usage</strong> (bottom-left) -- filesystem usage monitor</li>
 <li><strong>Settings</strong> (bottom-left) -- configure SLURM and local execution defaults</li>
 </ul>
@@ -2387,8 +2387,8 @@
 <h2 id="submitting-jobs">Submitting Jobs<a class="headerlink" href="#submitting-jobs" title="Permanent link">&para;</a></h2>
 <p>Click <strong>+ New Job</strong> in the sidebar or the dashboard. Each job type has its own form. For detailed screenshots and field descriptions, see the relevant guide page:</p>
 <ul>
-<li><strong>Pipeline</strong> -- See <a href="../pipeline/#using-the-gui">Running the Pipeline</a></li>
-<li><strong>Analyze</strong> -- See <a href="../analysis/#using-the-gui">Analyzing Results</a></li>
+<li><strong>Pipeline</strong> -- See <a href="../pipeline/#submitting-a-pipeline-job">Running the Pipeline</a></li>
+<li><strong>Analyze</strong> -- See <a href="../analysis/#submitting-an-analyze-job">Analyzing Results</a></li>
 <li><strong>Downsample</strong> -- See <a href="../downsampling/#using-the-gui">Downsampling</a></li>
 <li><strong>Density Estimation</strong> -- See <a href="../conformational-density/#using-the-gui">Conformational Density</a></li>
 <li><strong>Compute State</strong> -- Generate a 3D volume at a specific latent coordinate</li>
@@ -2428,7 +2428,7 @@
 <h3 id="3d-volume-viewer">3D Volume Viewer<a class="headerlink" href="#3d-volume-viewer" title="Permanent link">&para;</a></h3>
 <p>View isosurface renderings of any volume directly in the browser. Adjust the <strong>Contour (σ)</strong> threshold and <strong>Opacity</strong>, switch between <strong>3D</strong> and <strong>Slice</strong> views, and choose a render <strong>Resolution</strong> (Auto / 256 / 128 / 64 / Full) for faster interaction over slow connections. Use the <strong>Pin</strong> button next to any volume to overlay up to four volumes in one scene and compare them.</p>
 <h2 id="masks">Masks<a class="headerlink" href="#masks" title="Permanent link">&para;</a></h2>
-<p>Click <strong>Masks</strong> at the bottom of the sidebar to open the project's mask library. From there you can review every mask and combine masks with boolean operations (union, intersect, subtract). To create a new one, click the green wand icon on any volume in a job's <strong>Volumes</strong> tab to launch the interactive <strong>Mask Wizard</strong> -- a guided tool for drawing a solvent or focus mask with live threshold, dilation, and soft-edge previews. See <a href="../masks/#using-the-gui">Masks</a> for the full workflow.</p>
+<p>Click <strong>Masks</strong> at the bottom of the sidebar to open the project's mask library. From there you can review every mask and combine masks with boolean operations (union, intersect, subtract). To create a new one, click the green wand icon on any volume in a job's <strong>Volumes</strong> tab to launch the interactive <strong>Mask Wizard</strong> -- a guided tool for drawing a solvent or focus mask with live threshold, dilation, and soft-edge previews. See <a href="../masks/#using-the-gui-the-mask-wizard">Masks</a> for the full workflow.</p>
 <h2 id="gui-vs-cli-workflow">GUI vs CLI Workflow<a class="headerlink" href="#gui-vs-cli-workflow" title="Permanent link">&para;</a></h2>
 <p>The GUI mirrors the CLI workflow, adding interactivity:</p>
 <table>
