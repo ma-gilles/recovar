@@ -41,6 +41,10 @@ recovar estimate_stable_states density_output/data/deconv_density_knee.pkl \
 
 Identifies local maxima of the conformational density. The first argument is the density `.pkl` file produced by `estimate_conformational_density`.
 
+![Stable states — local maxima of the deconvolved density](../_static/examples/density_10073_stable_states.png)
+
+Each numbered point is a local maximum of the density — a candidate stable conformational state. Their coordinates are written to `stable_state_<i>_coords.txt`, ready to hand to `compute_state` to reconstruct the corresponding volume.
+
 ## Using density for trajectories
 
 The density can guide trajectory computation to follow high-density paths:
@@ -52,6 +56,10 @@ recovar compute_trajectory output -o trajectory --zdim=10 \
 ```
 
 Without `--density`, trajectories follow straight lines in latent space. With density, they curve to follow high-density regions.
+
+![Density-guided trajectory following the high-density valley](../_static/examples/density_10073_trajectory.png)
+
+The dashed path runs from the start state (★) to the end state (■). Rather than cutting straight across the low-density gap between the basins, it bends to stay on the high-density ridge — the conformational route best supported by the data.
 
 !!! tip "GUI alternative"
     In the GUI's latent space explorer, you can select two points on the scatter plot to compute a trajectory interactively. See the [GUI Guide](gui.md#latent-space-explorer).

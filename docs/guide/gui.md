@@ -159,6 +159,13 @@ From the **Parameters** tab of any job, click **Clone Job** to open a new form w
 
 ## Exploring Results
 
+The clip below shows the full interactive loop — color the latent space by deconvolved conformational density, pick two states, compute a density-guided trajectory, and play the resulting volumes back in the 3D viewer:
+
+<video controls muted loop playsinline width="100%" style="max-width: 900px; border-radius: 8px;">
+  <source src="../../_static/gui/explore_demo.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
+
 ### Latent Space Explorer
 
 After running an Analyze job, click **Explore Latent Space** to open the interactive explorer. The PCA and UMAP projections sit side by side; color the particles by k-means cluster to see how the conformational landscape breaks apart.
