@@ -672,8 +672,6 @@
       
         
       
-        
-      
     
     
     
@@ -737,34 +735,6 @@
     
   
     Web GUI
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../tutorial/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Tutorial
   
 
     
@@ -1924,6 +1894,10 @@
 </tr>
 </tbody>
 </table>
+<div class="admonition note">
+<p class="admonition-title">Poses and CTF must be <code>.pkl</code> files</p>
+<p>Unlike <code>recovar pipeline</code>, this command does <strong>not</strong> auto-extract poses and CTF from a <code>.star</code>/<code>.cs</code> file. Even when <code>particles</code> is a <code>.star</code> or <code>.cs</code>, you must pass <code>--poses</code> and <code>--ctf</code> as separate <code>.pkl</code> files (for example, the <code>poses.pkl</code> / <code>ctf.pkl</code> that cryoDRGN writes during preprocessing).</p>
+</div>
 <h2 id="example-using-cryodrgn-embeddings">Example: using cryoDRGN embeddings<a class="headerlink" href="#example-using-cryodrgn-embeddings" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Run cryoDRGN to get latent coordinates (<code>z.pkl</code>)</li>

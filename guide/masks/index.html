@@ -672,8 +672,6 @@
       
         
       
-        
-      
     
     
     
@@ -737,34 +735,6 @@
     
   
     Web GUI
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../tutorial/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Tutorial
   
 
     
@@ -1088,23 +1058,6 @@
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Using the GUI: the Mask Wizard">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#erasing-parts-of-a-mask" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Erasing parts of a mask
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1854,23 +1807,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Using the GUI: the Mask Wizard">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#erasing-parts-of-a-mask" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Erasing parts of a mask
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -1976,13 +1912,6 @@
 </ul>
 <p>Switch between the <strong>Slice</strong> view (scroll through X / Y / Z planes with the green mask overlaid) and the <strong>3D</strong> isosurface view:</p>
 <p><img alt="Mask Wizard -- 3D isosurface view" src="../../_static/gui/21_mask_wizard_3d.png" /></p>
-<h3 id="erasing-parts-of-a-mask">Erasing parts of a mask<a class="headerlink" href="#erasing-parts-of-a-mask" title="Permanent link">&para;</a></h3>
-<p>To carve a region out -- for example, to keep only one domain for a focus mask -- turn on the <strong>Eraser</strong>:</p>
-<ul>
-<li>In <strong>3D</strong>, click on the mask surface to drop an erase sphere (radius set by the slider).</li>
-<li>In <strong>Slice</strong>, use the <strong>Brush</strong> to paint over regions, or the <strong>Box</strong> tool to remove a slab.</li>
-<li>Undo and redo with the toolbar buttons or Cmd/Ctrl+Z.</li>
-</ul>
 <p>Click <strong>Save Mask</strong> to write the result to <code>&lt;project&gt;/Masks/</code>. It is then available as a solvent or focus mask in any new Pipeline job, and in the <strong>Masks</strong> library (sidebar), where you can combine masks with union / intersect / subtract.</p>
 <p>The rest of this page covers the equivalent command-line options.</p>
 <h2 id="solvent-mask">Solvent mask<a class="headerlink" href="#solvent-mask" title="Permanent link">&para;</a></h2>
@@ -2028,7 +1957,7 @@
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--mask<span class="o">=</span>sphere<span class="w"> </span>--focus-mask<span class="w"> </span>focus_mask.mrc
 </code></pre></div>
 <h3 id="creating-a-focus-mask">Creating a focus mask<a class="headerlink" href="#creating-a-focus-mask" title="Permanent link">&para;</a></h3>
-<p>The quickest way is the <a href="#using-the-gui-the-mask-wizard">Mask Wizard</a> above: open the mean reconstruction, set a threshold, and use the eraser to keep only your region of interest.</p>
+<p>The quickest way is the <a href="#using-the-gui-the-mask-wizard">Mask Wizard</a> above: open the mean reconstruction, set a threshold, and use the <strong>Segments</strong> control to keep only the connected region of interest.</p>
 <p>You can also build one in UCSF Chimera or ChimeraX:</p>
 <ol>
 <li>Open your consensus map</li>

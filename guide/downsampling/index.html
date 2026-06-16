@@ -672,8 +672,6 @@
       
         
       
-        
-      
     
     
     
@@ -737,34 +735,6 @@
     
   
     Web GUI
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../tutorial/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Tutorial
   
 
     
@@ -1109,10 +1079,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#automatic-downsampling-recommended" class="md-nav__link">
+  <a href="#choosing-a-different-box-size" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Automatic downsampling (recommended)
+        Choosing a different box size
       
     </span>
   </a>
@@ -1120,71 +1090,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#manual-pre-downsampling" class="md-nav__link">
+  <a href="#running-the-pipeline-and-volumes-at-different-box-sizes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Manual pre-downsampling
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Manual pre-downsampling">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#recovar-downsample-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        recovar downsample options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#performance-comparison" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Performance comparison
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How it works
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#choosing-a-box-size" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Choosing a box size
+        Running the pipeline and volumes at different box sizes
       
     </span>
   </a>
@@ -1845,10 +1754,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#automatic-downsampling-recommended" class="md-nav__link">
+  <a href="#choosing-a-different-box-size" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Automatic downsampling (recommended)
+        Choosing a different box size
       
     </span>
   </a>
@@ -1856,71 +1765,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#manual-pre-downsampling" class="md-nav__link">
+  <a href="#running-the-pipeline-and-volumes-at-different-box-sizes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Manual pre-downsampling
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Manual pre-downsampling">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#recovar-downsample-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        recovar downsample options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#performance-comparison" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Performance comparison
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How it works
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#choosing-a-box-size" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Choosing a box size
+        Running the pipeline and volumes at different box sizes
       
     </span>
   </a>
@@ -1962,144 +1810,36 @@
 <p>Downsampling shrinks the image box size before processing. It significantly speeds up the pipeline without meaningfully affecting results at the resolutions relevant for heterogeneity analysis.</p>
 <div class="admonition info">
 <p class="admonition-title">The pipeline downsamples to 256 by default</p>
-<p><code>recovar pipeline</code> runs with <code>--downsample 256</code>, so images larger than 256x256 are automatically downsampled to a box size of 256. If your images are already at or below 256, the step is skipped. To run at the original box size, pass <code>--no-downsample</code>.</p>
+<p><code>recovar pipeline</code> runs with <code>--downsample 256</code>, so images larger than 256x256 are automatically downsampled to a box size of 256. If your images are already at or below 256, the step is skipped.</p>
 </div>
-<h2 id="automatic-downsampling-recommended">Automatic downsampling (recommended)<a class="headerlink" href="#automatic-downsampling-recommended" title="Permanent link">&para;</a></h2>
-<p>You don't need to do anything to get the default behavior — running the pipeline inside a project already downsamples to 256. To choose a different target box size, pass <code>--downsample D</code>:</p>
+<h2 id="choosing-a-different-box-size">Choosing a different box size<a class="headerlink" href="#choosing-a-different-box-size" title="Permanent link">&para;</a></h2>
+<p>By default the pipeline downsamples to 256. To use a different target, pass <code>--downsample D</code>; to keep the original box size, pass <code>--no-downsample</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>init_project<span class="w"> </span>my_project
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>my_project
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Default: downsamples to a box size of 256</span>
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--project<span class="w"> </span>.
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># Pick a different target box size (e.g. 128 for faster runs)</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># Smaller box for faster runs (e.g. 128)</span>
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--downsample<span class="w"> </span><span class="m">128</span><span class="w"> </span>--project<span class="w"> </span>.
 <a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
 <a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># Keep the original box size</span>
 <a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--no-downsample<span class="w"> </span>--project<span class="w"> </span>.
 </code></pre></div>
-<p>When downsampling is enabled, the pipeline automatically:</p>
-<ol>
-<li>Pre-downsamples all images to disk in the shared project cache (<code>Cache/downsample/...</code>)</li>
-<li>Runs the pipeline on the downsampled images in the numbered Pipeline job directory</li>
-<li>Reuses the cached downsampled images across matching project runs, instead of tying the cache to one output directory</li>
-</ol>
-<p>This is the simplest and recommended approach — one command handles everything.</p>
-<h2 id="manual-pre-downsampling">Manual pre-downsampling<a class="headerlink" href="#manual-pre-downsampling" title="Permanent link">&para;</a></h2>
-<p>For maximum control or to materialize a reusable downsampled dataset explicitly:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Project-style downsample job</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>recovar<span class="w"> </span>downsample<span class="w"> </span>particles.star<span class="w"> </span>-D<span class="w"> </span><span class="m">128</span><span class="w"> </span>--project<span class="w"> </span>.<span class="w"> </span>--output-name<span class="w"> </span>particles_d128
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Or an explicit standalone output directory</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>recovar<span class="w"> </span>downsample<span class="w"> </span>particles.star<span class="w"> </span>-D<span class="w"> </span><span class="m">128</span><span class="w"> </span>-o<span class="w"> </span>downsampled/
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Run pipeline on the materialized downsampled data</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>downsampled/particles.128.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc
+<p>The pipeline caches the downsampled images in the shared project cache and reuses them across matching runs, so you only pay the downsampling cost once.</p>
+<h2 id="running-the-pipeline-and-volumes-at-different-box-sizes">Running the pipeline and volumes at different box sizes<a class="headerlink" href="#running-the-pipeline-and-volumes-at-different-box-sizes" title="Permanent link">&para;</a></h2>
+<p>If the full-resolution pipeline is too slow, run the pipeline at a smaller box size and then reconstruct your final volumes at a higher resolution. The latent space comes from the fast low-resolution run, but <code>compute_state</code> can regenerate volumes at full resolution by pointing <code>--particles</code> at the original (un-downsampled) stack:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Fast pipeline + analysis at box size 128</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--downsample<span class="w"> </span><span class="m">128</span><span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>output<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1"># Recompute selected volumes at full resolution</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>recovar<span class="w"> </span>compute_state<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>volumes_highres<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span>--latent-points<span class="w"> </span>output/analysis_10/kmeans/centers.txt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span>--particles<span class="w"> </span>particles.star<span class="w"> </span>--Bfactor<span class="o">=</span><span class="m">50</span>
 </code></pre></div>
-<h3 id="recovar-downsample-options"><code>recovar downsample</code> options<a class="headerlink" href="#recovar-downsample-options" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>-D</code>, <code>--target-D</code></td>
-<td>Target box size (must be even). Required</td>
-</tr>
-<tr>
-<td><code>-o</code>, <code>--outdir</code></td>
-<td>Output directory (optional in project mode; shared project cache is still used when available)</td>
-</tr>
-<tr>
-<td><code>--project</code></td>
-<td>Project root. Lets the output land in the shared project cache and be tracked as a job</td>
-</tr>
-<tr>
-<td><code>--output-name</code></td>
-<td>Human-readable name for the resulting job</td>
-</tr>
-<tr>
-<td><code>--datadir</code></td>
-<td>Base directory for image paths</td>
-</tr>
-<tr>
-<td><code>--strip-prefix</code></td>
-<td>Strip prefix from paths</td>
-</tr>
-<tr>
-<td><code>--batch-size</code></td>
-<td>Images per batch (default: 1000)</td>
-</tr>
-<tr>
-<td><code>--gpu-budget-gb</code>, <code>--gpu-memory</code></td>
-<td>Soft GPU memory budget in GB for auto batch sizing</td>
-</tr>
-</tbody>
-</table>
-<h3 id="output-files">Output files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>downsampled/
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  particles.128.mrcs    # New MRC stack at target resolution
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>  particles.128.star    # Updated STAR with correct pixel size + image paths
-</code></pre></div>
-<p>When input is <code>.star</code>, the output <code>.star</code> preserves all metadata (poses, CTF, optics) with updated pixel size and image size. When input is <code>.cs</code> or <code>.mrcs</code>, a minimal <code>.star</code> is created.</p>
-<h2 id="performance-comparison">Performance comparison<a class="headerlink" href="#performance-comparison" title="Permanent link">&para;</a></h2>
-<p>For 100,000 images at 512x512 downsampled to 128x128:</p>
-<table>
-<thead>
-<tr>
-<th>Approach</th>
-<th>Time</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Pre-downsample (one-time)</td>
-<td>~18 minutes</td>
-</tr>
-<tr>
-<td>Pipeline without downsampling</td>
-<td>Baseline</td>
-</tr>
-<tr>
-<td>Pipeline with <code>--downsample 128</code></td>
-<td>Baseline + ~18 min (first run only)</td>
-</tr>
-<tr>
-<td>On-the-fly (no caching)</td>
-<td>Baseline + <strong>~9 hours</strong></td>
-</tr>
-</tbody>
-</table>
-<p>The pipeline makes ~30 passes over the data. Pre-downsampling avoids repeating the Fourier-crop FFT on every pass.</p>
-<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
-<p>Downsampling uses 2D Fourier cropping:</p>
-<ol>
-<li>FFT the image to Fourier space</li>
-<li>Crop the central <code>D x D</code> region (keeping low frequencies)</li>
-<li>Inverse FFT back to real space</li>
-<li>Normalize to preserve pixel values</li>
-</ol>
-<p>This is mathematically equivalent to low-pass filtering and resampling, and is the standard approach used by RELION, cryoSPARC, and cryoDRGN.</p>
-<h2 id="choosing-a-box-size">Choosing a box size<a class="headerlink" href="#choosing-a-box-size" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>128</strong> — good default for most datasets, fast</li>
-<li><strong>256</strong> — higher resolution, needed for very fine structural differences</li>
-<li><strong>64</strong> — very fast, useful for quick exploration</li>
-</ul>
-<p>The box size must be even and no larger than the original image size.</p>
-<div class="admonition tip">
-<p class="admonition-title">Tip</p>
-<p>Start with <code>--downsample 128</code> for initial exploration, then re-run at higher resolution if needed for publication figures.</p>
-</div>
 <h2 id="using-the-gui">Using the GUI<a class="headerlink" href="#using-the-gui" title="Permanent link">&para;</a></h2>
-<p>In the web GUI (<code>recovar gui</code>), you can downsample in two ways:</p>
-<ul>
-<li><strong>As part of a Pipeline job</strong>: expand <strong>Advanced</strong> options and set the <strong>Downsample</strong> field (it defaults to 256). The pipeline handles caching automatically.</li>
-<li><strong>As a standalone job</strong>: click <strong>+ New Job</strong>, select <strong>Downsample</strong> from the Job Type dropdown, browse to your particle file, and set the <strong>Target Box Size</strong> (defaults to 128). Its <strong>Advanced</strong> section holds Data Directory, Strip Prefix, and Batch Size (default 1000).</li>
-</ul>
+<p>In the web GUI (<code>recovar gui</code>), the <strong>Pipeline</strong> form downsamples to 256 by default — expand <strong>Advanced</strong> and change the <strong>Downsample</strong> field to pick a different box size (or disable it). To reconstruct higher-resolution volumes from a low-resolution run, submit a <strong>Compute State</strong> job and point it at the original particle stack.</p>
 <p>See the <a href="../gui/">GUI Guide</a> for project setup and job submission.</p>
 
 

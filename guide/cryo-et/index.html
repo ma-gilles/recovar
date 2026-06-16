@@ -672,8 +672,6 @@
       
         
       
-        
-      
     
     
     
@@ -737,34 +735,6 @@
     
   
     Web GUI
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../tutorial/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Tutorial
   
 
     
@@ -1239,6 +1209,34 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Importing from RELION5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#let-the-pipeline-convert-recommended-for-the-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Let the pipeline convert (recommended for the CLI)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#convert-explicitly-with-parse_relion5_tomo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convert explicitly with parse_relion5_tomo
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1853,6 +1851,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Importing from RELION5">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#let-the-pipeline-convert-recommended-for-the-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Let the pipeline convert (recommended for the CLI)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#convert-explicitly-with-parse_relion5_tomo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Convert explicitly with parse_relion5_tomo
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1942,16 +1968,27 @@
 <p class="admonition-title">Experimental</p>
 <p>Cryo-ET support is newer than SPA support and may be less stable. No paper has been published on this feature yet.</p>
 </div>
+<div class="admonition info">
+<p class="admonition-title">RELION-5 input only</p>
+<p>RECOVAR's cryo-ET support currently reads <strong>RELION-5</strong> tilt-series data. Process your tomograms through the RELION-5 tomography pipeline (import → tilt-series alignment → particle extraction / Bayesian polishing) to produce the <code>tomograms.star</code> and <code>particles.star</code> that RECOVAR consumes. See the <a href="https://relion.readthedocs.io/en/release-5.0/STA_tutorial/Introduction.html">RELION-5 tomography tutorial</a> for how to generate those files.</p>
+</div>
 <h2 id="using-the-gui">Using the GUI<a class="headerlink" href="#using-the-gui" title="Permanent link">&para;</a></h2>
-<p>In the <a href="../gui/">Web GUI</a> cryo-ET is just a checkbox. In the <strong>Pipeline</strong> form, point <strong>Particles</strong> at your RELION5 2D-tilt star (produced by <code>recovar parse_relion5_tomo</code>, see <a href="#importing-from-relion5">below</a>), expand <strong>Advanced</strong>, and tick <strong>Tilt series</strong>. A cryo-ET panel appears -- per-tilt dose, tilt angles, and the CTF model are read automatically from the star, so the only common knob is <strong>Max tilts</strong> (how many tilts per series to use).</p>
+<p>In the <a href="../gui/">Web GUI</a> cryo-ET is just a checkbox. In the <strong>Pipeline</strong> form, point <strong>Particles</strong> at a RELION5 2D-tilt star (produced by <code>recovar parse_relion5_tomo</code>, see <a href="#importing-from-relion5">below</a>), expand <strong>Advanced</strong>, and tick <strong>Tilt series</strong>. A cryo-ET panel appears -- per-tilt dose, tilt angles, and the CTF model are read automatically from the star, so the only common knob is <strong>Max tilts</strong> (how many tilts per series to use).</p>
 <p><img alt="Pipeline form with the Tilt series option enabled" src="../../_static/gui/06d_pipeline_tilt.png" /></p>
 <p>The rest of this page covers the same workflow from the command line.</p>
 <h2 id="importing-from-relion5">Importing from RELION5<a class="headerlink" href="#importing-from-relion5" title="Permanent link">&para;</a></h2>
-<p>If your data was processed in RELION5 (tilt-series alignment + particle extraction), use <code>parse_relion5_tomo</code> to convert to RECOVAR's 2D tilt format:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>parse_relion5_tomo<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span>-t<span class="w"> </span>Polish/job249/tomograms.star<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span>-p<span class="w"> </span>Extract/job260/particles.star<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span>-o<span class="w"> </span>particles_2d.star
+<p>RECOVAR works on a 2D-tilt star (one row per particle per tilt). Starting from the RELION5 outputs — a <code>tomograms.star</code> with the tilt-series geometry and a <code>particles.star</code> with the 3D particle positions/orientations — you can get there two ways.</p>
+<h3 id="let-the-pipeline-convert-recommended-for-the-cli">Let the pipeline convert (recommended for the CLI)<a class="headerlink" href="#let-the-pipeline-convert-recommended-for-the-cli" title="Permanent link">&para;</a></h3>
+<p>Pass the RELION5 <code>particles.star</code> as the input and point <code>--tomograms</code> at the geometry star. The pipeline runs the conversion internally before processing, and <code>--tomograms</code> implies <code>--tilt-series</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>Extract/job260/particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span>--tomograms<span class="w"> </span>Polish/job249/tomograms.star
+</code></pre></div>
+<h3 id="convert-explicitly-with-parse_relion5_tomo">Convert explicitly with <code>parse_relion5_tomo</code><a class="headerlink" href="#convert-explicitly-with-parse_relion5_tomo" title="Permanent link">&para;</a></h3>
+<p>To materialize the 2D-tilt star yourself — for example to load it in the GUI, which takes the 2D star directly — run the conversion as its own step:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>parse_relion5_tomo<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>-t<span class="w"> </span>Polish/job249/tomograms.star<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span>-p<span class="w"> </span>Extract/job260/particles.star<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span>-o<span class="w"> </span>particles_2d.star
 </code></pre></div>
 <p>This reads the RELION5 3D tomography metadata and produces a 2D STAR file where each row is one tilt of one particle, with per-tilt defocus, orientation, and dose information. The output is directly compatible with <code>recovar pipeline --tilt-series</code>.</p>
 <p><strong>Requirements:</strong></p>
@@ -1965,8 +2002,8 @@
 <p>Projection geometry adapted from <a href="https://github.com/zhonge/cryodrgn">relion2cryodrgn</a> by Ryan Feathers (Princeton/Zhong lab), based on code by Bogdan Toader (MRC-LMB/RELION team).</p>
 </div>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles_2d.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--tilt-series
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles_2d.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--tilt-series
 </code></pre></div>
 <p>The input is a 2D STAR file with tilt-series metadata (one row per particle per tilt, grouped by <code>_rlnGroupName</code>).</p>
 <h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">&para;</a></h2>
@@ -2032,8 +2069,8 @@
 <p>The default is <code>relion5</code> for tilt-series data and <code>cryoem</code> otherwise. For RELION5 input the default is correct, which is why the GUI does not expose this setting. <code>warp</code> is experimental.</p>
 <h2 id="with-focus-mask">With focus mask<a class="headerlink" href="#with-focus-mask" title="Permanent link">&para;</a></h2>
 <p>A key advantage of RECOVAR for cryo-ET is focus mask support:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--focus-mask<span class="w"> </span>binding_site.mrc<span class="w"> </span>--tilt-series
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--focus-mask<span class="w"> </span>binding_site.mrc<span class="w"> </span>--tilt-series
 </code></pre></div>
 <h2 id="tips">Tips<a class="headerlink" href="#tips" title="Permanent link">&para;</a></h2>
 <ul>
