@@ -253,7 +253,7 @@ When using the **project system** (`--project`), pipeline output is placed into 
 
 === ":octicons-terminal-16: CLI"
 
-    See the [Tutorial](tutorial.md) for a full worked example with real pipeline output and plots on EMPIAR-10076 (50S ribosome, 131k particles).
+    The pipeline writes diagnostic plots and volumes under the output directory — see the `output/plots/` and `output/volumes/` subfolders above. Open the `.mrc` volumes in ChimeraX and the `.png` plots in any image viewer.
 
 ## Tips
 

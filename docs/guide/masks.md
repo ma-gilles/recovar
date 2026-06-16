@@ -21,14 +21,6 @@ Switch between the **Slice** view (scroll through X / Y / Z planes with the gree
 
 ![Mask Wizard -- 3D isosurface view](../_static/gui/21_mask_wizard_3d.png)
 
-### Erasing parts of a mask
-
-To carve a region out -- for example, to keep only one domain for a focus mask -- turn on the **Eraser**:
-
-- In **3D**, click on the mask surface to drop an erase sphere (radius set by the slider).
-- In **Slice**, use the **Brush** to paint over regions, or the **Box** tool to remove a slab.
-- Undo and redo with the toolbar buttons or Cmd/Ctrl+Z.
-
 Click **Save Mask** to write the result to `<project>/Masks/`. It is then available as a solvent or focus mask in any new Pipeline job, and in the **Masks** library (sidebar), where you can combine masks with union / intersect / subtract.
 
 The rest of this page covers the equivalent command-line options.
@@ -74,7 +66,7 @@ recovar pipeline particles.star -o output \
 
 ### Creating a focus mask
 
-The quickest way is the [Mask Wizard](#using-the-gui-the-mask-wizard) above: open the mean reconstruction, set a threshold, and use the eraser to keep only your region of interest.
+The quickest way is the [Mask Wizard](#using-the-gui-the-mask-wizard) above: open the mean reconstruction, set a threshold, and use the **Segments** control to keep only the connected region of interest.
 
 You can also build one in UCSF Chimera or ChimeraX:
 

@@ -5,9 +5,12 @@ RECOVAR supports tilt-series data for cryo-ET heterogeneity analysis. One practi
 !!! warning "Experimental"
     Cryo-ET support is newer than SPA support and may be less stable. No paper has been published on this feature yet.
 
+!!! info "RELION-5 input only"
+    RECOVAR's cryo-ET support currently reads **RELION-5** tilt-series data. Process your tomograms through the RELION-5 tomography pipeline (import → tilt-series alignment → particle extraction / Bayesian polishing) to produce the `tomograms.star` and `particles.star` that RECOVAR consumes. See the [RELION-5 tomography tutorial](https://relion.readthedocs.io/en/release-5.0/STA_tutorial/Introduction.html) for how to generate those files.
+
 ## Using the GUI
 
-In the [Web GUI](gui.md) cryo-ET is just a checkbox. In the **Pipeline** form, point **Particles** at your RELION5 2D-tilt star (produced by `recovar parse_relion5_tomo`, see [below](#importing-from-relion5)), expand **Advanced**, and tick **Tilt series**. A cryo-ET panel appears -- per-tilt dose, tilt angles, and the CTF model are read automatically from the star, so the only common knob is **Max tilts** (how many tilts per series to use).
+In the [Web GUI](gui.md) cryo-ET is just a checkbox. In the **Pipeline** form, point **Particles** at a RELION5 2D-tilt star (produced by `recovar parse_relion5_tomo`, see [below](#importing-from-relion5)), expand **Advanced**, and tick **Tilt series**. A cryo-ET panel appears -- per-tilt dose, tilt angles, and the CTF model are read automatically from the star, so the only common knob is **Max tilts** (how many tilts per series to use).
 
 ![Pipeline form with the Tilt series option enabled](../_static/gui/06d_pipeline_tilt.png)
 
@@ -15,7 +18,20 @@ The rest of this page covers the same workflow from the command line.
 
 ## Importing from RELION5
 
-If your data was processed in RELION5 (tilt-series alignment + particle extraction), use `parse_relion5_tomo` to convert to RECOVAR's 2D tilt format:
+RECOVAR works on a 2D-tilt star (one row per particle per tilt). Starting from the RELION5 outputs — a `tomograms.star` with the tilt-series geometry and a `particles.star` with the 3D particle positions/orientations — you can get there two ways.
+
+### Let the pipeline convert (recommended for the CLI)
+
+Pass the RELION5 `particles.star` as the input and point `--tomograms` at the geometry star. The pipeline runs the conversion internally before processing, and `--tomograms` implies `--tilt-series`:
+
+```bash
+recovar pipeline Extract/job260/particles.star -o output --mask mask.mrc \
+    --tomograms Polish/job249/tomograms.star
+```
+
+### Convert explicitly with `parse_relion5_tomo`
+
+To materialize the 2D-tilt star yourself — for example to load it in the GUI, which takes the 2D star directly — run the conversion as its own step:
 
 ```bash
 recovar parse_relion5_tomo \

@@ -85,7 +85,6 @@ nav:
   - Processing:
     - First Steps:
         - Web GUI: guide/gui.md
-        - Tutorial: guide/tutorial.md
     - Basics:
         - Input Data: guide/input-data.md
         - Running the Pipeline: guide/pipeline.md

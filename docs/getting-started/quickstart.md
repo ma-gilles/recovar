@@ -149,7 +149,6 @@ All commands accept `--project <dir>` to enable project mode. If you run from wi
 
 Now that you have results, here's where to go next:
 
-- **[Tutorial](../guide/tutorial.md)** -- full worked example with plots on EMPIAR-10076
 - **[Web GUI](../guide/gui.md)** -- launch the browser interface to interactively explore latent spaces and view 3D volumes
 - **[Analyzing Results](../guide/analysis.md)** -- deep dive into k-means, trajectories, UMAP, and volume generation options
 - **[Input Data](../guide/input-data.md)** -- supported formats and data preparation

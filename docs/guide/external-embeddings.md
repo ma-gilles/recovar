@@ -31,6 +31,9 @@ recovar reconstruct_from_external_embedding particles.star \
 | `--zdim1` | False | Enable for 1D latent space |
 | `--tilt-series` | False | Use tilt-series data |
 
+!!! note "Poses and CTF must be `.pkl` files"
+    Unlike `recovar pipeline`, this command does **not** auto-extract poses and CTF from a `.star`/`.cs` file. Even when `particles` is a `.star` or `.cs`, you must pass `--poses` and `--ctf` as separate `.pkl` files (for example, the `poses.pkl` / `ctf.pkl` that cryoDRGN writes during preprocessing).
+
 ## Example: using cryoDRGN embeddings
 
 1. Run cryoDRGN to get latent coordinates (`z.pkl`)
