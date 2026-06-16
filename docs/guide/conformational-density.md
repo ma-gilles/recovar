@@ -22,6 +22,16 @@ This deconvolves the particle distribution in latent space to produce density es
 !!! note
     Runtime scales exponentially with `--pca_dim`. Keep it at 4 or below.
 
+### Example output
+
+The estimator sweeps a range of deconvolution strengths and picks a "knee" on the L-curve of cost versus regularization — the point that balances noise suppression against over-fitting. Everything to the right of the knee mostly fits noise:
+
+![Density L-curve with the selected knee regularization](../_static/examples/density_10073_lcurve.png)
+
+The deconvolved density at every regularization level is also saved as a grid, projected onto pairs of principal components. Heavily regularized estimates (top rows) are smooth and unimodal; lightly regularized ones (bottom rows) are sharper but noisier. The knee picks an intermediate level that reveals the distinct high-density basins — the stable conformational states — without over-fitting:
+
+![Deconvolved conformational density across PC pairs at increasing deconvolution](../_static/examples/density_10073_all.png)
+
 ## Estimating stable states
 
 ```bash
