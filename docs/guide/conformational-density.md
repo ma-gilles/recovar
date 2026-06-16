@@ -36,30 +36,30 @@ The deconvolved density at every regularization level is also saved as a grid, p
 
 ```bash
 recovar estimate_stable_states density_output/data/deconv_density_knee.pkl \
-    -o stable_states
+    -o stable_states --n_local_maxs 1
 ```
 
-Identifies local maxima of the conformational density. The first argument is the density `.pkl` file produced by `estimate_conformational_density`.
+Identifies local maxima of the conformational density — the most stable conformational states. The first argument is the density `.pkl` file produced by `estimate_conformational_density`; `--n_local_maxs` sets how many peaks to return (here, the single highest).
 
-![Stable states — local maxima of the deconvolved density](../_static/examples/density_10073_stable_states.png)
+![The maximum of the deconvolved density](../_static/examples/density_10073_stable_states.png)
 
-Each numbered point is a local maximum of the density — a candidate stable conformational state. Their coordinates are written to `stable_state_<i>_coords.txt`, ready to hand to `compute_state` to reconstruct the corresponding volume.
+The marked point is the maximum of the density. It can look slightly off-peak here because the plot is only a 2D projection of the full **4-dimensional** density — the true maximum sits where all four coordinates line up, not necessarily on the brightest spot of any single 2D view. Its coordinates are written to `stable_state_0_coords.txt`, ready to hand to `compute_state` to reconstruct that conformation.
 
 ## Using density for trajectories
 
 The density can guide trajectory computation to follow high-density paths:
 
 ```bash
-recovar compute_trajectory output -o trajectory --zdim=10 \
+recovar compute_trajectory output -o trajectory --zdim=4 \
     --density density_output/data/deconv_density_knee.pkl \
     --endpts centers.txt --ind 0,1
 ```
 
-Without `--density`, trajectories follow straight lines in latent space. With density, they curve to follow high-density regions.
+Pass the deconvolved density (`deconv_density_knee.pkl`) via `--density` so the path follows the sharp high-density regions. `--zdim` should match the density — the deconvolved density is computed in up to 4 dimensions, so `--zdim=4` here.
 
 ![Density-guided trajectory following the high-density valley](../_static/examples/density_10073_trajectory.png)
 
-The dashed path runs from the start state (★) to the end state (■). Rather than cutting straight across the low-density gap between the basins, it bends to stay on the high-density ridge — the conformational route best supported by the data.
+The dashed path runs from the start state (★) to the end state (■), bending to stay on the high-density ridge — threading through the populated basins rather than the empty region between them.
 
 !!! tip "GUI alternative"
     In the GUI's latent space explorer, you can select two points on the scatter plot to compute a trajectory interactively. See the [GUI Guide](gui.md#latent-space-explorer).

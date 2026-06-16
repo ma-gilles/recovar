@@ -53,11 +53,15 @@ Results are saved next to the pipeline output, in `result_dir/analysis_10/` (her
 | `--no-z-regularization` | False | Use unregularized latent variables (changes output suffix to `_noreg`) |
 
 !!! tip "How to choose zdim"
-    Look at the eigenvalue spectrum plot. Choose the zdim where eigenvalues start to flatten -- this is where signal transitions to noise. Typical values: 2-4 for simple motions, 10-20 for complex heterogeneity.
+    The algorithms are generally not very sensitive to the number of eigenvectors (PCs) — with one exception, density estimation (see below). For general exploratory analysis — seeing how many clusters are in the data, whether there are outliers, the overall distribution — **zdim 20** is a typical choice.
+
+    Sometimes it is preferable to use as few PCs as possible while still capturing most of the variance. A reasonably reliable way to do this is to look at the **eigenvolumes** (in the GUI, or in the plots the pipeline writes): where they start to look like noise, you can drop those components.
+
+    For **density estimation** you typically need a focus mask and as few PCs as you can — up to 4 — and there it is particularly important to choose well.
 
 !!! tip "What to inspect first after analyze"
     1. **Mean map** — is the reconstruction sensible? Open `mean_filt.mrc` in ChimeraX
-    2. **Eigenvalue spectrum** — how many modes before it flattens? That's your signal
+    2. **Eigenvolumes** — which show real structure, and which look like noise? The noisy ones can be dropped when picking zdim
     3. **PCA scatter** — isolated clusters or continuous gradients?
     4. **K-means volumes** — do the differences correspond to real density changes?
     5. **UMAP** — does it confirm the structure seen in PCA?
@@ -94,12 +98,15 @@ recovar compute_state output -o volumes \
 | `--particles` | Same | Different particle stack for higher resolution |
 | `--datadir` | Same | Path prefix for particle paths |
 
+!!! tip "Fast volume estimation"
+    Volumes come from kernel regression, and the speed/resolution tradeoff is set by `--n-bins` and `--maskrad-fraction`. Lowering both (e.g. `--n-bins 10 --maskrad-fraction 10`) makes volumes roughly 40x faster to compute at lower resolution — handy for a quick preview before a full-resolution run. This applies to both `compute_state` and `analyze`. In the GUI, the **Analyze** form bundles it into the one-click **Quick Analyze** button.
+
 ## Computing trajectories
 
 Use `compute_trajectory` to compute high-density paths through latent space:
 
 ```bash
-recovar compute_trajectory output -o trajectory --zdim=10 \
+recovar compute_trajectory output -o trajectory --zdim=4 \
     --density density/data/deconv_density_knee.pkl \
     --endpts centers.txt --ind 0,1
 ```
