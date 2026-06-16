@@ -1115,6 +1115,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Estimating density">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#example-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1773,6 +1790,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Estimating density">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#example-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1868,6 +1902,11 @@
 <p class="admonition-title">Note</p>
 <p>Runtime scales exponentially with <code>--pca_dim</code>. Keep it at 4 or below.</p>
 </div>
+<h3 id="example-output">Example output<a class="headerlink" href="#example-output" title="Permanent link">&para;</a></h3>
+<p>The estimator sweeps a range of deconvolution strengths and picks a "knee" on the L-curve of cost versus regularization — the point that balances noise suppression against over-fitting. Everything to the right of the knee mostly fits noise:</p>
+<p><img alt="Density L-curve with the selected knee regularization" src="../../_static/examples/density_10073_lcurve.png" /></p>
+<p>The deconvolved density at every regularization level is also saved as a grid, projected onto pairs of principal components. Heavily regularized estimates (top rows) are smooth and unimodal; lightly regularized ones (bottom rows) are sharper but noisier. The knee picks an intermediate level that reveals the distinct high-density basins — the stable conformational states — without over-fitting:</p>
+<p><img alt="Deconvolved conformational density across PC pairs at increasing deconvolution" src="../../_static/examples/density_10073_all.png" /></p>
 <h2 id="estimating-stable-states">Estimating stable states<a class="headerlink" href="#estimating-stable-states" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>estimate_stable_states<span class="w"> </span>density_output/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>-o<span class="w"> </span>stable_states
