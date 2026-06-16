@@ -1909,20 +1909,20 @@
 <p><img alt="Deconvolved conformational density across PC pairs at increasing deconvolution" src="../../_static/examples/density_10073_all.png" /></p>
 <h2 id="estimating-stable-states">Estimating stable states<a class="headerlink" href="#estimating-stable-states" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>estimate_stable_states<span class="w"> </span>density_output/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>-o<span class="w"> </span>stable_states
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>-o<span class="w"> </span>stable_states<span class="w"> </span>--n_local_maxs<span class="w"> </span><span class="m">1</span>
 </code></pre></div>
-<p>Identifies local maxima of the conformational density. The first argument is the density <code>.pkl</code> file produced by <code>estimate_conformational_density</code>.</p>
-<p><img alt="Stable states — local maxima of the deconvolved density" src="../../_static/examples/density_10073_stable_states.png" /></p>
-<p>Each numbered point is a local maximum of the density — a candidate stable conformational state. Their coordinates are written to <code>stable_state_&lt;i&gt;_coords.txt</code>, ready to hand to <code>compute_state</code> to reconstruct the corresponding volume.</p>
+<p>Identifies local maxima of the conformational density — the most stable conformational states. The first argument is the density <code>.pkl</code> file produced by <code>estimate_conformational_density</code>; <code>--n_local_maxs</code> sets how many peaks to return (here, the single highest).</p>
+<p><img alt="The maximum of the deconvolved density" src="../../_static/examples/density_10073_stable_states.png" /></p>
+<p>The marked point is the maximum of the density. It can look slightly off-peak here because the plot is only a 2D projection of the full <strong>4-dimensional</strong> density — the true maximum sits where all four coordinates line up, not necessarily on the brightest spot of any single 2D view. Its coordinates are written to <code>stable_state_0_coords.txt</code>, ready to hand to <code>compute_state</code> to reconstruct that conformation.</p>
 <h2 id="using-density-for-trajectories">Using density for trajectories<a class="headerlink" href="#using-density-for-trajectories" title="Permanent link">&para;</a></h2>
 <p>The density can guide trajectory computation to follow high-density paths:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>compute_trajectory<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>trajectory<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>compute_trajectory<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>trajectory<span class="w"> </span>--zdim<span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--density<span class="w"> </span>density_output/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span>--endpts<span class="w"> </span>centers.txt<span class="w"> </span>--ind<span class="w"> </span><span class="m">0</span>,1
 </code></pre></div>
-<p>Without <code>--density</code>, trajectories follow straight lines in latent space. With density, they curve to follow high-density regions.</p>
+<p>Pass the deconvolved density (<code>deconv_density_knee.pkl</code>) via <code>--density</code> so the path follows the sharp high-density regions. <code>--zdim</code> should match the density — the deconvolved density is computed in up to 4 dimensions, so <code>--zdim=4</code> here.</p>
 <p><img alt="Density-guided trajectory following the high-density valley" src="../../_static/examples/density_10073_trajectory.png" /></p>
-<p>The dashed path runs from the start state (★) to the end state (■). Rather than cutting straight across the low-density gap between the basins, it bends to stay on the high-density ridge — the conformational route best supported by the data.</p>
+<p>The dashed path runs from the start state (★) to the end state (■), bending to stay on the high-density ridge — threading through the populated basins rather than the empty region between them.</p>
 <div class="admonition tip">
 <p class="admonition-title">GUI alternative</p>
 <p>In the GUI's latent space explorer, you can select two points on the scatter plot to compute a trajectory interactively. See the <a href="../gui/#latent-space-explorer">GUI Guide</a>.</p>

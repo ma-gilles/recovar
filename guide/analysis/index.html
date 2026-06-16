@@ -2133,13 +2133,15 @@
 </table>
 <div class="admonition tip">
 <p class="admonition-title">How to choose zdim</p>
-<p>Look at the eigenvalue spectrum plot. Choose the zdim where eigenvalues start to flatten -- this is where signal transitions to noise. Typical values: 2-4 for simple motions, 10-20 for complex heterogeneity.</p>
+<p>The algorithms are generally not very sensitive to the number of eigenvectors (PCs) — with one exception, density estimation (see below). For general exploratory analysis — seeing how many clusters are in the data, whether there are outliers, the overall distribution — <strong>zdim 20</strong> is a typical choice.</p>
+<p>Sometimes it is preferable to use as few PCs as possible while still capturing most of the variance. A reasonably reliable way to do this is to look at the <strong>eigenvolumes</strong> (in the GUI, or in the plots the pipeline writes): where they start to look like noise, you can drop those components.</p>
+<p>For <strong>density estimation</strong> you typically need a focus mask and as few PCs as you can — up to 4 — and there it is particularly important to choose well.</p>
 </div>
 <div class="admonition tip">
 <p class="admonition-title">What to inspect first after analyze</p>
 <ol>
 <li><strong>Mean map</strong> — is the reconstruction sensible? Open <code>mean_filt.mrc</code> in ChimeraX</li>
-<li><strong>Eigenvalue spectrum</strong> — how many modes before it flattens? That's your signal</li>
+<li><strong>Eigenvolumes</strong> — which show real structure, and which look like noise? The noisy ones can be dropped when picking zdim</li>
 <li><strong>PCA scatter</strong> — isolated clusters or continuous gradients?</li>
 <li><strong>K-means volumes</strong> — do the differences correspond to real density changes?</li>
 <li><strong>UMAP</strong> — does it confirm the structure seen in PCA?</li>
@@ -2206,9 +2208,13 @@
 </tr>
 </tbody>
 </table>
+<div class="admonition tip">
+<p class="admonition-title">Fast volume estimation</p>
+<p>Volumes come from kernel regression, and the speed/resolution tradeoff is set by <code>--n-bins</code> and <code>--maskrad-fraction</code>. Lowering both (e.g. <code>--n-bins 10 --maskrad-fraction 10</code>) makes volumes roughly 40x faster to compute at lower resolution — handy for a quick preview before a full-resolution run. This applies to both <code>compute_state</code> and <code>analyze</code>. In the GUI, the <strong>Analyze</strong> form bundles it into the one-click <strong>Quick Analyze</strong> button.</p>
+</div>
 <h2 id="computing-trajectories">Computing trajectories<a class="headerlink" href="#computing-trajectories" title="Permanent link">&para;</a></h2>
 <p>Use <code>compute_trajectory</code> to compute high-density paths through latent space:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>recovar<span class="w"> </span>compute_trajectory<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>trajectory<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>recovar<span class="w"> </span>compute_trajectory<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>trajectory<span class="w"> </span>--zdim<span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--density<span class="w"> </span>density/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>--endpts<span class="w"> </span>centers.txt<span class="w"> </span>--ind<span class="w"> </span><span class="m">0</span>,1
 </code></pre></div>
