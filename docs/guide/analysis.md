@@ -2,8 +2,7 @@
 
 After the pipeline finishes, use `recovar analyze` to generate volumes, compute k-means clusters, create trajectories, and run UMAP.
 
-!!! example "Choose your workflow: :octicons-terminal-16: **CLI** or :material-monitor: **GUI**"
-    This page has tabbed instructions for both the **command line** and the **web GUI**. Click the tab headers below each section to switch. Your choice is remembered across all pages. [How to launch the GUI →](gui.md#launching-the-gui)
+Instructions below are tabbed for the **CLI** and the **GUI**.
 
 ## Submitting an analyze job
 
@@ -18,7 +17,7 @@ After the pipeline finishes, use `recovar analyze` to generate volumes, compute 
     5. Click **Submit Analyze Job**
 
     !!! tip "Quick Analyze"
-        The **Quick Analyze** button submits the same job with `n-bins=10` and `maskrad-fraction=10`, which makes the cluster-center volumes roughly 40x faster to compute at a lower resolution. UMAP and k-means clustering are unchanged. It's a good way to preview the conformational landscape before running a full-resolution analysis.
+        The **Quick Analyze** button submits the same job with `n-bins=10` and `maskrad-fraction=10`, making the cluster-center volumes roughly 40x faster to compute at lower resolution. UMAP and k-means are unchanged.
 
 === ":octicons-terminal-16: CLI"
 
@@ -137,7 +136,7 @@ Choose one of:
 ## Viewing results
 
 !!! tip "Interactive exploration"
-    Use `recovar gui` to explore results interactively in your browser — view scatter plots, click to generate volumes, and inspect 3D renderings. See the [GUI Guide](gui.md).
+    Use `recovar gui` to explore results in your browser. See the [GUI Guide](gui.md).
 
 ### Volume files
 

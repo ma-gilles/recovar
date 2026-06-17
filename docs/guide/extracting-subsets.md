@@ -1,10 +1,6 @@
 # Extracting Image Subsets
 
-RECOVAR can identify which images contributed to a particular feature in a generated volume. This is useful for:
-
-- Focused refinement of a specific conformational state
-- Re-importing selected particles into RELION or cryoSPARC
-- Understanding which particles contribute to observed features
+RECOVAR can identify which images contributed to a particular feature in a generated volume — for example, to pull out the particles behind one conformational state and re-import them into RELION or cryoSPARC for focused refinement.
 
 ## Based on volume features
 
@@ -96,4 +92,4 @@ In the web GUI's **Latent Space Explorer** (available after running Analyze), yo
 4. Click **Export .star** to save the selected particles as a RELION-compatible `.star` file (if the source job has no `.star` to copy from, the GUI exports a `.ind` index file instead)
 5. A link to **rerun pipeline** with the exported subset appears for one-click re-processing
 
-This provides a visual, interactive alternative to the CLI-based k-means cluster extraction described above. See the [GUI Guide](gui.md) for details.
+See the [GUI Guide](gui.md) for details.

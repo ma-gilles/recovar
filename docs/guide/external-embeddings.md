@@ -1,10 +1,6 @@
 # External Embeddings
 
-You can use RECOVAR's volume generation (kernel regression) with latent spaces produced by other heterogeneity methods. This is useful for:
-
-- Improving resolution of cryoDRGN or other method's reconstructions
-- Validating results from neural network methods (RECOVAR's kernel regression is transparent and produces no hallucinations)
-- Combining strengths of different methods
+You can generate volumes with RECOVAR's kernel regression from a latent space produced by another method (e.g. cryoDRGN). Pass the external embedding and a set of target coordinates, and RECOVAR reconstructs the volumes at those points.
 
 ## Usage
 
@@ -48,4 +44,4 @@ recovar reconstruct_from_external_embedding particles.mrcs \
     --target coords.txt --Bfactor=50
 ```
 
-The resulting volumes use RECOVAR's transparent kernel regression for volume generation but follow cryoDRGN's latent space structure.
+The volumes are reconstructed by kernel regression at cryoDRGN's latent coordinates.

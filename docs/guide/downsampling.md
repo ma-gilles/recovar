@@ -1,13 +1,13 @@
 # Downsampling
 
-Downsampling shrinks the image box size before processing. It significantly speeds up the pipeline without meaningfully affecting results at the resolutions relevant for heterogeneity analysis.
+Downsampling shrinks the image box size before processing. It speeds up the pipeline; at the resolutions relevant for heterogeneity analysis the effect on results is small.
 
 !!! info "The pipeline downsamples to 256 by default"
     `recovar pipeline` runs with `--downsample 256`, so images larger than 256x256 are automatically downsampled to a box size of 256. If your images are already at or below 256, the step is skipped.
 
 ## Choosing a different box size
 
-By default the pipeline downsamples to 256. To use a different target, pass `--downsample D`; to keep the original box size, pass `--no-downsample`:
+To use a different target box size, pass `--downsample D`; to keep the original, pass `--no-downsample`:
 
 ```bash
 recovar init_project my_project

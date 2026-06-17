@@ -2,8 +2,7 @@
 
 The RECOVAR pipeline takes particle images and a mask, then computes the mean reconstruction, covariance, principal components, and embeddings.
 
-!!! example "Choose your workflow: :octicons-terminal-16: **CLI** or :material-monitor: **GUI**"
-    This page has tabbed instructions for both the **command line** and the **web GUI**. Click the tab headers below each section to switch. Your choice is remembered across all pages. [How to launch the GUI →](gui.md#launching-the-gui)
+Instructions below are tabbed for the **CLI** and the **GUI**. [How to launch the GUI →](gui.md#launching-the-gui)
 
 ## Submitting a pipeline job
 
@@ -74,7 +73,7 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
     Under **Rarely Used**: Halfset indices (`.pkl`), N Images, Poses, CTF, and Indices (`--ind`).
 
     !!! note "GUI defaults differ slightly from the CLI"
-        The GUI turns **Correct image scale** and **Lazy loading** on by default, whereas the CLI leaves both off. The defaults reflect what most users want; uncheck them if you need the CLI behavior.
+        The GUI turns **Correct image scale** and **Lazy loading** on by default, whereas the CLI leaves both off. Uncheck them to match the CLI behavior.
 
 === ":octicons-terminal-16: CLI"
 
@@ -159,7 +158,7 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
 
 ## Multi-GPU (experimental)
 
-Multi-GPU support parallelizes the covariance estimation step across GPUs. This is the most expensive step of the pipeline, so multi-GPU can significantly reduce total runtime for large datasets.
+Multi-GPU parallelizes the covariance estimation step across GPUs. Because that is the most expensive step, multi-GPU reduces runtime on large datasets.
 
 ```bash
 # Use all available GPUs
@@ -257,17 +256,10 @@ When using the **project system** (`--project`), pipeline output is placed into 
 
 ## Tips
 
-!!! tip "Recommended starting parameters"
-    - **Downsample**: 256 by default (good quality); drop to 128 for faster runs, or pass `--no-downsample` to keep the original box size
-    - **zdim**: Start with `1,2,4,10,20` (default). For publication, also try `--zdim 40`
-    - **n-images**: Use 10000-50000 for initial exploration, all images for final run
-    - **--correct-contrast**: Always enable this unless you know your data is already contrast-corrected
-
-!!! tip "Quick setup check"
-    Use `--only-mean` for a fast run that only computes the mean reconstruction. This verifies your data, mask, and CTF are correct before committing to a full run.
-
-!!! tip "Large datasets"
-    For datasets > 500k particles, use `--lazy` for lazy loading and `--downsample 128` for speed. Consider `--n-images 100000` for initial exploration.
-
-!!! tip "Memory"
-    If you run out of GPU memory, try `--low-memory-option` or `--very-low-memory-option`. You can also plan for a smaller budget with `--gpu-budget-gb 8`.
+- **Downsample**: 256 by default; drop to 128 for faster runs, or `--no-downsample` to keep the original box size.
+- **zdim**: the default `1,2,4,10,20` is usually enough; for publication you can also try `--zdim 40`.
+- **n-images**: 10000-50000 for initial exploration, all images for the final run.
+- **--correct-contrast**: enable unless the data is already contrast-corrected.
+- **Quick check**: `--only-mean` computes only the mean reconstruction — a fast way to verify data, mask, and CTF before a full run.
+- **Large datasets** (>500k particles): `--lazy` plus `--downsample 128`.
+- **Out of GPU memory**: `--low-memory-option` or `--very-low-memory-option`, or set `--gpu-budget-gb 8`.

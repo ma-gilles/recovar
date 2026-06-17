@@ -1,9 +1,6 @@
 # Conformational Density
 
-RECOVAR can estimate the probability density of conformations in the latent space. This enables:
-
-- Identification of stable conformational states
-- High-density trajectory computation
+RECOVAR can estimate the probability density of conformations in the latent space, which is used to identify stable conformational states and to compute high-density trajectories.
 
 ## Estimating density
 

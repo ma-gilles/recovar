@@ -2,8 +2,6 @@
 
 ## What you'll need
 
-Before starting, make sure you have:
-
 | Requirement | Details |
 |---|---|
 | **Particle stack** | A `.star` file (RELION) or `.cs` file (cryoSPARC) with CTF parameters |
@@ -22,12 +20,10 @@ Before starting, make sure you have:
     - **zdim**: Number of latent-space dimensions. A first run with `zdim=4` is a good default (it's what the GUI uses); increase to 10 or 20 to resolve finer heterogeneity at the cost of speed.
     - **K-means**: Groups particles into representative conformational states.
     - **UMAP**: 2D visualization of the latent space for exploring heterogeneity.
-    - **Eigenvalues**: Measure how much variance each principal component captures. Sharp drop = clear signal.
+    - **Eigenvolumes**: Volume representations of the principal components; the ones that look like noise can be dropped when choosing zdim.
     - **Trajectory**: A series of volumes showing a conformational path between two states.
 
 === ":material-monitor: GUI"
-
-    The easiest way to get started is through the web GUI.
 
     **1. Launch the GUI**
 
@@ -147,9 +143,7 @@ All commands accept `--project <dir>` to enable project mode. If you run from wi
 
 ## Next steps
 
-Now that you have results, here's where to go next:
-
 - **[Web GUI](../guide/gui.md)** -- launch the browser interface to interactively explore latent spaces and view 3D volumes
 - **[Analyzing Results](../guide/analysis.md)** -- deep dive into k-means, trajectories, UMAP, and volume generation options
 - **[Input Data](../guide/input-data.md)** -- supported formats and data preparation
-- **[Downsampling](../guide/downsampling.md)** -- when and how to downsample for optimal results
+- **[Downsampling](../guide/downsampling.md)** -- when and how to downsample

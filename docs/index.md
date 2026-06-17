@@ -20,12 +20,12 @@ hide:
 
 ## Why RECOVAR?
 
-- **Highest resolution** on [CryoBench](https://cryobench.cs.princeton.edu) across multiple datasets
+- **Highest resolution** on [CryoBench](https://cryobench.cs.princeton.edu)
 - **Conformational density** estimation in latent space
 - **Cryo-ET support** for tilt-series heterogeneity analysis
 - **Web GUI** with interactive latent-space exploration and sub-particle selection
 - **Direct input** from RELION (`.star`) and cryoSPARC (`.cs`) -- no format conversion
-- **No generative model** -- volumes come straight from kernel regression on your particles, so they stay transparent and verifiable
+- **No generative model** -- volumes come from kernel regression on your particles, not a neural network
 
 !!! info "What you need before starting"
     RECOVAR starts **after consensus refinement** in RELION or cryoSPARC. You need:
@@ -40,11 +40,11 @@ hide:
 
 ## Example output
 
-The Web GUI turns the latent space into something you can explore -- color particles by conformational cluster, lasso a subset, and generate a volume at any point with a click:
+In the Web GUI you can color particles by cluster, lasso a subset, and generate a volume at any point with a click:
 
 ![Interactive latent-space explorer in the Web GUI](_static/gui/16_latent_explorer.png)
 
-RECOVAR also writes the standard diagnostic plots and volumes you would expect:
+RECOVAR also writes diagnostic plots and volumes:
 
 <div class="example-outputs" markdown>
 
@@ -54,7 +54,7 @@ RECOVAR also writes the standard diagnostic plots and volumes you would expect:
 
 </div>
 
-Inspect any volume directly in the browser -- a 3D viewer with an adjustable isosurface threshold, no ChimeraX round-trip needed:
+Inspect any volume in the browser, with an adjustable isosurface threshold:
 
 ![3D volume viewer in the GUI](_static/gui/homepage_volume_viewer.png)
 
@@ -62,7 +62,7 @@ Inspect any volume directly in the browser -- a 3D viewer with an adjustable iso
 
 ## Typical workflow
 
-The easiest way to use RECOVAR is through the [Web GUI](guide/gui.md) -- launch it with `recovar gui`, then create jobs, explore the latent space, and generate volumes all from your browser.
+Launch the [Web GUI](guide/gui.md) with `recovar gui` to create jobs, explore the latent space, and generate volumes in the browser.
 
 Or use the command line:
 

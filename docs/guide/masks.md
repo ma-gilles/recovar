@@ -4,7 +4,7 @@ A real-space mask is important to boost SNR by focusing the analysis on the regi
 
 ## Using the GUI: the Mask Wizard
 
-The easiest way to make a solvent or focus mask is the built-in **Mask Wizard**. Open any job's **Volumes** tab and click the green wand icon on a volume (usually the mean reconstruction) to launch it.
+To make a solvent or focus mask in the GUI, use the built-in **Mask Wizard**. Open any job's **Volumes** tab and click the green wand icon on a volume (usually the mean reconstruction) to launch it.
 
 ![Mask Wizard -- slice view with live preview and controls](../_static/gui/20_mask_wizard.png)
 
@@ -50,7 +50,7 @@ A good approach is to first run with `--mask=sphere`, inspect the variance map t
 
 ## Focus mask
 
-A focus mask restricts the heterogeneity analysis to a specific region of the molecule. This is useful when you're interested in a particular domain or binding site.
+A focus mask restricts the heterogeneity analysis to a specific region of the molecule, such as a single domain or binding site.
 
 ```bash
 recovar pipeline particles.star -o output \
@@ -66,7 +66,7 @@ recovar pipeline particles.star -o output \
 
 ### Creating a focus mask
 
-The quickest way is the [Mask Wizard](#using-the-gui-the-mask-wizard) above: open the mean reconstruction, set a threshold, and use the **Segments** control to keep only the connected region of interest.
+Use the [Mask Wizard](#using-the-gui-the-mask-wizard) above: open the mean reconstruction, set a threshold, and use the **Segments** control to keep only the connected region of interest.
 
 You can also build one in UCSF Chimera or ChimeraX:
 

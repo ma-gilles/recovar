@@ -1,6 +1,6 @@
 # Web GUI
 
-RECOVAR includes a browser-based GUI for launching jobs, exploring latent spaces interactively, and viewing 3D volumes -- all without writing commands.
+RECOVAR includes a browser-based GUI for launching jobs, exploring latent spaces interactively, and viewing 3D volumes.
 
 ## Launching the GUI
 
@@ -41,7 +41,7 @@ The tunnel forwards traffic so the remote server appears local. If port 8080 is 
 
 ### First Launch
 
-When you first open the GUI, you will see the initial dashboard with no project loaded. The empty state offers three actions: **Create Project**, **Open Project**, and **Tutorial Dataset** -- the last one generates a small example dataset and opens it as a project, a zero-setup way to try the interface. The system info bar at the top shows the hostname, execution mode (`Local mode`, `SLURM mode`, or `SLURM + Local mode`), the recovar version, and available GPUs.
+When you first open the GUI, you will see the initial dashboard with no project loaded. The empty state offers three actions: **Create Project**, **Open Project**, and **Tutorial Dataset** -- the last one generates a small example dataset and opens it as a project. The system info bar at the top shows the hostname, execution mode (`Local mode`, `SLURM mode`, or `SLURM + Local mode`), the recovar version, and available GPUs.
 
 ![Initial Dashboard](../_static/gui/01_initial_dashboard.png)
 
@@ -70,7 +70,7 @@ Click **Open Project** to open a directory that already contains a recovar proje
 
 ## Dashboard
 
-Once a project is open, the dashboard shows a complete overview of your work.
+Once a project is open, the dashboard shows an overview of the project.
 
 ![Dashboard with Project](../_static/gui/04_dashboard.png)
 
@@ -159,7 +159,7 @@ From the **Parameters** tab of any job, click **Clone Job** to open a new form w
 
 ## Exploring Results
 
-The clip below shows the full interactive loop — color the latent space by deconvolved conformational density, pick two states, compute a density-guided trajectory, and play the resulting volumes back in the 3D viewer:
+The clip below shows the interactive loop: color the latent space by deconvolved density, pick two states, compute a density-guided trajectory, and play the resulting volumes in the 3D viewer:
 
 <video controls muted loop playsinline width="100%" style="max-width: 900px; border-radius: 8px;">
   <source src="../../_static/gui/explore_demo.mp4" type="video/mp4">
@@ -168,7 +168,7 @@ The clip below shows the full interactive loop — color the latent space by dec
 
 ### Latent Space Explorer
 
-After running an Analyze job, click **Explore Latent Space** to open the interactive explorer. The PCA and UMAP projections sit side by side; color the particles by k-means cluster to see how the conformational landscape breaks apart.
+After running an Analyze job, click **Explore Latent Space** to open the interactive explorer. The PCA and UMAP projections sit side by side; color the particles by k-means cluster.
 
 ![Latent space explorer -- PCA and UMAP colored by k-means cluster](../_static/gui/16_latent_explorer.png)
 
