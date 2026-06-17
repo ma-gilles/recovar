@@ -2020,10 +2020,7 @@
 
 <h1 id="analyzing-results">Analyzing Results<a class="headerlink" href="#analyzing-results" title="Permanent link">&para;</a></h1>
 <p>After the pipeline finishes, use <code>recovar analyze</code> to generate volumes, compute k-means clusters, create trajectories, and run UMAP.</p>
-<div class="admonition example">
-<p class="admonition-title">Choose your workflow: <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM7.25 8a.75.75 0 0 1-.22.53l-2.25 2.25a.749.749 0 0 1-1.275-.326.75.75 0 0 1 .215-.734L5.44 8 3.72 6.28a.749.749 0 0 1 .326-1.275.75.75 0 0 1 .734.215l2.25 2.25c.141.14.22.331.22.53m1.5 1.5h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1 0-1.5"/></svg></span> <strong>CLI</strong> or <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 16H3V4h18m0-2H3c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h7v2H8v2h8v-2h-2v-2h7a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2"/></svg></span> <strong>GUI</strong></p>
-<p>This page has tabbed instructions for both the <strong>command line</strong> and the <strong>web GUI</strong>. Click the tab headers below each section to switch. Your choice is remembered across all pages. <a href="../gui/#launching-the-gui">How to launch the GUI →</a></p>
-</div>
+<p>Instructions below are tabbed for the <strong>CLI</strong> and the <strong>GUI</strong>.</p>
 <h2 id="submitting-an-analyze-job">Submitting an analyze job<a class="headerlink" href="#submitting-an-analyze-job" title="Permanent link">&para;</a></h2>
 <div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 16H3V4h18m0-2H3c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h7v2H8v2h8v-2h-2v-2h7a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2"/></svg></span> GUI</label><label for="__tabbed_1_2"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM7.25 8a.75.75 0 0 1-.22.53l-2.25 2.25a.749.749 0 0 1-1.275-.326.75.75 0 0 1 .215-.734L5.44 8 3.72 6.28a.749.749 0 0 1 .326-1.275.75.75 0 0 1 .734.215l2.25 2.25c.141.14.22.331.22.53m1.5 1.5h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1 0-1.5"/></svg></span> CLI</label></div>
 <div class="tabbed-content">
@@ -2038,7 +2035,7 @@
 </ol>
 <div class="admonition tip">
 <p class="admonition-title">Quick Analyze</p>
-<p>The <strong>Quick Analyze</strong> button submits the same job with <code>n-bins=10</code> and <code>maskrad-fraction=10</code>, which makes the cluster-center volumes roughly 40x faster to compute at a lower resolution. UMAP and k-means clustering are unchanged. It's a good way to preview the conformational landscape before running a full-resolution analysis.</p>
+<p>The <strong>Quick Analyze</strong> button submits the same job with <code>n-bins=10</code> and <code>maskrad-fraction=10</code>, making the cluster-center volumes roughly 40x faster to compute at lower resolution. UMAP and k-means are unchanged.</p>
 </div>
 </div>
 <div class="tabbed-block">
@@ -2290,7 +2287,7 @@
 <h2 id="viewing-results">Viewing results<a class="headerlink" href="#viewing-results" title="Permanent link">&para;</a></h2>
 <div class="admonition tip">
 <p class="admonition-title">Interactive exploration</p>
-<p>Use <code>recovar gui</code> to explore results interactively in your browser — view scatter plots, click to generate volumes, and inspect 3D renderings. See the <a href="../gui/">GUI Guide</a>.</p>
+<p>Use <code>recovar gui</code> to explore results in your browser. See the <a href="../gui/">GUI Guide</a>.</p>
 </div>
 <h3 id="volume-files">Volume files<a class="headerlink" href="#volume-files" title="Permanent link">&para;</a></h3>
 <p>Open <code>.mrc</code> files in ChimeraX, Chimera, or any MRC viewer:</p>

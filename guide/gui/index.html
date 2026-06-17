@@ -2251,7 +2251,7 @@
 
 
 <h1 id="web-gui">Web GUI<a class="headerlink" href="#web-gui" title="Permanent link">&para;</a></h1>
-<p>RECOVAR includes a browser-based GUI for launching jobs, exploring latent spaces interactively, and viewing 3D volumes -- all without writing commands.</p>
+<p>RECOVAR includes a browser-based GUI for launching jobs, exploring latent spaces interactively, and viewing 3D volumes.</p>
 <h2 id="launching-the-gui">Launching the GUI<a class="headerlink" href="#launching-the-gui" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>gui
 </code></pre></div>
@@ -2306,7 +2306,7 @@
 <p>The tunnel forwards traffic so the remote server appears local. If port 8080 is taken, use a different port in both the SSH command and <code>recovar gui --port &lt;port&gt;</code>.</p>
 <h2 id="getting-started">Getting Started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h2>
 <h3 id="first-launch">First Launch<a class="headerlink" href="#first-launch" title="Permanent link">&para;</a></h3>
-<p>When you first open the GUI, you will see the initial dashboard with no project loaded. The empty state offers three actions: <strong>Create Project</strong>, <strong>Open Project</strong>, and <strong>Tutorial Dataset</strong> -- the last one generates a small example dataset and opens it as a project, a zero-setup way to try the interface. The system info bar at the top shows the hostname, execution mode (<code>Local mode</code>, <code>SLURM mode</code>, or <code>SLURM + Local mode</code>), the recovar version, and available GPUs.</p>
+<p>When you first open the GUI, you will see the initial dashboard with no project loaded. The empty state offers three actions: <strong>Create Project</strong>, <strong>Open Project</strong>, and <strong>Tutorial Dataset</strong> -- the last one generates a small example dataset and opens it as a project. The system info bar at the top shows the hostname, execution mode (<code>Local mode</code>, <code>SLURM mode</code>, or <code>SLURM + Local mode</code>), the recovar version, and available GPUs.</p>
 <p><img alt="Initial Dashboard" src="../../_static/gui/01_initial_dashboard.png" /></p>
 <h3 id="creating-a-project">Creating a Project<a class="headerlink" href="#creating-a-project" title="Permanent link">&para;</a></h3>
 <p>Click <strong>Create Project</strong> in the sidebar or in the main content area. A dialog opens with a built-in file browser that lets you navigate the filesystem.</p>
@@ -2323,7 +2323,7 @@
 <p>Click <strong>Open Project</strong> to open a directory that already contains a recovar project.</p>
 <p><img alt="Open Project Dialog" src="../../_static/gui/03_open_project.png" /></p>
 <h2 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h2>
-<p>Once a project is open, the dashboard shows a complete overview of your work.</p>
+<p>Once a project is open, the dashboard shows an overview of the project.</p>
 <p><img alt="Dashboard with Project" src="../../_static/gui/04_dashboard.png" /></p>
 <p>Key areas:</p>
 <ul>
@@ -2386,14 +2386,14 @@
 <p>From the <strong>Parameters</strong> tab of any job, click <strong>Clone Job</strong> to open a new form with all parameters pre-filled. Modify what you need and resubmit.</p>
 <p><img alt="Cloned Form" src="../../_static/gui/19_cloned_form.png" /></p>
 <h2 id="exploring-results">Exploring Results<a class="headerlink" href="#exploring-results" title="Permanent link">&para;</a></h2>
-<p>The clip below shows the full interactive loop — color the latent space by deconvolved conformational density, pick two states, compute a density-guided trajectory, and play the resulting volumes back in the 3D viewer:</p>
+<p>The clip below shows the interactive loop: color the latent space by deconvolved density, pick two states, compute a density-guided trajectory, and play the resulting volumes in the 3D viewer:</p>
 <video controls muted loop playsinline width="100%" style="max-width: 900px; border-radius: 8px;">
   <source src="../../_static/gui/explore_demo.mp4" type="video/mp4">
   Your browser does not support the video tag.
 </video>
 
 <h3 id="latent-space-explorer">Latent Space Explorer<a class="headerlink" href="#latent-space-explorer" title="Permanent link">&para;</a></h3>
-<p>After running an Analyze job, click <strong>Explore Latent Space</strong> to open the interactive explorer. The PCA and UMAP projections sit side by side; color the particles by k-means cluster to see how the conformational landscape breaks apart.</p>
+<p>After running an Analyze job, click <strong>Explore Latent Space</strong> to open the interactive explorer. The PCA and UMAP projections sit side by side; color the particles by k-means cluster.</p>
 <p><img alt="Latent space explorer -- PCA and UMAP colored by k-means cluster" src="../../_static/gui/16_latent_explorer.png" /></p>
 <ul>
 <li><strong>PCA and UMAP</strong> projections side by side (handles hundreds of thousands of particles; very large datasets are automatically subsampled for smooth display)</li>

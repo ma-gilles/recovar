@@ -1899,7 +1899,7 @@
 <h1 id="masks">Masks<a class="headerlink" href="#masks" title="Permanent link">&para;</a></h1>
 <p>A real-space mask is important to boost SNR by focusing the analysis on the region of interest.</p>
 <h2 id="using-the-gui-the-mask-wizard">Using the GUI: the Mask Wizard<a class="headerlink" href="#using-the-gui-the-mask-wizard" title="Permanent link">&para;</a></h2>
-<p>The easiest way to make a solvent or focus mask is the built-in <strong>Mask Wizard</strong>. Open any job's <strong>Volumes</strong> tab and click the green wand icon on a volume (usually the mean reconstruction) to launch it.</p>
+<p>To make a solvent or focus mask in the GUI, use the built-in <strong>Mask Wizard</strong>. Open any job's <strong>Volumes</strong> tab and click the green wand icon on a volume (usually the mean reconstruction) to launch it.</p>
 <p><img alt="Mask Wizard -- slice view with live preview and controls" src="../../_static/gui/20_mask_wizard.png" /></p>
 <p>The wizard builds a mask from the volume and previews it live as you adjust:</p>
 <ul>
@@ -1948,7 +1948,7 @@
 </table>
 <p>A good approach is to first run with <code>--mask=sphere</code>, inspect the variance map to see which regions have heterogeneity, then create a focused mask around those regions.</p>
 <h2 id="focus-mask">Focus mask<a class="headerlink" href="#focus-mask" title="Permanent link">&para;</a></h2>
-<p>A focus mask restricts the heterogeneity analysis to a specific region of the molecule. This is useful when you're interested in a particular domain or binding site.</p>
+<p>A focus mask restricts the heterogeneity analysis to a specific region of the molecule, such as a single domain or binding site.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--focus-mask<span class="w"> </span>focus_mask.mrc
 </code></pre></div>
@@ -1957,7 +1957,7 @@
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--mask<span class="o">=</span>sphere<span class="w"> </span>--focus-mask<span class="w"> </span>focus_mask.mrc
 </code></pre></div>
 <h3 id="creating-a-focus-mask">Creating a focus mask<a class="headerlink" href="#creating-a-focus-mask" title="Permanent link">&para;</a></h3>
-<p>The quickest way is the <a href="#using-the-gui-the-mask-wizard">Mask Wizard</a> above: open the mean reconstruction, set a threshold, and use the <strong>Segments</strong> control to keep only the connected region of interest.</p>
+<p>Use the <a href="#using-the-gui-the-mask-wizard">Mask Wizard</a> above: open the mean reconstruction, set a threshold, and use the <strong>Segments</strong> control to keep only the connected region of interest.</p>
 <p>You can also build one in UCSF Chimera or ChimeraX:</p>
 <ol>
 <li>Open your consensus map</li>

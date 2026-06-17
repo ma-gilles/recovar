@@ -1868,12 +1868,12 @@
 <hr />
 <h2 id="why-recovar">Why RECOVAR?<a class="headerlink" href="#why-recovar" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Highest resolution</strong> on <a href="https://cryobench.cs.princeton.edu">CryoBench</a> across multiple datasets</li>
+<li><strong>Highest resolution</strong> on <a href="https://cryobench.cs.princeton.edu">CryoBench</a></li>
 <li><strong>Conformational density</strong> estimation in latent space</li>
 <li><strong>Cryo-ET support</strong> for tilt-series heterogeneity analysis</li>
 <li><strong>Web GUI</strong> with interactive latent-space exploration and sub-particle selection</li>
 <li><strong>Direct input</strong> from RELION (<code>.star</code>) and cryoSPARC (<code>.cs</code>) -- no format conversion</li>
-<li><strong>No generative model</strong> -- volumes come straight from kernel regression on your particles, so they stay transparent and verifiable</li>
+<li><strong>No generative model</strong> -- volumes come from kernel regression on your particles, not a neural network</li>
 </ul>
 <div class="admonition info">
 <p class="admonition-title">What you need before starting</p>
@@ -1887,9 +1887,9 @@
 </div>
 <hr />
 <h2 id="example-output">Example output<a class="headerlink" href="#example-output" title="Permanent link">&para;</a></h2>
-<p>The Web GUI turns the latent space into something you can explore -- color particles by conformational cluster, lasso a subset, and generate a volume at any point with a click:</p>
+<p>In the Web GUI you can color particles by cluster, lasso a subset, and generate a volume at any point with a click:</p>
 <p><img alt="Interactive latent-space explorer in the Web GUI" src="_static/gui/16_latent_explorer.png" /></p>
-<p>RECOVAR also writes the standard diagnostic plots and volumes you would expect:</p>
+<p>RECOVAR also writes diagnostic plots and volumes:</p>
 <div class="example-outputs">
 <table>
 <thead>
@@ -1906,11 +1906,11 @@
 </tbody>
 </table>
 </div>
-<p>Inspect any volume directly in the browser -- a 3D viewer with an adjustable isosurface threshold, no ChimeraX round-trip needed:</p>
+<p>Inspect any volume in the browser, with an adjustable isosurface threshold:</p>
 <p><img alt="3D volume viewer in the GUI" src="_static/gui/homepage_volume_viewer.png" /></p>
 <hr />
 <h2 id="typical-workflow">Typical workflow<a class="headerlink" href="#typical-workflow" title="Permanent link">&para;</a></h2>
-<p>The easiest way to use RECOVAR is through the <a href="guide/gui/">Web GUI</a> -- launch it with <code>recovar gui</code>, then create jobs, explore the latent space, and generate volumes all from your browser.</p>
+<p>Launch the <a href="guide/gui/">Web GUI</a> with <code>recovar gui</code> to create jobs, explore the latent space, and generate volumes in the browser.</p>
 <p>Or use the command line:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># 1. Run the pipeline (~10 min for a small dataset)</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc

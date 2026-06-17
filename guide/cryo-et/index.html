@@ -1963,7 +1963,7 @@
 
 
 <h1 id="cryo-et-tomography">Cryo-ET / Tomography<a class="headerlink" href="#cryo-et-tomography" title="Permanent link">&para;</a></h1>
-<p>RECOVAR supports tilt-series data for cryo-ET heterogeneity analysis. One practical advantage over cryoDRGN-ET and tomodrgn is that a focus mask can be used.</p>
+<p>RECOVAR supports tilt-series data for cryo-ET heterogeneity analysis, including the use of a focus mask.</p>
 <div class="admonition warning">
 <p class="admonition-title">Experimental</p>
 <p>Cryo-ET support is newer than SPA support and may be less stable. No paper has been published on this feature yet.</p>
@@ -1973,7 +1973,7 @@
 <p>RECOVAR's cryo-ET support currently reads <strong>RELION-5</strong> tilt-series data. Process your tomograms through the RELION-5 tomography pipeline (import → tilt-series alignment → particle extraction / Bayesian polishing) to produce the <code>tomograms.star</code> and <code>particles.star</code> that RECOVAR consumes. See the <a href="https://relion.readthedocs.io/en/release-5.0/STA_tutorial/Introduction.html">RELION-5 tomography tutorial</a> for how to generate those files.</p>
 </div>
 <h2 id="using-the-gui">Using the GUI<a class="headerlink" href="#using-the-gui" title="Permanent link">&para;</a></h2>
-<p>In the <a href="../gui/">Web GUI</a> cryo-ET is just a checkbox. In the <strong>Pipeline</strong> form, point <strong>Particles</strong> at a RELION5 2D-tilt star (produced by <code>recovar parse_relion5_tomo</code>, see <a href="#importing-from-relion5">below</a>), expand <strong>Advanced</strong>, and tick <strong>Tilt series</strong>. A cryo-ET panel appears -- per-tilt dose, tilt angles, and the CTF model are read automatically from the star, so the only common knob is <strong>Max tilts</strong> (how many tilts per series to use).</p>
+<p>In the <a href="../gui/">Web GUI</a> cryo-ET is a single checkbox. In the <strong>Pipeline</strong> form, point <strong>Particles</strong> at a RELION5 2D-tilt star (produced by <code>recovar parse_relion5_tomo</code>, see <a href="#importing-from-relion5">below</a>), expand <strong>Advanced</strong>, and tick <strong>Tilt series</strong>. A cryo-ET panel appears -- per-tilt dose, tilt angles, and the CTF model are read automatically from the star, so the only common knob is <strong>Max tilts</strong> (how many tilts per series to use).</p>
 <p><img alt="Pipeline form with the Tilt series option enabled" src="../../_static/gui/06d_pipeline_tilt.png" /></p>
 <p>The rest of this page covers the same workflow from the command line.</p>
 <h2 id="importing-from-relion5">Importing from RELION5<a class="headerlink" href="#importing-from-relion5" title="Permanent link">&para;</a></h2>
@@ -2066,9 +2066,9 @@
 </tr>
 </tbody>
 </table>
-<p>The default is <code>relion5</code> for tilt-series data and <code>cryoem</code> otherwise. For RELION5 input the default is correct, which is why the GUI does not expose this setting. <code>warp</code> is experimental.</p>
+<p>The default is <code>relion5</code> for tilt-series data and <code>cryoem</code> otherwise. The default is correct for RELION5 input, so the GUI does not expose it. <code>warp</code> is experimental.</p>
 <h2 id="with-focus-mask">With focus mask<a class="headerlink" href="#with-focus-mask" title="Permanent link">&para;</a></h2>
-<p>A key advantage of RECOVAR for cryo-ET is focus mask support:</p>
+<p>Add a focus mask with <code>--focus-mask</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--focus-mask<span class="w"> </span>binding_site.mrc<span class="w"> </span>--tilt-series
 </code></pre></div>

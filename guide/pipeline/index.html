@@ -2018,10 +2018,7 @@
 
 <h1 id="running-the-pipeline">Running the Pipeline<a class="headerlink" href="#running-the-pipeline" title="Permanent link">&para;</a></h1>
 <p>The RECOVAR pipeline takes particle images and a mask, then computes the mean reconstruction, covariance, principal components, and embeddings.</p>
-<div class="admonition example">
-<p class="admonition-title">Choose your workflow: <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM7.25 8a.75.75 0 0 1-.22.53l-2.25 2.25a.749.749 0 0 1-1.275-.326.75.75 0 0 1 .215-.734L5.44 8 3.72 6.28a.749.749 0 0 1 .326-1.275.75.75 0 0 1 .734.215l2.25 2.25c.141.14.22.331.22.53m1.5 1.5h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1 0-1.5"/></svg></span> <strong>CLI</strong> or <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 16H3V4h18m0-2H3c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h7v2H8v2h8v-2h-2v-2h7a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2"/></svg></span> <strong>GUI</strong></p>
-<p>This page has tabbed instructions for both the <strong>command line</strong> and the <strong>web GUI</strong>. Click the tab headers below each section to switch. Your choice is remembered across all pages. <a href="../gui/#launching-the-gui">How to launch the GUI →</a></p>
-</div>
+<p>Instructions below are tabbed for the <strong>CLI</strong> and the <strong>GUI</strong>. <a href="../gui/#launching-the-gui">How to launch the GUI →</a></p>
 <h2 id="submitting-a-pipeline-job">Submitting a pipeline job<a class="headerlink" href="#submitting-a-pipeline-job" title="Permanent link">&para;</a></h2>
 <div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 16H3V4h18m0-2H3c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h7v2H8v2h8v-2h-2v-2h7a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2"/></svg></span> GUI</label><label for="__tabbed_1_2"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM7.25 8a.75.75 0 0 1-.22.53l-2.25 2.25a.749.749 0 0 1-1.275-.326.75.75 0 0 1 .215-.734L5.44 8 3.72 6.28a.749.749 0 0 1 .326-1.275.75.75 0 0 1 .734.215l2.25 2.25c.141.14.22.331.22.53m1.5 1.5h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1 0-1.5"/></svg></span> CLI</label></div>
 <div class="tabbed-content">
@@ -2105,7 +2102,7 @@
 <p>Under <strong>Rarely Used</strong>: Halfset indices (<code>.pkl</code>), N Images, Poses, CTF, and Indices (<code>--ind</code>).</p>
 <div class="admonition note">
 <p class="admonition-title">GUI defaults differ slightly from the CLI</p>
-<p>The GUI turns <strong>Correct image scale</strong> and <strong>Lazy loading</strong> on by default, whereas the CLI leaves both off. The defaults reflect what most users want; uncheck them if you need the CLI behavior.</p>
+<p>The GUI turns <strong>Correct image scale</strong> and <strong>Lazy loading</strong> on by default, whereas the CLI leaves both off. Uncheck them to match the CLI behavior.</p>
 </div>
 </div>
 <div class="tabbed-block">
@@ -2322,7 +2319,7 @@
 </tbody>
 </table>
 <h2 id="multi-gpu-experimental">Multi-GPU (experimental)<a class="headerlink" href="#multi-gpu-experimental" title="Permanent link">&para;</a></h2>
-<p>Multi-GPU support parallelizes the covariance estimation step across GPUs. This is the most expensive step of the pipeline, so multi-GPU can significantly reduce total runtime for large datasets.</p>
+<p>Multi-GPU parallelizes the covariance estimation step across GPUs. Because that is the most expensive step, multi-GPU reduces runtime on large datasets.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Use all available GPUs</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--multi-gpu
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
@@ -2443,27 +2440,15 @@
 </div>
 </div>
 <h2 id="tips">Tips<a class="headerlink" href="#tips" title="Permanent link">&para;</a></h2>
-<div class="admonition tip">
-<p class="admonition-title">Recommended starting parameters</p>
 <ul>
-<li><strong>Downsample</strong>: 256 by default (good quality); drop to 128 for faster runs, or pass <code>--no-downsample</code> to keep the original box size</li>
-<li><strong>zdim</strong>: Start with <code>1,2,4,10,20</code> (default). For publication, also try <code>--zdim 40</code></li>
-<li><strong>n-images</strong>: Use 10000-50000 for initial exploration, all images for final run</li>
-<li><strong>--correct-contrast</strong>: Always enable this unless you know your data is already contrast-corrected</li>
+<li><strong>Downsample</strong>: 256 by default; drop to 128 for faster runs, or <code>--no-downsample</code> to keep the original box size.</li>
+<li><strong>zdim</strong>: the default <code>1,2,4,10,20</code> is usually enough; for publication you can also try <code>--zdim 40</code>.</li>
+<li><strong>n-images</strong>: 10000-50000 for initial exploration, all images for the final run.</li>
+<li><strong>--correct-contrast</strong>: enable unless the data is already contrast-corrected.</li>
+<li><strong>Quick check</strong>: <code>--only-mean</code> computes only the mean reconstruction — a fast way to verify data, mask, and CTF before a full run.</li>
+<li><strong>Large datasets</strong> (&gt;500k particles): <code>--lazy</code> plus <code>--downsample 128</code>.</li>
+<li><strong>Out of GPU memory</strong>: <code>--low-memory-option</code> or <code>--very-low-memory-option</code>, or set <code>--gpu-budget-gb 8</code>.</li>
 </ul>
-</div>
-<div class="admonition tip">
-<p class="admonition-title">Quick setup check</p>
-<p>Use <code>--only-mean</code> for a fast run that only computes the mean reconstruction. This verifies your data, mask, and CTF are correct before committing to a full run.</p>
-</div>
-<div class="admonition tip">
-<p class="admonition-title">Large datasets</p>
-<p>For datasets &gt; 500k particles, use <code>--lazy</code> for lazy loading and <code>--downsample 128</code> for speed. Consider <code>--n-images 100000</code> for initial exploration.</p>
-</div>
-<div class="admonition tip">
-<p class="admonition-title">Memory</p>
-<p>If you run out of GPU memory, try <code>--low-memory-option</code> or <code>--very-low-memory-option</code>. You can also plan for a smaller budget with <code>--gpu-budget-gb 8</code>.</p>
-</div>
 
 
 

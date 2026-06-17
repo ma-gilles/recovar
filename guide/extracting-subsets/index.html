@@ -1919,12 +1919,7 @@
 
 
 <h1 id="extracting-image-subsets">Extracting Image Subsets<a class="headerlink" href="#extracting-image-subsets" title="Permanent link">&para;</a></h1>
-<p>RECOVAR can identify which images contributed to a particular feature in a generated volume. This is useful for:</p>
-<ul>
-<li>Focused refinement of a specific conformational state</li>
-<li>Re-importing selected particles into RELION or cryoSPARC</li>
-<li>Understanding which particles contribute to observed features</li>
-</ul>
+<p>RECOVAR can identify which images contributed to a particular feature in a generated volume — for example, to pull out the particles behind one conformational state and re-import them into RELION or cryoSPARC for focused refinement.</p>
 <h2 id="based-on-volume-features">Based on volume features<a class="headerlink" href="#based-on-volume-features" title="Permanent link">&para;</a></h2>
 <p>The <code>extract_image_subset</code> command identifies images that produced a particular region of a volume.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>extract_image_subset<span class="w"> </span><span class="se">\</span>
@@ -2032,7 +2027,7 @@
 <li>Click <strong>Export .star</strong> to save the selected particles as a RELION-compatible <code>.star</code> file (if the source job has no <code>.star</code> to copy from, the GUI exports a <code>.ind</code> index file instead)</li>
 <li>A link to <strong>rerun pipeline</strong> with the exported subset appears for one-click re-processing</li>
 </ol>
-<p>This provides a visual, interactive alternative to the CLI-based k-means cluster extraction described above. See the <a href="../gui/">GUI Guide</a> for details.</p>
+<p>See the <a href="../gui/">GUI Guide</a> for details.</p>
 
 
 
