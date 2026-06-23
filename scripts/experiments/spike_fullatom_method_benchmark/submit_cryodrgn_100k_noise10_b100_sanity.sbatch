@@ -75,6 +75,7 @@ for zdim in $ZDIMS_STR; do
     --num-epochs 20
     --num-workers 4
     --max-threads "${SLURM_CPUS_PER_TASK:-8}"
+    --uninvert-data
     -o "$outdir"
   )
   echo "TRAIN_COMMAND=${cmd[*]}"

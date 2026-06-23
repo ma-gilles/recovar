@@ -85,6 +85,7 @@ fi
   --num-epochs 20 \
   --num-workers 4 \
   --max-threads "${SLURM_CPUS_PER_TASK:-8}" \
+  --uninvert-data \
   -o "$OUTDIR"
 
 echo "DONE=$(date -Is)"

@@ -143,7 +143,7 @@ def _write_active_volumes(
 # ---------------------------------------------------------------------------
 
 
-def _simulate_dataset(args, out: Path, volume_prefix: Path, voxel_size: float) -> tuple[np.ndarray, dict]:
+def _simulate_dataset(args, out: Path, volume_prefix: Path, voxel_size: float) -> tuple[np.ndarray | None, dict]:
     dataset_dir = out / "03_dataset"
     dataset_dir.mkdir(parents=True, exist_ok=True)
     particles_path = dataset_dir / f"particles.{args.grid_size}.mrcs"
@@ -153,7 +153,7 @@ def _simulate_dataset(args, out: Path, volume_prefix: Path, voxel_size: float) -
         logger.info("Reusing existing simulated dataset in %s", dataset_dir)
         with sim_info_path.open("rb") as f:
             sim_info = pickle.load(f)
-        return np.asarray(utils.load_mrc(particles_path), dtype=np.float32), sim_info
+        return None, sim_info
 
     logger.info("Simulating %d images in %s", args.n_images, dataset_dir)
     np.random.seed(args.seed)
@@ -178,6 +178,7 @@ def _simulate_dataset(args, out: Path, volume_prefix: Path, voxel_size: float) -
         disc_type="cubic",
         n_tilts=-1,
         premultiplied_ctf=args.premultiplied_ctf,
+        sequential_image_write=getattr(args, "sequential_image_write", True),
     )
     np.save(dataset_dir / "state_assignment.npy", np.asarray(sim_info["image_assignment"], dtype=np.int32))
     _write_json(
@@ -194,7 +195,7 @@ def _simulate_dataset(args, out: Path, volume_prefix: Path, voxel_size: float) -
             "state_assignment": str(dataset_dir / "state_assignment.npy"),
         },
     )
-    return np.asarray(image_stack, dtype=np.float32), sim_info
+    return None if image_stack is None else np.asarray(image_stack, dtype=np.float32), sim_info
 
 
 # ---------------------------------------------------------------------------
@@ -774,6 +775,16 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--very-low-memory-option", action="store_true")
     parser.add_argument("--pipeline-gpu-memory", type=float, default=None)
     parser.add_argument("--premultiplied-ctf", action="store_true")
+    parser.add_argument(
+        "--sequential-image-write",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Sort simulated image rows by assigned state before writing the particle stack, and permute poses/CTF/"
+            "state labels consistently. This avoids random writes to huge .mrcs files. Use "
+            "--no-sequential-image-write for legacy row ordering."
+        ),
+    )
     parser.add_argument(
         "--bfactor", type=float, default=0.0, help="compute_state sharpening B-factor. 0 = no sharpening (default)."
     )

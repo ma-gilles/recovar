@@ -69,6 +69,10 @@ def masking_options(
 
         if keep_input_mask:
             volume_mask = input_mask
+            # Threshold to boolean before dilation: a soft/float mask has tiny
+            # (~1e-8) nonzero values almost everywhere, and binary_dilation treats
+            # any nonzero as foreground, which blows the dilated mask up to all-ones.
+            input_mask = input_mask > 0.5
         else:
             logger.info("Using input mask")
             if mask_dilation_iter > 0:

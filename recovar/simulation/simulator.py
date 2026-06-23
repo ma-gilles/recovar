@@ -408,6 +408,7 @@ def generate_synthetic_dataset(
     create_nested_structure=False,
     nested_prefix="Extract/job193",
     percent_tilt_series_outliers=0.0,
+    sequential_image_write=False,
 ):
     from recovar.output import output
 
@@ -500,6 +501,7 @@ def generate_synthetic_dataset(
             premultiplied_ctf=premultiplied_ctf,
             noise_increase_per_tilt=noise_increase_per_tilt,
             percent_tilt_series_outliers=percent_tilt_series_outliers,
+            sequential_image_write=sequential_image_write,
         )
         mrc.voxel_size = voxel_size
         logger.info("Streaming simulated particles: file synced and closed")
@@ -608,6 +610,7 @@ def generate_simulated_dataset(
     premultiplied_ctf=False,
     noise_increase_per_tilt=None,
     percent_tilt_series_outliers=0.0,
+    sequential_image_write=False,
 ):
 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -686,6 +689,32 @@ def generate_simulated_dataset(
         per_tilt_contrast = None
         tilt_groups = None
         tilt_series_assignment = None
+
+    original_image_index = None
+    if sequential_image_write:
+        can_reorder = (
+            n_tilts <= 0
+            and not put_extra_particles
+            and percent_outliers == 0
+            and percent_tilt_series_outliers == 0
+            and image_offset_n_std == 0
+        )
+        if can_reorder:
+            original_image_index = np.argsort(image_assignments, kind="stable").astype(np.int32, copy=False)
+            if not np.array_equal(original_image_index, np.arange(n_images, dtype=np.int32)):
+                logger.info("Sorting simulated image rows by assigned volume for contiguous particle-stack writes")
+                ctf_params = ctf_params[original_image_index]
+                rots = rots[original_image_index]
+                trans = trans[original_image_index]
+                per_image_contrast = per_image_contrast[original_image_index]
+                per_image_noise_scale = per_image_noise_scale[original_image_index]
+                image_assignments = image_assignments[original_image_index]
+        else:
+            logger.warning(
+                "Ignoring sequential_image_write because this simulation uses tilt series, outliers, "
+                "extra particles, or per-image offsets."
+            )
+            sequential_image_write = False
 
     if n_tilts > 0:
         ctf_evaluator = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
@@ -865,6 +894,8 @@ def generate_simulated_dataset(
         "per_image_noise_scale": per_image_noise_scale,
         "per_image_offset": per_image_offset,
         "image_assignment": image_assignments,
+        "original_image_index": original_image_index,
+        "sequential_image_write": bool(sequential_image_write and original_image_index is not None),
         "noise_variance": noise_variance.astype(np.float32),
         "voxel_size": voxel_size,
         "tilt_series_assignment": tilt_series_assignment,

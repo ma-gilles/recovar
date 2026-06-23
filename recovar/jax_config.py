@@ -8,6 +8,32 @@ import logging
 import os
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", ".90")
+
+# Robustness: when XLA picks a Triton GEMM and its autotuner can't find a valid
+# config, the run errors out with "No valid config found!". Observed on MIG
+# slices for the float32 cross_terms einsum in compute_projected_covariance,
+# and on box-256 kernel-regression deconvolution where the per-image reduce
+# ``weights @ per_image`` is a (n_weight_sets, ~67M) GEMM that Triton rejects.
+#
+# ``--xla_gpu_cublas_fallback=true`` does NOT recover — that flag only kicks in
+# for *performance* fallback (cuBLAS when faster), not *failure* fallback. To
+# handle the autotuner failure we disable Triton GEMM entirely so XLA emits
+# cuBLAS calls directly.
+#
+# Triton GEMM is typically 0-20% faster than cuBLAS for recovar's matmul shapes
+# on full A100/H100; we trade that small win for cross-device robustness.
+# Recovar's primary bottleneck is FFTs and the custom CUDA backproject kernel,
+# not the float32 gemm, so the perf cost is small. Re-enable via
+# ``XLA_FLAGS=--xla_gpu_enable_triton_gemm=true`` before launching.
+#
+# References:
+#   https://github.com/NVIDIA/JAX-Toolbox/issues/317
+#   https://docs.jax.dev/en/latest/gpu_performance_tips.html
+_existing_flags = os.environ.get("XLA_FLAGS", "")
+if "xla_gpu_enable_triton_gemm" not in _existing_flags:
+    triton_off = "--xla_gpu_enable_triton_gemm=false"
+    os.environ["XLA_FLAGS"] = f"{_existing_flags} {triton_off}".strip() if _existing_flags else triton_off
+
 import jax
 
 jax.config.update("jax_enable_x64", True)

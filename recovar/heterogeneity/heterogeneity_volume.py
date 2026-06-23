@@ -10,7 +10,6 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.heterogeneity.latent_density
 import recovar.jax_config
-from recovar import utils
 from recovar.core import mask
 from recovar.data_io import cryoem_dataset, halfsets
 from recovar.heterogeneity import (
@@ -114,8 +113,7 @@ def _standard_kernel_candidates(bins, heterogeneity_distances, n_min_particles):
         bins = pick_heterogeneity_bins2(-1, heterogeneity_distances[1], 0.5, n_min_particles, n_bins=bins)
 
     n_images_per_bin = [
-        int(np.sum(heterogeneity_distances[0] < b) + np.sum(heterogeneity_distances[1] < b))
-        for b in bins
+        int(np.sum(heterogeneity_distances[0] < b) + np.sum(heterogeneity_distances[1] < b)) for b in bins
     ]
     logger.info("bins %s", bins)
     logger.info("Particles per bin: %s", n_images_per_bin)
@@ -128,12 +126,8 @@ def _deconvolved_kernel_candidates(ndim, latent_differences, latent_precision, l
     if latent_differences is None or latent_precision is None:
         raise ValueError("deconv_latent_differences and deconv_latent_precision are required for deconvolved mode")
 
-    latent_differences = [
-        deconvolved_kernel_regression._coerce_1d_latent_differences(x) for x in latent_differences
-    ]
-    latent_precision = [
-        deconvolved_kernel_regression._coerce_1d_latent_precision(x) for x in latent_precision
-    ]
+    latent_differences = [deconvolved_kernel_regression._coerce_1d_latent_differences(x) for x in latent_differences]
+    latent_precision = [deconvolved_kernel_regression._coerce_1d_latent_precision(x) for x in latent_precision]
     lambda_grid, _, sigma_ref = deconvolved_kernel_regression.deconvolution_bandwidths_1d(
         np.concatenate(latent_precision), lambda_grid=lambda_grid
     )
@@ -169,21 +163,15 @@ def _local_poly_kernel_candidates(
     if latent_differences is None or latent_precision is None:
         raise ValueError("local_poly_latent_differences and local_poly_latent_precision are required for local_poly")
 
-    latent_differences = [
-        local_polynomial_regression.coerce_1d_latent_differences(x) for x in latent_differences
-    ]
-    latent_precision = [
-        local_polynomial_regression.coerce_1d_latent_precision(x) for x in latent_precision
-    ]
+    latent_differences = [local_polynomial_regression.coerce_1d_latent_differences(x) for x in latent_differences]
+    latent_precision = [local_polynomial_regression.coerce_1d_latent_precision(x) for x in latent_precision]
     all_latent_differences = np.concatenate(latent_differences)
     all_latent_precision = np.concatenate(latent_precision)
-    multipliers, h_grid, sigma_ref, h_min, r_min = (
-        local_polynomial_regression.local_poly_bandwidth_grid_info_1d(
-            all_latent_differences,
-            all_latent_precision,
-            n_min_particles,
-            multipliers=bandwidth_multipliers,
-        )
+    multipliers, h_grid, sigma_ref, h_min, r_min = local_polynomial_regression.local_poly_bandwidth_grid_info_1d(
+        all_latent_differences,
+        all_latent_precision,
+        n_min_particles,
+        multipliers=bandwidth_multipliers,
     )
     n_images_per_h = []
     for h in h_grid:
@@ -420,17 +408,15 @@ def make_volumes_kernel_estimate_local(
         estimates[k] = estimates[k].reshape(-1, *ds.volume_shape).astype(np.float32)
         logger.info("Computing estimates done")
 
-        cross_validation_estimators[k], lhs[k], rhs[k] = (
-            _run_kernel_estimator(
-                half_ds,
-                k,
-                heterogeneity_bins[0:1],
-                tau_value=tau,
-                grid_correct=False,
-                use_spherical_mask=False,
-                return_lhs_rhs=True,
-                upsampling_factor=1,
-            )
+        cross_validation_estimators[k], lhs[k], rhs[k] = _run_kernel_estimator(
+            half_ds,
+            k,
+            heterogeneity_bins[0:1],
+            tau_value=tau,
+            grid_correct=False,
+            use_spherical_mask=False,
+            return_lhs_rhs=True,
+            upsampling_factor=1,
         )
 
         lhs_cv_half = lhs[k][0, 0, 0] if kernel_regression_mode == "local_poly" else lhs[k][0]
@@ -477,6 +463,17 @@ def make_volumes_kernel_estimate_local(
 
     estimates = [None, None]
 
+    # Final estimate pass. Standard/local_poly backproject each image once, so the
+    # 2x anti-aliasing upsampling is cheap and worth keeping. The deconvolved path
+    # instead materializes a (n_weight_sets, upsampled_half_vol) accumulator plus a
+    # per-image CUDA intermediate; at 2x on box>=256 (~67M half-voxels x ~50 weight
+    # sets) that OOMs an 80GB GPU. Native resolution (8x less memory) keeps it
+    # feasible and is ~17x faster than the per-weight-set loop.
+    _env_ups = os.environ.get("RECOVAR_FINAL_ESTIMATE_UPSAMPLING")
+    if _env_ups not in (None, ""):
+        final_estimate_upsampling = int(_env_ups)
+    else:
+        final_estimate_upsampling = 1 if kernel_regression_mode == "deconvolved" else 2
     for k in range(2):
         logger.info("Computing estimates start")
         half_ds = ds.get_halfset(k)
@@ -487,7 +484,7 @@ def make_volumes_kernel_estimate_local(
             tau_value=None,
             grid_correct=True,
             use_spherical_mask=True,
-            upsampling_factor=2,
+            upsampling_factor=final_estimate_upsampling,
         )
         estimates[k] = estimates[k].reshape(-1, *ds.volume_shape).astype(np.float32)
 

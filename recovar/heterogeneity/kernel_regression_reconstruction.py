@@ -7,6 +7,7 @@ adaptive/precompute polynomial discretization routines remain in
 """
 
 import logging
+import os
 
 import equinox as eqx
 import jax
@@ -347,6 +348,22 @@ def _can_use_cuda_per_image_backproject(config: ForwardModelConfig) -> bool:
     return custom_cuda_requested() and jax.default_backend() == "gpu" and core.decide_order(config.disc_type) <= 1
 
 
+# The per-image CUDA path is ~15-100x faster than the Python loop below. Setting this
+# flag (truthy) is the only way to run the slow loop on a GPU with custom CUDA enabled —
+# guards against silently crawling because libcuda_backproject.so is stale/unbuilt.
+_ALLOW_LOOP_FALLBACK_ENV = "RECOVAR_ALLOW_BACKPROJECT_LOOP_FALLBACK"
+
+
+def _loop_fallback_allowed(config: ForwardModelConfig) -> bool:
+    if os.environ.get(_ALLOW_LOOP_FALLBACK_ENV, "").lower() not in {"", "0", "false", "no", "off"}:
+        return True  # explicit opt-in
+    if jax.default_backend() != "gpu":
+        return True  # no GPU: the loop is the only option (e.g. CPU unit tests)
+    if not custom_cuda_requested():
+        return True  # user explicitly disabled custom CUDA (RECOVAR_DISABLE_CUDA)
+    return False
+
+
 def backproject_weight_sets_from_fft(
     config: ForwardModelConfig,
     images,
@@ -377,6 +394,16 @@ def backproject_weight_sets_from_fft(
             Ft_y=Ft_y,
             Ft_ctf=Ft_ctf,
             upsample_ctf=upsample_ctf,
+        )
+
+    if not _loop_fallback_allowed(config):
+        raise RuntimeError(
+            "backproject_weight_sets_from_fft fell back to the slow Python loop on a GPU "
+            f"with custom CUDA enabled (disc_type={config.disc_type!r}, "
+            f"order={core.decide_order(config.disc_type)}). The CUDA per-image path only "
+            "supports order<=1; for higher orders, or if libcuda_backproject.so is "
+            "stale/unbuilt (rebuild with `recovar build_custom_cuda`), set "
+            f"{_ALLOW_LOOP_FALLBACK_ENV}=1 to use the slow loop intentionally."
         )
 
     image_weights = np.asarray(image_weights)

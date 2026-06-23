@@ -245,3 +245,101 @@ def test_generate_simulated_dataset_extra_particles_and_outliers(monkeypatch):
     # Non-outliers should be main(1) + extra(10) = 11, outliers replaced by 99.
     means = main_image_stack.mean(axis=(1, 2))
     np.testing.assert_array_equal(np.sort(np.unique(means)), np.array([11.0, 99.0], dtype=np.float32))
+
+
+def test_generate_simulated_dataset_sequential_write_reorders_consistently(monkeypatch):
+    volumes = np.ones((3, 4**3), dtype=np.complex64)
+    voxel_size = 1.0
+    n_images = 24
+    volume_distribution = np.array([0.2, 0.5, 0.3], dtype=np.float32)
+    noise_variance = np.ones(3, dtype=np.float32)
+
+    class _FakeDatasetObj:
+        def __init__(self, n_images, grid_size, ctf_params, rots, trans):
+            self.n_images = n_images
+            self.image_shape = (grid_size, grid_size)
+            self.CTF_params = ctf_params
+            self.rotation_matrices = rots
+            self.translations = trans
+            self.grid_size = grid_size
+            self.voxel_size = voxel_size
+            self.volume_shape = (grid_size, grid_size, grid_size)
+
+    def _fake_param_generator(n_images, grid_size):
+        ctf = np.zeros((n_images, 9), dtype=np.float32)
+        ctf[:, core.CTFParamIndex.DFU] = np.arange(n_images, dtype=np.float32) + 10.0
+        rots = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
+        rots[:, 0, 0] = np.arange(n_images, dtype=np.float32) + 1.0
+        trans = np.stack(
+            [np.arange(n_images, dtype=np.float32), -np.arange(n_images, dtype=np.float32)],
+            axis=1,
+        )
+        return ctf, rots, trans
+
+    def _fake_cryo_dataset(image_stack, voxel_size, metadata, ctf_evaluator=None, grid_size=None, **kwargs):
+        return _FakeDatasetObj(
+            metadata.n_images,
+            grid_size,
+            metadata._ctf_params,
+            metadata._rotation_matrices,
+            metadata._translations,
+        )
+
+    def _fake_simulate_data(
+        experiment_dataset,
+        volumes,
+        noise_variance,
+        batch_size,
+        image_assignments,
+        per_image_contrast,
+        per_image_noise_scale,
+        **kwargs,
+    ):
+        values = image_assignments.astype(np.float32) * 1000.0 + experiment_dataset.CTF_params[:, 0]
+        return np.broadcast_to(values[:, None, None], (experiment_dataset.n_images, 4, 4)).copy()
+
+    monkeypatch.setattr(simulator.cryoem_dataset, "CryoEMDataset", _fake_cryo_dataset)
+    monkeypatch.setattr(simulator.utils, "get_gpu_memory_total", lambda: 10)
+    monkeypatch.setattr(simulator.utils, "get_image_batch_size", lambda grid_size, gpu_mem: 2)
+    monkeypatch.setattr(simulator, "simulate_data", _fake_simulate_data)
+
+    np.random.seed(7)
+    old_images, old_ctf, old_rots, old_trans, old_info, _, _ = simulator.generate_simulated_dataset(
+        volumes=volumes,
+        voxel_size=voxel_size,
+        volume_distribution=volume_distribution,
+        n_images=n_images,
+        noise_variance=noise_variance,
+        noise_scale_std=0.0,
+        contrast_std=0.0,
+        put_extra_particles=False,
+        percent_outliers=0.0,
+        dataset_param_generator=_fake_param_generator,
+        image_offset_n_std=0.0,
+        sequential_image_write=False,
+    )
+
+    np.random.seed(7)
+    new_images, new_ctf, new_rots, new_trans, new_info, _, _ = simulator.generate_simulated_dataset(
+        volumes=volumes,
+        voxel_size=voxel_size,
+        volume_distribution=volume_distribution,
+        n_images=n_images,
+        noise_variance=noise_variance,
+        noise_scale_std=0.0,
+        contrast_std=0.0,
+        put_extra_particles=False,
+        percent_outliers=0.0,
+        dataset_param_generator=_fake_param_generator,
+        image_offset_n_std=0.0,
+        sequential_image_write=True,
+    )
+
+    order = np.argsort(old_info["image_assignment"], kind="stable").astype(np.int32)
+    assert new_info["sequential_image_write"] is True
+    np.testing.assert_array_equal(new_info["original_image_index"], order)
+    np.testing.assert_array_equal(new_info["image_assignment"], old_info["image_assignment"][order])
+    np.testing.assert_array_equal(new_ctf, old_ctf[order])
+    np.testing.assert_array_equal(new_rots, old_rots[order])
+    np.testing.assert_array_equal(new_trans, old_trans[order])
+    np.testing.assert_array_equal(new_images, old_images[order])
