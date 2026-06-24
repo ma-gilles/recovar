@@ -2,6 +2,7 @@
 
 import functools
 import logging
+import os
 import time
 
 import equinox as eqx
@@ -426,6 +427,20 @@ def compute_regularized_covariance_columns_in_batch(
         contains per-column FSC curves.
     """
     frequency_batch = utils.get_column_batch_size(dataset.grid_size, gpu_memory)
+    _force_frequency_batch = os.environ.get("RECOVAR_DEBUG_FORCE_COLUMN_BATCH")
+    if _force_frequency_batch:
+        try:
+            forced = int(_force_frequency_batch)
+            if forced > 0:
+                frequency_batch = min(frequency_batch, forced)
+                logger.info(
+                    "RECOVAR_DEBUG_FORCE_COLUMN_BATCH capping covariance column batch to %s",
+                    frequency_batch,
+                )
+            else:
+                logger.warning("RECOVAR_DEBUG_FORCE_COLUMN_BATCH=%r is not positive; ignoring", _force_frequency_batch)
+        except ValueError:
+            logger.warning("RECOVAR_DEBUG_FORCE_COLUMN_BATCH=%r is not an int; ignoring", _force_frequency_batch)
 
     covariance_cols = []
     fscs = []

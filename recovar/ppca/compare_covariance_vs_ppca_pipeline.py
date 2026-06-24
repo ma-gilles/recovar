@@ -828,7 +828,7 @@ def _score_existing_run(args) -> dict:
         "zdim": args.zdim,
         "ppca_em_iters": args.ppca_em_iters,
         "seed": args.seed,
-        "use_contrast_correction": use_contrast,
+        "use_contrast_correction": args.contrast_std > 0,
         "covariance_gpu_gb": args.covariance_gpu_gb,
         "ppca_gpu_gb": args.ppca_gpu_gb,
         "covariance_low_memory_option": args.covariance_low_memory_option,

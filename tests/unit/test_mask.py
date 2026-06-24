@@ -35,6 +35,24 @@ def test_soften_volume_mask_range():
     assert np.all((out >= 0) & (out <= 1))
 
 
+def test_masking_options_resizes_kept_input_mask(monkeypatch):
+    input_mask = np.zeros((8, 8, 8), dtype=np.float32)
+    input_mask[2:6, 2:6, 2:6] = 1.0
+    monkeypatch.setattr(mask.utils, "load_mrc", lambda _path: input_mask)
+
+    volume_mask, dilated_mask = mask.masking_options(
+        "input_mask.mrc",
+        means=None,
+        volume_shape=(4, 4, 4),
+        keep_input_mask=True,
+        dilated_mask_dilations_iter=1,
+    )
+
+    assert volume_mask.shape == (4, 4, 4)
+    assert dilated_mask.shape == (4, 4, 4)
+    assert volume_mask.dtype == np.float32
+
+
 def test_smooth_circular_mask_shape_and_range():
     m = mask.smooth_circular_mask(image_size=16, radius=4, thickness=2)
     assert m.shape == (16, 16)

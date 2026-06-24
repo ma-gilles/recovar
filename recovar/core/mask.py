@@ -66,6 +66,9 @@ def masking_options(
 
     if volume_mask_option.endswith(".mrc"):
         input_mask = utils.load_mrc(volume_mask_option).astype(np.float32)
+        if input_mask.shape[0] != volume_shape[0]:
+            logger.info("Rescaling input mask from %s to %s", input_mask.shape, volume_shape)
+            input_mask = skimage.transform.rescale(input_mask, volume_shape[0] / input_mask.shape[0])
 
         if keep_input_mask:
             volume_mask = input_mask
@@ -75,9 +78,6 @@ def masking_options(
                 logger.info("Thresholding and dilating input mask")
                 input_mask = input_mask > 0.99
                 input_mask = binary_dilation(input_mask, iterations=mask_dilation_iter)
-
-            if input_mask.shape[0] != volume_shape[0]:
-                input_mask = skimage.transform.rescale(input_mask, volume_shape[0] / input_mask.shape[0])
 
             logger.info("Thresholding mask at 0.5 and softening with cosine kernel of radius %d pixels", kernel_size)
             input_mask = input_mask > 0.5

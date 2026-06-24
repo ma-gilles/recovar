@@ -939,7 +939,9 @@ def _run_ppca_refinement(
     * the ``"postprocess"`` / ``"embedding_source"`` info tags written into
       ``ppca_info`` for downstream provenance.
     """
-    basis_size = int(np.max(options.zs_dim_to_test))
+    final_zdim = int(np.max(options.zs_dim_to_test))
+    rest_zdim = (len(focus_masks) - 1) * int(zdim_for_rest)
+    basis_size = rest_zdim + final_zdim
     if basis_size <= 0:
         raise ValueError(f"PPCA basis size must be positive, got {basis_size}")
 
@@ -959,7 +961,9 @@ def _run_ppca_refinement(
                     f"--ppca-pcs-per-mask has {len(pcs_per_mask)} entries but there are {len(focus_masks)} masks"
                 )
             if sum(pcs_per_mask) != basis_size:
-                raise ValueError(f"--ppca-pcs-per-mask sums to {sum(pcs_per_mask)} but --ppca-zdim is {basis_size}")
+                raise ValueError(
+                    f"--ppca-pcs-per-mask sums to {sum(pcs_per_mask)} but PPCA internal basis size is {basis_size}"
+                )
             assignment = []
             for mask_idx, n_pcs in enumerate(pcs_per_mask):
                 assignment.extend([mask_idx] * n_pcs)
@@ -1120,8 +1124,10 @@ def _run_ppca_refinement(
             embedding_source = "compute_embeddings"
 
     logger.info(
-        "PPCA solve complete: q=%d iters=%d projcov_every=%d refitb_every=%d contrast_mode=%s",
+        "PPCA solve complete: q=%d final_zdim=%d rest_zdim=%d iters=%d projcov_every=%d refitb_every=%d contrast_mode=%s",
         basis_size,
+        final_zdim,
+        rest_zdim,
         em_iter,
         projcov_every,
         refitb_every,
@@ -1134,6 +1140,8 @@ def _run_ppca_refinement(
         "iteration_data": iteration_data,
         "prior_info": prior_info,
         "basis_size": basis_size,
+        "final_zdim": final_zdim,
+        "rest_zdim": rest_zdim,
         "contrast_mode": contrast_mode,
         "prior_mode": "hybrid_shell",
         "embedding_source": embedding_source,
@@ -1562,6 +1570,25 @@ def standard_recovar_pipeline(args):
             except ValueError:
                 logger.warning("RECOVAR_DEBUG_FORCE_N_PCS=%r is not an int — ignoring", _force_n_pcs)
 
+        # Sweep-only override for high-resolution covariance repair jobs.
+        # This reduces the randomized SVD sketch without reducing the
+        # number of sampled covariance columns.
+        _force_sketch_size = os.environ.get("RECOVAR_DEBUG_FORCE_RANDOMIZED_SKETCH_SIZE")
+        if _force_sketch_size:
+            try:
+                _force_val = int(_force_sketch_size)
+                logger.info(
+                    "RECOVAR_DEBUG_FORCE_RANDOMIZED_SKETCH_SIZE overriding covariance randomized_sketch_size: %s -> %s",
+                    covariance_options.get("randomized_sketch_size"),
+                    _force_val,
+                )
+                covariance_options["randomized_sketch_size"] = _force_val
+            except ValueError:
+                logger.warning(
+                    "RECOVAR_DEBUG_FORCE_RANDOMIZED_SKETCH_SIZE=%r is not an int; ignoring",
+                    _force_sketch_size,
+                )
+
         if args.low_memory_option:
             logger.info("Using low-memory covariance options (reduced sampling, adaptive n_pcs)")
             covariance_options["sampling_n_cols"] = 50
@@ -1620,6 +1647,8 @@ def standard_recovar_pipeline(args):
             est_contrasts_noreg = ppca_result["contrasts_noreg"]
             ppca_info = {
                 "basis_size": int(ppca_result["basis_size"]),
+                "final_zdim": int(ppca_result["final_zdim"]),
+                "rest_zdim": int(ppca_result["rest_zdim"]),
                 "contrast_mode": ppca_result["contrast_mode"],
                 "prior_mode": ppca_result["prior_mode"],
                 "em_iters": int(args.ppca_em_iters),

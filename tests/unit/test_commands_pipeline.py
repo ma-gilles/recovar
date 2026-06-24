@@ -370,6 +370,8 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
     assert em_calls["kwargs"]["EM_iter"] == 7
     assert em_calls["kwargs"]["return_posterior_info"] is True
     assert out["basis_size"] == 4
+    assert out["final_zdim"] == 4
+    assert out["rest_zdim"] == 0
     assert out["contrast_mode"] == "marginalize"
     assert out["prior_mode"] == "hybrid_shell"
     assert out["u_rescaled"].dtype == np.complex64
@@ -377,6 +379,96 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
     assert out["W"].dtype == np.complex64
     np.testing.assert_allclose(out["latent_coords"][4], np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32) * np.sqrt(np.arange(1, 5, dtype=np.float32))[None, :])
     np.testing.assert_allclose(out["contrasts"][4], np.array([1.25], dtype=np.float32))
+
+
+def test_run_ppca_refinement_allocates_rest_block_for_complement_masks(monkeypatch):
+    fake_dataset = SimpleNamespace(volume_shape=(2, 2, 2), volume_size=8)
+    means = SimpleNamespace(combined=np.zeros(8, dtype=np.complex64))
+    options = SimpleNamespace(zs_dim_to_test=[4])
+    args = SimpleNamespace(
+        ppca_zdim=4,
+        ppca_contrast_mode="auto",
+        correct_contrast=False,
+        ppca_em_iters=3,
+        use_complement_mask=True,
+        ppca_pcs_per_mask="20,4",
+        ppca_use_gridding_correction=True,
+        ppca_projected_covariance=False,
+        tilt_series=False,
+    )
+
+    em_calls = {}
+
+    def _fake_prior(dataset, mean_estimate, npc, volume_shape, batch_size):
+        return {"W_prior": np.full((8, npc), 3.0, dtype=np.float32)}
+
+    def _fake_em(dataset, mean_estimate, W_init, W_prior, **kwargs):
+        em_calls["W_init"] = W_init
+        em_calls["W_prior"] = W_prior
+        em_calls["kwargs"] = kwargs
+        q = W_init.shape[1]
+        return (
+            np.ones((8, q), dtype=np.complex128),
+            np.arange(1, q + 1, dtype=np.float64),
+            np.full((8, q), 5.0, dtype=np.complex128),
+            np.zeros((1, q), dtype=np.float32),
+            np.tile(np.eye(q, dtype=np.float32), (1, 1, 1)),
+            [{"Iteration": 0}],
+            {"mean_c": np.array([1.0], dtype=np.float32)},
+        )
+
+    def _fake_compute_embeddings(means_, u, s, dataset, volume_mask, options_, gpu_memory, focus_masks, zdim_for_rest, args_):
+        assert options_.zs_dim_to_test == [4]
+        assert u["rescaled"].shape == (8, 24)
+        assert s["rescaled"].shape == (24,)
+        assert len(focus_masks) == 2
+        assert zdim_for_rest == 20
+        return (
+            {4: np.zeros((1, 24), dtype=np.float32)},
+            {4: np.zeros((1, 24), dtype=np.float32)},
+            {4: np.tile(np.eye(24, dtype=np.float32), (1, 1, 1))},
+            {4: np.tile(np.eye(24, dtype=np.float32), (1, 1, 1))},
+            {4: np.array([1.0], dtype=np.float32)},
+            {4: np.array([1.0], dtype=np.float32)},
+        )
+
+    monkeypatch.setattr(
+        pipeline_cmd.ppca_prior_estimation,
+        "estimate_hybrid_shell_prior_from_data",
+        _fake_prior,
+    )
+    monkeypatch.setattr(pipeline_cmd.ppca_module, "EM", _fake_em)
+    monkeypatch.setattr(pipeline_cmd, "_compute_embeddings", _fake_compute_embeddings)
+
+    out = pipeline_cmd._run_ppca_refinement(
+        fake_dataset,
+        means,
+        np.ones((2, 2, 2), dtype=np.float32),
+        np.ones((2, 2, 2), dtype=np.float32),
+        options,
+        args,
+        batch_size=32,
+        gpu_memory=40,
+        covariance_options={
+            "disc_type": "linear_interp",
+            "disc_type_u": "linear_interp",
+            "mask_images_in_proj": True,
+        },
+        focus_masks=[
+            np.ones((2, 2, 2), dtype=np.float32),
+            np.ones((2, 2, 2), dtype=np.float32),
+        ],
+        zdim_for_rest=20,
+    )
+
+    assert em_calls["W_init"].shape == (8, 24)
+    np.testing.assert_allclose(em_calls["W_prior"], np.full((8, 24), 3.0, dtype=np.float32))
+    np.testing.assert_array_equal(em_calls["kwargs"]["pc_mask_assignment"], np.array([0] * 20 + [1] * 4))
+    assert em_calls["kwargs"]["masks"].shape == (2, 2, 2, 2)
+    assert out["basis_size"] == 24
+    assert out["final_zdim"] == 4
+    assert out["rest_zdim"] == 20
+    assert out["latent_coords"][4].shape == (1, 24)
 
 
 def test_standard_pipeline_passes_gpu_limit_to_predownsample(monkeypatch, tmp_path):
