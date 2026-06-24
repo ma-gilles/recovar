@@ -9,6 +9,7 @@ import jax.numpy as jnp
 
 from .pose_accumulators import AugmentedPPCAStats
 from .triangular import _tri_size, unpack_tri_to_full
+from .w_regularization import w_prior_precision, w_prior_quadratic
 
 
 @dataclass(frozen=True)
@@ -128,8 +129,7 @@ def augmented_ppca_mstep_objective(
         data_quadratic = -0.5 * jnp.real(jnp.sum(jnp.conj(theta_s) * lhs_theta))
         mean_prior_term = -0.5 * jnp.sum(mean_reg_s * (jnp.abs(theta_s[:, 0]) ** 2))
         if q:
-            W_reg = 1.0 / (W_prior_s + reg_floor)
-            W_prior_term = -0.5 * jnp.sum(W_reg * (jnp.abs(theta_s[:, 1:]) ** 2))
+            W_prior_term = -0.5 * w_prior_quadratic(theta_s[:, 1:], W_prior_s, reg_floor=reg_floor)
         else:
             W_prior_term = jnp.asarray(0.0, dtype=mean_prior_term.dtype)
         return data_linear, data_quadratic, mean_prior_term, W_prior_term
@@ -217,7 +217,7 @@ def solve_augmented_ppca_mstep(
     def _solve_slice(rhs_s, lhs_tri_s, mean_reg_s, W_prior_s):
         lhs = unpack_tri_to_full(lhs_tri_s, p, hermitian=True)
         lhs = 0.5 * (lhs + jnp.swapaxes(jnp.conj(lhs), -1, -2))
-        W_reg = 1.0 / (W_prior_s + reg_floor)
+        W_reg = w_prior_precision(W_prior_s, reg_floor=reg_floor)
         reg = jnp.concatenate([mean_reg_s[:, None], W_reg], axis=1).astype(lhs.real.dtype)
         lhs_reg = lhs + jnp.eye(p, dtype=lhs.dtype)[None, :, :] * reg[:, None, :]
         return jax.vmap(jnp.linalg.solve)(lhs_reg, rhs_s)
@@ -229,7 +229,7 @@ def solve_augmented_ppca_mstep(
         lhs = 0.5 * (lhs + jnp.swapaxes(jnp.conj(lhs), -1, -2))
         lhs_wmu = lhs[:, 1:, 0]
         lhs_ww = lhs[:, 1:, 1:]
-        W_reg = 1.0 / (W_prior_s + reg_floor)
+        W_reg = w_prior_precision(W_prior_s, reg_floor=reg_floor)
         lhs_ww_reg = lhs_ww + jnp.eye(q, dtype=lhs_ww.dtype)[None, :, :] * W_reg[:, None, :]
         rhs_cond = rhs_s[:, 1:] - lhs_wmu * fixed_mean_s[:, None]
         W_theta = jax.vmap(jnp.linalg.solve)(lhs_ww_reg, rhs_cond)

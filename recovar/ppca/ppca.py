@@ -10,6 +10,7 @@ import numpy as np
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core, utils
 from recovar.core import linalg
+from recovar.ppca.w_regularization import w_prior_precision, w_prior_quadratic
 
 logger = logging.getLogger(__name__)
 
@@ -894,7 +895,7 @@ def EM_step_half(
     # mask projection or gridding correction is needed.
     # ------------------------------------------------------------------
     W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
-    reg_half = 1 / (W_prior_half + 1e-16)
+    reg_half = w_prior_precision(W_prior_half)
     mask = (
         jnp.array(volume_mask).reshape(volume_shape)
         if volume_mask is not None
@@ -935,7 +936,7 @@ def EM_step_half(
     W_prior_half = (
         ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T if W_prior.shape[0] != W.shape[0] else W_prior
     )
-    ll_prior = jnp.linalg.norm(W / jnp.sqrt(W_prior_half + 1e-16)) ** 2
+    ll_prior = w_prior_quadratic(W, W_prior_half)
     neg_ll_total = float(-ll_sum.real + ll_prior.real)
     neg_ll_data = float(-ll_sum.real)
     neg_ll_prior = float(ll_prior.real)
@@ -1593,7 +1594,7 @@ def EM(
                     ll_sum_r += _llb
             _Wph = ftu.full_volume_to_half_volume(W_prior.T, vs).T if W_prior.shape[0] != W.shape[0] else W_prior
             neg_ll_data = float(-ll_sum_r.real)
-            neg_ll_prior = float(jnp.linalg.norm(W / jnp.sqrt(_Wph + 1e-16)) ** 2)
+            neg_ll_prior = float(w_prior_quadratic(W, _Wph))
             neg_ll_total = neg_ll_data + neg_ll_prior
 
         logger.info(f"Done with EM step {iter_i}")

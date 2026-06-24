@@ -446,6 +446,8 @@ def save_pipeline_results(
     zs_full=None,
     ppca_loadings=None,
     ppca_iteration_data=None,
+    solvar_loadings=None,
+    solvar_iteration_data=None,
 ):
     """Save all pipeline results to disk.
 
@@ -470,6 +472,11 @@ def save_pipeline_results(
         uses the PPCA refinement path.
     ppca_iteration_data : list[dict] or None
         Optional per-iteration PPCA diagnostics.
+    solvar_loadings : ndarray or None
+        Optional SOLVAR loading matrix ``W`` saved separately when the pipeline
+        uses the SOLVAR path.
+    solvar_iteration_data : list[dict] or None
+        Optional per-epoch SOLVAR diagnostics.
     """
     paths.ensure_dirs()
 
@@ -488,6 +495,10 @@ def save_pipeline_results(
         np.save(paths.ppca_loadings, np.asarray(ppca_loadings))
     if ppca_iteration_data is not None:
         utils.pickle_dump(ppca_iteration_data, paths.ppca_iteration_data)
+    if solvar_loadings is not None:
+        np.save(paths.solvar_loadings, np.asarray(solvar_loadings))
+    if solvar_iteration_data is not None:
+        utils.pickle_dump(solvar_iteration_data, paths.solvar_iteration_data)
 
     write_metadata_json(paths, result)
 
@@ -629,6 +640,10 @@ def write_metadata_json(paths, result):
         metadata['files']['ppca_loadings'] = 'model/ppca_loadings.npy'
     if os.path.isfile(paths.ppca_iteration_data):
         metadata['files']['ppca_iteration_data'] = 'model/ppca_iteration_data.pkl'
+    if os.path.isfile(paths.solvar_loadings):
+        metadata['files']['solvar_loadings'] = 'model/solvar_loadings.npy'
+    if os.path.isfile(paths.solvar_iteration_data):
+        metadata['files']['solvar_iteration_data'] = 'model/solvar_iteration_data.pkl'
 
     try:
         with open(paths.metadata, 'w') as f:
@@ -1056,13 +1071,23 @@ class PipelineOutput:
         elif key == 'covariance_cols':
             return utils.pickle_load(self.paths.covariance_cols)
         elif key in ('ppca_W', 'W'):
-            if not os.path.isfile(self.paths.ppca_loadings):
-                raise KeyError(f"key '{key}' not found in PipelineOutput")
-            return np.load(self.paths.ppca_loadings)
+            if os.path.isfile(self.paths.ppca_loadings):
+                return np.load(self.paths.ppca_loadings)
+            if key == 'W' and os.path.isfile(self.paths.solvar_loadings):
+                return np.load(self.paths.solvar_loadings)
+            raise KeyError(f"key '{key}' not found in PipelineOutput")
         elif key == 'ppca_iteration_data':
             if not os.path.isfile(self.paths.ppca_iteration_data):
                 raise KeyError("key 'ppca_iteration_data' not found in PipelineOutput")
             return utils.pickle_load(self.paths.ppca_iteration_data)
+        elif key == 'solvar_W':
+            if not os.path.isfile(self.paths.solvar_loadings):
+                raise KeyError("key 'solvar_W' not found in PipelineOutput")
+            return np.load(self.paths.solvar_loadings)
+        elif key == 'solvar_iteration_data':
+            if not os.path.isfile(self.paths.solvar_iteration_data):
+                raise KeyError("key 'solvar_iteration_data' not found in PipelineOutput")
+            return utils.pickle_load(self.paths.solvar_iteration_data)
 
         elif key in ('dataset', 'lazy_dataset'):
             ds = halfsets.load_halfset_dataset_from_args(
@@ -1102,6 +1127,10 @@ class PipelineOutput:
             keys += ['ppca_W', 'W']
         if os.path.isfile(self.paths.ppca_iteration_data):
             keys.append('ppca_iteration_data')
+        if os.path.isfile(self.paths.solvar_loadings):
+            keys += ['solvar_W', 'W']
+        if os.path.isfile(self.paths.solvar_iteration_data):
+            keys.append('solvar_iteration_data')
         return keys
 
 
