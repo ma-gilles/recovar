@@ -18,6 +18,7 @@ from recovar.output.output_paths import ResultPaths
 from recovar.ppca import ppca as ppca_module
 from recovar.ppca import prior_estimation as ppca_prior_estimation
 from recovar.reconstruction import homogeneous, noise
+from recovar.solvar import solvar as solvar_module
 from recovar.utils.helpers import RobustFileHandler as _RobustFileHandler
 from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
 
@@ -462,6 +463,85 @@ def add_args(parser: argparse.ArgumentParser):
         ),
     )
     adv.add_argument(
+        "--use-solvar",
+        dest="use_solvar",
+        action="store_true",
+        help="Estimate the low-rank covariance basis with fixed-pose SOLVAR instead of covariance-PCA.",
+    )
+    adv.add_argument(
+        "--solvar-objective",
+        dest="solvar_objective",
+        choices=["ls", "mle"],
+        default="mle",
+        help="SOLVAR objective: least-squares low-rank covariance ('ls') or maximum likelihood ('mle').",
+    )
+    adv.add_argument(
+        "--solvar-iters",
+        dest="solvar_iters",
+        type=int,
+        default=40,
+        help="Number of SOLVAR stochastic optimization epochs.",
+    )
+    adv.add_argument(
+        "--solvar-zdim",
+        dest="solvar_zdim",
+        type=int,
+        default=None,
+        help="Single latent dimension to use when --use-solvar is enabled. Defaults to the first --zdim value.",
+    )
+    adv.add_argument(
+        "--solvar-learning-rate",
+        dest="solvar_learning_rate",
+        type=float,
+        default=1e-6,
+        help="Adam learning rate for SOLVAR.",
+    )
+    adv.add_argument(
+        "--solvar-init",
+        dest="solvar_init",
+        choices=["covariance", "random"],
+        default="covariance",
+        help="SOLVAR loading initialization. 'covariance' warm-starts from RECOVAR covariance PCA; 'random' uses random real-space loadings.",
+    )
+    adv.add_argument(
+        "--solvar-warm-start-n-pcs",
+        dest="solvar_warm_start_n_pcs",
+        type=int,
+        default=0,
+        help=(
+            "Number of RECOVAR covariance PCs to compute for SOLVAR warm start. "
+            "0 uses max(--solvar-zdim, 50). This is independent of the covariance baseline's n_pcs."
+        ),
+    )
+    adv.add_argument(
+        "--solvar-batch-size",
+        dest="solvar_batch_size",
+        type=int,
+        default=200,
+        help="Image batch size for SOLVAR optimization.",
+    )
+    adv.add_argument(
+        "--solvar-init-scale",
+        dest="solvar_init_scale",
+        type=float,
+        default=0.01,
+        help="Standard deviation of random real-space SOLVAR loading initialization.",
+    )
+    adv.add_argument(
+        "--solvar-gradient-clip-norm",
+        dest="solvar_gradient_clip_norm",
+        type=float,
+        default=0.0,
+        help="Clip SOLVAR gradient norm to this value when positive.",
+    )
+    adv.add_argument(
+        "--solvar-no-mask-projection",
+        dest="solvar_mask_projection",
+        action="store_false",
+        default=True,
+        help="Disable real-space mask projection after each SOLVAR update.",
+    )
+    adv.add_argument(
         "--test-covar-options",
         dest="test_covar_options",
         action="store_true",
@@ -832,6 +912,42 @@ def _configure_ppca_single_zdim(args, options):
     return basis_size
 
 
+def _resolve_solvar_zdim(args):
+    """Return the single latent dimension used by the SOLVAR pipeline path."""
+    solvar_zdim = getattr(args, "solvar_zdim", None)
+    if solvar_zdim is None:
+        zdim = getattr(args, "zdim", [10])
+        if isinstance(zdim, (list, tuple)):
+            solvar_zdim = zdim[0]
+        else:
+            solvar_zdim = zdim
+    basis_size = int(solvar_zdim)
+    if basis_size <= 0:
+        raise ValueError(f"--solvar-zdim must be positive, got {basis_size}")
+    return basis_size
+
+
+def _configure_solvar_single_zdim(args, options):
+    """Force pipeline metadata/options into the single-zdim SOLVAR contract."""
+    basis_size = _resolve_solvar_zdim(args)
+    args.zdim = [basis_size]
+    options.zs_dim_to_test = [basis_size]
+    return basis_size
+
+
+def _resolve_solvar_warm_start_n_pcs(args, basis_size: int) -> int:
+    """Return the covariance-PC count used only for SOLVAR warm starts."""
+    requested = int(getattr(args, "solvar_warm_start_n_pcs", 0) or 0)
+    if requested < 0:
+        raise ValueError(f"--solvar-warm-start-n-pcs must be non-negative, got {requested}")
+    n_pcs = max(int(basis_size), 50) if requested == 0 else requested
+    if n_pcs < int(basis_size):
+        raise ValueError(
+            f"--solvar-warm-start-n-pcs={n_pcs} is smaller than SOLVAR rank {basis_size}"
+        )
+    return n_pcs
+
+
 def _make_ppca_initial_loading(volume_size, basis_size, seed=0, init_scale=0.01, volume_shape=None):
     """Build a deterministic random PPCA loading initialization in half-Fourier space.
 
@@ -939,7 +1055,9 @@ def _run_ppca_refinement(
     * the ``"postprocess"`` / ``"embedding_source"`` info tags written into
       ``ppca_info`` for downstream provenance.
     """
-    basis_size = int(np.max(options.zs_dim_to_test))
+    final_zdim = int(np.max(options.zs_dim_to_test))
+    rest_zdim = (len(focus_masks) - 1) * int(zdim_for_rest)
+    basis_size = rest_zdim + final_zdim
     if basis_size <= 0:
         raise ValueError(f"PPCA basis size must be positive, got {basis_size}")
 
@@ -959,7 +1077,9 @@ def _run_ppca_refinement(
                     f"--ppca-pcs-per-mask has {len(pcs_per_mask)} entries but there are {len(focus_masks)} masks"
                 )
             if sum(pcs_per_mask) != basis_size:
-                raise ValueError(f"--ppca-pcs-per-mask sums to {sum(pcs_per_mask)} but --ppca-zdim is {basis_size}")
+                raise ValueError(
+                    f"--ppca-pcs-per-mask sums to {sum(pcs_per_mask)} but PPCA internal basis size is {basis_size}"
+                )
             assignment = []
             for mask_idx, n_pcs in enumerate(pcs_per_mask):
                 assignment.extend([mask_idx] * n_pcs)
@@ -1120,8 +1240,10 @@ def _run_ppca_refinement(
             embedding_source = "compute_embeddings"
 
     logger.info(
-        "PPCA solve complete: q=%d iters=%d projcov_every=%d refitb_every=%d contrast_mode=%s",
+        "PPCA solve complete: q=%d final_zdim=%d rest_zdim=%d iters=%d projcov_every=%d refitb_every=%d contrast_mode=%s",
         basis_size,
+        final_zdim,
+        rest_zdim,
         em_iter,
         projcov_every,
         refitb_every,
@@ -1134,6 +1256,8 @@ def _run_ppca_refinement(
         "iteration_data": iteration_data,
         "prior_info": prior_info,
         "basis_size": basis_size,
+        "final_zdim": final_zdim,
+        "rest_zdim": rest_zdim,
         "contrast_mode": contrast_mode,
         "prior_mode": "hybrid_shell",
         "embedding_source": embedding_source,
@@ -1144,6 +1268,123 @@ def _run_ppca_refinement(
         "contrasts": contrasts,
         "contrasts_noreg": contrasts_noreg,
         "em_mean_c": posterior_info.get("mean_c") if posterior_info else None,
+    }
+
+
+def _run_solvar_refinement(
+    dataset,
+    means,
+    focus_mask,
+    options,
+    args,
+    batch_size,
+    gpu_memory,
+    focus_masks,
+    zdim_for_rest,
+    W_initial=None,
+    init_mode="random",
+    warm_start_n_pcs=None,
+):
+    """Run fixed-pose no-contrast SOLVAR and return pipeline-compatible arrays."""
+    basis_size = int(np.max(options.zs_dim_to_test))
+    if basis_size <= 0:
+        raise ValueError(f"SOLVAR basis size must be positive, got {basis_size}")
+    if getattr(args, "tilt_series", False):
+        raise ValueError("SOLVAR pipeline mode does not support --tilt-series yet")
+    if getattr(args, "correct_contrast", False) or getattr(args, "do_over_with_contrast", False):
+        raise ValueError("SOLVAR initial implementation is no-contrast only; disable contrast correction")
+
+    logger.warning("SOLVAR pipeline mode is fixed-pose/no-contrast and uses the provisional PPCA hybrid-shell W prior.")
+
+    objective = str(getattr(args, "solvar_objective", "mle")).lower()
+    if W_initial is None:
+        W_init = solvar_module.make_random_loading(
+            dataset.volume_shape,
+            basis_size,
+            seed=0,
+            init_scale=float(getattr(args, "solvar_init_scale", 0.01)),
+        )
+        init_mode = "random"
+    else:
+        W_init = np.asarray(W_initial, dtype=np.complex64)
+    logger.info("SOLVAR initialization: %s", init_mode)
+    prior_info = ppca_prior_estimation.estimate_hybrid_shell_prior_from_data(
+        dataset,
+        means.combined,
+        basis_size,
+        dataset.volume_shape,
+        batch_size,
+    )
+    solvar_batch_size = int(getattr(args, "solvar_batch_size", 200))
+    if solvar_batch_size <= 0:
+        solvar_batch_size = int(batch_size)
+    result = solvar_module.fit(
+        dataset,
+        means.combined,
+        W_init,
+        prior_info["W_prior"],
+        objective=objective,
+        n_epochs=int(getattr(args, "solvar_iters", 40)),
+        batch_size=solvar_batch_size,
+        learning_rate=float(getattr(args, "solvar_learning_rate", 1e-6)),
+        gradient_clip_norm=float(getattr(args, "solvar_gradient_clip_norm", 0.0)),
+        volume_mask=np.asarray(focus_mask, dtype=np.float32),
+        project_mask=bool(getattr(args, "solvar_mask_projection", True)),
+        disc_type_mean="cubic",
+        disc_type="linear_interp",
+        return_iteration_data=True,
+    )
+
+    half_vol_size = int(np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)))
+    U_full = result.U
+    if U_full.shape[0] == half_vol_size:
+        U_full = fourier_transform_utils.half_volume_to_full_volume(np.asarray(U_full).T, dataset.volume_shape).T
+    U_full = _as_pipeline_basis_dtype(U_full)
+    u = {"rescaled": U_full, "real": None}
+    s = {"rescaled": np.asarray(result.S, dtype=np.float32), "real": None}
+    (
+        latent_coords,
+        latent_coords_noreg,
+        latent_precision,
+        latent_precision_noreg,
+        contrasts,
+        contrasts_noreg,
+    ) = _compute_embeddings(
+        means,
+        u,
+        s,
+        dataset,
+        np.asarray(focus_mask, dtype=np.float32),
+        options,
+        gpu_memory,
+        focus_masks,
+        zdim_for_rest,
+        args,
+    )
+    logger.info(
+        "SOLVAR solve complete: objective=%s q=%d iters=%d",
+        objective,
+        basis_size,
+        int(getattr(args, "solvar_iters", 40)),
+    )
+    return {
+        "u_rescaled": U_full,
+        "s_rescaled": np.asarray(result.S, dtype=np.float32),
+        "W": _as_pipeline_basis_dtype(result.W),
+        "iteration_data": result.iteration_data,
+        "prior_info": prior_info,
+        "basis_size": basis_size,
+        "objective": objective,
+        "init_mode": init_mode,
+        "warm_start_n_pcs": None if warm_start_n_pcs is None else int(warm_start_n_pcs),
+        "prior_mode": "hybrid_shell",
+        "embedding_source": "compute_embeddings",
+        "latent_coords": latent_coords,
+        "latent_coords_noreg": latent_coords_noreg,
+        "latent_precision": latent_precision,
+        "latent_precision_noreg": latent_precision_noreg,
+        "contrasts": contrasts,
+        "contrasts_noreg": contrasts_noreg,
     }
 
 
@@ -1189,10 +1430,17 @@ def standard_recovar_pipeline(args):
         args.mask = os.path.abspath(args.mask)
 
     has_gpu = utils.jax_has_gpu()
+    if getattr(args, "use_ppca", False) and getattr(args, "use_solvar", False):
+        raise ValueError("--use-ppca and --use-solvar are mutually exclusive")
     if getattr(args, "use_ppca", False) and (not has_gpu):
         raise ValueError(
             "--use-ppca currently requires a CUDA GPU. "
             "The PPCA E/M-step path uses CUDA FFI backprojection kernels and does not yet support CPU-only runs."
+        )
+    if getattr(args, "use_solvar", False) and (not has_gpu):
+        raise ValueError(
+            "--use-solvar currently requires a CUDA GPU. "
+            "The SOLVAR path differentiates through RECOVAR projection/backprojection kernels."
         )
 
     if (not args.accept_cpu) and (not has_gpu):
@@ -1326,6 +1574,9 @@ def standard_recovar_pipeline(args):
     if getattr(args, "use_ppca", False):
         ppca_zdim = _configure_ppca_single_zdim(args, options)
         logger.info("PPCA mode enabled: overriding latent dimensions to single zdim=%d", ppca_zdim)
+    if getattr(args, "use_solvar", False):
+        solvar_zdim = _configure_solvar_single_zdim(args, options)
+        logger.info("SOLVAR mode enabled: overriding latent dimensions to single zdim=%d", solvar_zdim)
 
     ## TODO this is a big one, so do with care. I wonder if there is a better way to handle this logic.
     ## Could we instead store 'one' dataset and the indices instead of two different objects, then do a clevery use of iterators
@@ -1377,6 +1628,10 @@ def standard_recovar_pipeline(args):
         if args.do_over_with_contrast:
             logger.info("PPCA refinement handles contrast inside EM; disabling pipeline do-over loop.")
         n_repeats = 1
+    if getattr(args, "use_solvar", False):
+        if args.correct_contrast or args.do_over_with_contrast:
+            raise ValueError("SOLVAR initial implementation is no-contrast only; disable contrast correction")
+        n_repeats = 1
     if args.do_over_with_contrast and not args.correct_contrast:
         logger.warning("Do over with contrast, but contrast correction is off. Setting contrast correction to on")
         args.correct_contrast = True
@@ -1405,6 +1660,9 @@ def standard_recovar_pipeline(args):
     ppca_loadings = None
     ppca_iteration_data = None
     ppca_info = None
+    solvar_loadings = None
+    solvar_iteration_data = None
+    solvar_info = None
     for repeat in range(n_repeats):
         if repeat == 1:
             ndim = 10 if 10 in options.zs_dim_to_test else int(np.median(options.zs_dim_to_test))
@@ -1562,6 +1820,25 @@ def standard_recovar_pipeline(args):
             except ValueError:
                 logger.warning("RECOVAR_DEBUG_FORCE_N_PCS=%r is not an int — ignoring", _force_n_pcs)
 
+        # Sweep-only override for high-resolution covariance repair jobs.
+        # This reduces the randomized SVD sketch without reducing the
+        # number of sampled covariance columns.
+        _force_sketch_size = os.environ.get("RECOVAR_DEBUG_FORCE_RANDOMIZED_SKETCH_SIZE")
+        if _force_sketch_size:
+            try:
+                _force_val = int(_force_sketch_size)
+                logger.info(
+                    "RECOVAR_DEBUG_FORCE_RANDOMIZED_SKETCH_SIZE overriding covariance randomized_sketch_size: %s -> %s",
+                    covariance_options.get("randomized_sketch_size"),
+                    _force_val,
+                )
+                covariance_options["randomized_sketch_size"] = _force_val
+            except ValueError:
+                logger.warning(
+                    "RECOVAR_DEBUG_FORCE_RANDOMIZED_SKETCH_SIZE=%r is not an int; ignoring",
+                    _force_sketch_size,
+                )
+
         if args.low_memory_option:
             logger.info("Using low-memory covariance options (reduced sampling, adaptive n_pcs)")
             covariance_options["sampling_n_cols"] = 50
@@ -1620,6 +1897,8 @@ def standard_recovar_pipeline(args):
             est_contrasts_noreg = ppca_result["contrasts_noreg"]
             ppca_info = {
                 "basis_size": int(ppca_result["basis_size"]),
+                "final_zdim": int(ppca_result["final_zdim"]),
+                "rest_zdim": int(ppca_result["rest_zdim"]),
                 "contrast_mode": ppca_result["contrast_mode"],
                 "prior_mode": ppca_result["prior_mode"],
                 "em_iters": int(args.ppca_em_iters),
@@ -1631,6 +1910,83 @@ def standard_recovar_pipeline(args):
                 "ppca_refitb_kappa": float(getattr(args, "ppca_refitb_kappa", 0.0)),
                 "ppca_effective_zdim": int(getattr(args, "ppca_effective_zdim", 0)),
                 "embedding_source": ppca_result["embedding_source"],
+            }
+        elif getattr(args, "use_solvar", False):
+            solvar_W_initial = None
+            warm_start_n_pcs = None
+            solvar_init_mode = str(getattr(args, "solvar_init", "covariance"))
+            if solvar_init_mode == "covariance":
+                basis_size = int(np.max(options.zs_dim_to_test))
+                warm_start_n_pcs = _resolve_solvar_warm_start_n_pcs(args, basis_size)
+                solvar_covariance_options = dict(covariance_options)
+                solvar_covariance_options["n_pcs_to_compute"] = warm_start_n_pcs
+                logger.info(
+                    "Computing RECOVAR covariance PCA warm start for SOLVAR q=%d using %d covariance PCs",
+                    basis_size,
+                    warm_start_n_pcs,
+                )
+                solvar_u_init, solvar_s_init, _, _, _ = principal_components.estimate_principal_components(
+                    ds,
+                    options,
+                    means,
+                    mean_prior,
+                    focus_masks[-1],
+                    dilated_volume_mask,
+                    valid_idx,
+                    batch_size,
+                    gpu_memory_to_use=gpu_memory,
+                    covariance_options=solvar_covariance_options,
+                    variance_estimate=variance_est["combined"],
+                    use_reg_mean_in_contrast=args.use_reg_mean_in_contrast,
+                    use_multi_gpu=args.multi_gpu,
+                    n_gpus=args.n_gpus,
+                )
+                solvar_W_initial = solvar_module.make_loading_from_basis(
+                    solvar_u_init["rescaled"],
+                    solvar_s_init["rescaled"],
+                    basis_size,
+                    ds.volume_shape,
+                )
+                options.ignore_zero_frequency = ignore_zero_frequency
+                del solvar_u_init, solvar_s_init
+            solvar_result = _run_solvar_refinement(
+                ds,
+                means,
+                focus_masks[-1],
+                options,
+                args,
+                batch_size,
+                gpu_memory,
+                focus_masks,
+                zdim_for_rest,
+                W_initial=solvar_W_initial,
+                init_mode=solvar_init_mode,
+                warm_start_n_pcs=warm_start_n_pcs,
+            )
+            u = {"rescaled": solvar_result["u_rescaled"], "real": None}
+            s = {"rescaled": solvar_result["s_rescaled"], "real": None}
+            covariance_cols = None
+            picked_frequencies = None
+            column_fscs = None
+            solvar_loadings = solvar_result["W"]
+            solvar_iteration_data = solvar_result["iteration_data"]
+            latent_coords = solvar_result["latent_coords"]
+            latent_coords_noreg = solvar_result["latent_coords_noreg"]
+            latent_precision = solvar_result["latent_precision"]
+            latent_precision_noreg = solvar_result["latent_precision_noreg"]
+            est_contrasts = solvar_result["contrasts"]
+            est_contrasts_noreg = solvar_result["contrasts_noreg"]
+            solvar_info = {
+                "basis_size": int(solvar_result["basis_size"]),
+                "objective": solvar_result["objective"],
+                "init_mode": solvar_result["init_mode"],
+                "prior_mode": solvar_result["prior_mode"],
+                "iters": int(getattr(args, "solvar_iters", 40)),
+                "learning_rate": float(getattr(args, "solvar_learning_rate", 1e-6)),
+                "batch_size": int(getattr(args, "solvar_batch_size", 200)),
+                "warm_start_n_pcs": solvar_result["warm_start_n_pcs"],
+                "mask_projection": bool(getattr(args, "solvar_mask_projection", True)),
+                "embedding_source": solvar_result["embedding_source"],
             }
         else:
             for idx, focus_mask in enumerate(focus_masks):
@@ -1875,11 +2231,15 @@ def standard_recovar_pipeline(args):
         heterogeneity_method = (
             "ppca_projected_covariance" if getattr(args, "ppca_projected_covariance", False) else "ppca"
         )
+    if getattr(args, "use_solvar", False):
+        heterogeneity_method = f"solvar-{str(getattr(args, 'solvar_objective', 'mle')).lower()}"
     result_extras = {
         "heterogeneity_method": heterogeneity_method,
     }
     if ppca_info is not None:
         result_extras["ppca_info"] = ppca_info
+    if solvar_info is not None:
+        result_extras["solvar_info"] = solvar_info
 
     result = output.build_params_dict(
         volume_shape=volume_shape,
@@ -1911,6 +2271,8 @@ def standard_recovar_pipeline(args):
         zs_full=zs_full if args.use_complement_mask else None,
         ppca_loadings=ppca_loadings,
         ppca_iteration_data=ppca_iteration_data,
+        solvar_loadings=solvar_loadings,
+        solvar_iteration_data=solvar_iteration_data,
     )
 
     logger.info("total time: %s", time.time() - st_time)

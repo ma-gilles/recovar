@@ -10,6 +10,7 @@ import numpy as np
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core, utils
 from recovar.core import linalg
+from recovar.ppca.w_regularization import w_prior_precision, w_prior_quadratic
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,38 @@ _half_adjoint_slice_volume = functools.partial(core.adjoint_slice_volume, half_i
 batch_over_vol_adjoint_slice_volume_half = jax.vmap(
     _half_adjoint_slice_volume, in_axes=(-1, None, None, None, None), out_axes=-1
 )
+
+# Keep the full-GPU LHS accumulation path for genuinely small latent systems.
+# The add materializes another half_volume_size x tri(q) buffer, so the
+# practical safe limit is well below the nominal device budget. Larger LHS
+# arrays can still stay on high-memory GPUs if accumulated in column chunks.
+_GPU_LHS_FULL_ACCUMULATION_BUDGET_BYTES = 4e9
+_GPU_LHS_STORAGE_BUDGET_BYTES = 4e9
+_GPU_LHS_STORAGE_FRACTION = 0.20
+_GPU_LHS_COLUMN_CHUNK_BYTES = 1e9
+
+
+@functools.partial(jax.jit, donate_argnums=(0,))
+def _add_lhs_column_chunk(lhs_summed, ctf2_bp, second_moment_chunk, start_col):
+    update = ctf2_bp @ second_moment_chunk
+    current = jax.lax.dynamic_slice(lhs_summed, (0, start_col), update.shape)
+    return jax.lax.dynamic_update_slice(lhs_summed, current + update, (0, start_col))
+
+
+def _lhs_gpu_storage_budget_bytes(gpu_memory_to_use=None):
+    """Choose when the LHS accumulator itself may stay resident on GPU."""
+    if gpu_memory_to_use is None:
+        return _GPU_LHS_STORAGE_BUDGET_BYTES
+    try:
+        memory_gb = float(gpu_memory_to_use)
+    except (TypeError, ValueError):
+        return _GPU_LHS_STORAGE_BUDGET_BYTES
+    if not np.isfinite(memory_gb) or memory_gb <= 0:
+        return _GPU_LHS_STORAGE_BUDGET_BYTES
+    return max(
+        _GPU_LHS_STORAGE_BUDGET_BYTES,
+        memory_gb * _GPU_LHS_STORAGE_FRACTION * 1e9,
+    )
 
 
 def _e_step_half_inner(
@@ -267,6 +300,7 @@ def E_M_step_batch_half(
     eigenvalues=None,
     contrast_mean=1.0,
     contrast_variance=np.inf,
+    lhs_full_gpu_budget_bytes=None,
 ):
     """Half-spectrum, upper-triangular-LHS variant of :func:`E_M_step_batch`.
 
@@ -378,15 +412,29 @@ def E_M_step_batch_half(
         # lhs_summed is 15.7 GB, so the unchunked matmul needs 2×15.7 = 31 GB
         # (old + new) which can OOM on 80 GB GPUs.
         #
-        # Strategy: if the matmul result fits comfortably on GPU (<10 GB),
-        # do the fast all-GPU path.  Otherwise, chunk and accumulate on CPU.
+        # Strategy: if the matmul result fits comfortably on GPU, keep the
+        # fast all-GPU path. Otherwise, chunk and accumulate on CPU. A 180^3
+        # complement-mask run with 40 PCs needs ~9 GB here and can OOM under a
+        # 28 GB budget due to the extra add materialization.
         _smt_real = second_moment_tri.real.astype(real_dtype)
         _matmul_bytes = half_volume_size * _smt_real.shape[1] * 4
-        _GPU_MATMUL_BUDGET = 10e9  # 10 GB threshold
 
-        if _matmul_bytes <= _GPU_MATMUL_BUDGET:
+        lhs_full_budget = (
+            _GPU_LHS_FULL_ACCUMULATION_BUDGET_BYTES
+            if lhs_full_gpu_budget_bytes is None
+            else lhs_full_gpu_budget_bytes
+        )
+        if _matmul_bytes <= lhs_full_budget:
             # Fast path: full GPU matmul (small PC count)
             lhs_summed = lhs_summed + (ctf2_bp @ _smt_real)
+        elif not isinstance(lhs_summed, np.ndarray):
+            # High-memory GPU path: avoid materializing the full LHS update at
+            # once. The accumulator stays on GPU, but each matmul result is
+            # limited to a column slice of the triangular basis.
+            tri_chunk = max(1, int(_GPU_LHS_COLUMN_CHUNK_BYTES / (4 * half_volume_size)))
+            for tri0 in range(0, _smt_real.shape[1], tri_chunk):
+                tri1 = min(tri0 + tri_chunk, _smt_real.shape[1])
+                lhs_summed = _add_lhs_column_chunk(lhs_summed, ctf2_bp, _smt_real[:, tri0:tri1], tri0)
         else:
             # Memory-safe path: chunk and accumulate on CPU
             _VCHUNK = max(1, int(2e9 / (4 * _smt_real.shape[1])))
@@ -773,6 +821,7 @@ def EM_step_half(
     return_mean_c=False,
     masks=None,
     pc_mask_assignment=None,
+    gpu_memory_to_use=None,
 ):
     """Half-spectrum EM step for L2-regularized PPCA.
 
@@ -809,15 +858,25 @@ def EM_step_half(
         disc_type_mean,
     )
 
+    lhs_gpu_storage_budget_bytes = _lhs_gpu_storage_budget_bytes(gpu_memory_to_use)
+
     # Half-volume accumulators.  lhs scales as O(half_vol × q²) — at 256³ it
     # is 7.1 GB for 20 PCs but 15.7 GB for 30 PCs.  For small lhs we keep
-    # it on GPU for speed; for large lhs we start on CPU and transfer to
-    # GPU only at the M-step.  The threshold matches E_M_step_batch_half.
+    # it on GPU for speed; high-memory jobs can use a chunked GPU update; for
+    # large constrained jobs we start on CPU and transfer to GPU only at the
+    # M-step.
     _lhs_bytes = half_volume_size * tri_sz * 4
-    if _lhs_bytes <= 10e9:
+    if _lhs_bytes <= lhs_gpu_storage_budget_bytes:
         lhs_summed = jnp.zeros((half_volume_size, tri_sz), dtype=ref.dtype_real)
     else:
         lhs_summed = np.zeros((half_volume_size, tri_sz), dtype=np.float32)
+    logger.info(
+        "EM_step_half: LHS bytes %.2f GB, GPU storage budget %.2f GB, full-update budget %.2f GB, storage=%s",
+        _lhs_bytes / 1e9,
+        lhs_gpu_storage_budget_bytes / 1e9,
+        _GPU_LHS_FULL_ACCUMULATION_BUDGET_BYTES / 1e9,
+        "gpu" if not isinstance(lhs_summed, np.ndarray) else "cpu",
+    )
     rhs_summed = jnp.zeros((half_volume_size, basis_size), dtype=ref.dtype)
 
     ll_sum = jnp.array(0.0, dtype=ref.dtype)
@@ -869,6 +928,7 @@ def EM_step_half(
                 eigenvalues=eigenvalues,
                 contrast_mean=contrast_mean,
                 contrast_variance=contrast_variance,
+                lhs_full_gpu_budget_bytes=_GPU_LHS_FULL_ACCUMULATION_BUDGET_BYTES,
             )
             expected_zs.append(np.array(ez_batch))
             second_moment_zs.append(np.array(smz_batch))
@@ -894,7 +954,7 @@ def EM_step_half(
     # mask projection or gridding correction is needed.
     # ------------------------------------------------------------------
     W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
-    reg_half = 1 / (W_prior_half + 1e-16)
+    reg_half = w_prior_precision(W_prior_half)
     mask = (
         jnp.array(volume_mask).reshape(volume_shape)
         if volume_mask is not None
@@ -935,7 +995,7 @@ def EM_step_half(
     W_prior_half = (
         ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T if W_prior.shape[0] != W.shape[0] else W_prior
     )
-    ll_prior = jnp.linalg.norm(W / jnp.sqrt(W_prior_half + 1e-16)) ** 2
+    ll_prior = w_prior_quadratic(W, W_prior_half)
     neg_ll_total = float(-ll_sum.real + ll_prior.real)
     neg_ll_data = float(-ll_sum.real)
     neg_ll_prior = float(ll_prior.real)
@@ -1400,6 +1460,7 @@ def EM(
             return_mean_c=True,
             masks=masks,
             pc_mask_assignment=pc_mask_assignment,
+            gpu_memory_to_use=gpu_memory_to_use,
         )
         posterior_info = {"mean_c": np.asarray(mean_c, dtype=np.float32)}
 
@@ -1593,7 +1654,7 @@ def EM(
                     ll_sum_r += _llb
             _Wph = ftu.full_volume_to_half_volume(W_prior.T, vs).T if W_prior.shape[0] != W.shape[0] else W_prior
             neg_ll_data = float(-ll_sum_r.real)
-            neg_ll_prior = float(jnp.linalg.norm(W / jnp.sqrt(_Wph + 1e-16)) ** 2)
+            neg_ll_prior = float(w_prior_quadratic(W, _Wph))
             neg_ll_total = neg_ll_data + neg_ll_prior
 
         logger.info(f"Done with EM step {iter_i}")

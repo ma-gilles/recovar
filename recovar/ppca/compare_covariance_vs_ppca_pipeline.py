@@ -697,15 +697,16 @@ def write_comparison_plots(output_root: str, scores: dict, zdim: int) -> dict:
     methods = [method for method in METHOD_ORDER if method in scores]
     labels = [METHOD_LABELS[method] for method in methods]
     colors = [METHOD_COLORS[method] for method in methods]
-    x = np.arange(1, zdim + 1)
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
     width = 0.8 / max(len(methods), 1)
     center_offsets = (np.arange(len(methods)) - (len(methods) - 1) / 2.0) * width
     for offset, method, label, color in zip(center_offsets, methods, labels, colors):
+        rel_var_per_pc = np.asarray(scores[method]["rel_var_per_pc"], dtype=np.float32)
+        x = np.arange(1, rel_var_per_pc.size + 1)
         axes[0].bar(
             x + offset,
-            scores[method]["rel_var_per_pc"],
+            rel_var_per_pc,
             width=width,
             label=label,
             color=color,
@@ -717,10 +718,12 @@ def write_comparison_plots(output_root: str, scores: dict, zdim: int) -> dict:
     axes[0].set_title("Per-PC Relative Variance")
     axes[0].legend(loc="best")
 
-    axes[1].plot(x, scores[methods[0]]["s_gt"], "k--", linewidth=2, label="GT")
+    s_gt = np.asarray(scores[methods[0]]["s_gt"], dtype=np.float32)
+    axes[1].plot(np.arange(1, s_gt.size + 1), s_gt, "k--", linewidth=2, label="GT")
     markers = ["o", "s", "^", "d", "v"]
     for marker, method, label, color in zip(markers, methods, labels, colors):
-        axes[1].plot(x, scores[method]["s_est"], marker=marker, color=color, label=label)
+        s_est = np.asarray(scores[method]["s_est"], dtype=np.float32)
+        axes[1].plot(np.arange(1, s_est.size + 1), s_est, marker=marker, color=color, label=label)
     axes[1].set_yscale("log")
     axes[1].set_xlabel("PC")
     axes[1].set_ylabel("Eigenvalue")
@@ -828,7 +831,7 @@ def _score_existing_run(args) -> dict:
         "zdim": args.zdim,
         "ppca_em_iters": args.ppca_em_iters,
         "seed": args.seed,
-        "use_contrast_correction": use_contrast,
+        "use_contrast_correction": args.contrast_std > 0,
         "covariance_gpu_gb": args.covariance_gpu_gb,
         "ppca_gpu_gb": args.ppca_gpu_gb,
         "covariance_low_memory_option": args.covariance_low_memory_option,

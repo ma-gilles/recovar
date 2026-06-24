@@ -1,6 +1,7 @@
 """Principal component analysis of the estimated covariance operator."""
 
 import logging
+import os
 import time
 
 import jax
@@ -262,6 +263,28 @@ def get_cov_svds(
     randomized_sketch_size,
     random_seed=None,
 ):
+    _force_svd_gpu_gb = os.environ.get("RECOVAR_DEBUG_FORCE_RANDOMIZED_SVD_GPU_GB")
+    if _force_svd_gpu_gb:
+        try:
+            forced_gpu_memory = float(_force_svd_gpu_gb)
+            if forced_gpu_memory > 0:
+                logger.info(
+                    "RECOVAR_DEBUG_FORCE_RANDOMIZED_SVD_GPU_GB overriding randomized SVD GPU memory: %s -> %s",
+                    gpu_memory_to_use,
+                    forced_gpu_memory,
+                )
+                gpu_memory_to_use = forced_gpu_memory
+            else:
+                logger.warning(
+                    "RECOVAR_DEBUG_FORCE_RANDOMIZED_SVD_GPU_GB=%r is not positive; ignoring",
+                    _force_svd_gpu_gb,
+                )
+        except ValueError:
+            logger.warning(
+                "RECOVAR_DEBUG_FORCE_RANDOMIZED_SVD_GPU_GB=%r is not a float; ignoring",
+                _force_svd_gpu_gb,
+            )
+
     u_real, s_real, _ = randomized_real_svd_of_columns(
         covariance_cols["est_mask"],
         picked_frequencies,
