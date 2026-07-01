@@ -239,6 +239,8 @@ If you use RECOVAR in your research, please cite:
 
 > Gilles, M.A. and Singer, A. (2025). Cryo-EM heterogeneity analysis using regularized covariance estimation and kernel regression. *Proceedings of the National Academy of Sciences*, 122(9), e2419140122. [doi:10.1073/pnas.2419140122](https://doi.org/10.1073/pnas.2419140122)
 
+The inputs needed to reproduce the experiments in this paper can be access on this [dropbox](https://www.dropbox.com/scl/fo/fjo8lwfj0xemqmki1dc30/AKISv4oMtt6q0gKGz59gFxM?rlkey=7xwnbaj4rb5r8f10nttsqexzr&st=2dze278r&dl=0). 
+
 ## Contact
 
 Marc Aurele Gilles — [gilles@princeton.edu](mailto:gilles@princeton.edu)
