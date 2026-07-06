@@ -6,8 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ── RELION source tree (header-only dependency for now) ──────────────
-set(RELION_SRC_DIR "/scratch/gpfs/GILLES/mg6942/relion/src"
-    CACHE PATH "Path to RELION source (the 'src' directory)")
+if(DEFINED ENV{RELION_SRC_DIR})
+    set(RELION_SRC_DIR "$ENV{RELION_SRC_DIR}"
+        CACHE PATH "Path to RELION source (the 'src' directory)")
+else()
+    message(FATAL_ERROR "Environment variable RELION_SRC_DIR is not defined. Please set RELION_SRC_DIR to the path of the RELION 'src' directory.")
+endif()
 
 if(NOT EXISTS "${RELION_SRC_DIR}/projector.h")
     message(FATAL_ERROR "RELION_SRC_DIR=${RELION_SRC_DIR} does not contain projector.h")
