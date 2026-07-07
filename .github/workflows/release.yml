@@ -62,6 +62,7 @@ jobs:
           print(f"installing {wheel}")
           subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-deps", wheel])
           PY
+          cd "$(mktemp -d)"
           python - <<'PY'
           import numpy as np
           from recovar.heterogeneity import fast_marching
