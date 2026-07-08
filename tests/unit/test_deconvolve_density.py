@@ -1,7 +1,8 @@
-import numpy as np
-import pytest
 import sys
 import types
+
+import numpy as np
+import pytest
 
 pytest.importorskip("jax")
 pytest.importorskip("jaxopt")
@@ -138,6 +139,94 @@ def _legacy_compute_deconvolved_density(
         lbfgsb_sols.append(np.array(lbfgsb_sol))
 
     return lbfgsb_sols, cost, reg_cost, alphas
+
+
+def test_get_raw_density_rejects_outliers_in_requested_pca_dim(monkeypatch):
+    zdim = 4
+    pca_dim = 2
+    num_points = 3
+    zs = np.arange(16, dtype=np.float32).reshape(4, 4)
+    cov_zs = np.zeros((4, 4, 4), dtype=np.float32)
+    diag_values = np.array(
+        [
+            [10.0, 10.0, 1.0, 1.0],
+            [1.0, 1.0, 100.0, 100.0],
+            [8.0, 8.0, 1.0, 1.0],
+            [0.5, 0.5, 90.0, 90.0],
+        ],
+        dtype=np.float32,
+    )
+    for idx, diag in enumerate(diag_values):
+        cov_zs[idx] = np.diag(diag)
+
+    class FakePipelineOutput:
+        def get_embedding_component(self, entry, key):
+            assert key == zdim
+            if entry == "latent_coords_noreg":
+                return zs
+            if entry == "latent_precision_noreg":
+                return cov_zs
+            raise KeyError(entry)
+
+        def get(self, key):
+            raise AssertionError(f"unexpected fallback get({key!r})")
+
+    captured = {}
+
+    class FakeGaussianKDE:
+        def __init__(self, dataset, bandwidth):
+            captured["kde_dataset"] = np.asarray(dataset)
+            captured["bandwidth"] = bandwidth
+            self.covariance = np.eye(pca_dim, dtype=np.float32) * 0.25
+
+    def fake_compute_latent_space_density_kde(zs_arg, pca_dim_max, num_points, percentile):
+        captured["density_zs"] = np.asarray(zs_arg)
+        captured["density_args"] = (pca_dim_max, num_points, percentile)
+        return np.ones((num_points, num_points), dtype=np.float32), np.array([[-1.0, 1.0], [-2.0, 2.0]])
+
+    def fake_make_latent_space_grid_from_bounds(bounds, num_points):
+        axes = [np.linspace(lo, hi, num_points, dtype=np.float32) for lo, hi in bounds]
+        mesh = np.meshgrid(*axes, indexing="ij")
+        return np.stack([axis.reshape(-1) for axis in mesh], axis=-1)
+
+    def fake_estimate_kernel_by_sampling(grids, cov_arg, gauss_covariance, num_samples):
+        captured["kernel_cov_zs"] = np.asarray(cov_arg)
+        captured["kernel_gauss_covariance"] = np.asarray(gauss_covariance)
+        captured["kernel_num_samples"] = num_samples
+        return np.ones(grids.shape[:-1], dtype=np.float32)
+
+    monkeypatch.setattr(dd.jax.scipy.stats, "gaussian_kde", FakeGaussianKDE)
+    monkeypatch.setattr(dd.latent_density, "compute_latent_space_density_kde", fake_compute_latent_space_density_kde)
+    monkeypatch.setattr(
+        dd.latent_density, "make_latent_space_grid_from_bounds", fake_make_latent_space_grid_from_bounds
+    )
+    monkeypatch.setattr(dd, "estimate_kernel_by_sampling", fake_estimate_kernel_by_sampling)
+
+    density, kernel, total_covar, grids, bounds = dd.get_raw_density(
+        FakePipelineOutput(),
+        zdim=zdim,
+        noreg=True,
+        pca_dim_max=pca_dim,
+        percentile_reject=50,
+        num_points=num_points,
+        percentile_bound=7,
+    )
+
+    expected_good = [0, 2]
+    expected_zs = zs[expected_good, :pca_dim]
+    expected_cov_zs = cov_zs[expected_good, :pca_dim, :pca_dim]
+    np.testing.assert_array_equal(captured["density_zs"], expected_zs)
+    np.testing.assert_array_equal(captured["kde_dataset"], expected_zs.T)
+    np.testing.assert_array_equal(captured["kernel_cov_zs"], expected_cov_zs)
+    assert captured["density_args"] == (pca_dim, num_points, 7)
+    assert captured["bandwidth"] == "silverman"
+    assert captured["kernel_num_samples"] == 5000
+    assert density.shape == (num_points, num_points)
+    assert kernel.shape == (num_points, num_points)
+    assert grids.shape == (num_points, num_points, pca_dim)
+    np.testing.assert_array_equal(bounds, np.array([[-1.0, 1.0], [-2.0, 2.0]]))
+    expected_total_covar = np.mean(np.linalg.inv(expected_cov_zs), axis=0) + np.eye(pca_dim) * 0.25
+    np.testing.assert_allclose(total_covar, expected_total_covar)
 
 
 def test_estimate_kernel_by_sampling_shape_and_normalization(cpu_device):
