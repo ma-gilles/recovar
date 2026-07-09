@@ -2156,8 +2156,10 @@ def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
         del args
         calls.append(kwargs)
         is_probe = kwargs.get("disable_adjoint_y", False)
-        class_index = (sum(1 for call in calls if call.get("disable_adjoint_y", False)) - 1) if is_probe else (
-            sum(1 for call in calls if not call.get("disable_adjoint_y", False)) - 1
+        class_index = (
+            (sum(1 for call in calls if call.get("disable_adjoint_y", False)) - 1)
+            if is_probe
+            else (sum(1 for call in calls if not call.get("disable_adjoint_y", False)) - 1)
         )
         stats = RelionStats(
             log_evidence_per_image=jnp.asarray([np.log(class_masses[class_index])], dtype=jnp.float32),
@@ -2191,9 +2193,7 @@ def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
     )
 
     mstep_thresholds = [
-        call.get("reconstruction_probability_threshold")
-        for call in calls
-        if not call.get("disable_adjoint_y", False)
+        call.get("reconstruction_probability_threshold") for call in calls if not call.get("disable_adjoint_y", False)
     ]
     assert len(mstep_thresholds) == 2
     for threshold in mstep_thresholds:
@@ -3831,6 +3831,117 @@ class TestRelionModeSmokeTest:
 
         assert recorded["particle_diameter"] == pytest.approx(200.0)
 
+    def test_relion_mode_k1_dense_global_search_uses_adaptive_two_pass(
+        self,
+        half_datasets,
+        init_volume,
+        translations,
+        monkeypatch,
+    ):
+        """K=1 dense-global-search iterations must route through the same
+        coarse/significance/fine adaptive engine K-class uses, once adaptive
+        oversampling is requested.
+
+        RELION applies the 2-pass adaptive scheme per particle regardless of
+        class count (ml_optimiser.cpp::expectationOneParticle: the exp_ipass
+        loop wraps the whole per-particle E-step; classes are looped *inside*
+        each pass). ``max_healpix_order=2`` stays below
+        ``LOCAL_SEARCH_HEALPIX_ORDER`` (4, helpers/convergence.py) so this run
+        never enters local search, isolating the dense-global-search phase
+        that this regression guards.
+        """
+        recorded_n_classes = []
+        original_adaptive = iteration_loop_module.run_dense_k_class_em_adaptive
+
+        def wrap_adaptive(experiment_dataset, means, *args, **kwargs):
+            recorded_n_classes.append(int(np.asarray(means).shape[0]))
+            return original_adaptive(experiment_dataset, means, *args, **kwargs)
+
+        monkeypatch.setattr(iteration_loop_module, "run_dense_k_class_em_adaptive", wrap_adaptive)
+
+        result = refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            _make_rotations(20, seed=123),
+            translations,
+            disc_type="linear_interp",
+            max_iter=2,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=20,
+            init_current_size=16,
+            adaptive_oversampling=1,
+            nside_level=1,
+            init_healpix_order=1,
+            max_healpix_order=2,
+        )
+
+        assert recorded_n_classes, (
+            "K=1 with adaptive_oversampling=1 should route dense-global-search "
+            "iterations through run_dense_k_class_em_adaptive"
+        )
+        assert all(n == 1 for n in recorded_n_classes)
+        assert np.asarray(result["mean"]).shape == (VOLUME_SIZE,)
+        assert np.all(np.isfinite(np.asarray(result["mean"])))
+        # Regression guard for the pose-decode branch in the main iteration
+        # loop (iteration_loop.py ~3202): it prefers best_pose_rotations[k]
+        # (populated by _scatter_dense_k_class_result for the adaptive path)
+        # over decoding hard_assignments against the coarse translation grid,
+        # which would be wrong here since ha_k indexes the fine grid.
+        assert len(result["best_rotation_eulers_history"]) == 2
+        assert len(result["best_translations_history"]) == 2
+        for iter_eulers, iter_translations in zip(
+            result["best_rotation_eulers_history"], result["best_translations_history"]
+        ):
+            for half_idx in range(2):
+                assert iter_eulers[half_idx] is not None
+                assert iter_translations[half_idx] is not None
+                assert np.all(np.isfinite(np.asarray(iter_eulers[half_idx])))
+                assert np.all(np.isfinite(np.asarray(iter_translations[half_idx])))
+
+    def test_relion_mode_k1_dense_global_search_os0_skips_adaptive_engine(
+        self,
+        half_datasets,
+        init_volume,
+        translations,
+        monkeypatch,
+    ):
+        """``adaptive_oversampling=0`` must keep using the plain run_em path for
+        K=1 -- this is the accepted, byte-identical os=0 parity baseline
+        (docs/math/em_parity_best_metrics.md, "K=1 os=0 strict") and must not
+        be perturbed by widening the adaptive-engine gate for K=1."""
+        recorded_n_classes = []
+        original_adaptive = iteration_loop_module.run_dense_k_class_em_adaptive
+
+        def wrap_adaptive(experiment_dataset, means, *args, **kwargs):
+            recorded_n_classes.append(int(np.asarray(means).shape[0]))
+            return original_adaptive(experiment_dataset, means, *args, **kwargs)
+
+        monkeypatch.setattr(iteration_loop_module, "run_dense_k_class_em_adaptive", wrap_adaptive)
+
+        refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            _make_rotations(20, seed=123),
+            translations,
+            disc_type="linear_interp",
+            max_iter=2,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=20,
+            init_current_size=16,
+            adaptive_oversampling=0,
+            nside_level=1,
+            init_healpix_order=1,
+            max_healpix_order=2,
+        )
+
+        assert not recorded_n_classes, (
+            "adaptive_oversampling=0 must not route K=1 through run_dense_k_class_em_adaptive"
+        )
+
     def test_relion_translation_log_prior_matches_source_pdf_offset(self, translations):
         log_prior = make_relion_translation_log_prior(
             np.asarray(translations),
@@ -3942,7 +4053,9 @@ class TestRelionModeSmokeTest:
         )
 
         np.testing.assert_array_equal(np.asarray(rotation_prior), np.asarray([[9, 10], [1, 2]], dtype=np.float32))
-        np.testing.assert_array_equal(np.asarray(translation_prior), np.asarray([[104, 105], [100, 101]], dtype=np.float32))
+        np.testing.assert_array_equal(
+            np.asarray(translation_prior), np.asarray([[104, 105], [100, 101]], dtype=np.float32)
+        )
         np.testing.assert_array_equal(
             np.asarray(candidate_mask),
             (np.arange(24).reshape(3, 4, 2) % 3 == 0)[[2, 0], 1:3, :],

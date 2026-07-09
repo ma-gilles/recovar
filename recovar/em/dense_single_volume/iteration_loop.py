@@ -633,14 +633,34 @@ def _score_half_dense(
         em_kwargs["rotation_log_prior"] = None
         em_kwargs["class_rotation_log_prior"] = class_rotation_log_prior_k
 
-    if k_class_enabled:
+    # RELION applies its coarse/significance/fine 2-pass adaptive oversampling
+    # per particle regardless of class count (ml_optimiser.cpp::
+    # expectationOneParticle: the exp_ipass loop wraps the whole per-particle
+    # E-step; classes are looped *inside* each pass). Route a true K=1 caller
+    # through the same K-class adaptive machinery, using a synthetic length-1
+    # class axis, whenever adaptive oversampling is actually requested for
+    # this iteration. This must stay False whenever adaptive_oversampling==0
+    # so the accepted os=0 K=1 parity baseline is untouched.
+    use_k1_adaptive_machinery = (
+        not k_class_enabled
+        and int(state.adaptive_oversampling) > 0
+        and (relion_firstiter_cc_this_iter or firstiter_coarse_current_size is not None)
+    )
+
+    if k_class_enabled or use_k1_adaptive_machinery:
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K-class refine does not support adjoint ablation flags")
-        em_kwargs["relion_half_volume_mstep"] = True
+        if k_class_enabled:
+            em_kwargs["relion_half_volume_mstep"] = True
         if k_class_image_batch_size_override is not None:
             em_kwargs["image_batch_size"] = k_class_image_batch_size_override
         if k_class_rotation_block_size_override is not None:
             em_kwargs["rotation_block_size"] = k_class_rotation_block_size_override
+        # Synthetic length-1 class axis for the K=1 case only; k_class._as_class_means
+        # requires means.ndim == 2. mean_variance/noise_variance_k need no wrapping
+        # (k_class._select_class_value returns a shared array unchanged when its
+        # leading axis doesn't match n_classes).
+        means_for_engine = means_k if k_class_enabled else jnp.asarray(means_k)[None, :]
         rot_pmap_for_collapse = None
         trans_pmap_for_collapse = None
         n_trans_fine_for_collapse = None
@@ -658,7 +678,7 @@ def _score_half_dense(
                 adaptive_os_local,
             ) = _score_kclass_firstiter_cc_pass2(
                 experiment_dataset=experiment_dataset,
-                mean=means_k,
+                mean=means_for_engine,
                 mean_variance=mean_variance,
                 noise_variance_k=noise_variance_k,
                 effective_rotations=effective_rotations,
@@ -704,7 +724,7 @@ def _score_half_dense(
             adaptive_em_kwargs["sparse_pass2"] = True
             k_class_result = run_dense_k_class_em_adaptive(
                 experiment_dataset,
-                means_k,
+                means_for_engine,
                 mean_variance,
                 noise_variance_k,
                 coarse_rot,
@@ -724,6 +744,9 @@ def _score_half_dense(
                 **adaptive_em_kwargs,
             )
         else:
+            # Only reachable when k_class_enabled is True: use_k1_adaptive_machinery
+            # requires adaptive_oversampling > 0 plus one of the two branches above,
+            # so a synthetic K=1 caller never lands here.
             k_class_result = run_dense_k_class_em(
                 experiment_dataset,
                 means_k,
@@ -753,6 +776,12 @@ def _score_half_dense(
             best_pose_translations=best_pose_translations,
             require_best_pose_details=return_best_pose_details,
         )
+        if not k_class_enabled:
+            # Real K-class callers want the (n_classes, volume_size) shape
+            # _scatter_dense_k_class_result returns as-is; the synthetic K=1
+            # caller needs it squeezed back to the flat shape HalfScoreResult
+            # (and plain run_em) expect.
+            Ft_y_k, Ft_ctf_k = Ft_y_k[0], Ft_ctf_k[0]
         coarse_ha_k = None
         if trans_pmap_for_collapse is not None and n_trans_fine_for_collapse is not None:
             coarse_ha_k = _collapse_fine_pose_assignments_to_coarse(
