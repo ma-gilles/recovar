@@ -20,6 +20,10 @@ least 256x256 images, compared against RELION for accuracy and speed.
 - Accuracy and speed are separate axes. A faster run with worse quality, or a
   more accurate run that is slower, is a mixed result unless the tradeoff was
   explicitly intended.
+- Shellwise FSC, FSC-AUC, and established FSC score/resolution summaries versus
+  GT and RELION are the only map-quality gates. Correlation values in legacy
+  rows are retained as weak historical diagnostics and cannot accept or reject
+  a run under the current contract.
 
 ## Accepted Best Runs
 
@@ -109,7 +113,7 @@ Quality comparison:
 | Metric | Previous/reference | Current | Delta | Status |
 |--------|--------------------|---------|-------|--------|
 | RECOVAR merged GT FSC-AUC | RELION `0.447203` | `0.456776` | `+0.009573` | better |
-| merged RECOVAR-vs-RELION FSC-AUC | accepted K=1 map corr `0.9995` (different summary metric) | `0.994387` | not directly comparable | same-quality map parity |
+| merged RECOVAR-vs-RELION FSC-AUC | current strict gate `0.995` | `0.994387` | `-0.000613` | below current strict gate; GT quality better |
 | merged RECOVAR-vs-RELION correlation | `0.9995` | `0.999571` | `+0.000071` | same |
 | pose angle mean / p95 | pending | `0.4228 / 1.3072 deg` | new evidence | close |
 | translation mean / p95 | pending | `0.0715 / 0.2250 px` | new evidence | close |
@@ -127,13 +131,14 @@ Performance comparison:
 
 Conclusion:
 
-- Overall status: mixed but strong.  Map/GT quality is same or better and the
-  speed ratio improved from `1.95x` to `1.40x`; free-trajectory Pmax remains
-  different because RECOVAR intentionally does not emulate RELION's iter-1 CC
-  hard-Pmax artifact.
+- Overall status: mixed but strong. GT quality is better, but strict
+  RECOVAR-vs-RELION FSC-AUC is just below the current gate; the
+  speed ratio improved from `1.95x` to `1.40x`; this historical run predates
+  the later strict iter-1 CC/Pmax parity fix, so its free-trajectory Pmax is not
+  current correctness evidence.
 - Better metrics: GT FSC-AUC and end-to-end speed ratio.
 - Worse metrics: free-trajectory Pmax agreement.
-- Same metrics: merged map correlation remains about `0.9995`.
+- Diagnostic only: merged map correlation remains about `0.9995`.
 - Accepted as new best: speed evidence yes; not a wholesale replacement for
   the accepted K=1 row because this run stopped at its ten-iteration cap
   without final all-data output and uses a different RELION baseline wall.

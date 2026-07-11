@@ -185,16 +185,25 @@ RECOVAR default expands 1,392; candidate counts are 169 versus 4,926 positive
 and Pmax is `0.8333` versus `0.2519`. The existing pruned-parent path restores
 24 rotations, 156 positive candidates, Pmax `0.8445`, and 6 retained samples
 versus RELION's 5. This improves true-final FSC-AUC from `0.991498` to
-`0.994526` grid-off and `0.995366` with strict RELION grid correction.
+`0.994527` grid-off and canonical 63-shell FSC-AUC `0.995784` with strict
+RELION grid correction. Grid-on RECOVAR-vs-GT is only `0.000887` below RELION,
+within the `0.002` gate. This small-cell final map therefore passes the FSC
+quality contract; correlation is diagnostic only.
 
-Make RELION pruned-parent support the K=1 local adaptive default while keeping
-full-parent as an explicit diagnostic override. Rerun focused unit/fast guards,
-then the complete strict ten-iteration trajectory from iter 0. Require the
-numbered schedule/convergence to remain exact and compare all final particle,
-BPref, shellwise FSC, FSC-AUC, FSC score/resolution, and diagnostic map
-correlation metrics. After support closure, isolate any remaining shellwise
-FSC/radial-amplitude residual at the tau2/final filtering boundary; correlation
-must not be used as an acceptance gate.
+RELION pruned-parent support is now the K=1 local adaptive default, with
+full-parent retained as an explicit diagnostic override. The four-way final
+cross-replay shows tau2 substitution changes FSC-AUC by less than `1e-5`, while
+substituting the RELION BPref accumulator raises strict-oracle FSC-AUC from
+`0.997003` to `0.999684`. This exonerates final tau2/Wiener reconstruction and
+localizes the remaining measurable high-shell residual to BPref accumulation.
+
+Full clean A100 trajectory validation is running as Slurm job `10990444` from
+the canonical-reporting checkpoint; the earlier H100 request `10989654` never
+started and was replaced because the pinned RELION oracle ran on A100. Require
+the numbered schedule/convergence to remain exact and compare final particle,
+BPref, shellwise FSC, FSC-AUC, FSC score/resolution, and diagnostic correlation.
+If it passes, advance to additional K=1 robustness seeds/stress cells rather
+than treating radial amplitude or correlation as a quality blocker.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that

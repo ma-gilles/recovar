@@ -1056,8 +1056,8 @@ still require score-margin adjudication before they can be called numerical
 ties.
 
 The Pmax repair does not close the full iter-1 state. The strict merged map
-correlation against RELION is only `0.995764` (half correlations
-`0.995723/0.995755`), below the `0.9995` K=1 gate. RECOVAR and RELION reach
+correlation against RELION is `0.995764` (half correlations
+`0.995723/0.995755`), recorded only as a weak diagnostic. RECOVAR and RELION reach
 the same FSC<0.143 shell 20; RECOVAR-vs-GT map correlation is `0.712883`
 versus RELION `0.711143`, so this is a strict-parity failure rather than an
 observed GT-quality regression. By contrast, fixed-state RELION-it1 to
@@ -1119,8 +1119,7 @@ opposite preferences `4.83e-6/2.87e-5`.
 
 Thus every iter-1 discrete difference is explained by underlying score arrays
 inside the established GPU numerical band. This satisfies the user's
-tie-aware decision contract; it does not change or waive the standalone
-`0.9995` strict map-correlation gate. The iter-1 map residual is a hard-WTA
+tie-aware decision contract. The iter-1 map residual is a hard-WTA
 amplification of five qualified ties plus arithmetic-level scatter tails, not
 an unexplained support, coordinate, score, or accumulator bug. Continue with
 the repaired strict free trajectory and require convergence/finalization to
@@ -1207,8 +1206,45 @@ and Pmax `0.2519`. Materialized and fused RECOVAR posterior dumps agree.
 
 Pruned-parent validation job `10989301` restores the exact 24-rotation support,
 156 positive candidates, 6 retained samples, and Pmax `0.8445`. True-final
-FSC-AUC improves from `0.991498` to `0.994526` grid-off and `0.995366` under
-the strict grid-on output convention. Grid-on correlation is `0.991474`, so
-the FSC-AUC gate closes but the map-correlation gate remains unresolved. The
-correctness change makes pruned-parent support the default and retains
-full-parent as an explicit diagnostic override.
+FSC-AUC improves from `0.991498` to `0.994526` grid-off. The legacy grid-on
+report was `0.995366`, but it integrated two incomplete Nyquist-edge shells.
+Under the canonical 63-shell contract used by `regularization.get_fsc_gpu`,
+grid-on RECOVAR-vs-RELION FSC-AUC is `0.995784` and passes the `0.995` gate.
+Grid-on RECOVAR-vs-GT FSC-AUC is `0.649948` versus RELION `0.650835`, a
+`-0.000887` delta within the `-0.002` gate. Diagnostic correlation is not an
+acceptance criterion. The correctness change makes pruned-parent support the
+default and retains full-parent as an explicit diagnostic override.
+
+## 2026-07-11 Canonical FSC Contract and Final Cross-Replay
+
+Commit `f80ac8ad` makes the K=1 replay/completion and K=4 evaluation reporters
+use the same canonical shell range as `regularization.get_fsc_gpu`: for a
+128-cube, shells 0 through 62, with DC excluded from normalized FSC-AUC. The
+previous NumPy reporters included shells 63 and 64 even though they are
+incomplete Nyquist-edge spheres. Focused tests pin the 63-shell result. Commit
+`b95099b3` also promotes GT FSC-AUC into the trajectory NPZ/JSON ledger so GT
+correlation cannot become the headline merely because FSC-AUC was omitted.
+
+Canonical saved-map audit of job `10989301` gives grid-off
+RECOVAR-vs-RELION FSC-AUC `0.994527` and grid-on `0.995784`; all grid-on
+cross-FSC shells exceed `0.989`. Against GT, grid-off RECOVAR is substantially
+better than RELION (`0.669908` versus `0.650835`), while strict grid-on differs
+by only `-0.000887`. The grid-on FSC residual is concentrated at high
+frequency: shells 41 through 62 contribute about 69 percent of its AUC
+deficit. Radial amplitude rolloff is recorded as tau2/filter telemetry only;
+it cannot pass or fail map quality because FSC is invariant to a positive
+per-shell scale.
+
+Commit `e766a2ef` adds a four-way final reconstruction replay using the saved
+RECOVAR and matched RELION BPref/tau2 dumps. The artifact root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_cross_replay_20260711_150100`
+and is marked `SAFE_TO_DELETE`. Against the matched continuation oracle, FSC-AUC
+is `0.997036` for RECOVAR accumulator plus RECOVAR tau2, `0.997044` for
+RECOVAR accumulator plus RELION tau2, `0.999756` for RELION accumulator plus
+RECOVAR tau2, and `0.999750` for RELION accumulator plus RELION tau2. Against
+the original strict oracle the corresponding values are `0.997003`,
+`0.997010`, `0.999684`, and `0.999678`. Tau2 substitution is negligible and
+the RECOVAR reconstruction/filter implementation is near exact when fed the
+RELION accumulator. The remaining measurable high-shell residual is therefore
+in BPref accumulation, while the accepted K=1 small-cell map still passes the
+FSC quality gates.
