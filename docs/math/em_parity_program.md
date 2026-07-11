@@ -136,21 +136,22 @@ checkpoint.
 
 ### Next experiment
 
-Create a K=1 strict-mode A/B on the complete 3k/128 strict fixture from
-identical RELION iter-0 state. The older canonical 5k/128 fixture omitted
-`--firstiter_cc` and cannot serve as this oracle:
+The complete 3k/128 strict firstiter A/B is finished. Strict Pmax is exactly
+one particle-by-particle and fixed RELION-it1 arithmetic is in the numerical
+band, but the strict iter-1 merged map correlation remains `0.995764`, below
+the K=1 gate. The active hypothesis is that the first material residual is
+already present in the iter-1 reconstruction accumulators.
 
-- A: current RECOVAR quality-mode first iteration;
-- B: strict hard-winner `firstiter_cc` with RELION winner-subset pass-2 routing;
-- compare the complete iter-1 state and fixed-state iter-1-to-iter-2 outputs;
-- stop at the first state field where B still differs materially.
-
-First validate that patched strict iter-1 Pmax is exactly one and compare
-pass-1/pass-2 winners, `Ft_y`, `Ft_CTF`, and post-low-pass maps. Then run the
-free iter-2 trajectory and the RELION-it1 fixed-state arithmetic control.
-Success means the Pmax state is repaired and the iter-2 gap moves toward the
-fixed-state arithmetic band without degrading maps. Failure moves the next
-experiment to the earliest mismatched iter-1 accumulator/map field.
+Run the patched RELION oracle for exactly one iteration on the identical
+fixture/seed with raw M-step dumping enabled. Compare each half's saved
+RECOVAR `Ft_y`/`Ft_ctf` against RELION BPref at three levels: raw layout,
+downsampled coordinates after the established frame conversion, and shell
+sums. Scan coordinate mappings before interpreting a complex-data mismatch.
+If weights agree but complex averages do not, bisect reconstruction operands,
+support membership, and winner contributions on the earliest differing
+particle. If both accumulators agree, move downstream to half joining,
+`updateSSNRarrays`, reconstruction, and firstiter low-pass. Do not run a
+longer free trajectory until this boundary is classified.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that

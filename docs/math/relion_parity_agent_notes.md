@@ -1035,3 +1035,40 @@ the pinned optimiser STAR command; `on` forces strict iter-0 semantics for a
 diagnostic, and `off` is the explicit ablation path. Unit coverage validates
 oracle-on/oracle-off auto selection, both overrides, and rejects forcing the
 mode after iter 0. The focused harness file passes 11/11 tests.
+
+## 2026-07-11 Strict Firstiter-CC A/B and Remaining Iter-1 Map Gap
+
+Slurm job `10986138` ran three sequential one-iteration controls on H100
+`della-h21g2` from the same complete 3k/128 strict fixture. The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_firstiter_pmax_ab_20260711_122212`
+and is marked `SAFE_TO_DELETE`. The tested source was commit `b044c0a3`.
+Two earlier attempts, `10986075` and `10986106`, failed before refinement due
+to missing cuSPARSE runtime paths and then a missing RELION binding; they are
+setup failures and contain no scientific result.
+
+The strict `--firstiter-cc-mode on` run now matches RELION's entire iter-1
+Pmax vector exactly: mean, median, and maximum absolute gap are zero for all
+3,000 particles, and both report `ave_Pmax=1`. The explicit off ablation
+reports `ave_Pmax=0.893242`. Strict iter-1 pose/translation assignments are
+also close: angular mean `0.0111` degrees with 99.9 percent within 5 degrees,
+and translation mean `0.0003` pixels with p99 zero. The few discrete outliers
+still require score-margin adjudication before they can be called numerical
+ties.
+
+The Pmax repair does not close the full iter-1 state. The strict merged map
+correlation against RELION is only `0.995764` (half correlations
+`0.995723/0.995755`), below the `0.9995` K=1 gate. RECOVAR and RELION reach
+the same FSC<0.143 shell 20; RECOVAR-vs-GT map correlation is `0.712883`
+versus RELION `0.711143`, so this is a strict-parity failure rather than an
+observed GT-quality regression. By contrast, fixed-state RELION-it1 to
+iter-2 replay gives map correlation `1.000000`, pose mean gap `0.0059`
+degrees, translation mean gap `0.0002` pixels, and Pmax mean gap about
+`2.97e-5`. This localizes the remaining material difference to the iter-1
+history, before the later fixed-state arithmetic.
+
+The strict run preserved its post-join iter-1 `Ft_y` and `Ft_ctf` arrays under
+`strict_on/intermediates/it000_Ft_*`. The next discriminating experiment is
+therefore a matched patched-RELION iter-1 raw/downsampled BPref dump, followed
+by coordinate- and shell-level comparison with
+`scripts/compare_iter1_bpref_accum.py`. Do not extend the free trajectory
+until this accumulator boundary is classified.
