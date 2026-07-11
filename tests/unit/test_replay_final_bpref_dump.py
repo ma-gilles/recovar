@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import struct
 
 import numpy as np
 
@@ -56,3 +57,27 @@ def test_replay_fsc_uses_canonical_non_nyquist_shell_range():
 
     assert fsc.shape == (16 // 2 - 1,)
     np.testing.assert_allclose(fsc, 1.0, atol=1e-12)
+
+
+def test_read_relion_bpref_array_reads_shape_header(tmp_path):
+    path = tmp_path / "bpref.bin"
+    values = np.arange(24, dtype=np.float64).reshape(2, 3, 4)
+    with path.open("wb") as stream:
+        stream.write(struct.pack("qqq", *values.shape))
+        values.tofile(stream)
+
+    loaded = replay_final_bpref_dump.read_relion_bpref_array(path, dtype=np.dtype(np.float64))
+
+    np.testing.assert_array_equal(loaded, values)
+
+
+def test_read_relion_spectrum_reads_length_header(tmp_path):
+    path = tmp_path / "tau2.bin"
+    values = np.asarray([1.0, 2.0, 3.0], dtype=np.float64)
+    with path.open("wb") as stream:
+        stream.write(struct.pack("q", values.size))
+        values.tofile(stream)
+
+    loaded = replay_final_bpref_dump.read_relion_spectrum(path)
+
+    np.testing.assert_array_equal(loaded, values)

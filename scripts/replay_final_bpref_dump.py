@@ -13,6 +13,7 @@ import argparse
 import json
 import math
 import os
+import struct
 import sys
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         help="Gridding correction padding factor. Defaults to dump value or reconstruction padding factor.",
     )
+    parser.add_argument(
+        "--relion-bpref-prefix",
+        type=Path,
+        help=(
+            "Optional RELION dump prefix ending before _bpref_data.bin and "
+            "_bpref_weight.bin. Replaces the RECOVAR joined accumulator."
+        ),
+    )
+    parser.add_argument(
+        "--relion-tau2-bin",
+        type=Path,
+        help="Optional RELION length-prefixed tau2 spectrum. Replaces the RECOVAR-derived tau2.",
+    )
     return parser.parse_args(argv)
 
 
@@ -90,6 +104,35 @@ def resolve_mstep_accumulator_shape(dump: Any, volume_shape: tuple[int, int, int
     if "mstep_accumulator_shape" in dump:
         return tuple(int(v) for v in np.asarray(dump["mstep_accumulator_shape"]).reshape(-1))
     return tuple(int(v) * int(padding_factor) for v in volume_shape)
+
+
+def read_relion_bpref_array(path: Path, *, dtype: np.dtype) -> np.ndarray:
+    """Read a RELION BPref dump with a three-int64 shape header."""
+
+    with path.open("rb") as stream:
+        header = stream.read(3 * np.dtype(np.int64).itemsize)
+        if len(header) != 3 * np.dtype(np.int64).itemsize:
+            raise ValueError(f"truncated RELION BPref header: {path}")
+        shape = tuple(int(value) for value in struct.unpack("qqq", header))
+        count = int(np.prod(shape))
+        values = np.fromfile(stream, dtype=dtype, count=count)
+        if values.size != count or stream.read(1):
+            raise ValueError(f"RELION BPref payload size does not match {shape}: {path}")
+    return values.reshape(shape)
+
+
+def read_relion_spectrum(path: Path) -> np.ndarray:
+    """Read a RELION float64 spectrum with a one-int64 length header."""
+
+    with path.open("rb") as stream:
+        header = stream.read(np.dtype(np.int64).itemsize)
+        if len(header) != np.dtype(np.int64).itemsize:
+            raise ValueError(f"truncated RELION spectrum header: {path}")
+        (count,) = struct.unpack("q", header)
+        values = np.fromfile(stream, dtype=np.float64, count=int(count))
+        if values.size != int(count) or stream.read(1):
+            raise ValueError(f"RELION spectrum payload size does not match length {count}: {path}")
+    return values
 
 
 def centered_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
@@ -172,6 +215,7 @@ def map_metrics(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
     return {
         "corr": centered_corr(lhs, rhs),
         "fsc_auc": normalized_fsc_auc(fsc, shells),
+        "fsc": fsc,
         "shell_05": first_shell_below(fsc, 0.5),
         "shell_0143": first_shell_below(fsc, 0.143),
     }
@@ -209,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo_root))
 
+    from recovar.em.dense_single_volume.helpers import half_volume_mstep
     from recovar.reconstruction import regularization, relion_functions
     from recovar.utils import helpers
 
@@ -262,12 +307,65 @@ def main(argv: list[str] | None = None) -> int:
             weight_combination="sum",
         )
 
+        reconstruction_Ft_ctf = np.asarray(dump["Ft_ctf"])
+        reconstruction_Ft_y = np.asarray(dump["Ft_y"])
+        accumulator_source = "recovar_dump"
+        if args.relion_bpref_prefix is not None:
+            prefix = args.relion_bpref_prefix.resolve()
+            relion_data = read_relion_bpref_array(
+                Path(f"{prefix}_bpref_data.bin"),
+                dtype=np.dtype(np.complex128),
+            )
+            relion_weight = read_relion_bpref_array(
+                Path(f"{prefix}_bpref_weight.bin"),
+                dtype=np.dtype(np.float64),
+            )
+            expected_half_shape = (
+                mstep_accumulator_shape[0],
+                mstep_accumulator_shape[1],
+                mstep_accumulator_shape[2] // 2 + 1,
+            )
+            if relion_data.shape != expected_half_shape or relion_weight.shape != expected_half_shape:
+                raise ValueError(
+                    "RELION BPref shape mismatch: "
+                    f"data={relion_data.shape}, weight={relion_weight.shape}, expected={expected_half_shape}"
+                )
+            n = int(volume_shape[0])
+            reconstruction_Ft_y = (
+                half_volume_mstep.relion_x_half_volume_to_native_half(
+                    relion_data.reshape(-1),
+                    mstep_accumulator_shape,
+                )
+                / (-(n**2))
+            )
+            reconstruction_Ft_ctf = (
+                half_volume_mstep.relion_x_half_volume_to_native_half(
+                    relion_weight.reshape(-1),
+                    mstep_accumulator_shape,
+                ).real
+                / (n**4)
+            )
+            accumulator_source = str(prefix)
+
+        reconstruction_tau = final_tau
+        reconstruction_tau_is_1d = False
+        tau2_source = "recovar_derived"
+        if args.relion_tau2_bin is not None:
+            relion_tau2 = read_relion_spectrum(args.relion_tau2_bin.resolve())
+            if relion_tau2.size < volume_shape[0] // 2 - 1:
+                raise ValueError(
+                    f"RELION tau2 has {relion_tau2.size} shells; expected at least {volume_shape[0] // 2 - 1}"
+                )
+            reconstruction_tau = relion_tau2 * float(volume_shape[0] ** 4)
+            reconstruction_tau_is_1d = True
+            tau2_source = str(args.relion_tau2_bin.resolve())
+
         replay_map = relion_functions.post_process_from_filter_v2(
-            dump["Ft_ctf"],
-            dump["Ft_y"],
+            reconstruction_Ft_ctf,
+            reconstruction_Ft_y,
             volume_shape,
             padding_factor,
-            tau=final_tau,
+            tau=reconstruction_tau,
             kernel="triangular",
             use_spherical_mask=True,
             grid_correct=grid_correct,
@@ -279,6 +377,7 @@ def main(argv: list[str] | None = None) -> int:
             current_size=current_size,
             return_real_space=True,
             accumulator_volume_shape=mstep_accumulator_shape,
+            tau_is_1d=reconstruction_tau_is_1d,
         )
 
         replay_map_np = np.asarray(replay_map, dtype=np.float32).reshape(volume_shape)
@@ -296,6 +395,9 @@ def main(argv: list[str] | None = None) -> int:
             "tau2_full_half_axis": tau2_full_half_axis,
             "voxel_size": voxel_size,
             "minres_map": int(args.minres_map),
+            "accumulator_source": accumulator_source,
+            "tau2_source": tau2_source,
+            "tau2_is_1d": reconstruction_tau_is_1d,
             "fsc_source": "recomputed" if args.recompute_fsc or "fsc_shells" not in dump else "dump",
             "fsc_head": _head(fsc_shells),
             "fsc_tail": _tail(fsc_shells),
