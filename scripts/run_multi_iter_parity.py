@@ -1495,20 +1495,23 @@ def main():
 
         for label, vol_ft in recovar_final_series.items():
             fsc_vs_gt = _compute_fsc_vs_gt(vol_ft, gt_ft)
+            fsc_auc_vs_gt = _normalized_fsc_auc(fsc_vs_gt)
             shell_05 = _first_shell_below_threshold(fsc_vs_gt, 0.5)
             shell_0143 = _first_shell_below_threshold(fsc_vs_gt, 0.143)
             real_vol = np.real(np.array(ftu.get_idft3(jnp.asarray(np.asarray(vol_ft).reshape(N, N, N)))))
             corr_vs_gt = float(np.corrcoef(real_vol.ravel(), gt_real.ravel())[0, 1])
             print(
-                f"  {label:<14s} corr={corr_vs_gt:.6f}, "
+                f"  {label:<14s} FSC-AUC={fsc_auc_vs_gt:.6f}, corr={corr_vs_gt:.6f}, "
                 f"FSC<0.5 shell={shell_05}, res={_shell_to_resolution_angstrom(shell_05):.2f} A, "
                 f"FSC<0.143 shell={shell_0143}, res={_shell_to_resolution_angstrom(shell_0143):.2f} A"
             )
             gt_summary[f"{label}_fsc_vs_gt"] = fsc_vs_gt
+            gt_summary[f"{label}_fsc_auc_vs_gt"] = np.float64(fsc_auc_vs_gt)
             gt_summary[f"{label}_corr_vs_gt"] = np.float64(corr_vs_gt)
             gt_summary[f"{label}_shell_05"] = np.int32(-1 if shell_05 is None else shell_05)
             gt_summary[f"{label}_shell_0143"] = np.int32(-1 if shell_0143 is None else shell_0143)
             gt_ledger_summary[f"{label}_corr_vs_gt"] = float(corr_vs_gt)
+            gt_ledger_summary[f"{label}_fsc_auc_vs_gt"] = float(fsc_auc_vs_gt)
             gt_ledger_summary[f"{label}_shell_05"] = int(-1 if shell_05 is None else shell_05)
             gt_ledger_summary[f"{label}_shell_0143"] = int(-1 if shell_0143 is None else shell_0143)
             if args.gt_align and (args.gt_align_all_series or label.endswith("_merged")):
@@ -1524,10 +1527,12 @@ def main():
                 )
                 aligned_ft = np.asarray(ftu.get_dft3(jnp.asarray(alignment.aligned_volume))).reshape(-1)
                 aligned_fsc_vs_gt = _compute_fsc_vs_gt(aligned_ft, gt_ft)
+                aligned_fsc_auc_vs_gt = _normalized_fsc_auc(aligned_fsc_vs_gt)
                 aligned_shell_05 = _first_shell_below_threshold(aligned_fsc_vs_gt, 0.5)
                 aligned_shell_0143 = _first_shell_below_threshold(aligned_fsc_vs_gt, 0.143)
                 print(
-                    f"  {label:<14s} aligned_corr={alignment.corr:.6f}, "
+                    f"  {label:<14s} aligned_FSC-AUC={aligned_fsc_auc_vs_gt:.6f}, "
+                    f"aligned_corr={alignment.corr:.6f}, "
                     f"aligned_FSC<0.5 shell={aligned_shell_05}, "
                     f"res={_shell_to_resolution_angstrom(aligned_shell_05):.2f} A, "
                     f"aligned_FSC<0.143 shell={aligned_shell_0143}, "
@@ -1535,6 +1540,7 @@ def main():
                     f"rot_idx={alignment.rotation_index}, mirror_x={alignment.mirror_x}, sign={alignment.sign}"
                 )
                 gt_summary[f"{label}_aligned_fsc_vs_gt"] = aligned_fsc_vs_gt
+                gt_summary[f"{label}_aligned_fsc_auc_vs_gt"] = np.float64(aligned_fsc_auc_vs_gt)
                 gt_summary[f"{label}_aligned_corr_vs_gt"] = np.float64(alignment.corr)
                 gt_summary[f"{label}_aligned_score_vs_gt"] = np.float64(alignment.score)
                 gt_summary[f"{label}_aligned_shell_05"] = np.int32(-1 if aligned_shell_05 is None else aligned_shell_05)
@@ -1548,6 +1554,7 @@ def main():
                 gt_summary[f"{label}_gt_align_score_max_shell"] = np.int32(args.gt_align_max_shell)
                 gt_summary[f"{label}_gt_align_healpix_order"] = np.int32(args.gt_align_healpix_order)
                 gt_ledger_summary[f"{label}_aligned_corr_vs_gt"] = float(alignment.corr)
+                gt_ledger_summary[f"{label}_aligned_fsc_auc_vs_gt"] = float(aligned_fsc_auc_vs_gt)
                 gt_ledger_summary[f"{label}_aligned_score_vs_gt"] = float(alignment.score)
                 gt_ledger_summary[f"{label}_aligned_shell_05"] = int(
                     -1 if aligned_shell_05 is None else aligned_shell_05

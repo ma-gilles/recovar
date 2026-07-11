@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from scripts.run_multi_iter_parity import (
+    _normalized_fsc_auc,
     map_pose_arrays_to_particle_order,
     parse_relion_optimiser_cli_flags,
     relion_final_gt_series,
@@ -12,6 +13,12 @@ from scripts.run_multi_iter_parity import (
     resolve_relion_final_oracle_paths,
     stack_index_from_image_name,
 )
+
+
+def test_normalized_fsc_auc_excludes_dc_and_uses_canonical_input_range():
+    fsc = np.asarray([1.0, 0.2, 0.6, 0.6], dtype=np.float64)
+
+    assert _normalized_fsc_auc(fsc) == pytest.approx(0.5)
 
 
 def test_stack_index_from_image_name_is_zero_based():
