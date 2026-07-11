@@ -53,6 +53,16 @@ def test_normalized_fsc_auc_ignores_shell_zero_and_integrates_curve():
     assert evaluator._normalized_fsc_auc(fsc) == pytest.approx(0.5)
 
 
+def test_kclass_fsc_uses_canonical_non_nyquist_shell_range():
+    rng = np.random.default_rng(0)
+    volume = rng.standard_normal((16, 16, 16))
+
+    fsc = evaluator._fsc(volume, volume)
+
+    assert fsc.shape == (16 // 2 - 1,)
+    np.testing.assert_allclose(fsc, 1.0, atol=1e-12)
+
+
 def test_kclass_assignment_summary_uses_auc_not_early_shell_mean():
     early_only = np.asarray([1.0] + [0.95] * 7 + [0.0] * 32, dtype=np.float64)
     broad_lower_peak = np.asarray([1.0] + [0.75] * 39, dtype=np.float64)

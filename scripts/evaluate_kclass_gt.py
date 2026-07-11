@@ -142,8 +142,10 @@ def _fsc(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     c = n // 2
     z, y, x = np.indices(a.shape)
     r = np.round(np.sqrt((z - c) ** 2 + (y - c) ** 2 + (x - c) ** 2)).astype(np.int32)
-    out = np.zeros(c + 1)
-    for s in range(c + 1):
+    # Match regularization.get_fsc_gpu: shell indices [0, N // 2 - 2].
+    # The Nyquist-edge shells are not complete spherical shells on this grid.
+    out = np.zeros(c - 1)
+    for s in range(c - 1):
         m = r == s
         if not m.any():
             continue

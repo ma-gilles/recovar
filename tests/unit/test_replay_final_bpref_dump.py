@@ -46,3 +46,13 @@ def test_replay_final_bpref_dump_uses_joined_half_weight_sum():
 
     assert 'weight_combination="sum"' in source
     assert '"tau2_weight_combination": "sum"' in source
+
+
+def test_replay_fsc_uses_canonical_non_nyquist_shell_range():
+    rng = np.random.default_rng(0)
+    volume = rng.standard_normal((16, 16, 16))
+
+    fsc = replay_final_bpref_dump.shell_fsc(volume, volume)
+
+    assert fsc.shape == (16 // 2 - 1,)
+    np.testing.assert_allclose(fsc, 1.0, atol=1e-12)

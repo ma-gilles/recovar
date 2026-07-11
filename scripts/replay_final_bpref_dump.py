@@ -106,6 +106,7 @@ def centered_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
 
 
 def shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+    """Return canonical RECOVAR FSC shells, excluding Nyquist edges."""
     a = np.asarray(lhs, dtype=np.float64)
     b = np.asarray(rhs, dtype=np.float64)
     if a.shape != b.shape or a.ndim != 3 or len(set(a.shape)) != 1:
@@ -124,7 +125,7 @@ def shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
     denom = np.sqrt(lhs_power * rhs_power)
     out = np.full(numerator.shape, np.nan, dtype=np.float64)
     np.divide(numerator, denom, out=out, where=denom > 0.0)
-    return out[: n // 2 + 1]
+    return out[: n // 2 - 1]
 
 
 def normalized_fsc_auc(values: Any, axis: Any | None = None) -> float:
