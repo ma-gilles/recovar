@@ -47,8 +47,11 @@ Known evidence:
 - K=1 free-trajectory Pmax diverges beginning at iter 2, but an exact fixed
   RELION it001-to-it002 replay of worst particles gives Pmax correlation `1.0`,
   mean absolute gap `0.000309`, max `0.000917`, and exact pose/translation.
-  Therefore the active strict-parity bug is state history, with iter-1
-  `firstiter_cc` policy the leading cause, not E-step arithmetic.
+  The earliest proven state-history bug was iter-1 hard-winner Pmax assembly:
+  RECOVAR used the correct WTA reconstruction path but recomputed Pmax from
+  incompatible coarse/fine score normalizations, yielding mean `2.03e-6`
+  instead of RELION's exact `1.0`. A CPU regression now pins the fix; GPU
+  trajectory validation is pending.
 - K=4 100k/256 map quality is close/better by GT FSC-AUC, but particle-level
   state parity is incomplete: recorded class agreement `0.89025`, pose within
   5 degrees `0.71669`, translation within 1 px `0.77529`. Runtime is `2.181x`
@@ -133,18 +136,21 @@ checkpoint.
 
 ### Next experiment
 
-Create a K=1 strict-mode A/B on the existing 5k/128 fixture from identical
-RELION iter-0 state:
+Create a K=1 strict-mode A/B on the complete 3k/128 strict fixture from
+identical RELION iter-0 state. The older canonical 5k/128 fixture omitted
+`--firstiter_cc` and cannot serve as this oracle:
 
 - A: current RECOVAR quality-mode first iteration;
 - B: strict hard-winner `firstiter_cc` with RELION winner-subset pass-2 routing;
 - compare the complete iter-1 state and fixed-state iter-1-to-iter-2 outputs;
 - stop at the first state field where B still differs materially.
 
-Success means B collapses the iter-2 free-trajectory Pmax gap toward the
-fixed-state arithmetic band without degrading maps. Failure means the next
-experiment moves to the earliest mismatched iter-1 state field rather than
-changing later kernels.
+First validate that patched strict iter-1 Pmax is exactly one and compare
+pass-1/pass-2 winners, `Ft_y`, `Ft_CTF`, and post-low-pass maps. Then run the
+free iter-2 trajectory and the RELION-it1 fixed-state arithmetic control.
+Success means the Pmax state is repaired and the iter-2 gap moves toward the
+fixed-state arithmetic band without degrading maps. Failure moves the next
+experiment to the earliest mismatched iter-1 accumulator/map field.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that

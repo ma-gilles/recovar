@@ -1708,10 +1708,9 @@ def _score_half_dense(
         fine_rotations_for_pose = None
         adaptive_os_local = 0
         # STRICT-PARITY: at iter 1 with --firstiter_cc, route through the
-        # adaptive 2-pass engine with normalized-CC scoring and regular
-        # significance support. Patched RELION storeWavg dumps retain multiple
-        # pass-2 candidates, so the old single-best-coarse subset path is only
-        # a diagnostic in k_class.py / run_k_class_parity.py.
+        # adaptive 2-pass engine with normalized-CC scoring. Pass 2 retains the
+        # oversampled children of the single best coarse class/pose, matching
+        # RELION's firstiter-CC binarized coarse support.
         if relion_firstiter_cc_this_iter:
             (
                 k_class_result,

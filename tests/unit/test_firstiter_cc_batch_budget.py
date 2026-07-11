@@ -4,6 +4,7 @@ import numpy as np
 import jax.numpy as jnp
 
 from recovar.em.dense_single_volume import iteration_loop
+from recovar.em.dense_single_volume import k_class
 from recovar.em.dense_single_volume.batch_planning import _estimate_relion_em_batch_sizes
 from recovar.em.dense_single_volume.firstiter_cc import (
     _safe_dense_k_class_rotation_block_size,
@@ -11,6 +12,31 @@ from recovar.em.dense_single_volume.firstiter_cc import (
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, make_relion_stats
 from recovar.em.dense_single_volume.k_class import KClassEMResult
+
+
+def test_firstiter_winner_take_all_assembly_reports_unit_pmax_across_score_normalizations():
+    """RELION reports Pmax=1 after firstiter-CC binarizes the winning weight."""
+    per_class_stats = (
+        make_relion_stats(
+            log_evidence_per_image=np.array([1_000.0], dtype=np.float32),
+            best_log_score_per_image=np.array([-1_000.0], dtype=np.float32),
+            max_posterior_per_image=np.ones(1, dtype=np.float32),
+            rotation_posterior_sums=np.ones(1, dtype=np.float32),
+        ),
+    )
+
+    result = k_class._assemble_result(
+        class_log_evidence=np.array([[1_000.0]], dtype=np.float64),
+        new_means=None,
+        Ft_y=[jnp.zeros(1, dtype=jnp.complex64)],
+        Ft_ctf=[jnp.zeros(1, dtype=jnp.float32)],
+        per_class_hard_assignments=np.zeros((1, 1), dtype=np.int32),
+        per_class_stats=per_class_stats,
+        noise_stats=None,
+        firstiter_winner_take_all=True,
+    )
+
+    np.testing.assert_array_equal(np.asarray(result.stats.max_posterior_per_image), np.ones(1))
 
 
 def test_firstiter_cc_budget_preserves_256_k4_completion_batch_size():

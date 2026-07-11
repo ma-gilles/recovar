@@ -1102,6 +1102,7 @@ def _assemble_result(
     per_class_best_pose_rotation_ids=None,
     profile_summary: dict | None = None,
     class_posterior_sums_override=None,
+    firstiter_winner_take_all: bool = False,
     host_accumulators: bool = False,
     mstep_full_half_axis: int | None = None,
     mstep_accumulator_shape: tuple[int, int, int] | None = None,
@@ -1139,10 +1140,17 @@ def _assemble_result(
     image_indices = np.arange(class_assignments.shape[0])
     pose_assignments = np.asarray(per_class_hard_assignments)[class_assignments, image_indices]
     global_best_scores = np.max(best_scores, axis=0)
-    finite_joint_best = np.isfinite(global_best_scores) & np.isfinite(global_log_evidence)
     joint_pmax = np.zeros_like(global_best_scores, dtype=np.float64)
-    joint_log_pmax = global_best_scores[finite_joint_best] - global_log_evidence[finite_joint_best]
-    joint_pmax[finite_joint_best] = np.exp(np.minimum(joint_log_pmax, 0.0))
+    if firstiter_winner_take_all:
+        # RELION binarizes the firstiter-CC weights after each pass, so every
+        # valid image has Pmax=1. The coarse class log-evidence and fine-pass
+        # best scores above come from different score surfaces and cannot be
+        # subtracted to reconstruct this probability.
+        joint_pmax[np.isfinite(global_best_scores)] = 1.0
+    else:
+        finite_joint_best = np.isfinite(global_best_scores) & np.isfinite(global_log_evidence)
+        joint_log_pmax = global_best_scores[finite_joint_best] - global_log_evidence[finite_joint_best]
+        joint_pmax[finite_joint_best] = np.exp(np.minimum(joint_log_pmax, 0.0))
     # Pmax is a probability; clip tiny numerical overshoots or inconsistent
     # synthetic fixtures while preserving all valid joint posterior values.
     joint_pmax = np.clip(joint_pmax, 0.0, 1.0)
@@ -1681,6 +1689,7 @@ def _run_firstiter_global_winner_subset_pass2(
         per_class_best_pose_translations=per_class_best_pose_translations,
         per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
         class_posterior_sums_override=np.asarray(subset_counts, dtype=np.float64),
+        firstiter_winner_take_all=True,
         profile_summary={"firstiter_subset_pass2_s": np.float64(time.time() - t0)},
     )
 
@@ -1880,6 +1889,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         per_class_best_pose_translations=per_class_best_pose_translations,
         per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
         class_posterior_sums_override=np.asarray(subset_counts, dtype=np.float64),
+        firstiter_winner_take_all=True,
         profile_summary={"sparse_firstiter_subset_pass2_s": np.float64(time.time() - t0)},
         host_accumulators=True,
         mstep_full_half_axis=0 if common["relion_x_half_mstep"] else None,

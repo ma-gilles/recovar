@@ -962,10 +962,9 @@ particle Pmax comparison was much weaker: correlation `0.405970`, mean
 absolute gap `0.178171`, although poses and translations remained close.
 
 An iteration scan localized the gap to iteration 2, before local search:
-Pmax correlation `0.348878` and mean absolute gap `0.187896`.  Iteration 1 is
-intentionally not a Bayesian parity target because RELION `--firstiter_cc`
-hard-sets Pmax to 1 while RECOVAR does not emulate that winner-take-all
-artifact.
+Pmax correlation `0.348878` and mean absolute gap `0.187896`.  The original
+interpretation that RECOVAR did not emulate RELION's iter-1 winner-take-all
+path was superseded by the result-assembly audit below.
 
 A fixed-state replay then selected the two worst free-trajectory particles
 from each half-set (`37899,43649,58806,78500`) and replayed RELION it001 to
@@ -994,6 +993,38 @@ This falsifies the late fused/split score kernel and pass-2 arithmetic as the
 cause of the large free-trajectory Pmax gap.  A separate fused-vs-split dump
 for 178,176 identical candidates had maximum score difference `4.88e-4`,
 maximum posterior difference `2.75e-5`, and identical best pose/translation.
-Do not add RELION's iter-1 CC hard-Pmax artifact merely to improve the
-free-trajectory Pmax ledger.  Use fixed-state replay for arithmetic-level
-posterior claims and map/pose/GT metrics for free-trajectory quality claims.
+Use fixed-state replay for arithmetic-level posterior claims and map/pose/GT
+metrics for free-trajectory quality claims.
+
+## 2026-07-11 K=1 Firstiter-CC Pmax Assembly Bug
+
+Two independent source audits and the recorded 100k run showed that RECOVAR
+already executed normalized-CC scoring, hard-winner reconstruction, and the
+best-coarse winner-subset pass-2 path.  However, top-level K-class result
+assembly combined coarse-pass log evidence with fine-pass best scores and
+recomputed `Pmax = exp(fine_best - coarse_logZ)`.  Those values are from
+different score surfaces, so the 100k strict run produced iter-1 Pmax
+min/mean/max `2.79e-7 / 2.03e-6 / 1.46e-5` and logged `ave_Pmax=0.0000`.
+RELION's corresponding model STAR reports exactly `1.000000` because its
+firstiter-CC path binarizes the winning weight.
+
+The fix adds an explicit firstiter winner-take-all contract to
+`k_class._assemble_result` and sets Pmax to one for every valid fine-pass
+winner.  It changes only reported state; the existing fine-pass `Ft_y` and
+`Ft_CTF` accumulators already passed through unchanged.  Therefore this fixes
+the earliest proven trajectory mismatch in Pmax scheduling/convergence but
+does not by itself prove that iter-1 reconstruction state caused all of the
+iter-2 free-trajectory gap.
+
+Regression and validation:
+
+- failing-before/passing-after test:
+  `tests/unit/test_firstiter_cc_batch_budget.py::test_firstiter_winner_take_all_assembly_reports_unit_pmax_across_score_normalizations`
+- full focused file: 11 passed
+- `pixi run test-em-fast-guard`: passed
+- no GPU or Slurm validation yet
+
+The canonical 5k/128 fixture omits `--firstiter_cc` and is not a valid strict
+iter-1 oracle.  Use the complete 3k/128 strict fixture at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_small_stress_relion_20260711_042025_22010/cases/11_small_baseline_3k_g128_white_noise1_bf80`
+for the immediate A/B and generate a pinned strict 5k fixture later.
