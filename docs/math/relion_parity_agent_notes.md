@@ -1072,3 +1072,56 @@ therefore a matched patched-RELION iter-1 raw/downsampled BPref dump, followed
 by coordinate- and shell-level comparison with
 `scripts/compare_iter1_bpref_accum.py`. Do not extend the free trajectory
 until this accumulator boundary is classified.
+
+## 2026-07-11 Iter-1 BPref and Tie-Aware Winner Adjudication
+
+The matched patched-RELION M-step dump ran as Slurm job `10986571` on the
+same H100 node (`della-h21g2`) as the strict RECOVAR A/B. Job `10986554`
+failed before RELION due an MPI-slot allocation mistake and is setup-only.
+The successful run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_firstiter_bpref_dump_20260711_123707`
+and is marked `SAFE_TO_DELETE`. The patched RELION binary SHA-256 is
+`206d6fbb7e3840549ea49adb4154c313dcb7b36a709c902a4969ee6d03cc6a33`.
+Its iter-1 maps match the original d476e6 oracle with correlation `1.0` and
+scaled relative error about `3e-8`; all 3,000 Pmax values match exactly.
+The local RELION changes therefore do not contaminate this oracle boundary.
+
+At all 47,209 logical BPref coordinates per half, the expected
+RELION `(k,i,j)` to RECOVAR `(i,k,j)` mapping ranks first. Median relative
+complex-average errors are `6.74e-5/9.39e-5` for halves 1/2, and median
+weight errors are `2.30e-6/3.23e-6`. Complex-average cosine similarities are
+`0.999939/0.999808`; weight cosine similarities are `0.999985/0.999928`.
+Shell weight ratios are effectively one except the outer `r=28` boundary
+(`0.9982/0.9983`). The larger half-2 error tail coincides with four of the
+five materially different WTA assignments.
+
+Tie-aware score adjudication used jobs `10986838` (matched RELION broad/fine
+tables), `10987192` (five RECOVAR full coarse tables), and `10987411`
+(coherent RELION fine table for original index 2693), all on H100
+`della-h21g2`. Jobs `10986788` and `10987024` were cancelled/failed diagnostic
+setup attempts: the former used original indices instead of RELION's
+micrograph-sorted internal part IDs, and the latter selected a dump hook that
+is bypassed by the joint strict-firstiter coarse scorer. Their outputs are not
+scientific evidence. The complete artifact root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_firstiter_tie_scores_20260711_124711`
+and is marked `SAFE_TO_DELETE`.
+
+For original indices `431,1087,1280,1794,2693`, all 1,069,056 coarse
+candidates match one-to-one. RECOVAR-vs-RELION centered score p95 gaps are
+`6.98e-5` to `8.60e-5`, and maximum gaps are `1.71e-4` to `2.08e-4`.
+Coarse winners are identical for 431 and 2693. The other three winner flips
+are genuine near ties: RELION's preference is `2.41e-5` to `4.96e-5`, while
+RECOVAR's opposite preference is `2.26e-6` to `1.38e-5`. Particle 431's
+32-candidate fine surfaces correlate `0.99999961`; its opposite winner
+preferences are `7.54e-6` and `1.45e-5`. Particle 2693's fine surfaces
+correlate `0.99999972`, with centered p95/max gaps `5.61e-5/6.24e-5` and
+opposite preferences `4.83e-6/2.87e-5`.
+
+Thus every iter-1 discrete difference is explained by underlying score arrays
+inside the established GPU numerical band. This satisfies the user's
+tie-aware decision contract; it does not change or waive the standalone
+`0.9995` strict map-correlation gate. The iter-1 map residual is a hard-WTA
+amplification of five qualified ties plus arithmetic-level scatter tails, not
+an unexplained support, coordinate, score, or accumulator bug. Continue with
+the repaired strict free trajectory and require convergence/finalization to
+match exactly.

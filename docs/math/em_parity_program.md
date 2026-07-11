@@ -142,16 +142,24 @@ band, but the strict iter-1 merged map correlation remains `0.995764`, below
 the K=1 gate. The active hypothesis is that the first material residual is
 already present in the iter-1 reconstruction accumulators.
 
-Run the patched RELION oracle for exactly one iteration on the identical
-fixture/seed with raw M-step dumping enabled. Compare each half's saved
-RECOVAR `Ft_y`/`Ft_ctf` against RELION BPref at three levels: raw layout,
-downsampled coordinates after the established frame conversion, and shell
-sums. Scan coordinate mappings before interpreting a complex-data mismatch.
-If weights agree but complex averages do not, bisect reconstruction operands,
-support membership, and winner contributions on the earliest differing
-particle. If both accumulators agree, move downstream to half joining,
-`updateSSNRarrays`, reconstruction, and firstiter low-pass. Do not run a
-longer free trajectory until this boundary is classified.
+The iter-1 accumulator boundary is classified. BPref complex averages and
+weights agree at arithmetic level for typical coordinates, with small outer
+shell/error tails. All five materially different winners have complete
+coarse score comparisons, and both same-parent fine flips have coherent fine
+comparisons. Every flip is a demonstrated numerical tie; no unexplained
+support, frame, score, or accumulator mismatch remains. The iter-1 map still
+misses the standalone correlation gate, so retain that result explicitly
+rather than calling it a strict map pass.
+
+Next run the repaired strict trajectory freely from RELION iter 0 through the
+oracle's ten numbered iterations and final all-data path. Compare every state
+boundary, not only the final map. Convergence iteration and finalization must
+match exactly. Classify any newly material Pmax/map drift by moving one fixed
+RELION state boundary at a time; reuse the iter-1 tie evidence instead of
+reopening already-qualified WTA flips. If the trajectory reaches the same
+convergence/final path with stable arithmetic-level fixed-state controls,
+advance to additional K=1 seeds/stress cells while retaining the iter-1 map
+gate as an explicit unresolved policy/gate decision.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
