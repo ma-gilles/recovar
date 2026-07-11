@@ -77,6 +77,16 @@ def _optional_recovar_array(recovar, key, shape, *, fill_value=np.nan, dtype=np.
     return np.full(shape, fill_value, dtype=dtype)
 
 
+def _scalar_or_default(mapping, key, default, *, dtype=np.float64):
+    value = mapping.get(key)
+    if value is None:
+        return np.asarray(default, dtype=dtype).reshape(()).item()
+    arr = np.asarray(value, dtype=dtype).reshape(-1)
+    if arr.size == 0:
+        return np.asarray(default, dtype=dtype).reshape(()).item()
+    return arr[0].item()
+
+
 def _probability_summary_from_probs(probs, topk=(1, 2, 5, 10)):
     probs = _normalize_probs(probs)
     sorted_probs = np.sort(probs)[::-1]
@@ -267,21 +277,34 @@ def summarize_relion_operands(relion_npz, topk=(1, 2, 5, 10)):
             "stored_pmax": pmax_stored,
             "pmax_from_raw": pmax_from_raw,
             "pmax_semantics_gap": float(pmax_stored - pmax_from_raw),
-            "nr_dir": int(np.asarray(relion.get("header_nr_dir", 0)).reshape(())),
-            "nr_psi": int(np.asarray(relion.get("header_nr_psi", 0)).reshape(())),
-            "nr_trans": int(np.asarray(relion.get("header_nr_trans", 0)).reshape(())),
-            "nr_oversampled_rot": int(np.asarray(relion.get("header_nr_oversampled_rot", 0)).reshape(())),
-            "nr_oversampled_trans": int(np.asarray(relion.get("header_nr_oversampled_trans", 0)).reshape(())),
-            "current_size": int(np.asarray(relion.get("header_current_size", 0)).reshape(())),
-            "ori_size": int(np.asarray(relion.get("header_ori_size", 0)).reshape(())),
-            "adaptive_fraction": float(np.asarray(relion.get("adaptive_fraction", np.array(np.nan))).reshape(())),
-            "maximum_significants": int(np.asarray(relion.get("maximum_significants", np.array(-1))).reshape(())),
+            "nr_dir": int(_scalar_or_default(relion, "header_nr_dir", 0, dtype=np.int64)),
+            "nr_psi": int(_scalar_or_default(relion, "header_nr_psi", 0, dtype=np.int64)),
+            "nr_trans": int(_scalar_or_default(relion, "header_nr_trans", 0, dtype=np.int64)),
+            "nr_oversampled_rot": int(_scalar_or_default(relion, "header_nr_oversampled_rot", 0, dtype=np.int64)),
+            "nr_oversampled_trans": int(
+                _scalar_or_default(relion, "header_nr_oversampled_trans", 0, dtype=np.int64)
+            ),
+            "current_size": int(_scalar_or_default(relion, "header_current_size", 0, dtype=np.int64)),
+            "ori_size": int(_scalar_or_default(relion, "header_ori_size", 0, dtype=np.int64)),
+            "adaptive_fraction": float(_scalar_or_default(relion, "adaptive_fraction", np.nan)),
+            "maximum_significants": int(_scalar_or_default(relion, "maximum_significants", -1, dtype=np.int64)),
             "denominator_count": int(np.count_nonzero(denom_mask)),
             "fine_threshold_count": int(np.count_nonzero(fine_threshold_mask)),
             "reconstruction_count": int(np.count_nonzero(reconstruction_mask)),
-            "candidate_threshold_idx": int(np.asarray(relion.get("candidate_threshold_idx", np.array(0))).reshape(())),
-            "candidate_threshold_count": int(np.asarray(relion.get("candidate_threshold_count", np.array(np.count_nonzero(fine_threshold_mask)))).reshape(())),
-            "candidate_denominator_count": int(np.asarray(relion.get("candidate_denominator_count", np.array(raw_weights.size))).reshape(())),
+            "candidate_threshold_idx": int(
+                _scalar_or_default(relion, "candidate_threshold_idx", 0, dtype=np.int64)
+            ),
+            "candidate_threshold_count": int(
+                _scalar_or_default(
+                    relion,
+                    "candidate_threshold_count",
+                    np.count_nonzero(fine_threshold_mask),
+                    dtype=np.int64,
+                )
+            ),
+            "candidate_denominator_count": int(
+                _scalar_or_default(relion, "candidate_denominator_count", raw_weights.size, dtype=np.int64)
+            ),
             "normalized_weight": normalized_weight,
             "cumulative_fraction": cumulative_fraction,
             "sorted_rank": sorted_rank,
@@ -414,10 +437,37 @@ def _map_relion_translation_indices(relion, recovar):
     recovar_translations = np.asarray(recovar["translations"], dtype=np.float64).reshape(-1, 2)
     relion_tx = np.asarray(relion["translations_x"], dtype=np.float64).reshape(-1)
     relion_ty = np.asarray(relion["translations_y"], dtype=np.float64).reshape(-1)
+    has_candidate_translation = "candidate_translation_x" in relion and "candidate_translation_y" in relion
+
+    if has_candidate_translation:
+        relion_candidate_coords = np.column_stack(
+            [
+                np.asarray(relion["candidate_translation_x"], dtype=np.float64).reshape(-1),
+                np.asarray(relion["candidate_translation_y"], dtype=np.float64).reshape(-1),
+            ]
+        )
+        candidate_tolerance = _translation_snap_tolerance(recovar_translations)
+        recovar_trans_idx = np.empty(relion_candidate_coords.shape[0], dtype=np.int64)
+        max_candidate_error = 0.0
+        for idx, coord in enumerate(relion_candidate_coords):
+            sqdist = np.sum((recovar_translations - coord[None, :]) ** 2, axis=1)
+            best = int(np.argmin(sqdist))
+            recovar_trans_idx[idx] = best
+            max_candidate_error = max(max_candidate_error, float(np.sqrt(sqdist[best])))
+        if max_candidate_error > candidate_tolerance:
+            raise ValueError(
+                f"RELION candidate->RECOVAR translation mapping error too large: {max_candidate_error:.6f}",
+            )
+        return (
+            relion_trans_idx,
+            relion_coarse_trans_idx,
+            relion_candidate_coords[:, 0],
+            relion_candidate_coords[:, 1],
+            recovar_trans_idx,
+        )
 
     scale_x, shift_x = _fit_sorted_axis_affine(relion_tx, recovar_translations[:, 0])
     scale_y, shift_y = _fit_sorted_axis_affine(relion_ty, recovar_translations[:, 1])
-    candidate_tolerance = _translation_snap_tolerance(recovar_translations)
     relion_coarse_coords = np.column_stack(
         [
             scale_x * relion_tx + shift_x,
@@ -433,33 +483,13 @@ def _map_relion_translation_indices(relion, recovar):
         coarse_to_recovar[idx] = best
         max_mapping_error = max(max_mapping_error, float(np.sqrt(sqdist[best])))
 
-    has_candidate_translation = "candidate_translation_x" in relion and "candidate_translation_y" in relion
-    if (not has_candidate_translation) and max_mapping_error > 1e-3:
+    if max_mapping_error > 1e-3:
         raise ValueError(
             f"RELION->RECOVAR translation mapping error too large: {max_mapping_error:.6f}",
         )
 
-    if has_candidate_translation:
-        relion_candidate_coords = np.column_stack(
-            [
-                np.asarray(relion["candidate_translation_x"], dtype=np.float64).reshape(-1),
-                np.asarray(relion["candidate_translation_y"], dtype=np.float64).reshape(-1),
-            ]
-        )
-        recovar_trans_idx = np.empty(relion_candidate_coords.shape[0], dtype=np.int64)
-        max_candidate_error = 0.0
-        for idx, coord in enumerate(relion_candidate_coords):
-            sqdist = np.sum((recovar_translations - coord[None, :]) ** 2, axis=1)
-            best = int(np.argmin(sqdist))
-            recovar_trans_idx[idx] = best
-            max_candidate_error = max(max_candidate_error, float(np.sqrt(sqdist[best])))
-        if max_candidate_error > candidate_tolerance:
-            raise ValueError(
-                f"RELION candidate->RECOVAR translation mapping error too large: {max_candidate_error:.6f}",
-            )
-    else:
-        relion_candidate_coords = relion_coarse_coords[relion_coarse_trans_idx]
-        recovar_trans_idx = coarse_to_recovar[relion_coarse_trans_idx]
+    relion_candidate_coords = relion_coarse_coords[relion_coarse_trans_idx]
+    recovar_trans_idx = coarse_to_recovar[relion_coarse_trans_idx]
 
     return (
         relion_trans_idx,
@@ -497,11 +527,13 @@ def build_relion_recovar_candidate_mapping(relion_npz, recovar_npz, image_positi
 
     pixel_pos = {int(value): idx for idx, value in enumerate(relion_pixel)}
     psi_pos = {int(value): idx for idx, value in enumerate(relion_psi)}
-    recovar_local_rot_id = np.array(
-        [pixel_pos[int(pixel)] * npsi + psi_pos[int(psi)] for pixel, psi in zip(recovar_pixel, recovar_psi)],
-        dtype=np.int64,
-    )
-    rot_id_to_slot = {int(rot_id): idx for idx, rot_id in enumerate(recovar_local_rot_id)}
+    recovar_local_rot_id = np.full(recovar_pixel.shape, -1, dtype=np.int64)
+    for idx, (pixel, psi) in enumerate(zip(recovar_pixel, recovar_psi)):
+        pixel_key = int(pixel)
+        psi_key = int(psi)
+        if pixel_key in pixel_pos and psi_key in psi_pos:
+            recovar_local_rot_id[idx] = pixel_pos[pixel_key] * npsi + psi_pos[psi_key]
+    rot_id_to_slot = {int(rot_id): idx for idx, rot_id in enumerate(recovar_local_rot_id) if int(rot_id) >= 0}
 
     relion_rot_id = np.asarray(relion["acc_rot_id"], dtype=np.int64).reshape(-1)
     (
@@ -511,6 +543,15 @@ def build_relion_recovar_candidate_mapping(relion_npz, recovar_npz, image_positi
         relion_translation_y,
         recovar_trans_idx,
     ) = _map_relion_translation_indices(relion, recovar)
+    missing_rot_ids = sorted({int(rot_id) for rot_id in relion_rot_id if int(rot_id) not in rot_id_to_slot})
+    if missing_rot_ids:
+        missing_pixels = sorted(set(relion_pixel) - set(recovar_pixel))
+        missing_psi = sorted(set(relion_psi) - set(recovar_psi))
+        raise KeyError(
+            "RECOVAR local support is missing RELION rotation ids; "
+            f"missing_relion_rot_ids={missing_rot_ids[:12]}, "
+            f"missing_pixels={missing_pixels[:12]}, missing_psi={missing_psi[:12]}"
+        )
     recovar_rot_slot = np.array([rot_id_to_slot[int(rot_id)] for rot_id in relion_rot_id], dtype=np.int64)
     score_shape = np.asarray(recovar["pass2_scores_total"][image_position]).shape
     denominator_mask = np.zeros(score_shape, dtype=bool)

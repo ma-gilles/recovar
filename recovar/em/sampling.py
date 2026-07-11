@@ -722,6 +722,34 @@ def get_healpix_children(parent_pixels, parent_nside_level):
     return hp.nest2ring(nside_child, children_nested)
 
 
+@functools.lru_cache(maxsize=None)
+def _relion_nested_child_offsets(oversampling_order: int) -> np.ndarray:
+    """Fine NEST offsets inside one parent pixel in RELION's enumeration order.
+
+    HEALPix NEST child pixels are bit-interleaved ``x/y`` offsets. Repeated
+    ``4 * parent + child`` subdivision yields depth-first offset order; RELION's
+    ``HealPixOver`` instead scans the fine ``xyf`` cell with ``y`` as the outer
+    loop and ``x`` as the inner loop. The two orders are identical for one
+    oversampling level but differ for two or more levels.
+    """
+    oversampling_order = int(oversampling_order)
+    if oversampling_order < 0:
+        raise ValueError("oversampling_order must be non-negative")
+
+    factor = 1 << oversampling_order
+    offsets = np.empty(factor * factor, dtype=np.int64)
+    pos = 0
+    for y in range(factor):
+        for x in range(factor):
+            nested = 0
+            for bit in range(oversampling_order):
+                nested |= ((x >> bit) & 1) << (2 * bit)
+                nested |= ((y >> bit) & 1) << (2 * bit + 1)
+            offsets[pos] = nested
+            pos += 1
+    return offsets
+
+
 def get_oversampled_rotation_grid(parent_pixels, parent_nside_level, oversampling_order=1):
     """Generate rotation matrices for HEALPix children of the given parent pixels.
 
@@ -742,10 +770,15 @@ def get_oversampled_rotation_grid(parent_pixels, parent_nside_level, oversamplin
     current_pixels = parent_pixels.copy()
     parent_map = np.arange(len(parent_pixels))
 
-    for level in range(oversampling_order):
-        children = get_healpix_children(current_pixels, parent_nside_level + level)
-        parent_map = np.repeat(parent_map, 4)
-        current_pixels = children
+    if int(oversampling_order) > 0:
+        nside_parent = 2**parent_nside_level
+        parent_nested = hp.ring2nest(nside_parent, current_pixels)
+        offsets = _relion_nested_child_offsets(int(oversampling_order))
+        current_pixels = hp.nest2ring(
+            2 ** (parent_nside_level + int(oversampling_order)),
+            parent_nested[:, None] * (4 ** int(oversampling_order)) + offsets[None, :],
+        ).reshape(-1)
+        parent_map = np.repeat(parent_map, offsets.size)
 
     fine_nside_level = parent_nside_level + oversampling_order
     fine_nside = 2**fine_nside_level
@@ -835,14 +868,15 @@ def get_oversampled_rotation_grid_from_samples(
         parent_pixels = parent_rotation_indices // coarse_n_in_planes
         parent_psi = parent_rotation_indices % coarse_n_in_planes
 
+    oversampling_order = int(oversampling_order)
     current_pixels = parent_pixels.copy()
     parent_map = np.arange(len(parent_rotation_indices), dtype=np.int64)
-    for level in range(oversampling_order):
-        del level
-        current_pixels = 4 * np.repeat(current_pixels.astype(np.int64, copy=False), 4) + np.tile(
-            np.arange(4, dtype=np.int64), len(current_pixels)
-        )
-        parent_map = np.repeat(parent_map, 4)
+    if oversampling_order > 0:
+        offsets = _relion_nested_child_offsets(oversampling_order)
+        current_pixels = (
+            current_pixels.astype(np.int64, copy=False)[:, None] * (4**oversampling_order) + offsets[None, :]
+        ).reshape(-1)
+        parent_map = np.repeat(parent_map, offsets.size)
 
     psi_factor = 2**oversampling_order
     coarse_psi_step = 2.0 * np.pi / coarse_n_in_planes

@@ -156,10 +156,12 @@ def initial_low_pass_filter_references(
     ori_size: int,
     pixel_size: float,
     ini_high_ang: float,
+    filter_edgewidth: float = WIDTH_FMASK_EDGE,
 ) -> np.ndarray:
     """``initialLowPassFilterReferences`` (ml_optimiser.cpp:3336): cosine-taper from r=radius outward to r=radius_p."""
-    radius = ori_size * pixel_size / ini_high_ang - WIDTH_FMASK_EDGE / 2.0
-    radius_p = radius + WIDTH_FMASK_EDGE
+    edge_width = float(filter_edgewidth)
+    radius = ori_size * pixel_size / ini_high_ang - edge_width / 2.0
+    radius_p = radius + edge_width
     N = Iref.shape[1]
     kz = np.fft.fftfreq(N, d=1.0) * N
     kx = np.arange(N // 2 + 1, dtype=np.float64)
@@ -167,8 +169,8 @@ def initial_low_pass_filter_references(
     mask = np.zeros_like(r)
     mask[r < radius] = 1.0
     edge = (r >= radius) & (r <= radius_p)
-    if WIDTH_FMASK_EDGE > 0:
-        mask[edge] = 0.5 - 0.5 * np.cos(np.pi * (radius_p - r[edge]) / WIDTH_FMASK_EDGE)
+    if edge_width > 0:
+        mask[edge] = 0.5 - 0.5 * np.cos(np.pi * (radius_p - r[edge]) / edge_width)
 
     out = np.zeros_like(Iref)
     for k in range(Iref.shape[0]):

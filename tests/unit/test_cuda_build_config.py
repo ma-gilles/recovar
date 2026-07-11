@@ -261,6 +261,18 @@ def test_cuda_available_records_load_error_for_followup_failure_message(monkeypa
     assert "dlopen failed" in str(cb.cuda_unavailable_error())
 
 
+def test_cuda_available_accepts_cuda_platform_name(monkeypatch):
+    import recovar.cuda_backproject as cb
+
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cb, "_cuda_ok", None)
+    monkeypatch.setattr(cb, "_auto_build_error", None)
+    monkeypatch.setattr(cb.jax, "devices", lambda: [types.SimpleNamespace(platform="cuda")])
+    monkeypatch.setattr(cb, "_ensure_ffi", lambda: None)
+
+    assert cb.cuda_available() is True
+
+
 def test_slicing_uses_custom_cuda_by_default_on_gpu(monkeypatch):
     import recovar.core.slicing as core_slicing
     import recovar.cuda_backproject as cb

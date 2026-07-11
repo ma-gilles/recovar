@@ -79,7 +79,10 @@ def clamp_relion_coarse_image_size(coarse_size, current_size, ori_size):
     ``image_coarse_size = XMIPP_MIN(image_current_size, image_coarse_size)``
     update.
     """
-    coarse_size = quantize_current_size(int(coarse_size), ori_size=ori_size)
+    coarse_size = int(coarse_size)
+    if coarse_size % 2 != 0:
+        coarse_size += 1
+    coarse_size = max(8, min(coarse_size, int(ori_size)))
     if current_size is None:
         return coarse_size
     return min(int(current_size), coarse_size)

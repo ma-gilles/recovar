@@ -23,6 +23,7 @@ from recovar.relion_bind._relion_bind_core import (
     get_coarse_orientations,
     get_downsampled_average,
     project_volume,
+    reconstruct_from_bpref,
 )
 
 
@@ -61,9 +62,14 @@ def _project_at_orientations(vol, orientations, N, pf=2):
 
 
 def _relion_pad_size(ori_size, padding_factor):
-    """RELION BackProjector pad_size: 2*ROUND(pf*r_max)+3."""
+    """RELION BackProjector pad_size: 2*int(pf*r_max+0.5)+3."""
     r_max = ori_size // 2
-    return 2 * round(padding_factor * r_max) + 3
+    return 2 * int(padding_factor * r_max + 0.5) + 3
+
+
+def _relion_current_pad_size(current_size, padding_factor):
+    r_max = current_size // 2
+    return 2 * int(padding_factor * r_max + 0.5) + 3
 
 
 class TestBackprojectorDeterminism:
@@ -121,6 +127,38 @@ class TestBackprojectorDeterminism:
 
         assert np.max(np.abs(recon1 - recon2)) == 0.0, "Reconstruction not bit-exact"
 
+    def test_reconstruct_from_bpref_deterministic(self):
+        """Injected BPref data/weight should route through RELION deterministically."""
+        N = 16
+        pf = 2
+        pad = _relion_pad_size(N, pf)
+        rng = np.random.default_rng(7)
+        data = (rng.standard_normal((pad, pad, pad // 2 + 1)) + 1j * rng.standard_normal((pad, pad, pad // 2 + 1))).astype(
+            np.complex128
+        )
+        weight = rng.uniform(0.1, 2.0, size=data.shape).astype(np.float64)
+        tau2 = np.ones(N // 2 + 1, dtype=np.float64) * 1e3
+
+        kwargs = dict(
+            ori_size=N,
+            padding_factor=pf,
+            interpolator=TRILINEAR,
+            do_map=True,
+            max_iter_preweight=10,
+            tau2_fudge=1.0,
+            skip_gridding=True,
+            current_size=N,
+            r_max=N // 2,
+            normalise=1.0,
+            minres_map=5.0,
+        )
+        recon1 = reconstruct_from_bpref(data, weight, tau2, **kwargs)
+        recon2 = reconstruct_from_bpref(data, weight, tau2, **kwargs)
+
+        assert recon1.shape == (N, N, N)
+        assert np.all(np.isfinite(recon1))
+        assert np.max(np.abs(recon1 - recon2)) == 0.0, "Injected BPref reconstruction not bit-exact"
+
 
 class TestBackprojectorDataShape:
     """Verify accumulator shapes match RELION's pad_size formula."""
@@ -140,6 +178,30 @@ class TestBackprojectorDataShape:
         assert weight.shape == data.shape
         assert np.sum(np.abs(data)) > 0
         assert np.sum(weight) > 0
+
+    def test_current_size_pad_size(self):
+        N = 32
+        current_size = 12
+        rng = np.random.default_rng(123)
+        images = (
+            rng.standard_normal((1, N, N // 2 + 1))
+            + 1j * rng.standard_normal((1, N, N // 2 + 1))
+        ).astype(np.complex128)
+        rotations = np.eye(3, dtype=np.float64)[None, :, :]
+        empty_w = np.zeros((0,), dtype=np.float64)
+
+        data, weight = get_backprojector_data(
+            images,
+            rotations,
+            empty_w,
+            ori_size=N,
+            padding_factor=2,
+            current_size=current_size,
+        )
+
+        expected_pad = _relion_current_pad_size(current_size, 2)
+        assert data.shape == (expected_pad, expected_pad, expected_pad // 2 + 1)
+        assert weight.shape == data.shape
 
 
 class TestDownsampledAverage:

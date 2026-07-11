@@ -16,6 +16,8 @@ import numpy as np
 from recovar.utils.nvtx_shim import nvtx
 
 from .em_engine import run_em
+from .helpers.half_volume_mstep import relion_backprojector_volume_shape
+from .helpers.significance import ComplementSignificantSampleIndices, significant_sample_count
 from .helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
 from .local_em_engine import run_local_em_exact
 from .local_layout import LocalHypothesisLayout
@@ -23,6 +25,7 @@ from .local_layout import LocalHypothesisLayout
 logger = logging.getLogger(__name__)
 NVTX_DOMAIN_EM = "recovar_em"
 _RUN_EM_ALLOWED_KWARGS = frozenset(inspect.signature(run_em).parameters)
+_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 
 
 class KClassEMResult(NamedTuple):
@@ -47,6 +50,10 @@ class KClassEMResult(NamedTuple):
     best_pose_translations: jax.Array | None = None
     best_pose_rotation_ids: jax.Array | None = None
     profile_summary: dict | None = None
+    significant_counts: jax.Array | None = None
+    class_mstep_posterior_sums: jax.Array | None = None
+    mstep_full_half_axis: int | None = None
+    mstep_accumulator_shape: tuple[int, int, int] | None = None
 
 
 class _DenseKClassScoreProbeResult(NamedTuple):
@@ -68,6 +75,246 @@ def _logsumexp_np(values: np.ndarray, axis: int) -> np.ndarray:
     with np.errstate(divide="ignore"):
         log_sum = np.log(sum_exp)
     return np.squeeze(max_value, axis=axis) + log_sum
+
+
+def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return bool(default)
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _k_class_fused_relion_fine_mstep_prune_mode_override(*, relion_fine_mstep_prune: bool) -> str | None:
+    """Default K-class sparse pass-2 to joint pruning, unless explicitly overridden."""
+
+    if not bool(relion_fine_mstep_prune):
+        return None
+    if _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV in os.environ:
+        return None
+    return "joint"
+
+
+def _env_value_or_none(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value if value else None
+
+
+def _use_fused_sparse_k_class_pass2(n_classes: int) -> bool:
+    # Keep K=1 on the single-class sparse path by default.  That path already
+    # chunks broad full-support pass-2 work by rotation and is the safer RELION
+    # parity route for first-iteration/default-GUI refinements.  Multi-class
+    # runs still default to the fused path, and K=1 fused remains available for
+    # explicit experiments via RECOVAR_SPARSE_KCLASS_FUSED=1.
+    return _env_flag_enabled("RECOVAR_SPARSE_KCLASS_FUSED", default=int(n_classes) > 1)
+
+
+def _dense_pass2_rotation_fraction_threshold(n_classes: int) -> float | None:
+    if int(n_classes) <= 1:
+        return None
+    value = _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION")
+    if value is None:
+        return 0.50
+    threshold = float(value)
+    if not np.isfinite(threshold):
+        raise ValueError("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION must be finite")
+    if threshold <= 0.0:
+        return None
+    return threshold
+
+
+def _dense_pass2_mean_rotation_fraction_threshold(n_classes: int) -> float | None:
+    if int(n_classes) <= 1:
+        return None
+    value = _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION")
+    if value is None:
+        legacy_value = _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION")
+        if legacy_value is not None and float(legacy_value) <= 0.0:
+            return None
+        return 0.15
+    threshold = float(value)
+    if not np.isfinite(threshold):
+        raise ValueError("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION must be finite")
+    if threshold <= 0.0:
+        return None
+    return threshold
+
+
+def _dense_pass2_small_dataset_image_threshold(n_classes: int) -> int | None:
+    if int(n_classes) <= 1:
+        return None
+    value = _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_SMALL_DATASET_IMAGES")
+    if value is None:
+        return 1500
+    threshold = int(value)
+    if threshold <= 0:
+        return None
+    return threshold
+
+
+def _dense_pass2_small_dataset_mean_rotation_fraction_threshold(n_classes: int) -> float | None:
+    if int(n_classes) <= 1:
+        return None
+    value = _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_SMALL_DATASET_MEAN_SUPPORT_FRACTION")
+    if value is None:
+        return 0.10
+    threshold = float(value)
+    if not np.isfinite(threshold):
+        raise ValueError("RECOVAR_K_CLASS_DENSE_PASS2_SMALL_DATASET_MEAN_SUPPORT_FRACTION must be finite")
+    if threshold <= 0.0:
+        return None
+    return threshold
+
+
+def _compact_sparse_pass2_large_dataset_image_threshold(n_classes: int) -> int | None:
+    if int(n_classes) <= 1:
+        return None
+    value = _env_value_or_none("RECOVAR_K_CLASS_COMPACT_SPARSE_PASS2_MIN_IMAGES")
+    if value is None:
+        return 20_000
+    threshold = int(value)
+    if threshold <= 0:
+        return None
+    return threshold
+
+
+def _compact_sparse_pass2_preferred_over_dense(n_classes: int, n_images: int) -> bool:
+    """Return whether large K-class jobs should keep compact sparse pass-2.
+
+    The dense fallback is still useful as an escape hatch and for small jobs,
+    but on the 50k/256 K=4 RELION-parity cases compact-pair sparse pass-2 is
+    faster even when coarse significance leaves broad fine-grid support.
+    Explicit dense-threshold env overrides keep their historical meaning.
+    """
+
+    min_images = _compact_sparse_pass2_large_dataset_image_threshold(n_classes)
+    if min_images is None or int(n_images) < min_images:
+        return False
+    if (
+        _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION") is not None
+        or _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION") is not None
+    ):
+        return False
+    compact_pair_check = _env_flag_enabled("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", default=False)
+    compact_pairs = _env_flag_enabled(
+        "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS",
+        default=not compact_pair_check,
+    )
+    return bool(compact_pairs and not compact_pair_check)
+
+
+def _fine_support_stats(
+    sig_sample_indices_by_class,
+    *,
+    n_rot_coarse: int,
+    n_trans_coarse: int,
+    rot_parent_map: np.ndarray,
+    trans_parent_map: np.ndarray,
+    n_rot_fine: int,
+    n_trans_fine: int,
+) -> dict[str, float]:
+    n_rot_coarse = int(n_rot_coarse)
+    n_trans_coarse = int(n_trans_coarse)
+    n_rot_fine = int(n_rot_fine)
+    n_trans_fine = int(n_trans_fine)
+    if n_rot_coarse <= 0 or n_trans_coarse <= 0 or n_rot_fine <= 0 or n_trans_fine <= 0:
+        raise ValueError("rotation and translation grid sizes must be positive")
+    rot_parent_map_np = np.asarray(rot_parent_map, dtype=np.int64)
+    if rot_parent_map_np.shape != (n_rot_fine,):
+        raise ValueError(
+            f"rot_parent_map must have shape ({n_rot_fine},), got {rot_parent_map_np.shape}",
+        )
+    if np.any(rot_parent_map_np < 0) or int(rot_parent_map_np.max(initial=-1)) >= n_rot_coarse:
+        raise ValueError("rot_parent_map values must be in [0, n_rot_coarse)")
+    trans_parent_map_np = np.asarray(trans_parent_map, dtype=np.int64)
+    if trans_parent_map_np.shape != (n_trans_fine,):
+        raise ValueError(
+            f"trans_parent_map must have shape ({n_trans_fine},), got {trans_parent_map_np.shape}",
+        )
+    if np.any(trans_parent_map_np < 0) or int(trans_parent_map_np.max(initial=-1)) >= n_trans_coarse:
+        raise ValueError("trans_parent_map values must be in [0, n_trans_coarse)")
+    fine_children_per_coarse = np.bincount(rot_parent_map_np, minlength=n_rot_coarse)
+    fine_trans_children_per_coarse = np.bincount(trans_parent_map_np, minlength=n_trans_coarse)
+
+    rotation_counts = []
+    pose_counts = []
+    for samples_by_image in sig_sample_indices_by_class:
+        for samples in samples_by_image:
+            if samples is None:
+                rotation_counts.append(n_rot_fine)
+                pose_counts.append(n_rot_fine * n_trans_fine)
+                continue
+            if isinstance(samples, ComplementSignificantSampleIndices):
+                excluded = np.asarray(samples.excluded_indices, dtype=np.int64).reshape(-1)
+                if excluded.size == 0:
+                    rotation_counts.append(n_rot_fine)
+                    pose_counts.append(n_rot_fine * n_trans_fine)
+                    continue
+                if np.any(excluded < 0) or int(excluded.max(initial=-1)) >= n_rot_coarse * n_trans_coarse:
+                    raise ValueError("excluded sample ids must index the coarse rotation/translation grid")
+                excluded_rot_ids = excluded // n_trans_coarse
+                excluded_trans_ids = excluded % n_trans_coarse
+                excluded_per_rot = np.bincount(excluded_rot_ids, minlength=n_rot_coarse)
+                significant_coarse_rot = np.flatnonzero(excluded_per_rot < n_trans_coarse)
+                excluded_fine_pose_count = int(
+                    np.sum(
+                        fine_children_per_coarse[excluded_rot_ids]
+                        * fine_trans_children_per_coarse[excluded_trans_ids],
+                        dtype=np.int64,
+                    ),
+                )
+                rotation_counts.append(int(fine_children_per_coarse[significant_coarse_rot].sum()))
+                pose_counts.append(int(n_rot_fine * n_trans_fine) - excluded_fine_pose_count)
+                continue
+            sample_ids = np.asarray(samples, dtype=np.int64).ravel()
+            if sample_ids.size == 0:
+                rotation_counts.append(0)
+                pose_counts.append(0)
+                continue
+            sample_ids = np.unique(sample_ids)
+            coarse_rot_ids = sample_ids // n_trans_coarse
+            coarse_trans_ids = sample_ids % n_trans_coarse
+            if np.any(coarse_rot_ids < 0) or int(coarse_rot_ids.max(initial=-1)) >= n_rot_coarse:
+                raise ValueError("significant sample ids must index the coarse rotation/translation grid")
+            rotation_counts.append(int(fine_children_per_coarse[np.unique(coarse_rot_ids)].sum()))
+            pose_counts.append(
+                int(
+                    np.sum(
+                        fine_children_per_coarse[coarse_rot_ids]
+                        * fine_trans_children_per_coarse[coarse_trans_ids],
+                    ),
+                ),
+            )
+
+    rotation_counts_np = np.asarray(rotation_counts, dtype=np.float64)
+    pose_counts_np = np.asarray(pose_counts, dtype=np.float64)
+    if rotation_counts_np.size == 0:
+        rotation_counts_np = np.asarray([0.0], dtype=np.float64)
+        pose_counts_np = np.asarray([0.0], dtype=np.float64)
+    rotation_median = float(np.median(rotation_counts_np))
+    rotation_mean = float(np.mean(rotation_counts_np))
+    rotation_max = float(np.max(rotation_counts_np))
+    pose_median = float(np.median(pose_counts_np))
+    pose_mean = float(np.mean(pose_counts_np))
+    pose_max = float(np.max(pose_counts_np))
+    n_fine_poses = float(n_rot_fine * n_trans_fine)
+    return {
+        "entries": float(rotation_counts_np.size),
+        "rotation_median": rotation_median,
+        "rotation_mean": rotation_mean,
+        "rotation_max": rotation_max,
+        "rotation_median_fraction": rotation_median / float(n_rot_fine),
+        "rotation_mean_fraction": rotation_mean / float(n_rot_fine),
+        "rotation_max_fraction": rotation_max / float(n_rot_fine),
+        "pose_median": pose_median,
+        "pose_mean": pose_mean,
+        "pose_max": pose_max,
+        "pose_median_fraction": pose_median / n_fine_poses,
+        "pose_mean_fraction": pose_mean / n_fine_poses,
+        "pose_max_fraction": pose_max / n_fine_poses,
+    }
 
 
 def _global_reconstruction_probability_thresholds(
@@ -131,6 +378,15 @@ def _as_class_means(means) -> jax.Array:
 def _select_class_value(value, class_index: int, n_classes: int):
     value_array = jnp.asarray(value)
     if value_array.ndim >= 2 and int(value_array.shape[0]) == n_classes:
+        return value_array[class_index]
+    return value
+
+
+def _select_projector_half_for_class(value, class_index: int, n_classes: int):
+    if value is None:
+        return None
+    value_array = jnp.asarray(value)
+    if value_array.ndim >= 4 and int(value_array.shape[0]) == n_classes:
         return value_array[class_index]
     return value
 
@@ -462,6 +718,7 @@ def _run_sparse_k_class_adaptive_pass2(
     class_log_priors,
     accumulate_noise: bool,
     return_best_pose_details: bool,
+    coarse_healpix_order: int | None = None,
     oversampling_order: int,
     random_perturbation: float,
     engine_kwargs: dict,
@@ -472,9 +729,16 @@ def _run_sparse_k_class_adaptive_pass2(
 
     n_classes = int(means_array.shape[0])
     n_rot_coarse = int(coarse_rotations_np.shape[0])
+    n_coarse_trans = int(coarse_translations_np.shape[0])
     n_fine_trans = int(fine_translations_np.shape[0])
-    healpix_order = _infer_healpix_order_from_rotation_count(n_rot_coarse)
+    healpix_order = (
+        int(coarse_healpix_order)
+        if coarse_healpix_order is not None
+        else _infer_healpix_order_from_rotation_count(n_rot_coarse)
+    )
     base_engine_kwargs = dict(engine_kwargs)
+    relion_projector_half_by_class = base_engine_kwargs.get("relion_projector_half")
+    relion_projector_r_max = base_engine_kwargs.get("relion_projector_r_max")
 
     def _class_rotation_prior(class_index: int):
         class_prior = base_engine_kwargs.get("class_rotation_log_prior")
@@ -503,25 +767,42 @@ def _run_sparse_k_class_adaptive_pass2(
         reconstruction_padding_factor=int(base_engine_kwargs.get("reconstruction_padding_factor", 1)),
         image_corrections=base_engine_kwargs.get("image_corrections"),
         scale_corrections=base_engine_kwargs.get("scale_corrections"),
+        group_ids=base_engine_kwargs.get("group_ids"),
         image_pre_shifts=base_engine_kwargs.get("image_pre_shifts"),
         use_float64_scoring=bool(base_engine_kwargs.get("use_float64_scoring", False)),
         translation_prior_centers=base_engine_kwargs.get("translation_prior_centers"),
         do_gridding_correction=bool(base_engine_kwargs.get("do_gridding_correction", False)),
         square_window=bool(base_engine_kwargs.get("square_window", False)),
         relion_half_volume_mstep=bool(base_engine_kwargs.get("relion_half_volume_mstep", False)),
+        relion_x_half_mstep=bool(base_engine_kwargs.get("mstep_relion_x_half", False)),
+        adaptive_fraction=float(base_engine_kwargs.get("adaptive_fraction", 0.999)),
+        relion_fine_mstep_prune=bool(base_engine_kwargs.get("relion_fine_mstep_prune", False)) and n_classes == 1,
         random_perturbation=float(random_perturbation),
         fine_rotations_override=fine_rotations_np,
         fine_rotation_parent_override=rot_parent_map_np,
         fine_translations_override=fine_translations_np,
         fine_translation_parent_override=trans_parent_map_np,
     )
+    mstep_accumulator_shape = (
+        relion_backprojector_volume_shape(
+            experiment_dataset.volume_shape,
+            common["reconstruction_padding_factor"],
+            current_size=common["current_size"],
+        )
+        if common["relion_x_half_mstep"]
+        else None
+    )
 
-    if os.environ.get("RECOVAR_SPARSE_KCLASS_FUSED") == "1":
+    if _use_fused_sparse_k_class_pass2(n_classes):
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
             compute_k_class_pass2_stats_sparse_fused,
         )
 
         fused_t0 = time.time()
+        fused_common = dict(common)
+        fused_common.pop("relion_fine_mstep_prune", None)
+        fused_common["relion_projector_half"] = relion_projector_half_by_class
+        fused_common["relion_projector_r_max"] = relion_projector_r_max
         try:
             fused = compute_k_class_pass2_stats_sparse_fused(
                 experiment_dataset,
@@ -534,7 +815,10 @@ def _run_sparse_k_class_adaptive_pass2(
                     _class_rotation_prior(class_index) for class_index in range(n_classes)
                 ],
                 accumulate_noise=accumulate_noise,
-                **common,
+                relion_fine_mstep_prune_mode=_k_class_fused_relion_fine_mstep_prune_mode_override(
+                    relion_fine_mstep_prune=bool(base_engine_kwargs.get("relion_fine_mstep_prune", False)),
+                ),
+                **fused_common,
             )
         except NotImplementedError as exc:
             logger.info("Sparse fused K-class pass2 unavailable; falling back to 2K-1 sparse path: %s", exc)
@@ -557,16 +841,16 @@ def _run_sparse_k_class_adaptive_pass2(
                 per_class_best_pose_translations=fused.per_class_best_pose_translations,
                 per_class_best_pose_rotation_ids=fused.per_class_best_pose_rotation_ids,
                 profile_summary=fused.profile_summary,
+                class_posterior_sums_override=fused.class_posterior_sums,
                 host_accumulators=True,
+                mstep_full_half_axis=0 if common["relion_x_half_mstep"] else None,
+                mstep_accumulator_shape=mstep_accumulator_shape,
             )
 
     def _support_work_units(samples_by_image) -> int:
         total = 0
         for samples in samples_by_image:
-            if samples is None:
-                total += n_rot_coarse * n_coarse_trans
-            else:
-                total += int(np.asarray(samples).size)
+            total += significant_sample_count(samples, n_rot_coarse * n_coarse_trans)
         return int(total)
 
     class_log_evidence = [None] * n_classes
@@ -601,6 +885,12 @@ def _run_sparse_k_class_adaptive_pass2(
             return_score_log_z_only=True,
             disable_adjoint_y=True,
             disable_adjoint_ctf=True,
+            relion_projector_half=_select_projector_half_for_class(
+                relion_projector_half_by_class,
+                class_index,
+                n_classes,
+            ),
+            relion_projector_r_max=relion_projector_r_max,
             **common,
         )
         log_evidence, score_log_z = output
@@ -656,6 +946,12 @@ def _run_sparse_k_class_adaptive_pass2(
         accumulate_noise=accumulate_noise,
         normalization_other_score_log_z=other_score_log_z,
         return_score_log_z=True,
+        relion_projector_half=_select_projector_half_for_class(
+            relion_projector_half_by_class,
+            last_class_index,
+            n_classes,
+        ),
+        relion_projector_r_max=relion_projector_r_max,
         **common,
     )
     last_stats, last_score_log_z = _store_mstep_output(last_class_index, output, includes_score_log_z=True)
@@ -674,6 +970,12 @@ def _run_sparse_k_class_adaptive_pass2(
             rotation_log_prior=_class_rotation_prior(class_index),
             accumulate_noise=accumulate_noise,
             normalization_log_z=global_score_log_z,
+            relion_projector_half=_select_projector_half_for_class(
+                relion_projector_half_by_class,
+                class_index,
+                n_classes,
+            ),
+            relion_projector_r_max=relion_projector_r_max,
             **common,
         )
         _store_mstep_output(class_index, output)
@@ -706,6 +1008,8 @@ def _run_sparse_k_class_adaptive_pass2(
             "sparse_adaptive_mstep_s": np.float64(mstep_s),
         },
         host_accumulators=True,
+        mstep_full_half_axis=0 if common["relion_x_half_mstep"] else None,
+        mstep_accumulator_shape=mstep_accumulator_shape,
     )
 
 
@@ -728,6 +1032,9 @@ def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None) -> NoiseStats |
         sumw=sum(float(stats.sumw) for stats in noise_stats),
         wsum_noise_a2=_sum_field("wsum_noise_a2"),
         wsum_noise_xa=_sum_field("wsum_noise_xa"),
+        wsum_norm_correction=_sum_field("wsum_norm_correction"),
+        wsum_scale_correction_xa=_sum_field("wsum_scale_correction_xa"),
+        wsum_scale_correction_aa=_sum_field("wsum_scale_correction_aa"),
     )
 
 
@@ -752,7 +1059,10 @@ def _sum_k_class_noise_stats(
     Each per-class ``run_em`` call normalizes posteriors over poses within one
     class and reports ``sumw == n_images``.  RELION normalizes over the joint
     class x pose grid, so ``sum_weight`` is the sum of class responsibilities
-    over images, not ``n_classes * n_images``.
+    over images, not ``n_classes * n_images``.  Newer fused K-class paths
+    already return per-class image-power stats weighted by that same class
+    mass; legacy paths still return raw image power and need total-mass
+    rescaling.
     """
 
     aggregate = _sum_noise_stats(noise_stats)
@@ -766,11 +1076,13 @@ def _sum_k_class_noise_stats(
             "class_posterior_sums and noise_stats disagree on class count: "
             f"{responsibilities.shape[0]} vs {raw_sumw.shape[0]}",
         )
-    image_power = np.zeros_like(np.asarray(aggregate.wsum_img_power, dtype=np.float64))
-    for stats, responsibility, class_sumw in zip(noise_stats, responsibilities, raw_sumw, strict=True):
-        if class_sumw <= 0.0:
-            continue
-        image_power += np.asarray(stats.wsum_img_power, dtype=np.float64) * (responsibility / class_sumw)
+    image_power = np.asarray(aggregate.wsum_img_power, dtype=np.float64)
+    if not np.allclose(raw_sumw, responsibilities, rtol=1e-4, atol=1e-4):
+        image_power = np.zeros_like(image_power)
+        for stats, responsibility, class_sumw in zip(noise_stats, responsibilities, raw_sumw, strict=True):
+            if class_sumw <= 0.0:
+                continue
+            image_power += np.asarray(stats.wsum_img_power, dtype=np.float64) * (responsibility / class_sumw)
     return aggregate._replace(
         wsum_img_power=jnp.asarray(image_power, dtype=aggregate.wsum_img_power.dtype), sumw=relion_sumw
     )
@@ -791,6 +1103,8 @@ def _assemble_result(
     profile_summary: dict | None = None,
     class_posterior_sums_override=None,
     host_accumulators: bool = False,
+    mstep_full_half_axis: int | None = None,
+    mstep_accumulator_shape: tuple[int, int, int] | None = None,
 ) -> KClassEMResult:
     global_log_evidence = _logsumexp_np(class_log_evidence, axis=0).astype(np.float64)
     # Guard against -inf - (-inf) = NaN when an entire (image, class) had all
@@ -804,36 +1118,42 @@ def _assemble_result(
         -np.inf,
     )
     class_responsibilities = np.exp(diff)
-    class_posterior_sums = np.sum(class_responsibilities, axis=1)
+    class_posterior_sums_full = np.sum(class_responsibilities, axis=1)
+    class_posterior_sums = class_posterior_sums_full
+    class_mstep_posterior_sums = class_posterior_sums_full
     if class_posterior_sums_override is not None:
-        class_posterior_sums = np.asarray(class_posterior_sums_override, dtype=np.float64)
-        if class_posterior_sums.shape != (class_log_evidence.shape[0],):
+        class_mstep_posterior_sums = np.asarray(class_posterior_sums_override, dtype=np.float64)
+        if class_mstep_posterior_sums.shape != (class_log_evidence.shape[0],):
             raise ValueError(
                 "class_posterior_sums_override must have shape "
-                f"({class_log_evidence.shape[0]},), got {class_posterior_sums.shape}",
+                f"({class_log_evidence.shape[0]},), got {class_mstep_posterior_sums.shape}",
             )
-        if not np.all(np.isfinite(class_posterior_sums)) or np.any(class_posterior_sums < 0.0):
+        if not np.all(np.isfinite(class_mstep_posterior_sums)) or np.any(class_mstep_posterior_sums < 0.0):
             raise ValueError("class_posterior_sums_override must be finite and non-negative")
 
     best_scores = np.stack(
         [np.asarray(stats.best_log_score_per_image, dtype=np.float64) for stats in per_class_stats],
         axis=0,
     )
-    pmax = np.stack(
-        [np.asarray(stats.max_posterior_per_image, dtype=np.float64) for stats in per_class_stats],
-        axis=0,
-    )
     class_assignments = np.argmax(best_scores, axis=0).astype(np.int32)
     image_indices = np.arange(class_assignments.shape[0])
     pose_assignments = np.asarray(per_class_hard_assignments)[class_assignments, image_indices]
+    global_best_scores = np.max(best_scores, axis=0)
+    finite_joint_best = np.isfinite(global_best_scores) & np.isfinite(global_log_evidence)
+    joint_pmax = np.zeros_like(global_best_scores, dtype=np.float64)
+    joint_log_pmax = global_best_scores[finite_joint_best] - global_log_evidence[finite_joint_best]
+    joint_pmax[finite_joint_best] = np.exp(np.minimum(joint_log_pmax, 0.0))
+    # Pmax is a probability; clip tiny numerical overshoots or inconsistent
+    # synthetic fixtures while preserving all valid joint posterior values.
+    joint_pmax = np.clip(joint_pmax, 0.0, 1.0)
     rotation_posterior_sums = jnp.sum(
         jnp.stack([jnp.asarray(stats.rotation_posterior_sums) for stats in per_class_stats], axis=0),
         axis=0,
     )
     stats = make_relion_stats(
         log_evidence_per_image=global_log_evidence,
-        best_log_score_per_image=np.max(best_scores, axis=0),
-        max_posterior_per_image=np.max(pmax, axis=0),
+        best_log_score_per_image=global_best_scores,
+        max_posterior_per_image=joint_pmax,
         rotation_posterior_sums=rotation_posterior_sums,
         image_dtype=jnp.float32,
     )
@@ -847,7 +1167,23 @@ def _assemble_result(
     else:
         stacked_new_means = jnp.stack([jnp.asarray(mean) for mean in new_means], axis=0)
 
-    aggregate_noise_stats = _sum_k_class_noise_stats(noise_stats, class_posterior_sums)
+    aggregate_noise_stats = _sum_k_class_noise_stats(noise_stats, class_mstep_posterior_sums)
+    profile_summary_out = None
+    if profile_summary is not None:
+        profile_summary_out = dict(profile_summary)
+        profile_summary_out["class_posterior_sums_full"] = class_posterior_sums_full.astype(
+            np.float64,
+            copy=True,
+        )
+        profile_summary_out["class_posterior_sums_returned"] = class_posterior_sums.astype(
+            np.float64,
+            copy=True,
+        )
+        profile_summary_out["class_mstep_posterior_sums_returned"] = class_mstep_posterior_sums.astype(
+            np.float64,
+            copy=True,
+        )
+        profile_summary_out["class_posterior_sums_used_override"] = class_posterior_sums_override is not None
 
     return KClassEMResult(
         new_means=stacked_new_means,
@@ -874,7 +1210,10 @@ def _assemble_result(
         best_pose_rotations=best_pose_rotations,
         best_pose_translations=best_pose_translations,
         best_pose_rotation_ids=best_pose_rotation_ids,
-        profile_summary=profile_summary,
+        profile_summary=profile_summary_out,
+        class_mstep_posterior_sums=jnp.asarray(class_mstep_posterior_sums, dtype=jnp.float32),
+        mstep_full_half_axis=mstep_full_half_axis,
+        mstep_accumulator_shape=mstep_accumulator_shape,
     )
 
 
@@ -981,9 +1320,9 @@ def _run_dense_k_class_joint_firstiter_score_probe(
     n_rot = int(np.asarray(rotations).shape[0])
     n_images = _dataset_image_count(experiment_dataset)
 
-    rotation_prior = engine_kwargs.get("class_rotation_log_prior")
-    if rotation_prior is None:
-        rotation_prior = engine_kwargs.get("rotation_log_prior")
+    # RELION's iter-1 firstiter_cc path performs WTA on raw normalized-CC
+    # scores before the non-firstiter prior-weighting branch is reached.
+    firstiter_class_log_priors = np.zeros(n_classes, dtype=np.float64)
     full_stats = _compute_k_class_significance_batched(
         experiment_dataset,
         means_array,
@@ -991,15 +1330,15 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         rotations,
         translations,
         disc_type,
-        class_log_priors=class_log_priors,
+        class_log_priors=firstiter_class_log_priors,
         adaptive_fraction=1.0,
         max_significants=1,
         image_batch_size=int(engine_kwargs.get("image_batch_size", 500)),
         rotation_block_size=int(engine_kwargs.get("rotation_block_size", 5000)),
         current_size=engine_kwargs.get("current_size"),
         score_with_masked_images=bool(engine_kwargs.get("score_with_masked_images", False)),
-        rotation_log_prior=rotation_prior,
-        translation_log_prior=engine_kwargs.get("translation_log_prior"),
+        rotation_log_prior=None,
+        translation_log_prior=None,
         image_corrections=engine_kwargs.get("image_corrections"),
         scale_corrections=engine_kwargs.get("scale_corrections"),
         image_pre_shifts=engine_kwargs.get("image_pre_shifts"),
@@ -1011,7 +1350,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         relion_projector_half=engine_kwargs.get("relion_projector_half"),
         relion_projector_r_max=engine_kwargs.get("relion_projector_r_max"),
         score_mode="normalized_cc",
-        collect_significance=False,
+        collect_significance=bool(os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR")),
         return_class_best=True,
     )[-1]
 
@@ -1040,6 +1379,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
 _IMAGE_AXIS_ENGINE_KWARGS = (
     "image_corrections",
     "scale_corrections",
+    "group_ids",
     "image_pre_shifts",
     "translation_prior_centers",
     "translation_log_prior",
@@ -1061,6 +1401,91 @@ def _subset_image_axis_engine_kwargs(kwargs: dict, image_indices: np.ndarray, n_
         if array.ndim > 0 and int(array.shape[0]) == int(n_images):
             out[name] = array[image_indices]
     return out
+
+
+def _full_group_count_from_kwargs(kwargs: dict) -> int | None:
+    group_ids = kwargs.get("group_ids")
+    if group_ids is None:
+        return None
+    group_ids_np = np.asarray(group_ids, dtype=np.int64).reshape(-1)
+    if group_ids_np.size and int(np.min(group_ids_np)) < 0:
+        raise ValueError("group_ids must be non-negative")
+    return int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
+
+
+def _expand_subset_noise_stats(
+    noise: NoiseStats,
+    image_indices: np.ndarray,
+    n_images: int,
+    *,
+    full_group_count: int | None,
+) -> NoiseStats:
+    """Expand subset-only optional noise fields to the parent image/group axes."""
+
+    image_indices = np.asarray(image_indices, dtype=np.int64).reshape(-1)
+    n_images = int(n_images)
+    if image_indices.size:
+        if int(np.min(image_indices)) < 0 or int(np.max(image_indices)) >= n_images:
+            raise ValueError("subset image indices are out of bounds")
+
+    def _image_field(value, name: str):
+        if value is None:
+            return None
+        array = np.asarray(value)
+        flat = array.reshape(-1)
+        if flat.shape[0] == n_images:
+            return jnp.asarray(array)
+        if flat.shape[0] != image_indices.size:
+            raise ValueError(
+                f"{name} has shape {array.shape}; expected {image_indices.size} subset values "
+                f"or {n_images} full-image values",
+            )
+        out = np.zeros(n_images, dtype=flat.dtype)
+        out[image_indices] = flat
+        return jnp.asarray(out)
+
+    def _group_field(value, name: str):
+        if value is None:
+            return None
+        array = np.asarray(value)
+        flat = array.reshape(-1)
+        if full_group_count is None or flat.shape[0] == int(full_group_count):
+            return jnp.asarray(array)
+        if flat.shape[0] > int(full_group_count):
+            raise ValueError(
+                f"{name} has shape {array.shape}; expected no more than {full_group_count} groups",
+            )
+        out = np.zeros(int(full_group_count), dtype=flat.dtype)
+        out[: flat.shape[0]] = flat
+        return jnp.asarray(out)
+
+    return noise._replace(
+        wsum_norm_correction=_image_field(noise.wsum_norm_correction, "wsum_norm_correction"),
+        wsum_scale_correction_xa=_group_field(noise.wsum_scale_correction_xa, "wsum_scale_correction_xa"),
+        wsum_scale_correction_aa=_group_field(noise.wsum_scale_correction_aa, "wsum_scale_correction_aa"),
+    )
+
+
+def _zero_subset_noise_stats(
+    noise_variance,
+    *,
+    n_images: int,
+    full_group_count: int | None,
+) -> NoiseStats:
+    class_noise = np.asarray(noise_variance, dtype=np.float32)
+    return make_noise_stats(
+        wsum_sigma2_noise=np.zeros_like(class_noise, dtype=np.float32),
+        wsum_img_power=np.zeros_like(class_noise, dtype=np.float32),
+        wsum_sigma2_offset=0.0,
+        sumw=0.0,
+        wsum_norm_correction=np.zeros(int(n_images), dtype=np.float32),
+        wsum_scale_correction_xa=(
+            None if full_group_count is None else np.zeros(int(full_group_count), dtype=np.float32)
+        ),
+        wsum_scale_correction_aa=(
+            None if full_group_count is None else np.zeros(int(full_group_count), dtype=np.float32)
+        ),
+    )
 
 
 def _full_stats_from_subset(
@@ -1118,6 +1543,8 @@ def _run_firstiter_global_winner_subset_pass2(
     n_classes = int(means_array.shape[0])
     n_images = int(coarse_class_assignments.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
+    relion_projector_half_by_class = pass2_kwargs.get("relion_projector_half")
+    relion_projector_r_max = pass2_kwargs.get("relion_projector_r_max")
     rotations_np = np.asarray(fine_rotations_np, dtype=np.float32)
     translations_np = np.asarray(fine_translations_np, dtype=np.float32)
 
@@ -1130,6 +1557,7 @@ def _run_firstiter_global_winner_subset_pass2(
     per_class_best_pose_translations = [] if return_best_pose_details else None
     per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
 
+    full_group_count = _full_group_count_from_kwargs(pass2_kwargs)
     subset_counts = []
     t0 = time.time()
     for class_index in range(n_classes):
@@ -1150,11 +1578,10 @@ def _run_firstiter_global_winner_subset_pass2(
             )
             if per_class_noise is not None:
                 per_class_noise.append(
-                    make_noise_stats(
-                        wsum_sigma2_noise=np.zeros_like(np.asarray(noise_variance), dtype=np.float32),
-                        wsum_img_power=np.zeros_like(np.asarray(noise_variance), dtype=np.float32),
-                        wsum_sigma2_offset=0.0,
-                        sumw=0.0,
+                    _zero_subset_noise_stats(
+                        _select_class_value(noise_variance, class_index, n_classes),
+                        n_images=n_images,
+                        full_group_count=full_group_count,
                     ),
                 )
             if return_best_pose_details:
@@ -1211,7 +1638,14 @@ def _run_firstiter_global_winner_subset_pass2(
             ),
         )
         if per_class_noise is not None:
-            per_class_noise.append(noise)
+            per_class_noise.append(
+                _expand_subset_noise_stats(
+                    noise,
+                    image_indices,
+                    n_images,
+                    full_group_count=full_group_count,
+                ),
+            )
         if return_best_pose_details:
             best_rots, best_trans, best_rot_ids = _decode_dense_best_pose_details(
                 hard_subset,
@@ -1281,20 +1715,12 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
 
     n_classes = int(means_array.shape[0])
     n_images = int(coarse_class_assignments.shape[0])
-    log_priors = _class_log_priors(n_classes, class_log_priors)
+    relion_projector_half_by_class = pass2_kwargs.get("relion_projector_half")
+    relion_projector_r_max = pass2_kwargs.get("relion_projector_r_max")
 
     def _class_rotation_prior(class_index: int):
-        class_prior = pass2_kwargs.get("class_rotation_log_prior")
-        if class_prior is not None:
-            rot_prior = _select_required_class_value(
-                class_prior,
-                class_index,
-                n_classes,
-                "class_rotation_log_prior",
-            )
-        else:
-            rot_prior = pass2_kwargs.get("rotation_log_prior")
-        return _rotation_prior_with_class_log_prior(rot_prior, float(log_priors[class_index]), n_rot_coarse)
+        del class_index
+        return np.zeros(int(n_rot_coarse), dtype=np.float32)
 
     common = dict(
         nside_level=int(healpix_order),
@@ -1316,8 +1742,18 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         fine_translations_override=fine_translations_np,
         fine_translation_parent_override=trans_parent_map_np,
         relion_half_volume_mstep=bool(pass2_kwargs.get("relion_half_volume_mstep", False)),
+        relion_x_half_mstep=bool(pass2_kwargs.get("mstep_relion_x_half", False)),
         relion_firstiter_score_mode="normalized_cc",
         relion_firstiter_winner_take_all=True,
+    )
+    mstep_accumulator_shape = (
+        relion_backprojector_volume_shape(
+            experiment_dataset.volume_shape,
+            common["reconstruction_padding_factor"],
+            current_size=common["current_size"],
+        )
+        if common["relion_x_half_mstep"]
+        else None
     )
 
     Ft_y = []
@@ -1329,6 +1765,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
     per_class_best_pose_translations = [] if return_best_pose_details else None
     per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
 
+    full_group_count = _full_group_count_from_kwargs(pass2_kwargs)
     subset_counts = []
     t0 = time.time()
     for class_index in range(n_classes):
@@ -1348,13 +1785,11 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
                 ),
             )
             if per_class_noise is not None:
-                class_noise = np.asarray(_select_class_value(noise_variance, class_index, n_classes), dtype=np.float32)
                 per_class_noise.append(
-                    make_noise_stats(
-                        wsum_sigma2_noise=np.zeros_like(class_noise, dtype=np.float32),
-                        wsum_img_power=np.zeros_like(class_noise, dtype=np.float32),
-                        wsum_sigma2_offset=0.0,
-                        sumw=0.0,
+                    _zero_subset_noise_stats(
+                        _select_class_value(noise_variance, class_index, n_classes),
+                        n_images=n_images,
+                        full_group_count=full_group_count,
                     ),
                 )
             if return_best_pose_details:
@@ -1376,12 +1811,19 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
             coarse_translations_np,
             subset_sig,
             rotation_log_prior=_class_rotation_prior(class_index),
-            translation_log_prior=class_kwargs.get("translation_log_prior"),
+            translation_log_prior=None,
             accumulate_noise=accumulate_noise,
             image_corrections=class_kwargs.get("image_corrections"),
             scale_corrections=class_kwargs.get("scale_corrections"),
+            group_ids=class_kwargs.get("group_ids"),
             image_pre_shifts=class_kwargs.get("image_pre_shifts"),
             translation_prior_centers=class_kwargs.get("translation_prior_centers"),
+            relion_projector_half=_select_projector_half_for_class(
+                relion_projector_half_by_class,
+                class_index,
+                n_classes,
+            ),
+            relion_projector_r_max=relion_projector_r_max,
             **common,
         )
         class_Ft_y, class_Ft_ctf, hard_subset, best_rots, best_trans, best_rot_ids, stats_subset = output[:7]
@@ -1400,7 +1842,14 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
             ),
         )
         if per_class_noise is not None:
-            per_class_noise.append(noise)
+            per_class_noise.append(
+                _expand_subset_noise_stats(
+                    noise,
+                    image_indices,
+                    n_images,
+                    full_group_count=full_group_count,
+                ),
+            )
         if return_best_pose_details:
             best_rots_full = np.zeros((n_images, 3, 3), dtype=np.float32)
             best_trans_full = np.zeros((n_images, 2), dtype=np.float32)
@@ -1433,6 +1882,8 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         class_posterior_sums_override=np.asarray(subset_counts, dtype=np.float64),
         profile_summary={"sparse_firstiter_subset_pass2_s": np.float64(time.time() - t0)},
         host_accumulators=True,
+        mstep_full_half_axis=0 if common["relion_x_half_mstep"] else None,
+        mstep_accumulator_shape=mstep_accumulator_shape,
     )
 
 
@@ -1471,6 +1922,7 @@ def run_dense_k_class_em(
     n_classes = int(means_array.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
     base_engine_kwargs = dict(engine_kwargs)
+    keep_half_accumulators = n_classes > 1 and bool(base_engine_kwargs.get("relion_half_volume_mstep", False))
     rotations_np = np.asarray(rotations, dtype=np.float32)
     translations_np = np.asarray(translations, dtype=np.float32)
 
@@ -1549,9 +2001,17 @@ def run_dense_k_class_em(
     per_class_best_pose_rotations = [] if return_best_pose_details else None
     per_class_best_pose_translations = [] if return_best_pose_details else None
     per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
+    mstep_engine_kwargs = dict(base_engine_kwargs)
+    logger.info(
+        "Dense K-class EM M-step: using %s accumulator layout",
+        "native half-volume" if keep_half_accumulators else "full-volume",
+    )
+    if keep_half_accumulators:
+        mstep_engine_kwargs.setdefault("return_half_volume_accumulators", True)
+        logger.info("Dense K-class EM: keeping per-class M-step accumulators in half-volume layout")
     mstep_t0 = time.time()
     for class_index in range(n_classes):
-        class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
+        class_engine_kwargs = _dense_engine_kwargs_for_class(mstep_engine_kwargs, class_index, n_classes)
         with _DenseScoreDumpClassLabel(class_index):
             output = run_em(
                 experiment_dataset,
@@ -1610,6 +2070,7 @@ def run_dense_k_class_em(
         per_class_best_pose_rotations=per_class_best_pose_rotations,
         per_class_best_pose_translations=per_class_best_pose_translations,
         per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
+        host_accumulators=keep_half_accumulators,
     )
 
 
@@ -1940,6 +2401,17 @@ def _build_fine_grid_significance_mask(
         if sig is None:
             mask[image_index] = True
             continue
+        if isinstance(sig, ComplementSignificantSampleIndices):
+            excluded = np.asarray(sig.excluded_indices, dtype=np.int64).reshape(-1)
+            if excluded.size == 0:
+                mask[image_index] = True
+                continue
+            coarse_rot_idx = excluded // n_trans_coarse
+            coarse_trans_idx = excluded % n_trans_coarse
+            coarse_pair = np.ones((n_rot_coarse, n_trans_coarse), dtype=bool)
+            coarse_pair[coarse_rot_idx, coarse_trans_idx] = False
+            mask[image_index] = coarse_pair[rot_parent_map][:, trans_parent_map]
+            continue
         sig = np.asarray(sig, dtype=np.int64)
         if sig.size == 0:
             continue
@@ -1992,6 +2464,17 @@ class _PerClassFineGridSignificanceMask:
             sig = self.significant_sample_indices[image_index]
             if sig is None:
                 mask[local_image, :actual_rot, :] = True
+                continue
+            if isinstance(sig, ComplementSignificantSampleIndices):
+                excluded = np.asarray(sig.excluded_indices, dtype=np.int64).reshape(-1)
+                if excluded.size == 0:
+                    mask[local_image, :actual_rot, :] = True
+                    continue
+                coarse_rot_idx = excluded // self.n_trans_coarse
+                coarse_trans_idx = excluded % self.n_trans_coarse
+                coarse_pair = np.ones((self.n_rot_coarse, self.n_trans_coarse), dtype=bool)
+                coarse_pair[coarse_rot_idx, coarse_trans_idx] = False
+                mask[local_image, :actual_rot, :] = coarse_pair[rot_parent_block][:, self.trans_parent_map]
                 continue
             sig = np.asarray(sig, dtype=np.int64).reshape(-1)
             if sig.size == 0:
@@ -2065,10 +2548,13 @@ def run_dense_k_class_em_adaptive(
     significance_rotation_block_size: int | None = None,
     coarse_current_size: int | None = None,
     fine_current_size: int | None = None,
+    coarse_healpix_order: int | None = None,
+    oversampling_order: int | None = None,
     coarse_translation_log_prior=None,
     coarse_rotation_log_prior=None,
     coarse_class_rotation_log_prior=None,
     skip_significance_pruning: bool = False,
+    relion_fine_mstep_prune: bool = False,
     firstiter_cc_pass2_only_best_coarse: bool = False,
     return_best_pose_details: bool = False,
     **engine_kwargs,
@@ -2097,15 +2583,15 @@ def run_dense_k_class_em_adaptive(
         Per-pass Fourier window radii.  Pass-1 typically uses a smaller
         ``coarse_current_size`` per RELION's ``image_coarse_size`` semantics.
         When ``None``, both passes use the same ``current_size``.
+    coarse_healpix_order, oversampling_order : int or None
+        RELION sampling metadata for sparse pass-2 diagnostics.  When omitted,
+        the values are inferred from exact HEALPix grid sizes for compatibility
+        with older callers.
     coarse_*_log_prior : optional priors used only at pass-1.  ``engine_kwargs``
         carries the priors used at pass-2.
     skip_significance_pruning : bool
         When True, skip the pass-1 coarse significance computation entirely
-        and evaluate the full fine grid with no mask.  This matches RELION's
-        ``--firstiter_cc`` + adaptive_oversampling behavior at iter 1
-        (ml_optimiser.cpp:9181-9207): RELION still runs the 2-pass loop but
-        binarizes weights to a single best pose post-pass-2, so pass-1
-        significance pruning is a no-op for that iteration.
+        and evaluate the full fine grid with no mask.
     """
     # Lazy import to avoid the formatter stripping a top-level name that is
     # only referenced inside this function.
@@ -2128,6 +2614,19 @@ def run_dense_k_class_em_adaptive(
     n_rot_fine = int(fine_rotations_np.shape[0])
     n_trans_fine = int(fine_translations_np.shape[0])
 
+    def _resolved_coarse_healpix_order() -> int:
+        if coarse_healpix_order is not None:
+            return int(coarse_healpix_order)
+        return _infer_healpix_order_from_rotation_count(n_rot_coarse)
+
+    def _resolved_oversampling_order() -> int:
+        if oversampling_order is not None:
+            return max(0, int(oversampling_order))
+        return max(
+            0,
+            _infer_healpix_order_from_rotation_count(n_rot_fine) - _resolved_coarse_healpix_order(),
+        )
+
     if rot_parent_map_np.shape != (n_rot_fine,):
         raise ValueError(
             f"rot_parent_map must have shape ({n_rot_fine},), got {rot_parent_map_np.shape}",
@@ -2146,6 +2645,17 @@ def run_dense_k_class_em_adaptive(
     sig_ibs = int(significance_image_batch_size or image_batch_size)
     sig_rbs = int(significance_rotation_block_size or rotation_block_size)
 
+    def _counts_from_significant_samples(sig_sample_indices_by_class) -> np.ndarray:
+        counts = np.zeros(n_images, dtype=np.int32)
+        full_coarse_pose_count = int(n_rot_coarse * n_trans_coarse)
+        for image_idx in range(n_images):
+            total = 0
+            for class_idx in range(n_classes):
+                samples = sig_sample_indices_by_class[class_idx][image_idx]
+                total += significant_sample_count(samples, full_coarse_pose_count)
+            counts[image_idx] = total
+        return counts
+
     # Pass-1 priors fall back to pass-2 priors when not supplied separately.
     if coarse_translation_log_prior is None:
         coarse_translation_log_prior = engine_kwargs.get("translation_log_prior")
@@ -2159,21 +2669,17 @@ def run_dense_k_class_em_adaptive(
     )
 
     coarse_class_assignments_for_override = None
+    significant_counts_for_result = None
     pass1_t0 = time.time()
     if firstiter_cc_pass2_only_best_coarse:
-        # RELION ml_optimiser.cpp:9181-9207: at iter 1 with --firstiter_cc,
-        # pass-1 binarizes exp_Mweight to a single best (class, pose). Pass-2
-        # then refines only that pose's children. With recovar's K-class
-        # winner_take_all M-step (each class accumulates one-hot weight at
-        # its own per-class best), the cleanest mirror is: for each class
-        # independently, restrict pass-2 to children of class k's per-class
-        # coarse-best pose. This matches the per-class M-step contribution
-        # pattern recovar's existing K-class baseline already uses, while
-        # giving each class the benefit of fine-grid refinement around its
-        # own coarse winner.
+        # RELION firstiter_cc branch: restrict pass-2 to children of each
+        # class's per-class coarse-best pose, then gate by the global winning
+        # class. This is the production default-GUI parity path for iter 1.
         coarse_probe_kwargs = dict(engine_kwargs)
         coarse_probe_kwargs.pop("rotation_translation_mask", None)
         coarse_probe_kwargs.pop("class_rotation_translation_mask", None)
+        coarse_probe_kwargs["image_batch_size"] = sig_ibs
+        coarse_probe_kwargs["rotation_block_size"] = sig_rbs
         coarse_probe_kwargs["relion_firstiter_score_mode"] = "normalized_cc"
         coarse_probe_kwargs["relion_firstiter_winner_take_all"] = True
         coarse_probe_kwargs["current_size"] = (
@@ -2196,11 +2702,7 @@ def run_dense_k_class_em_adaptive(
         # (independently scored per class). For each class, restrict pass-2
         # to that single pose's children.
         coarse_per_class_assn = np.asarray(coarse_result.per_class_hard_assignments, dtype=np.int64)
-        # Preserve the K-class assignment from the coarse pass: RELION
-        # decides class membership at the coarse grid binarization step
-        # (the fine refinement only touches the single winning class's pose),
-        # so the per-particle class assignment should reflect coarse argmax,
-        # not per-class fine-best argmax.
+        # Preserve the K-class assignment from the coarse diagnostic probe.
         coarse_class_assignments_for_override = np.asarray(
             coarse_result.class_assignments,
             dtype=np.int32,
@@ -2209,9 +2711,15 @@ def run_dense_k_class_em_adaptive(
             [np.array([int(coarse_per_class_assn[k, i])], dtype=np.int32) for i in range(n_images)]
             for k in range(n_classes)
         ]
+        significant_counts_for_result = np.full(n_images, n_classes, dtype=np.int32)
     elif skip_significance_pruning:
         # Trivial mask: every fine pose is significant (None means all-True).
         sig_sample_indices_by_class = [[None] * n_images for _ in range(n_classes)]
+        significant_counts_for_result = np.full(
+            n_images,
+            n_classes * n_rot_coarse * n_trans_coarse,
+            dtype=np.int32,
+        )
     else:
         sig_kwargs = dict(
             adaptive_fraction=adaptive_fraction,
@@ -2230,6 +2738,9 @@ def run_dense_k_class_em_adaptive(
             do_gridding_correction=engine_kwargs.get("do_gridding_correction", False),
             square_window=engine_kwargs.get("square_window", False),
             use_float64_scoring=engine_kwargs.get("use_float64_scoring", False),
+            score_mode=engine_kwargs.get("relion_firstiter_score_mode", "gaussian"),
+            relion_projector_half=engine_kwargs.get("relion_projector_half"),
+            relion_projector_r_max=engine_kwargs.get("relion_projector_r_max"),
         )
 
         with nvtx.annotate("kclass.adaptive.significance", color="orange", domain=NVTX_DOMAIN_EM):
@@ -2250,10 +2761,23 @@ def run_dense_k_class_em_adaptive(
                 class_log_priors=log_priors,
                 **sig_kwargs,
             )
+        significant_counts_for_result = (
+            _counts_from_significant_samples(sig_sample_indices_by_class)
+            if _n_sig_per_image is None
+            else np.asarray(_n_sig_per_image, dtype=np.int32)
+        )
     pass1_s = time.time() - pass1_t0
+
+    def _with_significant_counts(result: KClassEMResult) -> KClassEMResult:
+        if significant_counts_for_result is None:
+            return result
+        return result._replace(
+            significant_counts=jnp.asarray(significant_counts_for_result, dtype=jnp.int32),
+        )
 
     mask_t0 = time.time()
     pass2_kwargs = dict(engine_kwargs)
+    pass2_kwargs["relion_fine_mstep_prune"] = bool(relion_fine_mstep_prune)
     # Build a per-particle, per-class fine-grid mask from the coarse significance.
     pass2_kwargs.pop("rotation_translation_mask", None)
     sparse_pass2_requested = bool(pass2_kwargs.pop("sparse_pass2", False))
@@ -2261,6 +2785,10 @@ def run_dense_k_class_em_adaptive(
     # Dense fallback calls must keep run_em's block-skipping optimization off:
     # otherwise omitting the kwarg silently re-enables run_em's default.
     pass2_kwargs["sparse_pass2"] = False
+    if firstiter_cc_pass2_only_best_coarse:
+        pass2_kwargs.pop("rotation_log_prior", None)
+        pass2_kwargs.pop("class_rotation_log_prior", None)
+        pass2_kwargs.pop("translation_log_prior", None)
     if "current_size" not in pass2_kwargs and fine_current_size is not None:
         pass2_kwargs["current_size"] = fine_current_size
 
@@ -2287,12 +2815,8 @@ def run_dense_k_class_em_adaptive(
             coarse_class_assignments=coarse_class_assignments_for_override,
             n_rot_coarse=n_rot_coarse,
             n_fine_trans=n_trans_fine,
-            healpix_order=_infer_healpix_order_from_rotation_count(n_rot_coarse),
-            oversampling_order=max(
-                0,
-                _infer_healpix_order_from_rotation_count(n_rot_fine)
-                - _infer_healpix_order_from_rotation_count(n_rot_coarse),
-            ),
+            healpix_order=_resolved_coarse_healpix_order(),
+            oversampling_order=_resolved_oversampling_order(),
             class_log_priors=class_log_priors,
             accumulate_noise=accumulate_noise,
             return_best_pose_details=return_best_pose_details,
@@ -2312,7 +2836,162 @@ def run_dense_k_class_em_adaptive(
             pass2_s,
             time.time() - overall_t0,
         )
-        return result
+        return _with_significant_counts(result)
+
+    dense_support_threshold = _dense_pass2_rotation_fraction_threshold(n_classes)
+    if (
+        sparse_pass2_requested
+        and engine_kwargs.get("relion_projector_half") is None
+        and dense_support_threshold is not None
+        and not firstiter_cc_pass2_only_best_coarse
+        and not skip_significance_pruning
+    ):
+        dense_mean_support_threshold = _dense_pass2_mean_rotation_fraction_threshold(n_classes)
+        support_stats = _fine_support_stats(
+            sig_sample_indices_by_class,
+            n_rot_coarse=n_rot_coarse,
+            n_trans_coarse=n_trans_coarse,
+            rot_parent_map=rot_parent_map_np,
+            trans_parent_map=trans_parent_map_np,
+            n_rot_fine=n_rot_fine,
+            n_trans_fine=n_trans_fine,
+        )
+        compact_sparse_preferred = _compact_sparse_pass2_preferred_over_dense(n_classes, n_images)
+        compact_sparse_min_images = _compact_sparse_pass2_large_dataset_image_threshold(n_classes)
+        dense_by_median = (
+            not compact_sparse_preferred
+            and support_stats["rotation_median_fraction"] >= dense_support_threshold
+        )
+        dense_by_mean = (
+            not compact_sparse_preferred
+            and dense_mean_support_threshold is not None
+            and support_stats["rotation_mean_fraction"] >= dense_mean_support_threshold
+        )
+        dense_small_n_threshold = _dense_pass2_small_dataset_image_threshold(n_classes)
+        dense_small_mean_threshold = _dense_pass2_small_dataset_mean_rotation_fraction_threshold(n_classes)
+        dense_by_small_dataset = (
+            dense_small_n_threshold is not None
+            and dense_small_mean_threshold is not None
+            and n_images <= dense_small_n_threshold
+            and support_stats["rotation_mean_fraction"] >= dense_small_mean_threshold
+        )
+        mean_threshold_text = (
+            "disabled" if dense_mean_support_threshold is None else f"{dense_mean_support_threshold:.3f}"
+        )
+        small_threshold_text = (
+            "disabled"
+            if dense_small_n_threshold is None or dense_small_mean_threshold is None
+            else f"n<={dense_small_n_threshold}, mean>={dense_small_mean_threshold:.3f}"
+        )
+        if dense_by_median or dense_by_mean or dense_by_small_dataset:
+            sparse_pass2_requested = False
+            dense_reasons = []
+            if dense_by_median:
+                dense_reasons.append(
+                    f"median fine rotation support {support_stats['rotation_median']:.0f}/{n_rot_fine} "
+                    f"({support_stats['rotation_median_fraction']:.3f}) >= median threshold "
+                    f"{dense_support_threshold:.3f}",
+                )
+            if dense_by_mean:
+                dense_reasons.append(
+                    f"mean fine rotation support {support_stats['rotation_mean']:.0f}/{n_rot_fine} "
+                    f"({support_stats['rotation_mean_fraction']:.3f}) >= mean threshold "
+                    f"{dense_mean_support_threshold:.3f}",
+                )
+            if dense_by_small_dataset:
+                dense_reasons.append(
+                    f"small dataset n_images={n_images} <= {dense_small_n_threshold} with mean fine rotation "
+                    f"support {support_stats['rotation_mean']:.0f}/{n_rot_fine} "
+                    f"({support_stats['rotation_mean_fraction']:.3f}) >= small-dataset mean threshold "
+                    f"{dense_small_mean_threshold:.3f}",
+                )
+            logger.info(
+                "Adaptive K-class dense pass2 fallback: %s; median=%.0f/%d (%.3f, threshold %.3f) "
+                "mean=%.0f/%d (%.3f, threshold %s, small threshold %s) max=%.0f/%d (%.3f); "
+                "fine pose support median=%.0f/%d (%.3f) mean=%.0f/%d (%.3f) max=%.0f/%d (%.3f)",
+                "; ".join(dense_reasons),
+                support_stats["rotation_median"],
+                n_rot_fine,
+                support_stats["rotation_median_fraction"],
+                dense_support_threshold,
+                support_stats["rotation_mean"],
+                n_rot_fine,
+                support_stats["rotation_mean_fraction"],
+                mean_threshold_text,
+                small_threshold_text,
+                support_stats["rotation_max"],
+                n_rot_fine,
+                support_stats["rotation_max_fraction"],
+                support_stats["pose_median"],
+                n_rot_fine * n_trans_fine,
+                support_stats["pose_median_fraction"],
+                support_stats["pose_mean"],
+                n_rot_fine * n_trans_fine,
+                support_stats["pose_mean_fraction"],
+                support_stats["pose_max"],
+                n_rot_fine * n_trans_fine,
+                support_stats["pose_max_fraction"],
+            )
+        elif compact_sparse_preferred:
+            logger.info(
+                "Adaptive K-class sparse pass2 retained: compact-pair sparse path preferred for "
+                "large dataset n_images=%d >= %d; median fine rotation support %.0f/%d "
+                "(%.3f, dense threshold %.3f); mean=%.0f/%d (%.3f, dense threshold %s; "
+                "small threshold %s); max=%.0f/%d (%.3f); fine pose support median=%.0f/%d "
+                "(%.3f) mean=%.0f/%d (%.3f) max=%.0f/%d (%.3f)",
+                n_images,
+                -1 if compact_sparse_min_images is None else compact_sparse_min_images,
+                support_stats["rotation_median"],
+                n_rot_fine,
+                support_stats["rotation_median_fraction"],
+                dense_support_threshold,
+                support_stats["rotation_mean"],
+                n_rot_fine,
+                support_stats["rotation_mean_fraction"],
+                mean_threshold_text,
+                small_threshold_text,
+                support_stats["rotation_max"],
+                n_rot_fine,
+                support_stats["rotation_max_fraction"],
+                support_stats["pose_median"],
+                n_rot_fine * n_trans_fine,
+                support_stats["pose_median_fraction"],
+                support_stats["pose_mean"],
+                n_rot_fine * n_trans_fine,
+                support_stats["pose_mean_fraction"],
+                support_stats["pose_max"],
+                n_rot_fine * n_trans_fine,
+                support_stats["pose_max_fraction"],
+            )
+        else:
+            logger.info(
+                "Adaptive K-class sparse pass2 retained: median fine rotation support %.0f/%d "
+                "(%.3f) < median threshold %.3f; mean=%.0f/%d (%.3f) < mean threshold %s "
+                "(small threshold %s); "
+                "max=%.0f/%d (%.3f); "
+                "fine pose support median=%.0f/%d (%.3f) mean=%.0f/%d (%.3f) max=%.0f/%d (%.3f)",
+                support_stats["rotation_median"],
+                n_rot_fine,
+                support_stats["rotation_median_fraction"],
+                dense_support_threshold,
+                support_stats["rotation_mean"],
+                n_rot_fine,
+                support_stats["rotation_mean_fraction"],
+                mean_threshold_text,
+                small_threshold_text,
+                support_stats["rotation_max"],
+                n_rot_fine,
+                support_stats["rotation_max_fraction"],
+                support_stats["pose_median"],
+                n_rot_fine * n_trans_fine,
+                support_stats["pose_median_fraction"],
+                support_stats["pose_mean"],
+                n_rot_fine * n_trans_fine,
+                support_stats["pose_mean_fraction"],
+                support_stats["pose_max"],
+                n_rot_fine * n_trans_fine,
+                support_stats["pose_max_fraction"],
+            )
 
     if sparse_pass2_requested and not firstiter_cc_pass2_only_best_coarse and not skip_significance_pruning:
         result = _run_sparse_k_class_adaptive_pass2(
@@ -2331,11 +3010,8 @@ def run_dense_k_class_em_adaptive(
             class_log_priors=log_priors,
             accumulate_noise=accumulate_noise,
             return_best_pose_details=return_best_pose_details,
-            oversampling_order=max(
-                0,
-                _infer_healpix_order_from_rotation_count(n_rot_fine)
-                - _infer_healpix_order_from_rotation_count(n_rot_coarse),
-            ),
+            coarse_healpix_order=_resolved_coarse_healpix_order(),
+            oversampling_order=_resolved_oversampling_order(),
             random_perturbation=0.0,
             engine_kwargs=pass2_kwargs,
         )
@@ -2351,7 +3027,14 @@ def run_dense_k_class_em_adaptive(
             time.time() - mask_t0,
             time.time() - overall_t0,
         )
-        return result
+        return _with_significant_counts(result)
+
+    pass2_kwargs.pop("group_ids", None)
+    if pass2_kwargs.pop("mstep_relion_x_half", False):
+        logger.info(
+            "Adaptive K-class dense pass2 fallback: stripping RELION x-half M-step flag; "
+            "dense backend returns full-volume accumulators",
+        )
 
     # Expand priors from coarse to fine grid by parent broadcasting.
     # Mirrors RELION's pushback semantics where each oversampled child inherits
@@ -2397,17 +3080,8 @@ def run_dense_k_class_em_adaptive(
 
     global_winner = None
     if coarse_class_assignments_for_override is not None:
-        # RELION ml_optimiser.cpp:9181-9207 with K>1: at iter 1 with --firstiter_cc,
-        # binarization sets ONE entry to 1 in the global (class × pose) grid.
-        # Only the globally-winning class accumulates weight=1 from each image;
-        # the K-1 losing classes contribute zero. Without this gate, recovar's
-        # per-class winner-take-all M-step gives every class weight=1 from every
-        # image, which over-mixes images across classes (especially harmful for
-        # the lowest-occupancy class — see K=4 chained iter-1 class-1 corr 0.876
-        # vs RELION class-1, where class 1 receives ~80% off-class images).
-        #
-        # Mask out images where global winner != class_index so class k's M-step
-        # only sees its global-winner images.
+        # RELION firstiter_cc path: force pass-2 through the single coarse
+        # class/pose winner selected by the joint coarse probe.
         global_winner = np.asarray(coarse_class_assignments_for_override, dtype=np.int64)
     if global_winner is not None and hasattr(experiment_dataset, "subset"):
         with _DenseScoreDumpPhaseLabel("fine"):
@@ -2470,7 +3144,7 @@ def run_dense_k_class_em_adaptive(
             pass2_s,
             time.time() - overall_t0,
         )
-        return result
+        return _with_significant_counts(result)
     if not (skip_significance_pruning and global_winner is None):
         pass2_kwargs["class_rotation_translation_mask"] = _ClassFineGridSignificanceMask(
             significant_sample_indices_by_class=sig_sample_indices_by_class,
@@ -2544,4 +3218,4 @@ def run_dense_k_class_em_adaptive(
         pass2_s,
         time.time() - overall_t0,
     )
-    return result
+    return _with_significant_counts(result)

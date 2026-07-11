@@ -87,10 +87,14 @@ def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_
     """
     n_images, _ = weights_flat.shape
 
-    # Sort descending per image
+    # Sort descending per image. RELION only adds strictly positive weights to
+    # its sorted significant-pose list; zero-probability samples must not become
+    # significant if the threshold falls through to the tail.
     sorted_w = jnp.sort(weights_flat, axis=-1)[:, ::-1]
     cumsum = jnp.cumsum(sorted_w, axis=-1)
     total = weights_flat.sum(axis=-1, keepdims=True)
+    positive_counts = jnp.sum(weights_flat > 0.0, axis=-1)
+    last_positive_idx = jnp.maximum(positive_counts - 1, 0)
 
     # Fraction of total weight accumulated so far
     frac = cumsum / jnp.maximum(total, 1e-30)
@@ -102,8 +106,9 @@ def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_
     threshold_idx = jnp.where(
         jnp.any(crosses, axis=-1),
         jnp.argmax(crosses, axis=-1),
-        weights_flat.shape[-1] - 1,
+        last_positive_idx,
     )
+    threshold_idx = jnp.minimum(threshold_idx, last_positive_idx)
 
     # RELION treats maximum_significants <= 0 as "no cap".
     if max_significants is not None and int(max_significants) > 0:
@@ -112,8 +117,9 @@ def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_
     # Get the threshold value: the weight at the threshold index
     threshold_val = sorted_w[jnp.arange(n_images), threshold_idx]
 
-    # Mask: keep all samples with weight >= threshold
-    mask = weights_flat >= threshold_val[:, None]
+    # Mask: keep all positive samples with weight >= threshold. The positive
+    # guard matches RELION's nonzero sorted list while preserving threshold ties.
+    mask = (weights_flat > 0.0) & (weights_flat >= threshold_val[:, None])
 
     # Count significant samples per image
     n_significant = jnp.sum(mask, axis=-1).astype(jnp.int32)
@@ -134,30 +140,38 @@ def _find_significant_mask_topk(weights_flat, adaptive_fraction=0.999, max_signi
     top_weights, _ = jax.lax.top_k(weights_flat, topk)
     cumsum = jnp.cumsum(top_weights, axis=-1)
     total = weights_flat.sum(axis=-1, keepdims=True)
+    positive_counts = jnp.sum(weights_flat > 0.0, axis=-1)
+    positive_counts_in_top = jnp.sum(top_weights > 0.0, axis=-1)
+    last_top_positive_idx = jnp.maximum(positive_counts_in_top - 1, 0)
     frac = cumsum / jnp.maximum(total, 1e-30)
     crosses = frac > adaptive_fraction
     threshold_idx = jnp.where(
         jnp.any(crosses, axis=-1),
         jnp.argmax(crosses, axis=-1),
-        int(topk) - 1,
+        last_top_positive_idx,
     )
+    threshold_idx = jnp.minimum(threshold_idx, last_top_positive_idx)
 
     if max_significants is not None and int(max_significants) > 0:
         threshold_idx = jnp.minimum(threshold_idx, int(max_significants) - 1)
-        topk_covers_threshold = jnp.full(
-            (n_images,),
-            int(max_significants) <= int(topk),
-            dtype=bool,
+        topk_covers_threshold = (
+            jnp.any(crosses, axis=-1)
+            | jnp.full((n_images,), int(max_significants) <= int(topk), dtype=bool)
+            | (positive_counts <= int(topk))
         )
     else:
-        topk_covers_threshold = jnp.any(crosses, axis=-1) | jnp.full(
-            (n_images,),
-            int(topk) == int(weights_flat.shape[-1]),
-            dtype=bool,
+        topk_covers_threshold = (
+            jnp.any(crosses, axis=-1)
+            | (positive_counts <= int(topk))
+            | jnp.full(
+                (n_images,),
+                int(topk) == int(weights_flat.shape[-1]),
+                dtype=bool,
+            )
         )
 
     threshold_val = top_weights[jnp.arange(n_images), threshold_idx]
-    mask = weights_flat >= threshold_val[:, None]
+    mask = (weights_flat > 0.0) & (weights_flat >= threshold_val[:, None])
     n_significant = jnp.sum(mask, axis=-1).astype(jnp.int32)
     return mask, n_significant, topk_covers_threshold
 
@@ -268,6 +282,7 @@ def compute_pass2_stats(
     reconstruction_padding_factor=1,
     image_corrections=None,
     scale_corrections=None,
+    group_ids=None,
     image_pre_shifts=None,
     use_float64_scoring=False,
     do_gridding_correction=False,
@@ -564,6 +579,7 @@ def compute_pass2_stats_sparse(
     reconstruction_padding_factor=1,
     image_corrections=None,
     scale_corrections=None,
+    group_ids=None,
     image_pre_shifts=None,
     use_float64_scoring=False,
     do_gridding_correction=False,
@@ -581,8 +597,13 @@ def compute_pass2_stats_sparse(
     fine_translations_override=None,
     fine_translation_parent_override=None,
     relion_half_volume_mstep=False,
+    relion_x_half_mstep=False,
+    relion_fine_mstep_prune=False,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
+    relion_projector_half=None,
+    relion_projector_r_max=None,
+    adaptive_fraction=0.999,
     use_perimage_reference=False,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
@@ -606,16 +627,24 @@ def compute_pass2_stats_sparse(
     """
     if use_perimage_reference and (return_score_log_z or return_score_log_z_only):
         raise NotImplementedError("score-logZ returns are only implemented for the bucketed sparse pass-2 path")
+    if use_perimage_reference and group_ids is not None:
+        logger.warning(
+            "Sparse per-image reference pass-2 does not accumulate native group-scale correction stats; "
+            "use the bucketed sparse pass-2 path for native scale updates."
+        )
     full_grid_reference = (
         all(samples is None for samples in significant_sample_indices)
         and not return_score_log_z
         and not return_score_log_z_only
         and normalization_log_z is None
         and normalization_other_score_log_z is None
+        and group_ids is None
         and fine_rotations_override is None
         and fine_rotation_parent_override is None
         and fine_translations_override is None
         and fine_translation_parent_override is None
+        and not relion_x_half_mstep
+        and not relion_fine_mstep_prune
         and relion_firstiter_score_mode == "gaussian"
         and not relion_firstiter_winner_take_all
     )
@@ -644,6 +673,7 @@ def compute_pass2_stats_sparse(
             reconstruction_padding_factor=reconstruction_padding_factor,
             image_corrections=image_corrections,
             scale_corrections=scale_corrections,
+            group_ids=group_ids,
             image_pre_shifts=image_pre_shifts,
             use_float64_scoring=use_float64_scoring,
             translation_prior_centers=translation_prior_centers,
@@ -661,9 +691,17 @@ def compute_pass2_stats_sparse(
             fine_translations_override=fine_translations_override,
             fine_translation_parent_override=fine_translation_parent_override,
             relion_half_volume_mstep=relion_half_volume_mstep,
+            relion_x_half_mstep=relion_x_half_mstep,
+            relion_fine_mstep_prune=relion_fine_mstep_prune,
             relion_firstiter_score_mode=relion_firstiter_score_mode,
             relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+            relion_projector_half=relion_projector_half,
+            relion_projector_r_max=relion_projector_r_max,
+            adaptive_fraction=adaptive_fraction,
         )
+
+    if relion_projector_half is not None:
+        raise NotImplementedError("RELION projector sparse pass-2 requires the bucketed implementation")
 
     return _compute_pass2_stats_sparse_perimage_reference(
         experiment_dataset,
@@ -687,6 +725,7 @@ def compute_pass2_stats_sparse(
         reconstruction_padding_factor=reconstruction_padding_factor,
         image_corrections=image_corrections,
         scale_corrections=scale_corrections,
+        group_ids=group_ids,
         image_pre_shifts=image_pre_shifts,
         translation_prior_centers=translation_prior_centers,
         use_float64_scoring=use_float64_scoring,
@@ -726,6 +765,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
     reconstruction_padding_factor=1,
     image_corrections=None,
     scale_corrections=None,
+    group_ids=None,
     image_pre_shifts=None,
     translation_prior_centers=None,
     use_float64_scoring=False,

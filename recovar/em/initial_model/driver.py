@@ -21,9 +21,8 @@ from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star, write_star
 from recovar.em import sampling
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
-    make_relion_translation_log_prior,
+    relion_round_away_from_zero,
     relion_sigma_offset_prior_center,
-    relion_translation_prior_center,
 )
 from recovar.reconstruction.noise import make_radial_noise
 from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion, write_relion_mrc
@@ -346,12 +345,12 @@ def _image_origin_offsets_pixels_from_star(main_star, dataset) -> np.ndarray:
         shifts = pixels
     if not np.all(np.isfinite(shifts)):
         raise ValueError("STAR origin shifts must be finite")
-    return shifts.astype(np.float32)
+    return shifts.astype(np.float64, copy=False)
 
 
 def _image_pre_shifts_from_star(main_star, dataset) -> np.ndarray:
     """RELION rounded old-offset image pre-shifts in pixel units (accelerated path)."""
-    return np.rint(_image_origin_offsets_pixels_from_star(main_star, dataset)).astype(np.float32)
+    return relion_round_away_from_zero(_image_origin_offsets_pixels_from_star(main_star, dataset))
 
 
 def _particle_state_from_star(main_star, dataset) -> NativeParticleState:
@@ -881,17 +880,18 @@ def _translation_log_prior(
     if sigma_angstrom <= 0.0:
         raise ValueError("translation_sigma_angstrom must be positive when provided")
     translations = np.asarray(translations, dtype=np.float32)
-    centers_arr = None
+    shared = centers is None
     if centers is not None:
         centers_arr = np.asarray(centers, dtype=np.float32)
         if centers_arr.ndim != 2 or centers_arr.shape[1] != 2:
             raise ValueError(f"translation prior centers must have shape (N, 2), got {centers_arr.shape}")
-    return make_relion_translation_log_prior(
-        translations[:, :2],
-        voxel_size=float(voxel_size),
-        sigma_offset_angstrom=sigma_angstrom,
-        prior_centers=centers_arr,
-    )
+    else:
+        centers_arr = np.zeros((1, 2), dtype=np.float32)
+
+    diffs_angstrom = (translations[None, :, :2] - centers_arr[:, None, :2]) * float(voxel_size)
+    log_prior = -0.5 * np.sum(diffs_angstrom**2, axis=-1) / (sigma_angstrom**2)
+    log_prior = log_prior.astype(np.float32, copy=False)
+    return log_prior[0] if shared else log_prior
 
 
 def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteration: int) -> float:
@@ -996,7 +996,7 @@ def _dense_estep_config(
     sigma_offset_angstrom: float | None = None,
     class_log_priors: np.ndarray | None = None,
 ) -> DenseInitialModelEstepConfig:
-    image_pre_shifts = np.rint(np.asarray(translation_offsets, dtype=np.float32)).astype(np.float32)
+    image_pre_shifts = relion_round_away_from_zero(translation_offsets)
     coarse_translations = np.asarray(
         sampling_plan.coarse_translations
         if sampling_plan.coarse_translations is not None
@@ -1014,12 +1014,14 @@ def _dense_estep_config(
         sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
     else:
         sigma_angstrom = float(sigma_offset_angstrom)
-    # relion_translation_prior_center cancels voxel_size scaling in make_relion_translation_log_prior
-    # (RELION's mixed-unit pdf_offset; K=2 c2 parity fix 2026-05-08).
+    # InitialModel pre-applies rounded image shifts, so pdf_offset is centered
+    # on the remaining sub-pixel residual and scored in Angstrom units.
+    residual_offsets = np.asarray(translation_offsets, dtype=np.float32)[:, :2] - image_pre_shifts[:, :2]
+    translation_prior_centers = (residual_offsets / float(dataset.voxel_size)).astype(np.float32, copy=False)
     _prior_kwargs = dict(
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=sigma_angstrom,
-        centers=relion_translation_prior_center(translation_offsets, float(dataset.voxel_size)),
+        centers=translation_prior_centers,
     )
     coarse_translation_log_prior = _translation_log_prior(coarse_prior_translations, **_prior_kwargs)
     translation_log_prior = _translation_log_prior(sampling_plan.translations, **_prior_kwargs)
@@ -1239,7 +1241,7 @@ def _update_particle_state_from_estep_meta(
         assignments = np.asarray(pose, dtype=np.int64).reshape(-1)
         trans = np.asarray(translations, dtype=np.float32)
         translation_ids = np.mod(assignments, int(trans.shape[0]))
-        base = np.rint(particle_state.translation_offsets[ids]).astype(np.float32)
+        base = relion_round_away_from_zero(particle_state.translation_offsets[ids])
         particle_state.translation_offsets[ids] = base + trans[translation_ids, :2]
         particle_state.pose_assignments = _ensure_field(particle_state.pose_assignments, (N,), np.int32, -1)
         particle_state.pose_assignments[ids] = assignments.astype(np.int32, copy=False)

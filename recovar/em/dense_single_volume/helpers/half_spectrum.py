@@ -78,11 +78,34 @@ def make_relion_noise_shell_indices_half(image_shape):
     return jnp.asarray(shell_indices.reshape(-1), dtype=jnp.int32)
 
 
-def bin_shell_values_np(values, shell_indices, n_shells):
-    """Bin per-pixel values into integer shell indices on host."""
+def bin_shell_values_jax(values, shell_indices, n_shells):
+    """Bin per-pixel values into shell indices, dropping RELION sentinel pixels."""
 
+    shell_count = int(n_shells)
+    values = jnp.asarray(values)
+    shell_indices = jnp.asarray(shell_indices, dtype=jnp.int32)
+    sentinel = jnp.asarray(shell_count, dtype=jnp.int32)
+    safe_indices = jnp.where(
+        (shell_indices >= 0) & (shell_indices < shell_count),
+        shell_indices,
+        sentinel,
+    )
+    bins = jnp.zeros(shell_count + 1, dtype=values.dtype)
+    return bins.at[safe_indices].add(values)[:shell_count]
+
+
+def bin_shell_values_np(values, shell_indices, n_shells):
+    """Bin per-pixel values into shell indices, dropping sentinel pixels on host."""
+
+    shell_count = int(n_shells)
+    shell_indices_np = np.asarray(shell_indices, dtype=np.int64)
+    safe_indices = np.where(
+        (shell_indices_np >= 0) & (shell_indices_np < shell_count),
+        shell_indices_np,
+        shell_count,
+    )
     return np.bincount(
-        np.asarray(shell_indices, dtype=np.int64),
+        safe_indices,
         weights=np.asarray(values, dtype=np.float64),
-        minlength=int(n_shells),
-    )[: int(n_shells)]
+        minlength=shell_count + 1,
+    )[:shell_count]

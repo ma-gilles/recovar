@@ -205,6 +205,59 @@ class TestOversampledGrid:
                 f"Oversampled point {i} at {angle_deg:.2f}° exceeds coarse step {coarse_step:.2f}°"
             )
 
+    @pytest.mark.parametrize("oversampling_order", [1, 2])
+    @pytest.mark.parametrize("random_perturbation", [0.0, 0.461207])
+    def test_recovar_sampled_oversampling_matches_relion_binding_order(self, oversampling_order, random_perturbation):
+        """RECOVAR's sampled oversampling path must preserve RELION child order."""
+        from recovar.em.sampling import (
+            _relion_euler_angles_to_matrix,
+            get_oversampled_rotation_grid_from_samples,
+            rotation_grid_n_in_planes,
+        )
+
+        order = 2
+        n_pixels = healpy.nside2npix(2**order)
+        parent_samples = [
+            0,
+            5,
+            n_pixels + 17,
+            3 * n_pixels + 191,
+        ]
+        matrices, parent_map, child_indices = get_oversampled_rotation_grid_from_samples(
+            np.asarray(parent_samples, dtype=np.int64),
+            order,
+            oversampling_order=oversampling_order,
+            random_perturbation=random_perturbation,
+            return_rotation_indices=True,
+            rotation_index_order="recovar",
+        )
+
+        expected_blocks = []
+        expected_parent = []
+        for parent_pos, sample in enumerate(parent_samples):
+            idir = int(sample % n_pixels)
+            ipsi = int(sample // n_pixels)
+            expected_eulers = get_oversampled_orientations(
+                order,
+                oversampling_order,
+                idir,
+                ipsi,
+                random_perturbation,
+            )
+            expected_blocks.append(_relion_euler_angles_to_matrix(expected_eulers).astype(np.float32))
+            expected_parent.extend([parent_pos] * expected_eulers.shape[0])
+
+        expected_matrices = np.concatenate(expected_blocks, axis=0)
+        np.testing.assert_array_equal(parent_map, np.asarray(expected_parent, dtype=np.int64))
+        np.testing.assert_allclose(matrices, expected_matrices, rtol=2e-5, atol=2e-5)
+
+        fine_order = order + oversampling_order
+        fine_n_pixels = healpy.nside2npix(2**fine_order)
+        fine_n_psi = rotation_grid_n_in_planes(fine_order)
+        assert child_indices.shape == parent_map.shape
+        assert np.all(child_indices >= 0)
+        assert np.all(child_indices < fine_n_pixels * fine_n_psi)
+
 
 class TestPerturbation:
     """Compare RELION perturbation against recovar's apply_relion_rotation_perturbation."""

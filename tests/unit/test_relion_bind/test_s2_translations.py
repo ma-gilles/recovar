@@ -104,6 +104,45 @@ class TestOversampledTranslations:
         assert abs(actual_x - expected_spacing) < 1e-10
         assert abs(actual_y - expected_spacing) < 1e-10
 
+    @pytest.mark.parametrize("oversampling_order", [1, 2])
+    @pytest.mark.parametrize("random_perturbation", [0.0, 0.461207])
+    def test_recovar_oversampled_grid_matches_relion_binding_order(self, oversampling_order, random_perturbation):
+        """RECOVAR must preserve RELION's translation child order and perturbation."""
+        from recovar.em.sampling import (
+            apply_relion_translation_perturbation,
+            get_oversampled_translation_grid,
+            get_translation_grid,
+        )
+
+        offset_range = 10.0
+        offset_step = 2.0
+        pixel_size = 1.5
+        parent_translations = get_translation_grid(offset_range, offset_step) / pixel_size
+        parent_step_pixels = offset_step / pixel_size
+
+        for itrans in [0, 7, parent_translations.shape[0] - 1]:
+            recovar_children, parent_map = get_oversampled_translation_grid(
+                parent_translations[itrans : itrans + 1],
+                parent_step_pixels,
+                oversampling_order=oversampling_order,
+            )
+            recovar_children = apply_relion_translation_perturbation(
+                recovar_children,
+                random_perturbation,
+                parent_step_pixels,
+            )
+            relion_children = get_oversampled_translations(
+                offset_range,
+                offset_step,
+                itrans,
+                oversampling_order,
+                pixel_size,
+                random_perturbation,
+            )
+
+            np.testing.assert_allclose(recovar_children, relion_children, atol=1e-12, rtol=1e-12)
+            np.testing.assert_array_equal(parent_map, np.zeros(relion_children.shape[0], dtype=np.int64))
+
 
 class TestTranslationPerturbation:
     """Verify translation perturbation matches RELION's formula."""

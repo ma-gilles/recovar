@@ -112,6 +112,19 @@ class TestRefinementStateConstruction:
 
         assert state.has_fine_enough_angular_sampling is True
 
+    def test_resolution_required_sampling_can_be_fine_enough_without_acc_rot(self):
+        """Finite resolution-implied sampling can terminate non-replay runs."""
+        state = RefinementState(
+            healpix_order=7,
+            adaptive_oversampling=1,
+            acc_rot=float("inf"),
+            current_resolution=15.11,
+            particle_diameter_angstrom=200.0,
+        )
+
+        assert resolution_required_angular_sampling(15.11, 200.0) == pytest.approx(8.5714, rel=1e-3)
+        assert state.has_fine_enough_angular_sampling is True
+
     def test_should_do_local_search_at_order_4(self):
         state = RefinementState(healpix_order=4)
         assert state.should_do_local_search is True
@@ -315,6 +328,19 @@ class TestCheckConvergence:
             nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
         )
         assert check_convergence(state) is False
+
+    def test_converged_when_resolution_fine_enough_without_acc_rot(self):
+        state = RefinementState(
+            healpix_order=7,
+            adaptive_oversampling=1,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=MAX_NR_ITER_WO_RESOL_GAIN,
+            nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+            acc_rot=float("inf"),
+            current_resolution=15.11,
+            particle_diameter_angstrom=200.0,
+        )
+        assert check_convergence(state) is True
 
 
 # =========================================================================

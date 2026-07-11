@@ -2,11 +2,15 @@
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from recovar.em.sampling import relion_sampling_perturbation_for_iteration
 from scripts.run_full_refinement import (
     _effective_perturb_seed,
+    _resolve_effective_max_healpix_order,
+    _jsonable_profile_rows,
+    _pose_history_by_image,
     _refine_sampling_kwargs,
     _resolve_relion_sampling_orders,
 )
@@ -25,6 +29,48 @@ def test_relion_sampling_order_rejects_negative_values():
 
     with pytest.raises(ValueError):
         _resolve_relion_sampling_orders(healpix_order=1, adaptive_oversampling=-1)
+
+
+def test_kclass_default_max_healpix_order_matches_relion_fixed_class3d_sampling():
+    cap, source = _resolve_effective_max_healpix_order(
+        n_classes=4,
+        healpix_order=1,
+        max_healpix_order=None,
+    )
+
+    assert cap == 1
+    assert "Class3D fixed" in source
+
+
+def test_k1_default_max_healpix_order_keeps_autorefine_cap():
+    cap, source = _resolve_effective_max_healpix_order(
+        n_classes=1,
+        healpix_order=3,
+        max_healpix_order=None,
+    )
+
+    assert cap == 7
+    assert "auto-refine" in source
+
+
+def test_explicit_max_healpix_order_allows_kclass_refinement():
+    cap, source = _resolve_effective_max_healpix_order(
+        n_classes=4,
+        healpix_order=1,
+        max_healpix_order=3,
+    )
+
+    assert cap == 3
+    assert source == "explicit CLI"
+
+
+def test_explicit_max_healpix_order_cannot_be_coarser_than_start():
+    with pytest.raises(ValueError, match="max_healpix_order"):
+        _resolve_effective_max_healpix_order(
+            n_classes=4,
+            healpix_order=2,
+            max_healpix_order=1,
+        )
 
 
 def test_cli_translation_grid_parameters_seed_refinement_state():
@@ -60,3 +106,76 @@ def test_relion_seeded_sampling_perturbation_sequence_matches_reference_star():
     ]
 
     assert values == pytest.approx([0.460047, -0.25278, 0.125066], abs=5e-6)
+
+
+def test_pose_history_by_image_restores_original_particle_order():
+    half_indices = [
+        np.asarray([2, 0], dtype=np.int64),
+        np.asarray([3, 1], dtype=np.int64),
+    ]
+    half_pose_arrays = [
+        np.asarray([[20.0, 21.0], [0.0, 1.0]], dtype=np.float32),
+        np.asarray([[30.0, 31.0], [10.0, 11.0]], dtype=np.float32),
+    ]
+
+    by_image = _pose_history_by_image(
+        half_pose_arrays,
+        half_indices,
+        n_images=4,
+        trailing_shape=(2,),
+        dtype=np.float32,
+    )
+
+    np.testing.assert_allclose(
+        by_image,
+        np.asarray(
+            [
+                [0.0, 1.0],
+                [10.0, 11.0],
+                [20.0, 21.0],
+                [30.0, 31.0],
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="does not match half-set index length"):
+        _pose_history_by_image(
+            [half_pose_arrays[0][:1], half_pose_arrays[1]],
+            half_indices,
+            n_images=4,
+            trailing_shape=(2,),
+            dtype=np.float32,
+        )
+
+
+def test_profile_rows_are_jsonable_for_nested_numpy_values():
+    rows = [
+        {
+            "phase": "iteration",
+            "sparse_kclass_fused_s": np.float64(3.5),
+            "local_adaptive_pass2_parent_mode": "pruned_parent",
+            "local_adaptive_pass2_full_parent": np.bool_(False),
+            "counts": np.asarray([1, 2, 3], dtype=np.int32),
+            "per_class_profile_summary": (
+                {"class_index": np.int64(1), "score_s": np.float32(1.25)},
+                {"class_index": np.int64(2), "score_s": np.float32(2.25)},
+            ),
+        }
+    ]
+
+    jsonable = _jsonable_profile_rows(rows)
+
+    assert jsonable == [
+        {
+            "phase": "iteration",
+            "sparse_kclass_fused_s": 3.5,
+            "local_adaptive_pass2_parent_mode": "pruned_parent",
+            "local_adaptive_pass2_full_parent": False,
+            "counts": [1, 2, 3],
+            "per_class_profile_summary": [
+                {"class_index": 1, "score_s": pytest.approx(float(np.float32(1.25)))},
+                {"class_index": 2, "score_s": pytest.approx(float(np.float32(2.25)))},
+            ],
+        }
+    ]

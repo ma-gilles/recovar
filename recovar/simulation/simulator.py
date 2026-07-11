@@ -7,6 +7,7 @@ import os
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import mrcfile
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
@@ -190,6 +191,94 @@ def get_pose_ctf_generator(option):
         return get_params_generator(load_second_dataset_params)
 
 
+def _normalized_vector(vector, *, name):
+    vector = np.asarray(vector, dtype=float)
+    if vector.shape != (3,):
+        raise ValueError(f"{name} must have shape (3,), got {vector.shape}")
+    norm = np.linalg.norm(vector)
+    if norm == 0:
+        raise ValueError(f"{name} must be nonzero")
+    return vector / norm
+
+
+def _orthogonal_unit_vector(vector):
+    vector = _normalized_vector(vector, name="vector")
+    ref = np.array([1.0, 0.0, 0.0]) if abs(vector[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    out = ref - vector * float(ref @ vector)
+    return out / np.linalg.norm(out)
+
+
+def _kent_frame(mu, mu0):
+    gamma1 = _normalized_vector(mu0, name="mu0")
+    mu = _normalized_vector(mu, name="mu")
+    gamma2 = mu - gamma1 * float(mu @ gamma1)
+    gamma2_norm = np.linalg.norm(gamma2)
+    if gamma2_norm == 0:
+        gamma2 = _orthogonal_unit_vector(gamma1)
+    else:
+        gamma2 = gamma2 / gamma2_norm
+    gamma3 = np.cross(gamma1, gamma2)
+    gamma3 = gamma3 / np.linalg.norm(gamma3)
+    return gamma1, gamma2, gamma3
+
+
+def _sample_kent_points_fallback(n_images, alpha, beta, mu, mu0, rng):
+    """Sample Kent-like viewing directions without the optional sphstat package."""
+    n_images = int(n_images)
+    if n_images < 0:
+        raise ValueError("n_images must be nonnegative")
+    if n_images == 0:
+        return np.empty((0, 3), dtype=float)
+
+    gamma1, gamma2, gamma3 = _kent_frame(mu, mu0)
+    envelope_log_density = abs(float(alpha)) + abs(float(beta))
+    accepted = []
+    accepted_count = 0
+    batch_size = max(4096, min(max(4 * n_images, 4096), 262144))
+    max_draws = max(100000, 500 * n_images)
+    draws = 0
+
+    while accepted_count < n_images and draws < max_draws:
+        candidates = rng.normal(size=(batch_size, 3))
+        candidates /= np.linalg.norm(candidates, axis=1, keepdims=True)
+        coord1 = candidates @ gamma1
+        coord2 = candidates @ gamma2
+        coord3 = candidates @ gamma3
+        log_density = float(alpha) * coord1 + float(beta) * (coord2**2 - coord3**2)
+        keep = np.log(rng.random(batch_size)) <= (log_density - envelope_log_density)
+        if np.any(keep):
+            block = candidates[keep]
+            need = n_images - accepted_count
+            accepted.append(block[:need])
+            accepted_count += min(block.shape[0], need)
+        draws += batch_size
+
+    if accepted_count < n_images:
+        logger.warning(
+            "Kent rejection fallback accepted %d/%d samples after %d draws; filling the tail with tangent-normal samples",
+            accepted_count,
+            n_images,
+            draws,
+        )
+        need = n_images - accepted_count
+        kappa = max(abs(float(alpha)), 1e-6)
+        ovalness = min(abs(float(beta)), 0.49 * kappa)
+        sigma_major = 1.0 / np.sqrt(max(kappa - 2.0 * ovalness, 1e-3))
+        sigma_minor = 1.0 / np.sqrt(max(kappa + 2.0 * ovalness, 1e-3))
+        if beta < 0:
+            sigma_major, sigma_minor = sigma_minor, sigma_major
+        center = gamma1 if alpha >= 0 else -gamma1
+        tangent = (
+            rng.normal(scale=sigma_major, size=(need, 1)) * gamma2[None, :]
+            + rng.normal(scale=sigma_minor, size=(need, 1)) * gamma3[None, :]
+        )
+        tail = center[None, :] + tangent
+        tail /= np.linalg.norm(tail, axis=1, keepdims=True)
+        accepted.append(tail)
+
+    return np.concatenate(accepted, axis=0)[:n_images]
+
+
 def kent_sampling_scheme(n_images, grid_size, seed=0, arguments=None):
     """
     Generate Kent (5-parameter Fisher-Bingham - FB5) distributed data on the unit sphere
@@ -207,13 +296,8 @@ def kent_sampling_scheme(n_images, grid_size, seed=0, arguments=None):
     """
 
     np.random.seed(seed)
+    rng = np.random.default_rng(seed)
     ctf_params, _, _ = generate_simulated_params_from_real(n_images, load_second_dataset_params, grid_size)
-    try:
-        import sphstat
-
-    except ImportError:
-        raise ImportError("sphstat is not installed. Please install it with `pip install sphstat`")
-
     if arguments is not None:
         alpha = float(arguments[0])
         beta = float(arguments[1])
@@ -226,10 +310,16 @@ def kent_sampling_scheme(n_images, grid_size, seed=0, arguments=None):
         mu = np.array([1.0, 1.0, 0.0])
         mu = mu / np.linalg.norm(mu)
 
-    sample = sphstat.distributions.kent(n_images, alpha, beta, mu, mu0)
+    try:
+        import sphstat
 
-    unit_vectors = sample["points"]
-    theta = np.random.rand(n_images) * 2 * np.pi
+        sample = sphstat.distributions.kent(n_images, alpha, beta, mu, mu0)
+        unit_vectors = sample["points"]
+    except ImportError:
+        logger.warning("sphstat is not installed; using internal Kent/Fisher-Bingham fallback sampler")
+        unit_vectors = _sample_kent_points_fallback(n_images, alpha, beta, mu, mu0, rng)
+
+    theta = rng.random(n_images) * 2 * np.pi
     rotations = cryo_rotation_batch(unit_vectors, theta)
 
     translations = np.zeros([n_images, 2])
@@ -797,7 +887,14 @@ def generate_synthetic_dataset(
     # Save outputs
     particles_file = output_folder + f"/particles.{grid_size}.mrcs"
 
-    utils.write_mrc_stack(particles_file, main_image_stack, voxel_size=voxel_size, dtype=image_dtype)
+    if streaming_mmap:
+        if mrc_file is not None:
+            if hasattr(mrc_file, "flush"):
+                mrc_file.flush()
+        if hasattr(main_image_stack, "flush"):
+            main_image_stack.flush()
+    else:
+        utils.write_mrc_stack(particles_file, main_image_stack, voxel_size=voxel_size, dtype=image_dtype)
     poses = (rots.astype(np.float32), trans.astype(np.float32))
     utils.pickle_dump(poses, output_folder + "/poses.pkl")
     save_ctf_params(output_folder, grid_size, ctf_params, voxel_size)

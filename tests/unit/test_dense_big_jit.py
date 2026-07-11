@@ -281,7 +281,7 @@ def _reference_scores(s, *, score_mode="gaussian", use_window=False, current_siz
                 IMAGE_SHAPE,
                 VOLUME_SHAPE,
             )
-    if score_mode == "gaussian":
+    if score_mode != "normalized_cc":
         scores = scores + s["rotation_log_prior"][:, :, None]
         scores = scores + s["translation_log_prior"][:, None, :]
     scores = jnp.where(s["candidate_mask"][None, :, :], scores, -jnp.inf)
@@ -475,6 +475,35 @@ def test_dense_big_jit_pass1_matches_dense_primitives_for_modes(score_mode, use_
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_dense_big_jit_normalized_cc_ignores_priors_but_keeps_masks():
+    s = _inputs()
+    no_prior = dict(s)
+    no_prior["rotation_log_prior"] = jnp.zeros_like(s["rotation_log_prior"])
+    no_prior["translation_log_prior"] = jnp.zeros_like(s["translation_log_prior"])
+
+    with_prior = _run_big_jit(
+        s,
+        run_mstep=False,
+        score_mode="normalized_cc",
+    )
+    without_prior = _run_big_jit(
+        no_prior,
+        run_mstep=False,
+        score_mode="normalized_cc",
+    )
+    np.testing.assert_allclose(np.asarray(with_prior.block_max), np.asarray(without_prior.block_max))
+    np.testing.assert_allclose(np.asarray(with_prior.block_sum_exp), np.asarray(without_prior.block_sum_exp))
+
+    masked = dict(s)
+    masked["candidate_mask"] = s["candidate_mask"].at[0, :].set(False)
+    masked_result = _run_big_jit(
+        masked,
+        run_mstep=False,
+        score_mode="normalized_cc",
+    )
+    assert not np.allclose(np.asarray(with_prior.block_max), np.asarray(masked_result.block_max))
 
 
 def test_logsumexp_initial_block_handles_underflow_without_nan():

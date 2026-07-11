@@ -83,9 +83,18 @@ def prepare_benchmark(
     voxel_size: float | None,
     noise_level: float,
     noise_model: str,
+    dataset_params_option: str,
     init_resolution_ang: float,
     pdb_path: str | None,
     pdb_bfactor: float,
+    noise_scale_std: float,
+    contrast_std: float,
+    volume_radius: float,
+    percent_outliers: float,
+    put_extra_particles: bool,
+    image_offset_n_std: float,
+    relion_bg_radius_px: float | None,
+    noise_rng_batch_size: int | None,
     relion_normalize: bool,
     streaming_mmap: bool,
     streaming_chunk_size: int,
@@ -98,6 +107,18 @@ def prepare_benchmark(
         raise ValueError(f"grid_size must be positive, got {grid_size}")
     if init_resolution_ang <= 0:
         raise ValueError(f"init_resolution_ang must be positive, got {init_resolution_ang}")
+    if noise_level < 0:
+        raise ValueError(f"noise_level must be non-negative, got {noise_level}")
+    if noise_scale_std < 0:
+        raise ValueError(f"noise_scale_std must be non-negative, got {noise_scale_std}")
+    if contrast_std < 0:
+        raise ValueError(f"contrast_std must be non-negative, got {contrast_std}")
+    if not 0.0 <= percent_outliers <= 1.0:
+        raise ValueError(f"percent_outliers must be in [0, 1], got {percent_outliers}")
+    if volume_radius <= 0:
+        raise ValueError(f"volume_radius must be positive, got {volume_radius}")
+    if image_offset_n_std < 0:
+        raise ValueError(f"image_offset_n_std must be non-negative, got {image_offset_n_std}")
     if streaming_mmap and not relion_normalize:
         raise ValueError("streaming_mmap requires relion_normalize=True in the simulator")
     if voxel_size is None:
@@ -129,6 +150,32 @@ def prepare_benchmark(
     else:
         logger.info("Reusing existing target-grid PDB state at %s", volume_path)
 
+    outlier_file_input = None
+    if percent_outliers > 0.0:
+        outlier_prefix = output_dir / "pdb_outlier_state" / "outlier"
+        outlier_file = output_dir / "pdb_outlier_state" / "outlier0001.mrc"
+        if not outlier_file.exists():
+            logger.info(
+                "Generating deterministic PDB outlier state: grid=%d voxel=%.6g B=%.6g source=%s",
+                grid_size,
+                voxel_size,
+                pdb_bfactor,
+                pdb_path or "recovar/assets/5nrl_atoms.npz",
+            )
+            generate_trajectory_volumes(
+                output_dir=str(output_dir),
+                grid_size=grid_size,
+                n_volumes=2,
+                voxel_size=voxel_size,
+                Bfactor=pdb_bfactor,
+                max_rotation_degrees=40.0,
+                pdb_path=pdb_path,
+                output_prefix=str(outlier_prefix),
+            )
+        else:
+            logger.info("Reusing PDB outlier state at %s", outlier_file)
+        outlier_file_input = str(outlier_file)
+
     required = _required_dataset_files(output_dir, grid_size)
     if not all(path.exists() for path in required):
         logger.info(
@@ -149,22 +196,25 @@ def prepare_benchmark(
             n_images,
             grid_size=grid_size,
             volume_distribution=np.asarray([1.0], dtype=np.float64),
-            dataset_params_option="uniform",
+            dataset_params_option=dataset_params_option,
             noise_level=noise_level,
             noise_model=noise_model,
-            put_extra_particles=False,
-            percent_outliers=0.0,
-            volume_radius=0.7,
+            put_extra_particles=put_extra_particles,
+            percent_outliers=percent_outliers,
+            volume_radius=volume_radius,
             trailing_zero_format_in_vol_name=True,
-            noise_scale_std=0.0,
-            contrast_std=0.0,
+            noise_scale_std=noise_scale_std,
+            contrast_std=contrast_std,
             disc_type=disc_type,
             n_tilts=-1,
             image_dtype=np.float32,
-            outlier_file_input=None,
+            outlier_file_input=outlier_file_input,
             relion_normalize=relion_normalize,
             streaming_mmap=streaming_mmap,
             streaming_chunk_size=streaming_chunk_size,
+            image_offset_n_std=image_offset_n_std,
+            relion_bg_radius_px=relion_bg_radius_px,
+            noise_rng_batch_size=noise_rng_batch_size,
         )
     else:
         logger.info("Reusing existing dataset files in %s", output_dir)
@@ -172,8 +222,16 @@ def prepare_benchmark(
     sim_info_path = output_dir / "simulation_info.pkl"
     sim_info = utils.pickle_load(sim_info_path)
     assignments = np.asarray(sim_info["image_assignment"])
-    if set(np.unique(assignments).tolist()) != {0}:
-        raise RuntimeError(f"Expected a single-class dataset, got assignments {np.unique(assignments).tolist()}")
+    allowed_assignments = {0}
+    if percent_outliers > 0.0:
+        allowed_assignments.add(-1)
+    unique_assignments = set(np.unique(assignments).tolist())
+    if 0 not in unique_assignments or not unique_assignments.issubset(allowed_assignments):
+        raise RuntimeError(
+            f"Expected a single target class"
+            f"{' plus outliers' if percent_outliers > 0.0 else ''}, "
+            f"got assignments {sorted(unique_assignments)}",
+        )
 
     sim_info["pdb_k1_generation"] = {
         "source": "recovar.simulation.trajectory_generation.generate_trajectory_volumes",
@@ -181,13 +239,23 @@ def prepare_benchmark(
         "grid_size": grid_size,
         "voxel_size": voxel_size,
         "pdb_bfactor": pdb_bfactor,
+        "dataset_params_option": dataset_params_option,
         "noise_level": noise_level,
         "noise_model": noise_model,
+        "noise_scale_std": noise_scale_std,
+        "contrast_std": contrast_std,
+        "volume_radius": volume_radius,
+        "percent_outliers": percent_outliers,
+        "put_extra_particles": put_extra_particles,
+        "image_offset_n_std": image_offset_n_std,
+        "relion_bg_radius_px": relion_bg_radius_px,
+        "noise_rng_batch_size": noise_rng_batch_size,
         "init_resolution_ang": init_resolution_ang,
         "seed": seed,
         "relion_normalize": relion_normalize,
         "streaming_mmap": streaming_mmap,
         "disc_type": disc_type,
+        "outlier_file_input": outlier_file_input,
     }
     utils.pickle_dump(sim_info, sim_info_path)
 
@@ -214,6 +282,11 @@ def main() -> None:
     parser.add_argument("--voxel-size", type=float, default=None)
     parser.add_argument("--noise-level", type=float, default=0.001)
     parser.add_argument("--noise-model", choices=("white", "radial1"), default="white")
+    parser.add_argument(
+        "--dataset-params-option",
+        default="uniform",
+        help="Pose/CTF generator option forwarded to simulator.generate_synthetic_dataset.",
+    )
     parser.add_argument("--init-resolution-ang", type=float, default=30.0)
     parser.add_argument(
         "--pdb-path",
@@ -226,6 +299,14 @@ def main() -> None:
         default=0.0,
         help="B-factor for target-grid PDB volume generation. Use 0 for near-Nyquist sanity checks.",
     )
+    parser.add_argument("--noise-scale-std", type=float, default=0.0)
+    parser.add_argument("--contrast-std", type=float, default=0.0)
+    parser.add_argument("--volume-radius", type=float, default=0.7)
+    parser.add_argument("--percent-outliers", type=float, default=0.0)
+    parser.add_argument("--put-extra-particles", action="store_true")
+    parser.add_argument("--image-offset-n-std", type=float, default=0.0)
+    parser.add_argument("--relion-bg-radius-px", type=float, default=None)
+    parser.add_argument("--noise-rng-batch-size", type=int, default=None)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument(
         "--relion-normalize",
@@ -256,9 +337,18 @@ def main() -> None:
         voxel_size=args.voxel_size,
         noise_level=args.noise_level,
         noise_model=args.noise_model,
+        dataset_params_option=args.dataset_params_option,
         init_resolution_ang=args.init_resolution_ang,
         pdb_path=args.pdb_path,
         pdb_bfactor=args.pdb_bfactor,
+        noise_scale_std=args.noise_scale_std,
+        contrast_std=args.contrast_std,
+        volume_radius=args.volume_radius,
+        percent_outliers=args.percent_outliers,
+        put_extra_particles=args.put_extra_particles,
+        image_offset_n_std=args.image_offset_n_std,
+        relion_bg_radius_px=args.relion_bg_radius_px,
+        noise_rng_batch_size=args.noise_rng_batch_size,
         relion_normalize=args.relion_normalize,
         streaming_mmap=args.streaming_mmap,
         streaming_chunk_size=args.streaming_chunk_size,

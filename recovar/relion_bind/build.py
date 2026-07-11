@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 BIND_DIR = Path(__file__).parent
-BUILD_DIR = BIND_DIR / "build"
+BUILD_DIR = Path(os.environ.get("RECOVAR_RELION_BIND_BUILD_DIR", BIND_DIR / "build")).expanduser()
 RELION_SRC = Path("/scratch/gpfs/GILLES/mg6942/relion/src")
 
 
@@ -30,7 +30,7 @@ def build():
         print(f"ERROR: RELION source not found at {RELION_SRC}", file=sys.stderr)
         sys.exit(1)
 
-    BUILD_DIR.mkdir(exist_ok=True)
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
 
     cmake_cmd = [
         "cmake",
@@ -49,14 +49,24 @@ def build():
     print(f"Building: {' '.join(make_cmd)}")
     subprocess.check_call(make_cmd, cwd=BUILD_DIR)
 
-    # Copy .so to package directory
+    # Copy .so to package directory for local developer builds. Slurm jobs set
+    # RECOVAR_RELION_BIND_BUILD_DIR to a scratch build directory; keep the
+    # artifact there so quota-full source checkouts do not break setup.
     so_files = list(BUILD_DIR.glob("_relion_bind_core*.so"))
     if not so_files:
         print("ERROR: No .so file produced", file=sys.stderr)
         sys.exit(1)
 
+    if os.environ.get("RECOVAR_RELION_BIND_BUILD_DIR") and os.environ.get(
+        "RECOVAR_RELION_BIND_COPY_TO_PACKAGE", "0"
+    ).strip().lower() not in {"1", "true", "yes", "on"}:
+        print(f"Built external RELION binding: {so_files[0]}")
+        return
+
     dest = BIND_DIR / so_files[0].name
-    shutil.copy2(so_files[0], dest)
+    tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
+    shutil.copy2(so_files[0], tmp_dest)
+    tmp_dest.replace(dest)
     print(f"Installed: {dest}")
 
 

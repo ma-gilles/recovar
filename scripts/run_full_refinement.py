@@ -18,6 +18,7 @@ Environment variables:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -32,8 +33,9 @@ import jax.numpy as jnp
 import jaxlib
 import numpy as np
 
+from recovar import utils
 from recovar.core import fourier_transform_utils as ftu
-from recovar.utils.parity_provenance import _safe_git_commit
+from recovar.utils.parity_provenance import _safe_git_commit, git_worktree_provenance
 
 logging.basicConfig(
     level=logging.INFO,
@@ -68,6 +70,38 @@ def _resolve_relion_sampling_orders(healpix_order: int, adaptive_oversampling: i
     return coarse_order, coarse_order + oversampling
 
 
+def _resolve_effective_max_healpix_order(
+    *,
+    n_classes: int,
+    healpix_order: int,
+    max_healpix_order: int | None,
+) -> tuple[int, str]:
+    """Resolve the backend HEALPix refinement cap.
+
+    RELION Class3D runs launched with ``--healpix_order`` use fixed coarse
+    sampling (``_rlnDoAutoSampling 0`` in the optimiser STAR).  In that mode,
+    adaptive oversampling only controls the pass-2 child grid; it does not let
+    later iterations increase the coarse HEALPix order.  K=1 auto-refine keeps
+    RECOVAR's historical broad cap unless an explicit cap is provided.
+    """
+    init_order = int(healpix_order)
+    if init_order < 0:
+        raise ValueError(f"healpix_order must be non-negative, got {healpix_order}")
+
+    if max_healpix_order is None:
+        if int(n_classes) > 1:
+            return init_order, "RELION Class3D fixed --healpix_order"
+        return 7, "K=1 auto-refine default"
+
+    cap = int(max_healpix_order)
+    if cap < init_order:
+        raise ValueError(
+            "max_healpix_order must be >= healpix_order "
+            f"({cap} < {init_order})",
+        )
+    return cap, "explicit CLI"
+
+
 def _npz_scalar_to_float(npz, key):
     if key not in npz.files:
         return None
@@ -97,6 +131,32 @@ def _pose_history_by_image(iter_entry, half_indices, n_images, trailing_shape, *
             )
         out[half_idx] = arr
     return out
+
+
+def _jsonable_profile_value(value):
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(key): _jsonable_profile_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_profile_value(item) for item in value]
+    try:
+        arr = np.asarray(value)
+    except Exception:
+        return str(value)
+    if arr.shape == ():
+        return _jsonable_profile_value(arr.item())
+    return _jsonable_profile_value(arr.tolist())
+
+
+def _jsonable_profile_rows(rows):
+    return [
+        {str(key): _jsonable_profile_value(value) for key, value in row.items()}
+        for row in rows
+        if isinstance(row, dict)
+    ]
 
 
 def _read_timing_npz(npz_path: Path) -> dict:
@@ -197,6 +257,23 @@ def _load_relion_max_significants(optimiser_star_path):
     return int(match.group(1))
 
 
+def _parse_relion_cli_ini_high(text):
+    """Extract a positive RELION ``--ini_high`` value from an optimiser STAR header."""
+    cli_line = ""
+    for line in str(text).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") and "--" in stripped:
+            cli_line = stripped.lstrip("#").strip()
+            break
+    match = re.search(r"(?:^|\s)--ini_high(?:\s+|=)(\S+)", cli_line)
+    if match is None:
+        return None
+    val = float(match.group(1))
+    if val <= 0.0:
+        return None
+    return val
+
+
 def _parse_relion_tau2_fudge(text):
     """Extract RELION's tau2_fudge from a model or optimiser STAR text block.
 
@@ -234,11 +311,84 @@ def _resolve_tau2_fudge(n_classes, cli_tau2_fudge, relion_init_tau2_fudge):
     return 1.0, "RELION auto-refine default"
 
 
+def _load_relion_it000_model_stars(relion_init_dir, n_classes):
+    """Load RELION iter-0 model STARs for strict cold-start replay.
+
+    Class3D writes a shared ``run_it000_model.star``. AutoRefine writes
+    half-specific ``run_it000_half{1,2}_model.star`` files instead; preserve
+    the shared path when present, and fall back to the half pair for K=1.
+    """
+    import starfile as _starfile
+
+    relion_init_dir = Path(relion_init_dir)
+    shared_model_path = relion_init_dir / "run_it000_model.star"
+    if shared_model_path.exists():
+        model = _starfile.read(str(shared_model_path))
+        return {
+            "models": [model],
+            "model_paths": [shared_model_path],
+            "reference_model": model,
+            "reference_model_path": shared_model_path,
+            "source": "shared",
+        }
+
+    half_model_paths = [
+        relion_init_dir / "run_it000_half1_model.star",
+        relion_init_dir / "run_it000_half2_model.star",
+    ]
+    if int(n_classes) == 1 and all(path.exists() for path in half_model_paths):
+        models = [_starfile.read(str(path)) for path in half_model_paths]
+        return {
+            "models": models,
+            "model_paths": half_model_paths,
+            "reference_model": models[0],
+            "reference_model_path": half_model_paths[0],
+            "source": "half-specific",
+        }
+
+    expected = [shared_model_path, *half_model_paths]
+    missing = [str(path) for path in expected if not path.exists()]
+    raise SystemExit(
+        "--relion_init_dir given but no compatible iter-0 model STAR was found; "
+        f"missing candidates: {', '.join(missing)}",
+    )
+
+
 def _resolve_replay_normcorr(perturb_replay_relion_dir, replay_relion_normcorr):
     """Default normcorr replay on only for explicit RELION replay runs."""
     if replay_relion_normcorr is not None:
         return bool(replay_relion_normcorr)
     return perturb_replay_relion_dir is not None
+
+
+def _format_replay_mean_for_log(values) -> str:
+    arr = np.asarray(values)
+    if arr.size == 0:
+        return "empty"
+    return f"{float(arr.mean()):.4f}"
+
+
+def _load_native_group_ids_per_half(particles_star, half1_idx, half2_idx):
+    """Return 0-based RELION group IDs per half when particles.star provides them."""
+
+    import starfile as _starfile
+
+    data = _starfile.read(str(particles_star))
+    particles = data["particles"] if isinstance(data, dict) else data
+    if "rlnGroupNumber" not in particles.columns:
+        return None
+    group_numbers = np.asarray(particles["rlnGroupNumber"], dtype=np.int64).reshape(-1)
+    if group_numbers.size != len(particles):
+        raise ValueError(
+            f"rlnGroupNumber length {group_numbers.size} does not match particles table length {len(particles)}"
+        )
+    if group_numbers.size and int(np.min(group_numbers)) < 1:
+        raise ValueError("RELION rlnGroupNumber values must be 1-based positive integers")
+    group_ids = group_numbers - 1
+    return [
+        np.asarray(group_ids[np.asarray(half1_idx, dtype=np.int64)], dtype=np.int64),
+        np.asarray(group_ids[np.asarray(half2_idx, dtype=np.int64)], dtype=np.int64),
+    ]
 
 
 def _default_refinement_subsets(n_images, seed, n_classes):
@@ -272,6 +422,7 @@ def _build_replay_iteration_overrides(
     ds_grid,
     *,
     include_normcorr,
+    init_relion_iteration=0,
 ):
     """Build per-iter replay overrides keyed on recovar iteration index.
 
@@ -281,12 +432,19 @@ def _build_replay_iteration_overrides(
     override dict containing:
       * image_corrections: per-image (avg_norm/normcorr) * group_scale
       * scale_corrections: per-image group_scale alone
+      * previous_best_translations / previous_best_rotation_eulers: RELION's
+        previous hard assignments for local-search centering
 
     This matches scripts/run_multi_iter_parity.py::_load_relion_iteration_override
     (the proven replay logic). The recovar iter-k override is read from
     RELION iter-k's model+data (since recovar iter-k corresponds to RELION
     iter-(k+1), and the per-image scalings used at the start of RELION
     iter-(k+1) are the ones written by RELION iter-k's M-step).
+
+    ``init_relion_iteration`` is normally zero. Diagnostic profile runs can
+    set it to a later RELION iteration to jump directly into local search; in
+    that case override slot 0 is sourced from the upstream RELION iteration
+    instead of being left empty.
     """
     import re as _re
     from pathlib import Path as _Path
@@ -299,14 +457,71 @@ def _build_replay_iteration_overrides(
         m = _re.match(r"(\d+)@", str(name))
         return int(m.group(1)) - 1 if m else -1
 
-    overrides = [None] * max_iter
-    for recovar_iter in range(1, max_iter):
+    def _model_has_class_direction_priors(model):
+        return any(str(key).startswith("model_pdf_orient_class_") for key in model)
+
+    def _read_model_direction_prior(model_path, model):
+        if not _model_has_class_direction_priors(model):
+            return None
+        from recovar.em.sampling import read_relion_direction_prior, read_relion_direction_priors
+
+        has_multiple_classes = any(
+            str(key).startswith("model_pdf_orient_class_") and not str(key).endswith("_1")
+            for key in model
+        )
+        if has_multiple_classes:
+            return read_relion_direction_priors(model_path)
+        return read_relion_direction_prior(model_path)
+
+    def _read_model_noise_variance(model, *, image_shape):
+        optics = model.get("model_optics_group_1") if isinstance(model, dict) else None
+        if optics is None or "rlnSigma2Noise" not in optics:
+            return None
+        radial = np.asarray(optics["rlnSigma2Noise"], dtype=np.float64) * float(ds_grid) ** 4
+        return np.asarray(
+            utils.make_radial_image(jnp.asarray(radial), image_shape, extend_last_frequency=True),
+            dtype=np.float32,
+        ).reshape(-1)
+
+    def _read_model_class_tau2(model):
+        if not isinstance(model, dict):
+            return None
+        class_tau2 = []
+        for key, table in model.items():
+            match = _re.fullmatch(r"model_class_(\d+)", str(key))
+            if match is None:
+                continue
+            col = "rlnReferenceTau2" if "rlnReferenceTau2" in table.columns else None
+            if col is None and "rlnReferenceSigma2" in table.columns:
+                col = "rlnReferenceSigma2"
+            if col is None:
+                continue
+            class_tau2.append(
+                (
+                    int(match.group(1)),
+                    np.asarray(table[col], dtype=np.float64) * float(ds_grid) ** 4,
+                )
+            )
+        if len(class_tau2) <= 1:
+            return None
+        class_tau2.sort(key=lambda item: item[0])
+        return np.stack([tau2 for _, tau2 in class_tau2], axis=0)
+
+    # Index i is consumed by iteration_loop for recovar iter i+1 during the
+    # numbered refinement, and by the final all-data pass as len(current_sizes).
+    # Allocate one extra slot so convergence on the last configured numbered
+    # iteration can replay RELION run_it{max_iter:03d}_data.star.
+    overrides = [None] * (max_iter + 1)
+    init_relion_iteration = int(init_relion_iteration)
+    for recovar_iter in range(0, max_iter + 1):
         # recovar iter k uses corrections computed by RELION iter k (which were
         # written into run_it{k}_data.star). recovar iter 1 (the first iter) has
         # no upstream RELION normcorr — leave that override as None so the
         # E-step uses image_corrections=None (=1.0 for all particles, matching
         # RELION iter-0 nc=1.0).
-        relion_iter = recovar_iter  # recovar iter k <-> RELION iter k for normcorr source
+        relion_iter = init_relion_iteration + recovar_iter
+        if relion_iter <= 0:
+            continue
         data_star = relion_dir / f"run_it{relion_iter:03d}_data.star"
         model_h1 = relion_dir / f"run_it{relion_iter:03d}_half1_model.star"
         model_h2 = relion_dir / f"run_it{relion_iter:03d}_half2_model.star"
@@ -324,8 +539,9 @@ def _build_replay_iteration_overrides(
             if model_paths is None:
                 missing.append(f"{model_h1} + {model_h2} or {model_shared}")
             logger.warning(
-                "Replay override for recovar iter %d: missing %s — leaving unset",
+                "Replay override for recovar iter %d (RELION iter %03d): missing %s — leaving unset",
                 recovar_iter + 1,
+                relion_iter,
                 "; ".join(missing),
             )
             continue
@@ -356,7 +572,13 @@ def _build_replay_iteration_overrides(
         # value, which is ~6× too wide and depresses iter-2 Pmax by ~22%.
         sigma_offset_h1 = _scalar(m1["model_general"], "rlnSigmaOffsetsAngst")
         sigma_offset_h2 = _scalar(m2["model_general"], "rlnSigmaOffsetsAngst")
-        sigma_offset_avg = 0.5 * (float(sigma_offset_h1) + float(sigma_offset_h2))
+        sigma_offset_per_half = [float(sigma_offset_h1), float(sigma_offset_h2)]
+        sigma_offset_avg = 0.5 * (sigma_offset_per_half[0] + sigma_offset_per_half[1])
+        noise_h1 = _read_model_noise_variance(m1, image_shape=(int(ds_grid), int(ds_grid)))
+        noise_h2 = _read_model_noise_variance(m2, image_shape=(int(ds_grid), int(ds_grid)))
+        direction_prior_h1 = _read_model_direction_prior(model_paths[0], m1)
+        direction_prior_h2 = _read_model_direction_prior(model_paths[1], m2)
+        class_tau2 = _read_model_class_tau2(m1)
 
         groups_h1 = m1.get("model_groups")
         groups_h2 = m2.get("model_groups")
@@ -383,37 +605,294 @@ def _build_replay_iteration_overrides(
         # Map RELION particle order to recovar's half1/half2 ordering.
         # recovar's half1_idx / half2_idx are stack-row indices into the same
         # particles.star as RELION's data.star.
-        def _to_half(combined, half_idx):
-            return np.asarray([combined[idx_to_pos[int(i)]] for i in half_idx], dtype=np.float32)
+        def _to_half(values, half_idx):
+            return np.asarray([values[idx_to_pos[int(i)]] for i in half_idx], dtype=np.float32)
 
         corr_h1 = _to_half(combined_h1, half1_idx)
         corr_h2 = _to_half(combined_h2, half2_idx)
         scale_corr_h1 = _to_half(pp_scale_h1, half1_idx)
         scale_corr_h2 = _to_half(pp_scale_h2, half2_idx)
 
-        override_k = {"translation_sigma_angstrom": sigma_offset_avg}
+        trans_h1 = None
+        trans_h2 = None
+        if "rlnOriginXAngst" in parts.columns and "rlnOriginYAngst" in parts.columns:
+            offsets = np.stack(
+                [
+                    np.asarray(parts["rlnOriginXAngst"], dtype=np.float64) / float(ds_voxel),
+                    np.asarray(parts["rlnOriginYAngst"], dtype=np.float64) / float(ds_voxel),
+                ],
+                axis=1,
+            )
+            trans_h1 = _to_half(offsets, half1_idx)
+            trans_h2 = _to_half(offsets, half2_idx)
+        elif "rlnOriginX" in parts.columns and "rlnOriginY" in parts.columns:
+            offsets = np.stack(
+                [
+                    np.asarray(parts["rlnOriginX"], dtype=np.float64),
+                    np.asarray(parts["rlnOriginY"], dtype=np.float64),
+                ],
+                axis=1,
+            )
+            trans_h1 = _to_half(offsets, half1_idx)
+            trans_h2 = _to_half(offsets, half2_idx)
+
+        angle_cols = ("rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi")
+        rot_h1 = None
+        rot_h2 = None
+        euler_h1 = None
+        euler_h2 = None
+        if all(col in parts.columns for col in angle_cols):
+            eulers = np.stack([np.asarray(parts[col], dtype=np.float64) for col in angle_cols], axis=1)
+            rotations = utils.R_from_relion(eulers, degrees=True).astype(np.float32)
+            rot_h1 = _to_half(rotations, half1_idx)
+            rot_h2 = _to_half(rotations, half2_idx)
+            euler_h1 = _to_half(eulers, half1_idx)
+            euler_h2 = _to_half(eulers, half2_idx)
+
+        override_k = {
+            "translation_sigma_angstrom": sigma_offset_avg,
+            "translation_sigma_angstrom_per_half": sigma_offset_per_half,
+            "previous_best_translations": [trans_h1, trans_h2],
+            "previous_best_rotations": [rot_h1, rot_h2],
+            "previous_best_rotation_eulers": [euler_h1, euler_h2],
+        }
+        if noise_h1 is not None and noise_h2 is not None:
+            override_k["noise_variance"] = [noise_h1, noise_h2]
+        if direction_prior_h1 is not None and direction_prior_h2 is not None:
+            override_k["direction_prior"] = [direction_prior_h1, direction_prior_h2]
+        if class_tau2 is not None:
+            override_k["class_tau2"] = class_tau2
         if include_normcorr:
             override_k["image_corrections"] = [corr_h1, corr_h2]
             override_k["scale_corrections"] = [scale_corr_h1, scale_corr_h2]
         overrides[recovar_iter] = override_k
         if include_normcorr:
             logger.info(
-                "Replay override recovar iter %d: image_corr means=(%.4f, %.4f), scale_corr means=(%.4f, %.4f), sigma_offset=%.4f Å",
+                "Replay override recovar iter %d: image_corr means=(%s, %s), scale_corr means=(%s, %s), "
+                "sigma_offset=(half1 %.4f Å, half2 %.4f Å, mean %.4f Å)",
                 recovar_iter + 1,
-                float(corr_h1.mean()),
-                float(corr_h2.mean()),
-                float(scale_corr_h1.mean()),
-                float(scale_corr_h2.mean()),
+                _format_replay_mean_for_log(corr_h1),
+                _format_replay_mean_for_log(corr_h2),
+                _format_replay_mean_for_log(scale_corr_h1),
+                _format_replay_mean_for_log(scale_corr_h2),
+                sigma_offset_per_half[0],
+                sigma_offset_per_half[1],
                 sigma_offset_avg,
             )
         else:
             logger.info(
-                "Replay override recovar iter %d: sigma_offset=%.4f Å (normcorr replay disabled)",
+                "Replay override recovar iter %d: sigma_offset=(half1 %.4f Å, half2 %.4f Å, mean %.4f Å) "
+                "(normcorr replay disabled)",
                 recovar_iter + 1,
+                sigma_offset_per_half[0],
+                sigma_offset_per_half[1],
                 sigma_offset_avg,
             )
 
     return overrides
+
+
+def _load_init_previous_best_poses_npz(path, pose_iter="last"):
+    """Load previous best poses from a RECOVAR refinement_results.npz file.
+
+    This is a diagnostic/debugging hook for starting directly in the local
+    search branch. It does not affect the default GUI/CLI path.
+    """
+
+    pose_path = Path(path)
+    with np.load(pose_path, allow_pickle=False) as npz:
+        if str(pose_iter).lower() in {"last", "latest"}:
+            pattern = re.compile(r"^best_rotation_eulers_iter_(\d{3})_half0$")
+            available = sorted(
+                int(match.group(1))
+                for key in npz.files
+                if (match := pattern.match(key)) is not None
+                and f"best_rotation_eulers_iter_{match.group(1)}_half1" in npz.files
+                and f"best_translations_iter_{match.group(1)}_half0" in npz.files
+                and f"best_translations_iter_{match.group(1)}_half1" in npz.files
+            )
+            if not available:
+                raise ValueError(f"No numbered per-half best-pose arrays found in {pose_path}")
+            iter_label = f"{available[-1]:03d}"
+        elif str(pose_iter).lower() in {"final_all_data", "final-all-data"}:
+            euler_keys = [
+                "best_rotation_eulers_final_all_data_half0",
+                "best_rotation_eulers_final_all_data_half1",
+            ]
+            trans_keys = [
+                "best_translations_final_all_data_half0",
+                "best_translations_final_all_data_half1",
+            ]
+            missing = [key for key in euler_keys + trans_keys if key not in npz.files]
+            if missing:
+                raise ValueError(f"Missing final-all-data pose arrays in {pose_path}: {missing}")
+            eulers = [np.asarray(npz[key], dtype=np.float32) for key in euler_keys]
+            translations = [np.asarray(npz[key], dtype=np.float32) for key in trans_keys]
+            return {
+                "iteration": "final_all_data",
+                "previous_best_rotation_eulers": eulers,
+                "previous_best_translations": translations,
+            }
+        else:
+            iter_label = f"{int(pose_iter):03d}"
+
+        euler_keys = [
+            f"best_rotation_eulers_iter_{iter_label}_half0",
+            f"best_rotation_eulers_iter_{iter_label}_half1",
+        ]
+        trans_keys = [
+            f"best_translations_iter_{iter_label}_half0",
+            f"best_translations_iter_{iter_label}_half1",
+        ]
+        missing = [key for key in euler_keys + trans_keys if key not in npz.files]
+        if missing:
+            raise ValueError(f"Missing pose arrays for iter {iter_label} in {pose_path}: {missing}")
+        eulers = [np.asarray(npz[key], dtype=np.float32) for key in euler_keys]
+        translations = [np.asarray(npz[key], dtype=np.float32) for key in trans_keys]
+
+    for half, (euler, translation) in enumerate(zip(eulers, translations), start=1):
+        if euler.ndim != 2 or euler.shape[1] != 3:
+            raise ValueError(f"half-{half} Euler array must have shape (N, 3), got {euler.shape}")
+        if translation.ndim != 2 or translation.shape[1] != 2:
+            raise ValueError(f"half-{half} translation array must have shape (N, 2), got {translation.shape}")
+        if euler.shape[0] != translation.shape[0]:
+            raise ValueError(
+                f"half-{half} Euler/translation row mismatch: {euler.shape[0]} vs {translation.shape[0]}",
+            )
+
+    return {
+        "iteration": iter_label,
+        "previous_best_rotation_eulers": eulers,
+        "previous_best_translations": translations,
+    }
+
+
+def _load_init_noise_radial_npz(path, noise_iter="last"):
+    """Load a diagnostic initial noise spectrum from refinement_results.npz."""
+
+    noise_path = Path(path)
+    with np.load(noise_path, allow_pickle=False) as npz:
+        if str(noise_iter).lower() in {"last", "latest"}:
+            pattern = re.compile(r"^noise_radial_iter_(\d{3})$")
+            available = sorted(
+                int(match.group(1)) for key in npz.files if (match := pattern.match(key)) is not None
+            )
+            if not available:
+                raise ValueError(f"No numbered noise_radial_iter arrays found in {noise_path}")
+            iter_label = f"{available[-1]:03d}"
+        else:
+            iter_label = f"{int(noise_iter):03d}"
+        key = f"noise_radial_iter_{iter_label}"
+        if key not in npz.files:
+            raise ValueError(f"Missing {key} in {noise_path}")
+        noise_radial = np.asarray(npz[key], dtype=np.float64)
+
+    if noise_radial.ndim != 1:
+        raise ValueError(f"{key} must be a 1D radial spectrum, got shape {noise_radial.shape}")
+    if not np.all(np.isfinite(noise_radial)):
+        raise ValueError(f"{key} contains non-finite values")
+    if np.any(noise_radial <= 0.0):
+        raise ValueError(f"{key} must be strictly positive")
+    return {
+        "iteration": iter_label,
+        "noise_radial": noise_radial,
+    }
+
+
+def _validate_initial_noise_radial(noise_radial, *, label: str):
+    noise_radial = np.asarray(noise_radial, dtype=np.float64)
+    if noise_radial.ndim != 1:
+        raise ValueError(f"{label} must be a 1D radial spectrum, got shape {noise_radial.shape}")
+    if not np.all(np.isfinite(noise_radial)):
+        raise ValueError(f"{label} contains non-finite values")
+    if np.any(noise_radial <= 0.0):
+        raise ValueError(f"{label} must be strictly positive")
+    return noise_radial
+
+
+def _initial_noise_cache_key(ds, args, image_subset, *, batch_size: int, apply_image_mask: bool):
+    """Build an exact-cache key for the deterministic bootstrap noise estimate."""
+
+    data_dir = Path(args.data_dir).resolve()
+    file_fingerprints = []
+    if data_dir.exists():
+        for path in sorted(data_dir.iterdir()):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in {".star", ".mrc", ".mrcs", ".npz", ".pkl", ".cs"}:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            file_fingerprints.append(
+                {
+                    "name": path.name,
+                    "size": int(stat.st_size),
+                    "mtime_ns": int(stat.st_mtime_ns),
+                }
+            )
+    payload = {
+        "version": 1,
+        "data_dir": str(data_dir),
+        "files": file_fingerprints,
+        "n_units": int(ds.n_units),
+        "image_shape": tuple(int(x) for x in ds.image_shape),
+        "voxel_size": float(ds.voxel_size),
+        "subset": np.asarray(image_subset, dtype=np.int32).tolist(),
+        "batch_size": int(batch_size),
+        "apply_image_mask": bool(apply_image_mask),
+        "relion_mask_params": None if getattr(args, "_relion_mask_params", None) is None else tuple(
+            float(x) for x in args._relion_mask_params
+        ),
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    image_mask = getattr(ds, "image_mask", None)
+    if image_mask is not None:
+        mask_arr = np.asarray(image_mask, dtype=np.float32)
+        digest.update(str(mask_arr.shape).encode("utf-8"))
+        digest.update(mask_arr.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def _load_initial_noise_cache(cache_dir, cache_key, image_shape):
+    cache_path = Path(cache_dir) / f"initial_noise_{cache_key}.npz"
+    if not cache_path.exists():
+        return None, cache_path
+    with np.load(cache_path, allow_pickle=False) as npz:
+        stored_key = str(npz["cache_key"]) if "cache_key" in npz.files else ""
+        if stored_key != str(cache_key):
+            raise ValueError(f"Initial noise cache key mismatch in {cache_path}")
+        stored_shape = tuple(int(x) for x in np.asarray(npz["image_shape"], dtype=np.int64))
+        expected_shape = tuple(int(x) for x in image_shape)
+        if stored_shape != expected_shape:
+            raise ValueError(
+                f"Initial noise cache image_shape mismatch in {cache_path}: {stored_shape} vs {expected_shape}"
+            )
+        noise_radial = _validate_initial_noise_radial(
+            npz["noise_radial"],
+            label=f"{cache_path}:noise_radial",
+        )
+    return noise_radial, cache_path
+
+
+def _save_initial_noise_cache(cache_dir, cache_key, image_shape, noise_radial):
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (cache_dir / "SAFE_TO_DELETE").touch(exist_ok=True)
+    except OSError:
+        pass
+    cache_path = cache_dir / f"initial_noise_{cache_key}.npz"
+    tmp_path = cache_dir / f".{cache_path.name}.{os.getpid()}.tmp.npz"
+    np.savez_compressed(
+        tmp_path,
+        cache_key=np.asarray(str(cache_key)),
+        image_shape=np.asarray(image_shape, dtype=np.int64),
+        noise_radial=np.asarray(noise_radial, dtype=np.float64),
+    )
+    os.replace(tmp_path, cache_path)
+    return cache_path
 
 
 def _find_relion_optimiser_star(args):
@@ -561,6 +1040,14 @@ def main():
         default="/scratch/gpfs/GILLES/mg6942/tmp/em_profile/data/our_results",
         help="Directory to save results",
     )
+    parser.add_argument(
+        "--skip-large-outputs",
+        action="store_true",
+        help=(
+            "Skip refinement_results.npz and final MRC writes. Intended only for "
+            "short timing probes where run logs and benchmark ledgers are sufficient."
+        ),
+    )
     parser.add_argument("--max_iter", type=int, default=10, help="Maximum EM iterations")
     parser.add_argument(
         "--healpix_order",
@@ -568,6 +1055,18 @@ def main():
         default=3,
         help="RELION coarse pass-1 HEALPix order. With adaptive oversampling, "
         "pass 2 evaluates healpix_order + adaptive_oversampling.",
+    )
+    parser.add_argument(
+        "--max_healpix_order",
+        type=int,
+        default=None,
+        help=(
+            "Maximum coarse HEALPix order for RECOVAR's RELION-style sampling "
+            "updates. If omitted, K>1 Class3D stays fixed at --healpix_order "
+            "to match RELION's _rlnDoAutoSampling=0 command path; K=1 keeps "
+            "the historical auto-refine cap of 7. Set explicitly to allow "
+            "Class3D coarse-grid refinement."
+        ),
     )
     parser.add_argument(
         "--auto_local_healpix_order",
@@ -629,6 +1128,16 @@ def main():
         "run_it{NNN}_sampling.star in this directory and use that exact value "
         "instead of recovar's RNG. Required for bit-exact ab-initio replay "
         "against a RELION reference run.",
+    )
+    parser.add_argument(
+        "--init_relion_iteration",
+        type=int,
+        default=0,
+        help=(
+            "Diagnostic replay offset: treat the first RECOVAR loop iteration "
+            "as continuing after this RELION iteration. This is mainly for "
+            "profile-only jumps into later local-search iterations."
+        ),
     )
     parser.add_argument(
         "--replay_relion_normcorr",
@@ -725,7 +1234,8 @@ def main():
     parser.add_argument(
         "--relion_init_dir",
         default=None,
-        help="Strict-parity cold-start: load RELION run_it000_model.star "
+        help="Strict-parity cold-start: load RELION run_it000_model.star, "
+        "or AutoRefine run_it000_half{1,2}_model.star for K=1, "
         "sigma2_noise spectrum + per-class rlnReferenceTau2 spectra + "
         "rlnTau2FudgeFactor/rlnTau2FudgeArg + rlnSigmaOffsetsAngst from this "
         "directory and use them as recovar's iter-0 state (instead of "
@@ -754,12 +1264,120 @@ def main():
         ),
     )
     parser.add_argument(
+        "--init_previous_best_poses_npz",
+        default=None,
+        help=(
+            "Diagnostic only: seed local-search priors from a RECOVAR "
+            "refinement_results.npz file containing per-half best Euler and "
+            "translation arrays."
+        ),
+    )
+    parser.add_argument(
+        "--init_previous_best_poses_iter",
+        default="last",
+        help=(
+            "Iteration selector for --init_previous_best_poses_npz. Use an "
+            "integer, 'last' for the latest numbered iteration, or "
+            "'final_all_data'."
+        ),
+    )
+    parser.add_argument(
+        "--init_noise_from_npz",
+        default=None,
+        help=(
+            "Diagnostic only: initialize sigma2_noise from a RECOVAR "
+            "refinement_results.npz noise_radial_iter_### array instead of "
+            "estimating it from images."
+        ),
+    )
+    parser.add_argument(
+        "--init_noise_iter",
+        default="last",
+        help="Iteration selector for --init_noise_from_npz. Use an integer or 'last'.",
+    )
+    parser.add_argument(
+        "--initial_noise_cache_dir",
+        default=None,
+        help=(
+            "Diagnostic speed cache for the masked bootstrap initial sigma2_noise "
+            "estimate. On a cache miss the estimate is computed normally and saved; "
+            "on a hit the exact cached radial spectrum is reused."
+        ),
+    )
+    parser.add_argument(
+        "--skip_final_iteration",
+        action="store_true",
+        help="Diagnostic only: skip the final all-data Nyquist iteration.",
+    )
+    parser.add_argument(
         "--timing_dir",
         default=None,
         help=(
             "Optional directory for lightweight per-iteration timing NPZs. "
             "This uses RECOVAR_PARITY_TIMING_DIR internally and does not "
             "write full parity tensor/volume dumps."
+        ),
+    )
+    parser.add_argument(
+        "--save_intermediates_dir",
+        default=None,
+        help=(
+            "Optional debug directory for per-iteration regularized/unregularized "
+            "class maps, Fourier accumulators, assignments, and metadata."
+        ),
+    )
+    parser.add_argument(
+        "--save_intermediates_skip_unregularized",
+        action="store_true",
+        help=(
+            "When --save_intermediates_dir is set, save regularized maps and "
+            "metadata but skip diagnostic unregularized maps. This preserves "
+            "regularized-map FSC debugging while avoiding an extra "
+            "reconstruction pass per iteration."
+        ),
+    )
+    parser.add_argument(
+        "--local_search_profile",
+        choices=("auto", "on", "off"),
+        default="auto",
+        help=(
+            "Control exact-local profile collection. The default profiles when "
+            "--save_intermediates_dir is provided; use 'on' for timing ledgers "
+            "without full intermediate dumps."
+        ),
+    )
+    parser.add_argument(
+        "--stop_after_local_search_profile",
+        action="store_true",
+        help=(
+            "Diagnostic mode: stop after the first local-search E-step has "
+            "written timing profiles, without running tau/FSC/reconstruction."
+        ),
+    )
+    parser.add_argument(
+        "--stop_after_local_search",
+        action="store_true",
+        help=(
+            "Diagnostic mode: stop after the first local-search E-step without "
+            "forcing detailed per-bucket profile collection."
+        ),
+    )
+    parser.add_argument(
+        "--stop_after_local_search_score_only",
+        action="store_true",
+        help=(
+            "Diagnostic mode: stop after local pass-2 scoring while skipping "
+            "the local M-step/noise accumulators. This is for pose/Pmax "
+            "debugging only and does not produce maps or FSC-quality outputs."
+        ),
+    )
+    parser.add_argument(
+        "--diagnostic_single_half",
+        action="store_true",
+        help=(
+            "Diagnostic local-search speed mode: with a local-search stop flag, "
+            "run only half 1 and leave half 2 empty. This is invalid for map/FSC "
+            "runs because it bypasses the gold-standard second half."
         ),
     )
     parser.add_argument(
@@ -779,7 +1397,7 @@ def main():
     # Verify GPU
     devices = jax.devices()
     logger.info("JAX devices: %s", devices)
-    if not any(d.platform == "gpu" for d in devices):
+    if not any(getattr(d, "platform", "") in {"gpu", "cuda"} for d in devices):
         logger.error("No GPU available. Aborting.")
         sys.exit(1)
 
@@ -794,6 +1412,7 @@ def main():
         lazy=False,
     )
     relion_mask_params = _maybe_apply_relion_image_mask(ds, args)
+    args._relion_mask_params = relion_mask_params
     particle_diameter_ang = None if relion_mask_params is None else float(relion_mask_params[0])
     logger.info("Dataset: %d images, image_shape=%s, voxel_size=%.3f A/px", ds.n_units, ds.image_shape, ds.voxel_size)
 
@@ -842,11 +1461,59 @@ def main():
                 len(half1_idx),
             )
 
+    local_stop_requested = (
+        bool(args.stop_after_local_search_profile)
+        or bool(args.stop_after_local_search)
+        or bool(args.stop_after_local_search_score_only)
+    )
+    if args.diagnostic_single_half:
+        if not local_stop_requested:
+            raise SystemExit(
+                "--diagnostic_single_half is only valid with --stop_after_local_search, "
+                "--stop_after_local_search_profile, or --stop_after_local_search_score_only"
+            )
+        if args.n_classes != 1:
+            raise SystemExit("--diagnostic_single_half is K=1-only")
+        logger.warning(
+            "Diagnostic single-half local-search probe: running half 1 only (%d images); "
+            "half 2 is empty. Do not use this for map/FSC quality.",
+            int(half1_idx.size),
+        )
+        half2_idx = np.empty(0, dtype=np.int64)
+
     ds_half1 = ds.subset(half1_idx)
     ds_half2 = ds.subset(half2_idx)
     logger.info("Half-sets: %d + %d images", ds_half1.n_units, ds_half2.n_units)
+    native_group_ids_per_half = _load_native_group_ids_per_half(
+        os.path.join(args.data_dir, "particles.star"),
+        half1_idx,
+        half2_idx,
+    )
+    if native_group_ids_per_half is not None:
+        logger.info(
+            "Native RELION group IDs from particles.star: half1 groups=%s half2 groups=%s",
+            np.unique(native_group_ids_per_half[0]).tolist(),
+            np.unique(native_group_ids_per_half[1]).tolist(),
+        )
 
     optimiser_star = _find_relion_optimiser_star(args)
+    relion_firstiter_ini_high_angstrom = None
+    if optimiser_star is not None:
+        optimiser_text = Path(optimiser_star).read_text(errors="ignore")
+        relion_firstiter_ini_high_angstrom = _parse_relion_cli_ini_high(optimiser_text)
+        if args.firstiter_cc:
+            if relion_firstiter_ini_high_angstrom is None:
+                logger.info(
+                    "RELION firstiter_cc: no positive --ini_high found in %s; "
+                    "not applying post-iter1 ini_high low-pass",
+                    optimiser_star,
+                )
+            else:
+                logger.info(
+                    "RELION firstiter_cc: using --ini_high %.2f A from %s for post-iter1 low-pass",
+                    float(relion_firstiter_ini_high_angstrom),
+                    optimiser_star,
+                )
     if args.max_significants is None and optimiser_star is not None:
         relion_max_significants = _load_relion_max_significants(optimiser_star)
         if relion_max_significants is not None:
@@ -878,20 +1545,17 @@ def main():
     # real-space ``--maskedge = 5`` — those are distinct quantities.
     _RELION_FMASK_EDGE = 2
 
-    def _apply_ini_high_lowpass(vol_ft_flat, volume_shape, voxel_size, ini_high):
-        from recovar.heterogeneity.locres import low_pass_filter_map
+    def _apply_ini_high_lowpass_real(volume_real, volume_shape, voxel_size, ini_high):
+        from recovar.em.initial_model.bootstrap_iref import initial_low_pass_filter_references
 
-        return np.asarray(
-            low_pass_filter_map(
-                jnp.asarray(vol_ft_flat).reshape(volume_shape),
-                volume_shape[0],
-                float(ini_high),
-                float(voxel_size),
-                int(_RELION_FMASK_EDGE),
-                do_highpass_instead=False,
-                volume_shape=volume_shape,
-            )
-        ).astype(np.complex64).reshape(-1)
+        filtered = initial_low_pass_filter_references(
+            np.asarray(volume_real, dtype=np.float64)[None, ...],
+            ori_size=int(volume_shape[0]),
+            pixel_size=float(voxel_size),
+            ini_high_ang=float(ini_high),
+            filter_edgewidth=float(_RELION_FMASK_EDGE),
+        )[0]
+        return filtered.astype(np.float32, copy=False)
 
     _apply_ini_lowpass = bool(getattr(args, "apply_initial_lowpass", False))
     _ini_high_for_lowpass = (
@@ -906,15 +1570,15 @@ def main():
         assert init_vol_real.shape == ds.volume_shape, (
             f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
         )
-        init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
         if _ini_high_for_lowpass is not None:
-            init_vol_ft = _apply_ini_high_lowpass(
-                init_vol_ft, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
+            init_vol_real = _apply_ini_high_lowpass_real(
+                init_vol_real, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
             )
             logger.info(
                 "Applied RELION initialLowPassFilterReferences to init reference: ini_high=%.2f A, fmask_edge=%d shells",
                 _ini_high_for_lowpass, _RELION_FMASK_EDGE,
             )
+        init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
         logger.info("Initial volume loaded from %s: shape=%s", init_mrc_path, init_vol_real.shape)
     else:
         if args.init_class_volumes:
@@ -931,11 +1595,11 @@ def main():
             assert vol_real.shape == ds.volume_shape, (
                 f"Class {k + 1} volume shape mismatch at {p}: {vol_real.shape} vs {ds.volume_shape}"
             )
-            vol_ft = np.array(ftu.get_dft3(jnp.asarray(vol_real))).astype(np.complex64).reshape(-1)
             if _ini_high_for_lowpass is not None:
-                vol_ft = _apply_ini_high_lowpass(
-                    vol_ft, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
+                vol_real = _apply_ini_high_lowpass_real(
+                    vol_real, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
                 )
+            vol_ft = np.array(ftu.get_dft3(jnp.asarray(vol_real))).astype(np.complex64).reshape(-1)
             per_class_ft.append(vol_ft)
             logger.info("Class %d initial volume loaded from %s", k + 1, p)
         if _ini_high_for_lowpass is not None:
@@ -957,12 +1621,22 @@ def main():
         args.healpix_order,
         args.adaptive_oversampling,
     )
+    effective_max_healpix_order, max_healpix_order_source = _resolve_effective_max_healpix_order(
+        n_classes=args.n_classes,
+        healpix_order=init_healpix_order,
+        max_healpix_order=args.max_healpix_order,
+    )
     rotation_grid_order = init_healpix_order
     logger.info(
         "RELION grid orders: coarse/pass1=%d, fine/pass2=%d (adaptive_oversampling=%d)",
         init_healpix_order,
         finest_healpix_order,
         args.adaptive_oversampling,
+    )
+    logger.info(
+        "Max coarse HEALPix order: %d (%s)",
+        effective_max_healpix_order,
+        max_healpix_order_source,
     )
 
     rotations = get_relion_rotation_grid(rotation_grid_order).astype(np.float32)
@@ -984,25 +1658,69 @@ def main():
 
     from recovar.reconstruction import noise as recon_noise
 
-    initial_noise_subset = np.arange(min(1000, ds.n_units), dtype=np.int32)
-    # In RELION mode the E-step scores masked images, so the bootstrap noise
-    # MUST come from masked images too — otherwise sigma2 is dominated by the
-    # solvent area and the iter-1 chi² is ~3.3-6× too small (verified
-    # 2026-04-08 against the tiny parity dataset, see tmp/check_sigma2_mask.py).
-    initial_noise_radial = recon_noise.estimate_initial_noise_spectrum_from_unaligned_images(
-        ds,
-        initial_noise_subset,
-        batch_size=min(args.image_batch_size, initial_noise_subset.size),
-        apply_image_mask=True,
-    )
-    noise_variance = recon_noise.make_radial_noise(initial_noise_radial, ds.image_shape)
-    logger.info(
-        "Initial sigma2_noise estimate from %d images: min=%.3e median=%.3e max=%.3e",
-        initial_noise_subset.size,
-        float(np.min(np.asarray(initial_noise_radial))),
-        float(np.median(np.asarray(initial_noise_radial))),
-        float(np.max(np.asarray(initial_noise_radial))),
-    )
+    if args.init_noise_from_npz is not None:
+        init_noise = _load_init_noise_radial_npz(args.init_noise_from_npz, args.init_noise_iter)
+        initial_noise_radial = init_noise["noise_radial"]
+        noise_variance = recon_noise.make_radial_noise(initial_noise_radial, ds.image_shape)
+        logger.info(
+            "Diagnostic init: loaded sigma2_noise from %s iter=%s: min=%.3e median=%.3e max=%.3e",
+            args.init_noise_from_npz,
+            init_noise["iteration"],
+            float(np.min(np.asarray(initial_noise_radial))),
+            float(np.median(np.asarray(initial_noise_radial))),
+            float(np.max(np.asarray(initial_noise_radial))),
+        )
+    else:
+        initial_noise_subset = np.arange(min(1000, ds.n_units), dtype=np.int32)
+        initial_noise_batch_size = min(args.image_batch_size, initial_noise_subset.size)
+        initial_noise_cache_key = None
+        initial_noise_cache_path = None
+        initial_noise_radial = None
+        if args.initial_noise_cache_dir is not None:
+            initial_noise_cache_key = _initial_noise_cache_key(
+                ds,
+                args,
+                initial_noise_subset,
+                batch_size=initial_noise_batch_size,
+                apply_image_mask=True,
+            )
+            initial_noise_radial, initial_noise_cache_path = _load_initial_noise_cache(
+                args.initial_noise_cache_dir,
+                initial_noise_cache_key,
+                ds.image_shape,
+            )
+            if initial_noise_radial is not None:
+                logger.info(
+                    "Initial sigma2_noise cache hit: %s",
+                    initial_noise_cache_path,
+                )
+        # In RELION mode the E-step scores masked images, so the bootstrap noise
+        # MUST come from masked images too — otherwise sigma2 is dominated by the
+        # solvent area and the iter-1 chi² is ~3.3-6× too small (verified
+        # 2026-04-08 against the tiny parity dataset, see tmp/check_sigma2_mask.py).
+        if initial_noise_radial is None:
+            initial_noise_radial = recon_noise.estimate_initial_noise_spectrum_from_unaligned_images(
+                ds,
+                initial_noise_subset,
+                batch_size=initial_noise_batch_size,
+                apply_image_mask=True,
+            )
+            if args.initial_noise_cache_dir is not None:
+                initial_noise_cache_path = _save_initial_noise_cache(
+                    args.initial_noise_cache_dir,
+                    initial_noise_cache_key,
+                    ds.image_shape,
+                    initial_noise_radial,
+                )
+                logger.info("Initial sigma2_noise cache saved: %s", initial_noise_cache_path)
+        noise_variance = recon_noise.make_radial_noise(initial_noise_radial, ds.image_shape)
+        logger.info(
+            "Initial sigma2_noise estimate from %d images: min=%.3e median=%.3e max=%.3e",
+            initial_noise_subset.size,
+            float(np.min(np.asarray(initial_noise_radial))),
+            float(np.median(np.asarray(initial_noise_radial))),
+            float(np.max(np.asarray(initial_noise_radial))),
+        )
 
     # Compute initial signal prior from init volume (weak prior). For K>1
     # use class-1 as the representative volume; the engine derives per-class
@@ -1031,27 +1749,44 @@ def main():
         import re as _re
         from pathlib import Path as _Path
 
-        import starfile as _starfile
-
         _relion_init_dir = _Path(args.relion_init_dir)
-        _it0_model_path = _relion_init_dir / "run_it000_model.star"
         _it0_optim_path = _relion_init_dir / "run_it000_optimiser.star"
-        if not _it0_model_path.exists():
-            raise SystemExit(f"--relion_init_dir given but {_it0_model_path} not found")
-        _it0_model = _starfile.read(str(_it0_model_path))
+        _it0_model_bundle = _load_relion_it000_model_stars(_relion_init_dir, args.n_classes)
+        _it0_models = _it0_model_bundle["models"]
+        _it0_model = _it0_model_bundle["reference_model"]
+        _it0_model_path = _it0_model_bundle["reference_model_path"]
         # sigma2_noise spectrum (× N⁴ for recovar's unit convention; matches
         # run_k_class_parity.py:715-717).
         _n4 = ds.grid_size**4
-        _relion_sigma2 = np.asarray(_it0_model["model_optics_group_1"]["rlnSigma2Noise"], dtype=np.float64)
-        _relion_noise_radial = jnp.asarray(_relion_sigma2 * _n4)
-        noise_variance = recon_noise.make_radial_noise(_relion_noise_radial, ds.image_shape)
-        logger.info(
-            "STRICT-PARITY: replaced bootstrapped sigma2_noise with RELION it000 "
-            "spectrum (× N^4=%.3e). RELION shape=%s, head=%s",
-            float(_n4),
-            _relion_sigma2.shape,
-            np.asarray(_relion_sigma2[:5]),
-        )
+        _relion_sigma2_per_model = [
+            np.asarray(_model["model_optics_group_1"]["rlnSigma2Noise"], dtype=np.float64)
+            for _model in _it0_models
+        ]
+        if len(_relion_sigma2_per_model) == 1:
+            _relion_sigma2 = _relion_sigma2_per_model[0]
+            _relion_noise_radial = jnp.asarray(_relion_sigma2 * _n4)
+            noise_variance = recon_noise.make_radial_noise(_relion_noise_radial, ds.image_shape)
+            logger.info(
+                "STRICT-PARITY: replaced bootstrapped sigma2_noise with RELION it000 "
+                "shared spectrum (× N^4=%.3e). RELION shape=%s, head=%s",
+                float(_n4),
+                _relion_sigma2.shape,
+                np.asarray(_relion_sigma2[:5]),
+            )
+        else:
+            noise_variance = [
+                recon_noise.make_radial_noise(jnp.asarray(_relion_sigma2 * _n4), ds.image_shape)
+                for _relion_sigma2 in _relion_sigma2_per_model
+            ]
+            logger.info(
+                "STRICT-PARITY: replaced bootstrapped sigma2_noise with RELION it000 "
+                "per-half spectra (× N^4=%.3e). half1 shape=%s head=%s half2 shape=%s head=%s",
+                float(_n4),
+                _relion_sigma2_per_model[0].shape,
+                np.asarray(_relion_sigma2_per_model[0][:5]),
+                _relion_sigma2_per_model[1].shape,
+                np.asarray(_relion_sigma2_per_model[1][:5]),
+            )
         # Per-class tau2 spectra (rlnReferenceTau2 × N⁴ for recovar units).
         if args.n_classes > 1:
             _per_class_tau2 = []
@@ -1152,6 +1887,7 @@ def main():
             ds_voxel=ds.voxel_size,
             ds_grid=ds.grid_size,
             include_normcorr=replay_normcorr,
+            init_relion_iteration=args.init_relion_iteration,
         )
 
     effective_tau2_fudge, tau2_fudge_source = _resolve_tau2_fudge(
@@ -1169,6 +1905,21 @@ def main():
         "unseeded" if effective_perturb_seed is None else str(effective_perturb_seed),
         " (explicit)" if args.perturb_seed is not None else " (from --seed)",
     )
+    init_previous_best_poses = None
+    if args.init_previous_best_poses_npz is not None:
+        init_previous_best_poses = _load_init_previous_best_poses_npz(
+            args.init_previous_best_poses_npz,
+            args.init_previous_best_poses_iter,
+        )
+        logger.info(
+            "Diagnostic local-search seed: loaded previous best poses from %s (iter=%s; half sizes=%s)",
+            args.init_previous_best_poses_npz,
+            init_previous_best_poses["iteration"],
+            [
+                int(arr.shape[0])
+                for arr in init_previous_best_poses["previous_best_rotation_eulers"]
+            ],
+        )
 
     result = refine_single_volume(
         experiment_datasets=experiment_datasets,
@@ -1188,6 +1939,7 @@ def main():
         max_significants=args.max_significants,
         nside_level=rotation_grid_order if args.adaptive_oversampling > 0 else None,
         **_refine_sampling_kwargs(args, init_healpix_order),
+        max_healpix_order=effective_max_healpix_order,
         init_translation_sigma_angstrom=(
             relion_init_sigma_offset_angstrom
             if relion_init_sigma_offset_angstrom is not None
@@ -1199,15 +1951,97 @@ def main():
         perturb_seed=effective_perturb_seed,
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,
         replay_iteration_overrides=replay_iteration_overrides,
+        init_relion_iteration=args.init_relion_iteration,
         n_classes=args.n_classes,
         emulate_relion_firstiter_cc=bool(args.firstiter_cc),
-        relion_firstiter_ini_high_angstrom=(args.init_resolution if args.firstiter_cc else None),
+        relion_firstiter_ini_high_angstrom=(
+            relion_firstiter_ini_high_angstrom if args.firstiter_cc else None
+        ),
+        init_group_ids=native_group_ids_per_half,
+        init_previous_best_translations=(
+            None
+            if init_previous_best_poses is None
+            else init_previous_best_poses["previous_best_translations"]
+        ),
+        init_previous_best_rotation_eulers=(
+            None
+            if init_previous_best_poses is None
+            else init_previous_best_poses["previous_best_rotation_eulers"]
+        ),
+        skip_final_iteration=bool(args.skip_final_iteration),
+        save_intermediates_dir=args.save_intermediates_dir,
+        save_intermediates_skip_unregularized=bool(args.save_intermediates_skip_unregularized),
+        local_search_profile_mode=args.local_search_profile,
+        stop_after_local_search_profile=bool(args.stop_after_local_search_profile),
+        stop_after_local_search=bool(args.stop_after_local_search),
+        stop_after_local_search_score_only=bool(args.stop_after_local_search_score_only),
     )
 
     total_time = time.time() - t_start
     logger.info("=" * 70)
     logger.info("Refinement complete in %.1fs (%d iterations)", total_time, args.max_iter)
     logger.info("=" * 70)
+
+    if result.get("profile_only"):
+        local_profile_rows = _jsonable_profile_rows(result.get("local_profile_history", []))
+        global_profile_rows = _jsonable_profile_rows(result.get("global_profile_history", []))
+        setup_phase_seconds = {
+            str(key): float(value) for key, value in result.get("setup_phase_seconds", {}).items()
+        }
+        timing_rows = _collect_timing_rows(timing_dir_path)
+        timing_summary = _summarize_timing_rows(timing_rows)
+        profile_summary = {
+            "profile_only": True,
+            "stop_after_local_search_score_only": bool(result.get("stop_after_local_search_score_only", False)),
+            "git_commit": _safe_git_commit(),
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "numpy_version": np.__version__,
+            "jax_version": getattr(jax, "__version__", None),
+            "jaxlib_version": getattr(jaxlib, "__version__", None),
+            "jax_devices": [str(device) for device in jax.devices()],
+            "data_dir": str(Path(args.data_dir).resolve()),
+            "output_dir": str(Path(args.output).resolve()),
+            "timing_dir": str(timing_dir_path.resolve()) if timing_dir_path is not None else None,
+            "total_time_s": float(total_time),
+            "current_sizes": [int(x) for x in result.get("current_sizes", [])],
+            "wall_times_trajectory": [float(x) for x in result.get("wall_times", [])],
+            "n_images": int(n_images),
+            "image_shape": [int(x) for x in ds.image_shape],
+            "volume_shape": [int(x) for x in ds.volume_shape],
+            "voxel_size": float(ds.voxel_size),
+            "healpix_order": int(args.healpix_order),
+            "auto_local_healpix_order": int(args.auto_local_healpix_order),
+            "adaptive_oversampling": int(args.adaptive_oversampling),
+            "max_significants": int(args.max_significants),
+            "diagnostic_single_half": bool(args.diagnostic_single_half),
+            "setup_phase_seconds": setup_phase_seconds,
+            "local_profile_rows": local_profile_rows,
+            "global_profile_rows": global_profile_rows,
+            "timing_rows": timing_rows,
+            "timing_summary": timing_summary,
+        }
+        profile_path = Path(args.output) / "local_search_profile_only.json"
+        profile_path.parent.mkdir(parents=True, exist_ok=True)
+        with profile_path.open("w", encoding="utf-8") as f:
+            json.dump(profile_summary, f, indent=2, sort_keys=True)
+        logger.info("Profile-only summary saved to %s", profile_path)
+        if args.benchmark_ledger_json:
+            ledger_path = Path(args.benchmark_ledger_json)
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            with ledger_path.open("w", encoding="utf-8") as f:
+                json.dump(profile_summary, f, indent=2, sort_keys=True)
+            logger.info("Benchmark ledger saved to %s", ledger_path)
+        print("\n" + "=" * 70)
+        print("LOCAL SEARCH PROFILE ONLY")
+        print("=" * 70)
+        print(f"Profiles: {len(local_profile_rows)}")
+        print(f"Total wall time: {total_time:.1f}s")
+        if result.get("current_sizes"):
+            print(f"Current size: {result['current_sizes'][-1]}")
+        print(f"Summary JSON: {profile_path}")
+        print("=" * 70)
+        return
 
     # ---- Save results ----
     save_dict = {
@@ -1219,6 +2053,8 @@ def main():
         "healpix_order": args.healpix_order,
         "coarse_healpix_order": init_healpix_order,
         "finest_healpix_order": finest_healpix_order,
+        "max_healpix_order": effective_max_healpix_order,
+        "max_healpix_order_source": np.asarray(max_healpix_order_source),
         "n_rotations": rotations.shape[0],
         "n_translations": translations.shape[0],
         "n_images": n_images,
@@ -1250,10 +2086,20 @@ def main():
             result["sigma_offset_trajectory"],
             dtype=np.float64,
         )
+    if "sigma_offset_per_half_trajectory" in result:
+        save_dict["sigma_offset_per_half_trajectory"] = np.asarray(
+            result["sigma_offset_per_half_trajectory"],
+            dtype=object,
+        )
     if "sigma_offset_used_trajectory" in result:
         save_dict["sigma_offset_used_trajectory"] = np.asarray(
             result["sigma_offset_used_trajectory"],
             dtype=np.float64,
+        )
+    if "sigma_offset_used_per_half_trajectory" in result:
+        save_dict["sigma_offset_used_per_half_trajectory"] = np.asarray(
+            result["sigma_offset_used_per_half_trajectory"],
+            dtype=object,
         )
     if "convergence_state" in result:
         state = result["convergence_state"]
@@ -1268,22 +2114,37 @@ def main():
         save_dict["class_weights"] = np.asarray(result["class_weights"], dtype=np.float64)
     if result.get("class_weight_trajectory") is not None:
         save_dict["class_weight_trajectory"] = np.asarray(result["class_weight_trajectory"], dtype=np.float64)
+    if result.get("class_mstep_weight_trajectory") is not None:
+        save_dict["class_mstep_weight_trajectory"] = np.asarray(
+            result["class_mstep_weight_trajectory"], dtype=np.float64
+        )
+    if result.get("class_full_posterior_weight_trajectory") is not None:
+        save_dict["class_full_posterior_weight_trajectory"] = np.asarray(
+            result["class_full_posterior_weight_trajectory"], dtype=np.float64
+        )
     if result.get("class_assignments") is not None and any(c is not None for c in result["class_assignments"]):
         for k, ca in enumerate(result["class_assignments"]):
             if ca is not None:
                 save_dict[f"class_assignments_half{k}"] = np.asarray(ca, dtype=np.int32)
+    if result.get("class_assignment_history") is not None:
+        class_half_order_indices = np.concatenate(
+            [np.asarray(half1_idx, dtype=np.int64), np.asarray(half2_idx, dtype=np.int64)],
+        )
+        for i, classes in enumerate(result["class_assignment_history"]):
+            classes_half_order = np.asarray(classes, dtype=np.int32).reshape(-1)
+            save_dict[f"class_assignments_iter_{i:03d}"] = classes_half_order
+            save_dict[f"class_assignments_half_order_iter_{i:03d}"] = classes_half_order
+            if classes_half_order.shape[0] == class_half_order_indices.shape[0]:
+                classes_by_image = np.full(int(n_images), -1, dtype=np.int32)
+                classes_by_image[class_half_order_indices] = classes_half_order
+                save_dict[f"class_assignments_by_image_iter_{i:03d}"] = classes_by_image
     if result.get("per_class_sigma_offset_trajectory") is not None:
         # Per-iter K-vector or None; serialize as object array via dtype=object.
         save_dict["per_class_sigma_offset_trajectory"] = np.asarray(
             result["per_class_sigma_offset_trajectory"], dtype=object
         )
-    local_profile_rows = [
-        {
-            key: (np.asarray(value).item() if np.asarray(value).ndim == 0 else np.asarray(value).tolist())
-            for key, value in row.items()
-        }
-        for row in result.get("local_profile_history", [])
-    ]
+    local_profile_rows = _jsonable_profile_rows(result.get("local_profile_history", []))
+    global_profile_rows = _jsonable_profile_rows(result.get("global_profile_history", []))
     setup_phase_seconds = {str(key): float(value) for key, value in result.get("setup_phase_seconds", {}).items()}
 
     # Save FSC curves per iteration
@@ -1323,8 +2184,72 @@ def main():
 
     # Save per-image Pmax per iteration (if available)
     if "pmax_per_image_history" in result:
+        pmax_half_order_indices = np.concatenate(
+            [np.asarray(half1_idx, dtype=np.int64), np.asarray(half2_idx, dtype=np.int64)],
+        )
         for i, pmax in enumerate(result["pmax_per_image_history"]):
-            save_dict[f"pmax_per_image_iter_{i:03d}"] = np.asarray(pmax, dtype=np.float32)
+            pmax_half_order = np.asarray(pmax, dtype=np.float32).reshape(-1)
+            save_dict[f"pmax_per_image_iter_{i:03d}"] = pmax_half_order
+            save_dict[f"pmax_per_half_order_iter_{i:03d}"] = pmax_half_order
+            if pmax_half_order.shape[0] == pmax_half_order_indices.shape[0]:
+                pmax_by_image = np.full(int(n_images), np.nan, dtype=np.float32)
+                pmax_by_image[pmax_half_order_indices] = pmax_half_order
+                save_dict[f"pmax_per_image_by_image_iter_{i:03d}"] = pmax_by_image
+    if result.get("final_all_data_fsc") is not None:
+        save_dict["fsc_final_all_data"] = np.asarray(result["final_all_data_fsc"], dtype=np.float32)
+    if "final_all_data_ran" in result:
+        save_dict["final_all_data_ran"] = np.asarray(result["final_all_data_ran"], dtype=np.bool_)
+    for result_key, save_key in (
+        ("tau2_radial_final_all_data", "tau2_radial_final_all_data"),
+        ("tau2_fsc_used_final_all_data", "tau2_fsc_used_final_all_data"),
+        ("tau2_ssnr_final_all_data", "tau2_ssnr_final_all_data"),
+    ):
+        if result.get(result_key) is not None:
+            save_dict[save_key] = np.asarray(result[result_key], dtype=np.float64)
+    if "final_all_data_sampling_perturbation" in result:
+        save_dict["final_all_data_sampling_perturbation"] = np.asarray(
+            result["final_all_data_sampling_perturbation"],
+            dtype=np.float32,
+        )
+    if "final_all_data_sampling_perturbation_applied" in result:
+        save_dict["final_all_data_sampling_perturbation_applied"] = np.asarray(
+            result["final_all_data_sampling_perturbation_applied"],
+            dtype=np.bool_,
+        )
+    if "final_all_data_sampling_relion_iteration" in result:
+        save_dict["final_all_data_sampling_relion_iteration"] = np.asarray(
+            result["final_all_data_sampling_relion_iteration"],
+            dtype=np.int32,
+        )
+    if result.get("final_all_data_sampling_star") is not None:
+        save_dict["final_all_data_sampling_star"] = np.asarray(str(result["final_all_data_sampling_star"]))
+    if result.get("final_all_data_sampling_star_source") is not None:
+        save_dict["final_all_data_sampling_star_source"] = np.asarray(
+            str(result["final_all_data_sampling_star_source"])
+        )
+    if "final_all_data_sampling_offset_range" in result:
+        save_dict["final_all_data_sampling_offset_range"] = np.asarray(
+            result["final_all_data_sampling_offset_range"],
+            dtype=np.float32,
+        )
+    if "final_all_data_sampling_offset_step" in result:
+        save_dict["final_all_data_sampling_offset_step"] = np.asarray(
+            result["final_all_data_sampling_offset_step"],
+            dtype=np.float32,
+        )
+    if "final_all_data_grid_correct" in result:
+        save_dict["final_all_data_grid_correct"] = np.asarray(
+            result["final_all_data_grid_correct"],
+            dtype=np.bool_,
+        )
+    if result.get("final_all_data_gridding_correct") is not None:
+        save_dict["final_all_data_gridding_correct"] = np.asarray(
+            str(result["final_all_data_gridding_correct"])
+        )
+    if result.get("tau2_weight_combination_final_all_data") is not None:
+        save_dict["tau2_weight_combination_final_all_data"] = np.asarray(
+            str(result["tau2_weight_combination_final_all_data"])
+        )
 
     half_indices = [
         np.asarray(half1_idx, dtype=np.int64),
@@ -1364,6 +2289,60 @@ def main():
             save_dict[f"best_translations_by_image_iter_{i:03d}"] = by_image
             save_dict["best_translations_final_by_image"] = by_image
 
+    final_all_data_eulers = result.get("final_all_data_best_rotation_eulers")
+    final_all_data_euler_halves = _pose_history_half_arrays(final_all_data_eulers, dtype=np.float32)
+    if final_all_data_euler_halves is not None and not all(arr is None for arr in final_all_data_euler_halves):
+        compact = []
+        for k, arr in enumerate(final_all_data_euler_halves):
+            if arr is None:
+                continue
+            save_dict[f"best_rotation_eulers_final_all_data_half{k}"] = arr
+            compact.append(arr)
+        if compact:
+            save_dict["best_rotation_eulers_final_all_data"] = np.concatenate(compact, axis=0)
+        by_image = _pose_history_by_image(final_all_data_eulers, half_indices, n_images, (3,), dtype=np.float32)
+        if by_image is not None:
+            save_dict["best_rotation_eulers_final_all_data_by_image"] = by_image
+
+    final_all_data_trans = result.get("final_all_data_best_translations")
+    final_all_data_trans_halves = _pose_history_half_arrays(final_all_data_trans, dtype=np.float32)
+    if final_all_data_trans_halves is not None and not all(arr is None for arr in final_all_data_trans_halves):
+        compact = []
+        for k, arr in enumerate(final_all_data_trans_halves):
+            if arr is None:
+                continue
+            save_dict[f"best_translations_final_all_data_half{k}"] = arr
+            compact.append(arr)
+        if compact:
+            save_dict["best_translations_final_all_data"] = np.concatenate(compact, axis=0)
+        by_image = _pose_history_by_image(final_all_data_trans, half_indices, n_images, (2,), dtype=np.float32)
+        if by_image is not None:
+            save_dict["best_translations_final_all_data_by_image"] = by_image
+
+    final_all_data_pmax = result.get("final_all_data_max_posterior")
+    final_all_data_pmax_halves = _pose_history_half_arrays(final_all_data_pmax, dtype=np.float32)
+    if final_all_data_pmax_halves is not None and not all(arr is None for arr in final_all_data_pmax_halves):
+        compact = []
+        for k, arr in enumerate(final_all_data_pmax_halves):
+            if arr is None:
+                continue
+            save_dict[f"pmax_final_all_data_half{k}"] = arr
+            compact.append(arr)
+        if compact:
+            save_dict["pmax_final_all_data"] = np.concatenate(compact, axis=0)
+        by_image = _pose_history_by_image(final_all_data_pmax, half_indices, n_images, (), dtype=np.float32)
+        if by_image is not None:
+            save_dict["pmax_final_all_data_by_image"] = by_image
+
+    git_provenance = git_worktree_provenance()
+    save_dict["git_commit"] = np.asarray(git_provenance["head"])
+    save_dict["git_branch"] = np.asarray(git_provenance["branch"])
+    save_dict["git_dirty_count"] = np.asarray(git_provenance["dirty_count"], dtype=np.int64)
+    save_dict["git_diff_sha256"] = np.asarray(git_provenance["diff_sha256"])
+    save_dict["git_worktree_fingerprint_sha256"] = np.asarray(git_provenance["worktree_fingerprint_sha256"])
+    save_dict["git_status_porcelain"] = np.asarray(git_provenance["status_porcelain"])
+    save_dict["git_untracked_file_hashes"] = np.asarray(git_provenance["untracked_file_hashes"])
+
     # Save final merged volume (Fourier space)
     save_dict["final_mean_ft"] = np.asarray(result["mean"])
     if setup_phase_seconds:
@@ -1380,8 +2359,11 @@ def main():
             save_dict[f"hard_assignments_half{k}"] = np.asarray(result["hard_assignments"][k])
 
     out_path = os.path.join(args.output, "refinement_results.npz")
-    np.savez_compressed(out_path, **save_dict)
-    logger.info("Results saved to %s", out_path)
+    if args.skip_large_outputs:
+        logger.info("Skipping large refinement result archive (--skip-large-outputs): %s", out_path)
+    else:
+        np.savez_compressed(out_path, **save_dict)
+        logger.info("Results saved to %s", out_path)
 
     timing_rows = _collect_timing_rows(timing_dir_path)
     timing_summary = _summarize_timing_rows(timing_rows)
@@ -1390,6 +2372,7 @@ def main():
         ledger_path.parent.mkdir(parents=True, exist_ok=True)
         ledger = {
             "git_commit": _safe_git_commit(),
+            "git_provenance": git_provenance,
             "python_version": platform.python_version(),
             "platform": platform.platform(),
             "numpy_version": np.__version__,
@@ -1416,11 +2399,14 @@ def main():
             "healpix_order": int(args.healpix_order),
             "coarse_healpix_order": int(init_healpix_order),
             "finest_healpix_order": int(finest_healpix_order),
+            "max_healpix_order": int(effective_max_healpix_order),
+            "max_healpix_order_source": str(max_healpix_order_source),
             "auto_local_healpix_order": int(args.auto_local_healpix_order),
             "adaptive_oversampling": int(args.adaptive_oversampling),
             "max_significants": int(args.max_significants),
             "setup_phase_seconds": setup_phase_seconds,
             "local_profile_rows": local_profile_rows,
+            "global_profile_rows": global_profile_rows,
             "timing_rows": timing_rows,
             "timing_summary": timing_summary,
         }
@@ -1428,42 +2414,45 @@ def main():
             json.dump(ledger, f, indent=2, sort_keys=True)
         logger.info("Benchmark ledger saved to %s", ledger_path)
 
-    # Also save final merged volume as MRC for visual inspection.
-    # Use the canonical idiom: get_idft3 + write_mrc (handles axis transpose).
-    from recovar.utils.helpers import write_mrc as _write_mrc
-
-    def _ft_to_real_volume(ft_array):
-        ft_reshape = np.asarray(ft_array).reshape(ds.volume_shape)
-        return np.real(np.array(ftu.get_idft3(jnp.asarray(ft_reshape)))).astype(np.float32)
-
-    if args.n_classes == 1:
-        final_mean_real = _ft_to_real_volume(result["mean"])
-        _write_mrc(os.path.join(args.output, "final_merged.mrc"), final_mean_real, voxel_size=ds.voxel_size)
-        logger.info("Final merged volume saved to final_merged.mrc")
-        for k in range(2):
-            half_real = _ft_to_real_volume(result["means"][k])
-            _write_mrc(
-                os.path.join(args.output, f"final_half{k + 1}.mrc"),
-                half_real,
-                voxel_size=ds.voxel_size,
-            )
-            logger.info("Half-%d volume saved", k + 1)
+    if args.skip_large_outputs:
+        logger.info("Skipping final MRC volume writes (--skip-large-outputs)")
     else:
-        # K-class: result["means"][k] has shape (K, V); result["class_means"]
-        # has shape (K, V) for the merged final iter; result["mean"] is the
-        # class-weighted merged volume.
-        final_mean_real = _ft_to_real_volume(result["mean"])
-        _write_mrc(os.path.join(args.output, "final_merged.mrc"), final_mean_real, voxel_size=ds.voxel_size)
-        if result.get("class_means") is not None:
-            class_means_arr = np.asarray(result["class_means"])
-            for c in range(args.n_classes):
-                vol_real = _ft_to_real_volume(class_means_arr[c])
+        # Also save final merged volume as MRC for visual inspection.
+        # Use the canonical idiom: get_idft3 + write_mrc (handles axis transpose).
+        from recovar.utils.helpers import write_mrc as _write_mrc
+
+        def _ft_to_real_volume(ft_array):
+            ft_reshape = np.asarray(ft_array).reshape(ds.volume_shape)
+            return np.real(np.array(ftu.get_idft3(jnp.asarray(ft_reshape)))).astype(np.float32)
+
+        if args.n_classes == 1:
+            final_mean_real = _ft_to_real_volume(result["mean"])
+            _write_mrc(os.path.join(args.output, "final_merged.mrc"), final_mean_real, voxel_size=ds.voxel_size)
+            logger.info("Final merged volume saved to final_merged.mrc")
+            for k in range(2):
+                half_real = _ft_to_real_volume(result["means"][k])
                 _write_mrc(
-                    os.path.join(args.output, f"final_class{c + 1:03d}.mrc"),
-                    vol_real,
+                    os.path.join(args.output, f"final_half{k + 1}.mrc"),
+                    half_real,
                     voxel_size=ds.voxel_size,
                 )
-            logger.info("Saved %d per-class merged final volumes", args.n_classes)
+                logger.info("Half-%d volume saved", k + 1)
+        else:
+            # K-class: result["means"][k] has shape (K, V); result["class_means"]
+            # has shape (K, V) for the merged final iter; result["mean"] is the
+            # class-weighted merged volume.
+            final_mean_real = _ft_to_real_volume(result["mean"])
+            _write_mrc(os.path.join(args.output, "final_merged.mrc"), final_mean_real, voxel_size=ds.voxel_size)
+            if result.get("class_means") is not None:
+                class_means_arr = np.asarray(result["class_means"])
+                for c in range(args.n_classes):
+                    vol_real = _ft_to_real_volume(class_means_arr[c])
+                    _write_mrc(
+                        os.path.join(args.output, f"final_class{c + 1:03d}.mrc"),
+                        vol_real,
+                        voxel_size=ds.voxel_size,
+                    )
+                logger.info("Saved %d per-class merged final volumes", args.n_classes)
 
     # ---- Print summary ----
     print("\n" + "=" * 70)

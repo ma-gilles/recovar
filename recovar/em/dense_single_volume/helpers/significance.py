@@ -7,6 +7,7 @@ Called by ``refine_single_volume`` and ``_run_relion_iteration_loop`` in ``refin
 
 import os
 from functools import partial
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -26,6 +27,65 @@ _SIGNIFICANCE_SCORE_CACHE_MAX_GB_ENV = "RECOVAR_SIGNIFICANCE_SCORE_CACHE_MAX_GB"
 _SIGNIFICANCE_SCORE_CACHE_DEFAULT_MAX_GB = 2.0
 _SIGNIFICANCE_FUSED_PASS1_ENV = "RECOVAR_PASS1_FUSED"
 NVTX_DOMAIN_EM = "recovar_em"
+
+
+class ComplementSignificantSampleIndices(NamedTuple):
+    """Exact dense significance mask stored as a sparse complement.
+
+    ``None`` remains the representation for an all-True support mask.  This
+    object is used when most, but not all, coarse samples are significant:
+    storing the included indices would be O(n_samples) per image, while storing
+    the excluded tail preserves the exact RELION adaptive mask with bounded
+    host memory.
+    """
+
+    excluded_indices: np.ndarray
+    total_size: int
+
+    @property
+    def size(self) -> int:
+        return int(self.total_size) - int(np.asarray(self.excluded_indices).size)
+
+
+def significant_sample_count(samples, total_size: int) -> int:
+    """Return the number of included coarse samples for any support encoding."""
+
+    if samples is None:
+        return int(total_size)
+    if isinstance(samples, ComplementSignificantSampleIndices):
+        return int(samples.size)
+    return int(np.asarray(samples).size)
+
+
+def significant_sample_ids(samples, total_size: int) -> np.ndarray:
+    """Materialize included ids for diagnostics or dense fallbacks."""
+
+    if samples is None:
+        return np.arange(int(total_size), dtype=np.int64)
+    if isinstance(samples, ComplementSignificantSampleIndices):
+        excluded = np.asarray(samples.excluded_indices, dtype=np.int64).reshape(-1)
+        if excluded.size == 0:
+            return np.arange(int(total_size), dtype=np.int64)
+        keep = np.ones(int(total_size), dtype=bool)
+        keep[excluded] = False
+        return np.flatnonzero(keep).astype(np.int64, copy=False)
+    return np.asarray(samples, dtype=np.int64).reshape(-1)
+
+
+def compact_significant_sample_indices_from_mask(mask) -> object:
+    """Encode one boolean significance mask without materializing dense keeps."""
+
+    mask_np = np.asarray(mask, dtype=bool).reshape(-1)
+    if bool(np.all(mask_np)):
+        return None
+    included = int(np.count_nonzero(mask_np))
+    excluded = int(mask_np.size - included)
+    if included > excluded:
+        return ComplementSignificantSampleIndices(
+            excluded_indices=np.flatnonzero(~mask_np).astype(np.int32),
+            total_size=int(mask_np.size),
+        )
+    return np.flatnonzero(mask_np).astype(np.int32)
 
 
 def _pass1_fused_enabled() -> bool:
@@ -179,6 +239,18 @@ def _significance_debug_dump_enabled() -> bool:
     return bool(os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR"))
 
 
+def _original_indices_for_local(experiment_dataset, local_indices) -> np.ndarray:
+    """Map local batch image indices to original image ids for debug dumps."""
+    local_indices = np.asarray(local_indices, dtype=np.int64)
+    mapper = getattr(experiment_dataset, "original_image_indices_from_local", None)
+    if mapper is not None:
+        return np.asarray(mapper(local_indices), dtype=np.int64)
+    original_indices_all = getattr(experiment_dataset, "dataset_indices", None)
+    if original_indices_all is None:
+        return local_indices
+    return np.asarray(original_indices_all, dtype=np.int64)[local_indices]
+
+
 def _maybe_dump_significance_batch(
     *,
     experiment_dataset,
@@ -221,11 +293,7 @@ def _maybe_dump_significance_batch(
             return
 
     local_indices = np.asarray(indices, dtype=np.int64)
-    original_indices_all = getattr(experiment_dataset, "dataset_indices", None)
-    if original_indices_all is None:
-        original_indices = local_indices
-    else:
-        original_indices = np.asarray(original_indices_all, dtype=np.int64)[local_indices]
+    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
 
     os.makedirs(dump_dir, exist_ok=True)
     n_trans = int(translations.shape[0])
@@ -378,11 +446,7 @@ def _maybe_dump_k_class_significance_batch(
             return
 
     local_indices = np.asarray(indices, dtype=np.int64)
-    original_indices_all = getattr(experiment_dataset, "dataset_indices", None)
-    if original_indices_all is None:
-        original_indices = local_indices
-    else:
-        original_indices = np.asarray(original_indices_all, dtype=np.int64)[local_indices]
+    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
 
     os.makedirs(dump_dir, exist_ok=True)
     n_rot = int(rotations.shape[0])
@@ -782,6 +846,9 @@ def _compute_significance_batched(
         batch_translation_log_prior,
     ):
         if use_relion_projector:
+            projector_kwargs = {}
+            if current_size is not None:
+                projector_kwargs["projector_output_size"] = int(current_size)
             proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
                 relion_projector_half,
                 jnp.asarray(rots_b),
@@ -790,6 +857,7 @@ def _compute_significance_batched(
                 padding_factor=int(projection_padding_factor),
                 centered_rows=True,
                 dense_scale=True,
+                **projector_kwargs,
             )
         else:
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
@@ -964,11 +1032,7 @@ def _compute_significance_batched(
             target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
             if target_original_indices:
                 local_indices_for_dump = np.asarray(indices, dtype=np.int64)
-                original_indices_all = getattr(experiment_dataset, "dataset_indices", None)
-                if original_indices_all is None:
-                    original_indices_for_dump = local_indices_for_dump
-                else:
-                    original_indices_for_dump = np.asarray(original_indices_all, dtype=np.int64)[local_indices_for_dump]
+                original_indices_for_dump = _original_indices_for_local(experiment_dataset, local_indices_for_dump)
                 dump_target_positions = np.flatnonzero(
                     np.isin(original_indices_for_dump, np.fromiter(target_original_indices, dtype=np.int64))
                 ).astype(np.int64)
@@ -1130,12 +1194,9 @@ def _compute_significance_batched(
         if return_significant_sample_indices:
             batch_sig_mask_np = np.asarray(batch_sig_mask, dtype=bool)
             for local_idx, global_idx in enumerate(indices):
-                if np.all(batch_sig_mask_np[local_idx]):
-                    significant_sample_indices[int(global_idx)] = None
-                else:
-                    significant_sample_indices[int(global_idx)] = np.flatnonzero(batch_sig_mask_np[local_idx]).astype(
-                        np.int32
-                    )
+                significant_sample_indices[int(global_idx)] = compact_significant_sample_indices_from_mask(
+                    batch_sig_mask_np[local_idx],
+                )
         start_idx = end_idx
 
     full_stats = None
@@ -1392,6 +1453,9 @@ def _compute_k_class_significance_batched(
 
     def _score_block(class_index, mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
         if use_relion_projector:
+            projector_kwargs = {}
+            if current_size is not None:
+                projector_kwargs["projector_output_size"] = int(current_size)
             proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
                 relion_projector_half[class_index],
                 rots_b,
@@ -1400,6 +1464,7 @@ def _compute_k_class_significance_batched(
                 padding_factor=int(projection_padding_factor),
                 centered_rows=True,
                 dense_scale=True,
+                **projector_kwargs,
             )
         else:
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
@@ -1610,13 +1675,13 @@ def _compute_k_class_significance_batched(
         # (pre-prior) for each target image inside the per-class block loop.
         # This enables direct diff against RELION's exp_Mweight_diff2
         # without needing the full (batch, n_classes, n_rot*n_trans) cache.
+        debug_dump_enabled = collect_significance and _significance_debug_dump_enabled()
         dump_target_local_positions = None
-        if _significance_debug_dump_enabled():
+        if debug_dump_enabled:
             _dump_targets = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
             if _dump_targets:
                 _local_for_dump = np.asarray(indices, dtype=np.int64)
-                _orig_all = getattr(experiment_dataset, "dataset_indices", None)
-                _orig = _local_for_dump if _orig_all is None else np.asarray(_orig_all, dtype=np.int64)[_local_for_dump]
+                _orig = _original_indices_for_local(experiment_dataset, _local_for_dump)
                 _positions = np.flatnonzero(np.isin(_orig, np.fromiter(_dump_targets, dtype=np.int64)))
                 if _positions.size:
                     dump_target_local_positions = _positions.astype(np.int64)
@@ -1856,9 +1921,7 @@ def _compute_k_class_significance_batched(
                     dtype=np.int32,
                 )
 
-        if _significance_debug_dump_enabled():
-            if not collect_significance:
-                raise ValueError("debug significance dumps require collect_significance=True")
+        if debug_dump_enabled:
             # Concatenate per-class per-block raw scores for the dump targets
             # into per-class arrays of shape (n_targets, n_rot, n_trans).
             target_scores_pre_prior_per_class = None
@@ -1912,8 +1975,8 @@ def _compute_k_class_significance_batched(
                     c0 = class_index * samples_per_class
                     c1 = c0 + samples_per_class
                     mask = batch_sig_mask_np[local_idx, c0:c1]
-                    significant_sample_indices[class_index][global_idx] = (
-                        None if np.all(mask) else np.flatnonzero(mask).astype(np.int32)
+                    significant_sample_indices[class_index][global_idx] = compact_significant_sample_indices_from_mask(
+                        mask,
                     )
         start_idx = end_idx
 

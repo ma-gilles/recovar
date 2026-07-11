@@ -147,32 +147,20 @@ def _combined_noise_stats(noise_stats_per_half):
     wsum_sigma2_offset = float(sum(float(stats_k.wsum_sigma2_offset) for stats_k in stats))
     sumw = float(sum(float(stats_k.sumw) for stats_k in stats))
 
-    if any(stats_k.wsum_noise_a2 is not None for stats_k in stats):
-        wsum_noise_a2 = np.sum(
+    def _sum_optional_field(name: str, like):
+        values = [getattr(stats_k, name, None) for stats_k in stats]
+        if all(value is None for value in values):
+            return None
+        return np.sum(
             [
-                np.zeros_like(wsum_sigma2_noise)
-                if stats_k.wsum_noise_a2 is None
-                else np.asarray(stats_k.wsum_noise_a2, dtype=np.float64)
-                for stats_k in stats
+                np.zeros_like(like, dtype=np.float64) if value is None else np.asarray(value, dtype=np.float64)
+                for value in values
             ],
             axis=0,
         )
-    else:
-        wsum_noise_a2 = None
 
-    if any(stats_k.wsum_noise_xa is not None for stats_k in stats):
-        wsum_noise_xa = np.sum(
-            [
-                np.zeros_like(wsum_sigma2_noise)
-                if stats_k.wsum_noise_xa is None
-                else np.asarray(stats_k.wsum_noise_xa, dtype=np.float64)
-                for stats_k in stats
-            ],
-            axis=0,
-        )
-    else:
-        wsum_noise_xa = None
-
+    wsum_noise_a2 = _sum_optional_field("wsum_noise_a2", wsum_sigma2_noise)
+    wsum_noise_xa = _sum_optional_field("wsum_noise_xa", wsum_sigma2_noise)
     return make_noise_stats(
         wsum_sigma2_noise=wsum_sigma2_noise,
         wsum_img_power=wsum_img_power,
@@ -228,6 +216,9 @@ def _reconstruct_volume_eager(
     grid_correct=True,
     minres_map=0,
     current_size=None,
+    return_real_space=False,
+    accumulator_volume_shape=None,
+    tau_is_1d=False,
 ):
     """Eager RELION-style reconstruction from full or half Fourier accumulators.
 
@@ -252,6 +243,9 @@ def _reconstruct_volume_eager(
         gridding_padding_factor=projection_padding_factor,
         minres_map=minres_map,
         current_size=current_size,
+        return_real_space=return_real_space,
+        accumulator_volume_shape=accumulator_volume_shape,
+        tau_is_1d=tau_is_1d,
     )
 
 
@@ -261,18 +255,22 @@ def _apply_relion_initial_lowpass_filter(
     """Apply RELION's ``initialLowPassFilterReferences`` to a full Fourier volume."""
     if ini_high_angstrom is None or float(ini_high_angstrom) <= 0.0:
         return volume_ft_flat
-    from recovar.heterogeneity import locres
+    from recovar.em.initial_model.bootstrap_iref import initial_low_pass_filter_references
 
-    filtered = locres.low_pass_filter_map(
-        jnp.asarray(volume_ft_flat).reshape(volume_shape),
-        volume_shape[0],
-        float(ini_high_angstrom),
-        float(voxel_size),
-        int(filter_edgewidth),
-        do_highpass_instead=False,
-        volume_shape=volume_shape,
+    original = jnp.asarray(volume_ft_flat).reshape(volume_shape)
+    volume_real = np.real(np.asarray(fourier_transform_utils.get_idft3(original))).astype(
+        np.float64,
+        copy=False,
     )
-    return filtered.reshape(-1)
+    filtered_real = initial_low_pass_filter_references(
+        volume_real[None, ...],
+        ori_size=int(volume_shape[0]),
+        pixel_size=float(voxel_size),
+        ini_high_ang=float(ini_high_angstrom),
+        filter_edgewidth=float(filter_edgewidth),
+    )[0]
+    filtered_ft = fourier_transform_utils.get_dft3(jnp.asarray(filtered_real))
+    return filtered_ft.astype(original.dtype).reshape(-1)
 
 
 def _align_fourier_volume_sign_to_reference(volume_ft_flat, reference_ft_flat, volume_shape):
@@ -305,6 +303,7 @@ def _reconstruct_and_postprocess_means(
     Ft_y_combined,
     Ft_ctf_combined,
     mean_signal_variance,
+    mean_signal_variance_shells,
     mean_signal_variance_per_half,
     n_classes: int,
     k_class_enabled: bool,
@@ -322,6 +321,7 @@ def _reconstruct_and_postprocess_means(
     relion_firstiter_ini_high_angstrom,
     relion_width_mask_edge: int,
     relion_fmask_edge: int,
+    accumulator_volume_shape=None,
 ) -> None:
     """Run one iteration's regularized reconstruction + post-processing.
 
@@ -338,22 +338,46 @@ def _reconstruct_and_postprocess_means(
     _t_recon = time.time()
     cs_int = int(cs) if cs is not None else None
     if k_class_enabled:
-        shared_classes = jnp.stack(
-            [
-                _reconstruct_volume_eager(
-                    Ft_ctf_combined[class_idx],
-                    Ft_y_combined[class_idx],
-                    volume_shape,
-                    padding_factor,
-                    tau=mean_signal_variance[class_idx],
-                    tau2_fudge=tau2_fudge,
-                    projection_padding_factor=projection_padding_factor,
-                    minres_map=relion_minres_map,
-                    current_size=cs_int,
-                ).reshape(-1)
-                for class_idx in range(n_classes)
-            ],
-            axis=0,
+        shared_class_maps = []
+        for class_idx in range(n_classes):
+            logger.info(
+                "Class3D reconstruction start: iter=%d class=%d/%d current_size=%s",
+                iteration + 1,
+                class_idx + 1,
+                n_classes,
+                cs_int,
+            )
+            class_map = _reconstruct_volume_eager(
+                Ft_ctf_combined[class_idx],
+                Ft_y_combined[class_idx],
+                volume_shape,
+                padding_factor,
+                tau=(
+                    mean_signal_variance_shells[class_idx]
+                    if mean_signal_variance_shells is not None
+                    else mean_signal_variance[class_idx]
+                ),
+                tau2_fudge=tau2_fudge,
+                projection_padding_factor=projection_padding_factor,
+                minres_map=relion_minres_map,
+                current_size=cs_int,
+                accumulator_volume_shape=accumulator_volume_shape,
+                tau_is_1d=mean_signal_variance_shells is not None,
+            ).reshape(-1)
+            shared_class_maps.append(class_map)
+            logger.info(
+                "Class3D reconstruction done: iter=%d class=%d/%d elapsed=%.1fs",
+                iteration + 1,
+                class_idx + 1,
+                n_classes,
+                time.time() - _t_recon,
+            )
+        shared_classes = jnp.stack(shared_class_maps, axis=0)
+        logger.info(
+            "Class3D reconstruction stack complete: iter=%d classes=%d elapsed=%.1fs",
+            iteration + 1,
+            n_classes,
+            time.time() - _t_recon,
         )
         means[0] = shared_classes
         means[1] = shared_classes
@@ -371,6 +395,7 @@ def _reconstruct_and_postprocess_means(
                 projection_padding_factor=projection_padding_factor,
                 minres_map=relion_minres_map,
                 current_size=cs_int,
+                accumulator_volume_shape=accumulator_volume_shape,
             ).reshape(-1)
 
     for k in range(2):
@@ -391,9 +416,6 @@ def _reconstruct_and_postprocess_means(
                 means_premask=np.asarray(means[k], dtype=np.complex64),
             )
 
-        # RELION's solventFlatten (ml_optimiser.cpp:5469): mask the
-        # reconstructed reference outside particle_diameter to remove
-        # solvent noise before the next E-step's projections.
         if particle_diameter_ang is not None and particle_diameter_ang > 0:
             flatten_radius = particle_diameter_ang / (2.0 * cryo.voxel_size)
             solvent_mask = mask.raised_cosine_mask(
@@ -463,6 +485,7 @@ class SigmaOffsetUpdateResult:
 
     current_sigma_offset_angstrom: float
     per_class_sigma_offset_angstrom: np.ndarray | None
+    per_half_sigma_offset_angstrom: np.ndarray | None
 
 
 def update_c1_sigma_offset_from_posterior(
@@ -487,15 +510,34 @@ def update_c1_sigma_offset_from_posterior(
 
     sigma2_offset_wsum = 0.0
     sigma2_offset_sumw = 0.0
+    per_half_sigma_offset = None
+    per_half_values = []
+    per_half_valid = False
     for stats_k in noise_stats_per_half:
         if stats_k is None:
+            per_half_values.append(np.nan)
             continue
-        sigma2_offset_wsum += float(getattr(stats_k, "wsum_sigma2_offset", 0.0))
-        sigma2_offset_sumw += float(getattr(stats_k, "sumw", 0.0))
-    # D.2: per-class sigma_offset diagnostic. RELION Class3D maintains K
-    # independent sigma_offset values; recovar currently uses the
-    # cross-class aggregate. Compute and log per-class sigmas to gauge
-    # whether the per-class refactor is justified for this fixture.
+        wsum_k = float(getattr(stats_k, "wsum_sigma2_offset", 0.0))
+        sumw_k = float(getattr(stats_k, "sumw", 0.0))
+        sigma2_offset_wsum += wsum_k
+        sigma2_offset_sumw += sumw_k
+        if wsum_k > 0.0 and sumw_k > 0.0:
+            per_half_values.append(float(np.sqrt(max(wsum_k / (2.0 * sumw_k), 2.0))))
+            per_half_valid = True
+        else:
+            per_half_values.append(np.nan)
+    if per_half_valid and not k_class_enabled and len(per_half_values) == len(noise_stats_per_half):
+        per_half_sigma_offset = np.asarray(
+            [
+                float(value) if np.isfinite(value) else float(current_sigma_offset_angstrom)
+                for value in per_half_values
+            ],
+            dtype=np.float64,
+        )
+    # D.2: per-class sigma_offset diagnostic. RELION Class3D maintains one
+    # shared sigma2_offset in model_general; per-class values here are logged
+    # only to help diagnose skewed class posteriors without changing the live
+    # shared translation prior.
     per_class_sigma_offset = None
     if k_class_enabled:
         per_class_w = np.zeros(n_classes, dtype=np.float64)
@@ -549,6 +591,7 @@ def update_c1_sigma_offset_from_posterior(
     return SigmaOffsetUpdateResult(
         current_sigma_offset_angstrom=current_sigma_offset_angstrom,
         per_class_sigma_offset_angstrom=per_class_sigma_offset,
+        per_half_sigma_offset_angstrom=per_half_sigma_offset,
     )
 
 
@@ -591,6 +634,7 @@ def compute_unregularized_halfmaps_and_align_signs(
     projection_padding_factor: int,
     minres_map: int,
     need_unreg_means: bool,
+    accumulator_volume_shape=None,
 ) -> UnregularizedHalfmapResult:
     """Reconstruct unregularized half-maps (only when diagnostics need them)
     and sign-align the regularized means against the previous-iter reference.
@@ -619,6 +663,7 @@ def compute_unregularized_halfmaps_and_align_signs(
                         tau2_fudge=tau2_fudge,
                         projection_padding_factor=projection_padding_factor,
                         minres_map=minres_map,
+                        accumulator_volume_shape=accumulator_volume_shape,
                     ).reshape(-1)
                     for class_idx in range(n_classes)
                 ],
@@ -636,6 +681,7 @@ def compute_unregularized_halfmaps_and_align_signs(
                     tau2_fudge=tau2_fudge,
                     projection_padding_factor=projection_padding_factor,
                     minres_map=minres_map,
+                    accumulator_volume_shape=accumulator_volume_shape,
                 )
                 for Ft_ctf_half, Ft_y_half in zip(Ft_ctf_per_half, Ft_y_per_half)
             ]
@@ -685,6 +731,270 @@ def compute_unregularized_halfmaps_and_align_signs(
         unregularized_means=unreg_means,
         aligned_means=means,
         any_sign_flipped=any_sign_flipped,
+    )
+
+
+# ---------------------------------------------------------------------------
+# RELION norm/scale correction update
+# ---------------------------------------------------------------------------
+
+
+@_dataclass
+class NormScaleCorrectionUpdateResult:
+    """Native RELION norm/scale correction state for the next iteration."""
+
+    norm_corrections_per_half: list
+    avg_norm_correction_per_half: list
+    group_scale_corrections_per_half: list
+    image_corrections_per_half: list
+    scale_corrections_per_half: list
+    zero_norm_residual_counts: list
+
+
+def _half_list_or_none(values, *, n_halves: int, name: str):
+    if values is None:
+        return [None] * n_halves
+    if not isinstance(values, (list, tuple)) or len(values) != n_halves:
+        raise ValueError(f"{name} must be a {n_halves}-element list/tuple or None")
+    return list(values)
+
+
+def _derive_group_scale_from_image_scale(scale_per_image, group_ids, n_groups):
+    group_scale = np.ones(n_groups, dtype=np.float64)
+    if scale_per_image is None:
+        return group_scale
+    sums = np.bincount(group_ids, weights=np.asarray(scale_per_image, dtype=np.float64), minlength=n_groups)
+    counts = np.bincount(group_ids, minlength=n_groups)
+    present = counts > 0
+    group_scale[present] = sums[present] / counts[present]
+    return group_scale
+
+
+def update_relion_norm_scale_corrections(
+    *,
+    noise_stats_per_half,
+    image_corrections_per_half=None,
+    scale_corrections_per_half=None,
+    group_ids_per_half=None,
+    group_scale_corrections_per_half=None,
+    avg_norm_correction_per_half=None,
+    relion_firstiter_cc_this_iter: bool = False,
+    do_norm_correction: bool = True,
+    do_scale_correction: bool = True,
+    scale_relaxation_mu: float = 0.0,
+    image_weights_per_half=None,
+    eps: float = 1e-30,
+) -> NormScaleCorrectionUpdateResult:
+    """Update RELION-style per-image norm and per-group scale corrections.
+
+    The existing scoring paths consume two per-image arrays:
+    ``image_corrections = (avg_norm / normcorr) * scale[group_id]`` and
+    ``scale_corrections = scale[group_id]``.  This helper updates the native
+    RELION state behind those arrays from M-step sufficient statistics.
+
+    Scale sufficient statistics are expected to match RELION's
+    ``wsum_model.wsum_signal_product`` and ``wsum_model.wsum_reference_power``:
+    the collection site must divide XA by the old scale and AA by its square
+    before accumulation.
+    """
+
+    stats_per_half = _half_list_or_none(noise_stats_per_half, n_halves=2, name="noise_stats_per_half")
+    image_corr_in = _half_list_or_none(image_corrections_per_half, n_halves=2, name="image_corrections_per_half")
+    scale_corr_in = _half_list_or_none(scale_corrections_per_half, n_halves=2, name="scale_corrections_per_half")
+    group_ids_in = _half_list_or_none(group_ids_per_half, n_halves=2, name="group_ids_per_half")
+    group_scale_in = _half_list_or_none(
+        group_scale_corrections_per_half,
+        n_halves=2,
+        name="group_scale_corrections_per_half",
+    )
+    avg_norm_in = (
+        [1.0, 1.0]
+        if avg_norm_correction_per_half is None
+        else list(avg_norm_correction_per_half)
+        if isinstance(avg_norm_correction_per_half, (list, tuple)) and len(avg_norm_correction_per_half) == 2
+        else None
+    )
+    if avg_norm_in is None:
+        raise ValueError("avg_norm_correction_per_half must be a 2-element list/tuple or None")
+    weights_in = _half_list_or_none(image_weights_per_half, n_halves=2, name="image_weights_per_half")
+
+    if not (0.0 <= float(scale_relaxation_mu) <= 1.0):
+        raise ValueError(f"scale_relaxation_mu must be in [0, 1], got {scale_relaxation_mu}")
+
+    out_norm = []
+    out_avg_norm = []
+    out_group_scale = []
+    out_image_corr = []
+    out_scale_corr = []
+    out_zero_norm_counts = []
+
+    for half_idx, stats in enumerate(stats_per_half):
+        if stats is None:
+            raise RuntimeError("RELION norm/scale update expected per-half NoiseStats")
+
+        norm_stats = getattr(stats, "wsum_norm_correction", None)
+        if norm_stats is None:
+            if image_corr_in[half_idx] is None and scale_corr_in[half_idx] is None and group_ids_in[half_idx] is None:
+                raise RuntimeError("Cannot infer image count without norm stats or correction arrays")
+            n_images = int(
+                len(
+                    next(
+                        value
+                        for value in (image_corr_in[half_idx], scale_corr_in[half_idx], group_ids_in[half_idx])
+                        if value is not None
+                    )
+                )
+            )
+        else:
+            n_images = int(np.asarray(norm_stats).reshape(-1).shape[0])
+
+        group_ids = (
+            np.zeros(n_images, dtype=np.int64)
+            if group_ids_in[half_idx] is None
+            else np.asarray(group_ids_in[half_idx], dtype=np.int64).reshape(-1)
+        )
+        if group_ids.shape != (n_images,):
+            raise ValueError(
+                f"group_ids_per_half[{half_idx}] has shape {group_ids.shape}, expected ({n_images},)",
+            )
+        if group_ids.size and int(np.min(group_ids)) < 0:
+            raise ValueError("group IDs must be non-negative")
+
+        scale_per_image_in = (
+            None
+            if scale_corr_in[half_idx] is None
+            else np.asarray(scale_corr_in[half_idx], dtype=np.float64).reshape(-1)
+        )
+        image_corr = (
+            None
+            if image_corr_in[half_idx] is None
+            else np.asarray(image_corr_in[half_idx], dtype=np.float64).reshape(-1)
+        )
+        if scale_per_image_in is not None and scale_per_image_in.shape != (n_images,):
+            raise ValueError(
+                f"scale_corrections_per_half[{half_idx}] has shape {scale_per_image_in.shape}, expected ({n_images},)",
+            )
+        if image_corr is not None and image_corr.shape != (n_images,):
+            raise ValueError(
+                f"image_corrections_per_half[{half_idx}] has shape {image_corr.shape}, expected ({n_images},)",
+            )
+
+        n_groups_from_ids = int(np.max(group_ids)) + 1 if group_ids.size else 1
+        if group_scale_in[half_idx] is None:
+            n_groups = n_groups_from_ids
+            group_scale_old = _derive_group_scale_from_image_scale(scale_per_image_in, group_ids, n_groups)
+        else:
+            group_scale_old = np.asarray(group_scale_in[half_idx], dtype=np.float64).reshape(-1)
+            n_groups = int(group_scale_old.shape[0])
+            if n_groups < n_groups_from_ids:
+                raise ValueError(
+                    f"group_scale_corrections_per_half[{half_idx}] has {n_groups} groups, "
+                    f"but group IDs require {n_groups_from_ids}",
+                )
+        if np.any(group_scale_old <= 0.0):
+            raise ValueError("group scale corrections must be positive")
+
+        scale_per_image_old = group_scale_old[group_ids]
+        if scale_per_image_in is not None:
+            scale_per_image_old = scale_per_image_in
+        if image_corr is None:
+            image_corr = scale_per_image_old.copy()
+        if np.any(image_corr <= 0.0):
+            raise ValueError("image corrections must be positive")
+
+        image_norm_factor = image_corr / np.maximum(scale_per_image_old, eps)
+        avg_norm_old = float(avg_norm_in[half_idx])
+        if avg_norm_old <= 0.0:
+            raise ValueError("avg_norm corrections must be positive")
+
+        if do_norm_correction and norm_stats is not None:
+            norm_residual = np.asarray(norm_stats, dtype=np.float64).reshape(-1)
+            if norm_residual.shape != (n_images,):
+                raise ValueError(
+                    f"wsum_norm_correction for half {half_idx} has shape {norm_residual.shape}, "
+                    f"expected ({n_images},)",
+                )
+            if not np.all(np.isfinite(norm_residual)):
+                raise ValueError("wsum_norm_correction must be finite")
+            if np.any(norm_residual < -1e-12):
+                raise ValueError("wsum_norm_correction must be non-negative")
+            old_norm_over_avg = scale_per_image_old / image_corr
+            valid_norm = norm_residual > eps
+            zero_norm_count = int(n_images - np.count_nonzero(valid_norm))
+            normcorr_from_stats = old_norm_over_avg * np.sqrt(np.maximum(2.0 * norm_residual, 0.0))
+            weights = (
+                np.ones(n_images, dtype=np.float64)
+                if weights_in[half_idx] is None
+                else np.asarray(weights_in[half_idx], dtype=np.float64).reshape(-1)
+            )
+            if weights.shape != (n_images,):
+                raise ValueError(f"image_weights_per_half[{half_idx}] has shape {weights.shape}, expected ({n_images},)")
+            if np.any(weights < 0.0):
+                raise ValueError("image weights must be non-negative")
+            valid_weight_sum = float(np.sum(weights[valid_norm]))
+            if valid_weight_sum > 0.0:
+                target_avg_norm = float(np.sum(weights[valid_norm] * normcorr_from_stats[valid_norm]) / valid_weight_sum)
+            elif np.any(valid_norm):
+                target_avg_norm = float(np.mean(normcorr_from_stats[valid_norm]))
+            else:
+                target_avg_norm = avg_norm_old
+            avg_norm_new = float(scale_relaxation_mu) * avg_norm_old + (1.0 - float(scale_relaxation_mu)) * target_avg_norm
+            image_norm_factor_new = image_norm_factor.copy()
+            image_norm_factor_new[valid_norm] = avg_norm_new / np.maximum(normcorr_from_stats[valid_norm], eps)
+            image_norm_factor = image_norm_factor_new
+            normcorr_new = avg_norm_new / np.maximum(image_norm_factor, eps)
+        else:
+            normcorr_new = avg_norm_old / np.maximum(image_norm_factor, eps)
+            avg_norm_new = avg_norm_old
+            zero_norm_count = 0
+
+        scale_xa = getattr(stats, "wsum_scale_correction_xa", None)
+        scale_aa = getattr(stats, "wsum_scale_correction_aa", None)
+        if (
+            do_scale_correction
+            and not relion_firstiter_cc_this_iter
+            and scale_xa is not None
+            and scale_aa is not None
+        ):
+            xa = np.asarray(scale_xa, dtype=np.float64).reshape(-1)
+            aa = np.asarray(scale_aa, dtype=np.float64).reshape(-1)
+            if xa.shape != (n_groups,) or aa.shape != (n_groups,):
+                raise ValueError(
+                    f"scale stats for half {half_idx} have shapes {xa.shape}/{aa.shape}, expected ({n_groups},)",
+                )
+            scale_target = np.ones_like(xa, dtype=np.float64)
+            np.divide(xa, aa, out=scale_target, where=aa > 0.0)
+            scale_new = float(scale_relaxation_mu) * group_scale_old + (1.0 - float(scale_relaxation_mu)) * scale_target
+            sorted_scale = np.sort(scale_new)
+            median = float(sorted_scale[n_groups // 2])
+            if np.isfinite(median) and median > 0.0:
+                scale_new = np.clip(scale_new, median / 5.0, 5.0 * median)
+            counts = np.bincount(group_ids, minlength=n_groups).astype(np.float64)
+            count_sum = float(np.sum(counts))
+            if count_sum > 0.0:
+                avg_scale = float(np.sum(counts * scale_new) / count_sum)
+                if avg_scale > 0.0 and np.isfinite(avg_scale):
+                    scale_new = scale_new / avg_scale
+        else:
+            scale_new = group_scale_old.copy()
+
+        scale_per_image_new = scale_new[group_ids]
+        image_corr_new = image_norm_factor * scale_per_image_new
+
+        out_norm.append(jnp.asarray(normcorr_new, dtype=jnp.float32))
+        out_avg_norm.append(avg_norm_new)
+        out_group_scale.append(jnp.asarray(scale_new, dtype=jnp.float32))
+        out_scale_corr.append(jnp.asarray(scale_per_image_new, dtype=jnp.float32))
+        out_image_corr.append(jnp.asarray(image_corr_new, dtype=jnp.float32))
+        out_zero_norm_counts.append(zero_norm_count)
+
+    return NormScaleCorrectionUpdateResult(
+        norm_corrections_per_half=out_norm,
+        avg_norm_correction_per_half=out_avg_norm,
+        group_scale_corrections_per_half=out_group_scale,
+        image_corrections_per_half=out_image_corr,
+        scale_corrections_per_half=out_scale_corr,
+        zero_norm_residual_counts=out_zero_norm_counts,
     )
 
 

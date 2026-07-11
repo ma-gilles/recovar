@@ -16,8 +16,11 @@ from recovar.em.dense_single_volume.k_class import (
     _ClassFineGridSignificanceMask,
     _assemble_result,
     _build_fine_grid_significance_mask,
+    _compact_sparse_pass2_preferred_over_dense,
     _dense_engine_kwargs_for_class,
+    _expand_subset_noise_stats,
     _run_sparse_k_class_adaptive_pass2,
+    _zero_subset_noise_stats,
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
     run_local_k_class_em,
@@ -27,6 +30,7 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _combine_optional_half_accumulators,
 )
 from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
+from recovar.em.dense_single_volume.mean_helpers import update_c1_sigma_offset_from_posterior
 from recovar.em.sampling import read_relion_direction_priors
 
 
@@ -64,6 +68,45 @@ def _firstiter_probe_result(class_assignments, per_class_hard=None, n_rot=1):
     )
 
 
+def test_large_k_class_prefers_compact_sparse_pass2_over_dense_fallback(monkeypatch):
+    monkeypatch.delenv("RECOVAR_K_CLASS_COMPACT_SPARSE_PASS2_MIN_IMAGES", raising=False)
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", raising=False)
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", raising=False)
+
+    assert _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=50_000)
+    assert not _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+    assert not _compact_sparse_pass2_preferred_over_dense(n_classes=1, n_images=50_000)
+
+
+def test_compact_sparse_pass2_preference_respects_env_overrides(monkeypatch):
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", raising=False)
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", raising=False)
+
+    monkeypatch.setenv("RECOVAR_K_CLASS_COMPACT_SPARSE_PASS2_MIN_IMAGES", "1000")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+    assert _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "0")
+    assert not _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+    monkeypatch.setenv("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", "0.2")
+    assert not _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+
+    monkeypatch.setenv("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", "")
+    monkeypatch.setenv("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", "  ")
+    assert _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", raising=False)
+    monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", raising=False)
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", "1")
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", raising=False)
+    assert not _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+
+
 def test_k_class_hard_assignment_uses_joint_best_pose_not_marginal_class():
     result = _assemble_result(
         class_log_evidence=np.asarray([[0.0], [-0.2]], dtype=np.float64),
@@ -81,7 +124,54 @@ def test_k_class_hard_assignment_uses_joint_best_pose_not_marginal_class():
     assert np.asarray(result.class_responsibilities)[0, 0] > np.asarray(result.class_responsibilities)[1, 0]
     np.testing.assert_array_equal(np.asarray(result.class_assignments), np.asarray([1], dtype=np.int32))
     np.testing.assert_array_equal(np.asarray(result.pose_assignments), np.asarray([7], dtype=np.int32))
-    np.testing.assert_allclose(np.asarray(result.stats.max_posterior_per_image), np.asarray([0.20], dtype=np.float32))
+    expected_pmax = np.exp(-1.0 - np.logaddexp(0.0, -0.2))
+    np.testing.assert_allclose(
+        np.asarray(result.stats.max_posterior_per_image),
+        np.asarray([expected_pmax], dtype=np.float32),
+    )
+
+
+def test_k_class_assemble_result_reports_joint_pmax_not_per_class_pmax():
+    result = _assemble_result(
+        class_log_evidence=np.asarray([[0.0], [0.0]], dtype=np.float64),
+        new_means=[jnp.zeros(2), jnp.zeros(2)],
+        Ft_y=[jnp.zeros(2), jnp.zeros(2)],
+        Ft_ctf=[jnp.zeros(2), jnp.zeros(2)],
+        per_class_hard_assignments=np.asarray([[3], [7]], dtype=np.int32),
+        per_class_stats=(
+            _stats([0.0], [-0.1], [np.exp(-0.1)]),
+            _stats([0.0], [-2.0], [np.exp(-2.0)]),
+        ),
+        noise_stats=None,
+    )
+
+    old_per_class_normalized_pmax = np.exp(-0.1)
+    expected_joint_pmax = np.exp(-0.1 - np.log(2.0))
+    assert old_per_class_normalized_pmax > 1.9 * expected_joint_pmax
+    np.testing.assert_allclose(
+        np.asarray(result.stats.max_posterior_per_image),
+        np.asarray([expected_joint_pmax], dtype=np.float32),
+    )
+
+
+def test_k_class_assemble_result_clips_inconsistent_pmax_before_exp_overflow():
+    with np.errstate(over="raise"):
+        result = _assemble_result(
+            class_log_evidence=np.asarray([[-1000.0]], dtype=np.float64),
+            new_means=[jnp.zeros(2)],
+            Ft_y=[jnp.zeros(2)],
+            Ft_ctf=[jnp.zeros(2)],
+            per_class_hard_assignments=np.asarray([[3]], dtype=np.int32),
+            per_class_stats=(
+                _stats([-1000.0], [1000.0], [1.0]),
+            ),
+            noise_stats=None,
+        )
+
+    np.testing.assert_allclose(
+        np.asarray(result.stats.max_posterior_per_image),
+        np.asarray([1.0], dtype=np.float32),
+    )
 
 
 def test_k_class_assemble_result_can_keep_full_accumulators_on_host():
@@ -172,6 +262,163 @@ def test_k_class_noise_aggregate_uses_joint_relion_sum_weight():
     )
     assert result.aggregate_noise_stats.wsum_sigma2_offset / (2.0 * result.aggregate_noise_stats.sumw) == pytest.approx(
         20.0,
+    )
+
+
+def test_k_class_noise_aggregate_keeps_exact_mass_image_power():
+    """Fused K-class noise stats already weight image power by class mass."""
+
+    noise_stats = (
+        make_noise_stats(
+            wsum_sigma2_noise=np.asarray([1.0], dtype=np.float32),
+            wsum_img_power=np.asarray([2.0], dtype=np.float32),
+            wsum_sigma2_offset=30.0,
+            sumw=0.5,
+        ),
+        make_noise_stats(
+            wsum_sigma2_noise=np.asarray([3.0], dtype=np.float32),
+            wsum_img_power=np.asarray([4.0], dtype=np.float32),
+            wsum_sigma2_offset=50.0,
+            sumw=1.5,
+        ),
+    )
+
+    result = _assemble_result(
+        class_log_evidence=np.asarray(
+            [
+                [np.log(0.25), np.log(0.25)],
+                [np.log(0.75), np.log(0.75)],
+            ],
+            dtype=np.float64,
+        ),
+        new_means=[jnp.zeros(1), jnp.zeros(1)],
+        Ft_y=[jnp.zeros(1), jnp.zeros(1)],
+        Ft_ctf=[jnp.zeros(1), jnp.zeros(1)],
+        per_class_hard_assignments=np.zeros((2, 2), dtype=np.int32),
+        per_class_stats=(
+            _stats([0.0, 0.0], [0.0, 0.0], [0.5, 0.5], n_rot=1),
+            _stats([0.0, 0.0], [0.0, 0.0], [0.5, 0.5], n_rot=1),
+        ),
+        noise_stats=noise_stats,
+    )
+
+    assert result.aggregate_noise_stats is not None
+    assert result.aggregate_noise_stats.sumw == pytest.approx(2.0)
+    np.testing.assert_allclose(
+        np.asarray(result.aggregate_noise_stats.wsum_img_power),
+        np.asarray([6.0], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_subset_noise_stats_expand_optional_fields_to_parent_axes():
+    stats0 = make_noise_stats(
+        wsum_sigma2_noise=np.asarray([1.0], dtype=np.float32),
+        wsum_img_power=np.asarray([2.0], dtype=np.float32),
+        wsum_sigma2_offset=3.0,
+        sumw=2.0,
+        wsum_norm_correction=np.asarray([5.0, 7.0], dtype=np.float32),
+        wsum_scale_correction_xa=np.asarray([11.0, 13.0], dtype=np.float32),
+        wsum_scale_correction_aa=np.asarray([17.0, 19.0], dtype=np.float32),
+    )
+    stats1 = make_noise_stats(
+        wsum_sigma2_noise=np.asarray([10.0], dtype=np.float32),
+        wsum_img_power=np.asarray([20.0], dtype=np.float32),
+        wsum_sigma2_offset=30.0,
+        sumw=1.0,
+        wsum_norm_correction=np.asarray([23.0], dtype=np.float32),
+        wsum_scale_correction_xa=np.asarray([29.0], dtype=np.float32),
+        wsum_scale_correction_aa=np.asarray([31.0], dtype=np.float32),
+    )
+    expanded0 = _expand_subset_noise_stats(
+        stats0,
+        np.asarray([0, 2], dtype=np.int64),
+        4,
+        full_group_count=3,
+    )
+    expanded1 = _expand_subset_noise_stats(
+        stats1,
+        np.asarray([1], dtype=np.int64),
+        4,
+        full_group_count=3,
+    )
+    expanded_empty = _zero_subset_noise_stats(
+        np.asarray([0.0], dtype=np.float32),
+        n_images=4,
+        full_group_count=3,
+    )
+
+    summed = k_class_module._sum_noise_stats((expanded0, expanded1, expanded_empty))
+
+    np.testing.assert_allclose(np.asarray(summed.wsum_norm_correction), [5.0, 23.0, 7.0, 0.0])
+    np.testing.assert_allclose(np.asarray(summed.wsum_scale_correction_xa), [40.0, 13.0, 0.0])
+    np.testing.assert_allclose(np.asarray(summed.wsum_scale_correction_aa), [48.0, 19.0, 0.0])
+
+
+def test_k_class_sigma_offset_live_update_uses_shared_relion_aggregate():
+    """Per-class sigma diagnostics must not replace RELION's shared Class3D sigma."""
+
+    aggregate = (
+        make_noise_stats(
+            wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+            wsum_img_power=np.asarray([0.0], dtype=np.float32),
+            wsum_sigma2_offset=20.0,
+            sumw=2.0,
+        ),
+        make_noise_stats(
+            wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+            wsum_img_power=np.asarray([0.0], dtype=np.float32),
+            wsum_sigma2_offset=60.0,
+            sumw=6.0,
+        ),
+    )
+    per_class = (
+        (
+            make_noise_stats(
+                wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+                wsum_img_power=np.asarray([0.0], dtype=np.float32),
+                wsum_sigma2_offset=200.0,
+                sumw=2.0,
+            ),
+            make_noise_stats(
+                wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+                wsum_img_power=np.asarray([0.0], dtype=np.float32),
+                wsum_sigma2_offset=8.0,
+                sumw=2.0,
+            ),
+        ),
+        (
+            make_noise_stats(
+                wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+                wsum_img_power=np.asarray([0.0], dtype=np.float32),
+                wsum_sigma2_offset=200.0,
+                sumw=2.0,
+            ),
+            make_noise_stats(
+                wsum_sigma2_noise=np.asarray([0.0], dtype=np.float32),
+                wsum_img_power=np.asarray([0.0], dtype=np.float32),
+                wsum_sigma2_offset=8.0,
+                sumw=2.0,
+            ),
+        ),
+    )
+
+    result = update_c1_sigma_offset_from_posterior(
+        noise_stats_per_half=aggregate,
+        noise_stats_per_half_per_class=per_class,
+        current_sigma_offset_angstrom=1.5,
+        n_classes=2,
+        k_class_enabled=True,
+        state_fallback_offsets_angstrom=9.0,
+    )
+
+    assert result.current_sigma_offset_angstrom == pytest.approx(np.sqrt(80.0 / (2.0 * 8.0)))
+    np.testing.assert_allclose(
+        result.per_class_sigma_offset_angstrom,
+        np.asarray([np.sqrt(50.0), np.sqrt(2.0)], dtype=np.float64),
+        rtol=1e-6,
+        atol=1e-6,
     )
 
 
@@ -523,6 +770,8 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
         class_log_priors=np.log(np.asarray([0.4, 0.6], dtype=np.float64)),
         relion_firstiter_score_mode="normalized_cc",
         relion_firstiter_winner_take_all=True,
+        rotation_log_prior=np.asarray([0.0, -1.0, -2.0, -3.0, -4.0], dtype=np.float32),
+        translation_log_prior=np.asarray([0.0, -0.5, -1.0], dtype=np.float32),
         current_size=26,
         image_batch_size=7,
         rotation_block_size=5,
@@ -533,6 +782,9 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
     assert calls[0]["collect_significance"] is False
     assert calls[0]["return_class_best"] is True
     assert calls[0]["current_size"] == 26
+    np.testing.assert_allclose(calls[0]["class_log_priors"], np.zeros(2, dtype=np.float64))
+    assert calls[0]["rotation_log_prior"] is None
+    assert calls[0]["translation_log_prior"] is None
     np.testing.assert_array_equal(result.class_assignments, np.asarray([1, 0, 1], dtype=np.int32))
     np.testing.assert_array_equal(result.per_class_hard_assignments, np.asarray([[4, 5, 6], [7, 8, 9]], dtype=np.int32))
 
@@ -633,6 +885,10 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
         coarse_current_size=26,
         fine_current_size=56,
         current_size=56,
+        image_batch_size=19,
+        rotation_block_size=23,
+        significance_image_batch_size=3,
+        significance_rotation_block_size=5,
         firstiter_cc_pass2_only_best_coarse=True,
     )
 
@@ -640,7 +896,11 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
     assert len(score_calls) == 0
     assert len(dense_calls) == 1
     assert probe_calls[0]["current_size"] == 26
+    assert probe_calls[0]["image_batch_size"] == 3
+    assert probe_calls[0]["rotation_block_size"] == 5
     assert dense_calls[0]["current_size"] == 56
+    assert dense_calls[0]["image_batch_size"] == 19
+    assert dense_calls[0]["rotation_block_size"] == 23
     assert dense_calls[0]["sparse_pass2"] is False
 
 

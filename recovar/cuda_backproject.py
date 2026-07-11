@@ -642,7 +642,7 @@ def cuda_available() -> bool:
         logger.info("CUDA kernels disabled via %s", _DISABLE_CUSTOM_CUDA_ENV)
         return _cuda_ok
     try:
-        if not any(d.platform == "gpu" for d in jax.devices()):
+        if not any(getattr(d, "platform", "") in {"gpu", "cuda"} for d in jax.devices()):
             _cuda_ok = False
         else:
             _ensure_ffi()
@@ -689,12 +689,54 @@ def _rot_to_compact(rotation_matrices: jax.Array, real_dtype=None) -> jax.Array:
     return compact
 
 
+def _relion_x_half_backproject_rotation_to_kernel(rotation_matrices: jax.Array) -> jax.Array:
+    """Map RELION/RECOVAR scorer rotations to the CUDA ``(z, y, xhalf)`` scatter frame.
+
+    RELION's BackProjector stores the Fourier x-axis as the packed half axis but
+    RECOVAR's generic CUDA half-volume kernel packs its last coordinate. RELION
+    computes a numerical ``A.inv()`` rather than using a transpose; boundary
+    pixels at Nyquist can differ by one ulp, so mirror that inverse before
+    reversing to the kernel's ``(z, y, x)`` scatter coordinates.
+    """
+
+    inverse = jnp.linalg.inv(rotation_matrices.astype(jnp.float64))
+    return jnp.swapaxes(inverse, -1, -2)[..., [2, 1, 0]]
+
+
 def _volume_real_dtype(volume: jax.Array):
     """Return the real component dtype of a volume (float32 for complex64, etc.)."""
     return jnp.finfo(volume.dtype).dtype if jnp.issubdtype(volume.dtype, jnp.complexfloating) else volume.dtype
 
 
-def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
+def _infer_backproject_upsampling(image_shape, volume_shape, max_r=None):
+    """Infer Fourier oversampling for standard and RELION BackProjector grids."""
+
+    ih, _ = image_shape
+    N0, N1, N2 = volume_shape
+    if N0 != N1 or N0 != N2:
+        raise ValueError(f"volume_shape must be cubic, got {volume_shape}")
+    if N0 % ih == 0:
+        ups = N0 // ih
+        if ups <= 0:
+            raise ValueError(f"volume_shape[0] ({N0}) must be at least image_shape[0] ({ih})")
+        return int(ups)
+    if max_r is not None and float(max_r) > 0:
+        ups = int((float(N0) - 3.0) / (2.0 * float(max_r)) + 0.5)
+        expected = 2 * (int(float(ups) * float(max_r) + 0.5) + 1) + 1
+        if ups > 0 and expected == int(N0):
+            return ups
+    full_support = float(ih) / 2.0
+    ups = int((float(N0) - 3.0) / (2.0 * full_support) + 0.5)
+    expected = 2 * (int(float(ups) * full_support + 0.5) + 1) + 1
+    if ups > 0 and expected == int(N0):
+        return ups
+    raise ValueError(
+        f"volume_shape[0] ({N0}) must be divisible by image_shape[0] ({ih}) "
+        "or match RELION pad_size=2*(int(padding_factor*support_radius+0.5)+1)+1"
+    )
+
+
+def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=None):
     """Validate parameters at trace time (not inside JIT)."""
     ih, iw = image_shape
     N0, N1, N2 = volume_shape
@@ -704,8 +746,7 @@ def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
         raise ValueError(f"volume_shape must be positive, got {volume_shape}")
     if order not in (0, 1, 3):
         raise ValueError(f"order must be 0, 1, or 3, got {order}")
-    if N0 % ih != 0:
-        raise ValueError(f"volume_shape[0] ({N0}) must be divisible by image_shape[0] ({ih})")
+    _infer_backproject_upsampling(image_shape, volume_shape, max_r=max_r)
 
 
 def _encode_max_r(max_r):
@@ -728,7 +769,7 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
     """
     ih, iw_full = image_shape
     N0, N1, N2 = volume_shape
-    ups = N0 // ih
+    ups = _infer_backproject_upsampling(image_shape, volume_shape, max_r=max_r)
     iw_eff = iw_full // 2 + 1 if half_image else iw_full
     return (
         dict(
@@ -805,7 +846,7 @@ def backproject(
     Updated volume (same shape and dtype as *volume*).
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
@@ -839,17 +880,13 @@ def backproject_indexed(
     interprets ``images[:, j]`` as the value at ``pixel_indices[j]``.
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     if relion_x_half and not (half_volume and half_image):
         raise ValueError("relion_x_half requires half_volume=True and half_image=True")
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     kw["relion_fold_x"] = np.int64(int(relion_x_half))
     if relion_x_half:
-        # The CUDA half-volume scatter packs its last coordinate. RELION's
-        # BackProjector packs the Fourier x-axis, which is RECOVAR axis 0.
-        # Reorder coordinates to kernel layout (z, y, x) so the packed last
-        # axis is the RELION/RECOVAR-x half-axis.
-        rotation_matrices = rotation_matrices[..., [2, 1, 0]]
+        rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
@@ -878,13 +915,13 @@ def batch_backproject_indexed(
 ) -> jax.Array:
     """Back-project compact indexed images into a batch of volumes."""
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     if relion_x_half and not (half_volume and half_image):
         raise ValueError("relion_x_half requires half_volume=True and half_image=True")
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     kw["relion_fold_x"] = np.int64(int(relion_x_half))
     if relion_x_half:
-        rotation_matrices = rotation_matrices[..., [2, 1, 0]]
+        rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
@@ -922,7 +959,7 @@ def _project_impl(
     complex array, shape ``(n_images, n_pixels)``  (n_pixels = H*W or H*(W//2+1)).
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     kw, ih, iw_eff = _project_ffi_kwargs(
         image_shape,
         volume_shape,
@@ -1018,7 +1055,7 @@ def project_indexed(
     output stores those pixels compactly as ``(n_images, len(pixel_indices))``.
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     n_images = rotation_matrices.shape[0]
@@ -1070,7 +1107,7 @@ def batch_backproject(
     Updated volumes, shape ``(batch, vol_flat_size)``.
     """
     _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image, max_r=max_r)
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)

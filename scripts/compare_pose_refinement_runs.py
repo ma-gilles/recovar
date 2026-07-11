@@ -109,14 +109,18 @@ def _combine_class_assignments(npz, n_images: int) -> np.ndarray | None:
 
 def _load_em_npz(name: str, path: Path, n_images: int) -> PoseSet:
     with np.load(path, allow_pickle=False) as npz:
-        if "best_rotation_eulers_final_by_image" in npz.files:
+        if "best_rotation_eulers_final_all_data_by_image" in npz.files:
+            eulers = np.asarray(npz["best_rotation_eulers_final_all_data_by_image"], dtype=np.float64)
+        elif "best_rotation_eulers_final_by_image" in npz.files:
             eulers = np.asarray(npz["best_rotation_eulers_final_by_image"], dtype=np.float64)
         else:
             eulers = _combine_halves(npz, "best_rotation_eulers", n_images, (3,))
         if eulers is None:
             raise ValueError(f"{path} has no exported best_rotation_eulers pose history")
         rotations = np.asarray(utils.R_from_relion(eulers, degrees=True), dtype=np.float32)
-        if "best_translations_final_by_image" in npz.files:
+        if "best_translations_final_all_data_by_image" in npz.files:
+            translations = np.asarray(npz["best_translations_final_all_data_by_image"], dtype=np.float32)
+        elif "best_translations_final_by_image" in npz.files:
             translations = np.asarray(npz["best_translations_final_by_image"], dtype=np.float32)
         else:
             translations = _combine_halves(npz, "best_translations", n_images, (2,))

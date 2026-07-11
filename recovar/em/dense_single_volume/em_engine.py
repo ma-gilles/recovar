@@ -56,6 +56,7 @@ from .helpers.adjoint import (
 from .helpers.dtype_policy import DensePrecisionPolicy
 from .helpers.fourier_window import make_fourier_window_spec
 from .helpers.half_spectrum import (
+    bin_shell_values_jax,
     bin_shell_values_np,
     half_spectrum_dc_index,
     make_half_image_weights,
@@ -705,6 +706,7 @@ def run_em(
     disable_adjoint_ctf: bool = False,
     score_only: bool = False,
     relion_half_volume_mstep: bool = False,
+    return_half_volume_accumulators: bool = False,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -806,6 +808,11 @@ def run_em(
         back to the existing full-volume return contract. This mirrors the
         exact-local EM M-step convention and is required for InitialModel BPref
         parity against RELION's ``BackProjector``.
+    return_half_volume_accumulators : bool
+        When True with ``relion_half_volume_mstep``, keep the native packed
+        half-volume sufficient statistics instead of expanding to full-volume
+        layout before returning. This is intended for K-class callers that
+        immediately reconstruct from the accumulators.
     """
     overall_t0 = time.time()
     n_rot = rotations.shape[0]
@@ -816,6 +823,9 @@ def run_em(
     selected_position = {int(idx): pos for pos, idx in enumerate(np.asarray(image_indices, dtype=np.int64).tolist())}
     class_log_prior = float(class_log_prior)
     score_only = bool(score_only)
+    return_half_volume_accumulators = bool(return_half_volume_accumulators)
+    if return_half_volume_accumulators and not relion_half_volume_mstep:
+        raise ValueError("return_half_volume_accumulators requires relion_half_volume_mstep=True")
     if score_only:
         if not (disable_adjoint_y and disable_adjoint_ctf):
             raise ValueError("score_only requires disable_adjoint_y=True and disable_adjoint_ctf=True")
@@ -823,6 +833,8 @@ def run_em(
             raise ValueError("score_only cannot be combined with accumulate_noise=True")
         if normalization_log_evidence is not None:
             raise ValueError("score_only does not support external normalization_log_evidence")
+        if return_half_volume_accumulators:
+            raise ValueError("score_only cannot return half-volume accumulators")
     normalization_log_evidence_np = None
     if normalization_log_evidence is not None:
         normalization_log_evidence_np = np.asarray(normalization_log_evidence, dtype=np.float64)
@@ -1328,8 +1340,7 @@ def run_em(
                 processed_masked_half = processed_masked_half * image_only_corr[:, None]
             # Sum |img|^2 over images in this batch, bin to shells (FULL spectrum, not windowed)
             batch_img_power = jnp.sum(jnp.abs(processed_masked_half) ** 2, axis=0)  # (N_half,)
-            batch_img_power_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-            batch_img_power_shells = batch_img_power_shells.at[shell_indices_half].add(batch_img_power)
+            batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
             noise_img_power += np.asarray(batch_img_power_shells, dtype=np.float64)
             noise_sumw += actual_batch_size
             # Masked shifted images for the noise GEMM: use WITH-DC versions
@@ -2070,7 +2081,10 @@ def run_em(
             logger=logger,
             label="Dense",
         )
-        Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
+        if return_half_volume_accumulators:
+            logger.info("Dense M-step: keeping native half-volume accumulators for downstream reconstruction")
+        else:
+            Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
         new_mean = None
 
     elif reconstruction_padding_factor > 1:

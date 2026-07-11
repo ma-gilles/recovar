@@ -24,6 +24,7 @@ from recovar.em.dense_single_volume.em_engine import (
 )
 from recovar.em.dense_single_volume.helpers.oversampling import (
     _find_significant_mask_full_sort,
+    _find_significant_mask_topk,
     find_significant_mask,
     find_significant_rotations,
 )
@@ -219,6 +220,61 @@ class TestSignificanceMaskFraction:
         # RELION's loop breaks on `frac_weight > adaptive_fraction * exp_sum_weight`,
         # so the exact 0.5 boundary does not stop at the first sample.
         np.testing.assert_array_equal(np.asarray(mask), np.array([[True, True, True]]))
+        np.testing.assert_array_equal(np.asarray(n_sig), np.array([3], dtype=np.int32))
+
+    def test_zero_weights_are_not_significant_when_cutoff_reaches_tail(self):
+        """RELION sorts only positive weights, so zero-probability samples are never significant."""
+        w = jnp.zeros((2, 128), dtype=jnp.float32)
+        w = w.at[0, 3].set(0.50)
+        w = w.at[0, 7].set(0.30)
+        w = w.at[0, 11].set(0.20)
+        w = w.at[1, 4].set(1.0)
+
+        mask, n_sig = find_significant_mask(w, adaptive_fraction=1.0, max_significants=-1)
+
+        expected = np.zeros((2, 128), dtype=bool)
+        expected[0, [3, 7, 11]] = True
+        expected[1, [4]] = True
+        np.testing.assert_array_equal(np.asarray(mask), expected)
+        np.testing.assert_array_equal(np.asarray(n_sig), np.array([3, 1], dtype=np.int32))
+
+    def test_zero_weights_are_not_significant_in_full_sort_or_topk_paths(self):
+        """Guard the low-level paths used by local and sparse pass-2 reconstruction."""
+        w = jnp.zeros((1, 16), dtype=jnp.float32)
+        w = w.at[0, 2].set(0.60)
+        w = w.at[0, 5].set(0.25)
+        w = w.at[0, 9].set(0.15)
+
+        mask_full, n_sig_full = _find_significant_mask_full_sort(
+            w,
+            adaptive_fraction=1.0,
+            max_significants=-1,
+        )
+        mask_topk, n_sig_topk, topk_covers = _find_significant_mask_topk(
+            w,
+            adaptive_fraction=1.0,
+            max_significants=-1,
+            topk=8,
+        )
+
+        expected = np.zeros((1, 16), dtype=bool)
+        expected[0, [2, 5, 9]] = True
+        np.testing.assert_array_equal(np.asarray(mask_full), expected)
+        np.testing.assert_array_equal(np.asarray(mask_topk), expected)
+        np.testing.assert_array_equal(np.asarray(n_sig_full), np.array([3], dtype=np.int32))
+        np.testing.assert_array_equal(np.asarray(n_sig_topk), np.array([3], dtype=np.int32))
+        np.testing.assert_array_equal(np.asarray(topk_covers), np.array([True]))
+
+    def test_positive_threshold_ties_are_still_included(self):
+        """The zero guard must not change RELION's inclusive positive-threshold ties."""
+        w = jnp.array([[0.5, 0.25, 0.25, 0.0, 0.0]], dtype=jnp.float32)
+
+        mask, n_sig = find_significant_mask(w, adaptive_fraction=0.5, max_significants=-1)
+
+        np.testing.assert_array_equal(
+            np.asarray(mask),
+            np.array([[True, True, True, False, False]]),
+        )
         np.testing.assert_array_equal(np.asarray(n_sig), np.array([3], dtype=np.int32))
 
     def test_single_dominant(self):

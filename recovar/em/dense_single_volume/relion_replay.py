@@ -62,6 +62,38 @@ def _optional_float32_half_pair(values):
     ]
 
 
+def _optional_int64_half_pair(values):
+    """Return optional per-half integer arrays."""
+    if values is None:
+        return [None, None]
+    return [
+        np.asarray(values[0], dtype=np.int64) if values[0] is not None else None,
+        np.asarray(values[1], dtype=np.int64) if values[1] is not None else None,
+    ]
+
+
+def _normalize_sigma_offset_per_half(values):
+    """Return a strict two-element float list for half-specific sigma offsets."""
+    if values is None:
+        return None
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    if arr.size != 2:
+        raise ValueError(
+            "translation_sigma_angstrom_per_half must contain exactly two values; "
+            f"got shape {np.asarray(values).shape}"
+        )
+    if not np.all(np.isfinite(arr)):
+        raise ValueError("translation_sigma_angstrom_per_half must be finite")
+    return [float(arr[0]), float(arr[1])]
+
+
+def _mean_sigma_offset_per_half(values):
+    per_half = _normalize_sigma_offset_per_half(values)
+    if per_half is None:
+        return None
+    return float(0.5 * (per_half[0] + per_half[1]))
+
+
 def _normalize_logged_float32_half_pair(values, *, label: str):
     """Normalize per-half correction arrays and log summary statistics."""
     per_half = _optional_float32_half_pair(values)
@@ -92,6 +124,7 @@ class _RelionHalfInputState:
     previous_best_rotation_eulers: list
     image_corrections: list
     scale_corrections: list
+    group_ids: list
 
     @classmethod
     def from_initial_values(
@@ -101,6 +134,7 @@ class _RelionHalfInputState:
         previous_best_rotation_eulers,
         image_corrections,
         scale_corrections,
+        group_ids=None,
     ):
         return cls(
             previous_best_translations=_optional_float32_half_pair(previous_best_translations),
@@ -113,6 +147,7 @@ class _RelionHalfInputState:
                 scale_corrections,
                 label="scale_corrections",
             ),
+            group_ids=_optional_int64_half_pair(group_ids),
         )
 
 
@@ -135,6 +170,7 @@ class ReplayOverrideResult:
     previous_noise_radial: Any
     current_sigma_offset_angstrom: float
     replay_meta: dict | None  # parsed sampling.star (or None); used downstream by perturbation apply
+    current_sigma_offset_angstrom_per_half: list[float] | None = None
     class_weights: np.ndarray | None = None
 
 
@@ -188,6 +224,7 @@ def apply_iter_replay_overrides(
     _model_meta = None
     _replay_meta = None
     _replay_class_weights = None
+    _current_sigma_offset_angstrom_per_half = None
 
     if perturb_replay_relion_dir is not None:
         _star = os.path.join(
@@ -201,12 +238,40 @@ def apply_iter_replay_overrides(
         _px = float(cryo.voxel_size) if cryo.voxel_size > 0 else 1.0
         _relion_offset_range = float(_replay_meta["offset_range"]) / _px
         _relion_offset_step = float(_replay_meta["offset_step"]) / _px
-        _replay_prior_translations = jnp.array(
-            _il.get_translation_grid(
-                _relion_offset_range,
-                _relion_offset_step,
-            ).astype(np.float32)
+        _replay_prior_translations_np = _il.get_translation_grid(
+            _relion_offset_range,
+            _relion_offset_step,
+        ).astype(np.float32)
+        _state_prior_translations = _il.get_translation_grid(
+            float(state.translation_range),
+            float(state.translation_step),
+        ).astype(np.float32)
+        _translation_grid_differs = _state_prior_translations.shape != _replay_prior_translations_np.shape
+        if not _translation_grid_differs:
+            _translation_grid_differs = not np.allclose(
+                _state_prior_translations,
+                _replay_prior_translations_np,
+                rtol=0.0,
+                atol=1e-6,
+            )
+        _translation_params_differ = (
+            abs(float(state.translation_range) - _relion_offset_range) > 1e-6
+            or abs(float(state.translation_step) - _relion_offset_step) > 1e-6
         )
+        if _translation_grid_differs and not _translation_params_differ:
+            logger.info(
+                "Replay override: preserving current translation grid for sub-tolerance "
+                "RELION replay rounding: range %.9g -> %.9g px, step %.9g -> %.9g px "
+                "(translation grid n=%d vs rounded n=%d)",
+                float(state.translation_range),
+                _relion_offset_range,
+                float(state.translation_step),
+                _relion_offset_step,
+                int(_state_prior_translations.shape[0]),
+                int(_replay_prior_translations_np.shape[0]),
+            )
+            _replay_prior_translations_np = _state_prior_translations
+        _replay_prior_translations = jnp.array(_replay_prior_translations_np)
         _capped_hp = min(_relion_hp, state.max_healpix_order)
         if state.healpix_order != _capped_hp:
             if _capped_hp < _relion_hp:
@@ -239,7 +304,11 @@ def apply_iter_replay_overrides(
             if _replay_do_local:
                 state.sigma_rot = 0.0
                 state.sigma_psi = 0.0
-        # The model star records the control state for the replayed E-step.
+        # RELION's run_itNNN_model.star is written after iteration N, but its
+        # current_size and local-prior sigma fields are the controls used by
+        # that same iteration's E-step.  Other fields in the same file, such
+        # as current resolution and average Pmax, are post-iteration state.
+        # Sampling perturbation uses the same N suffix.
         # Reuse it for both current_size and local-prior sigmas.
         _cs_iter = _replay_control_model_iteration(init_relion_iteration, iteration)
         _model_star_candidates = [
@@ -289,26 +358,22 @@ def apply_iter_replay_overrides(
                 )
             state.sigma_rot = _relion_sigma_rot_rad
             state.sigma_psi = _relion_sigma_psi_rad
-        if (
-            abs(float(state.translation_range) - _relion_offset_range) > 1e-6
-            or abs(float(state.translation_step) - _relion_offset_step) > 1e-6
-        ):
+        if _translation_params_differ:
             logger.info(
-                "Replay override: translation_range %.3f -> %.3f px, step %.3f -> %.3f px",
+                "Replay override: translation_range %.9g -> %.9g px, step %.9g -> %.9g px "
+                "(translation grid n=%d -> %d)",
                 float(state.translation_range),
                 _relion_offset_range,
                 float(state.translation_step),
                 _relion_offset_step,
+                int(_state_prior_translations.shape[0]),
+                int(_replay_prior_translations_np.shape[0]),
             )
             state.translation_range = _relion_offset_range
             state.translation_step = _relion_offset_step
 
-        # Override current_size from the RELION model star that records the
-        # control state for the replayed E-step. Empirically, replaying
-        # RELION iter N+1 against the saved benchmark trajectory requires
-        # reading run_it{N+1}_model.star, not run_it{N}_model.star:
-        # the saved model star already carries the control variables
-        # (current_size, sigma_offset) used by that E-step.
+        # Override current_size from the RELION model star for the replayed
+        # iteration's E-step controls.
         if _model_meta is not None:
             _relion_cs = int(_model_meta["current_image_size"])
             if _relion_cs <= 0:
@@ -412,8 +477,25 @@ def apply_iter_replay_overrides(
                         )
 
     if iter_replay_override is not None:
+        _replay_sigma_per_half = iter_replay_override.get("translation_sigma_angstrom_per_half")
+        if _replay_sigma_per_half is not None:
+            _current_sigma_offset_angstrom_per_half = _normalize_sigma_offset_per_half(_replay_sigma_per_half)
+            current_sigma_offset_angstrom = float(
+                0.5
+                * (
+                    _current_sigma_offset_angstrom_per_half[0]
+                    + _current_sigma_offset_angstrom_per_half[1]
+                )
+            )
+            logger.info(
+                "Replay override: sigma_offset <- half1 %.4f A, half2 %.4f A, mean %.4f A (iter=%d)",
+                _current_sigma_offset_angstrom_per_half[0],
+                _current_sigma_offset_angstrom_per_half[1],
+                current_sigma_offset_angstrom,
+                iteration + 1,
+            )
         _replay_sigma = iter_replay_override.get("translation_sigma_angstrom")
-        if _replay_sigma is not None:
+        if _replay_sigma is not None and _replay_sigma_per_half is None:
             current_sigma_offset_angstrom = float(_replay_sigma)
             logger.info(
                 "Replay override: sigma_offset <- %.4f A (iter=%d)",
@@ -544,5 +626,6 @@ def apply_iter_replay_overrides(
         previous_noise_radial=previous_noise_radial,
         current_sigma_offset_angstrom=current_sigma_offset_angstrom,
         replay_meta=_replay_meta,
+        current_sigma_offset_angstrom_per_half=_current_sigma_offset_angstrom_per_half,
         class_weights=_replay_class_weights,
     )

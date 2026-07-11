@@ -19,6 +19,7 @@ G (angular sampling), H (speed tricks).
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -31,6 +32,14 @@ MAX_NR_ITER_WO_RESOL_GAIN = 1
 MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES = 1
 LOCAL_SEARCH_HEALPIX_ORDER = 4  # Switch to local search at order >= 4 (~3.7 deg)
 SIGMA_CUTOFF = 3.0  # Only search within 3-sigma of prior
+_LOW_PMAX_REFINE_GUARD_ENV = "RECOVAR_EM_LOW_PMAX_REFINE_GUARD"
+_LOW_PMAX_REFINE_MAX_AVE_PMAX_ENV = "RECOVAR_EM_LOW_PMAX_REFINE_MAX_AVE_PMAX"
+_LOW_PMAX_REFINE_MIN_RES_STALL_ENV = "RECOVAR_EM_LOW_PMAX_REFINE_MIN_RES_STALL"
+_LOW_PMAX_REFINE_REQUIRE_LOCAL_ENV = "RECOVAR_EM_LOW_PMAX_REFINE_REQUIRE_LOCAL"
+_LOW_PMAX_REFINE_DEFAULT_MAX_AVE_PMAX = 0.15
+_LOW_PMAX_REFINE_DEFAULT_MIN_RES_STALL = 3
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 
 # RELION's "smallest changes thus far" sentinel values (ml_optimiser.cpp:1042-1044)
 SMALLEST_CHANGES_INIT_ORIENTATIONS = 999.0  # degrees
@@ -124,7 +133,7 @@ def convergence_sampling_diagnostics(state: "RefinementState") -> dict[str, floa
         "resolution_required_step": float(resolution_required),
         "angular_accuracy": float(angular_accuracy),
         "fine_enough": bool(
-            state.acc_rot < float("inf")
+            np.isfinite(angular_accuracy)
             and state.effective_step < 0.75 * angular_accuracy
         ),
         "resolution_requires_finer_sampling": bool(
@@ -309,12 +318,14 @@ class RefinementState:
     def has_fine_enough_angular_sampling(self) -> bool:
         """True when angular sampling should not be refined further.
 
-        Fires when the per-particle ``acc_rot`` estimate is populated and
-        ``effective_step < 0.75 * acc_rot``. When particle diameter and current
-        resolution are known, cap ``acc_rot`` by RELION's resolution-implied
-        angular sampling. This prevents a loose approximate ``acc_rot`` from
-        declaring convergence while the current resolution still requires a
-        finer orientation grid.
+        Fires when ``effective_step < 0.75 * angular_accuracy``, where
+        ``angular_accuracy`` is the minimum of the per-particle ``acc_rot``
+        estimate and RELION's resolution-implied angular sampling when
+        particle diameter and current resolution are known. This prevents a
+        loose approximate ``acc_rot`` from declaring convergence while the
+        current resolution still requires a finer orientation grid, and also
+        lets non-replay runs converge when the expensive RELION ``acc_rot`` is
+        unavailable but the resolution-implied criterion is already satisfied.
 
         Mirrors RELION ``ml_optimiser.cpp:9817`` which sets
         ``has_fine_enough_angular_sampling = true`` when the old step is
@@ -326,10 +337,9 @@ class RefinementState:
         refinement but must not by itself trigger the final all-data
         iteration, otherwise RECOVAR can terminate earlier than RELION.
         """
-        if self.acc_rot < float("inf"):
-            angular_accuracy = fine_enough_angular_accuracy(self)
-            if self.effective_step < 0.75 * angular_accuracy:
-                return True
+        angular_accuracy = fine_enough_angular_accuracy(self)
+        if np.isfinite(angular_accuracy) and self.effective_step < 0.75 * angular_accuracy:
+            return True
         return False
 
     @property
@@ -570,11 +580,13 @@ def calculate_expected_angular_errors(
     nr_significant_per_image: np.ndarray,
     n_translations: int = 1,
 ) -> tuple[float, float]:
-    """Estimate angular and translational accuracy from the posterior.
+    """Approximate angular and translational accuracy from posterior support.
 
-    Port of RELION's ``calculateExpectedAngularErrors()``
-    (``ml_optimiser.cpp:9534-9564``).  The angular precision is estimated
-    from the number of significant orientations per image::
+    This is a cheap support-width proxy, not RELION's full
+    ``calculateExpectedAngularErrors()`` implementation. RELION perturbs
+    the current map until the likelihood ratio reaches ``P=0.01``; this
+    helper only estimates angular precision from the number of significant
+    orientation samples per image::
 
         sigma2_rot  = step^2 / (3 * n_sig)
         sigma2_tilt = step^2 / (3 * n_sig)
@@ -761,6 +773,9 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
         ):
             return False
 
+    if _low_pmax_refinement_guard_blocks(state):
+        return False
+
     # Don't refine beyond 75% of estimated angular accuracy.
     if state.acc_rot < float("inf"):
         angular_accuracy = fine_enough_angular_accuracy(state)
@@ -772,6 +787,81 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
             )
             return False
 
+    return True
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; using %.3f", name, value, default)
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; using %d", name, value, default)
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    normalized = value.strip().lower()
+    if normalized in _TRUE_ENV_VALUES:
+        return True
+    if normalized in _FALSE_ENV_VALUES:
+        return False
+    logger.warning("Ignoring invalid %s=%r; using %s", name, value, default)
+    return default
+
+
+def _low_pmax_refinement_guard_blocks(state: RefinementState) -> bool:
+    """Return whether the opt-in diffuse-posterior guard should stop refinement.
+
+    This is an ablation hook, disabled by default.  It prevents further
+    post-local angular refinement when the posterior remains diffuse
+    (low ave_Pmax) and the FSC-derived resolution has already stalled.
+    """
+    if not _env_flag_enabled(_LOW_PMAX_REFINE_GUARD_ENV):
+        return False
+    require_local_search = _env_bool(_LOW_PMAX_REFINE_REQUIRE_LOCAL_ENV, True)
+    if require_local_search and not state.do_local_search:
+        return False
+    max_ave_pmax = _env_float(
+        _LOW_PMAX_REFINE_MAX_AVE_PMAX_ENV,
+        _LOW_PMAX_REFINE_DEFAULT_MAX_AVE_PMAX,
+    )
+    min_res_stall = _env_int(
+        _LOW_PMAX_REFINE_MIN_RES_STALL_ENV,
+        _LOW_PMAX_REFINE_DEFAULT_MIN_RES_STALL,
+    )
+    if not np.isfinite(state.ave_Pmax) or float(state.ave_Pmax) > max_ave_pmax:
+        return False
+    if int(state.nr_iter_wo_resol_gain) < min_res_stall:
+        return False
+    logger.info(
+        "Low-Pmax angular-refinement guard active: ave_Pmax=%.4f <= %.4f, "
+        "resolution stalls=%d >= %d; keeping healpix_order=%d",
+        state.ave_Pmax,
+        max_ave_pmax,
+        state.nr_iter_wo_resol_gain,
+        min_res_stall,
+        state.healpix_order,
+    )
     return True
 
 

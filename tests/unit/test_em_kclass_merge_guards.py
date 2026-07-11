@@ -41,10 +41,164 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import recovar.em.dense_single_volume.helpers.oversampling as oversampling_mod
+import recovar.em.dense_single_volume.helpers.score_constraints as score_constraints_mod
 import recovar.em.dense_single_volume.helpers.significance as sig_mod
+import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_pass2_mod
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
+import recovar.em.dense_single_volume.k_class as k_class_mod
 
 pytestmark = pytest.mark.unit
+
+
+def test_kclass_mstep_defaults_to_relion_x_half_with_full_and_native_escape_hatches(monkeypatch):
+    """K-class quality parity should use RELION x-half BPref accumulators by default."""
+
+    monkeypatch.delenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", raising=False)
+    monkeypatch.delenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", raising=False)
+    monkeypatch.delenv("RECOVAR_K_CLASS_HALF_VOLUME_MSTEP", raising=False)
+    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is True
+    assert iteration_loop._k_class_relion_half_volume_mstep_enabled() is False
+
+    monkeypatch.setenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", "0")
+    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is False
+    assert iteration_loop._k_class_relion_half_volume_mstep_enabled() is False
+
+    monkeypatch.setenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", "1")
+    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is True
+
+    monkeypatch.delenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", raising=False)
+    monkeypatch.setenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", "1")
+    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is False
+    assert iteration_loop._k_class_relion_half_volume_mstep_enabled() is False
+
+    monkeypatch.setenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", "0")
+    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is False
+    assert iteration_loop._k_class_relion_half_volume_mstep_enabled() is True
+
+    monkeypatch.setenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", "1")
+    monkeypatch.setenv("RECOVAR_K_CLASS_HALF_VOLUME_MSTEP", "1")
+    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is False
+    assert iteration_loop._k_class_relion_half_volume_mstep_enabled() is True
+
+
+def test_k1_relion_x_half_mstep_defaults_on_with_escape_hatch(monkeypatch):
+    """K=1 adaptive RELION mode should use x-half BPref layout by default."""
+
+    monkeypatch.delenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, raising=False)
+    monkeypatch.setattr(iteration_loop, "_k1_relion_x_half_mstep_default_available", lambda: True)
+    assert iteration_loop._k1_relion_x_half_mstep_enabled() is True
+
+    monkeypatch.setenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, "0")
+    assert iteration_loop._k1_relion_x_half_mstep_enabled() is False
+
+    monkeypatch.setenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, "1")
+    assert iteration_loop._k1_relion_x_half_mstep_enabled() is True
+
+    monkeypatch.setenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, "invalid")
+    assert iteration_loop._k1_relion_x_half_mstep_enabled() is True
+
+
+def test_k1_relion_x_half_mstep_default_disables_when_cuda_unavailable(monkeypatch):
+    """The default must not request CUDA-only x-half adjoints on CPU tests."""
+
+    monkeypatch.delenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, raising=False)
+    monkeypatch.setattr(iteration_loop, "_k1_relion_x_half_mstep_default_available", lambda: False)
+    assert iteration_loop._k1_relion_x_half_mstep_enabled() is False
+
+    monkeypatch.setenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, "1")
+    assert iteration_loop._k1_relion_x_half_mstep_enabled() is True
+
+
+def test_kclass_adaptive_wires_relion_x_half_without_mislabeling_dense_branch():
+    source = inspect.getsource(iteration_loop._score_half_dense)
+    assert "k_class_relion_x_half_mstep = _k_class_relion_x_half_mstep_enabled()" in source
+    assert 'em_kwargs["mstep_relion_x_half"] = bool(k_class_relion_x_half_mstep)' in source
+    assert "k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis" in source
+    assert 'dense_em_kwargs.pop("mstep_relion_x_half", None)' in source
+    assert "mstep_full_half_axis=k_class_mstep_full_half_axis_this_score" in source
+    assert "mstep_full_half_axis=k1_adaptive_result.mstep_full_half_axis" in source
+    assert "mstep_full_half_axis: int | None = None" in inspect.getsource(k_class_mod.KClassEMResult)
+    assert "mstep_accumulator_shape: tuple[int, int, int] | None = None" in inspect.getsource(
+        k_class_mod.KClassEMResult
+    )
+    assert "mstep_accumulator_shape=mstep_accumulator_shape" in inspect.getsource(k_class_mod)
+
+
+def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
+    """RELION Class3D occupancies come from StoreWeightedSums, not full evidence sums."""
+
+    stats = [
+        SimpleNamespace(rotation_posterior_sums=np.array([1.0, 0.0, 0.0], dtype=np.float32)),
+        SimpleNamespace(rotation_posterior_sums=np.array([0.0, 1.0, 0.0], dtype=np.float32)),
+    ]
+    result = SimpleNamespace(
+        pose_assignments=np.array([0, 1, 2], dtype=np.int32),
+        noise_stats=("class0", "class1"),
+        class_assignments=np.array([0, 1, 1], dtype=np.int32),
+        class_posterior_sums=np.array([1.7, 1.3], dtype=np.float32),
+        class_mstep_posterior_sums=np.array([1.2, 1.8], dtype=np.float32),
+        per_class_stats=stats,
+        Ft_y="ft_y",
+        Ft_ctf="ft_ctf",
+        stats="stats",
+        aggregate_noise_stats="aggregate_noise",
+        best_pose_rotations=None,
+        best_pose_translations=None,
+    )
+    class_posterior_per_half = [None]
+    class_full_posterior_per_half = [None]
+
+    iteration_loop._scatter_dense_k_class_result(
+        result,
+        k=0,
+        effective_rotations=np.repeat(np.eye(3, dtype=np.float32)[None], 3, axis=0),
+        rot_pmap_for_collapse=None,
+        relion_firstiter_cc_this_iter=False,
+        adaptive_os_local=0,
+        noise_stats_per_half_per_class=[None],
+        class_assignments=[None],
+        class_posterior_per_half=class_posterior_per_half,
+        class_full_posterior_per_half=class_full_posterior_per_half,
+        class_rotation_posterior_per_half=[None],
+        best_pose_rotations=[None],
+        best_pose_rotation_eulers=[None],
+        best_pose_translations=[None],
+        require_best_pose_details=False,
+    )
+
+    np.testing.assert_allclose(class_posterior_per_half[0], [1.2, 1.8])
+    np.testing.assert_allclose(class_full_posterior_per_half[0], [1.7, 1.3])
+
+
+def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance():
+    """Full-chain NPZ output must expose the class-mass split used in parity debugging."""
+
+    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    assert "class_mstep_weight_trajectory.append(class_weights.copy())" in source
+    assert "class_full_posterior_weight_trajectory.append(" in source
+
+    import scripts.run_full_refinement as run_full_refinement
+
+    save_source = inspect.getsource(run_full_refinement)
+    assert '"class_mstep_weight_trajectory"' in save_source
+    assert '"class_full_posterior_weight_trajectory"' in save_source
+
+
+def test_kclass_adaptive_dense_fallback_strips_sparse_only_x_half_flag():
+    """Adaptive dense fallback must not tag full-volume dense M-steps as x-half."""
+
+    source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
+    assert 'pass2_kwargs.pop("mstep_relion_x_half", False)' in source
+    assert "dense backend returns full-volume accumulators" in source
+
+
+def test_dense_kclass_mstep_layout_is_logged_for_parity_runs():
+    """Dense pass-2 fallback must leave an audit trail for the M-step layout."""
+
+    source = inspect.getsource(k_class_mod.run_dense_k_class_em)
+    assert "Dense K-class EM M-step: using %s accumulator layout" in source
+    assert '"native half-volume" if keep_half_accumulators else "full-volume"' in source
 
 
 # ----------------------------------------------------------------------
@@ -109,6 +263,47 @@ def test_kclass_use_fused_pass1_gates_remain_in_place():
         "dump_target_with_prior_blocks_per_class is None",
     ):
         assert needle in window, f"K-class use_fused_pass1 lost guard: {needle!r}"
+
+
+def test_adaptive_kclass_pass1_forwards_relion_projector_kwargs():
+    """Adaptive K-class pass-1 must preserve exact RELION projector inputs.
+
+    InitialModel and projector-frame diagnostics pass ``relion_projector_half``
+    through ``engine_kwargs``.  Dropping it only at the adaptive pass-1
+    significance site silently reverts support selection to the JAX projector
+    while pass-2 can still use RELION projector tables.
+    """
+
+    source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
+    sig_kwargs_idx = source.find("sig_kwargs = dict(")
+    assert sig_kwargs_idx >= 0, "adaptive K-class significance kwargs block is missing"
+    window = source[sig_kwargs_idx : sig_kwargs_idx + 2000]
+    for needle in (
+        'relion_projector_half=engine_kwargs.get("relion_projector_half")',
+        'relion_projector_r_max=engine_kwargs.get("relion_projector_r_max")',
+    ):
+        assert needle in window, f"adaptive K-class pass-1 lost projector kwarg: {needle!r}"
+
+
+def test_sparse_pass2_preserves_relion_projector_api_and_forwarding():
+    """Adaptive sparse pass-2 must keep exact RELION projector support."""
+
+    for func in (
+        oversampling_mod.compute_pass2_stats_sparse,
+        sparse_pass2_mod.compute_pass2_stats_sparse_bucketed,
+        sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused,
+    ):
+        sig = inspect.signature(func)
+        for name in ("relion_projector_half", "relion_projector_r_max"):
+            assert name in sig.parameters, f"{func.__name__} lost projector parameter {name!r}"
+
+    source = inspect.getsource(k_class_mod._run_sparse_k_class_adaptive_pass2)
+    for needle in (
+        'fused_common["relion_projector_half"] = relion_projector_half_by_class',
+        "relion_projector_half=_select_projector_half_for_class(",
+        "relion_projector_r_max=relion_projector_r_max",
+    ):
+        assert needle in source, f"adaptive sparse pass-2 lost projector forwarding: {needle!r}"
 
 
 # ----------------------------------------------------------------------
@@ -249,6 +444,247 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     assert int(payload["n_trans"]) == n_trans
 
 
+def test_kclass_significance_dump_uses_original_index_mapper(monkeypatch, tmp_path):
+    """Subset datasets must target dumps by original RELION image id.
+
+    Directly indexing ``dataset_indices[local_index]`` is wrong for local
+    image ids in subset/pass2 debug runs. Prefer the explicit mapper when the
+    dataset provides one.
+    """
+
+    n_classes = 1
+    n_rot = 2
+    n_trans = 3
+    local_index = 7
+
+    def original_image_indices_from_local(local_indices):
+        assert np.array_equal(np.asarray(local_indices), np.asarray([local_index]))
+        return np.asarray([42], dtype=np.int64)
+
+    experiment_dataset = SimpleNamespace(
+        dataset_indices=np.arange(100, 200, dtype=np.int64),
+        original_image_indices_from_local=original_image_indices_from_local,
+    )
+    dump_dir = tmp_path / "dump"
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_DIR", str(dump_dir))
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES", "42")
+
+    sig_mod._maybe_dump_k_class_significance_batch(
+        experiment_dataset=experiment_dataset,
+        indices=np.asarray([local_index], dtype=np.int64),
+        n_classes=n_classes,
+        rotations=np.tile(np.eye(3, dtype=np.float32), (n_rot, 1, 1)),
+        translations=np.zeros((n_trans, 2), dtype=np.float32),
+        class_weight_mats=[np.ones((1, n_rot * n_trans), dtype=np.float64) / (n_rot * n_trans)],
+        batch_sig_mask=np.ones((1, n_classes * n_rot * n_trans), dtype=bool),
+        batch_n_sig=np.asarray([n_classes * n_rot * n_trans], dtype=np.int64),
+        hard_assignment_batch=np.asarray([0], dtype=np.int64),
+        class_assignment_batch=np.asarray([0], dtype=np.int64),
+        global_log_z=np.asarray([0.0], dtype=np.float64),
+        class_log_z_values=[np.asarray([0.0], dtype=np.float64)],
+        best_score=np.asarray([0.0], dtype=np.float64),
+        max_posterior=np.asarray([1.0], dtype=np.float64),
+        rotation_log_prior_padded=None,
+        batch_translation_log_prior=None,
+        class_log_priors=np.zeros(n_classes, dtype=np.float64),
+        current_size=14,
+        adaptive_fraction=0.999,
+        max_significants=100,
+    )
+
+    payload = np.load(dump_dir / "significance_orig000042_cs014.npz")
+    assert int(payload["original_index"]) == 42
+    assert int(payload["local_index"]) == local_index
+
+
+def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tmp_path):
+    """Sparse pass-2 dumps must include the actual M-step reconstruction window.
+
+    Score-window operands are insufficient for BPref parity once the pass uses
+    separate score/reconstruction masks.
+    """
+
+    n_rot = 2
+    n_trans = 3
+    n_score_pix = 5
+    n_recon_pix = 4
+    experiment_dataset = SimpleNamespace(dataset_indices=np.array([42], dtype=np.int64))
+    per_image_inputs = {
+        "oversampled_rots": [np.tile(np.eye(3, dtype=np.float32), (n_rot, 1, 1))],
+        "oversampled_rot_indices": [np.asarray([10, 11], dtype=np.int64)],
+        "parent_map": [np.asarray([0, 1], dtype=np.int32)],
+    }
+    scores = np.arange(n_rot * n_trans, dtype=np.float64).reshape(1, n_rot, n_trans)
+    probs = np.full((1, n_rot, n_trans), 1.0 / (n_rot * n_trans), dtype=np.float64)
+    candidate_mask = np.ones((1, n_rot, n_trans), dtype=bool)
+    reconstruction_mask = candidate_mask.copy()
+    shifted_score = np.ones((1, n_trans, n_score_pix), dtype=np.complex64)
+    shifted_recon = np.ones((1, n_trans, n_recon_pix), dtype=np.complex64) * (2.0 + 3.0j)
+    ctf_score = np.ones((1, n_score_pix), dtype=np.float64)
+    ctf_recon = np.ones((1, n_recon_pix), dtype=np.float64) * 4.0
+
+    dump_dir = tmp_path / "pass2"
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    sparse_pass2_mod._maybe_dump_pass2_bucket(
+        experiment_dataset=experiment_dataset,
+        image_indices=np.asarray([0], dtype=np.int64),
+        per_image_inputs=per_image_inputs,
+        current_size=14,
+        n_fine_trans=n_trans,
+        fine_translations=np.zeros((n_trans, 2), dtype=np.float32),
+        scores=scores,
+        probs=probs,
+        rotation_log_prior=np.zeros((1, n_rot), dtype=np.float64),
+        translation_log_prior=np.zeros((1, n_trans), dtype=np.float64),
+        candidate_mask=candidate_mask,
+        ctf2_over_nv_score=ctf_score,
+        proj_half=np.ones((1, n_rot, n_score_pix), dtype=np.complex64),
+        half_weights_used=np.ones(n_score_pix, dtype=np.float64),
+        window_indices=np.arange(n_score_pix, dtype=np.int32),
+        shifted_corrected_score_split=shifted_score,
+        shifted_recon_split=shifted_recon,
+        ctf2_over_nv_recon=ctf_recon,
+        recon_window_indices=np.asarray([0, 2, 3, 4], dtype=np.int32),
+        reconstruction_mask=reconstruction_mask,
+        reconstruction_probs=probs,
+        reconstruction_n_significant=np.asarray([n_rot * n_trans], dtype=np.int64),
+    )
+
+    files = sorted(os.listdir(dump_dir))
+    assert files, "Sparse pass-2 dump helper failed to write any npz files"
+    payload = np.load(dump_dir / files[0])
+    for name in (
+        "shifted_corrected",
+        "ctf2_over_nv_score",
+        "window_indices",
+        "shifted_recon",
+        "ctf2_over_nv_recon",
+        "recon_window_indices",
+    ):
+        assert name in payload.files, f"Sparse pass-2 dump npz is missing schema field {name!r}"
+    assert payload["shifted_corrected"].shape == (n_trans, n_score_pix)
+    assert payload["ctf2_over_nv_score"].shape == (n_score_pix,)
+    assert payload["window_indices"].shape == (n_score_pix,)
+    assert payload["shifted_recon"].shape == (n_trans, n_recon_pix)
+    assert payload["ctf2_over_nv_recon"].shape == (n_recon_pix,)
+    assert payload["recon_window_indices"].shape == (n_recon_pix,)
+    assert payload["shifted_recon"].dtype == np.complex64
+    assert payload["ctf2_over_nv_recon"].dtype == np.float64
+
+
+def test_sparse_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_path):
+    """Sparse pass-2 dumps use the same original-id targeting as pass1."""
+
+    n_rot = 2
+    n_trans = 3
+    n_pix = 5
+    local_index = 7
+
+    def original_image_indices_from_local(local_indices):
+        assert np.array_equal(np.asarray(local_indices), np.asarray([local_index]))
+        return np.asarray([42], dtype=np.int64)
+
+    experiment_dataset = SimpleNamespace(
+        dataset_indices=np.arange(100, 200, dtype=np.int64),
+        original_image_indices_from_local=original_image_indices_from_local,
+    )
+    rotations_for_image = np.tile(np.eye(3, dtype=np.float32), (n_rot, 1, 1))
+    per_image_inputs = {
+        "oversampled_rots": [rotations_for_image.copy() for _ in range(local_index + 1)],
+        "oversampled_rot_indices": [np.asarray([10, 11], dtype=np.int64) for _ in range(local_index + 1)],
+        "parent_map": [np.asarray([0, 1], dtype=np.int32) for _ in range(local_index + 1)],
+    }
+
+    dump_dir = tmp_path / "pass2"
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    sparse_pass2_mod._maybe_dump_pass2_bucket(
+        experiment_dataset=experiment_dataset,
+        image_indices=np.asarray([local_index], dtype=np.int64),
+        per_image_inputs=per_image_inputs,
+        current_size=14,
+        n_fine_trans=n_trans,
+        fine_translations=np.zeros((n_trans, 2), dtype=np.float32),
+        scores=np.zeros((1, n_rot, n_trans), dtype=np.float64),
+        probs=np.full((1, n_rot, n_trans), 1.0 / (n_rot * n_trans), dtype=np.float64),
+        rotation_log_prior=np.zeros((1, n_rot), dtype=np.float64),
+        translation_log_prior=np.zeros((1, n_trans), dtype=np.float64),
+        candidate_mask=np.ones((1, n_rot, n_trans), dtype=bool),
+        ctf2_over_nv_score=np.ones((1, n_pix), dtype=np.float64),
+        proj_half=np.ones((1, n_rot, n_pix), dtype=np.complex64),
+        half_weights_used=np.ones(n_pix, dtype=np.float64),
+        window_indices=np.arange(n_pix, dtype=np.int32),
+    )
+
+    payload = np.load(dump_dir / "pass2_orig000042_cs014.npz")
+    assert int(payload["original_index"]) == 42
+    assert int(payload["local_index"]) == local_index
+    assert payload["recon_window_indices"].dtype == np.int32
+
+
+def test_kclass_compact_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_path):
+    """K-class compact-pair pass-2 diagnostics must target original image ids."""
+
+    n_rot = 2
+    n_trans = 3
+    local_index = 7
+
+    def original_image_indices_from_local(local_indices):
+        assert np.array_equal(np.asarray(local_indices), np.asarray([local_index]))
+        return np.asarray([42], dtype=np.int64)
+
+    experiment_dataset = SimpleNamespace(
+        dataset_indices=np.arange(100, 200, dtype=np.int64),
+        original_image_indices_from_local=original_image_indices_from_local,
+    )
+    rotations_for_image = np.tile(np.eye(3, dtype=np.float32), (n_rot, 1, 1))
+    per_image_inputs = {
+        "oversampled_rots": [rotations_for_image.copy() for _ in range(local_index + 1)],
+        "oversampled_rot_indices": [np.asarray([10, 11], dtype=np.int64) for _ in range(local_index + 1)],
+        "parent_map": [np.asarray([0, 1], dtype=np.int32) for _ in range(local_index + 1)],
+        "log_prior": [np.asarray([0.1, -0.2], dtype=np.float32) for _ in range(local_index + 1)],
+    }
+    compact_pair_arrays = {
+        "pair_mask": np.asarray([[True, True, False]], dtype=bool),
+        "local_rotation_row": np.asarray([[0, 1, 0]], dtype=np.int64),
+        "translation_idx": np.asarray([[1, 2, 0]], dtype=np.int64),
+    }
+    translation_prior = np.asarray([[0.25, -0.5, 0.75]], dtype=np.float32)
+    scores = np.asarray([[3.5, 5.5, -np.inf]], dtype=np.float64)
+    probs = np.asarray([[0.2, 0.8, 0.0]], dtype=np.float64)
+
+    dump_dir = tmp_path / "pass2"
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    sparse_pass2_mod._maybe_dump_k_class_pass2_bucket(
+        experiment_dataset=experiment_dataset,
+        image_indices=np.asarray([local_index], dtype=np.int64),
+        class_index=1,
+        per_image_inputs=per_image_inputs,
+        class_bucket_arrays={},
+        compact_pair_arrays=compact_pair_arrays,
+        current_size=14,
+        n_fine_trans=n_trans,
+        fine_translations=np.zeros((n_trans, 2), dtype=np.float32),
+        scores=scores,
+        probs=probs,
+        bucket_translation_prior=translation_prior,
+        compact_pairs=True,
+    )
+
+    payload = np.load(dump_dir / "pass2_orig000042_class002_cs014.npz")
+    assert int(payload["original_index"]) == 42
+    assert int(payload["local_index"]) == local_index
+    assert int(payload["class_index"]) == 1
+    np.testing.assert_array_equal(payload["oversampled_rot_indices"], np.asarray([10, 11]))
+    assert payload["candidate_mask"].tolist() == [[False, True, False], [False, False, True]]
+    assert payload["probs"][0, 1] == pytest.approx(0.2)
+    assert payload["probs"][1, 2] == pytest.approx(0.8)
+    assert payload["scores_pre_prior"][0, 1] == pytest.approx(3.5 - 0.1 - (-0.5))
+    assert payload["scores_pre_prior"][1, 2] == pytest.approx(5.5 - (-0.2) - 0.75)
+
+
 # ----------------------------------------------------------------------
 # Pass1 fused gate (env-var contract)
 # ----------------------------------------------------------------------
@@ -282,6 +718,30 @@ def test_pass1_fused_enabled_env_var_contract(monkeypatch, value, expected):
     else:
         monkeypatch.setenv("RECOVAR_PASS1_FUSED", value)
     assert sig_mod._pass1_fused_enabled() is expected
+
+
+def test_normalized_cc_firstiter_ignores_log_priors():
+    """RELION firstiter normalized-CC WTA uses raw scores, not priors."""
+
+    score_constraints_source = inspect.getsource(sig_mod)
+    assert 'if score_mode == "normalized_cc":\n            return scores' in score_constraints_source
+
+    dense_constraints_source = inspect.getsource(score_constraints_mod.apply_dense_score_constraints)
+    assert 'if score_mode != "normalized_cc":' in dense_constraints_source
+    assert "scores = scores + rotation_prior[:, :, None]" in dense_constraints_source
+    assert "scores = scores + translation_prior[:, None, :]" in dense_constraints_source
+
+    dense_source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
+    assert "scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)" in dense_source
+    assert "scores_pre_prior" in dense_source
+    assert "scores_with_prior" in dense_source
+
+
+def test_adaptive_significance_forwards_firstiter_score_mode():
+    """No-shortcut firstiter diagnostics must still use normalized-CC pass-1 scoring."""
+
+    source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
+    assert 'score_mode=engine_kwargs.get("relion_firstiter_score_mode", "gaussian")' in source
 
 
 # ----------------------------------------------------------------------

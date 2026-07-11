@@ -130,6 +130,26 @@ def get_field(d, *names):
     return None
 
 
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _model_general(model):
+    if model and "model_general" in model:
+        return model["model_general"]
+    return None
+
+
+def _sigma_offset_from_model(model):
+    mg = _model_general(model)
+    if mg is None:
+        return float("nan")
+    return _safe_float(mg.get("rlnSigmaOffsetsAngst", float("nan")))
+
+
 def load_relion_iter(relion_dir, it):
     """Load all per-iter STARs for one RELION iteration."""
     nnn = f"{it:03d}"
@@ -174,6 +194,7 @@ def extract_relion_scalars(relion_iter):
     out = {}
     opt = relion_iter["optimiser"]
     model = relion_iter["model_h1"]
+    model_h2 = relion_iter["model_h2"]
     data = relion_iter.get("data")
 
     # Per-particle Pmax mean from data.star — this is the apples-to-apples
@@ -203,7 +224,14 @@ def extract_relion_scalars(relion_iter):
         out["current_resolution"] = float(mg.get("rlnCurrentResolution", float("nan")))
         out["log_likelihood"] = float(mg.get("rlnLogLikelihood", float("nan")))
         out["norm_correction_avg"] = float(mg.get("rlnNormCorrectionAverage", float("nan")))
-        out["sigma_offsets_angst"] = float(mg.get("rlnSigmaOffsetsAngst", float("nan")))
+        sigma_h1 = _sigma_offset_from_model(model)
+        sigma_h2 = _sigma_offset_from_model(model_h2)
+        if np.isfinite(sigma_h1):
+            out["sigma_offsets_h1_angst"] = sigma_h1
+        if np.isfinite(sigma_h2):
+            out["sigma_offsets_h2_angst"] = sigma_h2
+        sigma_pair = [v for v in (sigma_h1, sigma_h2) if np.isfinite(v)]
+        out["sigma_offsets_angst"] = float(np.mean(sigma_pair)) if sigma_pair else float("nan")
         out["tau2_fudge"] = float(mg.get("rlnTau2FudgeFactor", float("nan")))
         out["nr_groups"] = int(mg.get("rlnNrGroups", 0) or 0)
 
@@ -287,6 +315,26 @@ def _recovar_per_shell_array(recovar, key):
     return arr
 
 
+def _recovar_optional_pair(recovar, key, it):
+    if recovar is None or key not in recovar.files:
+        return None
+    arr = np.asarray(recovar[key], dtype=object)
+    if it >= len(arr):
+        return None
+    value = arr[it]
+    if value is None:
+        return None
+    if isinstance(value, np.ndarray) and value.shape == () and value.item() is None:
+        return None
+    try:
+        pair = np.asarray(value, dtype=np.float64).reshape(-1)
+    except (TypeError, ValueError):
+        return None
+    if pair.size != 2 or not np.all(np.isfinite(pair)):
+        return None
+    return [float(pair[0]), float(pair[1])]
+
+
 def extract_recovar_scalars(recovar, it):
     """Extract per-iter scalars from recovar's npz at iter index `it` (0-based)."""
     if recovar is None:
@@ -297,6 +345,8 @@ def extract_recovar_scalars(recovar, it):
     hpx_arr = recovar.get("healpix_order_trajectory")
     sigma_offset_arr = recovar.get("sigma_offset_trajectory")
     sigma_offset_used_arr = recovar.get("sigma_offset_used_trajectory")
+    sigma_offset_per_half = _recovar_optional_pair(recovar, "sigma_offset_per_half_trajectory", it)
+    sigma_offset_used_per_half = _recovar_optional_pair(recovar, "sigma_offset_used_per_half_trajectory", it)
     if sigma_offset_arr is None:
         sigma_offset_arr = sigma_offset_used_arr
     frac_changed_arr = recovar.get("frac_changed_trajectory")
@@ -314,8 +364,14 @@ def extract_recovar_scalars(recovar, it):
         out["healpix_order"] = int(hpx_arr[it])
     if sigma_offset_arr is not None and it < len(sigma_offset_arr):
         out["sigma_offsets_angst"] = float(sigma_offset_arr[it])
+    if sigma_offset_per_half is not None:
+        out["sigma_offsets_h1_angst"] = sigma_offset_per_half[0]
+        out["sigma_offsets_h2_angst"] = sigma_offset_per_half[1]
     if sigma_offset_used_arr is not None and it < len(sigma_offset_used_arr):
         out["sigma_offsets_used_angst"] = float(sigma_offset_used_arr[it])
+    if sigma_offset_used_per_half is not None:
+        out["sigma_offsets_used_h1_angst"] = sigma_offset_used_per_half[0]
+        out["sigma_offsets_used_h2_angst"] = sigma_offset_used_per_half[1]
     if frac_changed_arr is not None and it < len(frac_changed_arr):
         out["fraction_changed"] = float(frac_changed_arr[it])
     if acc_rot_arr is not None and it < len(acc_rot_arr):
@@ -530,8 +586,12 @@ def main():
             # full-set accounting reasons; reported here for completeness
             # but NOT directly comparable to recovar's ave_Pmax.
             ("ave_Pmax_mstep (RELION-only)", rsc.get("ave_Pmax_mstep"), None),
-            ("sigma_offsets_Å", rsc.get("sigma_offsets_angst"), rec_sc.get("sigma_offsets_angst")),
-            ("sigma_offsets_used_Å", None, rec_sc.get("sigma_offsets_used_angst")),
+            ("sigma_offsets_mean_Å", rsc.get("sigma_offsets_angst"), rec_sc.get("sigma_offsets_angst")),
+            ("sigma_offsets_h1_Å", rsc.get("sigma_offsets_h1_angst"), rec_sc.get("sigma_offsets_h1_angst")),
+            ("sigma_offsets_h2_Å", rsc.get("sigma_offsets_h2_angst"), rec_sc.get("sigma_offsets_h2_angst")),
+            ("sigma_offsets_used_mean_Å", None, rec_sc.get("sigma_offsets_used_angst")),
+            ("sigma_offsets_used_h1_Å", None, rec_sc.get("sigma_offsets_used_h1_angst")),
+            ("sigma_offsets_used_h2_Å", None, rec_sc.get("sigma_offsets_used_h2_angst")),
             ("smallest_chg_angles_°", rsc.get("smallest_change_angles"), rec_sc.get("smallest_change_angles")),
             ("smallest_chg_offsets", rsc.get("smallest_change_offsets"), rec_sc.get("smallest_change_offsets")),
             ("current_resolution Å", rsc.get("current_resolution"), None),
@@ -555,7 +615,9 @@ def main():
         for f, label in [
             ("log_likelihood", "log_likelihood"),
             ("norm_correction_avg", "norm_correction_avg"),
-            ("sigma_offsets_angst", "sigma_offsets_Å"),
+            ("sigma_offsets_angst", "sigma_offsets_mean_Å"),
+            ("sigma_offsets_h1_angst", "sigma_offsets_h1_Å"),
+            ("sigma_offsets_h2_angst", "sigma_offsets_h2_Å"),
             ("best_resolution_so_far", "best_res_so_far_(1/Å)"),
             ("smallest_change_angles", "smallest_chg_angles_°"),
             ("smallest_change_offsets", "smallest_chg_offsets_px"),

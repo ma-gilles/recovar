@@ -268,6 +268,25 @@ def make_fourier_window_indices_np(image_shape, current_size, square=False, incl
     return indices, len(indices)
 
 
+def centered_half_indices_to_fftw_half_indices(image_shape, indices):
+    """Map RECOVAR centered-row half-spectrum indices to FFTW row order.
+
+    RECOVAR stores packed half-images with the row axis fftshifted
+    (``ky=-N/2..N/2-1``). RELION's BackProjector x-half path consumes FFTW row
+    order (``ky=0..N/2,-N/2+1..-1``). The values can remain in their current
+    compact order; only the coordinate indices passed to the indexed adjoint
+    need this row remapping.
+    """
+
+    height, width = (int(image_shape[0]), int(image_shape[1]))
+    half_width = width // 2 + 1
+    indices = jnp.asarray(indices, dtype=jnp.int32)
+    rows = indices // half_width
+    cols = indices % half_width
+    fftw_rows = (rows + height // 2) % height
+    return (fftw_rows * half_width + cols).astype(jnp.int32)
+
+
 def make_fourier_window_spec(
     image_shape,
     current_size,

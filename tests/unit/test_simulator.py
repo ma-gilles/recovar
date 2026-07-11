@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import builtins
 
 pytest.importorskip("jax")
 pytest.importorskip("scipy")
@@ -65,6 +66,41 @@ def test_nonuniform_rotation_sampling_reproducible():
     r1 = simulator.nonuniform_rotation_sampling(8, grid_size=64, seed=123)
     r2 = simulator.nonuniform_rotation_sampling(8, grid_size=64, seed=123)
     np.testing.assert_allclose(r1, r2)
+
+
+def test_kent_sampling_scheme_uses_internal_fallback_without_sphstat(monkeypatch):
+    n_images = 32
+    ctf_params = np.zeros((n_images, int(core.CTFParamIndex.TILT_ANGLE) + 1), dtype=np.float32)
+    monkeypatch.setattr(
+        simulator,
+        "generate_simulated_params_from_real",
+        lambda n, _dataset_params_fn, _grid_size: (ctf_params[:n], None, None),
+    )
+
+    real_import = builtins.__import__
+
+    def _import_without_sphstat(name, *args, **kwargs):
+        if name == "sphstat":
+            raise ImportError("forced missing sphstat")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _import_without_sphstat)
+
+    ctf1, rot1, trans1 = simulator.kent_sampling_scheme(n_images, grid_size=64, seed=123)
+    ctf2, rot2, trans2 = simulator.kent_sampling_scheme(n_images, grid_size=64, seed=123)
+
+    assert ctf1.shape == ctf_params.shape
+    assert rot1.shape == (n_images, 3, 3)
+    assert trans1.shape == (n_images, 2)
+    np.testing.assert_allclose(rot1, rot2)
+    np.testing.assert_allclose(trans1, trans2)
+    np.testing.assert_allclose(ctf1, ctf2)
+    np.testing.assert_allclose(
+        rot1 @ np.transpose(rot1, (0, 2, 1)),
+        np.broadcast_to(np.eye(3), rot1.shape),
+        atol=1e-6,
+        rtol=1e-6,
+    )
 
 
 def test_cryo_rotation_batch_properties_and_shapes():

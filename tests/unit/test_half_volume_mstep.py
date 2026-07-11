@@ -1,0 +1,492 @@
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+import inspect
+import re
+
+import numpy as np
+import pytest
+
+pytest.importorskip("jax")
+import jax.numpy as jnp
+
+import recovar.core.fourier_transform_utils as ftu
+from recovar.em.dense_single_volume.helpers import half_volume_mstep
+from recovar.reconstruction import regularization
+
+pytestmark = pytest.mark.unit
+
+
+def _random_complex(shape, seed=0, dtype=np.complex64):
+    rng = np.random.default_rng(seed)
+    real = rng.normal(size=shape).astype(np.float32)
+    imag = rng.normal(size=shape).astype(np.float32)
+    return (real + 1j * imag).astype(dtype)
+
+
+def _valid_relion_x_half_grid(volume_shape, seed=0):
+    rng = np.random.default_rng(seed)
+    real_volume = rng.normal(size=volume_shape).astype(np.float32)
+    full = ftu.get_dft3(jnp.asarray(real_volume))
+    return np.asarray(ftu.full_volume_to_half_volume(full, volume_shape), dtype=np.complex64)
+
+
+def _expected_relion_x_half_to_recovar_full(half_grid, volume_shape):
+    relion_full = np.asarray(
+        ftu.half_volume_to_full_volume(jnp.asarray(half_grid), volume_shape)
+    ).reshape(volume_shape)
+    return relion_full.transpose(2, 1, 0).reshape(-1)
+
+
+def test_relion_x_half_native_half_matches_full_expansion():
+    volume_shape = (8, 8, 8)
+    half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    half_grid = _valid_relion_x_half_grid(volume_shape, seed=123)
+
+    expected = _expected_relion_x_half_to_recovar_full(half_grid, volume_shape)
+
+    native_half = half_volume_mstep.relion_x_half_volume_to_native_half(
+        jnp.asarray(half_grid).reshape(-1),
+        volume_shape,
+    )
+    actual = np.asarray(
+        ftu.half_volume_to_full_volume(jnp.asarray(native_half).reshape(half_shape), volume_shape)
+    ).reshape(-1)
+
+    assert isinstance(native_half, np.ndarray)
+    assert native_half.shape == (int(np.prod(half_shape)),)
+    assert native_half.dtype == half_grid.dtype
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-5)
+
+
+def test_relion_x_half_native_half_matches_odd_bpref_full_expansion():
+    volume_shape = (9, 9, 9)
+    half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    half_grid = _valid_relion_x_half_grid(volume_shape, seed=321)
+
+    expected = _expected_relion_x_half_to_recovar_full(half_grid, volume_shape)
+
+    native_half = half_volume_mstep.relion_x_half_volume_to_native_half(
+        jnp.asarray(half_grid).reshape(-1),
+        volume_shape,
+    )
+    actual = np.asarray(
+        ftu.half_volume_to_full_volume(jnp.asarray(native_half).reshape(half_shape), volume_shape)
+    ).reshape(-1)
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-5)
+
+
+def test_relion_x_half_public_layout_guard_avoids_full_expand_when_forced(monkeypatch):
+    volume_shape = (10, 10, 10)
+    half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    half_grid = _valid_relion_x_half_grid(volume_shape, seed=456)
+    expected = _expected_relion_x_half_to_recovar_full(half_grid, volume_shape)
+    original_half_volume_to_full_volume = ftu.half_volume_to_full_volume
+
+    def fail_half_volume_to_full_volume(*args, **kwargs):
+        raise AssertionError("JAX half-volume expansion should not be used")
+
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_TO_NATIVE_HALF", "1")
+    monkeypatch.setattr(
+        half_volume_mstep.fourier_transform_utils,
+        "half_volume_to_full_volume",
+        fail_half_volume_to_full_volume,
+    )
+
+    native_half = half_volume_mstep.relion_x_half_volume_to_public_layout(
+        jnp.asarray(half_grid).reshape(-1),
+        volume_shape,
+    )
+    actual = np.asarray(original_half_volume_to_full_volume(jnp.asarray(native_half).reshape(half_shape), volume_shape))
+
+    assert native_half.shape == (int(np.prod(half_shape)),)
+    np.testing.assert_allclose(actual.reshape(-1), expected, rtol=1e-6, atol=1e-5)
+
+
+def test_relion_x_half_native_half_threshold_keeps_default_256_padded_grid_off(monkeypatch):
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_TO_NATIVE_HALF", raising=False)
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_TO_NATIVE_HALF_MIN_VOXELS", raising=False)
+
+    assert not half_volume_mstep._large_relion_x_half_to_native_half_enabled(512**3)
+    assert half_volume_mstep._large_relion_x_half_to_native_half_enabled(768**3)
+
+
+def test_relion_x_half_full_host_threshold_enables_default_256_padded_grid(monkeypatch):
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_FULL_HOST", raising=False)
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_FULL_HOST_MIN_VOXELS", raising=False)
+
+    assert not half_volume_mstep._large_relion_x_half_full_host_enabled(259**3)
+    assert half_volume_mstep._large_relion_x_half_full_host_enabled(512**3)
+    assert half_volume_mstep._large_relion_x_half_full_host_enabled(768**3)
+
+
+def test_relion_x_half_host_x0_threshold_is_memory_safety_default(monkeypatch):
+    monkeypatch.delenv(half_volume_mstep._RELION_X_HALF_HOST_X0_ENV, raising=False)
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_TO_NATIVE_HALF_MIN_VOXELS", raising=False)
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_HOST_X0_MIN_VOXELS", raising=False)
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_TO_NATIVE_HALF", "0")
+
+    assert not half_volume_mstep._large_relion_x_half_host_x0_enabled(512**3)
+    assert half_volume_mstep._large_relion_x_half_host_x0_enabled(768**3)
+
+    monkeypatch.setenv(half_volume_mstep._RELION_X_HALF_HOST_X0_ENV, "0")
+    assert not half_volume_mstep._large_relion_x_half_host_x0_enabled(768**3)
+
+
+def test_relion_x_half_mstep_accumulator_dtypes_default_to_dataset_dtype(monkeypatch):
+    monkeypatch.delenv(half_volume_mstep._RELION_X_HALF_MSTEP_DOUBLE_ENV, raising=False)
+
+    y_dtype, ctf_dtype = half_volume_mstep.relion_x_half_mstep_accumulator_dtypes(
+        np.complex64,
+        use_relion_x_half_mstep=True,
+    )
+
+    assert y_dtype == np.dtype(np.complex64)
+    assert ctf_dtype == np.dtype(np.complex64)
+
+
+def test_relion_x_half_mstep_accumulator_dtypes_can_opt_into_double(monkeypatch):
+    monkeypatch.setenv(half_volume_mstep._RELION_X_HALF_MSTEP_DOUBLE_ENV, "1")
+
+    y_dtype, ctf_dtype = half_volume_mstep.relion_x_half_mstep_accumulator_dtypes(
+        np.complex64,
+        use_relion_x_half_mstep=True,
+    )
+
+    assert y_dtype == np.dtype(np.complex128)
+    assert ctf_dtype == np.dtype(np.float64)
+
+
+def test_relion_x_half_mstep_accumulator_dtypes_can_opt_out(monkeypatch):
+    monkeypatch.setenv(half_volume_mstep._RELION_X_HALF_MSTEP_DOUBLE_ENV, "0")
+
+    y_dtype, ctf_dtype = half_volume_mstep.relion_x_half_mstep_accumulator_dtypes(
+        np.complex64,
+        use_relion_x_half_mstep=True,
+    )
+
+    assert y_dtype == np.dtype(np.complex64)
+    assert ctf_dtype == np.dtype(np.complex64)
+
+
+def test_non_relion_mstep_keeps_dataset_accumulator_dtype(monkeypatch):
+    monkeypatch.delenv(half_volume_mstep._RELION_X_HALF_MSTEP_DOUBLE_ENV, raising=False)
+
+    y_dtype, ctf_dtype = half_volume_mstep.relion_x_half_mstep_accumulator_dtypes(
+        np.complex64,
+        use_relion_x_half_mstep=False,
+    )
+
+    assert y_dtype == np.dtype(np.complex64)
+    assert ctf_dtype == np.dtype(np.complex64)
+
+
+def test_exact_local_mstep_splits_when_accumulator_dtypes_differ():
+    from recovar.em.dense_single_volume.local_big_jit import _exact_local_mstep_should_split_adjoints
+
+    assert _exact_local_mstep_should_split_adjoints(
+        (259, 259, 259),
+        np.zeros((1, 4), dtype=np.complex128),
+        np.zeros((1, 4), dtype=np.float64),
+        np.zeros((8,), dtype=np.complex128),
+        np.zeros((8,), dtype=np.float64),
+    )
+    assert not _exact_local_mstep_should_split_adjoints(
+        (259, 259, 259),
+        np.zeros((1, 4), dtype=np.complex64),
+        np.zeros((1, 4), dtype=np.complex64),
+        np.zeros((8,), dtype=np.complex64),
+        np.zeros((8,), dtype=np.complex64),
+    )
+    assert _exact_local_mstep_should_split_adjoints(
+        (515, 515, 515),
+        np.zeros((1, 4), dtype=np.complex64),
+        np.zeros((1, 4), dtype=np.complex64),
+    )
+
+
+def test_relion_backprojector_volume_shape_matches_initzeros_formula():
+    assert half_volume_mstep.relion_backprojector_volume_shape((128, 128, 128), 2) == (259, 259, 259)
+    assert half_volume_mstep.relion_backprojector_volume_shape((128, 128, 128), 2, current_size=60) == (
+        123,
+        123,
+        123,
+    )
+    assert half_volume_mstep.relion_backprojector_volume_shape((128, 128, 128), 2, current_size=61) == (
+        123,
+        123,
+        123,
+    )
+    assert half_volume_mstep.relion_backprojector_volume_shape((128, 128, 128), 2, current_size=999) == (
+        259,
+        259,
+        259,
+    )
+    assert half_volume_mstep.relion_backprojector_volume_shape((16, 16, 16), 1.5, current_size=7) == (
+        13,
+        13,
+        13,
+    )
+
+
+def test_relion_backprojector_volume_shape_rejects_invalid_inputs():
+    with pytest.raises(ValueError, match="cubic"):
+        half_volume_mstep.relion_backprojector_volume_shape((16, 16, 18), 2)
+    with pytest.raises(ValueError, match="positive"):
+        half_volume_mstep.relion_backprojector_volume_shape((16, 16, 16), 0)
+
+
+def test_enforce_relion_x0_hermitian_uses_centered_odd_grid_partner():
+    from recovar.em.dense_single_volume.local_backprojection import (
+        enforce_relion_half_volume_x0_hermitian,
+        enforce_relion_half_volume_x0_hermitian_host,
+    )
+
+    volume_shape = (5, 5, 5)
+    half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    rng = np.random.default_rng(17)
+    original = _random_complex(half_shape, seed=17)
+    original[:, :, 1:] = rng.normal(size=original[:, :, 1:].shape).astype(np.float32)
+
+    got = np.asarray(
+        enforce_relion_half_volume_x0_hermitian(jnp.asarray(original).reshape(-1), volume_shape)
+    ).reshape(half_shape)
+    got_host = enforce_relion_half_volume_x0_hermitian_host(jnp.asarray(original).reshape(-1), volume_shape).reshape(
+        half_shape
+    )
+
+    i0 = np.arange(volume_shape[0])
+    i1 = np.arange(volume_shape[1])
+    centered_p0 = (volume_shape[0] - (volume_shape[0] % 2) - i0) % volume_shape[0]
+    centered_p1 = (volume_shape[1] - (volume_shape[1] % 2) - i1) % volume_shape[1]
+    expected_plane = original[:, :, 0] + np.conj(original[np.ix_(centered_p0, centered_p1)][:, :, 0])
+    self_partner = (centered_p0[:, None] == i0[:, None]) & (centered_p1[None, :] == i1[None, :])
+    expected_plane = np.where(self_partner, original[:, :, 0], expected_plane)
+    expected = original.copy()
+    expected[:, :, 0] = expected_plane
+
+    unshifted_p0 = (-i0) % volume_shape[0]
+    unshifted_p1 = (-i1) % volume_shape[1]
+    unshifted_plane = original[:, :, 0] + np.conj(original[np.ix_(unshifted_p0, unshifted_p1)][:, :, 0])
+
+    np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(got_host, expected, rtol=1e-6, atol=1e-6)
+    assert np.max(np.abs(unshifted_plane - expected_plane)) > 1e-3
+
+
+def test_enforce_half_volume_x0_uses_host_path_for_large_grids(monkeypatch):
+    volume_shape = (6, 6, 6)
+    half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    Ft_y = _random_complex(half_shape, seed=91)
+    Ft_ctf = _random_complex(half_shape, seed=92)
+
+    expected_y = np.asarray(
+        half_volume_mstep.enforce_relion_half_volume_x0_hermitian(jnp.asarray(Ft_y).reshape(-1), volume_shape)
+    )
+    expected_ctf = np.asarray(
+        half_volume_mstep.enforce_relion_half_volume_x0_hermitian(jnp.asarray(Ft_ctf).reshape(-1), volume_shape)
+    )
+
+    monkeypatch.setattr(half_volume_mstep, "_large_relion_x_half_host_x0_enabled", lambda full_voxels: True)
+
+    def fail_device_enforcement(*args, **kwargs):
+        raise AssertionError("device x0 enforcement should not run for large-grid host path")
+
+    monkeypatch.setattr(half_volume_mstep, "enforce_relion_half_volume_x0_hermitian", fail_device_enforcement)
+
+    got_y, got_ctf = half_volume_mstep.enforce_half_volume_x0(
+        jnp.asarray(Ft_y).reshape(-1),
+        jnp.asarray(Ft_ctf).reshape(-1),
+        volume_shape,
+        logger=logging.getLogger(__name__),
+        label="unit",
+    )
+
+    assert isinstance(got_y, np.ndarray)
+    assert isinstance(got_ctf, np.ndarray)
+    np.testing.assert_allclose(got_y, expected_y, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(got_ctf, expected_ctf, rtol=1e-6, atol=1e-6)
+
+
+def test_relion_x_half_production_allocators_use_current_size_backprojector_shape():
+    from recovar.em.dense_single_volume import k_class
+    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+
+    def assert_uses_current_size_shape(fn):
+        source = inspect.getsource(fn)
+        assert "relion_backprojector_volume_shape(" in source
+        calls = re.findall(r"relion_backprojector_volume_shape\([^)]*\)", source, flags=re.DOTALL)
+        assert calls
+        assert any(
+            "current_size=current_size" in call or 'current_size=common["current_size"]' in call
+            for call in calls
+        )
+        for call in calls:
+            if "reconstruction_padding_factor" in call or 'common["reconstruction_padding_factor"]' in call:
+                assert "current_size=current_size" in call or 'current_size=common["current_size"]' in call
+
+    assert_uses_current_size_shape(local_em_engine.run_local_em_exact)
+    assert_uses_current_size_shape(sparse_pass2_bucketed.compute_pass2_stats_sparse_bucketed)
+    assert_uses_current_size_shape(sparse_pass2_bucketed.compute_k_class_pass2_stats_sparse_fused)
+    assert_uses_current_size_shape(k_class._run_sparse_k_class_adaptive_pass2)
+
+
+def test_relion_x_half_public_layout_shape_switch(monkeypatch):
+    volume_shape = (4, 4, 4)
+    half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    half_grid = _valid_relion_x_half_grid(volume_shape, seed=789)
+
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_TO_NATIVE_HALF", "0")
+    full = half_volume_mstep.relion_x_half_volume_to_public_layout(
+        jnp.asarray(half_grid).reshape(-1),
+        volume_shape,
+    )
+    assert full.shape == (int(np.prod(volume_shape)),)
+
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_TO_NATIVE_HALF", "1")
+    native_half = half_volume_mstep.relion_x_half_volume_to_public_layout(
+        jnp.asarray(half_grid).reshape(-1),
+        volume_shape,
+    )
+    assert native_half.shape == (int(np.prod(half_shape)),)
+
+
+def test_relion_x_half_public_full_layout_uses_host_expand_when_forced(monkeypatch):
+    volume_shape = (10, 10, 10)
+    half_grid = _valid_relion_x_half_grid(volume_shape, seed=790)
+    expected = _expected_relion_x_half_to_recovar_full(half_grid, volume_shape)
+
+    def fail_half_volume_to_full_volume(*args, **kwargs):
+        raise AssertionError("JAX half-volume expansion should not be used")
+
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_TO_NATIVE_HALF", "0")
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_FULL_HOST", "1")
+    monkeypatch.setattr(
+        half_volume_mstep.fourier_transform_utils,
+        "half_volume_to_full_volume",
+        fail_half_volume_to_full_volume,
+    )
+
+    full = half_volume_mstep.relion_x_half_volume_to_public_layout(
+        jnp.asarray(half_grid).reshape(-1),
+        volume_shape,
+    )
+
+    assert isinstance(full, np.ndarray)
+    assert full.shape == (int(np.prod(volume_shape)),)
+    np.testing.assert_allclose(full, expected, rtol=1e-6, atol=1e-5)
+
+
+def test_relion_x_half_public_full_tau2_shell_stats_use_relion_x_axis(monkeypatch):
+    """Tau2 shell stats must match RELION x-half storage after public-full expansion."""
+
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_TO_NATIVE_HALF", "0")
+    volume_shape = (8, 8, 8)
+    half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    rng = np.random.default_rng(112)
+    relion_x_half_weight = rng.uniform(0.1, 2.0, size=half_shape).astype(np.float32)
+    relion_x_public_full = half_volume_mstep.relion_x_half_volume_to_full(
+        jnp.asarray(relion_x_half_weight).reshape(-1),
+        volume_shape,
+    )
+    fsc = np.full(volume_shape[0] // 2 + 1, 0.5, dtype=np.float64)
+
+    _, _, packed_details = regularization.compute_relion_tau2_from_weights(
+        relion_x_half_weight.reshape(-1),
+        relion_x_half_weight.reshape(-1),
+        fsc,
+        volume_shape,
+        return_details=True,
+    )
+    _, _, public_full_details = regularization.compute_relion_tau2_from_weights(
+        relion_x_public_full,
+        relion_x_public_full,
+        fsc,
+        volume_shape,
+        return_details=True,
+        full_half_axis=0,
+    )
+    _, _, wrong_axis_details = regularization.compute_relion_tau2_from_weights(
+        relion_x_public_full,
+        relion_x_public_full,
+        fsc,
+        volume_shape,
+        return_details=True,
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(public_full_details["sigma2_shells"]),
+        np.asarray(packed_details["sigma2_shells"]),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    assert np.max(
+        np.abs(
+            np.asarray(wrong_axis_details["sigma2_shells"])
+            - np.asarray(packed_details["sigma2_shells"])
+        )
+    ) > 1e-2
+
+
+def test_relion_x_half_backproject_rotation_transform_matches_relion_ainv():
+    from recovar.cuda_backproject import (
+        _relion_x_half_backproject_rotation_to_kernel,
+        _rot_to_compact,
+    )
+
+    rng = np.random.default_rng(44)
+    q, _ = np.linalg.qr(rng.normal(size=(3, 3)))
+    if np.linalg.det(q) < 0:
+        q[:, 0] *= -1.0
+
+    kernel_matrix = _relion_x_half_backproject_rotation_to_kernel(jnp.asarray(q[None], dtype=jnp.float64))
+    rot6 = np.asarray(_rot_to_compact(kernel_matrix), dtype=np.float64)[0]
+
+    for x, y in [(1.0, 2.0), (7.25, -3.5), (-4.0, 6.0)]:
+        got = y * rot6[:3] + x * rot6[3:]
+        relion_xyz = np.linalg.inv(q) @ np.asarray([x, y, 0.0], dtype=np.float64)
+        expected_kernel_zyx = relion_xyz[[2, 1, 0]]
+        np.testing.assert_allclose(got, expected_kernel_zyx, rtol=1e-12, atol=1e-12)
+
+
+def test_relion_x_half_backproject_rotation_uses_inverse_for_nyquist_boundary():
+    from recovar.cuda_backproject import (
+        _relion_x_half_backproject_rotation_to_kernel,
+        _rot_to_compact,
+    )
+
+    # RELION calls Matrix2D::inv(); using A.T instead includes the x=Nyquist
+    # source pixel for this rotation, adding one spurious unit of BPref weight.
+    rotation = np.asarray(
+        [
+            [-0.20223536142961612, 0.9760677738394581, -0.07995348309809173],
+            [-0.7519838250487249, -0.1024667595107726, 0.6511688644740704],
+            [0.627392369616113, 0.19181309670469796, 0.7547095802227721],
+        ],
+        dtype=np.float64,
+    )
+    kernel_matrix = _relion_x_half_backproject_rotation_to_kernel(jnp.asarray(rotation[None], dtype=jnp.float64))
+    rot6 = np.asarray(_rot_to_compact(kernel_matrix), dtype=np.float64)[0]
+
+    source = np.asarray([8.0, 0.0, 0.0], dtype=np.float64)
+    got = source[1] * rot6[:3] + source[0] * rot6[3:]
+    expected = (np.linalg.inv(rotation) @ source)[[2, 1, 0]]
+    transpose_result = (rotation.T @ source)[[2, 1, 0]]
+
+    np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+    assert np.linalg.norm(got) > np.linalg.norm(transpose_result)
+
+
+def test_relion_x_half_cuda_skips_fftw_x0_negative_row_duplicate():
+    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
+    text = cuda_source.read_text()
+
+    duplicate_x0_guard = "relion_fold_x && HALF_IMG && HALF_VOL && k1_idx == 0 && k0_idx >= image_w"
+    assert text.count(duplicate_x0_guard) == 2
+    assert "RELION iterates FFTW half-images in native row order" in text
+    assert "k0_idx < image_w" in text
+    assert "? (T)k1_idx * upsampling" in text
+    assert "BackProjector::backproject2Dto3D skips" in text

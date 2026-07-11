@@ -13,14 +13,14 @@
 #   ./scripts/run_em_merge_guard_slurm.sh --watch
 #
 # Outputs:
-#   /scratch/gpfs/GILLES/mg6942/_agent_scratch/em_merge_guard_<timestamp>/
+#   /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_merge_guard_<timestamp>/
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_ID="em_merge_guard_${TIMESTAMP}_${RANDOM}"
-SCRATCH_DIR="/scratch/gpfs/GILLES/mg6942/_agent_scratch/${RUN_ID}"
+SCRATCH_DIR="${EM_MERGE_GUARD_SCRATCH_DIR:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/${RUN_ID}}"
 ACCOUNT="${SBATCH_ACCOUNT:-gilles}"
 mkdir -p "${SCRATCH_DIR}"
 touch "${SCRATCH_DIR}/SAFE_TO_DELETE"

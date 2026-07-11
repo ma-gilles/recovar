@@ -10,7 +10,7 @@ from recovar.em.initial_model.gt_metrics import (
     DEFAULT_GT_ALIGN_MAX_SHELL,
     relion_alignment_rotations,
 )
-from scripts.run_vdam_abinitio_merge_guard import build_guard_commands, run_guard
+from scripts.run_vdam_abinitio_merge_guard import _default_output_root, build_guard_commands, run_guard
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -91,6 +91,30 @@ def test_merge_guard_plan_contains_cpu_and_gpu_gates():
 
     gpu_names = [command.name for command in build_guard_commands("gpu")]
     assert gpu_names[0] == "native_initialmodel_k2_smoke_gpu"
+
+
+def test_merge_guard_output_root_can_use_overflow_scratch(monkeypatch, tmp_path):
+    overflow = tmp_path / "overflow"
+    monkeypatch.setenv("VDAM_ABINITIO_GUARD_OUTPUT_ROOT", str(overflow))
+    monkeypatch.delenv("RECOVAR_AGENT_SCRATCH_ROOT", raising=False)
+    assert _default_output_root() == overflow
+
+    agent_root = tmp_path / "agent-root"
+    monkeypatch.delenv("VDAM_ABINITIO_GUARD_OUTPUT_ROOT", raising=False)
+    monkeypatch.setenv("RECOVAR_AGENT_SCRATCH_ROOT", str(agent_root))
+    assert _default_output_root() == agent_root
+
+
+def test_merge_guard_redirects_runtime_caches_to_output_dir():
+    guard = (REPO_ROOT / "scripts/run_vdam_abinitio_merge_guard.py").read_text()
+    expected_tokens = [
+        'pytest_cache_dir = output_dir / "pytest_cache"',
+        '"-o cache_dir={pytest_cache_dir}',
+        '"PYTHONPYCACHEPREFIX"',
+        'pycache_dir = output_dir / "pycache"',
+    ]
+    missing = [token for token in expected_tokens if token not in guard]
+    assert not missing, f"VDAM merge guard lost output-dir cache redirection: {missing}"
 
 
 def test_long_native_quality_guard_uses_relion_initialmodel_reference():

@@ -62,6 +62,7 @@ class RelionParityOptions:
     perturb_replay_relion_dir: str | None = None
     emulate_relion_firstiter_cc: bool = False
     relion_firstiter_ini_high_angstrom: float | None = None
+    do_solvent_fsc_correction: bool = False
     first_iteration_score_mode: str = "gaussian"
     first_iteration_reconstruction_mode: str = "soft"
 
@@ -103,6 +104,7 @@ class ReplayState:
 
     init_image_corrections: Any | None = None
     init_scale_corrections: Any | None = None
+    init_group_ids: Any | None = None
     init_direction_prior: Any | None = None
     init_previous_best_translations: Any | None = None
     init_previous_best_rotation_eulers: Any | None = None

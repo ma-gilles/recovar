@@ -145,7 +145,7 @@ static __device__ __forceinline__ void scatter_nearest(
 
     if (HALF_VOL) {
         const int ic2 = (int)c2;
-        const int N2_full = 2 * ic2;
+        const int N2_full = N0;
         const T g2_full = rk2 + c2;
         int i0 = round_int(g0);
         int i1 = round_int(g1);
@@ -157,7 +157,7 @@ static __device__ __forceinline__ void scatter_nearest(
         int hkz;
         if (kz >= 0) {
             hkz = kz;
-        } else if (-kz == ic2) {
+        } else if ((N0 & 1) == 0 && -kz == ic2) {
             /* Nyquist (kz = -N/2 = +N/2): self-conjugate, scatter directly */
             hkz = ic2;
         } else {
@@ -232,7 +232,7 @@ static __device__ __forceinline__ void scatter_trilinear(
 
     if (HALF_VOL) {
         const int ic2 = (int)c2;
-        const int N2_full = 2 * ic2;
+        const int N2_full = N0;
         const T g2_full = rk2 + c2;
 
         if (g0 < (T)-1 || g0 >= (T)N0 ||
@@ -270,7 +270,7 @@ static __device__ __forceinline__ void scatter_trilinear(
                     T sim = REAL_DATA ? (T)0 : w * val_im;
                     if (kz >= 0) {
                         hkz = kz;
-                    } else if (-kz == ic2) {
+                    } else if ((N0 & 1) == 0 && -kz == ic2) {
                         /* Nyquist: self-conjugate, scatter directly */
                         hkz = ic2;
                     } else {
@@ -454,8 +454,7 @@ backproject_kernel(
         && !(k0_idx == 0 && (image_h & 1) == 0);         /* not Nyquist row */
 
     if (conj_opt) {
-        const int ic2 = (int)c2;
-        const int N2_full = 2 * ic2;
+        const int N2_full = N0;
         if (ORDER == 0) {
             /* Nearest: both round(rk+c) and round(-rk+c) must be in [0,N). */
             const int pi0 = round_int(rk0+c0), pi1 = round_int(rk1+c1);
@@ -589,14 +588,33 @@ backproject_indexed_kernel(
     const int k0_idx = orig_pix / image_w;   /* row index */
     const int k1_idx = orig_pix % image_w;   /* col index */
 
-    const T k0 = (T)(k0_idx - image_h / 2) * upsampling;
+    T k0;
+    if (relion_fold_x && HALF_IMG) {
+        /* RELION iterates FFTW half-images in native row order:
+         * i=0..N/2 are nonnegative y, then i=N/2+1..N-1 are negative y.
+         * Do not use RECOVAR's centered row convention in this mode. */
+        k0 = (k0_idx < image_w)
+             ? (T)k0_idx * upsampling
+             : (T)(k0_idx - image_h) * upsampling;
+    } else {
+        k0 = (T)(k0_idx - image_h / 2) * upsampling;
+    }
     T k1;
     if (HALF_IMG) {
-        k1 = (k1_idx * 2 == full_image_w)
+        k1 = relion_fold_x
+             ? (T)k1_idx * upsampling
+             : (k1_idx * 2 == full_image_w)
              ? (T)(-k1_idx) * upsampling
              : (T)(k1_idx)  * upsampling;
     } else {
         k1 = (T)(k1_idx - image_w / 2) * upsampling;
+    }
+
+    if (relion_fold_x && HALF_IMG && HALF_VOL && k1_idx == 0 && k0_idx >= image_w) {
+        /* RELION's FFTW half-plane stores x=0 twice: once for positive rows
+         * and once for negative rows.  BackProjector::backproject2Dto3D skips
+         * the negative-row duplicate. */
+        return;
     }
 
     if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) return;
@@ -663,8 +681,7 @@ backproject_indexed_kernel(
         && !(k0_idx == 0 && (image_h & 1) == 0);
 
     if (conj_opt) {
-        const int ic2 = (int)c2;
-        const int N2_full = 2 * ic2;
+        const int N2_full = N0;
         if (ORDER == 0) {
             const int pi0 = round_int(rk0+c0), pi1 = round_int(rk1+c1);
             const int pi2 = round_int(rk2+c2);
@@ -787,14 +804,30 @@ batch_backproject_indexed_kernel(
     const int k0_idx = orig_pix / image_w;
     const int k1_idx = orig_pix % image_w;
 
-    const T k0 = (T)(k0_idx - image_h / 2) * upsampling;
+    T k0;
+    if (relion_fold_x && HALF_IMG) {
+        k0 = (k0_idx < image_w)
+             ? (T)k0_idx * upsampling
+             : (T)(k0_idx - image_h) * upsampling;
+    } else {
+        k0 = (T)(k0_idx - image_h / 2) * upsampling;
+    }
     T k1;
     if (HALF_IMG) {
-        k1 = (k1_idx * 2 == full_image_w)
+        k1 = relion_fold_x
+             ? (T)k1_idx * upsampling
+             : (k1_idx * 2 == full_image_w)
              ? (T)(-k1_idx) * upsampling
              : (T)(k1_idx)  * upsampling;
     } else {
         k1 = (T)(k1_idx - image_w / 2) * upsampling;
+    }
+
+    if (relion_fold_x && HALF_IMG && HALF_VOL && k1_idx == 0 && k0_idx >= image_w) {
+        /* RELION's FFTW half-plane stores x=0 twice: once for positive rows
+         * and once for negative rows.  BackProjector::backproject2Dto3D skips
+         * the negative-row duplicate. */
+        return;
     }
 
     if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) return;
@@ -835,8 +868,7 @@ batch_backproject_indexed_kernel(
         && !(k0_idx == 0 && (image_h & 1) == 0);
 
     if (conj_opt) {
-        const int ic2 = (int)c2;
-        const int N2_full = 2 * ic2;
+        const int N2_full = N0;
         if (ORDER == 0) {
             const int pi0 = round_int(rk0+c0), pi1 = round_int(rk1+c1);
             const int pi2 = round_int(rk2+c2);
@@ -1008,10 +1040,10 @@ project_kernel(
     if (HALF_VOL) {
         const T g0 = rk0 + c0;
         const T g1 = rk1 + c1;
-        /* N2_full = 2 * c2 for even N;  recover it for the full-vol
-         * z coordinate (g2_full) and its bounds check. */
+        /* The volume is cubic; use the actual full z dimension so odd
+         * RELION padded grids keep their final centered z plane. */
         const int ic2 = (int)c2;          /* N2/2 */
-        const int N2_full = 2 * ic2;      /* == N2 for even N2 */
+        const int N2_full = N0;
         const T g2_full = rk2 + c2;
 
         if (ORDER == 0) {
@@ -1077,7 +1109,7 @@ project_kernel(
                         bool cj = false;
                         if (kz >= 0) {
                             hkz = kz;
-                        } else if (-kz == ic2) {
+                        } else if ((N0 & 1) == 0 && -kz == ic2) {
                             /* Nyquist: self-conjugate */
                             hkz = ic2;
                         } else {
@@ -2095,8 +2127,7 @@ batch_backproject_kernel(
         && !(k0_idx == 0 && (image_h & 1) == 0);
 
     if (conj_opt) {
-        const int ic2 = (int)c2;
-        const int N2_full = 2 * ic2;
+        const int N2_full = N0;
         if (ORDER == 0) {
             const int pi0 = round_int(rk0+c0), pi1 = round_int(rk1+c1);
             const int pi2 = round_int(rk2+c2);
@@ -2248,7 +2279,7 @@ batch_project_kernel(
         const T g0 = rk0 + c0;
         const T g1 = rk1 + c1;
         const int ic2 = (int)c2;
-        const int N2_full = 2 * ic2;
+        const int N2_full = N0;
         const T g2_full = rk2 + c2;
 
         if (ORDER == 0) {
@@ -2313,7 +2344,7 @@ batch_project_kernel(
                         bool cjj = false;
                         if (kz >= 0) {
                             hkz = kz;
-                        } else if (-kz == ic2) {
+                        } else if ((N0 & 1) == 0 && -kz == ic2) {
                             hkz = ic2;
                         } else {
                             ri = (N0 - (N0 & 1) - j0) % N0;
@@ -3374,7 +3405,7 @@ batch_backproject_interleaved_kernel(
 
     /* HALF_VOL trilinear scatter with interleaved output */
     const int ic2 = (int)c2;
-    const int N2_full = 2 * ic2;
+    const int N2_full = N0;
 
     if (g0 < (T)-1 || g0 >= (T)N0 ||
         g1 < (T)-1 || g1 >= (T)N1 ||
@@ -3415,7 +3446,7 @@ batch_backproject_interleaved_kernel(
                 int hkz;
                 if (kz >= 0) {
                     hkz = kz;
-                } else if (-kz == ic2) {
+                } else if ((N0 & 1) == 0 && -kz == ic2) {
                     hkz = ic2;
                 } else {
                     sj0 = (N0 - (N0 & 1) - j0) % N0;
@@ -3519,7 +3550,7 @@ fused_backproject_kernel(
 
     const T g0 = rk0 + c0, g1 = rk1 + c1, g2 = rk2 + c2;
     const int ic2 = (int)c2;
-    const int N2_full = 2 * ic2;
+    const int N2_full = N0;
 
     if (g0 < (T)-1 || g0 >= (T)N0 ||
         g1 < (T)-1 || g1 >= (T)N1 ||
@@ -3557,7 +3588,7 @@ fused_backproject_kernel(
                 int sj0 = j0, sj1 = j1;
                 int hkz;
                 if (kz >= 0) { hkz = kz; }
-                else if (-kz == ic2) { hkz = ic2; }
+                else if ((N0 & 1) == 0 && -kz == ic2) { hkz = ic2; }
                 else {
                     sj0 = (N0 - (N0 & 1) - j0) % N0;
                     sj1 = (N1 - (N1 & 1) - j1) % N1;
@@ -3716,7 +3747,7 @@ per_image_backproject_kernel(
 
     const T g0 = rk0 + c0, g1 = rk1 + c1, g2 = rk2 + c2;
     const int ic2 = (int)c2;
-    const int N2_full = 2 * ic2;
+    const int N2_full = N0;
 
     if (g0 < (T)-1 || g0 >= (T)N0 ||
         g1 < (T)-1 || g1 >= (T)N1 ||
@@ -3750,7 +3781,7 @@ per_image_backproject_kernel(
                 int sj0 = j0, sj1 = j1;
                 int hkz;
                 if (kz >= 0) { hkz = kz; }
-                else if (-kz == ic2) { hkz = ic2; }
+                else if ((N0 & 1) == 0 && -kz == ic2) { hkz = ic2; }
                 else {
                     sj0 = (N0 - (N0 & 1) - j0) % N0;
                     sj1 = (N1 - (N1 & 1) - j1) % N1;

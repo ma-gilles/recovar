@@ -12,6 +12,13 @@ import numpy as np
 from recovar.em.sampling import rotation_grid_n_in_planes, rotation_grid_size
 
 
+def relion_round_away_from_zero(values):
+    """Vectorized RELION ``ROUND`` macro: nearest integer, ties away from zero."""
+    arr = np.asarray(values, dtype=np.float64)
+    rounded = np.where(arr >= 0.0, np.floor(arr + 0.5), -np.floor(-arr + 0.5))
+    return rounded.astype(np.float32, copy=False)
+
+
 def make_relion_translation_log_prior(
     translations,
     voxel_size,
@@ -22,12 +29,12 @@ def make_relion_translation_log_prior(
 ):
     """Return RELION's offset prior scores over a translation grid.
 
-    RELION stores ``sampling.translations_{x,y}`` in Angstrom, but uses
-    translation shifts in pixels for projection. In the E-step prior path
-    (``acc_ml_optimiser_impl.h`` around ``pdf_offset`` construction), it
-    computes the Gaussian exponent from the Angstrom-valued sampling grid and
-    then multiplies by ``my_pixel_size**2``. This intentionally mirrors that
-    source behavior rather than a dimensionally simplified Gaussian.
+    RELION's accelerated E-step prior path (``acc_ml_optimiser_impl.h``
+    around ``pdf_offset`` construction) builds the offset difference from the
+    Angstrom-valued sampling grid and then applies an extra
+    ``my_pixel_size**2`` factor.  RECOVAR translation grids are in projection
+    pixels, so explicit prior centers intentionally use the source-equivalent
+    ``pixel_size**4 / sigma_offset_A**2`` scale.
     """
     translations = np.asarray(translations, dtype=np.float32)
     if translations.ndim != 2:
@@ -45,22 +52,19 @@ def make_relion_translation_log_prior(
     n_trans = translations.shape[0]
 
     if prior_centers is None:
-        centers = np.zeros((1, translations.shape[1]), dtype=np.float32)
-        shared = True
-    else:
-        centers = np.asarray(prior_centers, dtype=np.float32).reshape(-1, translations.shape[1])
-        shared = False
+        return np.zeros(n_trans, dtype=np.float32)
+
+    prior_centers = np.asarray(prior_centers, dtype=np.float32)
+    shared = prior_centers.ndim == 1
+    centers = prior_centers.reshape(-1, translations.shape[1])
 
     if sigma2_offset <= 0.0:
         zeros = np.zeros((centers.shape[0], n_trans), dtype=np.float32)
         return zeros[0] if shared else zeros
 
-    diffs_ang = (translations[None, :, :] - centers[:, None, :]) * voxel_size
-    sqdist_ang = np.sum(diffs_ang**2, axis=-1)
-    log_prior = -0.5 * sqdist_ang / sigma2_offset
-    # RELION applies this after accumulating per-axis terms. It is not a
-    # normalization constant; it materially sharpens the translation prior.
-    log_prior *= voxel_size**2
+    diffs_px = translations[None, :, :] - centers[:, None, :]
+    sqdist_px = np.sum(diffs_px**2, axis=-1)
+    log_prior = -0.5 * sqdist_px * (voxel_size**4) / sigma2_offset
     log_prior = log_prior.astype(np.float32)
     return log_prior[0] if shared else log_prior
 
@@ -69,22 +73,43 @@ def relion_translation_search_base(previous_best_translations):
     """Return RELION's integer-pixel pre-shift for stored absolute offsets."""
     if previous_best_translations is None:
         return None
-    previous_best_translations = np.asarray(previous_best_translations, dtype=np.float32)
+    previous_best_translations = np.asarray(previous_best_translations, dtype=np.float64)
     if previous_best_translations.size == 0:
         return previous_best_translations.reshape(0, 2)
-    return np.rint(previous_best_translations).astype(np.float32)
+    return relion_round_away_from_zero(previous_best_translations)
 
 
 def relion_translation_prior_center(previous_best_translations, voxel_size, prior_offsets=None):
     """Return RELION's offset-prior center in RECOVAR search-grid pixels.
 
     RELION's accelerated path builds ``pdf_offset`` from
-    ``old_offset + sampling.translations - prior`` where the rounded
-    ``old_offset`` term is in pixel-like metadata units while
-    ``sampling.translations`` is the Angstrom-space grid.  RECOVAR scores
-    shifts after ``getTranslationsInPixel``-style conversion, so the prior
-    center must be divided by the pixel size.  The image pre-shift itself
-    still uses :func:`relion_translation_search_base` unchanged.
+    ``old_offset + sampling.translations - prior``.  The sampling grid is in
+    Angstroms, while RECOVAR scores projection-pixel shifts, so after the
+    rounded ``old_offset`` image pre-shift the score-grid prior center is
+    ``(prior - rounded_old_offset) / pixel_size``.  In ordinary AutoRefine
+    there is no separate origin prior, so ``prior`` defaults to zero.
+    """
+    old_offset = relion_translation_search_base(previous_best_translations)
+    if old_offset is None:
+        return None
+    voxel_size = float(voxel_size if voxel_size > 0 else 1.0)
+    if prior_offsets is None:
+        prior = np.zeros_like(old_offset, dtype=np.float32)
+    else:
+        prior = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape)
+    return ((prior - old_offset) / voxel_size).astype(np.float32)
+
+
+def relion_local_translation_prior_center(previous_best_translations, voxel_size, prior_offsets=None):
+    """Return RELION's local-search offset-prior center in RECOVAR pixels.
+
+    RELION's accelerated global path and local-search path use different
+    translation-grid conventions in practice: the global path scores
+    getTranslationsInPixel-style samples after the rounded old offset is
+    pre-applied, while the local path keeps the older Angstrom sampling
+    convention for ``pdf_offset``. With no explicit offset prior, that local
+    convention is represented in RECOVAR's pixel grid as
+    ``-rounded_old_offset / pixel_size``.
     """
     old_offset = relion_translation_search_base(previous_best_translations)
     if old_offset is None:
