@@ -1246,5 +1246,39 @@ the original strict oracle the corresponding values are `0.997003`,
 `0.997010`, `0.999684`, and `0.999678`. Tau2 substitution is negligible and
 the RECOVAR reconstruction/filter implementation is near exact when fed the
 RELION accumulator. The remaining measurable high-shell residual is therefore
-in BPref accumulation, while the accepted K=1 small-cell map still passes the
-FSC quality gates.
+in BPref accumulation. This fixed-state final replay passes the FSC map gates,
+but it does not qualify the free trajectory documented below.
+
+## 2026-07-11 Full Free-Trajectory Final Sensitivity
+
+Clean A100 job `10990444` ran from commit `f80ac8ad` at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_strict_full_pruned_20260711_143632`
+with a `SAFE_TO_DELETE` marker. The original H100 request `10989654` was
+cancelled before execution because the RELION oracle was produced on A100.
+The accepted job matches the ten numbered current sizes
+`[56,56,66,68,80,80,80,80,80,80]`, convergence at iteration 10, and the
+final all-data branch. Canonical numbered iter-10 RECOVAR-vs-RELION FSC-AUC is
+`0.999324`; RECOVAR and RELION iter-10 GT FSC-AUC values differ by only
+`-0.000037`. The unnumbered free-trajectory final nevertheless falls to
+RECOVAR-vs-RELION FSC-AUC `0.988116`. RECOVAR final GT FSC-AUC remains better
+(`0.669009` versus `0.650835`), but strict final parity fails.
+
+The corresponding fixed RELION-seeded final job `10989301` has FSC-AUC
+`0.994527`; its final map and the free result have mutual FSC-AUC `0.992955`.
+Their final Pmax vectors differ by mean/p95/max `0.0470/0.1413/0.4505`, while
+final tau2 and FSC shell arrays differ much less. Diagnostic-only commit
+`7367ee61` adds zero-numbered-iteration final replay from supplied RECOVAR-frame
+half maps. A100 job `10992173`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_reference_sensitivity_20260711_152100`,
+enters finalization from the saved free iter-10 half maps and reproduces
+FSC-AUC `0.988115`. Therefore the saved half references fully explain the
+free/fixed difference; no hidden optimizer state after iter 10 is required.
+
+Merged-reference diagnostic A100 job `10992266`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_merged_reference_20260711_152900`,
+scores both halves against the merged free iter-10 reference and worsens final
+FSC-AUC to `0.981072`. Early reference joining is not RELION's missing final
+semantic. Job `10992371` now starts from exact RELION iter-1 half maps and runs
+iterations 2 through 10 plus final. It decides whether the five already
+qualified iter-1 WTA near-ties are sufficient to seed the amplified final
+residual or whether a later numbered boundary also contributes.

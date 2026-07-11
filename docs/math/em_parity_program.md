@@ -197,13 +197,25 @@ substituting the RELION BPref accumulator raises strict-oracle FSC-AUC from
 `0.997003` to `0.999684`. This exonerates final tau2/Wiener reconstruction and
 localizes the remaining measurable high-shell residual to BPref accumulation.
 
-Full clean A100 trajectory validation is running as Slurm job `10990444` from
-the canonical-reporting checkpoint; the earlier H100 request `10989654` never
-started and was replaced because the pinned RELION oracle ran on A100. Require
-the numbered schedule/convergence to remain exact and compare final particle,
-BPref, shellwise FSC, FSC-AUC, FSC score/resolution, and diagnostic correlation.
-If it passes, advance to additional K=1 robustness seeds/stress cells rather
-than treating radial amplitude or correlation as a quality blocker.
+Full clean A100 trajectory job `10990444` completed the exact ten-iteration
+schedule `[56,56,66,68,80,80,80,80,80,80]`, convergence at iteration 10,
+and final all-data branch. The earlier H100 request `10989654` never started
+and was replaced because the pinned RELION oracle ran on A100. Numbered iter-10
+RECOVAR-vs-RELION FSC-AUC is `0.999324`, and its GT FSC-AUC delta is only
+`-0.000037`, but the free-trajectory unnumbered final FSC-AUC falls to
+`0.988116`. This fails strict final map parity even though RECOVAR remains
+better against GT (`0.669009` versus RELION `0.650835`). Do not launch the
+robustness matrix yet.
+
+Final-only job `10992173` enters the final pass directly from the saved free
+iter-10 half maps and exactly reproduces `0.988115`, proving no hidden state
+history after iter 10. Merged-reference diagnostic `10992266` is worse at
+`0.981072`, falsifying early half-reference joining. The active hypothesis is
+that the qualified iter-1 WTA near-ties seed the later half-map differences
+that final Nyquist scoring amplifies. A trajectory seeded from the exact
+RELION iter-1 half maps is Slurm job `10992371`; if it closes, fix or robustify
+the firstiter hard-winner arithmetic without weakening FSC gates. If it does
+not, use its first degrading numbered FSC boundary as the next target.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
