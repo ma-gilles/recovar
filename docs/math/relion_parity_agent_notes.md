@@ -1437,3 +1437,26 @@ are lower for RECOVAR, with deltas `-0.000016`, `-0.000266`, and `-0.000172`;
 no shell is lower by `0.002`. The fixed-final small-cell FSC contract passes.
 The next qualification is a free ten-iteration trajectory, not the robustness
 matrix.
+
+## 2026-07-11 Axis-Mask Free-Trajectory Requalification
+
+Clean A100 job `11002266` completed in `1201` seconds on `della-l07g2` from
+commit `0b2d8cd1feaec40e539e02fd9aa32f1d8357d287`. Its marked root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_strict_free_x0mask_20260711_175100`.
+It reproduces the numbered current-size schedule
+`[56,56,66,68,80,80,80,80,80,80]`, convergence at iteration 10, and the
+post-convergence Nyquist all-data path using state 10 and half-1 joined noise.
+
+The final RECOVAR-vs-RELION FSC-AUC is `0.990397`, improved from the earlier
+free result `0.988116` but still below the `0.995` gate. RECOVAR-vs-GT remains
+better at `0.669518` versus RELION `0.650835`. The numbered merged maps are
+already close: FSC-AUC is `0.997007` at iteration 2, `0.998487` at iteration
+4, `0.999179` at iteration 8, and `0.999339` at iteration 10. The iteration-10
+minimum non-DC shell FSC is `0.997415`. Thus the strict final sensitivity is
+again much larger than the numbered-map residual.
+
+The next single hypothesis is that the remaining free residual is seeded by
+the iteration-1 reconstruction/BPref boundary. Re-run the exact-RELION-iter1
+seed replay from the current checkpoint through iterations 2--10 and final.
+Do not launch the robustness matrix unless that boundary is closed and the
+free trajectory passes.

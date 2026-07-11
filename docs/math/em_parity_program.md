@@ -248,10 +248,18 @@ frequency shells, with worst delta `-0.000266`, inside the arithmetic band;
 the other 59 non-identical shells are higher. The fixed-final K=1 small-cell
 quality gate therefore passes without grid correction.
 
-The next experiment is a clean free ten-iteration trajectory on this 3k/128
-fixture. It must reproduce the RELION current-size schedule, convergence at
-iteration 10, final all-data branch, and pass the same FSC/FSC-AUC gates before
-the robustness matrix is launched.
+Clean free-trajectory A100 job `11002266` reproduces the RELION current-size
+schedule `[56,56,66,68,80,80,80,80,80,80]`, convergence at iteration 10, and
+the final all-data branch, but the unnumbered final remains below gate at
+RECOVAR-vs-RELION FSC-AUC `0.990397`. This improves the pre-mask free result
+`0.988116`, while RECOVAR-vs-GT remains better (`0.669518` versus `0.650835`).
+Numbered merged FSC-AUC is already `0.997007` at iteration 2 and rises to
+`0.999339` at iteration 10. Do not launch robustness.
+
+The next experiment is the established exact-RELION-iter1 seed replay on the
+new checkpoint, running numbered iterations 2--10 plus final. If that passes,
+the remaining free-trajectory residual is localized to the iteration-1
+reconstruction/BPref boundary rather than later local scoring.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
