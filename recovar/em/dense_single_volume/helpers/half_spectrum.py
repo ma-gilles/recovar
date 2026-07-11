@@ -21,14 +21,20 @@ def make_half_image_weights(image_shape):
 def make_scoring_half_image_weights(image_shape, *, relion_half_sum: bool):
     """Return half-spectrum weights for likelihood scoring.
 
-    RELION scores the packed rfft half-plane with unit weights rather than
-    Hermitian weights. Keep this convention centralized so dense/local/sparse
-    scoring cannot drift apart.
+    RELION scores its non-redundant FFTW half-plane with unit weights rather
+    than Hermitian weights.  RECOVAR's centered packed layout also contains
+    the conjugate ``kx=0, ky<0`` rows; RELION leaves those redundant rows at
+    zero.  Mask them here so full-size (non-windowed) dense/local/sparse
+    scoring cannot count the axis twice.  The ``ky=-N/2`` boundary is retained
+    because RELION represents it as ``+N/2``.
     """
 
     height, width = image_shape
     if relion_half_sum:
-        return jnp.ones(height * (width // 2 + 1), dtype=jnp.float32)
+        weights = jnp.ones((height, width // 2 + 1), dtype=jnp.float32)
+        if height > 2:
+            weights = weights.at[1 : (height + 1) // 2, 0].set(0.0)
+        return weights.reshape(-1)
     return make_half_image_weights(image_shape)
 
 

@@ -1282,3 +1282,158 @@ semantic. Job `10992371` now starts from exact RELION iter-1 half maps and runs
 iterations 2 through 10 plus final. It decides whether the five already
 qualified iter-1 WTA near-ties are sufficient to seed the amplified final
 residual or whether a later numbered boundary also contributes.
+
+## 2026-07-11 Texture Projection, Scatter, and Final Noise Boundary
+
+A100 job `10992371` completed from exact RELION iter-1 half maps. It matched
+the numbered schedule and convergence but reached final RECOVAR-vs-RELION
+FSC-AUC `0.994488`, so qualified iter-1 ties explain most of the free-run
+loss but are not the sole final residual.
+
+RELION's first-iteration CUDA projector uses single-precision texture
+interpolation. Direct texture probe job `10993092` flips all three previously
+different coarse winners to RELION's choices; production-helper validation
+job `10993348` matches the direct texture projections exactly. A100 iter-1
+job `10993443` then matches all 3,000 orientations exactly. The strict
+projector path now defaults to this CUDA texture arithmetic with an explicit
+diagnostic switch. Fixed-final A100 job `10993646` nevertheless remains at
+FSC-AUC `0.994526`, classifying texture projection as a real early-score fix
+but not the final-map limiter.
+
+One-particle scatter job `10994016`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_single_particle_bpref_scatter_20260711_164500`,
+feeds identical pre-reduced rows to RELION's C++ backprojector and RECOVAR's
+CUDA x-half scatter. In float64, data and weight relative L2 errors are
+`1.90e-14` and `1.83e-14`; float32 is materially worse (`7.17e-3` and
+`1.30e-2`). Thus the production double scatter is correct and forcing float
+accumulation is rejected. Array correlations in that diagnostic are not
+quality evidence.
+
+Verbose matched RELION final job `10994150` provides exact fine Euler,
+projection, translated-image, CTF/noise, raw-cost, and posterior operands for
+original particle 2219. The 24 fine rotation matrices map one-to-one with
+maximum Frobenius error `7.45e-9`; translations are exact. The old pruned
+RECOVAR dump had 156 positive/6 retained samples and Pmax `0.844463` versus
+RELION's 169 positive/5 retained and `0.833306`. Texture replay jobs `10994391`
+(setup failure), `10994428`, and `10994464` show exact RELION projections alone
+do not close the old posterior.
+
+The shared multiplicative mismatch in both shifted-image and CTF-squared
+operands identifies a final joined-noise semantic: particle 2219 is in half 2,
+but RELION scores both joined final particle halves with the half-1
+`sigma2_noise`. Shell 4 is the clearest example: `1268.288 / 1312.464 =
+0.96634`, matching the measured operand ratio `0.96635`. An exact-operand
+replay with half-1 noise gives Pmax `0.833344` versus RELION `0.833306` and
+candidate-posterior L1 error `7.7e-5`. Numbered split-half iterations still
+retain separate noise spectra; only K=1 post-convergence all-data scoring
+uses the joined first-half spectrum.
+
+Fixed-final A100 job `10994996`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_firsthalf_noise_20260711_165000`,
+completed with canonical grid-off RECOVAR-vs-RELION FSC-AUC `0.994497`, still
+below the `0.995` gate. RECOVAR-vs-GT FSC-AUC is `0.669846` versus RELION
+`0.650835`. The new particle-2219 CTF/noise and shifted-image operands match
+RELION at relative L2 `8.5e-7` and `2.6e-5`, but production Pmax is `0.816094`.
+Injecting the exact RELION reference projection raises it to `0.833168`,
+localizing the remaining amplification to the tiny numbered iter-10 map/
+projector input difference. The next experiment is a matched patched-RELION
+numbered iter-10 BPref dump from `run_it009`, compared against job `10994996`'s
+saved numbered accumulators. Do not rerun the free trajectory until that
+earlier accumulator boundary is classified.
+
+## 2026-07-11 Numbered Iter-10 and Exact-Reference Final Boundary
+
+Matched patched-RELION continuation job `10996603` ran numbered iteration 10
+only from `run_it009_optimiser.star` on A100 `della-l08g6`, using the exact
+`+0.182315` sampling perturbation. Its root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_relion_iter10_bpref_20260711_170000`
+and is marked `SAFE_TO_DELETE`. Patched-versus-original oracle FSC-AUC is
+`0.9999987/0.9999966` for halves 1/2, with minimum non-DC shell FSC
+`0.9999908/0.9999810`, so the raw BPref dump passes its oracle gate. Earlier
+attempt `10996494` was cancelled after it started iteration 11 because its
+continuation omitted `--auto_iter_max 10`; its products are preserved for the
+audit trail but are not acceptance evidence.
+
+At the expected coordinate mapping, numbered RECOVAR-versus-RELION median
+complex-average errors are `0.001478/0.007461` and median weight errors are
+`0.000230/0.003955` for halves 1/2. The low-resolution half join is exact,
+per-half noise agrees at roughly `3e-6` median relative error, and winner
+pose/Pmax errors are comparable. The first half-2-only difference is four
+fewer significant samples (`15738` versus RELION `15742`; half 1 is exactly
+`15501`). Thus this is sub-winner support/posterior arithmetic, not a half
+swap, joined-noise error, coordinate mapping, or winner-pose bug.
+
+Exact-reference A100 final-only job `10997070`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_exact_iter10_firsthalf_noise_20260711_171000`
+and marked `SAFE_TO_DELETE`, starts directly from the original RELION
+iteration-10 half maps while retaining pruned-parent support, texture
+projection, and joined half-1 final noise. It reaches final
+RECOVAR-versus-RELION FSC-AUC `0.994501`, effectively unchanged from
+`10994996` (`0.994497`), and therefore falsifies the hypothesis that the tiny
+numbered-map difference causes the remaining gate miss. RECOVAR-versus-GT
+FSC-AUC remains better (`0.669848` versus RELION `0.650835`).
+
+Exact references improve particle 2219 from Pmax `0.816094` to `0.833537`
+versus RELION `0.833306`, proving that particle is no longer representative.
+Across all particles, however, final Pmax mean/p95/max absolute errors remain
+`0.0282/0.0898/0.4592`. The worst current case is original index 428 / RELION
+stack 429 (`0.173354` versus `0.632525`). The joined final accumulator still
+differs from the accepted matched RELION pre-reconstruct accumulator by
+`11.64%` complex-data and `3.20%` weight relative L2. The next experiment is
+an exact matched RECOVAR/RELION final candidate and StoreWavg operand dump for
+stack 429, followed by identical-row replay if its pre-scatter operands agree.
+Do not launch the free trajectory or robustness matrix until this final
+support/BPref boundary is classified and the fixed-final FSC gate passes.
+
+## 2026-07-11 Stack-429 Redundant-Axis Scoring Boundary
+
+The matched final dumps under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_particle429_20260711_172000`
+identify a full-size half-spectrum scoring mismatch. On interior `kx>0`
+pixels, the RELION fine projections, shifted image, and CTF/noise operand match
+the corresponding RECOVAR operands at arithmetic level after the documented
+FFT/layout scaling. On the `kx=0` axis, RELION zeros `ky<0` rows because they
+are redundant conjugates; RECOVAR retained and scored those rows. The Nyquist
+boundary row is retained by RELION and is not part of the mask.
+
+An offline replay using
+`recovar_parent3/scores/local_score_it002_image_428_exact10_final429.npz`
+changes the RECOVAR parent Pmax from `0.657449` to `0.812126`, versus RELION
+`0.811969`. The 0.999 adaptive support then contains the same 10 parent pairs
+as RELION, including local parent 83 / RELION rotation 140 at coarse
+translation 4 (`0.000488` RECOVAR versus `0.000486` RELION). Without the mask,
+that pair ranked below RECOVAR's cutoff at only `0.000090`; its absence removed
+the fine candidates that later dominate the posterior.
+
+Replaying the saved fine operands with the axis mask and those restored 32
+children gives Pmax `0.628355` versus RELION `0.628361`, with the same winner.
+On the old shared support alone, the mask reduces posterior L1 error from
+`0.3785` to `0.0288`; the residual is dominated by the parent pair that was
+absent from the original fine dump. This demonstrates that the apparent
+translation-support mismatch is a downstream consequence of the same parent
+score bug, not a second layout-routing defect.
+
+The candidate fix is centralized in
+`recovar/em/dense_single_volume/helpers/half_spectrum.py`: RELION scoring
+weights are one except for packed rows `1:H/2` at column zero, which are zero.
+Non-RELION Hermitian weights are unchanged. The next validation is an
+exact-RELION-iter10 final-only A100 replay; quality remains gated only by
+shellwise FSC, canonical FSC-AUC, and FSC-derived score/resolution.
+
+Qualification job `11001328` completed on A100 `della-l07g2` in `136` seconds
+with exit code zero. Its root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_exact_iter10_x0mask_20260711_184500`
+and contains `SAFE_TO_DELETE`. Provenance is HEAD
+`4e0d1a9b94460b80f1dbd63e3fcd48e3fd6a400d`, dirty SHA-256
+`84e56685113c0b5e5865a08ce76e6accf734cd2465b85666215bd7632e3574ba`,
+with only `scripts/probe_firstiter_texture_ties.py` untracked.
+
+The fixed-final canonical RECOVAR-vs-RELION FSC-AUC is `0.997302`, up from
+`0.994501`. The minimum non-DC shell FSC is `0.995021`, the fifth percentile
+is `0.995382`, and the minimum over the last ten shells is `0.996824`.
+RECOVAR-vs-GT FSC-AUC is `0.670396` versus RELION `0.650835` (delta
+`+0.019561`); the FSC=0.5 crossing is shell 41 versus 40. Only GT shells 1--3
+are lower for RECOVAR, with deltas `-0.000016`, `-0.000266`, and `-0.000172`;
+no shell is lower by `0.002`. The fixed-final small-cell FSC contract passes.
+The next qualification is a free ten-iteration trajectory, not the robustness
+matrix.

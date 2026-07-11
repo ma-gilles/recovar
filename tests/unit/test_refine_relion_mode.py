@@ -2565,6 +2565,75 @@ def test_relion_projector_indexed_centered_rows_match_full_window(rng):
     )
 
 
+def test_relion_projector_texture_full_embeds_positive_x_half():
+    from recovar.em.dense_single_volume.helpers.projection import relion_projector_half_to_texture_full
+
+    projector_half = (
+        np.arange(5 * 5 * 3, dtype=np.float32).reshape(5, 5, 3)
+        + 1j * np.arange(5 * 5 * 3, dtype=np.float32).reshape(5, 5, 3)[::-1]
+    ).astype(np.complex64)
+    full = np.asarray(relion_projector_half_to_texture_full(jnp.asarray(projector_half)))
+
+    assert full.shape == (5, 5, 5)
+    np.testing.assert_array_equal(full[2:], np.transpose(projector_half, (2, 1, 0)))
+    np.testing.assert_array_equal(full[:2], np.zeros((2, 5, 5), dtype=np.complex64))
+
+
+def test_relion_projector_texture_route_defaults_on_and_can_be_disabled(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+
+    projector_half = jnp.ones((5, 5, 3), dtype=jnp.complex64)
+    rotations = jnp.eye(3, dtype=jnp.float32)[None]
+    calls = []
+
+    monkeypatch.delenv("RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP", raising=False)
+    monkeypatch.setattr(projection_helpers, "_cuda_projection_available", lambda: True)
+
+    def fake_texture(projector, rotations_block, image_shape, **kwargs):
+        calls.append((tuple(projector.shape), tuple(rotations_block.shape), tuple(image_shape), dict(kwargs)))
+        return jnp.full((rotations_block.shape[0], 4 * 3), 2.0 + 1.0j, dtype=jnp.complex64)
+
+    monkeypatch.setattr(projection_helpers, "_project_relion_projector_texture", fake_texture)
+    got, _ = projection_helpers.compute_relion_projector_projections_block(
+        projector_half,
+        rotations,
+        (4, 4),
+        r_max=1,
+        padding_factor=1,
+        return_abs2=False,
+        centered_rows=True,
+        projector_output_size=2,
+    )
+    np.testing.assert_array_equal(np.asarray(got), np.full((1, 12), 2.0 + 1.0j, dtype=np.complex64))
+    assert calls == [
+        (
+            (5, 5, 3),
+            (1, 3, 3),
+            (4, 4),
+            {"r_max": 1, "projector_output_size": 2},
+        )
+    ]
+
+    monkeypatch.setenv("RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP", "0")
+    monkeypatch.setattr(
+        projection_helpers,
+        "project_relion_projector_half_spectrum_centered_rows",
+        lambda *args, **kwargs: jnp.full((1, 12), 7.0 + 0.0j, dtype=jnp.complex64),
+    )
+    fallback, _ = projection_helpers.compute_relion_projector_projections_block(
+        projector_half,
+        rotations,
+        (4, 4),
+        r_max=1,
+        padding_factor=1,
+        return_abs2=False,
+        centered_rows=True,
+        projector_output_size=2,
+    )
+    np.testing.assert_array_equal(np.asarray(fallback), np.full((1, 12), 7.0 + 0.0j, dtype=np.complex64))
+    assert len(calls) == 1
+
+
 def test_local_big_jit_relion_projector_matches_helper(rng):
     from recovar.em.dense_single_volume.helpers.projection import compute_relion_projector_projections_block
     from recovar.em.dense_single_volume.local_big_jit import _project_local_half_spectrum
@@ -7590,7 +7659,7 @@ class TestRelionModeSmokeTest:
             assert final_centers.shape[-1] == 2
             assert np.all(np.isfinite(final_centers))
 
-    def test_relion_final_iteration_replays_last_numbered_noise_variance(
+    def test_relion_final_iteration_uses_joined_first_half_noise_variance(
         self,
         half_datasets,
         init_volume,
@@ -7598,7 +7667,7 @@ class TestRelionModeSmokeTest:
         translations,
         monkeypatch,
     ):
-        """The final all-data E-step scores with RELION's last model sigma2_noise."""
+        """The joined final E-step scores both particle halves with model half 1 noise."""
         original_update = iteration_loop_module.update_refinement_state
         original_run_em = iteration_loop_module.run_em
         replay_noise_h1 = np.linspace(2.0, 3.0, IMAGE_SIZE, dtype=np.float32)
@@ -7645,7 +7714,8 @@ class TestRelionModeSmokeTest:
         assert result["convergence_state"].has_converged is True
         assert len(run_em_noise) == 4
         np.testing.assert_allclose(run_em_noise[-2], replay_noise_h1, rtol=0.0, atol=0.0)
-        np.testing.assert_allclose(run_em_noise[-1], replay_noise_h2, rtol=0.0, atol=0.0)
+        np.testing.assert_allclose(run_em_noise[-1], replay_noise_h1, rtol=0.0, atol=0.0)
+        assert result["final_all_data_noise_source_half"] == 0
 
     def test_relion_final_iteration_uses_local_search_when_converged_state_is_local(
         self,

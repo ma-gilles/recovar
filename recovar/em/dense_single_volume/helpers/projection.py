@@ -15,6 +15,7 @@ from recovar.cuda_backproject import project_indexed
 from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_values_jax
 
 DEFAULT_PROJECTION_MAX_R = object()
+_RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP"
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4))
@@ -174,6 +175,98 @@ def _validate_centered_relion_projector_pixel_indices(
         )
 
 
+def relion_projector_half_to_texture_full(volume_relion_half: jax.Array) -> jax.Array:
+    """Embed RELION ``Projector::data[z,y,x>=0]`` for CUDA texture staging.
+
+    The CUDA texture projector only stages the non-negative model-x half from
+    the centered full volume.  Consequently the negative-x half can remain
+    zero: RELION handles negative projected x by flipping all coordinates and
+    conjugating the sampled positive-x value.
+    """
+
+    volume_relion_half = jnp.asarray(volume_relion_half)
+    pad_z, pad_y, half_x = volume_relion_half.shape
+    if pad_z != pad_y or pad_z % 2 != 1 or half_x != pad_z // 2 + 1:
+        raise ValueError(
+            "RELION texture projection expects odd Projector::data shape "
+            f"(pad, pad, pad//2+1), got {volume_relion_half.shape}",
+        )
+    center = pad_z // 2
+    full = jnp.zeros((pad_z, pad_z, pad_z), dtype=volume_relion_half.dtype)
+    return full.at[center:, :, :].set(jnp.transpose(volume_relion_half, (2, 1, 0)))
+
+
+def _relion_projector_texture_enabled(volume_relion_half, *, r_max: int, padding_factor: int) -> bool:
+    token = os.environ.get(_RELION_PROJECTOR_TEXTURE_ENV, "1").strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token not in {"1", "true", "yes", "on"}:
+        raise ValueError(f"Unsupported {_RELION_PROJECTOR_TEXTURE_ENV}={token!r}")
+    shape = tuple(int(value) for value in volume_relion_half.shape)
+    expected_pad = 2 * (int(float(padding_factor) * float(r_max) + 0.5) + 1) + 1
+    return (
+        _cuda_projection_available()
+        and jnp.dtype(volume_relion_half.dtype) == jnp.dtype(jnp.complex64)
+        and len(shape) == 3
+        and shape == (expected_pad, expected_pad, expected_pad // 2 + 1)
+    )
+
+
+def _texture_centered_crop_to_full(
+    projection_crop,
+    *,
+    image_shape,
+    projector_output_size: int,
+):
+    """Scatter a centered even-size CUDA projection into the full image box."""
+
+    image_size = int(image_shape[0])
+    crop_size = int(projector_output_size)
+    crop = projection_crop.reshape((projection_crop.shape[0], crop_size, crop_size // 2 + 1))
+    if crop_size == image_size:
+        return crop.reshape((projection_crop.shape[0], -1))
+    crop_rows = jnp.arange(crop_size, dtype=jnp.int32)
+    # Row zero is the even-box Nyquist row (+N/2 == -N/2); remaining rows
+    # proceed from -N/2+1 through +N/2-1 in centered order.
+    crop_ky = jnp.where(crop_rows == 0, crop_size // 2, crop_rows - crop_size // 2)
+    full_rows = crop_ky + image_size // 2
+    crop_cols = jnp.arange(crop_size // 2 + 1, dtype=jnp.int32)
+    full_indices = (full_rows[:, None] * (image_size // 2 + 1) + crop_cols[None, :]).reshape(-1)
+    full = jnp.zeros(
+        (projection_crop.shape[0], image_size * (image_size // 2 + 1)),
+        dtype=projection_crop.dtype,
+    )
+    return full.at[:, full_indices].set(crop.reshape((projection_crop.shape[0], -1)))
+
+
+def _project_relion_projector_texture(
+    volume_relion_half,
+    rotations_block,
+    image_shape,
+    *,
+    r_max: int,
+    projector_output_size: int,
+):
+    """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic."""
+
+    projector_full = relion_projector_half_to_texture_full(volume_relion_half)
+    pad_size = int(projector_full.shape[0])
+    projection_crop = project_half_spectrum(
+        projector_full.reshape(-1),
+        rotations_block,
+        (int(projector_output_size), int(projector_output_size)),
+        (pad_size, pad_size, pad_size),
+        "linear_interp",
+        max_r=float(r_max),
+        relion_texture_interp=True,
+    )
+    return _texture_centered_crop_to_full(
+        projection_crop,
+        image_shape=image_shape,
+        projector_output_size=int(projector_output_size),
+    )
+
+
 def compute_relion_projector_projections_block(
     volume_relion_half,
     rotations_block,
@@ -187,15 +280,50 @@ def compute_relion_projector_projections_block(
     projector_output_size: int | None = None,
     pixel_indices=None,
 ):
-    """Project precomputed RELION ``PPref`` data for one rotation block."""
+    """Project precomputed RELION ``PPref`` data for one rotation block.
 
-    if pixel_indices is not None:
+    Strict GPU parity defaults to RELION's float32 CUDA texture interpolation.
+    Set ``RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP=0`` for the manual/JAX
+    projector diagnostic or when running without the CUDA extension.
+    """
+
+    image_size = int(image_shape[0])
+    resolved_output_size = int(r_max) * 2 if projector_output_size is None else int(projector_output_size)
+    if resolved_output_size <= 0 or resolved_output_size > image_size:
+        resolved_output_size = image_size
+    use_texture = _relion_projector_texture_enabled(
+        volume_relion_half,
+        r_max=int(r_max),
+        padding_factor=int(padding_factor),
+    )
+
+    if use_texture:
+        if not centered_rows and pixel_indices is not None:
+            raise ValueError("pixel_indices are only supported with centered_rows=True")
+        if pixel_indices is not None and not isinstance(pixel_indices, jax.core.Tracer):
+            _validate_centered_relion_projector_pixel_indices(
+                pixel_indices,
+                image_shape=image_shape,
+                projector_output_size=resolved_output_size,
+            )
+        proj_centered = _project_relion_projector_texture(
+            volume_relion_half,
+            rotations_block,
+            image_shape,
+            r_max=int(r_max),
+            projector_output_size=resolved_output_size,
+        )
+        if centered_rows:
+            proj_half = proj_centered if pixel_indices is None else proj_centered[:, pixel_indices]
+        else:
+            proj_half = jnp.fft.ifftshift(
+                proj_centered.reshape((proj_centered.shape[0], image_size, image_size // 2 + 1)),
+                axes=1,
+            ).reshape((proj_centered.shape[0], -1))
+
+    elif pixel_indices is not None:
         if not centered_rows:
             raise ValueError("pixel_indices are only supported with centered_rows=True")
-        image_size = int(image_shape[0])
-        resolved_output_size = int(r_max) * 2 if projector_output_size is None else int(projector_output_size)
-        if resolved_output_size <= 0 or resolved_output_size > image_size:
-            resolved_output_size = image_size
         if resolved_output_size < image_size and not isinstance(pixel_indices, jax.core.Tracer):
             _validate_centered_relion_projector_pixel_indices(
                 pixel_indices,

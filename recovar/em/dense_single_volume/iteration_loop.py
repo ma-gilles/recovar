@@ -6640,6 +6640,20 @@ def _run_relion_iteration_loop(
             "Diagnostic %s=1: final all-data skips automatic last-numbered RELION state replay",
             _FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE_ENV,
         )
+    final_noise_variance_per_half = noise_variance_per_half
+    if not k_class_enabled:
+        # RELION joins the gold-standard models before its post-convergence
+        # all-data E-step.  The joined optimiser then scores both particle
+        # halves with the first model's sigma2_noise spectrum.  Keeping the
+        # second half's numbered-iteration noise here measurably changes the
+        # final posterior/support and the high-shell BPref accumulator.
+        final_noise_variance_per_half = [
+            noise_variance_per_half[0],
+            noise_variance_per_half[0],
+        ]
+        logger.info(
+            "RELION final all-data: scoring both particle halves with half-1 sigma2_noise",
+        )
     final_iter_t0 = time.time()
     final_current_size = int(grid_size)  # = ori_size, full Nyquist
     final_current_healpix_order = _exhaustive_grid_order_for_state(state)
@@ -7048,7 +7062,7 @@ def _run_relion_iteration_loop(
                 experiment_dataset=experiment_datasets[k],
                 means_k=final_join_means[k],
                 mean_variance=mean_variance,
-                noise_variance_k=noise_variance_per_half[k],
+                noise_variance_k=final_noise_variance_per_half[k],
                 previous_best_rotation_eulers_k=relion_half_inputs.previous_best_rotation_eulers[k],
                 local_search_rotations=final_local_search_rotations,
                 local_search_rotation_eulers=final_local_search_rotation_eulers,
@@ -7101,7 +7115,7 @@ def _run_relion_iteration_loop(
             experiment_dataset=experiment_datasets[k],
             means_k=final_join_means[k],
             mean_variance=mean_variance,
-            noise_variance_k=noise_variance_per_half[k],
+            noise_variance_k=final_noise_variance_per_half[k],
             effective_rotations=final_effective_rotations,
             current_translations=final_current_translations,
             base_translations=final_base_translations,
@@ -7197,7 +7211,7 @@ def _run_relion_iteration_loop(
                 else np.array([]),
                 "mean_vol_ft": np.asarray(final_join_means[k]),
                 "mean_variance": np.asarray(mean_variance),
-                "noise_variance": np.asarray(noise_variance_per_half[k]),
+                "noise_variance": np.asarray(final_noise_variance_per_half[k]),
                 "current_size": np.int32(final_current_size),
                 "half_spectrum_scoring": np.bool_(True),
                 "use_float64_scoring": np.bool_(False),
@@ -7598,6 +7612,7 @@ def _run_relion_iteration_loop(
         "best_rotation_eulers_history": best_rotation_eulers_history,
         "best_translations_history": best_translations_history,
         "final_all_data_ran": True,
+        "final_all_data_noise_source_half": 0 if not k_class_enabled else -1,
         "final_all_data_fsc": final_iter_fsc,
         "tau2_radial_final_all_data": (
             None

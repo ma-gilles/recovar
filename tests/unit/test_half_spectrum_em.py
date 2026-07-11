@@ -34,6 +34,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     bin_shell_values_np,
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
+    make_scoring_half_image_weights,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     preprocess_batch as _preprocess_batch,
@@ -64,6 +65,25 @@ N_ROTATIONS = 5
 N_TRANSLATIONS = 3
 N_IMAGES = 4
 SEED = 42
+
+
+def test_relion_scoring_half_weights_drop_redundant_negative_kx0_rows():
+    weights = np.asarray(
+        make_scoring_half_image_weights(IMAGE_SHAPE, relion_half_sum=True)
+    ).reshape(IMAGE_SHAPE[0], IMAGE_SHAPE[1] // 2 + 1)
+
+    expected = np.ones_like(weights)
+    expected[1 : IMAGE_SHAPE[0] // 2, 0] = 0.0
+    np.testing.assert_array_equal(weights, expected)
+
+    # RELION treats the Nyquist boundary row as +N/2 and keeps it.
+    assert weights[0, 0] == 1.0
+    assert weights[IMAGE_SHAPE[0] // 2, 0] == 1.0
+
+
+def test_non_relion_scoring_half_weights_keep_hermitian_multiplicity():
+    actual = make_scoring_half_image_weights(IMAGE_SHAPE, relion_half_sum=False)
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(make_half_image_weights(IMAGE_SHAPE)))
 
 
 def test_relion_shell_binning_drops_sentinel_indices_under_jit():

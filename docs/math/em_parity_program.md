@@ -153,12 +153,10 @@ checkpoint.
 
 ### Next experiment
 
-The complete 3k/128 strict firstiter A/B is finished. Strict Pmax is exactly
-one particle-by-particle and fixed RELION-it1 arithmetic is in the numerical
-band. The iter-1 map correlation is `0.995764`, but correlation is a weak
-diagnostic rather than a quality gate. The active hypothesis is that the first
-material FSC residual is already present in the iter-1 reconstruction
-accumulators.
+The complete 3k/128 strict firstiter A/B is finished. CUDA texture projection
+matches all 3,000 RELION iter-1 orientations exactly. Correlation remains a
+weak diagnostic rather than a quality gate; iter-1 and all later maps are
+judged only by shellwise FSC, FSC-AUC, and FSC-derived score/resolution.
 
 The iter-1 accumulator boundary is classified. BPref complex averages and
 weights agree at arithmetic level for typical coordinates, with small outer
@@ -210,12 +208,50 @@ robustness matrix yet.
 Final-only job `10992173` enters the final pass directly from the saved free
 iter-10 half maps and exactly reproduces `0.988115`, proving no hidden state
 history after iter 10. Merged-reference diagnostic `10992266` is worse at
-`0.981072`, falsifying early half-reference joining. The active hypothesis is
-that the qualified iter-1 WTA near-ties seed the later half-map differences
-that final Nyquist scoring amplifies. A trajectory seeded from the exact
-RELION iter-1 half maps is Slurm job `10992371`; if it closes, fix or robustify
-the firstiter hard-winner arithmetic without weakening FSC gates. If it does
-not, use its first degrading numbered FSC boundary as the next target.
+`0.981072`, falsifying early half-reference joining. Exact-RELION-iter1 seeded
+job `10992371` reaches final FSC-AUC `0.994488`; iter-1 ties explain most but
+not all of the free residual.
+
+The current strict path now also matches RELION's joined final noise semantic:
+both particle halves use half-1 `sigma2_noise` only in the post-convergence
+K=1 all-data E-step. Exact dumped operands then match a representative RELION
+posterior within the fixed-state numerical contract. Fixed-final job
+`10994996` still reaches only grid-off FSC-AUC `0.994497`, while RECOVAR GT
+FSC-AUC remains better (`0.669846` versus `0.650835`). Matched numbered iter-10
+BPref job `10996603` passes its patched-oracle FSC gate and localizes a small
+half-2 difference to four missing sub-winner significant samples, not noise,
+half joining, mapping, or winner poses. Exact-RELION-iter10 final-only job
+`10997070` remains at FSC-AUC `0.994501`, falsifying the tiny numbered-map
+difference as the remaining final limiter. Its full final Pmax mean/p95/max
+absolute errors are `0.0282/0.0898/0.4592`; original particle 428 / RELION
+stack 429 is now the worst case.
+
+The matched stack-429 operand replay has now classified that boundary. RELION
+zeros the redundant `kx=0, ky<0` rows in its non-redundant half-plane, while
+RECOVAR's full-size local likelihood counted those conjugate rows a second
+time. Applying the RELION axis mask offline changes the parent Pmax from
+`0.657449` to `0.812126` versus RELION `0.811969`, and restores exactly the 10
+parent pairs retained by RELION. In particular it restores the otherwise
+missing `(RELION rotation 140, coarse translation 4)` pair. Expanding that
+pair and applying the same mask changes the final fine Pmax from `0.173354` to
+`0.628355` versus RELION `0.628361`. The shared fine-candidate posterior L1
+error falls from `0.3785` to `0.0288` even before the restored parent pair is
+added. A centralized scoring-weight fix and focused unit regression are now
+present in the dirty candidate.
+
+Exact-RELION-iter10 final-only A100 job `11001328` qualifies the axis-mask
+patch. Canonical RECOVAR-vs-RELION FSC-AUC is `0.997302`; the minimum non-DC
+shell FSC is `0.995021`. RECOVAR-vs-GT FSC-AUC is `0.670396`, which is
+`+0.019561` above RELION, and its FSC=0.5 crossing is one shell better (41
+versus 40). RECOVAR is lower than RELION against GT in only three very-low
+frequency shells, with worst delta `-0.000266`, inside the arithmetic band;
+the other 59 non-identical shells are higher. The fixed-final K=1 small-cell
+quality gate therefore passes without grid correction.
+
+The next experiment is a clean free ten-iteration trajectory on this 3k/128
+fixture. It must reproduce the RELION current-size schedule, convergence at
+iteration 10, final all-data branch, and pass the same FSC/FSC-AUC gates before
+the robustness matrix is launched.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
