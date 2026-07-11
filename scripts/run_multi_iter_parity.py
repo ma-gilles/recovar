@@ -322,12 +322,49 @@ def relion_final_gt_series(relion_final_ft: dict[str, np.ndarray], relion_merged
     return series
 
 
+def validate_final_only_replay_args(
+    *,
+    max_iter: int,
+    force_final_after_zero_iterations: bool,
+    initial_half1_mrc: str | None,
+    initial_half2_mrc: str | None,
+) -> None:
+    """Validate the diagnostic that enters finalization from saved half maps."""
+
+    if not force_final_after_zero_iterations:
+        return
+    if int(max_iter) != 0:
+        raise ValueError("--force-final-after-zero-iterations requires --max_iter 0")
+    if (initial_half1_mrc is None) != (initial_half2_mrc is None):
+        raise ValueError("--initial-half1-mrc and --initial-half2-mrc must be provided together")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
     parser.add_argument("--data_star", required=True)
     parser.add_argument("--iter", type=int, default=3, help="RELION iteration to start from")
     parser.add_argument("--max_iter", type=int, default=15)
+    parser.add_argument(
+        "--initial-half1-mrc",
+        type=str,
+        default=None,
+        help="Diagnostic RECOVAR-frame half-1 map replacing the starting RELION map.",
+    )
+    parser.add_argument(
+        "--initial-half2-mrc",
+        type=str,
+        default=None,
+        help="Diagnostic RECOVAR-frame half-2 map replacing the starting RELION map.",
+    )
+    parser.add_argument(
+        "--force-final-after-zero-iterations",
+        action="store_true",
+        help=(
+            "Diagnostic only: with --max_iter 0, enter the K=1 final all-data pass "
+            "from the supplied/current half maps and the pinned RELION state."
+        ),
+    )
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument(
         "--save_intermediates_dir", type=str, default=None, help="Directory for manifest NPZ dumps (for replay)"
@@ -494,6 +531,12 @@ def main():
         help="Optional persistent JAX compilation cache directory for cross-process warm starts.",
     )
     args = parser.parse_args()
+    validate_final_only_replay_args(
+        max_iter=args.max_iter,
+        force_final_after_zero_iterations=args.force_final_after_zero_iterations,
+        initial_half1_mrc=args.initial_half1_mrc,
+        initial_half2_mrc=args.initial_half2_mrc,
+    )
 
     _print_provenance_banner_and_assert_parity_ancestors()
 
@@ -739,8 +782,16 @@ def main():
 
     # Volume: get_dft3(vol_real) produces the unnormalized centered DFT.
     # This matches the internal convention expected by the refinement code.
-    vol_h1 = helpers.load_relion_volume(f"{prefix}_half1_class001.mrc")
-    vol_h2 = helpers.load_relion_volume(f"{prefix}_half2_class001.mrc")
+    if args.initial_half1_mrc is not None:
+        vol_h1 = helpers.load_mrc(args.initial_half1_mrc)
+        vol_h2 = helpers.load_mrc(args.initial_half2_mrc)
+        print(
+            "  Diagnostic initial half maps (RECOVAR frame): "
+            f"half1={args.initial_half1_mrc}, half2={args.initial_half2_mrc}"
+        )
+    else:
+        vol_h1 = helpers.load_relion_volume(f"{prefix}_half1_class001.mrc")
+        vol_h2 = helpers.load_relion_volume(f"{prefix}_half2_class001.mrc")
     vol_ft_h1 = np.array(ftu.get_dft3(jnp.array(vol_h1))).reshape(-1)
     vol_ft_h2 = np.array(ftu.get_dft3(jnp.array(vol_h2))).reshape(-1)
 
@@ -1067,6 +1118,13 @@ def main():
             f"sigma_offset={float(override['translation_sigma_angstrom']):.4f} A, "
             f"corr means=({override['image_corrections'][0].mean():.4f}, {override['image_corrections'][1].mean():.4f}), "
             f"pre-shifts={trans_msg}"
+        )
+    if args.force_final_after_zero_iterations:
+        replay_iteration_overrides[0] = _load_relion_iteration_override(iteration, iteration + 1)
+        os.environ["RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER"] = "1"
+        print(
+            "  Diagnostic final-only replay: forcing K=1 final all-data after zero numbered iterations "
+            f"from RELION state {iteration:03d}"
         )
 
     # ---- Output directory ----

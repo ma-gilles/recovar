@@ -12,6 +12,7 @@ from scripts.run_multi_iter_parity import (
     resolve_firstiter_cc_mode,
     resolve_relion_final_oracle_paths,
     stack_index_from_image_name,
+    validate_final_only_replay_args,
 )
 
 
@@ -19,6 +20,26 @@ def test_normalized_fsc_auc_excludes_dc_and_uses_canonical_input_range():
     fsc = np.asarray([1.0, 0.2, 0.6, 0.6], dtype=np.float64)
 
     assert _normalized_fsc_auc(fsc) == pytest.approx(0.5)
+
+
+def test_final_only_replay_requires_zero_numbered_iterations():
+    with pytest.raises(ValueError, match="requires --max_iter 0"):
+        validate_final_only_replay_args(
+            max_iter=1,
+            force_final_after_zero_iterations=True,
+            initial_half1_mrc="half1.mrc",
+            initial_half2_mrc="half2.mrc",
+        )
+
+
+def test_final_only_replay_requires_paired_initial_half_maps():
+    with pytest.raises(ValueError, match="must be provided together"):
+        validate_final_only_replay_args(
+            max_iter=0,
+            force_final_after_zero_iterations=True,
+            initial_half1_mrc="half1.mrc",
+            initial_half2_mrc=None,
+        )
 
 
 def test_stack_index_from_image_name_is_zero_based():
