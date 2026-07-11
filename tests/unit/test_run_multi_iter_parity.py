@@ -4,6 +4,7 @@ import pytest
 from scripts.run_multi_iter_parity import (
     map_pose_arrays_to_particle_order,
     parse_relion_optimiser_cli_flags,
+    relion_final_gt_series,
     replay_control_relion_iteration,
     replay_override_iteration_pairs,
     replay_previous_relion_iteration,
@@ -126,3 +127,12 @@ def test_resolve_relion_final_oracle_uses_completed_numbered_halves_without_all_
         "half1": tmp_path / "run_it007_half1_class001.mrc",
         "half2": tmp_path / "run_it007_half2_class001.mrc",
     }
+
+
+def test_relion_final_gt_series_accepts_unnumbered_all_data_without_half_maps():
+    merged = np.ones(4, dtype=np.complex64)
+
+    series = relion_final_gt_series({"merged": merged}, merged)
+
+    assert set(series) == {"relion_merged"}
+    np.testing.assert_array_equal(series["relion_merged"], merged)

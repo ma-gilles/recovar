@@ -311,6 +311,17 @@ def _normalized_fsc_auc(fsc: np.ndarray) -> float:
     return float(integrate(values[finite], x))
 
 
+def relion_final_gt_series(relion_final_ft: dict[str, np.ndarray], relion_merged_ft) -> dict[str, np.ndarray]:
+    """Return only the RELION final maps available for GT reporting."""
+    series = {}
+    if "half1" in relion_final_ft and "half2" in relion_final_ft:
+        series["relion_half1"] = relion_final_ft["half1"]
+        series["relion_half2"] = relion_final_ft["half2"]
+    if relion_merged_ft is not None:
+        series["relion_merged"] = np.asarray(relion_merged_ft, dtype=np.complex64)
+    return series
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
@@ -1480,10 +1491,7 @@ def main():
             "recovar_half2": final_half2_ft,
             "recovar_merged": final_merged_ft,
         }
-        if relion_merged_ft is not None:
-            recovar_final_series["relion_half1"] = relion_final_ft["half1"]
-            recovar_final_series["relion_half2"] = relion_final_ft["half2"]
-            recovar_final_series["relion_merged"] = relion_merged_ft.astype(np.complex64)
+        recovar_final_series.update(relion_final_gt_series(relion_final_ft, relion_merged_ft))
 
         for label, vol_ft in recovar_final_series.items():
             fsc_vs_gt = _compute_fsc_vs_gt(vol_ft, gt_ft)
