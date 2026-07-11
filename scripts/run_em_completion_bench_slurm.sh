@@ -197,7 +197,7 @@ Environment overrides:
   RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE
                              Replay the last numbered RELION state for final all-data scoring (default: ${RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE})
   RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT
-                             Full parent support for adaptive local pass-2; default 1 prioritizes quality parity (current: ${RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT})
+                             Diagnostic full-parent expansion for adaptive local pass-2; default 0 matches RELION's pruned parent support (current: ${RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT})
   RECOVAR_EXACT_LOCAL_TARGET_ROW_PIXELS
                              Optional exact-local bucket row-pixel cap for speed probes
   RECOVAR_EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB

@@ -185,7 +185,7 @@ Environment overrides:
                                     Set 1 to enable RELION-style final output gridding correction.
                                     Default is unset/off, matching the current GUI-quality path.
   RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT
-                                    Full parent support for adaptive local pass-2; default 1 prioritizes quality parity (current: ${RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT})
+                                    Diagnostic full-parent expansion for adaptive local pass-2; default 0 matches RELION's pruned parent support (current: ${RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT})
   RECOVAR_LOCAL_ADAPTIVE_PASS2_ROTATION_ONLY
                                     Diagnostic only: keep pass-1 significant parent rotations but expand all parent translations.
   RECOVAR_LOCAL_ADAPTIVE_PASS2_DENOMINATOR_SUPPORT
