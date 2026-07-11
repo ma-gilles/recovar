@@ -254,6 +254,19 @@ def parse_relion_optimiser_cli_flags(opt_text: str) -> dict[str, object]:
     }
 
 
+def resolve_firstiter_cc_mode(mode: str, *, oracle_enabled: bool, start_iteration: int) -> bool:
+    """Resolve the typed firstiter-CC replay policy against the RELION oracle."""
+    if mode not in {"auto", "on", "off"}:
+        raise ValueError(f"unknown firstiter-CC mode {mode!r}")
+    if mode == "on" and int(start_iteration) != 0:
+        raise ValueError("--firstiter-cc-mode on requires --iter 0")
+    if int(start_iteration) != 0:
+        return False
+    if mode == "auto":
+        return bool(oracle_enabled)
+    return mode == "on"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
@@ -359,6 +372,16 @@ def main():
         choices=["perturbed", "coarse"],
         default="coarse",
         help="Evaluate local-search translation priors on the perturbed candidate grid or the unperturbed coarse RELION grid.",
+    )
+    parser.add_argument(
+        "--firstiter-cc-mode",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help=(
+            "Control RELION firstiter-CC emulation. 'auto' (default) follows the "
+            "optimiser STAR command, 'on' forces strict normalized-CC/hard-winner "
+            "semantics for --iter 0, and 'off' is the explicit ablation path."
+        ),
     )
     parser.add_argument(
         "--first_iteration_score_mode",
@@ -579,7 +602,12 @@ def main():
     m_ms = re.search(r"_rlnMaximumSignificantPoses\s+(-?\d+)", opt_text)
     max_significants = int(m_ms.group(1)) if m_ms else 500
     optimiser_cli_flags = parse_relion_optimiser_cli_flags(opt_text)
-    do_firstiter_cc = bool(optimiser_cli_flags["do_firstiter_cc"])
+    oracle_firstiter_cc = bool(optimiser_cli_flags["do_firstiter_cc"])
+    do_firstiter_cc = resolve_firstiter_cc_mode(
+        args.firstiter_cc_mode,
+        oracle_enabled=oracle_firstiter_cc,
+        start_iteration=args.iter,
+    )
     relion_ini_high = (
         float(args.relion_ini_high)
         if args.relion_ini_high is not None
@@ -632,7 +660,11 @@ def main():
     print(
         f"  ave_Pmax={ave_Pmax:.4f}, has_high_fsc_at_limit={has_high_fsc_at_limit}, max_significants={max_significants}"
     )
-    print(f"  RELION do_firstiter_cc={do_firstiter_cc}, ini_high={relion_ini_high}")
+    print(
+        "  RELION firstiter_cc: "
+        f"oracle={oracle_firstiter_cc}, mode={args.firstiter_cc_mode}, effective={do_firstiter_cc}; "
+        f"ini_high={relion_ini_high}"
+    )
     if args.force_oversampling is not None:
         print(f"  Oversampling override: {oversampling} -> {args.force_oversampling}")
         oversampling = int(args.force_oversampling)
@@ -1022,7 +1054,7 @@ def main():
     print(f"  Local translation prior mode: {args.local_search_translation_prior_mode}")
     print(f"  First-iteration score mode: {args.first_iteration_score_mode}")
     print(f"  First-iteration reconstruction mode: {args.first_iteration_reconstruction_mode}")
-    print(f"  Emulate RELION iter-1 CC: {args.iter == 0 and do_firstiter_cc}")
+    print(f"  Emulate RELION iter-1 CC: {do_firstiter_cc}")
     print(f"  RELION ini_high: {relion_ini_high}")
     print(f"  Adjoint ablations: disable_y={args.disable_adjoint_y}, disable_ctf={args.disable_adjoint_ctf}")
 
@@ -1069,7 +1101,7 @@ def main():
         local_search_translation_prior_mode=args.local_search_translation_prior_mode,
         disable_adjoint_y=args.disable_adjoint_y,
         disable_adjoint_ctf=args.disable_adjoint_ctf,
-        emulate_relion_firstiter_cc=(args.iter == 0 and do_firstiter_cc),
+        emulate_relion_firstiter_cc=do_firstiter_cc,
         relion_firstiter_ini_high_angstrom=relion_ini_high if args.iter == 0 else None,
         first_iteration_score_mode=args.first_iteration_score_mode,
         first_iteration_reconstruction_mode=args.first_iteration_reconstruction_mode,
@@ -1136,6 +1168,9 @@ def main():
         "local_search_translation_prior_mode": np.array(args.local_search_translation_prior_mode),
         "first_iteration_score_mode": np.array(args.first_iteration_score_mode),
         "first_iteration_reconstruction_mode": np.array(args.first_iteration_reconstruction_mode),
+        "firstiter_cc_mode": np.array(args.firstiter_cc_mode),
+        "firstiter_cc_oracle_enabled": np.bool_(oracle_firstiter_cc),
+        "firstiter_cc_effective": np.bool_(do_firstiter_cc),
         "relion_ini_high_angstrom": np.float64(relion_ini_high),
         "disable_adjoint_y": np.bool_(args.disable_adjoint_y),
         "disable_adjoint_ctf": np.bool_(args.disable_adjoint_ctf),

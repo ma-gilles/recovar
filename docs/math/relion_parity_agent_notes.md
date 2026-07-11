@@ -1028,3 +1028,10 @@ The canonical 5k/128 fixture omits `--firstiter_cc` and is not a valid strict
 iter-1 oracle.  Use the complete 3k/128 strict fixture at
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_small_stress_relion_20260711_042025_22010/cases/11_small_baseline_3k_g128_white_noise1_bf80`
 for the immediate A/B and generate a pinned strict 5k fixture later.
+
+`scripts/run_multi_iter_parity.py` now exposes typed
+`--firstiter-cc-mode {auto,on,off}` control. `auto` is the default and follows
+the pinned optimiser STAR command; `on` forces strict iter-0 semantics for a
+diagnostic, and `off` is the explicit ablation path. Unit coverage validates
+oracle-on/oracle-off auto selection, both overrides, and rejects forcing the
+mode after iter 0. The focused harness file passes 11/11 tests.

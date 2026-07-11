@@ -1,8 +1,10 @@
 import numpy as np
+import pytest
 
 from scripts.run_multi_iter_parity import (
     map_pose_arrays_to_particle_order,
     parse_relion_optimiser_cli_flags,
+    resolve_firstiter_cc_mode,
     replay_control_relion_iteration,
     replay_previous_relion_iteration,
     stack_index_from_image_name,
@@ -65,3 +67,25 @@ def test_parse_relion_optimiser_cli_flags_defaults_when_flag_is_absent():
     )
     assert parsed["do_firstiter_cc"] is False
     assert parsed["ini_high_angstrom"] == 30.0
+
+
+@pytest.mark.parametrize(
+    ("mode", "oracle_enabled", "expected"),
+    [
+        ("auto", True, True),
+        ("auto", False, False),
+        ("on", False, True),
+        ("off", True, False),
+    ],
+)
+def test_resolve_firstiter_cc_mode(mode, oracle_enabled, expected):
+    assert resolve_firstiter_cc_mode(mode, oracle_enabled=oracle_enabled, start_iteration=0) is expected
+
+
+def test_resolve_firstiter_cc_mode_rejects_force_on_after_iter_zero():
+    with pytest.raises(ValueError, match="requires --iter 0"):
+        resolve_firstiter_cc_mode("on", oracle_enabled=True, start_iteration=1)
+
+
+def test_resolve_firstiter_cc_mode_disables_auto_after_iter_zero():
+    assert resolve_firstiter_cc_mode("auto", oracle_enabled=True, start_iteration=1) is False
