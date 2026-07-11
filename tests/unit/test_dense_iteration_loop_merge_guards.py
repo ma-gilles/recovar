@@ -545,11 +545,11 @@ def test_iteration_loop_monkeypatch_ppca_and_vdam_surfaces_survive_merges():
     assert callable(run_vdam_iterations)
 
 
-def test_local_adaptive_pass2_defaults_to_full_parent(monkeypatch):
+def test_local_adaptive_pass2_defaults_to_relion_pruned_parent(monkeypatch):
     monkeypatch.delenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, raising=False)
     monkeypatch.delenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, raising=False)
 
-    assert iteration_loop._local_adaptive_pass2_full_parent_enabled() is True
+    assert iteration_loop._local_adaptive_pass2_full_parent_enabled() is False
 
     monkeypatch.setenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "1")
     assert iteration_loop._local_adaptive_pass2_full_parent_enabled() is True

@@ -481,7 +481,7 @@ def test_sparse_pass2_memory_cap_envs_are_forwarded(tmp_path):
         assert f"{name}={value}" in submission
 
 
-def test_local_adaptive_pass2_defaults_to_full_parent_in_jobs(tmp_path):
+def test_local_adaptive_pass2_defaults_to_relion_pruned_parent_in_jobs(tmp_path):
     proc, scratch = _dry_run_launcher(tmp_path, case="32")
 
     assert proc.returncode == 0, proc.stdout
@@ -489,8 +489,8 @@ def test_local_adaptive_pass2_defaults_to_full_parent_in_jobs(tmp_path):
     assert len(scripts) == 1
     text = scripts[0].read_text()
     submission = (scratch / "submission.env").read_text()
-    assert "export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=1" in text
-    assert "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=1" in submission
+    assert "export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0" in text
+    assert "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0" in submission
 
 
 def test_k1_batch_defaults_are_forwarded_to_jobs_and_provenance(tmp_path):

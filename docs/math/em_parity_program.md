@@ -171,14 +171,21 @@ exact (`0.999995` correlation). The remaining final gap is correlation
 or its BPref accumulation, not convergence history, numbered reconstruction,
 or output grid correction.
 
-Next generate a matched patched-RELION final-iteration BPref dump for this
-exact seed/fixture and verify the patched final maps and particle metadata
-against the original oracle. Compare pre/post-join final BPref data/weights,
-tau2/FSC spectra, and the saved RECOVAR final accumulator. If the first
-material boundary is already candidate weights/support, dump every final
-particle whose pose/Pmax differs and adjudicate its coarse/fine surfaces;
-otherwise repair the first joined-accumulator or tau2 boundary. Do not change
-reconstruction or grid-correction policy before this boundary is classified.
+The final BPref and score boundary is classified. RELION's matched final dump
+uses 24 fine rotations for a representative same-pose/Pmax outlier, while the
+RECOVAR default expands 1,392; candidate counts are 169 versus 4,926 positive
+and Pmax is `0.8333` versus `0.2519`. The existing pruned-parent path restores
+24 rotations, 156 positive candidates, Pmax `0.8445`, and 6 retained samples
+versus RELION's 5. This improves true-final FSC-AUC from `0.991498` to
+`0.994526` grid-off and `0.995366` with strict RELION grid correction.
+
+Make RELION pruned-parent support the K=1 local adaptive default while keeping
+full-parent as an explicit diagnostic override. Rerun focused unit/fast guards,
+then the complete strict ten-iteration trajectory from iter 0. Require the
+numbered schedule/convergence to remain exact and compare all final particle,
+BPref, FSC-AUC, and map metrics. After support closure, isolate the remaining
+radial-amplitude/correlation residual at the tau2/final filtering boundary;
+do not weaken the correlation gate.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that

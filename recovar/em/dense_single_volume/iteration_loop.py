@@ -686,18 +686,18 @@ def _local_adaptive_pass2_full_parent_enabled() -> bool:
         return False
     value = os.environ.get(_LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV)
     if value is None or value.strip() == "":
-        return True
+        return False
     normalized = value.strip().lower()
     if normalized in _TRUE_ENV_VALUES:
         return True
     if normalized in _FALSE_ENV_VALUES:
         return False
     logger.warning(
-        "Ignoring invalid %s=%r; using full-parent local pass-2 default",
+        "Ignoring invalid %s=%r; using RELION pruned-parent local pass-2 default",
         _LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV,
         value,
     )
-    return True
+    return False
 
 
 def _local_adaptive_pass2_rotation_only_enabled() -> bool:

@@ -1183,3 +1183,32 @@ similar amounts from their iter-10 state to final, so the final policy is
 broadly correct; the remaining first suspect is fine posterior/support and
 its joined BPref accumulation. The next experiment is a matched patched-RELION
 final BPref dump, not another free trajectory.
+
+## 2026-07-11 Final Local Pass-2 Parent-Support Bug
+
+Matched final diagnostics used RELION jobs `10988528`, `10988659`, `10988810`,
+`10988828`, and `10988885`. Job `10988659` established unpatched H100 rerun
+jitter (`0.99999943` final-map correlation, Pmax mean gap `3.07e-4`). A full
+patched trajectory drifted beyond that, so it was rejected as the strict
+accumulator oracle. Final-only continuation `10988885`, forced to the oracle
+`run_sampling.star` perturbation `+0.461207`, matches the original final map at
+`0.9999847` and supplies the accepted BPref dump. Jobs `10988810` and
+`10988828` were setup/non-matched sampling controls, not strict evidence.
+
+The accepted half-boundary comparison shows RECOVAR already differs before
+joining: complex scale-fitted L2 errors are `17.9%/18.4%`, and weight errors
+are `5.58%/5.72%`. RELION's joined BPref is exactly the sum of its two halves,
+exonerating the join. Matched score jobs `10989018`, `10989019`, and retry
+`10989166` targeted original index 2219, whose winner pose is effectively
+identical but whose Pmax differs materially. RELION uses 24 rotations x 36
+translations, 169 positive candidates, 5 retained samples, and Pmax `0.8333`.
+Default RECOVAR uses 1,392 rotations, 4,926 positive candidates, 30 retained,
+and Pmax `0.2519`. Materialized and fused RECOVAR posterior dumps agree.
+
+Pruned-parent validation job `10989301` restores the exact 24-rotation support,
+156 positive candidates, 6 retained samples, and Pmax `0.8445`. True-final
+FSC-AUC improves from `0.991498` to `0.994526` grid-off and `0.995366` under
+the strict grid-on output convention. Grid-on correlation is `0.991474`, so
+the FSC-AUC gate closes but the map-correlation gate remains unresolved. The
+correctness change makes pruned-parent support the default and retains
+full-parent as an explicit diagnostic override.

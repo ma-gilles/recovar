@@ -74,8 +74,8 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     assert "RECOVAR_SPARSE_PASS2_MAX_NOISE_BLOCK_BYTES=2147483648" in submission_env_text
     assert "RECOVAR_SPARSE_PASS2_MAX_ADJOINT_BLOCK_BYTES=1073741824" in k1_text
     assert "RECOVAR_SPARSE_PASS2_MAX_ADJOINT_BLOCK_BYTES=1073741824" in submission_env_text
-    assert "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=1" in k1_text
-    assert "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=1" in submission_env_text
+    assert "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0" in k1_text
+    assert "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0" in submission_env_text
     assert "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS=500" in k1_text
     assert "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS=500" in submission_env_text
     assert "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS=120" in k1_text
