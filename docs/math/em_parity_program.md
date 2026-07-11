@@ -59,6 +59,15 @@ Known evidence:
 - Exact local x-half current/full BPref microbatching now survives the recorded
   3k/128 stress case without OOM. The conservative cap is validated for that
   fixture, not yet a universal optimal cap.
+- The repaired 3k/128 strict trajectory matches RELION's ten numbered
+  iterations, convergence decision, current-size schedule, and final all-data
+  branch. Numbered map correlation rises from the qualified iter-1 tie result
+  (`0.995764`) to `0.999775` at iter 2 and `0.999912` at iter 10. The first
+  final-map report was semantically invalid because it compared RECOVAR's
+  all-data output to RELION's numbered half maps; the true unnumbered RELION
+  final comparison is correlation `0.987438`, FSC-AUC `0.980260`. The final
+  replay log exposes a concrete stale-state bug: final all-data requested
+  replay index 10 but the harness only populated through index 9.
 
 Canonical evidence and paths are in `docs/math/relion_parity_agent_notes.md`
 and `docs/math/em_parity_best_metrics.md`.
@@ -151,15 +160,19 @@ support, frame, score, or accumulator mismatch remains. The iter-1 map still
 misses the standalone correlation gate, so retain that result explicitly
 rather than calling it a strict map pass.
 
-Next run the repaired strict trajectory freely from RELION iter 0 through the
-oracle's ten numbered iterations and final all-data path. Compare every state
-boundary, not only the final map. Convergence iteration and finalization must
-match exactly. Classify any newly material Pmax/map drift by moving one fixed
-RELION state boundary at a time; reuse the iter-1 tie evidence instead of
-reopening already-qualified WTA flips. If the trajectory reaches the same
-convergence/final path with stable arithmetic-level fixed-state controls,
-advance to additional K=1 seeds/stress cells while retaining the iter-1 map
-gate as an explicit unresolved policy/gate decision.
+The ten-iteration trajectory is complete and its numbered states are stable.
+The active hypothesis is now confined to final all-data replay: the harness
+allocated `max_iter` overrides, so the final pass fell back from the required
+last-numbered RELION `run_it010` particle/model state to `run_it009`. Extend
+the override sequence by one state and rerun only `run_it009 -> run_it010 +
+final`, preserving final pose/Pmax arrays and BPref accumulators. The change is
+accepted only if the log shows final replay index 10 without fallback and the
+true unnumbered `run_class001.mrc` map/FSC metrics materially close. If they do
+not, compare final particle arrays and joined BPref against `run_data.star`
+before changing reconstruction or grid-correction policy. Grid correction is
+already falsified as the main residual: post-hoc radial correction changes
+true-final correlation only from `0.987438` to `0.989735` and FSC-AUC from
+`0.980260` to `0.981087`.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that

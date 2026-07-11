@@ -4,9 +4,11 @@ import pytest
 from scripts.run_multi_iter_parity import (
     map_pose_arrays_to_particle_order,
     parse_relion_optimiser_cli_flags,
-    resolve_firstiter_cc_mode,
     replay_control_relion_iteration,
+    replay_override_iteration_pairs,
     replay_previous_relion_iteration,
+    resolve_firstiter_cc_mode,
+    resolve_relion_final_oracle_paths,
     stack_index_from_image_name,
 )
 
@@ -53,6 +55,14 @@ def test_replay_iteration_helpers_split_previous_vs_control_state():
     assert replay_control_relion_iteration(13, 1) == 15
 
 
+def test_replay_override_pairs_include_last_numbered_state_for_final_all_data():
+    pairs = replay_override_iteration_pairs(0, 10)
+
+    assert len(pairs) == 10
+    assert pairs[0] == (1, 1, 2)
+    assert pairs[-1] == (10, 10, 11)
+
+
 def test_parse_relion_optimiser_cli_flags_reads_ini_high_and_firstiter_cc():
     parsed = parse_relion_optimiser_cli_flags(
         "# --auto_refine --firstiter_cc --ini_high 30 --ctf --iter 8\n_rlnParticleDiameter 544\n"
@@ -89,3 +99,30 @@ def test_resolve_firstiter_cc_mode_rejects_force_on_after_iter_zero():
 
 def test_resolve_firstiter_cc_mode_disables_auto_after_iter_zero():
     assert resolve_firstiter_cc_mode("auto", oracle_enabled=True, start_iteration=1) is False
+
+
+def test_resolve_relion_final_oracle_uses_unnumbered_map_after_all_data(tmp_path):
+    mode, paths = resolve_relion_final_oracle_paths(
+        tmp_path,
+        start_iteration=0,
+        completed_iterations=10,
+        final_all_data_ran=True,
+    )
+
+    assert mode == "all_data"
+    assert paths == {"merged": tmp_path / "run_class001.mrc"}
+
+
+def test_resolve_relion_final_oracle_uses_completed_numbered_halves_without_all_data(tmp_path):
+    mode, paths = resolve_relion_final_oracle_paths(
+        tmp_path,
+        start_iteration=3,
+        completed_iterations=4,
+        final_all_data_ran=False,
+    )
+
+    assert mode == "split_half"
+    assert paths == {
+        "half1": tmp_path / "run_it007_half1_class001.mrc",
+        "half2": tmp_path / "run_it007_half2_class001.mrc",
+    }

@@ -53,6 +53,18 @@ def replay_control_relion_iteration(init_relion_iteration: int, recovar_iteratio
     return replay_previous_relion_iteration(init_relion_iteration, recovar_iteration) + 1
 
 
+def replay_override_iteration_pairs(init_relion_iteration: int, max_iter: int) -> list[tuple[int, int, int]]:
+    """Return numbered replay states, including the state that seeds final all-data."""
+    return [
+        (
+            recovar_iteration,
+            replay_previous_relion_iteration(init_relion_iteration, recovar_iteration),
+            replay_control_relion_iteration(init_relion_iteration, recovar_iteration),
+        )
+        for recovar_iteration in range(1, int(max_iter) + 1)
+    ]
+
+
 def map_pose_arrays_to_particle_order(our_names, gt_rot_all, gt_trans_all=None):
     """Map pose arrays indexed by stack row onto the current particle ordering."""
     n_total = len(our_names)
@@ -265,6 +277,38 @@ def resolve_firstiter_cc_mode(mode: str, *, oracle_enabled: bool, start_iteratio
     if mode == "auto":
         return bool(oracle_enabled)
     return mode == "on"
+
+
+def resolve_relion_final_oracle_paths(
+    relion_dir: str | Path,
+    *,
+    start_iteration: int,
+    completed_iterations: int,
+    final_all_data_ran: bool,
+) -> tuple[str, dict[str, Path]]:
+    """Resolve the RELION maps with the same finalization semantics as RECOVAR."""
+    relion_dir = Path(relion_dir)
+    if final_all_data_ran:
+        return "all_data", {"merged": relion_dir / "run_class001.mrc"}
+    final_numbered_iteration = int(start_iteration) + int(completed_iterations)
+    return "split_half", {
+        label: relion_dir / f"run_it{final_numbered_iteration:03d}_{label}_class001.mrc"
+        for label in ("half1", "half2")
+    }
+
+
+def _normalized_fsc_auc(fsc: np.ndarray) -> float:
+    """Integrate finite non-DC FSC shells on a normalized frequency axis."""
+    values = np.asarray(fsc, dtype=np.float64).reshape(-1)
+    finite = np.isfinite(values)
+    if finite.size:
+        finite[0] = False
+    if np.count_nonzero(finite) < 2:
+        return float("nan")
+    x = np.flatnonzero(finite).astype(np.float64)
+    x = (x - x[0]) / (x[-1] - x[0])
+    integrate = getattr(np, "trapezoid", np.trapz)
+    return float(integrate(values[finite], x))
 
 
 def main():
@@ -984,10 +1028,13 @@ def main():
             "noise_variance": noise_variance_iter,
         }
 
-    replay_iteration_overrides = [None] * args.max_iter
-    for recovar_iter in range(1, args.max_iter):
-        relion_prev_iter = replay_previous_relion_iteration(iteration, recovar_iter)
-        relion_control_iter = replay_control_relion_iteration(iteration, recovar_iter)
+    # The extra slot at index max_iter seeds the post-convergence all-data
+    # pass from the last numbered RELION particle/model state.
+    replay_iteration_overrides = [None] * (args.max_iter + 1)
+    for recovar_iter, relion_prev_iter, relion_control_iter in replay_override_iteration_pairs(
+        iteration,
+        args.max_iter,
+    ):
         if not (relion_dir / f"run_it{relion_prev_iter:03d}_data.star").exists():
             print(
                 f"  Replay state for recovar iter {recovar_iter + 1}: RELION iter {relion_prev_iter:03d} not found, leaving override unset"
@@ -1174,6 +1221,7 @@ def main():
         "relion_ini_high_angstrom": np.float64(relion_ini_high),
         "disable_adjoint_y": np.bool_(args.disable_adjoint_y),
         "disable_adjoint_ctf": np.bool_(args.disable_adjoint_ctf),
+        "final_all_data_ran": np.bool_(result.get("final_all_data_ran", False)),
     }
     if result.get("ave_Pmax_trajectory"):
         save_dict["ave_Pmax_trajectory"] = np.array(result["ave_Pmax_trajectory"])
@@ -1250,6 +1298,42 @@ def main():
                 if arr_i is not None:
                     _save_array_or_half_sequence(f"{prefix_name}_{i:03d}", arr_i, dtype=np.float32)
 
+    for key in (
+        "final_all_data_best_rotation_eulers",
+        "final_all_data_best_translations",
+        "final_all_data_max_posterior",
+    ):
+        value = result.get(key)
+        if value is not None:
+            save_dict[key] = _concat_half_sequence(value, np.float32)
+    for key in (
+        "final_all_data_fsc",
+        "tau2_radial_final_all_data",
+        "tau2_fsc_used_final_all_data",
+        "tau2_ssnr_final_all_data",
+    ):
+        value = result.get(key)
+        if value is not None:
+            save_dict[key] = np.asarray(value)
+    for key in (
+        "final_all_data_sampling_perturbation",
+        "final_all_data_sampling_perturbation_applied",
+        "final_all_data_sampling_relion_iteration",
+        "final_all_data_sampling_offset_range",
+        "final_all_data_sampling_offset_step",
+        "final_all_data_grid_correct",
+    ):
+        if key in result:
+            save_dict[key] = np.asarray(result[key])
+    for key in (
+        "final_all_data_sampling_star",
+        "final_all_data_sampling_star_source",
+        "final_all_data_gridding_correct",
+        "tau2_weight_combination_final_all_data",
+    ):
+        if result.get(key) is not None:
+            save_dict[key] = np.asarray(str(result[key]))
+
     final_half1_ft = np.asarray(result["means"][0], dtype=np.complex64).reshape(-1)
     final_half2_ft = np.asarray(result["means"][1], dtype=np.complex64).reshape(-1)
     final_merged_ft = (final_half1_ft.astype(np.complex128) + final_half2_ft.astype(np.complex128)) / 2.0
@@ -1312,29 +1396,55 @@ def main():
         res = (N * pixel_size) / max(fsc05, 1)
         print(f"{i + 1:4d} {cs_i:4d} {pr_i:6.1f} {pmax_i:8.4f} {hp_i:3d} {fsc05:8d} {res:8.1f}")
 
-    # ---- Compare final volume with RELION ----
-    last_relion_it = iteration + args.max_iter
+    # ---- Compare final volume with the semantically matched RELION oracle ----
+    final_oracle_mode, final_oracle_paths = resolve_relion_final_oracle_paths(
+        relion_dir,
+        start_iteration=iteration,
+        completed_iterations=completed_iters,
+        final_all_data_ran=bool(result.get("final_all_data_ran", False)),
+    )
+    save_dict["relion_final_oracle_mode"] = np.array(final_oracle_mode)
     relion_final_real = {}
     relion_final_ft = {}
-    for k_half, label in [(0, "half1"), (1, "half2")]:
-        target_path = str(relion_dir / f"run_it{last_relion_it:03d}_{label}_class001.mrc")
-        if not Path(target_path).exists():
-            print(f"  Final {label}: RELION it{last_relion_it:03d} not found")
+    recovar_final_real = {
+        "half1": np.real(np.array(ftu.get_idft3(jnp.asarray(final_half1_ft.reshape(N, N, N))))),
+        "half2": np.real(np.array(ftu.get_idft3(jnp.asarray(final_half2_ft.reshape(N, N, N))))),
+        "merged": np.real(np.array(ftu.get_idft3(jnp.asarray(final_merged_ft.reshape(N, N, N))))),
+    }
+    for label, target_path in final_oracle_paths.items():
+        if not target_path.exists():
+            print(f"  Final {label}: matched RELION oracle not found: {target_path}")
             continue
-        recovar_vol_ft = np.asarray(result["means"][k_half])
-        recovar_vol_real = np.real(np.array(ftu.get_idft3(jnp.asarray(recovar_vol_ft.reshape(N, N, N)))))
-        relion_vol = helpers.load_relion_volume(target_path)
+        relion_vol = helpers.load_relion_volume(str(target_path))
         relion_final_real[label] = relion_vol
         relion_final_ft[label] = np.asarray(ftu.get_dft3(jnp.asarray(relion_vol))).reshape(-1)
-        corr = float(np.corrcoef(recovar_vol_real.ravel(), relion_vol.ravel())[0, 1])
-        print(f"  Final {label} vs RELION it{last_relion_it:03d}: corr={corr:.6f}")
+        corr = float(np.corrcoef(recovar_final_real[label].ravel(), relion_vol.ravel())[0, 1])
+        print(f"  Final {label} vs RELION {final_oracle_mode} oracle {target_path.name}: corr={corr:.6f}")
         save_dict[f"final_{label}_corr_vs_relion"] = np.float64(corr)
+        save_dict[f"relion_final_oracle_path_{label}"] = np.array(str(target_path))
 
     relion_merged_ft = None
-    if "half1" in relion_final_ft and "half2" in relion_final_ft:
+    if "merged" in relion_final_ft:
+        relion_merged_ft = relion_final_ft["merged"]
+    elif "half1" in relion_final_ft and "half2" in relion_final_ft:
         relion_merged_ft = (
             relion_final_ft["half1"].astype(np.complex128) + relion_final_ft["half2"].astype(np.complex128)
         ) / 2.0
+    if relion_merged_ft is not None:
+        if final_oracle_mode == "all_data":
+            relion_merged_real = relion_final_real["merged"]
+        else:
+            relion_merged_real = np.real(
+                np.array(ftu.get_idft3(jnp.asarray(relion_merged_ft.reshape(N, N, N))))
+            )
+        merged_corr = float(np.corrcoef(recovar_final_real["merged"].ravel(), relion_merged_real.ravel())[0, 1])
+        merged_fsc = _compute_fsc_vs_gt(final_merged_ft, relion_merged_ft)
+        merged_fsc_auc = _normalized_fsc_auc(merged_fsc)
+        save_dict["final_merged_corr_vs_relion"] = np.float64(merged_corr)
+        save_dict["final_merged_fsc_vs_relion"] = merged_fsc
+        save_dict["final_merged_fsc_auc_vs_relion"] = np.float64(merged_fsc_auc)
+        print(f"  Final merged vs RELION: corr={merged_corr:.6f}, FSC-AUC={merged_fsc_auc:.6f}")
+    if "half1" in relion_final_ft and "half2" in relion_final_ft:
         save_volume(
             np.asarray(relion_final_ft["half1"]),
             os.path.join(out_dir, "relion_final_half1"),
@@ -1349,17 +1459,15 @@ def main():
             from_ft=True,
             voxel_size=pixel_size,
         )
+    if relion_merged_ft is not None:
         save_volume(
-            np.asarray(relion_merged_ft.astype(np.complex64)),
+            np.asarray(relion_merged_ft, dtype=np.complex64),
             os.path.join(out_dir, "relion_final_merged"),
             volume_shape=(N, N, N),
             from_ft=True,
             voxel_size=pixel_size,
         )
-        print(
-            "  Saved RELION-frame final volumes in recovar coordinates: "
-            f"{os.path.join(out_dir, 'relion_final_half1.mrc')}, relion_final_half2.mrc, relion_final_merged.mrc"
-        )
+        print(f"  Saved matched RELION final map: {os.path.join(out_dir, 'relion_final_merged.mrc')}")
 
     gt_ledger_summary = {}
     if gt_ft is not None:
@@ -1477,6 +1585,19 @@ def main():
         "gt_align_all_series": bool(args.gt_align_all_series),
         "gt_metrics": gt_ledger_summary,
         "force_max_iter_after_convergence": bool(args.force_max_iter_after_convergence),
+        "final_all_data_ran": bool(result.get("final_all_data_ran", False)),
+        "relion_final_oracle_mode": final_oracle_mode,
+        "relion_final_oracle_paths": {label: str(path) for label, path in final_oracle_paths.items()},
+        "final_merged_corr_vs_relion": (
+            float(save_dict["final_merged_corr_vs_relion"])
+            if "final_merged_corr_vs_relion" in save_dict
+            else None
+        ),
+        "final_merged_fsc_auc_vs_relion": (
+            float(save_dict["final_merged_fsc_auc_vs_relion"])
+            if "final_merged_fsc_auc_vs_relion" in save_dict
+            else None
+        ),
         "elapsed_s": float(elapsed),
         "local_search_profile_mode": args.local_search_profile,
         "disable_adjoint_y": bool(args.disable_adjoint_y),

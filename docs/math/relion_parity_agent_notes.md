@@ -1125,3 +1125,34 @@ amplification of five qualified ties plus arithmetic-level scatter tails, not
 an unexplained support, coordinate, score, or accumulator bug. Continue with
 the repaired strict free trajectory and require convergence/finalization to
 match exactly.
+
+## 2026-07-11 Strict Full Trajectory and Final-Oracle Boundary
+
+Slurm job `10987518` completed the strict 3k/128 trajectory on H100
+`della-h21g2` from commit `966fe8fe`. The artifact root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_strict_full_trajectory_20260711_131542`
+and is marked `SAFE_TO_DELETE`. RECOVAR matches RELION's ten numbered
+iterations, convergence at iteration 10, current sizes
+`[56,56,66,68,80,80,80,80,80,80]`, and the post-convergence all-data branch.
+Numbered RECOVAR-vs-RELION map correlations are `0.995764, 0.999775,
+0.999872, 0.999857, 0.999831, 0.999885, 0.999889, 0.999900, 0.999908,
+0.999912`; the iter-1 exception is the already-qualified WTA tie boundary.
+
+The harness initially mislabeled final parity by comparing RECOVAR's
+post-convergence all-data result against RELION's numbered iter-10 half maps.
+The semantically correct oracle is the unnumbered RELION
+`run_class001.mrc`. Against it, the RECOVAR final merged map has correlation
+`0.987438` and FSC-AUC `0.980260`. RECOVAR remains better against GT on this
+fixture (`0.654772` versus RELION `0.633303` FSC-AUC), so this is a strict
+finalization-parity failure rather than a quality failure. Post-hoc RELION
+radial grid correction changes parity only to correlation `0.989735` and
+FSC-AUC `0.981087`, falsifying grid correction as the main residual.
+
+The first final-only state bug is explicit in `run.log`: final all-data
+requested replay state index 10 but fell back to index 9. The parity harness
+allocated only `max_iter` overrides and therefore never loaded RELION's
+last-numbered `run_it010` particle/model state for final scoring. The focused
+fix allocates the additional final seed state, selects the true unnumbered
+final map when `final_all_data_ran`, records canonical final correlation and
+FSC-AUC in the NPZ/JSON ledger, and preserves final poses, translations, Pmax,
+sampling, tau2, FSC, and grid metadata for subsequent boundary comparisons.
