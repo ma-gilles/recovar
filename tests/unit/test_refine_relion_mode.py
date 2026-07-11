@@ -6852,6 +6852,24 @@ class TestRelionModeSmokeTest:
     def test_relion_bootstrap_current_size_from_ini_high_matches_benchmark_case(self):
         assert bootstrap_current_size_from_ini_high_relion(128, 4.25, 30.0) == 56
 
+    def test_firstiter_cc_ini_high_tau2_taper_matches_relion_squared_cosine(self):
+        taper = iteration_loop_module._firstiter_cc_ini_high_tau2_taper(
+            65,
+            128,
+            4.25,
+            30.0,
+            filter_edgewidth=2,
+        )
+
+        radius = 128 * 4.25 / 30.0 - 1.0
+        radius_p = radius + 2.0
+        expected18 = (0.5 - 0.5 * np.cos(np.pi * (radius_p - 18.0) / 2.0)) ** 2
+        expected19 = (0.5 - 0.5 * np.cos(np.pi * (radius_p - 19.0) / 2.0)) ** 2
+        assert taper[17] == 1.0
+        np.testing.assert_allclose(taper[18], expected18, rtol=0, atol=1e-15)
+        np.testing.assert_allclose(taper[19], expected19, rtol=0, atol=1e-15)
+        np.testing.assert_array_equal(taper[20:], 0.0)
+
     def test_align_fourier_volume_sign_to_reference_flips_negative_overlap(self):
         ref = np.array([1.0 + 0.0j, -2.0 + 0.0j], dtype=np.complex64)
         vol = -ref

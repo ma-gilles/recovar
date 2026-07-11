@@ -1498,3 +1498,58 @@ precision, and the same single 0.5-pixel translation tie remains. Job
 `della-l07g3` and is infrastructure-only. The next qualification is a clean
 free ten-iteration trajectory; robustness remains gated on its canonical
 FSC-AUC and shellwise FSC result.
+
+## 2026-07-11 Iteration-1 Tau2 and Accelerated-BPref Precision
+
+Clean score-mode-scoped free-trajectory job `11014763`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_strict_free_cc_axis_scope_20260711_185000`
+and marked `SAFE_TO_DELETE`, completed on A100 `della-l08g6` from commit
+`47665b0fd1f94496da63d7202760b36a6ffcaa4f`. It exactly reproduces the
+current-size schedule `[56,56,66,68,80,80,80,80,80,80]`, convergence at
+iteration 10, and final all-data state/noise path. Final canonical
+RECOVAR-vs-RELION FSC-AUC is `0.990351`, below the `0.995` gate, while
+RECOVAR-vs-GT remains better (`0.669412` versus `0.650835`). Restoring exact
+iteration-1 poses therefore did not restore the complete iteration-1 state.
+
+Raw accumulator comparison localizes almost all weight-difference energy to
+the padded outer boundary: more than 99.9 percent lies at padded radii 52--57.
+Inside radius 52, weight relative-L2 error is approximately `9.4e-6` in each
+half; after downsampling it is only `3--5e-6` through shell 27 and rises to
+`0.00594/0.00621` at the shell-27/28 boundary. Half 1's remaining interior
+complex residual contains the established 0.5-pixel translation tie; half 2
+is otherwise clean.
+
+The earlier one-particle conclusion that float accumulation was incorrect
+compared RECOVAR CUDA against RELION's C++ CPU/double backprojector. The pinned
+production GPU build has `DoublePrec_ACC=OFF`, so its accelerated `XFLOAT` is
+single precision. The strict x-half path now allocates complex64/float32 BPref
+data/weight arrays by default, retains an explicit double diagnostic switch,
+casts the CPU-constructed orthonormal inverse to accelerator precision, and
+evaluates the rotated radius cutoff in that same precision. One-iteration job
+`11021943`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_firstiter_acc_float_rot_tau_20260711_193500`
+and marked `SAFE_TO_DELETE`, reduces downsampled-through-shell-28 BPref
+data/weight relative-L2 errors to `0.004184/0.000949` for half 1 and
+`0.003502/0.000902` for half 2. This is a modest boundary improvement, not by
+itself a map-quality conclusion.
+
+The larger proven state error was tau2. RECOVAR retained shell 18 `292.929`,
+shell 19 `196.997`, and nonzero shells 20--28 because it saved tau2 calculated
+before the first-iteration high-resolution filter. RELION source applies the
+`--ini_high` raised-cosine mask to tau2 and data-vs-prior after
+first-iteration reconstruction, squaring the mask for tau2. The source-matched
+candidate produces shell 18 `106.849670`, shell 19 `0.0235179`, and zero from
+shell 20 onward, versus RELION `106.808`, approximately `0.0235`, and zero.
+Two setup jobs preserve the audit trail: `11021427` exposed a missing import,
+and `11021652` exposed the need to clamp cube-corner radial indices; neither
+produced final science.
+
+Using the canonical Fourier-shell computation directly on the saved half maps,
+job `11021943` improves merged iteration-1 RECOVAR-vs-RELION FSC-AUC over
+supported shells 1--18 from `0.996052` to `0.998430`. Shell 18 improves from
+`0.908735` to `0.948464`; half-map FSC-AUC values are `0.998428` and
+`0.998427`. These FSC results, rather than map correlation, support the
+candidate. The next discriminating experiment is a clean ten-iteration free
+trajectory with the combined first-iteration state fix. Robustness remains
+blocked until the full strict FSC, GT, shellwise, convergence, and finalization
+gates pass.

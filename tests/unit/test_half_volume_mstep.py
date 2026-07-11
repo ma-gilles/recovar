@@ -12,6 +12,8 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
+import recovar.core.slicing as slicing
+import recovar.cuda_backproject as cuda_backproject
 from recovar.em.dense_single_volume.helpers import half_volume_mstep
 from recovar.reconstruction import regularization
 
@@ -135,7 +137,7 @@ def test_relion_x_half_host_x0_threshold_is_memory_safety_default(monkeypatch):
     assert not half_volume_mstep._large_relion_x_half_host_x0_enabled(768**3)
 
 
-def test_relion_x_half_mstep_accumulator_dtypes_default_to_dataset_dtype(monkeypatch):
+def test_relion_x_half_mstep_accumulator_dtypes_default_to_relion_acc_float(monkeypatch):
     monkeypatch.delenv(half_volume_mstep._RELION_X_HALF_MSTEP_DOUBLE_ENV, raising=False)
 
     y_dtype, ctf_dtype = half_volume_mstep.relion_x_half_mstep_accumulator_dtypes(
@@ -144,7 +146,15 @@ def test_relion_x_half_mstep_accumulator_dtypes_default_to_dataset_dtype(monkeyp
     )
 
     assert y_dtype == np.dtype(np.complex64)
-    assert ctf_dtype == np.dtype(np.complex64)
+    assert ctf_dtype == np.dtype(np.float32)
+
+    y_dtype, ctf_dtype = half_volume_mstep.relion_x_half_mstep_accumulator_dtypes(
+        np.complex128,
+        use_relion_x_half_mstep=True,
+    )
+
+    assert y_dtype == np.dtype(np.complex64)
+    assert ctf_dtype == np.dtype(np.float32)
 
 
 def test_relion_x_half_mstep_accumulator_dtypes_can_opt_into_double(monkeypatch):
@@ -168,7 +178,7 @@ def test_relion_x_half_mstep_accumulator_dtypes_can_opt_out(monkeypatch):
     )
 
     assert y_dtype == np.dtype(np.complex64)
-    assert ctf_dtype == np.dtype(np.complex64)
+    assert ctf_dtype == np.dtype(np.float32)
 
 
 def test_non_relion_mstep_keeps_dataset_accumulator_dtype(monkeypatch):
@@ -478,6 +488,77 @@ def test_relion_x_half_backproject_rotation_uses_inverse_for_nyquist_boundary():
 
     np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
     assert np.linalg.norm(got) > np.linalg.norm(transpose_result)
+
+
+def test_relion_x_half_float_acc_rotation_casts_cpu_orthonormal_inverse():
+    from recovar.cuda_backproject import _relion_x_half_backproject_rotation_to_kernel
+
+    rotation = jnp.asarray(
+        [[[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]],
+        dtype=jnp.float64,
+    )
+    actual = _relion_x_half_backproject_rotation_to_kernel(rotation, jnp.float32)
+
+    np.testing.assert_array_equal(
+        np.asarray(actual),
+        np.asarray(rotation, dtype=np.float32)[..., [2, 1, 0]],
+    )
+
+
+def test_relion_x_half_indexed_adjoint_preserves_accumulator_dtype(monkeypatch):
+    observed = {}
+
+    def fake_backproject_indexed(volume, slices, *args, **kwargs):
+        observed["volume_dtype"] = volume.dtype
+        observed["slice_dtype"] = slices.dtype
+        return volume
+
+    monkeypatch.setattr(slicing, "_use_cuda_backproject", lambda order: True)
+    monkeypatch.setattr(cuda_backproject, "backproject_indexed", fake_backproject_indexed)
+
+    result = slicing.adjoint_slice_volume_indexed(
+        jnp.ones((1, 1), dtype=jnp.complex128),
+        jnp.asarray([0], dtype=jnp.int32),
+        jnp.eye(3, dtype=jnp.float64)[None],
+        (4, 4),
+        (4, 4, 4),
+        "linear_interp",
+        volume=jnp.zeros(4 * 4 * 3, dtype=jnp.complex64),
+        half_image=True,
+        half_volume=True,
+        relion_x_half=True,
+    )
+
+    assert result.dtype == jnp.complex64
+    assert observed == {"volume_dtype": jnp.complex64, "slice_dtype": jnp.complex64}
+
+
+def test_relion_x_half_batched_indexed_adjoint_preserves_accumulator_dtype(monkeypatch):
+    observed = {}
+
+    def fake_batch_backproject_indexed(volumes, slices, *args, **kwargs):
+        observed["volume_dtype"] = volumes.dtype
+        observed["slice_dtype"] = slices.dtype
+        return volumes
+
+    monkeypatch.setattr(slicing, "_use_cuda_backproject", lambda order: True)
+    monkeypatch.setattr(cuda_backproject, "batch_backproject_indexed", fake_batch_backproject_indexed)
+
+    result = slicing.batch_adjoint_slice_volume_indexed(
+        jnp.ones((2, 1, 1), dtype=jnp.complex128),
+        jnp.asarray([0], dtype=jnp.int32),
+        jnp.eye(3, dtype=jnp.float64)[None],
+        (4, 4),
+        (4, 4, 4),
+        "linear_interp",
+        volumes=jnp.zeros((2, 4 * 4 * 3), dtype=jnp.complex64),
+        half_image=True,
+        half_volume=True,
+        relion_x_half=True,
+    )
+
+    assert result.dtype == jnp.complex64
+    assert observed == {"volume_dtype": jnp.complex64, "slice_dtype": jnp.complex64}
 
 
 def test_relion_x_half_cuda_skips_fftw_x0_negative_row_duplicate():

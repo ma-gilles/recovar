@@ -628,11 +628,8 @@ backproject_indexed_kernel(
          * source pixel has been rotated into 3-D. Mathematically this is
          * redundant for an exactly orthonormal matrix, but at the outer shell
          * it changes inclusion for roundoff-level boundary pixels. */
-        const double r2_3d =
-            (double)rk0 * (double)rk0 +
-            (double)rk1 * (double)rk1 +
-            (double)rk2 * (double)rk2;
-        if (r2_3d > (double)max_r2) return;
+        const T r2_3d = rk0 * rk0 + rk1 * rk1 + rk2 * rk2;
+        if (r2_3d > max_r2) return;
     }
 
     T val_re, val_im;
@@ -837,11 +834,8 @@ batch_backproject_indexed_kernel(
     T rk2 = k0 * R[2] + k1 * R[5];
 
     if (relion_fold_x && HALF_IMG && HALF_VOL && max_r2 >= (T)0) {
-        const double r2_3d =
-            (double)rk0 * (double)rk0 +
-            (double)rk1 * (double)rk1 +
-            (double)rk2 * (double)rk2;
-        if (r2_3d > (double)max_r2) return;
+        const T r2_3d = rk0 * rk0 + rk1 * rk1 + rk2 * rk2;
+        if (r2_3d > max_r2) return;
     }
 
     const bool relion_half_backproject = relion_fold_x && HALF_IMG && HALF_VOL;

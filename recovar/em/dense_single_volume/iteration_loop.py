@@ -21,6 +21,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import utils
+from recovar.core import fourier_transform_utils
 from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.batch_planning import (
     _estimate_relion_em_batch_sizes,
@@ -637,6 +638,29 @@ def _firstiter_cc_ini_high_resolution_shell(grid_size, voxel_size, ini_high_angs
     px = float(voxel_size if voxel_size > 0 else 1.0)
     shell = int(np.floor(int(grid_size) * px / float(ini_high_angstrom) + 0.5))
     return max(1, min(int(grid_size) // 2, shell))
+
+
+def _firstiter_cc_ini_high_tau2_taper(
+    n_shells,
+    grid_size,
+    voxel_size,
+    ini_high_angstrom,
+    *,
+    filter_edgewidth,
+):
+    """RELION's squared post-firstiter ``ini_high`` taper for tau2 state."""
+
+    if ini_high_angstrom is None or float(ini_high_angstrom) <= 0.0:
+        return np.ones(int(n_shells), dtype=np.float64)
+    edge = float(filter_edgewidth)
+    radius = float(grid_size) * float(voxel_size) / float(ini_high_angstrom) - edge / 2.0
+    radius_p = radius + edge
+    shells = np.arange(int(n_shells), dtype=np.float64)
+    taper = np.ones(int(n_shells), dtype=np.float64)
+    taper[shells > radius_p] = 0.0
+    transition = (shells >= radius) & (shells <= radius_p)
+    taper[transition] = 0.5 - 0.5 * np.cos(np.pi * (radius_p - shells[transition]) / edge)
+    return taper * taper
 
 
 def _exhaustive_grid_order_for_state(state: RefinementState) -> int:
@@ -5575,6 +5599,38 @@ def _run_relion_iteration_loop(
                 )
                 mean_signal_variance_per_half.append(mean_signal_variance_k)
                 tau2_update_details_per_half.append(tau2_update_details_k)
+            if relion_firstiter_cc_this_iter and relion_firstiter_ini_high_angstrom is not None:
+                tau2_taper = _firstiter_cc_ini_high_tau2_taper(
+                    len(tau2_update_details_per_half[0]["prior_shells"]),
+                    grid_size,
+                    cryo.voxel_size,
+                    relion_firstiter_ini_high_angstrom,
+                    filter_edgewidth=RELION_WIDTH_FMASK_EDGE,
+                )
+                radial_shells = np.asarray(
+                    fourier_transform_utils.get_grid_of_radial_distances(
+                        volume_shape,
+                        scaled=False,
+                        frequency_shift=0,
+                    ),
+                    dtype=np.int32,
+                ).reshape(-1)
+                radial_shells = np.minimum(radial_shells, len(tau2_taper) - 1)
+                tau2_taper_volume = jnp.asarray(tau2_taper[radial_shells], dtype=jnp.float32)
+                for half_idx in range(2):
+                    mean_signal_variance_per_half[half_idx] = (
+                        mean_signal_variance_per_half[half_idx] * tau2_taper_volume
+                    )
+                    for field in ("prior_shells", "ssnr_shells"):
+                        field_values = tau2_update_details_per_half[half_idx][field]
+                        tau2_update_details_per_half[half_idx][field] = field_values * jnp.asarray(
+                            tau2_taper,
+                            dtype=field_values.dtype,
+                        )
+                logger.info(
+                    "RELION iter-1 CC emulation: tapered tau2/data-vs-prior with ini_high=%.2f A",
+                    float(relion_firstiter_ini_high_angstrom),
+                )
             mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
             # Keep the single tau2 diagnostic fields aligned with RELION's half1
             # model.star, which is what the parity diff script reports.

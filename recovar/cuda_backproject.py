@@ -689,7 +689,10 @@ def _rot_to_compact(rotation_matrices: jax.Array, real_dtype=None) -> jax.Array:
     return compact
 
 
-def _relion_x_half_backproject_rotation_to_kernel(rotation_matrices: jax.Array) -> jax.Array:
+def _relion_x_half_backproject_rotation_to_kernel(
+    rotation_matrices: jax.Array,
+    target_dtype=None,
+) -> jax.Array:
     """Map RELION/RECOVAR scorer rotations to the CUDA ``(z, y, xhalf)`` scatter frame.
 
     RELION's BackProjector stores the Fourier x-axis as the packed half axis but
@@ -699,6 +702,12 @@ def _relion_x_half_backproject_rotation_to_kernel(rotation_matrices: jax.Array) 
     reversing to the kernel's ``(z, y, x)`` scatter coordinates.
     """
 
+    if target_dtype is not None and jnp.dtype(target_dtype) == jnp.dtype(jnp.float32):
+        # RELION builds an orthonormal Euler matrix in CPU RFLOAT, inverts it
+        # there, and only then stores the result as accelerated XFLOAT.  For a
+        # single-precision ACC build this is the float-cast transpose, not the
+        # inverse of an already rounded float32 matrix.
+        return rotation_matrices.astype(jnp.float32)[..., [2, 1, 0]]
     inverse = jnp.linalg.inv(rotation_matrices.astype(jnp.float64))
     return jnp.swapaxes(inverse, -1, -2)[..., [2, 1, 0]]
 
@@ -886,7 +895,10 @@ def backproject_indexed(
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     kw["relion_fold_x"] = np.int64(int(relion_x_half))
     if relion_x_half:
-        rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices)
+        rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(
+            rotation_matrices,
+            _volume_real_dtype(volume),
+        )
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
@@ -921,7 +933,10 @@ def batch_backproject_indexed(
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     kw["relion_fold_x"] = np.int64(int(relion_x_half))
     if relion_x_half:
-        rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices)
+        rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(
+            rotation_matrices,
+            _volume_real_dtype(volumes),
+        )
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)

@@ -45,8 +45,10 @@ def relion_x_half_mstep_accumulator_dtypes(dataset_dtype, *, use_relion_x_half_m
     """Return ``(Ft_y dtype, Ft_ctf dtype)`` for an M-step accumulator."""
 
     base_dtype = np.dtype(dataset_dtype)
-    if use_relion_x_half_mstep and relion_x_half_mstep_double_enabled():
-        return np.dtype(np.complex128), np.dtype(np.float64)
+    if use_relion_x_half_mstep:
+        if relion_x_half_mstep_double_enabled():
+            return np.dtype(np.complex128), np.dtype(np.float64)
+        return np.dtype(np.complex64), np.dtype(np.float32)
     return base_dtype, base_dtype
 
 

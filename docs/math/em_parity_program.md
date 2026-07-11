@@ -273,9 +273,30 @@ texture run: every orientation matches RELION and only the established
 0.5-pixel translation tie remains. Job `11013457` was an infrastructure-only
 failure (`CUDA_ERROR_NO_DEVICE`) before science on `della-l07g3`.
 
-The next experiment is a clean ten-iteration free-trajectory requalification
-with the score-mode-scoped mask. Do not launch robustness until its final
-canonical FSC-AUC reaches `0.995` and all shellwise/GT/convergence gates pass.
+Clean score-mode-scoped free-trajectory job `11014763` reproduces RELION's
+current-size schedule `[56,56,66,68,80,80,80,80,80,80]`, convergence at
+iteration 10, and final all-data path, but final canonical
+RECOVAR-vs-RELION FSC-AUC is only `0.990351`. RECOVAR remains better against
+GT (`0.669412` versus `0.650835`). Exact poses therefore do not by themselves
+close the iteration-1 seed error.
+
+The first divergent iteration-1 state is now identified. RECOVAR calculated
+tau2 before applying the `firstiter_cc --ini_high` cutoff and retained nonzero
+shells 20--28. RELION applies a squared raised-cosine taper to tau2 and
+data-vs-prior after first-iteration reconstruction. The candidate implements
+that source-matched taper. It also matches the pinned RELION accelerated GPU
+build's single-precision `XFLOAT` BPref accumulator; the earlier float64
+one-particle comparison used RELION's CPU/double backprojector and did not
+represent the production oracle.
+
+One-iteration A100 job `11021943` gives tau2 shell 18 `106.849670`, shell 19
+`0.0235179`, and shells 20 onward zero, versus RELION `106.808`, approximately
+`0.0235`, and zero. Merged iteration-1 RECOVAR-vs-RELION FSC-AUC over RELION's
+supported shells 1--18 improves from `0.996052` to `0.998430`; shell 18
+improves from `0.908735` to `0.948464`. The next experiment is a clean
+ten-iteration qualification of this complete first-iteration state fix. Do
+not launch robustness until final canonical FSC-AUC reaches `0.995` and all
+shellwise/GT/convergence gates pass.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
