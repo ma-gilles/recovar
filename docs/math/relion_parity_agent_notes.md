@@ -1156,3 +1156,30 @@ fix allocates the additional final seed state, selects the true unnumbered
 final map when `final_all_data_ran`, records canonical final correlation and
 FSC-AUC in the NPZ/JSON ledger, and preserves final poses, translations, Pmax,
 sampling, tau2, FSC, and grid metadata for subsequent boundary comparisons.
+
+The focused validation first ran as job `10988194`. Its scientific pass and
+1.2 GB final BPref dump completed, but a reporting-only `KeyError` occurred
+because the new unnumbered final-map branch still tried to add nonexistent
+RELION half maps to the GT table. A focused regression now covers that branch.
+Clean retry job `10988298` completed on H100 `della-h21g2` in `3m50s` from
+commit `44c6fc1b`; its root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_state10_replay_retry_20260711_134820`
+and is marked `SAFE_TO_DELETE`.
+
+The retry log shows final replay `previous_state_index=1` without fallback;
+for this `--iter 9 --max_iter 1` replay, index 1 is RELION `run_it010`. The
+numbered iter-10 fixed-state map correlation is `0.999995`. Correct final-state
+seeding improves the true unnumbered final FSC-AUC from `0.980260` to
+`0.991498`; correlation improves from `0.987438` to `0.988789`. Grid-on
+postprocessing reaches only correlation `0.991226` and FSC-AUC `0.992144`, so
+it remains a secondary output convention rather than the main residual.
+
+Against RELION `run_data.star`, all 3,000 RECOVAR final particles have median
+angular/translation errors of about `6e-6` degrees and `1.4e-7` pixels, but
+the tails are material: angular p95/p99 are `0.631/0.937` degrees and
+translation p95/p99 are `0.196/0.391` pixels. Pmax correlation is `0.7434`,
+with mean/p95/max absolute gaps `0.0423/0.1468/0.6415`. Both programs move by
+similar amounts from their iter-10 state to final, so the final policy is
+broadly correct; the remaining first suspect is fine posterior/support and
+its joined BPref accumulation. The next experiment is a matched patched-RELION
+final BPref dump, not another free trajectory.

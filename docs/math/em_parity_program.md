@@ -161,18 +161,24 @@ misses the standalone correlation gate, so retain that result explicitly
 rather than calling it a strict map pass.
 
 The ten-iteration trajectory is complete and its numbered states are stable.
-The active hypothesis is now confined to final all-data replay: the harness
-allocated `max_iter` overrides, so the final pass fell back from the required
-last-numbered RELION `run_it010` particle/model state to `run_it009`. Extend
-the override sequence by one state and rerun only `run_it009 -> run_it010 +
-final`, preserving final pose/Pmax arrays and BPref accumulators. The change is
-accepted only if the log shows final replay index 10 without fallback and the
-true unnumbered `run_class001.mrc` map/FSC metrics materially close. If they do
-not, compare final particle arrays and joined BPref against `run_data.star`
-before changing reconstruction or grid-correction policy. Grid correction is
-already falsified as the main residual: post-hoc radial correction changes
-true-final correlation only from `0.987438` to `0.989735` and FSC-AUC from
-`0.980260` to `0.981087`.
+The stale final-state fix is validated: final all-data now uses RELION
+`run_it010` without fallback, improving true-final FSC-AUC from `0.980260` to
+`0.991498`, while the fixed-state numbered iter-10 map remains essentially
+exact (`0.999995` correlation). The remaining final gap is correlation
+`0.988789`; final particle medians are effectively exact, but angular p95 is
+`0.631` degrees and Pmax correlation is only `0.7434` with mean absolute gap
+`0.0423`. This localizes the active hypothesis to final fine-posterior/support
+or its BPref accumulation, not convergence history, numbered reconstruction,
+or output grid correction.
+
+Next generate a matched patched-RELION final-iteration BPref dump for this
+exact seed/fixture and verify the patched final maps and particle metadata
+against the original oracle. Compare pre/post-join final BPref data/weights,
+tau2/FSC spectra, and the saved RECOVAR final accumulator. If the first
+material boundary is already candidate weights/support, dump every final
+particle whose pose/Pmax differs and adjudicate its coarse/fine surfaces;
+otherwise repair the first joined-accumulator or tau2 boundary. Do not change
+reconstruction or grid-correction policy before this boundary is classified.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
