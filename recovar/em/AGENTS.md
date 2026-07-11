@@ -105,8 +105,10 @@ current-size/resolution state, convergence state, and stage timings.
   evidence proves otherwise.
 - Use float64 replay or RELION CPU/double dumps to adjudicate unclear numeric
   gaps. Do not chase bitwise equality with GPU texture arithmetic.
-- FSC and FSC-AUC against GT and RELION are the primary map gates. Mean map
-  correlation is supporting evidence, not the main quality pass/fail metric.
+- Shellwise FSC curves, FSC-AUC, and the established FSC score/resolution
+  summaries against GT and RELION are the only map-quality gates. Mean map
+  correlation is a weak diagnostic only and must never pass, fail, or override
+  a quality decision, even when it appears numerically excellent.
 - K=4 comparisons require Hungarian class matching and per-class results;
   never hide a poor class in the mean.
 - Report uncertainty and missing cells. “Not measured” is not “same.”

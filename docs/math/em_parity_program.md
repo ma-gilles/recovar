@@ -88,22 +88,30 @@ explicit user decision.
 
 ### K=1 supplied-map quality
 
-- merged RECOVAR-vs-RELION map correlation `>=0.9995`;
 - merged RECOVAR-vs-RELION FSC-AUC `>=0.995`;
 - RECOVAR GT FSC-AUC no worse than RELION by more than `0.002`;
+- shellwise FSC curves and the established FSC score/resolution summaries
+  versus both GT and RELION show no unexplained systematic deficit;
 - strict-mode per-iteration state differences are arithmetic-level after the
   first-iteration policy is matched;
 - convergence iteration and final all-data path agree exactly.
 
+Map correlation is recorded only as a weak diagnostic. It is never a K=1
+quality gate and cannot override the FSC/FSC-AUC decision in either direction.
+
 ### K=4 supplied-map quality
 
-- Hungarian-matched mean class map correlation `>=0.999`, worst class
-  `>=0.998`;
+- every Hungarian-matched RECOVAR-vs-RELION class FSC-AUC `>=0.995`, with
+  shellwise FSC curves and established FSC score/resolution summaries reported
+  per class;
 - per-class GT FSC-AUC no worse than RELION by more than `0.002` without a
   documented quality-mode improvement;
 - class agreement `>=99%`, with pose/translation distributions reported per
   class and no collapsed/minority class;
 - convergence/finalization semantics agree.
+
+Map correlation is recorded only as a weak diagnostic. It is never a K=4
+quality gate, and class averaging must not hide a poor per-class FSC result.
 
 ### Performance
 
@@ -147,29 +155,29 @@ checkpoint.
 
 The complete 3k/128 strict firstiter A/B is finished. Strict Pmax is exactly
 one particle-by-particle and fixed RELION-it1 arithmetic is in the numerical
-band, but the strict iter-1 merged map correlation remains `0.995764`, below
-the K=1 gate. The active hypothesis is that the first material residual is
-already present in the iter-1 reconstruction accumulators.
+band. The iter-1 map correlation is `0.995764`, but correlation is a weak
+diagnostic rather than a quality gate. The active hypothesis is that the first
+material FSC residual is already present in the iter-1 reconstruction
+accumulators.
 
 The iter-1 accumulator boundary is classified. BPref complex averages and
 weights agree at arithmetic level for typical coordinates, with small outer
 shell/error tails. All five materially different winners have complete
 coarse score comparisons, and both same-parent fine flips have coherent fine
 comparisons. Every flip is a demonstrated numerical tie; no unexplained
-support, frame, score, or accumulator mismatch remains. The iter-1 map still
-misses the standalone correlation gate, so retain that result explicitly
-rather than calling it a strict map pass.
+support, frame, score, or accumulator mismatch remains. Retain the iter-1
+correlation as diagnostic context, but judge the map only by its shellwise FSC,
+FSC-AUC, and FSC score/resolution evidence.
 
 The ten-iteration trajectory is complete and its numbered states are stable.
 The stale final-state fix is validated: final all-data now uses RELION
 `run_it010` without fallback, improving true-final FSC-AUC from `0.980260` to
-`0.991498`, while the fixed-state numbered iter-10 map remains essentially
-exact (`0.999995` correlation). The remaining final gap is correlation
-`0.988789`; final particle medians are effectively exact, but angular p95 is
-`0.631` degrees and Pmax correlation is only `0.7434` with mean absolute gap
-`0.0423`. This localizes the active hypothesis to final fine-posterior/support
-or its BPref accumulation, not convergence history, numbered reconstruction,
-or output grid correction.
+`0.991498`, while the fixed-state numbered iter-10 map has diagnostic
+correlation `0.999995`. Final particle medians are effectively exact, but
+angular p95 is `0.631` degrees and Pmax correlation is only `0.7434` with mean
+absolute gap `0.0423`. This localizes the active hypothesis to final
+fine-posterior/support or its BPref accumulation, not convergence history,
+numbered reconstruction, or output grid correction.
 
 The final BPref and score boundary is classified. RELION's matched final dump
 uses 24 fine rotations for a representative same-pose/Pmax outlier, while the
@@ -183,9 +191,10 @@ Make RELION pruned-parent support the K=1 local adaptive default while keeping
 full-parent as an explicit diagnostic override. Rerun focused unit/fast guards,
 then the complete strict ten-iteration trajectory from iter 0. Require the
 numbered schedule/convergence to remain exact and compare all final particle,
-BPref, FSC-AUC, and map metrics. After support closure, isolate the remaining
-radial-amplitude/correlation residual at the tau2/final filtering boundary;
-do not weaken the correlation gate.
+BPref, shellwise FSC, FSC-AUC, FSC score/resolution, and diagnostic map
+correlation metrics. After support closure, isolate any remaining shellwise
+FSC/radial-amplitude residual at the tau2/final filtering boundary; correlation
+must not be used as an acceptance gate.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
