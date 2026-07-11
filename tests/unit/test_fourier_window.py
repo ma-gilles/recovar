@@ -25,6 +25,7 @@ from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
+    make_scoring_half_image_weights,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     preprocess_batch as _preprocess_batch,
@@ -570,6 +571,32 @@ class TestFourierWindowSpec:
         assert spec.dense_big_jit_projection_max_r() == 13.0
         assert spec.dense_big_jit_backprojection_max_r() == 13.0
         assert set(np.asarray(spec.recon_indices_np)).issubset(set(np.asarray(spec.score_indices_np)))
+
+    def test_firstiter_cc_rectangular_score_keeps_both_x0_axis_sides(self):
+        """CC keeps the full FFTW rectangle; Gaussian drops its redundant x0 side."""
+        shape = (128, 128)
+        n_half = shape[0] * (shape[1] // 2 + 1)
+        spec = make_fourier_window_spec(
+            shape,
+            current_size=56,
+            n_half=n_half,
+            score_square=True,
+            score_include_dc=True,
+            include_recon_window=True,
+        )
+        gaussian_weights = make_scoring_half_image_weights(shape, relion_half_sum=True)
+        cc_weights = make_scoring_half_image_weights(
+            shape,
+            relion_half_sum=True,
+            exclude_relion_redundant_x0=False,
+        )
+
+        assert spec.n_score == 56 * (56 // 2 + 1)
+        assert np.count_nonzero(np.asarray(spec.score_values(gaussian_weights)) == 0.0) == 27
+        np.testing.assert_array_equal(
+            np.asarray(spec.score_values(cc_weights)),
+            np.ones(spec.n_score, dtype=np.float32),
+        )
 
 
 # ===========================================================================

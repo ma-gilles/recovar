@@ -5864,6 +5864,7 @@ def compute_pass2_stats_sparse_bucketed(
     half_weights = make_scoring_half_image_weights(
         image_shape,
         relion_half_sum=half_spectrum_scoring,
+        exclude_relion_redundant_x0=relion_firstiter_score_mode != "normalized_cc",
     )
     half_weights_windowed = window_spec.score_values(half_weights)
     if use_float64_scoring:
@@ -7978,6 +7979,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     half_weights = make_scoring_half_image_weights(
         image_shape,
         relion_half_sum=half_spectrum_scoring,
+        exclude_relion_redundant_x0=relion_firstiter_score_mode != "normalized_cc",
     )
     half_weights_windowed = window_spec.score_values(half_weights)
     if use_float64_scoring:

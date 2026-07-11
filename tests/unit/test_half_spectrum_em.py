@@ -81,6 +81,18 @@ def test_relion_scoring_half_weights_drop_redundant_negative_kx0_rows():
     assert weights[IMAGE_SHAPE[0] // 2, 0] == 1.0
 
 
+def test_relion_normalized_cc_half_weights_keep_rectangular_x0_rows():
+    weights = np.asarray(
+        make_scoring_half_image_weights(
+            (8, 8),
+            relion_half_sum=True,
+            exclude_relion_redundant_x0=False,
+        )
+    ).reshape(8, 5)
+
+    np.testing.assert_array_equal(weights, np.ones((8, 5), dtype=np.float32))
+
+
 def test_non_relion_scoring_half_weights_keep_hermitian_multiplicity():
     actual = make_scoring_half_image_weights(IMAGE_SHAPE, relion_half_sum=False)
     np.testing.assert_array_equal(np.asarray(actual), np.asarray(make_half_image_weights(IMAGE_SHAPE)))

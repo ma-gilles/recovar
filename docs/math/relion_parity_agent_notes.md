@@ -1460,3 +1460,41 @@ the iteration-1 reconstruction/BPref boundary. Re-run the exact-RELION-iter1
 seed replay from the current checkpoint through iterations 2--10 and final.
 Do not launch the robustness matrix unless that boundary is closed and the
 free trajectory passes.
+
+## 2026-07-11 Iteration-1 Score-Geometry Scope
+
+Exact-RELION-iter1 seed A100 job `11007539`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_exact_iter1_seed_x0mask_20260711_182500`,
+completed the exact iterations 2--10 schedule and convergence/final path. Its
+final canonical RECOVAR-vs-RELION FSC-AUC is `0.997271`; RECOVAR-vs-GT is
+`0.670338` versus RELION `0.650835`, with FSC=0.5 crossing shell 41 versus 40.
+The remaining free-run failure is therefore seeded at iteration 1, not in a
+later local-search boundary.
+
+The post-axis-mask free run revealed 198/3000 angular and 219/3000 translation
+mismatches at iteration 1 (angular mean `0.607718` degrees, p95 `3.750014`;
+translation mean `0.048068` pixels, p95 `0.499999`). The pre-mask texture run
+`10993443` had matched all orientations and retained only one qualified
+0.5-pixel translation tie. Its iter-1 BPref accumulator relative-L2 errors
+against RELION were `0.004621/0.001104` (complex/weight) for half 1 and
+`0.004162/0.001139` for half 2; the globally masked run regressed to
+`0.093928/0.054039` and `0.086122/0.044691`.
+
+The cause is score geometry. The current-size-56 Gaussian radial window
+contains none of the redundant-axis rows, while the normalized-CC rectangular
+crop contains 27. RELION's first-iteration CUDA CC kernel scores all pixels in
+that rectangle; only Gaussian likelihood scoring drops centered
+`kx=0, ky<0`. The helper now exposes that distinction, and dense, K-class
+significance, and both sparse pass-2 CC callers retain the full rectangle.
+Gaussian dense/local/sparse callers retain the previously qualified mask.
+
+One-iteration A100 qualification job `11013677` completed in `112` seconds on
+`della-l08g6` under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_firstiter_cc_axis_scope_20260711_184500`.
+Its coarse and fine hard-assignment arrays are byte-identical to job
+`10993443`; all 3,000 orientations match RELION within Euler serialization
+precision, and the same single 0.5-pixel translation tie remains. Job
+`11013457` failed before RECOVAR with `CUDA_ERROR_NO_DEVICE` on
+`della-l07g3` and is infrastructure-only. The next qualification is a clean
+free ten-iteration trajectory; robustness remains gated on its canonical
+FSC-AUC and shellwise FSC result.

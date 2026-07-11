@@ -1339,6 +1339,7 @@ def _compute_k_class_significance_batched(
     half_weights = make_scoring_half_image_weights(
         image_shape,
         relion_half_sum=half_spectrum_scoring,
+        exclude_relion_redundant_x0=score_mode != "normalized_cc",
     )
     window_spec_kwargs = {}
     if score_mode == "normalized_cc":

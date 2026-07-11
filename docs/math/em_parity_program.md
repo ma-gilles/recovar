@@ -256,10 +256,26 @@ RECOVAR-vs-RELION FSC-AUC `0.990397`. This improves the pre-mask free result
 Numbered merged FSC-AUC is already `0.997007` at iteration 2 and rises to
 `0.999339` at iteration 10. Do not launch robustness.
 
-The next experiment is the established exact-RELION-iter1 seed replay on the
-new checkpoint, running numbered iterations 2--10 plus final. If that passes,
-the remaining free-trajectory residual is localized to the iteration-1
-reconstruction/BPref boundary rather than later local scoring.
+Exact-RELION-iter1 seed job `11007539` runs numbered iterations 2--10 plus
+final and passes at canonical RECOVAR-vs-RELION FSC-AUC `0.997271`.
+RECOVAR-vs-GT FSC-AUC is `0.670338` versus RELION `0.650835`. This closes the
+later-trajectory hypothesis and localizes the remaining free residual to the
+iteration-1 boundary.
+
+The first free run with the Gaussian redundant-axis fix exposed a scoped
+regression: 198/3000 iteration-1 orientations and 219/3000 translations no
+longer matched. RELION normalized-CC scores every pixel in its rectangular
+first-iteration FFTW crop; only Gaussian likelihood scoring removes centered
+`kx=0, ky<0` redundant rows. A score-mode-specific correction retains all CC
+rows while preserving the qualified Gaussian mask. A100 job `11013677`
+restores byte-identical coarse and fine hard assignments to the prior exact
+texture run: every orientation matches RELION and only the established
+0.5-pixel translation tie remains. Job `11013457` was an infrastructure-only
+failure (`CUDA_ERROR_NO_DEVICE`) before science on `della-l07g3`.
+
+The next experiment is a clean ten-iteration free-trajectory requalification
+with the score-mode-scoped mask. Do not launch robustness until its final
+canonical FSC-AUC reaches `0.995` and all shellwise/GT/convergence gates pass.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that

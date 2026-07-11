@@ -898,6 +898,7 @@ def run_em(
     half_weights = make_scoring_half_image_weights(
         image_shape,
         relion_half_sum=half_spectrum_scoring,
+        exclude_relion_redundant_x0=relion_firstiter_score_mode != "normalized_cc",
     )
 
     firstiter_cc_rectangular_score = relion_firstiter_score_mode == "normalized_cc"

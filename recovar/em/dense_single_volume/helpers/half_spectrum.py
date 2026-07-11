@@ -18,21 +18,32 @@ def make_half_image_weights(image_shape):
     return weights.reshape(-1)
 
 
-def make_scoring_half_image_weights(image_shape, *, relion_half_sum: bool):
+def make_scoring_half_image_weights(
+    image_shape,
+    *,
+    relion_half_sum: bool,
+    exclude_relion_redundant_x0: bool = True,
+):
     """Return half-spectrum weights for likelihood scoring.
 
     RELION scores its non-redundant FFTW half-plane with unit weights rather
     than Hermitian weights.  RECOVAR's centered packed layout also contains
-    the conjugate ``kx=0, ky<0`` rows; RELION leaves those redundant rows at
-    zero.  Mask them here so full-size (non-windowed) dense/local/sparse
-    scoring cannot count the axis twice.  The ``ky=-N/2`` boundary is retained
-    because RELION represents it as ``+N/2``.
+    the conjugate ``kx=0, ky<0`` rows; RELION's Gaussian likelihood leaves
+    those redundant rows at zero.  Mask them here so full-size
+    dense/local/sparse Gaussian scoring cannot count the axis twice.  The
+    ``ky=-N/2`` boundary is retained because RELION represents it as
+    ``+N/2``.
+
+    RELION's first-iteration normalized-CC CUDA kernels are different: they
+    iterate over every pixel in the rectangular FFTW crop, including both
+    sides of the centered ``kx=0`` axis.  Those callers must pass
+    ``exclude_relion_redundant_x0=False``.
     """
 
     height, width = image_shape
     if relion_half_sum:
         weights = jnp.ones((height, width // 2 + 1), dtype=jnp.float32)
-        if height > 2:
+        if exclude_relion_redundant_x0 and height > 2:
             weights = weights.at[1 : (height + 1) // 2, 0].set(0.0)
         return weights.reshape(-1)
     return make_half_image_weights(image_shape)
