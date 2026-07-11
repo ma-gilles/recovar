@@ -25,10 +25,16 @@ as the next product milestone rather than mixing it into the first closure.
 
 ## Current State — 2026-07-11
 
-Authoritative candidate worktree:
-`/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_em_min_deferred_abs2_20260709_1745`
+Authoritative clean candidate checkout:
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Recorded HEAD before this board was created:
+Immutable broad-candidate checkpoint:
+`a6d1d086d81fe7d2be863c50bad33c7ea85e0b7f` on
+`codex/em-parity-checkpoint-20260711`. The original dirty checkout remains
+unchanged at
+`/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_em_min_deferred_abs2_20260709_1745`.
+
+Base HEAD before this board was created:
 `4fba8f48a00ca7820a763e7ba41dac4a5a8d8242` on
 `codex/em-deferred-bigjit-abs2-min-20260709` with a large dirty candidate stack.
 Every new run must record a fresh diff SHA-256 and untracked manifest.
@@ -121,8 +127,9 @@ explicit user decision.
 
 ## Active Milestone
 
-Milestone 1 is partially complete but blocked by the broad dirty candidate
-stack. The first scientific target is Milestone 2.
+Milestone 1 now has an immutable local checkpoint. The active scientific target
+is Milestone 2; future changes must be small logical commits on top of the
+checkpoint.
 
 ### Next experiment
 
@@ -167,6 +174,9 @@ Resolved with the user on 2026-07-11:
   one writer per source area and the primary agent owning integration.
 - Preserve the existing dirty candidate and create a separate clean local
   checkpoint/logical commit history. Do not push without separate approval.
+- Long-lived EM development checkouts use
+  `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/`; bulky run outputs and runtime
+  caches remain under `/scratch/gpfs/CRYOEM/gilleslab/em_work/`.
 
 Record each resolved decision here with date, rationale, and effect on gates.
 

@@ -189,7 +189,9 @@ mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR"
 Put bulky disposable runs under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/<dated-run-name>/` and create a
 `SAFE_TO_DELETE` marker at the run root. Do not put long-lived matrices under
-the shared `_agent_scratch` roots. Preserve curated fixtures in place.
+the shared `_agent_scratch` roots. Keep long-lived EM source checkouts under
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/`, not the quota-constrained
+GILLES project filesystem. Preserve curated fixtures in place.
 
 ## RELION Oracle Rules
 
