@@ -3833,9 +3833,6 @@ class TestRelionModeSmokeTest:
 
     def test_relion_mode_k1_dense_global_search_uses_adaptive_two_pass(
         self,
-        half_datasets,
-        init_volume,
-        translations,
         monkeypatch,
     ):
         """K=1 dense-global-search iterations must route through the same
@@ -3849,7 +3846,29 @@ class TestRelionModeSmokeTest:
         ``LOCAL_SEARCH_HEALPIX_ORDER`` (4, helpers/convergence.py) so this run
         never enters local search, isolating the dense-global-search phase
         that this regression guards.
+
+        Uses a larger local box than the shared 8x8 fixture:
+        ``compute_coarse_image_size`` floors the pass-1 coarse size at 8px
+        (recovar/em/dense_single_volume/helpers/resolution.py), so on an 8x8
+        grid the coarse size always equals the box size and ``coarse_cs``
+        collapses to ``None`` -- which incidentally also skips the K=1
+        adaptive-routing trigger regardless of ``adaptive_oversampling``. A
+        32x32 box keeps the coarse pass a genuine resolution reduction.
         """
+        image_shape = (32, 32)
+        image_size = image_shape[0] * image_shape[1]
+        volume_shape = (32, 32, 32)
+        volume_size = int(np.prod(volume_shape))
+        monkeypatch.setattr(f"{__name__}.IMAGE_SHAPE", image_shape)
+        monkeypatch.setattr(f"{__name__}.IMAGE_SIZE", image_size)
+        monkeypatch.setattr(f"{__name__}.VOLUME_SHAPE", volume_shape)
+        monkeypatch.setattr(f"{__name__}.VOLUME_SIZE", volume_size)
+
+        rng = np.random.default_rng(SEED)
+        half_datasets = [MockDataset(N_IMAGES // 2, rng), MockDataset(N_IMAGES // 2, rng)]
+        init_volume = _hermitian_volume(volume_shape, seed=42)
+        translations = jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32)
+
         recorded_n_classes = []
         original_adaptive = iteration_loop_module.run_dense_k_class_em_adaptive
 
@@ -3862,8 +3881,8 @@ class TestRelionModeSmokeTest:
         result = refine_single_volume(
             half_datasets,
             init_volume,
-            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            jnp.ones(image_size, dtype=jnp.float32),
+            jnp.ones(volume_size, dtype=jnp.float32) * 100.0,
             _make_rotations(20, seed=123),
             translations,
             disc_type="linear_interp",
@@ -3882,7 +3901,7 @@ class TestRelionModeSmokeTest:
             "iterations through run_dense_k_class_em_adaptive"
         )
         assert all(n == 1 for n in recorded_n_classes)
-        assert np.asarray(result["mean"]).shape == (VOLUME_SIZE,)
+        assert np.asarray(result["mean"]).shape == (volume_size,)
         assert np.all(np.isfinite(np.asarray(result["mean"])))
         # Regression guard for the pose-decode branch in the main iteration
         # loop (iteration_loop.py ~3202): it prefers best_pose_rotations[k]
