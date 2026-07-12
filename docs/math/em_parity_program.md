@@ -562,6 +562,22 @@ tail changes retained for tie-aware inspection.  Corrected full real-data job
 iteration-16 convergence plus the normal final all-data branch before this
 trajectory is closed.
 
+Job `11049135` matches that control flow exactly but does not close map parity:
+it converges at numbered iteration 16, runs the normal iteration-17 all-data
+branch with grid correction off, and reaches merged FSC-AUC `0.974017` plus
+half-map FSC-AUCs `0.947021/0.944168`.  This is much better than the stale
+cold-start run's merged `0.859718`, but still fails the strict `0.995` gate.
+The first material post-iteration-2 drift is projector-dependent.  Starting
+from the qualified iteration-2 maps and exact RELION state, iteration-3 job
+`11050464` with CUDA texture interpolation gives merged FSC-AUC `0.992097`,
+Pmax MAE `0.012945`, and mean Pmax gap `+0.000802`.  Same-A100 manual/JAX
+projection job `11050495` improves those to `0.995407`, `0.006198`, and
+`+0.000189`, respectively, while moving the pose/translation tails closer to
+RELION.  Commit `db814243` therefore makes the manual projector the parity
+default and keeps texture interpolation as the explicit
+`RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP=1` diagnostic.  Full manual-projector
+trajectory job `11050804` is the next gate.
+
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
 shape is 168 images by 198 rotations by 9 translations by 12,861 score pixels.
@@ -579,10 +595,24 @@ parent bucket (`13,669` rows), processes all 49,913 half-set particles in
 27.7 seconds, then completes the fine score-only pass in 26.0 seconds; the job
 finishes successfully in 1:56 with no OOM.  Full clean 100k trajectory job
 `11047558` was cancelled as scientifically stale after the missing run_it000
-cold state was identified.  Corrected job `11049164` runs concurrently from
+cold state was identified.  Corrected job `11049164` was relaunched from
 clean commit `2e3cc620`, includes `--relion_init_dir`, and retains the validated
 runtime score-tile cap.  Its artifact root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_coldstart_scorecap_ready_20260712_051319`.
+
+Job `11049164` was subsequently cancelled at 41:31 after the same-A100
+iteration-3 projector A/B proved that its texture-on trajectory was
+scientifically stale.  Do not restart 100k until the manual-projector full real
+trajectory closes or identifies the next boundary.
+
+K=4 also localizes the texture regression at its first global Class3D step.
+Texture-on job `11049571` gives only 45.24% class agreement and per-class
+FSC-AUC `0.3520-0.4439`.  Texture-off job `11049966` restores 99.82% class
+agreement, pose p95 `1.42e-4` degrees, translation p95 `5.68e-6` pixels, and
+exact Pmax; per-class map FSC-AUC improves to `0.9927-0.9967`, so its remaining
+map/reconstruction tail is still open.  Class3D retains a fresh global first
+search rather than replaying run_it000 input orientations (`2e0e25ab`); those
+orientations are input metadata, not AutoRefine-style local-search centers.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
