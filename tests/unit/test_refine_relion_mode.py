@@ -105,6 +105,8 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
     EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV,
+    EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION,
+    EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR,
     EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
     EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
     _build_reconstruction_pack_indices,
@@ -644,6 +646,93 @@ def test_exact_local_microbatch_high_memory_gpu_default(monkeypatch):
         )
         == 19905
     )
+
+
+def test_exact_local_score_only_cap_covers_100k_parent_tile(monkeypatch):
+    from recovar.em.dense_single_volume import local_em_engine
+
+    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
+    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
+    monkeypatch.delenv(EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV, raising=False)
+    monkeypatch.setattr(local_em_engine, "_visible_gpu_memory_bytes", lambda: 80 * 1024**3)
+
+    rotation_counts = np.asarray([198], dtype=np.int32)
+    layout = LocalHypothesisLayout(
+        n_global_rotations=198,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=np.asarray([0, 198], dtype=np.int64),
+        rotation_ids_flat=np.arange(198, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (198, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(198, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((9, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((1, 9), dtype=np.float32),
+    )
+    runtime_free_bytes = int(46.4 * 1024**3)
+    cap = _exact_local_effective_max_hypotheses_per_microbatch(
+        None,
+        12861,
+        n_trans=9,
+        n_recon_windowed=12723,
+        local_layout=layout,
+        image_batch_size=168,
+        rotation_block_size=198,
+        score_only=True,
+        runtime_free_memory_bytes=runtime_free_bytes,
+    )
+    expected_tile_cap = int(
+        runtime_free_bytes
+        * EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION
+        // (9 * 12861 * np.dtype(np.float32).itemsize * EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR)
+    )
+
+    assert cap == expected_tile_cap
+    assert cap < 168 * 198
+    assert cap // 198 == 86
+
+
+def test_exact_local_score_only_cap_preserves_smaller_bucket_shape(monkeypatch):
+    from recovar.em.dense_single_volume import local_em_engine
+
+    monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
+    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
+    monkeypatch.delenv(EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV, raising=False)
+    monkeypatch.setattr(local_em_engine, "_visible_gpu_memory_bytes", lambda: 80 * 1024**3)
+
+    rotation_counts = np.asarray([198], dtype=np.int32)
+    layout = LocalHypothesisLayout(
+        n_global_rotations=198,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=np.asarray([0, 198], dtype=np.int64),
+        rotation_ids_flat=np.arange(198, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (198, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(198, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((9, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((1, 9), dtype=np.float32),
+    )
+    cap = _exact_local_effective_max_hypotheses_per_microbatch(
+        None,
+        4003,
+        n_trans=9,
+        n_recon_windowed=3923,
+        local_layout=layout,
+        image_batch_size=168,
+        rotation_block_size=198,
+        score_only=True,
+        runtime_free_memory_bytes=int(46.4 * 1024**3),
+    )
+    buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=168,
+        rotation_block_size=198,
+        max_hypotheses_per_microbatch=cap,
+    )
+
+    assert cap >= 168 * 198
+    assert len(buckets) == 1
 
 
 def test_exact_local_xhalf_full_bpref_uses_conservative_high_memory_cap(monkeypatch):

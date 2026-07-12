@@ -171,6 +171,12 @@ EXACT_LOCAL_AUTO_MICROBATCH_BOOST = 2.0
 EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV = "RECOVAR_EXACT_LOCAL_AUTO_MICROBATCH_BOOST"
 EXACT_LOCAL_XHALF_AUTO_MICROBATCH_BOOST = 1.0
 EXACT_LOCAL_XHALF_AUTO_MICROBATCH_BOOST_ENV = "RECOVAR_EXACT_LOCAL_XHALF_AUTO_MICROBATCH_BOOST"
+# Score-only big-JIT lowers the score residual to a dense
+# (image, rotation, translation, pixel) float32 tile.  Limit that one tile to
+# a conservative share of memory that is still free at local-search entry;
+# the remaining memory is needed by projections, inputs, outputs, and XLA.
+EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION = 0.20
+EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR = 1.25
 # Keep the deferred exact-local noise projection chunks small enough for
 # low-image-count/high-candidate outlier cases that otherwise fragment H100
 # memory. This cap is total projected row-pixels across the active image batch,
@@ -411,6 +417,26 @@ def _visible_gpu_memory_bytes() -> int | None:
         return None
     _VISIBLE_GPU_MEMORY_BYTES_CACHE = int(max(values)) * 1024**2
     return _VISIBLE_GPU_MEMORY_BYTES_CACHE
+
+
+def _exact_local_runtime_free_memory_bytes() -> int | None:
+    """Return allocator bytes not currently live on the first local GPU."""
+
+    try:
+        devices = jax.local_devices()
+        if not devices:
+            return None
+        stats = devices[0].memory_stats()
+    except Exception:
+        return None
+    if not stats:
+        return None
+    bytes_limit = stats.get("bytes_limit")
+    bytes_in_use = stats.get("bytes_in_use")
+    if bytes_limit is None or bytes_in_use is None:
+        return None
+    free_bytes = int(bytes_limit) - int(bytes_in_use)
+    return free_bytes if free_bytes > 0 else None
 
 
 def _exact_local_default_target_row_pixels(*, allow_high_memory_default: bool = True) -> int:
@@ -1311,6 +1337,8 @@ def _exact_local_effective_max_hypotheses_per_microbatch(
     allow_auto_boost: bool = True,
     auto_boost_factor: float | None = None,
     allow_high_memory_default: bool = True,
+    score_only: bool = False,
+    runtime_free_memory_bytes: int | None = None,
 ) -> int:
     cap = _exact_local_max_hypotheses_per_microbatch(
         default,
@@ -1332,7 +1360,28 @@ def _exact_local_effective_max_hypotheses_per_microbatch(
     if boost_factor <= 0.0 or not np.isfinite(boost_factor):
         raise ValueError("auto_boost_factor must be positive and finite")
     boost_cap = int(np.floor(cap * boost_factor))
-    return int(max(cap, min(65536, planned_floor, boost_cap)))
+    effective_cap = int(max(cap, min(65536, planned_floor, boost_cap)))
+    if not score_only:
+        return effective_cap
+
+    if runtime_free_memory_bytes is None:
+        runtime_free_memory_bytes = _exact_local_runtime_free_memory_bytes()
+    if runtime_free_memory_bytes is None:
+        # Without a runtime-free probe, retain the profiled base cap rather
+        # than applying an unbounded image-batch boost.
+        return cap
+    score_tile_bytes_per_hypothesis = (
+        max(1, int(n_trans))
+        * max(1, int(n_windowed))
+        * np.dtype(np.float32).itemsize
+        * EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR
+    )
+    score_tile_cap = int(
+        int(runtime_free_memory_bytes)
+        * EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION
+        // score_tile_bytes_per_hypothesis
+    )
+    return int(max(1, min(effective_cap, score_tile_cap)))
 
 
 def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.ndarray) -> LocalBucketSpec:
@@ -1993,6 +2042,7 @@ def run_local_em_exact(
         allow_auto_boost=allow_microbatch_auto_boost,
         auto_boost_factor=xhalf_auto_microbatch_boost,
         allow_high_memory_default=not xhalf_bpref_mstep,
+        score_only=score_only,
     )
     bucket_build_t0 = time.time()
     bucket_specs = bucket_local_hypothesis_layout(
