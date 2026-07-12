@@ -915,9 +915,33 @@ boundary open.  Wall time improves from 2021.1 s to 1917.75 s, but remains
 `1.44192x` RELION.  Summary:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_corrected_texture_full_retry_20260712_121000/summary.md`.
 
-Next gates: isolate the remaining nonzero RELION-versus-RECOVAR texture score
-residual and run the global-corrected-texture/manual-fine trajectory ablation
-(`11062767`).
+Global-corrected-texture/manual-fine trajectory `11062767` is rejected.  It
+diverges from the authoritative RELION SSNR schedule at iterations 12 and 14,
+has merged/half FSC-AUC `0.979389` and `0.951552/0.947366`, and worsens final
+pose/translation error to `0.157554` degrees and `0.0462333` pixels.  Its
+3339.83 s wall time is `2.51115x` RELION and 74.2% slower than corrected
+texture throughout.  Manual fine projection is therefore neither a quality
+nor a speed solution; the older hybrid's small final FSC advantage is a
+compensating error.  Summary:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_global_texture_manual_fine_20260712_124110/summary.md`.
+
+The admissible direct fine-projection operand gate localizes the remaining
+score residual to Euler construction.  RELION operand job `11066282` preserves
+all discrete arrays/support and shows that using RELION projections with the
+saved RECOVAR image plus RELION's 128-lane reduction matches raw RELION scores
+at the independent-rerun floor (centered p95 `0.000244141`, max `0.000488281`).
+Using RECOVAR projections gives p95 `0.00341797`, and projection substitution
+alone produces the same p95.  Exact device Euler job `11068941` finds zero of
+480 candidate matrix rows bit-exact (matrix max absolute delta `5.96e-8`).
+Injecting those exact matrices into the RECOVAR texture projector in GPU job
+`11071482` reduces correct-half projection p95 error from `4.825e-5` to
+`4.915e-7` (about 98x) and reduces score error back to the RELION rerun floor.
+Texture staging is exonerated; exact RELION fine Euler generation is the next
+production fix.  Evidence root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_row2813_relion_fine_euler_dump_20260712_132000`.
+
+Next gate: implement exact, batched RELION fine Euler construction, repeat the
+fixed-state operand/score panel, then rerun the corrected 10k trajectory.
 In parallel, clean 100k hybrid scale job `11058928` continues from detached
 commit `87fd1e78` with run-local, hash-qualified CUDA and RELION-bind artifacts;
 it remains useful for scale/OOM evidence but is superseded for final quality by
