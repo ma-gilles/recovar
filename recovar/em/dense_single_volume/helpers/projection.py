@@ -204,7 +204,7 @@ def _relion_projector_texture_enabled(
     enabled: bool | None = None,
 ) -> bool:
     if enabled is None:
-        token = os.environ.get(_RELION_PROJECTOR_TEXTURE_ENV, "0").strip().lower()
+        token = os.environ.get(_RELION_PROJECTOR_TEXTURE_ENV, "1").strip().lower()
         if token in {"0", "false", "no", "off"}:
             return False
         if token not in {"1", "true", "yes", "on"}:
@@ -298,10 +298,10 @@ def compute_relion_projector_projections_block(
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block.
 
-    Strict parity defaults to the manual/JAX interpolator.  The CUDA texture
-    path remains available with ``RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP=1``
-    for diagnostics; it currently changes global K=1/K-class winners and
-    degrades RELION map FSC on the qualified parity fixtures.
+    Strict parity defaults to RELION's CUDA texture interpolator when the
+    custom CUDA projector is available.  Set
+    ``RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP=0`` to force the manual/JAX
+    diagnostic fallback.
     """
 
     image_size = int(image_shape[0])

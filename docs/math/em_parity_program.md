@@ -878,14 +878,25 @@ versus RELION 1330 s (`1.51963x`), with sparse pass 2 consuming 862.42 s.
 Summary:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_hybrid_full_20260712_121500/summary.md`.
 
-Next gate: test the exact even-size Nyquist-coordinate mismatch identified in
-the texture crop.  RELION keeps the two surviving coarse-disk endpoints as
-`(+N/2,0)` and `(0,+N/2)`, while RECOVAR currently samples them with negative
-Nyquist coordinates and relabels the output.  In parallel, clean 100k hybrid
-trajectory job `11058928` is running from detached commit `87fd1e78` with
-run-local, hash-qualified CUDA and RELION-bind artifacts.  Attempt `11058781`
-was rejected and cancelled before scoring because its CUDA output path was
-shared.
+The even-size Nyquist-coordinate mismatch is causal and fixed by `39dc2ce2`.
+RELION keeps the two surviving coarse-disk endpoints as `(+N/2,0)` and
+`(0,+N/2)`, while RECOVAR sampled them with negative Nyquist coordinates and
+then relabelled the output.  Row-2813 positive-Nyquist job `11059889` flips
+exactly the two discrepant hypotheses.  Six-row panel `11059982` plus stable
+row-7710 retry `11060171` match every direct RELION `(rotation,translation)`
+support set exactly: counts `71,15,67,6509,131,24`, each with symmetric
+difference zero.  Corrected RELION texture projection is now the default for
+both coarse and fine supplied-PPref scoring; environment value `0` retains the
+manual/JAX diagnostic fallback.  Qualification:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_nyquist_texture_panel6_20260712_153500/nyquist_panel6_qualification.json`.
+
+Next gate: rerun the full 10k trajectory with corrected texture scoring and
+adjudicate FSC/FSC-AUC against both RELION and the earlier hybrid result.
+In parallel, clean 100k hybrid scale job `11058928` continues from detached
+commit `87fd1e78` with run-local, hash-qualified CUDA and RELION-bind artifacts;
+it remains useful for scale/OOM evidence but is superseded for final quality by
+the Nyquist correction.  Attempt `11058781` was rejected and cancelled before
+scoring because its CUDA output path was shared.
 
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing

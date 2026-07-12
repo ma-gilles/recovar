@@ -2668,7 +2668,7 @@ def test_relion_projector_texture_full_embeds_positive_x_half():
     np.testing.assert_array_equal(full[:2], np.zeros((2, 5, 5), dtype=np.complex64))
 
 
-def test_relion_projector_texture_route_is_opt_in_and_can_be_disabled(monkeypatch):
+def test_relion_projector_texture_route_defaults_on_and_can_be_disabled(monkeypatch):
     from recovar.em.dense_single_volume.helpers import projection as projection_helpers
 
     projector_half = jnp.ones((5, 5, 3), dtype=jnp.complex64)
@@ -2677,7 +2677,7 @@ def test_relion_projector_texture_route_is_opt_in_and_can_be_disabled(monkeypatc
 
     monkeypatch.delenv("RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP", raising=False)
     monkeypatch.setattr(projection_helpers, "_cuda_projection_available", lambda: True)
-    assert not projection_helpers._relion_projector_texture_enabled(
+    assert projection_helpers._relion_projector_texture_enabled(
         projector_half,
         r_max=1,
         padding_factor=1,
@@ -2747,12 +2747,12 @@ def test_relion_projector_texture_route_is_opt_in_and_can_be_disabled(monkeypatc
     assert len(calls) == 1
 
 
-def test_global_pass1_relion_projector_texture_defaults_to_manual(monkeypatch):
+def test_global_pass1_relion_projector_texture_defaults_to_texture(monkeypatch):
     from recovar.em.dense_single_volume.helpers import significance
 
     monkeypatch.delenv("RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP", raising=False)
     monkeypatch.setenv("RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP", "1")
-    assert not significance._global_pass1_relion_projector_texture_enabled()
+    assert significance._global_pass1_relion_projector_texture_enabled()
 
     monkeypatch.setenv("RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP", "1")
     assert significance._global_pass1_relion_projector_texture_enabled()

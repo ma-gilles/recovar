@@ -2612,7 +2612,7 @@ def run_dense_k_class_em_adaptive(
     coarse_relion_projector_texture_interp : bool or None
         Explicitly select the supplied-PPref coarse projector.  ``None``
         defers to ``RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP``;
-        the environment default remains the strict-parity manual projector.
+        the strict-parity default is RELION texture interpolation.
     """
     # Lazy import to avoid the formatter stripping a top-level name that is
     # only referenced inside this function.

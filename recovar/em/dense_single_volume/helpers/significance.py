@@ -33,13 +33,10 @@ NVTX_DOMAIN_EM = "recovar_em"
 def _global_pass1_relion_projector_texture_enabled() -> bool:
     """Whether dense/global pass-1 significance uses texture arithmetic.
 
-    Coarse significance defaults to the manual/JAX RELION projector even when
-    fine scoring opts into texture interpolation.  The two stages have distinct
-    parity boundaries: texture is closer on fine score surfaces, while manual
-    pass 1 reproduces RELION's significant-parent support on the qualified
-    real-data fixture.
+    Coarse significance defaults to RELION's texture projector.  Set the
+    environment flag to false to force the manual/JAX diagnostic fallback.
     """
-    token = os.environ.get(_GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV, "0").strip().lower()
+    token = os.environ.get(_GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV, "1").strip().lower()
     if token in {"0", "false", "no", "off"}:
         return False
     if token in {"1", "true", "yes", "on"}:
