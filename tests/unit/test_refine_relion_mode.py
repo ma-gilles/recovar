@@ -2156,6 +2156,7 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
             local_search_random_perturbation=0.0,
             local_search_angular_sampling_deg=relion_angular_sampling_deg(1),
             local_parent_oversampling_order=1,
+            diagnostic_score_only=False,
             local_search_translation_prior_mode="coarse",
             replay_prior_translations=None,
             rotation_log_prior_k=rotation_log_prior,
