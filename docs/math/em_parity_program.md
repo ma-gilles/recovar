@@ -357,6 +357,42 @@ gates. The active K=1 step advances to a 10k intermediate-scale confirmation,
 then a characterized real-particle case and the pinned 100k/256 completion
 case; K=4 remains gated until those K=1 confirmations pass.
 
+The two-cell 10k/128 intermediate-scale matrix is also closed for map quality,
+convergence, finalization, memory, and matched-A100 timing. Immutable setup,
+case, and summary jobs `11033444`--`11033447` ran from commit `3cbfd9ea` under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_mid10k_strict_retry_20260711_235500`
+with separate marked runtime scratch at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_mid10k_strict_retry_20260711_235500`.
+The summary job passed its exact-HEAD and clean-worktree gates.
+
+Uniform/white case 31 matches RELION convergence at iteration 13 and the final
+all-data branch. Final RECOVAR-vs-RELION FSC-AUC is `0.998723`; minimum non-DC
+shell FSC is `0.997648`, fifth percentile is `0.997682`, and the last-ten-shell
+minimum is `0.997653`. RECOVAR-vs-GT FSC-AUC is `0.818646` versus RELION
+`0.801765`, with worst shellwise GT delta only `-0.000453`. RECOVAR refinement
+wall is `1009.8` seconds versus RELION `1702` seconds on matched A100s, a
+RECOVAR/RELION ratio of `0.593`.
+
+Kent/radial-noise-3 case 32 matches RELION convergence at iteration 11 and the
+final all-data branch. Final RECOVAR-vs-RELION FSC-AUC is `0.998250`; minimum
+non-DC shell FSC is `0.996442`, fifth percentile is `0.996871`, and the
+last-ten-shell minimum is `0.997256`. RECOVAR-vs-GT FSC-AUC is `0.272194`
+versus RELION `0.268373`. The localized GT-shell swing at shells 3--5 is not a
+map-parity deficit: RECOVAR-vs-RELION FSC is `0.999743` or better over shells
+1--5, and RECOVAR is better in aggregate and through the later signal-bearing
+shells. RECOVAR refinement wall is `950.9` seconds versus RELION `1154`
+seconds, a ratio of `0.824`.
+
+The remaining 10k state tail is an explicit diagnostic, not a map-quality
+failure. Final pose p95 is arithmetic-level in both cells and every pose is
+within 5 degrees, but case 31 Pmax p95/max absolute gaps are
+`0.01166/0.254996` and case 32 gaps are `0.002476/0.044970`. Case 32 has 70
+adjacent-fine-grid pose flips above 1 degree and three translation differences
+above 0.5 pixel. Before the real-particle and pinned 100k gates, adjudicate
+representative particles with fixed-state RECOVAR score/posterior dumps and an
+uninterrupted instrumented RELION run; continuation dumps are forbidden by the
+previously demonstrated finalization-state confound.
+
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
 quality boundary is known.
