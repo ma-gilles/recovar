@@ -578,6 +578,16 @@ default and keeps texture interpolation as the explicit
 `RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP=1` diagnostic.  Full manual-projector
 trajectory job `11050804` is the next gate.
 
+Source audit finds the largest texture-path defect: RELION clips each
+projection to the smaller of the PPref/model radius and the current image
+radius, while RECOVAR texture projection previously enforced only the PPref
+radius.  Commit `81681151` adds the missing current-image disk mask without
+changing the manual default.  K=4 probe `11051135` moves first-iteration
+occupancies from the broken `[2708,1768,2405,3119]` to
+`[3216,1710,2200,2874]`, toward RELION's `[3369,1828,2045,2758]`, but does not
+close the residual.  Keep texture opt-in until its remaining even-box
+Nyquist/coordinate arithmetic is isolated.
+
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
 shape is 168 images by 198 rotations by 9 translations by 12,861 score pixels.
