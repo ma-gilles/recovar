@@ -3,6 +3,7 @@ import pytest
 
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
+    final_output_fourier_volumes,
     map_pose_arrays_to_particle_order,
     parse_relion_optimiser_cli_flags,
     relion_final_gt_series,
@@ -14,6 +15,23 @@ from scripts.run_multi_iter_parity import (
     stack_index_from_image_name,
     validate_final_only_replay_args,
 )
+
+
+def test_final_output_uses_joined_reconstruction_not_average_of_regularized_halves():
+    result = {
+        "mean": np.asarray([7.0 + 2.0j, 8.0 + 3.0j], dtype=np.complex64),
+        "means": [
+            np.asarray([1.0 + 0.0j, 2.0 + 0.0j], dtype=np.complex64),
+            np.asarray([3.0 + 0.0j, 4.0 + 0.0j], dtype=np.complex64),
+        ],
+    }
+
+    half1, half2, merged = final_output_fourier_volumes(result)
+
+    np.testing.assert_array_equal(half1, result["means"][0])
+    np.testing.assert_array_equal(half2, result["means"][1])
+    np.testing.assert_array_equal(merged, result["mean"])
+    assert not np.array_equal(merged, (half1 + half2) / 2.0)
 
 
 def test_normalized_fsc_auc_excludes_dc_and_uses_canonical_input_range():

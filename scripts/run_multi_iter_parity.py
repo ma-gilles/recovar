@@ -322,6 +322,19 @@ def relion_final_gt_series(relion_final_ft: dict[str, np.ndarray], relion_merged
     return series
 
 
+def final_output_fourier_volumes(result):
+    """Return final half maps and RELION-semantic joined reconstruction.
+
+    The final all-data path reconstructs the combined BPref accumulator as
+    ``result["mean"]``.  Averaging the two separately regularized half maps is
+    not equivalent because Wiener reconstruction is nonlinear in the weights.
+    """
+    half1 = np.asarray(result["means"][0], dtype=np.complex64).reshape(-1)
+    half2 = np.asarray(result["means"][1], dtype=np.complex64).reshape(-1)
+    merged = np.asarray(result["mean"], dtype=np.complex64).reshape(-1)
+    return half1, half2, merged
+
+
 def validate_final_only_replay_args(
     *,
     max_iter: int,
@@ -1403,10 +1416,7 @@ def main():
         if result.get(key) is not None:
             save_dict[key] = np.asarray(str(result[key]))
 
-    final_half1_ft = np.asarray(result["means"][0], dtype=np.complex64).reshape(-1)
-    final_half2_ft = np.asarray(result["means"][1], dtype=np.complex64).reshape(-1)
-    final_merged_ft = (final_half1_ft.astype(np.complex128) + final_half2_ft.astype(np.complex128)) / 2.0
-    final_merged_ft = final_merged_ft.astype(np.complex64)
+    final_half1_ft, final_half2_ft, final_merged_ft = final_output_fourier_volumes(result)
 
     save_dict["final_half1_ft"] = final_half1_ft
     save_dict["final_half2_ft"] = final_half2_ft
