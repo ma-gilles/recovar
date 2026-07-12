@@ -5599,38 +5599,6 @@ def _run_relion_iteration_loop(
                 )
                 mean_signal_variance_per_half.append(mean_signal_variance_k)
                 tau2_update_details_per_half.append(tau2_update_details_k)
-            if relion_firstiter_cc_this_iter and relion_firstiter_ini_high_angstrom is not None:
-                tau2_taper = _firstiter_cc_ini_high_tau2_taper(
-                    len(tau2_update_details_per_half[0]["prior_shells"]),
-                    grid_size,
-                    cryo.voxel_size,
-                    relion_firstiter_ini_high_angstrom,
-                    filter_edgewidth=RELION_WIDTH_FMASK_EDGE,
-                )
-                radial_shells = np.asarray(
-                    fourier_transform_utils.get_grid_of_radial_distances(
-                        volume_shape,
-                        scaled=False,
-                        frequency_shift=0,
-                    ),
-                    dtype=np.int32,
-                ).reshape(-1)
-                radial_shells = np.minimum(radial_shells, len(tau2_taper) - 1)
-                tau2_taper_volume = jnp.asarray(tau2_taper[radial_shells], dtype=jnp.float32)
-                for half_idx in range(2):
-                    mean_signal_variance_per_half[half_idx] = (
-                        mean_signal_variance_per_half[half_idx] * tau2_taper_volume
-                    )
-                    for field in ("prior_shells", "ssnr_shells"):
-                        field_values = tau2_update_details_per_half[half_idx][field]
-                        tau2_update_details_per_half[half_idx][field] = field_values * jnp.asarray(
-                            tau2_taper,
-                            dtype=field_values.dtype,
-                        )
-                logger.info(
-                    "RELION iter-1 CC emulation: tapered tau2/data-vs-prior with ini_high=%.2f A",
-                    float(relion_firstiter_ini_high_angstrom),
-                )
             mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
             # Keep the single tau2 diagnostic fields aligned with RELION's half1
             # model.star, which is what the parity diff script reports.
@@ -5679,6 +5647,54 @@ def _run_relion_iteration_loop(
             relion_fmask_edge=RELION_WIDTH_FMASK_EDGE,
             accumulator_volume_shape=mstep_accumulator_shape,
         )
+
+        # RELION reconstructs the first-iteration CC maps with the untapered
+        # updateSSNRarrays tau2.  Only afterwards does
+        # initialLowPassFilterReferences taper tau2/data_vs_prior for the
+        # model state and reporting; that tapered spectrum is explicitly not
+        # used in the reconstruction calculation (ml_optimiser.cpp:5296-5328).
+        if (
+            not k_class_enabled
+            and relion_firstiter_cc_this_iter
+            and relion_firstiter_ini_high_angstrom is not None
+        ):
+            tau2_taper = _firstiter_cc_ini_high_tau2_taper(
+                len(tau2_update_details_per_half[0]["prior_shells"]),
+                grid_size,
+                cryo.voxel_size,
+                relion_firstiter_ini_high_angstrom,
+                filter_edgewidth=RELION_WIDTH_FMASK_EDGE,
+            )
+            radial_shells = np.asarray(
+                fourier_transform_utils.get_grid_of_radial_distances(
+                    volume_shape,
+                    scaled=False,
+                    frequency_shift=0,
+                ),
+                dtype=np.int32,
+            ).reshape(-1)
+            radial_shells = np.minimum(radial_shells, len(tau2_taper) - 1)
+            tau2_taper_volume = jnp.asarray(tau2_taper[radial_shells], dtype=jnp.float32)
+            for half_idx in range(2):
+                mean_signal_variance_per_half[half_idx] = (
+                    mean_signal_variance_per_half[half_idx] * tau2_taper_volume
+                )
+                for field in ("prior_shells", "ssnr_shells"):
+                    field_values = tau2_update_details_per_half[half_idx][field]
+                    tau2_update_details_per_half[half_idx][field] = field_values * jnp.asarray(
+                        tau2_taper,
+                        dtype=field_values.dtype,
+                    )
+            mean_signal_variance = 0.5 * (
+                mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1]
+            )
+            mean_variance = mean_signal_variance
+            tau2_update_details = tau2_update_details_per_half[0]
+            logger.info(
+                "RELION iter-1 CC emulation: tapered post-reconstruction tau2/data-vs-prior "
+                "with ini_high=%.2f A",
+                float(relion_firstiter_ini_high_angstrom),
+            )
         _parity_dump.mark_stage(iteration, "recon")
 
         significant_counts.append(iter_recorded_sig_counts)

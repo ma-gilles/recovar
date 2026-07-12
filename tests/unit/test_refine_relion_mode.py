@@ -6870,6 +6870,89 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(taper[19], expected19, rtol=0, atol=1e-15)
         np.testing.assert_array_equal(taper[20:], 0.0)
 
+    def test_firstiter_cc_reconstructs_before_tau2_reporting_taper(
+        self,
+        half_datasets,
+        init_volume,
+        rotations,
+        translations,
+        monkeypatch,
+    ):
+        """The ini_high tau2 taper changes reported state, not reconstruction."""
+        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+
+        untapered_tau = [7.0, 11.0]
+        taper = np.asarray([1.0, 0.5, 0.0, 0.0, 0.0], dtype=np.float64)
+        tau2_call = 0
+        reconstruction_tau = []
+
+        def fake_tau2_from_weights(*_args, **_kwargs):
+            nonlocal tau2_call
+            value = untapered_tau[tau2_call]
+            tau2_call += 1
+            shells = jnp.full(taper.shape, value, dtype=jnp.float32)
+            details = {
+                "prior_shells": shells,
+                "sigma2_shells": jnp.ones_like(shells),
+                "avg_weight_shells": jnp.ones_like(shells),
+                "shell_sum": jnp.ones_like(shells),
+                "shell_count": jnp.ones_like(shells),
+                "fsc_shells": jnp.ones_like(shells),
+                "ssnr_shells": shells,
+            }
+            return jnp.full(VOLUME_SIZE, value, dtype=jnp.float32), shells, details
+
+        def fake_reconstruct(*_args, **kwargs):
+            reconstruction_tau.append(np.asarray(kwargs["tau"]))
+            return jnp.ones(VOLUME_SIZE, dtype=jnp.complex64)
+
+        monkeypatch.setattr(
+            regularization_module,
+            "compute_relion_tau2_from_weights",
+            fake_tau2_from_weights,
+        )
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "_firstiter_cc_ini_high_tau2_taper",
+            lambda *_args, **_kwargs: taper,
+        )
+        monkeypatch.setattr(mean_helpers_module, "_reconstruct_volume_eager", fake_reconstruct)
+        monkeypatch.setattr(
+            mean_helpers_module,
+            "_apply_relion_initial_lowpass_filter",
+            lambda volume, *_args, **_kwargs: volume,
+        )
+
+        result = refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations,
+            translations,
+            disc_type="linear_interp",
+            max_iter=1,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            init_current_size=4,
+            init_healpix_order=2,
+            max_healpix_order=2,
+            low_resol_join_halves_angstrom=0.0,
+            emulate_relion_firstiter_cc=True,
+            relion_firstiter_ini_high_angstrom=8.0,
+            skip_final_iteration=True,
+        )
+
+        assert len(reconstruction_tau) == 2
+        np.testing.assert_array_equal(reconstruction_tau[0], untapered_tau[0])
+        np.testing.assert_array_equal(reconstruction_tau[1], untapered_tau[1])
+        np.testing.assert_allclose(
+            result["tau2_radial_trajectory"][0],
+            untapered_tau[0] * taper,
+            rtol=0.0,
+            atol=0.0,
+        )
+
     def test_align_fourier_volume_sign_to_reference_flips_negative_overlap(self):
         ref = np.array([1.0 + 0.0j, -2.0 + 0.0j], dtype=np.complex64)
         vol = -ref

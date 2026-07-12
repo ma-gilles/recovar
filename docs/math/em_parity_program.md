@@ -483,6 +483,54 @@ initial-low-pass, masked, nor grid on/off RECOVAR variants closes the gap.
 The next boundary is an identity-validated RELION dump immediately after
 reconstruction, after the iteration-1 low-pass, and after solvent flattening.
 
+Exact stage-map job `11044321` closes that boundary.  The stage hook is
+observationally inert: patched environment-off versus environment-on half-map
+FSC-AUC is above `0.99999999982`, minimum non-DC shell FSC is above
+`0.9999999968`, and all particle/model arrays are exact.  RELION's captured
+post-solvent maps are bit-exact with its written iteration-1 maps.  With exact
+RELION accumulators, however, the first mismatch is already the raw
+reconstruction: supported-shell FSC-AUC is only about `0.6003/0.6009` for the
+two halves and `0.5968` merged.  The supported post-low-pass comparison rises
+to about `0.9596`, while the mask turns the phase error into the familiar
+full-shell final FSC-AUC `0.988656`.  Thus neither low-pass nor solvent-mask
+ordering is the primary source.
+
+The initial hypothesis that RECOVAR omitted RELION's default iterative
+preweighting is false.  Exact-d476 binding probe `11045912` proves that RELION
+5.0.1 defaults to `skip_gridding=true`; its native closed-form skip branch,
+using the pre-filter RELION tau operand, reproduces the captured
+post-reconstruct maps at supported-shell FSC-AUC approximately
+`0.99999999999999`, full FSC-AUC above `0.99999999996`, relative L2 about
+`1.2e-7`, and maximum real-space delta about `6.3e-9`.  Setting zero
+preweight iterations with `skip_gridding=false` is identical, while enabling
+ten iterative preweight steps is slightly worse and substituting the saved
+post-hoc filtered tau is materially worse.
+
+Source audit then identifies the smallest correction.  RECOVAR currently
+applies `_firstiter_cc_ini_high_tau2_taper` to
+`mean_signal_variance_per_half` before reconstruction.  RELION reconstructs
+with the untapered tau, calls `initialLowPassFilterReferences` on the map, and
+only then tapers tau2/data-vs-prior for the model/reporting state; its source
+explicitly notes that those tapered values are not used in calculations.
+Preserve untapered per-half tau for reconstruction, create the tapered state
+copy afterward, and retain the existing post-reconstruction map low-pass and
+solvent mask.  Do not add iterative preweighting or a C++ production solver
+unless the corrected direct-JAX stage replay still leaves a measured gap.
+
+The corrected direct-JAX stage replay and production iteration now pass.
+Checkout-bound A100 replay `11046061` uses exact RELION accumulators plus
+RECOVAR-computed untapered tau and reaches merged post-reconstruct
+supported-shell FSC-AUC `0.999998526`, active post-low-pass FSC-AUC
+`0.999999998`, and final solvent-masked full FSC-AUC `0.999999993` with
+minimum non-DC FSC `0.999999844`.  Patched production job `11046453` reruns
+the real 10,000-particle first iteration end to end and reaches merged
+FSC-AUC `0.999991962`, minimum non-DC FSC `0.999984135`, and half-map
+FSC-AUC `0.999984760/0.999991332`; Pmax is bit-exact for all particles and
+pose/translation p95 errors remain at the numerical-noise scale.  Earlier
+job `11046279` is rejected because direct script execution resolved submodules
+from a different editable checkout; the corrected runner uses module execution
+and asserts the exact `iteration_loop.py` and CUDA wrapper paths.
+
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
 quality boundary is known.
