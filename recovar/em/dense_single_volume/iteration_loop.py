@@ -1707,10 +1707,14 @@ def _score_half_dense(
     if class_rotation_log_prior_k is not None:
         em_kwargs["rotation_log_prior"] = None
         em_kwargs["class_rotation_log_prior"] = class_rotation_log_prior_k
-    if relion_projector_half is not None and (k_class_enabled or int(state.adaptive_oversampling) > 0):
+    if relion_projector_half is not None:
         em_kwargs["relion_projector_half"] = relion_projector_half
         em_kwargs["relion_projector_r_max"] = relion_projector_r_max
-
+    logger.info(
+        "Dense half-set projector handoff: supplied_ppref=%s state_oversampling=%d",
+        relion_projector_half is not None,
+        int(state.adaptive_oversampling),
+    )
     if k_class_enabled:
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K-class refine does not support adjoint ablation flags")
@@ -1993,12 +1997,15 @@ def _score_half_dense(
             logger.info(
                 "RELION adaptive K=1 routing through run_dense_k_class_em_adaptive "
                 "(oversampling=%d, pass2_backend=%s, skip_significance_pruning=%s, "
-                "fine_mstep_prune=%s, relion_x_half_mstep=%s)",
+                "fine_mstep_prune=%s, relion_x_half_mstep=%s, supplied_ppref=%s, "
+                "engine_ppref=%s)",
                 adaptive_os_local,
                 "sparse" if k1_sparse_pass2 else "dense",
                 bool(k1_skip_significance_pruning),
                 bool(k1_sparse_pass2),
                 bool(k1_relion_x_half_mstep),
+                relion_projector_half is not None,
+                adaptive_em_kwargs.get("relion_projector_half") is not None,
             )
             k1_adaptive_result = run_dense_k_class_em_adaptive(
                 experiment_dataset,

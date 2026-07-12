@@ -196,12 +196,21 @@ def relion_projector_half_to_texture_full(volume_relion_half: jax.Array) -> jax.
     return full.at[center:, :, :].set(jnp.transpose(volume_relion_half, (2, 1, 0)))
 
 
-def _relion_projector_texture_enabled(volume_relion_half, *, r_max: int, padding_factor: int) -> bool:
-    token = os.environ.get(_RELION_PROJECTOR_TEXTURE_ENV, "0").strip().lower()
-    if token in {"0", "false", "no", "off"}:
+def _relion_projector_texture_enabled(
+    volume_relion_half,
+    *,
+    r_max: int,
+    padding_factor: int,
+    enabled: bool | None = None,
+) -> bool:
+    if enabled is None:
+        token = os.environ.get(_RELION_PROJECTOR_TEXTURE_ENV, "0").strip().lower()
+        if token in {"0", "false", "no", "off"}:
+            return False
+        if token not in {"1", "true", "yes", "on"}:
+            raise ValueError(f"Unsupported {_RELION_PROJECTOR_TEXTURE_ENV}={token!r}")
+    elif not bool(enabled):
         return False
-    if token not in {"1", "true", "yes", "on"}:
-        raise ValueError(f"Unsupported {_RELION_PROJECTOR_TEXTURE_ENV}={token!r}")
     shape = tuple(int(value) for value in volume_relion_half.shape)
     expected_pad = 2 * (int(float(padding_factor) * float(r_max) + 0.5) + 1) + 1
     return (
@@ -285,6 +294,7 @@ def compute_relion_projector_projections_block(
     dense_scale: bool = False,
     projector_output_size: int | None = None,
     pixel_indices=None,
+    relion_texture_interp: bool | None = None,
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block.
 
@@ -302,6 +312,7 @@ def compute_relion_projector_projections_block(
         volume_relion_half,
         r_max=int(r_max),
         padding_factor=int(padding_factor),
+        enabled=relion_texture_interp,
     )
 
     if use_texture:

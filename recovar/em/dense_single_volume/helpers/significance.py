@@ -26,7 +26,36 @@ _SIGNIFICANCE_SCORE_CACHE_ENV = "RECOVAR_SIGNIFICANCE_SCORE_CACHE"
 _SIGNIFICANCE_SCORE_CACHE_MAX_GB_ENV = "RECOVAR_SIGNIFICANCE_SCORE_CACHE_MAX_GB"
 _SIGNIFICANCE_SCORE_CACHE_DEFAULT_MAX_GB = 2.0
 _SIGNIFICANCE_FUSED_PASS1_ENV = "RECOVAR_PASS1_FUSED"
+_GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP"
 NVTX_DOMAIN_EM = "recovar_em"
+
+
+def _global_pass1_relion_projector_texture_enabled() -> bool:
+    """Whether dense/global pass-1 significance uses texture arithmetic.
+
+    Coarse significance defaults to the manual/JAX RELION projector even when
+    fine scoring opts into texture interpolation.  The two stages have distinct
+    parity boundaries: texture is closer on fine score surfaces, while manual
+    pass 1 reproduces RELION's significant-parent support on the qualified
+    real-data fixture.
+    """
+    token = os.environ.get(_GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV, "0").strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(f"Unsupported {_GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV}={token!r}")
+
+
+def _dense_projection_scale(image_shape) -> float:
+    """Match the dense E-step projection scaling used by the shared helper."""
+
+    token = (os.environ.get("RECOVAR_DENSE_MEANS_SCALE") or "-N2").strip()
+    n = int(image_shape[0])
+    scale = {"-N2": -(n**2), "N2": float(n**2)}.get(token)
+    if scale is None:
+        raise ValueError(f"Unsupported RECOVAR_DENSE_MEANS_SCALE={token!r}")
+    return scale
 
 
 class ComplementSignificantSampleIndices(NamedTuple):
@@ -627,6 +656,7 @@ def _compute_significance_batched(
     projection_force_jax=False,
     relion_projector_half=None,
     relion_projector_r_max=None,
+    relion_projector_texture_interp: bool | None = None,
     return_full_stats=False,
 ):
     """Run coarse E-step and find significant rotations in a memory-efficient way.
@@ -678,6 +708,9 @@ def _compute_significance_batched(
     )
     from recovar.em.dense_single_volume.helpers.projection import (
         compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
+    )
+    from recovar.em.dense_single_volume.helpers.projection import (
+        project_relion_projector_half_spectrum_centered_rows as _project_relion_projector_manual,
     )
     from recovar.em.dense_single_volume.helpers.scoring import (
         _e_step_block_scores,
@@ -731,6 +764,11 @@ def _compute_significance_batched(
     window_indices = window_spec.score_indices
     n_windowed = window_spec.n_score
     projection_kwargs = window_spec.projection_kwargs()
+    coarse_texture_interp = (
+        _global_pass1_relion_projector_texture_enabled()
+        if relion_projector_texture_interp is None
+        else bool(relion_projector_texture_interp)
+    )
     projection_kwargs["force_jax"] = bool(projection_force_jax)
     if use_window:
         half_weights_windowed = window_spec.score_values(half_weights)
@@ -849,16 +887,29 @@ def _compute_significance_batched(
             projector_kwargs = {}
             if current_size is not None:
                 projector_kwargs["projector_output_size"] = int(current_size)
-            proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
-                relion_projector_half,
-                jnp.asarray(rots_b),
-                image_shape,
-                r_max=int(relion_projector_r_max),
-                padding_factor=int(projection_padding_factor),
-                centered_rows=True,
-                dense_scale=True,
-                **projector_kwargs,
-            )
+            if coarse_texture_interp:
+                proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
+                    relion_projector_half,
+                    jnp.asarray(rots_b),
+                    image_shape,
+                    r_max=int(relion_projector_r_max),
+                    padding_factor=int(projection_padding_factor),
+                    centered_rows=True,
+                    dense_scale=True,
+                    relion_texture_interp=True,
+                    **projector_kwargs,
+                )
+            else:
+                proj_half_b = _project_relion_projector_manual(
+                    relion_projector_half,
+                    jnp.asarray(rots_b),
+                    image_shape,
+                    int(relion_projector_r_max),
+                    int(projection_padding_factor),
+                    projector_kwargs.get("projector_output_size"),
+                )
+                proj_half_b = proj_half_b * _dense_projection_scale(image_shape)
+                proj_abs2_half_b = jnp.abs(proj_half_b) ** 2
         else:
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
                 mean_for_proj,
@@ -1245,6 +1296,7 @@ def _compute_k_class_significance_batched(
     use_float64_scoring=False,
     relion_projector_half=None,
     relion_projector_r_max=None,
+    relion_projector_texture_interp: bool | None = None,
     score_mode: str = "gaussian",
     collect_significance: bool = True,
     return_class_best: bool = False,
@@ -1277,6 +1329,9 @@ def _compute_k_class_significance_batched(
     )
     from recovar.em.dense_single_volume.helpers.projection import (
         compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
+    )
+    from recovar.em.dense_single_volume.helpers.projection import (
+        project_relion_projector_half_spectrum_centered_rows as _project_relion_projector_manual,
     )
     from recovar.em.dense_single_volume.helpers.scoring import (
         _e_step_block_scores,
@@ -1317,7 +1372,6 @@ def _compute_k_class_significance_batched(
                 "relion_projector_half must have shape "
                 f"({n_classes}, z, y, x_half), got {relion_projector_half.shape}",
             )
-
     if projection_padding_factor > 1 and not use_relion_projector:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
 
@@ -1359,6 +1413,11 @@ def _compute_k_class_significance_batched(
     window_indices = window_spec.score_indices
     n_windowed = window_spec.n_score
     projection_kwargs = window_spec.projection_kwargs()
+    coarse_texture_interp = (
+        _global_pass1_relion_projector_texture_enabled()
+        if relion_projector_texture_interp is None
+        else bool(relion_projector_texture_interp)
+    )
     if use_window:
         half_weights_windowed = window_spec.score_values(half_weights)
     if use_float64_scoring:
@@ -1457,16 +1516,29 @@ def _compute_k_class_significance_batched(
             projector_kwargs = {}
             if current_size is not None:
                 projector_kwargs["projector_output_size"] = int(current_size)
-            proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
-                relion_projector_half[class_index],
-                rots_b,
-                image_shape,
-                r_max=int(relion_projector_r_max),
-                padding_factor=int(projection_padding_factor),
-                centered_rows=True,
-                dense_scale=True,
-                **projector_kwargs,
-            )
+            if coarse_texture_interp:
+                proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
+                    relion_projector_half[class_index],
+                    rots_b,
+                    image_shape,
+                    r_max=int(relion_projector_r_max),
+                    padding_factor=int(projection_padding_factor),
+                    centered_rows=True,
+                    dense_scale=True,
+                    relion_texture_interp=True,
+                    **projector_kwargs,
+                )
+            else:
+                proj_half_b = _project_relion_projector_manual(
+                    relion_projector_half[class_index],
+                    rots_b,
+                    image_shape,
+                    int(relion_projector_r_max),
+                    int(projection_padding_factor),
+                    projector_kwargs.get("projector_output_size"),
+                )
+                proj_half_b = proj_half_b * _dense_projection_scale(image_shape)
+                proj_abs2_half_b = jnp.abs(proj_half_b) ** 2
         else:
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
                 mean_for_proj,

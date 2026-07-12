@@ -775,6 +775,7 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
         current_size=26,
         image_batch_size=7,
         rotation_block_size=5,
+        coarse_relion_projector_texture_interp=True,
     )
 
     assert len(calls) == 1
@@ -782,6 +783,7 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
     assert calls[0]["collect_significance"] is False
     assert calls[0]["return_class_best"] is True
     assert calls[0]["current_size"] == 26
+    assert calls[0]["relion_projector_texture_interp"] is True
     np.testing.assert_allclose(calls[0]["class_log_priors"], np.zeros(2, dtype=np.float64))
     assert calls[0]["rotation_log_prior"] is None
     assert calls[0]["translation_log_prior"] is None
@@ -898,6 +900,7 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
     assert probe_calls[0]["current_size"] == 26
     assert probe_calls[0]["image_batch_size"] == 3
     assert probe_calls[0]["rotation_block_size"] == 5
+    assert probe_calls[0]["coarse_relion_projector_texture_interp"] is False
     assert dense_calls[0]["current_size"] == 56
     assert dense_calls[0]["image_batch_size"] == 19
     assert dense_calls[0]["rotation_block_size"] == 23

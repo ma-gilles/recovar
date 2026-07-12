@@ -2728,6 +2728,39 @@ def test_relion_projector_texture_route_is_opt_in_and_can_be_disabled(monkeypatc
     np.testing.assert_array_equal(np.asarray(fallback), np.full((1, 12), 7.0 + 0.0j, dtype=np.complex64))
     assert len(calls) == 1
 
+    monkeypatch.setenv("RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP", "1")
+    explicit_fallback, _ = projection_helpers.compute_relion_projector_projections_block(
+        projector_half,
+        rotations,
+        (4, 4),
+        r_max=1,
+        padding_factor=1,
+        return_abs2=False,
+        centered_rows=True,
+        projector_output_size=2,
+        relion_texture_interp=False,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(explicit_fallback),
+        np.full((1, 12), 7.0 + 0.0j, dtype=np.complex64),
+    )
+    assert len(calls) == 1
+
+
+def test_global_pass1_relion_projector_texture_defaults_to_manual(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import significance
+
+    monkeypatch.delenv("RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP", raising=False)
+    monkeypatch.setenv("RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP", "1")
+    assert not significance._global_pass1_relion_projector_texture_enabled()
+
+    monkeypatch.setenv("RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP", "1")
+    assert significance._global_pass1_relion_projector_texture_enabled()
+
+    monkeypatch.setenv("RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP", "invalid")
+    with pytest.raises(ValueError, match="RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP"):
+        significance._global_pass1_relion_projector_texture_enabled()
+
 
 def test_texture_centered_crop_masks_current_image_disk():
     from recovar.em.dense_single_volume.helpers.projection import _texture_centered_crop_to_full
@@ -8919,6 +8952,59 @@ class TestRelionModeSmokeTest:
         assert sig_rot_any.shape == (rotations.shape[0],)
         assert n_sig.shape == (half_datasets[0].n_units,)
         assert ha.shape == (half_datasets[0].n_units,)
+
+    def test_k_class_significance_manual_ppref_bypasses_texture_selector(
+        self,
+        half_datasets,
+        monkeypatch,
+    ):
+        """Strict coarse scoring must call the manual PPref leaf directly."""
+        from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+
+        manual_calls = []
+
+        def fake_manual(projector_half, rotations, image_shape, r_max, padding_factor, output_size):
+            manual_calls.append((projector_half.shape, rotations.shape, r_max, padding_factor, output_size))
+            n_half = int(image_shape[0] * (image_shape[1] // 2 + 1))
+            return jnp.ones((rotations.shape[0], n_half), dtype=jnp.complex64)
+
+        def fail_texture_selector(*_args, **_kwargs):
+            raise AssertionError("manual coarse PPref scoring reached the texture selector")
+
+        monkeypatch.setattr(
+            projection_helpers,
+            "project_relion_projector_half_spectrum_centered_rows",
+            fake_manual,
+        )
+        monkeypatch.setattr(
+            projection_helpers,
+            "compute_relion_projector_projections_block",
+            fail_texture_selector,
+        )
+
+        dataset = half_datasets[0]
+        rotations = _make_rotations(3, seed=20)
+        _compute_k_class_significance_batched(
+            dataset,
+            jnp.zeros((1, VOLUME_SIZE), dtype=jnp.complex64),
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            rotations,
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
+            adaptive_fraction=1.0,
+            max_significants=1,
+            image_batch_size=dataset.n_units,
+            rotation_block_size=2,
+            current_size=None,
+            relion_projector_half=jnp.zeros((1, 3, 3, 2), dtype=jnp.complex64),
+            relion_projector_r_max=1,
+            relion_projector_texture_interp=False,
+            collect_significance=False,
+            return_class_best=True,
+        )
+
+        assert manual_calls
 
     def test_significance_batched_matches_run_em_with_pre_shifts_scales_and_projection_padding(
         self,

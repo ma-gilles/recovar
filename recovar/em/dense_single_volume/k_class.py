@@ -1357,6 +1357,10 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         use_float64_scoring=bool(engine_kwargs.get("use_float64_scoring", False)),
         relion_projector_half=engine_kwargs.get("relion_projector_half"),
         relion_projector_r_max=engine_kwargs.get("relion_projector_r_max"),
+        relion_projector_texture_interp=engine_kwargs.get(
+            "coarse_relion_projector_texture_interp",
+            False,
+        ),
         score_mode="normalized_cc",
         collect_significance=bool(os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR")),
         return_class_best=True,
@@ -2566,6 +2570,9 @@ def run_dense_k_class_em_adaptive(
     skip_significance_pruning: bool = False,
     relion_fine_mstep_prune: bool = False,
     firstiter_cc_pass2_only_best_coarse: bool = False,
+    coarse_relion_projector_texture_interp: bool | None = False,
+    relion_projector_half=None,
+    relion_projector_r_max: int | None = None,
     return_best_pose_details: bool = False,
     **engine_kwargs,
 ) -> KClassEMResult:
@@ -2608,6 +2615,16 @@ def run_dense_k_class_em_adaptive(
     from .helpers.significance import _compute_k_class_significance_batched
 
     overall_t0 = time.time()
+    if relion_projector_half is not None:
+        # Keep the supplied PPref available to fine pass 2 after consuming it
+        # as an explicit coarse-pass argument above.
+        engine_kwargs["relion_projector_half"] = relion_projector_half
+        engine_kwargs["relion_projector_r_max"] = relion_projector_r_max
+    logger.info(
+        "Adaptive K-class coarse projector: supplied_ppref=%s texture_interp=%s",
+        relion_projector_half is not None,
+        coarse_relion_projector_texture_interp,
+    )
     means_array = _as_class_means(means)
     n_classes = int(means_array.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
@@ -2692,6 +2709,9 @@ def run_dense_k_class_em_adaptive(
         coarse_probe_kwargs["rotation_block_size"] = sig_rbs
         coarse_probe_kwargs["relion_firstiter_score_mode"] = "normalized_cc"
         coarse_probe_kwargs["relion_firstiter_winner_take_all"] = True
+        coarse_probe_kwargs["coarse_relion_projector_texture_interp"] = (
+            coarse_relion_projector_texture_interp
+        )
         coarse_probe_kwargs["current_size"] = (
             coarse_current_size if coarse_current_size is not None else fine_current_size
         )
@@ -2749,8 +2769,9 @@ def run_dense_k_class_em_adaptive(
             square_window=engine_kwargs.get("square_window", False),
             use_float64_scoring=engine_kwargs.get("use_float64_scoring", False),
             score_mode=engine_kwargs.get("relion_firstiter_score_mode", "gaussian"),
-            relion_projector_half=engine_kwargs.get("relion_projector_half"),
-            relion_projector_r_max=engine_kwargs.get("relion_projector_r_max"),
+            relion_projector_half=relion_projector_half,
+            relion_projector_r_max=relion_projector_r_max,
+            relion_projector_texture_interp=coarse_relion_projector_texture_interp,
         )
 
         with nvtx.annotate("kclass.adaptive.significance", color="orange", domain=NVTX_DOMAIN_EM):
