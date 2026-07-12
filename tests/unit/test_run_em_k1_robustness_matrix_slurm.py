@@ -376,6 +376,9 @@ def test_launcher_records_submission_and_runtime_git_fingerprints(tmp_path):
     assert (provenance_dir / "git_diff.sha256").exists()
     fingerprint = (provenance_dir / "git_worktree_fingerprint.sha256").read_text().strip()
     assert len(fingerprint) == 64
+    components = (provenance_dir / "git_component_sha256.txt").read_text().splitlines()
+    assert len(components) == 3
+    assert all(len(component) == 64 and component.isalnum() for component in components)
     submission = (scratch / "submission.env").read_text()
     assert f"SUBMISSION_GIT_PROVENANCE_DIR={provenance_dir}" in submission
     assert f"SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256={fingerprint}" in submission
@@ -392,6 +395,7 @@ def test_launcher_records_submission_and_runtime_git_fingerprints(tmp_path):
     assert "ERROR: queued-job Git HEAD drift" in text
     assert "ERROR: queued-job worktree fingerprint drift" in text
     assert "Queued-job Git provenance gate ok" in text
+    assert "git_status_porcelain.txt\" 2>/dev/null | awk '{print $1}'" in text
 
 
 def test_runtime_caches_use_separate_em_runtime_root(tmp_path):

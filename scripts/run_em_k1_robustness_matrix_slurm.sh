@@ -413,12 +413,9 @@ capture_git_provenance_snapshot() {
       tar --null --files-from="${out_dir}/git_untracked_files.zlist" -cf "${out_dir}/git_untracked_files.tar" 2> "${out_dir}/git_untracked_files.tar.err" || true
     fi
     {
-      sha256sum "${out_dir}/git_status_porcelain.txt" 2>/dev/null || true
-      sha256sum "${out_dir}/git_diff.patch" 2>/dev/null || true
-      sha256sum "${out_dir}/git_untracked_file_hashes.tsv" 2>/dev/null || true
-      if [[ -f "${out_dir}/git_untracked_files.tar" ]]; then
-        sha256sum "${out_dir}/git_untracked_files.tar" 2>/dev/null || true
-      fi
+      sha256sum "${out_dir}/git_status_porcelain.txt" 2>/dev/null | awk '{print $1}' || true
+      sha256sum "${out_dir}/git_diff.patch" 2>/dev/null | awk '{print $1}' || true
+      sha256sum "${out_dir}/git_untracked_file_hashes.tsv" 2>/dev/null | awk '{print $1}' || true
     } > "${out_dir}/git_component_sha256.txt"
     sha256sum "${out_dir}/git_component_sha256.txt" | awk '{print $1}' > "${out_dir}/git_worktree_fingerprint.sha256"
   )
@@ -523,12 +520,9 @@ if [[ -s "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_files.zlist" ]]; then
   tar --null --files-from="\${JOB_GIT_PROVENANCE_DIR}/git_untracked_files.zlist" -cf "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_files.tar" 2> "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_files.tar.err" || true
 fi
 {
-  sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_status_porcelain.txt" 2>/dev/null || true
-  sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_diff.patch" 2>/dev/null || true
-  sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_file_hashes.tsv" 2>/dev/null || true
-  if [[ -f "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_files.tar" ]]; then
-    sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_files.tar" 2>/dev/null || true
-  fi
+  sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_status_porcelain.txt" 2>/dev/null | awk '{print \$1}' || true
+  sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_diff.patch" 2>/dev/null | awk '{print \$1}' || true
+  sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_file_hashes.tsv" 2>/dev/null | awk '{print \$1}' || true
 } > "\${JOB_GIT_PROVENANCE_DIR}/git_component_sha256.txt"
 sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_component_sha256.txt" | awk '{print \$1}' > "\${JOB_GIT_PROVENANCE_DIR}/git_worktree_fingerprint.sha256"
 echo "Git provenance dir: \${JOB_GIT_PROVENANCE_DIR}"
