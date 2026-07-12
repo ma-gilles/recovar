@@ -1480,12 +1480,14 @@ project_texture_kernel(
 
     const int k0_idx = pix / image_w;
     const int k1_idx = pix % image_w;
-    const float k0_unscaled = (float)(k0_idx - image_h / 2);
+    /* RELION keeps both even-box Nyquist axes positive in its accelerated
+     * half-spectrum projector.  This differs intentionally from RECOVAR's
+     * generic centered-grid convention used by the non-texture kernels. */
+    const float k0_unscaled = (float)(
+        k0_idx == 0 ? image_h / 2 : k0_idx - image_h / 2);
     float k1_unscaled;
     if (HALF_IMG) {
-        k1_unscaled = (k1_idx * 2 == full_image_w)
-             ? (float)(-k1_idx)
-             : (float)(k1_idx);
+        k1_unscaled = (float)k1_idx;
     } else {
         k1_unscaled = (float)(k1_idx - image_w / 2);
     }
@@ -1547,12 +1549,12 @@ project_texture_double_kernel(
 
     const int k0_idx = pix / image_w;
     const int k1_idx = pix % image_w;
-    const float k0_unscaled = (float)(k0_idx - image_h / 2);
+    /* Keep the coordinate convention identical to the C64 texture path. */
+    const float k0_unscaled = (float)(
+        k0_idx == 0 ? image_h / 2 : k0_idx - image_h / 2);
     float k1_unscaled;
     if (HALF_IMG) {
-        k1_unscaled = (k1_idx * 2 == full_image_w)
-             ? (float)(-k1_idx)
-             : (float)(k1_idx);
+        k1_unscaled = (float)k1_idx;
     } else {
         k1_unscaled = (float)(k1_idx - image_w / 2);
     }

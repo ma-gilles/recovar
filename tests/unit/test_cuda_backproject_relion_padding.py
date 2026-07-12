@@ -1,6 +1,6 @@
 import pytest
 
-from recovar.cuda_backproject import _infer_backproject_upsampling
+from recovar.cuda_backproject import _infer_backproject_upsampling, _project_ffi_kwargs
 from recovar.em.dense_single_volume.helpers.fourier_window import centered_half_indices_to_fftw_half_indices
 
 pytestmark = pytest.mark.unit
@@ -49,3 +49,16 @@ def test_centered_half_indices_to_fftw_half_indices_remaps_rows_only():
         100 * half_width + 5,
         28 * half_width + 7,
     ]
+
+
+def test_relion_texture_uses_one_canonical_boolean_ffi_mode(monkeypatch):
+    args = ((56, 56), (115, 115, 115), 1, False, True, 28)
+
+    # The retired diagnostic environment variable must not create a hidden
+    # third mode: True always means the production RELION texture convention.
+    monkeypatch.setenv("RECOVAR_RELION_TEXTURE_POSITIVE_NYQUIST", "1")
+    texture, _, _ = _project_ffi_kwargs(*args, relion_texture_interp=True)
+    assert int(texture["relion_texture_interp"]) == 1
+
+    non_texture, _, _ = _project_ffi_kwargs(*args, relion_texture_interp=False)
+    assert int(non_texture["relion_texture_interp"]) == 0

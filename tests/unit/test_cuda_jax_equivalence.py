@@ -726,6 +726,46 @@ def test_identity_rotation_project_cuda_vs_jax(gpu_device):
     )
 
 
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+def test_relion_texture_keeps_even_box_nyquist_axes_positive(gpu_device, dtype):
+    """RELION texture projection must not fold either packed Nyquist axis."""
+    _skip_if_no_cuda()
+    from recovar.cuda_backproject import project
+
+    image_shape = (56, 56)
+    volume_shape = (115, 115, 115)
+    center = volume_shape[0] // 2
+    padded_nyquist = image_shape[0]
+    volume = np.zeros(volume_shape, dtype=dtype)
+
+    # _rot_to_compact swaps identity's first two rows: image row frequency
+    # maps to model y and packed image-column frequency maps to model x.
+    positive_row_value = dtype(3.0 + 5.0j)
+    negative_row_value = dtype(7.0 + 11.0j)
+    positive_column_value = dtype(13.0 + 17.0j)
+    volume[center, center + padded_nyquist, center] = positive_row_value
+    volume[center, center - padded_nyquist, center] = negative_row_value
+    volume[center + padded_nyquist, center, center] = positive_column_value
+
+    rotations = jnp.eye(3, dtype=jnp.float32)[None]
+    with jax.default_device(gpu_device):
+        projected = project(
+            jax.device_put(jnp.asarray(volume.ravel())),
+            jax.device_put(rotations),
+            image_shape,
+            volume_shape,
+            order=1,
+            half_volume=False,
+            half_image=True,
+            max_r=28,
+            relion_texture_interp=True,
+        )
+
+    projected = np.asarray(projected).reshape(1, image_shape[0], image_shape[1] // 2 + 1)
+    np.testing.assert_allclose(projected[0, 0, 0], positive_row_value, atol=1e-6, rtol=0)
+    np.testing.assert_allclose(projected[0, image_shape[0] // 2, image_shape[1] // 2], positive_column_value, atol=1e-6, rtol=0)
+
+
 def test_axis_rotations_project_cuda_vs_jax(gpu_device):
     """90-degree axis rotations should produce identical slices on CUDA and JAX."""
     _skip_if_no_cuda()

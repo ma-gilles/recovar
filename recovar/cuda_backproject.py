@@ -811,7 +811,9 @@ def _project_ffi_kwargs(
     """FFI kwargs for forward projection.
 
     ``relion_texture_interp=True`` enables CUDA texture interpolation for
-    full-volume order-1 projections, matching RELION's accelerated projector.
+    full-volume order-1 projections, including RELION's positive even-box
+    Nyquist convention. Generic projections retain RECOVAR's centered-grid
+    convention.
     """
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     kw["relion_texture_interp"] = np.int64(int(relion_texture_interp))
@@ -1010,8 +1012,9 @@ def project(
     """Project *volume* to 2D images.
 
     ``relion_texture_interp=True`` uses RELION-style CUDA texture
-    interpolation where the FFI backend supports it. The flag is forwarded as
-    a static argument so manual and texture traces cannot alias in JAX caches.
+    interpolation, including RELION's positive even-box Nyquist convention,
+    where the FFI backend supports it. The flag is forwarded as a static
+    argument so manual and texture traces cannot alias in JAX caches.
     """
     global _texture_debug_keys
     debug_key = (
