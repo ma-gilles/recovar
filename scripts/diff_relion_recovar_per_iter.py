@@ -257,6 +257,22 @@ def extract_relion_per_shell(relion_iter, half):
     return out
 
 
+def extract_relion_direction_prior(relion_iter, half):
+    """Extract RELION's class-1 HEALPix direction prior (pdf_direction) for one half.
+
+    This is a per-half MlModel array in gold-standard auto-refine, same as
+    sigma_offset -- each half learns its own orientation distribution from
+    only its own particles.
+    """
+    model = relion_iter[f"model_h{half}"]
+    if model is None or "model_pdf_orient_class_1" not in model:
+        return None
+    df = model["model_pdf_orient_class_1"]
+    if "rlnOrientationDistribution" not in df.columns:
+        return None
+    return np.asarray(df["rlnOrientationDistribution"], dtype=np.float64)
+
+
 def load_recovar(npz_path):
     if not npz_path.exists():
         return None
@@ -381,6 +397,46 @@ def extract_recovar_per_shell(recovar, it):
         out["SsnrMap"] = ssnr
         out["DataVsPriorRatio"] = out["SsnrMap"]
     return out if out else None
+
+
+def extract_recovar_direction_prior(recovar, it):
+    """Return recovar's [half1, half2] direction-prior snapshot at iter index `it`.
+
+    ``direction_prior_trajectory_per_half`` is a ragged object array (one
+    entry per iteration, each a 2-list of arrays or None) since the direction
+    count grows with healpix_order across iterations.
+    """
+    if recovar is None or "direction_prior_trajectory_per_half" not in recovar.files:
+        return None, None
+    traj = recovar["direction_prior_trajectory_per_half"]
+    if it < 0 or it >= len(traj):
+        return None, None
+    entry = traj[it]
+    if entry is None:
+        return None, None
+    h1, h2 = entry[0], entry[1]
+    h1 = np.asarray(h1, dtype=np.float64) if h1 is not None else None
+    h2 = np.asarray(h2, dtype=np.float64) if h2 is not None else None
+    return h1, h2
+
+
+def compare_direction_priors(relion_arr, recovar_arr):
+    """Summarize the agreement between one half's RELION and recovar direction priors."""
+    if relion_arr is None or recovar_arr is None:
+        return None
+    if relion_arr.shape != recovar_arr.shape:
+        return {"mismatch": True, "n_relion": int(relion_arr.size), "n_recovar": int(recovar_arr.size)}
+    diff = relion_arr - recovar_arr
+    corr = float("nan")
+    if relion_arr.size > 1 and np.std(relion_arr) > 0 and np.std(recovar_arr) > 0:
+        corr = float(np.corrcoef(relion_arr, recovar_arr)[0, 1])
+    return {
+        "mismatch": False,
+        "n_directions": int(relion_arr.size),
+        "corr": corr,
+        "max_abs_diff": float(np.max(np.abs(diff))),
+        "l1": float(np.sum(np.abs(diff))),
+    }
 
 
 def fsc_resolution_angstrom(fsc, voxel_size, grid_size, threshold=0.143):
@@ -583,6 +639,39 @@ def main():
             v = rsc.get(f)
             if v is not None and not (isinstance(v, float) and np.isnan(v)):
                 print(f"    {label:<26s} {fmt(v, 16):>16s}")
+
+        # ---- pdf_orient (direction prior) comparison ----
+        # RELION's model_pdf_orient_class_1::rlnOrientationDistribution is a
+        # per-half MlModel array (independent gold-standard halves, same as
+        # sigma_offset); compare half1 vs half1 and half2 vs half2.
+        recovar_dir_h1, recovar_dir_h2 = (
+            extract_recovar_direction_prior(recovar, recovar_iter_index) if recovar_iter_index >= 0 else (None, None)
+        )
+        direction_prior_rows = [
+            ("h1", extract_relion_direction_prior(relion_iter, half=1), recovar_dir_h1),
+            ("h2", extract_relion_direction_prior(relion_iter, half=2), recovar_dir_h2),
+        ]
+        if any(
+            relion_arr is not None or recovar_arr is not None for _, relion_arr, recovar_arr in direction_prior_rows
+        ):
+            print(f"  {'pdf_orient (direction prior):':<28s}")
+            for label, relion_arr, recovar_arr in direction_prior_rows:
+                stats = compare_direction_priors(relion_arr, recovar_arr)
+                if stats is None:
+                    print(f"    {label:<26s} {'—':>16s}  (missing on one side)")
+                elif stats["mismatch"]:
+                    print(
+                        f"    {label:<26s} healpix_order mismatch "
+                        f"(RELION n={stats['n_relion']}, recovar n={stats['n_recovar']}) — skipped"
+                    )
+                else:
+                    corr = stats["corr"]
+                    color = GREEN if corr >= 1 - args.tol else (YELLOW if corr >= 1 - 10 * args.tol else RED)
+                    print(
+                        f"    {label:<26s} n={stats['n_directions']:<6d} "
+                        f"corr={color}{corr:.6f}{RESET}  "
+                        f"max_abs_diff={stats['max_abs_diff']:.3e}  L1={stats['l1']:.3e}"
+                    )
 
         # ---- Per-shell comparison ----
         if rps is not None and rps.get("_n_shells", 0) > 0:

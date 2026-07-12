@@ -1186,6 +1186,11 @@ def main():
         save_dict["sigma_offset_used_trajectory_per_half"] = np.array(
             result["sigma_offset_used_trajectory_per_half"], dtype=np.float64
         )
+    if result.get("direction_prior_trajectory_per_half"):
+        # Ragged: direction count grows with healpix_order across iterations.
+        save_dict["direction_prior_trajectory_per_half"] = np.asarray(
+            result["direction_prior_trajectory_per_half"], dtype=object
+        )
     for scalar_name in [
         "frac_changed_trajectory",
         "acc_rot_trajectory",

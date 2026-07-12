@@ -1674,6 +1674,10 @@ def _run_relion_iteration_loop(
     # threading per-class sigma into the engine's translation log_prior
     # is the next step (requires k_class.py engine signature change).
     per_class_sigma_offset_trajectory = []
+    # Per-iter snapshot of the learned HEALPix direction prior (RELION's
+    # pdf_direction / model_pdf_orient_class_1), one entry per half; None
+    # while no learned prior has replaced the uniform default yet.
+    direction_prior_trajectory_per_half = []
     frac_changed_trajectory = []
     acc_rot_trajectory = []
     smallest_change_angles_trajectory = []
@@ -3045,6 +3049,20 @@ def _run_relion_iteration_loop(
                     )
                     global_direction_prior_order_per_half[k] = current_healpix_order
 
+        # Snapshot class-1 (or shared) direction prior for RELION-parity
+        # comparison against model_pdf_orient_class_1::rlnOrientationDistribution.
+        if k_class_enabled:
+            direction_prior_snapshot = [
+                None if class_direction_prior_per_half[k] is None else np.asarray(class_direction_prior_per_half[k][0])
+                for k in range(2)
+            ]
+        else:
+            direction_prior_snapshot = [
+                None if global_direction_prior_per_half[k] is None else np.asarray(global_direction_prior_per_half[k])
+                for k in range(2)
+            ]
+        direction_prior_trajectory_per_half.append(direction_prior_snapshot)
+
         # --- Compute unregularized half-maps only when diagnostics need them ---
         # K=1 FSC was already computed above directly from the BackProjector
         # accumulators (current_iter_fsc), matching RELION ordering. For K>1
@@ -3617,6 +3635,7 @@ def _run_relion_iteration_loop(
             "sigma_offset_used_trajectory_per_half": sigma_offset_used_trajectory_per_half,
             "sigma_offset_trajectory_per_half": sigma_offset_trajectory_per_half,
             "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
+            "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
             "frac_changed_trajectory": frac_changed_trajectory,
             "acc_rot_trajectory": acc_rot_trajectory,
             "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
@@ -3840,6 +3859,7 @@ def _run_relion_iteration_loop(
         "sigma_offset_used_trajectory_per_half": sigma_offset_used_trajectory_per_half,
         "sigma_offset_trajectory_per_half": sigma_offset_trajectory_per_half,
         "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
+        "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
         "frac_changed_trajectory": frac_changed_trajectory,
         "acc_rot_trajectory": acc_rot_trajectory,
         "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
