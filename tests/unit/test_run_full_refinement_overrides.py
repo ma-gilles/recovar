@@ -500,6 +500,41 @@ def test_replay_overrides_inject_per_iter_sigma_offset():
 
 
 @pytest.mark.skipif(not FIXTURE.exists(), reason=f"fixture missing: {FIXTURE}")
+def test_replay_overrides_can_load_complete_iter0_cold_start():
+    half1_idx = np.arange(2515, dtype=np.int64)
+    half2_idx = np.arange(2515, 5000, dtype=np.int64)
+
+    overrides = _build_replay_iteration_overrides(
+        FIXTURE,
+        half1_idx,
+        half2_idx,
+        max_iter=0,
+        ds_voxel=4.25,
+        ds_grid=128,
+        include_normcorr=True,
+        include_initial_state=True,
+    )
+
+    cold_start = overrides[0]
+    assert cold_start is not None
+    assert cold_start["previous_best_translations"][0].shape == (2515, 2)
+    assert cold_start["previous_best_translations"][1].shape == (2485, 2)
+    assert cold_start["previous_best_rotation_eulers"][0].shape == (2515, 3)
+    assert cold_start["previous_best_rotation_eulers"][1].shape == (2485, 3)
+    assert cold_start["image_corrections"][0].shape == (2515,)
+    assert cold_start["scale_corrections"][1].shape == (2485,)
+    assert cold_start["direction_prior"][0].ndim == 1
+    assert cold_start["translation_sigma_angstrom"] == pytest.approx(
+        0.5
+        * (
+            _read_relion_sigma(FIXTURE / "run_it000_half1_model.star")
+            + _read_relion_sigma(FIXTURE / "run_it000_half2_model.star")
+        ),
+        abs=1e-6,
+    )
+
+
+@pytest.mark.skipif(not FIXTURE.exists(), reason=f"fixture missing: {FIXTURE}")
 def test_replay_overrides_iter2_sigma_matches_relion_iter1():
     """Specifically lock down the iter-2 cliff fix.
 

@@ -424,6 +424,7 @@ def _build_replay_iteration_overrides(
     include_normcorr,
     init_relion_iteration=0,
     particle_names=None,
+    include_initial_state=False,
 ):
     """Build per-iter replay overrides keyed on recovar iteration index.
 
@@ -446,6 +447,12 @@ def _build_replay_iteration_overrides(
     set it to a later RELION iteration to jump directly into local search; in
     that case override slot 0 is sourced from the upstream RELION iteration
     instead of being left empty.
+
+    When ``include_initial_state`` is true, slot 0 is loaded from RELION
+    iteration 0 as well. This is required for a strict cold-start replay:
+    run_it000 carries the particle pre-centering offsets, initial orientations,
+    image/scale corrections, and direction prior that RELION uses in its first
+    expectation step.
     """
     import re as _re
     from pathlib import Path as _Path
@@ -516,12 +523,12 @@ def _build_replay_iteration_overrides(
     init_relion_iteration = int(init_relion_iteration)
     for recovar_iter in range(0, max_iter + 1):
         # recovar iter k uses corrections computed by RELION iter k (which were
-        # written into run_it{k}_data.star). recovar iter 1 (the first iter) has
-        # no upstream RELION normcorr — leave that override as None so the
-        # E-step uses image_corrections=None (=1.0 for all particles, matching
-        # RELION iter-0 nc=1.0).
+        # written into run_it{k}_data.star). Fresh non-replay runs retain the
+        # historical empty slot 0; strict cold-start replay explicitly loads
+        # run_it000 because it contains nonzero particle pre-centering offsets
+        # and the other state consumed by RELION's first expectation step.
         relion_iter = init_relion_iteration + recovar_iter
-        if relion_iter <= 0:
+        if relion_iter < 0 or (relion_iter == 0 and not include_initial_state):
             continue
         data_star = relion_dir / f"run_it{relion_iter:03d}_data.star"
         model_h1 = relion_dir / f"run_it{relion_iter:03d}_half1_model.star"
@@ -1912,6 +1919,39 @@ def main():
             init_relion_iteration=args.init_relion_iteration,
             particle_names=our_names,
         )
+
+    # ``--relion_init_dir`` is the strict cold-start contract, not merely a
+    # noise/tau bootstrap. RELION's run_it000 particle/model state includes
+    # large pre-centering offsets on real data; omitting them makes iter-1
+    # search around zero and changes the hard firstiter-CC winners even though
+    # the starting reference and Pmax values appear to match.
+    if args.relion_init_dir is not None and int(args.init_relion_iteration) == 0:
+        initial_overrides = _build_replay_iteration_overrides(
+            args.relion_init_dir,
+            half1_idx,
+            half2_idx,
+            0,
+            ds_voxel=ds.voxel_size,
+            ds_grid=ds.grid_size,
+            include_normcorr=True,
+            init_relion_iteration=0,
+            particle_names=our_names,
+            include_initial_state=True,
+        )
+        if initial_overrides[0] is not None:
+            if replay_iteration_overrides is None:
+                replay_iteration_overrides = [None] * (args.max_iter + 1)
+            replay_iteration_overrides[0] = initial_overrides[0]
+            logger.info(
+                "STRICT-PARITY: loaded complete RELION run_it000 cold-start state "
+                "for the first expectation step",
+            )
+        else:
+            logger.warning(
+                "STRICT-PARITY: %s did not provide a complete run_it000 data/model "
+                "state; first-iteration particle pre-centering remains unset",
+                args.relion_init_dir,
+            )
 
     effective_tau2_fudge, tau2_fudge_source = _resolve_tau2_fudge(
         args.n_classes,
