@@ -623,12 +623,55 @@ as a discrete tie without score evidence even though the majority is exact.
 The first tie adjudication targets fixture row 1474,
 `19638@particles.256.mrcs`: it is arithmetic-level at iteration 1 but selects
 a pose 175.55 degrees away and a translation 2.24 pixels away at iteration 2,
-while RECOVAR/RELION Pmax is only `0.040652/0.039912`.  Uninterrupted patched
-RELION score-dump job `11053175` reruns iterations 1--2 from the original
-fixture, dumps the full iteration-2 candidate operands for stack 19638, and
-must first match the original iteration-1/2 maps and particle state before its
-margin is accepted.  Its marked root is
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_scoretail_relion_20260712_071000`.
+while RECOVAR/RELION Pmax is only `0.040652/0.039912`.  The initial f2c-based
+dump job `11053175` is rejected because its newer binary does not reproduce
+the d476 oracle.  An exact-source d476 binary was then built with a minimal
+score hook (build job `11053568`, binary SHA-256
+`f1b27fe6472dac204b579d6163e2c8a0edcb0d6f0ad5904e87fce0078fd339cb`).
+Its enabled job `11053649` also fails the mandatory same-binary observational
+inertness gate against dump-disabled control `11053938`: schedules match and
+iteration-2 map FSC-AUC remains above `0.9999999984`, but target rows 1474 and
+5550 flip by `127.78` and `172.19` degrees, row 5550's class field is corrupted,
+and one non-target shift changes.  Therefore every score/posterior array from
+that hook and the cancelled six-particle RELION panel `11054149` is
+scientifically inadmissible.  The audit is in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_min_score_d476_20260712_073000/dump_instrumentation_inert_audit.json`.
+
+The independently valid translation-coordinate audit resolves an apparent
+candidate mismatch.  RELION pre-shifts by
+`B = round_away_from_zero(old_absolute_px)`, scores a relative translation
+`t`, then stores `new_absolute_px = B + t`; the inverse is `t = new - B`, not
+`new - old`.  Dump-disabled control `11053938` therefore maps row 1474 to fine
+translation 56 and row 5550 to 34.  The free texture row-5550 winner maps
+exactly to fine translation 95 rather than being one pixel off.  This formula
+and the STAR-derived evidence remain admissible, but any accompanying RELION
+log-weight comparisons remain rejected until a redesigned hook passes the
+enabled/disabled control.  Evidence is in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_scoretail_fixedstate_20260712_072000/translation_coordinate_mapping.md`.
+
+RECOVAR exact-state panel `11054150` completes six independently verified
+fixture rows on an A100 and provides a fail-closed target set for the eventual
+inert RELION comparison.  Its Pmax/top-two log-margin pairs are row 5550
+`0.043996/0.072384`, row 5504 `0.003155/0.022116`, row 3102
+`0.061285/0.012997`, row 394 `0.116131/0.013222`, row 2813
+`0.375569/1.75604`, and row 7710 `0.364002/0.130013`.  Canonical
+`source_indices.npy` and the fixture STAR independently confirm every
+fixture-row-to-stack-image mapping.  The prepared comparator intentionally
+raises until an admissible RELION dump is supplied.  Summary artifacts are in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_recovar_panel6_20260712_075000`.
+
+The controlled RECOVAR projector A/B on the exact RELION iteration-1 state
+(texture job `11054266`; manual job `11054283`, cancelled after both requested
+dumps were complete) selects the same candidate with both arithmetic paths for
+both tail
+rows: `[289443,56]` for row 1474 and `[162979,34]` for row 5550.  Manual versus
+texture posterior L1 is `0.008714`/`0.004191`; centered pre-prior score
+difference p95 is `0.02995`/`0.02588`, and projection relative L2 is
+`0.000889`/`0.000790`.  Thus projector arithmetic perturbs the controlled
+surface but does not itself flip these two winners; free-trajectory flips
+require amplification through the preceding map/state trajectory.  This is a
+RECOVAR-only diagnostic and does not substitute for the rejected RELION score
+comparison.
 
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
@@ -689,7 +732,8 @@ Resolved with the user on 2026-07-11:
 - At scale, compare complete aggregate iteration state plus stratified score
   surfaces, automatically dumping every mismatch for full investigation.
 - RECOVAR and RELION timing pairs use the same GPU model. Any available cluster
-  GPU class is valid; local use is capped at three confirmed-idle GPUs.
+  GPU class is valid. Up to four local GPUs may be used for short checks, but
+  only after confirming each selected device is idle.
 - Up to three subagents may perform independent bounded investigations, with
   one writer per source area and the primary agent owning integration.
 - Preserve the existing dirty candidate and create a separate clean local
@@ -720,7 +764,9 @@ Next cheapest discriminating experiment:
 
 ## Queue Discipline
 
-Keep at most one active quality hypothesis and one independent read-only audit.
-Rank backlog items by expected information gained per GPU-hour. A run without a
-predeclared decision it can change should not be submitted. Negative results
-must be recorded so future agents do not repeat them.
+Run multiple independent, decision-bearing diagnostics in parallel when that
+reduces parity-debug latency; large Slurm queues are acceptable. Keep only one
+writer per source area, use matched GPU models for timing A/Bs, and cancel jobs
+as soon as their premise becomes stale. A run without a predeclared decision
+it can change should not be submitted. Negative and rejected results must be
+recorded so future agents do not repeat or accidentally cite them.
