@@ -900,7 +900,7 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
     assert probe_calls[0]["current_size"] == 26
     assert probe_calls[0]["image_batch_size"] == 3
     assert probe_calls[0]["rotation_block_size"] == 5
-    assert probe_calls[0]["coarse_relion_projector_texture_interp"] is False
+    assert probe_calls[0]["coarse_relion_projector_texture_interp"] is None
     assert dense_calls[0]["current_size"] == 56
     assert dense_calls[0]["image_batch_size"] == 19
     assert dense_calls[0]["rotation_block_size"] == 23

@@ -2570,7 +2570,7 @@ def run_dense_k_class_em_adaptive(
     skip_significance_pruning: bool = False,
     relion_fine_mstep_prune: bool = False,
     firstiter_cc_pass2_only_best_coarse: bool = False,
-    coarse_relion_projector_texture_interp: bool | None = False,
+    coarse_relion_projector_texture_interp: bool | None = None,
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
     return_best_pose_details: bool = False,
@@ -2609,6 +2609,10 @@ def run_dense_k_class_em_adaptive(
     skip_significance_pruning : bool
         When True, skip the pass-1 coarse significance computation entirely
         and evaluate the full fine grid with no mask.
+    coarse_relion_projector_texture_interp : bool or None
+        Explicitly select the supplied-PPref coarse projector.  ``None``
+        defers to ``RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP``;
+        the environment default remains the strict-parity manual projector.
     """
     # Lazy import to avoid the formatter stripping a top-level name that is
     # only referenced inside this function.

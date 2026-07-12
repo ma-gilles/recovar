@@ -777,9 +777,13 @@ pass 2.
 Minimal RELION v4.1 support probes passed the calibrated inertness gate
 `11056477`; cold oracle run `11056533` preserves perturbation `+0.405200`, the
 target state, and Pmax, with half-map FSC-AUC
-`0.99999990925/0.99999999862`.  Its three requested host booleans are all zero.
-This is admissible boundary evidence but does not replace the v3 raw-score
-arrays.  Audits are
+`0.99999990925/0.99999999862`.  However, the hook queried RECOVAR psi-major
+rotation IDs directly in RELION's pixel-major mask.  Its original three-zero
+interpretation is coordinate-wrong and rejected.  Applying
+`rel_rot=(rec_rot % 768)*48 + rec_rot//768`, the admissible v3 candidate arrays
+establish membership `[1,1,0]` for `(22971,19)`, `(22972,28)`, and `(2404,9)`.
+V4.1 therefore qualifies only the hook's inertness, not those requested support
+booleans.  Audits are
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_v41_probe_gate_20260712_092500/v41_inertness_audit.json`
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_v41_probe_cold5550_20260712_092500/cold_probe_qualification.json`.
@@ -808,8 +812,56 @@ Posterior L1 is `0.0007255`; common-centered pre-prior score p95/max error is
 completed.  Machine-readable qualification is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_global_pass1_bound_import_assert_20260712_115000/hybrid_row2813_qualification.json`.
 
-Next gate: run an import-bound six-target hybrid panel, then an import-bound
-full 10k trajectory.  Only after those pass should the 100k trajectory restart.
+Import-bound hybrid panel `11057457` completes the six-target fixed-state gate;
+the job was intentionally cancelled after all 12 requested dumps completed.
+All six winners now exactly match RELION.  Candidate symmetric differences
+versus RELION change from texture to hybrid as follows: row 394 `0→32`, row
+2813 `64→0`, row 3102 `32→0`, row 5504 `3392→512`, row 5550 `96→64`, and row
+7710 `64→0`.  Reconstruction-support differences are `5,0,0,139,5,0` in the
+same order.  Pmax absolute gaps range from `3.04e-6` to `8.78e-4`; common-score
+p95 errors remain `0.00274–0.00675`.  Thus the hybrid closes the known non-tie
+winner bug and improves five support sets, but manual coarse support is not
+universally exact.  Machine-readable comparison is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_hybrid_panel6_20260712_121000/hybrid_panel6_relion_comparison.json`.
+
+The exact-texture Euler hypothesis remains open, but the first NumPy float32
+proxy is now qualified as inexact.  Valid typed-texture row-2813 job `11058151`
+moves centered coarse scores by RMS `0.02421` and moves 66.2% of hypotheses
+toward the manual score surface, yet leaves the wrong texture parent swap
+unchanged.  RELION source audit subsequently found that the proxy precomputed
+`float32(pi)/float32(180)`, whereas the active CUDA kernel evaluates
+`angle*float32(pi)/float32(180)` and may contract later operations.  Correcting
+only that operation order changes 30,582 of 36,864 matrices (entry max
+`6.56e-7`).  Therefore this job rejects only the NumPy proxy, not exact RELION
+device Euler arithmetic.  Full audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_relion_euler_exact_audit_20260712_132500/AUDIT.md`.
+
+Typed-texture six-row discriminator `11058143` was cancelled after all six
+coarse dumps completed.  Across the six full 1,069,056-hypothesis arrays,
+manual and texture coarse supports differ from RELION by 19 and 18 parents,
+respectively, and differ from each other by 25.  Neither projector is globally
+exact.  Row 2813 has the decisive RELION/manual parent `(36245,8)` versus
+texture `(35567,1)` swap; row 394 is exact under texture but gains one manual
+parent; row 5504 improves from 16 manual to 14 texture differences but changes
+the support count from RELION 6509 to 6501; row 5550 is identical between both
+RECOVAR projectors and retains a two-parent swap versus RELION.  Machine-readable
+evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_texture_coarse_panel6_20260712_104500/texture_coarse_discriminator.json`.
+
+Import-bound full 10k hybrid trajectory job `11057493` completed all 16
+numbered iterations plus the converged final all-data iteration.  It terminates
+at iteration 16, matching RELION.  The final merged-map RELION FSC-AUC is
+`0.980495` (shells 1--16 mean FSC `0.999772`); half-map FSC-AUC is
+`0.953110/0.949810`.  Final all-data pose error is `0.150624` degrees mean and
+translation error `0.0438001` pixels mean.  RECOVAR wall time is 2021.1 s
+versus RELION 1330 s (`1.51963x`), with sparse pass 2 consuming 862.42 s.
+Summary:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_hybrid_full_20260712_121500/summary.md`.
+
+Next gate: exact multiply-then-divide Euler diagnostic, followed if necessary
+by a device-matrix dump and CUDA-toolchain discriminator.  The 100k trajectory
+should restart only after the remaining coarse projector boundary is resolved
+or explicitly bounded by the FSC gate.
 
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
