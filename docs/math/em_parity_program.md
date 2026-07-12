@@ -531,6 +531,30 @@ job `11046279` is rejected because direct script execution resolved submodules
 from a different editable checkout; the corrected runner uses module execution
 and asserts the exact `iteration_loop.py` and CUDA wrapper paths.
 
+Full patched trajectory `11046636` matches RELION's convergence at numbered
+iteration 16 and executes the final all-data branch, but correctly fails the
+map gate: merged FSC-AUC is `0.859718` and half-map FSC-AUCs are
+`0.835102/0.843042` despite diagnostic correlation `0.988109`.  The first
+post-fix divergence is not iteration-2 scoring.  Map-only cross-replay
+`11047995` starts from the corrected RECOVAR iteration-1 half maps plus exact
+RELION iteration-1 state and obtains iteration-2 mean Pmax `0.112050` versus
+`0.112067`, merged-map FSC-AUC `0.999299`, pose p95 zero at printed precision,
+and translation p95 zero at printed precision.
+
+The failed full trajectory did not start from the same iter-0 particle state.
+Its iteration-1 mean angular error is about 92 degrees and translation error
+about 11.7 pixels; tau2 already differs by up to 59.3% across active shells.
+`run_full_refinement --relion_init_dir` loaded iter-0 noise/tau but omitted the
+run_it000 particle pre-centering offsets (about 8.5 pixels mean absolute
+component), previous orientations, image/scale corrections, and direction
+prior.  Commit `a530ec6f` reuses the typed replay loader to install that
+complete run_it000 state in override slot 0.  Unit replay tests pass `8/8`.
+One-iteration A100 gate `11048426` then reaches merged FSC-AUC `0.999991954`,
+half-map FSC-AUCs `0.999984759/0.999991342`, minimum non-DC merged FSC
+`0.999984127`, and exact Pmax/rotation/translation arrays relative to the
+qualified corrected runner.  Advance through a two-iteration gate before
+another full real or 100k trajectory.
+
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
 shape is 168 images by 198 rotations by 9 translations by 12,861 score pixels.
