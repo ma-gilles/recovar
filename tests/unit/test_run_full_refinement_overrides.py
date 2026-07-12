@@ -644,6 +644,66 @@ def test_replay_overrides_use_shared_class3d_model_star(tmp_path):
     np.testing.assert_allclose(r2, utils.R_from_relion(expected_e2, degrees=True).astype(np.float32))
 
 
+def test_replay_overrides_map_noncontiguous_subset_stack_indices(tmp_path):
+    """Real-data subsets retain original stack IDs instead of renumbering rows."""
+    pd = pytest.importorskip("pandas")
+    starfile = pytest.importorskip("starfile")
+
+    # RELION may reorder rows; values are deliberately keyed to stack ID.
+    relion_stack_ids = [126, 16, 200, 51]
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": [f"{i}@particles.mrcs" for i in relion_stack_ids],
+            "rlnAngleRot": np.asarray(relion_stack_ids, dtype=float),
+            "rlnAngleTilt": np.asarray(relion_stack_ids, dtype=float) + 0.25,
+            "rlnAnglePsi": np.asarray(relion_stack_ids, dtype=float) + 0.5,
+            "rlnOriginXAngst": np.asarray(relion_stack_ids, dtype=float) * 2.0,
+            "rlnOriginYAngst": -np.asarray(relion_stack_ids, dtype=float) * 2.0,
+            "rlnNormCorrection": np.asarray(relion_stack_ids, dtype=float),
+            "rlnGroupNumber": [1, 1, 1, 1],
+        }
+    )
+    starfile.write({"particles": particles}, tmp_path / "run_it001_data.star")
+    starfile.write(
+        {
+            "model_general": pd.DataFrame(
+                {"rlnNormCorrectionAverage": [10.0], "rlnSigmaOffsetsAngst": [3.0]}
+            ),
+            "model_groups": pd.DataFrame({"rlnGroupScaleCorrection": [1.0]}),
+        },
+        tmp_path / "run_it001_model.star",
+    )
+
+    input_names = [
+        "16@particles.mrcs",
+        "51@particles.mrcs",
+        "126@particles.mrcs",
+        "200@particles.mrcs",
+    ]
+    overrides = _build_replay_iteration_overrides(
+        tmp_path,
+        half1_idx=np.asarray([0, 2], dtype=np.int64),
+        half2_idx=np.asarray([1, 3], dtype=np.int64),
+        max_iter=1,
+        ds_voxel=2.0,
+        ds_grid=8,
+        include_normcorr=True,
+        particle_names=input_names,
+    )
+
+    h1_corr, h2_corr = overrides[1]["image_corrections"]
+    np.testing.assert_allclose(h1_corr, np.asarray([10.0 / 16.0, 10.0 / 126.0], dtype=np.float32))
+    np.testing.assert_allclose(h2_corr, np.asarray([10.0 / 51.0, 10.0 / 200.0], dtype=np.float32))
+
+    h1_eulers, h2_eulers = overrides[1]["previous_best_rotation_eulers"]
+    np.testing.assert_allclose(h1_eulers[:, 0], np.asarray([16.0, 126.0], dtype=np.float32))
+    np.testing.assert_allclose(h2_eulers[:, 0], np.asarray([51.0, 200.0], dtype=np.float32))
+
+    h1_trans, h2_trans = overrides[1]["previous_best_translations"]
+    np.testing.assert_allclose(h1_trans[:, 0], np.asarray([16.0, 126.0], dtype=np.float32))
+    np.testing.assert_allclose(h2_trans[:, 0], np.asarray([51.0, 200.0], dtype=np.float32))
+
+
 def test_replay_overrides_include_max_iter_state_for_final_all_data(tmp_path):
     pd = pytest.importorskip("pandas")
     starfile = pytest.importorskip("starfile")

@@ -423,6 +423,7 @@ def _build_replay_iteration_overrides(
     *,
     include_normcorr,
     init_relion_iteration=0,
+    particle_names=None,
 ):
     """Build per-iter replay overrides keyed on recovar iteration index.
 
@@ -603,10 +604,30 @@ def _build_replay_iteration_overrides(
         combined_h2 = (avg_norm_h2 / nc) * pp_scale_h2
 
         # Map RELION particle order to recovar's half1/half2 ordering.
-        # recovar's half1_idx / half2_idx are stack-row indices into the same
-        # particles.star as RELION's data.star.
+        # half1_idx / half2_idx are row positions in RECOVAR's input STAR,
+        # whereas idx_to_pos is keyed by the original stack index encoded in
+        # rlnImageName.  These coincide for synthetic contiguous fixtures but
+        # not for real-data subsets that retain their original stack indices.
+        if particle_names is None:
+            particle_stack_indices = None
+        else:
+            particle_stack_indices = np.asarray([_idx(name) for name in particle_names], dtype=np.int64)
+            if np.any(particle_stack_indices < 0):
+                raise ValueError("RECOVAR input contains rlnImageName values without a '<index>@' prefix")
+            if np.unique(particle_stack_indices).size != particle_stack_indices.size:
+                raise ValueError("RECOVAR input contains duplicate particle stack indices")
+
         def _to_half(values, half_idx):
-            return np.asarray([values[idx_to_pos[int(i)]] for i in half_idx], dtype=np.float32)
+            rows = np.asarray(half_idx, dtype=np.int64)
+            stack_indices = rows if particle_stack_indices is None else particle_stack_indices[rows]
+            missing = sorted({int(i) for i in stack_indices if int(i) not in idx_to_pos})
+            if missing:
+                preview = ", ".join(str(i + 1) for i in missing[:8])
+                raise ValueError(
+                    f"RELION replay STAR is missing {len(missing)} RECOVAR particle stack indices "
+                    f"(1-based preview: {preview})"
+                )
+            return np.asarray([values[idx_to_pos[int(i)]] for i in stack_indices], dtype=np.float32)
 
         corr_h1 = _to_half(combined_h1, half1_idx)
         corr_h2 = _to_half(combined_h2, half2_idx)
@@ -1421,12 +1442,16 @@ def main():
     if args.n_classes < 1:
         raise SystemExit(f"--n_classes must be >= 1, got {args.n_classes}")
 
+    import starfile as _starfile
+
+    our_star = _starfile.read(os.path.join(args.data_dir, "particles.star"))
+    our_particles = our_star["particles"] if isinstance(our_star, dict) else our_star
+    our_names = list(our_particles["rlnImageName"])
+
     if args.relion_half_sets is not None:
         # Use RELION's half-set split from rlnRandomSubset
         logger.info("Loading RELION half-set assignments from %s", args.relion_half_sets)
         import re
-
-        import starfile as _starfile
 
         relion_data = _starfile.read(args.relion_half_sets)
         relion_particles = relion_data["particles"]
@@ -1445,9 +1470,6 @@ def main():
 
         # Our dataset loads in stack order 1,2,3,...
         # Map to RELION's subset assignments
-        our_star = _starfile.read(os.path.join(args.data_dir, "particles.star"))
-        our_particles = our_star["particles"] if isinstance(our_star, dict) else our_star
-        our_names = list(our_particles["rlnImageName"])
         our_subsets = np.array([relion_idx_to_subset[_image_name_to_stack_idx(name)] for name in our_names])
 
         half1_idx = np.where(our_subsets == 1)[0]
@@ -1888,6 +1910,7 @@ def main():
             ds_grid=ds.grid_size,
             include_normcorr=replay_normcorr,
             init_relion_iteration=args.init_relion_iteration,
+            particle_names=our_names,
         )
 
     effective_tau2_fudge, tau2_fudge_source = _resolve_tau2_fudge(
