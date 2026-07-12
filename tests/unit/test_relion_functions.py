@@ -205,7 +205,7 @@ def test_projection_padding_host_path_matches_device_path(monkeypatch):
     )
 
 
-def test_post_process_current_size_excludes_exact_relion_boundary_full_and_half():
+def test_post_process_current_size_includes_exact_relion_decenter_boundary_full_and_half():
     import recovar.core.fourier_transform_utils as ftu
 
     volume_shape = (4, 4, 4)
@@ -216,7 +216,7 @@ def test_post_process_current_size_excludes_exact_relion_boundary_full_and_half(
     full_inside = np.zeros(padded_shape, dtype=np.complex64)
     full_inside[2, 2, 2] = 3.0
     full_with_boundary = full_inside.copy()
-    full_with_boundary[1, 2, 2] = 7.0  # exact padded radius 1, excluded by r2 < max_r2.
+    full_with_boundary[1, 2, 2] = 7.0  # Projector::decenter includes r2 == max_r2.
 
     common_kwargs = dict(
         og_volume_shape=volume_shape,
@@ -239,12 +239,7 @@ def test_post_process_current_size_excludes_exact_relion_boundary_full_and_half(
         input_half_volume=False,
         **common_kwargs,
     )
-    np.testing.assert_allclose(
-        np.asarray(full_out_boundary),
-        np.asarray(full_out_inside),
-        atol=1e-6,
-        rtol=1e-6,
-    )
+    assert float(jnp.linalg.norm(full_out_boundary - full_out_inside)) > 1e-3
 
     half_shape = ftu.volume_shape_to_half_volume_shape(padded_shape)
     half_weight = np.ones(half_shape, dtype=np.float32)
@@ -265,12 +260,75 @@ def test_post_process_current_size_excludes_exact_relion_boundary_full_and_half(
         input_half_volume=True,
         **common_kwargs,
     )
-    np.testing.assert_allclose(
-        np.asarray(half_out_boundary),
-        np.asarray(half_out_inside),
-        atol=1e-6,
-        rtol=1e-6,
+    assert float(jnp.linalg.norm(half_out_boundary - half_out_inside)) > 1e-3
+
+
+def test_relion_decenter_mask_includes_boundary_and_excludes_outside():
+    full = np.asarray(rf._relion_current_size_decenter_mask((5, 5, 5), 1, half_volume=False))
+    half = np.asarray(rf._relion_current_size_decenter_mask((5, 5, 5), 1, half_volume=True))
+
+    assert full[2, 2, 2]
+    assert full[1, 2, 2]
+    assert not full[0, 2, 2]
+    assert half[2, 2, 0]
+    assert half[2, 2, 1]
+    assert not half[2, 2, 2]
+
+
+def test_half_tau_shell_mapping_rounds_only_after_padding_scale():
+    tau_shells = jnp.arange(16, dtype=jnp.float64)
+    mapped = np.asarray(
+        rf._upscale_tau_to_accumulator_layout(
+            tau_shells,
+            2,
+            (8, 8, 8),
+            (11, 11, 11),
+            half_volume=True,
+            tau_is_1d=True,
+        )
+    ).reshape(11, 11, 6)
+
+    # Centered coordinates (-4, -2, 1) have radius sqrt(21). RELION uses
+    # ROUND(sqrt(21) / 2) = 2; pre-rounding sqrt(21) would incorrectly give 3.
+    assert mapped[1, 3, 1] == 2
+
+
+def test_relion_current_size_map_prior_excludes_exact_boundary():
+    shape = (5, 5, 5)
+    half_shape = (5, 5, 3)
+    tau = jnp.ones(4, dtype=jnp.float64)
+
+    half_regularized = np.asarray(
+        rf.adjust_regularization_relion_style(
+            jnp.ones(half_shape, dtype=jnp.float64),
+            shape,
+            tau=tau,
+            padding_factor=1,
+            max_res_shell=1,
+            half_volume=True,
+            relion_native_shell_floor=True,
+            native_volume_shape=shape,
+            tau_is_1d=True,
+        )
     )
+    full_regularized = np.asarray(
+        rf.adjust_regularization_relion_style(
+            jnp.ones(shape, dtype=jnp.float64),
+            shape,
+            tau=tau,
+            padding_factor=1,
+            max_res_shell=1,
+            half_volume=False,
+            relion_native_shell_floor=True,
+            native_volume_shape=shape,
+            tau_is_1d=True,
+        )
+    )
+
+    assert half_regularized[2, 2, 0] > 1.0
+    assert half_regularized[2, 2, 1] == 1.0
+    assert full_regularized[2, 2, 2] > 1.0
+    assert full_regularized[1, 2, 2] == 1.0
 
 
 def test_post_process_large_grid_guard_avoids_complex128_padded_volume(monkeypatch):

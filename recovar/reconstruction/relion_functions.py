@@ -624,6 +624,7 @@ def _upscale_tau_half(tau, padding_factor, volume_shape, tau_is_1d=False):
             np.array(volume_shape) * padding_factor,
             scaled=False,
             frequency_shift=0,
+            rounded=False,
         )
         / padding_factor
     )
@@ -653,6 +654,7 @@ def _upscale_tau_to_accumulator_layout(
             accumulator_volume_shape,
             scaled=False,
             frequency_shift=0,
+            rounded=False,
         )
     else:
         pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(
@@ -793,11 +795,21 @@ def adjust_regularization_relion_style(
             inv_tau = 1 / (oversampling_factor * tau2_fudge * safe_tau)
             inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1.0 / (0.001 * filter_flat), inv_tau)
             inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
+            if relion_native_shell_floor and max_res_shell is not None:
+                radial = fourier_transform_utils.get_grid_of_radial_distances_real(
+                    volume_shape,
+                    scaled=False,
+                    frequency_shift=0,
+                    rounded=False,
+                ).reshape(-1)
+                prior_radius = float(padding_factor) * float(max_res_shell)
+                inv_tau = jnp.where(radial * radial < prior_radius * prior_radius, inv_tau, 0)
             if int(minres_map) > 0:
                 shell = fourier_transform_utils.get_grid_of_radial_distances_real(
                     volume_shape,
                     scaled=False,
                     frequency_shift=0,
+                    rounded=False,
                 ) / float(padding_factor)
                 shell = _relion_round_nonnegative(shell).reshape(-1)
                 inv_tau = jnp.where(shell >= int(minres_map), inv_tau, 0)
@@ -841,6 +853,15 @@ def adjust_regularization_relion_style(
         inv_tau = 1 / (oversampling_factor * tau2_fudge * safe_tau)
         inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1.0 / (0.001 * filter_flat), inv_tau)
         inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
+        if relion_native_shell_floor and max_res_shell is not None:
+            pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+                np.array(volume_shape),
+                1,
+                scaled=False,
+            )
+            radial_sq = jnp.sum(pixels * pixels, axis=-1)
+            prior_radius = float(padding_factor) * float(max_res_shell)
+            inv_tau = jnp.where(radial_sq < prior_radius * prior_radius, inv_tau, 0)
         if int(minres_map) > 0:
             pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(
                 np.array(volume_shape),
@@ -982,8 +1003,14 @@ def _relion_window_centered_half_fourier(vol_half, old_volume_shape, new_volume_
     return out.at[axis_idx[:, None, None], axis_idx[None, :, None], col_idx[None, None, :]].set(vol_half)
 
 
-def _relion_current_size_wiener_mask(volume_shape, radius, *, half_volume):
-    """RELION reconstruction support: include only voxels with ``r2 < max_r2``."""
+def _relion_current_size_decenter_mask(volume_shape, radius, *, half_volume):
+    """RELION ``Projector::decenter`` support: include ``r2 <= max_r2``.
+
+    This mask applies to the reconstruction numerator.  RELION copies the
+    exact-radius sphere from ``BackProjector::data`` into ``Fconv`` with an
+    inclusive comparison.  The MAP-prior and radial-floor loops separately
+    use strict ``r2 < max_r2`` support.
+    """
 
     radial_fn = (
         fourier_transform_utils.get_grid_of_radial_distances_real
@@ -997,7 +1024,7 @@ def _relion_current_size_wiener_mask(volume_shape, radius, *, half_volume):
         rounded=False,
     )
     radius = float(radius)
-    return radial * radial < radius * radius
+    return radial * radial <= radius * radius
 
 
 def post_process_from_filter(
@@ -1073,13 +1100,12 @@ def post_process_from_filter_v2(
     :func:`adjust_regularization_relion_style` and mirrors RELION's
     ``--tau2_fudge`` flag.
 
-    ``current_size`` (when given) limits the Wiener filter's spatial mask
-    to the padded sphere ``r < padding_factor * (current_size // 2)``,
-    matching RELION's ``BackProjector::reconstruct`` which skips voxels
-    with ``r2 >= max_r2 = ROUND(r_max * padding_factor)^2`` (line 1264).
-    Without this, recovar's Wiener filter operates on every padded voxel
-    up to ``upsampled_volume_shape[0]//2 - 1``, producing residual
-    high-shell content from the regularization floor that RELION omits.
+    ``current_size`` (when given) matches the two distinct support rules in
+    RELION's ``BackProjector::reconstruct``. ``Projector::decenter`` copies the
+    numerator on the inclusive sphere ``r2 <= max_r2``, while the MAP prior is
+    added only on the strict sphere ``r2 < max_r2``.  The radial denominator
+    floor is computed from the same strict sphere and clamped to its final
+    native shell outside that support.
     """
     upsampled_volume_shape = (
         tuple(3 * [og_volume_shape[0] * volume_upsampling_factor])
@@ -1109,7 +1135,7 @@ def post_process_from_filter_v2(
             Ft_ctf_flat = Ft_ctf_flat.real.astype(jnp.float32)
             F_ty_flat = F_ty_flat.astype(jnp.complex64)
         if current_size_limited:
-            valid_mask = _relion_current_size_wiener_mask(
+            valid_mask = _relion_current_size_decenter_mask(
                 upsampled_volume_shape,
                 wiener_radius,
                 half_volume=True,
@@ -1127,7 +1153,7 @@ def post_process_from_filter_v2(
             Ft_ctf_flat = Ft_ctf_flat.real.astype(jnp.float32)
             F_ty_flat = F_ty_flat.astype(jnp.complex64)
         if current_size_limited:
-            valid_mask = _relion_current_size_wiener_mask(
+            valid_mask = _relion_current_size_decenter_mask(
                 upsampled_volume_shape,
                 wiener_radius,
                 half_volume=False,
