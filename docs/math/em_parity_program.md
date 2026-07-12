@@ -552,8 +552,15 @@ complete run_it000 state in override slot 0.  Unit replay tests pass `8/8`.
 One-iteration A100 gate `11048426` then reaches merged FSC-AUC `0.999991954`,
 half-map FSC-AUCs `0.999984759/0.999991342`, minimum non-DC merged FSC
 `0.999984127`, and exact Pmax/rotation/translation arrays relative to the
-qualified corrected runner.  Advance through a two-iteration gate before
-another full real or 100k trajectory.
+qualified corrected runner.  Two-iteration A100 gate `11048692` then closes
+the next handoff: half-map FSC-AUCs are `0.999051092/0.999183696`, merged
+FSC-AUC is `0.999318831`, and minimum non-DC shell FSC is at least
+`0.975355`.  Mean Pmax is `0.1120446` versus RELION `0.1120673`; pose and
+translation p95 errors are at printed numerical precision, with rare discrete
+tail changes retained for tie-aware inspection.  Corrected full real-data job
+`11049135` now runs from clean commit `2e3cc620` and must match numbered
+iteration-16 convergence plus the normal final all-data branch before this
+trajectory is closed.
 
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
@@ -571,9 +578,11 @@ exact failed iteration-12 state.  The cap selects 69 images per 198-rotation
 parent bucket (`13,669` rows), processes all 49,913 half-set particles in
 27.7 seconds, then completes the fine score-only pass in 26.0 seconds; the job
 finishes successfully in 1:56 with no OOM.  Full clean 100k trajectory job
-`11047558` now runs from `48e712f1` with both the tau-order and score-tile
-fixes.  Its artifact root is
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_tauorder_scorecap_20260712_043600`.
+`11047558` was cancelled as scientifically stale after the missing run_it000
+cold state was identified.  Corrected job `11049164` runs concurrently from
+clean commit `2e3cc620`, includes `--relion_init_dir`, and retains the validated
+runtime score-tile cap.  Its artifact root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_coldstart_scorecap_ready_20260712_051319`.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
