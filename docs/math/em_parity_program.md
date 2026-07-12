@@ -663,8 +663,8 @@ raises until an admissible RELION dump is supplied.  Summary artifacts are in
 The controlled RECOVAR projector A/B on the exact RELION iteration-1 state
 (texture job `11054266`; manual job `11054283`, cancelled after both requested
 dumps were complete) selects the same candidate with both arithmetic paths for
-both tail
-rows: `[289443,56]` for row 1474 and `[162979,34]` for row 5550.  Manual versus
+both tail rows: `[289443,56]` for row 1474 and `[162979,34]` for row 5550.
+Manual versus
 texture posterior L1 is `0.008714`/`0.004191`; centered pre-prior score
 difference p95 is `0.02995`/`0.02588`, and projection relative L2 is
 `0.000889`/`0.000790`.  Thus projector arithmetic perturbs the controlled
@@ -672,6 +672,82 @@ surface but does not itself flip these two winners; free-trajectory flips
 require amplification through the preceding map/state trajectory.  This is a
 RECOVAR-only diagnostic and does not substitute for the rejected RELION score
 comparison.
+
+Pixel attribution rules out the remaining texture boundary hypotheses.  In
+the same two exact-state dumps, shells 1--10 contain `97.1%/95.7%` of the
+manual-versus-texture projection-difference energy, while boundary shell 46
+contains only `0.0181%/0.0278%` and all coordinates outside radius 46 are zero
+in both paths.  Removing the Nyquist row/column leaves `99.90%/98.46%` of the
+candidate score-delta RMS.  The texture residual is therefore interior
+interpolation arithmetic concentrated at low frequency, not another
+support-radius or even-box boundary error.  The reproducible CPU audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_recovar_manual_p1474_p5550_20260712_075700/projector_pixel_audit.json`.
+
+The first exact-d476 hook failure is fully explained: `ihidden_overs` is
+authoritative only in host memory, but the hook copied its uninitialized CUDA
+buffer back over that mapping before fine winner selection.  A host-only
+replacement removes all extra GPU copies and syncs.  Cross-node jobs
+`11054698/11054699` no longer corrupt either target and keep iteration-2 map
+FSC-AUC above `0.9999999985`, but naturally differ at one non-target
+translation, 13 significant counts, and Pmax by at most `0.000404`.  Same-node
+sequential pair `11054601` likewise preserves both targets and all angles/classes
+but differs at two non-target one-step translations and 17 significant counts,
+so its strict fail-closed audit remains false.  Row triangulation shows the
+enabled translations match both the original oracle and clean installed-binary
+repeat `11055156`; the disabled control is the outlier.  The clean repeat itself
+has iteration-2 Pmax delta at most `0.000126`, 17 one-count differences, no
+translation differences, and map FSC-AUC above `0.9999999988`.  These establish
+the natural RELION numerical envelope but do not waive the dump gate.
+
+The v3 hook buffers host snapshots and defers all file writes until the
+unconditional post-expectation MPI barrier, removing I/O from the
+particle-scoring loop.  Same-node continuation gate `11055736` runs disabled
+then enabled from the identical installed iteration-1 state and
+passes the calibrated admissibility gate: iteration-2 map FSC-AUC is
+`0.99999999855/0.99999999886`, minimum non-DC FSC is above `0.9999999826`, no
+translation or class differs, maximum angle delta is `3.42e-6` degrees, Pmax
+delta is at most `0.000117`, and nine significant counts differ by one.  Both
+target states are exact, their Pmax deltas are `1.4e-5`, schedules are exact,
+and all 26 dump files are present.  These changes are no larger than clean
+installed-repeat `11055156`, so
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_inert_dump_control_20260712_080200/v3_exact_inertness_audit.json`
+sets `score_arrays_admissible=true` for hook inertness on that continuation.
+Failed precursor `11055708` stopped before scoring because of the wrong
+continuation working directory and has no scientific output.
+
+However, `--continue run_it001_optimiser.star` does not replay the uninterrupted
+installed iteration-2 trajectory: the v3 disabled continuation versus oracle
+map FSC-AUC is only `0.86405/0.86135` and many particle states differ, likely
+because continuation does not restore the same perturbation/RNG sequence.
+Thus `11055736` qualifies the hook but its score arrays are not the oracle
+surface and must not be compared to RECOVAR's exact-oracle dumps.  A cold v3
+two-iteration dump run must first reproduce the uninterrupted oracle target
+states and candidate grid.
+
+Cold v3 job `11055888` restores the correct `+0.405200` perturbation and
+qualifies the target score surfaces.  Both row-1474 and row-5550 discrete
+states match the uninterrupted oracle; target Pmax is exact and within
+`2e-6`, respectively.  All 10,000 Euler/class arrays match to a maximum
+`2.96e-6` degrees, with one known non-target one-step translation and 14
+one-count differences from rebuilt-binary numerical variation.  Half-map
+FSC-AUC is `0.9999999093/0.99999999865`, minimum non-DC FSC is at least
+`0.9999996170`, and the 26 target arrays are admissible under the separate v3
+inertness gate.  Qualification is in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_inert_dump_control_20260712_080200/v3_cold_oracle_qualification.json`.
+
+The admissible score comparison reverses the projector conclusion inferred
+from final-map FSC alone.  Texture arithmetic is much closer to RELION on both
+controlled oracle surfaces.  For row 1474, texture versus manual posterior L1
+is `0.000291/0.008132`, centered pre-prior p95 absolute error is
+`0.000626/0.029760`, and support symmetric difference is `0/6`.  For row 5550,
+the corresponding values are `0.001086/0.004452`, `0.005816/0.025355`, and
+`9/5`.  RELION, texture, and manual choose the same controlled winners
+`[289443,56]` and `[162979,34]`; texture Pmax and top-two margins are also
+closer.  Manual's tiny full-trajectory FSC advantage is therefore a
+compensating error, not evidence of closer E-step arithmetic.  Do not optimize
+or retain manual as the strict default without reconciling this score boundary.
+The full comparison is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_inert_dump_control_20260712_080200/v3_cold_oracle_score_comparison.json`.
 
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
