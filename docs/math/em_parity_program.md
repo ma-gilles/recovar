@@ -835,6 +835,21 @@ only that operation order changes 30,582 of 36,864 matrices (entry max
 `6.56e-7`).  Therefore this job rejects only the NumPy proxy, not exact RELION
 device Euler arithmetic.  Full audit:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_relion_euler_exact_audit_20260712_132500/AUDIT.md`.
+Corrected multiply-then-divide typed-texture job `11058615` is also support-
+negative: its significant mask is bit-identical to the accepted texture
+control and retains the same row-2813 swap.  CUDA 12.6 and 12.8 produce
+identical normalized sm80 SASS for the RECOVAR texture kernel, ruling out the
+compiler-version hypothesis.  Exact device arithmetic remains under direct
+test by pinned RELION Euler-dump build `11058907` and target job `11058986`.
+
+Raw-map PPref provenance is ruled out causally by corrected job `11058908`.
+Bypassing the RECOVAR Fourier round trip from the matching raw `run_it001`
+half maps leaves the accepted-control support mask unchanged; centered
+with-prior RMS is only `1.70553e-5`, and the decisive pair preference moves
+`-2.28882e-5` away from RELION/manual.  Qualification is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_row2813_rawmrc_it001_ppref_texture_coarse_20260712_111000/qualification.json`.
+The preceding job `11058764` used off-state `run_it002` maps and is explicitly
+invalid, not evidence.
 
 Typed-texture six-row discriminator `11058143` was cancelled after all six
 coarse dumps completed.  Across the six full 1,069,056-hypothesis arrays,
@@ -858,10 +873,11 @@ versus RELION 1330 s (`1.51963x`), with sparse pass 2 consuming 862.42 s.
 Summary:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_hybrid_full_20260712_121500/summary.md`.
 
-Next gate: exact multiply-then-divide Euler diagnostic, followed if necessary
-by a device-matrix dump and CUDA-toolchain discriminator.  The 100k trajectory
-should restart only after the remaining coarse projector boundary is resolved
-or explicitly bounded by the FSC gate.
+Next gate: compare the exact RELION device Euler matrices from `11058986` to
+the accepted RECOVAR rotation grid.  In parallel, clean 100k hybrid trajectory
+job `11058928` is running from detached commit `87fd1e78` with run-local,
+hash-qualified CUDA and RELION-bind artifacts.  Attempt `11058781` was rejected
+and cancelled before scoring because its CUDA output path was shared.
 
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
