@@ -393,6 +393,51 @@ representative particles with fixed-state RECOVAR score/posterior dumps and an
 uninterrupted instrumented RELION run; continuation dumps are forbidden by the
 previously demonstrated finalization-state confound.
 
+The first characterized real-particle gate is open and currently fails strict
+parity. A deterministic 10k-particle EMPIAR-10076 subset (seed `20260712`,
+exactly 5000 particles per half) lives under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712`
+with a `SAFE_TO_DELETE` marker and manifest. The shared RECOVAR mean volume is
+used only as the common initializer; there is no pseudo-GT, so the quality
+gate is RECOVAR-vs-RELION shellwise FSC/FSC-AUC plus half-map and state parity.
+
+The first A100 pair exposed a real-subset indexing bug before RECOVAR science.
+`half1_idx` and `half2_idx` are row positions in the subset STAR, but replay
+overrides treated them as original stack IDs. Synthetic contiguous fixtures
+hid the bug. Commit `c3b3a27e` maps each input row through `rlnImageName`,
+validates missing and duplicate stack IDs, and adds a shuffled non-contiguous
+regression. The full override unit file passes (`38 passed`). Corrected
+RECOVAR-only job `11039455` completed from that commit on the same A100 model
+as RELION; failed jobs `11039371` and `11039400` were pre-science
+`CUDA_ERROR_NO_DEVICE` failures on unhealthy `della-l07g3`, which is excluded
+from the corrected runs.
+
+RELION converges at numbered iteration 17 and performs the final all-data
+branch; RECOVAR reproduces the same control decision and final branch. The
+underlying real-data state is not yet strict, however. Iteration-2 mean Pmax is
+`0.0716` in RECOVAR versus `0.112067` in RELION, accompanied by a transient
+support tail: median fine support is 32 rotations, but a few particles retain
+up to 200704 rotations. Iteration 2 takes `899.3` seconds. The tail collapses
+by iteration 3 and mean Pmax nearly recovers by iteration 4 (`0.6624` versus
+RELION `0.663427`), local iterations take 31--94 seconds, and final mean Pmax
+matches (`0.243046` versus `0.243119`). Per-particle final state still fails:
+mean/p95/max absolute Pmax gaps are `0.082570/0.226190/0.570284`; pose p95 is
+`0.759678` degrees and translation p95 is `0.641700` pixel.
+
+Final map parity fails and must not be waived by the high correlation. Final
+RECOVAR-vs-RELION FSC-AUC is `0.863672` while correlation is `0.988477`.
+Truncated FSC-AUC is `0.998450` through shell 16, `0.992968` through shell 32,
+and `0.964539` through shell 64, showing a smooth signal-band phase loss rather
+than a single corrupt shell. RECOVAR wall time is `2375.7` seconds versus
+RELION `1330` seconds; the ratio is `1.786`, dominated by the iteration-2
+support transient. Artifacts and summary are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_strict_20260712_010000`
+(`summary_retry.md` and `summary_metrics_retry.json`). The next quality
+hypothesis is an iteration-2 firstiter-CC support/normalization mismatch:
+select the largest per-particle Pmax/support residuals, freeze the same RELION
+state and maps, and compare raw scores, priors, support masks, log-normalizers,
+and winners before making performance changes.
+
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
 quality boundary is known.
