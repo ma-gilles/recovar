@@ -839,8 +839,13 @@ Corrected multiply-then-divide typed-texture job `11058615` is also support-
 negative: its significant mask is bit-identical to the accepted texture
 control and retains the same row-2813 swap.  CUDA 12.6 and 12.8 produce
 identical normalized sm80 SASS for the RECOVAR texture kernel, ruling out the
-compiler-version hypothesis.  Exact device arithmetic remains under direct
-test by pinned RELION Euler-dump build `11058907` and target job `11058986`.
+compiler-version hypothesis.  Pinned RELION jobs `11058907/11058986` then
+dumped the exact device matrices.  They differ from RECOVAR's default matrices
+in 257,338 of 327,024 active entries (p95 `2.38e-7`, max `6.85e-7`), but exact-
+table injection job `11059563` leaves the texture support mask bit-identical
+and worsens the decisive preference from `-0.00972366` to `-0.01270676`.
+Exact Euler arithmetic is therefore ruled out causally.  Qualification:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_row2813_exact_relion_euler_texture_retry_20260712_154000/qualification.json`.
 
 Raw-map PPref provenance is ruled out causally by corrected job `11058908`.
 Bypassing the RECOVAR Fourier round trip from the matching raw `run_it001`
@@ -873,11 +878,14 @@ versus RELION 1330 s (`1.51963x`), with sparse pass 2 consuming 862.42 s.
 Summary:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_hybrid_full_20260712_121500/summary.md`.
 
-Next gate: compare the exact RELION device Euler matrices from `11058986` to
-the accepted RECOVAR rotation grid.  In parallel, clean 100k hybrid trajectory
-job `11058928` is running from detached commit `87fd1e78` with run-local,
-hash-qualified CUDA and RELION-bind artifacts.  Attempt `11058781` was rejected
-and cancelled before scoring because its CUDA output path was shared.
+Next gate: test the exact even-size Nyquist-coordinate mismatch identified in
+the texture crop.  RELION keeps the two surviving coarse-disk endpoints as
+`(+N/2,0)` and `(0,+N/2)`, while RECOVAR currently samples them with negative
+Nyquist coordinates and relabels the output.  In parallel, clean 100k hybrid
+trajectory job `11058928` is running from detached commit `87fd1e78` with
+run-local, hash-qualified CUDA and RELION-bind artifacts.  Attempt `11058781`
+was rejected and cancelled before scoring because its CUDA output path was
+shared.
 
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
