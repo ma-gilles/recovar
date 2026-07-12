@@ -936,17 +936,149 @@ alone produces the same p95.  Exact device Euler job `11068941` finds zero of
 Injecting those exact matrices into the RECOVAR texture projector in GPU job
 `11071482` reduces correct-half projection p95 error from `4.825e-5` to
 `4.915e-7` (about 98x) and reduces score error back to the RELION rerun floor.
-Texture staging is exonerated; exact RELION fine Euler generation is the next
-production fix.  Evidence root:
+
+The cause is not a different Euler convention or missing RELION binding.
+RELION's live iteration-2 perturbation is `0.4052000939846039`, while the
+sampling STAR serializes only `0.405200`.  Seed-exact job `11075288` recovers
+the live value from `_rlnRandomSeed`, makes all 480/480 effective candidate
+matrices byte-identical to the accelerated RELION dump, and retains projection
+p95 `4.915e-7`.  Commit `3917aa67` makes this the typed `auto` behavior,
+verifies consistency with the rounded STAR, provides explicit `seed_exact`
+and `star` modes, and falls back to STAR precision only when seed provenance
+is unavailable.  Evidence root:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_row2813_relion_fine_euler_dump_20260712_132000`.
 
-Next gate: implement exact, batched RELION fine Euler construction, repeat the
-fixed-state operand/score panel, then rerun the corrected 10k trajectory.
-In parallel, clean 100k hybrid scale job `11058928` continues from detached
-commit `87fd1e78` with run-local, hash-qualified CUDA and RELION-bind artifacts;
-it remains useful for scale/OOM evidence but is superseded for final quality by
-the Nyquist correction.  Attempt `11058781` was rejected and cancelled before
-scoring because its CUDA output path was shared.
+Six-target fixed-state job `11076618` validates the combined positive-Nyquist
+and seed-exact path.  All six fine winners are exact.  Five targets have exact
+candidate and reconstruction support; row 5504 differs by one coarse parent at
+a `2.68e-10` weight cutoff and three reconstruction samples with probability
+gaps at most `1.82e-11`, so every discrete difference is a demonstrated
+threshold tie.  Centered fine-score p95 is `2.69e-4`--`5.96e-4`, at the
+independent accelerated-RELION rerun floor, and Pmax gaps are at most
+`8.70e-4`.  Machine-readable evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_fullpert_nyquist_panel6_20260712_193000/fullpert_panel6_relion_comparison.json`.
+
+Clean combined full-trajectory job `11079185` nevertheless fails the strict
+10k map gate.  It reproduces the full authoritative `(current_size,
+resolution shell, HEALPix order)` schedule, converges at iteration 16, and
+runs final all-data with parent/fine orders 6/7.  Final merged RELION FSC-AUC
+is `0.978500`, versus `0.979511` for rounded replay; half-map FSC-AUC is
+`0.950958/0.947709`.  The loss is high-frequency: new-minus-rounded merged
+mean FSC is `-1.6e-6` at shells 1--16, `-1.03e-3` at 33--64, and `-2.40e-3`
+at 65--96, with worst shell delta `-0.00580`.  Runtime is 1984.0 s, or
+`1.4917x` RELION.  Full precision is closer in pose/Pmax through iteration 2;
+iteration 4 is the first net particle-state worsening, after tiny prior-state
+differences are amplified by rare global score ties.  Iteration-1 diagnostic
+`11084547` rules out an early reconstruction bug: merged map FSC-AUC is
+`0.999996565`, minimum non-DC shell FSC `0.999993239`, and all 10k Pmax values
+are exactly one.  Evidence roots:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fullpert_finalorder_20260712_193000` and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter1_fullprecision_boundary_20260712_151500`.
+
+Four-iteration numbered-map job `11084946` reproduces `11079185` poses and
+translations byte-exactly and localizes the visible early map residual to the
+first shell outside current-size signal support.  Full-box merged FSC-AUC
+falls from `0.9999966` at
+iteration 1 to `0.9994003`, `0.9959409`, and `0.9905003` at iterations 2--4;
+the minimum shell is exactly the current-size boundary (47, 61, and 62).
+Through RELION's authoritative signal shell, however, merged FSC-AUC remains
+`0.999999759`, `0.999996900`, `0.999983765`, and `0.999938423`, with minimum
+shell FSC at least `0.999751`.  Thus no material signal-band reconstruction
+drift precedes the iteration-4 particle flips.
+
+A direct current-size-edge audit rules out a crop-origin or Nyquist-plane
+defect.  The edge planes contain only
+`0.073%`--`7.23%` of residual energy at iterations 2--4, fitted shifts are
+below `0.001` pixel.  Uninterrupted raw-BPref job `11087020` is a
+near-authoritative numerical oracle: half-map FSC-AUC against the installed
+iteration 2 is `0.99999991/0.999999998`, all angles and X translations are
+exact, and only two Y translations differ by one grid step at ties.  After
+frame scaling, RELION-versus-RECOVAR BPref numerator relative L2 is
+`1.77%/0.94%` by half while weight is `0.338%/0.200%`, but causal
+cross-substitution remains unqualified because the first reconstruction probe
+used `skip_gridding=False` and later probes paired the wrong BPref/map files.
+The inherited claim that a RELION solver raised shell-47 FSC to `0.999147`
+has no reproducible script or result artifact and is withdrawn.
+
+Identical-input reconstruction is instead closed: on both RELION and RECOVAR
+BPref operands, RECOVAR's wrapper and RELION's real `skip_gridding=True`
+binding agree at current-support FSC-AUC above `0.9999999999999` and shell-47
+FSC above `0.999999999996` after the documented frame transform.  The source
+audit nevertheless finds three independent correctness defects in RECOVAR's
+current-size wrapper: packed-half tau shells round padded radius before
+division and then round again (mislabeling `388168/1643720` supported
+iteration-2 voxels), numerator decenter incorrectly excludes the exact-radius
+sphere that RELION includes, and the MAP prior needs its own strict-radius
+support.  These fixes require a fresh four-iteration trajectory gate; they are
+not yet a production-quality closure.  Evidence roots:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter4_fullprecision_boundary_20260712_153000` and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_relion_iter2_bpref_dump_fullscratch_20260712_171500`.
+
+The tempting indexed-backprojection coordinate-order explanation is rejected.
+RELION rotates integer Fourier coordinates before multiplying by padding while
+RECOVAR's CUDA kernel multiplies first, but padding factor 2 is exact binary
+scaling: five million float32 coordinate cases are bit-exact.  The initial
+dot-then-padding A100 probe used the wrong default box size and is invalid as
+quantitative evidence; corrected box-256 pre-scatter and scatter probes instead
+show common-mode data/weight behavior and do not support the coordinate-order
+hypothesis.  The diagnostic source change was reverted.  The remaining
+credible BPref mechanism is global translated complex numerator accumulation
+and atomic ordering, which is more cancellation-sensitive than the positive
+CTF-squared weight.
+
+Reciprocal iteration-3 map-splice array `11086240_[0-3]` proves that low
+shells through authoritative signal shell 29 dominate the iteration-4
+particle divergence.  The authoritative-map control A and REL-low/REC-high C
+retain `9787/10000` and `9895/10000` exact joint winners relative to the free
+RECOVAR-map B trajectory, while REC-low/REL-high D retains `9887/10000` of B's
+winners.  Iteration-4 merged FSC-AUC through shell 61 groups independently as
+A/C (`0.998992/0.998972`) versus B/D (`0.998272/0.998286`).  A matches RELION
+joint winners within `1e-4` for `9996/10000`; B reproduces the free trajectory
+for all six selected targets and `9997/10000` joint winners.  The Slurm array
+is recorded as `FAILED/1` only because its post-run assertion requested local
+fused-posterior dumps during a global sparse pass-2, where that hook is not
+active; all science artifacts are complete.  This rules out iteration-4
+sampling, scoring, and BPref as the first boundary and moves the trace to
+iteration-3 low-shell PPref formation.  Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_it4_ppref_shell_cross_20260712_160000/ANALYSIS_SUMMARY.txt`.
+
+Clean 100k hybrid scale job `11058928` completes 16 numbered iterations plus
+final in 2:35:23 without OOM, but its final pass incorrectly repeats numbered
+parent/fine orders 6/7.  RELION's unnumbered `run_sampling.star` advances the
+final parent to 7, so adaptive oversampling requires fine order 8.  Commit
+`892c85e0` makes final sampling metadata authoritative while preserving the
+state-order fallback.  Final-only job `11074230` and combined seed-exact retry
+`11083758` validate parent/fine 7/8.  The final map passes strongly:
+RECOVAR-vs-RELION FSC-AUC is `0.996184`, and RECOVAR-vs-GT is `0.497383`
+versus RELION `0.490627`.  Pmax improves materially but remains non-parity:
+RECOVAR mean `0.099121379` versus RELION `0.118882262`, correlation `0.9158`.
+Seed-exact perturbation changes the mean only `1.1e-6`; 80,513 same-winner
+particles retain a `-0.01956` mean gap.  This localizes the residual to
+posterior denominator/support geometry, not sampling order, perturbation,
+winner pose, OOM, or final-map quality.  Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_final_only_seedexact_hp8_combined_retry_20260712_150000/PMax_RESIDUAL_AUDIT.md`.
+
+Next gates: validate the three source-derived current-size corrections in a
+fresh four-iteration trajectory before another full 10k trajectory.  The
+identical-input reconstruction gate is already closed; trajectory FSC/FSC-AUC
+and particle-state changes decide whether these corrections are retained and
+whether the smaller BPref numerator residual becomes the next boundary.
+Attempt `11058781` was rejected before scoring because its CUDA output path
+was shared.  The cold RELION dump `11084550` and stock continuation
+`11085341` are also rejected oracles because their trajectories diverge from
+the installed authoritative iteration 4.
+
+The continuation-oracle path is closed rather than weakened.  Final
+stored-accuracy job `11086683` exactly preserves the installed iteration-4
+sampling order and full perturbation and retains the serialized iteration-3
+accuracy (`2.006` degrees, `1.498312` Angstrom), yet still has half-map
+FSC-AUC `0.9999892/0.9988276`, 20 angular differences above one degree, 581
+translation differences, and 241 significant-sample-count mismatches.  Its
+90 score dumps fail the unchanged gate and remain quarantined.  Therefore
+RELION's serialized optimiser/data/model/sampling STARs omit process-history
+state needed for an exact continuation oracle; no further ad hoc continuation
+overrides are warranted.  Gate:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it4_authoritative_preserve_accuracy6_20260712_231500/authoritative_it4_parity_gate.json`.
 
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
