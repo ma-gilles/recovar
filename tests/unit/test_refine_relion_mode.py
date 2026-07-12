@@ -4793,7 +4793,7 @@ class TestRelionModeSmokeTest:
         translations,
         monkeypatch,
     ):
-        """Posterior-weighted offset variance should drive sigma_offset in RELION mode."""
+        """Posterior-weighted offset variance should drive sigma_offset independently per half."""
         import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         for ds in half_datasets:
@@ -4858,8 +4858,15 @@ class TestRelionModeSmokeTest:
             max_healpix_order=2,
         )
 
-        expected_sigma = np.sqrt((noise_offset_wsums[0] + noise_offset_wsums[1]) / (2.0 * N_IMAGES))
-        assert result["sigma_offset_trajectory"][0] == pytest.approx(expected_sigma)
+        # Each half must use only its own posterior moment (gold-standard
+        # halves are independent MlModels in RELION, ml_model.h:96) -- not a
+        # value pooled across both halves.
+        n_images_per_half = N_IMAGES // 2
+        expected_sigma_per_half = [np.sqrt(max(wsum / (2.0 * n_images_per_half), 2.0)) for wsum in noise_offset_wsums]
+        sigma_per_half = result["sigma_offset_trajectory_per_half"][0]
+        assert sigma_per_half[0] == pytest.approx(expected_sigma_per_half[0])
+        assert sigma_per_half[1] == pytest.approx(expected_sigma_per_half[1])
+        assert sigma_per_half[0] != pytest.approx(sigma_per_half[1])
 
     def test_relion_mode_passes_per_half_noise_to_engine(
         self,

@@ -52,6 +52,13 @@ def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: 
     return int(init_relion_iteration) + int(loop_iteration) + 1
 
 
+def _as_sigma_offset_half_pair(value) -> list[float]:
+    """Normalize a scalar-or-per-half sigma_offset override to a half pair."""
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return [float(value[0]), float(value[1])]
+    return [float(value), float(value)]
+
+
 def _optional_float32_half_pair(values):
     """Return optional per-half arrays normalized to float32."""
     if values is None:
@@ -133,7 +140,7 @@ class ReplayOverrideResult:
     noise_variance: Any
     previous_noise_radial_per_half: list
     previous_noise_radial: Any
-    current_sigma_offset_angstrom: float
+    current_sigma_offset_angstrom_per_half: list[float]
     replay_meta: dict | None  # parsed sampling.star (or None); used downstream by perturbation apply
     class_weights: np.ndarray | None = None
 
@@ -155,7 +162,7 @@ def apply_iter_replay_overrides(
     noise_variance,
     previous_noise_radial_per_half: list,
     previous_noise_radial,
-    current_sigma_offset_angstrom: float,
+    current_sigma_offset_angstrom,
     class_direction_prior_per_half: list,
     class_direction_prior_order_per_half: list,
     global_direction_prior_per_half: list,
@@ -188,6 +195,7 @@ def apply_iter_replay_overrides(
     _model_meta = None
     _replay_meta = None
     _replay_class_weights = None
+    current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(current_sigma_offset_angstrom)
 
     if perturb_replay_relion_dir is not None:
         _star = os.path.join(
@@ -414,10 +422,11 @@ def apply_iter_replay_overrides(
     if iter_replay_override is not None:
         _replay_sigma = iter_replay_override.get("translation_sigma_angstrom")
         if _replay_sigma is not None:
-            current_sigma_offset_angstrom = float(_replay_sigma)
+            current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(_replay_sigma)
             logger.info(
-                "Replay override: sigma_offset <- %.4f A (iter=%d)",
-                current_sigma_offset_angstrom,
+                "Replay override: sigma_offset <- half1=%.4f half2=%.4f A (iter=%d)",
+                current_sigma_offset_angstrom_per_half[0],
+                current_sigma_offset_angstrom_per_half[1],
                 iteration + 1,
             )
         _replay_prev_trans = iter_replay_override.get("previous_best_translations")
@@ -542,7 +551,7 @@ def apply_iter_replay_overrides(
         noise_variance=noise_variance,
         previous_noise_radial_per_half=previous_noise_radial_per_half,
         previous_noise_radial=previous_noise_radial,
-        current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+        current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
         replay_meta=_replay_meta,
         class_weights=_replay_class_weights,
     )

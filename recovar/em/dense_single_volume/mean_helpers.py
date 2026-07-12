@@ -452,51 +452,75 @@ from dataclasses import dataclass as _dataclass  # noqa: E402  -- inline import
 
 @_dataclass
 class SigmaOffsetUpdateResult:
-    """Posterior-weighted ``sigma_offset`` update result.
+    """Per-half ``sigma_offset`` update result.
 
-    ``per_class_sigma_offset_angstrom`` is the K-class diagnostic, currently
-    logged only (the cross-class aggregate ``current_sigma_offset_angstrom``
-    is what feeds the next iteration's translation prior). Both halves of
-    the dual cross-class / hard-assignment fallback formula are folded
-    into ``current_sigma_offset_angstrom`` before return.
+    RELION's ``sigma2_offset`` is a single scalar per ``MlModel``
+    (``ml_model.h:96``). Gold-standard auto-refine runs two independent
+    ``MlModel`` instances (one per half), so each half updates its own value
+    from only its own particles -- confirmed empirically via differing
+    ``_rlnSigmaOffsetsAngst`` in RELION's ``run_it*_half{1,2}_model.star``.
     """
 
-    current_sigma_offset_angstrom: float
+    current_sigma_offset_angstrom_per_half: list[float]
     per_class_sigma_offset_angstrom: np.ndarray | None
+
+
+def _sigma_offset_from_moment(
+    wsum: float,
+    sumw: float,
+    *,
+    current_sigma_offset_angstrom: float,
+    state_fallback_offsets_angstrom: float,
+    label: str,
+) -> float:
+    """RELION M-step ``sigma_offset`` update from one posterior moment.
+
+    ``sigma2_offset_new = wsum_sigma2_offset / (2 * sum_weight)``, clamped to
+    RELION's ``min_sigma2_offset`` floor. Falls back to the hard-assignment
+    proxy when a path doesn't propagate the full posterior moment (wsum==0).
+    """
+    min_sigma2_angstrom2 = 2.0  # RELION min_sigma2_offset default, in Å² (ml_optimiser.h).
+    if wsum > 0.0 and sumw > 0.0:
+        sigma2_offset_angstrom2 = max(wsum / (2.0 * sumw), min_sigma2_angstrom2)
+        updated = float(np.sqrt(sigma2_offset_angstrom2))
+        logger.info(
+            "C1 (%s): sigma_offset updated %.3f Å from posterior variance (clamp sigma^2 >= %.3f Å^2)",
+            label,
+            updated,
+            min_sigma2_angstrom2,
+        )
+        return updated
+
+    new_sigma_offset_angstrom = state_fallback_offsets_angstrom
+    if np.isfinite(new_sigma_offset_angstrom) and new_sigma_offset_angstrom > 0:
+        min_sigma_angstrom = float(np.sqrt(min_sigma2_angstrom2))
+        updated = max(float(new_sigma_offset_angstrom), min_sigma_angstrom)
+        logger.info(
+            "C1 fallback (%s): sigma_offset updated %.3f Å from hard assignments (clamp >= %.3f Å)",
+            label,
+            updated,
+            min_sigma_angstrom,
+        )
+        return updated
+    return current_sigma_offset_angstrom
 
 
 def update_c1_sigma_offset_from_posterior(
     *,
     noise_stats_per_half,
     noise_stats_per_half_per_class,
-    current_sigma_offset_angstrom: float,
+    current_sigma_offset_angstrom_per_half,
     n_classes: int,
     k_class_enabled: bool,
     state_fallback_offsets_angstrom: float,
 ) -> SigmaOffsetUpdateResult:
-    """RELION C1 posterior-weighted ``sigma_offset`` update.
+    """RELION C1 posterior-weighted ``sigma_offset`` update, per half-set."""
 
-    Prefer RELION's posterior-weighted sufficient statistic:
-
-        sigma2_offset_new = wsum_sigma2_offset / (2 * sum_weight)
-
-    for 2D single-particle data. Fall back to the older hard-assignment
-    proxy only when a path does not propagate the full posterior moment
-    (``sigma2_offset_wsum == 0``). Both halves of the M-step contribute.
-    """
-
-    sigma2_offset_wsum = 0.0
-    sigma2_offset_sumw = 0.0
-    for stats_k in noise_stats_per_half:
-        if stats_k is None:
-            continue
-        sigma2_offset_wsum += float(getattr(stats_k, "wsum_sigma2_offset", 0.0))
-        sigma2_offset_sumw += float(getattr(stats_k, "sumw", 0.0))
-    # D.2: per-class sigma_offset diagnostic. RELION Class3D maintains K
-    # independent sigma_offset values; recovar currently uses the
-    # cross-class aggregate. Compute and log per-class sigmas to gauge
-    # whether the per-class refactor is justified for this fixture.
+    # D.2: per-class diagnostic, logged only -- pools across halves since
+    # RELION has no per-class sigma_offset to validate against (see
+    # SigmaOffsetUpdateResult docstring).
     per_class_sigma_offset = None
+    default_sigma_offset_angstrom = float(np.mean(current_sigma_offset_angstrom_per_half))
     if k_class_enabled:
         per_class_w = np.zeros(n_classes, dtype=np.float64)
         per_class_n = np.zeros(n_classes, dtype=np.float64)
@@ -509,45 +533,41 @@ def update_c1_sigma_offset_from_posterior(
                 per_class_w[c] += float(getattr(stats_c, "wsum_sigma2_offset", 0.0))
                 per_class_n[c] += float(getattr(stats_c, "sumw", 0.0))
         min_sigma2 = 2.0
-        per_class_sigma_offset = np.full(n_classes, current_sigma_offset_angstrom, dtype=np.float64)
+        per_class_sigma_offset = np.full(n_classes, default_sigma_offset_angstrom, dtype=np.float64)
         for c in range(n_classes):
             if per_class_w[c] > 0.0 and per_class_n[c] > 0.0:
                 s2 = max(per_class_w[c] / (2.0 * per_class_n[c]), min_sigma2)
                 per_class_sigma_offset[c] = float(np.sqrt(s2))
         logger.info(
-            "C1: per-class sigma_offset = [%s] (cross-class aggregate %.3f Å)",
+            "C1: per-class sigma_offset = [%s]",
             ", ".join(f"{s:.3f}" for s in per_class_sigma_offset),
-            float(np.sqrt(max(sigma2_offset_wsum / max(2.0 * sigma2_offset_sumw, 1e-30), min_sigma2)))
-            if sigma2_offset_wsum > 0
-            else current_sigma_offset_angstrom,
         )
-    if sigma2_offset_wsum > 0.0 and sigma2_offset_sumw > 0.0:
-        min_sigma2_angstrom2 = 2.0
-        sigma2_offset_angstrom2 = max(
-            sigma2_offset_wsum / (2.0 * sigma2_offset_sumw),
-            min_sigma2_angstrom2,
+
+    if k_class_enabled:
+        wsum = sum(float(getattr(s, "wsum_sigma2_offset", 0.0)) for s in noise_stats_per_half if s is not None)
+        sumw = sum(float(getattr(s, "sumw", 0.0)) for s in noise_stats_per_half if s is not None)
+        shared = _sigma_offset_from_moment(
+            wsum,
+            sumw,
+            current_sigma_offset_angstrom=default_sigma_offset_angstrom,
+            state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
+            label="shared/K-class",
         )
-        current_sigma_offset_angstrom = float(np.sqrt(sigma2_offset_angstrom2))
-        logger.info(
-            "C1: sigma_offset updated %.3f Å from posterior variance (clamp sigma^2 >= %.3f Å^2)",
-            current_sigma_offset_angstrom,
-            min_sigma2_angstrom2,
-        )
+        new_per_half = [shared, shared]
     else:
-        new_sigma_offset_angstrom = state_fallback_offsets_angstrom
-        if np.isfinite(new_sigma_offset_angstrom) and new_sigma_offset_angstrom > 0:
-            min_sigma_angstrom = float(np.sqrt(2.0))  # RELION min_sigma2_offset = 2 Å²
-            current_sigma_offset_angstrom = max(
-                float(new_sigma_offset_angstrom),
-                min_sigma_angstrom,
+        new_per_half = [
+            _sigma_offset_from_moment(
+                float(getattr(stats_k, "wsum_sigma2_offset", 0.0)) if stats_k is not None else 0.0,
+                float(getattr(stats_k, "sumw", 0.0)) if stats_k is not None else 0.0,
+                current_sigma_offset_angstrom=current_sigma_offset_angstrom_per_half[k],
+                state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
+                label=f"half{k + 1}",
             )
-            logger.info(
-                "C1 fallback: sigma_offset updated %.3f Å from hard assignments (clamp >= %.3f Å)",
-                current_sigma_offset_angstrom,
-                min_sigma_angstrom,
-            )
+            for k, stats_k in enumerate(noise_stats_per_half)
+        ]
+
     return SigmaOffsetUpdateResult(
-        current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+        current_sigma_offset_angstrom_per_half=new_per_half,
         per_class_sigma_offset_angstrom=per_class_sigma_offset,
     )
 

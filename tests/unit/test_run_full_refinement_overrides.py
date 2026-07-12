@@ -172,11 +172,11 @@ def test_replay_overrides_inject_per_iter_sigma_offset():
 
         m1 = FIXTURE / f"run_it{recovar_iter:03d}_half1_model.star"
         m2 = FIXTURE / f"run_it{recovar_iter:03d}_half2_model.star"
-        relion_sigma = 0.5 * (_read_relion_sigma(m1) + _read_relion_sigma(m2))
-        recovar_sigma = float(overrides[recovar_iter]["translation_sigma_angstrom"])
+        relion_sigma = [_read_relion_sigma(m1), _read_relion_sigma(m2)]
+        recovar_sigma = [float(v) for v in overrides[recovar_iter]["translation_sigma_angstrom"]]
         assert recovar_sigma == pytest.approx(relion_sigma, abs=1e-6), (
-            f"iter {recovar_iter}: recovar override sigma_offset {recovar_sigma:.6f} != "
-            f"RELION rlnSigmaOffsetsAngst mean {relion_sigma:.6f}"
+            f"iter {recovar_iter}: recovar override sigma_offset {recovar_sigma} != "
+            f"RELION rlnSigmaOffsetsAngst per-half {relion_sigma}"
         )
 
 
@@ -203,14 +203,14 @@ def test_replay_overrides_iter2_sigma_matches_relion_iter1():
 
     iter1_h1 = FIXTURE / "run_it001_half1_model.star"
     iter1_h2 = FIXTURE / "run_it001_half2_model.star"
-    relion_iter1_sigma = 0.5 * (_read_relion_sigma(iter1_h1) + _read_relion_sigma(iter1_h2))
+    relion_iter1_sigma = [_read_relion_sigma(iter1_h1), _read_relion_sigma(iter1_h2)]
 
-    recovar_iter2_sigma = float(overrides[1]["translation_sigma_angstrom"])
+    recovar_iter2_sigma = [float(v) for v in overrides[1]["translation_sigma_angstrom"]]
     assert recovar_iter2_sigma == pytest.approx(relion_iter1_sigma, abs=1e-6)
     # Sanity: this is the data-driven RELION sigma, not the 10 Å init default.
-    assert recovar_iter2_sigma < 5.0, (
+    assert max(recovar_iter2_sigma) < 5.0, (
         "recovar iter-2 should use RELION's iter-1 data-driven sigma (~2 Å), "
-        f"not the init default (10 Å); got {recovar_iter2_sigma:.4f} Å"
+        f"not the init default (10 Å); got {recovar_iter2_sigma} Å"
     )
 
 
@@ -277,7 +277,7 @@ def test_replay_overrides_use_shared_class3d_model_star(tmp_path):
     )
 
     assert overrides[0] is None
-    assert overrides[1]["translation_sigma_angstrom"] == pytest.approx(6.5)
+    assert overrides[1]["translation_sigma_angstrom"] == pytest.approx([6.5, 6.5])
     h1, h2 = overrides[1]["image_corrections"]
     np.testing.assert_allclose(h1, np.asarray([30.0, 7.5], dtype=np.float32))
     np.testing.assert_allclose(h2, np.asarray([30.0, 12.0], dtype=np.float32))

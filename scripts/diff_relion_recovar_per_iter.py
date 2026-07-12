@@ -174,6 +174,7 @@ def extract_relion_scalars(relion_iter):
     out = {}
     opt = relion_iter["optimiser"]
     model = relion_iter["model_h1"]
+    model_h2 = relion_iter.get("model_h2")
     data = relion_iter.get("data")
 
     # Per-particle Pmax mean from data.star — this is the apples-to-apples
@@ -203,7 +204,11 @@ def extract_relion_scalars(relion_iter):
         out["current_resolution"] = float(mg.get("rlnCurrentResolution", float("nan")))
         out["log_likelihood"] = float(mg.get("rlnLogLikelihood", float("nan")))
         out["norm_correction_avg"] = float(mg.get("rlnNormCorrectionAverage", float("nan")))
+        # RELION's sigma_offset is a per-half MlModel scalar (independent
+        # gold-standard halves), so half1/half2 read from their own model.star.
         out["sigma_offsets_angst"] = float(mg.get("rlnSigmaOffsetsAngst", float("nan")))
+        if model_h2 and "model_general" in model_h2:
+            out["sigma_offsets_angst_h2"] = float(model_h2["model_general"].get("rlnSigmaOffsetsAngst", float("nan")))
         out["tau2_fudge"] = float(mg.get("rlnTau2FudgeFactor", float("nan")))
         out["nr_groups"] = int(mg.get("rlnNrGroups", 0) or 0)
 
@@ -299,6 +304,8 @@ def extract_recovar_scalars(recovar, it):
     sigma_offset_used_arr = recovar.get("sigma_offset_used_trajectory")
     if sigma_offset_arr is None:
         sigma_offset_arr = sigma_offset_used_arr
+    sigma_offset_per_half_arr = recovar.get("sigma_offset_trajectory_per_half")
+    sigma_offset_used_per_half_arr = recovar.get("sigma_offset_used_trajectory_per_half")
     frac_changed_arr = recovar.get("frac_changed_trajectory")
     acc_rot_arr = recovar.get("acc_rot_trajectory")
     smallest_change_angles_arr = recovar.get("smallest_change_angles_trajectory")
@@ -316,6 +323,12 @@ def extract_recovar_scalars(recovar, it):
         out["sigma_offsets_angst"] = float(sigma_offset_arr[it])
     if sigma_offset_used_arr is not None and it < len(sigma_offset_used_arr):
         out["sigma_offsets_used_angst"] = float(sigma_offset_used_arr[it])
+    if sigma_offset_per_half_arr is not None and it < len(sigma_offset_per_half_arr):
+        out["sigma_offsets_angst_h1"] = float(sigma_offset_per_half_arr[it][0])
+        out["sigma_offsets_angst_h2"] = float(sigma_offset_per_half_arr[it][1])
+    if sigma_offset_used_per_half_arr is not None and it < len(sigma_offset_used_per_half_arr):
+        out["sigma_offsets_used_angst_h1"] = float(sigma_offset_used_per_half_arr[it][0])
+        out["sigma_offsets_used_angst_h2"] = float(sigma_offset_used_per_half_arr[it][1])
     if frac_changed_arr is not None and it < len(frac_changed_arr):
         out["fraction_changed"] = float(frac_changed_arr[it])
     if acc_rot_arr is not None and it < len(acc_rot_arr):
@@ -530,8 +543,13 @@ def main():
             # full-set accounting reasons; reported here for completeness
             # but NOT directly comparable to recovar's ave_Pmax.
             ("ave_Pmax_mstep (RELION-only)", rsc.get("ave_Pmax_mstep"), None),
-            ("sigma_offsets_Å", rsc.get("sigma_offsets_angst"), rec_sc.get("sigma_offsets_angst")),
-            ("sigma_offsets_used_Å", None, rec_sc.get("sigma_offsets_used_angst")),
+            # sigma_offset is a per-half MlModel scalar in RELION (independent
+            # gold-standard halves); compare half1 vs half1 and half2 vs half2
+            # rather than RELION's half1 against recovar's cross-half mean.
+            ("sigma_offsets_Å_h1", rsc.get("sigma_offsets_angst"), rec_sc.get("sigma_offsets_angst_h1")),
+            ("sigma_offsets_Å_h2", rsc.get("sigma_offsets_angst_h2"), rec_sc.get("sigma_offsets_angst_h2")),
+            ("sigma_offsets_used_Å_h1", None, rec_sc.get("sigma_offsets_used_angst_h1")),
+            ("sigma_offsets_used_Å_h2", None, rec_sc.get("sigma_offsets_used_angst_h2")),
             ("smallest_chg_angles_°", rsc.get("smallest_change_angles"), rec_sc.get("smallest_change_angles")),
             ("smallest_chg_offsets", rsc.get("smallest_change_offsets"), rec_sc.get("smallest_change_offsets")),
             ("current_resolution Å", rsc.get("current_resolution"), None),
@@ -555,7 +573,6 @@ def main():
         for f, label in [
             ("log_likelihood", "log_likelihood"),
             ("norm_correction_avg", "norm_correction_avg"),
-            ("sigma_offsets_angst", "sigma_offsets_Å"),
             ("best_resolution_so_far", "best_res_so_far_(1/Å)"),
             ("smallest_change_angles", "smallest_chg_angles_°"),
             ("smallest_change_offsets", "smallest_chg_offsets_px"),
