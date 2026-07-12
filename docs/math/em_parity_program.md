@@ -438,6 +438,21 @@ select the largest per-particle Pmax/support residuals, freeze the same RELION
 state and maps, and compare raw scores, priors, support masks, log-normalizers,
 and winners before making performance changes.
 
+Fixed-state jobs refine that boundary further. One-iteration replay job
+`11041292` starts from RELION iteration-1 maps and state and produces
+iteration-2 FSC-AUC `0.999321`, mean Pmax `0.112001` versus RELION `0.112067`,
+mean absolute per-particle Pmax gap `0.000494`, and pose agreement through p99.
+Its mean fine support is only `298.5/322.9` rotations per half, versus
+`1180.9/1112.4` in the free trajectory. Thus iteration-2 scoring is not the
+primary source; it amplifies a preceding map difference. Direct iteration-1
+job `11041546` proves the first divergence: Pmax is exactly 1 for every
+particle, poses/translations match through p99, but the iteration-1 merged-map
+FSC-AUC is only `0.988635`. The active hypothesis is therefore iteration-1
+M-step support/weights, BPref accumulation, or reconstruction/filtering.
+Compare the saved RECOVAR `Ft_y`, `Ft_ctf`, regularized/unregularized maps,
+tau2, and noise under `iter1_map_diag/output/intermediates` against an
+uninterrupted, identity-validated RELION iteration-1 BPref dump.
+
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
 quality boundary is known.
