@@ -23,12 +23,12 @@ as the next product milestone rather than mixing it into the first closure.
 - **Performance:** exact accepted quality behavior with timing instrumentation;
   no algorithmic approximation without separate quality qualification.
 
-## Current State — 2026-07-11
+## Current State — 2026-07-12
 
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `da45deb49d642c77d6c6dd91baff7c91c2c1188c`
+Current accepted code checkpoint: `536d6bd9de5f2dab900ec5cdd6ad055be728840b`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -748,6 +748,68 @@ compensating error, not evidence of closer E-step arithmetic.  Do not optimize
 or retain manual as the strict default without reconciling this score boundary.
 The full comparison is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_inert_dump_control_20260712_080200/v3_cold_oracle_score_comparison.json`.
+
+The qualified cold-v3 six-particle panel `11056138` extends that conclusion.
+Five rows choose the same winner, with shared-surface posterior L1 between
+`0.000704` and `0.002227` and common-centered pre-prior score p95 error between
+`0.00262` and `0.00678`.  Row 2813 is the decisive non-tie: RELION chooses
+`[289965,48]` at Pmax `0.116213` with top-two log margin `0.184082`, while the
+texture RECOVAR path chooses `[284536,4]` at Pmax `0.375569` with margin
+`1.75604`.  Only `49.80%` of RECOVAR's mass lies on RELION candidates, although
+the shared-candidate centered score p95 error is only `0.003590`.  The bug is
+therefore the coarse-parent support supplied to fine pass 2, not a numerical
+tie or fine texture-score arithmetic.  Qualification and comparison are in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_v3_panel6_20260712_085000`.
+
+RECOVAR support audits localize the mismatch one pass earlier.  For row 5550,
+RELION has 4,192 fine candidates and RECOVAR has 4,160; the 64 RELION-only
+candidates are exactly two 32-child coarse parents `(22971,19)` and
+`(22972,28)`, while RECOVAR adds parent `(2404,9)`.  RECOVAR ranks those parent
+pairs 130, 131, and 126 around a rank-129 significance boundary, proving a
+coarse-score ordering difference rather than a fine-expansion bug.  The row
+2813 projector A/B is stronger: manual coarse projection selects RELION's exact
+15 parent pairs and exact 480 fine candidates; texture swaps RELION parent
+`(36245,8)` for `(35567,1)`.  Manual fine arithmetic is less accurate than
+texture, so strict scoring requires a hybrid: manual supplied-PPref projection
+for global coarse significance and texture supplied-PPref projection for fine
+pass 2.
+
+Minimal RELION v4.1 support probes passed the calibrated inertness gate
+`11056477`; cold oracle run `11056533` preserves perturbation `+0.405200`, the
+target state, and Pmax, with half-map FSC-AUC
+`0.99999990925/0.99999999862`.  Its three requested host booleans are all zero.
+This is admissible boundary evidence but does not replace the v3 raw-score
+arrays.  Audits are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_v41_probe_gate_20260712_092500/v41_inertness_audit.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_v41_probe_cold5550_20260712_092500/cold_probe_qualification.json`.
+
+Commit `536d6bd9` implements an explicit typed coarse-projector choice and
+bypasses the texture selector at the manual supplied-PPref leaf; native
+RECOVAR projection behavior and fine pass 2 remain unchanged.  The first four
+apparent hybrid retries (`11056492`, `11056559`, `11056716`, and `11056983`)
+were invalid diagnostics because `python scripts/run_multi_iter_parity.py`
+loaded EM submodules from the stale editable checkout
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_100k_20260712`.
+They are texture-identical and must not be cited as tests of the patch.  The
+runner now invokes `python -m scripts.run_multi_iter_parity`, isolates its
+per-job Python bytecode cache, and asserts the concrete iteration-loop,
+K-class, and significance module paths.
+
+Import-bound hybrid job `11057315` is the accepted row-2813 gate.  Its coarse
+dump is bit-exact to every array in the qualified manual baseline, including
+`normalization_log_z=65.99702880122135`, inclusion of coarse candidate
+`1051113`, and exclusion of texture-only `1031444`.  Fine candidate and
+reconstruction supports exactly match RELION (`480/480` candidates and
+`189/189` reconstruction hypotheses), the winner is exactly `[289965,48]`,
+and Pmax is `0.1162683021` versus RELION `0.1162131086` (gap `5.52e-5`).
+Posterior L1 is `0.0007255`; common-centered pre-prior score p95/max error is
+`0.00359195/0.00455151`.  The job was intentionally cancelled after both dumps
+completed.  Machine-readable qualification is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_global_pass1_bound_import_assert_20260712_115000/hybrid_row2813_qualification.json`.
+
+Next gate: run an import-bound six-target hybrid panel, then an import-bound
+full 10k trajectory.  Only after those pass should the 100k trajectory restart.
 
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
