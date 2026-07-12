@@ -1014,6 +1014,21 @@ not yet a production-quality closure.  Evidence roots:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter4_fullprecision_boundary_20260712_153000` and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_relion_iter2_bpref_dump_fullscratch_20260712_171500`.
 
+Four-iteration validation job `11089339` retains those corrections.  It runs
+from clean commit `fa597a61`, reproduces exact sizes `[48,92,120,122]`, and
+completes in 937.6 seconds.  Merged authoritative current-support FSC-AUC at
+iterations 2--4 improves from `0.999698/0.998491/0.996590` to
+`0.999968/0.999711/0.999096`; the corresponding minimum support-shell FSC
+improves from `0.982863/0.910681/0.800538` to
+`0.999275/0.993299/0.992760`.  Iteration-4 full-box FSC-AUC rises from
+`0.990577` to `0.998519`, and the two half-map edge shells rise from about
+`0.789/0.791` to `0.993/0.992`.  Iteration-3 Pmax MAE falls from `0.003763`
+to `0.002787`, pose outliers fall from 40 to 29, and translation outliers from
+99 to 59.  Iteration-4 Pmax MAE also improves (`0.009267` to `0.008367`),
+although sparse angle ties leave mean pose error slightly worse; aggregate
+map quality, not correlation, is the retention gate.  Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fa597a61_iter4_validation_20260712_171214/VALIDATION_REPORT.md`.
+
 The tempting indexed-backprojection coordinate-order explanation is rejected.
 RELION rotates integer Fourier coordinates before multiplying by padding while
 RECOVAR's CUDA kernel multiplies first, but padding factor 2 is exact binary
