@@ -27,6 +27,7 @@ from scripts.run_full_refinement import (
     _load_native_group_ids_per_half,
     _parse_relion_cli_ini_high,
     _parse_relion_tau2_fudge,
+    _replay_complete_initial_particle_state,
     _resolve_replay_normcorr,
     _resolve_tau2_fudge,
     _save_initial_noise_cache,
@@ -37,6 +38,12 @@ RUN_FULL_REFINEMENT = Path(__file__).resolve().parents[2] / "scripts" / "run_ful
 ITERATION_LOOP = (
     Path(__file__).resolve().parents[2] / "recovar" / "em" / "dense_single_volume" / "iteration_loop.py"
 )
+
+
+def test_complete_initial_particle_state_is_autorefine_only():
+    assert _replay_complete_initial_particle_state(1, 0)
+    assert not _replay_complete_initial_particle_state(4, 0)
+    assert not _replay_complete_initial_particle_state(1, 1)
 
 
 def _read_relion_sigma(model_star: Path) -> float:

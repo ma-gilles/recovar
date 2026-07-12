@@ -402,6 +402,19 @@ def _default_refinement_subsets(n_images, seed, n_classes):
     return np.sort(indices[: int(n_images) // 2]), np.sort(indices[int(n_images) // 2 :])
 
 
+def _replay_complete_initial_particle_state(n_classes, init_relion_iteration):
+    """Whether run_it000 poses/corrections seed the first expectation step.
+
+    AutoRefine (K=1) searches around the run_it000 pre-centering offsets, so
+    omitting that state changes the first winners.  Class3D (K>1) performs a
+    fresh global first-iteration search and does not seed it from the input
+    orientations; replaying those poses would incorrectly compose the global
+    samples with the supplied particle orientations.
+    """
+
+    return int(n_classes) == 1 and int(init_relion_iteration) == 0
+
+
 def _refine_sampling_kwargs(args, init_healpix_order):
     """Return sampling kwargs forwarded from the CLI into ``refine_single_volume``."""
     return {
@@ -1925,7 +1938,10 @@ def main():
     # large pre-centering offsets on real data; omitting them makes iter-1
     # search around zero and changes the hard firstiter-CC winners even though
     # the starting reference and Pmax values appear to match.
-    if args.relion_init_dir is not None and int(args.init_relion_iteration) == 0:
+    if args.relion_init_dir is not None and _replay_complete_initial_particle_state(
+        args.n_classes,
+        args.init_relion_iteration,
+    ):
         initial_overrides = _build_replay_iteration_overrides(
             args.relion_init_dir,
             half1_idx,
@@ -1952,6 +1968,11 @@ def main():
                 "state; first-iteration particle pre-centering remains unset",
                 args.relion_init_dir,
             )
+    elif args.relion_init_dir is not None and int(args.n_classes) > 1:
+        logger.info(
+            "STRICT-PARITY: Class3D first iteration uses a fresh global search; "
+            "not replaying run_it000 input poses/corrections",
+        )
 
     effective_tau2_fudge, tau2_fudge_source = _resolve_tau2_fudge(
         args.n_classes,
