@@ -2668,7 +2668,7 @@ def test_relion_projector_texture_full_embeds_positive_x_half():
     np.testing.assert_array_equal(full[:2], np.zeros((2, 5, 5), dtype=np.complex64))
 
 
-def test_relion_projector_texture_route_defaults_on_and_can_be_disabled(monkeypatch):
+def test_relion_projector_texture_route_is_opt_in_and_can_be_disabled(monkeypatch):
     from recovar.em.dense_single_volume.helpers import projection as projection_helpers
 
     projector_half = jnp.ones((5, 5, 3), dtype=jnp.complex64)
@@ -2677,6 +2677,12 @@ def test_relion_projector_texture_route_defaults_on_and_can_be_disabled(monkeypa
 
     monkeypatch.delenv("RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP", raising=False)
     monkeypatch.setattr(projection_helpers, "_cuda_projection_available", lambda: True)
+    assert not projection_helpers._relion_projector_texture_enabled(
+        projector_half,
+        r_max=1,
+        padding_factor=1,
+    )
+    monkeypatch.setenv("RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP", "1")
 
     def fake_texture(projector, rotations_block, image_shape, **kwargs):
         calls.append((tuple(projector.shape), tuple(rotations_block.shape), tuple(image_shape), dict(kwargs)))

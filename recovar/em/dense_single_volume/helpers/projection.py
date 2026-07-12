@@ -197,7 +197,7 @@ def relion_projector_half_to_texture_full(volume_relion_half: jax.Array) -> jax.
 
 
 def _relion_projector_texture_enabled(volume_relion_half, *, r_max: int, padding_factor: int) -> bool:
-    token = os.environ.get(_RELION_PROJECTOR_TEXTURE_ENV, "1").strip().lower()
+    token = os.environ.get(_RELION_PROJECTOR_TEXTURE_ENV, "0").strip().lower()
     if token in {"0", "false", "no", "off"}:
         return False
     if token not in {"1", "true", "yes", "on"}:
@@ -282,9 +282,10 @@ def compute_relion_projector_projections_block(
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block.
 
-    Strict GPU parity defaults to RELION's float32 CUDA texture interpolation.
-    Set ``RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP=0`` for the manual/JAX
-    projector diagnostic or when running without the CUDA extension.
+    Strict parity defaults to the manual/JAX interpolator.  The CUDA texture
+    path remains available with ``RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP=1``
+    for diagnostics; it currently changes global K=1/K-class winners and
+    degrades RELION map FSC on the qualified parity fixtures.
     """
 
     image_size = int(image_shape[0])
