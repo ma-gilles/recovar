@@ -2847,7 +2847,8 @@ def _weighted_image_power_shells_and_per_image(
 
     Shell sums stay weighted by the same posterior support used for the A2/XA
     residual terms.  RELION's per-image norm-correction residual additionally
-    receives unweighted image power for shells outside the current model size.
+    receives unweighted image power for valid shells outside the current model
+    size. Fourier pixels assigned to the shell-binning sentinel are excluded.
     """
 
     pixel_power = jnp.abs(processed_half) ** 2
@@ -2855,14 +2856,16 @@ def _weighted_image_power_shells_and_per_image(
     weighted_pixel_power = pixel_power * mass[:, None]
     weighted_half = jnp.sum(weighted_pixel_power, axis=0).astype(jnp.float32)
     weighted_shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
-    norm_mass = mass[:, None]
+    shell_indices_half = jnp.asarray(shell_indices_half)
+    valid_norm_shell = (shell_indices_half >= 0) & (shell_indices_half < int(shell_count))
+    norm_mass = jnp.where(valid_norm_shell[None, :], mass[:, None], 0.0)
     if norm_unweighted_shell_cutoff is not None:
         full_mass = (
             jnp.ones_like(mass)
             if valid_image_mask is None
             else jnp.asarray(valid_image_mask, dtype=pixel_power.dtype)
         )
-        unweighted_shell = jnp.asarray(shell_indices_half) > int(norm_unweighted_shell_cutoff)
+        unweighted_shell = valid_norm_shell & (shell_indices_half > int(norm_unweighted_shell_cutoff))
         norm_mass = jnp.where(unweighted_shell[None, :], full_mass[:, None], norm_mass)
     weighted_per_image = jnp.sum(pixel_power * norm_mass, axis=-1).astype(jnp.float32)
     return weighted_shells, weighted_per_image

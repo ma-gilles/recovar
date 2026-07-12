@@ -3706,6 +3706,50 @@ def test_weighted_image_power_uses_unweighted_high_shells_for_normcorr_only():
     np.testing.assert_allclose(np.asarray(per_image), expected_per_image, rtol=1e-6, atol=1e-6)
 
 
+def test_weighted_image_power_excludes_sentinel_from_support_weighted_normcorr():
+    processed_half = jnp.asarray(
+        [[1.0 + 0.0j, 100.0 + 0.0j], [2.0 + 0.0j, 200.0 + 0.0j]],
+        dtype=jnp.complex64,
+    )
+    support_mass = jnp.asarray([0.25, 1.5], dtype=jnp.float32)
+    shell_indices = jnp.asarray([0, 2], dtype=jnp.int32)
+
+    shells, per_image = _weighted_image_power_shells_and_per_image(
+        processed_half,
+        shell_indices,
+        support_mass,
+        shell_count=2,
+    )
+
+    np.testing.assert_array_equal(np.asarray(shells), np.asarray([6.25, 0.0], dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(per_image), np.asarray([0.25, 6.0], dtype=np.float32))
+
+
+def test_weighted_image_power_excludes_sentinel_from_normcorr_but_keeps_valid_outer_shell():
+    processed_half = jnp.asarray(
+        [
+            [1.0 + 0.0j, 2.0 + 0.0j, 100.0 + 0.0j],
+            [3.0 + 0.0j, 4.0 + 0.0j, 200.0 + 0.0j],
+        ],
+        dtype=jnp.complex64,
+    )
+    support_mass = jnp.asarray([0.25, 0.0], dtype=jnp.float32)
+    # Shell 1 is a valid outer shell beyond the current model cutoff. Shell 2
+    # is the drop-bin sentinel and must not enter either norm-correction sum.
+    shell_indices = jnp.asarray([0, 1, 2], dtype=jnp.int32)
+
+    shells, per_image = _weighted_image_power_shells_and_per_image(
+        processed_half,
+        shell_indices,
+        support_mass,
+        shell_count=2,
+        norm_unweighted_shell_cutoff=0,
+    )
+
+    np.testing.assert_array_equal(np.asarray(shells), np.asarray([0.25, 1.0], dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(per_image), np.asarray([4.25, 16.0], dtype=np.float32))
+
+
 def test_k1_relion_fine_mstep_prune_weights_image_power_by_retained_mass(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
