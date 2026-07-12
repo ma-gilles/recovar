@@ -293,10 +293,33 @@ One-iteration A100 job `11021943` gives tau2 shell 18 `106.849670`, shell 19
 `0.0235179`, and shells 20 onward zero, versus RELION `106.808`, approximately
 `0.0235`, and zero. Merged iteration-1 RECOVAR-vs-RELION FSC-AUC over RELION's
 supported shells 1--18 improves from `0.996052` to `0.998430`; shell 18
-improves from `0.908735` to `0.948464`. The next experiment is a clean
-ten-iteration qualification of this complete first-iteration state fix. Do
-not launch robustness until final canonical FSC-AUC reaches `0.995` and all
-shellwise/GT/convergence gates pass.
+improves from `0.908735` to `0.948464`.
+
+Clean A100 job `11023037` completes in `579` seconds with the exact schedule,
+iteration-10 convergence, and final all-data path. Final canonical
+RECOVAR-vs-RELION FSC-AUC improves from `0.990351` to `0.994646`, narrowly
+missing the unchanged `0.995` gate; RECOVAR-vs-GT remains better at `0.670285`
+versus `0.650835`. Numbered merged-map FSC-AUC is already `0.997721` at
+iteration 2 and `0.999746` at iteration 10.
+
+Post-rotation-only cutoff job `11025153` is a null result: supported-shell
+iteration-1 FSC-AUC remains `0.9984304911` and shell 18 remains `0.948464267`.
+The candidate is reverted. Downsampled BPref shell sums are already effectively
+exact, including shell 18, which moves the first residual after reconstruction.
+
+Source inspection identifies an ordering mismatch. RELION reapplies the
+`ini_high` Fourier low-pass inside maximization, then calls real-space
+`solventFlatten` from the outer iteration loop. RECOVAR did those operations
+in reverse order. They do not commute because the final real-space mask
+reintroduces a small high-shell tail. The next cheapest experiment corrects
+that order and reruns one iteration.
+
+One-iteration A100 job `11025949` confirms the fix. Canonical full-shell
+RECOVAR-vs-RELION FSC-AUC is `0.999538`; supported-shell 1--18 FSC-AUC is
+`0.999930`, shell 18 is `0.998800`, and the minimum non-DC shell is
+`0.996857`. The next experiment is a clean ten-iteration trajectory from this
+ordering fix. Do not launch robustness until its final canonical FSC-AUC
+reaches `0.995` and all shellwise/GT/convergence gates pass.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that

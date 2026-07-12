@@ -9709,8 +9709,8 @@ class TestRelionModeSmokeTest:
         assert regularization_module.resolution_from_data_vs_prior(dvp, allow_high_res_recovery=True) == 27
         assert dvp[29] < 1.0
 
-    def test_firstiter_cc_lowpass_runs_after_solvent_flatten(self, monkeypatch):
-        """RELION applies iter-1 ini_high low-pass after solvent flatten."""
+    def test_firstiter_cc_lowpass_runs_before_solvent_flatten(self, monkeypatch):
+        """RELION applies iter-1 ini_high low-pass before solvent flatten."""
         from types import SimpleNamespace
 
         from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
@@ -9767,7 +9767,7 @@ class TestRelionModeSmokeTest:
             relion_fmask_edge=2,
         )
 
-        assert events[:3] == ["flatten_idft", "flatten_dft", "lowpass"]
+        assert events[:3] == ["lowpass", "flatten_idft", "flatten_dft"]
 
     def test_kclass_reconstruction_uses_1d_tau_shell_prior(self, monkeypatch):
         """K-class M-step reconstruction should index RELION tau2 as shells."""

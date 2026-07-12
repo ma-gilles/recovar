@@ -416,25 +416,10 @@ def _reconstruct_and_postprocess_means(
                 means_premask=np.asarray(means[k], dtype=np.complex64),
             )
 
-        if particle_diameter_ang is not None and particle_diameter_ang > 0:
-            flatten_radius = particle_diameter_ang / (2.0 * cryo.voxel_size)
-            solvent_mask = mask.raised_cosine_mask(
-                volume_shape,
-                radius=flatten_radius,
-                radius_p=flatten_radius + relion_width_mask_edge,
-                offset=jnp.zeros(3),
-            )
-            if k_class_enabled:
-                flattened_classes = []
-                for class_idx in range(n_classes):
-                    vol_real = fourier_transform_utils.get_idft3(means[k][class_idx].reshape(volume_shape))
-                    flattened_classes.append(
-                        fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1),
-                    )
-                means[k] = jnp.stack(flattened_classes, axis=0)
-            else:
-                vol_real = fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
-                means[k] = fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1)
+        # RELION filters Iref inside maximizationOtherParameters, then calls
+        # solventFlatten from the outer iteration loop.  These operations do
+        # not commute: masking in real space after the Fourier low-pass adds a
+        # small, deterministic high-shell tail.
         if relion_firstiter_cc_this_iter:
             if k_class_enabled:
                 means[k] = jnp.stack(
@@ -458,6 +443,25 @@ def _reconstruct_and_postprocess_means(
                     relion_firstiter_ini_high_angstrom,
                     filter_edgewidth=relion_fmask_edge,
                 )
+        if particle_diameter_ang is not None and particle_diameter_ang > 0:
+            flatten_radius = particle_diameter_ang / (2.0 * cryo.voxel_size)
+            solvent_mask = mask.raised_cosine_mask(
+                volume_shape,
+                radius=flatten_radius,
+                radius_p=flatten_radius + relion_width_mask_edge,
+                offset=jnp.zeros(3),
+            )
+            if k_class_enabled:
+                flattened_classes = []
+                for class_idx in range(n_classes):
+                    vol_real = fourier_transform_utils.get_idft3(means[k][class_idx].reshape(volume_shape))
+                    flattened_classes.append(
+                        fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1),
+                    )
+                means[k] = jnp.stack(flattened_classes, axis=0)
+            else:
+                vol_real = fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
+                means[k] = fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1)
     if relion_firstiter_cc_this_iter and relion_firstiter_ini_high_angstrom is not None:
         logger.info(
             "RELION iter-1 CC emulation: reapplying ini_high low-pass filter at %.2f A",

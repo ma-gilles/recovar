@@ -1553,3 +1553,53 @@ candidate. The next discriminating experiment is a clean ten-iteration free
 trajectory with the combined first-iteration state fix. Robustness remains
 blocked until the full strict FSC, GT, shellwise, convergence, and finalization
 gates pass.
+
+Clean full-trajectory A100 job `11023037` subsequently completed in `579`
+seconds on `della-l08g6` from commit
+`a614969a29fd90535aba4b73fed093839ba29390`. Its marked root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_strict_free_tau_acc_20260711_200500`.
+It matches the ten-step current-size schedule, convergence at iteration 10,
+and final all-data path. Final canonical RECOVAR-vs-RELION FSC-AUC improves
+from `0.990351` to `0.994646` but remains `0.000354` below the fixed gate.
+RECOVAR-vs-GT is `0.670285` versus RELION `0.650835`. Numbered merged-map
+RECOVAR-vs-RELION FSC-AUC is `0.997721` at iteration 2, `0.999213` at
+iteration 4, `0.999686` at iteration 8, and `0.999746` at iteration 10.
+
+RELION's accelerated CUDA `backproject2Dto3D` source shows only one sphere
+test after rotating the source coordinate. RECOVAR also tested the unrotated
+radius. Post-rotation-only A100 job `11025153`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_firstiter_postrot_only_20260711_202000`,
+falsifies that difference as the limiter: supported-shell iteration-1 FSC-AUC
+is unchanged at `0.9984304911`, and shell 18 is unchanged at `0.948464267`.
+The source-cutoff candidate is reverted.
+
+Offline comparison of the new float32 accumulators against the existing
+patched-RELION downsampled BPref dumps shows effectively exact shell sums.
+At shell 18 both complex-average power and weight ratios print as `1.0000` for
+both halves. Across 47,209 coordinates, weight median relative error is about
+`1.76e-6`; complex-average median errors are `1.30e-5` and `1.22e-5` for the
+two halves. The first meaningful residual is therefore after BPref
+downsampling, not in its shell-aggregate input.
+
+RELION ordering is explicit in source: `maximizationOtherParameters` calls
+`initialLowPassFilterReferences`, then the outer iteration loop calls
+`solventFlatten`. RECOVAR applied solvent flattening before the iter-1
+Fourier low-pass. These operations do not commute because a final real-space
+mask creates a deterministic Fourier tail. The active candidate swaps only
+that first-iteration postprocessing order and updates the existing event-order
+regression. One-iteration shellwise FSC must improve before another full
+trajectory.
+
+One-iteration A100 job `11025949`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_firstiter_lowpass_before_mask_20260711_203000`
+and marked `SAFE_TO_DELETE`, confirms the source-matched order. It completed
+in `84` seconds on `della-l07g2` with dirty diff SHA-256
+`208149fee341b071c06209412624c60a8fae2fecc4cae62f07fa13fb5841579f`.
+Canonical full-shell RECOVAR-vs-RELION FSC-AUC rises from `0.298879` in the
+wrong-order one-iteration run to `0.999538`. More directly, supported-shell
+1--18 FSC-AUC rises from `0.998430` to `0.999930`; shell 18 rises from
+`0.948464` to `0.998800`. The minimum non-DC shell FSC is `0.996857` at shell
+19 and the fifth percentile is `0.998724`. This shellwise evidence closes the
+iteration-1 reconstruction/postprocessing boundary. The next qualification is
+a clean ten-iteration free trajectory; robustness remains gated on its final
+FSC-AUC, shellwise, GT, convergence, and finalization results.
