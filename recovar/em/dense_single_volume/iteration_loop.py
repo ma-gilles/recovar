@@ -248,6 +248,67 @@ def _int_env_or_default(name: str, default: int) -> int:
         return default
 
 
+def _replay_perturbation_seed(
+    replay_dir: str,
+    relion_iteration: int,
+    explicit_seed: int | None,
+) -> int | None:
+    """Return the RELION optimiser seed that generated a sampling state."""
+    if explicit_seed is not None:
+        return int(explicit_seed)
+    candidates = [
+        os.path.join(replay_dir, f"run_it{int(relion_iteration):03d}_optimiser.star"),
+        os.path.join(replay_dir, "run_optimiser.star"),
+    ]
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        seed = read_relion_optimiser_metadata(path).get("random_seed")
+        if seed is not None:
+            return int(seed)
+    return None
+
+
+def _resolve_replay_random_perturbation(
+    *,
+    star_value: float,
+    perturbation_factor: float,
+    relion_iteration: int,
+    replay_dir: str,
+    explicit_seed: int | None,
+    precision_mode: str,
+) -> tuple[float, str]:
+    """Recover RELION's live perturbation without STAR decimal truncation."""
+    if precision_mode not in {"auto", "seed_exact", "star"}:
+        raise ValueError(f"Unsupported perturb_replay_precision={precision_mode!r}")
+    if precision_mode == "star":
+        return float(star_value), "star"
+
+    seed = _replay_perturbation_seed(replay_dir, relion_iteration, explicit_seed)
+    if seed is None:
+        if precision_mode == "seed_exact":
+            raise ValueError(
+                "perturb_replay_precision='seed_exact' requires perturb_seed or "
+                "_rlnRandomSeed in a replay optimiser STAR"
+            )
+        return float(star_value), "star-fallback"
+
+    exact = relion_sampling_perturbation_for_iteration(
+        float(perturbation_factor),
+        int(seed),
+        int(relion_iteration),
+    )
+    # RELION writes this field with as few as five digits after the decimal.
+    # Treat the STAR value as a provenance guard, not as the arithmetic input.
+    if not np.isclose(exact, float(star_value), rtol=0.0, atol=5.1e-6):
+        raise ValueError(
+            "Seed-reconstructed SamplingPerturbation disagrees with replay STAR: "
+            f"iteration={relion_iteration} seed={seed} exact={exact:+.12g} "
+            f"star={float(star_value):+.12g}"
+        )
+    return float(exact), "seed-exact"
+
+
 def _debug_replay_relion_references_enabled(iteration_number: int) -> bool:
     """Return whether this scoring iteration should use RELION half-map references."""
 
@@ -3117,6 +3178,7 @@ def refine_single_volume(
     perturb_factor=0.0,
     perturb_seed=None,
     perturb_replay_relion_dir=None,
+    perturb_replay_precision="auto",
     init_fsc=None,
     init_ave_Pmax=None,
     init_has_high_fsc_at_limit=None,
@@ -3273,6 +3335,7 @@ def refine_single_volume(
         perturb_factor = parity.perturb_factor
         perturb_seed = parity.perturb_seed
         perturb_replay_relion_dir = parity.perturb_replay_relion_dir
+        perturb_replay_precision = parity.perturb_replay_precision
         emulate_relion_firstiter_cc = parity.emulate_relion_firstiter_cc
         relion_firstiter_ini_high_angstrom = parity.relion_firstiter_ini_high_angstrom
         do_solvent_fsc_correction = parity.do_solvent_fsc_correction
@@ -3342,6 +3405,7 @@ def refine_single_volume(
         perturb_factor=perturb_factor,
         perturb_seed=perturb_seed,
         perturb_replay_relion_dir=perturb_replay_relion_dir,
+        perturb_replay_precision=perturb_replay_precision,
         init_fsc=init_fsc,
         init_ave_Pmax=init_ave_Pmax,
         init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
@@ -3409,6 +3473,7 @@ def _run_relion_iteration_loop(
     perturb_factor=0.0,
     perturb_seed=None,
     perturb_replay_relion_dir=None,
+    perturb_replay_precision="auto",
     init_fsc=None,
     init_ave_Pmax=None,
     init_has_high_fsc_at_limit=None,
@@ -4254,13 +4319,22 @@ def _run_relion_iteration_loop(
         # AFTER oversampling. At adaptive_oversampling=0 (os0 RELION runs),
         # the coarse grid IS the trial grid so we apply directly here.
         if _replay_meta is not None:
-            random_perturbation = float(_replay_meta["random_perturbation"])
+            replay_relion_iteration = int(init_relion_iteration) + int(iteration) + 1
+            random_perturbation, replay_perturbation_source = _resolve_replay_random_perturbation(
+                star_value=float(_replay_meta["random_perturbation"]),
+                perturbation_factor=float(_replay_meta["perturbation_factor"]),
+                relion_iteration=replay_relion_iteration,
+                replay_dir=str(perturb_replay_relion_dir),
+                explicit_seed=perturb_seed,
+                precision_mode=str(perturb_replay_precision),
+            )
             logger.info(
-                "Perturbation replay: iter=%d rp=%+.5f pf=%.3f relion_hp_order=%d",
+                "Perturbation replay: iter=%d rp=%+.12g pf=%.3f relion_hp_order=%d source=%s",
                 iteration + 1,
                 random_perturbation,
                 float(_replay_meta["perturbation_factor"]),
                 int(_replay_meta["healpix_order"]),
+                replay_perturbation_source,
             )
         elif perturb_factor > 0:
             relion_iter = int(init_relion_iteration) + iteration + 1
@@ -6795,8 +6869,20 @@ def _run_relion_iteration_loop(
                 break
         if final_sampling_star is not None:
             final_replay_meta = read_relion_sampling_metadata(final_sampling_star)
-            final_random_perturbation = float(final_replay_meta["random_perturbation"])
             final_perturbation_factor = float(final_replay_meta.get("perturbation_factor", perturb_factor))
+            final_replay_relion_iteration = (
+                final_numbered_sampling_relion_iteration
+                if final_sampling_star_source == "last-numbered"
+                else final_sampling_relion_iteration
+            )
+            final_random_perturbation, final_perturbation_source = _resolve_replay_random_perturbation(
+                star_value=float(final_replay_meta["random_perturbation"]),
+                perturbation_factor=final_perturbation_factor,
+                relion_iteration=final_replay_relion_iteration,
+                replay_dir=str(perturb_replay_relion_dir),
+                explicit_seed=perturb_seed,
+                precision_mode=str(perturb_replay_precision),
+            )
             final_perturbation_healpix_order = int(final_replay_meta["healpix_order"])
             px = float(cryo.voxel_size) if cryo.voxel_size > 0 else 1.0
             final_translation_range = float(final_replay_meta["offset_range"]) / px
@@ -6852,15 +6938,16 @@ def _run_relion_iteration_loop(
             )
             final_current_translations = final_base_translations
             logger.info(
-                "Perturbation replay: final all-data relion_iter=%d rp=%+.5f pf=%.3f "
-                "relion_hp_order=%d offset_range=%.3f px offset_step=%.3f px source=%s",
-                final_sampling_relion_iteration,
+                "Perturbation replay: final all-data relion_iter=%d rp=%+.12g pf=%.3f "
+                "relion_hp_order=%d offset_range=%.3f px offset_step=%.3f px source=%s/%s",
+                final_replay_relion_iteration,
                 final_random_perturbation,
                 final_perturbation_factor,
                 final_perturbation_healpix_order,
                 final_translation_range,
                 final_translation_step,
                 final_sampling_star_source,
+                final_perturbation_source,
             )
         else:
             missing_sampling_stars = ", ".join(path for path, _source in final_sampling_candidates)

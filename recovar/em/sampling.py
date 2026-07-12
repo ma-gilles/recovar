@@ -333,7 +333,9 @@ def _relion_rnd_unif_first_draw(seed):
 
         libc = ctypes.CDLL(None)
         libc.srand(ctypes.c_uint(int(seed)))
-        return float(libc.rand()) / float((2**31) - 1)
+        # RELION declares rnd_unif as float even in double-precision CPU
+        # builds. Preserve that cast when the optional binding is unavailable.
+        return float(np.float32(float(libc.rand()) / float((2**31) - 1)))
 
 
 def advance_relion_perturbation(prev_random_perturbation, perturbation_factor, rng):
@@ -635,6 +637,7 @@ def read_relion_optimiser_metadata(optimiser_star_path):
         return cast(m.group(1))
 
     return dict(
+        random_seed=_grab("rlnRandomSeed", int),
         overall_accuracy_rotations=_grab("rlnOverallAccuracyRotations"),
         overall_accuracy_translations_angst=_grab("rlnOverallAccuracyTranslationsAngst"),
         has_converged=_grab("rlnHasConverged", int),

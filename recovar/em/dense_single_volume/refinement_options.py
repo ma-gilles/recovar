@@ -14,7 +14,7 @@ across iterations without copy-on-write surprises.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from recovar.em.dense_single_volume.helpers.convergence import LOCAL_SEARCH_HEALPIX_ORDER
 
@@ -60,6 +60,7 @@ class RelionParityOptions:
     perturb_factor: float = 0.0
     perturb_seed: int | None = None
     perturb_replay_relion_dir: str | None = None
+    perturb_replay_precision: Literal["auto", "seed_exact", "star"] = "auto"
     emulate_relion_firstiter_cc: bool = False
     relion_firstiter_ini_high_angstrom: float | None = None
     do_solvent_fsc_correction: bool = False

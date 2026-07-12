@@ -183,6 +183,38 @@ class TestOversampledGrid:
                 diff = np.max(np.abs(ov[0] - coarse[coarse_idx]))
                 assert diff < 1e-12, f"OS=0 mismatch at idir={idir}, ipsi={ipsi}: diff={diff:.2e}"
 
+    def test_full_precision_seeded_perturbation_matches_accelerated_matrix_dump(self):
+        """STAR-rounded perturbation must not replace RELION's live seeded value."""
+        from recovar.em.sampling import (
+            get_oversampled_rotation_grid_from_samples,
+            relion_sampling_perturbation_for_iteration,
+        )
+
+        parent_sample = np.asarray([47 * 768 + 149], dtype=np.int64)
+        exact_perturbation = relion_sampling_perturbation_for_iteration(0.5, 20260712, 2)
+        exact, _ = get_oversampled_rotation_grid_from_samples(
+            parent_sample,
+            parent_nside_level=3,
+            oversampling_order=1,
+            random_perturbation=exact_perturbation,
+        )
+        rounded, _ = get_oversampled_rotation_grid_from_samples(
+            parent_sample,
+            parent_nside_level=3,
+            oversampling_order=1,
+            random_perturbation=0.405200,
+        )
+        expected_effective = np.asarray(
+            [
+                [-0.19852252304553986, 0.9793077111244202, 0.03930952027440071],
+                [-0.620071291923523, -0.09443635493516922, -0.7788410782814026],
+                [-0.7590128183364868, -0.17899219691753387, 0.6259883046150208],
+            ],
+            dtype=np.float32,
+        )
+        np.testing.assert_array_equal(exact[0].T, expected_effective)
+        assert np.any(rounded[0] != exact[0])
+
     def test_oversampled_within_coarse_cell(self):
         """Oversampled directions lie within the coarse cell angular radius."""
         order = 2
