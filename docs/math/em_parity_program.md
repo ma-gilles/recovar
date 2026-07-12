@@ -588,6 +588,14 @@ occupancies from the broken `[2708,1768,2405,3119]` to
 close the residual.  Keep texture opt-in until its remaining even-box
 Nyquist/coordinate arithmetic is isolated.
 
+K=1 iteration-3 probe `11051461` confirms that the mask removes most of the
+texture regression: merged FSC-AUC improves from `0.992097` to `0.994951`,
+mean Pmax gap improves from `+0.000802` to `-0.000006`, and Pmax MAE improves
+from `0.012945` to `0.007292` in 212 seconds.  The manual path remains slightly
+better in map FSC-AUC (`0.995407`) and Pmax MAE (`0.006198`) but takes 357
+seconds.  Quality therefore stays on manual projection while the fixed texture
+path becomes the leading later performance candidate.
+
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
 shape is 168 images by 198 rotations by 9 translations by 12,861 score pixels.
