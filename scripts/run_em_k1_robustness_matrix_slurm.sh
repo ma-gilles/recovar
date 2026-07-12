@@ -13,6 +13,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_ID="em_k1_robustness_${TIMESTAMP}_${RANDOM}"
 SCRATCH_DIR="${EM_K1_MATRIX_SCRATCH_DIR:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/${RUN_ID}}"
+RUNTIME_ROOT="${EM_K1_MATRIX_RUNTIME_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${RUN_ID}}"
 ACCOUNT="${SBATCH_ACCOUNT:-gilles}"
 PARTITION="${SBATCH_PARTITION:-cryoem}"
 SUMMARY_PARTITION="${EM_K1_MATRIX_SUMMARY_PARTITION:-cpu}"
@@ -121,6 +122,7 @@ EM_K1_MATRIX_CASES, e.g.:
 
 Environment overrides:
   EM_K1_MATRIX_SCRATCH_DIR          Scratch/log root (default: ${SCRATCH_DIR})
+  EM_K1_MATRIX_RUNTIME_ROOT         Runtime tmp/pixi/rattler root (default: ${RUNTIME_ROOT})
   EM_K1_MATRIX_CASES                Comma-separated case names or 1-based indices
   EM_K1_MATRIX_RUN_RELION           Run RELION AutoRefine too (default: ${RUN_RELION})
   EM_K1_MATRIX_RELION_POOL          RELION --pool for strict-parity RELION baselines (default: ${RELION_POOL})
@@ -337,8 +339,8 @@ CASES=(
   "34|max_images_400k_g128_radial_noise3_nonuniform_bf80|400000|128|3.0|radial1|nonuniform|1734|80.0|0.0|0.0|0.7|-|36:00:00|500G|2000|1|0.0|0|0.0"
 )
 
-mkdir -p "${SCRATCH_DIR}/jobs" "${SCRATCH_DIR}/tmp" "${SCRATCH_DIR}/summaries"
-touch "${SCRATCH_DIR}/SAFE_TO_DELETE"
+mkdir -p "${SCRATCH_DIR}/jobs" "${SCRATCH_DIR}/summaries" "${RUNTIME_ROOT}"
+touch "${SCRATCH_DIR}/SAFE_TO_DELETE" "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 CUDA_LIB="${SCRATCH_DIR}/cuda/libcuda_backproject.so"
 INSTALL_LOCK="${REPO_ROOT}/.pixi/install-recovar.lock"
 
@@ -436,9 +438,9 @@ export PYTHONNOUSERSITE=1
 export PYTHONFAULTHANDLER="\${PYTHONFAULTHANDLER:-1}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
-export TMPDIR="${SCRATCH_DIR}/tmp/${job_name}_\${SLURM_JOB_ID}"
-export PIXI_HOME="${SCRATCH_DIR}/pixi_home/${job_name}_\${SLURM_JOB_ID}"
-export RATTLER_CACHE_DIR="${SCRATCH_DIR}/rattler_cache/${job_name}_\${SLURM_JOB_ID}"
+export TMPDIR="${RUNTIME_ROOT}/${job_name}_\${SLURM_JOB_ID}/tmp"
+export PIXI_HOME="${RUNTIME_ROOT}/${job_name}_\${SLURM_JOB_ID}/pixi_home"
+export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/${job_name}_\${SLURM_JOB_ID}/rattler_cache"
 export RECOVAR_JAX_CACHE_DIR="${SCRATCH_DIR}/jax_cache"
 export JAX_COMPILATION_CACHE_DIR="\${RECOVAR_JAX_CACHE_DIR}"
 # The matrix TMPDIR is GPFS scratch, not node-local storage. Leave particle
@@ -532,6 +534,19 @@ sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_component_sha256.txt" | awk '{print \$
 echo "Git provenance dir: \${JOB_GIT_PROVENANCE_DIR}"
 echo "Git diff SHA256: \$(awk '{print \$1}' "\${JOB_GIT_PROVENANCE_DIR}/git_diff.sha256" 2>/dev/null || true)"
 echo "Git worktree fingerprint SHA256: \$(cat "\${JOB_GIT_PROVENANCE_DIR}/git_worktree_fingerprint.sha256" 2>/dev/null || true)"
+EXPECTED_GIT_HEAD="${SUBMISSION_GIT_HEAD}"
+EXPECTED_GIT_WORKTREE_FINGERPRINT_SHA256="${SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256}"
+ACTUAL_GIT_HEAD="\$(cat "\${JOB_GIT_PROVENANCE_DIR}/git_head.txt")"
+ACTUAL_GIT_WORKTREE_FINGERPRINT_SHA256="\$(cat "\${JOB_GIT_PROVENANCE_DIR}/git_worktree_fingerprint.sha256")"
+if [[ "\${ACTUAL_GIT_HEAD}" != "\${EXPECTED_GIT_HEAD}" ]]; then
+  echo "ERROR: queued-job Git HEAD drift: expected \${EXPECTED_GIT_HEAD}, got \${ACTUAL_GIT_HEAD}" >&2
+  exit 2
+fi
+if [[ "\${ACTUAL_GIT_WORKTREE_FINGERPRINT_SHA256}" != "\${EXPECTED_GIT_WORKTREE_FINGERPRINT_SHA256}" ]]; then
+  echo "ERROR: queued-job worktree fingerprint drift: expected \${EXPECTED_GIT_WORKTREE_FINGERPRINT_SHA256}, got \${ACTUAL_GIT_WORKTREE_FINGERPRINT_SHA256}" >&2
+  exit 2
+fi
+echo "Queued-job Git provenance gate ok"
 echo "Slurm job: \${SLURM_JOB_ID}"
 echo "Host: \$(hostname)"
 echo "SLURM_JOB_GPUS=\${SLURM_JOB_GPUS:-}"
@@ -882,9 +897,12 @@ if [[ "${RUN_RELION}" -eq 1 ]]; then
       fi
       echo "RELION_REFINE_MPI=\${RELION_REFINE_MPI_BIN}"
     else
-      command -v "\${RELION_REFINE_MPI_BIN}"
+      RELION_REFINE_MPI_BIN="\$(command -v "\${RELION_REFINE_MPI_BIN}")"
     fi
+    echo "RELION_REFINE_MPI_RESOLVED=\${RELION_REFINE_MPI_BIN}"
+    echo "RELION_REFINE_MPI_SHA256=\$(sha256sum "\${RELION_REFINE_MPI_BIN}" | awk '{print \$1}')"
     command -v mpirun
+    nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
     export CUDA_VISIBLE_DEVICES=0
     RELION_TMPDIR="\${SLURM_TMPDIR:-/tmp/\${USER:-mg6942}/relion_\${SLURM_JOB_ID:-manual}_${idx}_${name}}"
     mkdir -p "\${RELION_TMPDIR}"
@@ -1063,6 +1081,9 @@ if [[ "\${STATUS}" -eq 0 ]]; then
   if [[ -s "\${CASE_ROOT}/summary.md" ]]; then
     tail -80 "\${CASE_ROOT}/summary.md" || true
   fi
+  if [[ "\${SUMMARY_STATUS}" -ne 0 ]]; then
+    STATUS="\${SUMMARY_STATUS}"
+  fi
 fi
 exit "\${STATUS}"
 EOF
@@ -1101,12 +1122,25 @@ export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
-export TMPDIR="${SCRATCH_DIR}/tmp/em_k1_matrix_summary_\${SLURM_JOB_ID}"
-export PIXI_HOME="${SCRATCH_DIR}/pixi_home/em_k1_matrix_summary_\${SLURM_JOB_ID}"
-export RATTLER_CACHE_DIR="${SCRATCH_DIR}/rattler_cache/em_k1_matrix_summary_\${SLURM_JOB_ID}"
+export TMPDIR="${RUNTIME_ROOT}/em_k1_matrix_summary_\${SLURM_JOB_ID}/tmp"
+export PIXI_HOME="${RUNTIME_ROOT}/em_k1_matrix_summary_\${SLURM_JOB_ID}/pixi_home"
+export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/em_k1_matrix_summary_\${SLURM_JOB_ID}/rattler_cache"
 export RECOVAR_JAX_CACHE_DIR="${SCRATCH_DIR}/jax_cache"
 export JAX_COMPILATION_CACHE_DIR="\${RECOVAR_JAX_CACHE_DIR}"
 mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}" "\${RECOVAR_JAX_CACHE_DIR}" "${SCRATCH_DIR}/summaries"
+
+EXPECTED_GIT_HEAD="${SUBMISSION_GIT_HEAD}"
+ACTUAL_GIT_HEAD="\$(git rev-parse HEAD)"
+if [[ "\${ACTUAL_GIT_HEAD}" != "\${EXPECTED_GIT_HEAD}" ]]; then
+  echo "ERROR: queued-summary Git HEAD drift: expected \${EXPECTED_GIT_HEAD}, got \${ACTUAL_GIT_HEAD}" >&2
+  exit 2
+fi
+if [[ -n "\$(git status --porcelain=v1)" ]]; then
+  echo "ERROR: queued-summary worktree is dirty" >&2
+  git status --short >&2
+  exit 2
+fi
+echo "Queued-summary Git provenance gate ok"
 
 echo "=== EM K=1 robustness matrix summary ==="
 echo "Repo: ${REPO_ROOT}"
@@ -1122,6 +1156,7 @@ for job_id in ${tracked_jobs}; do
 done
 echo
 
+MATRIX_SUMMARY_STATUS=0
 while IFS='|' read -r idx name n_images grid noise_level noise_model dataset_params_option seed pdb_bfactor noise_scale_std contrast_std volume_radius relion_bg_radius time_limit mem streaming_chunk streaming_mmap percent_outliers put_extra_particles image_offset_n_std case_root case_job_id; do
   [[ -z "\${idx}" || "\${idx}" == "index" ]] && continue
   recovar_dir="\${case_root}/recovar"
@@ -1145,6 +1180,9 @@ while IFS='|' read -r idx name n_images grid noise_level noise_model dataset_par
   summary_status="\$?"
   set -e
   echo "summary_status=\${summary_status}"
+  if [[ "\${summary_status}" -ne 0 ]]; then
+    MATRIX_SUMMARY_STATUS="\${summary_status}"
+  fi
   if [[ -s "\${summary_md}" ]]; then
     tail -80 "\${summary_md}" || true
   fi
@@ -1306,6 +1344,7 @@ PY
 
 echo "Matrix JSON: ${SCRATCH_DIR}/k1_robustness_matrix_summary.json"
 echo "Matrix Markdown: ${SCRATCH_DIR}/k1_robustness_matrix_summary.md"
+exit "\${MATRIX_SUMMARY_STATUS}"
 EOF
   chmod +x "${script_path}"
   printf '%s\n' "${script_path}"
@@ -1329,6 +1368,7 @@ submit_or_print() {
 
 SUBMISSION_GIT_PROVENANCE_DIR="${SCRATCH_DIR}/provenance/submission"
 capture_git_provenance_snapshot "${SUBMISSION_GIT_PROVENANCE_DIR}"
+SUBMISSION_GIT_HEAD="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 SUBMISSION_GIT_DIFF_SHA256="$(awk '{print $1}' "${SUBMISSION_GIT_PROVENANCE_DIR}/git_diff.sha256" 2>/dev/null || true)"
 SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256="$(cat "${SUBMISSION_GIT_PROVENANCE_DIR}/git_worktree_fingerprint.sha256" 2>/dev/null || true)"
 
@@ -1340,6 +1380,7 @@ echo "Submission git provenance: ${SUBMISSION_GIT_PROVENANCE_DIR}"
 echo "Submission git diff SHA256: ${SUBMISSION_GIT_DIFF_SHA256:-<unavailable>}"
 echo "Submission git worktree fingerprint SHA256: ${SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256:-<unavailable>}"
 echo "Scratch: ${SCRATCH_DIR}"
+echo "Runtime root: ${RUNTIME_ROOT}"
 echo "Partition/account: ${PARTITION}/${ACCOUNT}"
 echo "Setup partition: ${SETUP_PARTITION}"
 echo "Setup constraint: ${SETUP_CONSTRAINT:-<none>}"
@@ -1398,9 +1439,11 @@ REPO_ROOT=${REPO_ROOT}
 HEAD=$(git -C "${REPO_ROOT}" rev-parse HEAD)
 BRANCH=$(git -C "${REPO_ROOT}" symbolic-ref --short HEAD || echo '<detached>')
 SUBMISSION_GIT_PROVENANCE_DIR=${SUBMISSION_GIT_PROVENANCE_DIR}
+SUBMISSION_GIT_HEAD=${SUBMISSION_GIT_HEAD}
 SUBMISSION_GIT_DIFF_SHA256=${SUBMISSION_GIT_DIFF_SHA256}
 SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256=${SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256}
 SCRATCH_DIR=${SCRATCH_DIR}
+RUNTIME_ROOT=${RUNTIME_ROOT}
 SBATCH_PARTITION=${PARTITION}
 EM_K1_MATRIX_SETUP_PARTITION=${SETUP_PARTITION}
 EM_K1_MATRIX_SETUP_CONSTRAINT=${SETUP_CONSTRAINT}

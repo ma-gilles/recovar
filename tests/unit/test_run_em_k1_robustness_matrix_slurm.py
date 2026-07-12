@@ -387,6 +387,52 @@ def test_launcher_records_submission_and_runtime_git_fingerprints(tmp_path):
     assert "git_diff.patch" in text
     assert "git_untracked_file_hashes.tsv" in text
     assert "Git worktree fingerprint SHA256:" in text
+    assert "EXPECTED_GIT_HEAD=" in text
+    assert "EXPECTED_GIT_WORKTREE_FINGERPRINT_SHA256=" in text
+    assert "ERROR: queued-job Git HEAD drift" in text
+    assert "ERROR: queued-job worktree fingerprint drift" in text
+    assert "Queued-job Git provenance gate ok" in text
+
+
+def test_runtime_caches_use_separate_em_runtime_root(tmp_path):
+    runtime = tmp_path / "runtime"
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="32",
+        extra_env={"EM_K1_MATRIX_RUNTIME_ROOT": str(runtime)},
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    case_script = next((scratch / "jobs").glob("em_k1_matrix_32_*.sh")).read_text()
+    summary_script = (scratch / "jobs" / "em_k1_matrix_summary.sh").read_text()
+    assert f'export TMPDIR="{runtime}/em_k1_matrix_32_' in case_script
+    assert f'export PIXI_HOME="{runtime}/em_k1_matrix_32_' in case_script
+    assert f'export RATTLER_CACHE_DIR="{runtime}/em_k1_matrix_32_' in case_script
+    assert f'export TMPDIR="{runtime}/em_k1_matrix_summary_' in summary_script
+    assert (runtime / "SAFE_TO_DELETE").exists()
+    assert f"RUNTIME_ROOT={runtime}" in (scratch / "submission.env").read_text()
+
+
+def test_case_and_matrix_summary_failures_propagate_to_slurm_status(tmp_path):
+    proc, scratch = _dry_run_launcher(tmp_path, case="32")
+
+    assert proc.returncode == 0, proc.stdout
+    case_script = next((scratch / "jobs").glob("em_k1_matrix_32_*.sh")).read_text()
+    summary_script = (scratch / "jobs" / "em_k1_matrix_summary.sh").read_text()
+    assert 'STATUS="${SUMMARY_STATUS}"' in case_script
+    assert 'MATRIX_SUMMARY_STATUS="${summary_status}"' in summary_script
+    assert 'exit "${MATRIX_SUMMARY_STATUS}"' in summary_script
+    assert "ERROR: queued-summary Git HEAD drift" in summary_script
+    assert "ERROR: queued-summary worktree is dirty" in summary_script
+
+
+def test_relion_binary_identity_is_recorded_in_case_job(tmp_path):
+    proc, scratch = _dry_run_launcher(tmp_path, case="32")
+
+    assert proc.returncode == 0, proc.stdout
+    case_script = next((scratch / "jobs").glob("em_k1_matrix_32_*.sh")).read_text()
+    assert "RELION_REFINE_MPI_RESOLVED=" in case_script
+    assert "RELION_REFINE_MPI_SHA256=" in case_script
 
 
 def test_k1_dense_pass2_diagnostic_env_is_forwarded(tmp_path):
