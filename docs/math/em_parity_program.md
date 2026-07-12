@@ -531,6 +531,26 @@ job `11046279` is rejected because direct script execution resolved submodules
 from a different editable checkout; the corrected runner uses module execution
 and asserts the exact `iteration_loop.py` and CUDA wrapper paths.
 
+The first strict 100k/256 completion attempt `11036541` reaches numbered
+iteration 12, then fails in the local parent score-only big-JIT.  The failing
+shape is 168 images by 198 rotations by 9 translations by 12,861 score pixels.
+Its dense float32 residual is 14.34 GiB before compiler overhead and XLA asks
+for 16.34 GiB.  The previous microbatch planner bounded only
+`images * rotations`, so its automatic image-batch boost admitted this tensor
+without charging translations or score pixels.  Commit `48e712f1` adds a
+score-only runtime cap based on free allocator bytes, translations, score
+pixels, float32 width, and measured 1.25x live-tensor headroom.  Explicit
+overrides remain authoritative and M-step batching is unchanged.
+
+Same-H100 diagnostic `11047386` jumps directly from RELION iteration 11 to the
+exact failed iteration-12 state.  The cap selects 69 images per 198-rotation
+parent bucket (`13,669` rows), processes all 49,913 half-set particles in
+27.7 seconds, then completes the fine score-only pass in 26.0 seconds; the job
+finishes successfully in 1:56 with no OOM.  Full clean 100k trajectory job
+`11047558` now runs from `48e712f1` with both the tau-order and score-tile
+fixes.  Its artifact root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_tauorder_scorecap_20260712_043600`.
+
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
 quality boundary is known.
