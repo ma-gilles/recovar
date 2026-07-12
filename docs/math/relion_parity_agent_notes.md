@@ -1603,3 +1603,27 @@ wrong-order one-iteration run to `0.999538`. More directly, supported-shell
 iteration-1 reconstruction/postprocessing boundary. The next qualification is
 a clean ten-iteration free trajectory; robustness remains gated on its final
 FSC-AUC, shellwise, GT, convergence, and finalization results.
+
+Clean full-trajectory A100 job `11026304`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_strict_free_filter_order_20260711_204500`
+and marked `SAFE_TO_DELETE`, completed in `579` seconds on `della-l08g7` from
+commit `52d8b599254a713c115f052314f283abd6e0fb4c`. It exactly reproduces the
+current-size schedule `[56,56,66,68,80,80,80,80,80,80]`, converges at
+iteration 10, and enters the final all-data path using state 10 and half-1
+joined noise.
+
+Final canonical RECOVAR-vs-RELION FSC-AUC is `0.997260`, above the `0.995`
+gate. Minimum non-DC shell FSC is `0.994984` at shell 27, fifth percentile is
+`0.995371`, and the minimum over the last ten shells is `0.996734`; there is
+no unexplained systematic shellwise deficit. RECOVAR-vs-GT FSC-AUC is
+`0.670484` versus RELION `0.650835`, with FSC=0.5 crossings at shells 41 and
+40. Only GT shells 1--3 are lower for RECOVAR, by `-0.000016`, `-0.000266`,
+and `-0.000171`, all well inside the `0.002` gate. Correlation remains
+diagnostic only and is not used in this acceptance.
+
+This is the accepted 3k/128 white-noise supplied-map K=1 strict checkpoint.
+The next phase is the predefined small robustness matrix with RELION generated
+and run per case: high noise, nonuniform and Kent angle distributions, no CTF,
+outliers, contrast/noise-scale variation, and image-offset stress. Failures
+must be localized at the earliest trajectory boundary before proceeding to
+10k, real-particle, 100k/256, or K=4 evidence.

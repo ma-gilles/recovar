@@ -317,9 +317,21 @@ that order and reruns one iteration.
 One-iteration A100 job `11025949` confirms the fix. Canonical full-shell
 RECOVAR-vs-RELION FSC-AUC is `0.999538`; supported-shell 1--18 FSC-AUC is
 `0.999930`, shell 18 is `0.998800`, and the minimum non-DC shell is
-`0.996857`. The next experiment is a clean ten-iteration trajectory from this
-ordering fix. Do not launch robustness until its final canonical FSC-AUC
-reaches `0.995` and all shellwise/GT/convergence gates pass.
+`0.996857`.
+
+Clean full-trajectory A100 job `11026304` passes the small-cell strict gate.
+It completes in `579` seconds with the exact current-size schedule, convergence
+at iteration 10, and final all-data path. Final RECOVAR-vs-RELION FSC-AUC is
+`0.997260`; minimum non-DC shell FSC is `0.994984`, fifth percentile is
+`0.995371`, and the last-ten-shell minimum is `0.996734`. RECOVAR-vs-GT
+FSC-AUC is better (`0.670484` versus `0.650835`); only GT shells 1--3 are
+lower, with worst delta `-0.000266`, well inside the `0.002` gate.
+
+The active milestone now advances to K=1 robustness: run source-matched
+RECOVAR/RELION pairs across high noise, nonuniform/Kent angles, no CTF,
+outliers, contrast/noise-scale variation, and translation stress before the
+10k/real/100k confirmations. Any failing cell returns to first-divergence
+debugging; K=4 remains gated on this K=1 robustness step.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
