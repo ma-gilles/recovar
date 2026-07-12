@@ -453,6 +453,36 @@ Compare the saved RECOVAR `Ft_y`, `Ft_ctf`, regularized/unregularized maps,
 tau2, and noise under `iter1_map_diag/output/intermediates` against an
 uninterrupted, identity-validated RELION iteration-1 BPref dump.
 
+That accumulator boundary is now closed against the exact real-data oracle.
+An isolated RELION `d476e6f` build adds a single environment-gated dump after
+MPI combination, symmetry, and the 40-A low-resolution half join but before
+reconstruction.  Installed-d476 stop-one versus the uninterrupted oracle,
+installed versus patched with the environment unset, and patched environment
+off versus on all pass at half-map FSC-AUC above `0.9999999996`, minimum
+non-DC shell FSC above `0.9999999940`, maximum real-space delta
+`1.8626451e-9`, and bit-exact Pmax/pose/translation arrays for all 10,000
+particles.  Jobs `11042379`, `11042605`, and CPU analysis retry `11043664`
+produced the qualified dump under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_d476_bpref_real10076_identity_20260712_020200`.
+
+The RECOVAR and RELION post-join BPref accumulators are close but not
+identical: complex-average coordinate relative-error medians are about
+`2.0e-4`/`2.2e-4` for halves 1/2 (p95 `0.0449`/`0.0569`), while weight
+medians are `3.9e-6`/`4.8e-6` (p95 `0.0063`/`0.0091`).  The coordinate frame
+is unambiguous: permutation `(1,0,2)`, signs `(1,1,1)`, complex sign `-1`.
+However, decisive cross-replay jobs `11043878` and corrected `11043975`
+exonerate this residual.  Replaying the saved RECOVAR accumulators reproduces
+the saved RECOVAR merged map at FSC-AUC `0.99999998`; replacing only the
+accumulators with exact RELION values changes the replay by FSC-AUC only
+`~7e-6` (`0.9999930` between replacement maps) and changes the comparison to
+RELION only from `0.9886340` to `0.9886556`.  The real-data iteration-1
+failure is therefore downstream of accumulation, in reconstruction or
+post-processing.  Stage ablation job `11044058` confirms that solvent masking
+is required and grid-on is the closer branch, but neither the raw,
+initial-low-pass, masked, nor grid on/off RECOVAR variants closes the gap.
+The next boundary is an identity-validated RELION dump immediately after
+reconstruction, after the iteration-1 low-pass, and after solvent flattening.
+
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
 quality boundary is known.
