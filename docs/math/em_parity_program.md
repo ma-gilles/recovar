@@ -28,6 +28,9 @@ as the next product milestone rather than mixing it into the first closure.
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
+Current accepted code checkpoint: `f91ba865db652860eea15a2cde66ab11b4f05b72`
+on `codex/em-parity-checkpoint-20260711`.
+
 Immutable broad-candidate checkpoint:
 `a6d1d086d81fe7d2be863c50bad33c7ea85e0b7f` on
 `codex/em-parity-checkpoint-20260711`. The original dirty checkout remains
@@ -332,6 +335,27 @@ RECOVAR/RELION pairs across high noise, nonuniform/Kent angles, no CTF,
 outliers, contrast/noise-scale variation, and translation stress before the
 10k/real/100k confirmations. Any failing cell returns to first-divergence
 debugging; K=4 remains gated on this K=1 robustness step.
+
+The eight-cell 3k/128 robustness matrix is now closed on the intended final
+product. Jobs `11027056`--`11027063` established six direct passes and exact
+convergence/finalization. The apparent failures in heterogeneous
+contrast/noise-scale cases 18 and 22 were a parity-harness reporting bug:
+`run_multi_iter_parity.py` discarded the joined all-data reconstruction in
+`result["mean"]` and instead averaged the two separately Wiener-regularized
+half reconstructions. Those operations are not equivalent. Production
+`run_full_refinement.py` already saved the joined reconstruction correctly.
+Commit `f91ba865` fixes the harness and adds a regression.
+
+Focused A100 validations `11032906` and `11032907` pass after that correction.
+Case 18 has RECOVAR-vs-RELION FSC-AUC `0.995571`, minimum non-DC shell FSC
+`0.988215`, and GT FSC-AUC `0.765648` versus RELION `0.751884`. Case 22 has
+RECOVAR-vs-RELION FSC-AUC `0.996966`, minimum non-DC shell FSC `0.991276`, and
+GT FSC-AUC `0.335789` versus RELION `0.326059`. Their worst shellwise GT deltas
+are only `-0.000632` and `-0.000188`, respectively. Thus all eight robustness
+cells pass the aggregate FSC-AUC, GT-quality, convergence, and finalization
+gates. The active K=1 step advances to a 10k intermediate-scale confirmation,
+then a characterized real-particle case and the pinned 100k/256 completion
+case; K=4 remains gated until those K=1 confirmations pass.
 
 In parallel only when authorized: audit K=4 per-iteration dumps to identify the
 first class/pose/state divergence; do not optimize sparse pass 2 until that
