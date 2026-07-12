@@ -28,7 +28,7 @@ as the next product milestone rather than mixing it into the first closure.
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `f91ba865db652860eea15a2cde66ab11b4f05b72`
+Current accepted code checkpoint: `da45deb49d642c77d6c6dd91baff7c91c2c1188c`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -595,6 +595,40 @@ from `0.012945` to `0.007292` in 212 seconds.  The manual path remains slightly
 better in map FSC-AUC (`0.995407`) and Pmax MAE (`0.006198`) but takes 357
 seconds.  Quality therefore stays on manual projection while the fixed texture
 path becomes the leading later performance candidate.
+
+The paired full trajectories close the projector-only hypothesis but not the
+real-data quality gate.  Manual job `11050804` and current-radius-masked texture
+job `11051785` both reproduce RELION's complete current-size/healpix schedule,
+converge at numbered iteration 16, and execute the normal iteration-17
+all-data branch with grid correction off.  Manual final half-map FSC-AUCs are
+`0.950676/0.948478` and merged FSC-AUC is `0.977975`; masked texture gives
+`0.950195/0.945893` and `0.977663`.  Both therefore fail the immutable `0.995`
+map gate.  Manual uses 3402 seconds externally versus 2077 seconds for texture
+on the same A100 model (peak GPU memory `41156/41150` MiB).  The tiny manual
+FSC advantage keeps it as the strict quality default; texture remains the
+qualified speed diagnostic, not an accepted quality replacement.
+
+The cumulative residual is a sparse early hypothesis tail, not a mismatch in
+the averaged control trajectory or internal gold-standard FSC.  Against each
+numbered RELION model, RECOVAR's mean internal half-map FSC differs by at most
+`4.99e-4` through iteration 16 and the shellwise mean absolute difference is at
+most `0.001073`.  At iterations 1--3, pose p95 remains at numerical precision,
+but the fraction above one degree is `0.40%`, `1.09%`, and `1.04%`; the
+corresponding mean pose errors are `0.0282`, `0.2255`, and `0.2741` degrees.
+The tail grows through the global iterations and is then partly recovered by
+local search.  Final manual all-data pose mean/p95 is `0.1650/0.6396` degrees
+and translation mean/p95 is `0.0465/0.4538` pixel.  This is too large to waive
+as a discrete tie without score evidence even though the majority is exact.
+
+The first tie adjudication targets fixture row 1474,
+`19638@particles.256.mrcs`: it is arithmetic-level at iteration 1 but selects
+a pose 175.55 degrees away and a translation 2.24 pixels away at iteration 2,
+while RECOVAR/RELION Pmax is only `0.040652/0.039912`.  Uninterrupted patched
+RELION score-dump job `11053175` reruns iterations 1--2 from the original
+fixture, dumps the full iteration-2 candidate operands for stack 19638, and
+must first match the original iteration-1/2 maps and particle state before its
+margin is accepted.  Its marked root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_scoretail_relion_20260712_071000`.
 
 The first strict 100k/256 completion attempt `11036541` reaches numbered
 iteration 12, then fails in the local parent score-only big-JIT.  The failing
