@@ -740,6 +740,29 @@ def _exhaustive_grid_order_for_state(state: RefinementState) -> int:
     return min(state.healpix_order, RELION_MAX_FULL_GRID_ORDER)
 
 
+def _final_local_sampling_orders(
+    *,
+    state_healpix_order: int,
+    adaptive_oversampling: int,
+    final_sampling_healpix_order: int | None,
+) -> tuple[int, int]:
+    """Return RELION's final local parent and fine HEALPix orders.
+
+    The unnumbered final ``run_sampling.star`` may advance the parent order
+    beyond the last numbered optimiser state.  When that authoritative final
+    metadata exists, its order must replace the stale state order before
+    applying adaptive oversampling.  Runs without a final sampling STAR keep
+    the historical state-derived fallback.
+    """
+
+    parent_order = (
+        int(state_healpix_order)
+        if final_sampling_healpix_order is None
+        else int(final_sampling_healpix_order)
+    )
+    return parent_order, parent_order + int(adaptive_oversampling)
+
+
 def _direction_prior_healpix_order_for_scoring(
     *,
     use_local: bool,
@@ -7027,7 +7050,15 @@ def _run_relion_iteration_loop(
             step_rad = np.deg2rad(healpix_angular_step(state.healpix_order) / (2**state.adaptive_oversampling))
             final_sigma_rot = np.sqrt(2.0 * 2.0) * step_rad
             final_sigma_psi = final_sigma_rot
-        final_local_search_order = int(state.healpix_order) + int(state.adaptive_oversampling)
+        final_local_parent_order, final_local_search_order = _final_local_sampling_orders(
+            state_healpix_order=int(state.healpix_order),
+            adaptive_oversampling=int(state.adaptive_oversampling),
+            final_sampling_healpix_order=(
+                int(final_perturbation_healpix_order)
+                if final_sampling_star is not None
+                else None
+            ),
+        )
         use_parent_expanded_final_local = int(state.adaptive_oversampling) > 0
         if final_effective_rotations.shape[0] != rotation_grid_size(final_local_search_order):
             final_local_search_angular_sampling_deg = relion_angular_sampling_deg(
@@ -7055,7 +7086,7 @@ def _run_relion_iteration_loop(
                 if final_perturbation_applied:
                     final_local_search_random_perturbation = float(final_random_perturbation)
                 if use_parent_expanded_final_local:
-                    parent_order = final_local_search_order - int(state.adaptive_oversampling)
+                    parent_order = final_local_parent_order
                     parent_step_deg = healpix_angular_step(parent_order)
                     local_coarse_size = compute_coarse_image_size(
                         parent_step_deg,
@@ -7073,8 +7104,9 @@ def _run_relion_iteration_loop(
             final_local_search_rotations = final_effective_rotations
             final_local_search_rotation_eulers = final_effective_rotation_eulers
         logger.info(
-            "RELION final all-data iteration using local search: fine_order=%d, "
+            "RELION final all-data iteration using local search: parent_order=%d fine_order=%d, "
             "sigma_rot=%.4f rad (%.2f deg), sigma_psi=%.4f rad, perturbation=%+.5f",
+            final_local_parent_order,
             final_local_search_order,
             final_sigma_rot,
             np.rad2deg(final_sigma_rot),

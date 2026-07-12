@@ -257,6 +257,34 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
     )
 
 
+def test_final_local_sampling_orders_use_advanced_final_star_parent():
+    """100k replay advances final parent hp6->hp7, so os1 must score fine hp8."""
+
+    parent_order, fine_order = iteration_loop_module._final_local_sampling_orders(
+        state_healpix_order=6,
+        adaptive_oversampling=1,
+        final_sampling_healpix_order=7,
+    )
+
+    assert parent_order == 7
+    assert fine_order == 8
+
+
+def test_final_local_sampling_orders_preserve_equal_order_and_state_fallback():
+    """10k replay stays at hp6, and missing final metadata retains state hp6."""
+
+    assert iteration_loop_module._final_local_sampling_orders(
+        state_healpix_order=6,
+        adaptive_oversampling=1,
+        final_sampling_healpix_order=6,
+    ) == (6, 7)
+    assert iteration_loop_module._final_local_sampling_orders(
+        state_healpix_order=6,
+        adaptive_oversampling=1,
+        final_sampling_healpix_order=None,
+    ) == (6, 7)
+
+
 def test_local_debug_current_size_minus_one_is_wildcard():
     assert current_size_matches_request(None, 80)
     assert current_size_matches_request({-1}, 80)
