@@ -11,10 +11,12 @@ LAUNCHER = REPO_ROOT / "scripts" / "run_em_completion_bench_slurm.sh"
 
 def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     scratch = tmp_path / "scratch"
+    runtime = tmp_path / "runtime"
     env = os.environ.copy()
     env.update(
         {
             "EM_COMPLETION_SCRATCH_DIR": str(scratch),
+            "EM_COMPLETION_RUNTIME_ROOT": str(runtime),
             "SBATCH_ACCOUNT": "gilles",
             "SBATCH_PARTITION": "cryoem",
             "SBATCH_CONSTRAINT": "",
@@ -59,6 +61,9 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     k1_text = k1_script.read_text()
     summary_text = summary_script.read_text()
     submission_env_text = submission_env.read_text()
+    submission_fingerprint = (
+        scratch / "provenance" / "submission" / "git_worktree_fingerprint.sha256"
+    ).read_text().strip()
     shared_export = f'export RECOVAR_RELION_BIND_BUILD_DIR="{scratch}/relion_bind_build/shared"'
     jax_cache_export = f'export RECOVAR_JAX_CACHE_DIR="{scratch}/jax_cache"'
     assert shared_export in setup_text
@@ -101,14 +106,38 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     assert 'rm -rf "${RECOVAR_RELION_BIND_BUILD_DIR:?}"' in setup_text
     assert 'rm -rf "${RECOVAR_RELION_BIND_BUILD_DIR:?}"' not in k1_text
     assert "recovar/relion_bind/build.py" not in k1_text
+    assert (scratch / "SAFE_TO_DELETE").exists()
+    assert (runtime / "SAFE_TO_DELETE").exists()
+    for generated_text in (setup_text, k1_text, summary_text):
+        assert f'export TMPDIR="{runtime}/' in generated_text
+        assert "queued-job Git HEAD drift" in generated_text
+        assert "queued-job worktree fingerprint drift" in generated_text
+        assert submission_fingerprint in generated_text
+        assert (
+            'nvidia-smi -q > "${JOB_GIT_PROVENANCE_DIR}/nvidia_smi.txt"'
+            in generated_text
+        )
+    assert "RELION_REFINE_MPI_SHA256=" in setup_text
+    assert 'nvidia-smi -q > "${OUTPUT_DIR}/nvidia_smi.txt"' in k1_text
+    assert "ERROR: completion summary requires a clean worktree" in summary_text
+    assert "ERROR: upstream job ${job_id} state is" in summary_text
+    assert 'summarizer_status="$?"' in summary_text
+    assert 'exit "${SUMMARY_STATUS}"' in summary_text
+    assert f"RUNTIME_ROOT={runtime}" in submission_env_text
+    assert (
+        f"SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256={submission_fingerprint}"
+        in submission_env_text
+    )
 
 
 def test_completion_k4_resource_overrides_are_written(tmp_path):
     scratch = tmp_path / "scratch"
+    runtime = tmp_path / "runtime"
     env = os.environ.copy()
     env.update(
         {
             "EM_COMPLETION_SCRATCH_DIR": str(scratch),
+            "EM_COMPLETION_RUNTIME_ROOT": str(runtime),
             "SBATCH_ACCOUNT": "gilles",
             "SBATCH_PARTITION": "cryoem",
             "SBATCH_CONSTRAINT": "",
@@ -164,10 +193,12 @@ def test_completion_k4_resource_overrides_are_written(tmp_path):
 
 def test_completion_setup_defaults_to_cpu_partition(tmp_path):
     scratch = tmp_path / "scratch"
+    runtime = tmp_path / "runtime"
     env = os.environ.copy()
     env.update(
         {
             "EM_COMPLETION_SCRATCH_DIR": str(scratch),
+            "EM_COMPLETION_RUNTIME_ROOT": str(runtime),
             "SBATCH_ACCOUNT": "gilles",
             "SBATCH_PARTITION": "cryoem",
             "SBATCH_CONSTRAINT": "",

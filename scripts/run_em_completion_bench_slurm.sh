@@ -14,6 +14,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_ID="em_completion_bench_${TIMESTAMP}_${RANDOM}"
 SCRATCH_DIR="${EM_COMPLETION_SCRATCH_DIR:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/${RUN_ID}}"
+RUNTIME_ROOT="${EM_COMPLETION_RUNTIME_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/${RUN_ID}}"
 ACCOUNT="${SBATCH_ACCOUNT:-gilles}"
 PARTITION="${SBATCH_PARTITION:-cryoem}"
 CONSTRAINT="${SBATCH_CONSTRAINT:-}"
@@ -27,6 +28,8 @@ SUMMARY_CONSTRAINT="${EM_COMPLETION_SUMMARY_CONSTRAINT:-}"
 EXCLUSIVE="${EM_COMPLETION_EXCLUSIVE:-1}"
 SINGLE_VISIBLE_GPU="${EM_COMPLETION_SINGLE_VISIBLE_GPU:-1}"
 CUDA_MODULE="${CUDA_MODULE:-cudatoolkit/12.8}"
+RELION_MODULE="${RELION_MODULE:-relion/5.0.1/gcc-11.5.0-gpu}"
+RELION_REFINE_MPI="${RELION_REFINE_MPI:-relion_refine_mpi}"
 SBATCH_CONSTRAINT_DIRECTIVE=""
 if [[ -n "${CONSTRAINT}" ]]; then
   SBATCH_CONSTRAINT_DIRECTIVE="#SBATCH --constraint=${CONSTRAINT}"
@@ -87,6 +90,7 @@ Usage: $0 [--watch] [--dry-run] [--k1-only] [--k4-only] [--fast-tier] [--fast-ti
 
 Environment overrides:
   EM_COMPLETION_SCRATCH_DIR  Scratch/log root (default: ${SCRATCH_DIR})
+  EM_COMPLETION_RUNTIME_ROOT Per-job runtime/cache root (default: ${RUNTIME_ROOT})
   SBATCH_ACCOUNT             Slurm account (default: ${ACCOUNT})
   SBATCH_PARTITION           Slurm partition (default: ${PARTITION})
   SBATCH_CONSTRAINT          Optional Slurm constraint, e.g. h100
@@ -103,6 +107,8 @@ Environment overrides:
   EM_COMPLETION_SINGLE_VISIBLE_GPU
                              Expose only the first allocated GPU to CUDA/JAX for single-GPU timing (default: 1)
   CUDA_MODULE                Module loaded for nvcc (default: ${CUDA_MODULE})
+  RELION_MODULE              Module used to resolve the oracle executable (default: ${RELION_MODULE})
+  RELION_REFINE_MPI          RELION executable recorded for provenance (default: ${RELION_REFINE_MPI})
   K1_DATA_DIR                K=1 fixture directory
   K1_RELION_DIR              K=1 RELION output directory
   K4_DATA_DIR                K=4 fixture directory
@@ -227,8 +233,8 @@ for arg in "$@"; do
   esac
 done
 
-mkdir -p "${SCRATCH_DIR}/tmp" "${SCRATCH_DIR}/jobs"
-touch "${SCRATCH_DIR}/SAFE_TO_DELETE"
+mkdir -p "${SCRATCH_DIR}/jobs" "${RUNTIME_ROOT}"
+touch "${SCRATCH_DIR}/SAFE_TO_DELETE" "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 CUDA_LIB="${SCRATCH_DIR}/cuda/libcuda_backproject.so"
 INSTALL_LOCK="${REPO_ROOT}/.pixi/install-recovar.lock"
 
@@ -257,6 +263,38 @@ write_optional_env_exports() {
       printf 'export %s=%q\n' "${env_name}" "${env_value}"
     fi
   done
+}
+
+capture_git_provenance_snapshot() {
+  local out_dir="$1"
+  mkdir -p "${out_dir}"
+  (
+    cd "${REPO_ROOT}"
+    git rev-parse HEAD > "${out_dir}/git_head.txt" 2>/dev/null || true
+    git symbolic-ref --short HEAD > "${out_dir}/git_branch.txt" 2>/dev/null || echo "<detached>" > "${out_dir}/git_branch.txt"
+    git status --porcelain=v1 > "${out_dir}/git_status_porcelain.txt" 2>/dev/null || true
+    git status --short > "${out_dir}/git_status_short.txt" 2>/dev/null || true
+    git diff --binary --no-ext-diff HEAD -- > "${out_dir}/git_diff.patch" 2>/dev/null || true
+    sha256sum "${out_dir}/git_diff.patch" > "${out_dir}/git_diff.sha256" 2>/dev/null || true
+    git ls-files --others --exclude-standard -z > "${out_dir}/git_untracked_files.zlist" 2>/dev/null || true
+    : > "${out_dir}/git_untracked_file_hashes.tsv"
+    if [[ -s "${out_dir}/git_untracked_files.zlist" ]]; then
+      while IFS= read -r -d '' relpath; do
+        if [[ -f "${relpath}" ]]; then
+          sha256sum "${relpath}" >> "${out_dir}/git_untracked_file_hashes.tsv" 2>/dev/null || printf '%s\tunreadable\n' "${relpath}" >> "${out_dir}/git_untracked_file_hashes.tsv"
+        else
+          printf '%s\tnonfile-or-missing\n' "${relpath}" >> "${out_dir}/git_untracked_file_hashes.tsv"
+        fi
+      done < "${out_dir}/git_untracked_files.zlist"
+      tar --null --files-from="${out_dir}/git_untracked_files.zlist" -cf "${out_dir}/git_untracked_files.tar" 2> "${out_dir}/git_untracked_files.tar.err" || true
+    fi
+    {
+      sha256sum "${out_dir}/git_status_porcelain.txt" 2>/dev/null | awk '{print $1}' || true
+      sha256sum "${out_dir}/git_diff.patch" 2>/dev/null | awk '{print $1}' || true
+      sha256sum "${out_dir}/git_untracked_file_hashes.tsv" 2>/dev/null | awk '{print $1}' || true
+    } > "${out_dir}/git_component_sha256.txt"
+    sha256sum "${out_dir}/git_component_sha256.txt" | awk '{print $1}' > "${out_dir}/git_worktree_fingerprint.sha256"
+  )
 }
 
 require_dir "${REPO_ROOT}/recovar/em"
@@ -341,11 +379,12 @@ unset CONDA_DEFAULT_ENV CONDA_EXE CONDA_PYTHON_EXE CONDA_PROMPT_MODIFIER CONDA_S
 # those overrides or the CUDA provenance gate will correctly fail.
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
 export PYTHONNOUSERSITE=1
+export PYTHONFAULTHANDLER="\${PYTHONFAULTHANDLER:-1}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
-export TMPDIR="${SCRATCH_DIR}/tmp/${job_name}_\${SLURM_JOB_ID}"
-export PIXI_HOME="${SCRATCH_DIR}/pixi_home/${job_name}_\${SLURM_JOB_ID}"
-export RATTLER_CACHE_DIR="${SCRATCH_DIR}/rattler_cache/${job_name}_\${SLURM_JOB_ID}"
+export TMPDIR="${RUNTIME_ROOT}/${job_name}_\${SLURM_JOB_ID}/tmp"
+export PIXI_HOME="${RUNTIME_ROOT}/${job_name}_\${SLURM_JOB_ID}/pixi_home"
+export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/${job_name}_\${SLURM_JOB_ID}/rattler_cache"
 export RECOVAR_JAX_CACHE_DIR="${SCRATCH_DIR}/jax_cache"
 export JAX_COMPILATION_CACHE_DIR="\${RECOVAR_JAX_CACHE_DIR}"
 # The benchmark TMPDIR is GPFS scratch, not node-local storage. Leave particle
@@ -407,12 +446,49 @@ echo "HEAD: \$(git rev-parse HEAD)"
 echo "Branch: \$(git symbolic-ref --short HEAD || echo '<detached>')"
 echo "Dirty status:"
 git status --short
+JOB_GIT_PROVENANCE_DIR="${SCRATCH_DIR}/job_provenance/${job_name}_\${SLURM_JOB_ID}"
+mkdir -p "\${JOB_GIT_PROVENANCE_DIR}"
+git rev-parse HEAD > "\${JOB_GIT_PROVENANCE_DIR}/git_head.txt" 2>/dev/null || true
+git symbolic-ref --short HEAD > "\${JOB_GIT_PROVENANCE_DIR}/git_branch.txt" 2>/dev/null || echo "<detached>" > "\${JOB_GIT_PROVENANCE_DIR}/git_branch.txt"
+git status --porcelain=v1 > "\${JOB_GIT_PROVENANCE_DIR}/git_status_porcelain.txt" 2>/dev/null || true
+git status --short > "\${JOB_GIT_PROVENANCE_DIR}/git_status_short.txt" 2>/dev/null || true
+git diff --binary --no-ext-diff HEAD -- > "\${JOB_GIT_PROVENANCE_DIR}/git_diff.patch" 2>/dev/null || true
+sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_diff.patch" > "\${JOB_GIT_PROVENANCE_DIR}/git_diff.sha256" 2>/dev/null || true
+git ls-files --others --exclude-standard -z > "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_files.zlist" 2>/dev/null || true
+: > "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_file_hashes.tsv"
+if [[ -s "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_files.zlist" ]]; then
+  while IFS= read -r -d '' relpath; do
+    if [[ -f "\${relpath}" ]]; then
+      sha256sum "\${relpath}" >> "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_file_hashes.tsv" 2>/dev/null || printf '%s\tunreadable\n' "\${relpath}" >> "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_file_hashes.tsv"
+    else
+      printf '%s\tnonfile-or-missing\n' "\${relpath}" >> "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_file_hashes.tsv"
+    fi
+  done < "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_files.zlist"
+fi
+{
+  sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_status_porcelain.txt" 2>/dev/null | awk '{print \$1}' || true
+  sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_diff.patch" 2>/dev/null | awk '{print \$1}' || true
+  sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_untracked_file_hashes.tsv" 2>/dev/null | awk '{print \$1}' || true
+} > "\${JOB_GIT_PROVENANCE_DIR}/git_component_sha256.txt"
+sha256sum "\${JOB_GIT_PROVENANCE_DIR}/git_component_sha256.txt" | awk '{print \$1}' > "\${JOB_GIT_PROVENANCE_DIR}/git_worktree_fingerprint.sha256"
+ACTUAL_GIT_HEAD="\$(cat "\${JOB_GIT_PROVENANCE_DIR}/git_head.txt")"
+ACTUAL_GIT_WORKTREE_FINGERPRINT_SHA256="\$(cat "\${JOB_GIT_PROVENANCE_DIR}/git_worktree_fingerprint.sha256")"
+if [[ "\${ACTUAL_GIT_HEAD}" != "${SUBMISSION_GIT_HEAD}" ]]; then
+  echo "ERROR: queued-job Git HEAD drift: expected ${SUBMISSION_GIT_HEAD}, got \${ACTUAL_GIT_HEAD}" >&2
+  exit 2
+fi
+if [[ "\${ACTUAL_GIT_WORKTREE_FINGERPRINT_SHA256}" != "${SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256}" ]]; then
+  echo "ERROR: queued-job worktree fingerprint drift: expected ${SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256}, got \${ACTUAL_GIT_WORKTREE_FINGERPRINT_SHA256}" >&2
+  exit 2
+fi
+echo "Queued-job Git provenance gate ok"
 echo "Slurm job: \${SLURM_JOB_ID}"
 echo "Host: \$(hostname)"
 echo "SLURM_JOB_GPUS=\${SLURM_JOB_GPUS:-}"
 echo "SLURM_STEP_GPUS=\${SLURM_STEP_GPUS:-}"
 echo "CUDA_VISIBLE_DEVICES=\${CUDA_VISIBLE_DEVICES:-}"
 echo "TMPDIR=\${TMPDIR}"
+echo "PYTHONFAULTHANDLER=\${PYTHONFAULTHANDLER}"
 echo "RECOVAR_CUDA_LIB=\${RECOVAR_CUDA_LIB}"
 echo "RECOVAR_RELION_BIND_BUILD_DIR=\${RECOVAR_RELION_BIND_BUILD_DIR}"
 echo "CUDA_HOME=\${CUDA_HOME}"
@@ -509,7 +585,37 @@ for env_name in \
   fi
 done
 nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
+nvidia-smi -q > "\${JOB_GIT_PROVENANCE_DIR}/nvidia_smi.txt" 2>&1 || true
 echo
+EOF
+}
+
+write_relion_binary_provenance() {
+  cat <<EOF
+RELION_PROVENANCE_FILE="${SCRATCH_DIR}/provenance/relion_refine_mpi.txt"
+mkdir -p "\$(dirname "\${RELION_PROVENANCE_FILE}")"
+(
+  if [[ -f /etc/profile.d/modules.sh ]]; then
+    # shellcheck disable=SC1091
+    source /etc/profile.d/modules.sh
+  fi
+  set +u
+  module load "${RELION_MODULE}"
+  set -u
+  RELION_REFINE_MPI_BIN="${RELION_REFINE_MPI}"
+  if [[ "\${RELION_REFINE_MPI_BIN}" == */* ]]; then
+    if [[ ! -x "\${RELION_REFINE_MPI_BIN}" ]]; then
+      echo "ERROR: RELION_REFINE_MPI is not executable: \${RELION_REFINE_MPI_BIN}" >&2
+      exit 2
+    fi
+    RELION_REFINE_MPI_BIN="\$(realpath "\${RELION_REFINE_MPI_BIN}")"
+  else
+    RELION_REFINE_MPI_BIN="\$(command -v "\${RELION_REFINE_MPI_BIN}")"
+  fi
+  echo "RELION_MODULE=${RELION_MODULE}"
+  echo "RELION_REFINE_MPI_RESOLVED=\${RELION_REFINE_MPI_BIN}"
+  echo "RELION_REFINE_MPI_SHA256=\$(sha256sum "\${RELION_REFINE_MPI_BIN}" | awk '{print \$1}')"
+) | tee "\${RELION_PROVENANCE_FILE}"
 EOF
 }
 
@@ -593,6 +699,7 @@ assert str(relion_bind_file).startswith(str(repo) + "/") or (
 assert ".pixi/envs/default/" in str(jax_file), jax_file
 print("setup artifact gate ok")
 PY
+$(write_relion_binary_provenance)
 EOF
   chmod +x "${script_path}"
   printf '%s\n' "${script_path}"
@@ -615,6 +722,8 @@ ${SBATCH_EXCLUSIVE_DIRECTIVE}
 #SBATCH --time=01:00:00
 
 $(write_job_preamble "em_completion_fast_tier")
+
+cat "${SCRATCH_DIR}/provenance/relion_refine_mpi.txt"
 
 flock "${INSTALL_LOCK}" bash -lc 'pixi run --frozen install-recovar'
 PIXI_PY="\$(pixi run --frozen which python)"
@@ -670,6 +779,8 @@ $(write_job_preamble "em_completion_k1_100k256")
 
 OUTPUT_DIR="${output_dir}"
 mkdir -p "\${OUTPUT_DIR}"
+cp "${SCRATCH_DIR}/provenance/relion_refine_mpi.txt" "\${OUTPUT_DIR}/relion_refine_mpi_provenance.txt"
+nvidia-smi -q > "\${OUTPUT_DIR}/nvidia_smi.txt"
 nvidia-smi --query-gpu=timestamp,index,name,memory.used,memory.total,utilization.gpu --format=csv -l 60 > "\${OUTPUT_DIR}/gpu_monitor.csv" &
 MONITOR_PID="\$!"
 trap 'kill "\${MONITOR_PID}" 2>/dev/null || true' EXIT
@@ -764,6 +875,8 @@ $(write_job_preamble "em_completion_k4_100k256")
 
 OUTPUT_DIR="${output_dir}"
 mkdir -p "\${OUTPUT_DIR}"
+cp "${SCRATCH_DIR}/provenance/relion_refine_mpi.txt" "\${OUTPUT_DIR}/relion_refine_mpi_provenance.txt"
+nvidia-smi -q > "\${OUTPUT_DIR}/nvidia_smi.txt"
 if [[ "${RUN_K4_FUSED_SPARSE_PASS2}" -eq 1 ]]; then
   export RECOVAR_SPARSE_KCLASS_FUSED=1
 else
@@ -904,19 +1017,17 @@ ${SBATCH_SUMMARY_CONSTRAINT_DIRECTIVE}
 #SBATCH --dependency=${dependency}
 
 set -euo pipefail
-cd "${REPO_ROOT}"
-unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
-export PYTHONNOUSERSITE=1
+
+$(write_job_preamble "em_completion_summary")
+
+if [[ -n "\$(git status --porcelain=v1)" ]]; then
+  echo "ERROR: completion summary requires a clean worktree" >&2
+  git status --short >&2
+  exit 2
+fi
 export RECOVAR_DISABLE_CUDA=1
 export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
-export PIXI_FROZEN=true
-export TMPDIR="${SCRATCH_DIR}/tmp/em_completion_summary_\${SLURM_JOB_ID}"
-export PIXI_HOME="${SCRATCH_DIR}/pixi_home/em_completion_summary_\${SLURM_JOB_ID}"
-export RATTLER_CACHE_DIR="${SCRATCH_DIR}/rattler_cache/em_completion_summary_\${SLURM_JOB_ID}"
-export RECOVAR_JAX_CACHE_DIR="${SCRATCH_DIR}/jax_cache"
-export JAX_COMPILATION_CACHE_DIR="\${RECOVAR_JAX_CACHE_DIR}"
-mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}" "\${RECOVAR_JAX_CACHE_DIR}"
 
 echo "=== EM completion benchmark summary ==="
 echo "Repo: ${REPO_ROOT}"
@@ -926,9 +1037,15 @@ echo "Scratch: ${SCRATCH_DIR}"
 echo "Timing probe: ${EM_COMPLETION_TIMING_PROBE}"
 echo
 
+SUMMARY_STATUS=0
 for job_id in ${tracked_jobs}; do
   if [[ -n "\${job_id}" ]]; then
     sacct -j "\${job_id}" -X -o JobID,JobName%30,State,Elapsed,MaxRSS,ReqMem,AllocTRES || true
+    job_state="\$(sacct -j "\${job_id}" -X -n -o State | awk 'NF {print \$1; exit}')"
+    if [[ "\${job_state}" != "COMPLETED" ]]; then
+      echo "ERROR: upstream job \${job_id} state is \${job_state:-<missing>}, expected COMPLETED" >&2
+      SUMMARY_STATUS=1
+    fi
   fi
 done
 echo
@@ -954,6 +1071,7 @@ if [[ -f scripts/summarize_em_completion_bench.py ]]; then
   if [[ "${EM_COMPLETION_TIMING_PROBE}" != "1" && "${RUN_K4}" -eq 1 ]]; then
     REQUIRE_CASE_ARGS+=(--require-k4)
   fi
+  set +e
   pixi run --frozen python scripts/summarize_em_completion_bench.py \\
     --k1-recovar-dir "${SCRATCH_DIR}/k1_100k256_recovar" \\
     --k1-relion-dir "${K1_RELION_DIR}" \\
@@ -964,13 +1082,21 @@ if [[ -f scripts/summarize_em_completion_bench.py ]]; then
     --output-json "${SCRATCH_DIR}/summary_metrics.json" \\
     --output-markdown "${SCRATCH_DIR}/summary.md" \\
     "\${REQUIRE_CASE_ARGS[@]}"
+  summarizer_status="\$?"
+  set -e
+  echo "summarizer_status=\${summarizer_status}"
+  if [[ "\${summarizer_status}" -ne 0 ]]; then
+    SUMMARY_STATUS="\${summarizer_status}"
+  fi
   echo
   echo "Summary JSON: ${SCRATCH_DIR}/summary_metrics.json"
   echo "Summary Markdown: ${SCRATCH_DIR}/summary.md"
   [[ -s "${SCRATCH_DIR}/summary.md" ]] && cat "${SCRATCH_DIR}/summary.md"
 else
-  echo "scripts/summarize_em_completion_bench.py is not present yet; skipping metric aggregation." >&2
+  echo "ERROR: scripts/summarize_em_completion_bench.py is missing" >&2
+  SUMMARY_STATUS=2
 fi
+exit "\${SUMMARY_STATUS}"
 EOF
   chmod +x "${script_path}"
   printf '%s\n' "${script_path}"
@@ -993,11 +1119,21 @@ submit_or_print() {
   fi
 }
 
+SUBMISSION_GIT_PROVENANCE_DIR="${SCRATCH_DIR}/provenance/submission"
+capture_git_provenance_snapshot "${SUBMISSION_GIT_PROVENANCE_DIR}"
+SUBMISSION_GIT_HEAD="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+SUBMISSION_GIT_DIFF_SHA256="$(awk '{print $1}' "${SUBMISSION_GIT_PROVENANCE_DIR}/git_diff.sha256" 2>/dev/null || true)"
+SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256="$(cat "${SUBMISSION_GIT_PROVENANCE_DIR}/git_worktree_fingerprint.sha256" 2>/dev/null || true)"
+
 echo "EM completion benchmark launcher"
 echo "Repo: ${REPO_ROOT}"
 echo "HEAD: $(git -C "${REPO_ROOT}" rev-parse HEAD)"
 echo "Branch: $(git -C "${REPO_ROOT}" symbolic-ref --short HEAD || echo '<detached>')"
+echo "Submission git provenance: ${SUBMISSION_GIT_PROVENANCE_DIR}"
+echo "Submission git diff SHA256: ${SUBMISSION_GIT_DIFF_SHA256:-<unavailable>}"
+echo "Submission git worktree fingerprint SHA256: ${SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256:-<unavailable>}"
 echo "Scratch: ${SCRATCH_DIR}"
+echo "Runtime root: ${RUNTIME_ROOT}"
 echo "Partition/account: ${PARTITION}/${ACCOUNT}"
 echo "Constraint: ${CONSTRAINT:-<none>}"
 echo "Setup partition: ${SETUP_PARTITION}"
@@ -1007,6 +1143,7 @@ echo "Summary partition: ${SUMMARY_PARTITION}"
 echo "Summary constraint: ${SUMMARY_CONSTRAINT:-<none>}"
 echo "Exclusive GPU jobs: ${EXCLUSIVE}"
 echo "CUDA module: ${CUDA_MODULE}"
+echo "RELION module/executable: ${RELION_MODULE}/${RELION_REFINE_MPI}"
 echo "K=1 fixture: ${K1_DATA_DIR}"
 echo "K=1 RELION:  ${K1_RELION_DIR}"
 echo "K=1 max iter: ${K1_MAX_ITER}"
@@ -1061,7 +1198,12 @@ cat > "${SCRATCH_DIR}/submission.env" <<EOF
 REPO_ROOT=${REPO_ROOT}
 HEAD=$(git -C "${REPO_ROOT}" rev-parse HEAD)
 BRANCH=$(git -C "${REPO_ROOT}" symbolic-ref --short HEAD || echo '<detached>')
+SUBMISSION_GIT_PROVENANCE_DIR=${SUBMISSION_GIT_PROVENANCE_DIR}
+SUBMISSION_GIT_HEAD=${SUBMISSION_GIT_HEAD}
+SUBMISSION_GIT_DIFF_SHA256=${SUBMISSION_GIT_DIFF_SHA256}
+SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256=${SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256}
 SCRATCH_DIR=${SCRATCH_DIR}
+RUNTIME_ROOT=${RUNTIME_ROOT}
 SBATCH_PARTITION=${PARTITION}
 SBATCH_ACCOUNT=${ACCOUNT}
 SBATCH_CONSTRAINT=${CONSTRAINT}
@@ -1092,6 +1234,8 @@ K4_MAX_ITER=${K4_MAX_ITER}
 K4_MEM=${K4_MEM}
 K4_TIME_LIMIT=${K4_TIME_LIMIT}
 CUDA_LIB=${CUDA_LIB}
+RELION_MODULE=${RELION_MODULE}
+RELION_REFINE_MPI=${RELION_REFINE_MPI}
 RUN_K4_FUSED_SPARSE_PASS2=${RUN_K4_FUSED_SPARSE_PASS2}
 EM_COMPLETION_TIMING_PROBE=${EM_COMPLETION_TIMING_PROBE}
 RECOVAR_SPARSE_PASS2_MAX_TRANSLATION_TILE_BYTES=${RECOVAR_SPARSE_PASS2_MAX_TRANSLATION_TILE_BYTES:-}
