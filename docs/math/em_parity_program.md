@@ -1029,6 +1029,24 @@ although sparse angle ties leave mean pose error slightly worse; aggregate
 map quality, not correlation, is the retention gate.  Report:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fa597a61_iter4_validation_20260712_171214/VALIDATION_REPORT.md`.
 
+Full corrected 10k job `11090698` also retains commit `fa597a61`.  It
+reproduces the exact 16-iteration size/HEALPix schedule, converges at iteration
+16, and runs final all-data with parent/fine orders 6/7, seed-exact
+perturbation, and grid correction off.  Final merged FSC-AUC versus RELION is
+`0.978674`, up from `0.978500`; half-map FSC-AUCs are
+`0.952292/0.946336` versus `0.950958/0.947709`.  Final pose mean/p95 improves
+from `0.16561/0.64240` to `0.15986/0.63442` degrees and translation mean from
+`0.04928` to `0.04656` pixels, while Pmax MAE is essentially flat/slightly
+worse (`0.033922` to `0.033939`).  Runtime is 2045.7 seconds, 3.11% slower
+than the prior run and `1.538x` RELION.  The fixture contains no GT volume, so
+no GT FSC claim is made.  The earliest remaining material boundary is the
+iteration-8 global-to-local HEALPix-4 transition: minimum support FSC drops
+from about `0.9766` to `0.9144`, pose p95 leaves the numerical floor for about
+`2.39` degrees, and Pmax MAE reaches `0.0837`.  Next work must compare local
+parent/fine scoring and support at that fixed transition, not revisit the now
+closed identical-input reconstruction wrapper.  Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fa597a61_full10k_trajectory_20260712_173845/FINAL_REPORT.md`.
+
 The tempting indexed-backprojection coordinate-order explanation is rejected.
 RELION rotates integer Fourier coordinates before multiplying by padding while
 RECOVAR's CUDA kernel multiplies first, but padding factor 2 is exact binary
