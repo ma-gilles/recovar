@@ -890,8 +890,34 @@ both coarse and fine supplied-PPref scoring; environment value `0` retains the
 manual/JAX diagnostic fallback.  Qualification:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter2_nyquist_texture_panel6_20260712_153500/nyquist_panel6_qualification.json`.
 
-Next gate: rerun the full 10k trajectory with corrected texture scoring and
-adjudicate FSC/FSC-AUC against both RELION and the earlier hybrid result.
+Corrected-texture full 10k job `11060805` completes all 16 numbered
+iterations, converges on the same iteration as RELION, and executes the normal
+final all-data branch.  More importantly, its complete `(current_size,
+resolution shell)` trajectory exactly matches the authoritative RELION model
+STAR files.  At iteration 12 both select shell 32 (13.10 A): RELION FSC at
+shells 32/33 is `0.512015/0.497433`, corrected RECOVAR is
+`0.511150/0.498921`, while the older hybrid's `0.512818/0.500107` incorrectly
+selects shell 33.  The apparent corrected-versus-RELION iteration-12 mismatch
+was a diagnostic error caused by treating the older RECOVAR replay log as the
+oracle.  Resolution audits must derive RELION's shell from each model STAR
+`_rlnSsnrMap` (threshold 1, equivalently FSC 0.5), not another RECOVAR log.
+Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_iter12_schedule_audit_20260712_170000/REPORT.md`.
+
+The corrected run's final merged-map RELION FSC-AUC is `0.979511`, with
+half-map FSC-AUCs `0.953044/0.948438`.  This is slightly below the older
+hybrid's `0.980495` and `0.953110/0.949810`; the loss is high-frequency
+(shells 97--126 mean delta `-0.00283`) while shells 1--16 are unchanged to
+`2e-6`.  This does not invalidate the corrected projector: the corrected run
+is closer in the full control schedule and the six direct coarse support sets
+are exact.  It instead leaves a downstream score/reconstruction arithmetic
+boundary open.  Wall time improves from 2021.1 s to 1917.75 s, but remains
+`1.44192x` RELION.  Summary:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_corrected_texture_full_retry_20260712_121000/summary.md`.
+
+Next gates: isolate the remaining nonzero RELION-versus-RECOVAR texture score
+residual and run the global-corrected-texture/manual-fine trajectory ablation
+(`11062767`).
 In parallel, clean 100k hybrid scale job `11058928` continues from detached
 commit `87fd1e78` with run-local, hash-qualified CUDA and RELION-bind artifacts;
 it remains useful for scale/OOM evidence but is superseded for final quality by
