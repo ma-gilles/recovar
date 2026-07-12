@@ -223,14 +223,20 @@ def _texture_centered_crop_to_full(
     image_size = int(image_shape[0])
     crop_size = int(projector_output_size)
     crop = projection_crop.reshape((projection_crop.shape[0], crop_size, crop_size // 2 + 1))
+    crop_rows = jnp.arange(crop_size, dtype=jnp.int32)
+    crop_ky = jnp.where(crop_rows == 0, crop_size // 2, crop_rows - crop_size // 2)
+    crop_cols = jnp.arange(crop_size // 2 + 1, dtype=jnp.int32)
+    output_radius = crop_size // 2
+    output_disk = crop_ky[:, None] ** 2 + crop_cols[None, :] ** 2 <= output_radius**2
+    # RELION clips projections to min(PPref.mdlMaxR, image_half_width-1).
+    # The texture kernel already enforces the PPref/model sphere; apply the
+    # independent current-image disk here before embedding the crop.
+    crop = jnp.where(output_disk[None, :, :], crop, jnp.zeros((), dtype=crop.dtype))
     if crop_size == image_size:
         return crop.reshape((projection_crop.shape[0], -1))
-    crop_rows = jnp.arange(crop_size, dtype=jnp.int32)
     # Row zero is the even-box Nyquist row (+N/2 == -N/2); remaining rows
     # proceed from -N/2+1 through +N/2-1 in centered order.
-    crop_ky = jnp.where(crop_rows == 0, crop_size // 2, crop_rows - crop_size // 2)
     full_rows = crop_ky + image_size // 2
-    crop_cols = jnp.arange(crop_size // 2 + 1, dtype=jnp.int32)
     full_indices = (full_rows[:, None] * (image_size // 2 + 1) + crop_cols[None, :]).reshape(-1)
     full = jnp.zeros(
         (projection_crop.shape[0], image_size * (image_size // 2 + 1)),

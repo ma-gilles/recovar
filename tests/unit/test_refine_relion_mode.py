@@ -2729,6 +2729,24 @@ def test_relion_projector_texture_route_is_opt_in_and_can_be_disabled(monkeypatc
     assert len(calls) == 1
 
 
+def test_texture_centered_crop_masks_current_image_disk():
+    from recovar.em.dense_single_volume.helpers.projection import _texture_centered_crop_to_full
+
+    crop = jnp.ones((1, 4 * 3), dtype=jnp.complex64)
+    got = np.asarray(
+        _texture_centered_crop_to_full(
+            crop,
+            image_shape=(4, 4),
+            projector_output_size=4,
+        )
+    ).reshape(1, 4, 3)
+    expected = np.ones((1, 4, 3), dtype=np.complex64)
+    expected[:, 0, 1:] = 0.0
+    expected[:, 1, 2] = 0.0
+    expected[:, 3, 2] = 0.0
+    np.testing.assert_array_equal(got, expected)
+
+
 def test_local_big_jit_relion_projector_matches_helper(rng):
     from recovar.em.dense_single_volume.helpers.projection import compute_relion_projector_projections_block
     from recovar.em.dense_single_volume.local_big_jit import _project_local_half_spectrum
