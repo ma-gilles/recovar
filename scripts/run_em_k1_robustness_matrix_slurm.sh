@@ -432,6 +432,7 @@ unset CONDA_DEFAULT_ENV CONDA_EXE CONDA_PYTHON_EXE CONDA_PROMPT_MODIFIER CONDA_S
 # those overrides or the CUDA provenance gate will correctly fail.
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
 export PYTHONNOUSERSITE=1
+export RECOVAR_EXPECTED_REPO_ROOT="${REPO_ROOT}"
 export PYTHONFAULTHANDLER="\${PYTHONFAULTHANDLER:-1}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
@@ -857,7 +858,7 @@ fi
 
 echo "=== Prepare ${name} ==="
 PREP_START="\$(date +%s)"
-"\${PIXI_PY}" scripts/prepare_pdb_k1_relion_sanity_benchmark.py "\${PREPARE_ARGS[@]}" 2>&1 | tee "\${CASE_ROOT}/prepare.log"
+"\${PIXI_PY}" -m scripts.prepare_pdb_k1_relion_sanity_benchmark "\${PREPARE_ARGS[@]}" 2>&1 | tee "\${CASE_ROOT}/prepare.log"
 PREP_STATUS="\${PIPESTATUS[0]}"
 PREP_END="\$(date +%s)"
 cat > "\${CASE_ROOT}/prepare_walltime.json" <<JSON
@@ -913,7 +914,7 @@ if [[ "${RUN_RELION}" -eq 1 ]]; then
       if [[ "${NOCTF_RELION_USE_CTF}" == "1" ]]; then
         RELION_INPUT_STAR="particles_relion_identity_ctf.star"
         if [[ ! -s "\${RELION_INPUT_STAR}" || "\${RELION_INPUT_STAR}" -ot "particles.star" ]]; then
-          "\${PIXI_PY}" "${REPO_ROOT}/scripts/make_relion_identity_ctf_star.py" \\
+          "\${PIXI_PY}" -m scripts.make_relion_identity_ctf_star \\
             --input-star particles.star \\
             --output-star "\${RELION_INPUT_STAR}" \\
             --manifest particles_relion_identity_ctf.json \\
@@ -1025,7 +1026,7 @@ if [[ "${RUN_RELION}" -eq 1 ]]; then
 fi
 START_EPOCH="\$(date +%s)"
 set +e
-"\${PIXI_PY}" scripts/run_full_refinement.py \\
+"\${PIXI_PY}" -m scripts.run_full_refinement \\
   --data_dir "\${DATA_DIR}" \\
   --output "\${RECOVAR_DIR}" \\
   --max_iter "\${RECOVAR_MAX_ITER}" \\
@@ -1062,7 +1063,7 @@ if [[ "\${STATUS}" -eq 0 ]]; then
     SUMMARY_ARGS=(--k1-relion-dir "\${RELION_DIR}")
   fi
   set +e
-  pixi run --frozen python scripts/summarize_em_completion_bench.py \\
+  pixi run --frozen python -m scripts.summarize_em_completion_bench \\
     --k1-recovar-dir "\${RECOVAR_DIR}" \\
     --k1-fixture-dir "\${DATA_DIR}" \\
     --output-json "\${CASE_ROOT}/summary_metrics.json" \\
@@ -1164,7 +1165,7 @@ while IFS='|' read -r idx name n_images grid noise_level noise_model dataset_par
     RELION_SUMMARY_ARGS=(--k1-relion-dir "\${relion_dir}")
   fi
   set +e
-  pixi run --frozen python scripts/summarize_em_completion_bench.py \\
+  pixi run --frozen python -m scripts.summarize_em_completion_bench \\
     --k1-recovar-dir "\${recovar_dir}" \\
     --k1-fixture-dir "\${data_dir}" \\
     --output-json "\${summary_json}" \\

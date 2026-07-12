@@ -379,6 +379,7 @@ unset CONDA_DEFAULT_ENV CONDA_EXE CONDA_PYTHON_EXE CONDA_PROMPT_MODIFIER CONDA_S
 # those overrides or the CUDA provenance gate will correctly fail.
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
 export PYTHONNOUSERSITE=1
+export RECOVAR_EXPECTED_REPO_ROOT="${REPO_ROOT}"
 export PYTHONFAULTHANDLER="\${PYTHONFAULTHANDLER:-1}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
@@ -818,7 +819,7 @@ if [[ "${EM_COMPLETION_TIMING_PROBE}" == "1" ]]; then
   REFINEMENT_EXTRA_ARGS+=(--skip-large-outputs)
 fi
 set +e
-"\${PIXI_PY}" scripts/run_full_refinement.py \\
+"\${PIXI_PY}" -m scripts.run_full_refinement \\
   --data_dir "${K1_DATA_DIR}" \\
   --output "\${OUTPUT_DIR}" \\
   --max_iter "${K1_MAX_ITER}" \\
@@ -965,7 +966,7 @@ if [[ "${EM_COMPLETION_TIMING_PROBE}" == "1" ]]; then
   REFINEMENT_EXTRA_ARGS+=(--skip-large-outputs)
 fi
 set +e
-"\${PIXI_PY}" scripts/run_full_refinement.py \\
+"\${PIXI_PY}" -m scripts.run_full_refinement \\
   --data_dir "${K4_DATA_DIR}" \\
   --output "\${OUTPUT_DIR}" \\
   --max_iter "${K4_MAX_ITER}" \\
@@ -1072,7 +1073,7 @@ if [[ -f scripts/summarize_em_completion_bench.py ]]; then
     REQUIRE_CASE_ARGS+=(--require-k4)
   fi
   set +e
-  pixi run --frozen python scripts/summarize_em_completion_bench.py \\
+  pixi run --frozen python -m scripts.summarize_em_completion_bench \\
     --k1-recovar-dir "${SCRATCH_DIR}/k1_100k256_recovar" \\
     --k1-relion-dir "${K1_RELION_DIR}" \\
     --k1-fixture-dir "${K1_DATA_DIR}" \\

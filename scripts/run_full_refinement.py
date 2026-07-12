@@ -19,6 +19,7 @@ Environment variables:
 
 import argparse
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -43,6 +44,37 @@ logging.basicConfig(
     stream=sys.stderr,
 )
 logger = logging.getLogger(__name__)
+
+
+_CONCRETE_RECOVAR_PROVENANCE_MODULES = (
+    "recovar",
+    "recovar.em.dense_single_volume.iteration_loop",
+    "recovar.em.dense_single_volume.k_class",
+    "recovar.em.dense_single_volume.helpers.significance",
+)
+
+
+def _assert_expected_repo_imports() -> None:
+    """Fail fast if EM modules were imported from another editable checkout."""
+    expected_root_value = os.environ.get("RECOVAR_EXPECTED_REPO_ROOT")
+    if not expected_root_value:
+        return
+
+    expected_root = Path(expected_root_value).expanduser().resolve()
+    failures = []
+    for module_name in _CONCRETE_RECOVAR_PROVENANCE_MODULES:
+        module = importlib.import_module(module_name)
+        module_file_value = getattr(module, "__file__", None)
+        module_file = Path(module_file_value).resolve() if module_file_value else None
+        logger.info("Import provenance: %s=%s", module_name, module_file)
+        if module_file is None or not module_file.is_relative_to(expected_root):
+            failures.append(f"{module_name}={module_file}")
+
+    if failures:
+        raise RuntimeError(
+            "RECOVAR import provenance failure: expected every concrete EM module under "
+            f"{expected_root}, found " + ", ".join(failures)
+        )
 
 
 def _shell_index_to_resolution_angstrom(shell_index, grid_size, voxel_size):
@@ -1070,6 +1102,7 @@ def _maybe_apply_relion_image_mask(ds, args):
 
 
 def main():
+    _assert_expected_repo_imports()
     parser = argparse.ArgumentParser(description="Run full EM refinement on synthetic data")
     parser.add_argument(
         "--data_dir",

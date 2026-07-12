@@ -266,6 +266,7 @@ unset CONDA_DEFAULT_ENV CONDA_EXE CONDA_PYTHON_EXE CONDA_PROMPT_MODIFIER CONDA_S
 # those overrides or the CUDA provenance gate will correctly fail.
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
 export PYTHONNOUSERSITE=1
+export RECOVAR_EXPECTED_REPO_ROOT={q(REPO_ROOT)}
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
 export TMPDIR={q(scratch_dir)}/tmp/{job_name}_${{SLURM_JOB_ID}}
@@ -517,7 +518,7 @@ print("case provenance/cuda gate ok")
 PY
 
 echo "=== Prepare K-class dataset: {case.name} ==="
-"${{PIXI_PY}}" scripts/prepare_cryobench_pdb_multiclass_relion_parity_benchmark.py \\
+"${{PIXI_PY}}" -m scripts.prepare_cryobench_pdb_multiclass_relion_parity_benchmark \\
   --pdb-dir "${{SUB_PDB_DIR}}" \\
   --output-dir "${{DATA_DIR}}" \\
   --n-images {case.n_images} \\
@@ -609,7 +610,7 @@ fi
 echo "=== Run RECOVAR K-class refinement: {case.name} ==="
 START_EPOCH="$(date +%s)"
 set +e
-"${{PIXI_PY}}" scripts/run_full_refinement.py \\
+"${{PIXI_PY}}" -m scripts.run_full_refinement \\
   --data_dir "${{DATA_DIR}}" \\
   --output "${{RECOVAR_DIR}}" \\
   --max_iter {case.max_iter} \\
@@ -651,7 +652,7 @@ for class_no in $(seq -f "%03g" 1 {case.n_classes}); do
   REL_ARGS+=(--volume "${{RELION_DIR}}/run_it${{ITER_PADDED}}_class${{class_no}}.mrc")
   GT_ARGS+=(--gt_volume "${{DATA_DIR}}/reference_gt_class${{class_no}}.mrc")
 done
-"${{PIXI_PY}}" scripts/evaluate_kclass_gt.py \\
+"${{PIXI_PY}}" -m scripts.evaluate_kclass_gt \\
   "${{REC_ARGS[@]}}" \\
   "${{GT_ARGS[@]}}" \\
   --label RECOVAR \\
@@ -661,7 +662,7 @@ done
   {refine_orders_args} \\
   --output_json "${{CASE_ROOT}}/kclass_gt_fsc.json" \\
   2>&1 | tee "${{CASE_ROOT}}/evaluate_kclass_gt.log"
-"${{PIXI_PY}}" scripts/evaluate_kclass_gt.py \\
+"${{PIXI_PY}}" -m scripts.evaluate_kclass_gt \\
   "${{REL_ARGS[@]}}" \\
   "${{GT_ARGS[@]}}" \\
   --label RELION \\
@@ -725,7 +726,7 @@ for job_id in {' '.join(tracked_jobs)}; do
   sacct -j "${{job_id}}" -X -o JobID,JobName%40,State,Elapsed,MaxRSS,ReqMem,AllocTRES || true
 done
 echo
-pixi run --frozen python scripts/summarize_em_robustness_matrix.py \\
+pixi run --frozen python -m scripts.summarize_em_robustness_matrix \\
   {q(scratch_dir)} \\
   --output-markdown {q(scratch_dir / "em_kclass_robustness_summary.md")} \\
   --output-json {q(scratch_dir / "em_kclass_robustness_summary.json")} \\
