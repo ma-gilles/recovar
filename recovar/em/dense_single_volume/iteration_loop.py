@@ -126,6 +126,7 @@ from recovar.em.dense_single_volume.relion_metadata import (
 )
 from recovar.em.dense_single_volume.relion_replay import (
     _RelionHalfInputState,
+    _as_sigma_offset_half_pair,
     _mean_sigma_offset_per_half,
     _normalize_sigma_offset_per_half,
     apply_iter_replay_overrides,
@@ -3862,8 +3863,8 @@ def _run_relion_iteration_loop(
     # posterior-weighted offset moment when the E-step path propagates it.
     # RELION stores and updates this quantity in Angstrom², and its default
     # lower bound is min_sigma2_offset=2 Å² (ml_optimiser.cpp).
-    current_sigma_offset_angstrom = float(init_translation_sigma_angstrom)
-    current_sigma_offset_angstrom_per_half = None
+    current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(init_translation_sigma_angstrom)
+    current_sigma_offset_angstrom = _mean_sigma_offset_per_half(current_sigma_offset_angstrom_per_half)
     sigma_offset_used_trajectory = []
     sigma_offset_used_per_half_trajectory = []
     sigma_offset_trajectory = []
@@ -4204,6 +4205,7 @@ def _run_relion_iteration_loop(
             previous_noise_radial_per_half=previous_noise_radial_per_half,
             previous_noise_radial=previous_noise_radial,
             current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+            current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
             class_direction_prior_per_half=class_direction_prior_per_half,
             class_direction_prior_order_per_half=class_direction_prior_order_per_half,
             global_direction_prior_per_half=global_direction_prior_per_half,
@@ -4218,13 +4220,9 @@ def _run_relion_iteration_loop(
         previous_noise_radial_per_half = replay_result.previous_noise_radial_per_half
         previous_noise_radial = replay_result.previous_noise_radial
         current_sigma_offset_angstrom = replay_result.current_sigma_offset_angstrom
-        if replay_result.current_sigma_offset_angstrom_per_half is not None:
-            current_sigma_offset_angstrom_per_half = replay_result.current_sigma_offset_angstrom_per_half
-        elif (
-            iter_replay_override is not None
-            and iter_replay_override.get("translation_sigma_angstrom") is not None
-        ):
-            current_sigma_offset_angstrom_per_half = None
+        current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(
+            replay_result.current_sigma_offset_angstrom_per_half
+        )
         if k_class_enabled and replay_result.class_weights is not None:
             class_weights = np.asarray(replay_result.class_weights, dtype=np.float64)
             class_log_priors = np.log(class_weights)
@@ -4233,6 +4231,7 @@ def _run_relion_iteration_loop(
                 ", ".join(f"class {idx + 1}={weight:.4f}" for idx, weight in enumerate(class_weights)),
             )
 
+        _sigma_offset_before_state_swap = current_sigma_offset_angstrom
         (
             cs,
             means,
@@ -4267,6 +4266,10 @@ def _run_relion_iteration_loop(
             global_direction_prior_per_half=global_direction_prior_per_half,
             global_direction_prior_order_per_half=global_direction_prior_order_per_half,
         )
+        if current_sigma_offset_angstrom != _sigma_offset_before_state_swap:
+            current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(
+                current_sigma_offset_angstrom
+            )
         means = _maybe_debug_replay_relion_references(
             means=means,
             perturb_replay_relion_dir=perturb_replay_relion_dir,
@@ -5231,8 +5234,10 @@ def _run_relion_iteration_loop(
                 "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
                 "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
                 "sigma_offset_used_per_half_trajectory": sigma_offset_used_per_half_trajectory,
+                "sigma_offset_used_trajectory_per_half": sigma_offset_used_per_half_trajectory,
                 "sigma_offset_trajectory": sigma_offset_trajectory,
                 "sigma_offset_per_half_trajectory": sigma_offset_per_half_trajectory,
+                "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
                 "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
                 "frac_changed_trajectory": frac_changed_trajectory,
                 "acc_rot_trajectory": acc_rot_trajectory,
@@ -6480,15 +6485,14 @@ def _run_relion_iteration_loop(
             noise_stats_per_half=noise_stats_per_half,
             noise_stats_per_half_per_class=noise_stats_per_half_per_class,
             current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+            current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
             n_classes=n_classes,
             k_class_enabled=k_class_enabled,
             state_fallback_offsets_angstrom=state.current_changes_optimal_offsets_angstrom,
         )
         current_sigma_offset_angstrom = sigma_offset_result.current_sigma_offset_angstrom
-        current_sigma_offset_angstrom_per_half = (
-            None
-            if sigma_offset_result.per_half_sigma_offset_angstrom is None
-            else _normalize_sigma_offset_per_half(sigma_offset_result.per_half_sigma_offset_angstrom)
+        current_sigma_offset_angstrom_per_half = _normalize_sigma_offset_per_half(
+            sigma_offset_result.current_sigma_offset_angstrom_per_half
         )
         per_class_sigma_offset = sigma_offset_result.per_class_sigma_offset_angstrom
         sigma_offset_trajectory.append(float(current_sigma_offset_angstrom))
@@ -6665,8 +6669,10 @@ def _run_relion_iteration_loop(
             "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
             "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
             "sigma_offset_used_per_half_trajectory": sigma_offset_used_per_half_trajectory,
+            "sigma_offset_used_trajectory_per_half": sigma_offset_used_per_half_trajectory,
             "sigma_offset_trajectory": sigma_offset_trajectory,
             "sigma_offset_per_half_trajectory": sigma_offset_per_half_trajectory,
+            "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
             "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
             "frac_changed_trajectory": frac_changed_trajectory,
             "acc_rot_trajectory": acc_rot_trajectory,
@@ -6758,7 +6764,9 @@ def _run_relion_iteration_loop(
             _final_replay_sigma = final_replay_override.get("translation_sigma_angstrom")
             if _final_replay_sigma is not None and _final_replay_sigma_per_half is None:
                 current_sigma_offset_angstrom = float(_final_replay_sigma)
-                current_sigma_offset_angstrom_per_half = None
+                current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(
+                    current_sigma_offset_angstrom
+                )
                 _final_replay_fields.append("translation_sigma_angstrom")
             _final_replay_prev_trans = final_replay_override.get("previous_best_translations")
             if _final_replay_prev_trans is not None:
@@ -7837,8 +7845,10 @@ def _run_relion_iteration_loop(
         "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
         "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
         "sigma_offset_used_per_half_trajectory": sigma_offset_used_per_half_trajectory,
+        "sigma_offset_used_trajectory_per_half": sigma_offset_used_per_half_trajectory,
         "sigma_offset_trajectory": sigma_offset_trajectory,
         "sigma_offset_per_half_trajectory": sigma_offset_per_half_trajectory,
+        "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
         "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
         "frac_changed_trajectory": frac_changed_trajectory,
         "acc_rot_trajectory": acc_rot_trajectory,

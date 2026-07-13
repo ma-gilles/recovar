@@ -10448,12 +10448,12 @@ class TestRelionModeSmokeTest:
             max_healpix_order=2,
         )
 
-        expected_sigma = np.sqrt((noise_offset_wsums[0] + noise_offset_wsums[1]) / (2.0 * N_IMAGES))
-        assert result["sigma_offset_trajectory"][0] == pytest.approx(expected_sigma)
         expected_per_half = [
             np.sqrt(noise_offset_wsums[0] / (2.0 * half_datasets[0].n_units)),
             np.sqrt(noise_offset_wsums[1] / (2.0 * half_datasets[1].n_units)),
         ]
+        expected_sigma = float(np.mean(expected_per_half))
+        assert result["sigma_offset_trajectory"][0] == pytest.approx(expected_sigma)
         assert result["sigma_offset_per_half_trajectory"][0] == pytest.approx(expected_per_half)
 
     def test_relion_mode_passes_per_half_noise_to_engine(

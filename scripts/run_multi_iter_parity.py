@@ -957,13 +957,19 @@ def main():
     # The next model file is useful for replaying control outputs such as the
     # bootstrapped current image size, but its sigma offset is the result of
     # the E/M-step we are trying to reproduce, not an input to it.
-    control_general = model_h1["model_general"]
-    sigma_offset_angst = float(
-        control_general["rlnSigmaOffsetsAngst"]
-        if isinstance(control_general, dict)
-        else control_general["rlnSigmaOffsetsAngst"].iloc[0]
+    def _model_general_scalar(general, key):
+        return float(general[key] if isinstance(general, dict) else general[key].iloc[0])
+
+    sigma_offset_angst_per_half = [
+        _model_general_scalar(model_h1["model_general"], "rlnSigmaOffsetsAngst"),
+        _model_general_scalar(model_h2["model_general"], "rlnSigmaOffsetsAngst"),
+    ]
+    sigma_offset_angst = float(np.mean(sigma_offset_angst_per_half))
+    print(
+        "  sigma_offset = "
+        f"half1 {sigma_offset_angst_per_half[0]:.4f} A, "
+        f"half2 {sigma_offset_angst_per_half[1]:.4f} A, mean {sigma_offset_angst:.4f} A"
     )
-    print(f"  sigma_offset = {sigma_offset_angst:.4f} A")
 
     # ---- Direction prior from model star (RELION's pdf_orientation) ----
     pdf_orient_key = "model_pdf_orient_class_1"
@@ -1001,11 +1007,11 @@ def main():
             if isinstance(general_h2_iter, dict)
             else general_h2_iter["rlnNormCorrectionAverage"].iloc[0]
         )
-        sigma_offset_iter = float(
-            general_h1_iter["rlnSigmaOffsetsAngst"]
-            if isinstance(general_h1_iter, dict)
-            else general_h1_iter["rlnSigmaOffsetsAngst"].iloc[0]
-        )
+        sigma_offset_iter_per_half = [
+            _model_general_scalar(general_h1_iter, "rlnSigmaOffsetsAngst"),
+            _model_general_scalar(general_h2_iter, "rlnSigmaOffsetsAngst"),
+        ]
+        sigma_offset_iter = float(np.mean(sigma_offset_iter_per_half))
         sigma2_h1_iter = np.array(model_h1_iter["model_optics_group_1"]["rlnSigma2Noise"])
         sigma2_h2_iter = np.array(model_h2_iter["model_optics_group_1"]["rlnSigma2Noise"])
         noise_variance_iter = jnp.stack(
@@ -1103,6 +1109,10 @@ def main():
 
         return {
             "translation_sigma_angstrom": np.float32(sigma_offset_iter),
+            "translation_sigma_angstrom_per_half": np.asarray(
+                sigma_offset_iter_per_half,
+                dtype=np.float32,
+            ),
             "image_corrections": [corr_h1_iter, corr_h2_iter],
             "scale_corrections": [scale_corr_h1_iter, scale_corr_h2_iter],
             "previous_best_translations": [trans_h1_iter, trans_h2_iter],
@@ -1137,7 +1147,9 @@ def main():
             )
         print(
             f"  Replay state for recovar iter {recovar_iter + 1}: RELION prev={relion_prev_iter:03d}, control={relion_control_iter:03d}, "
-            f"sigma_offset={float(override['translation_sigma_angstrom']):.4f} A, "
+            "sigma_offset="
+            f"({float(override['translation_sigma_angstrom_per_half'][0]):.4f}, "
+            f"{float(override['translation_sigma_angstrom_per_half'][1]):.4f}) A, "
             f"corr means=({override['image_corrections'][0].mean():.4f}, {override['image_corrections'][1].mean():.4f}), "
             f"pre-shifts={trans_msg}"
         )
@@ -1218,7 +1230,7 @@ def main():
         max_healpix_order=args.max_healpix_order,
         init_translation_range=offset_range / pixel_size,
         init_translation_step=offset_step / pixel_size,
-        init_translation_sigma_angstrom=sigma_offset_angst,
+        init_translation_sigma_angstrom=sigma_offset_angst_per_half,
         particle_diameter_ang=particle_diameter,
         tau2_fudge=1.0,
         perturb_factor=0.5,
@@ -1328,6 +1340,14 @@ def main():
         save_dict["sigma_offset_trajectory"] = np.array(result["sigma_offset_trajectory"], dtype=np.float64)
     if result.get("sigma_offset_used_trajectory"):
         save_dict["sigma_offset_used_trajectory"] = np.array(result["sigma_offset_used_trajectory"], dtype=np.float64)
+    if result.get("sigma_offset_per_half_trajectory"):
+        save_dict["sigma_offset_per_half_trajectory"] = np.asarray(
+            result["sigma_offset_per_half_trajectory"], dtype=np.float64
+        )
+    if result.get("sigma_offset_used_per_half_trajectory"):
+        save_dict["sigma_offset_used_per_half_trajectory"] = np.asarray(
+            result["sigma_offset_used_per_half_trajectory"], dtype=np.float64
+        )
     for scalar_name in [
         "frac_changed_trajectory",
         "acc_rot_trajectory",

@@ -480,64 +480,104 @@ from dataclasses import dataclass as _dataclass  # noqa: E402  -- inline import
 class SigmaOffsetUpdateResult:
     """Posterior-weighted ``sigma_offset`` update result.
 
-    ``per_class_sigma_offset_angstrom`` is the K-class diagnostic, currently
-    logged only (the cross-class aggregate ``current_sigma_offset_angstrom``
-    is what feeds the next iteration's translation prior). Both halves of
-    the dual cross-class / hard-assignment fallback formula are folded
-    into ``current_sigma_offset_angstrom`` before return.
+    RELION gold-standard refinement has one model per half-set, so each half
+    updates and consumes its own sigma offset. The scalar value remains the
+    mean of the pair for backward-compatible telemetry only.
     """
 
     current_sigma_offset_angstrom: float
+    current_sigma_offset_angstrom_per_half: list[float]
     per_class_sigma_offset_angstrom: np.ndarray | None
-    per_half_sigma_offset_angstrom: np.ndarray | None
+
+    @property
+    def per_half_sigma_offset_angstrom(self):
+        """Backward-compatible alias for pre-PR157 callers."""
+
+        return np.asarray(self.current_sigma_offset_angstrom_per_half, dtype=np.float64)
+
+
+def _sigma_offset_from_moment(
+    wsum: float,
+    sumw: float,
+    *,
+    current_sigma_offset_angstrom: float,
+    state_fallback_offsets_angstrom: float,
+) -> float:
+    min_sigma2_angstrom2 = 2.0
+    if wsum > 0.0 and sumw > 0.0:
+        return float(np.sqrt(max(wsum / (2.0 * sumw), min_sigma2_angstrom2)))
+    if np.isfinite(state_fallback_offsets_angstrom) and state_fallback_offsets_angstrom > 0.0:
+        return max(float(state_fallback_offsets_angstrom), float(np.sqrt(min_sigma2_angstrom2)))
+    return float(current_sigma_offset_angstrom)
 
 
 def update_c1_sigma_offset_from_posterior(
     *,
     noise_stats_per_half,
     noise_stats_per_half_per_class,
-    current_sigma_offset_angstrom: float,
+    current_sigma_offset_angstrom: float | None = None,
+    current_sigma_offset_angstrom_per_half=None,
     n_classes: int,
     k_class_enabled: bool,
     state_fallback_offsets_angstrom: float,
 ) -> SigmaOffsetUpdateResult:
-    """RELION C1 posterior-weighted ``sigma_offset`` update.
+    """RELION C1 posterior-weighted ``sigma_offset`` update per half-set.
 
     Prefer RELION's posterior-weighted sufficient statistic:
 
         sigma2_offset_new = wsum_sigma2_offset / (2 * sum_weight)
 
-    for 2D single-particle data. Fall back to the older hard-assignment
-    proxy only when a path does not propagate the full posterior moment
-    (``sigma2_offset_wsum == 0``). Both halves of the M-step contribute.
+    for 2D single-particle data. A half without a propagated posterior moment
+    uses the hard-assignment fallback independently; pooling the other half's
+    posterior into it would not match RELION's gold-standard models.
     """
 
-    sigma2_offset_wsum = 0.0
-    sigma2_offset_sumw = 0.0
-    per_half_sigma_offset = None
+    if current_sigma_offset_angstrom_per_half is None:
+        if current_sigma_offset_angstrom is None:
+            raise ValueError("a scalar or per-half current sigma offset is required")
+        current_per_half = np.full(2, float(current_sigma_offset_angstrom), dtype=np.float64)
+    else:
+        current_per_half = np.asarray(current_sigma_offset_angstrom_per_half, dtype=np.float64).reshape(-1)
+        if current_per_half.size != 2 or not np.all(np.isfinite(current_per_half)):
+            raise ValueError("current_sigma_offset_angstrom_per_half must contain two finite values")
     per_half_values = []
-    per_half_valid = False
-    for stats_k in noise_stats_per_half:
+    pooled_wsum = 0.0
+    pooled_sumw = 0.0
+    for half_idx, stats_k in enumerate(noise_stats_per_half):
         if stats_k is None:
-            per_half_values.append(np.nan)
+            per_half_values.append(
+                _sigma_offset_from_moment(
+                    0.0,
+                    0.0,
+                    current_sigma_offset_angstrom=float(current_per_half[half_idx]),
+                    state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
+                )
+            )
             continue
         wsum_k = float(getattr(stats_k, "wsum_sigma2_offset", 0.0))
         sumw_k = float(getattr(stats_k, "sumw", 0.0))
-        sigma2_offset_wsum += wsum_k
-        sigma2_offset_sumw += sumw_k
-        if wsum_k > 0.0 and sumw_k > 0.0:
-            per_half_values.append(float(np.sqrt(max(wsum_k / (2.0 * sumw_k), 2.0))))
-            per_half_valid = True
-        else:
-            per_half_values.append(np.nan)
-    if per_half_valid and not k_class_enabled and len(per_half_values) == len(noise_stats_per_half):
-        per_half_sigma_offset = np.asarray(
-            [
-                float(value) if np.isfinite(value) else float(current_sigma_offset_angstrom)
-                for value in per_half_values
-            ],
-            dtype=np.float64,
+        pooled_wsum += wsum_k
+        pooled_sumw += sumw_k
+        per_half_values.append(
+            _sigma_offset_from_moment(
+                wsum_k,
+                sumw_k,
+                current_sigma_offset_angstrom=float(current_per_half[half_idx]),
+                state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
+            )
         )
+    if len(per_half_values) != 2:
+        raise ValueError(f"noise_stats_per_half must contain two halves, got {len(per_half_values)}")
+    per_half_sigma_offset = np.asarray(per_half_values, dtype=np.float64)
+    if k_class_enabled:
+        shared_sigma_offset = _sigma_offset_from_moment(
+            pooled_wsum,
+            pooled_sumw,
+            current_sigma_offset_angstrom=float(np.mean(current_per_half)),
+            state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
+        )
+        per_half_sigma_offset[:] = shared_sigma_offset
+    current_sigma_offset_angstrom = float(np.mean(per_half_sigma_offset))
     # D.2: per-class sigma_offset diagnostic. RELION Class3D maintains one
     # shared sigma2_offset in model_general; per-class values here are logged
     # only to help diagnose skewed class posteriors without changing the live
@@ -563,39 +603,18 @@ def update_c1_sigma_offset_from_posterior(
         logger.info(
             "C1: per-class sigma_offset = [%s] (cross-class aggregate %.3f Å)",
             ", ".join(f"{s:.3f}" for s in per_class_sigma_offset),
-            float(np.sqrt(max(sigma2_offset_wsum / max(2.0 * sigma2_offset_sumw, 1e-30), min_sigma2)))
-            if sigma2_offset_wsum > 0
-            else current_sigma_offset_angstrom,
-        )
-    if sigma2_offset_wsum > 0.0 and sigma2_offset_sumw > 0.0:
-        min_sigma2_angstrom2 = 2.0
-        sigma2_offset_angstrom2 = max(
-            sigma2_offset_wsum / (2.0 * sigma2_offset_sumw),
-            min_sigma2_angstrom2,
-        )
-        current_sigma_offset_angstrom = float(np.sqrt(sigma2_offset_angstrom2))
-        logger.info(
-            "C1: sigma_offset updated %.3f Å from posterior variance (clamp sigma^2 >= %.3f Å^2)",
             current_sigma_offset_angstrom,
-            min_sigma2_angstrom2,
         )
-    else:
-        new_sigma_offset_angstrom = state_fallback_offsets_angstrom
-        if np.isfinite(new_sigma_offset_angstrom) and new_sigma_offset_angstrom > 0:
-            min_sigma_angstrom = float(np.sqrt(2.0))  # RELION min_sigma2_offset = 2 Å²
-            current_sigma_offset_angstrom = max(
-                float(new_sigma_offset_angstrom),
-                min_sigma_angstrom,
-            )
-            logger.info(
-                "C1 fallback: sigma_offset updated %.3f Å from hard assignments (clamp >= %.3f Å)",
-                current_sigma_offset_angstrom,
-                min_sigma_angstrom,
-            )
+    logger.info(
+        "C1: sigma_offset updated per half [%.3f, %.3f] Å (mean %.3f Å)",
+        per_half_sigma_offset[0],
+        per_half_sigma_offset[1],
+        current_sigma_offset_angstrom,
+    )
     return SigmaOffsetUpdateResult(
         current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+        current_sigma_offset_angstrom_per_half=per_half_sigma_offset.tolist(),
         per_class_sigma_offset_angstrom=per_class_sigma_offset,
-        per_half_sigma_offset_angstrom=per_half_sigma_offset,
     )
 
 

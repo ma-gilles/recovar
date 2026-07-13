@@ -87,6 +87,15 @@ def _normalize_sigma_offset_per_half(values):
     return [float(arr[0]), float(arr[1])]
 
 
+def _as_sigma_offset_half_pair(values):
+    """Return a scalar or explicit pair as a strict two-half sigma list."""
+
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    if arr.size == 1:
+        arr = np.repeat(arr, 2)
+    return _normalize_sigma_offset_per_half(arr)
+
+
 def _mean_sigma_offset_per_half(values):
     per_half = _normalize_sigma_offset_per_half(values)
     if per_half is None:
@@ -193,6 +202,7 @@ def apply_iter_replay_overrides(
     previous_noise_radial_per_half: list,
     previous_noise_radial,
     current_sigma_offset_angstrom: float,
+    current_sigma_offset_angstrom_per_half: list[float] | None = None,
     class_direction_prior_per_half: list,
     class_direction_prior_order_per_half: list,
     global_direction_prior_per_half: list,
@@ -225,7 +235,11 @@ def apply_iter_replay_overrides(
     _model_meta = None
     _replay_meta = None
     _replay_class_weights = None
-    _current_sigma_offset_angstrom_per_half = None
+    _current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(
+        current_sigma_offset_angstrom
+        if current_sigma_offset_angstrom_per_half is None
+        else current_sigma_offset_angstrom_per_half
+    )
 
     if perturb_replay_relion_dir is not None:
         _star = os.path.join(
@@ -504,6 +518,7 @@ def apply_iter_replay_overrides(
         _replay_sigma = iter_replay_override.get("translation_sigma_angstrom")
         if _replay_sigma is not None and _replay_sigma_per_half is None:
             current_sigma_offset_angstrom = float(_replay_sigma)
+            _current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(_replay_sigma)
             logger.info(
                 "Replay override: sigma_offset <- %.4f A (iter=%d)",
                 current_sigma_offset_angstrom,
