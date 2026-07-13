@@ -1,0 +1,121 @@
+"""Exact host Euler-matrix parity guards for RELION M-step rotations."""
+
+import inspect
+
+import numpy as np
+
+from recovar.em.sampling import (
+    _relion_mstep_rotations_from_eulers,
+    apply_relion_rotation_perturbation_to_eulers,
+)
+
+# Five captured RELION iteration-1 winner rows that previously changed the
+# outer-radius predicate. These are host RFLOAT Euler rows before the final
+# XFLOAT cast in generateEulerMatrices().
+_RELION_FINE_EULERS_F64 = np.asarray(
+    [
+        [-148.07116258510126, 159.73799185037856, 6.190743060629692],
+        [-65.48923578673723, 80.24919217586016, 103.4673527691381],
+        [86.6136702414223, 65.35556221495885, -13.533766806566508],
+        [-121.68325289369227, 150.62937446903518, -1.2306848410672946],
+        [-27.57463869823777, 134.66318059851523, 35.865537006317815],
+    ],
+    dtype=np.float64,
+)
+
+# RECOVAR-facing transpose(inv(A)) bit patterns captured from RELION's
+# runWavgKernel Euler input for the same rows.
+_RELION_MSTEP_ROTATION_BITS = np.asarray(
+    [
+        [1062812740, 1053666949, 3199223633, 1054948714, 3211113161, 1025046566, 3197533304, 3191573647, 3211798669],
+        [1063147020, 1054929375, 1047202070, 3197074155, 1029314506, 1064656185, 1053906824, 3211104430, 1043164569],
+        [1048829552, 1053303020, 3210885245, 3212245813, 1042189919, 3193556645, 1029433292, 1063798404, 1054179116],
+        [1054928899, 1061204141, 3204124251, 1063014457, 3204602172, 3157038757, 3196314638, 3201675372, 3210680411],
+        [3194968473, 1061713058, 3205729934, 1060994388, 1057429299, 1054169910, 1059153352, 3198718531, 3207852987],
+    ],
+    dtype=np.uint32,
+).reshape(-1, 3, 3)
+
+_UNPERTURBED_FINE_EULERS_F64 = np.asarray(
+    [
+        [212.14285714285714, 159.42254649458224, 5.625],
+        [295.3125, 80.40593177313954, 103.125],
+        [87.18749999999999, 65.37568164783592, 346.875],
+        [238.50000000000003, 150.4344388449523, -1.875],
+        [333.0, 134.99388015045713, 35.625],
+    ],
+    dtype=np.float64,
+)
+
+
+def test_relion_mstep_rotation_helper_matches_captured_float32_bits():
+    rotations = _relion_mstep_rotations_from_eulers(_RELION_FINE_EULERS_F64)
+
+    assert rotations.dtype == np.float32
+    np.testing.assert_array_equal(rotations.view(np.uint32), _RELION_MSTEP_ROTATION_BITS)
+
+
+def test_relion_mstep_rotation_helper_preserves_matrix2d_inverse_source_order():
+    source = inspect.getsource(_relion_mstep_rotations_from_eulers)
+    cofactor_assignments = [
+        "inverse[:, 0, 0] = matrix[:, 2, 2] * matrix[:, 1, 1] - matrix[:, 2, 1] * matrix[:, 1, 2]",
+        "inverse[:, 0, 1] = -(matrix[:, 2, 2] * matrix[:, 0, 1] - matrix[:, 2, 1] * matrix[:, 0, 2])",
+        "inverse[:, 0, 2] = matrix[:, 1, 2] * matrix[:, 0, 1] - matrix[:, 1, 1] * matrix[:, 0, 2]",
+        "inverse[:, 1, 0] = -(matrix[:, 2, 2] * matrix[:, 1, 0] - matrix[:, 2, 0] * matrix[:, 1, 2])",
+        "inverse[:, 1, 1] = matrix[:, 2, 2] * matrix[:, 0, 0] - matrix[:, 2, 0] * matrix[:, 0, 2]",
+        "inverse[:, 1, 2] = -(matrix[:, 1, 2] * matrix[:, 0, 0] - matrix[:, 1, 0] * matrix[:, 0, 2])",
+        "inverse[:, 2, 0] = matrix[:, 2, 1] * matrix[:, 1, 0] - matrix[:, 2, 0] * matrix[:, 1, 1]",
+        "inverse[:, 2, 1] = -(matrix[:, 2, 1] * matrix[:, 0, 0] - matrix[:, 2, 0] * matrix[:, 0, 1])",
+        "inverse[:, 2, 2] = matrix[:, 1, 1] * matrix[:, 0, 0] - matrix[:, 1, 0] * matrix[:, 0, 1]",
+    ]
+    assert all(assignment in source for assignment in cofactor_assignments)
+    assert "np.linalg" not in source
+    assert source.index("determinant = (") < source.index("inverse /= determinant")
+    assert source.index("inverse /= determinant") < source.index("return np.swapaxes(inverse, 1, 2).astype(np.float32)")
+
+
+def test_perturbation_optional_mstep_return_keeps_legacy_tuple_and_float64_working_eulers():
+    random_perturbation = -0.04961434006690979
+    legacy_rotations, legacy_eulers = apply_relion_rotation_perturbation_to_eulers(
+        _UNPERTURBED_FINE_EULERS_F64,
+        random_perturbation,
+        7.5,
+    )
+    rotations, eulers, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+        _UNPERTURBED_FINE_EULERS_F64,
+        random_perturbation,
+        7.5,
+        return_mstep_rotations=True,
+    )
+
+    np.testing.assert_array_equal(rotations.view(np.uint32), legacy_rotations.view(np.uint32))
+    np.testing.assert_array_equal(eulers.view(np.uint32), legacy_eulers.view(np.uint32))
+    np.testing.assert_array_equal(mstep_rotations.view(np.uint32), _RELION_MSTEP_ROTATION_BITS)
+
+    # Reconstructing after the public Euler metadata is cast to float32 loses
+    # the host RFLOAT bits required at RELION's outer-radius boundary.
+    late_mstep_rotations = _relion_mstep_rotations_from_eulers(eulers)
+    assert np.count_nonzero(late_mstep_rotations.view(np.uint32) != _RELION_MSTEP_ROTATION_BITS) == 26
+
+
+def test_unperturbed_optional_mstep_return_is_backward_compatible():
+    legacy = apply_relion_rotation_perturbation_to_eulers(
+        _UNPERTURBED_FINE_EULERS_F64[:1],
+        0.0,
+        7.5,
+    )
+    extended = apply_relion_rotation_perturbation_to_eulers(
+        _UNPERTURBED_FINE_EULERS_F64[:1],
+        0.0,
+        7.5,
+        return_mstep_rotations=True,
+    )
+
+    assert len(legacy) == 2
+    assert len(extended) == 3
+    np.testing.assert_array_equal(extended[0], legacy[0])
+    np.testing.assert_array_equal(extended[1], legacy[1])
+    np.testing.assert_array_equal(
+        extended[2],
+        _relion_mstep_rotations_from_eulers(_UNPERTURBED_FINE_EULERS_F64[:1]),
+    )

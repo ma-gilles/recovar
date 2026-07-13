@@ -508,7 +508,47 @@ def _relion_matrix_to_euler_angles(A: np.ndarray) -> np.ndarray:
     return out
 
 
-def apply_relion_rotation_perturbation_to_eulers(eulers_deg, random_perturbation, angular_sampling_deg):
+def _relion_mstep_rotations_from_eulers(eulers_deg: np.ndarray) -> np.ndarray:
+    """Return RECOVAR-frame M-step rotations from RELION Euler rows.
+
+    RELION's host ``generateEulerMatrices(..., inverse=true)`` regenerates the
+    Euler matrix in RFLOAT precision and calls the explicit 3x3 special case
+    of ``Matrix2D::inv()``.  Although an ideal rotation's inverse is its
+    transpose, substituting a transpose changes float32 boundary decisions
+    after the final cast.  Preserve the cofactor, determinant, and division
+    operation order from ``matrix2d.h`` here.
+
+    The RELION inverse matrix is transposed once on return because RECOVAR's
+    projection/backprojection rotation convention is the transpose of
+    RELION's row-major Euler matrix convention.
+    """
+    matrix = _relion_euler_angles_to_matrix(eulers_deg)
+    inverse = np.empty_like(matrix)
+
+    inverse[:, 0, 0] = matrix[:, 2, 2] * matrix[:, 1, 1] - matrix[:, 2, 1] * matrix[:, 1, 2]
+    inverse[:, 0, 1] = -(matrix[:, 2, 2] * matrix[:, 0, 1] - matrix[:, 2, 1] * matrix[:, 0, 2])
+    inverse[:, 0, 2] = matrix[:, 1, 2] * matrix[:, 0, 1] - matrix[:, 1, 1] * matrix[:, 0, 2]
+    inverse[:, 1, 0] = -(matrix[:, 2, 2] * matrix[:, 1, 0] - matrix[:, 2, 0] * matrix[:, 1, 2])
+    inverse[:, 1, 1] = matrix[:, 2, 2] * matrix[:, 0, 0] - matrix[:, 2, 0] * matrix[:, 0, 2]
+    inverse[:, 1, 2] = -(matrix[:, 1, 2] * matrix[:, 0, 0] - matrix[:, 1, 0] * matrix[:, 0, 2])
+    inverse[:, 2, 0] = matrix[:, 2, 1] * matrix[:, 1, 0] - matrix[:, 2, 0] * matrix[:, 1, 1]
+    inverse[:, 2, 1] = -(matrix[:, 2, 1] * matrix[:, 0, 0] - matrix[:, 2, 0] * matrix[:, 0, 1])
+    inverse[:, 2, 2] = matrix[:, 1, 1] * matrix[:, 0, 0] - matrix[:, 1, 0] * matrix[:, 0, 1]
+
+    determinant = (
+        matrix[:, 0, 0] * inverse[:, 0, 0] + matrix[:, 1, 0] * inverse[:, 0, 1] + matrix[:, 2, 0] * inverse[:, 0, 2]
+    )
+    inverse /= determinant[:, None, None]
+    return np.swapaxes(inverse, 1, 2).astype(np.float32)
+
+
+def apply_relion_rotation_perturbation_to_eulers(
+    eulers_deg,
+    random_perturbation,
+    angular_sampling_deg,
+    *,
+    return_mstep_rotations=False,
+):
     """Apply RELION's SamplingPerturbation and return eulers plus matrices.
 
     RELION does not score ``A @ R_perturb`` directly. It converts that product
@@ -516,19 +556,31 @@ def apply_relion_rotation_perturbation_to_eulers(eulers_deg, random_perturbation
     projector matrices with ``generateEulerMatrices``. The round trip changes
     some float32 matrix entries by one ulp; CUDA texture interpolation can
     amplify that into measurable Pmax differences for borderline particles.
+
+    When ``return_mstep_rotations`` is true, a third array contains the
+    RECOVAR-frame matrices produced by RELION's separate host-side inverse
+    path for weighted-sum backprojection. The default two-array return remains
+    backward compatible.
     """
     eulers = np.asarray(eulers_deg, dtype=np.float64).reshape(-1, 3)
     if abs(float(random_perturbation)) < 1e-12:
-        return _relion_euler_angles_to_matrix(eulers).astype(np.float32), eulers.astype(np.float32)
+        rotations = _relion_euler_angles_to_matrix(eulers).astype(np.float32)
+        if return_mstep_rotations:
+            return rotations, eulers.astype(np.float32), _relion_mstep_rotations_from_eulers(eulers)
+        return rotations, eulers.astype(np.float32)
 
     myperturb = float(random_perturbation) * float(angular_sampling_deg)
     A = _relion_euler_angles_to_matrix(eulers)
-    R_perturb = _relion_euler_angles_to_matrix(
-        np.array([[myperturb, myperturb, myperturb]], dtype=np.float64)
-    )[0]
+    R_perturb = _relion_euler_angles_to_matrix(np.array([[myperturb, myperturb, myperturb]], dtype=np.float64))[0]
     perturbed_A = np.einsum("nij,jk->nik", A, R_perturb)
     perturbed_eulers = _relion_matrix_to_euler_angles(perturbed_A)
     perturbed_rotations = _relion_euler_angles_to_matrix(perturbed_eulers).astype(np.float32)
+    if return_mstep_rotations:
+        return (
+            perturbed_rotations,
+            perturbed_eulers.astype(np.float32),
+            _relion_mstep_rotations_from_eulers(perturbed_eulers),
+        )
     return perturbed_rotations, perturbed_eulers.astype(np.float32)
 
 
