@@ -434,6 +434,66 @@ def _default_refinement_subsets(n_images, seed, n_classes):
     return np.sort(indices[: int(n_images) // 2]), np.sort(indices[int(n_images) // 2 :])
 
 
+def _image_name_to_stack_index(name) -> int:
+    import re
+
+    match = re.match(r"(\d+)@", str(name))
+    return int(match.group(1)) if match else -1
+
+
+def _relion_halfset_and_accuracy_layout(our_particles, relion_particles):
+    """Map RELION's internal data rows onto RECOVAR's half-local ordering."""
+    our_stack_indices = np.asarray(
+        [_image_name_to_stack_index(name) for name in our_particles["rlnImageName"]],
+        dtype=np.int64,
+    )
+    relion_stack_indices = np.asarray(
+        [_image_name_to_stack_index(name) for name in relion_particles["rlnImageName"]],
+        dtype=np.int64,
+    )
+    if np.any(our_stack_indices < 0) or np.any(relion_stack_indices < 0):
+        raise ValueError("RELION/RECOVAR image names must use the '<index>@<stack>' form")
+    if np.unique(our_stack_indices).size != our_stack_indices.size:
+        raise ValueError("RECOVAR input STAR contains duplicate stack indices")
+    if np.unique(relion_stack_indices).size != relion_stack_indices.size:
+        raise ValueError("RELION data STAR contains duplicate stack indices")
+    our_row_by_stack = {int(stack_idx): row for row, stack_idx in enumerate(our_stack_indices)}
+    relion_row_by_stack = {int(stack_idx): row for row, stack_idx in enumerate(relion_stack_indices)}
+    if set(our_row_by_stack) != set(relion_row_by_stack):
+        raise ValueError("RELION and RECOVAR STAR files do not contain the same stack indices")
+
+    relion_subsets = np.asarray(relion_particles["rlnRandomSubset"], dtype=np.int64)
+    our_relion_rows = np.asarray(
+        [relion_row_by_stack[int(stack_idx)] for stack_idx in our_stack_indices],
+        dtype=np.int64,
+    )
+    our_subsets = relion_subsets[our_relion_rows]
+    half1_idx = np.flatnonzero(our_subsets == 1).astype(np.int64)
+    half2_idx = np.flatnonzero(our_subsets == 2).astype(np.int64)
+
+    half1_local_by_our_row = {int(our_row): local for local, our_row in enumerate(half1_idx)}
+    half1_base_order_local = np.asarray(
+        [
+            half1_local_by_our_row[our_row_by_stack[int(relion_stack_indices[relion_row])]]
+            for relion_row in np.flatnonzero(relion_subsets == 1)
+        ],
+        dtype=np.int64,
+    )
+    half1_particle_ids = our_relion_rows[half1_idx]
+    if "rlnOpticsGroup" in relion_particles.columns:
+        relion_optics = np.asarray(relion_particles["rlnOpticsGroup"], dtype=np.int64)
+        half1_optics_group_ids = relion_optics[half1_particle_ids]
+    else:
+        half1_optics_group_ids = np.zeros(half1_idx.size, dtype=np.int64)
+    return (
+        half1_idx,
+        half2_idx,
+        half1_base_order_local,
+        half1_optics_group_ids,
+        half1_particle_ids,
+    )
+
+
 def _replay_complete_initial_particle_state(n_classes, init_relion_iteration):
     """Whether run_it000 poses/corrections seed the first expectation step.
 
@@ -1499,34 +1559,22 @@ def main():
 
     our_star = _starfile.read(os.path.join(args.data_dir, "particles.star"))
     our_particles = our_star["particles"] if isinstance(our_star, dict) else our_star
-    our_names = list(our_particles["rlnImageName"])
+    expected_accuracy_half1_base_order_local = None
+    expected_accuracy_half1_optics_group_ids = None
+    expected_accuracy_half1_particle_ids = None
 
     if args.relion_half_sets is not None:
         # Use RELION's half-set split from rlnRandomSubset
         logger.info("Loading RELION half-set assignments from %s", args.relion_half_sets)
-        import re
-
         relion_data = _starfile.read(args.relion_half_sets)
         relion_particles = relion_data["particles"]
-        relion_subsets = np.array(relion_particles["rlnRandomSubset"])
-        relion_names = list(relion_particles["rlnImageName"])
-
-        # Build mapping: particle stack index -> subset
-        def _image_name_to_stack_idx(name):
-            m = re.match(r"(\d+)@", name)
-            return int(m.group(1)) if m else -1
-
-        relion_idx_to_subset = {}
-        for i in range(len(relion_names)):
-            stack_idx = _image_name_to_stack_idx(relion_names[i])
-            relion_idx_to_subset[stack_idx] = relion_subsets[i]
-
-        # Our dataset loads in stack order 1,2,3,...
-        # Map to RELION's subset assignments
-        our_subsets = np.array([relion_idx_to_subset[_image_name_to_stack_idx(name)] for name in our_names])
-
-        half1_idx = np.where(our_subsets == 1)[0]
-        half2_idx = np.where(our_subsets == 2)[0]
+        (
+            half1_idx,
+            half2_idx,
+            expected_accuracy_half1_base_order_local,
+            expected_accuracy_half1_optics_group_ids,
+            expected_accuracy_half1_particle_ids,
+        ) = _relion_halfset_and_accuracy_layout(our_particles, relion_particles)
         logger.info("Using RELION half-set split: %d (subset=1) + %d (subset=2)", len(half1_idx), len(half2_idx))
     else:
         half1_idx, half2_idx = _default_refinement_subsets(n_images, args.seed, args.n_classes)
@@ -2067,6 +2115,9 @@ def main():
         perturb_factor=args.perturb_factor,
         perturb_seed=effective_perturb_seed,
         optimizer_random_seed=args.seed,
+        expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
+        expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
+        expected_accuracy_half1_particle_ids=expected_accuracy_half1_particle_ids,
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,
         replay_iteration_overrides=replay_iteration_overrides,
         init_relion_iteration=args.init_relion_iteration,
@@ -2223,7 +2274,7 @@ def main():
         )
     for indices_key in (
         "expected_accuracy_trial_local_indices",
-        "expected_accuracy_trial_original_indices",
+        "expected_accuracy_trial_particle_ids",
     ):
         if result.get(indices_key) is not None:
             save_dict[indices_key] = np.asarray(result[indices_key], dtype=np.int64)

@@ -3241,6 +3241,9 @@ def refine_single_volume(
     perturb_factor=0.0,
     perturb_seed=None,
     optimizer_random_seed=None,
+    expected_accuracy_half1_base_order_local=None,
+    expected_accuracy_half1_optics_group_ids=None,
+    expected_accuracy_half1_particle_ids=None,
     perturb_replay_relion_dir=None,
     perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
@@ -3471,6 +3474,9 @@ def refine_single_volume(
         perturb_factor=perturb_factor,
         perturb_seed=perturb_seed,
         optimizer_random_seed=optimizer_random_seed,
+        expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
+        expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
+        expected_accuracy_half1_particle_ids=expected_accuracy_half1_particle_ids,
         perturb_replay_relion_dir=perturb_replay_relion_dir,
         perturb_replay_relion_prefix=perturb_replay_relion_prefix,
         perturb_replay_precision=perturb_replay_precision,
@@ -3541,6 +3547,9 @@ def _run_relion_iteration_loop(
     perturb_factor=0.0,
     perturb_seed=None,
     optimizer_random_seed=None,
+    expected_accuracy_half1_base_order_local=None,
+    expected_accuracy_half1_optics_group_ids=None,
+    expected_accuracy_half1_particle_ids=None,
     perturb_replay_relion_dir=None,
     perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
@@ -3906,7 +3915,7 @@ def _run_relion_iteration_loop(
     expected_accuracy_class_counts_trajectory = []
     expected_accuracy_status_trajectory = []
     expected_accuracy_trial_local_indices = None
-    expected_accuracy_trial_original_indices = None
+    expected_accuracy_trial_particle_ids = None
     smallest_change_angles_trajectory = []
     smallest_change_offsets_trajectory = []
     best_rotation_eulers_history = []
@@ -3986,8 +3995,19 @@ def _run_relion_iteration_loop(
                 int(experiment_datasets[0].n_units),
                 int(effective_optimizer_random_seed),
                 first_iteration=max(1, int(init_relion_iteration) + 1),
+                base_order_local=expected_accuracy_half1_base_order_local,
+                optics_group_ids=expected_accuracy_half1_optics_group_ids,
             )
+            if (
+                expected_accuracy_half1_optics_group_ids is not None
+                and np.unique(np.asarray(expected_accuracy_half1_optics_group_ids)).size > 1
+            ):
+                raise NotImplementedError(
+                    "exact expected accuracy currently supports one RELION optics group; "
+                    "per-optics image size/noise/CTF scaling is not yet implemented",
+                )
         except Exception as exc:
+            expected_accuracy_trial_order = None
             logger.warning("RELION exact expected-accuracy particle order unavailable: %s", exc)
 
     # --- RELION SamplingPerturbation state (healpix_sampling.cpp:167-174) ---
@@ -4388,6 +4408,7 @@ def _run_relion_iteration_loop(
                         padding_factor=PROJECTION_PADDING_FACTOR,
                         sigma2_fudge=float(tau2_fudge),
                         random_seed=int(effective_optimizer_random_seed),
+                        random_seed_particle_ids=expected_accuracy_half1_particle_ids,
                     )
                     exact_acc_rot_this_iter = float(accuracy.acc_rot)
                     exact_acc_trans_this_iter = float(accuracy.acc_trans_angstrom)
@@ -4407,8 +4428,8 @@ def _run_relion_iteration_loop(
                         accuracy.trial_local_indices,
                         dtype=np.int64,
                     ).copy()
-                    expected_accuracy_trial_original_indices = np.asarray(
-                        accuracy.trial_original_indices,
+                    expected_accuracy_trial_particle_ids = np.asarray(
+                        accuracy.trial_particle_ids,
                         dtype=np.int64,
                     ).copy()
                     exact_accuracy_status_this_iter = "ok"
@@ -4416,11 +4437,11 @@ def _run_relion_iteration_loop(
                     state.acc_trans = exact_acc_trans_this_iter
                     logger.info(
                         "RELION exact expected accuracy: acc_rot=%.3f deg, acc_trans=%.4f A "
-                        "(trials=%d, first_original_ids=%s)",
+                        "(trials=%d, first_particle_ids=%s)",
                         exact_acc_rot_this_iter,
                         exact_acc_trans_this_iter,
                         int(accuracy.trial_local_indices.size),
-                        accuracy.trial_original_indices[:5].tolist(),
+                        accuracy.trial_particle_ids[:5].tolist(),
                     )
                 except Exception as exc:
                     exact_accuracy_status_this_iter = f"error:{type(exc).__name__}:{exc}"
@@ -5438,7 +5459,7 @@ def _run_relion_iteration_loop(
                 "expected_accuracy_class_counts_trajectory": expected_accuracy_class_counts_trajectory,
                 "expected_accuracy_status_trajectory": expected_accuracy_status_trajectory,
                 "expected_accuracy_trial_local_indices": expected_accuracy_trial_local_indices,
-                "expected_accuracy_trial_original_indices": expected_accuracy_trial_original_indices,
+                "expected_accuracy_trial_particle_ids": expected_accuracy_trial_particle_ids,
                 "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
                 "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
                 "best_rotation_eulers_history": best_rotation_eulers_history,
@@ -6916,7 +6937,7 @@ def _run_relion_iteration_loop(
             "expected_accuracy_class_counts_trajectory": expected_accuracy_class_counts_trajectory,
             "expected_accuracy_status_trajectory": expected_accuracy_status_trajectory,
             "expected_accuracy_trial_local_indices": expected_accuracy_trial_local_indices,
-            "expected_accuracy_trial_original_indices": expected_accuracy_trial_original_indices,
+            "expected_accuracy_trial_particle_ids": expected_accuracy_trial_particle_ids,
             "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
             "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
             "best_rotation_eulers_history": best_rotation_eulers_history,
@@ -7146,6 +7167,7 @@ def _run_relion_iteration_loop(
                     padding_factor=PROJECTION_PADDING_FACTOR,
                     sigma2_fudge=float(tau2_fudge),
                     random_seed=int(effective_optimizer_random_seed),
+                    random_seed_particle_ids=expected_accuracy_half1_particle_ids,
                 )
                 state.acc_rot = float(final_expected_accuracy.acc_rot)
                 state.acc_trans = float(final_expected_accuracy.acc_trans_angstrom)
@@ -8189,7 +8211,7 @@ def _run_relion_iteration_loop(
         "expected_accuracy_class_counts_trajectory": expected_accuracy_class_counts_trajectory,
         "expected_accuracy_status_trajectory": expected_accuracy_status_trajectory,
         "expected_accuracy_trial_local_indices": expected_accuracy_trial_local_indices,
-        "expected_accuracy_trial_original_indices": expected_accuracy_trial_original_indices,
+        "expected_accuracy_trial_particle_ids": expected_accuracy_trial_particle_ids,
         "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
         "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
         "best_rotation_eulers_history": best_rotation_eulers_history,
