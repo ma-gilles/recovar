@@ -571,3 +571,102 @@ def test_relion_x_half_cuda_skips_fftw_x0_negative_row_duplicate():
     assert "k0_idx < image_w" in text
     assert "? (T)k1_idx * upsampling" in text
     assert "BackProjector::backproject2Dto3D skips" in text
+
+
+def test_relion_x_half_bp_block_topology_env_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", raising=False)
+    assert cuda_backproject.relion_x_half_bp_block_topology_enabled() is False
+
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", "1")
+    assert cuda_backproject.relion_x_half_bp_block_topology_enabled() is True
+
+
+def test_relion_x_half_bp_block_topology_expands_native_current_square():
+    # Full 8x8 FFTW-half indices for (ky,kx)=(0,1),(+2,2),(-1,1).
+    pixel_indices = jnp.asarray([1, 2 * 5 + 2, 7 * 5 + 1], dtype=jnp.int32)
+    images = jnp.asarray([[10.0, 20.0, 30.0], [11.0, 21.0, 31.0]], dtype=jnp.float32)
+
+    dense, dense_indices, current_height, current_half_width = (
+        cuda_backproject._prepare_relion_x_half_block_topology_operands(
+            images,
+            pixel_indices,
+            (8, 8),
+            max_r=2,
+        )
+    )
+
+    assert (current_height, current_half_width) == (4, 3)
+    np.testing.assert_array_equal(np.asarray(dense_indices), np.arange(12, dtype=np.int32))
+    expected = np.zeros((2, 12), dtype=np.float32)
+    expected[:, [1, 8, 10]] = np.asarray(images)
+    np.testing.assert_array_equal(np.asarray(dense), expected)
+
+
+def test_relion_x_half_bp_block_topology_expands_batched_operands():
+    pixel_indices = jnp.asarray([1, 7 * 5 + 1], dtype=jnp.int32)
+    images = jnp.arange(2 * 3 * 2, dtype=jnp.float32).reshape(2, 3, 2)
+
+    dense, _, current_height, current_half_width = (
+        cuda_backproject._prepare_relion_x_half_block_topology_operands(
+            images,
+            pixel_indices,
+            (8, 8),
+            max_r=2,
+        )
+    )
+
+    assert (current_height, current_half_width) == (4, 3)
+    assert dense.shape == (2, 3, 12)
+    np.testing.assert_array_equal(np.asarray(dense[..., [1, 10]]), np.asarray(images))
+    assert np.count_nonzero(np.asarray(dense)) == np.count_nonzero(np.asarray(images))
+
+
+def test_relion_x_half_bp_block_topology_actual_256_to_48_support_is_unique():
+    full_height = 256
+    full_half_width = full_height // 2 + 1
+    max_r = 24
+    signed_coordinates = [
+        (ky, kx)
+        for ky in range(-max_r, max_r + 1)
+        for kx in range(max_r + 1)
+        if ky * ky + kx * kx <= max_r * max_r and not (kx == 0 and ky < 0)
+    ]
+    pixel_indices = jnp.asarray(
+        [((ky % full_height) * full_half_width + kx) for ky, kx in signed_coordinates],
+        dtype=jnp.int32,
+    )
+    images = jnp.arange(1, len(signed_coordinates) + 1, dtype=jnp.float32)[None]
+
+    dense, _, current_height, current_half_width = (
+        cuda_backproject._prepare_relion_x_half_block_topology_operands(
+            images,
+            pixel_indices,
+            (full_height, full_height),
+            max_r=max_r,
+        )
+    )
+
+    expected_indices = np.asarray(
+        [(ky % current_height) * current_half_width + kx for ky, kx in signed_coordinates]
+    )
+    assert np.unique(expected_indices).size == expected_indices.size
+    assert np.all(expected_indices < current_height * current_half_width)
+    np.testing.assert_array_equal(np.asarray(dense)[0, expected_indices], np.asarray(images)[0])
+    assert np.count_nonzero(np.asarray(dense)) == len(signed_coordinates)
+
+
+def test_relion_x_half_bp_block_topology_cuda_source_covers_single_and_batch():
+    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
+    text = cuda_source.read_text()
+
+    assert "RELION_BLOCK_TOPOLOGY ? 128 : n_pixels" in text
+    assert "dim3 relion_block(128)" in text
+    assert text.count("relion_block_topology") >= 10
+    assert "batch_backproject_indexed_kernel<T, O, HV, HI, RD, true>" in text
+    assert '.Attr<int64_t>("relion_block_topology")' in text
+
+    single_source = inspect.getsource(cuda_backproject.backproject_indexed)
+    batch_source = inspect.getsource(cuda_backproject.batch_backproject_indexed)
+    gate = "relion_x_half and relion_x_half_bp_block_topology_enabled()"
+    assert gate in single_source
+    assert gate in batch_source

@@ -771,7 +771,8 @@ backproject_indexed_kernel(
  * backproject_indexed_kernel, but scatter a small batch of images into
  * matching independent volumes while reusing pixel coordinates and rotations.
  */
-template <typename T, int ORDER, bool HALF_VOL, bool HALF_IMG, bool REAL_DATA = false>
+template <typename T, int ORDER, bool HALF_VOL, bool HALF_IMG, bool REAL_DATA = false,
+          bool RELION_BLOCK_TOPOLOGY = false>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 batch_backproject_indexed_kernel(
     T*       __restrict__ vols,
@@ -791,11 +792,14 @@ batch_backproject_indexed_kernel(
     __shared__ T R[6];
 
     const int img_idx = blockIdx.x;
-    const int pix     = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+    const int pix_start = RELION_BLOCK_TOPOLOGY
+        ? (int)threadIdx.x
+        : (int)blockIdx.y * BLOCK_SIZE + (int)threadIdx.x;
 
     if (threadIdx.x < 6) R[threadIdx.x] = rot[img_idx * 6 + threadIdx.x];
     __syncthreads();
-    if (pix >= n_pixels) return;
+    const int pixel_stride = RELION_BLOCK_TOPOLOGY ? 128 : n_pixels;
+    for (int pix = pix_start; pix < n_pixels; pix += pixel_stride) {
 
     const int orig_pix = (int)pixel_indices[pix];
     const int k0_idx = orig_pix / image_w;
@@ -824,10 +828,10 @@ batch_backproject_indexed_kernel(
         /* RELION's FFTW half-plane stores x=0 twice: once for positive rows
          * and once for negative rows.  BackProjector::backproject2Dto3D skips
          * the negative-row duplicate. */
-        return;
+        continue;
     }
 
-    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) return;
+    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) continue;
 
     T rk0 = k0 * R[0] + k1 * R[3];
     T rk1 = k0 * R[1] + k1 * R[4];
@@ -835,7 +839,7 @@ batch_backproject_indexed_kernel(
 
     if (relion_fold_x && HALF_IMG && HALF_VOL && max_r2 >= (T)0) {
         const T r2_3d = rk0 * rk0 + rk1 * rk1 + rk2 * rk2;
-        if (r2_3d > max_r2) return;
+        if (r2_3d > max_r2) continue;
     }
 
     const bool relion_half_backproject = relion_fold_x && HALF_IMG && HALF_VOL;
@@ -849,7 +853,7 @@ batch_backproject_indexed_kernel(
 
     if (relion_half_backproject && ORDER == 1 && max_r2 >= (T)0) {
         const int maxR = (int)floor(sqrt((double)max_r2) + 0.5);
-        if (relion_compact_trilinear_oob<T>(rk2, rk1, rk0, maxR)) return;
+        if (relion_compact_trilinear_oob<T>(rk2, rk1, rk0, maxR)) continue;
     }
 
     const int stride1 = N2_eff;
@@ -899,6 +903,8 @@ batch_backproject_indexed_kernel(
             val_re = px.x;
             val_im = (fold_half_negative_z || fold_full_negative_z) ? -px.y : px.y;
         }
+        if (RELION_BLOCK_TOPOLOGY && val_re == (T)0 && (REAL_DATA || val_im == (T)0))
+            continue;
 
         if (ORDER == 0) {
             if (conj_opt)
@@ -963,6 +969,7 @@ batch_backproject_indexed_kernel(
                 }
             }
         }
+    }
     }
 }
 
@@ -1650,7 +1657,8 @@ cudaError_t launch_backproject_indexed(
     int64_t N0, int64_t N1, int64_t N2,
     int64_t ups, int64_t order, int64_t half_vol, int64_t half_img,
     int64_t full_iw, int64_t real_data = 0, int64_t max_r2_x4 = -1,
-    int64_t relion_fold_x = 0)
+    int64_t relion_fold_x = 0,
+    int64_t relion_block_topology = 0)
 {
     const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
     const T c0 = (T)(N0 / 2);
@@ -1666,7 +1674,7 @@ cudaError_t launch_backproject_indexed(
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2, (int)relion_fold_x)
 
     int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
-    switch (key) {
+    if (!relion_block_topology) switch (key) {
     case  0: BPI(0, false, false, false); break;
     case  1: BPI(0, false, true,  false); break;
     case  2: BPI(0, true,  false, false); break;
@@ -1685,6 +1693,35 @@ cudaError_t launch_backproject_indexed(
     case 15: BPI(1, true,  true,  true); break;
     }
     #undef BPI
+    if (relion_block_topology) {
+        const int vol_stride = (int)N0 * (int)N1 * N2_eff;
+        dim3 relion_grid((int)n_images, 1);
+        dim3 relion_block(128);
+        #define RBPI(O, HV, HI, RD) \
+            batch_backproject_indexed_kernel<T, O, HV, HI, RD, true><<<relion_grid, relion_block, 0, s>>>( \
+                vol, img, pixel_indices, rot, (int)n_pixels, (int)ih, (int)iw, \
+                (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, \
+                vol_stride, (int)n_images, 1, max_r2, (int)relion_fold_x)
+        switch (key) {
+        case  0: RBPI(0, false, false, false); break;
+        case  1: RBPI(0, false, true,  false); break;
+        case  2: RBPI(0, true,  false, false); break;
+        case  3: RBPI(0, true,  true,  false); break;
+        case  4: RBPI(1, false, false, false); break;
+        case  5: RBPI(1, false, true,  false); break;
+        case  6: RBPI(1, true,  false, false); break;
+        case  7: RBPI(1, true,  true,  false); break;
+        case  8: RBPI(0, false, false, true); break;
+        case  9: RBPI(0, false, true,  true); break;
+        case 10: RBPI(0, true,  false, true); break;
+        case 11: RBPI(0, true,  true,  true); break;
+        case 12: RBPI(1, false, false, true); break;
+        case 13: RBPI(1, false, true,  true); break;
+        case 14: RBPI(1, true,  false, true); break;
+        case 15: RBPI(1, true,  true,  true); break;
+        }
+        #undef RBPI
+    }
     return cudaGetLastError();
 }
 
@@ -1696,7 +1733,8 @@ cudaError_t launch_batch_backproject_indexed(
     int64_t N0, int64_t N1, int64_t N2,
     int64_t ups, int64_t order, int64_t half_vol, int64_t half_img,
     int64_t full_iw, int64_t real_data = 0, int64_t max_r2_x4 = -1,
-    int64_t relion_fold_x = 0)
+    int64_t relion_fold_x = 0,
+    int64_t relion_block_topology = 0)
 {
     const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
     const int vol_stride = (int)N0 * (int)N1 * N2_eff;
@@ -1714,7 +1752,7 @@ cudaError_t launch_batch_backproject_indexed(
             vol_stride, (int)n_images, (int)batch_size, max_r2, (int)relion_fold_x)
 
     int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
-    switch (key) {
+    if (!relion_block_topology) switch (key) {
     case  0: BBPI(0, false, false, false); break;
     case  1: BBPI(0, false, true,  false); break;
     case  2: BBPI(0, true,  false, false); break;
@@ -1733,6 +1771,34 @@ cudaError_t launch_batch_backproject_indexed(
     case 15: BBPI(1, true,  true,  true); break;
     }
     #undef BBPI
+    if (relion_block_topology) {
+        dim3 relion_grid((int)n_images, 1);
+        dim3 relion_block(128);
+        #define RBBPI(O, HV, HI, RD) \
+            batch_backproject_indexed_kernel<T, O, HV, HI, RD, true><<<relion_grid, relion_block, 0, s>>>( \
+                vols, imgs, pixel_indices, rot, (int)n_pixels, (int)ih, (int)iw, \
+                (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, \
+                vol_stride, (int)n_images, (int)batch_size, max_r2, (int)relion_fold_x)
+        switch (key) {
+        case  0: RBBPI(0, false, false, false); break;
+        case  1: RBBPI(0, false, true,  false); break;
+        case  2: RBBPI(0, true,  false, false); break;
+        case  3: RBBPI(0, true,  true,  false); break;
+        case  4: RBBPI(1, false, false, false); break;
+        case  5: RBBPI(1, false, true,  false); break;
+        case  6: RBBPI(1, true,  false, false); break;
+        case  7: RBBPI(1, true,  true,  false); break;
+        case  8: RBBPI(0, false, false, true); break;
+        case  9: RBBPI(0, false, true,  true); break;
+        case 10: RBBPI(0, true,  false, true); break;
+        case 11: RBBPI(0, true,  true,  true); break;
+        case 12: RBBPI(1, false, false, true); break;
+        case 13: RBBPI(1, false, true,  true); break;
+        case 14: RBBPI(1, true,  false, true); break;
+        case 15: RBBPI(1, true,  true,  true); break;
+        }
+        #undef RBBPI
+    }
     return cudaGetLastError();
 }
 
@@ -2813,6 +2879,7 @@ ffi::Error BackprojectIndexedImpl(
     int64_t half_volume, int64_t half_image, int64_t full_image_w,
     int64_t max_r2_x4,
     int64_t relion_fold_x,
+    int64_t relion_block_topology,
     ffi::AnyBuffer img,
     ffi::AnyBuffer pixel_indices,
     ffi::AnyBuffer rot,
@@ -2835,25 +2902,29 @@ ffi::Error BackprojectIndexedImpl(
         err = launch_backproject_indexed<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const int32_t*)pix_ptr, (const float*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4, relion_fold_x);
+            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4,
+            relion_fold_x, relion_block_topology);
         break;
     case ffi::DataType::C128:
         err = launch_backproject_indexed<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const int32_t*)pix_ptr, (const double*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4, relion_fold_x);
+            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4,
+            relion_fold_x, relion_block_topology);
         break;
     case ffi::DataType::F32:
         err = launch_backproject_indexed<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const int32_t*)pix_ptr, (const float*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4, relion_fold_x);
+            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4,
+            relion_fold_x, relion_block_topology);
         break;
     case ffi::DataType::F64:
         err = launch_backproject_indexed<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const int32_t*)pix_ptr, (const double*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4, relion_fold_x);
+            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4,
+            relion_fold_x, relion_block_topology);
         break;
     default:
         return ffi::Error::InvalidArgument("backproject_indexed: images must be C64, C128, F32, or F64");
@@ -2900,6 +2971,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("full_image_w")
         .Attr<int64_t>("max_r2_x4")
         .Attr<int64_t>("relion_fold_x")
+        .Attr<int64_t>("relion_block_topology")
         .Arg<ffi::AnyBuffer>()           /* img           */
         .Arg<ffi::AnyBuffer>()           /* pixel_indices */
         .Arg<ffi::AnyBuffer>()           /* rot           */
@@ -3133,6 +3205,7 @@ ffi::Error BatchBackprojectIndexedImpl(
     int64_t half_volume, int64_t half_image, int64_t full_image_w,
     int64_t max_r2_x4,
     int64_t relion_fold_x,
+    int64_t relion_block_topology,
     ffi::AnyBuffer imgs,          /* (batch, n_images, n_pixels) */
     ffi::AnyBuffer pixel_indices, /* (n_pixels,) */
     ffi::AnyBuffer rot,           /* (n_images, 6) */
@@ -3156,25 +3229,29 @@ ffi::Error BatchBackprojectIndexedImpl(
         err = launch_batch_backproject_indexed<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const int32_t*)pix_ptr, (const float*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4, relion_fold_x);
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/0,
+            max_r2_x4, relion_fold_x, relion_block_topology);
         break;
     case ffi::DataType::C128:
         err = launch_batch_backproject_indexed<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const int32_t*)pix_ptr, (const double*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4, relion_fold_x);
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/0,
+            max_r2_x4, relion_fold_x, relion_block_topology);
         break;
     case ffi::DataType::F32:
         err = launch_batch_backproject_indexed<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const int32_t*)pix_ptr, (const float*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4, relion_fold_x);
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/1,
+            max_r2_x4, relion_fold_x, relion_block_topology);
         break;
     case ffi::DataType::F64:
         err = launch_batch_backproject_indexed<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const int32_t*)pix_ptr, (const double*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4, relion_fold_x);
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/1,
+            max_r2_x4, relion_fold_x, relion_block_topology);
         break;
     default:
         return ffi::Error::InvalidArgument("batch_backproject_indexed: images must be C64, C128, F32, or F64");
@@ -3200,6 +3277,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("full_image_w")
         .Attr<int64_t>("max_r2_x4")
         .Attr<int64_t>("relion_fold_x")
+        .Attr<int64_t>("relion_block_topology")
         .Arg<ffi::AnyBuffer>()           /* imgs          */
         .Arg<ffi::AnyBuffer>()           /* pixel_indices */
         .Arg<ffi::AnyBuffer>()           /* rot           */

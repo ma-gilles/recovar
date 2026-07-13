@@ -56,11 +56,23 @@ _DISABLE_CUSTOM_CUDA_ENV = "RECOVAR_DISABLE_CUDA"
 _CUDA_LIB_ENV = "RECOVAR_CUDA_LIB"
 _CUDA_CACHE_DIR_ENV = "RECOVAR_CUDA_CACHE_DIR"
 _BUILD_LOCKFILE = ".build.lock"
+_RELION_X_HALF_BP_BLOCK_TOPOLOGY_ENV = "RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY"
 
 
 def _env_flag(name: str) -> bool:
     value = os.environ.get(name, "")
     return value.lower() not in {"", "0", "false", "no", "off"}
+
+
+def relion_x_half_bp_block_topology_enabled() -> bool:
+    """Return whether the diagnostic RELION GPU pixel-pass topology is enabled.
+
+    The value is consumed while JAX traces the caller. Change it only between
+    fresh processes; changing the environment after compilation does not
+    invalidate an already cached executable.
+    """
+
+    return _env_flag(_RELION_X_HALF_BP_BLOCK_TOPOLOGY_ENV)
 
 
 def custom_cuda_requested() -> bool:
@@ -712,6 +724,49 @@ def _relion_x_half_backproject_rotation_to_kernel(
     return jnp.swapaxes(inverse, -1, -2)[..., [2, 1, 0]]
 
 
+def _prepare_relion_x_half_block_topology_operands(images, pixel_indices, image_shape, max_r):
+    """Expand compact x-half rows into RELION's native current-size square.
+
+    RELION launches one block per orientation over a cropped FFTW array with
+    ``2*max_r`` rows and ``max_r+1`` packed-x columns. RECOVAR normally keeps
+    only the nonzero circular support. The diagnostic restores the omitted
+    square positions as explicit zeros so the CUDA kernel can enumerate native
+    FFTW pixel positions in the same 128-thread serial-pass topology. This is
+    deliberately a pixel-pass diagnostic, not full launch-order equivalence:
+    RELION also uses per-particle launches and couples translation reduction
+    with data/weight scattering, while RECOVAR performs those stages separately.
+    Values
+    absent from RECOVAR's compact support cannot be recovered: in particular,
+    redundant negative-y ``x=0`` lanes remain zero. RELION's normal 2-D input
+    also gives those lanes zero inverse-noise weight, but unusual callers with
+    nonzero values there are not exactly emulated by this diagnostic.
+    """
+
+    full_height, full_width = (int(image_shape[0]), int(image_shape[1]))
+    full_half_width = full_width // 2 + 1
+    if max_r is None:
+        current_height = full_height
+    else:
+        current_height = 2 * int(round(float(max_r)))
+    current_half_width = current_height // 2 + 1
+    if current_height <= 0 or current_height > full_height:
+        raise ValueError(
+            f"invalid RELION block-topology current height {current_height} for image shape {image_shape}"
+        )
+
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    full_rows = pixel_indices // full_half_width
+    columns = pixel_indices % full_half_width
+    signed_rows = jnp.where(full_rows <= full_height // 2, full_rows, full_rows - full_height)
+    current_rows = jnp.mod(signed_rows, current_height)
+    current_indices = current_rows * current_half_width + columns
+    dense_pixels = current_height * current_half_width
+    dense_images = jnp.zeros((*images.shape[:-1], dense_pixels), dtype=images.dtype)
+    dense_images = dense_images.at[..., current_indices].set(images)
+    dense_indices = jnp.arange(dense_pixels, dtype=jnp.int32)
+    return dense_images, dense_indices, current_height, current_half_width
+
+
 def _volume_real_dtype(volume: jax.Array):
     """Return the real component dtype of a volume (float32 for complex64, etc.)."""
     return jnp.finfo(volume.dtype).dtype if jnp.issubdtype(volume.dtype, jnp.complexfloating) else volume.dtype
@@ -896,13 +951,23 @@ def backproject_indexed(
         raise ValueError("relion_x_half requires half_volume=True and half_image=True")
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     kw["relion_fold_x"] = np.int64(int(relion_x_half))
+    use_relion_block_topology = bool(relion_x_half and relion_x_half_bp_block_topology_enabled())
+    kw["relion_block_topology"] = np.int64(int(use_relion_block_topology))
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if use_relion_block_topology:
+        logger.info("RELION x-half diagnostic: 128-thread one-block backprojection topology enabled")
+        images, pixel_indices, current_height, current_half_width = (
+            _prepare_relion_x_half_block_topology_operands(images, pixel_indices, image_shape, max_r)
+        )
+        kw["image_h"] = np.int64(current_height)
+        kw["image_w"] = np.int64(current_half_width)
+        kw["full_image_w"] = np.int64(current_height)
     if relion_x_half:
         rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(
             rotation_matrices,
             _volume_real_dtype(volume),
         )
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
-    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
 
     return jax.ffi.ffi_call(
@@ -934,13 +999,25 @@ def batch_backproject_indexed(
         raise ValueError("relion_x_half requires half_volume=True and half_image=True")
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     kw["relion_fold_x"] = np.int64(int(relion_x_half))
+    use_relion_block_topology = bool(relion_x_half and relion_x_half_bp_block_topology_enabled())
+    kw["relion_block_topology"] = np.int64(int(use_relion_block_topology))
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if use_relion_block_topology:
+        logger.info(
+            "RELION x-half diagnostic: batched 128-thread one-block backprojection topology enabled"
+        )
+        images, pixel_indices, current_height, current_half_width = (
+            _prepare_relion_x_half_block_topology_operands(images, pixel_indices, image_shape, max_r)
+        )
+        kw["image_h"] = np.int64(current_height)
+        kw["image_w"] = np.int64(current_half_width)
+        kw["full_image_w"] = np.int64(current_height)
     if relion_x_half:
         rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(
             rotation_matrices,
             _volume_real_dtype(volumes),
         )
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
-    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
 
     return jax.ffi.ffi_call(
