@@ -384,6 +384,7 @@ _TARGET_BATCH_PROJECT = "cuda_batch_project"
 _TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
 _TARGET_FUSED_BP = "cuda_fused_bp"
 _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
+_TARGET_RELION_FUSED_X_HALF_BP = "cuda_relion_fused_x_half_bp"
 
 
 _preflight_ok: bool | None = None  # None = not checked yet
@@ -630,6 +631,11 @@ def _ensure_ffi():
         )
         jax.ffi.register_ffi_target(_TARGET_FUSED_BP, jax.ffi.pycapsule(lib.FusedBackproject), platform="CUDA")
         jax.ffi.register_ffi_target(_TARGET_PER_IMAGE_BP, jax.ffi.pycapsule(lib.PerImageBackproject), platform="CUDA")
+        jax.ffi.register_ffi_target(
+            _TARGET_RELION_FUSED_X_HALF_BP,
+            jax.ffi.pycapsule(lib.RelionFusedXHalfBackproject),
+            platform="CUDA",
+        )
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
 
@@ -976,6 +982,121 @@ def backproject_indexed(
         input_output_aliases={3: 0},
         vmap_method="sequential",
     )(images, pixel_indices, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(6, 7, 8))
+def relion_fused_x_half_backproject_indexed(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    data_rows: jax.Array,
+    weight_rows: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float | None,
+) -> tuple[jax.Array, jax.Array]:
+    """Fused RELION x-half data/weight backprojection diagnostic.
+
+    This target is intentionally narrower than :func:`backproject_indexed`:
+    it accepts pre-reduced complex64 data rows and float32 weight rows, expands
+    both to RELION's native current-size FFTW square, and updates the complex64
+    data and float32 weight accumulators in one 128-thread CUDA grid.  The two
+    output buffers alias their corresponding input accumulators.
+    """
+
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if max_r is None:
+        raise ValueError("RELION fused x-half backprojection requires an explicit support radius")
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(f"RELION fused x-half backprojection requires an odd BPref grid, got {volume_shape}")
+
+    if data_volume.dtype != jnp.dtype(jnp.complex64):
+        raise TypeError(f"RELION fused x-half data volume must be complex64, got {data_volume.dtype}")
+    if weight_volume.dtype != jnp.dtype(jnp.float32):
+        raise TypeError(f"RELION fused x-half weight volume must be float32, got {weight_volume.dtype}")
+    if data_rows.dtype != jnp.dtype(jnp.complex64):
+        raise TypeError(f"RELION fused x-half data rows must be complex64, got {data_rows.dtype}")
+    if weight_rows.dtype != jnp.dtype(jnp.float32):
+        raise TypeError(f"RELION fused x-half weight rows must be float32, got {weight_rows.dtype}")
+    if pixel_indices.dtype != jnp.dtype(jnp.int32):
+        raise TypeError(f"RELION fused x-half pixel indices must be int32, got {pixel_indices.dtype}")
+    if not jnp.issubdtype(rotation_matrices.dtype, jnp.floating):
+        raise TypeError(f"RELION fused x-half rotations must be floating point, got {rotation_matrices.dtype}")
+
+    if data_rows.ndim != 2 or weight_rows.ndim != 2:
+        raise ValueError(
+            "RELION fused x-half rows must both have shape (n_rotations, n_pixels), "
+            f"got {data_rows.shape} and {weight_rows.shape}"
+        )
+    if data_rows.shape != weight_rows.shape:
+        raise ValueError(
+            f"RELION fused x-half data/weight row shape mismatch: {data_rows.shape} vs {weight_rows.shape}"
+        )
+    if data_rows.shape[0] <= 0 or data_rows.shape[1] <= 0:
+        raise ValueError(f"RELION fused x-half rows must be nonempty, got {data_rows.shape}")
+    if pixel_indices.ndim != 1 or pixel_indices.shape[0] != data_rows.shape[1]:
+        raise ValueError(
+            "RELION fused x-half pixel indices must match the row pixel axis, "
+            f"got {pixel_indices.shape} for rows {data_rows.shape}"
+        )
+    if rotation_matrices.shape != (data_rows.shape[0], 3, 3):
+        raise ValueError(
+            "RELION fused x-half rotations must have shape "
+            f"({data_rows.shape[0]}, 3, 3), got {rotation_matrices.shape}"
+        )
+    if data_volume.ndim != 1 or weight_volume.ndim != 1:
+        raise ValueError(
+            "RELION fused x-half accumulators must be flat, "
+            f"got {data_volume.shape} and {weight_volume.shape}"
+        )
+    expected_volume_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    if data_volume.shape != (expected_volume_size,) or weight_volume.shape != (expected_volume_size,):
+        raise ValueError(
+            "RELION fused x-half accumulator shape mismatch: expected "
+            f"{(expected_volume_size,)}, got {data_volume.shape} and {weight_volume.shape}"
+        )
+
+    dense_data_rows, dense_indices, current_height, current_half_width = (
+        _prepare_relion_x_half_block_topology_operands(data_rows, pixel_indices, image_shape, max_r)
+    )
+    dense_weight_rows, weight_dense_indices, weight_height, weight_half_width = (
+        _prepare_relion_x_half_block_topology_operands(weight_rows, pixel_indices, image_shape, max_r)
+    )
+    if (weight_height, weight_half_width) != (current_height, current_half_width):
+        raise ValueError("RELION fused x-half data/weight topology metadata mismatch")
+    # Both preparations use the same original indices, shape, and radius, so
+    # their dense index vectors are identical. Keep a shape assertion here and
+    # pass only one vector to the FFI target.
+    if weight_dense_indices.shape != dense_indices.shape:
+        raise ValueError("RELION fused x-half data/weight dense index shape mismatch")
+
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    kw["image_h"] = np.int64(current_height)
+    kw["image_w"] = np.int64(current_half_width)
+    kw["full_image_w"] = np.int64(current_height)
+    rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
+    rot6 = _rot_to_compact(rotation_matrices, jnp.float32)
+
+    out_types = (
+        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FUSED_X_HALF_BP,
+        out_types,
+        input_output_aliases={4: 0, 5: 1},
+        vmap_method="sequential",
+    )(
+        dense_data_rows,
+        dense_weight_rows,
+        dense_indices,
+        rot6,
+        data_volume,
+        weight_volume,
+        **kw,
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))

@@ -185,6 +185,7 @@ _SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTE
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
 _RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV = "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH"
+_RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_JOINT_MODES = {"joint", "global", "class_pose", "class-pose"}
 _SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK_ENV = "RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK"
@@ -2920,6 +2921,12 @@ def relion_x_half_bp_per_particle_launch_enabled() -> bool:
     return _env_flag_enabled(_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV, default=False)
 
 
+def relion_x_half_bp_fused_atomics_enabled() -> bool:
+    """Return whether the diagnostic fused data/weight scatter is enabled."""
+
+    return _env_flag_enabled(_RELION_X_HALF_BP_FUSED_ATOMICS_ENV, default=False)
+
+
 def _accumulate_relion_x_half_per_particle_launches(
     values,
     ctf_values,
@@ -2939,9 +2946,30 @@ def _accumulate_relion_x_half_per_particle_launches(
     """Accumulate one particle-owned orientation grid per FFI launch.
 
     This matches RELION's particle launch boundary and preserves the local
-    orientation order. Translation reduction and numerator/weight scattering
-    remain separate, so this is not a fused-kernel equivalence mode.
+    orientation order. The optional fused-atomics diagnostic interleaves each
+    neighbor's real, imaginary, and weight atomics in one kernel. Translation
+    reduction remains outside CUDA in both modes.
     """
+
+    use_fused_atomics = relion_x_half_bp_fused_atomics_enabled()
+    if use_fused_atomics:
+        import recovar.cuda_backproject as cuda_backproject
+
+        if not relion_x_half_bp_per_particle_launch_enabled():
+            raise RuntimeError(
+                "RELION fused-atomics diagnostic requires "
+                "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH=1"
+            )
+        if not cuda_backproject.relion_x_half_bp_block_topology_enabled():
+            raise RuntimeError(
+                "RELION fused-atomics diagnostic requires "
+                "RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY=1"
+            )
+        logger.info(
+            "RELION x-half diagnostic: fused real/imaginary/weight atomics enabled "
+            "for particle-owned launches (label=%s)",
+            log_label_prefix,
+        )
 
     actual_counts = np.asarray(actual_counts, dtype=np.int64)
     if values.shape[:2] != rotations.shape[:2] or ctf_values.shape[:2] != values.shape[:2]:
@@ -2966,32 +2994,49 @@ def _accumulate_relion_x_half_per_particle_launches(
         particle_values = values[particle_slice].reshape(int(count), values.shape[-1])
         particle_ctf_values = ctf_values[particle_slice].reshape(int(count), ctf_values.shape[-1])
         particle_rotations = rotations[particle_slice].reshape(int(count), 3, 3)
-        y_volume = _adjoint_slice_volume_windowed(
-            particle_values,
-            window_indices,
-            particle_rotations,
-            y_volume,
-            image_shape,
-            volume_shape,
-            disc_type,
-            True,
-            half_volume,
-            max_r,
-            True,
-        )
-        ctf_volume = _adjoint_slice_volume_windowed(
-            particle_ctf_values,
-            window_indices,
-            particle_rotations,
-            ctf_volume,
-            image_shape,
-            volume_shape,
-            disc_type,
-            True,
-            half_volume,
-            max_r,
-            True,
-        )
+        if use_fused_atomics:
+            if disc_type != "linear_interp" or not half_volume:
+                raise RuntimeError(
+                    "RELION fused-atomics diagnostic requires linear interpolation and a half-volume accumulator"
+                )
+            y_volume, ctf_volume = cuda_backproject.relion_fused_x_half_backproject_indexed(
+                y_volume,
+                ctf_volume,
+                particle_values,
+                particle_ctf_values,
+                window_indices,
+                particle_rotations,
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                max_r=max_r,
+            )
+        else:
+            y_volume = _adjoint_slice_volume_windowed(
+                particle_values,
+                window_indices,
+                particle_rotations,
+                y_volume,
+                image_shape,
+                volume_shape,
+                disc_type,
+                True,
+                half_volume,
+                max_r,
+                True,
+            )
+            ctf_volume = _adjoint_slice_volume_windowed(
+                particle_ctf_values,
+                window_indices,
+                particle_rotations,
+                ctf_volume,
+                image_shape,
+                volume_shape,
+                disc_type,
+                True,
+                half_volume,
+                max_r,
+                True,
+            )
     return y_volume, ctf_volume
 
 
@@ -7069,9 +7114,15 @@ def compute_pass2_stats_sparse_bucketed(
                 relion_x_half=use_relion_x_half_mstep,
             )
 
+            fused_atomics_requested = relion_x_half_bp_fused_atomics_enabled()
             use_per_particle_launches = (
                 use_relion_x_half_mstep and relion_x_half_bp_per_particle_launch_enabled()
             )
+            if fused_atomics_requested and not use_per_particle_launches:
+                raise RuntimeError(
+                    "RELION fused-atomics diagnostic requires the x-half M-step and "
+                    "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH=1"
+                )
             if use_per_particle_launches:
                 if not winner_take_all:
                     raise RuntimeError(

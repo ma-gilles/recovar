@@ -346,6 +346,79 @@ static __device__ __forceinline__ void scatter_trilinear(
     }
 }
 
+/* Strict RELION x-half diagnostic: scatter the pre-reduced complex data and
+ * real weight through the same neighbor loop. RELION updates model real,
+ * model imaginary, and model weight consecutively for each neighbor; keeping
+ * those atomics together is the sole semantic difference from invoking the
+ * generic complex and real scatter paths separately. */
+static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
+    float2* __restrict__ data_volume,
+    float* __restrict__ weight_volume,
+    float rk0, float rk1, float rk2,
+    float data_re, float data_im, float Fweight,
+    float c0, float c1, float c2,
+    int N0, int N1, int N2_eff, int stride0, int stride1)
+{
+    const float g0 = rk0 + c0;
+    const float g1 = rk1 + c1;
+    const int ic2 = (int)c2;
+    const int N2_full = N0;
+    const float g2_full = rk2 + c2;
+
+    if (g0 < -1.0f || g0 >= (float)N0 ||
+        g1 < -1.0f || g1 >= (float)N1 ||
+        g2_full < -1.0f || g2_full >= (float)N2_full) return;
+
+    const int b0 = floor_int(g0);
+    const int b1 = floor_int(g1);
+    const int b2 = floor_int(g2_full);
+    const float f0 = g0 - (float)b0;
+    const float f1 = g1 - (float)b1;
+    const float f2 = g2_full - (float)b2;
+    const float w0[2] = {1.0f - f0, f0};
+    const float w1[2] = {1.0f - f1, f1};
+    const float w2[2] = {1.0f - f2, f2};
+
+    #pragma unroll
+    for (int d0 = 0; d0 < 2; d0++) {
+        int j0 = b0 + d0;
+        if ((unsigned)j0 >= (unsigned)N0) continue;
+        #pragma unroll
+        for (int d1 = 0; d1 < 2; d1++) {
+            int j1 = b1 + d1;
+            if ((unsigned)j1 >= (unsigned)N1) continue;
+            const float ww = w0[d0] * w1[d1];
+            #pragma unroll
+            for (int d2 = 0; d2 < 2; d2++) {
+                const int j2 = b2 + d2;
+                if ((unsigned)j2 >= (unsigned)N2_full) continue;
+                const int kz = j2 - ic2;
+                const float w = ww * w2[d2];
+                int sj0 = j0;
+                int sj1 = j1;
+                int hkz;
+                float sre = w * data_re;
+                float sim = w * data_im;
+                if (kz >= 0) {
+                    hkz = kz;
+                } else if ((N0 & 1) == 0 && -kz == ic2) {
+                    hkz = ic2;
+                } else {
+                    sj0 = (N0 - (N0 & 1) - j0) % N0;
+                    sj1 = (N1 - (N1 & 1) - j1) % N1;
+                    hkz = -kz;
+                    sim = -sim;
+                }
+                if (hkz > ic2) continue;
+                const int off = sj0 * stride0 + sj1 * stride1 + hkz;
+                atomicAdd(&data_volume[off].x, sre);
+                atomicAdd(&data_volume[off].y, sim);
+                atomicAdd(&weight_volume[off], w * Fweight);
+            }
+        }
+    }
+}
+
 /* ================================================================== */
 /*                  Backproject kernel                                 */
 /* ================================================================== */
@@ -970,6 +1043,77 @@ batch_backproject_indexed_kernel(
             }
         }
     }
+    }
+}
+
+/* One invocation corresponds to one RELION particle. blockIdx.x retains the
+ * particle-local orientation-row order, while each 128-thread block walks the
+ * native current-size FFTW square in serial pixel passes. */
+__global__ void __launch_bounds__(128)
+relion_fused_x_half_backproject_kernel(
+    float2* __restrict__ data_volume,
+    float* __restrict__ weight_volume,
+    const float2* __restrict__ data_rows,
+    const float* __restrict__ weight_rows,
+    const int32_t* __restrict__ pixel_indices,
+    const float* __restrict__ rot,
+    int n_pixels, int image_h, int image_w,
+    int N0, int N1, int N2_eff,
+    float c0, float c1, float c2,
+    int upsampling, float max_r2)
+{
+    __shared__ float R[6];
+    const int row = (int)blockIdx.x;
+    if (threadIdx.x < 6) R[threadIdx.x] = rot[row * 6 + threadIdx.x];
+    __syncthreads();
+
+    for (int pix = (int)threadIdx.x; pix < n_pixels; pix += 128) {
+        const int orig_pix = (int)pixel_indices[pix];
+        const int k0_idx = orig_pix / image_w;
+        const int k1_idx = orig_pix % image_w;
+
+        const float k0 = (k0_idx < image_w)
+            ? (float)k0_idx * upsampling
+            : (float)(k0_idx - image_h) * upsampling;
+        const float k1 = (float)k1_idx * upsampling;
+
+        /* RELION omits the redundant negative-y x=0 FFTW row. */
+        if (k1_idx == 0 && k0_idx >= image_w) continue;
+        if (max_r2 >= 0.0f && k0 * k0 + k1 * k1 > max_r2) continue;
+
+        const int row_pixel = row * n_pixels + pix;
+        const float Fweight = weight_rows[row_pixel];
+        /* Match cuda_kernel_backproject3D's sole outer accumulation gate. */
+        if (!(Fweight > 0.0f)) continue;
+
+        const float2 value = data_rows[row_pixel];
+        float data_re = value.x;
+        float data_im = value.y;
+        float rk0 = k0 * R[0] + k1 * R[3];
+        float rk1 = k0 * R[1] + k1 * R[4];
+        float rk2 = k0 * R[2] + k1 * R[5];
+
+        if (max_r2 >= 0.0f) {
+            const float r2_3d = rk0 * rk0 + rk1 * rk1 + rk2 * rk2;
+            if (r2_3d > max_r2) continue;
+        }
+        if (rk2 < 0.0f) {
+            rk0 = -rk0;
+            rk1 = -rk1;
+            rk2 = -rk2;
+            data_im = -data_im;
+        }
+        if (max_r2 >= 0.0f) {
+            const int maxR = (int)floorf(sqrtf(max_r2) + 0.5f);
+            if (relion_compact_trilinear_oob<float>(rk2, rk1, rk0, maxR)) continue;
+        }
+
+        const int stride1 = N2_eff;
+        const int stride0 = N1 * N2_eff;
+        scatter_trilinear_relion_fused_x_half(
+            data_volume, weight_volume,
+            rk0, rk1, rk2, data_re, data_im, Fweight,
+            c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
     }
 }
 
@@ -1722,6 +1866,39 @@ cudaError_t launch_backproject_indexed(
         }
         #undef RBPI
     }
+    return cudaGetLastError();
+}
+
+cudaError_t launch_relion_fused_x_half_backproject(
+    cudaStream_t stream,
+    float2* data_volume,
+    float* weight_volume,
+    const float2* data_rows,
+    const float* weight_rows,
+    const int32_t* pixel_indices,
+    const float* rot,
+    int64_t n_rows,
+    int64_t n_pixels,
+    int64_t image_h,
+    int64_t image_w,
+    int64_t N0,
+    int64_t N1,
+    int64_t N2,
+    int64_t upsampling,
+    int64_t max_r2_x4)
+{
+    const int N2_eff = (int)(N2 / 2 + 1);
+    const float c0 = (float)(N0 / 2);
+    const float c1 = (float)(N1 / 2);
+    const float c2 = (float)(N2 / 2);
+    const float max_r2 = (float)max_r2_x4 / 4.0f;
+    dim3 grid((unsigned)n_rows, 1);
+    dim3 block(128);
+    relion_fused_x_half_backproject_kernel<<<grid, block, 0, stream>>>(
+        data_volume, weight_volume, data_rows, weight_rows, pixel_indices, rot,
+        (int)n_pixels, (int)image_h, (int)image_w,
+        (int)N0, (int)N1, N2_eff, c0, c1, c2,
+        (int)upsampling, max_r2);
     return cudaGetLastError();
 }
 
@@ -2934,6 +3111,100 @@ ffi::Error BackprojectIndexedImpl(
     return ffi::Error::Success();
 }
 
+ffi::Error RelionFusedXHalfBackprojectImpl(
+    cudaStream_t stream,
+    int64_t image_h, int64_t image_w,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t upsampling, int64_t order,
+    int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4,
+    ffi::AnyBuffer data_rows,
+    ffi::AnyBuffer weight_rows,
+    ffi::AnyBuffer pixel_indices,
+    ffi::AnyBuffer rot,
+    ffi::AnyBuffer data_volume_in,
+    ffi::AnyBuffer weight_volume_in,
+    ffi::Result<ffi::AnyBuffer> data_volume_out,
+    ffi::Result<ffi::AnyBuffer> weight_volume_out)
+{
+    if (data_rows.element_type() != ffi::DataType::C64 ||
+        data_volume_in.element_type() != ffi::DataType::C64 ||
+        data_volume_out->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: data rows and volumes must be complex64");
+    if (weight_rows.element_type() != ffi::DataType::F32 ||
+        weight_volume_in.element_type() != ffi::DataType::F32 ||
+        weight_volume_out->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: weight rows and volumes must be float32");
+    if (pixel_indices.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: pixel indices must be int32");
+    if (rot.element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: rotations must be float32");
+    if (order != 1 || half_volume != 1 || half_image != 1)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: requires order=1 and half image/volume");
+    if (N0 <= 0 || N0 != N1 || N1 != N2 || (N2 & 1) == 0)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: volume must be positive, cubic, and odd-sized");
+    if (image_h <= 0 || image_w != image_h / 2 + 1 || full_image_w != image_h)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: image attrs must describe a native FFTW half square");
+    if (upsampling <= 0 || max_r2_x4 < 0)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: requires positive upsampling and an explicit radius");
+
+    const auto data_row_dims = data_rows.dimensions();
+    const auto weight_row_dims = weight_rows.dimensions();
+    const auto pixel_dims = pixel_indices.dimensions();
+    const auto rot_dims = rot.dimensions();
+    const auto data_in_dims = data_volume_in.dimensions();
+    const auto weight_in_dims = weight_volume_in.dimensions();
+    const auto data_out_dims = data_volume_out->dimensions();
+    const auto weight_out_dims = weight_volume_out->dimensions();
+    if (data_row_dims.size() != 2 || weight_row_dims.size() != 2 ||
+        data_row_dims[0] <= 0 || data_row_dims[1] <= 0 ||
+        weight_row_dims[0] != data_row_dims[0] ||
+        weight_row_dims[1] != data_row_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: data/weight rows must have matching nonempty rank-2 shapes");
+    if (pixel_dims.size() != 1 || pixel_dims[0] != data_row_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: pixel index length must match row width");
+    if (rot_dims.size() != 2 || rot_dims[0] != data_row_dims[0] || rot_dims[1] != 6)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: rotations must have shape (n_rows, 6)");
+    if (data_row_dims[1] != image_h * image_w)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: rows must contain the full native FFTW square");
+
+    const int64_t expected_volume_size = N0 * N1 * (N2 / 2 + 1);
+    if (data_in_dims.size() != 1 || weight_in_dims.size() != 1 ||
+        data_out_dims.size() != 1 || weight_out_dims.size() != 1 ||
+        data_in_dims[0] != expected_volume_size ||
+        weight_in_dims[0] != expected_volume_size ||
+        data_out_dims[0] != expected_volume_size ||
+        weight_out_dims[0] != expected_volume_size)
+        return ffi::Error::InvalidArgument(
+            "RelionFusedXHalfBackproject: accumulator sizes do not match the half volume");
+
+    cudaError_t err = launch_relion_fused_x_half_backproject(
+        stream,
+        reinterpret_cast<float2*>(data_volume_out->untyped_data()),
+        static_cast<float*>(weight_volume_out->untyped_data()),
+        reinterpret_cast<const float2*>(data_rows.untyped_data()),
+        static_cast<const float*>(weight_rows.untyped_data()),
+        static_cast<const int32_t*>(pixel_indices.untyped_data()),
+        static_cast<const float*>(rot.untyped_data()),
+        data_row_dims[0], data_row_dims[1], image_h, image_w,
+        N0, N1, N2, upsampling, max_r2_x4);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     Backproject, BackprojectImpl,
     ffi::Ffi::Bind()
@@ -2977,6 +3248,31 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()           /* rot           */
         .Arg<ffi::AnyBuffer>()           /* vol_in        */
         .Ret<ffi::AnyBuffer>()           /* vol_out (aliased with vol_in) */
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFusedXHalfBackproject, RelionFusedXHalfBackprojectImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("N0")
+        .Attr<int64_t>("N1")
+        .Attr<int64_t>("N2")
+        .Attr<int64_t>("upsampling")
+        .Attr<int64_t>("order")
+        .Attr<int64_t>("half_volume")
+        .Attr<int64_t>("half_image")
+        .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
+        .Arg<ffi::AnyBuffer>()           /* data_rows       */
+        .Arg<ffi::AnyBuffer>()           /* weight_rows     */
+        .Arg<ffi::AnyBuffer>()           /* pixel_indices   */
+        .Arg<ffi::AnyBuffer>()           /* rot             */
+        .Arg<ffi::AnyBuffer>()           /* data_volume_in  */
+        .Arg<ffi::AnyBuffer>()           /* weight_volume_in */
+        .Ret<ffi::AnyBuffer>()           /* data_volume_out (aliased) */
+        .Ret<ffi::AnyBuffer>()           /* weight_volume_out (aliased) */
 );
 
 ffi::Error ProjectImpl(

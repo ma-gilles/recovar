@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 NVTX_DOMAIN_EM = "recovar_em"
 _RUN_EM_ALLOWED_KWARGS = frozenset(inspect.signature(run_em).parameters)
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
+_RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
 
 
 class KClassEMResult(NamedTuple):
@@ -2826,6 +2827,19 @@ def run_dense_k_class_em_adaptive(
         pass2_kwargs.pop("translation_log_prior", None)
     if "current_size" not in pass2_kwargs and fine_current_size is not None:
         pass2_kwargs["current_size"] = fine_current_size
+
+    fused_atomic_diagnostic_requested = _env_flag_enabled(_RELION_X_HALF_BP_FUSED_ATOMICS_ENV)
+    fused_atomic_diagnostic_supported = (
+        sparse_pass2_requested
+        and firstiter_cc_pass2_only_best_coarse
+        and coarse_class_assignments_for_override is not None
+        and hasattr(experiment_dataset, "subset")
+    )
+    if fused_atomic_diagnostic_requested and not fused_atomic_diagnostic_supported:
+        raise RuntimeError(
+            "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS is qualified only for the sparse "
+            "first-iteration global-winner subset pass 2"
+        )
 
     if (
         sparse_pass2_requested

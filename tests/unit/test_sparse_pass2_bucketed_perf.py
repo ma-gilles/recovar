@@ -1940,6 +1940,15 @@ def test_relion_x_half_bp_per_particle_launch_is_off_by_default(monkeypatch):
     assert bucketed_mod.relion_x_half_bp_per_particle_launch_enabled() is True
 
 
+def test_relion_x_half_bp_fused_atomics_is_off_by_default(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", raising=False)
+    assert bucketed_mod.relion_x_half_bp_fused_atomics_enabled() is False
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", "1")
+    assert bucketed_mod.relion_x_half_bp_fused_atomics_enabled() is True
+
+
 def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
@@ -1994,6 +2003,98 @@ def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monk
     expected_ctf = 10.0 + np.asarray(ctf_values[0, :2]).sum() + np.asarray(ctf_values[1, :1]).sum()
     np.testing.assert_allclose(np.asarray(y_volume), expected_y)
     np.testing.assert_allclose(np.asarray(ctf_volume), expected_ctf)
+
+
+def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    values = jnp.arange(2 * 3 * 2, dtype=jnp.float32).reshape(2, 3, 2).astype(jnp.complex64)
+    ctf_values = (100.0 + jnp.arange(2 * 3 * 2, dtype=jnp.float32)).reshape(2, 3, 2)
+    rotations = jnp.arange(2 * 3 * 9, dtype=jnp.float32).reshape(2, 3, 3, 3)
+    actual_counts = np.asarray([2, 1], dtype=np.int32)
+    calls = []
+
+    def fake_fused(
+        y_volume,
+        ctf_volume,
+        particle_values,
+        particle_ctf_values,
+        window_indices,
+        particle_rotations,
+        **kwargs,
+    ):
+        calls.append(
+            (
+                np.asarray(particle_values).copy(),
+                np.asarray(particle_ctf_values).copy(),
+                np.asarray(particle_rotations).copy(),
+                np.asarray(window_indices).copy(),
+                kwargs,
+            )
+        )
+        return (
+            y_volume + jnp.sum(jnp.real(particle_values)),
+            ctf_volume + jnp.sum(particle_ctf_values),
+        )
+
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", "1")
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", "1")
+    monkeypatch.setattr(cuda_backproject, "relion_fused_x_half_backproject_indexed", fake_fused)
+
+    y_volume, ctf_volume = bucketed_mod._accumulate_relion_x_half_per_particle_launches(
+        values,
+        ctf_values,
+        rotations,
+        actual_counts,
+        jnp.asarray(0.0, dtype=jnp.float32),
+        jnp.asarray(10.0, dtype=jnp.float32),
+        window_indices=jnp.arange(2, dtype=jnp.int32),
+        image_shape=(8, 8),
+        volume_shape=(8, 8, 8),
+        disc_type="linear_interp",
+        half_volume=True,
+        max_r=2.0,
+        log_label_prefix="test-fused",
+    )
+
+    assert [call[0].shape[0] for call in calls] == [2, 1]
+    np.testing.assert_array_equal(calls[0][0], np.asarray(values[0, :2]))
+    np.testing.assert_array_equal(calls[0][1], np.asarray(ctf_values[0, :2]))
+    np.testing.assert_array_equal(calls[0][2], np.asarray(rotations[0, :2]))
+    np.testing.assert_array_equal(calls[1][0], np.asarray(values[1, :1]))
+    expected_y = np.asarray(values[0, :2].real).sum() + np.asarray(values[1, :1].real).sum()
+    expected_ctf = 10.0 + np.asarray(ctf_values[0, :2]).sum() + np.asarray(ctf_values[1, :1]).sum()
+    np.testing.assert_allclose(np.asarray(y_volume), expected_y)
+    np.testing.assert_allclose(np.asarray(ctf_volume), expected_ctf)
+
+
+def test_relion_x_half_bp_fused_atomics_requires_block_topology(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", "1")
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", raising=False)
+    assert cuda_backproject.relion_x_half_bp_block_topology_enabled() is False
+
+    with pytest.raises(RuntimeError, match="BLOCK_TOPOLOGY=1"):
+        bucketed_mod._accumulate_relion_x_half_per_particle_launches(
+            jnp.ones((1, 1, 1), dtype=jnp.complex64),
+            jnp.ones((1, 1, 1), dtype=jnp.float32),
+            jnp.eye(3, dtype=jnp.float32).reshape(1, 1, 3, 3),
+            np.asarray([1], dtype=np.int32),
+            jnp.zeros(1, dtype=jnp.complex64),
+            jnp.zeros(1, dtype=jnp.float32),
+            window_indices=jnp.asarray([0], dtype=jnp.int32),
+            image_shape=(8, 8),
+            volume_shape=(7, 7, 7),
+            disc_type="linear_interp",
+            half_volume=True,
+            max_r=2.0,
+            log_label_prefix="test-prerequisite",
+        )
 
 
 def test_sparse_pass2_active_flat_row_gather_chunking_matches_full_gather(monkeypatch):

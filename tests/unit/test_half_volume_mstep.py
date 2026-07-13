@@ -670,3 +670,193 @@ def test_relion_x_half_bp_block_topology_cuda_source_covers_single_and_batch():
     gate = "relion_x_half and relion_x_half_bp_block_topology_enabled()"
     assert gate in single_source
     assert gate in batch_source
+
+
+def test_relion_fused_x_half_wrapper_uses_mixed_aliases_and_native_square(monkeypatch):
+    observed = {}
+
+    def fake_ffi_call(target, result_types, **options):
+        observed["target"] = target
+        observed["result_types"] = result_types
+        observed["options"] = options
+
+        def call(*args, **attrs):
+            observed["args"] = args
+            observed["attrs"] = attrs
+            return args[4], args[5]
+
+        return call
+
+    monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
+
+    image_shape = (8, 8)
+    volume_shape = (7, 7, 7)
+    volume_size = 7 * 7 * 4
+    pixel_indices = jnp.asarray([1, 2 * 5 + 2, 7 * 5 + 1], dtype=jnp.int32)
+    data_rows = jnp.asarray(
+        [[1.0 + 2.0j, 3.0 + 4.0j, 5.0 + 6.0j], [7.0 + 8.0j, 9.0 + 10.0j, 11.0 + 12.0j]],
+        dtype=jnp.complex64,
+    )
+    weight_rows = jnp.arange(1, 7, dtype=jnp.float32).reshape(2, 3)
+    rotations = jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (2, 3, 3))
+    data_volume = jnp.zeros(volume_size, dtype=jnp.complex64)
+    weight_volume = jnp.zeros(volume_size, dtype=jnp.float32)
+
+    result = cuda_backproject.relion_fused_x_half_backproject_indexed.__wrapped__(
+        data_volume,
+        weight_volume,
+        data_rows,
+        weight_rows,
+        pixel_indices,
+        rotations,
+        image_shape,
+        volume_shape,
+        2.0,
+    )
+
+    assert observed["target"] == cuda_backproject._TARGET_RELION_FUSED_X_HALF_BP
+    assert observed["options"]["input_output_aliases"] == {4: 0, 5: 1}
+    assert observed["options"]["vmap_method"] == "sequential"
+    assert [item.dtype for item in observed["result_types"]] == [jnp.complex64, jnp.float32]
+    dense_data, dense_weight, dense_indices, rot6, data_in, weight_in = observed["args"]
+    assert dense_data.shape == (2, 12)
+    assert dense_weight.shape == (2, 12)
+    np.testing.assert_array_equal(np.asarray(dense_indices), np.arange(12, dtype=np.int32))
+    assert rot6.shape == (2, 6) and rot6.dtype == jnp.float32
+    assert data_in is data_volume and weight_in is weight_volume
+    assert observed["attrs"]["image_h"] == 4
+    assert observed["attrs"]["image_w"] == 3
+    assert observed["attrs"]["full_image_w"] == 4
+    assert result[0] is data_volume and result[1] is weight_volume
+
+
+@pytest.mark.parametrize(
+    "data_dtype,weight_dtype,index_dtype,error_match",
+    [
+        (jnp.complex128, jnp.float32, jnp.int32, "data volume must be complex64"),
+        (jnp.complex64, jnp.float64, jnp.int32, "weight volume must be float32"),
+        (jnp.complex64, jnp.float32, jnp.int64, "pixel indices must be int32"),
+    ],
+)
+def test_relion_fused_x_half_wrapper_rejects_non_relion_dtypes(
+    monkeypatch, data_dtype, weight_dtype, index_dtype, error_match
+):
+    monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    data_volume = jnp.zeros(7 * 7 * 4, dtype=data_dtype)
+    weight_volume = jnp.zeros(7 * 7 * 4, dtype=weight_dtype)
+    data_rows = jnp.ones((1, 1), dtype=jnp.complex64)
+    weight_rows = jnp.ones((1, 1), dtype=jnp.float32)
+    pixel_indices = jnp.asarray([0], dtype=index_dtype)
+    rotations = jnp.eye(3, dtype=jnp.float32)[None]
+
+    with pytest.raises(TypeError, match=error_match):
+        cuda_backproject.relion_fused_x_half_backproject_indexed.__wrapped__(
+            data_volume,
+            weight_volume,
+            data_rows,
+            weight_rows,
+            pixel_indices,
+            rotations,
+            (8, 8),
+            (7, 7, 7),
+            2.0,
+        )
+
+
+def test_relion_fused_x_half_cuda_source_interleaves_neighbor_atomics():
+    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
+    text = cuda_source.read_text()
+
+    assert "relion_fused_x_half_backproject_kernel" in text
+    assert "for (int pix = (int)threadIdx.x; pix < n_pixels; pix += 128)" in text
+    assert "dim3 block(128)" in text
+    assert "if (!(Fweight > 0.0f)) continue;" in text
+    atomic_sequence = re.compile(
+        r"atomicAdd\(&data_volume\[off\]\.x, sre\);\s*"
+        r"atomicAdd\(&data_volume\[off\]\.y, sim\);\s*"
+        r"atomicAdd\(&weight_volume\[off\], w \* Fweight\);"
+    )
+    assert atomic_sequence.search(text)
+    handler = text[text.index("RelionFusedXHalfBackproject, RelionFusedXHalfBackprojectImpl") :]
+    assert handler.split("ffi::Error ProjectImpl", 1)[0].count(".Ret<ffi::AnyBuffer>()") == 2
+
+
+@pytest.mark.gpu
+def test_relion_fused_x_half_cuda_matches_separate_topology(
+    monkeypatch, custom_cuda_lib, gpu_device
+):
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", "1")
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+
+    image_shape = (8, 8)
+    volume_shape = (7, 7, 7)
+    volume_size = 7 * 7 * 4
+    pixel_indices = jnp.asarray([1, 2 * 5 + 2, 7 * 5 + 1], dtype=jnp.int32)
+    data_rows = jnp.asarray(
+        [[1.0 + 2.0j, -3.0 + 1.5j, 0.25 - 2.0j], [0.0 + 0.0j, 2.0 - 1.0j, -1.0 + 0.5j]],
+        dtype=jnp.complex64,
+    )
+    weight_rows = jnp.asarray([[1.0, 0.5, 2.0], [0.75, 1.25, 0.25]], dtype=jnp.float32)
+    rotations = jnp.asarray(
+        [
+            np.eye(3, dtype=np.float32),
+            [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        ],
+        dtype=jnp.float32,
+    )
+
+    with cuda_backproject.jax.default_device(gpu_device):
+        data_initial = (
+            np.arange(volume_size, dtype=np.float32) * np.complex64(1.0 + 0.5j) / volume_size
+        ).astype(np.complex64)
+        weight_initial = np.arange(volume_size, dtype=np.float32) / volume_size
+        expected_data_volume = cuda_backproject.jax.device_put(data_initial.copy())
+        expected_weight_volume = cuda_backproject.jax.device_put(weight_initial.copy())
+        actual_data_volume = cuda_backproject.jax.device_put(data_initial.copy())
+        actual_weight_volume = cuda_backproject.jax.device_put(weight_initial.copy())
+        data_rows = cuda_backproject.jax.device_put(data_rows)
+        weight_rows = cuda_backproject.jax.device_put(weight_rows)
+        pixel_indices = cuda_backproject.jax.device_put(pixel_indices)
+        rotations = cuda_backproject.jax.device_put(rotations)
+        expected_data = cuda_backproject.backproject_indexed(
+            expected_data_volume,
+            data_rows,
+            pixel_indices,
+            rotations,
+            image_shape,
+            volume_shape,
+            order=1,
+            half_volume=True,
+            half_image=True,
+            max_r=2.0,
+            relion_x_half=True,
+        )
+        expected_weight = cuda_backproject.backproject_indexed(
+            expected_weight_volume,
+            weight_rows,
+            pixel_indices,
+            rotations,
+            image_shape,
+            volume_shape,
+            order=1,
+            half_volume=True,
+            half_image=True,
+            max_r=2.0,
+            relion_x_half=True,
+        )
+        actual_data, actual_weight = cuda_backproject.relion_fused_x_half_backproject_indexed(
+            actual_data_volume,
+            actual_weight_volume,
+            data_rows,
+            weight_rows,
+            pixel_indices,
+            rotations,
+            image_shape,
+            volume_shape,
+            2.0,
+        )
+
+    np.testing.assert_allclose(np.asarray(actual_data), np.asarray(expected_data), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(actual_weight), np.asarray(expected_weight), rtol=1e-6, atol=1e-6)
