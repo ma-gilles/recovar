@@ -150,20 +150,20 @@ def _sigma_offset_from_model(model):
     return _safe_float(mg.get("rlnSigmaOffsetsAngst", float("nan")))
 
 
-def load_relion_iter(relion_dir, it):
+def load_relion_iter(relion_dir, it, run_prefix="run"):
     """Load all per-iter STARs for one RELION iteration."""
     nnn = f"{it:03d}"
     out = {}
-    out["optimiser"] = parse_relion_optimiser(relion_dir / f"run_it{nnn}_optimiser.star")
-    out["model_h1"] = parse_relion_model(relion_dir / f"run_it{nnn}_half1_model.star")
-    out["model_h2"] = parse_relion_model(relion_dir / f"run_it{nnn}_half2_model.star")
+    out["optimiser"] = parse_relion_optimiser(relion_dir / f"{run_prefix}_it{nnn}_optimiser.star")
+    out["model_h1"] = parse_relion_model(relion_dir / f"{run_prefix}_it{nnn}_half1_model.star")
+    out["model_h2"] = parse_relion_model(relion_dir / f"{run_prefix}_it{nnn}_half2_model.star")
     if out["model_h1"] is None and out["model_h2"] is None:
         # 3D classification writes one run_itNNN_model.star instead of
         # auto-refine half-model STARs. Use it for K-class diagnostics.
-        model = parse_relion_model(relion_dir / f"run_it{nnn}_model.star")
+        model = parse_relion_model(relion_dir / f"{run_prefix}_it{nnn}_model.star")
         out["model_h1"] = model
         out["model_h2"] = model
-    data_path = relion_dir / f"run_it{nnn}_data.star"
+    data_path = relion_dir / f"{run_prefix}_it{nnn}_data.star"
     out["data"] = starfile.read(str(data_path)) if data_path.exists() else None
     return out
 
@@ -490,6 +490,11 @@ def print_metric_block(prefix, pose_npz, metric_specs):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
+    parser.add_argument(
+        "--relion_run_prefix",
+        default="run",
+        help="RELION output prefix inside --relion_dir (default: run)",
+    )
     parser.add_argument("--recovar_dir", required=True)
     parser.add_argument("--max_iter", type=int, default=10)
     parser.add_argument(
@@ -526,7 +531,10 @@ def main():
 
     # Find which iters RELION actually wrote
     relion_iters = sorted(
-        {int(p.stem.split("_it")[1].split("_")[0]) for p in relion_dir.glob("run_it*_optimiser.star")}
+        {
+            int(p.stem.split("_it")[1].split("_")[0])
+            for p in relion_dir.glob(f"{args.relion_run_prefix}_it*_optimiser.star")
+        }
     )
     logger.info("RELION wrote iters: %s", relion_iters)
 
@@ -540,7 +548,7 @@ def main():
 
     for it in range(n_iters_to_check):
         relion_it = it + relion_offset
-        relion_iter = load_relion_iter(relion_dir, relion_it)
+        relion_iter = load_relion_iter(relion_dir, relion_it, args.relion_run_prefix)
         rsc = extract_relion_scalars(relion_iter)
         rps = extract_relion_per_shell(relion_iter, half=1)
 

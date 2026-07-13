@@ -282,6 +282,7 @@ def resolve_firstiter_cc_mode(mode: str, *, oracle_enabled: bool, start_iteratio
 def resolve_relion_final_oracle_paths(
     relion_dir: str | Path,
     *,
+    run_prefix: str = "run",
     start_iteration: int,
     completed_iterations: int,
     final_all_data_ran: bool,
@@ -289,10 +290,10 @@ def resolve_relion_final_oracle_paths(
     """Resolve the RELION maps with the same finalization semantics as RECOVAR."""
     relion_dir = Path(relion_dir)
     if final_all_data_ran:
-        return "all_data", {"merged": relion_dir / "run_class001.mrc"}
+        return "all_data", {"merged": relion_dir / f"{run_prefix}_class001.mrc"}
     final_numbered_iteration = int(start_iteration) + int(completed_iterations)
     return "split_half", {
-        label: relion_dir / f"run_it{final_numbered_iteration:03d}_{label}_class001.mrc"
+        label: relion_dir / f"{run_prefix}_it{final_numbered_iteration:03d}_{label}_class001.mrc"
         for label in ("half1", "half2")
     }
 
@@ -355,6 +356,11 @@ def validate_final_only_replay_args(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
+    parser.add_argument(
+        "--relion_run_prefix",
+        default="run",
+        help="RELION output prefix inside --relion_dir (default: run)",
+    )
     parser.add_argument("--data_star", required=True)
     parser.add_argument("--iter", type=int, default=3, help="RELION iteration to start from")
     parser.add_argument("--max_iter", type=int, default=15)
@@ -677,14 +683,17 @@ def main():
         )
 
     relion_dir = Path(args.relion_dir)
+    run_prefix = args.relion_run_prefix
     iteration = args.iter
-    prefix = str(relion_dir / f"run_it{iteration:03d}")
+    prefix = str(relion_dir / f"{run_prefix}_it{iteration:03d}")
 
     # ---- Load RELION state ----
     model_h1 = starfile.read(f"{prefix}_half1_model.star")
     model_h2 = starfile.read(f"{prefix}_half2_model.star")
     control_model_h1 = model_h1
-    control_model_path = relion_dir / f"run_it{replay_control_relion_iteration(iteration, 0):03d}_half1_model.star"
+    control_model_path = (
+        relion_dir / f"{run_prefix}_it{replay_control_relion_iteration(iteration, 0):03d}_half1_model.star"
+    )
     if control_model_path.exists():
         control_model_h1 = starfile.read(control_model_path)
     N = int(model_h1["model_general"]["rlnOriginalImageSize"])
@@ -705,7 +714,7 @@ def main():
     fsc_col = "rlnGoldStandardFsc" if "rlnGoldStandardFsc" in class1 else "rlnFourierShellCorrelationCorrected"
     fsc = np.array(class1[fsc_col])
 
-    opt_text = (relion_dir / f"run_it{iteration:03d}_optimiser.star").read_text()
+    opt_text = (relion_dir / f"{run_prefix}_it{iteration:03d}_optimiser.star").read_text()
     m_pd = re.search(r"_rlnParticleDiameter\s+(\S+)", opt_text)
     particle_diameter = float(m_pd.group(1)) if m_pd else 544.0
     m_os = re.search(r"_rlnAdaptiveOversampleOrder\s+(\d+)", opt_text)
@@ -727,7 +736,7 @@ def main():
         else 30.0
     )
 
-    sampling_meta = read_relion_sampling_metadata(relion_dir / f"run_it{iteration:03d}_sampling.star")
+    sampling_meta = read_relion_sampling_metadata(relion_dir / f"{run_prefix}_it{iteration:03d}_sampling.star")
     hp_order = int(sampling_meta["healpix_order"])
     offset_range = float(sampling_meta["offset_range"])
     offset_step = float(sampling_meta["offset_step"])
@@ -749,16 +758,16 @@ def main():
     has_high_fsc_at_limit = False
     for it in range(1, iteration + 1):
         try:
-            m = starfile.read(str(relion_dir / f"run_it{it:03d}_half1_model.star"))
+            m = starfile.read(str(relion_dir / f"{run_prefix}_it{it:03d}_half1_model.star"))
             fc = np.array(m["model_class_1"][fsc_col])
-            oc = (relion_dir / f"run_it{it:03d}_optimiser.star").read_text()
+            oc = (relion_dir / f"{run_prefix}_it{it:03d}_optimiser.star").read_text()
             cs_it = (
                 int(re.search(r"_rlnCurrentImageSize\s+(\d+)", oc).group(1))
                 if re.search(r"_rlnCurrentImageSize", oc)
                 else None
             )
             if cs_it is None:
-                mc = starfile.read(str(relion_dir / f"run_it{it:03d}_half1_model.star"))
+                mc = starfile.read(str(relion_dir / f"{run_prefix}_it{it:03d}_half1_model.star"))
                 cs_it = int(mc["model_general"]["rlnCurrentImageSize"])
             shell_at_limit = cs_it // 2 - 1
             if shell_at_limit < len(fc) and fc[shell_at_limit] > 0.2:
@@ -973,7 +982,7 @@ def main():
         print("  direction_prior: None (not found in model star)")
 
     def _load_relion_iteration_override(previous_relion_iteration, control_relion_iteration):
-        iter_prefix = relion_dir / f"run_it{previous_relion_iteration:03d}"
+        iter_prefix = relion_dir / f"{run_prefix}_it{previous_relion_iteration:03d}"
         model_h1_iter = starfile.read(f"{iter_prefix}_half1_model.star")
         model_h2_iter = starfile.read(f"{iter_prefix}_half2_model.star")
         relion_iter_data = starfile.read(f"{iter_prefix}_data.star")
@@ -1110,7 +1119,7 @@ def main():
         iteration,
         args.max_iter,
     ):
-        if not (relion_dir / f"run_it{relion_prev_iter:03d}_data.star").exists():
+        if not (relion_dir / f"{run_prefix}_it{relion_prev_iter:03d}_data.star").exists():
             print(
                 f"  Replay state for recovar iter {recovar_iter + 1}: RELION iter {relion_prev_iter:03d} not found, leaving override unset"
             )
@@ -1478,6 +1487,7 @@ def main():
     # ---- Compare final volume with the semantically matched RELION oracle ----
     final_oracle_mode, final_oracle_paths = resolve_relion_final_oracle_paths(
         relion_dir,
+        run_prefix=run_prefix,
         start_iteration=iteration,
         completed_iterations=completed_iters,
         final_all_data_ran=bool(result.get("final_all_data_ran", False)),
@@ -1723,7 +1733,7 @@ def main():
     if result.get("pmax_per_image_history"):
         for i_iter, pmax_arr in enumerate(result["pmax_per_image_history"]):
             target_it = iteration + 1 + i_iter
-            target_data_star = relion_dir / f"run_it{target_it:03d}_data.star"
+            target_data_star = relion_dir / f"{run_prefix}_it{target_it:03d}_data.star"
             if not target_data_star.exists():
                 print(
                     f"\n  Iter {i_iter + 1}: RELION data star it{target_it:03d} not found, skipping per-particle comparison"
@@ -2041,6 +2051,8 @@ def main():
             str(relion_dir),
             "--relion_start_iter",
             str(iteration),
+            "--relion_run_prefix",
+            run_prefix,
             "--gt_volume",
             str(gt_path),
             "--max_iter",
@@ -2078,6 +2090,8 @@ def main():
             out_dir,
             "--relion_start_iter",
             str(iteration),
+            "--relion_run_prefix",
+            run_prefix,
             "--max_iter",
             str(completed_iters + 1),
             "--tol",

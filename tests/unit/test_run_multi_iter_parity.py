@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from scripts import diff_relion_recovar_per_iter as parity_diff
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
     final_output_fourier_volumes,
@@ -151,18 +152,20 @@ def test_resolve_firstiter_cc_mode_disables_auto_after_iter_zero():
 def test_resolve_relion_final_oracle_uses_unnumbered_map_after_all_data(tmp_path):
     mode, paths = resolve_relion_final_oracle_paths(
         tmp_path,
+        run_prefix="custom",
         start_iteration=0,
         completed_iterations=10,
         final_all_data_ran=True,
     )
 
     assert mode == "all_data"
-    assert paths == {"merged": tmp_path / "run_class001.mrc"}
+    assert paths == {"merged": tmp_path / "custom_class001.mrc"}
 
 
 def test_resolve_relion_final_oracle_uses_completed_numbered_halves_without_all_data(tmp_path):
     mode, paths = resolve_relion_final_oracle_paths(
         tmp_path,
+        run_prefix="custom",
         start_iteration=3,
         completed_iterations=4,
         final_all_data_ran=False,
@@ -170,9 +173,32 @@ def test_resolve_relion_final_oracle_uses_completed_numbered_halves_without_all_
 
     assert mode == "split_half"
     assert paths == {
-        "half1": tmp_path / "run_it007_half1_class001.mrc",
-        "half2": tmp_path / "run_it007_half2_class001.mrc",
+        "half1": tmp_path / "custom_it007_half1_class001.mrc",
+        "half2": tmp_path / "custom_it007_half2_class001.mrc",
     }
+
+
+def test_diff_loader_uses_custom_relion_run_prefix(tmp_path, monkeypatch):
+    seen = []
+
+    def fake_parse(path):
+        seen.append(path.name)
+        return {"model_general": {}}
+
+    monkeypatch.setattr(parity_diff, "parse_relion_optimiser", fake_parse)
+    monkeypatch.setattr(parity_diff, "parse_relion_model", fake_parse)
+    data_path = tmp_path / "custom_it005_data.star"
+    data_path.touch()
+    monkeypatch.setattr(parity_diff.starfile, "read", lambda path: {"source": path})
+
+    loaded = parity_diff.load_relion_iter(tmp_path, 5, run_prefix="custom")
+
+    assert seen == [
+        "custom_it005_optimiser.star",
+        "custom_it005_half1_model.star",
+        "custom_it005_half2_model.star",
+    ]
+    assert loaded["data"] == {"source": str(data_path)}
 
 
 def test_relion_final_gt_series_accepts_unnumbered_all_data_without_half_maps():
