@@ -1662,10 +1662,15 @@ matrices also do not close them. The remaining first boundary is therefore the
 CUDA evaluation/code generation of `xp*xp + yp*yp + zp*zp` at radius 48, not
 the support definition, Euler construction, interpolation base, Fweight, or
 atomic ordering. RELION was compiled with CUDA 12.6 and the RECOVAR diagnostic
-with CUDA 12.8; first repeat the corrected RECOVAR capture with the exact
-RELION toolkit and flags, then compare PTX/SASS or pin the explicit float32
-multiply/add sequence if needed. Do not weaken or remove the rotated-radius
-predicate merely to make this fixture pass.
+with CUDA 12.8. Same-toolkit A100 job `11125480` rebuilds the corrected
+RECOVAR diagnostic with CUDA 12.6.85 and native `sm_80`; it leaves exactly 22
+cutoff flips and unchanged half errors `0.012369786/0.016898166`, while all
+fold/base/neighbor differences remain zero and coefficient relative L2 remains
+`1.072e-6`. Toolkit version alone is therefore rejected. RELION PTX evaluates
+the radius as `mul(y,y)`, `fma(x,x,y2)`, `fma(z,z,xy2)`; compare the complete
+RECOVAR coordinate/square SASS and test that explicit float32 sequence in the
+private signature build. Do not weaken or remove the rotated-radius predicate
+merely to make this fixture pass.
 
 Full evidence and the proposed 22-cutoff/five-base A100 golden regression are
 in
