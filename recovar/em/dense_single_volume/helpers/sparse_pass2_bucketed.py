@@ -477,6 +477,7 @@ def _prepare_per_image_pass2_inputs(
     rotation_log_prior,
     random_perturbation,
     fine_rotations_override=None,
+    fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
 ):
     """Compute per-image oversampled rotations / parent maps / candidate masks.
@@ -489,6 +490,7 @@ def _prepare_per_image_pass2_inputs(
 
     n_images = len(significant_sample_indices)
     per_image_oversampled_rots = []
+    per_image_oversampled_mstep_rots = []
     per_image_parent_map = []
     per_image_oversampled_rot_indices = []
     per_image_unique_rot = []
@@ -506,6 +508,7 @@ def _prepare_per_image_pass2_inputs(
         rotation_log_prior_np = None
 
     fine_rotations_np = None
+    fine_mstep_rotations_np = None
     fine_parent_np = None
     if fine_rotations_override is None and fine_rotation_parent_override is None:
         pass
@@ -523,6 +526,16 @@ def _prepare_per_image_pass2_inputs(
             raise ValueError("fine_rotation_parent_override values must be in [0, n_coarse_rot)")
     else:
         raise ValueError("fine_rotations_override and fine_rotation_parent_override must be provided together")
+
+    if fine_mstep_rotations_override is not None:
+        if fine_rotations_np is None:
+            raise ValueError("fine_mstep_rotations_override requires fine_rotations_override")
+        fine_mstep_rotations_np = np.asarray(fine_mstep_rotations_override, dtype=np.float32)
+        if fine_mstep_rotations_np.shape != fine_rotations_np.shape:
+            raise ValueError(
+                "fine_mstep_rotations_override must match fine_rotations_override shape: "
+                f"{fine_mstep_rotations_np.shape} vs {fine_rotations_np.shape}",
+            )
 
     for image_idx, sig_samples in enumerate(significant_sample_indices):
         coarse_excluded = None
@@ -607,6 +620,12 @@ def _prepare_per_image_pass2_inputs(
         else:
             raise ValueError("fine_rotations_override and fine_rotation_parent_override must be provided together")
 
+        oversampled_mstep_rots = (
+            oversampled_rots
+            if fine_mstep_rotations_np is None
+            else fine_mstep_rotations_np[oversampled_rot_indices]
+        )
+
         if use_full_rotation_support:
             if rotation_log_prior_np is not None:
                 if full_support_log_prior_cache is None:
@@ -681,6 +700,7 @@ def _prepare_per_image_pass2_inputs(
             )
 
         per_image_oversampled_rots.append(oversampled_rots)
+        per_image_oversampled_mstep_rots.append(oversampled_mstep_rots)
         per_image_parent_map.append(parent_map)
         per_image_oversampled_rot_indices.append(oversampled_rot_indices)
         per_image_unique_rot.append(unique_rot)
@@ -690,6 +710,7 @@ def _prepare_per_image_pass2_inputs(
     assert len(per_image_oversampled_rots) == n_images
     return {
         "oversampled_rots": per_image_oversampled_rots,
+        "oversampled_mstep_rots": per_image_oversampled_mstep_rots,
         "parent_map": per_image_parent_map,
         "oversampled_rot_indices": per_image_oversampled_rot_indices,
         "unique_rot": per_image_unique_rot,
@@ -3422,6 +3443,19 @@ def _build_bucket_arrays(
         np.eye(3, dtype=np.float32),
         (batch, bucket_size, 3, 3),
     ).copy()
+    separate_mstep_rotations = any(
+        per_image_inputs["oversampled_mstep_rots"][int(image_idx)]
+        is not per_image_inputs["oversampled_rots"][int(image_idx)]
+        for image_idx in image_indices.tolist()
+    )
+    padded_mstep_rotations = (
+        np.broadcast_to(
+            np.eye(3, dtype=np.float32),
+            (batch, bucket_size, 3, 3),
+        ).copy()
+        if separate_mstep_rotations
+        else padded_rotations
+    )
     padded_log_prior = (
         np.full((batch, bucket_size), -1e30, dtype=np.float32)
         if include_dense_score_fields
@@ -3444,6 +3478,8 @@ def _build_bucket_arrays(
         cnt = int(rots.shape[0])
         actual_counts[row] = cnt
         padded_rotations[row, :cnt] = rots
+        if separate_mstep_rotations:
+            padded_mstep_rotations[row, :cnt] = per_image_inputs["oversampled_mstep_rots"][image_idx]
         if include_dense_score_fields:
             padded_log_prior[row, :cnt] = per_image_inputs["log_prior"][image_idx]
             padded_candidate_mask[row, :cnt, :] = _candidate_mask_to_dense(per_image_inputs["candidate_mask"][image_idx])
@@ -3455,6 +3491,7 @@ def _build_bucket_arrays(
         "bucket_size": bucket_size,
         "actual_counts": actual_counts,
         "rotations": padded_rotations,
+        "mstep_rotations": padded_mstep_rotations,
         "rotation_indices": padded_rotation_indices,
         "log_prior": padded_log_prior,
         "candidate_mask": padded_candidate_mask,
@@ -5635,6 +5672,7 @@ def compute_pass2_stats_sparse_bucketed(
     disable_adjoint_ctf=False,
     rotation_block_size_for_quantization=5000,
     fine_rotations_override=None,
+    fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
     fine_translations_override=None,
     fine_translation_parent_override=None,
@@ -5858,6 +5896,7 @@ def compute_pass2_stats_sparse_bucketed(
         rotation_log_prior=rotation_log_prior,
         random_perturbation=random_perturbation,
         fine_rotations_override=fine_rotations_override,
+        fine_mstep_rotations_override=fine_mstep_rotations_override,
         fine_rotation_parent_override=fine_rotation_parent_override,
     )
     prep_s = time.time() - prep_t0
@@ -6337,26 +6376,49 @@ def compute_pass2_stats_sparse_bucketed(
         batch_data = jnp.asarray(batch_data)
         # Reorder bucket arrays to match fetched_indices
         if not np.array_equal(np.asarray(fetched_indices), image_indices):
-            (
-                rotations,
-                rotation_indices,
-                log_prior,
-                candidate_mask,
-                parent_map_padded,
-                actual_counts,
-            ) = _reorder_to_indices(
-                np.asarray(fetched_indices),
-                image_indices,
-                bucket_arrays["rotations"],
-                bucket_arrays["rotation_indices"],
-                bucket_arrays["log_prior"],
-                bucket_arrays["candidate_mask"],
-                bucket_arrays["parent_map"],
-                bucket_arrays["actual_counts"],
-            )
+            if bucket_arrays["mstep_rotations"] is bucket_arrays["rotations"]:
+                (
+                    rotations,
+                    rotation_indices,
+                    log_prior,
+                    candidate_mask,
+                    parent_map_padded,
+                    actual_counts,
+                ) = _reorder_to_indices(
+                    np.asarray(fetched_indices),
+                    image_indices,
+                    bucket_arrays["rotations"],
+                    bucket_arrays["rotation_indices"],
+                    bucket_arrays["log_prior"],
+                    bucket_arrays["candidate_mask"],
+                    bucket_arrays["parent_map"],
+                    bucket_arrays["actual_counts"],
+                )
+                mstep_rotations = rotations
+            else:
+                (
+                    rotations,
+                    mstep_rotations,
+                    rotation_indices,
+                    log_prior,
+                    candidate_mask,
+                    parent_map_padded,
+                    actual_counts,
+                ) = _reorder_to_indices(
+                    np.asarray(fetched_indices),
+                    image_indices,
+                    bucket_arrays["rotations"],
+                    bucket_arrays["mstep_rotations"],
+                    bucket_arrays["rotation_indices"],
+                    bucket_arrays["log_prior"],
+                    bucket_arrays["candidate_mask"],
+                    bucket_arrays["parent_map"],
+                    bucket_arrays["actual_counts"],
+                )
             image_indices = np.asarray(fetched_indices)
         else:
             rotations = bucket_arrays["rotations"]
+            mstep_rotations = bucket_arrays["mstep_rotations"]
             rotation_indices = bucket_arrays["rotation_indices"]
             log_prior = bucket_arrays["log_prior"]
             candidate_mask = bucket_arrays["candidate_mask"]
@@ -6462,7 +6524,11 @@ def compute_pass2_stats_sparse_bucketed(
                 shifted_noise = shifted_score_half_with_dc
 
         flat_rotations = flatten_bucket_rotations(jnp.asarray(rotations))
-        flat_backproject_rotations = flat_rotations
+        flat_backproject_rotations = (
+            flat_rotations
+            if mstep_rotations is rotations
+            else flatten_bucket_rotations(jnp.asarray(mstep_rotations))
+        )
         rotation_chunk_size = None
         identity_full_projection_cache_rows = False
         if projection_cache is not None:
@@ -6745,7 +6811,7 @@ def compute_pass2_stats_sparse_bucketed(
                         ctf2_over_nv_recon,
                         relion_x_half=use_relion_x_half_mstep,
                     )
-                    flat_chunk_rotations = flatten_bucket_rotations(jnp.asarray(rotations[:, start:stop]))
+                    flat_chunk_rotations = flatten_bucket_rotations(jnp.asarray(mstep_rotations[:, start:stop]))
                     if use_window:
                         Ft_y_total = _accumulate_adjoint_block_chunked(
                             flatten_bucket_rows(summed),
@@ -7146,7 +7212,7 @@ def compute_pass2_stats_sparse_bucketed(
                 Ft_y_total, Ft_ctf_total = _accumulate_relion_x_half_per_particle_launches(
                     summed,
                     ctf_probs,
-                    jnp.asarray(rotations),
+                    jnp.asarray(mstep_rotations),
                     actual_counts,
                     Ft_y_total,
                     Ft_ctf_total,
@@ -7548,6 +7614,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     random_perturbation=0.0,
     rotation_block_size_for_quantization=5000,
     fine_rotations_override=None,
+    fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
     fine_translations_override=None,
     fine_translation_parent_override=None,
@@ -7762,6 +7829,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             rotation_log_prior=rotation_log_priors_by_class[class_index],
             random_perturbation=random_perturbation,
             fine_rotations_override=fine_rotations_override,
+            fine_mstep_rotations_override=fine_mstep_rotations_override,
             fine_rotation_parent_override=fine_rotation_parent_override,
         )
         for class_index in range(n_classes)
@@ -8584,41 +8652,76 @@ def compute_k_class_pass2_stats_sparse_fused(
             fetched_indices_np = np.asarray(fetched_indices)
             reordered = []
             for arrays in class_bucket_arrays:
+                shared_mstep_rotations = arrays["mstep_rotations"] is arrays["rotations"]
                 if arrays["log_prior"] is None:
-                    rotations, rotation_indices, actual_counts = _reorder_to_indices(
-                        fetched_indices_np,
-                        image_indices,
-                        arrays["rotations"],
-                        arrays["rotation_indices"],
-                        arrays["actual_counts"],
-                    )
+                    if shared_mstep_rotations:
+                        rotations, rotation_indices, actual_counts = _reorder_to_indices(
+                            fetched_indices_np,
+                            image_indices,
+                            arrays["rotations"],
+                            arrays["rotation_indices"],
+                            arrays["actual_counts"],
+                        )
+                        mstep_rotations = rotations
+                    else:
+                        rotations, mstep_rotations, rotation_indices, actual_counts = _reorder_to_indices(
+                            fetched_indices_np,
+                            image_indices,
+                            arrays["rotations"],
+                            arrays["mstep_rotations"],
+                            arrays["rotation_indices"],
+                            arrays["actual_counts"],
+                        )
                     log_prior = None
                     candidate_mask = None
                     parent_map_padded = None
                 else:
-                    (
-                        rotations,
-                        rotation_indices,
-                        log_prior,
-                        candidate_mask,
-                        parent_map_padded,
-                        actual_counts,
-                    ) = _reorder_to_indices(
-                        fetched_indices_np,
-                        image_indices,
-                        arrays["rotations"],
-                        arrays["rotation_indices"],
-                        arrays["log_prior"],
-                        arrays["candidate_mask"],
-                        arrays["parent_map"],
-                        arrays["actual_counts"],
-                    )
+                    if shared_mstep_rotations:
+                        (
+                            rotations,
+                            rotation_indices,
+                            log_prior,
+                            candidate_mask,
+                            parent_map_padded,
+                            actual_counts,
+                        ) = _reorder_to_indices(
+                            fetched_indices_np,
+                            image_indices,
+                            arrays["rotations"],
+                            arrays["rotation_indices"],
+                            arrays["log_prior"],
+                            arrays["candidate_mask"],
+                            arrays["parent_map"],
+                            arrays["actual_counts"],
+                        )
+                        mstep_rotations = rotations
+                    else:
+                        (
+                            rotations,
+                            mstep_rotations,
+                            rotation_indices,
+                            log_prior,
+                            candidate_mask,
+                            parent_map_padded,
+                            actual_counts,
+                        ) = _reorder_to_indices(
+                            fetched_indices_np,
+                            image_indices,
+                            arrays["rotations"],
+                            arrays["mstep_rotations"],
+                            arrays["rotation_indices"],
+                            arrays["log_prior"],
+                            arrays["candidate_mask"],
+                            arrays["parent_map"],
+                            arrays["actual_counts"],
+                        )
                 reordered.append(
                     {
                         "image_indices": fetched_indices_np,
                         "bucket_size": arrays["bucket_size"],
                         "actual_counts": actual_counts,
                         "rotations": rotations,
+                        "mstep_rotations": mstep_rotations,
                         "rotation_indices": rotation_indices,
                         "log_prior": log_prior,
                         "candidate_mask": candidate_mask,
@@ -8750,14 +8853,18 @@ def compute_k_class_pass2_stats_sparse_fused(
         _add_sparse_group_timing(group_timing, "prepare", time.time() - stage_t0)
         scores_by_class = []
         class_score_log_z_bucket = []
-        flat_rotations_by_class = []
+        flat_backproject_rotations_by_class = []
         proj_for_noise_by_class = []
         proj_abs2_by_class = []
         stage_t0 = time.time()
         for class_index, arrays in enumerate(class_bucket_arrays):
             class_bucket_size = int(arrays["bucket_size"])
             flat_rotations = flatten_bucket_rotations(jnp.asarray(arrays["rotations"]))
-            flat_rotations_by_class.append(flat_rotations)
+            flat_backproject_rotations_by_class.append(
+                flat_rotations
+                if arrays["mstep_rotations"] is arrays["rotations"]
+                else flatten_bucket_rotations(jnp.asarray(arrays["mstep_rotations"]))
+            )
             cache = projection_cache_by_class[class_index]
             defer_compact_recon_projection = False
             identity_full_cache_rows = False
@@ -9358,7 +9465,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                                 probs_sum_t_jax,
                                 shifted_recon_split,
                                 ctf2_over_nv_recon,
-                                flat_rotations_by_class[class_index],
+                                flat_backproject_rotations_by_class[class_index],
                                 mstep_active_indices,
                                 mstep_active_mask,
                             )
@@ -9402,13 +9509,13 @@ def compute_k_class_pass2_stats_sparse_fused(
                 active_flat_rows_chunked = int(mstep_active_indices.size) > _active_flat_gather_chunk_rows(
                     summed,
                     ctf_probs,
-                    flat_rotations_by_class[class_index],
+                    flat_backproject_rotations_by_class[class_index],
                     max_block_bytes=max_adjoint_block_bytes,
                 )
                 if not active_flat_rows_chunked:
                     flat_summed, active_flat_rotations = _select_active_flat_rows(
                         summed,
-                        flat_rotations_by_class[class_index],
+                        flat_backproject_rotations_by_class[class_index],
                         mstep_active_indices,
                         mstep_active_mask,
                     )
@@ -9420,7 +9527,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             else:
                 flat_summed = flatten_bucket_rows(summed)
                 flat_ctf_probs = flatten_bucket_rows(ctf_probs)
-                active_flat_rotations = flat_rotations_by_class[class_index]
+                active_flat_rotations = flat_backproject_rotations_by_class[class_index]
             _add_sparse_group_timing(group_timing, "mstep_weighted_sums", time.time() - substage_t0)
             substage_t0 = time.time()
             mstep_window_indices = relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
@@ -9430,7 +9537,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         _accumulate_active_flat_rows_adjoint_chunked(
                             summed,
                             ctf_probs,
-                            flat_rotations_by_class[class_index],
+                            flat_backproject_rotations_by_class[class_index],
                             mstep_active_indices,
                             mstep_active_mask,
                             Ft_y_total[class_index],
@@ -9453,7 +9560,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         _accumulate_active_flat_rows_adjoint_chunked(
                             summed,
                             ctf_probs,
-                            flat_rotations_by_class[class_index],
+                            flat_backproject_rotations_by_class[class_index],
                             mstep_active_indices,
                             mstep_active_mask,
                             Ft_y_total[class_index],
@@ -9476,7 +9583,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         _accumulate_active_flat_rows_adjoint_chunked(
                             summed,
                             ctf_probs,
-                            flat_rotations_by_class[class_index],
+                            flat_backproject_rotations_by_class[class_index],
                             mstep_active_indices,
                             mstep_active_mask,
                             Ft_y_total[class_index],

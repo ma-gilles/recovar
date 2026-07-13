@@ -710,6 +710,7 @@ def _run_sparse_k_class_adaptive_pass2(
     coarse_rotations_np,
     coarse_translations_np,
     fine_rotations_np,
+    fine_mstep_rotations_np,
     rot_parent_map_np,
     fine_translations_np,
     trans_parent_map_np,
@@ -780,6 +781,7 @@ def _run_sparse_k_class_adaptive_pass2(
         relion_fine_mstep_prune=bool(base_engine_kwargs.get("relion_fine_mstep_prune", False)) and n_classes == 1,
         random_perturbation=float(random_perturbation),
         fine_rotations_override=fine_rotations_np,
+        fine_mstep_rotations_override=fine_mstep_rotations_np,
         fine_rotation_parent_override=rot_parent_map_np,
         fine_translations_override=fine_translations_np,
         fine_translation_parent_override=trans_parent_map_np,
@@ -1706,6 +1708,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
     noise_variance,
     coarse_translations_np,
     fine_rotations_np,
+    fine_mstep_rotations_np,
     fine_translations_np,
     rot_parent_map_np: np.ndarray,
     trans_parent_map_np: np.ndarray,
@@ -1752,6 +1755,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         square_window=bool(pass2_kwargs.get("square_window", False)),
         random_perturbation=0.0,
         fine_rotations_override=fine_rotations_np,
+        fine_mstep_rotations_override=fine_mstep_rotations_np,
         fine_rotation_parent_override=rot_parent_map_np,
         fine_translations_override=fine_translations_np,
         fine_translation_parent_override=trans_parent_map_np,
@@ -2574,6 +2578,7 @@ def run_dense_k_class_em_adaptive(
     coarse_relion_projector_texture_interp: bool | None = None,
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
+    fine_mstep_rotations_override=None,
     return_best_pose_details: bool = False,
     **engine_kwargs,
 ) -> KClassEMResult:
@@ -2593,6 +2598,10 @@ def run_dense_k_class_em_adaptive(
         Pass-1 coarse pose grids.
     fine_rotations, fine_translations : np.ndarray
         Pass-2 fine (oversampled) pose grids.
+    fine_mstep_rotations_override : np.ndarray or None
+        Optional pass-2 rotations used only for M-step backprojection. Score
+        projections, posterior selection, and reported best poses continue to
+        use ``fine_rotations``. Supported by sparse pass 2 only.
     rot_parent_map : np.ndarray of int, shape (n_rot_fine,)
         Index into ``coarse_rotations`` for each fine rotation.
     trans_parent_map : np.ndarray of int, shape (n_trans_fine,)
@@ -2637,6 +2646,11 @@ def run_dense_k_class_em_adaptive(
     coarse_rotations_np = np.asarray(coarse_rotations, dtype=np.float32)
     coarse_translations_np = np.asarray(coarse_translations, dtype=np.float32)
     fine_rotations_np = np.asarray(fine_rotations, dtype=np.float32)
+    fine_mstep_rotations_np = (
+        None
+        if fine_mstep_rotations_override is None
+        else np.asarray(fine_mstep_rotations_override, dtype=np.float32)
+    )
     fine_translations_np = np.asarray(fine_translations, dtype=np.float32)
     rot_parent_map_np = np.asarray(rot_parent_map, dtype=np.int64)
     trans_parent_map_np = np.asarray(trans_parent_map, dtype=np.int64)
@@ -2645,6 +2659,12 @@ def run_dense_k_class_em_adaptive(
     n_trans_coarse = int(coarse_translations_np.shape[0])
     n_rot_fine = int(fine_rotations_np.shape[0])
     n_trans_fine = int(fine_translations_np.shape[0])
+
+    if fine_mstep_rotations_np is not None and fine_mstep_rotations_np.shape != fine_rotations_np.shape:
+        raise ValueError(
+            "fine_mstep_rotations_override must match fine_rotations shape: "
+            f"{fine_mstep_rotations_np.shape} vs {fine_rotations_np.shape}",
+        )
 
     def _resolved_coarse_healpix_order() -> int:
         if coarse_healpix_order is not None:
@@ -2817,6 +2837,8 @@ def run_dense_k_class_em_adaptive(
     # Build a per-particle, per-class fine-grid mask from the coarse significance.
     pass2_kwargs.pop("rotation_translation_mask", None)
     sparse_pass2_requested = bool(pass2_kwargs.pop("sparse_pass2", False))
+    if fine_mstep_rotations_np is not None and not sparse_pass2_requested:
+        raise NotImplementedError("fine_mstep_rotations_override requires sparse_pass2=True")
     # The explicit bucketed sparse pass-2 path consumes ``sparse_pass2`` above.
     # Dense fallback calls must keep run_em's block-skipping optimization off:
     # otherwise omitting the kwarg silently re-enables run_em's default.
@@ -2855,6 +2877,7 @@ def run_dense_k_class_em_adaptive(
             noise_variance,
             coarse_translations_np,
             fine_rotations_np,
+            fine_mstep_rotations_np,
             fine_translations_np,
             rot_parent_map_np,
             trans_parent_map_np,
@@ -2891,6 +2914,7 @@ def run_dense_k_class_em_adaptive(
     if (
         sparse_pass2_requested
         and engine_kwargs.get("relion_projector_half") is None
+        and fine_mstep_rotations_np is None
         and dense_support_threshold is not None
         and not firstiter_cc_pass2_only_best_coarse
         and not skip_significance_pruning
@@ -3051,6 +3075,7 @@ def run_dense_k_class_em_adaptive(
             coarse_rotations_np,
             coarse_translations_np,
             fine_rotations_np,
+            fine_mstep_rotations_np,
             rot_parent_map_np,
             fine_translations_np,
             trans_parent_map_np,
@@ -3077,6 +3102,11 @@ def run_dense_k_class_em_adaptive(
             time.time() - overall_t0,
         )
         return _with_significant_counts(result)
+
+    if fine_mstep_rotations_np is not None:
+        raise NotImplementedError(
+            "fine_mstep_rotations_override requires a sparse adaptive pass-2 route",
+        )
 
     pass2_kwargs.pop("group_ids", None)
     if pass2_kwargs.pop("mstep_relion_x_half", False):

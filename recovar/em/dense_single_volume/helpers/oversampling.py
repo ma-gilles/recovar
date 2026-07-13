@@ -593,6 +593,7 @@ def compute_pass2_stats_sparse(
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
     fine_rotations_override=None,
+    fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
     fine_translations_override=None,
     fine_translation_parent_override=None,
@@ -632,6 +633,10 @@ def compute_pass2_stats_sparse(
             "Sparse per-image reference pass-2 does not accumulate native group-scale correction stats; "
             "use the bucketed sparse pass-2 path for native scale updates."
         )
+    if use_perimage_reference and fine_mstep_rotations_override is not None:
+        raise NotImplementedError(
+            "fine_mstep_rotations_override is only implemented for the bucketed sparse pass-2 path",
+        )
     full_grid_reference = (
         all(samples is None for samples in significant_sample_indices)
         and not return_score_log_z
@@ -640,6 +645,7 @@ def compute_pass2_stats_sparse(
         and normalization_other_score_log_z is None
         and group_ids is None
         and fine_rotations_override is None
+        and fine_mstep_rotations_override is None
         and fine_rotation_parent_override is None
         and fine_translations_override is None
         and fine_translation_parent_override is None
@@ -687,6 +693,7 @@ def compute_pass2_stats_sparse(
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
             fine_rotations_override=fine_rotations_override,
+            fine_mstep_rotations_override=fine_mstep_rotations_override,
             fine_rotation_parent_override=fine_rotation_parent_override,
             fine_translations_override=fine_translations_override,
             fine_translation_parent_override=fine_translation_parent_override,

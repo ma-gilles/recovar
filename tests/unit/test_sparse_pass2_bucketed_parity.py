@@ -13,6 +13,8 @@ M-step accumulators ``Ft_y`` / ``Ft_ctf``, hard assignments, and per-image
 RELION stats.
 """
 
+import inspect
+
 import numpy as np
 import pytest
 
@@ -25,14 +27,24 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
     compute_pass2_stats_sparse,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _build_bucket_arrays,
     _normalize_pass2_bucket,
     _normalize_pass2_bucket_with_log_z,
+    _prepare_per_image_pass2_inputs,
+    _reorder_to_indices,
     _score_pass2_bucket_normalized_cc,
     _score_pass2_bucket_relion_gpu_diff2,
     _winner_take_all_bucket_probs,
 )
+from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_pass2_module
 
 pytestmark = pytest.mark.unit
+
+
+def _z_rotation(angle):
+    c = np.float32(np.cos(angle))
+    s = np.float32(np.sin(angle))
+    return np.asarray([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +402,189 @@ def test_sparse_pass2_logz_normalization_masks_nonfinite_scores():
     assert float(np.asarray(max_posterior[0])) == pytest.approx(0.0)
     assert np.all(np.isfinite(np.asarray(probs)))
     assert float(np.asarray(safe_log_z[1])) == pytest.approx(0.5)
+
+
+def test_sparse_pass2_mstep_rotations_follow_score_selection_padding_and_reorder():
+    score_rotations = np.stack([_z_rotation(angle) for angle in (0.1, 0.2, 0.3, 0.4)])
+    mstep_rotations = np.stack([_z_rotation(angle) for angle in (1.1, 1.2, 1.3, 1.4)])
+    parent_map = np.asarray([0, 0, 1, 1], dtype=np.int32)
+    significant_samples = [
+        np.asarray([0, 1], dtype=np.int32),
+        np.asarray([1], dtype=np.int32),
+    ]
+
+    per_image = _prepare_per_image_pass2_inputs(
+        significant_samples,
+        n_coarse_rot=12,
+        n_coarse_trans=1,
+        nside_level=0,
+        oversampling_order=0,
+        n_fine_trans=1,
+        fine_translation_parent=np.asarray([0], dtype=np.int32),
+        rotation_log_prior=np.zeros(12, dtype=np.float32),
+        random_perturbation=0.0,
+        fine_rotations_override=score_rotations,
+        fine_mstep_rotations_override=mstep_rotations,
+        fine_rotation_parent_override=parent_map,
+    )
+
+    np.testing.assert_array_equal(per_image["oversampled_rots"][0], score_rotations)
+    np.testing.assert_array_equal(per_image["oversampled_mstep_rots"][0], mstep_rotations)
+    np.testing.assert_array_equal(per_image["oversampled_rots"][1], score_rotations[2:])
+    np.testing.assert_array_equal(per_image["oversampled_mstep_rots"][1], mstep_rotations[2:])
+
+    arrays = _build_bucket_arrays(
+        {"bucket_size": 6, "image_indices": np.asarray([0, 1], dtype=np.int64)},
+        per_image,
+        n_fine_trans=1,
+    )
+    assert arrays["mstep_rotations"] is not arrays["rotations"]
+    reordered_score, reordered_mstep = _reorder_to_indices(
+        np.asarray([1, 0], dtype=np.int64),
+        np.asarray([0, 1], dtype=np.int64),
+        arrays["rotations"],
+        arrays["mstep_rotations"],
+    )
+    identity = np.eye(3, dtype=np.float32)
+    expected_score = np.stack(
+        [
+            np.concatenate([score_rotations[2:], np.broadcast_to(identity, (4, 3, 3))]),
+            np.concatenate([score_rotations, np.broadcast_to(identity, (2, 3, 3))]),
+        ]
+    )
+    expected_mstep = np.stack(
+        [
+            np.concatenate([mstep_rotations[2:], np.broadcast_to(identity, (4, 3, 3))]),
+            np.concatenate([mstep_rotations, np.broadcast_to(identity, (2, 3, 3))]),
+        ]
+    )
+    np.testing.assert_array_equal(reordered_score, expected_score)
+    np.testing.assert_array_equal(reordered_mstep, expected_mstep)
+
+    aliased = _prepare_per_image_pass2_inputs(
+        significant_samples,
+        n_coarse_rot=12,
+        n_coarse_trans=1,
+        nside_level=0,
+        oversampling_order=0,
+        n_fine_trans=1,
+        fine_translation_parent=np.asarray([0], dtype=np.int32),
+        rotation_log_prior=np.zeros(12, dtype=np.float32),
+        random_perturbation=0.0,
+        fine_rotations_override=score_rotations,
+        fine_rotation_parent_override=parent_map,
+    )
+    aliased_arrays = _build_bucket_arrays(
+        {"bucket_size": 6, "image_indices": np.asarray([0, 1], dtype=np.int64)},
+        aliased,
+        n_fine_trans=1,
+    )
+    assert aliased_arrays["mstep_rotations"] is aliased_arrays["rotations"]
+
+
+def test_sparse_pass2_distinct_mstep_rotations_do_not_change_score_path(monkeypatch):
+    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    score_rotations = np.stack([_z_rotation(angle) for angle in (0.1, 0.2, 0.3, 0.4)])
+    mstep_rotations = np.stack([_z_rotation(angle) for angle in (1.1, 1.2, 1.3, 1.4)])
+    parent_map = np.asarray([0, 0, 1, 1], dtype=np.int32)
+    significant_samples = [
+        np.asarray([0, 1], dtype=np.int32),
+        np.asarray([1], dtype=np.int32),
+    ]
+    dataset = MockDataset(n_images=2, seed=19)
+    volume = _hermitian_volume(VOLUME_SHAPE, seed=23)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+
+    fetched_orders = []
+
+    def reverse_fetch(ds, requested_indices):
+        fetched = np.asarray(requested_indices, dtype=np.int64)[::-1]
+        fetched_orders.append(fetched.copy())
+        return jnp.asarray(ds._images[fetched]), jnp.asarray(ds.CTF_params[fetched]), fetched
+
+    monkeypatch.setattr(sparse_pass2_module, "fetch_indexed_batch", reverse_fetch)
+    captured_adjoint_rotations = []
+
+    def capture_adjoint(flat_block, flat_rotations, volume_accumulator, **kwargs):
+        del flat_block, kwargs
+        captured_adjoint_rotations.append(np.asarray(flat_rotations))
+        return volume_accumulator
+
+    monkeypatch.setattr(sparse_pass2_module, "_accumulate_adjoint_block_chunked", capture_adjoint)
+    common = dict(
+        nside_level=0,
+        disc_type="linear_interp",
+        oversampling_order=0,
+        current_size=None,
+        return_stats=True,
+        fine_rotations_override=score_rotations,
+        fine_rotation_parent_override=parent_map,
+        fine_translations_override=np.zeros((1, 2), dtype=np.float32),
+        fine_translation_parent_override=np.asarray([0], dtype=np.int32),
+    )
+    baseline = compute_pass2_stats_sparse(
+        dataset,
+        volume,
+        mean_variance,
+        noise_variance,
+        np.zeros((1, 2), dtype=np.float32),
+        significant_samples,
+        **common,
+    )
+    captured_adjoint_rotations.clear()
+    fetched_orders.clear()
+    overridden = compute_pass2_stats_sparse(
+        dataset,
+        volume,
+        mean_variance,
+        noise_variance,
+        np.zeros((1, 2), dtype=np.float32),
+        significant_samples,
+        fine_mstep_rotations_override=mstep_rotations,
+        **common,
+    )
+
+    np.testing.assert_array_equal(overridden[2], baseline[2])
+    np.testing.assert_array_equal(overridden[3], baseline[3])
+    np.testing.assert_array_equal(overridden[5], baseline[5])
+    np.testing.assert_array_equal(
+        np.asarray(overridden[6].best_log_score_per_image),
+        np.asarray(baseline[6].best_log_score_per_image),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(overridden[6].max_posterior_per_image),
+        np.asarray(baseline[6].max_posterior_per_image),
+    )
+
+    assert len(fetched_orders) == 1
+    identity = np.eye(3, dtype=np.float32)
+    selected_mstep_rotations = [mstep_rotations, mstep_rotations[2:]]
+    expected_rows = []
+    for image_idx in fetched_orders[0].tolist():
+        selected = selected_mstep_rotations[image_idx]
+        expected_rows.extend(selected)
+        expected_rows.extend(np.broadcast_to(identity, (16 - selected.shape[0], 3, 3)))
+    expected_adjoint_rotations = np.asarray(expected_rows, dtype=np.float32)
+    assert len(captured_adjoint_rotations) == 2
+    for actual in captured_adjoint_rotations:
+        np.testing.assert_array_equal(actual, expected_adjoint_rotations)
+
+
+def test_sparse_pass2_per_particle_xhalf_uses_mstep_rotation_tensor():
+    source = inspect.getsource(sparse_pass2_module.compute_pass2_stats_sparse_bucketed)
+    assert "flat_backproject_rotations" in source
+    assert "flatten_bucket_rotations(jnp.asarray(mstep_rotations[:, start:stop]))" in source
+    assert (
+        "_accumulate_relion_x_half_per_particle_launches(\n"
+        "                    summed,\n"
+        "                    ctf_probs,\n"
+        "                    jnp.asarray(mstep_rotations),"
+    ) in source
+
+    fused_source = inspect.getsource(sparse_pass2_module.compute_k_class_pass2_stats_sparse_fused)
+    assert "flat_backproject_rotations_by_class" in fused_source
+    assert "active_flat_rotations = flat_backproject_rotations_by_class[class_index]" in fused_source
 
 
 class TestSparsePass2Bucketed:
