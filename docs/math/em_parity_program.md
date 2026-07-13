@@ -1654,23 +1654,43 @@ fused x-half backprojectors. CPU policy/geometry tests pass `47/47`; A100 job
 `11125183` passes the fused/separate and rectangular/odd-cubic CUDA regressions
 `2/2`.
 
-That arithmetic-order fix does **not** remove any of the 22 axial-rim cutoff
-flips or the percent-scale half-accumulator residual. Each flip compares
+That coordinate-order fix alone does **not** remove any of the 22 axial-rim
+cutoff flips or the percent-scale half-accumulator residual. Each flip compares
 `radius2=2304.0` with `2304.000244140625`, with 15 RELION-reject/RECOVAR-pass
-and seven RELION-pass/RECOVAR-reject decisions. Exact captured RELION Euler
-matrices also do not close them. The remaining first boundary is therefore the
-CUDA evaluation/code generation of `xp*xp + yp*yp + zp*zp` at radius 48, not
-the support definition, Euler construction, interpolation base, Fweight, or
-atomic ordering. RELION was compiled with CUDA 12.6 and the RECOVAR diagnostic
-with CUDA 12.8. Same-toolkit A100 job `11125480` rebuilds the corrected
-RECOVAR diagnostic with CUDA 12.6.85 and native `sm_80`; it leaves exactly 22
-cutoff flips and unchanged half errors `0.012369786/0.016898166`, while all
-fold/base/neighbor differences remain zero and coefficient relative L2 remains
-`1.072e-6`. Toolkit version alone is therefore rejected. RELION PTX evaluates
-the radius as `mul(y,y)`, `fma(x,x,y2)`, `fma(z,z,xy2)`; compare the complete
-RECOVAR coordinate/square SASS and test that explicit float32 sequence in the
-private signature build. Do not weaken or remove the rotated-radius predicate
-merely to make this fixture pass.
+and seven RELION-pass/RECOVAR-reject decisions. RELION was compiled with CUDA
+12.6 and the RECOVAR diagnostic with CUDA 12.8. Same-toolkit A100 job
+`11125480` rebuilds the corrected RECOVAR diagnostic with CUDA 12.6.85 and
+native `sm_80`; it leaves exactly 22 cutoff flips and unchanged half errors
+`0.012369786/0.016898166`, while all fold/base/neighbor differences remain
+zero and coefficient relative L2 remains `1.072e-6`. Toolkit version alone is
+therefore rejected.
+
+The next two discriminators localize the remaining pre-atomic discrepancy.
+RELION evaluates physical `(x,y,z)` radius as `mul(y,y)`, `fma(x,x,y2)`, then
+`fma(z,z,xy2)`. Replaying that explicit sequence reduces the 22 cutoff flips
+to five and the deterministic half errors to `0.000884305/0.007236143` (job
+`11125903`). Each survivor is explained by a one-ULP difference in the Euler
+coefficient used by its axial source. Combining the explicit radius sequence
+with the exact captured RELION Euler bits removes every cutoff, fold, base, and
+neighbor mismatch and reduces deterministic half-accumulator relative L2 to
+`2.919113e-7/2.700236e-7` (job `11126507`). This closes the captured panel's
+pre-atomic geometry boundary, but does not yet provide a valid production
+source for the RELION matrix bits.
+
+Commit `341e778b` pins the physical-axis radius accumulation order in the
+strict single, batched, and fused x-half CUDA kernels. CPU policy/geometry
+tests pass `48/48`; A100 job `11126678` passes the fused/separate and
+rectangular/odd-cubic CUDA regressions `2/2`. A naive matrix-generator fix is
+explicitly rejected: A100/CUDA-12.6 job `11126900` recovers the source angle
+rows and regenerates current RECOVAR matrices bit-exactly, but literal CUDA
+`sincosf` disagrees with the captured RELION matrices in 855 elements across
+all 128 winners, and JAX float32 trigonometry disagrees in 1,046 elements.
+Current evidence indicates that the captured weighted-average/backprojection
+matrices follow RELION's CPU `RFLOAT` perturbed-angle, double-trigonometry, and
+matrix-inversion path rather than the GPU projector-plan's unperturbed-angle
+plus `doR=true` path. Trace and reproduce that exact call chain before changing
+the production Euler generator; do not substitute captured fixture matrices or
+weaken the rotated-radius predicate.
 
 Full evidence and the proposed 22-cutoff/five-base A100 golden regression are
 in
