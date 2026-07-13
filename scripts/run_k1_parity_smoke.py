@@ -208,12 +208,12 @@ def collect_provenance(command: list[str], inputs: SmokeInputs, stacks: list[Pat
     }
 
 
-def _finite_curve(values) -> tuple[list[float], int]:
+def _finite_curve(values) -> tuple[list[float | None], int]:
     import numpy as np
 
     curve = np.asarray(values, dtype=np.float64).reshape(-1)
     finite_non_dc = int(np.isfinite(curve[1:]).sum())
-    return curve.tolist(), finite_non_dc
+    return [float(value) if np.isfinite(value) else None for value in curve], finite_non_dc
 
 
 def quality_summary(npz_path: Path, *, auc_tolerance: float, min_relion_fsc_auc: float) -> dict:
@@ -273,8 +273,8 @@ def quality_summary(npz_path: Path, *, auc_tolerance: float, min_relion_fsc_auc:
         "passed": not failures,
         "failures": failures,
         "primary_fsc_quality": primary,
-        "merged_fsc_auc_deficit_vs_relion": deficit,
-        "final_merged_fsc_auc_vs_relion": direct_auc,
+        "merged_fsc_auc_deficit_vs_relion": float(deficit) if np.isfinite(deficit) else None,
+        "final_merged_fsc_auc_vs_relion": float(direct_auc) if np.isfinite(direct_auc) else None,
         "thresholds": {
             "max_merged_fsc_auc_deficit": auc_tolerance,
             "min_final_merged_fsc_auc_vs_relion": min_relion_fsc_auc,

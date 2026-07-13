@@ -79,3 +79,20 @@ def test_fsc_auc_deficit_fails_quality_gate(tmp_path):
     summary = smoke.quality_summary(result, auc_tolerance=1e-4, min_relion_fsc_auc=0.99)
     assert not summary["passed"]
     assert any("trails RELION" in failure for failure in summary["failures"])
+
+
+def test_nonfinite_high_frequency_shell_is_json_safe(tmp_path):
+    result = tmp_path / "refinement_results.npz"
+    arrays = {
+        "final_merged_fsc_vs_relion": np.array([1.0, 1.0, 0.999, np.nan]),
+        "final_merged_fsc_auc_vs_relion": np.float64(0.9995),
+    }
+    for label in smoke.QUALITY_LABELS:
+        arrays[f"{label}_fsc_vs_gt"] = np.array([1.0, 0.8, 0.4, np.nan])
+        arrays[f"{label}_fsc_auc_vs_gt"] = np.float64(0.6)
+        arrays[f"{label}_shell_05"] = np.int32(2)
+        arrays[f"{label}_shell_0143"] = np.int32(-1)
+    np.savez(result, **arrays)
+    summary = smoke.quality_summary(result, auc_tolerance=1e-4, min_relion_fsc_auc=0.99)
+    assert summary["passed"]
+    assert summary["primary_fsc_quality"]["recovar_merged"]["fsc_curve"][-1] is None
