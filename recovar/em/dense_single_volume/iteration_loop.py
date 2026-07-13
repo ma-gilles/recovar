@@ -252,13 +252,14 @@ def _replay_perturbation_seed(
     replay_dir: str,
     relion_iteration: int,
     explicit_seed: int | None,
+    replay_prefix: str = "run",
 ) -> int | None:
     """Return the RELION optimiser seed that generated a sampling state."""
     if explicit_seed is not None:
         return int(explicit_seed)
     candidates = [
-        os.path.join(replay_dir, f"run_it{int(relion_iteration):03d}_optimiser.star"),
-        os.path.join(replay_dir, "run_optimiser.star"),
+        os.path.join(replay_dir, f"{replay_prefix}_it{int(relion_iteration):03d}_optimiser.star"),
+        os.path.join(replay_dir, f"{replay_prefix}_optimiser.star"),
     ]
     for path in candidates:
         if not os.path.exists(path):
@@ -275,6 +276,7 @@ def _resolve_replay_random_perturbation(
     perturbation_factor: float,
     relion_iteration: int,
     replay_dir: str,
+    replay_prefix: str = "run",
     explicit_seed: int | None,
     precision_mode: str,
 ) -> tuple[float, str]:
@@ -284,7 +286,12 @@ def _resolve_replay_random_perturbation(
     if precision_mode == "star":
         return float(star_value), "star"
 
-    seed = _replay_perturbation_seed(replay_dir, relion_iteration, explicit_seed)
+    seed = _replay_perturbation_seed(
+        replay_dir,
+        relion_iteration,
+        explicit_seed,
+        replay_prefix=replay_prefix,
+    )
     if seed is None:
         if precision_mode == "seed_exact":
             raise ValueError(
@@ -333,6 +340,7 @@ def _maybe_debug_replay_relion_references(
     *,
     means,
     perturb_replay_relion_dir,
+    perturb_replay_relion_prefix: str = "run",
     init_relion_iteration: int,
     iteration: int,
     volume_shape,
@@ -362,9 +370,11 @@ def _maybe_debug_replay_relion_references(
     relion_dir = Path(perturb_replay_relion_dir)
     replayed_means = []
     for half_idx in range(2):
-        map_path = relion_dir / f"run_it{relion_iter:03d}_half{half_idx + 1}_class001.mrc"
+        map_path = relion_dir / (
+            f"{perturb_replay_relion_prefix}_it{relion_iter:03d}_half{half_idx + 1}_class001.mrc"
+        )
         if not map_path.exists():
-            shared_path = relion_dir / f"run_it{relion_iter:03d}_class001.mrc"
+            shared_path = relion_dir / f"{perturb_replay_relion_prefix}_it{relion_iter:03d}_class001.mrc"
             if shared_path.exists():
                 map_path = shared_path
         if not map_path.exists():
@@ -3211,6 +3221,7 @@ def refine_single_volume(
     perturb_factor=0.0,
     perturb_seed=None,
     perturb_replay_relion_dir=None,
+    perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
     init_fsc=None,
     init_ave_Pmax=None,
@@ -3368,6 +3379,7 @@ def refine_single_volume(
         perturb_factor = parity.perturb_factor
         perturb_seed = parity.perturb_seed
         perturb_replay_relion_dir = parity.perturb_replay_relion_dir
+        perturb_replay_relion_prefix = parity.perturb_replay_relion_prefix
         perturb_replay_precision = parity.perturb_replay_precision
         emulate_relion_firstiter_cc = parity.emulate_relion_firstiter_cc
         relion_firstiter_ini_high_angstrom = parity.relion_firstiter_ini_high_angstrom
@@ -3438,6 +3450,7 @@ def refine_single_volume(
         perturb_factor=perturb_factor,
         perturb_seed=perturb_seed,
         perturb_replay_relion_dir=perturb_replay_relion_dir,
+        perturb_replay_relion_prefix=perturb_replay_relion_prefix,
         perturb_replay_precision=perturb_replay_precision,
         init_fsc=init_fsc,
         init_ave_Pmax=init_ave_Pmax,
@@ -3506,6 +3519,7 @@ def _run_relion_iteration_loop(
     perturb_factor=0.0,
     perturb_seed=None,
     perturb_replay_relion_dir=None,
+    perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
     init_fsc=None,
     init_ave_Pmax=None,
@@ -3635,11 +3649,11 @@ def _run_relion_iteration_loop(
     if perturb_replay_relion_dir is not None and int(init_relion_iteration) > 0:
         _init_opt_star = os.path.join(
             perturb_replay_relion_dir,
-            f"run_it{int(init_relion_iteration):03d}_optimiser.star",
+            f"{perturb_replay_relion_prefix}_it{int(init_relion_iteration):03d}_optimiser.star",
         )
         _init_model_star = os.path.join(
             perturb_replay_relion_dir,
-            f"run_it{int(init_relion_iteration):03d}_half1_model.star",
+            f"{perturb_replay_relion_prefix}_it{int(init_relion_iteration):03d}_half1_model.star",
         )
         if os.path.exists(_init_model_star):
             _init_model_meta = read_relion_model_metadata(_init_model_star)
@@ -4175,6 +4189,7 @@ def _run_relion_iteration_loop(
         replay_result = apply_iter_replay_overrides(
             iter_replay_override=iter_replay_override,
             perturb_replay_relion_dir=perturb_replay_relion_dir,
+            perturb_replay_relion_prefix=perturb_replay_relion_prefix,
             init_relion_iteration=init_relion_iteration,
             iteration=iteration,
             state=state,
@@ -4255,6 +4270,7 @@ def _run_relion_iteration_loop(
         means = _maybe_debug_replay_relion_references(
             means=means,
             perturb_replay_relion_dir=perturb_replay_relion_dir,
+            perturb_replay_relion_prefix=perturb_replay_relion_prefix,
             init_relion_iteration=init_relion_iteration,
             iteration=iteration,
             volume_shape=volume_shape,
@@ -4358,6 +4374,7 @@ def _run_relion_iteration_loop(
                 perturbation_factor=float(_replay_meta["perturbation_factor"]),
                 relion_iteration=replay_relion_iteration,
                 replay_dir=str(perturb_replay_relion_dir),
+                replay_prefix=perturb_replay_relion_prefix,
                 explicit_seed=perturb_seed,
                 precision_mode=str(perturb_replay_precision),
             )
@@ -6056,7 +6073,7 @@ def _run_relion_iteration_loop(
             if perturb_replay_relion_dir is not None:
                 _model_path = os.path.join(
                     str(perturb_replay_relion_dir),
-                    f"run_it{iteration + 1:03d}_half1_model.star",
+                    f"{perturb_replay_relion_prefix}_it{iteration + 1:03d}_half1_model.star",
                 )
                 _tau2_dump["relion_model_path"] = np.asarray(_model_path)
                 _tau2_dump["relion_model_exists"] = np.bool_(os.path.exists(_model_path))
@@ -6319,7 +6336,7 @@ def _run_relion_iteration_loop(
             _optimiser_iter = int(init_relion_iteration) + iteration + 1
             _optimiser_star = os.path.join(
                 perturb_replay_relion_dir,
-                f"run_it{_optimiser_iter:03d}_optimiser.star",
+                f"{perturb_replay_relion_prefix}_it{_optimiser_iter:03d}_optimiser.star",
             )
             if os.path.exists(_optimiser_star):
                 try:
@@ -6395,10 +6412,16 @@ def _run_relion_iteration_loop(
             if perturb_replay_relion_dir is not None and not state.has_converged:
                 _next_sampling_star = os.path.join(
                     perturb_replay_relion_dir,
-                    f"run_it{_optimiser_iter + 1:03d}_sampling.star",
+                    f"{perturb_replay_relion_prefix}_it{_optimiser_iter + 1:03d}_sampling.star",
                 )
-                _final_sampling_star = os.path.join(perturb_replay_relion_dir, "run_sampling.star")
-                _final_optimiser_star = os.path.join(perturb_replay_relion_dir, "run_optimiser.star")
+                _final_sampling_star = os.path.join(
+                    perturb_replay_relion_dir,
+                    f"{perturb_replay_relion_prefix}_sampling.star",
+                )
+                _final_optimiser_star = os.path.join(
+                    perturb_replay_relion_dir,
+                    f"{perturb_replay_relion_prefix}_optimiser.star",
+                )
                 if (
                     not os.path.exists(_next_sampling_star)
                     and os.path.exists(_final_sampling_star)
@@ -6879,18 +6902,21 @@ def _run_relion_iteration_loop(
             (
                 os.path.join(
                     perturb_replay_relion_dir,
-                    f"run_it{final_sampling_relion_iteration:03d}_sampling.star",
+                    f"{perturb_replay_relion_prefix}_it{final_sampling_relion_iteration:03d}_sampling.star",
                 ),
                 "final-numbered",
             ),
             (
-                os.path.join(perturb_replay_relion_dir, "run_sampling.star"),
+                os.path.join(
+                    perturb_replay_relion_dir,
+                    f"{perturb_replay_relion_prefix}_sampling.star",
+                ),
                 "final",
             ),
             (
                 os.path.join(
                     perturb_replay_relion_dir,
-                    f"run_it{final_numbered_sampling_relion_iteration:03d}_sampling.star",
+                    f"{perturb_replay_relion_prefix}_it{final_numbered_sampling_relion_iteration:03d}_sampling.star",
                 ),
                 "last-numbered",
             ),
@@ -6913,6 +6939,7 @@ def _run_relion_iteration_loop(
                 perturbation_factor=final_perturbation_factor,
                 relion_iteration=final_replay_relion_iteration,
                 replay_dir=str(perturb_replay_relion_dir),
+                replay_prefix=perturb_replay_relion_prefix,
                 explicit_seed=perturb_seed,
                 precision_mode=str(perturb_replay_precision),
             )
@@ -6922,7 +6949,7 @@ def _run_relion_iteration_loop(
             final_translation_step = float(final_replay_meta["offset_step"]) / px
             numbered_sampling_path = os.path.join(
                 perturb_replay_relion_dir,
-                f"run_it{final_numbered_sampling_relion_iteration:03d}_sampling.star",
+                f"{perturb_replay_relion_prefix}_it{final_numbered_sampling_relion_iteration:03d}_sampling.star",
             )
             if (
                 final_sampling_star_source == "final"

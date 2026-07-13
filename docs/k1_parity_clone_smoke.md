@@ -46,9 +46,9 @@ stack paths are resolved from the STAR directory by default; use
 and `--relion-dir` override the convention. No dataset or RELION path is
 hardcoded in the launcher.
 
-Only the RELION prefix `run` is currently accepted. Although the top-level
-runner accepts another prefix, lower replay paths still contain `run_it...`;
-the launcher rejects that case rather than claiming incomplete portability.
+The default RELION prefix is `run`; use `--relion-run-prefix` for a differently
+named RELION job. The prefix is propagated through numbered replay state,
+unnumbered final state, perturbation seed recovery, and oracle-map lookup.
 
 Validate immediately after setup, without selecting or initializing a GPU:
 

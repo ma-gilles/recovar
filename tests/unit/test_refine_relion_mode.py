@@ -338,7 +338,10 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
     class Cryo:
         voxel_size = 1.4166666666666667
 
-    def fake_sampling_metadata(_path):
+    sampling_paths = []
+
+    def fake_sampling_metadata(path):
+        sampling_paths.append(path)
         return {
             "random_perturbation": -0.11451,
             "perturbation_factor": 0.5,
@@ -359,6 +362,7 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
     result = iteration_loop_module.apply_iter_replay_overrides(
         iter_replay_override=None,
         perturb_replay_relion_dir=str(tmp_path),
+        perturb_replay_relion_prefix="custom",
         init_relion_iteration=6,
         iteration=0,
         state=state,
@@ -389,6 +393,7 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
     assert get_translation_grid(state.translation_range, state.translation_step).shape[0] == 29
     assert state.translation_range == pytest.approx(3.0)
     assert state.translation_step == pytest.approx(1.0)
+    assert sampling_paths == [str(tmp_path / "custom_it007_sampling.star")]
     np.testing.assert_allclose(replay_grid, state_grid, rtol=0.0, atol=1e-6)
 
 
@@ -11033,6 +11038,7 @@ class TestRelionDefault:
             schedule=RefinementSchedule(max_iter=7, init_healpix_order=3, max_healpix_order=4),
             parity=RelionParityOptions(
                 tau2_fudge=4.0,
+                perturb_replay_relion_prefix="custom",
                 emulate_relion_firstiter_cc=True,
                 do_solvent_fsc_correction=True,
             ),
@@ -11063,6 +11069,7 @@ class TestRelionDefault:
         assert captured["init_healpix_order"] == 3
         assert captured["max_healpix_order"] == 4
         assert captured["tau2_fudge"] == 4.0
+        assert captured["perturb_replay_relion_prefix"] == "custom"
         assert captured["emulate_relion_firstiter_cc"] is True
         assert captured["do_solvent_fsc_correction"] is True
         assert captured["n_classes"] == 4

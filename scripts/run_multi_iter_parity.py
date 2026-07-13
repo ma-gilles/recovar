@@ -1223,6 +1223,7 @@ def main():
         tau2_fudge=1.0,
         perturb_factor=0.5,
         perturb_replay_relion_dir=str(relion_dir),
+        perturb_replay_relion_prefix=run_prefix,
         init_relion_iteration=iteration,
         init_fsc=fsc,
         init_ave_Pmax=ave_Pmax,

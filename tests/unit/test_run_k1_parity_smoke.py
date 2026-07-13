@@ -28,10 +28,9 @@ def test_validate_portable_fixture_contract(tmp_path):
     assert len(smoke.required_relion_paths(inputs)) == 14
 
 
-def test_nondefault_prefix_fails_until_lower_replay_is_plumbed(tmp_path):
+def test_nondefault_prefix_is_validated_portably(tmp_path):
     inputs = _fixture(tmp_path, prefix="other")
-    with pytest.raises(ValueError, match="lower replay code"):
-        smoke.validate_inputs(inputs)
+    assert smoke.validate_inputs(inputs) == [(tmp_path / "particles.mrcs").resolve()]
 
 
 def test_runner_command_is_one_iteration_split_half_smoke(tmp_path):

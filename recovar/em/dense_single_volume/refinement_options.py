@@ -60,6 +60,7 @@ class RelionParityOptions:
     perturb_factor: float = 0.0
     perturb_seed: int | None = None
     perturb_replay_relion_dir: str | None = None
+    perturb_replay_relion_prefix: str = "run"
     perturb_replay_precision: Literal["auto", "seed_exact", "star"] = "auto"
     emulate_relion_firstiter_cc: bool = False
     relion_firstiter_ini_high_angstrom: float | None = None

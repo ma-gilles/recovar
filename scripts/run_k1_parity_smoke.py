@@ -106,11 +106,6 @@ def referenced_particle_stacks(data_star: Path, particle_root: Path) -> list[Pat
 
 
 def validate_inputs(inputs: SmokeInputs, *, relion_src_dir: str | None = None) -> list[Path]:
-    if inputs.run_prefix != "run":
-        raise ValueError(
-            "Only --relion-run-prefix run is currently supported: lower replay code still "
-            "contains run_it... paths. This fail-fast prevents a false portability claim."
-        )
     missing = [path for path in (inputs.data_star, inputs.gt_volume) if not path.is_file()]
     if not inputs.relion_dir.is_dir():
         missing.append(inputs.relion_dir)

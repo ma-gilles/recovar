@@ -178,6 +178,7 @@ def apply_iter_replay_overrides(
     *,
     iter_replay_override: dict | None,
     perturb_replay_relion_dir: str | None,
+    perturb_replay_relion_prefix: str = "run",
     init_relion_iteration: int,
     iteration: int,
     state,
@@ -229,7 +230,7 @@ def apply_iter_replay_overrides(
     if perturb_replay_relion_dir is not None:
         _star = os.path.join(
             perturb_replay_relion_dir,
-            f"run_it{init_relion_iteration + iteration + 1:03d}_sampling.star",
+            f"{perturb_replay_relion_prefix}_it{init_relion_iteration + iteration + 1:03d}_sampling.star",
         )
         _replay_meta = _il.read_relion_sampling_metadata(_star)
         _relion_hp = int(_replay_meta["healpix_order"])
@@ -312,8 +313,14 @@ def apply_iter_replay_overrides(
         # Reuse it for both current_size and local-prior sigmas.
         _cs_iter = _replay_control_model_iteration(init_relion_iteration, iteration)
         _model_star_candidates = [
-            os.path.join(perturb_replay_relion_dir, f"run_it{_cs_iter:03d}_half1_model.star"),
-            os.path.join(perturb_replay_relion_dir, f"run_it{_cs_iter:03d}_model.star"),
+            os.path.join(
+                perturb_replay_relion_dir,
+                f"{perturb_replay_relion_prefix}_it{_cs_iter:03d}_half1_model.star",
+            ),
+            os.path.join(
+                perturb_replay_relion_dir,
+                f"{perturb_replay_relion_prefix}_it{_cs_iter:03d}_model.star",
+            ),
         ]
         _model_star = next((path for path in _model_star_candidates if os.path.exists(path)), None)
         if _model_star is not None:
@@ -397,7 +404,7 @@ def apply_iter_replay_overrides(
                 for _half_idx in range(2):
                     _prior_star = os.path.join(
                         perturb_replay_relion_dir,
-                        f"run_it{_prior_iter:03d}_half{_half_idx + 1}_model.star",
+                        f"{perturb_replay_relion_prefix}_it{_prior_iter:03d}_half{_half_idx + 1}_model.star",
                     )
                     if not os.path.exists(_prior_star):
                         if not k_class_enabled:
@@ -408,7 +415,7 @@ def apply_iter_replay_overrides(
                         # both RECOVAR halfsets.
                         _prior_star = os.path.join(
                             perturb_replay_relion_dir,
-                            f"run_it{_prior_iter:03d}_model.star",
+                            f"{perturb_replay_relion_prefix}_it{_prior_iter:03d}_model.star",
                         )
                         if not os.path.exists(_prior_star):
                             continue
