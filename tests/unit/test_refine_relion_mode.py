@@ -142,6 +142,7 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket_abs2_weighted_on_demand,
 )
 from recovar.em.sampling import (
+    _get_relion_rotation_grid_eulers_float64,
     apply_relion_rotation_perturbation,
     apply_relion_rotation_perturbation_to_eulers,
     build_local_search_grid_metadata,
@@ -2210,6 +2211,79 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
     assert captured["rotation_log_prior"] is None
 
 
+@pytest.mark.parametrize("k_class_enabled", [False, True])
+def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch, rng, k_class_enabled):
+    dataset = MockDataset(1, rng)
+    score_grid = np.repeat(np.eye(3, dtype=np.float32)[None], 2, axis=0)
+    mstep_grid = np.repeat((5.0 * np.eye(3, dtype=np.float32))[None], 2, axis=0)
+    captured = {}
+
+    class DispatchCaptured(Exception):
+        pass
+
+    def fake_run_local_search_iteration(*args, **kwargs):
+        _ = args
+        captured.update(kwargs)
+        raise DispatchCaptured
+
+    monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration", fake_run_local_search_iteration)
+    with pytest.raises(DispatchCaptured):
+        iteration_loop_module._score_half_local(
+            k=0,
+            experiment_dataset=dataset,
+            means_k=(jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64) if not k_class_enabled else jnp.zeros((2, VOLUME_SIZE), dtype=jnp.complex64)),
+            mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
+            noise_variance_k=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            previous_best_rotation_eulers_k=np.zeros((dataset.n_units, 3), dtype=np.float32),
+            local_search_rotations=score_grid,
+            local_search_rotation_eulers=np.zeros((2, 3), dtype=np.float32),
+            local_search_mstep_rotations=mstep_grid,
+            local_search_order=0,
+            sigma_rot=np.deg2rad(1.0),
+            sigma_psi=np.deg2rad(1.0),
+            current_translations=np.zeros((1, 2), dtype=np.float32),
+            base_translations=np.zeros((1, 2), dtype=np.float32),
+            trans_prior_center=np.zeros((dataset.n_units, 2), dtype=np.float32),
+            trans_prior_center_for_engine=np.zeros((dataset.n_units, 2), dtype=np.float32),
+            current_sigma_offset_angstrom=1.0,
+            current_translation_range=1.0,
+            disc_type="linear_interp",
+            cs_for_engine=None,
+            local_pass1_current_size=None,
+            image_corrections_k=None,
+            scale_corrections_k=None,
+            translation_search_base=None,
+            disable_adjoint_y=False,
+            disable_adjoint_ctf=False,
+            max_significants=-1,
+            state=type("State", (), {"adaptive_oversampling": 0})(),
+            iteration=3,
+            save_intermediates_dir=None,
+            local_search_random_perturbation=0.0,
+            local_search_angular_sampling_deg=relion_angular_sampling_deg(0),
+            local_parent_oversampling_order=0,
+            diagnostic_score_only=False,
+            local_search_translation_prior_mode="current",
+            replay_prior_translations=None,
+            rotation_log_prior_k=None,
+            class_log_priors=np.zeros(2, dtype=np.float32) if k_class_enabled else None,
+            k_class_enabled=k_class_enabled,
+            collect_local_search_profile=False,
+            safe_batch_sizes=lambda *args, **kwargs: (1, 16),
+            class_assignments=[None],
+            class_posterior_per_half=[None],
+            class_full_posterior_per_half=[None],
+            best_pose_rotations=[None],
+            best_pose_rotation_eulers=[None],
+            best_pose_translations=[None],
+            local_profile_history=[],
+        )
+
+    np.testing.assert_array_equal(captured["rotation_grid_mstep_rotations"], mstep_grid)
+    assert captured["generate_relion_mstep_rotations"] is True
+    assert (captured["class_log_priors"] is not None) is k_class_enabled
+
+
 def test_build_local_hypothesis_layout_parent_expands_translation_grid_and_priors():
     parent_order = 1
     fine_order = 2
@@ -2284,6 +2358,74 @@ def test_build_local_hypothesis_layout_parent_expands_translation_grid_and_prior
     )
 
 
+@pytest.mark.parametrize("builder_name", ["parent_expanded", "adaptive_local"])
+def test_lazy_pass2_layouts_request_aligned_relion_mstep_rotations(monkeypatch, builder_name):
+    calls = []
+
+    def fake_oversampled_rotations(parent_ids, *args, **kwargs):
+        _ = args
+        parent_ids = np.asarray(parent_ids, dtype=np.int64)
+        calls.append(dict(kwargs))
+        n_rows = int(parent_ids.size)
+        score = np.broadcast_to(3.0 * np.eye(3, dtype=np.float32), (n_rows, 3, 3)).copy()
+        mstep = np.broadcast_to(7.0 * np.eye(3, dtype=np.float32), (n_rows, 3, 3)).copy()
+        parent_map = np.arange(n_rows, dtype=np.int64)
+        child_ids = parent_ids.copy()
+        outputs = [score, parent_map]
+        if kwargs.get("return_rotation_indices"):
+            outputs.append(child_ids)
+        if kwargs.get("return_mstep_rotations"):
+            outputs.append(mstep)
+        return tuple(outputs)
+
+    monkeypatch.setattr(local_layout_module, "get_oversampled_rotation_grid_from_samples", fake_oversampled_rotations)
+    translations = np.array([[0.0, 0.0]], dtype=np.float32)
+    if builder_name == "parent_expanded":
+        layout = build_local_hypothesis_layout(
+            np.zeros((1, 3), dtype=np.float32),
+            None,
+            0.0,
+            0.0,
+            1,
+            translations,
+            np.zeros((1, 2), dtype=np.float32),
+            1.0,
+            None,
+            1.0,
+            grid_metadata=build_local_search_grid_metadata(1),
+            local_parent_oversampling_order=1,
+            generate_relion_mstep_rotations=True,
+        )
+    else:
+        parent_layout = LocalHypothesisLayout(
+            n_global_rotations=rotation_grid_size(0),
+            n_pixels=12,
+            n_psi=1,
+            rotation_offsets=np.array([0, 1], dtype=np.int64),
+            rotation_ids_flat=np.array([0], dtype=np.int32),
+            rotations_flat=np.eye(3, dtype=np.float32)[None],
+            rotation_log_priors_flat=np.zeros(1, dtype=np.float32),
+            rotation_counts=np.ones(1, dtype=np.int32),
+            translation_grid=translations,
+            translation_log_priors=np.zeros((1, 1), dtype=np.float32),
+        )
+        layout = build_local_adaptive_pass2_hypothesis_layout(
+            parent_layout,
+            [None],
+            0,
+            oversampling_order=1,
+        )
+    assert calls and all(call["return_mstep_rotations"] is True for call in calls)
+    np.testing.assert_array_equal(
+        layout.rotations_flat,
+        np.broadcast_to(3.0 * np.eye(3, dtype=np.float32), layout.rotations_flat.shape),
+    )
+    np.testing.assert_array_equal(
+        layout.mstep_rotations_flat,
+        np.broadcast_to(7.0 * np.eye(3, dtype=np.float32), layout.rotations_flat.shape),
+    )
+
+
 def test_build_local_hypothesis_layout_factorized_chunking_preserves_support(monkeypatch):
     healpix_order = 3
     grid_metadata = build_local_search_grid_metadata(healpix_order)
@@ -2331,6 +2473,12 @@ def test_selected_rotation_matrices_match_full_perturbed_grid():
         random_perturbation,
         angular_sampling_deg,
     )
+    _, _, full_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+        _get_relion_rotation_grid_eulers_float64(healpix_order),
+        random_perturbation,
+        angular_sampling_deg,
+        return_mstep_rotations=True,
+    )
     rotation_ids = np.array([0, 3, 17, rotation_grid_size(healpix_order) - 1], dtype=np.int32)
 
     selected_rotations = _selected_rotation_matrices(
@@ -2347,6 +2495,39 @@ def test_selected_rotation_matrices_match_full_perturbed_grid():
         atol=1e-6,
         rtol=1e-6,
     )
+    selected_mstep_rotations = local_layout_module._selected_mstep_rotation_matrices(
+        rotation_ids,
+        None,
+        grid_metadata,
+        random_perturbation=random_perturbation,
+        angular_sampling_deg=angular_sampling_deg,
+    )
+    np.testing.assert_array_equal(selected_mstep_rotations, full_mstep_rotations[rotation_ids])
+
+
+def test_relion_mstep_generation_keeps_source_eulers_float64_until_host_inverse():
+    healpix_order = 0
+    source_eulers = _get_relion_rotation_grid_eulers_float64(healpix_order)
+    public_eulers = get_relion_rotation_grid_eulers(healpix_order)
+    angular_sampling_deg = relion_angular_sampling_deg(healpix_order)
+
+    _, _, exact_mstep = apply_relion_rotation_perturbation_to_eulers(
+        source_eulers,
+        0.25,
+        angular_sampling_deg,
+        return_mstep_rotations=True,
+    )
+    _, _, late_mstep = apply_relion_rotation_perturbation_to_eulers(
+        source_eulers.astype(np.float32),
+        0.25,
+        angular_sampling_deg,
+        return_mstep_rotations=True,
+    )
+
+    assert source_eulers.dtype == np.float64
+    assert public_eulers.dtype == np.float32
+    np.testing.assert_array_equal(public_eulers, source_eulers.astype(np.float32))
+    assert np.count_nonzero(exact_mstep.view(np.uint32) != late_mstep.view(np.uint32)) > 0
 
 
 def test_exact_local_fine_grid_precompute_auto_policy():
@@ -3450,6 +3631,73 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         atol=1e-6,
     )
     assert len(outputs) == 5
+
+
+@pytest.mark.parametrize("k_class_enabled", [False, True])
+def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, rng, k_class_enabled):
+    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+
+    dataset = MockDataset(1, rng)
+    score_grid = get_relion_rotation_grid(0).astype(np.float32)
+    mstep_grid = np.arange(score_grid.size, dtype=np.float32).reshape(score_grid.shape)
+    captured = {}
+
+    class DispatchCaptured(Exception):
+        pass
+
+    def capture_dispatch(*args, **kwargs):
+        _ = kwargs
+        captured["layout"] = args[4]
+        raise DispatchCaptured
+
+    if k_class_enabled:
+        monkeypatch.setattr(local_iteration_module, "run_local_k_class_em", capture_dispatch)
+    else:
+        monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", capture_dispatch)
+
+    with pytest.raises(DispatchCaptured):
+        iteration_loop_module._run_local_search_iteration(
+            dataset,
+            jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            np.zeros((1, 3), dtype=np.float32),
+            score_grid,
+            get_relion_rotation_grid_eulers(0).astype(np.float32),
+            healpix_order=0,
+            sigma_rot=0.0,
+            sigma_psi=0.0,
+            translations=np.zeros((1, 2), dtype=np.float32),
+            prior_translations=np.zeros((1, 2), dtype=np.float32),
+            sigma_offset_angstrom=1.0,
+            offset_range_pixels=None,
+            disc_type="linear_interp",
+            image_batch_size=1,
+            rotation_block_size=16,
+            current_size=4,
+            rotation_grid_mstep_rotations=mstep_grid,
+            generate_relion_mstep_rotations=True,
+            class_log_priors=np.zeros(2, dtype=np.float32) if k_class_enabled else None,
+        )
+
+    layout = captured["layout"]
+    np.testing.assert_array_equal(layout.rotations_flat, score_grid[layout.rotation_ids_flat])
+    np.testing.assert_array_equal(layout.mstep_rotations_flat, mstep_grid[layout.rotation_ids_flat])
+
+    backward_compatible = build_local_hypothesis_layout(
+        np.zeros((1, 3), dtype=np.float32),
+        score_grid,
+        0.0,
+        0.0,
+        0,
+        np.zeros((1, 2), dtype=np.float32),
+        np.zeros((1, 2), dtype=np.float32),
+        1.0,
+        None,
+        dataset.voxel_size,
+        grid_metadata=build_local_search_grid_metadata(0),
+    )
+    assert backward_compatible.mstep_rotations_flat is None
 
 
 def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
@@ -8208,6 +8456,22 @@ class TestRelionModeSmokeTest:
             del args, kwargs
             return fake_relion_rotation_grid_float32(order)[1]
 
+        def fake_apply_relion_rotation_perturbation_to_eulers(
+            eulers,
+            random_perturbation,
+            angular_sampling_deg,
+            *,
+            return_mstep_rotations=False,
+        ):
+            _ = (random_perturbation, angular_sampling_deg)
+            n_rows = int(np.asarray(eulers).shape[0])
+            score = np.repeat(np.eye(3, dtype=np.float32)[None], n_rows, axis=0)
+            public_eulers = np.asarray(eulers, dtype=np.float32)
+            if return_mstep_rotations:
+                mstep = np.repeat((13.0 * np.eye(3, dtype=np.float32))[None], n_rows, axis=0)
+                return score, public_eulers, mstep
+            return score, public_eulers
+
         def force_converged_local_after_first_iter(*args, **kwargs):
             updated = original_update(*args, **kwargs)
             updated.has_converged = True
@@ -8269,6 +8533,11 @@ class TestRelionModeSmokeTest:
                     "current_size": current_size,
                     "accumulate_noise": kwargs["accumulate_noise"],
                     "return_best_pose_details": kwargs["return_best_pose_details"],
+                    "rotation_grid_mstep_rotations": np.asarray(
+                        kwargs["rotation_grid_mstep_rotations"],
+                        dtype=np.float32,
+                    ).copy(),
+                    "generate_relion_mstep_rotations": kwargs["generate_relion_mstep_rotations"],
                 }
             )
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
@@ -8325,6 +8594,16 @@ class TestRelionModeSmokeTest:
             "_relion_rotation_grid_float32",
             fake_relion_rotation_grid_float32,
         )
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "_get_relion_rotation_grid_eulers_float64",
+            lambda order: fake_get_relion_rotation_grid_eulers(order).astype(np.float64),
+        )
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "apply_relion_rotation_perturbation_to_eulers",
+            fake_apply_relion_rotation_perturbation_to_eulers,
+        )
         monkeypatch.setitem(
             make_relion_direction_log_prior.__globals__,
             "rotation_grid_size",
@@ -8363,6 +8642,12 @@ class TestRelionModeSmokeTest:
         assert all(call["accumulate_noise"] for call in local_calls)
         assert all(call["return_best_pose_details"] for call in local_calls)
         assert all(call["healpix_order"] == 4 for call in local_calls)
+        assert all(call["generate_relion_mstep_rotations"] is True for call in local_calls)
+        for call in local_calls:
+            np.testing.assert_array_equal(
+                call["rotation_grid_mstep_rotations"],
+                np.repeat((13.0 * np.eye(3, dtype=np.float32))[None], N_ROTATIONS, axis=0),
+            )
         for call, dataset in zip(local_calls, half_datasets):
             assert call["prior_rotations"].shape == (dataset.n_units, 3)
             assert call["prior_translations"].shape == (dataset.n_units, 2)
@@ -11586,7 +11871,13 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         sentinel[:, 0, 0] = 7.0
         return sentinel
 
-    def fake_apply_relion_rotation_perturbation_to_eulers(eulers, random_perturbation, angular_sampling_deg):
+    def fake_apply_relion_rotation_perturbation_to_eulers(
+        eulers,
+        random_perturbation,
+        angular_sampling_deg,
+        *,
+        return_mstep_rotations=False,
+    ):
         perturb_calls.append(
             {
                 "n_rot": int(np.asarray(eulers).shape[0]),
@@ -11597,6 +11888,10 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         sentinel_rotations = np.zeros((np.asarray(eulers).shape[0], 3, 3), dtype=np.float32)
         sentinel_rotations[:, 0, 0] = 7.0
         sentinel_eulers = np.full((np.asarray(eulers).shape[0], 3), 5.0, dtype=np.float32)
+        if return_mstep_rotations:
+            sentinel_mstep_rotations = np.zeros_like(sentinel_rotations)
+            sentinel_mstep_rotations[:, 1, 1] = 11.0
+            return sentinel_rotations, sentinel_eulers, sentinel_mstep_rotations
         return sentinel_rotations, sentinel_eulers
 
     def fake_r_to_relion(rotations, degrees=True):
@@ -11649,6 +11944,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
                 "eulers_is_none": rotation_grid_eulers is None,
                 "rotation_grid_random_perturbation": kwargs.get("rotation_grid_random_perturbation"),
                 "rotation_grid_angular_sampling_deg": kwargs.get("rotation_grid_angular_sampling_deg"),
+                "generate_relion_mstep_rotations": kwargs.get("generate_relion_mstep_rotations"),
             }
         )
         n_shells = half_datasets[0].image_shape[0] // 2 + 1
@@ -11689,6 +11985,11 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
+    monkeypatch.setattr(
+        refine_mod,
+        "_get_relion_rotation_grid_eulers_float64",
+        lambda order: fake_get_grid_eulers(order).astype(np.float64),
+    )
     monkeypatch.setattr(refine_mod, "advance_relion_perturbation", fake_advance_relion_perturbation)
     monkeypatch.setattr(refine_mod, "apply_relion_rotation_perturbation", fake_apply_relion_rotation_perturbation)
     monkeypatch.setattr(
@@ -11744,6 +12045,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     assert fine_calls[0]["rotation_grid_angular_sampling_deg"] == pytest.approx(
         relion_angular_sampling_deg(5, adaptive_oversampling=0),
     )
+    assert all(call["generate_relion_mstep_rotations"] is True for call in fine_calls)
 
 
 def test_local_search_uses_negative_previous_offsets_for_translation_prior(

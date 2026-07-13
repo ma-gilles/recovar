@@ -135,6 +135,7 @@ from recovar.em.dense_single_volume.relion_replay import (  # noqa: F401
     _replay_control_model_iteration as _replay_control_model_iteration,
 )
 from recovar.em.sampling import (  # noqa: F401  -- monkeypatched by tests/unit/test_refine_relion_mode.py
+    _get_relion_rotation_grid_eulers_float64,
     advance_relion_perturbation,
     advance_relion_perturbation_from_seed,
     apply_relion_rotation_perturbation,
@@ -2306,6 +2307,7 @@ def _score_half_local(
     best_pose_rotation_eulers,
     best_pose_translations,
     local_profile_history,
+    local_search_mstep_rotations=None,
     group_ids_k=None,
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
@@ -2781,6 +2783,8 @@ def _score_half_local(
         class_log_priors=class_log_priors if k_class_enabled else None,
         return_class_details=k_class_enabled,
         score_only=diagnostic_score_only,
+        rotation_grid_mstep_rotations=local_search_mstep_rotations,
+        generate_relion_mstep_rotations=True,
     )
     _local_cursor = 0
     Ft_y_k, Ft_ctf_k, ha_k = local_outputs[_local_cursor : _local_cursor + 3]
@@ -4372,6 +4376,7 @@ def _run_relion_iteration_loop(
         # snapped grid indices.
         effective_rotations = current_rotations
         effective_rotation_eulers = np.asarray(current_rotation_eulers, dtype=np.float32)
+        effective_mstep_rotations = None
         rotation_log_prior_per_half = [None, None]
         class_rotation_log_prior_per_half = [None, None]
         use_local = state.do_local_search and all(
@@ -4426,10 +4431,19 @@ def _run_relion_iteration_loop(
             _angsamp_order = int(_replay_meta["healpix_order"]) if _replay_meta is not None else current_healpix_order
             angsamp_deg = relion_angular_sampling_deg(_angsamp_order, adaptive_oversampling=0)
             if effective_rotation_eulers is not None:
+                mstep_source_eulers = _get_relion_rotation_grid_eulers_float64(_angsamp_order)
+                if int(mstep_source_eulers.shape[0]) != int(effective_rotation_eulers.shape[0]):
+                    mstep_source_eulers = np.asarray(effective_rotation_eulers, dtype=np.float64)
                 effective_rotations, effective_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
                     effective_rotation_eulers,
                     random_perturbation,
                     angsamp_deg,
+                )
+                _, _, effective_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+                    mstep_source_eulers,
+                    random_perturbation,
+                    angsamp_deg,
+                    return_mstep_rotations=True,
                 )
             else:
                 effective_rotations = apply_relion_rotation_perturbation(
@@ -4458,6 +4472,7 @@ def _run_relion_iteration_loop(
         local_search_order = None
         local_search_rotations = None
         local_search_rotation_eulers = None
+        local_search_mstep_rotations = None
         cs_for_engine = current_size if current_size < cryo.image_shape[0] else None
         sigma_rot = state.sigma_rot
         sigma_psi = state.sigma_psi if state.sigma_psi > 0 else sigma_rot
@@ -4489,6 +4504,12 @@ def _run_relion_iteration_loop(
                         local_search_rotation_eulers,
                         float(random_perturbation),
                         local_search_angular_sampling_deg,
+                    )
+                    _, _, local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+                        _get_relion_rotation_grid_eulers_float64(local_search_order),
+                        float(random_perturbation),
+                        local_search_angular_sampling_deg,
+                        return_mstep_rotations=True,
                     )
                     local_search_random_perturbation = 0.0
                 else:
@@ -4525,6 +4546,18 @@ def _run_relion_iteration_loop(
             else:
                 local_search_rotations = effective_rotations
                 local_search_rotation_eulers = None
+                if effective_mstep_rotations is not None:
+                    local_search_mstep_rotations = effective_mstep_rotations
+                else:
+                    mstep_source_eulers = _get_relion_rotation_grid_eulers_float64(local_search_order)
+                    if int(mstep_source_eulers.shape[0]) != int(effective_rotation_eulers.shape[0]):
+                        mstep_source_eulers = np.asarray(effective_rotation_eulers, dtype=np.float64)
+                    _, _, local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+                        mstep_source_eulers,
+                        0.0,
+                        relion_angular_sampling_deg(local_search_order, adaptive_oversampling=0),
+                        return_mstep_rotations=True,
+                    )
             logger.info(
                 "Local search (batched exact): fine_order=%d, sigma_rot=%.4f rad (%.2f deg), sigma_psi=%.4f rad",
                 local_search_order,
@@ -4910,6 +4943,7 @@ def _run_relion_iteration_loop(
                     previous_best_rotation_eulers_k=relion_half_inputs.previous_best_rotation_eulers[k],
                     local_search_rotations=local_search_rotations,
                     local_search_rotation_eulers=local_search_rotation_eulers,
+                    local_search_mstep_rotations=local_search_mstep_rotations,
                     local_search_order=local_search_order,
                     sigma_rot=sigma_rot,
                     sigma_psi=sigma_psi,
@@ -6913,6 +6947,7 @@ def _run_relion_iteration_loop(
         )
     final_effective_rotations = final_current_rotations
     final_effective_rotation_eulers = np.asarray(final_current_rotation_eulers, dtype=np.float32)
+    final_effective_mstep_rotations = None
     final_base_translations = jnp.asarray(
         get_translation_grid(
             state.translation_range,
@@ -7089,10 +7124,21 @@ def _run_relion_iteration_loop(
             final_perturbation_healpix_order,
             adaptive_oversampling=0,
         )
+        final_mstep_source_eulers = _get_relion_rotation_grid_eulers_float64(
+            final_perturbation_healpix_order
+        )
+        if int(final_mstep_source_eulers.shape[0]) != int(final_effective_rotation_eulers.shape[0]):
+            final_mstep_source_eulers = np.asarray(final_effective_rotation_eulers, dtype=np.float64)
         final_effective_rotations, final_effective_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
             final_effective_rotation_eulers,
             final_random_perturbation,
             final_angsamp_deg,
+        )
+        _, _, final_effective_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+            final_mstep_source_eulers,
+            final_random_perturbation,
+            final_angsamp_deg,
+            return_mstep_rotations=True,
         )
         final_current_translations = jnp.asarray(
             apply_relion_translation_perturbation(
@@ -7112,6 +7158,7 @@ def _run_relion_iteration_loop(
     final_local_search_order = None
     final_local_search_rotations = None
     final_local_search_rotation_eulers = None
+    final_local_search_mstep_rotations = None
     final_local_search_random_perturbation = 0.0
     final_local_search_angular_sampling_deg = None
     final_local_parent_oversampling_order = int(state.adaptive_oversampling)
@@ -7147,13 +7194,25 @@ def _run_relion_iteration_loop(
                     final_local_search_order
                 )
                 if final_perturbation_applied:
-                    (
-                        final_local_search_rotations,
-                        final_local_search_rotation_eulers,
-                    ) = apply_relion_rotation_perturbation_to_eulers(
-                        final_local_search_rotation_eulers,
+                    final_local_search_rotations, final_local_search_rotation_eulers = (
+                        apply_relion_rotation_perturbation_to_eulers(
+                            final_local_search_rotation_eulers,
+                            final_random_perturbation,
+                            final_local_search_angular_sampling_deg,
+                        )
+                    )
+                    _, _, final_local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+                        _get_relion_rotation_grid_eulers_float64(final_local_search_order),
                         final_random_perturbation,
                         final_local_search_angular_sampling_deg,
+                        return_mstep_rotations=True,
+                    )
+                else:
+                    _, _, final_local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+                        _get_relion_rotation_grid_eulers_float64(final_local_search_order),
+                        0.0,
+                        final_local_search_angular_sampling_deg,
+                        return_mstep_rotations=True,
                     )
             else:
                 final_local_search_rotations = None
@@ -7178,6 +7237,18 @@ def _run_relion_iteration_loop(
         else:
             final_local_search_rotations = final_effective_rotations
             final_local_search_rotation_eulers = final_effective_rotation_eulers
+            if final_effective_mstep_rotations is not None:
+                final_local_search_mstep_rotations = final_effective_mstep_rotations
+            else:
+                final_mstep_source_eulers = _get_relion_rotation_grid_eulers_float64(final_local_search_order)
+                if int(final_mstep_source_eulers.shape[0]) != int(final_effective_rotation_eulers.shape[0]):
+                    final_mstep_source_eulers = np.asarray(final_effective_rotation_eulers, dtype=np.float64)
+                _, _, final_local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+                    final_mstep_source_eulers,
+                    0.0,
+                    relion_angular_sampling_deg(final_local_search_order, adaptive_oversampling=0),
+                    return_mstep_rotations=True,
+                )
         logger.info(
             "RELION final all-data iteration using local search: parent_order=%d fine_order=%d, "
             "sigma_rot=%.4f rad (%.2f deg), sigma_psi=%.4f rad, perturbation=%+.5f",
@@ -7339,6 +7410,7 @@ def _run_relion_iteration_loop(
                 previous_best_rotation_eulers_k=relion_half_inputs.previous_best_rotation_eulers[k],
                 local_search_rotations=final_local_search_rotations,
                 local_search_rotation_eulers=final_local_search_rotation_eulers,
+                local_search_mstep_rotations=final_local_search_mstep_rotations,
                 local_search_order=final_local_search_order,
                 sigma_rot=final_sigma_rot,
                 sigma_psi=final_sigma_psi,

@@ -1148,16 +1148,25 @@ def get_relion_hidden_rotation_grid(order: int, *, matrices: bool = True) -> np.
 
 def get_relion_rotation_grid_eulers(order, *, rotation_index_order: str = "recovar"):
     """Return RELION Euler angles in the same index order as get_relion_rotation_grid."""
+    return _get_relion_rotation_grid_eulers_float64(
+        order,
+        rotation_index_order=rotation_index_order,
+    ).astype(np.float32)
+
+
+def _get_relion_rotation_grid_eulers_float64(order, *, rotation_index_order: str = "recovar"):
+    """Return source-precision RELION Euler rows without public float32 truncation."""
+
     from recovar.relion_bind._relion_bind_core import get_coarse_orientations
 
-    relion_euler = get_coarse_orientations(order)
+    relion_euler = np.asarray(get_coarse_orientations(order), dtype=np.float64)
     if rotation_index_order == "relion":
-        return relion_euler.astype(np.float32)
+        return relion_euler
     if rotation_index_order != "recovar":
         raise ValueError(f"rotation_index_order must be 'recovar' or 'relion', got {rotation_index_order!r}")
     n_dir = hp.nside2npix(2**order)
     n_psi = relion_euler.shape[0] // n_dir
-    return relion_euler.reshape(n_dir, n_psi, 3).transpose(1, 0, 2).reshape(-1, 3).astype(np.float32)
+    return relion_euler.reshape(n_dir, n_psi, 3).transpose(1, 0, 2).reshape(-1, 3)
 
 
 def get_oversampled_relion_hidden_rotation_grid_from_samples(

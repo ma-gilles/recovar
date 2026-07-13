@@ -207,6 +207,8 @@ def _run_local_search_iteration(
     apply_max_significants_to_support=False,
     stats_use_reconstruction_probs=False,
     score_only=False,
+    rotation_grid_mstep_rotations=None,
+    generate_relion_mstep_rotations=False,
 ):
     """Run exact local search over image-specific rotation neighborhoods."""
     # Indirection through the iteration_loop module so test monkeypatches that
@@ -247,6 +249,10 @@ def _run_local_search_iteration(
         layout_kwargs = {}
         if int(local_parent_oversampling_order) > 0:
             layout_kwargs["local_parent_oversampling_order"] = int(local_parent_oversampling_order)
+        if rotation_grid_mstep_rotations is not None:
+            layout_kwargs["rotation_grid_mstep_rotations"] = rotation_grid_mstep_rotations
+        if bool(generate_relion_mstep_rotations):
+            layout_kwargs["generate_relion_mstep_rotations"] = True
         local_layout = _il.build_local_hypothesis_layout(
             prior_rotations,
             rotation_grid_rotations,
