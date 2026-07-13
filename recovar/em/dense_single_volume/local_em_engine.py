@@ -214,6 +214,15 @@ _VISIBLE_GPU_MEMORY_BYTES_CACHE: int | None = None
 EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION = 0.25
 
 
+def _local_mstep_rotations(bucket: LocalBucketSpec) -> np.ndarray:
+    """Return the adjoint-only rotations, falling back to scoring rotations."""
+
+    rotations = bucket.local_mstep_rotations
+    if rotations is None:
+        rotations = bucket.local_rotations
+    return np.asarray(rotations, dtype=np.float32)
+
+
 def _bucket_contains_debug_target(experiment_dataset, image_indices, pending_targets: set[int] | None) -> bool:
     if not pending_targets:
         return False
@@ -1178,6 +1187,13 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
 
     padded_rotations = pad_axis(bucket.local_rotations, 0, padded_batch_size, value=0).astype(np.float32)
     padded_rotations[actual_batch_size:] = np.eye(3, dtype=np.float32)
+    padded_mstep_rotations = pad_axis(
+        _local_mstep_rotations(bucket),
+        0,
+        padded_batch_size,
+        value=0,
+    ).astype(np.float32)
+    padded_mstep_rotations[actual_batch_size:] = np.eye(3, dtype=np.float32)
     padded_bucket = LocalBucketSpec(
         image_indices=np.asarray(bucket.image_indices, dtype=np.int32),
         bucket_image_count=padded_batch_size,
@@ -1185,6 +1201,7 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
         actual_rotation_counts=pad_axis(bucket.actual_rotation_counts, 0, padded_batch_size, value=0).astype(np.int32),
         local_rotation_ids=pad_axis(bucket.local_rotation_ids, 0, padded_batch_size, value=-1).astype(np.int32),
         local_rotations=padded_rotations,
+        local_mstep_rotations=padded_mstep_rotations,
         local_rotation_log_prior=pad_axis(
             bucket.local_rotation_log_prior,
             0,
@@ -1402,6 +1419,7 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
         actual_rotation_counts=np.asarray(bucket.actual_rotation_counts[order], dtype=np.int32),
         local_rotation_ids=np.asarray(bucket.local_rotation_ids[order], dtype=np.int32),
         local_rotations=np.asarray(bucket.local_rotations[order], dtype=np.float32),
+        local_mstep_rotations=np.asarray(_local_mstep_rotations(bucket)[order], dtype=np.float32),
         local_rotation_log_prior=np.asarray(bucket.local_rotation_log_prior[order], dtype=np.float32),
         local_rotation_mask=np.asarray(bucket.local_rotation_mask[order], dtype=bool),
         translation_log_prior=np.asarray(bucket.translation_log_prior[order], dtype=np.float32),
@@ -2751,6 +2769,7 @@ def run_local_em_exact(
                 relion_projection_cache.id_map,
                 jnp.asarray(bucket.local_rotation_ids, dtype=jnp.int32),
                 jnp.asarray(bucket.local_rotations),
+                jnp.asarray(_local_mstep_rotations(bucket)),
                 local_rotation_log_prior_arg,
                 jnp.asarray(bucket.translation_log_prior),
                 jnp.asarray(bucket.local_rotation_mask),
@@ -3065,6 +3084,11 @@ def run_local_em_exact(
                     reconstruction_take_indices[:, :, None, None],
                     axis=1,
                 )
+                packed_mstep_rotations_np = np.take_along_axis(
+                    _local_mstep_rotations(bucket)[:unpadded_batch_size],
+                    reconstruction_take_indices[:, :, None, None],
+                    axis=1,
+                )
                 packed_reconstruction_probs = jnp.take_along_axis(
                     reconstruction_probs[:unpadded_batch_size],
                     reconstruction_take_indices_jnp[:, :, None],
@@ -3108,6 +3132,11 @@ def run_local_em_exact(
                     reconstruction_take_indices[:, :, None, None],
                     axis=1,
                 )
+                packed_mstep_rotations_np = np.take_along_axis(
+                    _local_mstep_rotations(bucket)[:unpadded_batch_size],
+                    reconstruction_take_indices[:, :, None, None],
+                    axis=1,
+                )
                 packed_summed = jnp.take_along_axis(
                     summed[:unpadded_batch_size],
                     reconstruction_take_indices_jnp[:, :, None],
@@ -3120,7 +3149,7 @@ def run_local_em_exact(
                     axis=1,
                 )
                 packed_ctf_probs = jnp.where(reconstruction_pack_mask_jnp[:, :, None], packed_ctf_probs, 0.0)
-                packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_rotations_np))
+                packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_mstep_rotations_np))
             else:
                 probs_sum_t_np = None
                 reconstruction_take_indices = np.broadcast_to(
@@ -3163,7 +3192,7 @@ def run_local_em_exact(
                 for chunk_start in range(0, packed_rotation_count, chunk_rows):
                     chunk_stop = min(packed_rotation_count, chunk_start + chunk_rows)
                     chunk_probs = packed_reconstruction_probs[:, chunk_start:chunk_stop]
-                    chunk_rotations = packed_rotations_np[:, chunk_start:chunk_stop]
+                    chunk_rotations = packed_mstep_rotations_np[:, chunk_start:chunk_stop]
                     chunk_flat_rotations = flatten_bucket_rotations(jnp.asarray(chunk_rotations))
                     if not disable_adjoint_y:
                         mstep_t0 = time.time()
@@ -4053,6 +4082,11 @@ def run_local_em_exact(
             reconstruction_take_indices[:, :, None, None],
             axis=1,
         )
+        packed_mstep_rotations_np = np.take_along_axis(
+            _local_mstep_rotations(bucket),
+            reconstruction_take_indices[:, :, None, None],
+            axis=1,
+        )
         packed_reconstruction_probs = None
         if score_only:
             packed_summed = None
@@ -4084,7 +4118,7 @@ def run_local_em_exact(
         if (not defer_packed_mstep_reduction) and (
             not disable_adjoint_y or not disable_adjoint_ctf or (accumulate_noise and proj_for_noise is None)
         ):
-            packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_rotations_np))
+            packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_mstep_rotations_np))
         timing.pack_s += time.time() - pack_t0
 
         if defer_packed_mstep_reduction and not score_only and (not disable_adjoint_y or not disable_adjoint_ctf):
@@ -4108,7 +4142,7 @@ def run_local_em_exact(
             for chunk_start in range(0, packed_rotation_count, chunk_rows):
                 chunk_stop = min(packed_rotation_count, chunk_start + chunk_rows)
                 chunk_probs = packed_reconstruction_probs[:, chunk_start:chunk_stop]
-                chunk_rotations = packed_rotations_np[:, chunk_start:chunk_stop]
+                chunk_rotations = packed_mstep_rotations_np[:, chunk_start:chunk_stop]
                 chunk_flat_rotations = flatten_bucket_rotations(jnp.asarray(chunk_rotations))
                 chunk_summed = None
                 chunk_ctf_probs = None

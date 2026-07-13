@@ -580,6 +580,7 @@ def run_local_bucket_big_jit(
     relion_projection_cache_id_map,
     local_rotation_ids_for_projection_cache,
     local_rotations,
+    local_mstep_rotations,
     rotation_log_prior,
     translation_log_prior,
     rotation_mask,
@@ -807,6 +808,11 @@ def run_local_bucket_big_jit(
             ctf2_over_nv_recon = ctf2_over_nv_half_with_dc
 
     flat_rotations = local_rotations.reshape(local_rotations.shape[0] * local_rotations.shape[1], 3, 3)
+    flat_mstep_rotations = local_mstep_rotations.reshape(
+        local_mstep_rotations.shape[0] * local_mstep_rotations.shape[1],
+        3,
+        3,
+    )
     if use_relion_projection_cache:
         safe_rotation_ids = jnp.maximum(local_rotation_ids_for_projection_cache.reshape(-1), 0)
         cache_rows = relion_projection_cache_id_map[safe_rotation_ids]
@@ -1157,7 +1163,7 @@ def run_local_bucket_big_jit(
         flat_summed,
         flat_ctf_probs,
         mstep_recon_window_indices,
-        flat_rotations,
+        flat_mstep_rotations,
         Ft_y,
         Ft_ctf,
         image_shape,

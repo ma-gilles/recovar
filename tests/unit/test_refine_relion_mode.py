@@ -8,6 +8,7 @@ Verifies:
 """
 
 import inspect
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -2566,6 +2567,7 @@ def test_bucket_local_hypothesis_layout_unify_argument_collapses_shape_classes(m
 
 
 def test_pad_local_big_jit_image_axis_masks_dummy_rows():
+    mstep_rotations = np.broadcast_to(2.0 * np.eye(3, dtype=np.float32), (1, 2, 3, 3)).copy()
     bucket = LocalBucketSpec(
         image_indices=np.array([2], dtype=np.int32),
         bucket_image_count=3,
@@ -2576,6 +2578,7 @@ def test_pad_local_big_jit_image_axis_masks_dummy_rows():
         local_rotation_log_prior=np.zeros((1, 2), dtype=np.float32),
         local_rotation_mask=np.ones((1, 2), dtype=bool),
         translation_log_prior=np.ones((1, 4), dtype=np.float32),
+        local_mstep_rotations=mstep_rotations,
     )
     batch_data = np.ones((1, 8, 8), dtype=np.float32)
     ctf_params = np.ones((1, 9), dtype=np.float32)
@@ -2596,6 +2599,11 @@ def test_pad_local_big_jit_image_axis_masks_dummy_rows():
     np.testing.assert_array_equal(padded.local_rotation_ids[1:], -np.ones((2, 2), dtype=np.int32))
     np.testing.assert_allclose(
         padded.local_rotations[1:, 0],
+        np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)),
+    )
+    np.testing.assert_array_equal(padded.local_mstep_rotations[0], mstep_rotations[0])
+    np.testing.assert_allclose(
+        padded.local_mstep_rotations[1:, 0],
         np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)),
     )
     np.testing.assert_allclose(padded_ctf[1:], np.broadcast_to(ctf_params[0], (2, 9)))
@@ -6563,6 +6571,105 @@ def _assert_noise_stats_allclose(actual, expected):
             rtol=1e-5,
             atol=1e-6,
         )
+
+
+def test_local_bucket_preserves_distinct_mstep_rotations(rng):
+    _, _, _, _, local_layout = _sparse_big_jit_local_case(rng)
+    distinct_mstep_rotations = np.roll(np.asarray(local_layout.rotations_flat), 1, axis=0)
+    distinct_layout = replace(local_layout, mstep_rotations_flat=distinct_mstep_rotations)
+
+    buckets = bucket_local_hypothesis_layout(
+        distinct_layout,
+        image_batch_size=2,
+        rotation_block_size=8,
+        max_hypotheses_per_microbatch=10_000,
+    )
+
+    for bucket in buckets:
+        assert bucket.local_mstep_rotations is not None
+        for row, image_idx in enumerate(np.asarray(bucket.image_indices, dtype=np.int64)):
+            count = int(bucket.actual_rotation_counts[row])
+            start = int(distinct_layout.rotation_offsets[image_idx])
+            stop = start + count
+            np.testing.assert_array_equal(
+                np.asarray(bucket.local_rotations[row, :count]),
+                np.asarray(distinct_layout.rotations_flat[start:stop]),
+            )
+            np.testing.assert_array_equal(
+                np.asarray(bucket.local_mstep_rotations[row, :count]),
+                distinct_mstep_rotations[start:stop],
+            )
+
+    reordered = _reorder_bucket_to_indices(buckets[0], np.asarray(buckets[0].image_indices)[::-1])
+    np.testing.assert_array_equal(reordered.local_rotations, np.asarray(buckets[0].local_rotations)[::-1])
+    np.testing.assert_array_equal(
+        reordered.local_mstep_rotations,
+        np.asarray(buckets[0].local_mstep_rotations)[::-1],
+    )
+
+
+@pytest.mark.parametrize("route", ["in_kernel_big_jit", "sparse_big_jit", "deferred_big_jit", "split"])
+def test_local_mstep_rotation_override_changes_only_adjoint_outputs(monkeypatch, rng, route):
+    dataset, mean, mean_variance, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
+    distinct_layout = replace(
+        local_layout,
+        mstep_rotations_flat=np.roll(np.asarray(local_layout.rotations_flat), 1, axis=0),
+    )
+    kwargs = dict(
+        image_batch_size=3,
+        rotation_block_size=8,
+        current_size=6,
+        accumulate_noise=False,
+        reconstruct_significant_only=route != "in_kernel_big_jit",
+        return_profile=True,
+        score_with_masked_images=False,
+        half_spectrum_scoring=False,
+        max_significants=-1,
+    )
+
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", raising=False)
+    monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)
+    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV, raising=False)
+    monkeypatch.delenv(EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV, raising=False)
+    if route == "sparse_big_jit":
+        monkeypatch.setenv(EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV, "1000")
+    elif route == "deferred_big_jit":
+        monkeypatch.setenv(EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV, "0")
+    elif route == "split":
+        monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
+
+    baseline = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        **kwargs,
+    )
+    overridden = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        distinct_layout,
+        "linear_interp",
+        **kwargs,
+    )
+
+    Ft_y_baseline, Ft_ctf_baseline, hard_baseline, stats_baseline, profile_baseline = baseline
+    Ft_y_overridden, Ft_ctf_overridden, hard_overridden, stats_overridden, profile_overridden = overridden
+    if route == "split":
+        assert int(profile_baseline["big_jit_bucket_count"]) == 0
+        assert int(profile_overridden["big_jit_bucket_count"]) == 0
+    else:
+        assert int(profile_baseline["big_jit_bucket_count"]) > 0
+        assert int(profile_overridden["big_jit_bucket_count"]) > 0
+    np.testing.assert_array_equal(hard_overridden, hard_baseline)
+    _assert_relion_stats_allclose(stats_overridden, stats_baseline)
+    assert np.max(np.abs(np.asarray(Ft_y_overridden) - np.asarray(Ft_y_baseline))) > 1e-6
+    assert np.max(np.abs(np.asarray(Ft_ctf_overridden) - np.asarray(Ft_ctf_baseline))) > 1e-6
 
 
 def test_run_local_em_exact_significant_support_uses_sparse_big_jit_packed_backprojection(monkeypatch, rng):

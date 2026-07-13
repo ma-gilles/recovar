@@ -107,6 +107,7 @@ class LocalHypothesisLayout:
     translation_log_priors: np.ndarray
     rotation_posterior_ids_flat: np.ndarray | None = None
     sample_mask_flat: np.ndarray | None = None
+    mstep_rotations_flat: np.ndarray | None = None
 
     @property
     def n_images(self) -> int:
@@ -132,6 +133,7 @@ class LocalBucketSpec:
     translation_log_prior: np.ndarray
     local_rotation_posterior_ids: np.ndarray | None = None
     local_sample_mask: np.ndarray | None = None
+    local_mstep_rotations: np.ndarray | None = None
 
 
 def _resolve_prior_rotations(prior_rotations: np.ndarray, healpix_order: int, grid_metadata):
@@ -1035,6 +1037,16 @@ def bucket_local_hypothesis_layout(
 
     image_batch_size = int(max(1, image_batch_size))
     max_hypotheses_per_microbatch = int(max(1, max_hypotheses_per_microbatch))
+    mstep_rotations_flat = (
+        np.asarray(layout.rotations_flat, dtype=np.float32)
+        if layout.mstep_rotations_flat is None
+        else np.asarray(layout.mstep_rotations_flat, dtype=np.float32)
+    )
+    if mstep_rotations_flat.shape != np.asarray(layout.rotations_flat).shape:
+        raise ValueError(
+            "mstep_rotations_flat must match rotations_flat shape: "
+            f"{mstep_rotations_flat.shape} vs {np.asarray(layout.rotations_flat).shape}",
+        )
     resolved_large_bucket_quantum = _exact_local_large_bucket_quantum(rotation_block_size, large_bucket_quantum)
     bucket_sizes = np.asarray(
         [
@@ -1075,6 +1087,7 @@ def bucket_local_hypothesis_layout(
                 np.eye(3, dtype=np.float32),
                 (batch_size, int(bucket_size), 3, 3),
             ).copy()
+            padded_mstep_rotations = padded_rotations.copy()
             padded_rotation_ids = np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
             padded_log_prior = np.full((batch_size, int(bucket_size)), -1e30, dtype=np.float32)
             padded_mask = np.zeros((batch_size, int(bucket_size)), dtype=bool)
@@ -1097,6 +1110,7 @@ def bucket_local_hypothesis_layout(
                 end_off = int(layout.rotation_offsets[image_idx + 1])
                 count = end_off - start_off
                 padded_rotations[row, :count] = layout.rotations_flat[start_off:end_off]
+                padded_mstep_rotations[row, :count] = mstep_rotations_flat[start_off:end_off]
                 padded_rotation_ids[row, :count] = layout.rotation_ids_flat[start_off:end_off]
                 padded_log_prior[row, :count] = layout.rotation_log_priors_flat[start_off:end_off]
                 padded_mask[row, :count] = True
@@ -1116,6 +1130,7 @@ def bucket_local_hypothesis_layout(
                     local_rotation_log_prior=padded_log_prior,
                     local_rotation_mask=padded_mask,
                     translation_log_prior=np.asarray(layout.translation_log_priors[image_indices], dtype=np.float32),
+                    local_mstep_rotations=padded_mstep_rotations,
                     local_rotation_posterior_ids=padded_posterior_ids,
                     local_sample_mask=padded_sample_mask,
                 )
