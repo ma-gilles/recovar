@@ -1,7 +1,5 @@
 """Focused tests for the opt-in RELION float32 fine-posterior diagnostic."""
 
-import inspect
-
 import numpy as np
 import pytest
 
@@ -13,7 +11,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_f32_fine_reconstruction_probs,
     _relion_pass2_reconstruction_probs,
     _relion_pass2_reconstruction_probs_for_mstep,
-    compute_pass2_stats_sparse_bucketed,
 )
 
 pytestmark = pytest.mark.unit
@@ -129,6 +126,19 @@ def test_relion_f32_fine_posterior_gate_is_xhalf_only(monkeypatch):
         np.testing.assert_array_equal(np.asarray(actual_value), np.asarray(expected_value))
 
 
-def test_sparse_pass2_winner_take_all_excludes_f32_posterior_override():
-    source = inspect.getsource(compute_pass2_stats_sparse_bucketed)
-    assert "use_relion_x_half_mstep\n        and not winner_take_all" in source
+def test_sparse_pass2_winner_take_all_excludes_f32_posterior_override(monkeypatch):
+    monkeypatch.setenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, "1")
+    scores = jnp.asarray([[[0.0, -0.2, -1.7], [-2.1, -3.5, -np.inf]]], dtype=jnp.float32)
+    probs = jnp.asarray([[[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]]], dtype=jnp.float64)
+
+    expected = _relion_pass2_reconstruction_probs(probs, adaptive_fraction=0.9)
+    actual = _relion_pass2_reconstruction_probs_for_mstep(
+        scores,
+        probs,
+        adaptive_fraction=0.9,
+        use_relion_x_half_mstep=True,
+        winner_take_all=True,
+    )
+
+    for actual_value, expected_value in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(np.asarray(actual_value), np.asarray(expected_value))

@@ -4788,10 +4788,15 @@ def _relion_pass2_reconstruction_probs_for_mstep(
     *,
     adaptive_fraction: float,
     use_relion_x_half_mstep: bool,
+    winner_take_all: bool = False,
 ):
     """Select the default or diagnostic fine-posterior reconstruction path."""
 
-    if use_relion_x_half_mstep and relion_x_half_f32_fine_posterior_enabled():
+    if (
+        use_relion_x_half_mstep
+        and not winner_take_all
+        and relion_x_half_f32_fine_posterior_enabled()
+    ):
         reconstruction_probs, mask, n_significant, _sum_weight, _threshold = (
             _relion_f32_fine_reconstruction_probs(
                 scores,
@@ -6925,6 +6930,7 @@ def compute_pass2_stats_sparse_bucketed(
                     probs,
                     adaptive_fraction=float(adaptive_fraction),
                     use_relion_x_half_mstep=use_relion_x_half_mstep,
+                    winner_take_all=winner_take_all,
                 )
             )
         shifted_recon_split_for_dump = None
