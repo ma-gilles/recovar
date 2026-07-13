@@ -10541,6 +10541,18 @@ class TestRelionModeSmokeTest:
         ]
         call_idx = {"value": 0}
         fine_mstep_prune_values = []
+        rotations_many = _make_rotations(20, seed=333)
+
+        monkeypatch.setattr(
+            refine_mod,
+            "_relion_rotation_grid_float32",
+            lambda _order: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
+        )
+        monkeypatch.setattr(
+            refine_mod,
+            "_relion_projector_half_maps_for_scoring",
+            lambda *_args, **_kwargs: (None, None),
+        )
 
         def fake_build_pass2_grids(
             effective_rotations,
@@ -10640,7 +10652,7 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            _make_rotations(20, seed=333),
+            rotations_many,
             translations,
             disc_type="linear_interp",
             max_iter=1,
@@ -10661,6 +10673,47 @@ class TestRelionModeSmokeTest:
         )
         assert np.isfinite(result["acc_rot_trajectory"][0])
         assert np.isinf(result["convergence_state"].acc_rot)
+
+    def test_k1_zero_oversampling_skips_adaptive_engine(
+        self,
+        half_datasets,
+        init_volume,
+        translations,
+        monkeypatch,
+    ):
+        """The accepted K=1 os=0 path must remain on direct dense EM."""
+        import recovar.em.dense_single_volume.iteration_loop as refine_mod
+
+        def fail_adaptive(*_args, **_kwargs):
+            raise AssertionError("adaptive_oversampling=0 entered the adaptive K-class engine")
+
+        rotations_many = _make_rotations(20, seed=334)
+        monkeypatch.setattr(refine_mod, "run_dense_k_class_em_adaptive", fail_adaptive)
+        monkeypatch.setattr(
+            refine_mod,
+            "_relion_rotation_grid_float32",
+            lambda _order: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
+        )
+
+        result = refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations_many,
+            translations,
+            disc_type="linear_interp",
+            max_iter=1,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=20,
+            relion_current_sizes=[8],
+            adaptive_oversampling=0,
+            init_healpix_order=1,
+            max_healpix_order=1,
+            skip_final_iteration=True,
+        )
+
+        assert np.asarray(result["mean"]).shape == (VOLUME_SIZE,)
 
     def test_k_class_adaptive_significant_counts_are_recorded_without_convergence_effect(
         self,

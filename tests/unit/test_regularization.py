@@ -499,6 +499,30 @@ def test_relion_weight_shell_stats_floor_bins_reconstruct_support():
     )
 
 
+def test_relion_weight_shell_stats_rounds_half_integer_radii_up():
+    """RELION ``ROUND`` maps positive 0.5/2.5 radii to shells 1/3."""
+    shape = (8, 8, 8)
+    padding_factor = 2
+    full_shape = tuple(s * padding_factor for s in shape)
+    weight = np.zeros(full_shape, dtype=np.float32)
+    center = tuple(s // 2 for s in full_shape)
+    weight[center[0], center[1], center[2] + 1] = 2.0  # radius / padding = 0.5
+    weight[center[0], center[1], center[2] + 5] = 3.0  # radius / padding = 2.5
+
+    stats = regularization._compute_relion_weight_shell_stats(
+        weight,
+        shape,
+        padding_factor=padding_factor,
+        shell_rounding="round",
+    )
+
+    shell_sum = np.asarray(stats["shell_sum"])
+    assert shell_sum[0] == pytest.approx(0.0)
+    assert shell_sum[1] == pytest.approx(2.0)
+    assert shell_sum[2] == pytest.approx(0.0)
+    assert shell_sum[3] == pytest.approx(3.0)
+
+
 def test_relion_weight_shell_stats_large_grid_cpu_path_matches_device_path(monkeypatch):
     shape = (8, 8, 8)
     padding_factor = 2
