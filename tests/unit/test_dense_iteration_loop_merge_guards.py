@@ -272,7 +272,11 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
 
     result = iteration_loop._score_half_local(
         k=0,
-        experiment_dataset=SimpleNamespace(voxel_size=1.0, volume_shape=(16, 16, 16)),
+        experiment_dataset=SimpleNamespace(
+            voxel_size=1.0,
+            image_shape=(16, 16),
+            volume_shape=(16, 16, 16),
+        ),
         means_k="mean",
         mean_variance="variance",
         noise_variance_k="noise_variance",
@@ -309,6 +313,7 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         class_log_priors=None,
         k_class_enabled=False,
         collect_local_search_profile=False,
+        diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
         class_assignments=[None, None],
         class_posterior_per_half=[None, None],
@@ -361,7 +366,11 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
 
     result = iteration_loop._score_half_local(
         k=0,
-        experiment_dataset=SimpleNamespace(voxel_size=1.0, volume_shape=(16, 16, 16)),
+        experiment_dataset=SimpleNamespace(
+            voxel_size=1.0,
+            image_shape=(16, 16),
+            volume_shape=(16, 16, 16),
+        ),
         means_k="mean",
         mean_variance="variance",
         noise_variance_k="noise_variance",
@@ -398,6 +407,7 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
         k_class_enabled=True,
         collect_local_search_profile=False,
+        diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
         class_assignments=[None, None],
         class_posterior_per_half=[None, None],

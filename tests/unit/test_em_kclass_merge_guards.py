@@ -279,8 +279,8 @@ def test_adaptive_kclass_pass1_forwards_relion_projector_kwargs():
     assert sig_kwargs_idx >= 0, "adaptive K-class significance kwargs block is missing"
     window = source[sig_kwargs_idx : sig_kwargs_idx + 2000]
     for needle in (
-        'relion_projector_half=engine_kwargs.get("relion_projector_half")',
-        'relion_projector_r_max=engine_kwargs.get("relion_projector_r_max")',
+        "relion_projector_half=relion_projector_half",
+        "relion_projector_r_max=relion_projector_r_max",
     ):
         assert needle in window, f"adaptive K-class pass-1 lost projector kwarg: {needle!r}"
 

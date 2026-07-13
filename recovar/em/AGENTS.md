@@ -9,7 +9,7 @@ runs live in `docs/math/em_parity_best_metrics.md`.
 identical. After editing either, mirror the change and verify:
 
 ```bash
-cmp recovar/em/AGENTS.md recovar/em/CLAUDE.md
+cmp recovar/em/CLAUDE.md recovar/em/AGENTS.md
 ```
 
 ## North Star
@@ -130,8 +130,8 @@ Use the cheapest sufficient rung and advance only after it passes:
 7. 100k/256 K=1 and K=4 completion pair, with RECOVAR and RELION for each pair
    run on the same GPU model.
 
-During normal iteration, run the whole fast parity tier at most every 3-4
-hours unless fixing that tier, changing its path, or doing final validation.
+During normal iteration, run the whole fast parity tier at most once every 3-4 hours
+unless fixing that tier, changing its path, or doing final validation.
 Prefer the directly affected test between tier runs.
 
 For EM-only work, do **not** run repo-wide full/long suites or SPA/ET table
@@ -153,8 +153,8 @@ The EM long tier is Slurm-only:
 ./scripts/run_em_parity_long_slurm.sh
 ```
 
-Completion evidence must use both K=1 and exactly K=4, at least 100k
-particles, at least 256x256 images, identical inputs/seeds/initial maps/masks,
+Completion evidence must use both K=1 and K=4 (exactly K=4, not a proxy), at least 100k particles,
+at least 256x256 images, identical inputs/seeds/initial maps/masks,
 and the same GPU class for RECOVAR and RELION. Completion runs are milestone
 evidence, not edit-loop tests.
 
@@ -231,6 +231,11 @@ coordinates, grid/voxel size, B-factor, noise model/level, CTF, class balance,
 angle distribution, contrast/noise-scale variation, translations, outliers,
 normalization, and seed.
 
+Use `scripts/prepare_pdb_k1_relion_sanity_benchmark.py` for the canonical K=1
+fixture and `scripts/prepare_cryobench_pdb_multiclass_relion_parity_benchmark.py`
+for the canonical K=4 fixture. A K=15 run is useful stress coverage but is not the K=4
+completion gate.
+
 Broad quality claims require a matrix across dataset family, SNR/noise model,
 K, class balance, uniform/preferred orientation distributions, CTF/no-CTF,
 contrast/noise scale, translations, junk/outliers, seed, grid size, and
@@ -251,8 +256,8 @@ Every reported run includes:
   metrics as applicable;
 - end-to-end and per-stage time, throughput, peak memory, compilation/warmup
   treatment, batch/microbatch sizes;
-- comparison to the accepted run with every delta labeled better, worse,
-  same, mixed, or not measured.
+- comparison to the accepted run with every delta labeled better, worse, or same;
+  use mixed or not measured only when no single directional label is valid.
 
 Append detailed findings to `docs/math/relion_parity_agent_notes.md`; update
 `docs/math/em_parity_program.md` when the active conclusion or next action
