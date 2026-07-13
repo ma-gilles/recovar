@@ -7,6 +7,7 @@ import numpy as np
 from recovar.em.sampling import (
     _relion_mstep_rotations_from_eulers,
     apply_relion_rotation_perturbation_to_eulers,
+    get_oversampled_rotation_grid_from_samples,
 )
 
 # Five captured RELION iteration-1 winner rows that previously changed the
@@ -119,3 +120,45 @@ def test_unperturbed_optional_mstep_return_is_backward_compatible():
         extended[2],
         _relion_mstep_rotations_from_eulers(_UNPERTURBED_FINE_EULERS_F64[:1]),
     )
+
+
+def test_oversampled_grid_optionally_returns_mstep_rotations_without_changing_score_grid():
+    legacy_rotations, legacy_parent_map, legacy_child_indices = get_oversampled_rotation_grid_from_samples(
+        np.array([0, 7], dtype=np.int64),
+        parent_nside_level=2,
+        oversampling_order=1,
+        random_perturbation=-0.11648395657539368,
+        return_rotation_indices=True,
+        rotation_index_order="relion",
+    )
+    rotations, parent_map, child_indices, mstep_rotations = get_oversampled_rotation_grid_from_samples(
+        np.array([0, 7], dtype=np.int64),
+        parent_nside_level=2,
+        oversampling_order=1,
+        random_perturbation=-0.11648395657539368,
+        return_rotation_indices=True,
+        return_mstep_rotations=True,
+        rotation_index_order="relion",
+    )
+
+    np.testing.assert_array_equal(rotations.view(np.uint32), legacy_rotations.view(np.uint32))
+    np.testing.assert_array_equal(parent_map, legacy_parent_map)
+    np.testing.assert_array_equal(child_indices, legacy_child_indices)
+    assert rotations.dtype == np.float32
+    assert mstep_rotations.dtype == np.float32
+    assert mstep_rotations.shape == rotations.shape
+    np.testing.assert_allclose(mstep_rotations, rotations, rtol=2e-7, atol=2e-7)
+
+
+def test_oversampled_grid_empty_optional_return_order_is_stable():
+    rotations, parent_map, child_indices, mstep_rotations = get_oversampled_rotation_grid_from_samples(
+        np.empty((0,), dtype=np.int64),
+        parent_nside_level=2,
+        return_rotation_indices=True,
+        return_mstep_rotations=True,
+    )
+
+    assert rotations.shape == (0, 3, 3)
+    assert parent_map.shape == (0,)
+    assert child_indices.shape == (0,)
+    assert mstep_rotations.shape == (0, 3, 3)

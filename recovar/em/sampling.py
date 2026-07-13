@@ -757,6 +757,7 @@ def read_relion_direction_prior(model_star_path):
 def read_relion_direction_priors(model_star_path, n_classes=None):
     """Read all RELION per-class orientation distributions from ``model.star``."""
     import re
+
     import numpy as np
     import starfile
 
@@ -898,6 +899,7 @@ def get_oversampled_rotation_grid_from_samples(
     *,
     random_perturbation=0.0,
     return_rotation_indices=False,
+    return_mstep_rotations=False,
     rotation_index_order: str = "recovar",
 ):
     """Generate oversampled child orientations from coarse sample indices.
@@ -933,14 +935,24 @@ def get_oversampled_rotation_grid_from_samples(
         RELION's oversampled psi children are midpoints inside the parent bin,
         so for 3D they are generally not exact rows of the global fine grid.
         Only returned when ``return_rotation_indices=True``.
+    mstep_rotations : np.ndarray, shape (n_children, 3, 3), optional
+        RELION host-path rotations used by weighted-sum backprojection. These
+        are formed from float64 Euler rows with RELION's explicit
+        ``Matrix2D::inv()`` operation order before any public float32 Euler
+        truncation. Only returned when ``return_mstep_rotations=True``. When
+        both optional returns are requested, this is the fourth result after
+        ``child_rotation_indices``.
     """
     parent_rotation_indices = np.asarray(parent_rotation_indices, dtype=np.int64)
     if parent_rotation_indices.size == 0:
         empty_rot = np.empty((0, 3, 3), dtype=np.float32)
         empty_map = np.empty((0,), dtype=np.int64)
+        outputs = [empty_rot, empty_map]
         if return_rotation_indices:
-            return empty_rot, empty_map, empty_map.copy()
-        return empty_rot, empty_map
+            outputs.append(empty_map.copy())
+        if return_mstep_rotations:
+            outputs.append(empty_rot.copy())
+        return tuple(outputs)
 
     if rotation_index_order == "relion_hidden":
         rotation_index_order = "relion"
@@ -1006,23 +1018,25 @@ def get_oversampled_rotation_grid_from_samples(
     )
     euler_angles = euler_angles / (2 * np.pi) * 360
     if abs(float(random_perturbation)) > 1e-12:
-        matrices, _ = apply_relion_rotation_perturbation_to_eulers(
+        perturbed = apply_relion_rotation_perturbation_to_eulers(
             euler_angles,
             random_perturbation,
             relion_angular_sampling_deg(parent_nside_level, adaptive_oversampling=0),
+            return_mstep_rotations=return_mstep_rotations,
         )
+        matrices = perturbed[0]
+        mstep_rotations = perturbed[2] if return_mstep_rotations else None
     else:
         matrices = _relion_euler_angles_to_matrix(euler_angles).astype(np.float32)
+        mstep_rotations = _relion_mstep_rotations_from_eulers(euler_angles) if return_mstep_rotations else None
     parent_map = np.repeat(parent_map, psi_factor)
 
+    outputs = [matrices, parent_map]
     if return_rotation_indices:
-        return (
-            matrices,
-            parent_map,
-            child_rotation_indices.astype(np.int64),
-        )
-
-    return matrices, parent_map
+        outputs.append(child_rotation_indices.astype(np.int64))
+    if return_mstep_rotations:
+        outputs.append(mstep_rotations)
+    return tuple(outputs)
 
 
 def get_oversampled_translation_grid(parent_translations, pixel_offset, oversampling_order=1):
