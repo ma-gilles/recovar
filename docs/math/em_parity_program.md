@@ -1047,6 +1047,126 @@ parent/fine scoring and support at that fixed transition, not revisit the now
 closed identical-input reconstruction wrapper.  Report:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fa597a61_full10k_trajectory_20260712_173845/FINAL_REPORT.md`.
 
+The fixed authoritative RELION iteration-7 to iteration-8 replay confirms
+that the global-to-local residual is inside the local E-step rather than only
+an amplification of the preceding RECOVAR map trajectory.  Aggregate replay
+job `11092142` starts from RELION iteration-7 maps and particle state, uses
+the exact iteration-8 current size 122, parent/fine orders 4/5, and seed-exact
+perturbation `-0.360924143344`.  It leaves `8802/10000` particle rotations at
+the numerical floor, but the remaining 1198 differ by at least one degree;
+pose p95 is `2.2536` degrees, translation p95 is `0.5` pixel, and mean Pmax is
+`0.636480` versus RELION `0.628746`.  Its nonzero Slurm exit is an
+instrumentation-gate failure after all science completed: the dump filter used
+absolute iteration 8 while the one-step replay labels its runtime loop as
+iteration 1.  Setup-only jobs `11091925` and `11091997` are also rejected
+(CUDA library-path contamination and an unsupported CLI argument,
+respectively).  Neither produced a scientific result.
+
+Corrected dump job `11092382` completes with exit 0 and all twelve requested
+particle surfaces.  Exact winner-to-grid mapping shows two distinct,
+non-numerical failure modes.  For particles 5727 and 932, RELION's winning
+coarse rotation parent is absent from RECOVAR pass 2; for particle 9887 the
+rotation parent is present but its required coarse translation pair is
+masked.  Regenerating the complete order-4 neighborhood and order-5 children
+recovers all three RELION rotations, ruling out parent/child enumeration.
+Thus their first divergence is pass-1 coarse scoring, normalization, or the
+0.999 significance selection.  Conversely, RELION's winners for particles
+3758, 4321, 5375, and 9826 are present but lose on RECOVAR's total score by
+`30.306/0.893/0.528/1.367`; saved-operand recomputation agrees with the live
+scores within about `0.002`, so reduction rounding cannot explain those
+margins.  Particle 3758 is a material raw data-term inversion (`30.720`),
+whereas the other three are flipped by RECOVAR's orientation/translation
+priors after the RELION winner has the better RECOVAR raw term.  A cold
+instrumented RELION iteration-8 run is therefore required to distinguish
+coarse support, raw projection/image operands, and prior arithmetic directly;
+continuation dumps remain inadmissible.  Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fa597a61_fixed_rel7_to8_localdump_20260712_183500/retry3/SUPPORT_AUDIT.md`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fa597a61_fixed_rel7_to8_localdump_20260712_183500/retry3/PASS2_SCORE_AUDIT.md`.
+
+Matched RECOVAR coarse-table job `11092553` completes in 5:40 and proves
+that the parent-support result is not a dump-mapping artifact.  For all twelve
+particles, the coarse `reconstruction_sample_mask` pairs exactly equal the
+fine table's finite candidates after collapsing each 8-by-4 child block back
+to its parent.  The required RELION winner pairs for particles 5727, 932, and
+9887 rank only 17, 13, and 3 in RECOVAR versus retained support sizes 6, 7,
+and 1; their score gaps from the RECOVAR winner are `-12.8455`, `-3.98770`,
+and `-14.23038`, and their posterior-to-cutoff ratios are
+`2.64e-6`, `1.85e-2`, and `6.60e-7`.  These are material coarse score or
+probability-table mismatches, not 0.999-threshold ties.  Particle 3758 gives
+the complementary boundary: its RELION winner parent is RECOVAR's coarse
+rank-1 pose with posterior `0.992`, so its `30.720` raw inversion arises only
+after fine-child projection/scoring.  Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fa597a61_fixed_rel7_to8_localdump_20260712_183500/retry4/coarse_dump/COARSE_DUMP_AUDIT.md`.
+
+Cold operand-enabled RELION job `11092529` is rejected by the mandatory
+observational-inertness gate.  It reproduces the exact iteration-1 through
+iteration-8 schedule and perturbations, produces the expected 180 files, and
+maps every requested particle ID correctly, but its iteration-8 half-map
+FSC-AUC against the installed uninterrupted oracle is only
+`0.985700/0.993777` with minimum non-DC FSC `0.963725/0.981571`.  It also
+changes 684 particle angles above `1e-4` degrees, 818 translations, 1968
+significant-sample counts, and Pmax by up to `0.68007`.  The Slurm job's
+nonzero exit is the intended fail-closed post-science result (after correcting
+an analysis-only STAR parser type assumption).  All 180 score/projection
+files are quarantined and must not be used.  A redesigned minimal hook must
+pass an enabled-versus-disabled cold control before direct RELION score
+comparison resumes.  Gate:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_relion_it8_cold_score_oracle_20260712_184953/cold_it8_inertness_gate.json`.
+
+The attempted score-only V3 pair `11092663/11092664` is also quarantined
+before score use because its advertised build path had been mutated in place.
+The genuinely qualified V3 binary from job `11055888` had SHA-256
+`68982a12...` and produced 13 files per target; the current path instead had
+SHA-256 `f77efbf3...`, contained the projection-operand hook, and produced 15
+files per target.  The mismatch is scientifically visible: the same-binary
+disabled run remains at HEALPix order 3 for iteration 8 while the enabled and
+installed runs advance to order 4; enabled-versus-disabled half-map FSC-AUC is
+only `0.706429/0.702250`, all 10,000 poses differ, and 8030 significant-count
+rows differ.  No accepted marker exists.  Future instrumented builds must use
+an immutable new build root and verify both source-diff and binary hashes
+before submission.  Quarantine record:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_relion_it8_v3_cold_pair_20260712_191034/paired_cold_it8_qualification.json`.
+
+Rebuilding the true V3 patch in a new immutable source root verifies exact
+commit `d476e6f`, patch and full-diff SHA-256 `58579a10...`, the original
+toolchain, and absence of all projection-operand code.  Build job `11093013`
+correctly notes that byte identity cannot survive the path change: RELION
+embeds absolute source/build paths in its executable.  A same-binary cold pair
+is the stronger scientific test.  Jobs `11093087/11093088` produce the
+expected 156/0 manifests and exact target mapping, but V3 is not inert through
+iteration 8: the disabled run remains at HEALPix order 3 while enabled and
+installed advance to order 4.  Enabled-versus-disabled half-map FSC-AUC is
+`0.708193/0.703562`, with all 10,000 poses, 6292 shifts, and 7983 significant
+counts differing.  Enabled-versus-installed FSC-AUC is only
+`0.984972/0.992932`.  V3 was qualified for iteration 2 only and must not be
+extrapolated to the later adaptive transition; its iteration-8 fine tables
+are quarantined.  Gate:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_relion_it8_v3_immutable_pair_20260712_193549/paired_cold_it8_qualification.json`.
+
+Fixed-transition projector A/B jobs `11093381/11093382` initially reveal a
+routing defect rather than a scientific hybrid result.  The supplied-PPref
+local bucket, packed-noise, and projection-cache helpers discarded their
+explicit `projection_relion_texture_interp` argument and fell back to the
+process-wide environment.  Consequently A was texture/texture and exactly
+reproduced baseline, while B was manual/manual.  Manual/manual does not change
+particles 3758, 5727, 932, or 9887 and slightly worsens mean angle,
+translation, and Pmax parity; its FSC-AUC gain is only `1.47e-5`.  Their Slurm
+`FAILED/1` states are a bad post-science regular-expression gate; both science
+outputs are complete.  Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fa597a61_rel7to8_projector_ab_20260712_190500/A_B_REPORT.md`.
+
+The production routing fix forwards the explicit selector through all three
+supplied-projector paths, pins local parent pass 1 to manual interpolation,
+and lets fine pass 2 follow the switchable texture default.  Validation job
+`11093570` completes with exit 0 and logs the intended route for both halves.
+It is exactly equal to the fixed baseline in every saved pose, translation,
+Pmax, and per-half fine significant count; the four target particles remain
+unchanged.  FSC-AUC changes by only `-5.22e-8` and maximum shell FSC by
+`2.17e-6`.  The fix is retained as a correctness/configuration repair, but
+manual-versus-texture selection is not the iteration-8 cause.  Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_local_hybrid_routing_validation_20260712_201000/VALIDATION_REPORT.md`.
+
 The tempting indexed-backprojection coordinate-order explanation is rejected.
 RELION rotates integer Fourier coordinates before multiplying by padding while
 RECOVAR's CUDA kernel multiplies first, but padding factor 2 is exact binary

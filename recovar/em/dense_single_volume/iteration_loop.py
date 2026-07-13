@@ -2430,6 +2430,7 @@ def _score_half_local(
             int(current_translations.shape[0]),
             local_pass1_current_size,
         )
+        logger.info("RELION local adaptive pass 1: using manual supplied-PPref interpolation")
         parent_outputs = _run_local_search_iteration(
             experiment_dataset,
             means_k,
@@ -2454,6 +2455,7 @@ def _score_half_local(
             reconstruction_padding_factor=PADDING_FACTOR,
             relion_projector_half=relion_projector_half,
             relion_projector_r_max=relion_projector_r_max,
+            projection_relion_texture_interp=False,
             use_float64_scoring=False,
             use_float64_projections=False,
             do_gridding_correction=True,
@@ -2696,6 +2698,10 @@ def _score_half_local(
     local_accumulate_noise = not diagnostic_score_only
     local_disable_adjoint_y = bool(disable_adjoint_y or diagnostic_score_only)
     local_disable_adjoint_ctf = bool(disable_adjoint_ctf or diagnostic_score_only)
+    logger.info(
+        "RELION local fine pass 2: supplied-PPref interpolation follows "
+        "RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP (default texture)"
+    )
     local_outputs = _run_local_search_iteration(
         experiment_dataset,
         means_k,
@@ -2720,6 +2726,10 @@ def _score_half_local(
         reconstruction_padding_factor=PADDING_FACTOR,
         relion_projector_half=relion_projector_half,
         relion_projector_r_max=relion_projector_r_max,
+        # RELION's local adaptive path is intentionally hybrid: parent pass 1
+        # uses the manual supplied-PPref projector above, while fine pass 2
+        # follows the user-switchable texture default.
+        projection_relion_texture_interp=None,
         use_float64_scoring=False,
         use_float64_projections=False,
         do_gridding_correction=True,

@@ -2626,7 +2626,7 @@ def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypat
         image_shape=(4, 4),
         proj_volume_shape=(4, 4, 4),
         disc_type="linear_interp",
-        projection_kwargs={},
+        projection_kwargs={"relion_texture_interp": False},
         window_spec=make_fourier_window_spec((4, 4), 4, 12, include_recon_window=True),
         n_half=12,
         half_weights=jnp.ones(12, dtype=jnp.float32),
@@ -2636,7 +2636,20 @@ def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypat
         projection_padding_factor=1,
     )
 
-    assert calls == [((4, 4, 3), (2, 3, 3), {"r_max": 2, "padding_factor": 1, "return_abs2": False, "centered_rows": True, "dense_scale": True})]
+    assert calls == [
+        (
+            (4, 4, 3),
+            (2, 3, 3),
+            {
+                "r_max": 2,
+                "padding_factor": 1,
+                "return_abs2": False,
+                "centered_rows": True,
+                "dense_scale": True,
+                "relion_texture_interp": False,
+            },
+        )
+    ]
     assert block.proj_weighted.shape == (1, 2, 12)
     assert block.proj_for_noise.shape == (1, 2, 12)
 
@@ -2876,6 +2889,7 @@ def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(mon
                 tuple(rotations.shape),
                 None if pixel_indices is None else int(np.asarray(pixel_indices).shape[0]),
                 kwargs.get("projector_output_size"),
+                kwargs.get("relion_texture_interp"),
             )
         )
         n_values = int(np.asarray(pixel_indices).shape[0])
@@ -2891,7 +2905,7 @@ def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(mon
         image_shape=(8, 8),
         proj_volume_shape=(8, 8, 8),
         disc_type="linear_interp",
-        projection_kwargs={},
+        projection_kwargs={"relion_texture_interp": True},
         window_spec=window_spec,
         n_half=40,
         half_weights=jnp.ones(40, dtype=jnp.float32),
@@ -2901,7 +2915,7 @@ def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(mon
         projection_padding_factor=1,
     )
 
-    assert calls == [((8, 8, 5), (2, 3, 3), window_spec.n_projection, 6)]
+    assert calls == [((8, 8, 5), (2, 3, 3), window_spec.n_projection, 6, True)]
     assert block.proj_weighted.shape == (1, 2, window_spec.n_score)
     assert block.proj_for_noise.shape == (1, 2, window_spec.n_recon)
 
@@ -2930,7 +2944,7 @@ def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
         image_shape=(4, 4),
         proj_volume_shape=(4, 4, 4),
         disc_type="linear_interp",
-        projection_kwargs={},
+        projection_kwargs={"relion_texture_interp": True},
         window_spec=window_spec,
         n_half=12,
         precision_policy=DensePrecisionPolicy(use_float64_scoring=False),
@@ -2940,9 +2954,63 @@ def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
         projection_padding_factor=1,
     )
 
-    assert calls == [((4, 4, 3), (2, 3, 3), {"r_max": 2, "padding_factor": 1, "return_abs2": False, "centered_rows": True, "dense_scale": True})]
+    assert calls == [
+        (
+            (4, 4, 3),
+            (2, 3, 3),
+            {
+                "r_max": 2,
+                "padding_factor": 1,
+                "return_abs2": False,
+                "centered_rows": True,
+                "dense_scale": True,
+                "relion_texture_interp": True,
+            },
+        )
+    ]
     assert packed.shape == (1, 2, 12)
     np.testing.assert_allclose(np.asarray(packed[0, 1]), 0.0)
+
+
+def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
+    from recovar.em.dense_single_volume import local_em_engine
+
+    bucket = LocalBucketSpec(
+        image_indices=np.array([0], dtype=np.int32),
+        bucket_image_count=1,
+        bucket_rotation_count=2,
+        actual_rotation_counts=np.array([2], dtype=np.int32),
+        local_rotation_ids=np.array([[0, 1]], dtype=np.int32),
+        local_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (1, 2, 3, 3)).copy(),
+        local_rotation_log_prior=np.zeros((1, 2), dtype=np.float32),
+        local_rotation_mask=np.ones((1, 2), dtype=bool),
+        translation_log_prior=np.zeros((1, 1), dtype=np.float32),
+    )
+    calls = []
+
+    def fake_projector(projector_half, rotations, image_shape, **kwargs):
+        calls.append(dict(kwargs))
+        return jnp.ones((rotations.shape[0], 12), dtype=jnp.complex64), None
+
+    monkeypatch.setattr(local_em_engine, "_compute_relion_projector_projections_block", fake_projector)
+    cache = local_em_engine._build_exact_local_relion_projection_cache_for_buckets(
+        [bucket],
+        jnp.ones((4, 4, 3), dtype=jnp.complex64),
+        image_shape=(4, 4),
+        n_projection_pixels=12,
+        relion_projector_r_max=2,
+        projection_padding_factor=1,
+        projection_relion_texture_interp=True,
+        projection_pixel_indices=None,
+        projector_output_size=4,
+        cache_row_capacity=2,
+        max_global_rotation_id=1,
+        group_index=0,
+        n_groups=1,
+    )
+
+    assert cache.enabled
+    assert calls[0]["relion_texture_interp"] is True
 
 
 def test_packed_local_noise_projection_chunk_rows_env(monkeypatch):
