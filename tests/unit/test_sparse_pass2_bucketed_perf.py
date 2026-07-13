@@ -1931,6 +1931,71 @@ def test_sparse_pass2_adjoint_block_chunking_accumulates_all_rows(monkeypatch):
     np.testing.assert_allclose(np.asarray(actual), np.asarray(volume + jnp.sum(flat_block)))
 
 
+def test_relion_x_half_bp_per_particle_launch_is_off_by_default(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", raising=False)
+    assert bucketed_mod.relion_x_half_bp_per_particle_launch_enabled() is False
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
+    assert bucketed_mod.relion_x_half_bp_per_particle_launch_enabled() is True
+
+
+def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    values = jnp.arange(2 * 3 * 2, dtype=jnp.float32).reshape(2, 3, 2).astype(jnp.complex64)
+    ctf_values = (100.0 + jnp.arange(2 * 3 * 2, dtype=jnp.float32)).reshape(2, 3, 2)
+    rotations = jnp.arange(2 * 3 * 9, dtype=jnp.float32).reshape(2, 3, 3, 3)
+    actual_counts = np.asarray([2, 1], dtype=np.int32)
+    calls = []
+
+    def fake_adjoint_slice_volume_windowed(
+        half_block,
+        window_indices,
+        rotations_block,
+        volume_in,
+        image_shape,
+        volume_shape,
+        disc_type,
+        half_image,
+        half_volume=False,
+        max_r=None,
+        relion_x_half=False,
+    ):
+        del window_indices, image_shape, volume_shape, disc_type, half_volume, max_r
+        assert half_image is True and relion_x_half is True
+        calls.append((np.asarray(half_block).copy(), np.asarray(rotations_block).copy()))
+        return volume_in + jnp.sum(jnp.real(half_block))
+
+    monkeypatch.setattr(bucketed_mod, "_adjoint_slice_volume_windowed", fake_adjoint_slice_volume_windowed)
+    y_volume, ctf_volume = bucketed_mod._accumulate_relion_x_half_per_particle_launches(
+        values,
+        ctf_values,
+        rotations,
+        actual_counts,
+        jnp.asarray(0.0, dtype=jnp.float32),
+        jnp.asarray(10.0, dtype=jnp.float32),
+        window_indices=jnp.arange(2, dtype=jnp.int32),
+        image_shape=(8, 8),
+        volume_shape=(8, 8, 8),
+        disc_type="linear_interp",
+        half_volume=True,
+        max_r=2.0,
+        log_label_prefix="test",
+    )
+
+    assert [call[0].shape[0] for call in calls] == [2, 2, 1, 1]
+    np.testing.assert_array_equal(calls[0][0], np.asarray(values[0, :2]))
+    np.testing.assert_array_equal(calls[0][1], np.asarray(rotations[0, :2]))
+    np.testing.assert_array_equal(calls[1][0], np.asarray(ctf_values[0, :2]))
+    np.testing.assert_array_equal(calls[2][0], np.asarray(values[1, :1]))
+    np.testing.assert_array_equal(calls[3][0], np.asarray(ctf_values[1, :1]))
+    expected_y = np.asarray(values[0, :2].real).sum() + np.asarray(values[1, :1].real).sum()
+    expected_ctf = 10.0 + np.asarray(ctf_values[0, :2]).sum() + np.asarray(ctf_values[1, :1]).sum()
+    np.testing.assert_allclose(np.asarray(y_volume), expected_y)
+    np.testing.assert_allclose(np.asarray(ctf_volume), expected_ctf)
+
+
 def test_sparse_pass2_active_flat_row_gather_chunking_matches_full_gather(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 

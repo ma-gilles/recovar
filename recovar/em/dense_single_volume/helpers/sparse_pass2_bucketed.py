@@ -184,6 +184,7 @@ _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT
 _SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTEP"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
+_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV = "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_JOINT_MODES = {"joint", "global", "class_pose", "class-pose"}
 _SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK_ENV = "RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK"
@@ -2911,6 +2912,87 @@ def _adjoint_block_chunk_rows(flat_block, *, max_block_bytes: int) -> int:
         return 1
     row_bytes = _flat_block_row_bytes(flat_block)
     return max(1, int(max_block_bytes) // row_bytes)
+
+
+def relion_x_half_bp_per_particle_launch_enabled() -> bool:
+    """Return whether the diagnostic x-half path launches once per particle."""
+
+    return _env_flag_enabled(_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV, default=False)
+
+
+def _accumulate_relion_x_half_per_particle_launches(
+    values,
+    ctf_values,
+    rotations,
+    actual_counts,
+    y_volume,
+    ctf_volume,
+    *,
+    window_indices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_volume,
+    max_r,
+    log_label_prefix: str,
+):
+    """Accumulate one particle-owned orientation grid per FFI launch.
+
+    This matches RELION's particle launch boundary and preserves the local
+    orientation order. Translation reduction and numerator/weight scattering
+    remain separate, so this is not a fused-kernel equivalence mode.
+    """
+
+    actual_counts = np.asarray(actual_counts, dtype=np.int64)
+    if values.shape[:2] != rotations.shape[:2] or ctf_values.shape[:2] != values.shape[:2]:
+        raise ValueError("per-particle x-half diagnostic requires matching (particle, rotation) axes")
+    if actual_counts.shape != (int(values.shape[0]),):
+        raise ValueError(
+            f"per-particle x-half actual_counts shape mismatch: {actual_counts.shape} vs {(int(values.shape[0]),)}"
+        )
+    logger.info(
+        "RELION x-half diagnostic: one adjoint launch per particle "
+        "(particles=%d, rotations min/median/max=%d/%d/%d, label=%s)",
+        int(values.shape[0]),
+        int(actual_counts.min()) if actual_counts.size else 0,
+        int(np.median(actual_counts)) if actual_counts.size else 0,
+        int(actual_counts.max()) if actual_counts.size else 0,
+        log_label_prefix,
+    )
+    for particle_index, count in enumerate(actual_counts.tolist()):
+        if count <= 0:
+            continue
+        particle_slice = (slice(particle_index, particle_index + 1), slice(0, int(count)))
+        particle_values = values[particle_slice].reshape(int(count), values.shape[-1])
+        particle_ctf_values = ctf_values[particle_slice].reshape(int(count), ctf_values.shape[-1])
+        particle_rotations = rotations[particle_slice].reshape(int(count), 3, 3)
+        y_volume = _adjoint_slice_volume_windowed(
+            particle_values,
+            window_indices,
+            particle_rotations,
+            y_volume,
+            image_shape,
+            volume_shape,
+            disc_type,
+            True,
+            half_volume,
+            max_r,
+            True,
+        )
+        ctf_volume = _adjoint_slice_volume_windowed(
+            particle_ctf_values,
+            window_indices,
+            particle_rotations,
+            ctf_volume,
+            image_shape,
+            volume_shape,
+            disc_type,
+            True,
+            half_volume,
+            max_r,
+            True,
+        )
+    return y_volume, ctf_volume
 
 
 def _accumulate_adjoint_block_chunked(
@@ -6360,6 +6442,10 @@ def compute_pass2_stats_sparse_bucketed(
         elif use_window and projection_cache is not None and not dump_this_bucket and not score_only:
             rotation_chunk_size = _cached_score_rotation_chunk_size_for_pass(bucket_size)
         if rotation_chunk_size is not None and int(rotation_chunk_size) < bucket_size:
+            if use_relion_x_half_mstep and relion_x_half_bp_per_particle_launch_enabled():
+                raise RuntimeError(
+                    "RELION per-particle launch diagnostic does not support rotation-chunked pass 2"
+                )
             rotation_chunk_size = max(1, int(rotation_chunk_size))
             if projection_cache is not None:
                 log_key = ("single-cached", int(bucket_size), int(batch), int(rotation_chunk_size))
@@ -6983,13 +7069,52 @@ def compute_pass2_stats_sparse_bucketed(
                 relion_x_half=use_relion_x_half_mstep,
             )
 
+            use_per_particle_launches = (
+                use_relion_x_half_mstep and relion_x_half_bp_per_particle_launch_enabled()
+            )
+            if use_per_particle_launches:
+                if not winner_take_all:
+                    raise RuntimeError(
+                        "RELION per-particle launch diagnostic is currently qualified only for winner-take-all"
+                    )
+                positive_rotation_rows = np.count_nonzero(
+                    np.asarray(jnp.sum(mstep_probs, axis=-1)) > 0,
+                    axis=1,
+                )
+                if not np.all(positive_rotation_rows == 1):
+                    raise RuntimeError(
+                        "RELION per-particle launch diagnostic requires exactly one positive rotation row per particle"
+                    )
+                if image_indices.size > 1 and not np.all(np.diff(image_indices) > 0):
+                    raise RuntimeError(
+                        "RELION per-particle launch diagnostic requires strictly increasing particle ownership order"
+                    )
+                mstep_window_indices = (
+                    relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
+                )
+                Ft_y_total, Ft_ctf_total = _accumulate_relion_x_half_per_particle_launches(
+                    summed,
+                    ctf_probs,
+                    jnp.asarray(rotations),
+                    actual_counts,
+                    Ft_y_total,
+                    Ft_ctf_total,
+                    window_indices=mstep_window_indices,
+                    image_shape=image_shape,
+                    volume_shape=recon_volume_shape,
+                    disc_type="linear_interp",
+                    half_volume=use_half_volume_mstep,
+                    max_r=float(current_size // 2) if use_window else None,
+                    log_label_prefix="single-particle-xhalf",
+                )
+
             # Backproject (use flat_rotations + flat summed/ctf_probs).
             # Padded rotations contribute zero because their probs == 0
             # (candidate_mask=False -> score=-inf -> exp(-inf)=0).
             flat_summed = flatten_bucket_rows(summed)
             flat_ctf_probs = flatten_bucket_rows(ctf_probs)
             mstep_window_indices = relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
-            if use_window:
+            if not use_per_particle_launches and use_window:
                 Ft_y_total = _accumulate_adjoint_block_chunked(
                     flat_summed,
                     flat_backproject_rotations,
@@ -7022,7 +7147,7 @@ def compute_pass2_stats_sparse_bucketed(
                     max_block_bytes=max_adjoint_block_bytes,
                     log_label="single-ctf-window",
                 )
-            elif use_relion_x_half_mstep:
+            elif not use_per_particle_launches and use_relion_x_half_mstep:
                 Ft_y_total = _accumulate_adjoint_block_chunked(
                     flat_summed,
                     flat_backproject_rotations,
@@ -7055,7 +7180,7 @@ def compute_pass2_stats_sparse_bucketed(
                     max_block_bytes=max_adjoint_block_bytes,
                     log_label="single-ctf-xhalf",
                 )
-            else:
+            elif not use_per_particle_launches:
                 Ft_y_total = _accumulate_adjoint_block_chunked(
                     flat_summed,
                     flat_backproject_rotations,
