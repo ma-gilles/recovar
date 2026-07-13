@@ -10,6 +10,10 @@ def test_infer_upsampling_accepts_standard_even_grid():
     assert _infer_backproject_upsampling((128, 128), (256, 256, 256)) == 2
 
 
+def test_infer_upsampling_accepts_standard_rectangular_grid():
+    assert _infer_backproject_upsampling((4, 8), (8, 10, 12)) == 2
+
+
 def test_infer_upsampling_accepts_final_all_data_relion_pad_without_max_r():
     assert _infer_backproject_upsampling((128, 128), (259, 259, 259), max_r=None) == 2
 

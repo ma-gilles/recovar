@@ -783,13 +783,16 @@ def _infer_backproject_upsampling(image_shape, volume_shape, max_r=None):
 
     ih, _ = image_shape
     N0, N1, N2 = volume_shape
-    if N0 != N1 or N0 != N2:
-        raise ValueError(f"volume_shape must be cubic, got {volume_shape}")
     if N0 % ih == 0:
         ups = N0 // ih
         if ups <= 0:
             raise ValueError(f"volume_shape[0] ({N0}) must be at least image_shape[0] ({ih})")
         return int(ups)
+    if N0 != N1 or N0 != N2:
+        raise ValueError(
+            "non-cubic volume_shape requires standard integer upsampling along axis 0, "
+            f"got image_shape={image_shape}, volume_shape={volume_shape}"
+        )
     if max_r is not None and float(max_r) > 0:
         ups = int((float(N0) - 3.0) / (2.0 * float(max_r)) + 0.5)
         expected = 2 * (int(float(ups) * float(max_r) + 0.5) + 1) + 1
