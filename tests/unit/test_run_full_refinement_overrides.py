@@ -293,6 +293,15 @@ def test_relion_expected_accuracy_layout_preserves_relion_particle_rows():
     np.testing.assert_array_equal(particle_ids, [2, 0, 3])
 
 
+def test_runner_keeps_input_particle_names_for_replay_mapping():
+    source = RUN_FULL_REFINEMENT.read_text()
+    bind = 'our_names = np.asarray(our_particles["rlnImageName"])'
+    first_replay_use = "particle_names=our_names"
+
+    assert bind in source
+    assert source.index(bind) < source.index(first_replay_use)
+
+
 def test_native_group_ids_are_available_to_k_class_refinement():
     source = RUN_FULL_REFINEMENT.read_text()
     group_block = source[

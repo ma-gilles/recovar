@@ -1559,6 +1559,10 @@ def main():
 
     our_star = _starfile.read(os.path.join(args.data_dir, "particles.star"))
     our_particles = our_star["particles"] if isinstance(our_star, dict) else our_star
+    # Keep the input-STAR particle identities available for replay mapping.
+    # RELION data STAR rows can be permuted relative to this table, so callers
+    # must map by rlnImageName rather than assuming row positions coincide.
+    our_names = np.asarray(our_particles["rlnImageName"])
     expected_accuracy_half1_base_order_local = None
     expected_accuracy_half1_optics_group_ids = None
     expected_accuracy_half1_particle_ids = None
