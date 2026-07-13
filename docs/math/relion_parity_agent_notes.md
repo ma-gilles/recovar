@@ -1627,3 +1627,62 @@ and run per case: high noise, nonuniform and Kent angle distributions, no CTF,
 outliers, contrast/noise-scale variation, and image-offset stress. Failures
 must be localized at the earliest trajectory boundary before proceeding to
 10k, real-particle, 100k/256, or K=4 evidence.
+
+## 2026-07-13 Exact M-step Geometry and Remaining 10k Iteration-1 Tie
+
+The strict 10k/128 iteration-1 investigation closes the production
+rotation-to-scatter geometry boundary without claiming complete BPref or
+trajectory parity.  The active branch is
+`codex/em-parity-checkpoint-20260711`; the exact-head full gate used commit
+`1e8ad088b9d2c7837308056a105763508dfca165`.
+
+RELION constructs the M-step inverse matrix on the CPU in double precision,
+using its explicit 3x3 cofactor, determinant, and division order, before
+casting the matrix for the CUDA backprojector.  RECOVAR now carries a separate
+host-generated M-step rotation stream while leaving projection, scoring,
+posterior, and winner selection on the existing score matrices.  Global
+sparse pass 2 and local adjoint plumbing preserve the two streams separately.
+The backprojection coordinate expressions also use RELION's operand order so
+the CUDA compiler contracts the same multiply-add pairs.  These changes are
+commits `e5bcb00e`, `07562137`, `59ac0b35`, `62940cc0`, `e1415768`, and
+`1e8ad088`.
+
+Production signature job `11137420` completed on an A100 in 131 seconds.  Its
+marked root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_mstep_fma_signature_gate_20260713_142542`.
+Across 128 particles, the RELION-host, RECOVAR-host, and CUDA-consumed rotation
+matrices have zero uint32 mismatches.  Cutoff, fold, interpolation base, and
+neighbor mismatch counts are all zero.  Raw-coordinate, radius-squared, and
+interpolation-coefficient relative L2 errors are zero; Fweight relative L2 is
+`3.53404e-7`.  Deterministic accumulator relative L2 is `2.91911e-7` for
+half 1 and `2.70024e-7` for half 2.  The JSON and report are
+`audit/production_mstep_signature_audit.json` and
+`audit/production_mstep_signature_report.md` under that root.
+
+The full exact-head A100 gate is Slurm job `11137642`, rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_10k128_it1_hostrot_fma_gate_20260713_142749`
+and marked `SAFE_TO_DELETE`.  It hash-verifies the immutable fresh RELION maps
+and pre-reconstruct BPref arrays from job `11130337`.  The merged
+RECOVAR-versus-RELION normalized FSC-AUC is `0.999999985292`; half-map values
+are `0.999999952467` and `0.999999996172`.  RECOVAR merged GT FSC-AUC is
+`0.227550394410` versus RELION `0.227551223235`.  RECOVAR's GT FSC=0.5 and
+FSC=0.143 resolutions are `29.575925` and `27.475383` Angstrom, versus
+RELION's `29.576021` and `27.475483` Angstrom.  Correlation is auxiliary and
+does not participate in this gate.
+
+Raw-array parity is not yet closed.  Supported BPref numerator/weight relative
+L2 errors are `0.0116863180/0.00257571901` for half 1 and
+`0.000804700285/0.0000836767217` for half 2.  Shells 15--28 are nearly closed
+in half 2, while the half-1 numerator error grows to about 2.8 percent at the
+outer supported shells.  Comparing saved winners to RELION by numeric
+`rlnImageName` localizes the material asymmetry to one of 10,000 particles:
+zero-based original index 4394 in half 1.  RECOVAR chooses psi
+`-50.585873` degrees and translation `[0.13351604, 0.63351607]` pixels;
+RELION chooses the neighboring psi `-46.835870` degrees and translation
+`[0.133516, 0.133516]` pixels.  All half-2 winners and all other material
+half-1 winners agree, apart from STAR/float32 serialization noise.  The next
+required boundary is an exact pre-exponential score comparison of these two
+hypotheses.  The discrete mismatch may be accepted only if both implementations'
+underlying scores establish a numerical tie; otherwise it remains a scoring
+bug.  Do not infer full iteration-1, full-trajectory, robustness, scale,
+real-data, or K=4 parity from the near-identical reconstructed maps.
