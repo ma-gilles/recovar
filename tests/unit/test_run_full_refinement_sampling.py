@@ -120,6 +120,7 @@ def test_relion_seeded_sampling_perturbation_preserves_scaled_rnd_unif_rounding(
 
     assert initial == 0.4600469470024109
     assert iteration_one == -0.04961434006690979
+    assert relion_sampling_perturbation_for_iteration(0.5, 1730, 1) == -0.11648395657539368
 
 
 def test_pose_history_by_image_restores_original_particle_order():
