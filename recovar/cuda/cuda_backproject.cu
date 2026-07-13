@@ -89,6 +89,22 @@ static __device__ __forceinline__ int wrap_mod(int x, int N) {
     return r < 0 ? r + N : r;
 }
 
+/* Recover the full last-axis size from its packed half-spectrum size.
+ *
+ * Standard RECOVAR grids have an even last axis, so N2 = 2*(N2_eff-1).
+ * RELION BackProjector accumulators are odd and cubic; preserve their final
+ * centered z plane when that shape is unambiguous from N0/N1/N2_eff.
+ * Arbitrary odd rectangular last axes remain unsupported because the packed
+ * shape alone cannot distinguish full sizes 2*N2_eff-2 and 2*N2_eff-1.
+ */
+static __device__ __forceinline__ int full_z_size_from_half(
+    int N0, int N1, int N2_eff)
+{
+    const bool odd_cubic =
+        (N0 & 1) && N0 == N1 && N2_eff == N0 / 2 + 1;
+    return odd_cubic ? N0 : 2 * (N2_eff - 1);
+}
+
 #define BLOCK_SIZE 256
 
 /* ================================================================== */
@@ -145,7 +161,7 @@ static __device__ __forceinline__ void scatter_nearest(
 
     if (HALF_VOL) {
         const int ic2 = (int)c2;
-        const int N2_full = N0;
+        const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
         const T g2_full = rk2 + c2;
         int i0 = round_int(g0);
         int i1 = round_int(g1);
@@ -157,7 +173,7 @@ static __device__ __forceinline__ void scatter_nearest(
         int hkz;
         if (kz >= 0) {
             hkz = kz;
-        } else if ((N0 & 1) == 0 && -kz == ic2) {
+        } else if ((N2_full & 1) == 0 && -kz == ic2) {
             /* Nyquist (kz = -N/2 = +N/2): self-conjugate, scatter directly */
             hkz = ic2;
         } else {
@@ -232,7 +248,7 @@ static __device__ __forceinline__ void scatter_trilinear(
 
     if (HALF_VOL) {
         const int ic2 = (int)c2;
-        const int N2_full = N0;
+        const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
         const T g2_full = rk2 + c2;
 
         if (g0 < (T)-1 || g0 >= (T)N0 ||
@@ -270,7 +286,7 @@ static __device__ __forceinline__ void scatter_trilinear(
                     T sim = REAL_DATA ? (T)0 : w * val_im;
                     if (kz >= 0) {
                         hkz = kz;
-                    } else if ((N0 & 1) == 0 && -kz == ic2) {
+                    } else if ((N2_full & 1) == 0 && -kz == ic2) {
                         /* Nyquist: self-conjugate, scatter directly */
                         hkz = ic2;
                     } else {
@@ -362,7 +378,7 @@ static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
     const float g0 = rk0 + c0;
     const float g1 = rk1 + c1;
     const int ic2 = (int)c2;
-    const int N2_full = N0;
+    const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
     const float g2_full = rk2 + c2;
 
     if (g0 < -1.0f || g0 >= (float)N0 ||
@@ -401,7 +417,7 @@ static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
                 float sim = w * data_im;
                 if (kz >= 0) {
                     hkz = kz;
-                } else if ((N0 & 1) == 0 && -kz == ic2) {
+                } else if ((N2_full & 1) == 0 && -kz == ic2) {
                     hkz = ic2;
                 } else {
                     sj0 = (N0 - (N0 & 1) - j0) % N0;
@@ -527,7 +543,7 @@ backproject_kernel(
         && !(k0_idx == 0 && (image_h & 1) == 0);         /* not Nyquist row */
 
     if (conj_opt) {
-        const int N2_full = N0;
+        const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
         if (ORDER == 0) {
             /* Nearest: both round(rk+c) and round(-rk+c) must be in [0,N). */
             const int pi0 = round_int(rk0+c0), pi1 = round_int(rk1+c1);
@@ -751,7 +767,7 @@ backproject_indexed_kernel(
         && !(k0_idx == 0 && (image_h & 1) == 0);
 
     if (conj_opt) {
-        const int N2_full = N0;
+        const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
         if (ORDER == 0) {
             const int pi0 = round_int(rk0+c0), pi1 = round_int(rk1+c1);
             const int pi2 = round_int(rk2+c2);
@@ -939,7 +955,7 @@ batch_backproject_indexed_kernel(
         && !(k0_idx == 0 && (image_h & 1) == 0);
 
     if (conj_opt) {
-        const int N2_full = N0;
+        const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
         if (ORDER == 0) {
             const int pi0 = round_int(rk0+c0), pi1 = round_int(rk1+c1);
             const int pi2 = round_int(rk2+c2);
@@ -1185,10 +1201,10 @@ project_kernel(
     if (HALF_VOL) {
         const T g0 = rk0 + c0;
         const T g1 = rk1 + c1;
-        /* The volume is cubic; use the actual full z dimension so odd
-         * RELION padded grids keep their final centered z plane. */
+        /* Recover the actual full z dimension so odd cubic RELION grids keep
+         * their final centered plane and even rectangular grids keep N2. */
         const int ic2 = (int)c2;          /* N2/2 */
-        const int N2_full = N0;
+        const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
         const T g2_full = rk2 + c2;
 
         if (ORDER == 0) {
@@ -1254,7 +1270,7 @@ project_kernel(
                         bool cj = false;
                         if (kz >= 0) {
                             hkz = kz;
-                        } else if ((N0 & 1) == 0 && -kz == ic2) {
+                        } else if ((N2_full & 1) == 0 && -kz == ic2) {
                             /* Nyquist: self-conjugate */
                             hkz = ic2;
                         } else {
@@ -2366,7 +2382,7 @@ batch_backproject_kernel(
         && !(k0_idx == 0 && (image_h & 1) == 0);
 
     if (conj_opt) {
-        const int N2_full = N0;
+        const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
         if (ORDER == 0) {
             const int pi0 = round_int(rk0+c0), pi1 = round_int(rk1+c1);
             const int pi2 = round_int(rk2+c2);
@@ -2518,7 +2534,7 @@ batch_project_kernel(
         const T g0 = rk0 + c0;
         const T g1 = rk1 + c1;
         const int ic2 = (int)c2;
-        const int N2_full = N0;
+        const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
         const T g2_full = rk2 + c2;
 
         if (ORDER == 0) {
@@ -2583,7 +2599,7 @@ batch_project_kernel(
                         bool cjj = false;
                         if (kz >= 0) {
                             hkz = kz;
-                        } else if ((N0 & 1) == 0 && -kz == ic2) {
+                        } else if ((N2_full & 1) == 0 && -kz == ic2) {
                             hkz = ic2;
                         } else {
                             ri = (N0 - (N0 & 1) - j0) % N0;
@@ -3775,7 +3791,7 @@ batch_backproject_interleaved_kernel(
 
     /* HALF_VOL trilinear scatter with interleaved output */
     const int ic2 = (int)c2;
-    const int N2_full = N0;
+    const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
 
     if (g0 < (T)-1 || g0 >= (T)N0 ||
         g1 < (T)-1 || g1 >= (T)N1 ||
@@ -3816,7 +3832,7 @@ batch_backproject_interleaved_kernel(
                 int hkz;
                 if (kz >= 0) {
                     hkz = kz;
-                } else if ((N0 & 1) == 0 && -kz == ic2) {
+                } else if ((N2_full & 1) == 0 && -kz == ic2) {
                     hkz = ic2;
                 } else {
                     sj0 = (N0 - (N0 & 1) - j0) % N0;
@@ -3920,7 +3936,7 @@ fused_backproject_kernel(
 
     const T g0 = rk0 + c0, g1 = rk1 + c1, g2 = rk2 + c2;
     const int ic2 = (int)c2;
-    const int N2_full = N0;
+    const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
 
     if (g0 < (T)-1 || g0 >= (T)N0 ||
         g1 < (T)-1 || g1 >= (T)N1 ||
@@ -3958,7 +3974,7 @@ fused_backproject_kernel(
                 int sj0 = j0, sj1 = j1;
                 int hkz;
                 if (kz >= 0) { hkz = kz; }
-                else if ((N0 & 1) == 0 && -kz == ic2) { hkz = ic2; }
+                else if ((N2_full & 1) == 0 && -kz == ic2) { hkz = ic2; }
                 else {
                     sj0 = (N0 - (N0 & 1) - j0) % N0;
                     sj1 = (N1 - (N1 & 1) - j1) % N1;
@@ -4117,7 +4133,7 @@ per_image_backproject_kernel(
 
     const T g0 = rk0 + c0, g1 = rk1 + c1, g2 = rk2 + c2;
     const int ic2 = (int)c2;
-    const int N2_full = N0;
+    const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
 
     if (g0 < (T)-1 || g0 >= (T)N0 ||
         g1 < (T)-1 || g1 >= (T)N1 ||
@@ -4151,7 +4167,7 @@ per_image_backproject_kernel(
                 int sj0 = j0, sj1 = j1;
                 int hkz;
                 if (kz >= 0) { hkz = kz; }
-                else if ((N0 & 1) == 0 && -kz == ic2) { hkz = ic2; }
+                else if ((N2_full & 1) == 0 && -kz == ic2) { hkz = ic2; }
                 else {
                     sj0 = (N0 - (N0 & 1) - j0) % N0;
                     sj1 = (N1 - (N1 & 1) - j1) % N1;
