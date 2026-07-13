@@ -1692,6 +1692,35 @@ plus `doR=true` path. Trace and reproduce that exact call chain before changing
 the production Euler generator; do not substitute captured fixture matrices or
 weaken the rotated-radius predicate.
 
+That trace identifies the last five matrix-boundary flips as a scaled-RNG
+operation-order bug, not a trigonometric-library difference. RELION calls the
+two-argument float function `rnd_unif(0.5*pf, pf)` directly. RECOVAR previously
+called `rnd_unif(0,1)` and scaled its already rounded result in Python double;
+the algebraically equivalent expression is not float-bit equivalent. For
+random seed `20260712`, RELION iteration 1 uses
+`random_perturbation=-0.04961434006690979`, whereas the old replay used
+`-0.049614354968070984`. Commit `e7a1af47` adds a direct scaled-range binding
+and float-faithful fallback. The rebuilt binding and 42 focused tests pass.
+
+With the corrected perturbation, the existing RELION C++ oversampled-angle
+binding matches every available dumped fine Euler component bit-for-bit
+(zero differences over 124 captured winners). Regenerating RELION's CPU
+double matrix and applying its explicit `Matrix2D::inv()` 3x3 cofactor order
+then matches all 128 captured backprojection matrices bit-for-bit. The same
+result is reproducible with NumPy float64 when the inverse operation order is
+pinned; float32 CUDA/JAX regeneration remains a decisive null. Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scaled_rnd_binding_20260713_132000/captured_gate.log`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scatter_radius_cuda126_20260713_144500/audit/relion_cpu_euler_gate.json`.
+
+The production follow-up is therefore narrow but architecturally important:
+preserve RELION's current scorer matrices, retain perturbed Euler rows in
+float64 long enough to generate a separate exact CPU M-step rotation stream,
+and route only that stream to x-half backprojection. RELION itself uses these
+distinct projector-plan and weighted-sum matrix paths. Do not replace the
+scorer matrices with the CPU inverse matrices or infer the latter after Euler
+metadata has been cast to float32.
+
 Full evidence and the proposed 22-cutoff/five-base A100 golden regression are
 in
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scatter_signature_gate_20260713_113000/SCATTER_SIGNATURE_REPORT.md`.
