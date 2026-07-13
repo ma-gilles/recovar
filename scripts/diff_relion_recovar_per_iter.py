@@ -280,6 +280,18 @@ def extract_relion_per_shell(relion_iter, half):
     return out
 
 
+def extract_relion_direction_prior(relion_iter, half):
+    """Extract one half's class-1 RELION HEALPix direction prior."""
+
+    model = relion_iter[f"model_h{half}"]
+    if model is None or "model_pdf_orient_class_1" not in model:
+        return None
+    table = model["model_pdf_orient_class_1"]
+    if "rlnOrientationDistribution" not in table.columns:
+        return None
+    return np.asarray(table["rlnOrientationDistribution"], dtype=np.float64)
+
+
 def load_recovar(npz_path):
     if not npz_path.exists():
         return None
@@ -424,6 +436,47 @@ def extract_recovar_per_shell(recovar, it):
         out["SsnrMap"] = ssnr
         out["DataVsPriorRatio"] = out["SsnrMap"]
     return out if out else None
+
+
+def extract_recovar_direction_prior(recovar, it):
+    """Return the saved [half1, half2] direction-prior snapshot for iteration ``it``."""
+
+    if recovar is None or "direction_prior_trajectory_per_half" not in recovar.files:
+        return None, None
+    trajectory = recovar["direction_prior_trajectory_per_half"]
+    if it < 0 or it >= len(trajectory) or trajectory[it] is None:
+        return None, None
+    entry = trajectory[it]
+    return tuple(
+        None if value is None else np.asarray(value, dtype=np.float64).reshape(-1)
+        for value in entry
+    )
+
+
+def compare_direction_priors(relion_arr, recovar_arr):
+    """Return direct array-error diagnostics; correlation is auxiliary only."""
+
+    if relion_arr is None or recovar_arr is None:
+        return None
+    relion_arr = np.asarray(relion_arr, dtype=np.float64).reshape(-1)
+    recovar_arr = np.asarray(recovar_arr, dtype=np.float64).reshape(-1)
+    if relion_arr.shape != recovar_arr.shape:
+        return {"mismatch": True, "n_relion": int(relion_arr.size), "n_recovar": int(recovar_arr.size)}
+    difference = recovar_arr - relion_arr
+    l1_diff = float(np.sum(np.abs(difference)))
+    relion_l1 = float(np.sum(np.abs(relion_arr)))
+    corr = float("nan")
+    if relion_arr.size > 1 and np.std(relion_arr) > 0 and np.std(recovar_arr) > 0:
+        corr = float(np.corrcoef(relion_arr, recovar_arr)[0, 1])
+    return {
+        "mismatch": False,
+        "n_directions": int(relion_arr.size),
+        "max_abs_diff": float(np.max(np.abs(difference), initial=0.0)),
+        "l1_diff": l1_diff,
+        "relative_l1_diff": float(l1_diff / max(relion_l1, np.finfo(np.float64).tiny)),
+        "mass_diff": float(np.sum(recovar_arr) - np.sum(relion_arr)),
+        "corr_auxiliary": corr,
+    }
 
 
 def fsc_resolution_angstrom(fsc, voxel_size, grid_size, threshold=0.143):
@@ -636,6 +689,36 @@ def main():
             v = rsc.get(f)
             if v is not None and not (isinstance(v, float) and np.isnan(v)):
                 print(f"    {label:<26s} {fmt(v, 16):>16s}")
+
+        recovar_dir_h1, recovar_dir_h2 = (
+            extract_recovar_direction_prior(recovar, recovar_iter_index)
+            if recovar_iter_index >= 0
+            else (None, None)
+        )
+        direction_prior_rows = [
+            ("h1", extract_relion_direction_prior(relion_iter, half=1), recovar_dir_h1),
+            ("h2", extract_relion_direction_prior(relion_iter, half=2), recovar_dir_h2),
+        ]
+        if any(lhs is not None or rhs is not None for _, lhs, rhs in direction_prior_rows):
+            print(f"  {'pdf_orient direct array diff:':<28s}")
+            for label, relion_arr, recovar_arr in direction_prior_rows:
+                stats = compare_direction_priors(relion_arr, recovar_arr)
+                if stats is None:
+                    print(f"    {label:<26s} {'—':>16s}  (missing on one side)")
+                elif stats["mismatch"]:
+                    print(
+                        f"    {label:<26s} HEALPix-size mismatch "
+                        f"(RELION n={stats['n_relion']}, RECOVAR n={stats['n_recovar']})"
+                    )
+                else:
+                    color = GREEN if stats["relative_l1_diff"] <= args.tol else RED
+                    print(
+                        f"    {label:<26s} n={stats['n_directions']:<6d} "
+                        f"relative_L1={color}{stats['relative_l1_diff']:.3e}{RESET}  "
+                        f"max_abs={stats['max_abs_diff']:.3e}  L1={stats['l1_diff']:.3e}  "
+                        f"mass_diff={stats['mass_diff']:.3e}  "
+                        f"corr={stats['corr_auxiliary']:.6f} (aux only)"
+                    )
 
         # ---- Per-shell comparison ----
         if rps is not None and rps.get("_n_shells", 0) > 0:

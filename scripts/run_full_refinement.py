@@ -2218,6 +2218,10 @@ def main():
             result["sigma_offset_used_per_half_trajectory"],
             dtype=object,
         )
+    if result.get("direction_prior_trajectory_per_half") is not None:
+        save_dict["direction_prior_trajectory_per_half"] = np.asarray(
+            result["direction_prior_trajectory_per_half"], dtype=object
+        )
     if "convergence_state" in result:
         state = result["convergence_state"]
         save_dict["convergence_iteration"] = np.int32(state.iteration)

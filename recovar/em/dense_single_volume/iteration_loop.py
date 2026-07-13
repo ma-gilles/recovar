@@ -3873,6 +3873,9 @@ def _run_relion_iteration_loop(
     # one shared sigma2_offset; K>1 vectors here are telemetry only and must
     # not feed the live translation prior.
     per_class_sigma_offset_trajectory = []
+    # Per-iteration snapshots of RELION's learned pdf_direction state.
+    # Entries are [half1, half2] and may be ragged as HEALPix order grows.
+    direction_prior_trajectory_per_half = []
     frac_changed_trajectory = []
     acc_rot_trajectory = []
     smallest_change_angles_trajectory = []
@@ -5239,6 +5242,7 @@ def _run_relion_iteration_loop(
                 "sigma_offset_per_half_trajectory": sigma_offset_per_half_trajectory,
                 "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
                 "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
+                "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
                 "frac_changed_trajectory": frac_changed_trajectory,
                 "acc_rot_trajectory": acc_rot_trajectory,
                 "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
@@ -5880,6 +5884,22 @@ def _run_relion_iteration_loop(
                 for k in range(2):
                     class_direction_prior_per_half[k] = combined_class_direction_prior.copy()
                     class_direction_prior_order_per_half[k] = current_healpix_order
+
+        if k_class_enabled:
+            direction_prior_snapshot = [
+                None
+                if class_direction_prior_per_half[k] is None
+                else np.asarray(class_direction_prior_per_half[k][0], dtype=np.float64).copy()
+                for k in range(2)
+            ]
+        else:
+            direction_prior_snapshot = [
+                None
+                if global_direction_prior_per_half[k] is None
+                else np.asarray(global_direction_prior_per_half[k], dtype=np.float64).copy()
+                for k in range(2)
+            ]
+        direction_prior_trajectory_per_half.append(direction_prior_snapshot)
 
         # --- Compute unregularized half-maps only when diagnostics need them ---
         # K=1 FSC was already computed above directly from the BackProjector
@@ -6674,6 +6694,7 @@ def _run_relion_iteration_loop(
             "sigma_offset_per_half_trajectory": sigma_offset_per_half_trajectory,
             "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
             "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
+            "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
             "frac_changed_trajectory": frac_changed_trajectory,
             "acc_rot_trajectory": acc_rot_trajectory,
             "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
@@ -7850,6 +7871,7 @@ def _run_relion_iteration_loop(
         "sigma_offset_per_half_trajectory": sigma_offset_per_half_trajectory,
         "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
         "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
+        "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
         "frac_changed_trajectory": frac_changed_trajectory,
         "acc_rot_trajectory": acc_rot_trajectory,
         "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
