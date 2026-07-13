@@ -1419,3 +1419,73 @@ the percent/sub-percent boundary. Both diagnostic switches remain off by
 default. The next trace is per-particle positive operands (CTF squared,
 inverse noise, scale) and their rotation scatter; complex image/translation
 phase operands follow only after the positive weight path is classified.
+
+## 2026-07-13 Matched BPref Operand And First-Boundary Trace
+
+The per-particle operand boundary is closed rather than inferred. RECOVAR job
+`11095951` and RELION diagnostic build/run jobs `11096416/11096516` capture
+original particle 3996 at iteration 2/current size 92. RELION's exact
+accelerated store-weighted-sums buffers map to RECOVAR with FFTW row
+`ky mod 92`; all 116 translations have the same order and differ by at most
+`3.18e-7` pixels. The positive `CTF^2*Minvsigma2` reconstruction operand has
+relative L2 `1.008e-6` after the exact `256^-4` scale. Every translated
+unmasked complex `image*CTF*Minvsigma2` row has fitted relative L2 about
+`8.17e-7` after `-256^-2`. This closes particle identity, CTF, inverse noise,
+scale, unmasked preprocessing, old-offset application, fine translations, and
+phase convention. Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_relion_it2_p3996_store_operands_20260712_223000/MATCHED_OPERAND_REPORT.md`.
+
+The same capture closes candidate geometry but exposes inherited posterior
+drift. All 24 accelerated Euler matrices agree exactly after the expected
+transpose; the 896 indexed candidates and 161 reconstruction samples are
+identical with no missing nonzero candidate. Nevertheless the default
+posterior differs by L1 `0.0130861` with maximum candidate gap `8.842e-4`,
+and live fine projections differ by roughly `2.34e-4--3.17e-4` relative L2.
+The affine-aligned raw data-score RMS is `0.0307184`. This is score-surface
+drift from the incoming maps, not support or operand arithmetic.
+
+Fixed-reference job `11096872` proves that causal direction. It replays the
+exact installed RELION iteration-1 half maps only for RECOVAR scoring
+iteration 2. Particle 3996's projection median relative L2 falls to
+`2.31e-7`, raw-score RMS to `2.64e-4`, and posterior L1 to `0.0002309`, while
+candidate/support/argmax remain exact. Aggregate supported-radius BPref also
+improves materially: numerator residual becomes `0.398%/0.439%` and weight
+`0.107%/0.111%`, versus approximately `1.72%/0.94%` and `0.318%/0.200%` on
+the default trajectory. The remaining fixed-reference residual is
+`98%--99.9%` outer-shell power. Thus iteration 2 mostly amplifies the prior
+map boundary; its posterior path is not the first cause. Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_e7a6e124_relref_it2_control_20260712_234500/FIXED_REFERENCE_AUDIT.md`.
+
+Iteration-1 raw-BPref job `11096911` locates that first cause before any soft
+posterior exists. Against RECOVAR zero-based `it000`, hard-assignment
+supported-radius numerator residual is `1.741%/1.590%` and weight is
+`0.507%/0.601%`; weight DC is exact in both halves. The dump is qualified by
+RELION-dump-versus-stock half-map FSC-AUC
+`0.999999998872/0.999999998890`. RECOVAR-versus-stock FSC-AUC is already high
+(`0.999992264/0.999997461`) but not exact enough to prevent later score
+amplification. Shell 24 contributes only 25--32% of raw residual power, so an
+outer-boundary-only patch cannot close the full first-iteration discrepancy.
+Audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_relion_iter1_bpref_dump_20260713_000500/audit/IT1_BPREF_AUDIT.md`.
+
+Finally, matched hard-winner jobs `11097303/11097304` reject a material
+one-contribution geometry defect. Particle 3996 has the same unique winner
+(orientation 7, translation 88), bitwise phase, and identical translation.
+The positive operand has relative L2 `5.88e-7`; there are no radius-support,
+base-neighbor, or x-fold decisions that differ. RELION's Euler and RECOVAR's
+transpose differ by one float32 ULP in one of nine winner entries, and the
+remaining float expression ordering moves padded coordinates by at most
+`3.82e-6`, but a full simulated one-particle weight scatter differs by only
+`3.21e-6` (`3.91e-6` on shell 24). These effects are real but two to three
+orders too small to explain the aggregate gap. Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it1_p3996_matched_winner_audit_20260713_004500/MATCHED_WINNER_AUDIT.md`.
+
+The active discriminator is therefore the outer float32 atomic enumeration.
+RELION launches one 128-thread block per orientation and iterates pixels in
+serial passes; RECOVAR launches multiple 256-thread pixel blocks per
+orientation from a compact centered-row list. Run repeatability only proves
+each topology is stable; it does not prove cross-topology equivalence. An
+off-by-default launch/order diagnostic must reproduce RELION's orientation and
+native FFTW pixel enumeration before any production retention. FSC/FSC-AUC
+remain the map acceptance gates; accumulator relative norms only localize this
+boundary.
