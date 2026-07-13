@@ -1489,3 +1489,28 @@ off-by-default launch/order diagnostic must reproduce RELION's orientation and
 native FFTW pixel enumeration before any production retention. FSC/FSC-AUC
 remain the map acceptance gates; accumulator relative norms only localize this
 boundary.
+
+Commit `94dc6224` adds the first narrow launch diagnostic,
+`RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY`. It expands the compact current-size
+circle into native FFTW square order and uses one 128-thread block per
+orientation with serial pixel passes. The switch is off by default and is
+captured at JAX trace time, so the scientific A/B used separate fresh
+processes. Same-build A100 jobs `11111001/11111002` completed in `00:05:59`
+from the immutable commit and exact iteration-1 state. The off control
+reproduces the accepted boundary: supported numerator residual
+`1.74143471%/1.59014638%`, weight residual `0.507356356%/0.601081232%`, and
+map FSC-AUC `0.9999922641/0.999997461041` against stock RELION. Enabling the
+topology changes on-versus-off accumulators by only
+`1.184e-7/1.183e-7` numerator and `7.77e-8/7.80e-8` weight relative L2;
+on-versus-off map FSC-AUC is `0.9999999940/0.9999999938`. The RELION residual
+and map FSC-AUC are unchanged at reported precision. Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_94dc6224_it1_bptopology_ab_20260713_092000/audit/AB_REPORT.md`.
+
+This null result rejects only native pixel order, 128-thread lane grouping,
+and serial pixel passes as the percent/sub-percent cause. It does not emulate
+or reject RELION's per-particle kernel-launch boundaries, in-kernel translation
+reduction, or interleaved real/imaginary/weight atomics. RECOVAR currently
+flattens active particle/orientation rows, reduces translations before the
+scatter, and launches numerator and weight separately. The next diagnostic
+must preserve particle ownership and couple these operations before another
+trajectory run; the block-topology switch remains diagnostic-only and off.
