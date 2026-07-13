@@ -1514,3 +1514,34 @@ flattens active particle/orientation rows, reduces translations before the
 scatter, and launches numerator and weight separately. The next diagnostic
 must preserve particle ownership and couple these operations before another
 trajectory run; the block-topology switch remains diagnostic-only and off.
+
+Commit `813f77f3` adds the next deliberately narrower diagnostic,
+`RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH`. In the single-class,
+non-rotation-chunked winner-take-all x-half path it asserts strictly increasing
+particle ownership, asserts exactly one positive rotation row per particle,
+preserves the unpadded `actual_counts`, and gives each particle's eight ordered
+fine rotations their own backprojection launch. It remains off by default and
+still performs translation reduction before launching separate numerator and
+weight kernels.
+
+Same-build A100 jobs `11112039/11112041` completed successfully on
+`della-l07g3` in `00:05:53/00:06:06`. The diagnostic fired for all 10,000
+particles in 46 batches, always with rotation-count min/median/max `8/8/8`.
+The result is another decisive null. Control supported-radius RELION residuals
+are `1.74143470%/1.59014641%` for numerator and
+`0.507356372%/0.601081213%` for weight; per-particle launches leave them
+`1.74143472%/1.59014640%` and `0.507356362%/0.601081202%`. Particle-versus-
+control relative L2 is only `9.14e-8/9.11e-8` for numerator and
+`5.44e-8/5.48e-8` for weight. Particle-versus-control half-map FSC-AUC is
+`0.999999993928/0.999999994128`, while each mode's map-versus-stock-RELION
+FSC-AUC remains `0.999992264/0.999997461`.
+
+Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_813f77f3_it1_particlelaunch_ab_20260713_095000/audit/AB_REPORT.md`.
+This rejects the particle launch boundary under pre-reduced, separate
+numerator/weight kernels. It does not reject RELION's fused neighbor atomic
+sequence (real, imaginary, then weight) or its in-kernel translation
+reduction. The next same-build iteration-1 discriminator is therefore an
+off-by-default fused two-accumulator x-half FFI, still using the qualified
+pre-reduced operands. Do not run a longer trajectory unless that boundary
+materially improves raw BPref residuals and FSC/FSC-AUC.
