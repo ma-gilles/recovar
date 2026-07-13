@@ -5600,7 +5600,9 @@ def compute_pass2_stats_sparse_bucketed(
     use_relion_x_half_mstep = bool(relion_x_half_mstep)
     use_relion_fine_mstep_prune = bool(relion_fine_mstep_prune) or use_relion_x_half_mstep
     use_relion_f32_fine_posterior = (
-        use_relion_x_half_mstep and relion_x_half_f32_fine_posterior_enabled()
+        use_relion_x_half_mstep
+        and not winner_take_all
+        and relion_x_half_f32_fine_posterior_enabled()
     )
     use_half_volume_mstep = bool(relion_half_volume_mstep) or use_relion_x_half_mstep
     compact_pair_mstep_mode_requested = _compact_pair_mstep_mode_for_pass()

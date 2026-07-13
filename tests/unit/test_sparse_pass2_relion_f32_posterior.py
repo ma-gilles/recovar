@@ -1,5 +1,7 @@
 """Focused tests for the opt-in RELION float32 fine-posterior diagnostic."""
 
+import inspect
+
 import numpy as np
 import pytest
 
@@ -11,6 +13,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_f32_fine_reconstruction_probs,
     _relion_pass2_reconstruction_probs,
     _relion_pass2_reconstruction_probs_for_mstep,
+    compute_pass2_stats_sparse_bucketed,
 )
 
 pytestmark = pytest.mark.unit
@@ -124,3 +127,8 @@ def test_relion_f32_fine_posterior_gate_is_xhalf_only(monkeypatch):
 
     for actual_value, expected_value in zip(actual, expected, strict=True):
         np.testing.assert_array_equal(np.asarray(actual_value), np.asarray(expected_value))
+
+
+def test_sparse_pass2_winner_take_all_excludes_f32_posterior_override():
+    source = inspect.getsource(compute_pass2_stats_sparse_bucketed)
+    assert "use_relion_x_half_mstep\n        and not winner_take_all" in source
