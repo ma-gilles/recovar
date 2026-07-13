@@ -44,6 +44,11 @@ def test_runner_command_is_one_iteration_split_half_smoke(tmp_path):
     assert "--gt_volume" in command
 
 
+def test_cli_default_uses_immutable_k1_direct_map_gate(tmp_path):
+    parsed = smoke.parser().parse_args(["--output-dir", str(tmp_path / "out")])
+    assert parsed.min_relion_fsc_auc == pytest.approx(0.995)
+
+
 def test_fsc_auc_is_gate_and_correlation_is_auxiliary(tmp_path):
     result = tmp_path / "refinement_results.npz"
     arrays = {

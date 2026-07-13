@@ -78,7 +78,8 @@ without running or submitting it.
 The launcher requires finite GT FSC curves/FSC-AUC for RECOVAR and RELION half
 maps and merged maps. By default, RECOVAR's merged FSC-AUC may trail RELION by
 at most `1e-4`, matching the existing completion parity tolerance, and the
-direct RECOVAR-vs-RELION merged FSC-AUC must be at least `0.99`. These smoke
+direct RECOVAR-vs-RELION merged FSC-AUC must be at least `0.995`, the program's
+immutable K=1 direct-map gate. These smoke
 thresholds are explicit CLI options, not hidden environment settings.
 
 Outputs include:

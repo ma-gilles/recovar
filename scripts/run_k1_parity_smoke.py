@@ -390,7 +390,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--image-batch-size", type=int, default=64)
     result.add_argument("--rotation-block-size", type=int, default=2048)
     result.add_argument("--fsc-auc-tolerance", type=float, default=1e-4)
-    result.add_argument("--min-relion-fsc-auc", type=float, default=0.99)
+    result.add_argument("--min-relion-fsc-auc", type=float, default=0.995)
     result.add_argument("--slurm-job-name", default="recovar-k1-smoke")
     result.add_argument("--slurm-gres", default="gpu:1")
     result.add_argument("--slurm-cpus", type=int, default=4)
