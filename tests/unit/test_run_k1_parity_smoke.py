@@ -100,3 +100,14 @@ def test_nonfinite_high_frequency_shell_is_json_safe(tmp_path):
     summary = smoke.quality_summary(result, auc_tolerance=1e-4, min_relion_fsc_auc=0.99)
     assert summary["passed"]
     assert summary["primary_fsc_quality"]["recovar_merged"]["fsc_curve"][-1] is None
+
+
+def test_slurm_script_marks_generated_output_disposable(tmp_path):
+    output = tmp_path / "out"
+    args = smoke.parser().parse_args(["--output-dir", str(output)])
+    script = smoke.write_slurm_script(args, ["python", "smoke.py", "--internal-worker"], output)
+    assert script.is_file()
+    assert (output / "SAFE_TO_DELETE").is_file()
+    text = script.read_text()
+    assert "XLA_PYTHON_CLIENT_PREALLOCATE=false" in text
+    assert str(output / "runtime" / "tmp") in text

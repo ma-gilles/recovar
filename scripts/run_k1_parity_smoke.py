@@ -384,6 +384,8 @@ def choose_mode(requested: str) -> tuple[str, str | None]:
 
 
 def write_slurm_script(args: argparse.Namespace, worker_command: list[str], output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "SAFE_TO_DELETE").touch()
     logs = output_dir / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     script = logs / "k1_parity_smoke.sbatch"
