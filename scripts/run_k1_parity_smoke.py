@@ -203,6 +203,57 @@ def collect_provenance(command: list[str], inputs: SmokeInputs, stacks: list[Pat
     }
 
 
+def ensure_relion_binding(
+    python: Path,
+    env: dict[str, str],
+    *,
+    relion_src_dir: str | None,
+    output_dir: Path,
+) -> None:
+    """Use an existing RELION binding or build one into output-local scratch."""
+
+    import_command = [
+        str(python),
+        "-c",
+        "from recovar.relion_bind import _relion_bind_core; print(_relion_bind_core.__file__)",
+    ]
+    probe = subprocess.run(
+        import_command,
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if probe.returncode == 0:
+        print(f"RELION binding: {probe.stdout.strip()}")
+        return
+    if relion_src_dir is None:
+        raise RuntimeError(
+            "RECOVAR's RELION binding is unavailable. Pass --relion-src-dir /path/to/relion/src "
+            "or build it before running. Import error:\n" + probe.stderr.strip()
+        )
+
+    build_dir = output_dir / "runtime" / "relion_bind"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    env["RELION_SRC_DIR"] = str(_resolve_path(relion_src_dir))
+    env["RECOVAR_RELION_BIND_BUILD_DIR"] = str(build_dir)
+    build_log = output_dir / "relion_bind_build.log"
+    with build_log.open("w") as log:
+        result = subprocess.run(
+            [str(python), str(REPO_ROOT / "recovar" / "relion_bind" / "build.py")],
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    if result.returncode:
+        raise RuntimeError(f"RELION binding build failed; see {build_log}")
+    subprocess.run(import_command, cwd=REPO_ROOT, env=env, check=True)
+    print(f"RELION binding built under {build_dir}")
+
+
 def _finite_curve(values) -> tuple[list[float | None], int]:
     import numpy as np
 
@@ -380,7 +431,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--validate-only", action="store_true")
     result.add_argument("--dry-run", action="store_true")
     result.add_argument("--python", help="Python executable; default: repo pixi environment")
-    result.add_argument("--relion-src-dir", help="RELION src/ used only if bindings must be built")
+    result.add_argument("--relion-src-dir", help="RELION src/ used to build bindings when absent")
     result.add_argument("--max-particles", type=int)
     result.add_argument("--image-batch-size", type=int, default=64)
     result.add_argument("--rotation-block-size", type=int, default=2048)
@@ -435,6 +486,12 @@ def main(argv: list[str] | None = None) -> int:
         env["CUDA_VISIBLE_DEVICES"] = gpu
     if args.relion_src_dir:
         env["RELION_SRC_DIR"] = str(_resolve_path(args.relion_src_dir))
+    ensure_relion_binding(
+        python,
+        env,
+        relion_src_dir=args.relion_src_dir,
+        output_dir=inputs.output_dir,
+    )
     provenance = collect_provenance(command, inputs, stacks)
     (inputs.output_dir / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     log_path = inputs.output_dir / "k1_parity_smoke.log"

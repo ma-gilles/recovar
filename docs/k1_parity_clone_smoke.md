@@ -10,7 +10,18 @@ convergence, K=4, quality-matrix, or performance parity.
 
 ## Setup
 
-From the repository root:
+Clone the current draft parity PR with SSH and detach at the exact fetched
+head so the tested commit is unambiguous:
+
+```bash
+git clone git@github.com:ma-gilles/recovar.git
+cd recovar
+git fetch origin refs/pull/158/head:refs/remotes/origin/pr158
+git switch --detach refs/remotes/origin/pr158
+git rev-parse HEAD
+```
+
+Then install from the repository root:
 
 ```bash
 pixi install
@@ -24,6 +35,10 @@ source checkout and build with:
 ```bash
 RELION_SRC_DIR=/path/to/relion/src pixi run python recovar/relion_bind/build.py
 ```
+
+Alternatively, pass `--relion-src-dir /path/to/relion/src` to the launcher;
+when no importable binding exists it builds into `OUTPUT/runtime/relion_bind`
+and records the build log at `OUTPUT/relion_bind_build.log`.
 
 ## Portable fixture convention
 
