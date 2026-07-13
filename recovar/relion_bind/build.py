@@ -16,7 +16,21 @@ from pathlib import Path
 
 BIND_DIR = Path(__file__).parent
 BUILD_DIR = Path(os.environ.get("RECOVAR_RELION_BIND_BUILD_DIR", BIND_DIR / "build")).expanduser()
-RELION_SRC = Path("/scratch/gpfs/GILLES/mg6942/relion/src")
+
+
+def get_relion_src() -> Path:
+    """Return the explicitly configured RELION ``src`` directory."""
+
+    configured = os.environ.get("RELION_SRC_DIR")
+    if not configured:
+        raise RuntimeError(
+            "RELION_SRC_DIR is not set; point it at the RELION 'src' directory "
+            "before building recovar.relion_bind"
+        )
+    relion_src = Path(configured).expanduser().resolve()
+    if not (relion_src / "projector.h").is_file():
+        raise FileNotFoundError(f"RELION_SRC_DIR={relion_src} does not contain projector.h")
+    return relion_src
 
 
 def get_pybind11_cmake_dir():
@@ -26,9 +40,7 @@ def get_pybind11_cmake_dir():
 
 
 def build():
-    if not RELION_SRC.exists():
-        print(f"ERROR: RELION source not found at {RELION_SRC}", file=sys.stderr)
-        sys.exit(1)
+    relion_src = get_relion_src()
 
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -37,7 +49,7 @@ def build():
         str(BIND_DIR),
         f"-Dpybind11_DIR={get_pybind11_cmake_dir()}",
         f"-DPYTHON_EXECUTABLE={sys.executable}",
-        f"-DRELION_SRC_DIR={RELION_SRC}",
+        f"-DRELION_SRC_DIR={relion_src}",
         "-DCMAKE_BUILD_TYPE=Release",
     ]
 
