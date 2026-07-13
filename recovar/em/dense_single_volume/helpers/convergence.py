@@ -20,7 +20,7 @@ G (angular sampling), H (speed tricks).
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 import numpy as np
@@ -110,14 +110,14 @@ def resolution_required_angular_sampling(
 
 
 def fine_enough_angular_accuracy(state: "RefinementState") -> float:
-    """Return the angular-accuracy threshold used for fine-enough checks."""
-    return min(
-        float(state.acc_rot),
-        resolution_required_angular_sampling(
-            state.current_resolution,
-            state.particle_diameter_angstrom,
-        ),
-    )
+    """Return RELION's measured accuracy for the fine-enough check.
+
+    The resolution-implied angular step is a separate trigger for entering
+    ``updateAngularSampling``.  RELION does not substitute that step for a
+    missing ``acc_rot`` and does not cap a finite ``acc_rot`` with it when
+    deciding whether the current grid is already fine enough.
+    """
+    return float(state.acc_rot)
 
 
 def convergence_sampling_diagnostics(state: "RefinementState") -> dict[str, float | bool]:
@@ -126,7 +126,7 @@ def convergence_sampling_diagnostics(state: "RefinementState") -> dict[str, floa
         state.current_resolution,
         state.particle_diameter_angstrom,
     )
-    angular_accuracy = min(float(state.acc_rot), float(resolution_required))
+    angular_accuracy = fine_enough_angular_accuracy(state)
     return {
         "effective_step": float(state.effective_step),
         "acc_rot": float(state.acc_rot),
@@ -248,6 +248,7 @@ class RefinementState:
 
     # Convergence flags
     has_converged: bool = False
+    has_fine_enough_angular_sampling: bool = False
     do_local_search: bool = False
 
     # Local search priors (radians)
@@ -313,34 +314,6 @@ class RefinementState:
     def effective_step(self) -> float:
         """Effective angular step in degrees (accounting for oversampling)."""
         return effective_angular_step(self.healpix_order, self.adaptive_oversampling)
-
-    @property
-    def has_fine_enough_angular_sampling(self) -> bool:
-        """True when angular sampling should not be refined further.
-
-        Fires when ``effective_step < 0.75 * angular_accuracy``, where
-        ``angular_accuracy`` is the minimum of the per-particle ``acc_rot``
-        estimate and RELION's resolution-implied angular sampling when
-        particle diameter and current resolution are known. This prevents a
-        loose approximate ``acc_rot`` from declaring convergence while the
-        current resolution still requires a finer orientation grid, and also
-        lets non-replay runs converge when the expensive RELION ``acc_rot`` is
-        unavailable but the resolution-implied criterion is already satisfied.
-
-        Mirrors RELION ``ml_optimiser.cpp:9817`` which sets
-        ``has_fine_enough_angular_sampling = true`` when the old step is
-        already finer than ``0.75 * acc_rot``, so the convergence check
-        downstream (``ml_optimiser.cpp:10137``) can proceed.
-
-        ``max_healpix_order`` is a RECOVAR runtime cap, not RELION's
-        fine-enough criterion. Hitting that cap must stop further grid
-        refinement but must not by itself trigger the final all-data
-        iteration, otherwise RECOVAR can terminate earlier than RELION.
-        """
-        angular_accuracy = fine_enough_angular_accuracy(self)
-        if np.isfinite(angular_accuracy) and self.effective_step < 0.75 * angular_accuracy:
-            return True
-        return False
 
     @property
     def should_do_local_search(self) -> bool:
@@ -732,13 +705,9 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
     bool
         True if angular sampling should be refined.
     """
-    # RELION fine-enough sampling: do not refine further. This may allow
-    # convergence downstream once the stall counters are also satisfied.
     if state.has_fine_enough_angular_sampling:
         return False
 
-    # RECOVAR runtime cap: do not refine beyond it, but do not report
-    # fine-enough/converged just because the cap was reached.
     if state.healpix_order >= state.max_healpix_order:
         logger.info(
             "Angular sampling reached max_healpix_order=%d; not refining further "
@@ -747,9 +716,14 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
         )
         return False
 
-    # RELION can proceed either because resolution stalled, or because the
-    # current resolution requires finer angular sampling. The resolution-based
-    # shortcut is disabled for the direct transition into local search.
+    if not _angular_sampling_update_is_ready(state):
+        return False
+
+    return not _angular_sampling_is_fine_enough_now(state)
+
+
+def _angular_sampling_update_is_ready(state: RefinementState) -> bool:
+    """Return whether RELION enters the body of ``updateAngularSampling``."""
     do_proceed_resolution = (
         resolution_triggers_angular_refinement(state)
         or state.nr_iter_wo_resol_gain >= MAX_NR_ITER_WO_RESOL_GAIN
@@ -776,18 +750,45 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
     if _low_pmax_refinement_guard_blocks(state):
         return False
 
-    # Don't refine beyond 75% of estimated angular accuracy.
-    if state.acc_rot < float("inf"):
-        angular_accuracy = fine_enough_angular_accuracy(state)
-        if state.effective_step < 0.75 * angular_accuracy:
-            logger.info(
-                "Angular step %.2f deg < 75%% of angular accuracy %.2f deg; not refining further",
-                state.effective_step,
-                angular_accuracy,
-            )
-            return False
-
     return True
+
+
+def _angular_sampling_is_fine_enough_now(state: RefinementState) -> bool:
+    """Evaluate RELION's strict old-step versus measured-accuracy test."""
+    angular_accuracy = fine_enough_angular_accuracy(state)
+    return bool(
+        np.isfinite(angular_accuracy)
+        and state.effective_step < 0.75 * angular_accuracy
+    )
+
+
+def update_angular_sampling(state: RefinementState) -> RefinementState:
+    """Run RELION's expectation-boundary sampling transition.
+
+    ``has_fine_enough_angular_sampling`` is a latched optimiser flag.  It is
+    set only when the resolution/hidden-variable proceed conditions are met
+    and the *old* sampling step is already finer than 75% of measured
+    ``acc_rot``.  Recomputing it as a property of a newly refined grid causes
+    an off-by-one convergence decision.
+    """
+    if state.has_fine_enough_angular_sampling or not _angular_sampling_update_is_ready(state):
+        return state
+    if _angular_sampling_is_fine_enough_now(state):
+        logger.info(
+            "Angular step %.2f deg < 75%% of angular accuracy %.2f deg; "
+            "latching fine-enough sampling",
+            state.effective_step,
+            fine_enough_angular_accuracy(state),
+        )
+        return replace(state, has_fine_enough_angular_sampling=True)
+    if state.healpix_order >= state.max_healpix_order:
+        logger.info(
+            "Angular sampling reached max_healpix_order=%d; keeping RELION "
+            "fine-enough flag false",
+            state.max_healpix_order,
+        )
+        return state
+    return refine_angular_sampling(state)
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -995,6 +996,7 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
         nr_iter_wo_resol_gain=0,
         nr_iter_wo_assignment_changes=0,
         has_converged=False,
+        has_fine_enough_angular_sampling=False,
         do_local_search=do_local,
         sigma_rot=sigma_rad,
         sigma_psi=sigma_rad,
@@ -1045,6 +1047,8 @@ def update_refinement_state(
     current_classes: Optional[np.ndarray] = None,
     previous_classes: Optional[np.ndarray] = None,
     voxel_size_angstrom: float = 1.0,
+    update_sampling: bool = True,
+    check_convergence_now: bool = True,
 ) -> RefinementState:
     """Update RefinementState after one EM iteration.
 
@@ -1090,6 +1094,16 @@ def update_refinement_state(
         keeps the historical zero class-change behavior.
     voxel_size_angstrom : float, default 1.0
         Pixel size in angstroms. Required for the offset metric.
+    update_sampling : bool, default True
+        Apply RELION's angular/translation sampling scheduler after updating
+        the statistics.  The autonomous iteration loop sets this false because
+        it runs the scheduler at the next expectation boundary, after exact
+        expected-accuracy estimation, matching RELION's call order.
+    check_convergence_now : bool, default True
+        Evaluate convergence immediately after recording this iteration.  The
+        autonomous loop sets this false and evaluates at the top of the next
+        iteration, matching RELION and avoiding a synthetic final pass when
+        ``max_iter`` is exhausted before that next iteration exists.
 
     Returns
     -------
@@ -1134,7 +1148,9 @@ def update_refinement_state(
                 "current_classes and previous_classes must have matching shapes; "
                 f"got {current_classes_arr.shape} and {previous_classes_arr.shape}",
             )
-        current_changes_classes = float(np.count_nonzero(current_classes_arr != previous_classes_arr))
+        current_changes_classes = float(
+            np.count_nonzero(current_classes_arr != previous_classes_arr) / current_classes_arr.size
+        ) if current_classes_arr.size else 0.0
 
     # --- Compute Pmax ---
     ave_pmax = state.ave_Pmax
@@ -1146,11 +1162,25 @@ def update_refinement_state(
     # (lower = better resolution).  Matches RELION
     # MlOptimiser::updateCurrentResolution at ml_optimiser.cpp:5658-5663:
     #
-    #   if (newres <= mymodel.current_resolution+0.0001) // Å, lower is better
+    #   if (newres <= mymodel.current_resolution+0.0001)
+    #
+    # where RELION stores both resolutions as reciprocal Angstrom.  RECOVAR
+    # stores Angstrom, so compare the reciprocals and preserve the +0.0001
+    # tolerance exactly.
     #       nr_iter_wo_resol_gain_sum_bodies++;
     #   else
     #       nr_iter_wo_resol_gain = 0;
-    resol_improved = new_resolution < state.current_resolution
+    old_resolution_frequency = (
+        0.0
+        if not np.isfinite(state.current_resolution) or state.current_resolution <= 0.0
+        else 1.0 / float(state.current_resolution)
+    )
+    new_resolution_frequency = (
+        0.0
+        if not np.isfinite(new_resolution) or new_resolution <= 0.0
+        else 1.0 / float(new_resolution)
+    )
+    resol_improved = new_resolution_frequency > old_resolution_frequency + 0.0001
     if resol_improved:
         nr_iter_wo_resol_gain = 0
     else:
@@ -1215,7 +1245,9 @@ def update_refinement_state(
         if current_changes_offsets_angstrom < smallest_offsets:
             smallest_offsets = current_changes_offsets_angstrom
     if np.isfinite(current_changes_classes) and current_changes_classes < smallest_classes:
-        smallest_classes = round(current_changes_classes)
+        # RELION's ROUND macro is floor(x + 0.5), unlike Python's bankers
+        # rounding at exactly 0.5.
+        smallest_classes = float(np.floor(current_changes_classes + 0.5))
 
     # --- Update accuracy estimates ---
     new_acc_rot = acc_rot if acc_rot is not None else state.acc_rot
@@ -1234,6 +1266,7 @@ def update_refinement_state(
         nr_iter_wo_resol_gain=nr_iter_wo_resol_gain,
         nr_iter_wo_assignment_changes=nr_iter_wo_assignment_changes,
         has_converged=False,
+        has_fine_enough_angular_sampling=state.has_fine_enough_angular_sampling,
         do_local_search=state.do_local_search,
         sigma_rot=state.sigma_rot,
         sigma_psi=state.sigma_psi,
@@ -1289,12 +1322,11 @@ def update_refinement_state(
     )
 
     # --- Check if we should refine angular sampling ---
-    if should_refine_angular_sampling(updated):
-        updated = refine_angular_sampling(updated)
-        return updated
+    if update_sampling:
+        updated = update_angular_sampling(updated)
 
     # --- Check convergence ---
-    if check_convergence(updated):
+    if check_convergence_now and check_convergence(updated):
         updated.has_converged = True
         logger.info(
             "Convergence detected at iteration %d: "

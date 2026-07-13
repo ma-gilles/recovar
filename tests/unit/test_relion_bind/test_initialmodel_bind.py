@@ -331,6 +331,69 @@ class TestRandomiseParticlesOrderBinding:
         assert order.size == 0
 
 
+class TestAutoRefineExpectedAccuracyBinding:
+    def test_split_half_random_shuffle_reference(self, bind):
+        if not hasattr(bind, "auto_refine_randomise_half_order"):
+            pytest.skip("relion_bind must be rebuilt with AutoRefine half ordering")
+        order = np.asarray(bind.auto_refine_randomise_half_order(10, 1712))
+        np.testing.assert_array_equal(order, [0, 4, 3, 9, 1, 8, 2, 5, 6, 7])
+
+    @staticmethod
+    def _accuracy_fixture(bind, class_ids, pdf_class=(0.5, 0.5)):
+        rng = np.random.default_rng(9)
+        reference = rng.standard_normal((8, 8, 8)).astype(np.float64)
+        references = np.stack([reference, reference], axis=0)
+        eulers = np.asarray([[0.0, 35.0, 10.0], [75.0, 60.0, -20.0]], dtype=np.float64)
+        particle_ids = np.arange(2, dtype=np.int64)
+        zeros = np.zeros(2, dtype=np.float64)
+        return bind.vdam_expected_angular_errors(
+            references,
+            eulers,
+            particle_ids,
+            np.asarray(class_ids, dtype=np.int32),
+            np.asarray(pdf_class, dtype=np.float64),
+            np.ones(5, dtype=np.float64),
+            zeros,
+            zeros,
+            zeros,
+            zeros,
+            300.0,
+            2.7,
+            0.07,
+            1.0,
+            8,
+            8,
+            1,
+            1,
+            1.0,
+            17,
+            False,
+            False,
+            np.asarray([101, 205], dtype=np.int64),
+        )
+
+    def test_every_trial_is_evaluated_against_every_active_class(self, bind):
+        if not hasattr(bind, "auto_refine_randomise_half_order"):
+            pytest.skip("relion_bind must be rebuilt with corrected expected-error semantics")
+        out = self._accuracy_fixture(bind, class_ids=[0, 0])
+        np.testing.assert_array_equal(np.asarray(out["class_counts"]), [2, 2])
+        np.testing.assert_array_equal(np.asarray(out["acc_rot_class"]), [out["acc_rot"], out["acc_rot"]])
+        np.testing.assert_array_equal(np.asarray(out["acc_trans_class"]), [out["acc_trans"], out["acc_trans"]])
+
+        invalid_labels = self._accuracy_fixture(bind, class_ids=[-7, 99])
+        np.testing.assert_array_equal(out["acc_rot_class"], invalid_labels["acc_rot_class"])
+        np.testing.assert_array_equal(out["acc_trans_class"], invalid_labels["acc_trans_class"])
+        np.testing.assert_array_equal(out["class_counts"], invalid_labels["class_counts"])
+
+    def test_inactive_class_is_skipped(self, bind):
+        if not hasattr(bind, "auto_refine_randomise_half_order"):
+            pytest.skip("relion_bind must be rebuilt with corrected expected-error semantics")
+        out = self._accuracy_fixture(bind, class_ids=[0, 1], pdf_class=(0.991, 0.009))
+        np.testing.assert_array_equal(np.asarray(out["class_counts"]), [2, 0])
+        assert np.asarray(out["acc_rot_class"])[1] == 999.0
+        assert np.asarray(out["acc_trans_class"])[1] == 999.0
+
+
 class TestRndUnifRangeBinding:
     def test_scaled_range_preserves_relion_float_operation_boundary(self, bind):
         if not hasattr(bind, "vdam_rnd_unif_range_sequence"):

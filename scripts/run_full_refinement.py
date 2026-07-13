@@ -2066,6 +2066,7 @@ def main():
         tau2_fudge=effective_tau2_fudge,
         perturb_factor=args.perturb_factor,
         perturb_seed=effective_perturb_seed,
+        optimizer_random_seed=args.seed,
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,
         replay_iteration_overrides=replay_iteration_overrides,
         init_relion_iteration=args.init_relion_iteration,
@@ -2184,6 +2185,7 @@ def main():
         "tau2_fudge": np.float64(effective_tau2_fudge),
         "tau2_fudge_source": np.asarray(tau2_fudge_source),
         "particle_diameter_ang": (np.float64(particle_diameter_ang) if particle_diameter_ang is not None else np.nan),
+        "firstiter_cc_effective": np.bool_(bool(args.firstiter_cc)),
         "half1_indices": half1_idx,
         "half2_indices": half2_idx,
     }
@@ -2197,6 +2199,50 @@ def main():
         save_dict["ave_Pmax_trajectory"] = np.asarray(
             result["ave_Pmax_trajectory"],
             dtype=np.float64,
+        )
+    for trajectory_key in (
+        "frac_changed_trajectory",
+        "acc_rot_trajectory",
+        "acc_trans_trajectory",
+        "smallest_change_angles_trajectory",
+        "smallest_change_offsets_trajectory",
+    ):
+        if trajectory_key in result:
+            save_dict[trajectory_key] = np.asarray(result[trajectory_key], dtype=np.float64)
+    for trajectory_key, trajectory_dtype in (
+        ("acc_rot_per_class_trajectory", np.float64),
+        ("acc_trans_per_class_trajectory", np.float64),
+        ("expected_accuracy_class_counts_trajectory", np.int64),
+    ):
+        if trajectory_key in result:
+            save_dict[trajectory_key] = np.asarray(result[trajectory_key], dtype=trajectory_dtype)
+    if "expected_accuracy_status_trajectory" in result:
+        save_dict["expected_accuracy_status_trajectory"] = np.asarray(
+            result["expected_accuracy_status_trajectory"],
+            dtype=np.str_,
+        )
+    for indices_key in (
+        "expected_accuracy_trial_local_indices",
+        "expected_accuracy_trial_original_indices",
+    ):
+        if result.get(indices_key) is not None:
+            save_dict[indices_key] = np.asarray(result[indices_key], dtype=np.int64)
+    for final_accuracy_key, final_accuracy_dtype in (
+        ("final_all_data_acc_rot", np.float64),
+        ("final_all_data_acc_trans", np.float64),
+        ("final_all_data_acc_rot_per_class", np.float64),
+        ("final_all_data_acc_trans_per_class", np.float64),
+        ("final_all_data_expected_accuracy_class_counts", np.int64),
+    ):
+        if result.get(final_accuracy_key) is not None:
+            save_dict[final_accuracy_key] = np.asarray(
+                result[final_accuracy_key],
+                dtype=final_accuracy_dtype,
+            )
+    if result.get("final_all_data_expected_accuracy_status") is not None:
+        save_dict["final_all_data_expected_accuracy_status"] = np.asarray(
+            result["final_all_data_expected_accuracy_status"],
+            dtype=np.str_,
         )
     if "sigma_offset_trajectory" in result:
         save_dict["sigma_offset_trajectory"] = np.asarray(
@@ -2286,6 +2332,10 @@ def main():
         for i, nr in enumerate(result["noise_radial_trajectory"]):
             if nr is not None:
                 save_dict[f"noise_radial_iter_{i:03d}"] = np.asarray(nr, dtype=np.float64)
+    if "noise_radial_per_half_trajectory" in result:
+        for i, nr_half in enumerate(result["noise_radial_per_half_trajectory"]):
+            if nr_half is not None:
+                save_dict[f"noise_radial_per_half_iter_{i:03d}"] = np.asarray(nr_half, dtype=np.float64)
     if "tau2_radial_trajectory" in result:
         for i, t2 in enumerate(result["tau2_radial_trajectory"]):
             if t2 is not None:
