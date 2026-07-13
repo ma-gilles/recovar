@@ -96,9 +96,11 @@ from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_ctf_sums_from_probs_sum_t,
+    compute_local_mstep_sums,
     compute_local_weighted_sums,
     flatten_bucket_rotations,
     flatten_bucket_rows,
+    relion_x_half_sequential_translation_reduction_enabled,
 )
 from recovar.em.dense_single_volume.local_layout import _exact_bucket_rotation_size
 from recovar.reconstruction import noise as noise_utils
@@ -5770,6 +5772,11 @@ def compute_pass2_stats_sparse_bucketed(
         "Sparse pass-2 M-step: using %s backprojection",
         mstep_layout_label,
     )
+    if use_relion_x_half_mstep and relion_x_half_sequential_translation_reduction_enabled():
+        logger.info(
+            "Sparse pass-2 RELION x-half M-step diagnostic: using sequential float32 "
+            "translation reduction"
+        )
     if use_relion_fine_mstep_prune and not use_relion_x_half_mstep:
         logger.info("Sparse pass-2 M-step: applying RELION fine-pass significant-weight pruning")
 
@@ -6469,8 +6476,12 @@ def compute_pass2_stats_sparse_bucketed(
                     mstep_probs = probs
                     if use_relion_fine_mstep_prune:
                         mstep_probs = jnp.where(reconstruction_mask_chunks[chunk_idx], probs, 0.0)
-                    summed = compute_local_weighted_sums(mstep_probs, shifted_recon_split)
-                    ctf_probs = compute_local_ctf_sums(mstep_probs, ctf2_over_nv_recon)
+                    summed, ctf_probs = compute_local_mstep_sums(
+                        mstep_probs,
+                        shifted_recon_split,
+                        ctf2_over_nv_recon,
+                        relion_x_half=use_relion_x_half_mstep,
+                    )
                     flat_chunk_rotations = flatten_bucket_rotations(jnp.asarray(rotations[:, start:stop]))
                     if use_window:
                         Ft_y_total = _accumulate_adjoint_block_chunked(
@@ -6830,8 +6841,12 @@ def compute_pass2_stats_sparse_bucketed(
             else:
                 mstep_probs = probs
             shifted_recon_split = shifted_recon_split_for_dump
-            summed = compute_local_weighted_sums(mstep_probs, shifted_recon_split)  # (B, R, N)
-            ctf_probs = compute_local_ctf_sums(mstep_probs, ctf2_over_nv_recon)  # (B, R, N)
+            summed, ctf_probs = compute_local_mstep_sums(
+                mstep_probs,
+                shifted_recon_split,
+                ctf2_over_nv_recon,
+                relion_x_half=use_relion_x_half_mstep,
+            )
 
             # Backproject (use flat_rotations + flat summed/ctf_probs).
             # Padded rotations contribute zero because their probs == 0
@@ -9040,16 +9055,20 @@ def compute_k_class_pass2_stats_sparse_fused(
                         active_rows_precomputed = True
                     else:
                         rectangular_active_prematmul_skipped += 1
-                        summed = compute_local_weighted_sums(mstep_probs, shifted_recon_split)
-                        ctf_probs = compute_local_ctf_sums_from_probs_sum_t(
-                            probs_sum_t_jax,
+                        summed, ctf_probs = compute_local_mstep_sums(
+                            mstep_probs,
+                            shifted_recon_split,
                             ctf2_over_nv_recon,
+                            relion_x_half=use_relion_x_half_mstep,
+                            default_probs_sum_t=probs_sum_t_jax,
                         )
                 else:
-                    summed = compute_local_weighted_sums(mstep_probs, shifted_recon_split)
-                    ctf_probs = compute_local_ctf_sums_from_probs_sum_t(
-                        probs_sum_t_jax,
+                    summed, ctf_probs = compute_local_mstep_sums(
+                        mstep_probs,
+                        shifted_recon_split,
                         ctf2_over_nv_recon,
+                        relion_x_half=use_relion_x_half_mstep,
+                        default_probs_sum_t=probs_sum_t_jax,
                     )
             if active_rows_precomputed:
                 pass

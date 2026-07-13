@@ -1,0 +1,77 @@
+import numpy as np
+
+from recovar.em.dense_single_volume.local_backprojection import (
+    compute_local_ctf_sums,
+    compute_local_mstep_sums,
+    compute_local_weighted_sums,
+    compute_relion_f32_sequential_mstep_sums,
+)
+
+
+def _numpy_relion_f32_loop(probs, shifted, ctf2_over_nv):
+    probs = np.asarray(probs, dtype=np.float32)
+    shifted = np.asarray(shifted, dtype=np.complex64)
+    ctf2_over_nv = np.asarray(ctf2_over_nv, dtype=np.float32)
+    numerator = np.zeros((probs.shape[0], probs.shape[1], shifted.shape[-1]), dtype=np.complex64)
+    denominator = np.zeros(numerator.shape, dtype=np.float32)
+    for trans_idx in range(probs.shape[-1]):
+        weight = probs[:, :, trans_idx, None]
+        numerator += weight * shifted[:, None, trans_idx, :]
+        denominator += weight * ctf2_over_nv[:, None, :]
+    return numerator, denominator
+
+
+def test_relion_f32_sequential_mstep_sums_match_numpy_translation_loop_exactly():
+    probs = np.array([[[1.0, 1.0, 1.0], [0.5, 0.25, 0.125]]], dtype=np.float64)
+    shifted = np.array(
+        [[[1.0e8 + 2.0j, -8.0j], [1.0 + 4.0j, 2.0j], [-1.0e8 - 2.0j, 4.0j]]],
+        dtype=np.complex64,
+    )
+    ctf2_over_nv = np.array([[1.0e8, 8.0]], dtype=np.float64)
+
+    expected_y, expected_ctf = _numpy_relion_f32_loop(probs, shifted, ctf2_over_nv)
+    actual_y, actual_ctf = compute_relion_f32_sequential_mstep_sums(probs, shifted, ctf2_over_nv)
+
+    assert actual_y.dtype == np.dtype(np.complex64)
+    assert actual_ctf.dtype == np.dtype(np.float32)
+    np.testing.assert_array_equal(np.asarray(actual_y), expected_y)
+    np.testing.assert_array_equal(np.asarray(actual_ctf), expected_ctf)
+    # This cancellation pattern distinguishes left-to-right float32 carrying
+    # from a higher-precision or reassociated reduction.
+    assert np.asarray(actual_y)[0, 0, 0] == np.complex64(0.0 + 4.0j)
+
+
+def test_local_mstep_sums_default_dispatch_is_existing_behavior(monkeypatch):
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION", raising=False)
+    probs = np.array([[[0.2, 0.3, 0.5]]], dtype=np.float64)
+    shifted = np.array([[[1 + 2j], [3 + 4j], [5 + 6j]]], dtype=np.complex64)
+    ctf2_over_nv = np.array([[7.0]], dtype=np.float32)
+
+    actual = compute_local_mstep_sums(probs, shifted, ctf2_over_nv, relion_x_half=True)
+    expected = (
+        compute_local_weighted_sums(probs, shifted),
+        compute_local_ctf_sums(probs, ctf2_over_nv),
+    )
+
+    assert actual[0].dtype == expected[0].dtype
+    assert actual[1].dtype == expected[1].dtype
+    np.testing.assert_array_equal(np.asarray(actual[0]), np.asarray(expected[0]))
+    np.testing.assert_array_equal(np.asarray(actual[1]), np.asarray(expected[1]))
+
+
+def test_local_mstep_sums_env_gate_only_changes_relion_x_half(monkeypatch):
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION", "1")
+    probs = np.array([[[1.0, 1.0, 1.0]]], dtype=np.float64)
+    shifted = np.array([[[1.0e8 + 0j], [1.0 + 0j], [-1.0e8 + 0j]]], dtype=np.complex64)
+    ctf2_over_nv = np.array([[2.0]], dtype=np.float64)
+
+    xhalf_y, xhalf_ctf = compute_local_mstep_sums(probs, shifted, ctf2_over_nv, relion_x_half=True)
+    normal_y, normal_ctf = compute_local_mstep_sums(probs, shifted, ctf2_over_nv, relion_x_half=False)
+
+    assert xhalf_y.dtype == np.dtype(np.complex64)
+    assert xhalf_ctf.dtype == np.dtype(np.float32)
+    assert normal_y.dtype == np.dtype(np.complex128)
+    assert normal_ctf.dtype == np.dtype(np.float64)
+    assert np.asarray(xhalf_y)[0, 0, 0] == 0.0
+    assert np.asarray(normal_y)[0, 0, 0] == 1.0
+    np.testing.assert_array_equal(np.asarray(normal_ctf), np.array([[[6.0]]], dtype=np.float64))
