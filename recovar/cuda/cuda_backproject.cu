@@ -105,6 +105,26 @@ static __device__ __forceinline__ int full_z_size_from_half(
     return odd_cubic ? N0 : 2 * (N2_eff - 1);
 }
 
+/* Match RELION BP.cuh's compiled radius predicate in its physical axis order.
+ * RECOVAR's backprojection coordinates rk2/rk1/rk0 correspond to RELION's
+ * physical x/y/z. The explicit round-to-nearest operations are observable at
+ * the exact outer rim: reassociating the sum can flip r2 > max_r2 by one ulp. */
+static __device__ __forceinline__ float relion_radius_squared(
+    float rk0, float rk1, float rk2)
+{
+    const float y2 = __fmul_rn(rk1, rk1);
+    const float xy2 = __fmaf_rn(rk2, rk2, y2);
+    return __fmaf_rn(rk0, rk0, xy2);
+}
+
+static __device__ __forceinline__ double relion_radius_squared(
+    double rk0, double rk1, double rk2)
+{
+    const double y2 = __dmul_rn(rk1, rk1);
+    const double xy2 = __fma_rn(rk2, rk2, y2);
+    return __fma_rn(rk0, rk0, xy2);
+}
+
 #define BLOCK_SIZE 256
 
 /* ================================================================== */
@@ -734,7 +754,7 @@ backproject_indexed_kernel(
          * source pixel has been rotated into 3-D. Mathematically this is
          * redundant for an exactly orthonormal matrix, but at the outer shell
          * it changes inclusion for roundoff-level boundary pixels. */
-        const T r2_3d = rk0 * rk0 + rk1 * rk1 + rk2 * rk2;
+        const T r2_3d = relion_radius_squared(rk0, rk1, rk2);
         if (r2_3d > max_r2) return;
     }
 
@@ -958,7 +978,7 @@ batch_backproject_indexed_kernel(
     }
 
     if (relion_fold_x && HALF_IMG && HALF_VOL && max_r2 >= (T)0) {
-        const T r2_3d = rk0 * rk0 + rk1 * rk1 + rk2 * rk2;
+        const T r2_3d = relion_radius_squared(rk0, rk1, rk2);
         if (r2_3d > max_r2) continue;
     }
 
@@ -1145,7 +1165,7 @@ relion_fused_x_half_backproject_kernel(
         float rk2 = (k0_unscaled * R[2] + k1_unscaled * R[5]) * (float)upsampling;
 
         if (max_r2 >= 0.0f) {
-            const float r2_3d = rk0 * rk0 + rk1 * rk1 + rk2 * rk2;
+            const float r2_3d = relion_radius_squared(rk0, rk1, rk2);
             if (r2_3d > max_r2) continue;
         }
         if (rk2 < 0.0f) {

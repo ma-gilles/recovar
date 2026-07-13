@@ -592,6 +592,17 @@ def test_relion_x_half_cuda_rotates_before_applying_padding_factor():
     assert "The order is observable at the radius boundary" in text
 
 
+def test_relion_x_half_cuda_pins_physical_radius_accumulation_order():
+    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
+    text = cuda_source.read_text()
+
+    helper = text[text.index("float relion_radius_squared(") : text.index("#define BLOCK_SIZE")]
+    assert "__fmul_rn(rk1, rk1)" in helper
+    assert "__fmaf_rn(rk2, rk2, y2)" in helper
+    assert "__fmaf_rn(rk0, rk0, xy2)" in helper
+    assert text.count("relion_radius_squared(rk0, rk1, rk2)") == 3
+
+
 def test_relion_x_half_bp_block_topology_env_is_off_by_default(monkeypatch):
     monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", raising=False)
     assert cuda_backproject.relion_x_half_bp_block_topology_enabled() is False
