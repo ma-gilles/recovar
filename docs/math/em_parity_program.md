@@ -1623,3 +1623,54 @@ deterministic accumulators. If that panel remains at the ordinary `~3e-6`
 floor, pre-atomic geometry is rejected and the trace moves to global
 particle/candidate ownership or production accumulator correspondence; do not
 implement the full translation CUDA port without contrary evidence.
+
+## 2026-07-13 Boundary-Enriched Production Scatter Trace
+
+The 128-particle actual-kernel gate rejects the preceding ordinary-coordinate
+null and proves a sparse support-boundary divergence before atomics. Jobs
+`11120008`, `11120414`, `11120476`, `11121797`, `11122426`, `11122768`,
+`11123306`, and `11123449` capture 64 particles per half directly from the
+RELION and RECOVAR production scatter paths. The panel covers all eight fine
+children and all four defocus quartiles. RECOVAR signature replay agrees with
+its actual zeroed GPU accumulator to `4.157e-6/4.304e-6` relative L2 by half,
+so the result is not a host replay or atomic-order inference.
+
+Among 114,816 common positive source records there are 22 radius-cutoff
+differences, zero x-half fold differences, and five base/neighbor differences.
+All 22 cutoff flips are axial outer-rim sources `(24,0)` or `(0,24)`. They
+produce deterministic half-accumulator relative L2 errors of
+`0.012369786/0.016898168`; excluding those two source coordinates reduces the
+errors to `2.342e-6/2.599e-6`. The 5,376 RELION-only native-square records are
+all radius rejects and contribute nothing. Fweight agrees to `3.534e-7` after
+the known scale, closing the positive operand at this boundary.
+
+RELION rotates the unpadded integer coordinate and applies `padding_factor`
+after the dot product. RECOVAR previously distributed the scale into both dot
+products. Isolated A/B jobs `11124285/11124286` prove that matching RELION's
+operation order eliminates all five base/neighbor differences and reduces
+jointly accepted coefficient relative L2 from `1.132e-2` to `1.072e-6`.
+Commit `6f467ea0` applies that correction to the strict single, batched, and
+fused x-half backprojectors. CPU policy/geometry tests pass `47/47`; A100 job
+`11125183` passes the fused/separate and rectangular/odd-cubic CUDA regressions
+`2/2`.
+
+That arithmetic-order fix does **not** remove any of the 22 axial-rim cutoff
+flips or the percent-scale half-accumulator residual. Each flip compares
+`radius2=2304.0` with `2304.000244140625`, with 15 RELION-reject/RECOVAR-pass
+and seven RELION-pass/RECOVAR-reject decisions. Exact captured RELION Euler
+matrices also do not close them. The remaining first boundary is therefore the
+CUDA evaluation/code generation of `xp*xp + yp*yp + zp*zp` at radius 48, not
+the support definition, Euler construction, interpolation base, Fweight, or
+atomic ordering. RELION was compiled with CUDA 12.6 and the RECOVAR diagnostic
+with CUDA 12.8; first repeat the corrected RECOVAR capture with the exact
+RELION toolkit and flags, then compare PTX/SASS or pin the explicit float32
+multiply/add sequence if needed. Do not weaken or remove the rotated-radius
+predicate merely to make this fixture pass.
+
+Full evidence and the proposed 22-cutoff/five-base A100 golden regression are
+in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scatter_signature_gate_20260713_113000/SCATTER_SIGNATURE_REPORT.md`.
+After the radius gate closes, rerun the complete iteration-1 raw BPref and map
+comparison. Accumulator relative L2 remains a localization metric; acceptance
+still requires shellwise FSC, FSC-AUC, and the FSC-derived score/resolution
+summaries against RELION and GT.
