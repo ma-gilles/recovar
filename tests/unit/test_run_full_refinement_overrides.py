@@ -27,6 +27,7 @@ from scripts.run_full_refinement import (
     _load_native_group_ids_per_half,
     _parse_relion_cli_ini_high,
     _parse_relion_tau2_fudge,
+    _relion_halfset_and_accuracy_layout,
     _replay_complete_initial_particle_state,
     _resolve_replay_normcorr,
     _resolve_tau2_fudge,
@@ -265,6 +266,31 @@ def test_load_native_group_ids_per_half_reads_particles_star(tmp_path):
     assert got is not None
     np.testing.assert_array_equal(got[0], np.asarray([0, 2], dtype=np.int64))
     np.testing.assert_array_equal(got[1], np.asarray([1, 1], dtype=np.int64))
+
+
+def test_relion_expected_accuracy_layout_preserves_relion_particle_rows():
+    pd = pytest.importorskip("pandas")
+    our_particles = pd.DataFrame(
+        {"rlnImageName": ["30@x.mrcs", "10@x.mrcs", "40@x.mrcs", "20@x.mrcs"]},
+    )
+    relion_particles = pd.DataFrame(
+        {
+            "rlnImageName": ["10@x.mrcs", "20@x.mrcs", "30@x.mrcs", "40@x.mrcs"],
+            "rlnRandomSubset": [1, 2, 1, 1],
+            "rlnOpticsGroup": [2, 1, 1, 2],
+        },
+    )
+
+    half1, half2, base_order, optics, particle_ids = _relion_halfset_and_accuracy_layout(
+        our_particles,
+        relion_particles,
+    )
+
+    np.testing.assert_array_equal(half1, [0, 1, 2])
+    np.testing.assert_array_equal(half2, [3])
+    np.testing.assert_array_equal(base_order, [1, 0, 2])
+    np.testing.assert_array_equal(optics, [1, 2, 2])
+    np.testing.assert_array_equal(particle_ids, [2, 0, 3])
 
 
 def test_native_group_ids_are_available_to_k_class_refinement():

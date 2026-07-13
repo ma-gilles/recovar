@@ -20,10 +20,17 @@ class ExpectedAccuracy:
     acc_trans_per_class_angstrom: np.ndarray
     class_counts: np.ndarray
     trial_local_indices: np.ndarray
-    trial_original_indices: np.ndarray
+    trial_particle_ids: np.ndarray
 
 
-def relion_half1_trial_order(n_particles: int, random_seed: int, first_iteration: int = 1) -> np.ndarray:
+def relion_half1_trial_order(
+    n_particles: int,
+    random_seed: int,
+    first_iteration: int = 1,
+    *,
+    base_order_local=None,
+    optics_group_ids=None,
+) -> np.ndarray:
     """Return RELION's one-time randomized half-1 local particle order.
 
     ``Experiment::randomiseParticlesOrder`` uses ``srand(random_seed + iter)``
@@ -35,10 +42,29 @@ def relion_half1_trial_order(n_particles: int, random_seed: int, first_iteration
 
     if not hasattr(bind, "auto_refine_randomise_half_order"):
         raise RuntimeError("RELION binding lacks auto_refine_randomise_half_order; rebuild recovar/relion_bind")
-    return np.asarray(
+    shuffled_positions = np.asarray(
         bind.auto_refine_randomise_half_order(int(n_particles), int(random_seed) + int(first_iteration)),
         dtype=np.int64,
     )
+    if base_order_local is None:
+        base_order = np.arange(int(n_particles), dtype=np.int64)
+    else:
+        base_order = np.asarray(base_order_local, dtype=np.int64).reshape(-1)
+        if base_order.shape != (int(n_particles),):
+            raise ValueError(
+                f"base_order_local must have shape ({n_particles},), got {base_order.shape}",
+            )
+        if not np.array_equal(np.sort(base_order), np.arange(int(n_particles), dtype=np.int64)):
+            raise ValueError("base_order_local must be a permutation of half-local particle indices")
+    order = base_order[shuffled_positions]
+    if optics_group_ids is not None:
+        optics = np.asarray(optics_group_ids, dtype=np.int64).reshape(-1)
+        if optics.shape != (int(n_particles),):
+            raise ValueError(f"optics_group_ids must have shape ({n_particles},), got {optics.shape}")
+        # Experiment::randomiseParticlesOrder stable-sorts the already
+        # shuffled half by numeric optics group.
+        order = order[np.argsort(optics[order], kind="stable")]
+    return order
 
 
 def _constant_selected(values: np.ndarray, indices: np.ndarray, name: str) -> float:
@@ -64,6 +90,7 @@ def estimate_relion_expected_accuracy(
     padding_factor: int,
     sigma2_fudge: float,
     random_seed: int,
+    random_seed_particle_ids=None,
     max_trials: int = 100,
 ) -> ExpectedAccuracy:
     """Evaluate RELION ``calculateExpectedAngularErrors`` on half 1.
@@ -87,12 +114,13 @@ def estimate_relion_expected_accuracy(
     if trial_local.size == 0:
         raise ValueError("expected-accuracy estimation requires at least one particle")
 
-    original_indices = np.asarray(dataset.original_image_indices_from_local(), dtype=np.int64).reshape(-1)
-    if original_indices.shape != (n_particles,):
-        raise ValueError(
-            f"dataset original-index layout has shape {original_indices.shape}, expected ({n_particles},)",
-        )
-    trial_original = original_indices[trial_local]
+    if random_seed_particle_ids is None:
+        particle_ids = np.asarray(dataset.original_image_indices_from_local(), dtype=np.int64).reshape(-1)
+    else:
+        particle_ids = np.asarray(random_seed_particle_ids, dtype=np.int64).reshape(-1)
+    if particle_ids.shape != (n_particles,):
+        raise ValueError(f"random-seed particle IDs have shape {particle_ids.shape}, expected ({n_particles},)")
+    trial_particle_ids = particle_ids[trial_local]
 
     refs_ft = np.asarray(reference_fourier)
     if refs_ft.ndim == 1:
@@ -148,7 +176,7 @@ def estimate_relion_expected_accuracy(
         int(random_seed),
         True,
         False,
-        np.ascontiguousarray(trial_original, dtype=np.int64),
+        np.ascontiguousarray(trial_particle_ids, dtype=np.int64),
     )
     return ExpectedAccuracy(
         acc_rot=float(out["acc_rot"]),
@@ -157,5 +185,5 @@ def estimate_relion_expected_accuracy(
         acc_trans_per_class_angstrom=np.asarray(out["acc_trans_class"], dtype=np.float64),
         class_counts=np.asarray(out["class_counts"], dtype=np.int64),
         trial_local_indices=trial_local.copy(),
-        trial_original_indices=trial_original.copy(),
+        trial_particle_ids=trial_particle_ids.copy(),
     )

@@ -338,6 +338,25 @@ class TestAutoRefineExpectedAccuracyBinding:
         order = np.asarray(bind.auto_refine_randomise_half_order(10, 1712))
         np.testing.assert_array_equal(order, [0, 4, 3, 9, 1, 8, 2, 5, 6, 7])
 
+    def test_python_order_applies_relion_base_order_and_stable_optics_sort(self, bind):
+        if not hasattr(bind, "auto_refine_randomise_half_order"):
+            pytest.skip("relion_bind must be rebuilt with AutoRefine half ordering")
+        from recovar.em.dense_single_volume.helpers.expected_accuracy import relion_half1_trial_order
+
+        base = np.asarray([5, 4, 3, 2, 1, 0], dtype=np.int64)
+        optics = np.asarray([2, 1, 2, 1, 2, 1], dtype=np.int64)
+        shuffled_positions = np.asarray(bind.auto_refine_randomise_half_order(6, 1712), dtype=np.int64)
+        expected = base[shuffled_positions]
+        expected = expected[np.argsort(optics[expected], kind="stable")]
+
+        actual = relion_half1_trial_order(
+            6,
+            1711,
+            base_order_local=base,
+            optics_group_ids=optics,
+        )
+        np.testing.assert_array_equal(actual, expected)
+
     @staticmethod
     def _accuracy_fixture(bind, class_ids, pdf_class=(0.5, 0.5)):
         rng = np.random.default_rng(9)

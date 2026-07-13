@@ -8077,7 +8077,7 @@ class TestRelionModeSmokeTest:
                 acc_trans_per_class_angstrom=np.full(n_classes, 1.5, dtype=np.float64),
                 class_counts=np.full(n_classes, n_trials, dtype=np.int64),
                 trial_local_indices=np.arange(n_trials, dtype=np.int64),
-                trial_original_indices=np.arange(n_trials, dtype=np.int64),
+                trial_particle_ids=np.arange(n_trials, dtype=np.int64),
             )
 
         monkeypatch.setattr(
