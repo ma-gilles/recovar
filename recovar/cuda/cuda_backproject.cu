@@ -736,13 +736,13 @@ backproject_indexed_kernel(
 
     T rk0, rk1, rk2;
     if (relion_fold_x && HALF_IMG) {
-        /* Match RELION cuda_kernel_backproject3D arithmetic exactly: rotate
-         * native integer image coordinates first, then apply padding_factor.
-         * Scaling before the dot product changes a few float32 ulps and can
-         * flip the redundant rotated-radius test at the support boundary. */
-        rk0 = (k0_unscaled * R[0] + k1_unscaled * R[3]) * (T)upsampling;
-        rk1 = (k0_unscaled * R[1] + k1_unscaled * R[4]) * (T)upsampling;
-        rk2 = (k0_unscaled * R[2] + k1_unscaled * R[5]) * (T)upsampling;
+        /* Match RELION cuda_kernel_backproject3D arithmetic exactly: form
+         * matrix-x*source-x first, add matrix-y*source-y, then apply
+         * padding_factor. Reversing the addends changes CUDA's contracted FMA
+         * and can move exact-integer interpolation coordinates by one ulp. */
+        rk0 = (R[3] * k1_unscaled + R[0] * k0_unscaled) * (T)upsampling;
+        rk1 = (R[4] * k1_unscaled + R[1] * k0_unscaled) * (T)upsampling;
+        rk2 = (R[5] * k1_unscaled + R[2] * k0_unscaled) * (T)upsampling;
     } else {
         rk0 = k0 * R[0] + k1 * R[3];
         rk1 = k0 * R[1] + k1 * R[4];
@@ -967,10 +967,10 @@ batch_backproject_indexed_kernel(
 
     T rk0, rk1, rk2;
     if (relion_fold_x && HALF_IMG) {
-        /* RELION rotates the unpadded FFTW coordinate, then pads it. */
-        rk0 = (k0_unscaled * R[0] + k1_unscaled * R[3]) * (T)upsampling;
-        rk1 = (k0_unscaled * R[1] + k1_unscaled * R[4]) * (T)upsampling;
-        rk2 = (k0_unscaled * R[2] + k1_unscaled * R[5]) * (T)upsampling;
+        /* RELION forms matrix-x*source-x before matrix-y*source-y, then pads. */
+        rk0 = (R[3] * k1_unscaled + R[0] * k0_unscaled) * (T)upsampling;
+        rk1 = (R[4] * k1_unscaled + R[1] * k0_unscaled) * (T)upsampling;
+        rk2 = (R[5] * k1_unscaled + R[2] * k0_unscaled) * (T)upsampling;
     } else {
         rk0 = k0 * R[0] + k1 * R[3];
         rk1 = k0 * R[1] + k1 * R[4];
@@ -1158,11 +1158,13 @@ relion_fused_x_half_backproject_kernel(
         const float2 value = data_rows[row_pixel];
         float data_re = value.x;
         float data_im = value.y;
-        /* Match RELION cuda_kernel_backproject3D: rotate first, then apply
-         * padding_factor. The order is observable at the radius boundary. */
-        float rk0 = (k0_unscaled * R[0] + k1_unscaled * R[3]) * (float)upsampling;
-        float rk1 = (k0_unscaled * R[1] + k1_unscaled * R[4]) * (float)upsampling;
-        float rk2 = (k0_unscaled * R[2] + k1_unscaled * R[5]) * (float)upsampling;
+        /* Match RELION cuda_kernel_backproject3D: form matrix-x*source-x
+         * before matrix-y*source-y, then apply padding_factor. Both the
+         * addend order and delayed scaling are observable at interpolation
+         * boundaries. */
+        float rk0 = (R[3] * k1_unscaled + R[0] * k0_unscaled) * (float)upsampling;
+        float rk1 = (R[4] * k1_unscaled + R[1] * k0_unscaled) * (float)upsampling;
+        float rk2 = (R[5] * k1_unscaled + R[2] * k0_unscaled) * (float)upsampling;
 
         if (max_r2 >= 0.0f) {
             const float r2_3d = relion_radius_squared(rk0, rk1, rk2);

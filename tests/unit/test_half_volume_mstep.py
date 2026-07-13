@@ -582,14 +582,17 @@ def test_relion_x_half_cuda_rotates_before_applying_padding_factor():
     # cuda_kernel_backproject3D. At outer-shell pixels, distributing the
     # padding multiplication into this float32 dot product can change the
     # redundant rotated-radius decision by one ulp.
-    expected_rk0 = "(k0_unscaled * R[0] + k1_unscaled * R[3]) *"
-    expected_rk1 = "(k0_unscaled * R[1] + k1_unscaled * R[4]) *"
-    expected_rk2 = "(k0_unscaled * R[2] + k1_unscaled * R[5]) *"
-    assert text.count(expected_rk0) >= 5  # indexed, batch, fused, two projectors
-    assert text.count(expected_rk1) >= 5
-    assert text.count(expected_rk2) >= 5
-    assert "Match RELION cuda_kernel_backproject3D arithmetic exactly" in text
-    assert "The order is observable at the radius boundary" in text
+    expected_rk0 = "(R[3] * k1_unscaled + R[0] * k0_unscaled) *"
+    expected_rk1 = "(R[4] * k1_unscaled + R[1] * k0_unscaled) *"
+    expected_rk2 = "(R[5] * k1_unscaled + R[2] * k0_unscaled) *"
+    assert text.count(expected_rk0) == 3  # indexed, batch, and fused backprojectors
+    assert text.count(expected_rk1) == 3
+    assert text.count(expected_rk2) == 3
+    # Projector arithmetic is a separate RELION kernel boundary and remains on
+    # its already-captured score-path operation order.
+    assert text.count("(k0_unscaled * R[0] + k1_unscaled * R[3]) *") == 2
+    assert "matrix-x*source-x first" in text
+    assert "Reversing the addends changes CUDA's contracted FMA" in text
 
 
 def test_relion_x_half_cuda_pins_physical_radius_accumulation_order():
