@@ -569,8 +569,27 @@ def test_relion_x_half_cuda_skips_fftw_x0_negative_row_duplicate():
     assert text.count(duplicate_x0_guard) == 2
     assert "RELION iterates FFTW half-images in native row order" in text
     assert "k0_idx < image_w" in text
-    assert "? (T)k1_idx * upsampling" in text
+    assert "k1_unscaled = (T)k1_idx" in text
+    assert "k1 = k1_unscaled * upsampling" in text
     assert "BackProjector::backproject2Dto3D skips" in text
+
+
+def test_relion_x_half_cuda_rotates_before_applying_padding_factor():
+    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
+    text = cuda_source.read_text()
+
+    # Strict RELION backprojection must preserve the operation ordering in
+    # cuda_kernel_backproject3D. At outer-shell pixels, distributing the
+    # padding multiplication into this float32 dot product can change the
+    # redundant rotated-radius decision by one ulp.
+    expected_rk0 = "(k0_unscaled * R[0] + k1_unscaled * R[3]) *"
+    expected_rk1 = "(k0_unscaled * R[1] + k1_unscaled * R[4]) *"
+    expected_rk2 = "(k0_unscaled * R[2] + k1_unscaled * R[5]) *"
+    assert text.count(expected_rk0) >= 5  # indexed, batch, fused, two projectors
+    assert text.count(expected_rk1) >= 5
+    assert text.count(expected_rk2) >= 5
+    assert "Match RELION cuda_kernel_backproject3D arithmetic exactly" in text
+    assert "The order is observable at the radius boundary" in text
 
 
 def test_relion_x_half_bp_block_topology_env_is_off_by_default(monkeypatch):

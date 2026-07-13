@@ -678,23 +678,29 @@ backproject_indexed_kernel(
     const int k1_idx = orig_pix % image_w;   /* col index */
 
     T k0;
+    T k0_unscaled = (T)0;
     if (relion_fold_x && HALF_IMG) {
         /* RELION iterates FFTW half-images in native row order:
          * i=0..N/2 are nonnegative y, then i=N/2+1..N-1 are negative y.
          * Do not use RECOVAR's centered row convention in this mode. */
-        k0 = (k0_idx < image_w)
-             ? (T)k0_idx * upsampling
-             : (T)(k0_idx - image_h) * upsampling;
+        k0_unscaled = (k0_idx < image_w)
+                      ? (T)k0_idx
+                      : (T)(k0_idx - image_h);
+        k0 = k0_unscaled * upsampling;
     } else {
         k0 = (T)(k0_idx - image_h / 2) * upsampling;
     }
     T k1;
+    T k1_unscaled = (T)0;
     if (HALF_IMG) {
-        k1 = relion_fold_x
-             ? (T)k1_idx * upsampling
-             : (k1_idx * 2 == full_image_w)
-             ? (T)(-k1_idx) * upsampling
-             : (T)(k1_idx)  * upsampling;
+        if (relion_fold_x) {
+            k1_unscaled = (T)k1_idx;
+            k1 = k1_unscaled * upsampling;
+        } else {
+            k1 = (k1_idx * 2 == full_image_w)
+                 ? (T)(-k1_idx) * upsampling
+                 : (T)(k1_idx)  * upsampling;
+        }
     } else {
         k1 = (T)(k1_idx - image_w / 2) * upsampling;
     }
@@ -708,9 +714,20 @@ backproject_indexed_kernel(
 
     if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) return;
 
-    T rk0 = k0 * R[0] + k1 * R[3];
-    T rk1 = k0 * R[1] + k1 * R[4];
-    T rk2 = k0 * R[2] + k1 * R[5];
+    T rk0, rk1, rk2;
+    if (relion_fold_x && HALF_IMG) {
+        /* Match RELION cuda_kernel_backproject3D arithmetic exactly: rotate
+         * native integer image coordinates first, then apply padding_factor.
+         * Scaling before the dot product changes a few float32 ulps and can
+         * flip the redundant rotated-radius test at the support boundary. */
+        rk0 = (k0_unscaled * R[0] + k1_unscaled * R[3]) * (T)upsampling;
+        rk1 = (k0_unscaled * R[1] + k1_unscaled * R[4]) * (T)upsampling;
+        rk2 = (k0_unscaled * R[2] + k1_unscaled * R[5]) * (T)upsampling;
+    } else {
+        rk0 = k0 * R[0] + k1 * R[3];
+        rk1 = k0 * R[1] + k1 * R[4];
+        rk2 = k0 * R[2] + k1 * R[5];
+    }
 
     if (relion_fold_x && HALF_IMG && HALF_VOL && max_r2 >= (T)0) {
         /* RELION's backproject2Dto3D repeats the radius cutoff after the
@@ -895,20 +912,26 @@ batch_backproject_indexed_kernel(
     const int k1_idx = orig_pix % image_w;
 
     T k0;
+    T k0_unscaled = (T)0;
     if (relion_fold_x && HALF_IMG) {
-        k0 = (k0_idx < image_w)
-             ? (T)k0_idx * upsampling
-             : (T)(k0_idx - image_h) * upsampling;
+        k0_unscaled = (k0_idx < image_w)
+                      ? (T)k0_idx
+                      : (T)(k0_idx - image_h);
+        k0 = k0_unscaled * upsampling;
     } else {
         k0 = (T)(k0_idx - image_h / 2) * upsampling;
     }
     T k1;
+    T k1_unscaled = (T)0;
     if (HALF_IMG) {
-        k1 = relion_fold_x
-             ? (T)k1_idx * upsampling
-             : (k1_idx * 2 == full_image_w)
-             ? (T)(-k1_idx) * upsampling
-             : (T)(k1_idx)  * upsampling;
+        if (relion_fold_x) {
+            k1_unscaled = (T)k1_idx;
+            k1 = k1_unscaled * upsampling;
+        } else {
+            k1 = (k1_idx * 2 == full_image_w)
+                 ? (T)(-k1_idx) * upsampling
+                 : (T)(k1_idx)  * upsampling;
+        }
     } else {
         k1 = (T)(k1_idx - image_w / 2) * upsampling;
     }
@@ -922,9 +945,17 @@ batch_backproject_indexed_kernel(
 
     if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) continue;
 
-    T rk0 = k0 * R[0] + k1 * R[3];
-    T rk1 = k0 * R[1] + k1 * R[4];
-    T rk2 = k0 * R[2] + k1 * R[5];
+    T rk0, rk1, rk2;
+    if (relion_fold_x && HALF_IMG) {
+        /* RELION rotates the unpadded FFTW coordinate, then pads it. */
+        rk0 = (k0_unscaled * R[0] + k1_unscaled * R[3]) * (T)upsampling;
+        rk1 = (k0_unscaled * R[1] + k1_unscaled * R[4]) * (T)upsampling;
+        rk2 = (k0_unscaled * R[2] + k1_unscaled * R[5]) * (T)upsampling;
+    } else {
+        rk0 = k0 * R[0] + k1 * R[3];
+        rk1 = k0 * R[1] + k1 * R[4];
+        rk2 = k0 * R[2] + k1 * R[5];
+    }
 
     if (relion_fold_x && HALF_IMG && HALF_VOL && max_r2 >= (T)0) {
         const T r2_3d = rk0 * rk0 + rk1 * rk1 + rk2 * rk2;
@@ -1088,10 +1119,12 @@ relion_fused_x_half_backproject_kernel(
         const int k0_idx = orig_pix / image_w;
         const int k1_idx = orig_pix % image_w;
 
-        const float k0 = (k0_idx < image_w)
-            ? (float)k0_idx * upsampling
-            : (float)(k0_idx - image_h) * upsampling;
-        const float k1 = (float)k1_idx * upsampling;
+        const float k0_unscaled = (k0_idx < image_w)
+            ? (float)k0_idx
+            : (float)(k0_idx - image_h);
+        const float k1_unscaled = (float)k1_idx;
+        const float k0 = k0_unscaled * upsampling;
+        const float k1 = k1_unscaled * upsampling;
 
         /* RELION omits the redundant negative-y x=0 FFTW row. */
         if (k1_idx == 0 && k0_idx >= image_w) continue;
@@ -1105,9 +1138,11 @@ relion_fused_x_half_backproject_kernel(
         const float2 value = data_rows[row_pixel];
         float data_re = value.x;
         float data_im = value.y;
-        float rk0 = k0 * R[0] + k1 * R[3];
-        float rk1 = k0 * R[1] + k1 * R[4];
-        float rk2 = k0 * R[2] + k1 * R[5];
+        /* Match RELION cuda_kernel_backproject3D: rotate first, then apply
+         * padding_factor. The order is observable at the radius boundary. */
+        float rk0 = (k0_unscaled * R[0] + k1_unscaled * R[3]) * (float)upsampling;
+        float rk1 = (k0_unscaled * R[1] + k1_unscaled * R[4]) * (float)upsampling;
+        float rk2 = (k0_unscaled * R[2] + k1_unscaled * R[5]) * (float)upsampling;
 
         if (max_r2 >= 0.0f) {
             const float r2_3d = rk0 * rk0 + rk1 * rk1 + rk2 * rk2;
