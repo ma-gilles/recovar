@@ -183,6 +183,7 @@ _SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV = "RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_
 _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS"
 _SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTEP"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
+_RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_JOINT_MODES = {"joint", "global", "class_pose", "class-pose"}
 _SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK_ENV = "RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK"
@@ -4724,6 +4725,86 @@ def _relion_pass2_reconstruction_probs(probs, *, adaptive_fraction: float):
     return jnp.where(mask, probs, 0.0), mask, n_significant
 
 
+@partial(jax.jit, static_argnames=("adaptive_fraction",))
+def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
+    """Build fine M-step probabilities with RELION GPU float32 arithmetic.
+
+    The reference GPU path shifts its float32 log weights so the maximum is
+    50, applies ``expf``, sorts the raw weights in ascending order, and obtains
+    both ``sum_weight`` and the lower-tail significance cutoff from a float32
+    cumulative scan.  Surviving weights are divided by the full pre-pruning
+    ``sum_weight``; they are intentionally not renormalized afterward.
+    """
+
+    scores_f32 = jnp.asarray(scores, dtype=jnp.float32)
+    flat_scores = scores_f32.reshape(scores_f32.shape[0], -1)
+    finite = jnp.isfinite(flat_scores)
+    best = jnp.max(jnp.where(finite, flat_scores, -jnp.inf), axis=1)
+    has_finite = jnp.isfinite(best)
+    safe_best = jnp.where(has_finite, best, jnp.float32(0.0))
+    shifted = jnp.where(finite, flat_scores - safe_best[:, None] + jnp.float32(50.0), -jnp.inf)
+    raw_weights = jnp.where(shifted < jnp.float32(-88.0), jnp.float32(0.0), jnp.exp(shifted))
+    raw_weights = jnp.where(finite & jnp.isfinite(raw_weights), raw_weights, jnp.float32(0.0))
+
+    sorted_weights = jnp.sort(raw_weights, axis=1)
+    cumulative = jnp.cumsum(sorted_weights, axis=1, dtype=jnp.float32)
+    sum_weight = cumulative[:, -1]
+    has_mass = has_finite & jnp.isfinite(sum_weight) & (sum_weight > jnp.float32(0.0))
+    # RELION forms this product in RFLOAT, then converts it to the XFLOAT
+    # threshold argument used by the device search.
+    tail_target = jnp.asarray(
+        (jnp.float64(1.0) - jnp.float64(adaptive_fraction)) * sum_weight.astype(jnp.float64),
+        dtype=jnp.float32,
+    )
+    threshold_idx = jax.vmap(lambda row, target: jnp.searchsorted(row, target, side="right"))(
+        cumulative,
+        tail_target,
+    )
+    threshold_idx = jnp.minimum(threshold_idx, cumulative.shape[1] - 1)
+    threshold = sorted_weights[jnp.arange(flat_scores.shape[0]), threshold_idx]
+    mask_flat = has_mass[:, None] & finite & (raw_weights >= threshold[:, None])
+    safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
+    reconstruction_probs_flat = jnp.where(mask_flat, raw_weights / safe_sum_weight[:, None], jnp.float32(0.0))
+    n_significant = jnp.sum(mask_flat, axis=1).astype(jnp.int32)
+    output_shape = scores_f32.shape
+    return (
+        reconstruction_probs_flat.reshape(output_shape),
+        mask_flat.reshape(output_shape),
+        n_significant,
+        sum_weight,
+        threshold,
+    )
+
+
+def relion_x_half_f32_fine_posterior_enabled() -> bool:
+    """Return whether the opt-in RELION float32 fine posterior is enabled."""
+
+    return _env_flag_enabled(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, default=False)
+
+
+def _relion_pass2_reconstruction_probs_for_mstep(
+    scores,
+    probs,
+    *,
+    adaptive_fraction: float,
+    use_relion_x_half_mstep: bool,
+):
+    """Select the default or diagnostic fine-posterior reconstruction path."""
+
+    if use_relion_x_half_mstep and relion_x_half_f32_fine_posterior_enabled():
+        reconstruction_probs, mask, n_significant, _sum_weight, _threshold = (
+            _relion_f32_fine_reconstruction_probs(
+                scores,
+                adaptive_fraction=float(adaptive_fraction),
+            )
+        )
+        return reconstruction_probs, mask, n_significant
+    return _relion_pass2_reconstruction_probs(
+        probs,
+        adaptive_fraction=float(adaptive_fraction),
+    )
+
+
 def _relion_pass2_reconstruction_pair_probs(pair_probs, pair_mask, *, adaptive_fraction: float):
     """Apply RELION's fine-pass significant threshold to compact pair probs."""
 
@@ -5518,6 +5599,9 @@ def compute_pass2_stats_sparse_bucketed(
         recon_volume_shape = volume_shape
     use_relion_x_half_mstep = bool(relion_x_half_mstep)
     use_relion_fine_mstep_prune = bool(relion_fine_mstep_prune) or use_relion_x_half_mstep
+    use_relion_f32_fine_posterior = (
+        use_relion_x_half_mstep and relion_x_half_f32_fine_posterior_enabled()
+    )
     use_half_volume_mstep = bool(relion_half_volume_mstep) or use_relion_x_half_mstep
     compact_pair_mstep_mode_requested = _compact_pair_mstep_mode_for_pass()
     compact_pair_pair_sparse_requested = compact_pair_mstep_mode_requested == "pair_sparse"
@@ -5776,6 +5860,11 @@ def compute_pass2_stats_sparse_bucketed(
         logger.info(
             "Sparse pass-2 RELION x-half M-step diagnostic: using sequential float32 "
             "translation reduction"
+        )
+    if use_relion_f32_fine_posterior:
+        logger.info(
+            "Sparse pass-2 RELION x-half M-step diagnostic: using float32 fine-posterior "
+            "normalization and significance pruning"
         )
     if use_relion_fine_mstep_prune and not use_relion_x_half_mstep:
         logger.info("Sparse pass-2 M-step: applying RELION fine-pass significant-weight pruning")
@@ -6416,22 +6505,47 @@ def compute_pass2_stats_sparse_bucketed(
 
             ctf_probs = None
             reconstruction_mask_chunks = None
+            reconstruction_prob_chunks = None
             if use_relion_fine_mstep_prune and not score_only:
-                mask_flat_chunks = []
-                for start, stop in chunk_ranges:
-                    scores_chunk, _, _, _ = _score_rotation_chunk(start, stop, need_recon=False)
-                    normalize_log_z = bucket_log_z
-                    _chunk_log_z, probs_chunk, _chunk_best_log_score, _chunk_best_argmax, _chunk_max_posterior = (
-                        _normalize_pass2_bucket_with_log_z(scores_chunk, normalize_log_z)
+                if use_relion_f32_fine_posterior:
+                    score_flat_chunks = []
+                    for start, stop in chunk_ranges:
+                        scores_chunk, _, _, _ = _score_rotation_chunk(start, stop, need_recon=False)
+                        score_flat_chunks.append(scores_chunk.reshape(batch, -1))
+                    all_scores_flat = jnp.concatenate(score_flat_chunks, axis=1)
+                    (
+                        reconstruction_probs_flat,
+                        reconstruction_mask_flat,
+                        _reconstruction_n_significant,
+                        _sum_weight,
+                        _threshold,
+                    ) = _relion_f32_fine_reconstruction_probs(
+                        all_scores_flat,
+                        adaptive_fraction=float(adaptive_fraction),
                     )
-                    mask_flat_chunks.append(probs_chunk.reshape(batch, -1))
-                all_probs_flat = jnp.concatenate(mask_flat_chunks, axis=1)
-                reconstruction_mask_flat, _reconstruction_n_significant = _find_significant_mask_full_sort(
-                    all_probs_flat,
-                    float(adaptive_fraction),
-                    -1,
-                )
+                else:
+                    mask_flat_chunks = []
+                    for start, stop in chunk_ranges:
+                        scores_chunk, _, _, _ = _score_rotation_chunk(start, stop, need_recon=False)
+                        normalize_log_z = bucket_log_z
+                        (
+                            _chunk_log_z,
+                            probs_chunk,
+                            _chunk_best_log_score,
+                            _chunk_best_argmax,
+                            _chunk_max_posterior,
+                        ) = _normalize_pass2_bucket_with_log_z(scores_chunk, normalize_log_z)
+                        mask_flat_chunks.append(probs_chunk.reshape(batch, -1))
+                    all_probs_flat = jnp.concatenate(mask_flat_chunks, axis=1)
+                    reconstruction_mask_flat, _reconstruction_n_significant = _find_significant_mask_full_sort(
+                        all_probs_flat,
+                        float(adaptive_fraction),
+                        -1,
+                    )
+                    reconstruction_probs_flat = None
                 reconstruction_mask_chunks = []
+                if reconstruction_probs_flat is not None:
+                    reconstruction_prob_chunks = []
                 offset = 0
                 for start, stop in chunk_ranges:
                     width = int(stop - start) * int(n_fine_trans)
@@ -6442,6 +6556,14 @@ def compute_pass2_stats_sparse_bucketed(
                             n_fine_trans,
                         )
                     )
+                    if reconstruction_prob_chunks is not None:
+                        reconstruction_prob_chunks.append(
+                            reconstruction_probs_flat[:, offset : offset + width].reshape(
+                                batch,
+                                int(stop - start),
+                                n_fine_trans,
+                            )
+                        )
                     offset += width
             if accumulate_noise:
                 if translation_sqdist_ang is not None:
@@ -6475,7 +6597,10 @@ def compute_pass2_stats_sparse_bucketed(
                 if not score_only:
                     mstep_probs = probs
                     if use_relion_fine_mstep_prune:
-                        mstep_probs = jnp.where(reconstruction_mask_chunks[chunk_idx], probs, 0.0)
+                        if reconstruction_prob_chunks is None:
+                            mstep_probs = jnp.where(reconstruction_mask_chunks[chunk_idx], probs, 0.0)
+                        else:
+                            mstep_probs = reconstruction_prob_chunks[chunk_idx]
                     summed, ctf_probs = compute_local_mstep_sums(
                         mstep_probs,
                         shifted_recon_split,
@@ -6793,9 +6918,11 @@ def compute_pass2_stats_sparse_bucketed(
         reconstruction_n_significant = None
         if probs is not None and use_relion_fine_mstep_prune and not score_only:
             reconstruction_probs, reconstruction_mask, reconstruction_n_significant = (
-                _relion_pass2_reconstruction_probs(
+                _relion_pass2_reconstruction_probs_for_mstep(
+                    scores,
                     probs,
                     adaptive_fraction=float(adaptive_fraction),
+                    use_relion_x_half_mstep=use_relion_x_half_mstep,
                 )
             )
         shifted_recon_split_for_dump = None

@@ -1350,3 +1350,45 @@ writer per source area, use matched GPU models for timing A/Bs, and cancel jobs
 as soon as their premise becomes stale. A run without a predeclared decision
 it can change should not be submitted. Negative and rejected results must be
 recorded so future agents do not repeat or accidentally cite them.
+
+## 2026-07-12 Iteration-2 BPref Arithmetic Trace
+
+The iteration-2 raw-BPref oracle is now explicitly qualified rather than
+treated as exact. Job `11087020` is close enough for percent-level accumulator
+diagnostics: iteration-2 half-map FSC-AUC against the installed run is
+`0.999999909/0.999999999`, all serialized angles and X translations agree,
+and only two Y translations move by one grid step. It is not bitwise inert:
+15 significant counts differ by one and maximum Pmax delta is `0.002181`.
+All 99 recorded artifact hashes verify. Its arrays may therefore adjudicate
+the `0.94%--1.72%` numerator and `0.20%--0.32%` weight residuals, but not
+cross-substitution causality, exact ties, or smaller effects. The correct pair
+is RELION iteration 2 versus RECOVAR zero-based `it001`; using `it002` pairs
+different current sizes. Audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_job11087020_readonly_audit_20260712_213000/AUDIT_REPORT.md`.
+
+Source inspection identified an arithmetic difference before BPref scatter:
+the active RELION GPU build reduces each orientation/pixel across translations
+in `XFLOAT=float`, while RECOVAR normally forms the sufficient statistic with
+a higher-precision GEMM before truncating to the float accumulator. Commit
+`e6098b58` adds an off-by-default diagnostic switch,
+`RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION`, that carries the
+numerator in complex64 and the positive denominator in float32 in increasing
+translation-index order. Focused CPU tests cover exact sequential arithmetic,
+dtype, gate-off equivalence, and x-half-only dispatch.
+
+Job `11094394` rejects that difference as the material boundary. It completes
+the exact two-iteration `[48,92]` schedule from immutable commit `e6098b58` in
+`629.3` science seconds (`00:14:03` including setup). Relative to the default,
+the supported-radius raw-BPref numerator residual falls only
+`0.0172285 -> 0.0171696` and `0.00944339 -> 0.00943748`; weight falls only
+`0.00318974 -> 0.00318260` and `0.00200353 -> 0.00200285`. Iteration-2
+half-map FSC-AUC through shell 46 changes only
+`0.9999186 -> 0.9999188` and stays `0.9999695` in half 2. Keep the switch off
+and do not extend this hypothesis to a full trajectory. RECOVAR repeatability
+also rules out nondeterministic inter-particle atomics: two independent default
+runs differ by only `2.25e-6--2.65e-6` numerator relative L2 and
+`4.4e-7--5.0e-7` weight relative L2 at the same boundary. The remaining
+systematic trace moves earlier to RELION's float32 fine-weight exponentiation,
+ascending sorted cumulative normalization/significance threshold, and
+posterior/support weights. Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_e6098b58_f32seq_it2_bpref_20260712_214000/DIAGNOSTIC_REPORT.md`.
