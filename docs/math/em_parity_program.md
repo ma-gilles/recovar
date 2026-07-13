@@ -1577,9 +1577,49 @@ Report:
 Do not extend the fused-pre-reduced branch to a trajectory. Pixel enumeration,
 thread grouping, per-particle launch boundaries, and fused neighbor atomics are
 now all rejected as material causes for qualified pre-reduced operands. The
-remaining source-level first boundary is RELION's CUDA translation loop:
-thresholding and normalization of raw orientation/translation weights,
-per-pixel phase translation, CTF/minvsigma multiplication, and float32
-accumulation of `real`, `imag`, and `Fweight` before the scatter. The next
-diagnostic must move that reduction into the fused CUDA kernel from the raw
-matched operands; FSC/FSC-AUC remain the acceptance gates.
+remaining source-level first boundary must be localized between per-particle
+operands and the aggregate scatter. FSC/FSC-AUC remain the acceptance gates.
+
+The completed 12-particle operand panel now rejects the CUDA translation-loop
+port as the next positive-weight fix. Jobs `11116157`, `11116203`, `11116239`,
+`11117008`, and `11117519` cover both halves, defocus extremes, angular order,
+and residual-heavy particles. Every particle has exactly one active hard
+winner and RECOVAR agrees on all 12 winners. Fine Euler matrices agree within
+`5.96e-8`; the positive `CTF^2*Minvsigma2` operand has relative-L2
+min/median/max `1.73e-7/3.58e-7/5.73e-7`. The reconstructed complex winner
+rows differ by only `1.94e-5/1.08e-4/3.00e-4` min/median/max, with the remaining
+complex comparison qualified by the host phase replay. Because iteration-1
+weight has neither a translation sum nor phase, a raw translation-reduction
+port cannot explain its `0.507%/0.601%` aggregate residual. Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it1_operand_panel_20260713_110500/OPERAND_PANEL_REPORT.md`.
+
+An independent aggregate audit also rejects comparison mapping, half
+ownership, padding, low-resolution joining, dump timing, and a global weight
+normalization. Correct mapping is uniquely best at `0.00507/0.00601` relative
+L2; swapping halves is approximately `0.230/0.227`; RELION's post-join dump is
+byte-identical to its pre-reconstruct input outside the intentional join; and
+fitting a global scale barely changes the residual. Total weight and shell
+sums are conserved to roughly `1e-6--1e-4` while shell-local voxelwise
+redistribution reaches percent scale. Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_bpref_weight_residual_audit_20260713_110518/AUDIT_REPORT.md`.
+
+Host replay of all 10,764 active source pixels in the 12-particle panel finds
+zero cutoff, x-half fold, base-voxel, or neighbor-index differences. Sorted
+float64 scatter relative L2 is `3.38957e-6/2.99566e-6`, about three orders below
+the whole-dataset residual; per-particle coefficient relative L2 is
+`2.26e-6--3.46e-6`. This closes ordinary-coordinate pre-atomic scatter but not
+rare boundary crossings: the nearest non-DC integer margin in this random
+panel is only `8.64e-5`, too large to represent the extrema among 10,000
+particles. Audit and design:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scatter_signature_offline_20260713_111555/SCATTER_SIGNATURE_DESIGN.md`.
+
+The active discriminator is therefore a complete pre-atomic signature for a
+reproducible, boundary-enriched 128-particle panel: 32 particles per half with
+the smallest integer-plane margin, 16 per half with the smallest cutoff
+margin, and 16 per half with greatest mass into the top aggregate residual
+voxels, deduplicated and stratified by CTF and orientation. Compare radius and
+fold decisions, base/neighbor indices, coefficients, `Fweight`, and sorted
+deterministic accumulators. If that panel remains at the ordinary `~3e-6`
+floor, pre-atomic geometry is rejected and the trace moves to global
+particle/candidate ownership or production accumulator correspondence; do not
+implement the full translation CUDA port without contrary evidence.
