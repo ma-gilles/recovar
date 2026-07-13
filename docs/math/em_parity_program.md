@@ -28,7 +28,7 @@ as the next product milestone rather than mixing it into the first closure.
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `ef2dbd065812bafd3e31ba7863f4a2975414c249`
+Current accepted code checkpoint: `63a4844070b641860c0bdce7bf75e62439576293`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -47,13 +47,15 @@ Known evidence:
 - K=1 100k/256 map quality is excellent: merged RECOVAR-vs-RELION correlation
   `0.999571`, FSC-AUC `0.994387`, and RECOVAR GT FSC-AUC is `+0.009573` above
   RELION. RECOVAR is about `1.40x` RELION wall time on the recorded run.
-- Current-head K=1 fixed-fixture trajectory job `11144457` matches all ten
-  numbered iterations, the exact current-size schedule, convergence at
+- Current-head K=1 fixed-fixture boundary-replay job `11144457` matches all
+  ten numbered RELION-seeded transitions, the exact current-size schedule, convergence at
   iteration 10, and the valid converged final-all-data path. Independent
   shellwise recomputation puts every numbered half/merged FSC-AUC above
   `0.9999985`; final merged RECOVAR-vs-RELION FSC-AUC is `0.998450626`, and
   RECOVAR final GT FSC-AUC exceeds RELION by `0.019912496`. This closes the
-  fixed 3k/128 trajectory gate, not robustness, scale, real-data, or K=4.
+  fixed 3k/128 per-iteration boundary gate. It does **not** close the autonomous
+  trajectory gate: `scripts/run_multi_iter_parity.py` injects RELION particle,
+  noise, direction-prior, and optimiser-control state at each iteration.
 - K=4 100k/256 map quality is close/better by GT FSC-AUC, but particle-level
   state parity is incomplete: recorded class agreement `0.89025`, pose within
   5 degrees `0.71669`, translation within 1 px `0.77529`. Runtime is `2.181x`
@@ -64,8 +66,9 @@ Known evidence:
 - The earlier 3k/128 final-state replay defect and iteration-1 reconstruction
   boundary are repaired. The current accepted evidence is FSC/FSC-AUC based;
   legacy map correlations are diagnostic only. The next K=1 work is the
-  predefined robustness matrix, followed by 10k, real-particle, and 100k/256
-  validation. The existing real EMPIAR-10076 failure is already localized to
+  predefined boundary-replay robustness matrix while an autonomous cold-start
+  trajectory is qualified separately, followed by 10k, real-particle, and
+  100k/256 validation. The existing real EMPIAR-10076 failure is already localized to
   iteration-3 low-shell PPref formation before amplification at the
   iteration-8 global-to-local transition.
 
@@ -319,7 +322,7 @@ RECOVAR-vs-RELION FSC-AUC is `0.999538`; supported-shell 1--18 FSC-AUC is
 `0.999930`, shell 18 is `0.998800`, and the minimum non-DC shell is
 `0.996857`.
 
-Clean full-trajectory A100 job `11026304` passes the small-cell strict gate.
+Clean boundary-replay A100 job `11026304` passes the small-cell fixed-transition gate.
 It completes in `579` seconds with the exact current-size schedule, convergence
 at iteration 10, and final all-data path. Final RECOVAR-vs-RELION FSC-AUC is
 `0.997260`; minimum non-DC shell FSC is `0.994984`, fifth percentile is
@@ -440,7 +443,7 @@ Fixed-state jobs refine that boundary further. One-iteration replay job
 iteration-2 FSC-AUC `0.999321`, mean Pmax `0.112001` versus RELION `0.112067`,
 mean absolute per-particle Pmax gap `0.000494`, and pose agreement through p99.
 Its mean fine support is only `298.5/322.9` rotations per half, versus
-`1180.9/1112.4` in the free trajectory. Thus iteration-2 scoring is not the
+`1180.9/1112.4` in the boundary-replay trajectory. Thus iteration-2 scoring is not the
 primary source; it amplifies a preceding map difference. Direct iteration-1
 job `11041546` proves the first divergence: Pmax is exactly 1 for every
 particle, poses/translations match through p99, but the iteration-1 merged-map
@@ -1199,11 +1202,12 @@ CTF-squared weight.
 Reciprocal iteration-3 map-splice array `11086240_[0-3]` proves that low
 shells through authoritative signal shell 29 dominate the iteration-4
 particle divergence.  The authoritative-map control A and REL-low/REC-high C
-retain `9787/10000` and `9895/10000` exact joint winners relative to the free
-RECOVAR-map B trajectory, while REC-low/REL-high D retains `9887/10000` of B's
+retain `9787/10000` and `9895/10000` exact joint winners relative to the
+boundary-replay RECOVAR-map B trajectory, while REC-low/REL-high D retains
+`9887/10000` of B's
 winners.  Iteration-4 merged FSC-AUC through shell 61 groups independently as
 A/C (`0.998992/0.998972`) versus B/D (`0.998272/0.998286`).  A matches RELION
-joint winners within `1e-4` for `9996/10000`; B reproduces the free trajectory
+joint winners within `1e-4` for `9996/10000`; B reproduces the boundary-replay trajectory
 for all six selected targets and `9997/10000` joint winners.  The Slurm array
 is recorded as `FAILED/1` only because its post-run assertion requested local
 fused-posterior dumps during a global sparse pass-2, where that hook is not

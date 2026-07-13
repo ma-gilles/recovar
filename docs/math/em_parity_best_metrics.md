@@ -143,7 +143,7 @@ Conclusion:
   the accepted K=1 row because this run stopped at its ten-iteration cap
   without final all-data output and uses a different RELION baseline wall.
 
-### 2026-07-13 `k1-current-head-fixed-3k128-trajectory`
+### 2026-07-13 `k1-current-head-fixed-3k128-boundary-replay`
 
 Run metadata:
 
@@ -153,8 +153,8 @@ Run metadata:
   `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 - Fixture: `11_small_baseline_3k_g128_white_noise1_bf80`, 3,000 particles,
   box 128, seed 1711
-- K: 1 supplied-map strict replay, ten numbered iterations plus converged
-  final all-data
+- K: 1 supplied-map strict per-iteration boundary replay, ten numbered
+  RELION-seeded transitions plus converged final all-data
 - Slurm job: `11144457`, A100, `COMPLETED 0:0`, elapsed 12m10s
 - Artifacts:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_3k128_full_trajectory_preflight_20260713_144434`
@@ -176,13 +176,16 @@ Quality comparison:
 
 Conclusion:
 
-- Overall status: accepted for the fixed 3k/128 K=1 trajectory gate.
+- Overall status: accepted for the fixed 3k/128 K=1 per-iteration boundary
+  gate. This is not an autonomous trajectory: the runner injects RELION state
+  at every numbered iteration.
 - Better metrics: final cross FSC-AUC improves over the prior accepted small
   checkpoint, and RECOVAR GT FSC-AUC/resolution is higher than RELION.
 - Worse metrics: none against the quality contract.
 - Same metrics: exact schedule, convergence, and finalization semantics.
-- Scope limit: not a completion-benchmark or speed row; robustness, scale,
-  real-particle, 100k/256, and K=4 evidence remain open.
+- Scope limit: not a completion-benchmark, speed row, or autonomous-trajectory
+  qualification; robustness, scale, real-particle, 100k/256, and K=4 evidence
+  remain open.
 
 ## Required Metric Template
 

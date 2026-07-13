@@ -1014,7 +1014,7 @@ winner.  It changes only reported state; the existing fine-pass `Ft_y` and
 `Ft_CTF` accumulators already passed through unchanged.  Therefore this fixes
 the earliest proven trajectory mismatch in Pmax scheduling/convergence but
 does not by itself prove that iter-1 reconstruction state caused all of the
-iter-2 free-trajectory gap.
+iter-2 boundary-replay gap.
 
 Regression and validation:
 
@@ -1070,7 +1070,7 @@ The strict run preserved its post-join iter-1 `Ft_y` and `Ft_ctf` arrays under
 `strict_on/intermediates/it000_Ft_*`. The next discriminating experiment is
 therefore a matched patched-RELION iter-1 raw/downsampled BPref dump, followed
 by coordinate- and shell-level comparison with
-`scripts/compare_iter1_bpref_accum.py`. Do not extend the free trajectory
+`scripts/compare_iter1_bpref_accum.py`. Do not extend the boundary-replay trajectory
 until this accumulator boundary is classified.
 
 ## 2026-07-11 Iter-1 BPref and Tie-Aware Winner Adjudication
@@ -1122,7 +1122,7 @@ inside the established GPU numerical band. This satisfies the user's
 tie-aware decision contract. The iter-1 map residual is a hard-WTA
 amplification of five qualified ties plus arithmetic-level scatter tails, not
 an unexplained support, coordinate, score, or accumulator bug. Continue with
-the repaired strict free trajectory and require convergence/finalization to
+the repaired strict boundary-replay trajectory and require convergence/finalization to
 match exactly.
 
 ## 2026-07-11 Strict Full Trajectory and Final-Oracle Boundary
@@ -1181,7 +1181,7 @@ with mean/p95/max absolute gaps `0.0423/0.1468/0.6415`. Both programs move by
 similar amounts from their iter-10 state to final, so the final policy is
 broadly correct; the remaining first suspect is fine posterior/support and
 its joined BPref accumulation. The next experiment is a matched patched-RELION
-final BPref dump, not another free trajectory.
+final BPref dump, not another boundary-replay trajectory.
 
 ## 2026-07-11 Final Local Pass-2 Parent-Support Bug
 
@@ -1247,7 +1247,7 @@ the original strict oracle the corresponding values are `0.997003`,
 the RECOVAR reconstruction/filter implementation is near exact when fed the
 RELION accumulator. The remaining measurable high-shell residual is therefore
 in BPref accumulation. This fixed-state final replay passes the FSC map gates,
-but it does not qualify the free trajectory documented below.
+but it does not qualify the boundary-replay trajectory documented below.
 
 ## 2026-07-11 Full Free-Trajectory Final Sensitivity
 
@@ -1338,7 +1338,7 @@ Injecting the exact RELION reference projection raises it to `0.833168`,
 localizing the remaining amplification to the tiny numbered iter-10 map/
 projector input difference. The next experiment is a matched patched-RELION
 numbered iter-10 BPref dump from `run_it009`, compared against job `10994996`'s
-saved numbered accumulators. Do not rerun the free trajectory until that
+saved numbered accumulators. Do not rerun the boundary-replay trajectory until that
 earlier accumulator boundary is classified.
 
 ## 2026-07-11 Numbered Iter-10 and Exact-Reference Final Boundary
@@ -1382,7 +1382,7 @@ differs from the accepted matched RELION pre-reconstruct accumulator by
 `11.64%` complex-data and `3.20%` weight relative L2. The next experiment is
 an exact matched RECOVAR/RELION final candidate and StoreWavg operand dump for
 stack 429, followed by identical-row replay if its pre-scatter operands agree.
-Do not launch the free trajectory or robustness matrix until this final
+Do not launch the boundary-replay trajectory or robustness matrix until this final
 support/BPref boundary is classified and the fixed-final FSC gate passes.
 
 ## 2026-07-11 Stack-429 Redundant-Axis Scoring Boundary
@@ -1459,7 +1459,7 @@ The next single hypothesis is that the remaining free residual is seeded by
 the iteration-1 reconstruction/BPref boundary. Re-run the exact-RELION-iter1
 seed replay from the current checkpoint through iterations 2--10 and final.
 Do not launch the robustness matrix unless that boundary is closed and the
-free trajectory passes.
+boundary-replay trajectory passes.
 
 ## 2026-07-11 Iteration-1 Score-Geometry Scope
 
@@ -1554,7 +1554,7 @@ trajectory with the combined first-iteration state fix. Robustness remains
 blocked until the full strict FSC, GT, shellwise, convergence, and finalization
 gates pass.
 
-Clean full-trajectory A100 job `11023037` subsequently completed in `579`
+Clean boundary-replay A100 job `11023037` subsequently completed in `579`
 seconds on `della-l08g6` from commit
 `a614969a29fd90535aba4b73fed093839ba29390`. Its marked root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_strict_free_tau_acc_20260711_200500`.
@@ -1601,10 +1601,10 @@ wrong-order one-iteration run to `0.999538`. More directly, supported-shell
 `0.948464` to `0.998800`. The minimum non-DC shell FSC is `0.996857` at shell
 19 and the fifth percentile is `0.998724`. This shellwise evidence closes the
 iteration-1 reconstruction/postprocessing boundary. The next qualification is
-a clean ten-iteration free trajectory; robustness remains gated on its final
+a clean ten-iteration boundary replay; robustness remains gated on its final
 FSC-AUC, shellwise, GT, convergence, and finalization results.
 
-Clean full-trajectory A100 job `11026304`, rooted at
+Clean ten-step boundary-replay A100 job `11026304`, rooted at
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_strict_free_filter_order_20260711_204500`
 and marked `SAFE_TO_DELETE`, completed in `579` seconds on `della-l08g7` from
 commit `52d8b599254a713c115f052314f283abd6e0fb4c`. It exactly reproduces the
@@ -1718,7 +1718,7 @@ introduced by this slice.  The current-head full-trajectory validation is
 recorded below.  Do not infer robustness, scale, real-data, or K=4 quality
 parity from the completed iteration-1 classification alone.
 
-## 2026-07-13 Current-Head K=1 Full-Trajectory Acceptance
+## 2026-07-13 Current-Head K=1 Per-Iteration Boundary-Replay Acceptance
 
 Fail-closed A100 job `11144457` completed `0:0` in 12 minutes 10 seconds at
 commit `ef2dbd065812bafd3e31ba7863f4a2975414c249`.  Its root is
@@ -1728,6 +1728,18 @@ local M-step generator commit `e12b230a` in ancestry, and the SHA-256-qualified
 particle-4394 score classification.  It also hash-verified all 95 immutable
 RELION oracle inputs and kept `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` and
 `RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER` unset.
+
+Semantic audit after acceptance established that this runner is not an
+autonomous trajectory. `scripts/run_multi_iter_parity.py` loads a
+`replay_iteration_overrides` entry from each RELION `run_itNNN_data.star`,
+model, and optimiser state, injecting previous poses, corrections, noise,
+direction priors, sigma-offset, and convergence control before every numbered
+step. Historical job `11026304` used the same mechanism despite its old
+"free" label. These runs strongly qualify every fixed transition and the
+finalization boundary, but they do not prove that RECOVAR's own evolving state
+stays on the RELION trajectory without intervention. The autonomous
+cold-start gate remains open and must omit per-iteration replay overrides and
+current-size oracles.
 
 The exact current-size schedule is `[56,56,66,68,80,80,80,80,80,80]`.
 RECOVAR and RELION converge at iteration 10, after which RECOVAR enters the
@@ -1751,6 +1763,7 @@ The automated report, independent audit, saved shell arrays, and signed-off
 manual review are `TRAJECTORY_FSC_REPORT.md`,
 `independent_audit_job_11144457.json`, `trajectory_fsc_arrays.npz`, and
 `MANUAL_SHELLWISE_REVIEW.md` under the run root.  This closes the fixed
-3k/128 white-noise K=1 full-trajectory gate at the current head.  The next
-gates remain K=1 robustness, scale, and real-particle quality; K=4 strict
-quality follows those.  The run is not a speed comparison.
+3k/128 white-noise K=1 per-iteration boundary-replay gate at the current head.
+The autonomous trajectory, K=1 robustness, scale, and real-particle quality
+gates remain open; K=4 strict quality follows those. The run is not a speed
+comparison.
