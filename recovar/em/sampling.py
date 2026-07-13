@@ -338,6 +338,42 @@ def _relion_rnd_unif_first_draw(seed):
         return float(np.float32(float(libc.rand()) / float((2**31) - 1)))
 
 
+def _relion_rnd_unif_scaled_first_draw(seed, low, high):
+    """Return RELION ``rnd_unif(low, high)`` after seeding, bit-faithfully.
+
+    RELION's ``rnd_unif`` accepts float arguments and evaluates the range
+    scaling inside the C++ function.  Scaling a separately rounded
+    ``rnd_unif(0, 1)`` result in Python is not equivalent: the difference is
+    observable in SamplingPerturbation Euler matrices at the outer M-step
+    radius.  Prefer the binding that calls the source function directly and
+    retain a glibc-compatible fallback for environments without rebuilt
+    bindings.
+    """
+    try:
+        from recovar.relion_bind import _relion_bind_core as bind
+
+        return float(
+            np.asarray(
+                bind.vdam_rnd_unif_range_sequence(int(seed), 1, float(low), float(high)),
+                dtype=np.float64,
+            )[0]
+        )
+    except (AttributeError, ImportError):
+        import ctypes
+
+        libc = ctypes.CDLL(None)
+        libc.srand(ctypes.c_uint(int(seed)))
+        low_f = np.float32(low)
+        high_f = np.float32(high)
+        if low_f == high_f:
+            return float(low_f)
+        # RELION/Princeton Linux uses glibc RAND_MAX == 2**31 - 1.  Preserve
+        # each float32 conversion and operation from funcs.cpp::rnd_unif.
+        rand_max_f = np.float32((2**31) - 1)
+        denominator = np.float32(rand_max_f / np.float32(high_f - low_f))
+        return float(np.float32(low_f + np.float32(libc.rand()) / denominator))
+
+
 def advance_relion_perturbation(prev_random_perturbation, perturbation_factor, rng):
     """Update the RELION per-iteration perturbation state.
 
@@ -365,8 +401,8 @@ def advance_relion_perturbation(prev_random_perturbation, perturbation_factor, r
 def advance_relion_perturbation_from_seed(prev_random_perturbation, perturbation_factor, seed):
     """Advance SamplingPerturbation using RELION's per-iteration RNG seed."""
     pf = float(perturbation_factor)
-    rnd = _relion_rnd_unif_first_draw(int(seed))
-    new = float(prev_random_perturbation) + (0.5 * pf) + (rnd * 0.5 * pf)
+    increment = _relion_rnd_unif_scaled_first_draw(int(seed), 0.5 * pf, pf)
+    new = float(prev_random_perturbation) + increment
     return _wrap_relion_perturbation(new, pf)
 
 

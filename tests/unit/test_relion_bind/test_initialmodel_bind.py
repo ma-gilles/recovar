@@ -331,6 +331,16 @@ class TestRandomiseParticlesOrderBinding:
         assert order.size == 0
 
 
+class TestRndUnifRangeBinding:
+    def test_scaled_range_preserves_relion_float_operation_boundary(self, bind):
+        if not hasattr(bind, "vdam_rnd_unif_range_sequence"):
+            pytest.skip("relion_bind must be rebuilt after adding scaled rnd_unif parity")
+
+        draw = np.asarray(bind.vdam_rnd_unif_range_sequence(1, 1, 0.25, 0.5))
+
+        np.testing.assert_array_equal(draw, np.asarray([0.4600469470024109]))
+
+
 class TestPostprocessInitialIrefBinding:
     def test_postprocess_is_deterministic_from_relion_rand_state(self, bind):
         rng = np.random.default_rng(0)

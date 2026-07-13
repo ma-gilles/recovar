@@ -5,7 +5,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.sampling import relion_sampling_perturbation_for_iteration
+from recovar.em.sampling import (
+    advance_relion_perturbation_from_seed,
+    relion_sampling_perturbation_for_iteration,
+)
 from scripts.run_full_refinement import (
     _effective_perturb_seed,
     _resolve_effective_max_healpix_order,
@@ -106,6 +109,17 @@ def test_relion_seeded_sampling_perturbation_sequence_matches_reference_star():
     ]
 
     assert values == pytest.approx([0.460047, -0.25278, 0.125066], abs=5e-6)
+
+
+def test_relion_seeded_sampling_perturbation_preserves_scaled_rnd_unif_rounding():
+    # Source-level RELION evaluates rnd_unif(0.25f, 0.5f) directly.  Replacing
+    # it with 0.25 + 0.25*rnd_unif() gives -0.049614354968070984 here and
+    # changes axial outer-rim backprojection decisions by one ulp.
+    initial = advance_relion_perturbation_from_seed(0.0, 0.5, seed=1)
+    iteration_one = advance_relion_perturbation_from_seed(initial, 0.5, seed=20260713)
+
+    assert initial == 0.4600469470024109
+    assert iteration_one == -0.04961434006690979
 
 
 def test_pose_history_by_image_restores_original_particle_order():

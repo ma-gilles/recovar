@@ -976,6 +976,27 @@ static py::array_t<double> vdam_rnd_unif_sequence(
 
 
 /**
+ * Return the first `n_draws` values of RELION's `rnd_unif(low, high)` after
+ * `init_random_generator(seed)`.  Calling the scaled source function is
+ * intentionally distinct from scaling `rnd_unif(0, 1)` after it returns:
+ * both paths round in float, but at different operation boundaries.
+ */
+static py::array_t<double> vdam_rnd_unif_range_sequence(
+    int seed,
+    long n_draws,
+    double low,
+    double high
+) {
+    init_random_generator(seed);
+    py::array_t<double> out((py::ssize_t)n_draws);
+    double* p = (double*)out.request().ptr;
+    for (long i = 0; i < n_draws; i++)
+        p[i] = (double)rnd_unif((float)low, (float)high);
+    return out;
+}
+
+
+/**
  * RELION InitialModel expected angular/translation accuracy estimator.
  *
  * This is the SPA 3D-reference-to-2D-image subset loop from
@@ -1426,6 +1447,10 @@ Returns -1 when subset should span all particles.
     m.def("vdam_rnd_unif_sequence", &vdam_rnd_unif_sequence,
           py::arg("seed"), py::arg("n_draws"),
           "Return the first n_draws of rnd_unif() after init_random_generator(seed).");
+
+    m.def("vdam_rnd_unif_range_sequence", &vdam_rnd_unif_range_sequence,
+          py::arg("seed"), py::arg("n_draws"), py::arg("low"), py::arg("high"),
+          "Return the first n_draws of rnd_unif(low, high) after seeding.");
 
     m.def("vdam_expected_angular_errors", &vdam_expected_angular_errors,
           py::arg("references"),
