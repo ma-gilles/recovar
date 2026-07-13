@@ -1392,3 +1392,30 @@ systematic trace moves earlier to RELION's float32 fine-weight exponentiation,
 ascending sorted cumulative normalization/significance threshold, and
 posterior/support weights. Report:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_e6098b58_f32seq_it2_bpref_20260712_214000/DIAGNOSTIC_REPORT.md`.
+
+RELION's fine-weight normalization is also source-distinct: the accelerated
+path keeps raw weights in float32, applies the `+50` max shift and `expf`,
+sorts ascending, obtains the denominator and lower-tail significance cutoff
+from a float32 cumulative scan, retains cutoff ties, and divides retained raw
+weights by the full pre-pruning float32 denominator. Commit `4d9daafc` adds an
+off-by-default K=1 x-half diagnostic for exactly that arithmetic. Jobs
+`11095329` and `11095487` are rejected setup/diagnostic-routing attempts: the
+first allowed the soft diagnostic to override first-iteration CC hard weights;
+the second guarded only the chunked dispatcher, leaving the non-chunked call
+unprotected. Neither provides an iteration-2 result. Commits `adfd76bd` and
+`e7a6e124` add behavioral winner-take-all guards at both dispatcher levels.
+
+Corrected job `11095669` completes the two-iteration `[48,92]` gate from
+immutable commit `e7a6e124` in `600.7` science seconds (`00:13:34` including
+setup). Its iteration-1 particle state is byte-identical to the accepted
+control and its accumulators differ only `3.5e-8--5.4e-8` relative L2. At
+iteration 2, however, adding the source-matched float32 posterior changes the
+accepted sequential-only accumulators by just `3.6e-6/9.8e-6` numerator and
+`6.3e-7/1.3e-6` weight relative L2. Against the near-authoritative RELION raw
+BPref, supported-radius residuals remain `0.0171696/0.0094375` numerator and
+`0.0031826/0.0020029` weight. The fine exponentiation, sorted denominator,
+cutoff/support, and normalization-order hypothesis is therefore rejected as
+the percent/sub-percent boundary. Both diagnostic switches remain off by
+default. The next trace is per-particle positive operands (CTF squared,
+inverse noise, scale) and their rotation scatter; complex image/translation
+phase operands follow only after the positive weight path is classified.
