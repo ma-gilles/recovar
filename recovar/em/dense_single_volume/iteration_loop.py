@@ -38,8 +38,14 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
     calculate_expected_angular_errors,
+    check_convergence,
     healpix_angular_step,
+    update_angular_sampling,
     update_refinement_state,
+)
+from recovar.em.dense_single_volume.helpers.expected_accuracy import (
+    estimate_relion_expected_accuracy,
+    relion_half1_trial_order,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
@@ -3234,6 +3240,7 @@ def refine_single_volume(
     tau2_fudge=1.0,
     perturb_factor=0.0,
     perturb_seed=None,
+    optimizer_random_seed=None,
     perturb_replay_relion_dir=None,
     perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
@@ -3463,6 +3470,7 @@ def refine_single_volume(
         tau2_fudge=tau2_fudge,
         perturb_factor=perturb_factor,
         perturb_seed=perturb_seed,
+        optimizer_random_seed=optimizer_random_seed,
         perturb_replay_relion_dir=perturb_replay_relion_dir,
         perturb_replay_relion_prefix=perturb_replay_relion_prefix,
         perturb_replay_precision=perturb_replay_precision,
@@ -3532,6 +3540,7 @@ def _run_relion_iteration_loop(
     tau2_fudge=1.0,
     perturb_factor=0.0,
     perturb_seed=None,
+    optimizer_random_seed=None,
     perturb_replay_relion_dir=None,
     perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
@@ -3891,6 +3900,13 @@ def _run_relion_iteration_loop(
     direction_prior_trajectory_per_half = []
     frac_changed_trajectory = []
     acc_rot_trajectory = []
+    acc_trans_trajectory = []
+    acc_rot_per_class_trajectory = []
+    acc_trans_per_class_trajectory = []
+    expected_accuracy_class_counts_trajectory = []
+    expected_accuracy_status_trajectory = []
+    expected_accuracy_trial_local_indices = None
+    expected_accuracy_trial_original_indices = None
     smallest_change_angles_trajectory = []
     smallest_change_offsets_trajectory = []
     best_rotation_eulers_history = []
@@ -3955,6 +3971,25 @@ def _run_relion_iteration_loop(
     )
     _mark_setup_phase("noise_radial_init")
 
+    # RELION randomises each half once at the first iteration and then uses
+    # the first 100 half-1 particles for calculateExpectedAngularErrors.
+    # Build that immutable local order once.  A missing/rebuilt-without-this-
+    # helper binding is handled fail-closed below: acc_rot stays infinite and
+    # cannot trigger convergence.
+    expected_accuracy_trial_order = None
+    effective_optimizer_random_seed = (
+        perturb_seed if optimizer_random_seed is None else optimizer_random_seed
+    )
+    if effective_optimizer_random_seed is not None and int(experiment_datasets[0].n_units) > 0:
+        try:
+            expected_accuracy_trial_order = relion_half1_trial_order(
+                int(experiment_datasets[0].n_units),
+                int(effective_optimizer_random_seed),
+                first_iteration=max(1, int(init_relion_iteration) + 1),
+            )
+        except Exception as exc:
+            logger.warning("RELION exact expected-accuracy particle order unavailable: %s", exc)
+
     # --- RELION SamplingPerturbation state (healpix_sampling.cpp:167-174) ---
     # RELION applies a random rigid rotation of the entire SO(3) trial grid at
     # each iteration: A -> A @ R_perturb with R_perturb = R_from_relion([m,m,m])
@@ -3983,7 +4018,25 @@ def _run_relion_iteration_loop(
         "RELION mode setup timing before iteration loop: %s",
         ", ".join(f"{key}={value:.1f}s" for key, value in setup_phase_seconds.items()),
     )
+    native_sampling_boundary = perturb_replay_relion_dir is None
     while (force_max_iter_after_convergence or not state.has_converged) and iteration < max_iter:
+        # RELION checks convergence at the top of iteration n from the
+        # completed n-1 statistics and the fine-enough decision latched during
+        # expectation n-1.  If true, iteration n is the unnumbered joined
+        # all-data pass rather than another numbered half-set iteration.
+        if (
+            native_sampling_boundary
+            and not force_max_iter_after_convergence
+            and iteration > 0
+            and check_convergence(state)
+        ):
+            state.has_converged = True
+            logger.info(
+                "Convergence reached after numbered iteration %d. "
+                "Entering RELION final all-data iteration.",
+                iteration,
+            )
+            break
         t0 = time.time()
         _parity_dump.start_iteration(iteration)
         iter_replay_override = None
@@ -4295,6 +4348,97 @@ def _run_relion_iteration_loop(
             volume_shape=volume_shape,
             n_classes=n_classes,
         )
+
+        exact_acc_rot_this_iter = None
+        exact_acc_trans_this_iter = None
+        exact_acc_rot_per_class_this_iter = None
+        exact_acc_trans_per_class_this_iter = None
+        exact_accuracy_class_counts_this_iter = None
+        exact_accuracy_status_this_iter = "skipped_firstiter_cc"
+        should_estimate_exact_accuracy = not relion_firstiter_cc_this_iter
+        if native_sampling_boundary and should_estimate_exact_accuracy:
+            previous_eulers_half1 = relion_half_inputs.previous_best_rotation_eulers[0]
+            if expected_accuracy_trial_order is None or previous_eulers_half1 is None:
+                exact_accuracy_status_this_iter = "unavailable_inputs"
+                state.acc_rot = float("inf")
+                state.acc_trans = float("inf")
+                logger.warning(
+                    "RELION exact expected accuracy unavailable at iteration %d; "
+                    "convergence remains fail-closed",
+                    iteration + 1,
+                )
+            else:
+                if k_class_enabled:
+                    accuracy_class_ids = class_assignments[0]
+                    if accuracy_class_ids is None:
+                        accuracy_class_ids = np.zeros(int(experiment_datasets[0].n_units), dtype=np.int32)
+                else:
+                    accuracy_class_ids = np.zeros(int(experiment_datasets[0].n_units), dtype=np.int32)
+                try:
+                    accuracy = estimate_relion_expected_accuracy(
+                        reference_fourier=means[0],
+                        volume_shape=tuple(volume_shape),
+                        best_eulers_deg=previous_eulers_half1,
+                        class_ids=accuracy_class_ids,
+                        class_weights=class_weights,
+                        sigma2_noise_native=previous_noise_radial_per_half[0],
+                        dataset=experiment_datasets[0],
+                        trial_order_local=expected_accuracy_trial_order,
+                        current_image_size=int(cs),
+                        padding_factor=PROJECTION_PADDING_FACTOR,
+                        sigma2_fudge=float(tau2_fudge),
+                        random_seed=int(effective_optimizer_random_seed),
+                    )
+                    exact_acc_rot_this_iter = float(accuracy.acc_rot)
+                    exact_acc_trans_this_iter = float(accuracy.acc_trans_angstrom)
+                    exact_acc_rot_per_class_this_iter = np.asarray(
+                        accuracy.acc_rot_per_class,
+                        dtype=np.float64,
+                    ).copy()
+                    exact_acc_trans_per_class_this_iter = np.asarray(
+                        accuracy.acc_trans_per_class_angstrom,
+                        dtype=np.float64,
+                    ).copy()
+                    exact_accuracy_class_counts_this_iter = np.asarray(
+                        accuracy.class_counts,
+                        dtype=np.int64,
+                    ).copy()
+                    expected_accuracy_trial_local_indices = np.asarray(
+                        accuracy.trial_local_indices,
+                        dtype=np.int64,
+                    ).copy()
+                    expected_accuracy_trial_original_indices = np.asarray(
+                        accuracy.trial_original_indices,
+                        dtype=np.int64,
+                    ).copy()
+                    exact_accuracy_status_this_iter = "ok"
+                    state.acc_rot = exact_acc_rot_this_iter
+                    state.acc_trans = exact_acc_trans_this_iter
+                    logger.info(
+                        "RELION exact expected accuracy: acc_rot=%.3f deg, acc_trans=%.4f A "
+                        "(trials=%d, first_original_ids=%s)",
+                        exact_acc_rot_this_iter,
+                        exact_acc_trans_this_iter,
+                        int(accuracy.trial_local_indices.size),
+                        accuracy.trial_original_indices[:5].tolist(),
+                    )
+                except Exception as exc:
+                    exact_accuracy_status_this_iter = f"error:{type(exc).__name__}:{exc}"
+                    state.acc_rot = float("inf")
+                    state.acc_trans = float("inf")
+                    logger.warning(
+                        "RELION exact expected-accuracy estimation failed at iteration %d; "
+                        "convergence remains fail-closed: %s",
+                        iteration + 1,
+                        exc,
+                    )
+
+        # RELION evaluates accuracy and updates sampling at the beginning of
+        # Expectation (iterations > 1), using the previous iteration's stall
+        # counters.  Sampling must therefore be prepared here, not after this
+        # iteration's M-step statistics are recorded.
+        if native_sampling_boundary and iteration > 0:
+            state = update_angular_sampling(state)
 
         sigma_offset_used_trajectory.append(float(current_sigma_offset_angstrom))
         sigma_offset_used_per_half_trajectory.append(_copy_optional_float_pair(current_sigma_offset_angstrom_per_half))
@@ -5288,6 +5432,13 @@ def _run_relion_iteration_loop(
                 "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
                 "frac_changed_trajectory": frac_changed_trajectory,
                 "acc_rot_trajectory": acc_rot_trajectory,
+                "acc_trans_trajectory": acc_trans_trajectory,
+                "acc_rot_per_class_trajectory": acc_rot_per_class_trajectory,
+                "acc_trans_per_class_trajectory": acc_trans_per_class_trajectory,
+                "expected_accuracy_class_counts_trajectory": expected_accuracy_class_counts_trajectory,
+                "expected_accuracy_status_trajectory": expected_accuracy_status_trajectory,
+                "expected_accuracy_trial_local_indices": expected_accuracy_trial_local_indices,
+                "expected_accuracy_trial_original_indices": expected_accuracy_trial_original_indices,
                 "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
                 "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
                 "best_rotation_eulers_history": best_rotation_eulers_history,
@@ -6372,12 +6523,12 @@ def _run_relion_iteration_loop(
         # Keep it in the output trajectory for diagnostics, but do not let it
         # stop K=1 refinements by default; collapsed one-sample support can
         # otherwise declare HEALPix-3 sampling "fine enough" too early.
-        iter_acc_rot = None
-        iter_acc_trans = None
+        iter_acc_rot = exact_acc_rot_this_iter
+        iter_acc_trans = exact_acc_trans_this_iter
         convergence_acc_rot = None
         convergence_acc_trans = None
         if iter_sig_counts is not None and len(iter_sig_counts) > 0:
-            iter_acc_rot, _ = calculate_expected_angular_errors(
+            approx_acc_rot, _ = calculate_expected_angular_errors(
                 state.healpix_order,
                 iter_sig_counts,
                 n_translations=n_trans_current,
@@ -6388,11 +6539,11 @@ def _run_relion_iteration_loop(
                 ave_pmax=ave_pmax,
                 new_resolution_angstrom=new_res_angstrom,
             )
-            if approx_for_convergence:
-                convergence_acc_rot = iter_acc_rot
+            if approx_for_convergence and exact_acc_rot_this_iter is None:
+                convergence_acc_rot = approx_acc_rot
             logger.info(
                 "approx_acc_rot=%.3f deg (from %d images, mean n_sig=%.1f, convergence=%s)",
-                iter_acc_rot,
+                approx_acc_rot,
                 len(iter_sig_counts),
                 float(np.mean(iter_sig_counts)),
                 approx_convergence_reason,
@@ -6446,6 +6597,8 @@ def _run_relion_iteration_loop(
             current_classes=current_combined_classes,
             previous_classes=previous_combined_classes,
             voxel_size_angstrom=float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
+            update_sampling=not native_sampling_boundary,
+            check_convergence_now=not native_sampling_boundary,
         )
         if _optimiser_meta is not None:
             _relion_res_stalls = _optimiser_meta.get("number_iter_without_resolution_gain")
@@ -6564,6 +6717,23 @@ def _run_relion_iteration_loop(
             None if per_class_sigma_offset is None else per_class_sigma_offset.tolist()
         )
         acc_rot_trajectory.append(float(iter_acc_rot) if iter_acc_rot is not None else np.nan)
+        acc_trans_trajectory.append(float(iter_acc_trans) if iter_acc_trans is not None else np.nan)
+        acc_rot_per_class_trajectory.append(
+            np.full(n_classes, np.nan, dtype=np.float64)
+            if exact_acc_rot_per_class_this_iter is None
+            else exact_acc_rot_per_class_this_iter
+        )
+        acc_trans_per_class_trajectory.append(
+            np.full(n_classes, np.nan, dtype=np.float64)
+            if exact_acc_trans_per_class_this_iter is None
+            else exact_acc_trans_per_class_this_iter
+        )
+        expected_accuracy_class_counts_trajectory.append(
+            np.full(n_classes, -1, dtype=np.int64)
+            if exact_accuracy_class_counts_this_iter is None
+            else exact_accuracy_class_counts_this_iter
+        )
+        expected_accuracy_status_trajectory.append(exact_accuracy_status_this_iter)
         smallest_change_angles_trajectory.append(float(state.current_changes_optimal_orientations))
         smallest_change_offsets_trajectory.append(float(state.current_changes_optimal_offsets_angstrom))
 
@@ -6740,6 +6910,13 @@ def _run_relion_iteration_loop(
             "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
             "frac_changed_trajectory": frac_changed_trajectory,
             "acc_rot_trajectory": acc_rot_trajectory,
+            "acc_trans_trajectory": acc_trans_trajectory,
+            "acc_rot_per_class_trajectory": acc_rot_per_class_trajectory,
+            "acc_trans_per_class_trajectory": acc_trans_per_class_trajectory,
+            "expected_accuracy_class_counts_trajectory": expected_accuracy_class_counts_trajectory,
+            "expected_accuracy_status_trajectory": expected_accuracy_status_trajectory,
+            "expected_accuracy_trial_local_indices": expected_accuracy_trial_local_indices,
+            "expected_accuracy_trial_original_indices": expected_accuracy_trial_original_indices,
             "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
             "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
             "best_rotation_eulers_history": best_rotation_eulers_history,
@@ -6757,6 +6934,8 @@ def _run_relion_iteration_loop(
             iteration,
             max_iter,
         )
+    final_expected_accuracy = None
+    final_expected_accuracy_status = "not_run"
     # --- RELION's final iteration: do_join_random_halves + do_use_all_data ---
     # After convergence, RELION runs ONE more iter with:
     #   - current_size = ori_size (Nyquist, all shells)
@@ -6937,6 +7116,55 @@ def _run_relion_iteration_loop(
         )
     final_iter_t0 = time.time()
     final_current_size = int(grid_size)  # = ori_size, full Nyquist
+    if native_sampling_boundary:
+        final_eulers_half1 = relion_half_inputs.previous_best_rotation_eulers[0]
+        if expected_accuracy_trial_order is None or final_eulers_half1 is None:
+            final_expected_accuracy_status = "unavailable_inputs"
+            state.acc_rot = float("inf")
+            state.acc_trans = float("inf")
+            logger.warning(
+                "RELION final all-data expected accuracy unavailable; "
+                "final expectation remains fail-closed",
+            )
+        else:
+            final_accuracy_class_ids = (
+                class_assignments[0]
+                if k_class_enabled and class_assignments[0] is not None
+                else np.zeros(int(experiment_datasets[0].n_units), dtype=np.int32)
+            )
+            try:
+                final_expected_accuracy = estimate_relion_expected_accuracy(
+                    reference_fourier=final_join_means[0],
+                    volume_shape=tuple(volume_shape),
+                    best_eulers_deg=final_eulers_half1,
+                    class_ids=final_accuracy_class_ids,
+                    class_weights=class_weights,
+                    sigma2_noise_native=previous_noise_radial_per_half[0],
+                    dataset=experiment_datasets[0],
+                    trial_order_local=expected_accuracy_trial_order,
+                    current_image_size=final_current_size,
+                    padding_factor=PROJECTION_PADDING_FACTOR,
+                    sigma2_fudge=float(tau2_fudge),
+                    random_seed=int(effective_optimizer_random_seed),
+                )
+                state.acc_rot = float(final_expected_accuracy.acc_rot)
+                state.acc_trans = float(final_expected_accuracy.acc_trans_angstrom)
+                state = update_angular_sampling(state)
+                final_expected_accuracy_status = "ok"
+                logger.info(
+                    "RELION final all-data expected accuracy: acc_rot=%.3f deg, "
+                    "acc_trans=%.4f A",
+                    state.acc_rot,
+                    state.acc_trans,
+                )
+            except Exception as exc:
+                final_expected_accuracy_status = f"error:{type(exc).__name__}:{exc}"
+                state.acc_rot = float("inf")
+                state.acc_trans = float("inf")
+                logger.warning(
+                    "RELION final all-data expected-accuracy estimation failed: %s",
+                    exc,
+                )
     final_current_healpix_order = _exhaustive_grid_order_for_state(state)
     if final_current_healpix_order == current_healpix_order:
         final_current_rotations = current_rotations
@@ -7955,11 +8183,34 @@ def _run_relion_iteration_loop(
         "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
         "frac_changed_trajectory": frac_changed_trajectory,
         "acc_rot_trajectory": acc_rot_trajectory,
+        "acc_trans_trajectory": acc_trans_trajectory,
+        "acc_rot_per_class_trajectory": acc_rot_per_class_trajectory,
+        "acc_trans_per_class_trajectory": acc_trans_per_class_trajectory,
+        "expected_accuracy_class_counts_trajectory": expected_accuracy_class_counts_trajectory,
+        "expected_accuracy_status_trajectory": expected_accuracy_status_trajectory,
+        "expected_accuracy_trial_local_indices": expected_accuracy_trial_local_indices,
+        "expected_accuracy_trial_original_indices": expected_accuracy_trial_original_indices,
         "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
         "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
         "best_rotation_eulers_history": best_rotation_eulers_history,
         "best_translations_history": best_translations_history,
         "final_all_data_ran": True,
+        "final_all_data_expected_accuracy_status": final_expected_accuracy_status,
+        "final_all_data_acc_rot": (
+            None if final_expected_accuracy is None else float(final_expected_accuracy.acc_rot)
+        ),
+        "final_all_data_acc_trans": (
+            None if final_expected_accuracy is None else float(final_expected_accuracy.acc_trans_angstrom)
+        ),
+        "final_all_data_acc_rot_per_class": (
+            None if final_expected_accuracy is None else final_expected_accuracy.acc_rot_per_class
+        ),
+        "final_all_data_acc_trans_per_class": (
+            None if final_expected_accuracy is None else final_expected_accuracy.acc_trans_per_class_angstrom
+        ),
+        "final_all_data_expected_accuracy_class_counts": (
+            None if final_expected_accuracy is None else final_expected_accuracy.class_counts
+        ),
         "final_all_data_noise_source_half": 0 if not k_class_enabled else -1,
         "final_all_data_fsc": final_iter_fsc,
         "tau2_radial_final_all_data": (

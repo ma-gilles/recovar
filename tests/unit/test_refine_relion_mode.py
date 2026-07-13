@@ -10,6 +10,7 @@ Verifies:
 import inspect
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -8053,6 +8054,7 @@ class TestRelionModeSmokeTest:
         original_update = iteration_loop_module.update_refinement_state
         original_run_em = iteration_loop_module.run_em
         run_em_mean_ids = []
+        expected_accuracy_current_sizes = []
 
         def force_convergence_after_first_iter(*args, **kwargs):
             updated = original_update(*args, **kwargs)
@@ -8064,12 +8066,36 @@ class TestRelionModeSmokeTest:
             run_em_mean_ids.append(id(mean))
             return original_run_em(dataset, mean, *args, **kwargs)
 
+        def fake_expected_accuracy(**kwargs):
+            expected_accuracy_current_sizes.append(int(kwargs["current_image_size"]))
+            n_classes = int(np.asarray(kwargs["class_weights"]).size)
+            n_trials = int(np.asarray(kwargs["best_eulers_deg"]).shape[0])
+            return SimpleNamespace(
+                acc_rot=1.25,
+                acc_trans_angstrom=1.5,
+                acc_rot_per_class=np.full(n_classes, 1.25, dtype=np.float64),
+                acc_trans_per_class_angstrom=np.full(n_classes, 1.5, dtype=np.float64),
+                class_counts=np.full(n_classes, n_trials, dtype=np.int64),
+                trial_local_indices=np.arange(n_trials, dtype=np.int64),
+                trial_original_indices=np.arange(n_trials, dtype=np.int64),
+            )
+
         monkeypatch.setattr(
             iteration_loop_module,
             "update_refinement_state",
             force_convergence_after_first_iter,
         )
         monkeypatch.setattr(iteration_loop_module, "run_em", spy_run_em)
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "relion_half1_trial_order",
+            lambda n_particles, *_args, **_kwargs: np.arange(n_particles, dtype=np.int64),
+        )
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "estimate_relion_expected_accuracy",
+            fake_expected_accuracy,
+        )
 
         result = refine_single_volume(
             half_datasets,
@@ -8086,12 +8112,17 @@ class TestRelionModeSmokeTest:
             init_healpix_order=2,
             max_healpix_order=2,
             low_resol_join_halves_angstrom=0.0,
+            perturb_seed=17,
+            optimizer_random_seed=17,
         )
 
         assert result["convergence_state"].has_converged is True
         assert len(result["wall_times"]) == 2
         assert len(run_em_mean_ids) == 4
         assert run_em_mean_ids[-2] != run_em_mean_ids[-1]
+        assert expected_accuracy_current_sizes == [IMAGE_SHAPE[0]]
+        assert result["final_all_data_expected_accuracy_status"] == "ok"
+        assert result["final_all_data_acc_rot"] == pytest.approx(1.25)
 
     def test_relion_final_iteration_tau2_uses_half_accumulators(
         self,
@@ -10959,13 +10990,15 @@ class TestRelionModeSmokeTest:
             adaptive_oversampling,
             translation_step,
             random_perturbation,
+            return_mstep_rotations=False,
         ):
             _ = (base_translations, current_healpix_order, adaptive_oversampling, translation_step, random_perturbation)
             coarse_rot = np.asarray(effective_rotations, dtype=np.float32)
             coarse_trans = np.asarray(current_translations, dtype=np.float32)
             rot_parent = np.arange(coarse_rot.shape[0], dtype=np.int32)
             trans_parent = np.arange(coarse_trans.shape[0], dtype=np.int32)
-            return coarse_rot, coarse_trans, coarse_rot, coarse_trans, rot_parent, trans_parent
+            base = (coarse_rot, coarse_trans, coarse_rot, coarse_trans, rot_parent, trans_parent)
+            return (*base, coarse_rot) if return_mstep_rotations else base
 
         def fake_adaptive_k1(
             experiment_dataset,
@@ -11138,13 +11171,15 @@ class TestRelionModeSmokeTest:
             adaptive_oversampling,
             translation_step,
             random_perturbation,
+            return_mstep_rotations=False,
         ):
             _ = (base_translations, current_healpix_order, adaptive_oversampling, translation_step, random_perturbation)
             coarse_rot = np.asarray(effective_rotations, dtype=np.float32)
             coarse_trans = np.asarray(current_translations, dtype=np.float32)
             rot_parent = np.arange(coarse_rot.shape[0], dtype=np.int32)
             trans_parent = np.arange(coarse_trans.shape[0], dtype=np.int32)
-            return coarse_rot, coarse_trans, coarse_rot, coarse_trans, rot_parent, trans_parent
+            base = (coarse_rot, coarse_trans, coarse_rot, coarse_trans, rot_parent, trans_parent)
+            return (*base, coarse_rot) if return_mstep_rotations else base
 
         def fake_adaptive_k_class(
             experiment_dataset,
