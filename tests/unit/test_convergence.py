@@ -917,7 +917,7 @@ class TestUpdateRefinementState:
         )
         assert updated.current_changes_optimal_classes == 0.0
 
-    def test_hidden_variable_translation_ratio_uses_effective_oversampled_step(self):
+    def test_hidden_variable_translation_ratio_uses_coarse_optimizer_step(self):
         state = self._make_base_state(
             healpix_order=2,
             adaptive_oversampling=1,
@@ -956,7 +956,96 @@ class TestUpdateRefinementState:
         )
 
         assert updated.current_changes_optimal_offsets_angstrom == pytest.approx(0.55 / np.sqrt(2.0))
-        assert updated.nr_iter_wo_large_hidden_variable_changes == 0
+        assert updated.nr_iter_wo_large_hidden_variable_changes == 1
+
+    @staticmethod
+    def _rotation_delta(n_images, relion_mean_angle_deg):
+        # A z rotation changes two of three matrix rows by theta, so RELION's
+        # row-mean angular distance is 2*theta/3.
+        theta = np.deg2rad(1.5 * relion_mean_angle_deg)
+        rotation = np.array(
+            [
+                [np.cos(theta), -np.sin(theta), 0.0],
+                [np.sin(theta), np.cos(theta), 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        return np.repeat(rotation[None, :, :], n_images, axis=0)
+
+    @staticmethod
+    def _translation_delta(n_images, relion_rms_angstrom, voxel_size):
+        # RELION divides the summed x/y squared displacement by 2*N.
+        delta_x_pixel = np.sqrt(2.0) * relion_rms_angstrom / voxel_size
+        return np.column_stack(
+            [
+                np.full(n_images, delta_x_pixel, dtype=np.float64),
+                np.zeros(n_images, dtype=np.float64),
+            ]
+        )
+
+    def _record_relion_hidden_change(self, state, angle_deg, offset_angstrom):
+        n_images = 8
+        identity = np.repeat(np.eye(3, dtype=np.float64)[None, :, :], n_images, axis=0)
+        zeros = np.zeros((n_images, 2), dtype=np.float64)
+        assignments = np.zeros(n_images, dtype=np.int32)
+        return update_refinement_state(
+            state,
+            assignments,
+            assignments,
+            n_rotations=1,
+            n_translations=1,
+            translations=zeros[:1],
+            new_resolution=22.6667,
+            current_rotation_matrices=self._rotation_delta(n_images, angle_deg),
+            previous_rotation_matrices=identity,
+            current_translations_pixel=self._translation_delta(
+                n_images,
+                offset_angstrom,
+                state.voxel_size_angstrom,
+            ),
+            previous_translations_pixel=zeros,
+            voxel_size_angstrom=state.voxel_size_angstrom,
+            update_sampling=False,
+            check_convergence_now=False,
+        )
+
+    def test_relion_order4_to_order5_hidden_change_boundary(self):
+        state = RefinementState(
+            healpix_order=4,
+            adaptive_oversampling=1,
+            translation_step=1.87425 / 4.25,
+            current_resolution=22.6667,
+            voxel_size_angstrom=4.25,
+            acc_rot=1.065,
+            smallest_changes_optimal_classes=0.0,
+            smallest_changes_optimal_orientations=1.996281,
+            smallest_changes_optimal_offsets_angstrom=0.810118,
+        )
+
+        state = self._record_relion_hidden_change(state, 1.309840, 0.730098)
+
+        assert state.nr_iter_wo_resol_gain == 1
+        assert state.nr_iter_wo_large_hidden_variable_changes == 1
+        assert update_angular_sampling(state).healpix_order == 5
+
+    def test_relion_order5_to_order6_hidden_change_boundary(self):
+        state = RefinementState(
+            healpix_order=5,
+            adaptive_oversampling=1,
+            translation_step=1.683 / 4.25,
+            current_resolution=22.6667,
+            voxel_size_angstrom=4.25,
+            acc_rot=1.030,
+        )
+
+        state = self._record_relion_hidden_change(state, 0.908481, 0.722427)
+        assert state.nr_iter_wo_large_hidden_variable_changes == 0
+        state = self._record_relion_hidden_change(state, 0.600638, 0.606800)
+
+        assert state.nr_iter_wo_resol_gain >= 1
+        assert state.nr_iter_wo_large_hidden_variable_changes == 1
+        assert update_angular_sampling(state).healpix_order == 6
 
 
 # =========================================================================

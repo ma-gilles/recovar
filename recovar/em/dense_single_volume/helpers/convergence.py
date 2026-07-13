@@ -1212,21 +1212,21 @@ def update_refinement_state(
     smallest_offsets = state.smallest_changes_optimal_offsets_angstrom
     smallest_classes = state.smallest_changes_optimal_classes
     if np.isfinite(current_changes_orientations) and np.isfinite(current_changes_offsets_angstrom):
-        # Sampling steps used as the "small enough" denominator. RELION uses
-        # the ANGULAR SAMPLING STEP (in degrees, after oversampling) for the
-        # orientation ratio and the TRANSLATION SAMPLING STEP (in pixels,
-        # after oversampling) for the offset ratio. Convert offsets to pixels.
-        rot_step_deg = effective_angular_step(
-            state.healpix_order,
-            state.adaptive_oversampling,
-        )
+        # Sampling steps used as the hidden-variable "small enough"
+        # denominator are the stored coarse optimiser steps.  Adaptive
+        # oversampling refines the expectation quadrature but is not applied
+        # again here.  This distinction is trajectory-critical: RELION's
+        # order-4 -> order-5 boundary accepts 1.30984 / 3.75 and
+        # 0.73010 / 1.87425 as < 0.4, whereas dividing both denominators by
+        # two delays that transition by four iterations.
+        rot_step_deg = healpix_angular_step(state.healpix_order)
         # offset RMS is in angstroms; convert to pixels for the ratio
         # comparison against the translation sampling step (also in pixels).
         if voxel_size_angstrom > 0:
             offsets_pixels = current_changes_offsets_angstrom / voxel_size_angstrom
         else:
             offsets_pixels = current_changes_offsets_angstrom
-        trans_step = state.translation_step / (2**state.adaptive_oversampling)
+        trans_step = state.translation_step
         ratio_orient_changes = current_changes_orientations / rot_step_deg if rot_step_deg > 0 else float("inf")
         ratio_trans_changes = offsets_pixels / trans_step if trans_step > 0 else float("inf")
 
