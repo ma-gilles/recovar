@@ -1545,3 +1545,41 @@ reduction. The next same-build iteration-1 discriminator is therefore an
 off-by-default fused two-accumulator x-half FFI, still using the qualified
 pre-reduced operands. Do not run a longer trajectory unless that boundary
 materially improves raw BPref residuals and FSC/FSC-AUC.
+
+Commit `2173ab4b` implements that fused discriminator as the strict,
+off-by-default `RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS` path. It accepts the
+pre-reduced complex64 numerator and float32 weight rows, preserves the native
+current-size square and particle-owned eight-orientation grid, and issues each
+neighbor's atomics in RELION order: real, imaginary, then weight. Mixed-type
+two-output FFI aliases are validated on both Python and CUDA sides. Unsupported
+later-iteration, dense, and joint K-class routes fail closed rather than
+silently ignoring the flag. Translation reduction remains outside CUDA.
+
+The immutable A100 GPU smoke job `11114721` passes the fused-versus-separate
+topology comparison from nonzero initial accumulators; setup-only job
+`11114516` had already built successfully but exited `141` because a
+`pipefail` symbol-audit pipeline observed `nm`'s expected SIGPIPE. Same-build
+science jobs `11114805/11114806` then complete successfully in
+`00:03:56/00:04:05`. Both use the 128-thread native topology and per-particle
+launches; only job `11114806` enables fused atomics.
+
+The result is null at the established repeatability floor. Control-versus-
+RELION supported-radius residuals are `1.74143472%/1.59014640%` for numerator
+and `0.507356363%/0.601081201%` for weight. Fused atomics leave them
+`1.74143398%/1.59014674%` and `0.507356467%/0.601081250%`. Fused-versus-
+control relative L2 is only `2.49e-6/2.45e-6` numerator and
+`7.47e-7/7.45e-7` weight; half-map FSC-AUC is
+`0.999999993721/0.999999993560`. Map-versus-stock-RELION FSC-AUC remains
+`0.999992264/0.999997461`.
+
+Report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_2173ab4b_it1_fusedbp_ab_20260713_104500/audit/AB_REPORT.md`.
+Do not extend the fused-pre-reduced branch to a trajectory. Pixel enumeration,
+thread grouping, per-particle launch boundaries, and fused neighbor atomics are
+now all rejected as material causes for qualified pre-reduced operands. The
+remaining source-level first boundary is RELION's CUDA translation loop:
+thresholding and normalization of raw orientation/translation weights,
+per-pixel phase translation, CTF/minvsigma multiplication, and float32
+accumulation of `real`, `imag`, and `Fweight` before the scatter. The next
+diagnostic must move that reduction into the fused CUDA kernel from the raw
+matched operands; FSC/FSC-AUC remain the acceptance gates.
