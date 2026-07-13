@@ -1670,19 +1670,50 @@ FSC=0.143 resolutions are `29.575925` and `27.475383` Angstrom, versus
 RELION's `29.576021` and `27.475483` Angstrom.  Correlation is auxiliary and
 does not participate in this gate.
 
-Raw-array parity is not yet closed.  Supported BPref numerator/weight relative
-L2 errors are `0.0116863180/0.00257571901` for half 1 and
-`0.000804700285/0.0000836767217` for half 2.  Shells 15--28 are nearly closed
-in half 2, while the half-1 numerator error grows to about 2.8 percent at the
+The initially unexplained supported BPref numerator/weight relative-L2 errors
+were `0.0116863180/0.00257571901` for half 1 and
+`0.000804700285/0.0000836767217` for half 2.  Shells 15--28 were nearly closed
+in half 2, while the half-1 numerator error grew to about 2.8 percent at the
 outer supported shells.  Comparing saved winners to RELION by numeric
-`rlnImageName` localizes the material asymmetry to one of 10,000 particles:
-zero-based original index 4394 in half 1.  RECOVAR chooses psi
+`rlnImageName` localized the material asymmetry to one of 10,000 particles:
+zero-based original index 4394 in half 1.  RECOVAR chose psi
 `-50.585873` degrees and translation `[0.13351604, 0.63351607]` pixels;
-RELION chooses the neighboring psi `-46.835870` degrees and translation
+RELION chose the neighboring psi `-46.835870` degrees and translation
 `[0.133516, 0.133516]` pixels.  All half-2 winners and all other material
-half-1 winners agree, apart from STAR/float32 serialization noise.  The next
-required boundary is an exact pre-exponential score comparison of these two
-hypotheses.  The discrete mismatch may be accepted only if both implementations'
-underlying scores establish a numerical tie; otherwise it remains a scoring
-bug.  Do not infer full iteration-1, full-trajectory, robustness, scale,
-real-data, or K=4 parity from the near-identical reconstructed maps.
+half-1 winners agreed, apart from STAR/float32 serialization noise.
+
+The exact score adjudication is rooted at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it1_p4394_score_audit_20260713_150500`
+and marked `SAFE_TO_DELETE`.  Corrected RELION capture job `11140143` maps
+RELION's internally sorted particle id 3774 to original image
+`4395@particles.128.mrcs`; the earlier direct-id assumption was wrong and its
+RELION target is excluded.  All `1,069,056` coarse hypotheses map one-to-one.
+The centered complete-score-surface absolute gap has p95 `2.259016e-5` and
+maximum `8.808076e-5`, both below the previously accepted 3k numerical band.
+RECOVAR ranks coarse candidates `(rotation 31658, translation 15)` and
+`(32426, 14)` first/second by `3.516674e-6`; RELION ranks the same pair in the
+opposite order by `2.712011e-6`.  The candidate-specific residual difference
+is exactly the sum of those opposite margins and the flip-identity residual is
+zero.  This qualifies the discrete winner difference as numerical noise in
+the underlying scores, rather than a support, mapping, or tie-order bug.
+
+Production CUDA causal-replay job `11141660` replaced only particle 4394's
+RECOVAR winner contribution with its RELION winner contribution.  The half-1
+numerator relative-L2 residual fell from `0.0116863180` to `0.0014925369`
+(`87.23%` reduction), and the weight residual fell from `0.0025757190` to
+`0.0002483004` (`90.36%` reduction).  This causally attributes the asymmetric
+raw BPref tail to the qualified coarse near-tie and its different downstream
+fine support.  No production tie-breaking patch is justified.  The
+hash-pinned classification is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it1_p4394_score_audit_20260713_150500/particle_4394_classification.json`.
+
+Commit `e12b230a` completes the separate host M-step rotation generator path
+for numbered K=1/K=4 local search and K=1 final local all-data.  It preserves
+the public float32 scoring Euler API, derives adjoint matrices from binding
+source-precision float64 Euler rows, and requests aligned host matrices for
+lazy parent-expanded/adaptive local layouts.  Ten focused tests pass.  The
+full `test_refine_relion_mode.py` result was 281 passed and five failed; all
+five failures reproduced unchanged on exact base `1e8ad088`, so none is
+introduced by this slice.  Full-trajectory FSC/FSC-AUC validation remains the
+next required gate.  Do not infer robustness, scale, real-data, or K=4 quality
+parity from the completed iteration-1 classification alone.
