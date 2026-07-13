@@ -83,6 +83,8 @@ def _build_firstiter_cc_pass2_grids(
     adaptive_oversampling: int,
     translation_step_px: float,
     random_perturbation: float,
+    *,
+    return_mstep_rotations: bool = False,
 ):
     """Build (coarse, fine, parent_map) pose grids for K-class iter-1 firstiter_cc adaptive engine.
 
@@ -103,7 +105,7 @@ def _build_firstiter_cc_pass2_grids(
         n_trans = int(coarse_trans_np.shape[0])
         rot_parent_map = np.arange(n_rot, dtype=np.int64)
         trans_parent_map = np.arange(n_trans, dtype=np.int64)
-        return (
+        outputs = (
             coarse_rot_np,
             coarse_trans_np,
             coarse_rot_np,
@@ -111,16 +113,24 @@ def _build_firstiter_cc_pass2_grids(
             rot_parent_map,
             trans_parent_map,
         )
+        if return_mstep_rotations:
+            return (*outputs, coarse_rot_np.copy())
+        return outputs
 
     adaptive_os = int(adaptive_oversampling)
     all_coarse_rot_indices = np.arange(int(coarse_rot_np.shape[0]), dtype=np.int64)
-    fine_rotations, rot_parent_map = get_oversampled_rotation_grid_from_samples(
+    fine_rotation_outputs = get_oversampled_rotation_grid_from_samples(
         all_coarse_rot_indices,
         parent_nside_level=int(coarse_healpix_order),
         oversampling_order=adaptive_os,
         random_perturbation=float(random_perturbation),
+        return_mstep_rotations=return_mstep_rotations,
     )
+    fine_rotations, rot_parent_map = fine_rotation_outputs[:2]
+    fine_mstep_rotations = fine_rotation_outputs[2] if return_mstep_rotations else None
     fine_rotations = np.asarray(fine_rotations, dtype=np.float32)
+    if fine_mstep_rotations is not None:
+        fine_mstep_rotations = np.asarray(fine_mstep_rotations, dtype=np.float32)
     rot_parent_map = np.asarray(rot_parent_map, dtype=np.int64)
 
     fine_base_translations, trans_parent_map = get_oversampled_translation_grid(
@@ -135,7 +145,7 @@ def _build_firstiter_cc_pass2_grids(
     ).astype(np.float32)
     trans_parent_map = np.asarray(trans_parent_map, dtype=np.int64)
 
-    return (
+    outputs = (
         coarse_rot_np,
         coarse_trans_np,
         fine_rotations,
@@ -143,3 +153,6 @@ def _build_firstiter_cc_pass2_grids(
         rot_parent_map,
         trans_parent_map,
     )
+    if return_mstep_rotations:
+        return (*outputs, fine_mstep_rotations)
+    return outputs

@@ -1,10 +1,9 @@
 from types import SimpleNamespace
 
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 
-from recovar.em.dense_single_volume import iteration_loop
-from recovar.em.dense_single_volume import k_class
+from recovar.em.dense_single_volume import iteration_loop, k_class
 from recovar.em.dense_single_volume.batch_planning import _estimate_relion_em_batch_sizes
 from recovar.em.dense_single_volume.firstiter_cc import (
     _safe_dense_k_class_rotation_block_size,
@@ -113,7 +112,10 @@ def test_firstiter_cc_adaptive_dispatch_clamps_against_fine_translation_grid(mon
         fine_rot = np.zeros((4608, 3, 3), dtype=np.float32)
         rot_parent = np.zeros(fine_rot.shape[0], dtype=np.int64)
         trans_parent = np.zeros(fine_trans.shape[0], dtype=np.int64)
-        return coarse_rot, coarse_trans, fine_rot, fine_trans, rot_parent, trans_parent
+        outputs = (coarse_rot, coarse_trans, fine_rot, fine_trans, rot_parent, trans_parent)
+        if kwargs.get("return_mstep_rotations", False):
+            return (*outputs, np.full_like(fine_rot, 0.25))
+        return outputs
 
     def fake_adaptive(*args, **kwargs):
         captured.update(kwargs)
@@ -167,6 +169,7 @@ def test_firstiter_cc_adaptive_dispatch_clamps_against_fine_translation_grid(mon
     assert captured["firstiter_cc_pass2_only_best_coarse"] is True
     assert captured["skip_significance_pruning"] is False
     assert captured["relion_fine_mstep_prune"] is True
+    assert np.all(captured["fine_mstep_rotations_override"] == 0.25)
 
 
 def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch):
@@ -183,7 +186,10 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
         fine_trans = np.zeros((116, 2), dtype=np.float32)
         rot_parent = np.arange(fine_rot.shape[0], dtype=np.int64) % coarse_rot.shape[0]
         trans_parent = np.arange(fine_trans.shape[0], dtype=np.int64) % coarse_trans.shape[0]
-        return coarse_rot, coarse_trans, fine_rot, fine_trans, rot_parent, trans_parent
+        outputs = (coarse_rot, coarse_trans, fine_rot, fine_trans, rot_parent, trans_parent)
+        if kwargs.get("return_mstep_rotations", False):
+            return (*outputs, np.full_like(fine_rot, 0.25))
+        return outputs
 
     def fake_safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None, current_size_for_batch=None):
         calls.append((int(n_rot), int(n_trans), classes, image_shape_for_batch, current_size_for_batch))
@@ -303,6 +309,7 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
     assert captured["significance_image_batch_size"] == 187
     assert captured["rotation_block_size"] == min(700, _safe_dense_k_class_rotation_block_size(116, captured["image_batch_size"]))
     assert captured["significance_rotation_block_size"] == 700
+    assert np.all(captured["fine_mstep_rotations_override"] == 0.25)
     assert result.ha.shape == (3,)
     assert result.coarse_ha.shape == (3,)
 
@@ -320,7 +327,10 @@ def test_kclass_nonfirstiter_adaptive_dispatch_sizes_actual_fine_grid(monkeypatc
         fine_trans = np.zeros((116, 2), dtype=np.float32)
         rot_parent = np.arange(fine_rot.shape[0], dtype=np.int64) % coarse_rot.shape[0]
         trans_parent = np.arange(fine_trans.shape[0], dtype=np.int64) % coarse_trans.shape[0]
-        return coarse_rot, coarse_trans, fine_rot, fine_trans, rot_parent, trans_parent
+        outputs = (coarse_rot, coarse_trans, fine_rot, fine_trans, rot_parent, trans_parent)
+        if kwargs.get("return_mstep_rotations", False):
+            return (*outputs, np.full_like(fine_rot, 0.25))
+        return outputs
 
     def fake_safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None, current_size_for_batch=None):
         assert classes in {None, 4}
@@ -421,6 +431,7 @@ def test_kclass_nonfirstiter_adaptive_dispatch_sizes_actual_fine_grid(monkeypatc
     assert captured["significance_image_batch_size"] == 50
     assert captured["significance_rotation_block_size"] == 576
     assert captured["sparse_pass2"] is True
+    assert np.all(captured["fine_mstep_rotations_override"] == 0.25)
     assert result.ha.shape == (3,)
 
 

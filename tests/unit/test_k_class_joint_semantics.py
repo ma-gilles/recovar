@@ -1425,6 +1425,39 @@ def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
     np.testing.assert_array_equal(trans_parent_map, np.zeros(4, dtype=np.int64))
 
 
+def test_firstiter_adaptive_grid_can_return_relion_host_mstep_rotations():
+    coarse_rot = np.eye(3, dtype=np.float32)[None]
+    coarse_trans = np.array([[0.0, 0.0]], dtype=np.float32)
+    legacy = _build_firstiter_cc_pass2_grids(
+        coarse_rot,
+        coarse_trans,
+        coarse_trans,
+        coarse_healpix_order=0,
+        adaptive_oversampling=1,
+        translation_step_px=2.0,
+        random_perturbation=-0.11648395657539368,
+    )
+    extended = _build_firstiter_cc_pass2_grids(
+        coarse_rot,
+        coarse_trans,
+        coarse_trans,
+        coarse_healpix_order=0,
+        adaptive_oversampling=1,
+        translation_step_px=2.0,
+        random_perturbation=-0.11648395657539368,
+        return_mstep_rotations=True,
+    )
+
+    assert len(legacy) == 6
+    assert len(extended) == 7
+    for legacy_array, extended_array in zip(legacy, extended[:6], strict=True):
+        np.testing.assert_array_equal(extended_array, legacy_array)
+    fine_mstep_rotations = extended[6]
+    assert fine_mstep_rotations.dtype == np.float32
+    assert fine_mstep_rotations.shape == extended[2].shape
+    np.testing.assert_allclose(fine_mstep_rotations, extended[2], rtol=2e-7, atol=2e-7)
+
+
 def test_local_k_class_single_class_skips_score_probe(monkeypatch):
     calls = []
 

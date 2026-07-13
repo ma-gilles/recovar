@@ -509,9 +509,13 @@ def test_final_all_data_sampling_replay_prefers_final_sampling_star_before_last_
     start = source.index(marker)
     block = source[start : source.index("        for candidate_path", start)]
 
-    final_numbered = 'f"run_it{final_sampling_relion_iteration:03d}_sampling.star"'
-    last_numbered = 'f"run_it{final_numbered_sampling_relion_iteration:03d}_sampling.star"'
-    run_sampling = '"run_sampling.star"'
+    final_numbered = (
+        'f"{perturb_replay_relion_prefix}_it{final_sampling_relion_iteration:03d}_sampling.star"'
+    )
+    last_numbered = (
+        'f"{perturb_replay_relion_prefix}_it{final_numbered_sampling_relion_iteration:03d}_sampling.star"'
+    )
+    run_sampling = 'f"{perturb_replay_relion_prefix}_sampling.star"'
 
     assert final_numbered in block
     assert last_numbered in block

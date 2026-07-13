@@ -1472,6 +1472,7 @@ def _score_kclass_firstiter_cc_pass2(
         fine_trans,
         rot_pmap,
         trans_pmap,
+        fine_mstep_rot,
     ) = _build_firstiter_cc_pass2_grids(
         effective_rotations,
         current_translations,
@@ -1480,6 +1481,7 @@ def _score_kclass_firstiter_cc_pass2(
         adaptive_os_local,
         float(state.translation_step),
         random_perturbation,
+        return_mstep_rotations=True,
     )
     n_classes = int(np.asarray(mean).shape[0]) if np.asarray(mean).ndim >= 2 else 1
     firstiter_significance_image_batch_size = None
@@ -1588,6 +1590,7 @@ def _score_kclass_firstiter_cc_pass2(
         significance_rotation_block_size=firstiter_significance_rotation_block_size,
         coarse_healpix_order=int(current_healpix_order),
         oversampling_order=int(adaptive_os_local),
+        fine_mstep_rotations_override=(fine_mstep_rot if firstiter_sparse_pass2 else None),
         **extra,
         **firstiter_em_kwargs,
     )
@@ -1873,6 +1876,7 @@ def _score_half_dense(
                 fine_trans,
                 rot_pmap_for_collapse,
                 trans_pmap_for_collapse,
+                fine_mstep_rot,
             ) = _build_firstiter_cc_pass2_grids(
                 effective_rotations,
                 current_translations,
@@ -1881,6 +1885,7 @@ def _score_half_dense(
                 adaptive_os_local,
                 float(state.translation_step),
                 random_perturbation,
+                return_mstep_rotations=True,
             )
             n_trans_fine_for_collapse = int(fine_trans.shape[0])
             adaptive_em_kwargs = dict(em_kwargs)
@@ -1948,6 +1953,7 @@ def _score_half_dense(
                 fine_current_size=firstiter_fine_current_size,
                 coarse_healpix_order=int(current_healpix_order),
                 oversampling_order=int(adaptive_os_local),
+                fine_mstep_rotations_override=(fine_mstep_rot if kclass_sparse_pass2 else None),
                 return_best_pose_details=return_best_pose_details,
                 **adaptive_em_kwargs,
             )
@@ -2067,6 +2073,7 @@ def _score_half_dense(
                 fine_trans,
                 rot_pmap_for_collapse,
                 trans_pmap_for_collapse,
+                fine_mstep_rot,
             ) = _build_firstiter_cc_pass2_grids(
                 effective_rotations,
                 current_translations,
@@ -2075,6 +2082,7 @@ def _score_half_dense(
                 adaptive_os_local,
                 float(state.translation_step),
                 random_perturbation,
+                return_mstep_rotations=True,
             )
             n_trans_fine_for_collapse = int(fine_trans.shape[0])
             fine_rotations_for_pose = fine_rot
@@ -2126,6 +2134,7 @@ def _score_half_dense(
                 fine_current_size=firstiter_fine_current_size,
                 coarse_healpix_order=int(current_healpix_order),
                 oversampling_order=int(adaptive_os_local),
+                fine_mstep_rotations_override=(fine_mstep_rot if k1_sparse_pass2 else None),
                 return_best_pose_details=return_best_pose_details,
                 **adaptive_em_kwargs,
             )
