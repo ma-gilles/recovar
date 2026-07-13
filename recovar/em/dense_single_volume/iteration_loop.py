@@ -114,6 +114,7 @@ from recovar.em.dense_single_volume.relion_metadata import (
     _rotation_eulers_for_canonical_or_custom_grid,
 )
 from recovar.em.dense_single_volume.relion_replay import (
+    _as_sigma_offset_half_pair,
     _RelionHalfInputState,
     apply_iter_replay_overrides,
 )
@@ -633,14 +634,34 @@ def _score_half_dense(
         em_kwargs["rotation_log_prior"] = None
         em_kwargs["class_rotation_log_prior"] = class_rotation_log_prior_k
 
-    if k_class_enabled:
+    # RELION applies its coarse/significance/fine 2-pass adaptive oversampling
+    # per particle regardless of class count (ml_optimiser.cpp::
+    # expectationOneParticle: the exp_ipass loop wraps the whole per-particle
+    # E-step; classes are looped *inside* each pass). Route a true K=1 caller
+    # through the same K-class adaptive machinery, using a synthetic length-1
+    # class axis, whenever adaptive oversampling is actually requested for
+    # this iteration. This must stay False whenever adaptive_oversampling==0
+    # so the accepted os=0 K=1 parity baseline is untouched.
+    use_k1_adaptive_machinery = (
+        not k_class_enabled
+        and int(state.adaptive_oversampling) > 0
+        and (relion_firstiter_cc_this_iter or firstiter_coarse_current_size is not None)
+    )
+
+    if k_class_enabled or use_k1_adaptive_machinery:
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K-class refine does not support adjoint ablation flags")
-        em_kwargs["relion_half_volume_mstep"] = True
+        if k_class_enabled:
+            em_kwargs["relion_half_volume_mstep"] = True
         if k_class_image_batch_size_override is not None:
             em_kwargs["image_batch_size"] = k_class_image_batch_size_override
         if k_class_rotation_block_size_override is not None:
             em_kwargs["rotation_block_size"] = k_class_rotation_block_size_override
+        # Synthetic length-1 class axis for the K=1 case only; k_class._as_class_means
+        # requires means.ndim == 2. mean_variance/noise_variance_k need no wrapping
+        # (k_class._select_class_value returns a shared array unchanged when its
+        # leading axis doesn't match n_classes).
+        means_for_engine = means_k if k_class_enabled else jnp.asarray(means_k)[None, :]
         rot_pmap_for_collapse = None
         trans_pmap_for_collapse = None
         n_trans_fine_for_collapse = None
@@ -658,7 +679,7 @@ def _score_half_dense(
                 adaptive_os_local,
             ) = _score_kclass_firstiter_cc_pass2(
                 experiment_dataset=experiment_dataset,
-                mean=means_k,
+                mean=means_for_engine,
                 mean_variance=mean_variance,
                 noise_variance_k=noise_variance_k,
                 effective_rotations=effective_rotations,
@@ -704,7 +725,7 @@ def _score_half_dense(
             adaptive_em_kwargs["sparse_pass2"] = True
             k_class_result = run_dense_k_class_em_adaptive(
                 experiment_dataset,
-                means_k,
+                means_for_engine,
                 mean_variance,
                 noise_variance_k,
                 coarse_rot,
@@ -724,6 +745,9 @@ def _score_half_dense(
                 **adaptive_em_kwargs,
             )
         else:
+            # Only reachable when k_class_enabled is True: use_k1_adaptive_machinery
+            # requires adaptive_oversampling > 0 plus one of the two branches above,
+            # so a synthetic K=1 caller never lands here.
             k_class_result = run_dense_k_class_em(
                 experiment_dataset,
                 means_k,
@@ -753,6 +777,12 @@ def _score_half_dense(
             best_pose_translations=best_pose_translations,
             require_best_pose_details=return_best_pose_details,
         )
+        if not k_class_enabled:
+            # Real K-class callers want the (n_classes, volume_size) shape
+            # _scatter_dense_k_class_result returns as-is; the synthetic K=1
+            # caller needs it squeezed back to the flat shape HalfScoreResult
+            # (and plain run_em) expect.
+            Ft_y_k, Ft_ctf_k = Ft_y_k[0], Ft_ctf_k[0]
         coarse_ha_k = None
         if trans_pmap_for_collapse is not None and n_trans_fine_for_collapse is not None:
             coarse_ha_k = _collapse_fine_pose_assignments_to_coarse(
@@ -1634,14 +1664,20 @@ def _run_relion_iteration_loop(
     # posterior-weighted offset moment when the E-step path propagates it.
     # RELION stores and updates this quantity in Angstrom², and its default
     # lower bound is min_sigma2_offset=2 Å² (ml_optimiser.cpp).
-    current_sigma_offset_angstrom = float(init_translation_sigma_angstrom)
+    current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(init_translation_sigma_angstrom)
     sigma_offset_used_trajectory = []
     sigma_offset_trajectory = []
+    sigma_offset_used_trajectory_per_half = []
+    sigma_offset_trajectory_per_half = []
     # D.2: per-class sigma_offset trajectory. K=1 leaves entries as
     # [scalar, scalar, ...]; K>1 stores K-vectors. Diagnostic for now —
     # threading per-class sigma into the engine's translation log_prior
     # is the next step (requires k_class.py engine signature change).
     per_class_sigma_offset_trajectory = []
+    # Per-iter snapshot of the learned HEALPix direction prior (RELION's
+    # pdf_direction / model_pdf_orient_class_1), one entry per half; None
+    # while no learned prior has replaced the uniform default yet.
+    direction_prior_trajectory_per_half = []
     frac_changed_trajectory = []
     acc_rot_trajectory = []
     smallest_change_angles_trajectory = []
@@ -1929,7 +1965,7 @@ def _run_relion_iteration_loop(
             noise_variance=noise_variance,
             previous_noise_radial_per_half=previous_noise_radial_per_half,
             previous_noise_radial=previous_noise_radial,
-            current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+            current_sigma_offset_angstrom=current_sigma_offset_angstrom_per_half,
             class_direction_prior_per_half=class_direction_prior_per_half,
             class_direction_prior_order_per_half=class_direction_prior_order_per_half,
             global_direction_prior_per_half=global_direction_prior_per_half,
@@ -1943,7 +1979,7 @@ def _run_relion_iteration_loop(
         noise_variance = replay_result.noise_variance
         previous_noise_radial_per_half = replay_result.previous_noise_radial_per_half
         previous_noise_radial = replay_result.previous_noise_radial
-        current_sigma_offset_angstrom = replay_result.current_sigma_offset_angstrom
+        current_sigma_offset_angstrom_per_half = replay_result.current_sigma_offset_angstrom_per_half
         if k_class_enabled and replay_result.class_weights is not None:
             class_weights = np.asarray(replay_result.class_weights, dtype=np.float64)
             class_log_priors = np.log(class_weights)
@@ -1952,7 +1988,8 @@ def _run_relion_iteration_loop(
                 ", ".join(f"class {idx + 1}={weight:.4f}" for idx, weight in enumerate(class_weights)),
             )
 
-        sigma_offset_used_trajectory.append(float(current_sigma_offset_angstrom))
+        sigma_offset_used_trajectory.append(float(np.mean(current_sigma_offset_angstrom_per_half)))
+        sigma_offset_used_trajectory_per_half.append(list(current_sigma_offset_angstrom_per_half))
         current_sizes.append(cs)
         healpix_order_trajectory.append(state.healpix_order)
         current_size = int(cs)
@@ -2350,7 +2387,7 @@ def _run_relion_iteration_loop(
                 translation_log_prior = make_relion_translation_log_prior(
                     translation_prior_translations,
                     cryo.voxel_size,
-                    current_sigma_offset_angstrom,
+                    current_sigma_offset_angstrom_per_half[k],
                     trans_prior_center,
                     offset_range_pixels=None,
                 )
@@ -2435,7 +2472,7 @@ def _run_relion_iteration_loop(
                     base_translations=base_translations,
                     trans_prior_center=trans_prior_center,
                     trans_prior_center_for_engine=trans_prior_center_for_engine,
-                    current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+                    current_sigma_offset_angstrom=current_sigma_offset_angstrom_per_half[k],
                     current_translation_range=current_translation_range,
                     disc_type=disc_type,
                     cs_for_engine=cs_for_engine,
@@ -3012,6 +3049,20 @@ def _run_relion_iteration_loop(
                     )
                     global_direction_prior_order_per_half[k] = current_healpix_order
 
+        # Snapshot class-1 (or shared) direction prior for RELION-parity
+        # comparison against model_pdf_orient_class_1::rlnOrientationDistribution.
+        if k_class_enabled:
+            direction_prior_snapshot = [
+                None if class_direction_prior_per_half[k] is None else np.asarray(class_direction_prior_per_half[k][0])
+                for k in range(2)
+            ]
+        else:
+            direction_prior_snapshot = [
+                None if global_direction_prior_per_half[k] is None else np.asarray(global_direction_prior_per_half[k])
+                for k in range(2)
+            ]
+        direction_prior_trajectory_per_half.append(direction_prior_snapshot)
+
         # --- Compute unregularized half-maps only when diagnostics need them ---
         # K=1 FSC was already computed above directly from the BackProjector
         # accumulators (current_iter_fsc), matching RELION ordering. For K>1
@@ -3407,14 +3458,15 @@ def _run_relion_iteration_loop(
         sigma_offset_result = update_c1_sigma_offset_from_posterior(
             noise_stats_per_half=noise_stats_per_half,
             noise_stats_per_half_per_class=noise_stats_per_half_per_class,
-            current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+            current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
             n_classes=n_classes,
             k_class_enabled=k_class_enabled,
             state_fallback_offsets_angstrom=state.current_changes_optimal_offsets_angstrom,
         )
-        current_sigma_offset_angstrom = sigma_offset_result.current_sigma_offset_angstrom
+        current_sigma_offset_angstrom_per_half = sigma_offset_result.current_sigma_offset_angstrom_per_half
         per_class_sigma_offset = sigma_offset_result.per_class_sigma_offset_angstrom
-        sigma_offset_trajectory.append(float(current_sigma_offset_angstrom))
+        sigma_offset_trajectory.append(float(np.mean(current_sigma_offset_angstrom_per_half)))
+        sigma_offset_trajectory_per_half.append(list(current_sigma_offset_angstrom_per_half))
         per_class_sigma_offset_trajectory.append(
             None if per_class_sigma_offset is None else per_class_sigma_offset.tolist()
         )
@@ -3436,7 +3488,7 @@ def _run_relion_iteration_loop(
                     iteration=iteration,
                     init_relion_iteration=int(init_relion_iteration),
                     current_size=int(cs),
-                    sigma_offset=float(current_sigma_offset_angstrom),
+                    sigma_offset=float(np.mean(current_sigma_offset_angstrom_per_half)),
                     translation_step=float(state.translation_step),
                     translation_range=float(state.translation_range),
                     random_perturbation=float(random_perturbation) if random_perturbation is not None else 0.0,
@@ -3580,7 +3632,10 @@ def _run_relion_iteration_loop(
             "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
             "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
             "sigma_offset_trajectory": sigma_offset_trajectory,
+            "sigma_offset_used_trajectory_per_half": sigma_offset_used_trajectory_per_half,
+            "sigma_offset_trajectory_per_half": sigma_offset_trajectory_per_half,
             "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
+            "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
             "frac_changed_trajectory": frac_changed_trajectory,
             "acc_rot_trajectory": acc_rot_trajectory,
             "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
@@ -3801,7 +3856,10 @@ def _run_relion_iteration_loop(
         "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
         "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
         "sigma_offset_trajectory": sigma_offset_trajectory,
+        "sigma_offset_used_trajectory_per_half": sigma_offset_used_trajectory_per_half,
+        "sigma_offset_trajectory_per_half": sigma_offset_trajectory_per_half,
         "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
+        "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
         "frac_changed_trajectory": frac_changed_trajectory,
         "acc_rot_trajectory": acc_rot_trajectory,
         "smallest_change_angles_trajectory": smallest_change_angles_trajectory,

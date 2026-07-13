@@ -354,9 +354,12 @@ def _build_replay_iteration_overrides(
         # exist yet), so without an explicit override the iter-2 E-step uses
         # the default init sigma (10 Å) instead of the data-driven RELION
         # value, which is ~6× too wide and depresses iter-2 Pmax by ~22%.
+        # RELION's sigma_offset is a per-half MlModel scalar (independent
+        # gold-standard halves, ml_model.h:96) -- pass each half's own value
+        # rather than averaging them into one shared number.
         sigma_offset_h1 = _scalar(m1["model_general"], "rlnSigmaOffsetsAngst")
         sigma_offset_h2 = _scalar(m2["model_general"], "rlnSigmaOffsetsAngst")
-        sigma_offset_avg = 0.5 * (float(sigma_offset_h1) + float(sigma_offset_h2))
+        sigma_offset_per_half = [float(sigma_offset_h1), float(sigma_offset_h2)]
 
         groups_h1 = m1.get("model_groups")
         groups_h2 = m2.get("model_groups")
@@ -391,26 +394,28 @@ def _build_replay_iteration_overrides(
         scale_corr_h1 = _to_half(pp_scale_h1, half1_idx)
         scale_corr_h2 = _to_half(pp_scale_h2, half2_idx)
 
-        override_k = {"translation_sigma_angstrom": sigma_offset_avg}
+        override_k = {"translation_sigma_angstrom": sigma_offset_per_half}
         if include_normcorr:
             override_k["image_corrections"] = [corr_h1, corr_h2]
             override_k["scale_corrections"] = [scale_corr_h1, scale_corr_h2]
         overrides[recovar_iter] = override_k
         if include_normcorr:
             logger.info(
-                "Replay override recovar iter %d: image_corr means=(%.4f, %.4f), scale_corr means=(%.4f, %.4f), sigma_offset=%.4f Å",
+                "Replay override recovar iter %d: image_corr means=(%.4f, %.4f), scale_corr means=(%.4f, %.4f), sigma_offset=(h1=%.4f, h2=%.4f) Å",
                 recovar_iter + 1,
                 float(corr_h1.mean()),
                 float(corr_h2.mean()),
                 float(scale_corr_h1.mean()),
                 float(scale_corr_h2.mean()),
-                sigma_offset_avg,
+                sigma_offset_per_half[0],
+                sigma_offset_per_half[1],
             )
         else:
             logger.info(
-                "Replay override recovar iter %d: sigma_offset=%.4f Å (normcorr replay disabled)",
+                "Replay override recovar iter %d: sigma_offset=(h1=%.4f, h2=%.4f) Å (normcorr replay disabled)",
                 recovar_iter + 1,
-                sigma_offset_avg,
+                sigma_offset_per_half[0],
+                sigma_offset_per_half[1],
             )
 
     return overrides
@@ -748,10 +753,7 @@ def main():
     parser.add_argument(
         "--init_volume",
         default=None,
-        help=(
-            "Initial reference volume for K=1. Defaults to "
-            "<data_dir>/reference_init.mrc when omitted."
-        ),
+        help=("Initial reference volume for K=1. Defaults to <data_dir>/reference_init.mrc when omitted."),
     )
     parser.add_argument(
         "--timing_dir",
@@ -881,23 +883,25 @@ def main():
     def _apply_ini_high_lowpass(vol_ft_flat, volume_shape, voxel_size, ini_high):
         from recovar.heterogeneity.locres import low_pass_filter_map
 
-        return np.asarray(
-            low_pass_filter_map(
-                jnp.asarray(vol_ft_flat).reshape(volume_shape),
-                volume_shape[0],
-                float(ini_high),
-                float(voxel_size),
-                int(_RELION_FMASK_EDGE),
-                do_highpass_instead=False,
-                volume_shape=volume_shape,
+        return (
+            np.asarray(
+                low_pass_filter_map(
+                    jnp.asarray(vol_ft_flat).reshape(volume_shape),
+                    volume_shape[0],
+                    float(ini_high),
+                    float(voxel_size),
+                    int(_RELION_FMASK_EDGE),
+                    do_highpass_instead=False,
+                    volume_shape=volume_shape,
+                )
             )
-        ).astype(np.complex64).reshape(-1)
+            .astype(np.complex64)
+            .reshape(-1)
+        )
 
     _apply_ini_lowpass = bool(getattr(args, "apply_initial_lowpass", False))
     _ini_high_for_lowpass = (
-        float(args.init_resolution)
-        if _apply_ini_lowpass and float(args.init_resolution) > 0.0
-        else None
+        float(args.init_resolution) if _apply_ini_lowpass and float(args.init_resolution) > 0.0 else None
     )
 
     if args.n_classes == 1:
@@ -909,11 +913,15 @@ def main():
         init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
         if _ini_high_for_lowpass is not None:
             init_vol_ft = _apply_ini_high_lowpass(
-                init_vol_ft, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
+                init_vol_ft,
+                ds.volume_shape,
+                ds.voxel_size,
+                _ini_high_for_lowpass,
             )
             logger.info(
                 "Applied RELION initialLowPassFilterReferences to init reference: ini_high=%.2f A, fmask_edge=%d shells",
-                _ini_high_for_lowpass, _RELION_FMASK_EDGE,
+                _ini_high_for_lowpass,
+                _RELION_FMASK_EDGE,
             )
         logger.info("Initial volume loaded from %s: shape=%s", init_mrc_path, init_vol_real.shape)
     else:
@@ -934,14 +942,19 @@ def main():
             vol_ft = np.array(ftu.get_dft3(jnp.asarray(vol_real))).astype(np.complex64).reshape(-1)
             if _ini_high_for_lowpass is not None:
                 vol_ft = _apply_ini_high_lowpass(
-                    vol_ft, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
+                    vol_ft,
+                    ds.volume_shape,
+                    ds.voxel_size,
+                    _ini_high_for_lowpass,
                 )
             per_class_ft.append(vol_ft)
             logger.info("Class %d initial volume loaded from %s", k + 1, p)
         if _ini_high_for_lowpass is not None:
             logger.info(
                 "Applied RELION initialLowPassFilterReferences to %d init references: ini_high=%.2f A, fmask_edge=%d shells",
-                args.n_classes, _ini_high_for_lowpass, _RELION_FMASK_EDGE,
+                args.n_classes,
+                _ini_high_for_lowpass,
+                _RELION_FMASK_EDGE,
             )
         # Stack to (K, V); refine_single_volume._normalize_initial_means handles the
         # per-half broadcast.
@@ -1254,6 +1267,21 @@ def main():
         save_dict["sigma_offset_used_trajectory"] = np.asarray(
             result["sigma_offset_used_trajectory"],
             dtype=np.float64,
+        )
+    if "sigma_offset_trajectory_per_half" in result:
+        save_dict["sigma_offset_trajectory_per_half"] = np.asarray(
+            result["sigma_offset_trajectory_per_half"],
+            dtype=np.float64,
+        )
+    if "sigma_offset_used_trajectory_per_half" in result:
+        save_dict["sigma_offset_used_trajectory_per_half"] = np.asarray(
+            result["sigma_offset_used_trajectory_per_half"],
+            dtype=np.float64,
+        )
+    if result.get("direction_prior_trajectory_per_half") is not None:
+        # Ragged: direction count grows with healpix_order across iterations.
+        save_dict["direction_prior_trajectory_per_half"] = np.asarray(
+            result["direction_prior_trajectory_per_half"], dtype=object
         )
     if "convergence_state" in result:
         state = result["convergence_state"]

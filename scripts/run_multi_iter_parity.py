@@ -257,6 +257,7 @@ def parse_relion_optimiser_cli_flags(opt_text: str) -> dict[str, object]:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
+    parser.add_argument("--relion_run_prefix", type=str, default="run", help="RELION run prefix")
     parser.add_argument("--data_star", required=True)
     parser.add_argument("--iter", type=int, default=3, help="RELION iteration to start from")
     parser.add_argument("--max_iter", type=int, default=15)
@@ -544,15 +545,24 @@ def main():
 
     relion_dir = Path(args.relion_dir)
     iteration = args.iter
-    prefix = str(relion_dir / f"run_it{iteration:03d}")
+    run_prefix = args.relion_run_prefix
+    prefix = str(relion_dir / f"{run_prefix}_it{iteration:03d}")
 
     # ---- Load RELION state ----
     model_h1 = starfile.read(f"{prefix}_half1_model.star")
     model_h2 = starfile.read(f"{prefix}_half2_model.star")
     control_model_h1 = model_h1
-    control_model_path = relion_dir / f"run_it{replay_control_relion_iteration(iteration, 0):03d}_half1_model.star"
-    if control_model_path.exists():
-        control_model_h1 = starfile.read(control_model_path)
+    control_model_h2 = model_h2
+    control_model_h1_path = (
+        relion_dir / f"{run_prefix}_it{replay_control_relion_iteration(iteration, 0):03d}_half1_model.star"
+    )
+    control_model_h2_path = (
+        relion_dir / f"{run_prefix}_it{replay_control_relion_iteration(iteration, 0):03d}_half2_model.star"
+    )
+    if control_model_h1_path.exists():
+        control_model_h1 = starfile.read(control_model_h1_path)
+    if control_model_h2_path.exists():
+        control_model_h2 = starfile.read(control_model_h2_path)
     N = int(model_h1["model_general"]["rlnOriginalImageSize"])
     current_size = int(control_model_h1["model_general"]["rlnCurrentImageSize"])
     pixel_size = float(model_h1["model_general"]["rlnPixelSize"])
@@ -571,7 +581,7 @@ def main():
     fsc_col = "rlnGoldStandardFsc" if "rlnGoldStandardFsc" in class1 else "rlnFourierShellCorrelationCorrected"
     fsc = np.array(class1[fsc_col])
 
-    opt_text = (relion_dir / f"run_it{iteration:03d}_optimiser.star").read_text()
+    opt_text = (relion_dir / f"{run_prefix}_it{iteration:03d}_optimiser.star").read_text()
     m_pd = re.search(r"_rlnParticleDiameter\s+(\S+)", opt_text)
     particle_diameter = float(m_pd.group(1)) if m_pd else 544.0
     m_os = re.search(r"_rlnAdaptiveOversampleOrder\s+(\d+)", opt_text)
@@ -588,7 +598,7 @@ def main():
         else 30.0
     )
 
-    sampling_meta = read_relion_sampling_metadata(relion_dir / f"run_it{iteration:03d}_sampling.star")
+    sampling_meta = read_relion_sampling_metadata(relion_dir / f"{run_prefix}_it{iteration:03d}_sampling.star")
     hp_order = int(sampling_meta["healpix_order"])
     offset_range = float(sampling_meta["offset_range"])
     offset_step = float(sampling_meta["offset_step"])
@@ -610,16 +620,16 @@ def main():
     has_high_fsc_at_limit = False
     for it in range(1, iteration + 1):
         try:
-            m = starfile.read(str(relion_dir / f"run_it{it:03d}_half1_model.star"))
+            m = starfile.read(str(relion_dir / f"{run_prefix}_it{it:03d}_half1_model.star"))
             fc = np.array(m["model_class_1"][fsc_col])
-            oc = (relion_dir / f"run_it{it:03d}_optimiser.star").read_text()
+            oc = (relion_dir / f"{run_prefix}_it{it:03d}_optimiser.star").read_text()
             cs_it = (
                 int(re.search(r"_rlnCurrentImageSize\s+(\d+)", oc).group(1))
                 if re.search(r"_rlnCurrentImageSize", oc)
                 else None
             )
             if cs_it is None:
-                mc = starfile.read(str(relion_dir / f"run_it{it:03d}_half1_model.star"))
+                mc = starfile.read(str(relion_dir / f"{run_prefix}_it{it:03d}_half1_model.star"))
                 cs_it = int(mc["model_general"]["rlnCurrentImageSize"])
             shell_at_limit = cs_it // 2 - 1
             if shell_at_limit < len(fc) and fc[shell_at_limit] > 0.2:
@@ -797,13 +807,18 @@ def main():
     # The next model file is useful for replaying control outputs such as the
     # bootstrapped current image size, but its sigma offset is the result of
     # the E/M-step we are trying to reproduce, not an input to it.
-    control_general = model_h1["model_general"]
-    sigma_offset_angst = float(
-        control_general["rlnSigmaOffsetsAngst"]
-        if isinstance(control_general, dict)
-        else control_general["rlnSigmaOffsetsAngst"].iloc[0]
-    )
-    print(f"  sigma_offset = {sigma_offset_angst:.4f} A")
+    # RELION's sigma_offset is a per-half MlModel scalar (independent
+    # gold-standard halves, ml_model.h:96) -- read each half's own value.
+    def _read_sigma_offset(general):
+        return float(
+            general["rlnSigmaOffsetsAngst"] if isinstance(general, dict) else general["rlnSigmaOffsetsAngst"].iloc[0]
+        )
+
+    sigma_offset_angst_per_half = [
+        _read_sigma_offset(model_h1["model_general"]),
+        _read_sigma_offset(model_h2["model_general"]),
+    ]
+    print(f"  sigma_offset = (h1={sigma_offset_angst_per_half[0]:.4f}, h2={sigma_offset_angst_per_half[1]:.4f}) A")
 
     # ---- Direction prior from model star (RELION's pdf_orientation) ----
     pdf_orient_key = "model_pdf_orient_class_1"
@@ -822,7 +837,7 @@ def main():
         print("  direction_prior: None (not found in model star)")
 
     def _load_relion_iteration_override(previous_relion_iteration, control_relion_iteration):
-        iter_prefix = relion_dir / f"run_it{previous_relion_iteration:03d}"
+        iter_prefix = relion_dir / f"{run_prefix}_it{previous_relion_iteration:03d}"
         model_h1_iter = starfile.read(f"{iter_prefix}_half1_model.star")
         model_h2_iter = starfile.read(f"{iter_prefix}_half2_model.star")
         relion_iter_data = starfile.read(f"{iter_prefix}_data.star")
@@ -841,11 +856,20 @@ def main():
             if isinstance(general_h2_iter, dict)
             else general_h2_iter["rlnNormCorrectionAverage"].iloc[0]
         )
-        sigma_offset_iter = float(
+        # RELION's sigma_offset is a per-half MlModel scalar (independent
+        # gold-standard halves, ml_model.h:96) -- read each half's own value
+        # rather than applying half1's to both.
+        sigma_offset_h1_iter = float(
             general_h1_iter["rlnSigmaOffsetsAngst"]
             if isinstance(general_h1_iter, dict)
             else general_h1_iter["rlnSigmaOffsetsAngst"].iloc[0]
         )
+        sigma_offset_h2_iter = float(
+            general_h2_iter["rlnSigmaOffsetsAngst"]
+            if isinstance(general_h2_iter, dict)
+            else general_h2_iter["rlnSigmaOffsetsAngst"].iloc[0]
+        )
+        sigma_offset_iter = [sigma_offset_h1_iter, sigma_offset_h2_iter]
         sigma2_h1_iter = np.array(model_h1_iter["model_optics_group_1"]["rlnSigma2Noise"])
         sigma2_h2_iter = np.array(model_h2_iter["model_optics_group_1"]["rlnSigma2Noise"])
         noise_variance_iter = jnp.stack(
@@ -942,7 +966,7 @@ def main():
             ]
 
         return {
-            "translation_sigma_angstrom": np.float32(sigma_offset_iter),
+            "translation_sigma_angstrom": [np.float32(v) for v in sigma_offset_iter],
             "image_corrections": [corr_h1_iter, corr_h2_iter],
             "scale_corrections": [scale_corr_h1_iter, scale_corr_h2_iter],
             "previous_best_translations": [trans_h1_iter, trans_h2_iter],
@@ -956,7 +980,7 @@ def main():
     for recovar_iter in range(1, args.max_iter):
         relion_prev_iter = replay_previous_relion_iteration(iteration, recovar_iter)
         relion_control_iter = replay_control_relion_iteration(iteration, recovar_iter)
-        if not (relion_dir / f"run_it{relion_prev_iter:03d}_data.star").exists():
+        if not (relion_dir / f"{run_prefix}_it{relion_prev_iter:03d}_data.star").exists():
             print(
                 f"  Replay state for recovar iter {recovar_iter + 1}: RELION iter {relion_prev_iter:03d} not found, leaving override unset"
             )
@@ -972,9 +996,10 @@ def main():
                 f"h1 mean_abs={np.abs(override['previous_best_translations'][0]).mean():.3f} px, "
                 f"h2 mean_abs={np.abs(override['previous_best_translations'][1]).mean():.3f} px"
             )
+        sigma_h1, sigma_h2 = override["translation_sigma_angstrom"]
         print(
             f"  Replay state for recovar iter {recovar_iter + 1}: RELION prev={relion_prev_iter:03d}, control={relion_control_iter:03d}, "
-            f"sigma_offset={float(override['translation_sigma_angstrom']):.4f} A, "
+            f"sigma_offset=(h1={float(sigma_h1):.4f}, h2={float(sigma_h2):.4f}) A, "
             f"corr means=({override['image_corrections'][0].mean():.4f}, {override['image_corrections'][1].mean():.4f}), "
             f"pre-shifts={trans_msg}"
         )
@@ -1048,7 +1073,7 @@ def main():
         max_healpix_order=args.max_healpix_order,
         init_translation_range=offset_range / pixel_size,
         init_translation_step=offset_step / pixel_size,
-        init_translation_sigma_angstrom=sigma_offset_angst,
+        init_translation_sigma_angstrom=sigma_offset_angst_per_half,
         particle_diameter_ang=particle_diameter,
         tau2_fudge=1.0,
         perturb_factor=0.5,
@@ -1153,6 +1178,19 @@ def main():
         save_dict["sigma_offset_trajectory"] = np.array(result["sigma_offset_trajectory"], dtype=np.float64)
     if result.get("sigma_offset_used_trajectory"):
         save_dict["sigma_offset_used_trajectory"] = np.array(result["sigma_offset_used_trajectory"], dtype=np.float64)
+    if result.get("sigma_offset_trajectory_per_half"):
+        save_dict["sigma_offset_trajectory_per_half"] = np.array(
+            result["sigma_offset_trajectory_per_half"], dtype=np.float64
+        )
+    if result.get("sigma_offset_used_trajectory_per_half"):
+        save_dict["sigma_offset_used_trajectory_per_half"] = np.array(
+            result["sigma_offset_used_trajectory_per_half"], dtype=np.float64
+        )
+    if result.get("direction_prior_trajectory_per_half"):
+        # Ragged: direction count grows with healpix_order across iterations.
+        save_dict["direction_prior_trajectory_per_half"] = np.asarray(
+            result["direction_prior_trajectory_per_half"], dtype=object
+        )
     for scalar_name in [
         "frac_changed_trajectory",
         "acc_rot_trajectory",
@@ -1282,7 +1320,7 @@ def main():
     relion_final_real = {}
     relion_final_ft = {}
     for k_half, label in [(0, "half1"), (1, "half2")]:
-        target_path = str(relion_dir / f"run_it{last_relion_it:03d}_{label}_class001.mrc")
+        target_path = str(relion_dir / f"{run_prefix}_it{last_relion_it:03d}_{label}_class001.mrc")
         if not Path(target_path).exists():
             print(f"  Final {label}: RELION it{last_relion_it:03d} not found")
             continue
@@ -1484,7 +1522,7 @@ def main():
     if result.get("pmax_per_image_history"):
         for i_iter, pmax_arr in enumerate(result["pmax_per_image_history"]):
             target_it = iteration + 1 + i_iter
-            target_data_star = relion_dir / f"run_it{target_it:03d}_data.star"
+            target_data_star = relion_dir / f"{run_prefix}_it{target_it:03d}_data.star"
             if not target_data_star.exists():
                 print(
                     f"\n  Iter {i_iter + 1}: RELION data star it{target_it:03d} not found, skipping per-particle comparison"

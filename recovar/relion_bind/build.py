@@ -16,7 +16,10 @@ from pathlib import Path
 
 BIND_DIR = Path(__file__).parent
 BUILD_DIR = BIND_DIR / "build"
-RELION_SRC = Path("/scratch/gpfs/GILLES/mg6942/relion/src")
+RELION_SRC_ENV = os.environ.get("RELION_SRC_DIR")
+if RELION_SRC_ENV is None:
+    raise RuntimeError("RELION_SRC_DIR environment variable is not set")
+RELION_SRC = Path(RELION_SRC_ENV)
 
 
 def get_pybind11_cmake_dir():

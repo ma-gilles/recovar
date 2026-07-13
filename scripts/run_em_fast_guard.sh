@@ -39,8 +39,9 @@ import recovar
 repo = pathlib.Path.cwd().resolve()
 recovar_file = pathlib.Path(recovar.__file__).resolve()
 jax_file = pathlib.Path(jax.__file__).resolve()
+pixi_env = (repo / ".pixi" / "envs" / "default").resolve()
 assert str(recovar_file).startswith(str(repo) + "/"), recovar_file
-assert ".pixi/envs/default/" in str(jax_file), jax_file
+assert str(jax_file).startswith(str(pixi_env) + "/"), (jax_file, pixi_env)
 print(f"provenance_ok recovar={recovar_file} jax={jax_file}")
 PY
 

@@ -25,6 +25,17 @@ def _relion_round_away_from_zero(x):
     x = np.asarray(x)
     return np.trunc(np.where(x > 0, x + 0.5, x - 0.5)).astype(np.int64)
 
+
+def _relion_round_away_from_zero_jnp(x):
+    """Mirror RELION's ``ROUND`` macro for JAX arrays (round-half-away-from-zero).
+
+    ``jnp.round``/``np.rint`` use round-half-to-even, which disagrees with
+    RELION's ``ROUND`` macro (``macros.h``) at every half-integer shell
+    boundary whose integer part is even (e.g. 0.5, 2.5, ...).
+    """
+    return jnp.trunc(jnp.where(x > 0, x + 0.5, x - 0.5)).astype(jnp.int32)
+
+
 ## Mean prior computation
 
 
@@ -651,7 +662,7 @@ def _compute_relion_weight_shell_stats(
     if shell_rounding not in {"round", "floor"}:
         raise ValueError(f"shell_rounding must be 'round' or 'floor', got {shell_rounding!r}")
 
-    round_fn = jnp.round if shell_rounding == "round" else jnp.floor
+    round_fn = _relion_round_away_from_zero_jnp if shell_rounding == "round" else jnp.floor
     shell_sum_np = None
     shell_count_np = None
 
@@ -677,8 +688,7 @@ def _compute_relion_weight_shell_stats(
 
         if int(np.prod(radial_shape)) > _RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS:
             coords = [
-                np.arange(-(int(s) // 2), int(s) - int(s) // 2, dtype=np.float32)
-                for s in radial_volume_shape[:-1]
+                np.arange(-(int(s) // 2), int(s) - int(s) // 2, dtype=np.float32) for s in radial_volume_shape[:-1]
             ]
             if is_half_layout:
                 coords.append(np.arange(0, int(radial_volume_shape[-1]) // 2 + 1, dtype=np.float32))
@@ -698,7 +708,7 @@ def _compute_relion_weight_shell_stats(
                 max_r_pad = int(_relion_round_away_from_zero(np.asarray(float(r_max) * padding_factor)))
                 radius_included_np = padded_dist_np * padded_dist_np < float(max_r_pad * max_r_pad)
             if shell_rounding == "round":
-                shell_index_np = np.rint(padded_dist_np / padding_factor).astype(np.int32)
+                shell_index_np = _relion_round_away_from_zero(padded_dist_np / padding_factor).astype(np.int32)
             else:
                 shell_index_np = np.floor(padded_dist_np / padding_factor).astype(np.int32)
             shell_index_np = np.minimum(shell_index_np, ori_half)
