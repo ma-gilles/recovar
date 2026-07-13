@@ -1047,9 +1047,10 @@ parent/fine scoring and support at that fixed transition, not revisit the now
 closed identical-input reconstruction wrapper.  Report:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_fa597a61_full10k_trajectory_20260712_173845/FINAL_REPORT.md`.
 
-The fixed authoritative RELION iteration-7 to iteration-8 replay confirms
-that the global-to-local residual is inside the local E-step rather than only
-an amplification of the preceding RECOVAR map trajectory.  Aggregate replay
+The fixed serialized RELION iteration-7 to iteration-8 replay exposes where
+the global-to-local transition amplifies a residual, but it is not an
+identical-input oracle for RELION's uninterrupted in-memory projector state.
+Aggregate replay
 job `11092142` starts from RELION iteration-7 maps and particle state, uses
 the exact iteration-8 current size 122, parent/fine orders 4/5, and seed-exact
 perturbation `-0.360924143344`.  It leaves `8802/10000` particle rotations at
@@ -1069,8 +1070,9 @@ coarse rotation parent is absent from RECOVAR pass 2; for particle 9887 the
 rotation parent is present but its required coarse translation pair is
 masked.  Regenerating the complete order-4 neighborhood and order-5 children
 recovers all three RELION rotations, ruling out parent/child enumeration.
-Thus their first divergence is pass-1 coarse scoring, normalization, or the
-0.999 significance selection.  Conversely, RELION's winners for particles
+Within the serialized-state replay, their first divergence is pass-1 coarse
+scoring, normalization, or the 0.999 significance selection.  Conversely,
+RELION's uninterrupted winners for particles
 3758, 4321, 5375, and 9826 are present but lose on RECOVAR's total score by
 `30.306/0.893/0.528/1.367`; saved-operand recomputation agrees with the live
 scores within about `0.002`, so reduction rounding cannot explain those
@@ -1166,6 +1168,24 @@ unchanged.  FSC-AUC changes by only `-5.22e-8` and maximum shell FSC by
 `2.17e-6`.  The fix is retained as a correctness/configuration repair, but
 manual-versus-texture selection is not the iteration-8 cause.  Report:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_local_hybrid_routing_validation_20260712_201000/VALIDATION_REPORT.md`.
+
+An unmodified stock `relion_project` audit resolves the apparent particle-3758
+fine-score contradiction and changes the causal boundary.  Projecting the two
+candidate poses from the serialized iteration-7 half-map matches RECOVAR's
+saved projection operands at relative L2 `0.000891/0.000832`.  Combining those
+stock projections with RECOVAR's saved image/CTF/noise operands reproduces the
+same material raw/total preference for RECOVAR's winner:
+`30.7315/30.3182` versus RECOVAR `30.7196/30.3062`.  The opposite half-map
+still prefers the RECOVAR winner by `18.98` raw-score units, stock CTF agrees
+after the paired sign convention, and stock CTF-subtracted residuals also
+favor the RECOVAR winner.  RECOVAR is therefore self-consistent with stock
+RELION for the serialized map.  The uninterrupted RELION winner depends on
+live reconstruction/projector state not recoverable from its written
+map/model/data/sampling files, exactly as the failed continuation gates imply.
+Iteration 8 amplifies an earlier map/projector-state difference; it does not
+establish a local E-step bug on identical inputs.  Return the trajectory trace
+to pre-iteration-8 reconstruction/projector formation.  Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it8_p3758_stock_project_20260712_203000/STOCK_PROJECTOR_AUDIT.md`.
 
 The tempting indexed-backprojection coordinate-order explanation is rejected.
 RELION rotates integer Fourier coordinates before multiplying by padding while
