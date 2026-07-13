@@ -143,6 +143,47 @@ Conclusion:
   the accepted K=1 row because this run stopped at its ten-iteration cap
   without final all-data output and uses a different RELION baseline wall.
 
+### 2026-07-13 `k1-current-head-fixed-3k128-trajectory`
+
+Run metadata:
+
+- Commit: `ef2dbd065812bafd3e31ba7863f4a2975414c249`
+- Branch: `codex/em-parity-checkpoint-20260711`
+- Worktree:
+  `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
+- Fixture: `11_small_baseline_3k_g128_white_noise1_bf80`, 3,000 particles,
+  box 128, seed 1711
+- K: 1 supplied-map strict replay, ten numbered iterations plus converged
+  final all-data
+- Slurm job: `11144457`, A100, `COMPLETED 0:0`, elapsed 12m10s
+- Artifacts:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_3k128_full_trajectory_preflight_20260713_144434`
+  (`SAFE_TO_DELETE` present)
+
+Quality comparison:
+
+| Metric | Required/reference | Current | Delta | Status |
+|--------|--------------------|---------|-------|--------|
+| Exact current-size schedule | `[56,56,66,68,80,80,80,80,80,80]` | exact | 0 | same/pass |
+| Convergence/finalization | iter 10, converged final-all-data once | exact | 0 | same/pass |
+| Worst numbered half/merged FSC-AUC | `>=0.995` | `0.999998586` | `+0.004998586` margin | pass |
+| Worst numbered shell FSC | no unexplained deficit | `0.999992610` | arithmetic-level | pass |
+| Worst numbered merged GT FSC-AUC delta | `>=-0.002` | `-0.000005307` | `+0.001994693` margin | pass |
+| Final merged RECOVAR-vs-RELION FSC-AUC | `>=0.995`; prior accepted 3k `0.997260` | `0.998450626` | `+0.001190626` vs prior | better/pass |
+| Final minimum shell FSC | no unexplained deficit | `0.997581339` at shell 51 | all shells above gate | pass |
+| Final GT FSC-AUC, RECOVAR/RELION | RECOVAR no worse by `0.002` | `0.670747382 / 0.650834886` | `+0.019912496` | better/pass |
+| Final GT FSC=0.5 crossing | RELION shell 40 | RECOVAR shell 41 | +1 shell | better |
+
+Conclusion:
+
+- Overall status: accepted for the fixed 3k/128 K=1 trajectory gate.
+- Better metrics: final cross FSC-AUC improves over the prior accepted small
+  checkpoint, and RECOVAR GT FSC-AUC/resolution is higher than RELION.
+- Worse metrics: none against the quality contract.
+- Same metrics: exact schedule, convergence, and finalization semantics.
+- Scope limit: not a completion-benchmark or speed row; robustness, scale,
+  real-particle, 100k/256, and K=4 evidence remain open.
+
 ## Required Metric Template
 
 Use this template for each new completion benchmark.

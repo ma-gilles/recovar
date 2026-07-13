@@ -1714,6 +1714,43 @@ source-precision float64 Euler rows, and requests aligned host matrices for
 lazy parent-expanded/adaptive local layouts.  Ten focused tests pass.  The
 full `test_refine_relion_mode.py` result was 281 passed and five failed; all
 five failures reproduced unchanged on exact base `1e8ad088`, so none is
-introduced by this slice.  Full-trajectory FSC/FSC-AUC validation remains the
-next required gate.  Do not infer robustness, scale, real-data, or K=4 quality
+introduced by this slice.  The current-head full-trajectory validation is
+recorded below.  Do not infer robustness, scale, real-data, or K=4 quality
 parity from the completed iteration-1 classification alone.
+
+## 2026-07-13 Current-Head K=1 Full-Trajectory Acceptance
+
+Fail-closed A100 job `11144457` completed `0:0` in 12 minutes 10 seconds at
+commit `ef2dbd065812bafd3e31ba7863f4a2975414c249`.  Its root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_3k128_full_trajectory_preflight_20260713_144434`
+and is marked `SAFE_TO_DELETE`.  The runner required a clean exact head, the
+local M-step generator commit `e12b230a` in ancestry, and the SHA-256-qualified
+particle-4394 score classification.  It also hash-verified all 95 immutable
+RELION oracle inputs and kept `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` and
+`RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER` unset.
+
+The exact current-size schedule is `[56,56,66,68,80,80,80,80,80,80]`.
+RECOVAR and RELION converge at iteration 10, after which RECOVAR enters the
+valid converged final-all-data Nyquist path exactly once.  An independent
+NumPy FFT/shell-binning audit, which does not call RECOVAR FSC routines,
+recomputes every numbered half-map and merged curve.  Its worst numbered shell
+FSC is `0.999992610469` at iteration 10, half 2, shell 41.  The worst numbered
+half/merged normalized FSC-AUC is `0.999998585696`, and numbered merged GT
+FSC-AUC deltas range from `-5.306682553e-6` to `+4.833533575e-6`.
+
+The final merged RECOVAR-vs-RELION normalized FSC-AUC is `0.998450626094`.
+The minimum final shell FSC is `0.997581338511` at shell 51; low, middle, and
+high frequency-band means are `0.999657940515`, `0.997986171031`, and
+`0.997799875262`.  No final shell is below `0.995`, `0.99`, or `0.95`, and
+there is no isolated or coherent shellwise collapse.  Final RECOVAR GT
+FSC-AUC is `0.670747381970` versus RELION `0.650834885635`, a delta of
+`+0.019912496335`; FSC=0.5 crosses at shell 41 for RECOVAR and shell 40 for
+RELION.  Correlation is not used in this decision.
+
+The automated report, independent audit, saved shell arrays, and signed-off
+manual review are `TRAJECTORY_FSC_REPORT.md`,
+`independent_audit_job_11144457.json`, `trajectory_fsc_arrays.npz`, and
+`MANUAL_SHELLWISE_REVIEW.md` under the run root.  This closes the fixed
+3k/128 white-noise K=1 full-trajectory gate at the current head.  The next
+gates remain K=1 robustness, scale, and real-particle quality; K=4 strict
+quality follows those.  The run is not a speed comparison.

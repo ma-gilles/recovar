@@ -23,12 +23,12 @@ as the next product milestone rather than mixing it into the first closure.
 - **Performance:** exact accepted quality behavior with timing instrumentation;
   no algorithmic approximation without separate quality qualification.
 
-## Current State — 2026-07-12
+## Current State — 2026-07-13
 
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `536d6bd9de5f2dab900ec5cdd6ad055be728840b`
+Current accepted code checkpoint: `ef2dbd065812bafd3e31ba7863f4a2975414c249`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -47,14 +47,13 @@ Known evidence:
 - K=1 100k/256 map quality is excellent: merged RECOVAR-vs-RELION correlation
   `0.999571`, FSC-AUC `0.994387`, and RECOVAR GT FSC-AUC is `+0.009573` above
   RELION. RECOVAR is about `1.40x` RELION wall time on the recorded run.
-- K=1 free-trajectory Pmax diverges beginning at iter 2, but an exact fixed
-  RELION it001-to-it002 replay of worst particles gives Pmax correlation `1.0`,
-  mean absolute gap `0.000309`, max `0.000917`, and exact pose/translation.
-  The earliest proven state-history bug was iter-1 hard-winner Pmax assembly:
-  RECOVAR used the correct WTA reconstruction path but recomputed Pmax from
-  incompatible coarse/fine score normalizations, yielding mean `2.03e-6`
-  instead of RELION's exact `1.0`. A CPU regression now pins the fix; GPU
-  trajectory validation is pending.
+- Current-head K=1 fixed-fixture trajectory job `11144457` matches all ten
+  numbered iterations, the exact current-size schedule, convergence at
+  iteration 10, and the valid converged final-all-data path. Independent
+  shellwise recomputation puts every numbered half/merged FSC-AUC above
+  `0.9999985`; final merged RECOVAR-vs-RELION FSC-AUC is `0.998450626`, and
+  RECOVAR final GT FSC-AUC exceeds RELION by `0.019912496`. This closes the
+  fixed 3k/128 trajectory gate, not robustness, scale, real-data, or K=4.
 - K=4 100k/256 map quality is close/better by GT FSC-AUC, but particle-level
   state parity is incomplete: recorded class agreement `0.89025`, pose within
   5 degrees `0.71669`, translation within 1 px `0.77529`. Runtime is `2.181x`
@@ -62,15 +61,13 @@ Known evidence:
 - Exact local x-half current/full BPref microbatching now survives the recorded
   3k/128 stress case without OOM. The conservative cap is validated for that
   fixture, not yet a universal optimal cap.
-- The repaired 3k/128 strict trajectory matches RELION's ten numbered
-  iterations, convergence decision, current-size schedule, and final all-data
-  branch. Numbered map correlation rises from the qualified iter-1 tie result
-  (`0.995764`) to `0.999775` at iter 2 and `0.999912` at iter 10. The first
-  final-map report was semantically invalid because it compared RECOVAR's
-  all-data output to RELION's numbered half maps; the true unnumbered RELION
-  final comparison is correlation `0.987438`, FSC-AUC `0.980260`. The final
-  replay log exposes a concrete stale-state bug: final all-data requested
-  replay index 10 but the harness only populated through index 9.
+- The earlier 3k/128 final-state replay defect and iteration-1 reconstruction
+  boundary are repaired. The current accepted evidence is FSC/FSC-AUC based;
+  legacy map correlations are diagnostic only. The next K=1 work is the
+  predefined robustness matrix, followed by 10k, real-particle, and 100k/256
+  validation. The existing real EMPIAR-10076 failure is already localized to
+  iteration-3 low-shell PPref formation before amplification at the
+  iteration-8 global-to-local transition.
 
 Canonical evidence and paths are in `docs/math/relion_parity_agent_notes.md`
 and `docs/math/em_parity_best_metrics.md`.
