@@ -1954,27 +1954,39 @@ RELION-oracle FSC-AUC values are `0.996711349` and `0.996711421`.
 Evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/`.
 
-## 2026-07-14 Case-13 coarse Gaussian score boundary
+## 2026-07-14 Case-13 final per-half noise bug
 
-The two final case-13 pose differences have different classifications. One is
-a genuine numerical tie: the RELION decision margin after raw-score/prior
-cancellation is about `0.19` raw float32 ULP, and RECOVAR differs by only
-`2.07` ULP. The other is a real support-path failure. RELION retains coarse
-translation parent 10 as its twelfth sample at the 0.999 posterior-mass
-threshold; RECOVAR ranks the same finite candidate twelfth but excludes it
-because its cumulative mass crosses the threshold after eleven samples.
+The earlier case-13 coarse-score classification used an off-by-one RELION
+stack index and is retracted.  A corrected uninterrupted capture for original
+particle 1682 uses one-based stack index 1683 and reproduces the authoritative
+RELION raw-score checksum exactly: `t5=6559.189453125`,
+`t10=6577.24951171875`, and `t10-t5=-18.06005859375`.  The corrected layout
+mapping also includes RELION FFTW-y to RECOVAR centered-y roll by 64 rows.
 
-The significance implementations, indices, priors, translation coordinates,
-image/scale corrections, and manual-versus-texture projector selector are all
-ruled out. Direct RELION coarse raw score difference `t10-t5` is
-`-18.06005859375`, versus RECOVAR `-18.28744506836`, a discrepancy of
-`-0.22738647461` (about 14,900 float32 ULP). Across all finite translations,
-the centered discrepancy is a smooth quadratic (`R^2=0.9996576`), identifying
-a systematic Gaussian score-surface operand/reduction mismatch rather than a
-threshold tie.
+The valid operand comparison identifies a workflow bug rather than a scorer
+reduction bug.  Particle 1682 belongs to random subset 2, but RECOVAR's final
+all-data branch duplicated half 1's `sigma2_noise` spectrum and used it for
+both subsets.  RELION keeps `do_split_random_halves` enabled through the final
+expectation, so each follower scores its subset with its own model and noise
+spectrum; it combines the weighted sums only afterward and disables the split
+only while writing the joined final model.  The measured RECOVAR-to-RELION
+weight ratio is shell-constant to relative RMS `8.54e-7`, and substituting the
+half-2 noise reduces the float64 `t10-t5` operand discrepancy from about
+`0.225` to `3.80e-4`.  The remaining difference to RELION's live float32 raw
+score is `1.49e-3` and remains a qualified numerical scorer boundary, not the
+cause of this final support failure.
 
-Evidence:
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_exact_it9_final_20260714_145938/relion_score_pair_capture_d476e6/CASE13_TWO_SIDED_CLASSIFICATION.md`.
+The narrow fix retains the two half-specific noise spectra for the joined
+final E-step.  A fixed-state full final replay improves merged
+RECOVAR-vs-RELION FSC-AUC from `0.993421942` to `0.997786`, clearing the
+`0.995` gate.  RECOVAR merged GT FSC-AUC is `0.312351999`, versus RELION
+`0.301136412`; both have FSC<0.5 at shell 19 and FSC<0.143 at shell 27.  A
+clean autonomous trajectory remains the end-to-end acceptance gate.
+
+Corrected operand evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_exact_it9_final_20260714_145938/relion_score_pair_capture_d476e6/case13_matched_rel_rec_operand_analysis.json`.
+Fixed-state FSC evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_exact_it9_final_20260714_145938/relion_score_pair_capture_d476e6/recovar_parent_pass_dump_20260714/p1682_half_noise_fix_2d7ada89_cuda/benchmark_ledger.json`.
 
 ## 2026-07-14 Clean-head case-20 scale result
 
@@ -2005,6 +2017,26 @@ iteration-1 reference collapses that pair to an exact tie, while RELION's live
 kernel favors row 34 by one ULP.  The full native-to-RELION span is therefore
 four float32 ULPs.  All candidate masks, priors, rotations, translations, and
 non-reference operands are otherwise identical at the captured boundary.
+
+The reduction topology has a second, material detail.  RELION traverses the
+entire current-size FFTW packed image, including zero-weight pixels outside
+the scoring circle; those zero slots still determine the CUDA lane occupied
+by every retained pixel.  RECOVAR stores only 1,275 active case-20 pixels, so
+reducing that compact array consecutively is not equivalent to RELION's
+56-by-29, 1,624-slot layout.  H100 fixed-state job ``11189614`` restores the
+full-grid lane positions without materializing a hypothesis-by-full-image
+tensor.  This alone changes particle 365 from compact winner ``(1,29)`` to
+RELION-side winner ``(1,32)`` by one float32 ULP.  Particle 469 remains on
+RECOVAR's side by three ULPs while the live RELION kernel is on the other side
+by one ULP, leaving a qualified four-ULP operand discrepancy.  The kernel uses
+under 5.1 MB of compiled temporary storage and takes about 0.09--0.11 ms for
+these fixed rows.  This remains a diagnostic candidate, not a production
+change: rotation chunks need one external minimum over the complete fine
+support, K-class needs that minimum across classes, and centered log-evidence
+must carry ``-min_diff2`` rather than the existing image-norm offset.
+
+Validation report:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it2_gaussian_capture_20260714_182500/case20_full_grid_diff2_validation.json`.
 
 The reference difference is traced one layer earlier.  Same-H100 RELION job
 ``11188600`` captured the post-join iteration-1 BackProjectors and three map
