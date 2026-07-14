@@ -57,6 +57,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
     make_shell_indices_half,
+    mask_relion_noise_shell_indices_to_current_window,
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     enforce_half_volume_x0,
@@ -6163,6 +6164,13 @@ def compute_pass2_stats_sparse_bucketed(
 
     if accumulate_noise:
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
+        if use_window:
+            shell_indices_half = mask_relion_noise_shell_indices_to_current_window(
+                shell_indices_half,
+                image_shape,
+                current_size,
+                window_indices,
+            )
         shell_indices_noise = window_spec.recon_values(shell_indices_half)
         noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
         scale_correction_pixel_mask = _relion_scale_correction_pixel_mask(
@@ -8425,6 +8433,13 @@ def compute_k_class_pass2_stats_sparse_fused(
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(shared_noise_variance, image_shape).squeeze()
     if accumulate_noise:
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
+        if use_window:
+            shell_indices_half = mask_relion_noise_shell_indices_to_current_window(
+                shell_indices_half,
+                image_shape,
+                current_size,
+                window_indices,
+            )
         shell_indices_noise = window_spec.recon_values(shell_indices_half)
         noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
         scale_dvp = scale_correction_data_vs_prior

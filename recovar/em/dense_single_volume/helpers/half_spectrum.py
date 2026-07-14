@@ -95,6 +95,34 @@ def make_relion_noise_shell_indices_half(image_shape):
     return jnp.asarray(shell_indices.reshape(-1), dtype=jnp.int32)
 
 
+def mask_relion_noise_shell_indices_to_current_window(
+    shell_indices,
+    image_shape,
+    current_size,
+    current_window_indices,
+):
+    """Drop low-shell pixels outside RELION's asymmetric current FFT crop.
+
+    A rounded radial shell mask alone retains a few pixels on both even-size
+    boundary rows (for example ``ky=+/-28`` at current size 56). RELION's
+    ``windowFourierTransform`` rectangle retains only the positive boundary
+    row in RECOVAR's centered layout. Pixels on the opposite boundary are
+    neither current-image residuals nor high-shell extensions, because their
+    rounded shell is still the current cutoff.
+    """
+
+    if current_size is None or int(current_size) >= int(image_shape[0]):
+        return jnp.asarray(shell_indices, dtype=jnp.int32)
+    shell_indices = jnp.asarray(shell_indices, dtype=jnp.int32)
+    current_window_mask = jnp.zeros(shell_indices.shape, dtype=bool)
+    current_window_mask = current_window_mask.at[jnp.asarray(current_window_indices, dtype=jnp.int32)].set(True)
+    current_window_mask = current_window_mask.at[half_spectrum_dc_index(image_shape)].set(True)
+    shell_cutoff = int(current_size) // 2
+    sentinel = int(image_shape[0]) // 2 + 1
+    outside_current_crop = (shell_indices <= shell_cutoff) & ~current_window_mask
+    return jnp.where(outside_current_crop, sentinel, shell_indices)
+
+
 def bin_shell_values_jax(values, shell_indices, n_shells):
     """Bin per-pixel values into shell indices, dropping RELION sentinel pixels."""
 

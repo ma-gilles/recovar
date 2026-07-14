@@ -26,6 +26,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
+    mask_relion_noise_shell_indices_to_current_window,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     preprocess_batch as _preprocess_batch,
@@ -374,6 +375,31 @@ class TestWindowIndicesSubset:
         assert len(shell1_coords) == 4
         counts = np.bincount(shell_indices[shell_indices <= shape[0] // 2], minlength=shape[0] // 2 + 1)
         assert counts[:5].tolist() == [1, 4, 6, 8, 16]
+
+    @pytest.mark.parametrize("square", [False, True])
+    def test_relion_noise_shell_indices_follow_asymmetric_current_crop(self, square):
+        shape = (128, 128)
+        current_size = 56
+        window_indices, _ = make_fourier_window_indices_np(
+            shape,
+            current_size=current_size,
+            square=square,
+            include_dc=True,
+        )
+        shell_indices = mask_relion_noise_shell_indices_to_current_window(
+            make_relion_noise_shell_indices_half(shape),
+            shape,
+            current_size,
+            window_indices,
+        )
+        shell_indices = np.asarray(shell_indices).reshape(shape[0], shape[1] // 2 + 1)
+        sentinel = shape[0] // 2 + 1
+
+        # RECOVAR's centered crop keeps ky=+28. The opposite boundary row is
+        # outside RELION's 56x29 rectangle even where rounded radius is 28.
+        assert np.all(shell_indices[36, 1:6] == sentinel)
+        assert np.all(shell_indices[92, 1:6] == 28)
+        assert int(np.count_nonzero(shell_indices <= current_size // 2)) == 1276
 
     def test_square_window_matches_relion_downsized_half_shape(self):
         """Square mode matches RELION windowFourierTransform's FFTW crop size."""
