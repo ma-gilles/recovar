@@ -90,6 +90,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
     compute_norm_residual_per_image as _compute_norm_residual_per_image,
     compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
+    relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_projections_block as _compute_projections_block,
@@ -1679,6 +1680,8 @@ def run_local_em_exact(
     image_corrections: np.ndarray | None = None,
     scale_corrections: np.ndarray | None = None,
     group_ids: np.ndarray | None = None,
+    scale_correction_group_count: int | None = None,
+    scale_correction_data_vs_prior: np.ndarray | None = None,
     image_pre_shifts: np.ndarray | None = None,
     mstep_subtract_ctf_projection: bool = False,
     mstep_relion_x_half: bool = False,
@@ -1729,13 +1732,26 @@ def run_local_em_exact(
     class_log_prior = float(class_log_prior)
     group_ids_np = None
     n_scale_groups = 0
+    explicit_scale_group_count = 0
+    if scale_correction_group_count is not None:
+        explicit_scale_group_count = int(scale_correction_group_count)
+        if (
+            explicit_scale_group_count < 0
+            or not np.isfinite(float(scale_correction_group_count))
+            or float(scale_correction_group_count) != float(explicit_scale_group_count)
+        ):
+            raise ValueError(
+                "scale_correction_group_count must be a non-negative integer, "
+                f"got {scale_correction_group_count!r}"
+            )
     if group_ids is not None:
         group_ids_np = np.asarray(group_ids, dtype=np.int64).reshape(-1)
         if group_ids_np.shape != (n_images,):
             raise ValueError(f"group_ids must have shape ({n_images},), got {group_ids_np.shape}")
         if group_ids_np.size and int(np.min(group_ids_np)) < 0:
             raise ValueError("group_ids must be non-negative")
-        n_scale_groups = int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
+        inferred_scale_group_count = int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
+        n_scale_groups = max(explicit_scale_group_count, inferred_scale_group_count)
     normalization_log_z_np = None
     if normalization_log_z is not None:
         normalization_log_z_np = np.asarray(normalization_log_z, dtype=np.float64)
@@ -1952,6 +1968,11 @@ def run_local_em_exact(
         shell_indices_noise = window_spec.recon_values(shell_indices_half)
         norm_unweighted_shell_cutoff = image_shape[0] // 2 if current_size is None else int(current_size // 2)
         noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
+        scale_correction_pixel_mask = _relion_scale_correction_pixel_mask(
+            scale_correction_data_vs_prior,
+            shell_indices_noise,
+            n_shells=n_shells,
+        )
         noise_wsum = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_img_power = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_norm_correction = jnp.zeros(n_images, dtype=jnp.float32)
@@ -2688,6 +2709,7 @@ def run_local_em_exact(
                 shell_indices_half_arg = shell_indices_half
                 shell_indices_noise_arg = shell_indices_noise
                 noise_variance_for_noise_arg = noise_variance_for_noise
+                scale_correction_pixel_mask_arg = scale_correction_pixel_mask
                 n_shells_arg = n_shells
             else:
                 noise_wsum_arg = disabled_noise_wsum
@@ -2700,6 +2722,7 @@ def run_local_em_exact(
                 shell_indices_half_arg = disabled_noise_shell_indices
                 shell_indices_noise_arg = disabled_noise_shell_indices
                 noise_variance_for_noise_arg = noise_variance_half
+                scale_correction_pixel_mask_arg = jnp.zeros(n_half, dtype=bool)
                 n_shells_arg = 1
             if reconstruction_probability_threshold_np is None:
                 reconstruction_probability_threshold_arg = jnp.zeros((batch_size,), dtype=jnp.float32)
@@ -2762,6 +2785,7 @@ def run_local_em_exact(
                 shell_indices_half_arg,
                 shell_indices_noise_arg,
                 noise_variance_for_noise_arg,
+                scale_correction_pixel_mask_arg,
                 big_jit_projection_pixel_indices_arg,
                 big_jit_projection_score_take_arg,
                 big_jit_projection_recon_take_arg,
@@ -3407,6 +3431,7 @@ def run_local_em_exact(
                             chunk_ctf_probs,
                             noise_variance_for_noise,
                             batch_scale_unpadded,
+                            scale_correction_pixel_mask,
                         )
                         noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image)
                         noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image)
@@ -4432,6 +4457,7 @@ def run_local_em_exact(
                             chunk_ctf_probs,
                             noise_variance_for_noise,
                             batch_scale,
+                            scale_correction_pixel_mask,
                         )
                         noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image)
                         noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image)
@@ -4503,6 +4529,7 @@ def run_local_em_exact(
                             chunk_ctf_probs,
                             noise_variance_for_noise,
                             batch_scale,
+                            scale_correction_pixel_mask,
                         )
                         noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image)
                         noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image)

@@ -799,6 +799,7 @@ def update_relion_norm_scale_corrections(
     image_corrections_per_half=None,
     scale_corrections_per_half=None,
     group_ids_per_half=None,
+    group_count_per_half=None,
     group_scale_corrections_per_half=None,
     avg_norm_correction_per_half=None,
     relion_firstiter_cc_this_iter: bool = False,
@@ -825,6 +826,7 @@ def update_relion_norm_scale_corrections(
     image_corr_in = _half_list_or_none(image_corrections_per_half, n_halves=2, name="image_corrections_per_half")
     scale_corr_in = _half_list_or_none(scale_corrections_per_half, n_halves=2, name="scale_corrections_per_half")
     group_ids_in = _half_list_or_none(group_ids_per_half, n_halves=2, name="group_ids_per_half")
+    group_count_in = _half_list_or_none(group_count_per_half, n_halves=2, name="group_count_per_half")
     group_scale_in = _half_list_or_none(
         group_scale_corrections_per_half,
         n_halves=2,
@@ -903,16 +905,29 @@ def update_relion_norm_scale_corrections(
             )
 
         n_groups_from_ids = int(np.max(group_ids)) + 1 if group_ids.size else 1
+        explicit_group_count = 0
+        if group_count_in[half_idx] is not None:
+            explicit_group_count = int(group_count_in[half_idx])
+            if (
+                explicit_group_count < 0
+                or not np.isfinite(float(group_count_in[half_idx]))
+                or float(group_count_in[half_idx]) != float(explicit_group_count)
+            ):
+                raise ValueError(
+                    f"group_count_per_half[{half_idx}] must be a non-negative integer, "
+                    f"got {group_count_in[half_idx]!r}"
+                )
+        required_group_count = max(explicit_group_count, n_groups_from_ids)
         if group_scale_in[half_idx] is None:
-            n_groups = n_groups_from_ids
+            n_groups = required_group_count
             group_scale_old = _derive_group_scale_from_image_scale(scale_per_image_in, group_ids, n_groups)
         else:
             group_scale_old = np.asarray(group_scale_in[half_idx], dtype=np.float64).reshape(-1)
             n_groups = int(group_scale_old.shape[0])
-            if n_groups < n_groups_from_ids:
+            if n_groups < required_group_count:
                 raise ValueError(
                     f"group_scale_corrections_per_half[{half_idx}] has {n_groups} groups, "
-                    f"but group IDs require {n_groups_from_ids}",
+                    f"but group IDs / explicit count require {required_group_count}",
                 )
         if np.any(group_scale_old <= 0.0):
             raise ValueError("group scale corrections must be positive")

@@ -28,6 +28,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -400,27 +401,113 @@ def _format_replay_mean_for_log(values) -> str:
     return f"{float(arr.mean()):.4f}"
 
 
+class NativeGroupLayout(NamedTuple):
+    """RELION group labels in RECOVAR half order plus the full model axis."""
+
+    group_ids_per_half: tuple[np.ndarray, np.ndarray]
+    n_groups: int
+    source: str
+
+
+def _relion_image_identity(name, *, label: str) -> tuple[int, str]:
+    """Return the exact ``(<1-based index>, <stack>)`` RELION image identity."""
+
+    match = re.fullmatch(r"(\d+)@(.+)", str(name))
+    if match is None:
+        raise ValueError(f"{label} image names must use the '<index>@<stack>' form; got {name!r}")
+    return int(match.group(1)), match.group(2)
+
+
+def _particle_identity_rows(particles, *, label: str) -> dict[tuple[int, str], int]:
+    if "rlnImageName" not in particles.columns:
+        raise ValueError(f"{label} is missing rlnImageName")
+    identities = [
+        _relion_image_identity(name, label=label)
+        for name in np.asarray(particles["rlnImageName"]).reshape(-1)
+    ]
+    if len(set(identities)) != len(identities):
+        raise ValueError(f"{label} contains duplicate rlnImageName/stack identities")
+    return {identity: row for row, identity in enumerate(identities)}
+
+
+def _resolve_native_group_layout(
+    our_particles,
+    half1_idx,
+    half2_idx,
+    *,
+    relion_particles=None,
+) -> NativeGroupLayout | None:
+    """Map RELION groups to RECOVAR rows without assuming equal STAR order.
+
+    The supplied RELION data table is authoritative when it carries
+    ``rlnGroupNumber``.  Otherwise this falls back to the RECOVAR input table.
+    Group numbers remain on RELION's full model axis even when a half-set does
+    not contain the highest-numbered group.
+    """
+
+    if relion_particles is not None and "rlnGroupNumber" in relion_particles.columns:
+        group_particles = relion_particles
+        source = "supplied RELION data STAR"
+    elif "rlnGroupNumber" in our_particles.columns:
+        group_particles = our_particles
+        source = "RECOVAR input particles STAR"
+    else:
+        return None
+
+    our_rows = _particle_identity_rows(our_particles, label="RECOVAR input STAR")
+    group_rows = _particle_identity_rows(group_particles, label=source)
+    if set(our_rows) != set(group_rows):
+        missing = len(set(our_rows) - set(group_rows))
+        extra = len(set(group_rows) - set(our_rows))
+        raise ValueError(
+            f"{source} and RECOVAR input STAR do not contain the same "
+            f"rlnImageName/stack identities (missing={missing}, extra={extra})",
+        )
+
+    group_numbers_source = np.asarray(group_particles["rlnGroupNumber"], dtype=np.int64).reshape(-1)
+    if group_numbers_source.shape != (len(group_particles),):
+        raise ValueError(
+            f"rlnGroupNumber length {group_numbers_source.size} does not match "
+            f"{source} particle count {len(group_particles)}",
+        )
+    if group_numbers_source.size and int(np.min(group_numbers_source)) < 1:
+        raise ValueError("RELION rlnGroupNumber values must be 1-based positive integers")
+
+    group_ids_by_our_row = np.asarray(
+        [group_numbers_source[group_rows[identity]] - 1 for identity in our_rows],
+        dtype=np.int64,
+    )
+    half_indices = []
+    for label, values in (("half1_idx", half1_idx), ("half2_idx", half2_idx)):
+        indices = np.asarray(values, dtype=np.int64).reshape(-1)
+        if indices.size and (int(np.min(indices)) < 0 or int(np.max(indices)) >= len(our_particles)):
+            raise ValueError(f"{label} contains an out-of-bounds RECOVAR particle row")
+        if np.unique(indices).size != indices.size:
+            raise ValueError(f"{label} contains duplicate RECOVAR particle rows")
+        half_indices.append(indices)
+    if np.intersect1d(half_indices[0], half_indices[1]).size:
+        raise ValueError("half1_idx and half2_idx overlap")
+
+    n_groups = int(np.max(group_numbers_source)) if group_numbers_source.size else 0
+    return NativeGroupLayout(
+        group_ids_per_half=(
+            np.asarray(group_ids_by_our_row[half_indices[0]], dtype=np.int64),
+            np.asarray(group_ids_by_our_row[half_indices[1]], dtype=np.int64),
+        ),
+        n_groups=n_groups,
+        source=source,
+    )
+
+
 def _load_native_group_ids_per_half(particles_star, half1_idx, half2_idx):
-    """Return 0-based RELION group IDs per half when particles.star provides them."""
+    """Compatibility wrapper for a single particles STAR group layout."""
 
     import starfile as _starfile
 
     data = _starfile.read(str(particles_star))
     particles = data["particles"] if isinstance(data, dict) else data
-    if "rlnGroupNumber" not in particles.columns:
-        return None
-    group_numbers = np.asarray(particles["rlnGroupNumber"], dtype=np.int64).reshape(-1)
-    if group_numbers.size != len(particles):
-        raise ValueError(
-            f"rlnGroupNumber length {group_numbers.size} does not match particles table length {len(particles)}"
-        )
-    if group_numbers.size and int(np.min(group_numbers)) < 1:
-        raise ValueError("RELION rlnGroupNumber values must be 1-based positive integers")
-    group_ids = group_numbers - 1
-    return [
-        np.asarray(group_ids[np.asarray(half1_idx, dtype=np.int64)], dtype=np.int64),
-        np.asarray(group_ids[np.asarray(half2_idx, dtype=np.int64)], dtype=np.int64),
-    ]
+    layout = _resolve_native_group_layout(particles, half1_idx, half2_idx)
+    return None if layout is None else list(layout.group_ids_per_half)
 
 
 def _default_refinement_subsets(n_images, seed, n_classes):
@@ -1566,6 +1653,7 @@ def main():
     expected_accuracy_half1_base_order_local = None
     expected_accuracy_half1_optics_group_ids = None
     expected_accuracy_half1_particle_ids = None
+    relion_particles = None
 
     if args.relion_half_sets is not None:
         # Use RELION's half-set split from rlnRandomSubset
@@ -1611,16 +1699,23 @@ def main():
     ds_half1 = ds.subset(half1_idx)
     ds_half2 = ds.subset(half2_idx)
     logger.info("Half-sets: %d + %d images", ds_half1.n_units, ds_half2.n_units)
-    native_group_ids_per_half = _load_native_group_ids_per_half(
-        os.path.join(args.data_dir, "particles.star"),
+    native_group_layout = _resolve_native_group_layout(
+        our_particles,
         half1_idx,
         half2_idx,
+        relion_particles=relion_particles,
     )
-    if native_group_ids_per_half is not None:
+    native_group_ids_per_half = (
+        None if native_group_layout is None else list(native_group_layout.group_ids_per_half)
+    )
+    native_group_count = None if native_group_layout is None else native_group_layout.n_groups
+    if native_group_layout is not None:
         logger.info(
-            "Native RELION group IDs from particles.star: half1 groups=%s half2 groups=%s",
-            np.unique(native_group_ids_per_half[0]).tolist(),
-            np.unique(native_group_ids_per_half[1]).tolist(),
+            "Native RELION group layout: source=%s full_groups=%d half1_present=%d half2_present=%d",
+            native_group_layout.source,
+            native_group_count,
+            int(np.unique(native_group_ids_per_half[0]).size),
+            int(np.unique(native_group_ids_per_half[1]).size),
         )
 
     optimiser_star = _find_relion_optimiser_star(args)
@@ -2131,6 +2226,7 @@ def main():
             relion_firstiter_ini_high_angstrom if args.firstiter_cc else None
         ),
         init_group_ids=native_group_ids_per_half,
+        init_group_count=native_group_count,
         init_previous_best_translations=(
             None
             if init_previous_best_poses is None

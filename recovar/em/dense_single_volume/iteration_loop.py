@@ -1746,6 +1746,8 @@ def _score_half_dense(
     best_pose_rotation_eulers,
     best_pose_translations,
     group_ids_k=None,
+    group_count_k=None,
+    scale_correction_data_vs_prior=None,
     # Mode-specific overrides (adaptive site sets these; single-pass uses
     # the defaults):
     k_class_image_batch_size_override: int | None = None,
@@ -1800,6 +1802,9 @@ def _score_half_dense(
         "translation_log_prior": translation_log_prior,
         "image_corrections": image_corrections_k,
         "scale_corrections": scale_corrections_k,
+        "group_ids": group_ids_k,
+        "scale_correction_group_count": group_count_k,
+        "scale_correction_data_vs_prior": scale_correction_data_vs_prior,
         "image_pre_shifts": translation_search_base,
         "translation_prior_centers": trans_prior_center_for_engine,
         "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
@@ -1972,6 +1977,9 @@ def _score_half_dense(
             # historical layout and avoid tagging its full-volume output as
             # x-half-expanded.
             dense_em_kwargs.pop("mstep_relion_x_half", None)
+            dense_em_kwargs.pop("group_ids", None)
+            dense_em_kwargs.pop("scale_correction_group_count", None)
+            dense_em_kwargs.pop("scale_correction_data_vs_prior", None)
             k_class_result = run_dense_k_class_em(
                 experiment_dataset,
                 means_k,
@@ -2215,6 +2223,15 @@ def _score_half_dense(
             mstep_accumulator_shape=getattr(k1_adaptive_result, "mstep_accumulator_shape", None),
         )
 
+    if group_ids_k is not None:
+        raise RuntimeError(
+            "RELION native group-scale correction requires the sparse/adaptive or local "
+            "M-step; direct dense K=1 does not accumulate group XA/AA statistics"
+        )
+    direct_em_kwargs = dict(em_kwargs)
+    direct_em_kwargs.pop("group_ids", None)
+    direct_em_kwargs.pop("scale_correction_group_count", None)
+    direct_em_kwargs.pop("scale_correction_data_vs_prior", None)
     _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
         experiment_dataset,
         means_k,
@@ -2227,7 +2244,7 @@ def _score_half_dense(
         accumulate_noise=True,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
-        **em_kwargs,
+        **direct_em_kwargs,
     )
     return HalfScoreResult(
         ha=ha_k,
@@ -2315,6 +2332,8 @@ def _score_half_local(
     local_profile_history,
     local_search_mstep_rotations=None,
     group_ids_k=None,
+    group_count_k=None,
+    scale_correction_data_vs_prior=None,
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
 ) -> HalfScoreResult:
@@ -2492,6 +2511,8 @@ def _score_half_local(
             image_corrections=image_corrections_k,
             scale_corrections=scale_corrections_k,
             group_ids=group_ids_k,
+            scale_correction_group_count=group_count_k,
+            scale_correction_data_vs_prior=scale_correction_data_vs_prior,
             image_pre_shifts=translation_search_base,
             score_with_masked_images=True,
             return_profile=True,
@@ -2683,6 +2704,8 @@ def _score_half_local(
                 image_corrections=image_corrections_k,
                 scale_corrections=scale_corrections_k,
                 group_ids=group_ids_k,
+                scale_correction_group_count=group_count_k,
+                scale_correction_data_vs_prior=scale_correction_data_vs_prior,
                 image_pre_shifts=translation_search_base,
                 score_with_masked_images=True,
                 return_profile=False,
@@ -2766,6 +2789,8 @@ def _score_half_local(
         image_corrections=image_corrections_k,
         scale_corrections=scale_corrections_k,
         group_ids=group_ids_k,
+        scale_correction_group_count=group_count_k,
+        scale_correction_data_vs_prior=scale_correction_data_vs_prior,
         image_pre_shifts=translation_search_base,
         score_with_masked_images=True,
         mstep_relion_x_half=local_relion_x_half_mstep,
@@ -3254,6 +3279,7 @@ def refine_single_volume(
     init_image_corrections=None,
     init_scale_corrections=None,
     init_group_ids=None,
+    init_group_count=None,
     init_direction_prior=None,
     init_previous_best_translations=None,
     init_previous_best_rotation_eulers=None,
@@ -3429,6 +3455,7 @@ def refine_single_volume(
         init_image_corrections = replay.init_image_corrections
         init_scale_corrections = replay.init_scale_corrections
         init_group_ids = replay.init_group_ids
+        init_group_count = replay.init_group_count
         init_direction_prior = replay.init_direction_prior
         init_previous_best_translations = replay.init_previous_best_translations
         init_previous_best_rotation_eulers = replay.init_previous_best_rotation_eulers
@@ -3487,6 +3514,7 @@ def refine_single_volume(
         init_image_corrections=init_image_corrections,
         init_scale_corrections=init_scale_corrections,
         init_group_ids=init_group_ids,
+        init_group_count=init_group_count,
         init_direction_prior=init_direction_prior,
         init_previous_best_translations=init_previous_best_translations,
         init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
@@ -3560,6 +3588,7 @@ def _run_relion_iteration_loop(
     init_image_corrections=None,
     init_scale_corrections=None,
     init_group_ids=None,
+    init_group_count=None,
     init_direction_prior=None,
     init_previous_best_translations=None,
     init_previous_best_rotation_eulers=None,
@@ -3863,6 +3892,7 @@ def _run_relion_iteration_loop(
         image_corrections=init_image_corrections,
         scale_corrections=init_scale_corrections,
         group_ids=init_group_ids,
+        group_count=init_group_count,
     )
     max_posterior_per_half = per_half.max_posterior
     rotation_posterior_per_half = per_half.rotation_posterior
@@ -4875,6 +4905,11 @@ def _run_relion_iteration_loop(
                 time.time() - projector_t0,
             )
 
+        # Freeze the exact iteration-start curve used by RELION's scale XA/AA
+        # shell gate.  The scheduling variable is updated again after the
+        # reconstruction, before parity diagnostics are written.
+        scale_correction_data_vs_prior_this_iter = previous_data_vs_prior_for_scheduling
+
         for k in range(2):
             noise_variance_k = noise_variance_per_half[k]
             rotation_log_prior_k = rotation_log_prior_per_half[k]
@@ -5124,6 +5159,8 @@ def _run_relion_iteration_loop(
                     image_corrections_k=relion_half_inputs.image_corrections[k],
                     scale_corrections_k=relion_half_inputs.scale_corrections[k],
                     group_ids_k=relion_half_inputs.group_ids[k],
+                    group_count_k=relion_half_inputs.group_count[k],
+                    scale_correction_data_vs_prior=scale_correction_data_vs_prior_this_iter,
                     translation_search_base=translation_search_base,
                     disable_adjoint_y=disable_adjoint_y,
                     disable_adjoint_ctf=disable_adjoint_ctf,
@@ -5185,6 +5222,8 @@ def _run_relion_iteration_loop(
                     image_corrections_k=relion_half_inputs.image_corrections[k],
                     scale_corrections_k=relion_half_inputs.scale_corrections[k],
                     group_ids_k=relion_half_inputs.group_ids[k],
+                    group_count_k=relion_half_inputs.group_count[k],
+                    scale_correction_data_vs_prior=scale_correction_data_vs_prior_this_iter,
                     firstiter_score_mode_this_iter=firstiter_score_mode_this_iter,
                     firstiter_winner_take_all_this_iter=firstiter_winner_take_all_this_iter,
                     cs_for_engine=cs_for_engine,
@@ -5254,6 +5293,8 @@ def _run_relion_iteration_loop(
                     image_corrections_k=relion_half_inputs.image_corrections[k],
                     scale_corrections_k=relion_half_inputs.scale_corrections[k],
                     group_ids_k=relion_half_inputs.group_ids[k],
+                    group_count_k=relion_half_inputs.group_count[k],
+                    scale_correction_data_vs_prior=scale_correction_data_vs_prior_this_iter,
                     firstiter_score_mode_this_iter=firstiter_score_mode_this_iter,
                     firstiter_winner_take_all_this_iter=firstiter_winner_take_all_this_iter,
                     cs_for_engine=cs_for_engine,
@@ -6449,6 +6490,10 @@ def _run_relion_iteration_loop(
         if not relion_firstiter_cc_this_iter:
             _parity_dump.mark_stage(iteration, "noise_update")
 
+        group_scale_corrections_for_dump = [None, None]
+        norm_corrections_for_dump = [None, None]
+        avg_norm_corrections_for_dump = [None, None]
+        zero_norm_residual_counts_for_dump = [None, None]
         can_update_norm_scale = (
             noise_stats_per_half is not None
             and all(
@@ -6472,12 +6517,17 @@ def _run_relion_iteration_loop(
                 image_corrections_per_half=relion_half_inputs.image_corrections,
                 scale_corrections_per_half=relion_half_inputs.scale_corrections,
                 group_ids_per_half=group_ids_per_half,
+                group_count_per_half=relion_half_inputs.group_count,
                 relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
                 do_norm_correction=True,
                 do_scale_correction=True,
             )
             relion_half_inputs.image_corrections = norm_scale_update.image_corrections_per_half
             relion_half_inputs.scale_corrections = norm_scale_update.scale_corrections_per_half
+            group_scale_corrections_for_dump = norm_scale_update.group_scale_corrections_per_half
+            norm_corrections_for_dump = norm_scale_update.norm_corrections_per_half
+            avg_norm_corrections_for_dump = norm_scale_update.avg_norm_correction_per_half
+            zero_norm_residual_counts_for_dump = norm_scale_update.zero_norm_residual_counts
             if any(int(count) > 0 for count in norm_scale_update.zero_norm_residual_counts):
                 logger.warning(
                     "RELION norm correction preserved previous image normalization for zero/tiny norm residuals: "
@@ -6487,11 +6537,13 @@ def _run_relion_iteration_loop(
                 )
             logger.info(
                 "RELION norm correction update: avg_norm half1=%.6g half2=%.6g; "
-                "image_corr ranges half1=%s half2=%s",
+                "image_corr ranges half1=%s half2=%s; scale_corr ranges half1=%s half2=%s",
                 float(norm_scale_update.avg_norm_correction_per_half[0]),
                 float(norm_scale_update.avg_norm_correction_per_half[1]),
                 _format_relion_correction_range(norm_scale_update.image_corrections_per_half[0]),
                 _format_relion_correction_range(norm_scale_update.image_corrections_per_half[1]),
+                _format_relion_correction_range(norm_scale_update.scale_corrections_per_half[0]),
+                _format_relion_correction_range(norm_scale_update.scale_corrections_per_half[1]),
             )
 
         # Save per-iter per-shell sigma2 (after this iter's noise update) and
@@ -6790,6 +6842,15 @@ def _run_relion_iteration_loop(
                     unreg_means=unreg_means,
                     new_iter_best_rotation_eulers=new_iter_best_rotation_eulers,
                     new_iter_best_translations=new_iter_best_translations,
+                    image_corrections=relion_half_inputs.image_corrections,
+                    scale_corrections=relion_half_inputs.scale_corrections,
+                    group_ids=relion_half_inputs.group_ids,
+                    group_counts=relion_half_inputs.group_count,
+                    group_scale_corrections=group_scale_corrections_for_dump,
+                    norm_corrections=norm_corrections_for_dump,
+                    avg_norm_corrections=avg_norm_corrections_for_dump,
+                    zero_norm_residual_counts=zero_norm_residual_counts_for_dump,
+                    scale_correction_data_vs_prior=scale_correction_data_vs_prior_this_iter,
                 )
             except Exception as exc:
                 logger.warning("parity_dump.dump_iteration failed at iter %d: %s", iteration, exc)
@@ -7676,6 +7737,8 @@ def _run_relion_iteration_loop(
                 image_corrections_k=relion_half_inputs.image_corrections[k],
                 scale_corrections_k=relion_half_inputs.scale_corrections[k],
                 group_ids_k=relion_half_inputs.group_ids[k],
+                group_count_k=relion_half_inputs.group_count[k],
+                scale_correction_data_vs_prior=previous_data_vs_prior_for_scheduling,
                 translation_search_base=translation_search_base,
                 disable_adjoint_y=disable_adjoint_y,
                 disable_adjoint_ctf=disable_adjoint_ctf,
@@ -7727,6 +7790,8 @@ def _run_relion_iteration_loop(
                 image_corrections_k=relion_half_inputs.image_corrections[k],
                 scale_corrections_k=relion_half_inputs.scale_corrections[k],
                 group_ids_k=relion_half_inputs.group_ids[k],
+                group_count_k=relion_half_inputs.group_count[k],
+                scale_correction_data_vs_prior=previous_data_vs_prior_for_scheduling,
                 firstiter_score_mode_this_iter="gaussian",
                 firstiter_winner_take_all_this_iter=False,
                 cs_for_engine=final_current_size,

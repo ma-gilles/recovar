@@ -83,6 +83,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
     compute_projections_block as _compute_projections_block,
     compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
+    relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
 )
 from recovar.em.dense_single_volume.helpers.significance import (
     ComplementSignificantSampleIndices,
@@ -5664,6 +5665,8 @@ def compute_pass2_stats_sparse_bucketed(
     square_window=False,
     random_perturbation,
     group_ids=None,
+    scale_correction_group_count=None,
+    scale_correction_data_vs_prior=None,
     normalization_log_z=None,
     normalization_other_score_log_z=None,
     return_score_log_z=False,
@@ -6076,13 +6079,26 @@ def compute_pass2_stats_sparse_bucketed(
     noise_sumw_total = 0.0
     noise_sigma2_offset_total = 0.0
     group_ids_np = None
+    explicit_scale_group_count = 0
+    if scale_correction_group_count is not None:
+        explicit_scale_group_count = int(scale_correction_group_count)
+        if (
+            explicit_scale_group_count < 0
+            or not np.isfinite(float(scale_correction_group_count))
+            or float(scale_correction_group_count) != float(explicit_scale_group_count)
+        ):
+            raise ValueError(
+                "scale_correction_group_count must be a non-negative integer, "
+                f"got {scale_correction_group_count!r}"
+            )
     if group_ids is not None:
         group_ids_np = np.asarray(group_ids, dtype=np.int64).reshape(-1)
         if group_ids_np.shape != (n_images,):
             raise ValueError(f"group_ids must have shape ({n_images},), got {group_ids_np.shape}")
         if group_ids_np.size and int(np.min(group_ids_np)) < 0:
             raise ValueError("group_ids must be non-negative")
-        n_scale_groups = int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
+        inferred_scale_group_count = int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
+        n_scale_groups = max(explicit_scale_group_count, inferred_scale_group_count)
         noise_scale_correction_xa_total = np.zeros(n_scale_groups, dtype=np.float64)
         noise_scale_correction_aa_total = np.zeros(n_scale_groups, dtype=np.float64)
     if accumulate_noise:
@@ -6149,6 +6165,11 @@ def compute_pass2_stats_sparse_bucketed(
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
         shell_indices_noise = window_spec.recon_values(shell_indices_half)
         noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
+        scale_correction_pixel_mask = _relion_scale_correction_pixel_mask(
+            scale_correction_data_vs_prior,
+            shell_indices_noise,
+            n_shells=n_shells,
+        )
 
     normalization_log_z_np = None
     if normalization_log_z is not None:
@@ -6885,6 +6906,7 @@ def compute_pass2_stats_sparse_bucketed(
                             ctf_probs,
                             noise_variance_for_noise,
                             bucket_scale_for_stats,
+                            scale_correction_pixel_mask,
                         )
                         np.add.at(
                             noise_scale_correction_xa_total,
@@ -7387,6 +7409,7 @@ def compute_pass2_stats_sparse_bucketed(
                     ctf_probs,
                     noise_variance_for_noise,
                     bucket_scale_for_stats,
+                    scale_correction_pixel_mask,
                 )
                 np.add.at(
                     noise_scale_correction_xa_total,
@@ -7606,6 +7629,8 @@ def compute_k_class_pass2_stats_sparse_fused(
     image_corrections=None,
     scale_corrections=None,
     group_ids=None,
+    scale_correction_group_count=None,
+    scale_correction_data_vs_prior=None,
     image_pre_shifts=None,
     use_float64_scoring=False,
     translation_prior_centers=None,
@@ -8311,13 +8336,26 @@ def compute_k_class_pass2_stats_sparse_fused(
     group_ids_np = None
     noise_scale_correction_xa_total = None
     noise_scale_correction_aa_total = None
+    explicit_scale_group_count = 0
+    if scale_correction_group_count is not None:
+        explicit_scale_group_count = int(scale_correction_group_count)
+        if (
+            explicit_scale_group_count < 0
+            or not np.isfinite(float(scale_correction_group_count))
+            or float(scale_correction_group_count) != float(explicit_scale_group_count)
+        ):
+            raise ValueError(
+                "scale_correction_group_count must be a non-negative integer, "
+                f"got {scale_correction_group_count!r}"
+            )
     if group_ids is not None:
         group_ids_np = np.asarray(group_ids, dtype=np.int64).reshape(-1)
         if group_ids_np.shape != (n_images,):
             raise ValueError(f"group_ids must have shape ({n_images},), got {group_ids_np.shape}")
         if group_ids_np.size and int(np.min(group_ids_np)) < 0:
             raise ValueError("group_ids must be non-negative")
-        n_scale_groups = int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
+        inferred_scale_group_count = int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
+        n_scale_groups = max(explicit_scale_group_count, inferred_scale_group_count)
         noise_scale_correction_xa_total = np.zeros((n_classes, n_scale_groups), dtype=np.float64)
         noise_scale_correction_aa_total = np.zeros((n_classes, n_scale_groups), dtype=np.float64)
 
@@ -8389,6 +8427,24 @@ def compute_k_class_pass2_stats_sparse_fused(
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
         shell_indices_noise = window_spec.recon_values(shell_indices_half)
         noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
+        scale_dvp = scale_correction_data_vs_prior
+        if scale_dvp is None:
+            scale_dvp_per_class = [None] * n_classes
+        else:
+            scale_dvp_array = np.asarray(scale_dvp)
+            if scale_dvp_array.ndim == 1:
+                scale_dvp_per_class = [scale_dvp_array] * n_classes
+            elif scale_dvp_array.ndim == 2 and scale_dvp_array.shape[0] == n_classes:
+                scale_dvp_per_class = [scale_dvp_array[k] for k in range(n_classes)]
+            else:
+                raise ValueError(
+                    "scale_correction_data_vs_prior must be one shell vector or have "
+                    f"shape ({n_classes}, n_shells), got {scale_dvp_array.shape}"
+                )
+        scale_correction_pixel_masks = [
+            _relion_scale_correction_pixel_mask(dvp_k, shell_indices_noise, n_shells=n_shells)
+            for dvp_k in scale_dvp_per_class
+        ]
 
     projection_cache_by_class = [None] * n_classes
     dump_pass2_operands = bool(os.environ.get("RECOVAR_PASS2_DUMP_DIR"))
@@ -9811,6 +9867,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         scale_ctf_probs,
                         noise_variance_for_noise,
                         bucket_scale_for_stats,
+                        scale_correction_pixel_masks[class_index],
                     )
                     np.add.at(
                         noise_scale_correction_xa_total[class_index],

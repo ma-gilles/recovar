@@ -72,6 +72,30 @@ def _optional_int64_half_pair(values):
     ]
 
 
+def _optional_group_count_half_pair(values):
+    """Return an optional explicit group cardinality for each half-set."""
+    if values is None:
+        return [None, None]
+    arr = np.asarray(values).reshape(-1)
+    if arr.size == 1:
+        arr = np.repeat(arr, 2)
+    if arr.size != 2:
+        raise ValueError(
+            "init_group_count must be a scalar or contain exactly two values; "
+            f"got shape {np.asarray(values).shape}"
+        )
+    counts = []
+    for value in arr:
+        if value is None:
+            counts.append(None)
+            continue
+        count = int(value)
+        if count < 0 or float(value) != float(count):
+            raise ValueError(f"init_group_count values must be non-negative integers, got {value!r}")
+        counts.append(count)
+    return counts
+
+
 def _normalize_sigma_offset_per_half(values):
     """Return a strict two-element float list for half-specific sigma offsets."""
     if values is None:
@@ -134,6 +158,7 @@ class _RelionHalfInputState:
     image_corrections: list
     scale_corrections: list
     group_ids: list
+    group_count: list
 
     @classmethod
     def from_initial_values(
@@ -144,6 +169,7 @@ class _RelionHalfInputState:
         image_corrections,
         scale_corrections,
         group_ids=None,
+        group_count=None,
     ):
         return cls(
             previous_best_translations=_optional_float32_half_pair(previous_best_translations),
@@ -157,6 +183,7 @@ class _RelionHalfInputState:
                 label="scale_corrections",
             ),
             group_ids=_optional_int64_half_pair(group_ids),
+            group_count=_optional_group_count_half_pair(group_count),
         )
 
 

@@ -28,7 +28,7 @@ as the next product milestone rather than mixing it into the first closure.
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `63a4844070b641860c0bdce7bf75e62439576293`
+Current accepted code checkpoint: `5a5769df37e49674c118697f60e73cbdd706b880`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -155,6 +155,51 @@ is Milestone 2; future changes must be small logical commits on top of the
 checkpoint.
 
 ### Next experiment
+
+The current clean autonomous K=1 gate is job `11151255` at commit
+`5a5769df37e49674c118697f60e73cbdd706b880`.  All ten numbered iterations
+match RELION's current-size schedule `[56,56,66,68,80,80,80,80,80,80]`,
+healpix schedule `[3,3,3,4,4,5,5,6,6,6]`, convergence at iteration 10, and
+the single final Nyquist branch.  Every numbered FSC-AUC and GT gate passes.
+The autonomous final merged map remains below the strict cross gate at
+`0.986771`, although its GT FSC-AUC is better than RELION by `+0.020688`.
+An exact-RELION-iteration-10 control on the same HEAD (job `11151769`) passes
+the final cross gate at `0.998457`, localizing the failure to accumulated
+trajectory state rather than final reconstruction mechanics.
+
+The expected-accuracy mismatch is closed. RELION excludes the redundant
+packed-FFTW `x=0, y<0` column from `Mresol`; the binding counted it. Adding the
+same exclusion changes the exact first-100 result from `1.844` degrees /
+`1.6915` Angstrom to RELION's exact `1.858` / `1.6915`. A Nyquist guard alone
+does not change the mismatch. Same-process jobs `11152475`, `11152727`, and
+`11152933` also reject particle order, CPU/GPU `PPref`, serialization,
+anisotropic magnification, and scale-difference transforms. The audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_ppref_cpu_ab_20260713_192524/ROOT_CAUSE_REPORT.md`.
+
+Autonomous A100 job `11153043` verifies the fixed iteration-2 accuracy and the
+same exact size/order/convergence schedule. Its final merged cross FSC-AUC is
+`0.986985443`, still below `0.995`, while RECOVAR GT FSC-AUC is `0.671500068`
+versus RELION `0.650834886`. Expected accuracy was therefore a real boundary
+bug but is not the final-map cause.
+
+The exact-final accumulator factorial (jobs `11151900`, `11151905`, `11152058`,
+and `11152064_0`-`11152064_3`) independently shows that the residual is
+posterior/adjoint accumulation, not tau2: replacing only the accumulator raises
+FSC-AUC from `0.995640221` to `0.998443887`, while replacing only tau2 changes
+it to `0.995652710`. The final-state factorial now localizes the material
+autonomous failure. Holding the RELION iteration-10 state except for one
+component gives cross FSC-AUC `0.995216198` for RECOVAR poses alone and
+`0.996873606` for the RECOVAR map alone; using both gives `0.993407704`.
+RECOVAR noise/tau2 and direction-prior substitutions remain near `0.9934`.
+Substituting RECOVAR's image/group-scale corrections collapses the result to
+`0.986822205`, nearly reproducing the autonomous failure.
+
+RECOVAR's scale array is exactly one because the driver reads group IDs only
+from input `particles.star`, where they are absent; RELION's supplied
+`run_it000_data.star` contains 3,000 groups derived from 3,000 micrographs.
+Restore those groups by image identity, preserve the full group count in both
+halves, then enforce RELION's additional `data_vs_prior > 3` shell mask when
+collecting scale `XA/AA`.
 
 The complete 3k/128 strict firstiter A/B is finished. CUDA texture projection
 matches all 3,000 RELION iter-1 orientations exactly. Correlation remains a
@@ -1729,3 +1774,14 @@ After the radius gate closes, rerun the complete iteration-1 raw BPref and map
 comparison. Accumulator relative L2 remains a localization metric; acceptance
 still requires shellwise FSC, FSC-AUC, and the FSC-derived score/resolution
 summaries against RELION and GT.
+
+## 2026-07-13 autonomous K=1 native normalization result
+
+Native RELION group mapping and `data_vs_prior > 3` scale-statistic support
+close the single-fixture autonomous final-map gap. A100 job `11154968` matches
+the ten-step size schedule and convergence boundary, then passes the final
+merged normalized FSC-AUC gate at `0.997935505` with minimum shell FSC
+`0.995978466`. RECOVAR GT FSC-AUC is `0.670747694`, versus RELION
+`0.650834886`. Correlation was not computed. Treat this as acceptance of the
+3k/128 white-noise K=1 fixture only; proceed to heterogeneous robustness,
+larger scale, real-particle, and then K=4 gates.

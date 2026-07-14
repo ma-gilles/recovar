@@ -56,6 +56,10 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     relion_translation_search_base,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import resolve_image_mask_for_half_preprocess
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_scale_correction_terms_per_image,
+    relion_scale_correction_pixel_mask,
+)
 from recovar.em.dense_single_volume.helpers.resolution import (
     _bootstrap_current_size_relion,
     bootstrap_current_size_from_ini_high_relion,
@@ -487,6 +491,7 @@ def test_replay_override_replaces_native_norm_scale_state_but_keeps_group_ids():
         image_corrections=[np.asarray([9.0, 9.0], dtype=np.float32), np.asarray([8.0], dtype=np.float32)],
         scale_corrections=[np.asarray([7.0, 7.0], dtype=np.float32), np.asarray([6.0], dtype=np.float32)],
         group_ids=group_ids,
+        group_count=3000,
     )
 
     iteration_loop_module.apply_iter_replay_overrides(
@@ -525,6 +530,7 @@ def test_replay_override_replaces_native_norm_scale_state_but_keeps_group_ids():
     np.testing.assert_allclose(relion_half_inputs.scale_corrections[0], [4.0, 5.0])
     np.testing.assert_array_equal(relion_half_inputs.group_ids[0], group_ids[0])
     np.testing.assert_array_equal(relion_half_inputs.group_ids[1], group_ids[1])
+    assert relion_half_inputs.group_count == [3000, 3000]
 
 
 def _pack_fake_local_search_outputs(
@@ -5401,6 +5407,9 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
         projection_padding_factor=1,
         reconstruction_padding_factor=1,
         half_spectrum_scoring=False,
+        scale_corrections=np.ones(2, dtype=np.float32),
+        group_ids=np.asarray([0, 2], dtype=np.int64),
+        scale_correction_group_count=5,
         pass2_layout=local_layout,
         return_best_pose_details=True,
         class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
@@ -5428,6 +5437,10 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
     assert np.asarray(best_rotation_ids).shape == (2,)
     assert np.asarray(stats.log_evidence_per_image).shape == (2,)
     assert noise_stats is not None
+    assert np.asarray(noise_stats.wsum_scale_correction_xa).shape == (5,)
+    assert np.asarray(noise_stats.wsum_scale_correction_aa).shape == (5,)
+    np.testing.assert_array_equal(np.asarray(noise_stats.wsum_scale_correction_xa)[3:], 0.0)
+    np.testing.assert_array_equal(np.asarray(noise_stats.wsum_scale_correction_aa)[3:], 0.0)
     assert np.asarray(class_assignments_out).shape == (2,)
     assert np.asarray(class_posterior_sums).shape == (2,)
     np.testing.assert_allclose(np.sum(class_full_posterior_sums), dataset.n_images, rtol=5e-3, atol=1e-5)
@@ -5907,6 +5920,7 @@ def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, r
         image_corrections=np.array([1.3, 0.8, 1.1], dtype=np.float32),
         scale_corrections=np.array([0.7, 1.2, 0.9], dtype=np.float32),
         group_ids=np.array([0, 1, 0], dtype=np.int64),
+        scale_correction_group_count=5,
         image_pre_shifts=np.array([[0.5, -1.0], [-1.0, 1.25], [0.0, 0.0]], dtype=np.float32),
         max_significants=-1,
     )
@@ -5981,7 +5995,9 @@ def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, r
     assert noise_default.wsum_scale_correction_aa is not None
     assert noise_split.wsum_scale_correction_xa is not None
     assert noise_split.wsum_scale_correction_aa is not None
-    assert np.asarray(noise_default.wsum_scale_correction_xa).shape == (2,)
+    assert np.asarray(noise_default.wsum_scale_correction_xa).shape == (5,)
+    np.testing.assert_array_equal(np.asarray(noise_default.wsum_scale_correction_xa)[2:], 0.0)
+    np.testing.assert_array_equal(np.asarray(noise_default.wsum_scale_correction_aa)[2:], 0.0)
     np.testing.assert_allclose(
         np.asarray(noise_default.wsum_scale_correction_xa),
         np.asarray(noise_split.wsum_scale_correction_xa),
@@ -7810,6 +7826,58 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(np.asarray(got.image_corrections_per_half[0]), [1.5, 0.75], rtol=1e-6)
         assert np.asarray(got.image_corrections_per_half[1]).shape == (0,)
         assert np.asarray(got.scale_corrections_per_half[1]).shape == (0,)
+
+    def test_relion_norm_scale_update_preserves_explicit_absent_groups(self):
+        """Half-local missing groups retain RELION's full model-group axis."""
+        stats = NoiseStats(
+            wsum_sigma2_noise=jnp.array([0.0], dtype=jnp.float32),
+            wsum_img_power=jnp.array([0.0], dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=2.0,
+            wsum_norm_correction=jnp.ones(2, dtype=jnp.float32),
+            wsum_scale_correction_xa=jnp.array([2.0, 0.0, 4.0, 0.0, 0.0], dtype=jnp.float32),
+            wsum_scale_correction_aa=jnp.array([1.0, 0.0, 2.0, 0.0, 0.0], dtype=jnp.float32),
+        )
+        group_ids = np.asarray([0, 2], dtype=np.int64)
+
+        got = update_relion_norm_scale_corrections(
+            noise_stats_per_half=[stats, stats],
+            group_ids_per_half=[group_ids, group_ids],
+            group_count_per_half=[5, 5],
+            do_norm_correction=False,
+        )
+
+        assert np.asarray(got.group_scale_corrections_per_half[0]).shape == (5,)
+        assert np.asarray(got.scale_corrections_per_half[0]).shape == (2,)
+        np.testing.assert_allclose(np.asarray(got.group_scale_corrections_per_half[0])[[1, 3, 4]], 0.5)
+
+    def test_scale_statistics_use_relion_data_vs_prior_shell_support(self):
+        # RELION represents redundant/out-of-band pixels with the positive
+        # sentinel ``n_shells``, not only negative indices.
+        shell_indices = jnp.asarray([-1, 0, 1, 3], dtype=jnp.int32)
+        pixel_mask = relion_scale_correction_pixel_mask(
+            jnp.asarray([4.0, 3.1, 2.0], dtype=jnp.float32),
+            shell_indices,
+            n_shells=3,
+        )
+        np.testing.assert_array_equal(np.asarray(pixel_mask), [False, True, True, False])
+        unrestricted_mask = relion_scale_correction_pixel_mask(None, shell_indices, n_shells=3)
+        np.testing.assert_array_equal(np.asarray(unrestricted_mask), [False, True, True, False])
+
+        proj = jnp.ones((1, 1, 4), dtype=jnp.complex64)
+        summed = jnp.asarray([[[1.0, 2.0, 3.0, 4.0]]], dtype=jnp.complex64)
+        xa, aa = compute_scale_correction_terms_per_image(
+            proj,
+            jnp.abs(proj) ** 2,
+            summed,
+            jnp.ones((1, 1, 4), dtype=jnp.float32),
+            jnp.ones(4, dtype=jnp.float32),
+            jnp.ones(1, dtype=jnp.float32),
+            pixel_mask,
+        )
+
+        np.testing.assert_allclose(np.asarray(xa), [5.0], rtol=0, atol=0)
+        np.testing.assert_allclose(np.asarray(aa), [2.0], rtol=0, atol=0)
 
     def test_relion_norm_scale_update_skips_firstiter_cc_scale_only(self):
         """RELION firstiter-CC still updates normcorr but keeps old scales."""
@@ -11443,6 +11511,7 @@ class TestRelionDefault:
         """Passing ``options=RefinementOptions(...)`` overrides individual kwargs."""
         from recovar.em.dense_single_volume import (
             KClassOptions,
+            ReplayState,
             RefinementOptions,
             RefinementSchedule,
             RelionParityOptions,
@@ -11470,6 +11539,7 @@ class TestRelionDefault:
                 do_solvent_fsc_correction=True,
             ),
             k_class=KClassOptions(n_classes=4),
+            replay=ReplayState(init_group_count=[7, 8]),
         )
         result = refine_single_volume(
             half_datasets,
@@ -11500,6 +11570,7 @@ class TestRelionDefault:
         assert captured["emulate_relion_firstiter_cc"] is True
         assert captured["do_solvent_fsc_correction"] is True
         assert captured["n_classes"] == 4
+        assert captured["init_group_count"] == [7, 8]
 
     def test_canonical_rotation_grid_reuses_relion_euler_table(self, monkeypatch):
         """The auto-refine setup path must not convert canonical grids via SciPy."""

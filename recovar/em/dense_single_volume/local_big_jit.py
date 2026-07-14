@@ -573,6 +573,7 @@ def run_local_bucket_big_jit(
     shell_indices_half,
     shell_indices_noise,
     noise_variance_for_noise,
+    scale_correction_pixel_mask,
     projection_pixel_indices,
     projection_score_take_indices,
     projection_recon_take_indices,
@@ -1233,6 +1234,7 @@ def run_local_bucket_big_jit(
                 ctf_probs,
                 noise_variance_for_noise,
                 batch_scale,
+                scale_correction_pixel_mask,
             )
             scale_xa_per_image = jnp.where(valid_image_mask, scale_xa_per_image, 0.0)
             scale_aa_per_image = jnp.where(valid_image_mask, scale_aa_per_image, 0.0)

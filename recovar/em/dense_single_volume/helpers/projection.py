@@ -578,6 +578,7 @@ def compute_scale_correction_terms_per_image(
     ctf_probs,
     noise_variance_half,
     old_scale,
+    scale_correction_pixel_mask=None,
 ):
     """Return RELION group-scale XA/AA sufficient statistics per image.
 
@@ -589,11 +590,34 @@ def compute_scale_correction_terms_per_image(
 
     safe_scale = jnp.maximum(jnp.asarray(old_scale, dtype=proj_abs2_half.real.dtype), 1e-30)
     ctf_has_mass = ctf_probs != 0.0
+    scale_pixel_mask = None
+    if scale_correction_pixel_mask is not None:
+        scale_pixel_mask = jnp.asarray(scale_correction_pixel_mask, dtype=bool).reshape(-1)
+        ctf_has_mass = ctf_has_mass & scale_pixel_mask[None, None, :]
     ctf_probs_raw = jnp.where(ctf_has_mass, ctf_probs * noise_variance_half[None, None, :], 0.0)
     aa_terms = jnp.where(ctf_has_mass, proj_abs2_half * ctf_probs_raw, 0.0)
     aa_per_image = jnp.sum(aa_terms, axis=(1, 2)) / (safe_scale**2)
 
-    cross_terms = jnp.where(summed_masked != 0.0, proj_half * jnp.conj(summed_masked), 0.0)
+    cross_has_mass = summed_masked != 0.0
+    if scale_pixel_mask is not None:
+        cross_has_mass = cross_has_mass & scale_pixel_mask[None, None, :]
+    cross_terms = jnp.where(cross_has_mass, proj_half * jnp.conj(summed_masked), 0.0)
     xa_terms = noise_variance_half[None, None, :] * cross_terms.real
     xa_per_image = jnp.sum(xa_terms, axis=(1, 2)) / safe_scale
     return xa_per_image.astype(jnp.float32), aa_per_image.astype(jnp.float32)
+
+
+def relion_scale_correction_pixel_mask(data_vs_prior, shell_indices, *, n_shells=None):
+    """Return RELION's ``data_vs_prior > 3`` scale-statistic pixel mask."""
+
+    indices = jnp.asarray(shell_indices, dtype=jnp.int32).reshape(-1)
+    if n_shells is None:
+        n_shells = int(np.asarray(data_vs_prior).size) if data_vs_prior is not None else int(np.max(indices))
+    valid_shell = (indices >= 0) & (indices < int(n_shells))
+    if data_vs_prior is None:
+        return valid_shell
+    dvp = jnp.asarray(data_vs_prior).reshape(-1)
+    if dvp.size == 0:
+        return jnp.zeros_like(indices, dtype=bool)
+    safe_indices = jnp.clip(indices, 0, dvp.size - 1)
+    return valid_shell & (indices < dvp.size) & (dvp[safe_indices] > 3.0)

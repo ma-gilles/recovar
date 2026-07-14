@@ -412,6 +412,40 @@ class TestAutoRefineExpectedAccuracyBinding:
         assert np.asarray(out["acc_rot_class"])[1] == 999.0
         assert np.asarray(out["acc_trans_class"])[1] == 999.0
 
+    def test_expected_accuracy_excludes_redundant_negative_y_packed_column(self, bind):
+        n = 8
+        y = np.arange(n, dtype=np.float64)
+        reference = np.cos(2.0 * np.pi * y / n)[None, :, None] * np.ones((n, 1, n))
+        out = bind.vdam_expected_angular_errors(
+            np.ascontiguousarray(reference[None]),
+            np.asarray([[0.0, 0.0, 0.0]], dtype=np.float64),
+            np.asarray([0], dtype=np.int64),
+            np.asarray([0], dtype=np.int32),
+            np.asarray([1.0], dtype=np.float64),
+            np.full(n // 2 + 1, 10.0, dtype=np.float64),
+            np.zeros(1, dtype=np.float64),
+            np.zeros(1, dtype=np.float64),
+            np.zeros(1, dtype=np.float64),
+            np.zeros(1, dtype=np.float64),
+            300.0,
+            2.7,
+            0.07,
+            1.0,
+            n,
+            n,
+            1,
+            1,
+            1.0,
+            17,
+            False,
+            False,
+            np.asarray([0], dtype=np.int64),
+        )
+
+        # RELION's Mresol map excludes y<0 on packed x=0. Counting that
+        # Hermitian duplicate produces 0.4 instead of the correct 0.6 pixels.
+        assert out["acc_trans"] == pytest.approx(0.6)
+
 
 class TestRndUnifRangeBinding:
     def test_scaled_range_preserves_relion_float_operation_boundary(self, bind):

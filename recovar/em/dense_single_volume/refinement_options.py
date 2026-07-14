@@ -107,6 +107,7 @@ class ReplayState:
     init_image_corrections: Any | None = None
     init_scale_corrections: Any | None = None
     init_group_ids: Any | None = None
+    init_group_count: Any | None = None
     init_direction_prior: Any | None = None
     init_previous_best_translations: Any | None = None
     init_previous_best_rotation_eulers: Any | None = None

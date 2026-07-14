@@ -5660,6 +5660,7 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(monkeypa
         return_score_log_z=True,
         accumulate_noise=True,
         group_ids=np.asarray([0, 1, 0, 1], dtype=np.int64),
+        scale_correction_group_count=5,
         half_spectrum_scoring=True,
         fine_rotations_override=fine_rotations,
         fine_rotation_parent_override=fine_parent,
@@ -5723,7 +5724,9 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(monkeypa
     )
     assert chunked[8].wsum_scale_correction_xa is not None
     assert chunked[8].wsum_scale_correction_aa is not None
-    assert np.asarray(chunked[8].wsum_scale_correction_xa).shape == (2,)
+    assert np.asarray(chunked[8].wsum_scale_correction_xa).shape == (5,)
+    np.testing.assert_array_equal(np.asarray(chunked[8].wsum_scale_correction_xa)[2:], 0.0)
+    np.testing.assert_array_equal(np.asarray(chunked[8].wsum_scale_correction_aa)[2:], 0.0)
     np.testing.assert_allclose(
         np.asarray(chunked[8].wsum_scale_correction_xa),
         np.asarray(unchunked[8].wsum_scale_correction_xa),
@@ -5737,6 +5740,21 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(monkeypa
         atol=1e-5,
     )
     assert chunked[8].sumw == pytest.approx(unchunked[8].sumw, abs=1e-6)
+
+    no_scale_shells = compute_pass2_stats_sparse(
+        **{
+            **common,
+            "scale_correction_data_vs_prior": np.zeros(IMAGE_SHAPE[0] // 2 + 1, dtype=np.float32),
+        }
+    )
+    np.testing.assert_array_equal(np.asarray(no_scale_shells[8].wsum_scale_correction_xa), 0.0)
+    np.testing.assert_array_equal(np.asarray(no_scale_shells[8].wsum_scale_correction_aa), 0.0)
+    np.testing.assert_allclose(
+        np.asarray(no_scale_shells[8].wsum_norm_correction),
+        np.asarray(chunked[8].wsum_norm_correction),
+        rtol=1e-5,
+        atol=1e-5,
+    )
 
     common_pruned = dict(common)
     common_pruned["relion_fine_mstep_prune"] = True
@@ -6031,6 +6049,7 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
         coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         coarse_translations_np=coarse_translations,
         fine_rotations_np=fine_rotations,
+        fine_mstep_rotations_np=None,
         rot_parent_map_np=fine_parent,
         fine_translations_np=fine_translations,
         trans_parent_map_np=fine_translation_parent,
@@ -6045,7 +6064,14 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
             "current_size": None,
             "relion_half_volume_mstep": False,
             "group_ids": np.asarray([0, 1, 0, 1, 2], dtype=np.int64),
+            "scale_correction_group_count": 7,
             "scale_corrections": np.asarray([1.0, 1.08, 0.91, 1.03, 0.97], dtype=np.float32),
+            "scale_correction_data_vs_prior": np.stack(
+                [
+                    np.full(IMAGE_SHAPE[0] // 2 + 1, 4.0, dtype=np.float32),
+                    np.zeros(IMAGE_SHAPE[0] // 2 + 1, dtype=np.float32),
+                ],
+            ),
         },
     )
 
@@ -6183,7 +6209,11 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
     _assert_noise_stats_close(fused.noise_stats, legacy.noise_stats, rtol=1e-5, atol=1e-5)
     assert fused.noise_stats[0].wsum_scale_correction_xa is not None
     assert fused.noise_stats[0].wsum_scale_correction_aa is not None
-    assert np.asarray(fused.noise_stats[0].wsum_scale_correction_xa).shape == (3,)
+    assert np.asarray(fused.noise_stats[0].wsum_scale_correction_xa).shape == (7,)
+    np.testing.assert_array_equal(np.asarray(fused.noise_stats[0].wsum_scale_correction_xa)[3:], 0.0)
+    np.testing.assert_array_equal(np.asarray(fused.noise_stats[0].wsum_scale_correction_aa)[3:], 0.0)
+    np.testing.assert_array_equal(np.asarray(fused.noise_stats[1].wsum_scale_correction_xa), 0.0)
+    np.testing.assert_array_equal(np.asarray(fused.noise_stats[1].wsum_scale_correction_aa), 0.0)
     _assert_k_class_noise_sumw_matches_class_mass(fused, rtol=1e-4, atol=1e-4)
 
     window_kwargs = dict(kwargs)

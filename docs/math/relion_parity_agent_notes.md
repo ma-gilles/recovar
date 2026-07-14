@@ -1767,3 +1767,107 @@ manual review are `TRAJECTORY_FSC_REPORT.md`,
 The autonomous trajectory, K=1 robustness, scale, and real-particle quality
 gates remain open; K=4 strict quality follows those. The run is not a speed
 comparison.
+# 2026-07-13: autonomous K=1 final gap and expected-accuracy/PPref boundary
+
+- Clean candidate: `5a5769df37e49674c118697f60e73cbdd706b880` on
+  `codex/em-parity-checkpoint-20260711`.
+- Autonomous job `11151255` passes all ten numbered schedule, convergence,
+  shellwise FSC-AUC, and GT gates.  The one final Nyquist map fails only the
+  cross-FSC-AUC gate: `0.986771` versus required `0.995`; GT FSC-AUC delta is
+  `+0.020688` in RECOVAR's favor.  Evidence root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_autonomous_coarsehvc_currenthead_20260713_183403/`.
+- Exact iteration-10 final-only job `11151769` passes at cross FSC-AUC
+  `0.998457`, with RECOVAR GT FSC-AUC `0.670751` versus RELION `0.650835`.
+  Evidence root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_exact_iter10_currenthead_20260713_190800/`.
+- Binding replay on the exact first 100 IDs gives `1.844` degrees and
+  `1.6915` Angstrom; authoritative RELION gives `1.858` and `1.6915`.
+  `RELION_SINGLE_PRECISION` is not causal: the oracle log records
+  `BASE=double` and CPU double.  The binding is also double.
+- RELION builds `PPref` during expectation setup through the CUDA gridding,
+  padding, and `cufftExecD2Z` branch when `--gpu 0` is active, then consumes
+  that double `PPref` in the CPU expected-error loop.  RECOVAR's binding
+  suppresses CUDA and uses CPU FFTW.  GPU job `11152404` rejects that backend
+  as causal: JAX/cuFFT and CPU FFTW `PPref` agree at relative L2 `3.67e-16`,
+  and both return `1.844` / `1.6915`.
+- Same-process RELION job `11152475` reproduces the authoritative
+  `1.858` / `1.6915` and directly confirms first vector IDs
+  `[2313,2343,2409,806,815]`.  The remaining expected-accuracy audit is the
+  live in-memory state versus serialized MRC/STAR inputs, not particle order
+  or the FFT backend.
+- A naive CPU continuation job `11152191` is a negative control, not evidence:
+  RELION re-randomized particle order and reported `2.058` degrees /
+  `1.72975` Angstrom before intentionally failing on a relative stack path.
+  Do not compare that aggregate to the original-process values.
+- Exact-final raw BPref audit root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it2_particle_replace_20260713_165017/exact_final_bpref_relion/`.
+  Accumulator substitution raises replay FSC-AUC from `0.995640221` to
+  `0.998443887`; tau2 substitution alone reaches only `0.995652710`.
+- Autonomous pose comparison is exact at iteration 1 except for the qualified
+  single translation near-tie.  Rotational discrepancies above `0.1` degree
+  then grow from 3 particles at iteration 2 to 110 at iteration 3, 277 at
+  iteration 4, and 1,050 at iteration 10.  The next final-map discriminator is
+  a final-state map/pose factorial, with FSC/FSC-AUC as its acceptance metric.
+
+# 2026-07-13: expected-accuracy closure and correction-state root cause
+
+- RELION's `Mresol` excludes the redundant packed `x=0, y<0` column. The
+  expected-accuracy binding did not. The exact exclusion changes
+  `1.844/1.6915` to RELION's `1.858/1.6915`; the Nyquist guard is independently
+  null. Jobs `11152475`, `11152727`, and `11152933` completed `0:0`. Full
+  report:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_ppref_cpu_ab_20260713_192524/ROOT_CAUSE_REPORT.md`.
+- Corrected autonomous job `11153043` completed `0:0` in `00:09:49` on A100.
+  It preserves the exact current-size, HEALPix, convergence-at-10, and final
+  Nyquist schedule. Final merged cross FSC-AUC is `0.986985443`; RECOVAR GT
+  FSC-AUC is `0.671500068` versus RELION `0.650834886`.
+- Exact-state factorial evidence identifies image/group-scale corrections as
+  the material final-state component. RECOVAR poses alone pass at
+  `0.995216198`; its map alone passes at `0.996873606`; both give
+  `0.993407704`. Adding RECOVAR corrections gives `0.986822205`; adding
+  noise/tau2 and direction priors changes only the fourth-to-sixth decimal.
+  Evidence root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_autonomous_final_state_factorial_20260713_194341/`.
+- The immediate cause of scale arrays staying exactly one is disabled native
+  group statistics: `/data/particles.star` has no `rlnGroupNumber`, but the
+  supplied RELION `run_it000_data.star` has 3,000 singleton groups generated
+  from unique micrographs. Map those rows by `rlnImageName`; never index the
+  lexicographically reordered RELION table with dataset-order half indices.
+  Preserve all 3,000 group slots in both half models, including absent groups.
+- After group statistics are enabled, match RELION's scale-statistic support:
+  collect `XA/AA` only where the iteration-start class
+  `data_vs_prior[ires] > 3`. This was the remaining pre-fix discrepancy.
+  Correlation is not an acceptance metric for any of these decisions.
+
+# 2026-07-13: autonomous K=1 native-correction acceptance
+
+- RECOVAR now maps the supplied RELION data STAR to dataset order by exact
+  `rlnImageName`, preserves all 3,000 model-group slots in both halves, and
+  accumulates group XA/AA only on the iteration-start `data_vs_prior > 3`
+  shells. Dense fallbacks fail closed rather than silently dropping native
+  scale statistics. The parity NPZ records raw XA/AA, group identities/counts,
+  and post-update normalization state.
+- Two-iteration A100 job `11154785` completed `0:0` in `00:02:36`. At
+  iteration 2, group IDs and per-group particle counts match RELION exactly.
+  Group-scale median absolute errors are `3.456e-5` and `5.354e-6` by half;
+  relative-L2 errors are `0.001254` and `0.000359`. After the exact `128^2`
+  unit conversion, average norm errors are `1.770e-5` and `1.512e-5`.
+  Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_native_scale2iter_20260713_210956/iter2_correction_comparison.json`.
+- Autonomous A100 job `11154968` completed `0:0` in `00:10:17`. It matches
+  the exact schedule `[56,56,66,68,80,80,80,80,80,80]`, converges after
+  numbered iteration 10, and enters one valid Nyquist all-data pass. All
+  numbered FSC gates pass; their minimum half/merged normalized FSC-AUC is
+  `0.999874272`.
+- Final merged RECOVAR-versus-RELION normalized FSC-AUC is `0.997935505`,
+  improving the pre-fix `0.986985443` failure. The minimum non-DC shell FSC is
+  `0.995978466` at shell 60; low/mid/high band means are
+  `0.999652168/0.997622576/0.996633032`. No shell is below `0.995`.
+  RECOVAR GT FSC-AUC is `0.670747694` versus RELION `0.650834886`, delta
+  `+0.019912809`. Correlation was forbidden and was not computed.
+- Automated report and manual shellwise sign-off:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_autonomous_native_scale_20260713_212530/particleids_exact_accuracy_fsc_job_11154968.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_autonomous_native_scale_20260713_212530/MANUAL_SHELLWISE_REVIEW.md`.
+- This closes the single 3k/128 white-noise autonomous K=1 fixture. Robustness,
+  scale, real-particle, and K=4 quality gates remain open.

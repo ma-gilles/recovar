@@ -580,6 +580,8 @@ def compute_pass2_stats_sparse(
     image_corrections=None,
     scale_corrections=None,
     group_ids=None,
+    scale_correction_group_count=None,
+    scale_correction_data_vs_prior=None,
     image_pre_shifts=None,
     use_float64_scoring=False,
     do_gridding_correction=False,
@@ -644,6 +646,8 @@ def compute_pass2_stats_sparse(
         and normalization_log_z is None
         and normalization_other_score_log_z is None
         and group_ids is None
+        and scale_correction_group_count is None
+        and scale_correction_data_vs_prior is None
         and fine_rotations_override is None
         and fine_mstep_rotations_override is None
         and fine_rotation_parent_override is None
@@ -680,6 +684,8 @@ def compute_pass2_stats_sparse(
             image_corrections=image_corrections,
             scale_corrections=scale_corrections,
             group_ids=group_ids,
+            scale_correction_group_count=scale_correction_group_count,
+            scale_correction_data_vs_prior=scale_correction_data_vs_prior,
             image_pre_shifts=image_pre_shifts,
             use_float64_scoring=use_float64_scoring,
             translation_prior_centers=translation_prior_centers,

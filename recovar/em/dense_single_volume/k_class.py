@@ -457,6 +457,13 @@ def _local_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_clas
         projector_half_arr = jnp.asarray(projector_half)
         if projector_half_arr.ndim >= 4 and int(projector_half_arr.shape[0]) == n_classes:
             kwargs["relion_projector_half"] = projector_half_arr[class_index]
+    scale_dvp = kwargs.get("scale_correction_data_vs_prior")
+    if scale_dvp is not None:
+        kwargs["scale_correction_data_vs_prior"] = _select_class_value(
+            scale_dvp,
+            class_index,
+            n_classes,
+        )
     return kwargs
 
 
@@ -770,6 +777,8 @@ def _run_sparse_k_class_adaptive_pass2(
         image_corrections=base_engine_kwargs.get("image_corrections"),
         scale_corrections=base_engine_kwargs.get("scale_corrections"),
         group_ids=base_engine_kwargs.get("group_ids"),
+        scale_correction_group_count=base_engine_kwargs.get("scale_correction_group_count"),
+        scale_correction_data_vs_prior=base_engine_kwargs.get("scale_correction_data_vs_prior"),
         image_pre_shifts=base_engine_kwargs.get("image_pre_shifts"),
         use_float64_scoring=bool(base_engine_kwargs.get("use_float64_scoring", False)),
         translation_prior_centers=base_engine_kwargs.get("translation_prior_centers"),
@@ -795,6 +804,17 @@ def _run_sparse_k_class_adaptive_pass2(
         if common["relion_x_half_mstep"]
         else None
     )
+
+    def _common_for_class(class_index: int) -> dict:
+        class_common = dict(common)
+        scale_dvp = class_common.get("scale_correction_data_vs_prior")
+        if scale_dvp is not None:
+            class_common["scale_correction_data_vs_prior"] = _select_class_value(
+                scale_dvp,
+                class_index,
+                n_classes,
+            )
+        return class_common
 
     if _use_fused_sparse_k_class_pass2(n_classes):
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
@@ -894,7 +914,7 @@ def _run_sparse_k_class_adaptive_pass2(
                 n_classes,
             ),
             relion_projector_r_max=relion_projector_r_max,
-            **common,
+            **_common_for_class(class_index),
         )
         log_evidence, score_log_z = output
         class_log_evidence[class_index] = np.asarray(log_evidence, dtype=np.float64)
@@ -955,7 +975,7 @@ def _run_sparse_k_class_adaptive_pass2(
             n_classes,
         ),
         relion_projector_r_max=relion_projector_r_max,
-        **common,
+        **_common_for_class(last_class_index),
     )
     last_stats, last_score_log_z = _store_mstep_output(last_class_index, output, includes_score_log_z=True)
     class_log_evidence[last_class_index] = np.asarray(last_stats.log_evidence_per_image, dtype=np.float64)
@@ -979,7 +999,7 @@ def _run_sparse_k_class_adaptive_pass2(
                 n_classes,
             ),
             relion_projector_r_max=relion_projector_r_max,
-            **common,
+            **_common_for_class(class_index),
         )
         _store_mstep_output(class_index, output)
     mstep_s = time.time() - mstep_t0
@@ -1419,13 +1439,28 @@ def _subset_image_axis_engine_kwargs(kwargs: dict, image_indices: np.ndarray, n_
 
 
 def _full_group_count_from_kwargs(kwargs: dict) -> int | None:
+    explicit_count = kwargs.get("scale_correction_group_count")
+    if explicit_count is not None:
+        normalized_explicit_count = int(explicit_count)
+        if (
+            normalized_explicit_count < 0
+            or not np.isfinite(float(explicit_count))
+            or float(explicit_count) != float(normalized_explicit_count)
+        ):
+            raise ValueError(
+                "scale_correction_group_count must be a non-negative integer, "
+                f"got {explicit_count!r}"
+            )
+    else:
+        normalized_explicit_count = 0
     group_ids = kwargs.get("group_ids")
     if group_ids is None:
-        return None
+        return normalized_explicit_count or None
     group_ids_np = np.asarray(group_ids, dtype=np.int64).reshape(-1)
     if group_ids_np.size and int(np.min(group_ids_np)) < 0:
         raise ValueError("group_ids must be non-negative")
-    return int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
+    inferred_count = int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
+    return max(normalized_explicit_count, inferred_count)
 
 
 def _expand_subset_noise_stats(
@@ -1834,6 +1869,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
             image_corrections=class_kwargs.get("image_corrections"),
             scale_corrections=class_kwargs.get("scale_corrections"),
             group_ids=class_kwargs.get("group_ids"),
+            scale_correction_group_count=class_kwargs.get("scale_correction_group_count"),
             image_pre_shifts=class_kwargs.get("image_pre_shifts"),
             translation_prior_centers=class_kwargs.get("translation_prior_centers"),
             relion_projector_half=_select_projector_half_for_class(
@@ -3108,7 +3144,13 @@ def run_dense_k_class_em_adaptive(
             "fine_mstep_rotations_override requires a sparse adaptive pass-2 route",
         )
 
+    if pass2_kwargs.get("group_ids") is not None:
+        raise RuntimeError(
+            "RELION native group-scale correction requires sparse K-class pass 2; "
+            "the broad-support dense fallback does not accumulate group XA/AA statistics"
+        )
     pass2_kwargs.pop("group_ids", None)
+    pass2_kwargs.pop("scale_correction_group_count", None)
     if pass2_kwargs.pop("mstep_relion_x_half", False):
         logger.info(
             "Adaptive K-class dense pass2 fallback: stripping RELION x-half M-step flag; "

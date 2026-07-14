@@ -29,6 +29,7 @@ from scripts.run_full_refinement import (
     _parse_relion_tau2_fudge,
     _relion_halfset_and_accuracy_layout,
     _replay_complete_initial_particle_state,
+    _resolve_native_group_layout,
     _resolve_replay_normcorr,
     _resolve_tau2_fudge,
     _save_initial_noise_cache,
@@ -268,6 +269,88 @@ def test_load_native_group_ids_per_half_reads_particles_star(tmp_path):
     np.testing.assert_array_equal(got[1], np.asarray([1, 1], dtype=np.int64))
 
 
+def test_native_group_layout_prefers_supplied_relion_groups_and_maps_exact_identities():
+    pd = pytest.importorskip("pandas")
+    our_particles = pd.DataFrame(
+        {
+            "rlnImageName": [
+                "3@stack_a.mrcs",
+                "1@stack_a.mrcs",
+                "4@stack_a.mrcs",
+                "2@stack_a.mrcs",
+            ],
+        },
+    )
+    relion_particles = pd.DataFrame(
+        {
+            "rlnImageName": [
+                "1@stack_a.mrcs",
+                "2@stack_a.mrcs",
+                "3@stack_a.mrcs",
+                "4@stack_a.mrcs",
+            ],
+            "rlnGroupNumber": [2, 4, 1, 7],
+        },
+    )
+
+    layout = _resolve_native_group_layout(
+        our_particles,
+        half1_idx=np.asarray([0, 1], dtype=np.int64),
+        half2_idx=np.asarray([2, 3], dtype=np.int64),
+        relion_particles=relion_particles,
+    )
+
+    assert layout is not None
+    assert layout.source == "supplied RELION data STAR"
+    assert layout.n_groups == 7
+    np.testing.assert_array_equal(layout.group_ids_per_half[0], [0, 1])
+    np.testing.assert_array_equal(layout.group_ids_per_half[1], [6, 3])
+
+
+def test_native_group_layout_preserves_full_group_axis_when_half_max_is_absent():
+    pd = pytest.importorskip("pandas")
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": ["1@x.mrcs", "2@x.mrcs", "3@x.mrcs", "4@x.mrcs"],
+            "rlnGroupNumber": [1, 2, 7, 4],
+        },
+    )
+
+    layout = _resolve_native_group_layout(
+        particles,
+        half1_idx=np.asarray([0, 1], dtype=np.int64),
+        half2_idx=np.asarray([2, 3], dtype=np.int64),
+    )
+
+    assert layout is not None
+    assert layout.n_groups == 7
+    assert int(np.max(layout.group_ids_per_half[0])) == 1
+    np.testing.assert_array_equal(layout.group_ids_per_half[1], [6, 3])
+
+
+@pytest.mark.parametrize(
+    ("relion_names", "message"),
+    [
+        (["1@x.mrcs", "1@x.mrcs"], "duplicate rlnImageName/stack identities"),
+        (["1@x.mrcs", "2@other.mrcs"], "do not contain the same rlnImageName/stack identities"),
+    ],
+)
+def test_native_group_layout_rejects_duplicate_or_missing_relion_identities(relion_names, message):
+    pd = pytest.importorskip("pandas")
+    our_particles = pd.DataFrame({"rlnImageName": ["1@x.mrcs", "2@x.mrcs"]})
+    relion_particles = pd.DataFrame(
+        {"rlnImageName": relion_names, "rlnGroupNumber": [1, 2]},
+    )
+
+    with pytest.raises(ValueError, match=message):
+        _resolve_native_group_layout(
+            our_particles,
+            half1_idx=np.asarray([0], dtype=np.int64),
+            half2_idx=np.asarray([1], dtype=np.int64),
+            relion_particles=relion_particles,
+        )
+
+
 def test_relion_expected_accuracy_layout_preserves_relion_particle_rows():
     pd = pytest.importorskip("pandas")
     our_particles = pd.DataFrame(
@@ -304,14 +387,16 @@ def test_runner_keeps_input_particle_names_for_replay_mapping():
 
 def test_native_group_ids_are_available_to_k_class_refinement():
     source = RUN_FULL_REFINEMENT.read_text()
-    group_block = source[
-        source.index("native_group_ids_per_half = _load_native_group_ids_per_half") :
-        source.index("optimiser_star = _find_relion_optimiser_star(args)")
-    ]
+    group_start = source.index("native_group_layout = _resolve_native_group_layout")
+    group_end = source.index("optimiser_star = _find_relion_optimiser_star(args)", group_start)
+    group_block = source[group_start:group_end]
 
     assert "args.n_classes == 1" not in group_block
     assert "Native group-scale updates remain disabled for K-class refinement" not in source
+    assert "relion_particles=relion_particles" in group_block
+    assert "native_group_count =" in group_block
     assert "init_group_ids=native_group_ids_per_half" in source
+    assert "init_group_count=native_group_count" in source
 
 
 def test_load_init_previous_best_poses_npz_selects_latest_numbered_iter(tmp_path):

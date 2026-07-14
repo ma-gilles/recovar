@@ -1283,7 +1283,16 @@ static py::dict vdam_expected_angular_errors(
                             ? iy_linear
                             : (iy_linear - current_image_size);
                         const int ires = ROUND(std::sqrt((double)(iy * iy + ix * ix)));
-                        if (ires > 0 && ires < sigma_buf.shape[0]) {
+                        // Match Mresol_fine/Mresol_coarse: the packed x=0
+                        // Fourier column stores both Hermitian y halves, so
+                        // RELION counts only y>=0.  It also excludes shells
+                        // beyond the current image Nyquist boundary.
+                        if (
+                            ires > 0
+                            && ires < current_image_size / 2 + 1
+                            && !(ix == 0 && iy < 0)
+                            && ires < sigma_buf.shape[0]
+                        ) {
                             const double sigma = sigma_ptr[ires];
                             if (sigma > 0.0) {
                                 const Complex diff = DIRECT_MULTIDIM_ELEM(F1, n) - DIRECT_MULTIDIM_ELEM(F2, n);
