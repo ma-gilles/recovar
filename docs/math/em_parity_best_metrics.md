@@ -187,6 +187,37 @@ Conclusion:
   qualification; robustness, scale, real-particle, 100k/256, and K=4 evidence
   remain open.
 
+### 2026-07-14 `k1-case16-autonomous-robustness`
+
+Run metadata:
+
+- Commit: `a78ec7c0bbdf69548aa16e9dea44efcd6a1712a9`
+- Fixture: `16_small_anisotropic_outliers_3k_g128_pct25_noise3_bf80`,
+  3,000 particles, box 128
+- K: 1 supplied-map autonomous full trajectory and converged final all-data
+- Slurm job: `11186872`, A100, `COMPLETED 0:0`, elapsed 9m48s
+- Artifacts:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/autonomous_final_hp_fix_commit_a78ec7c0`
+  (`SAFE_TO_DELETE` present)
+
+Quality comparison:
+
+| Metric | Required/reference | Current | Delta | Status |
+|--------|--------------------|---------|-------|--------|
+| Exact current-size/order schedule | RELION 11-iteration schedule | exact | 0 | same/pass |
+| Convergence/finalization | iter 11, final-all-data once | exact | 0 | same/pass |
+| Worst numbered merged cross FSC-AUC | `>=0.995` | `0.999987620` | `+0.004987620` margin | pass |
+| Final merged cross FSC-AUC | `>=0.995` | `0.996711421` | `+0.001711421` margin | pass |
+| Final minimum non-DC shell FSC | no unexplained deficit | `0.991779912` | shell 47 | pass |
+| Final GT FSC-AUC, RECOVAR/RELION | RECOVAR no worse by `0.002` | `0.293003022 / 0.284665626` | `+0.008337396` | better/pass |
+
+The previously reported final FSC-AUC `0.743531728` was invalid: it used the
+average of RELION's unfiltered half BackProjectors as the final oracle. The
+authoritative post-convergence all-data oracle is the unnumbered joined
+`run_class001.mrc`. The corrected audit computes FSC/FSC-AUC only and is stored
+at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/autonomous_final_hp_fix_commit_a78ec7c0/analysis/FINAL_HP_AUDIT.md`.
+
 ## Required Metric Template
 
 Use this template for each new completion benchmark.
@@ -214,15 +245,16 @@ Quality comparison:
 
 | Metric | Previous best | Current | Delta | Status |
 |--------|---------------|---------|-------|--------|
-| final_half1_corr_vs_RELION | pending | pending | pending | pending |
-| final_half2_corr_vs_RELION | pending | pending | pending | pending |
-| merged_corr_vs_RELION | pending | pending | pending | pending |
-| recovar_corr_vs_GT | pending | pending | pending | pending |
-| relion_corr_vs_GT | pending | pending | pending | pending |
+| final_half1_FSC_AUC_vs_RELION | pending | pending | pending | pending |
+| final_half2_FSC_AUC_vs_RELION | pending | pending | pending | pending |
+| merged_FSC_AUC_vs_RELION | pending | pending | pending | pending |
+| recovar_FSC_AUC_vs_GT | pending | pending | pending | pending |
+| relion_FSC_AUC_vs_GT | pending | pending | pending | pending |
+| minimum_non_DC_shell_FSC_vs_RELION | pending | pending | pending | pending |
 | FSC_0.5_shell_RECOVAR | pending | pending | pending | pending |
 | FSC_0.143_shell_RECOVAR | pending | pending | pending | pending |
 | Pmax_gap_RECOVAR_minus_RELION | pending | pending | pending | pending |
-| Pmax_correlation | pending | pending | pending | pending |
+| Pmax_absolute_error_distribution | pending | pending | pending | pending |
 | pose_angle_error_vs_RELION | pending | pending | pending | pending |
 | translation_error_vs_RELION | pending | pending | pending | pending |
 | K4_class_assignment_or_map_match | pending | pending | pending | pending |

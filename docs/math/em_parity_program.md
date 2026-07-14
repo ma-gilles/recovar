@@ -1877,12 +1877,15 @@ GT FSC-AUC differs by at most `4.01e-5`. Before the fix, pose differences grew
 to `60/56` by iteration 6 and triggered false local search and convergence at
 iteration 9.
 
-This does not yet accept case 16 end to end. The final all-data merged
-cross-FSC-AUC is only `0.743531728`, even though RECOVAR's final GT FSC-AUC is
-better than RELION by `+0.054821`. The open boundary is therefore the final
-all-data branch, not the numbered trajectory; localize final poses, half
-accumulators, joined FSC/tau2, and reconstruction separately. Evidence:
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/autonomous_default_commit_d685/analysis/TRAJECTORY_AUDIT.md`.
+Case 16 also passes end to end. The initially reported final all-data
+cross-FSC-AUC of `0.743531728` was an audit-oracle error: it compared
+RECOVAR's joined final reconstruction to the average of RELION's two
+unfiltered half BackProjectors. RELION's authoritative post-convergence
+all-data output is the unnumbered joined `run_class001.mrc`. Against that map,
+the autonomous final cross-FSC-AUC is `0.996711421`, the minimum non-DC shell
+FSC is `0.991779912`, and RECOVAR's GT FSC-AUC exceeds RELION by
+`+0.008337396`. Corrected evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/autonomous_final_hp_fix_commit_a78ec7c0/analysis/FINAL_HP_AUDIT.md`.
 
 ## 2026-07-14 Case-22 firstiter-CC reduction order
 
@@ -1927,10 +1930,13 @@ Audit:
 ## 2026-07-14 Case-16 final SamplingPerturbation order
 
 An exact RELION iteration-11 state replay through RECOVAR's final all-data
-branch reaches merged cross-FSC-AUC `0.997899`; a factorial using autonomous
-half references with exact RELION metadata reaches `0.997343`. Therefore the
-final scorer, BPref M-step, reconstruction, and autonomous half references are
-not the cause of the autonomous `0.743531728` result.
+branch reaches merged cross-FSC-AUC `0.997899`; a high-precision replay using
+autonomous half references and autonomous metadata reaches `0.996712`.
+The autonomous and replay final maps agree at cross-FSC-AUC
+`0.9999999997`, and all 3,000 final Euler/translation decisions are bitwise
+identical. This independently confirms that the earlier `0.743531728` result
+was solely the wrong final oracle, not a scorer, BPref, reconstruction, or
+serialization failure.
 
 The decisive manifest boundary is the final trial grid. Native autonomous
 finalization used the capped exhaustive grid order 3 to scale
@@ -1940,7 +1946,10 @@ canonical construction. Their 36,864 rotations differ by one common right
 rotation of `0.682834` degrees. The targeted fix uses `state.healpix_order` for
 native local-search final perturbation and preserves the exhaustive order for
 global search. Focused merge guards pass `23/23`; the EM fast guard passes
-`16/16`. Corrected autonomous FSC/FSC-AUC validation remains required.
+`16/16`. The fix is required for exact RELION workflow semantics, although
+its aggregate case-16 map effect is numerically negligible: pre-fix and
+post-fix final maps agree at cross-FSC-AUC `0.9999999993`, while their correct
+RELION-oracle FSC-AUC values are `0.996711349` and `0.996711421`.
 
 Evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/`.
