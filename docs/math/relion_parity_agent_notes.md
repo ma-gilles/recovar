@@ -1985,3 +1985,48 @@ comparison.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it1_particle1553_capture_20260714_160000/ARITHMETIC_REPORT.md`.
 - Validation:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_explicit_cross_it1_validation_20260714_174500/`.
+
+# 2026-07-14: post-firstiter robustness boundaries
+
+- Case 22 clean-head A100 job `11185459` proves the firstiter reduction fix is
+  exact at iteration 1 and keeps numbered merged cross-FSC-AUC at least
+  `0.99887014` through iteration 8. It still chooses 72 instead of 70 at
+  iteration 9, converges at 9 instead of 11, and fails final cross-FSC-AUC at
+  `0.8245735`. Continue at the ordinary Gaussian scorer; do not undo the
+  exact 3,000-pose firstiter fix.
+- Case 20 same-H100 job `11185799` converges at the same iteration 11 and has
+  near-exact numbered FSC, but differs in current size at iterations 8 and 10
+  and fails final cross-FSC-AUC at `0.9851148007`. Its first hard differences
+  are two iteration-2 Gaussian pass-2 decisions.
+- Case 11 same-A100 job `11185798` passes the strict robustness gate; retain
+  its full audit alongside cases 20 and 22 under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_cleanhead_68a3f9e6_20260714_180000/`.
+
+# 2026-07-14: case-16 native final perturbation-order bug
+
+- Exact RELION iteration-11 state replay gives final cross-FSC-AUC `0.997899`.
+  Autonomous references plus exact RELION metadata give `0.997343`; neither
+  final machinery nor the half references explain the autonomous `0.743532`.
+- Native autonomous finalization used the exhaustive order 3 angular step for
+  SamplingPerturbation. RELION final `sampling.star` uses active local order 4.
+  Both observed 36,864-rotation manifests match their canonical construction
+  exactly and differ by a common `0.682834` degree right rotation.
+- `_native_final_perturbation_healpix_order` now selects active
+  `state.healpix_order` for local search and preserves exhaustive-grid order
+  for global search. Focused merge guards pass `23/23`; EM fast guard passes
+  `16/16`. Require corrected autonomous case-16 FSC/FSC-AUC before acceptance.
+
+# 2026-07-14: case-13 tie versus real coarse-support mismatch
+
+- Particle 2701 is an explainable cancellation tie: RELION's net margin is
+  about `0.19` raw float32 ULP and RECOVAR differs by about `2.07` ULP.
+- Particle 1682 is a real Gaussian coarse-score mismatch. RELION directly
+  measures `t10-t5=-18.06005859375`; RECOVAR gives `-18.28744506836`.
+  The `-0.22738647461` difference moves the same finite candidate across the
+  0.999 retained-mass threshold and excludes the eventual fine winner.
+- Index mapping, posterior sorting/cutoff, priors, corrections, coordinates,
+  and manual/texture projector choice are null. Translation-wise error is a
+  smooth quadratic (`R^2=.9996576`), so continue at shared Gaussian
+  projection/image-phase operands and reduction.
+- Classification:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_exact_it9_final_20260714_145938/relion_score_pair_capture_d476e6/CASE13_TWO_SIDED_CLASSIFICATION.md`.

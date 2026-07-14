@@ -526,6 +526,17 @@ def test_final_all_data_sampling_replay_prefers_final_sampling_star_before_last_
     assert '"last-numbered"' in block
 
 
+def test_native_final_perturbation_uses_active_local_order_but_preserves_global_order():
+    local_state = SimpleNamespace(do_local_search=True, healpix_order=4)
+    global_state = SimpleNamespace(do_local_search=False, healpix_order=4)
+
+    assert iteration_loop._native_final_perturbation_healpix_order(local_state, 3) == 4
+    assert iteration_loop._native_final_perturbation_healpix_order(global_state, 3) == 3
+
+    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    assert "final_perturbation_healpix_order = _native_final_perturbation_healpix_order(" in source
+
+
 def test_iteration_loop_monkeypatch_ppca_and_vdam_surfaces_survive_merges():
     required_iteration_loop_symbols = [
         "_align_fourier_volume_sign_to_reference",

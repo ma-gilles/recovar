@@ -1908,3 +1908,74 @@ Evidence roots:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it1_particle1553_capture_20260714_160000/ARITHMETIC_REPORT.md`;
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_explicit_cross_it1_validation_20260714_174500/`.
+
+### Autonomous case-22 result after the firstiter-CC reduction fix
+
+Clean-head A100 job `11185459` confirms that the explicit reduction fixes the
+intended boundary but does not by itself close case 22. Numbered merged
+cross-FSC-AUC remains at least `0.99887014` through iteration 8. RECOVAR then
+chooses size 72 instead of RELION's 70, converges after iteration 9 rather than
+11, and ends at final cross-FSC-AUC `0.8245735`. RECOVAR GT FSC-AUC is
+`0.32852954` versus RELION `0.32606263`. The next boundary is ordinary
+Gaussian pass-2 scoring, which still uses the complex contraction family.
+Treat the firstiter fix as accepted at its exact 3,000-pose boundary, not as
+acceptance of the complete robustness cell.
+
+Audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_explicit_cross_full_20260714_174700/audit_job_11185459.json`.
+
+## 2026-07-14 Case-16 final SamplingPerturbation order
+
+An exact RELION iteration-11 state replay through RECOVAR's final all-data
+branch reaches merged cross-FSC-AUC `0.997899`; a factorial using autonomous
+half references with exact RELION metadata reaches `0.997343`. Therefore the
+final scorer, BPref M-step, reconstruction, and autonomous half references are
+not the cause of the autonomous `0.743531728` result.
+
+The decisive manifest boundary is the final trial grid. Native autonomous
+finalization used the capped exhaustive grid order 3 to scale
+SamplingPerturbation, while RELION's final `sampling.star` records the active
+local-search parent order 4. Both manifests exactly match their corresponding
+canonical construction. Their 36,864 rotations differ by one common right
+rotation of `0.682834` degrees. The targeted fix uses `state.healpix_order` for
+native local-search final perturbation and preserves the exhaustive order for
+global search. Focused merge guards pass `23/23`; the EM fast guard passes
+`16/16`. Corrected autonomous FSC/FSC-AUC validation remains required.
+
+Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/`.
+
+## 2026-07-14 Case-13 coarse Gaussian score boundary
+
+The two final case-13 pose differences have different classifications. One is
+a genuine numerical tie: the RELION decision margin after raw-score/prior
+cancellation is about `0.19` raw float32 ULP, and RECOVAR differs by only
+`2.07` ULP. The other is a real support-path failure. RELION retains coarse
+translation parent 10 as its twelfth sample at the 0.999 posterior-mass
+threshold; RECOVAR ranks the same finite candidate twelfth but excludes it
+because its cumulative mass crosses the threshold after eleven samples.
+
+The significance implementations, indices, priors, translation coordinates,
+image/scale corrections, and manual-versus-texture projector selector are all
+ruled out. Direct RELION coarse raw score difference `t10-t5` is
+`-18.06005859375`, versus RECOVAR `-18.28744506836`, a discrepancy of
+`-0.22738647461` (about 14,900 float32 ULP). Across all finite translations,
+the centered discrepancy is a smooth quadratic (`R^2=0.9996576`), identifying
+a systematic Gaussian score-surface operand/reduction mismatch rather than a
+threshold tie.
+
+Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_exact_it9_final_20260714_145938/relion_score_pair_capture_d476e6/CASE13_TWO_SIDED_CLASSIFICATION.md`.
+
+## 2026-07-14 Clean-head case-20 scale result
+
+Same-H100 job `11185799` at `68a3f9e6` matches RELION's convergence after
+iteration 11 and keeps every numbered merged cross-FSC-AUC near `0.9998` or
+better, but chooses sizes 50 instead of 52 at iterations 8 and 10. Final
+cross-FSC-AUC is `0.9851148007`; RECOVAR GT FSC-AUC is `0.0858743655` versus
+RELION `0.0846081506`. The first discrete differences are only two
+iteration-2 Gaussian pass-2 decisions. A same-H100 operand capture is the next
+discriminator for the complex Gaussian cross contraction.
+
+Audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_cleanhead_68a3f9e6_20260714_180000/case20/audit_job_11185799.json`.

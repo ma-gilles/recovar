@@ -795,6 +795,21 @@ def _final_local_sampling_orders(
     return parent_order, parent_order + int(adaptive_oversampling)
 
 
+def _native_final_perturbation_healpix_order(state, final_current_healpix_order: int) -> int:
+    """Return the angular-step order for native final sampling perturbation.
+
+    Local search deliberately caps the exhaustive trial grid below the active
+    sampling order. RELION nevertheless scales SamplingPerturbation by the
+    active local-search order recorded in ``sampling.star``, not by that capped
+    global-grid order. Global search keeps the historical exhaustive-grid
+    behavior.
+    """
+
+    if state.do_local_search:
+        return int(state.healpix_order)
+    return int(final_current_healpix_order)
+
+
 def _direction_prior_healpix_order_for_scoring(
     *,
     use_local: bool,
@@ -7310,7 +7325,10 @@ def _run_relion_iteration_loop(
     final_sampling_star_source = None
     final_random_perturbation = 0.0
     final_perturbation_factor = float(perturb_factor)
-    final_perturbation_healpix_order = final_current_healpix_order
+    final_perturbation_healpix_order = _native_final_perturbation_healpix_order(
+        state,
+        final_current_healpix_order,
+    )
     final_perturbation_applied = False
     if perturb_replay_relion_dir is not None:
         final_sampling_candidates = [
