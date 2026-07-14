@@ -113,7 +113,7 @@ class TestRelionBinding:
         """
         D = box_size
         width_mask_edge = 5
-        radius = min(particle_diameter / (2.0 * pixel_size), D / 2.0)
+        radius = particle_diameter / (2.0 * pixel_size)
 
         recovar_mask_f64 = smooth_circular_mask(D, radius, float(width_mask_edge))
         recovar_mask_f32 = relion_soft_image_mask(D, pixel_size, particle_diameter, width_mask_edge)
@@ -127,8 +127,8 @@ class TestRelionBinding:
         )
 
     @pytest.mark.parametrize("pixel_size", [1.0, 1.35, 2.0])
-    @pytest.mark.parametrize("particle_diameter", [100.0, 200.0])
-    def test_relion_soft_image_mask_matches_binding(self, box_size, pixel_size, particle_diameter, rng):
+    @pytest.mark.parametrize("radius_frac", [0.3, 0.7, 1.1])
+    def test_relion_soft_image_mask_matches_binding(self, box_size, pixel_size, radius_frac, rng):
         """Verify masked image from relion_soft_image_mask matches RELION C++.
 
         Uses float64 mask (smooth_circular_mask) for the comparison to avoid
@@ -137,7 +137,8 @@ class TestRelionBinding:
         """
         D = box_size
         width_mask_edge = 5
-        radius = min(particle_diameter / (2.0 * pixel_size), D / 2.0)
+        radius = radius_frac * D / 2.0
+        particle_diameter = 2.0 * pixel_size * radius
         image = rng.standard_normal((D, D))
 
         relion_result = soft_mask_outside_map_2d(image, radius, float(width_mask_edge))
@@ -168,11 +169,12 @@ class TestRelionBinding:
         )
 
     @pytest.mark.parametrize("pixel_size", [1.0, 1.35, 2.0])
-    @pytest.mark.parametrize("particle_diameter", [100.0, 200.0])
-    def test_apply_relion_soft_image_mask_matches_binding(self, box_size, pixel_size, particle_diameter, rng):
+    @pytest.mark.parametrize("radius_frac", [0.3, 0.7, 1.1])
+    def test_apply_relion_soft_image_mask_matches_binding(self, box_size, pixel_size, radius_frac, rng):
         D = box_size
         width_mask_edge = 5
-        radius = min(particle_diameter / (2.0 * pixel_size), D / 2.0)
+        radius = radius_frac * D / 2.0
+        particle_diameter = 2.0 * pixel_size * radius
         image = rng.standard_normal((D, D)).astype(np.float32)
 
         relion_result = soft_mask_outside_map_2d(image.astype(np.float64), radius, float(width_mask_edge))
@@ -190,12 +192,44 @@ class TestRelionBinding:
 class TestMaskEdgeCases:
     """Edge cases for mask computation."""
 
-    def test_radius_larger_than_box(self):
-        """When particle_diameter exceeds box, radius is clamped to D/2."""
+    def test_positive_radius_larger_than_half_box_is_not_clamped(self):
+        """RELION preserves a positive radius above D/2."""
         D = 32
-        mask = relion_soft_image_mask(D, 1.0, 1000.0, 5)
-        assert mask.shape == (D, D)
-        assert mask[D // 2, D // 2] == 1.0
+        radius = 18.25
+        width = 3.0
+        particle_diameter = 2.0 * radius
+
+        result = relion_soft_image_mask(D, 1.0, particle_diameter, width)
+        expected = smooth_circular_mask(D, radius, width).astype(np.float32)
+
+        np.testing.assert_array_equal(result, expected)
+
+    def test_positive_radius_larger_than_half_box_matches_binding(self, rng):
+        """The unclamped oversized-radius mask matches RELION C++ exactly."""
+        D = 32
+        radius = 18.25
+        width = 3.0
+        image = rng.standard_normal((D, D))
+
+        relion_result = soft_mask_outside_map_2d(image, radius, width)
+        recovar_mask = smooth_circular_mask(D, radius, width)
+        recovar_result = apply_relion_soft_image_mask(image, recovar_mask)
+
+        np.testing.assert_allclose(recovar_result, relion_result, rtol=0.0, atol=1e-12)
+
+    def test_negative_radius_defaults_to_half_box(self, rng):
+        """RELION's negative-radius sentinel and RECOVAR both use D/2."""
+        D = 32
+        width = 3.0
+        image = rng.standard_normal((D, D))
+
+        result = relion_soft_image_mask(D, 1.0, -2.0, width)
+        expected = smooth_circular_mask(D, D / 2.0, width).astype(np.float32)
+        np.testing.assert_array_equal(result, expected)
+
+        relion_negative = soft_mask_outside_map_2d(image, -1.0, width)
+        relion_half_box = soft_mask_outside_map_2d(image, D / 2.0, width)
+        np.testing.assert_allclose(relion_negative, relion_half_box, rtol=0.0, atol=1e-12)
 
     def test_zero_image_gives_zero_bg(self):
         """softMaskOutsideMap on a zero image should return all zeros."""

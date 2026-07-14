@@ -549,6 +549,9 @@ def relion_soft_image_mask(image_size, pixel_size, particle_diameter_ang, width_
     - radius = ``particle_diameter_ang / (2 * pixel_size)``
     - cosine width = ``width_mask_edge_px``
 
+    A negative radius is RELION's sentinel for ``image_size / 2``. Positive
+    radii are used as-is rather than clamped to the half-box radius.
+
     This helper mirrors that convention and returns a mask in image-space
     pixels, ready to multiply against centered particle images before the DFT.
     """
@@ -556,13 +559,15 @@ def relion_soft_image_mask(image_size, pixel_size, particle_diameter_ang, width_
         raise ValueError(f"image_size must be positive, got {image_size}")
     if pixel_size <= 0:
         raise ValueError(f"pixel_size must be positive, got {pixel_size}")
-    if particle_diameter_ang <= 0:
-        raise ValueError(f"particle_diameter_ang must be positive, got {particle_diameter_ang}")
     if width_mask_edge_px < 0:
         raise ValueError(f"width_mask_edge_px must be non-negative, got {width_mask_edge_px}")
 
     radius_px = float(particle_diameter_ang) / (2.0 * float(pixel_size))
-    radius_px = min(radius_px, image_size / 2.0)
+    # RELION's softMaskOutsideMap uses half the box only for its negative-radius
+    # sentinel. Positive radii are not clamped, even when they exceed half the
+    # box and therefore mask only the corners.
+    if radius_px < 0.0:
+        radius_px = image_size / 2.0
     thickness_px = float(width_mask_edge_px)
 
     if thickness_px == 0.0:
