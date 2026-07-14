@@ -3657,13 +3657,15 @@ def _score_pass2_bucket_normalized_cc(
 ):
     """RELION iter-1 normalized-CC scoring for sparse pass-2 buckets."""
 
-    proj_weighted = proj_half * half_weights[None, None, :]
-    cross = -2.0 * jnp.einsum(
-        "btn,brn->brt",
-        jnp.conj(shifted_score),
-        proj_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
+    # RELION's CUDA kernel forms pointwise real/imaginary products and then
+    # reduces them in float32.  A complex GEMM is algebraically equivalent but
+    # has a different accumulation order; one-ULP firstiter-CC ties can choose
+    # different winners and subsequently alter the full refinement schedule.
+    cross_products = (
+        proj_half[:, :, None, :].real * shifted_score[:, None, :, :].real
+        + proj_half[:, :, None, :].imag * shifted_score[:, None, :, :].imag
+    ) * jnp.asarray(half_weights, dtype=jnp.float32)[None, None, None, :]
+    cross = -2.0 * jnp.sum(cross_products, axis=-1, dtype=jnp.float32)
     proj_abs2_weighted = (proj_half.real * proj_half.real + proj_half.imag * proj_half.imag) * half_weights[
         None, None, :
     ]
@@ -3689,13 +3691,11 @@ def _score_pass2_bucket_normalized_cc_single_cached(
 ):
     """Single-image normalized-CC scorer for cached ``(R, N)`` projections."""
 
-    proj_weighted = proj_half * half_weights[None, :]
-    cross = -2.0 * jnp.einsum(
-        "tn,rn->rt",
-        jnp.conj(shifted_score),
-        proj_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
+    cross_products = (
+        proj_half[:, None, :].real * shifted_score[None, :, :].real
+        + proj_half[:, None, :].imag * shifted_score[None, :, :].imag
+    ) * jnp.asarray(half_weights, dtype=jnp.float32)[None, None, :]
+    cross = -2.0 * jnp.sum(cross_products, axis=-1, dtype=jnp.float32)
     proj_abs2_weighted = (proj_half.real * proj_half.real + proj_half.imag * proj_half.imag) * half_weights[None, :]
     norms = jnp.einsum(
         "n,rn->r",
@@ -3775,13 +3775,10 @@ def _score_pass2_pairs_normalized_cc(
 
     shifted_pair = shifted_score[row, safe_translation_idx, :]
     proj_pair = proj_half[row, safe_rotation_row, :]
-    proj_weighted = proj_pair * half_weights[None, None, :]
-    cross = -2.0 * jnp.einsum(
-        "bpn,bpn->bp",
-        jnp.conj(shifted_pair),
-        proj_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
+    cross_products = (
+        proj_pair.real * shifted_pair.real + proj_pair.imag * shifted_pair.imag
+    ) * jnp.asarray(half_weights, dtype=jnp.float32)[None, None, :]
+    cross = -2.0 * jnp.sum(cross_products, axis=-1, dtype=jnp.float32)
     proj_abs2_weighted = (
         proj_pair.real * proj_pair.real + proj_pair.imag * proj_pair.imag
     ) * half_weights[None, None, :]

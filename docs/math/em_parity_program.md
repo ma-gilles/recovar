@@ -1864,3 +1864,47 @@ Root-cause evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_phase_precision_20260714_143051/16_small_anisotropic_outliers_3k_g128_pct25_noise3_bf80/audit_case16_divergence_20260714/exact_iter3_score_20260714_145500/analysis/NORM_SUM_WEIGHT_ROOT_CAUSE.md`.
 Validation root:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/`.
+
+### Autonomous case-16 validation
+
+A clean autonomous A100 run at commit `d685ba36` (job `11184169`) proves that
+the retained-mass normalization fix restores the numbered control trajectory.
+RECOVAR and RELION both execute 11 numbered iterations, use sizes
+`[56,56,50,50,50,50,50,50,50,52,52]`, switch from HEALPix order 3 to 4 at
+iteration 9, converge after iteration 11, and enter final all-data only after
+convergence. Numbered merged cross-FSC-AUC is at least `0.999987621`; numbered
+GT FSC-AUC differs by at most `4.01e-5`. Before the fix, pose differences grew
+to `60/56` by iteration 6 and triggered false local search and convergence at
+iteration 9.
+
+This does not yet accept case 16 end to end. The final all-data merged
+cross-FSC-AUC is only `0.743531728`, even though RECOVAR's final GT FSC-AUC is
+better than RELION by `+0.054821`. The open boundary is therefore the final
+all-data branch, not the numbered trajectory; localize final poses, half
+accumulators, joined FSC/tau2, and reconstruction separately. Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/autonomous_default_commit_d685/analysis/TRAJECTORY_AUDIT.md`.
+
+## 2026-07-14 Case-22 firstiter-CC reduction order
+
+After the TF32 phase fix, case 22 retained one iteration-1 winner difference
+on original particle 1552. A same-A100 RELION/RECOVAR candidate capture shows
+that both implementations evaluate the same coarse parent and the same 32
+fine candidates. The RELION winning margin is one float32 ULP
+(`4.76837e-7`), while RECOVAR's complex-GEMM contraction reverses the two
+candidates by `5.96046e-8`. Recomputing the cross term as RELION's explicit
+float32 real/imaginary products followed by a float32 reduction restores the
+RELION ordering; the projection-norm contraction is unchanged.
+
+A production-shaped A100 microbenchmark measures the explicit contraction at
+`7.272 ms` versus `4.775 ms` for the complex GEMM. The affected firstiter-CC
+pass-2 kernel is a small part of a full refinement, so end-to-end trajectory
+timing remains the required performance gate. Same-A100 validation job
+`11185051` starts from the canonical RELION iteration-0 state and matches all
+3,000 iteration-1 Euler/origin decisions (`0` mismatches at the float32/STAR
+threshold), including particle 1552. The full autonomous trajectory remains
+the acceptance gate before this numerical compatibility change is accepted.
+
+Evidence roots:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it1_particle1553_capture_20260714_160000/ARITHMETIC_REPORT.md`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_explicit_cross_it1_validation_20260714_174500/`.

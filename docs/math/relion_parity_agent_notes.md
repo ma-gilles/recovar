@@ -1943,3 +1943,45 @@ comparison.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_phase_precision_20260714_143051/16_small_anisotropic_outliers_3k_g128_pct25_noise3_bf80/audit_case16_divergence_20260714/exact_iter3_score_20260714_145500/analysis/NORM_SUM_WEIGHT_ROOT_CAUSE.md`.
 - Validation root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/`.
+
+# 2026-07-14: case-16 autonomous numbered trajectory accepted; final branch open
+
+- Clean A100 job `11184169` at `d685ba36` completes in `00:08:58` and exactly
+  matches RELION's 11-iteration size/order schedule and convergence boundary.
+- Numbered merged cross-FSC-AUC is
+  `1.000000000, .999999999, .999999997, .999999998, .999999998,
+  .999999999, .999999999, .999999999, .999999999, .999998470,
+  .999987621`. Numbered GT FSC-AUC differences are at most `4.01e-5`.
+- Hard rotation/translation mismatch counts by iteration are
+  `0/0, 0/0, 1/1, 0/0, 1/1, 1/0, 1/0, 0/0, 2/0, 28/15, 25/19`.
+  The first difference is a diffuse close choice, while map FSC remains
+  effectively exact; do not require brittle discrete tie identity.
+- The final all-data cross-FSC-AUC is only `0.743531728` (RECOVAR GT
+  `0.293003`, RELION GT `0.238181`). This is a real unresolved final-branch
+  mismatch despite the exact control trajectory. Decompose final poses,
+  half accumulators, joined FSC/tau2, and final reconstruction before changing
+  numbered EM.
+- Audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/autonomous_default_commit_d685/analysis/TRAJECTORY_AUDIT.md`.
+
+# 2026-07-14: case-22 normalized-CC complex reduction boundary
+
+- Same-A100 RELION/RECOVAR capture proves original particle 1552 sees the
+  same coarse parent and the same ordered 32 fine candidates. RELION chooses
+  `(r1,t89)` over `(r4,t88)` by `4.76837e-7`; RECOVAR's complex c64
+  `dot_general` reverses them by `5.96046e-8`.
+- The reference norm is bit-identical. The discrepancy is only the complex
+  numerator reduction. Explicit float32 real/imaginary products plus
+  float32 `reduce_sum` recover RELION's winner with a `4.47035e-7` margin.
+- The production patch changes only normalized firstiter-CC pass-2 cross
+  terms in bucketed, cached-single, and compact-pair routes. Norm contractions
+  remain unchanged. Focused reduction tests plus the EM fast guard pass.
+- A100 job `11185051` matches all 3,000 canonical iteration-1 Euler/origin
+  decisions with zero threshold failures and restores the target particle.
+  Do not accept or commit solely from this boundary: require the autonomous
+  case-22 FSC/FSC-AUC trajectory, schedule, convergence, finalization, and
+  end-to-end timing.
+- Capture:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it1_particle1553_capture_20260714_160000/ARITHMETIC_REPORT.md`.
+- Validation:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_explicit_cross_it1_validation_20260714_174500/`.
