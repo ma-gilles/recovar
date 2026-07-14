@@ -2010,10 +2010,11 @@ The reference difference is traced one layer earlier.  Same-H100 RELION job
 ``11188600`` captured the post-join iteration-1 BackProjectors and three map
 stages.  With the exact RELION layout and scales ``-256^-2`` for the complex
 numerator and ``256^-4`` for the positive weight, the inclusive supported-
-radius relative-L2 residual is about ``2.07e-4`` for the numerator but only
-``2.0e-6`` for the weight in both halves.  Independent RECOVAR repeats differ
-by only about ``3.3e-8``, so this is a systematic cross-implementation
-arithmetic difference rather than RECOVAR atomic nondeterminism.
+radius relative-L2 residual is ``1.985202940e-4``/``1.992240058e-4`` for the
+numerator and ``1.504021633e-6``/``1.529009109e-6`` for the weight by half.
+Independent RECOVAR repeats differ by only about ``3.3e-8``, so this is a
+systematic cross-implementation arithmetic difference rather than RECOVAR
+atomic nondeterminism.
 
 Cross-reconstruction job ``11188818`` localizes causality to accumulation.
 RECOVAR reconstruction/post-processing fed the RELION accumulators reproduces
