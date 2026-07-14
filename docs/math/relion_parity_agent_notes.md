@@ -1871,3 +1871,31 @@ comparison.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_autonomous_native_scale_20260713_212530/MANUAL_SHELLWISE_REVIEW.md`.
 - This closes the single 3k/128 white-noise autonomous K=1 fixture. Robustness,
   scale, real-particle, and K=4 quality gates remain open.
+
+# 2026-07-14: case-22 translation-phase precision closure
+
+- Case-22 exact per-pixel RELION CUDA capture jobs `11164971` and `11165146`
+  completed on an A100. Exact unit mapping and hybrid scores isolate the
+  first-iteration normalized-CC winner flips to RECOVAR's weighted translated
+  image; projection interpolation, CTF, and score reduction are null.
+- Fitting the complex-image residual to a Fourier phase ramp yields effective
+  translation errors that match TF32-rounded float32 shifts. For example,
+  `-2.0479863` becomes `-2.0488281` (delta `-0.000841856`) and `1.9520137`
+  becomes `1.9521484` (delta `+0.0001347065`). Removing the ramp leaves only
+  `1.24e-7`--`1.47e-7` weighted phase RMS.
+- Commit `c741faee266f243877f43ecb457a9debd22e6bcf` sets
+  `jax.lax.Precision.HIGHEST` on generic, full-half-table, and indexed-half-
+  table candidate phases. Commit `b658bd8d12bac32a72040d309bad6f259a8e2f87`
+  applies the same contract to the separate per-image Fourier pre-shift phase.
+  Compiled-jaxpr regressions prevent silent TF32 reintroduction in all four
+  paths.
+- A100 job `11177896` restores both RELION winners. Full score-field RMS falls
+  by about 8--9x to `1.6304e-6` and `1.7883e-6`; the four corrected target
+  score gaps are between `-7.45e-7` and `+5.66e-7`.
+- Focused tests: 42 passed across core geometry, RELION E3 shifts, all four EM
+  phase paths, and pose/translation score recovery.
+- Canonical evidence is under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_early_score_audit_20260713_235725/`.
+  The next gate is the autonomous case-22 trajectory at the exact clean head,
+  judged by shellwise FSC/FSC-AUC plus schedule/convergence/finalization. Track
+  phase-generation timing because the generic precision change is cross-cutting.

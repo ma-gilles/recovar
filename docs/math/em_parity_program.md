@@ -23,12 +23,12 @@ as the next product milestone rather than mixing it into the first closure.
 - **Performance:** exact accepted quality behavior with timing instrumentation;
   no algorithmic approximation without separate quality qualification.
 
-## Current State — 2026-07-13
+## Current State — 2026-07-14
 
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `5a5769df37e49674c118697f60e73cbdd706b880`
+Current accepted code checkpoint: `b658bd8d12bac32a72040d309bad6f259a8e2f87`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -1785,3 +1785,35 @@ merged normalized FSC-AUC gate at `0.997935505` with minimum shell FSC
 `0.650834886`. Correlation was not computed. Treat this as acceptance of the
 3k/128 white-noise K=1 fixture only; proceed to heterogeneous robustness,
 larger scale, real-particle, and then K=4 gates.
+
+## 2026-07-14 Case-22 TF32 Translation-Phase Root Cause
+
+The first failing robustness fixture, case 22 (3k/128, radial noise 5 with
+severe outliers), previously reached final merged RECOVAR-versus-RELION
+FSC-AUC `0.8231073` and converged two iterations early. The earliest discrete
+boundary was two iteration-1 normalized-CC winner flips. Exact RELION CUDA and
+RECOVAR per-pixel captures rule out priors, projection interpolation, CTF,
+reference norm, and reduction order. Hybrid replay assigns the material score
+gap to the weighted translated image.
+
+The image residual is a linear Fourier phase. Its fitted translation delta
+matches A100 TF32 rounding of the requested shifts exactly; weighted phase RMS
+falls from `1.24e-4`--`7.73e-4` to `1.24e-7`--`1.47e-7` after removing that
+ramp. Commit `c741faee` requests `jax.lax.Precision.HIGHEST` in the generic,
+full half-spectrum, and indexed/windowed candidate-translation phase dot
+products. Follow-up commit `b658bd8d` covers the separate per-image Fourier
+pre-shift phase constructor. A100 job `11177896` restores both RELION winners
+and reduces full score-field RMS from `1.33e-5`/`1.58e-5` to
+`1.63e-6`/`1.79e-6`; corrected target-score gaps are at most `7.45e-7`.
+Forty-two focused tests pass.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_early_score_audit_20260713_235725/REPORT.md`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_early_score_audit_20260713_235725/rel_cc_pixels_v7_20260714_014000/REPORT.md`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_early_score_audit_20260713_235725/rec_tf32_phase_highest_20260714_014700/phase_precision_audit.md`.
+
+The active experiment is a clean autonomous case-22 full trajectory from
+`b658bd8d`, with shellwise FSC/FSC-AUC, exact current-size schedule,
+convergence iteration, finalization, and phase-generation timing as the
+acceptance gates. Correlation is not an acceptance metric.
