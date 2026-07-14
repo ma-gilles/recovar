@@ -1988,3 +1988,47 @@ discriminator for the complex Gaussian cross contraction.
 
 Audit:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_cleanhead_68a3f9e6_20260714_180000/case20/audit_job_11185799.json`.
+
+### Case-20 iteration-2 Gaussian operand and iteration-1 BPref boundary
+
+The fine Gaussian arithmetic oracle is RELION's direct ``diff2`` expression,
+not RECOVAR's algebraically equivalent complex cross-term contraction.  Source
+verification is important here: the CUDA SPA path instantiates
+``REF3D=true, DATA3D=false`` with a 256-thread reduction block and translation
+chunk size seven.  An initial 128-lane diagnostic was therefore invalid as an
+exact RELION emulation and is not a production candidate.  Recomputing the
+captured operands with the correct 256-lane tree preserves the scientific
+localization.  For original particle 365, the native one-ULP winner gap is
+removed by the captured RELION image operand.  For particle 469, RECOVAR's
+image and reference favor row 27 by three ULPs; substituting RELION's saved
+iteration-1 reference collapses that pair to an exact tie, while RELION's live
+kernel favors row 34 by one ULP.  The full native-to-RELION span is therefore
+four float32 ULPs.  All candidate masks, priors, rotations, translations, and
+non-reference operands are otherwise identical at the captured boundary.
+
+The reference difference is traced one layer earlier.  Same-H100 RELION job
+``11188600`` captured the post-join iteration-1 BackProjectors and three map
+stages.  With the exact RELION layout and scales ``-256^-2`` for the complex
+numerator and ``256^-4`` for the positive weight, the inclusive supported-
+radius relative-L2 residual is about ``2.07e-4`` for the numerator but only
+``2.0e-6`` for the weight in both halves.  Independent RECOVAR repeats differ
+by only about ``3.3e-8``, so this is a systematic cross-implementation
+arithmetic difference rather than RECOVAR atomic nondeterminism.
+
+Cross-reconstruction job ``11188818`` localizes causality to accumulation.
+RECOVAR reconstruction/post-processing fed the RELION accumulators reproduces
+RELION's post-reconstruct maps at FSC-AUC
+``0.999999999831/0.999999999840`` and the final post-solvent references at
+``0.999999999985`` in both halves, with best-scale residual below ``7e-7``.
+Feeding RECOVAR accumulators gives raw-stage FSC-AUC
+``0.999999981523/0.999999981144`` and final FSC-AUC
+``0.999999999449/0.999999999451``.  Tau2 derived from the RELION accumulators
+matches the RELION model STAR through the untapered shells to serialized
+precision.  Thus neither the Wiener solver, tau2 update, low-pass, nor solvent
+flatten is the first cause.  The strong numerator-versus-weight asymmetry
+points next to the translated complex hard-winner operand/phase arithmetic
+before scatter.  Shell FSC/FSC-AUC remain the map-quality gates; accumulator
+norms are localization diagnostics only.
+
+Evidence root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it2_gaussian_capture_20260714_182500/`.
