@@ -689,6 +689,20 @@ def _k1_data_vs_prior_for_scheduling(
     return np.asarray(fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge), dtype=np.float32)
 
 
+def _truncate_fsc_for_current_size_growth(fsc, *, current_size, grid_size):
+    """Zero FSC shells beyond RELION's inclusive current-size boundary.
+
+    BackProjector includes radii ``R <= current_size / 2``.  The boundary
+    shell therefore remains part of RELION's full-array FSC threshold scan;
+    only shells starting at ``current_size // 2 + 1`` are unavailable.
+    """
+    truncated = np.asarray(fsc, dtype=np.float32).copy()
+    if int(current_size) < int(grid_size):
+        first_unavailable_shell = min(len(truncated), int(current_size) // 2 + 1)
+        truncated[first_unavailable_shell:] = 0.0
+    return truncated
+
+
 def _concatenate_pose_stacks_or_none(stacks, *, trailing_shape, label):
     """Concatenate per-half pose stacks, accepting empty replay stacks."""
     arrays = []
@@ -2955,6 +2969,9 @@ _STATE_SWAP_STATE_FIELD_GROUPS = {
         "nr_iter_wo_resol_gain",
         "nr_iter_wo_assignment_changes",
         "nr_iter_wo_large_hidden_variable_changes",
+        "mpi_leader_hidden_variable_angular_step_deg",
+        "mpi_leader_hidden_variable_translation_step_angstrom",
+        "suppress_hidden_variable_increment_once",
         "has_converged",
     },
 }
@@ -4135,10 +4152,12 @@ def _run_relion_iteration_loop(
                     cs,
                 )
             elif init_fsc is not None:
-                fsc_prev = np.asarray(init_fsc, dtype=np.float32).copy()
                 prev_cs = int(init_current_size)
-                if prev_cs < grid_size:
-                    fsc_prev[min(len(fsc_prev), prev_cs // 2) :] = 0.0
+                fsc_prev = _truncate_fsc_for_current_size_growth(
+                    init_fsc,
+                    current_size=prev_cs,
+                    grid_size=grid_size,
+                )
                 data_vs_prior_iter = np.asarray(
                     fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge),
                 )
@@ -4215,12 +4234,11 @@ def _run_relion_iteration_loop(
                 cs = computed_cs
             else:
                 fsc_prev_raw = np.asarray(fsc_history[-1], dtype=np.float32).copy()
-                fsc_prev_for_growth = np.asarray(
+                fsc_prev_for_growth = _truncate_fsc_for_current_size_growth(
                     fsc_for_growth_history[-1] if fsc_for_growth_history else fsc_prev_raw,
-                    dtype=np.float32,
-                ).copy()
-                if prev_cs < grid_size:
-                    fsc_prev_for_growth[min(len(fsc_prev_for_growth), prev_cs // 2) :] = 0.0
+                    current_size=prev_cs,
+                    grid_size=grid_size,
+                )
 
                 data_vs_prior_iter = _k1_data_vs_prior_for_scheduling(
                     raw_fsc=fsc_prev_raw,
@@ -4266,6 +4284,19 @@ def _run_relion_iteration_loop(
                 cs = quantize_current_size(raw_cs, ori_size=grid_size)
 
         cs = quantize_current_size(cs, ori_size=grid_size)
+        if iteration > 0:
+            logger.info(
+                "RELION current-size decision: iter=%d prev=%d res_shell=%d "
+                "incr_size=%d high_fsc_at_limit=%s ave_Pmax=%.6f raw=%d quantized=%d",
+                iteration + 1,
+                int(prev_cs),
+                int(res_shell),
+                int(relion_incr_size),
+                bool(relion_has_high_fsc_at_limit),
+                float(state.ave_Pmax),
+                int(raw_cs),
+                int(cs),
+            )
         if relion_current_sizes is not None:
             if iteration < len(relion_current_sizes):
                 oracle_cs = int(relion_current_sizes[iteration])

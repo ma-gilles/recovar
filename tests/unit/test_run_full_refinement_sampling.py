@@ -1,5 +1,6 @@
 """CLI-level sampling contract tests for ``scripts/run_full_refinement.py``."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -11,12 +12,16 @@ from recovar.em.sampling import (
 )
 from scripts.run_full_refinement import (
     _effective_perturb_seed,
+    _explicit_relion_optimiser_for_seed,
     _resolve_effective_max_healpix_order,
     _jsonable_profile_rows,
     _pose_history_by_image,
     _refine_sampling_kwargs,
+    _resolve_optimizer_random_seed,
     _resolve_relion_sampling_orders,
 )
+
+RUN_FULL_REFINEMENT = Path(__file__).resolve().parents[2] / "scripts" / "run_full_refinement.py"
 
 
 def test_relion_healpix_order_is_coarse_pass1_order():
@@ -96,6 +101,55 @@ def test_cli_perturb_seed_defaults_to_relion_random_seed():
     assert _effective_perturb_seed(SimpleNamespace(seed=17, perturb_seed=None)) == 17
     assert _effective_perturb_seed(SimpleNamespace(seed=17, perturb_seed=23)) == 23
     assert _effective_perturb_seed(SimpleNamespace(seed=17, perturb_seed=-1)) is None
+
+
+def test_optimizer_seed_explicit_cli_wins_over_relion_star(tmp_path):
+    optimiser = tmp_path / "run_it000_optimiser.star"
+    optimiser.write_text("_rlnRandomSeed 1713\n")
+
+    assert _resolve_optimizer_random_seed(99, optimiser) == (99, "explicit CLI")
+
+
+def test_optimizer_seed_inherits_explicit_relion_star_when_omitted(tmp_path):
+    optimiser = tmp_path / "run_it000_optimiser.star"
+    optimiser.write_text("_rlnRandomSeed 1713\n")
+
+    seed, source = _resolve_optimizer_random_seed(None, optimiser)
+
+    assert seed == 1713
+    assert str(optimiser.resolve()) in source
+
+
+def test_optimizer_seed_omitted_without_relion_state_keeps_default():
+    assert _resolve_optimizer_random_seed(None, None) == (42, "standalone default")
+
+
+def test_optimizer_seed_zero_is_preserved():
+    assert _resolve_optimizer_random_seed(0, None) == (0, "explicit CLI")
+
+
+def test_seed_source_ignores_incidental_data_dir_relion_discovery(tmp_path):
+    relion_dir = tmp_path / "relion_ref"
+    relion_dir.mkdir()
+    (relion_dir / "run_optimiser.star").write_text("_rlnRandomSeed 1713\n")
+    args = SimpleNamespace(
+        data_dir=str(tmp_path),
+        relion_optimiser=None,
+        relion_init_dir=None,
+        perturb_replay_relion_dir=None,
+        relion_half_sets=None,
+    )
+
+    assert _explicit_relion_optimiser_for_seed(args) is None
+
+
+def test_optimizer_seed_is_resolved_before_halfset_splitting():
+    source = RUN_FULL_REFINEMENT.read_text()
+
+    assert "default=None" in source[source.index('parser.add_argument(\n        "--seed"') :]
+    assert source.index("args.seed, optimizer_seed_source = _resolve_optimizer_random_seed") < source.index(
+        "_default_refinement_subsets(n_images, args.seed"
+    )
 
 
 def test_relion_seeded_sampling_perturbation_sequence_matches_reference_star():

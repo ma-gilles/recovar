@@ -10559,6 +10559,41 @@ class TestRelionModeSmokeTest:
             allow_high_res_recovery=True,
         ) == boundary_shell
 
+    def test_k1_growth_fsc_keeps_case15_size68_boundary_shell(self):
+        """Case 15 iter 8 must scan shell 34 and grow 68 -> 78 like RELION."""
+        fsc = np.zeros(65, dtype=np.float32)
+        fsc[1:25] = 0.6
+        fsc[25:34] = 0.18
+        fsc[33] = 0.184406
+        fsc[34] = 0.159366
+
+        growth_fsc = iteration_loop_module._truncate_fsc_for_current_size_growth(
+            fsc,
+            current_size=68,
+            grid_size=128,
+        )
+        incr_size, has_high_fsc = regularization_module.update_relion_growth_state_from_fsc(
+            growth_fsc,
+            68,
+            incr_size=10,
+            has_high_fsc_at_limit=False,
+        )
+        next_size = regularization_module.compute_current_size_relion(
+            24,
+            128,
+            ave_Pmax=0.521225,
+            has_high_fsc_at_limit=has_high_fsc,
+            incr_size=incr_size,
+        )
+
+        assert growth_fsc[34] == pytest.approx(0.159366)
+        assert growth_fsc[35] == 0.0
+        assert regularization_module.first_shell_below_threshold(growth_fsc, 0.5) == 25
+        assert regularization_module.first_shell_below_threshold(growth_fsc, 0.143) == 35
+        assert incr_size == 15
+        assert has_high_fsc is False
+        assert next_size == 78
+
     def test_firstiter_cc_scheduling_uses_ini_high_shell(self):
         """RELION iter-1 firstiter_cc grows from ini_high, not DVP."""
         shell = iteration_loop_module._firstiter_cc_ini_high_resolution_shell(256, 2.125, 30.0)

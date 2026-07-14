@@ -1171,6 +1171,42 @@ def _find_relion_optimiser_star(args):
     return None
 
 
+def _resolve_optimizer_random_seed(explicit_seed, relion_optimiser_star):
+    """Resolve the optimiser seed without silently diverging from RELION.
+
+    An explicit CLI seed always wins.  For strict-parity runs whose RELION
+    optimiser was explicitly supplied, inherit ``_rlnRandomSeed`` when the
+    CLI seed is omitted.  Ordinary standalone runs retain the historical
+    deterministic default of 42.
+    """
+    if explicit_seed is not None:
+        return int(explicit_seed), "explicit CLI"
+
+    if relion_optimiser_star is not None:
+        from recovar.em.sampling import read_relion_optimiser_metadata
+
+        metadata = read_relion_optimiser_metadata(relion_optimiser_star)
+        relion_seed = metadata.get("random_seed")
+        if relion_seed is not None:
+            return int(relion_seed), f"RELION optimiser {Path(relion_optimiser_star).resolve()}"
+
+    return 42, "standalone default"
+
+
+def _explicit_relion_optimiser_for_seed(args):
+    """Return a seed source only when the user explicitly selected RELION state.
+
+    ``_find_relion_optimiser_star`` also performs convenient incidental
+    discovery under ``data_dir``.  That discovery is useful for masks and
+    support caps, but must not unexpectedly change a standalone run's RNG.
+    """
+    explicit_relion_state = any(
+        getattr(args, name, None)
+        for name in ("relion_optimiser", "relion_init_dir", "perturb_replay_relion_dir")
+    )
+    return _find_relion_optimiser_star(args) if explicit_relion_state else None
+
+
 def _effective_perturb_seed(args):
     """Resolve the SamplingPerturbation seed used by the refinement loop.
 
@@ -1385,7 +1421,16 @@ def main():
         default=40000,
         help="Rotations per block (larger = faster, less Python overhead)",
     )
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for half-set split")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Random seed for half-set splitting, SamplingPerturbation, and optimiser sampling. "
+            "If omitted with explicit RELION optimiser/init state, inherit _rlnRandomSeed; "
+            "otherwise use 42."
+        ),
+    )
     parser.add_argument(
         "--relion_half_sets",
         default=None,
@@ -1607,6 +1652,10 @@ def main():
         help="Optional JSON path for an auto-refine quality/performance ledger.",
     )
     args = parser.parse_args()
+
+    seed_optimiser_star = _explicit_relion_optimiser_for_seed(args)
+    args.seed, optimizer_seed_source = _resolve_optimizer_random_seed(args.seed, seed_optimiser_star)
+    logger.info("Optimiser random seed: %d (%s)", args.seed, optimizer_seed_source)
 
     if args.timing_dir:
         timing_dir_path = Path(args.timing_dir)

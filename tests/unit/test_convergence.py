@@ -33,6 +33,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     effective_angular_step,
     healpix_angular_step,
     refine_angular_sampling,
+    relion_mpi_hidden_variable_change_is_small,
     resolution_required_angular_sampling,
     resolution_triggers_angular_refinement,
     should_refine_angular_sampling,
@@ -917,7 +918,7 @@ class TestUpdateRefinementState:
         )
         assert updated.current_changes_optimal_classes == 0.0
 
-    def test_hidden_variable_translation_ratio_uses_coarse_optimizer_step(self):
+    def test_hidden_variable_translation_ratio_uses_initial_mpi_leader_effective_step(self):
         state = self._make_base_state(
             healpix_order=2,
             adaptive_oversampling=1,
@@ -935,7 +936,7 @@ class TestUpdateRefinementState:
         previous_trans = np.zeros((5, 2), dtype=np.float32)
         current_trans = np.column_stack(
             [
-                np.full(5, 0.55, dtype=np.float32),
+                np.full(5, 0.25, dtype=np.float32),
                 np.zeros(5, dtype=np.float32),
             ]
         )
@@ -955,8 +956,38 @@ class TestUpdateRefinementState:
             voxel_size_angstrom=1.0,
         )
 
-        assert updated.current_changes_optimal_offsets_angstrom == pytest.approx(0.55 / np.sqrt(2.0))
+        assert updated.current_changes_optimal_offsets_angstrom == pytest.approx(0.25 / np.sqrt(2.0))
         assert updated.nr_iter_wo_large_hidden_variable_changes == 1
+
+    def test_relion_mpi_case13_it8_star_values_reset_hidden_change_counter(self):
+        """Case 13 STAR values require the stale MPI-leader translation step."""
+        # run_it000_sampling.star: order=3, offset_step=4.25 A, oversampling=1.
+        # run_it007/008_optimiser.star provide the smallest/current changes.
+        assert not relion_mpi_hidden_variable_change_is_small(
+            current_classes=0.0,
+            current_offsets_angstrom=0.984143,
+            current_orientations_deg=1.054518,
+            smallest_classes=0.0,
+            smallest_offsets_angstrom=1.035820,
+            smallest_orientations_deg=1.136805,
+            mpi_leader_angular_step_deg=7.5 / 2.0,
+            mpi_leader_translation_step_angstrom=4.25 / 2.0,
+        )
+
+    def test_relion_mpi_case15_it7_star_values_increment_hidden_change_counter(self):
+        """Case 15 STAR values also match the fixed process-initial sampling."""
+        # run_it000_sampling.star: order=3, offset_step=4.25 A, oversampling=1.
+        # run_it006/007_optimiser.star provide the smallest/current changes.
+        assert relion_mpi_hidden_variable_change_is_small(
+            current_classes=0.0,
+            current_offsets_angstrom=0.575090,
+            current_orientations_deg=1.266198,
+            smallest_classes=0.0,
+            smallest_offsets_angstrom=1.112159,
+            smallest_orientations_deg=2.265981,
+            mpi_leader_angular_step_deg=7.5 / 2.0,
+            mpi_leader_translation_step_angstrom=4.25 / 2.0,
+        )
 
     @staticmethod
     def _rotation_delta(n_images, relion_mean_angle_deg):
@@ -1021,6 +1052,8 @@ class TestUpdateRefinementState:
             smallest_changes_optimal_classes=0.0,
             smallest_changes_optimal_orientations=1.996281,
             smallest_changes_optimal_offsets_angstrom=0.810118,
+            mpi_leader_hidden_variable_angular_step_deg=7.5 / 2.0,
+            mpi_leader_hidden_variable_translation_step_angstrom=4.25 / 2.0,
         )
 
         state = self._record_relion_hidden_change(state, 1.309840, 0.730098)
@@ -1028,19 +1061,30 @@ class TestUpdateRefinementState:
         assert state.nr_iter_wo_resol_gain == 1
         assert state.nr_iter_wo_large_hidden_variable_changes == 1
         assert update_angular_sampling(state).healpix_order == 5
+        refined = update_angular_sampling(state)
+        assert refined.mpi_leader_hidden_variable_angular_step_deg == pytest.approx(7.5 / 2.0)
+        assert refined.mpi_leader_hidden_variable_translation_step_angstrom == pytest.approx(4.25 / 2.0)
 
     def test_relion_order5_to_order6_hidden_change_boundary(self):
         state = RefinementState(
-            healpix_order=5,
+            healpix_order=4,
             adaptive_oversampling=1,
-            translation_step=1.683 / 4.25,
+            translation_step=1.87425 / 4.25,
             current_resolution=22.6667,
             voxel_size_angstrom=4.25,
             acc_rot=1.030,
+            acc_trans=1.122,
+            mpi_leader_hidden_variable_angular_step_deg=7.5 / 2.0,
+            mpi_leader_hidden_variable_translation_step_angstrom=4.25 / 2.0,
         )
+        state = refine_angular_sampling(state)
+
+        assert state.healpix_order == 5
+        assert state.suppress_hidden_variable_increment_once is True
 
         state = self._record_relion_hidden_change(state, 0.908481, 0.722427)
         assert state.nr_iter_wo_large_hidden_variable_changes == 0
+        assert state.suppress_hidden_variable_increment_once is False
         state = self._record_relion_hidden_change(state, 0.600638, 0.606800)
 
         assert state.nr_iter_wo_resol_gain >= 1

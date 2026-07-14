@@ -83,6 +83,57 @@ def effective_angular_step(order: int, adaptive_oversampling: int = 0) -> float:
     return healpix_angular_step(order) / (2**adaptive_oversampling)
 
 
+def relion_mpi_hidden_variable_change_is_small(
+    *,
+    current_classes: float,
+    current_offsets_angstrom: float,
+    current_orientations_deg: float,
+    smallest_classes: float,
+    smallest_offsets_angstrom: float,
+    smallest_orientations_deg: float,
+    mpi_leader_angular_step_deg: float,
+    mpi_leader_translation_step_angstrom: float,
+) -> bool:
+    """Evaluate RELION MPI's hidden-variable stall predicate.
+
+    This deliberately accepts the sampling steps held by the MPI leader, not
+    the current follower sampling.  In ``MlOptimiserMpi::expectation`` RELION
+    calls ``updateAngularSampling`` only on followers.  For non-helical runs it
+    broadcasts the updated counters and smallest-change trackers, but not the
+    sampling object.  Later, rank 0 calls
+    ``updateOverallChangesInHiddenVariables`` and therefore divides by the
+    effective sampling steps that the leader had when the process (or restart)
+    was initialized.  See ``ml_optimiser_mpi.cpp:1094-1125,2880-2903`` and
+    ``ml_optimiser.cpp:9263-9273`` in RELION d476e6f.
+
+    The caller is responsible for applying adaptive oversampling when it
+    initializes the two fixed leader-step arguments.
+    """
+    angular_step = float(mpi_leader_angular_step_deg)
+    translation_step = float(mpi_leader_translation_step_angstrom)
+    ratio_orient = (
+        float(current_orientations_deg) / angular_step
+        if angular_step > 0.0
+        else float("inf")
+    )
+    ratio_trans = (
+        float(current_offsets_angstrom) / translation_step
+        if translation_step > 0.0
+        else float("inf")
+    )
+    return bool(
+        1.03 * float(current_classes) >= float(smallest_classes)
+        and (
+            ratio_trans < 0.40
+            or 1.03 * float(current_offsets_angstrom) >= float(smallest_offsets_angstrom)
+        )
+        and (
+            ratio_orient < 0.40
+            or 1.03 * float(current_orientations_deg) >= float(smallest_orientations_deg)
+        )
+    )
+
+
 def resolution_required_angular_sampling(
     current_resolution_angstrom: float,
     particle_diameter_angstrom: float,
@@ -302,11 +353,26 @@ class RefinementState:
     # the older field is kept for assignment-change logging.
     nr_iter_wo_large_hidden_variable_changes: int = 0
 
+    # RELION MPI quirk: B4 is evaluated by rank 0, whose non-helical sampling
+    # object is not updated or synchronized when followers refine sampling.
+    # These are the effective (oversampling-applied) denominator steps held by
+    # the leader at process/restart initialization and remain fixed thereafter.
+    mpi_leader_hidden_variable_angular_step_deg: float = 0.0
+    mpi_leader_hidden_variable_translation_step_angstrom: float = 0.0
+    suppress_hidden_variable_increment_once: bool = False
+
     def __post_init__(self):
         if self.auto_local_healpix_order < 0:
             raise ValueError("auto_local_healpix_order must be non-negative")
         if self.angular_step == 0.0:
             self.angular_step = healpix_angular_step(self.healpix_order)
+        oversampling_scale = 2**self.adaptive_oversampling
+        if self.mpi_leader_hidden_variable_angular_step_deg == 0.0:
+            self.mpi_leader_hidden_variable_angular_step_deg = self.angular_step / oversampling_scale
+        if self.mpi_leader_hidden_variable_translation_step_angstrom == 0.0:
+            self.mpi_leader_hidden_variable_translation_step_angstrom = (
+                self.translation_step * self.voxel_size_angstrom / oversampling_scale
+            )
         if self.should_do_local_search:
             self.do_local_search = True
 
@@ -1020,6 +1086,14 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
         smallest_changes_optimal_offsets_angstrom=SMALLEST_CHANGES_INIT_OFFSETS,
         smallest_changes_optimal_classes=SMALLEST_CHANGES_INIT_CLASSES,
         nr_iter_wo_large_hidden_variable_changes=0,
+        mpi_leader_hidden_variable_angular_step_deg=state.mpi_leader_hidden_variable_angular_step_deg,
+        mpi_leader_hidden_variable_translation_step_angstrom=(
+            state.mpi_leader_hidden_variable_translation_step_angstrom
+        ),
+        # The follower reset performed by updateAngularSampling is the value
+        # observed in the optimiser STAR for the first iteration on every new
+        # sampling, even though rank 0 subsequently aggregates B3 changes.
+        suppress_hidden_variable_increment_once=True,
     )
 
 
@@ -1212,29 +1286,20 @@ def update_refinement_state(
     smallest_offsets = state.smallest_changes_optimal_offsets_angstrom
     smallest_classes = state.smallest_changes_optimal_classes
     if np.isfinite(current_changes_orientations) and np.isfinite(current_changes_offsets_angstrom):
-        # Sampling steps used as the hidden-variable "small enough"
-        # denominator are the stored coarse optimiser steps.  Adaptive
-        # oversampling refines the expectation quadrature but is not applied
-        # again here.  This distinction is trajectory-critical: RELION's
-        # order-4 -> order-5 boundary accepts 1.30984 / 3.75 and
-        # 0.73010 / 1.87425 as < 0.4, whereas dividing both denominators by
-        # two delays that transition by four iterations.
-        rot_step_deg = healpix_angular_step(state.healpix_order)
-        # offset RMS is in angstroms; convert to pixels for the ratio
-        # comparison against the translation sampling step (also in pixels).
-        if voxel_size_angstrom > 0:
-            offsets_pixels = current_changes_offsets_angstrom / voxel_size_angstrom
-        else:
-            offsets_pixels = current_changes_offsets_angstrom
-        trans_step = state.translation_step
-        ratio_orient_changes = current_changes_orientations / rot_step_deg if rot_step_deg > 0 else float("inf")
-        ratio_trans_changes = offsets_pixels / trans_step if trans_step > 0 else float("inf")
-
-        class_ok = 1.03 * current_changes_classes >= smallest_classes
-        trans_ok = ratio_trans_changes < 0.40 or 1.03 * current_changes_offsets_angstrom >= smallest_offsets
-        rot_ok = ratio_orient_changes < 0.40 or 1.03 * current_changes_orientations >= smallest_orient
-
-        if class_ok and trans_ok and rot_ok:
+        if state.suppress_hidden_variable_increment_once:
+            nr_iter_wo_large_hidden_variable_changes = 0
+        elif relion_mpi_hidden_variable_change_is_small(
+            current_classes=current_changes_classes,
+            current_offsets_angstrom=current_changes_offsets_angstrom,
+            current_orientations_deg=current_changes_orientations,
+            smallest_classes=smallest_classes,
+            smallest_offsets_angstrom=smallest_offsets,
+            smallest_orientations_deg=smallest_orient,
+            mpi_leader_angular_step_deg=state.mpi_leader_hidden_variable_angular_step_deg,
+            mpi_leader_translation_step_angstrom=(
+                state.mpi_leader_hidden_variable_translation_step_angstrom
+            ),
+        ):
             nr_iter_wo_large_hidden_variable_changes += 1
         else:
             nr_iter_wo_large_hidden_variable_changes = 0
@@ -1289,6 +1354,11 @@ def update_refinement_state(
         smallest_changes_optimal_offsets_angstrom=smallest_offsets,
         smallest_changes_optimal_classes=smallest_classes,
         nr_iter_wo_large_hidden_variable_changes=nr_iter_wo_large_hidden_variable_changes,
+        mpi_leader_hidden_variable_angular_step_deg=state.mpi_leader_hidden_variable_angular_step_deg,
+        mpi_leader_hidden_variable_translation_step_angstrom=(
+            state.mpi_leader_hidden_variable_translation_step_angstrom
+        ),
+        suppress_hidden_variable_increment_once=False,
     )
 
     logger.info(
