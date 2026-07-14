@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -84,7 +85,12 @@ def half_image_phase_factors(image_shape, shifts):
         scaled=True,
     )
     shifts = jnp.asarray(shifts, dtype=jnp.float32)
-    return jnp.exp(-2j * jnp.pi * (lattice_half @ shifts.T)).T
+    phase_arg = jnp.matmul(
+        lattice_half,
+        shifts.T,
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    return jnp.exp(-2j * jnp.pi * phase_arg).T
 
 
 def tiled_half_image_phase_factors(image_shape, shifts, n_trans: int):
