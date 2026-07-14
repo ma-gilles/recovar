@@ -5086,6 +5086,45 @@ def test_indexed_half_translation_phase_table_matches_full_slice():
     )
 
 
+def test_em_translation_phase_dot_products_request_highest_precision():
+    """Prevent A100 TF32 rounding from changing RELION translation phases."""
+
+    translations = jnp.asarray(
+        [
+            [-2.0479863, 1.9520137],
+            [1.9520137, -1.0479863],
+        ],
+        dtype=jnp.float32,
+    )
+    pixel_indices = jnp.asarray([0, 2, 5, 7, 11], dtype=jnp.int32)
+    n_half = IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1)
+    images = jnp.ones((translations.shape[0], n_half), dtype=jnp.complex64)
+
+    phase_jaxprs = (
+        jax.make_jaxpr(lambda value: half_translation_phase_table(value, IMAGE_SHAPE))(translations),
+        jax.make_jaxpr(
+            lambda value: _half_translation_phase_table_for_indices(
+                value,
+                IMAGE_SHAPE,
+                pixel_indices,
+            )
+        )(translations),
+        jax.make_jaxpr(
+            lambda image, value: core.translate_images(
+                image,
+                value,
+                IMAGE_SHAPE,
+                half_image=True,
+            )
+        )(images, translations),
+    )
+
+    for phase_jaxpr in phase_jaxprs:
+        jaxpr_text = str(phase_jaxpr)
+        assert "dot_general[" in jaxpr_text
+        assert "precision=(Precision.HIGHEST, Precision.HIGHEST)" in jaxpr_text
+
+
 def test_score_only_sparse_normalizer_matches_full_normalizer_stats():
     scores = jnp.asarray(
         [

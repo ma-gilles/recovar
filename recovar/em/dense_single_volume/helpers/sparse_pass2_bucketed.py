@@ -733,6 +733,7 @@ def _half_translation_phase_table_for_indices(translations, image_shape, pixel_i
         "td,pd->tp",
         jnp.asarray(translations, dtype=jnp.float32),
         lattice_window,
+        precision=jax.lax.Precision.HIGHEST,
     )
     return jnp.exp(-2j * jnp.pi * phase_arg)
 

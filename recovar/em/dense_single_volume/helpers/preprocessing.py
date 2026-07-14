@@ -258,6 +258,7 @@ def half_translation_phase_table(translations, image_shape):
         "td,pd->tp",
         jnp.asarray(translations, dtype=jnp.float32),
         lattice_half,
+        precision=jax.lax.Precision.HIGHEST,
     )
     return jnp.exp(-2j * jnp.pi * phase_arg)
 
