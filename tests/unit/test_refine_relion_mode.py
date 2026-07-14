@@ -8510,7 +8510,7 @@ class TestRelionModeSmokeTest:
             assert final_centers.shape[-1] == 2
             assert np.all(np.isfinite(final_centers))
 
-    def test_relion_final_iteration_uses_joined_first_half_noise_variance(
+    def test_relion_final_iteration_uses_each_random_subsets_noise_variance(
         self,
         half_datasets,
         init_volume,
@@ -8518,7 +8518,7 @@ class TestRelionModeSmokeTest:
         translations,
         monkeypatch,
     ):
-        """The joined final E-step scores both particle halves with model half 1 noise."""
+        """The joined final E-step retains each random subset's noise model."""
         original_update = iteration_loop_module.update_refinement_state
         original_run_em = iteration_loop_module.run_em
         replay_noise_h1 = np.linspace(2.0, 3.0, IMAGE_SIZE, dtype=np.float32)
@@ -8565,8 +8565,9 @@ class TestRelionModeSmokeTest:
         assert result["convergence_state"].has_converged is True
         assert len(run_em_noise) == 4
         np.testing.assert_allclose(run_em_noise[-2], replay_noise_h1, rtol=0.0, atol=0.0)
-        np.testing.assert_allclose(run_em_noise[-1], replay_noise_h1, rtol=0.0, atol=0.0)
-        assert result["final_all_data_noise_source_half"] == 0
+        np.testing.assert_allclose(run_em_noise[-1], replay_noise_h2, rtol=0.0, atol=0.0)
+        assert result["final_all_data_noise_source_half"] == -1
+        assert result["final_all_data_noise_source_halves"] == (0, 1)
 
     def test_relion_final_iteration_uses_local_search_when_converged_state_is_local(
         self,

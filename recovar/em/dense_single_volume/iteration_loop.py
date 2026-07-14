@@ -7230,17 +7230,12 @@ def _run_relion_iteration_loop(
         )
     final_noise_variance_per_half = noise_variance_per_half
     if not k_class_enabled:
-        # RELION joins the gold-standard models before its post-convergence
-        # all-data E-step.  The joined optimiser then scores both particle
-        # halves with the first model's sigma2_noise spectrum.  Keeping the
-        # second half's numbered-iteration noise here measurably changes the
-        # final posterior/support and the high-shell BPref accumulator.
-        final_noise_variance_per_half = [
-            noise_variance_per_half[0],
-            noise_variance_per_half[0],
-        ]
+        # RELION joins the half-set weighted sums after the post-convergence
+        # expectation step.  During that E-step each MPI follower still owns
+        # its numbered-iteration half model, so particles from random subset
+        # 1 and 2 are scored with sigma2_noise from half 1 and 2 respectively.
         logger.info(
-            "RELION final all-data: scoring both particle halves with half-1 sigma2_noise",
+            "RELION final all-data: scoring each particle half with its own sigma2_noise",
         )
     final_iter_t0 = time.time()
     final_current_size = int(grid_size)  # = ori_size, full Nyquist
@@ -8347,7 +8342,9 @@ def _run_relion_iteration_loop(
         "final_all_data_expected_accuracy_class_counts": (
             None if final_expected_accuracy is None else final_expected_accuracy.class_counts
         ),
-        "final_all_data_noise_source_half": 0 if not k_class_enabled else -1,
+        # -1 preserves the legacy scalar sentinel for a per-half source.
+        "final_all_data_noise_source_half": -1,
+        "final_all_data_noise_source_halves": (0, 1),
         "final_all_data_fsc": final_iter_fsc,
         "tau2_radial_final_all_data": (
             None
