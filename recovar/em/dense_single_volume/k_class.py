@@ -1111,6 +1111,39 @@ def _sum_k_class_noise_stats(
     )
 
 
+def _resolve_class_mstep_posterior_sums(
+    *,
+    noise_stats: tuple[NoiseStats, ...] | None,
+    class_posterior_sums_full: np.ndarray,
+    class_posterior_sums_override,
+) -> np.ndarray:
+    """Choose RELION's retained class/pose mass for M-step normalization.
+
+    Independent multi-class probes normalize each class over its own pose
+    grid, so their raw ``NoiseStats.sumw`` values cannot be combined and the
+    full class responsibilities remain the fallback.  K=1 has no class-axis
+    renormalization: its single noise statistic already contains RELION's
+    significant-support mass and must not be replaced by the image count.
+    Fused/local K-class callers can provide the corresponding retained
+    per-class masses explicitly.
+    """
+
+    if class_posterior_sums_override is not None:
+        resolved = np.asarray(class_posterior_sums_override, dtype=np.float64)
+    elif noise_stats is not None and len(noise_stats) == 1:
+        resolved = np.asarray([float(noise_stats[0].sumw)], dtype=np.float64)
+    else:
+        resolved = np.asarray(class_posterior_sums_full, dtype=np.float64)
+    if resolved.shape != np.asarray(class_posterior_sums_full).shape:
+        raise ValueError(
+            "class_posterior_sums_override must have shape "
+            f"{np.asarray(class_posterior_sums_full).shape}, got {resolved.shape}",
+        )
+    if not np.all(np.isfinite(resolved)) or np.any(resolved < 0.0):
+        raise ValueError("class M-step posterior sums must be finite and non-negative")
+    return resolved
+
+
 def _assemble_result(
     *,
     class_log_evidence: np.ndarray,
@@ -1144,16 +1177,11 @@ def _assemble_result(
     class_responsibilities = np.exp(diff)
     class_posterior_sums_full = np.sum(class_responsibilities, axis=1)
     class_posterior_sums = class_posterior_sums_full
-    class_mstep_posterior_sums = class_posterior_sums_full
-    if class_posterior_sums_override is not None:
-        class_mstep_posterior_sums = np.asarray(class_posterior_sums_override, dtype=np.float64)
-        if class_mstep_posterior_sums.shape != (class_log_evidence.shape[0],):
-            raise ValueError(
-                "class_posterior_sums_override must have shape "
-                f"({class_log_evidence.shape[0]},), got {class_mstep_posterior_sums.shape}",
-            )
-        if not np.all(np.isfinite(class_mstep_posterior_sums)) or np.any(class_mstep_posterior_sums < 0.0):
-            raise ValueError("class_posterior_sums_override must be finite and non-negative")
+    class_mstep_posterior_sums = _resolve_class_mstep_posterior_sums(
+        noise_stats=noise_stats,
+        class_posterior_sums_full=class_posterior_sums_full,
+        class_posterior_sums_override=class_posterior_sums_override,
+    )
 
     best_scores = np.stack(
         [np.asarray(stats.best_log_score_per_image, dtype=np.float64) for stats in per_class_stats],

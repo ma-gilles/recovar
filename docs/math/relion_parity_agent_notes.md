@@ -1918,3 +1918,28 @@ comparison.
   post-first median from `0.006245` to `0.006081` seconds.
 - Evidence and manual sign-off:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_phase_precision_20260714_143051/15_small_outliers_3k_g128_pct20_noise1_bf80/`.
+
+# 2026-07-14: case-16 norm `sum_weight` bug and plumbing validation
+
+- Exact RELION-state iteration-3 replay matches all 3,000 hard poses. The
+  autonomous five-particle divergence is therefore upstream state drift, not
+  an unexplained scorer discrepancy.
+- RELION accumulates one unweighted updated `normcorr` per particle but divides
+  by retained significant posterior `sum_weight`. RECOVAR divided by image
+  count. In addition, sparse adaptive K=1 correctly produced retained mass,
+  but `_assemble_result` replaced it with the single class responsibility
+  sum, exactly `N`.
+- The production fix preserves `NoiseStats.sumw` for K=1 and uses it as the
+  norm denominator. Unit coverage independently guards the denominator formula
+  and the K=1 aggregation boundary. The EM fast guard passes 16/16.
+- A100 jobs `11183647` (default posterior) and `11183648` (diagnostic float32
+  posterior) both complete successfully and agree. Half-set retained masses
+  are `1468.013404` and `1529.966030`; internal average norms improve to
+  `5212.8874` and `5212.7233`. The diagnostic posterior mode is not needed.
+- This closes the formula and routing bug only. Do not call case 16 accepted
+  until the canonical autonomous trajectory passes shellwise FSC/FSC-AUC,
+  schedule, convergence, and finalization gates.
+- Durable source/factorial report:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_phase_precision_20260714_143051/16_small_anisotropic_outliers_3k_g128_pct25_noise3_bf80/audit_case16_divergence_20260714/exact_iter3_score_20260714_145500/analysis/NORM_SUM_WEIGHT_ROOT_CAUSE.md`.
+- Validation root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/`.

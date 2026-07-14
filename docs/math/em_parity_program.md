@@ -1832,3 +1832,35 @@ The final cross curve has a shallow high-frequency tail: minimum shell FSC is
 below `0.99`. This passes the predefined AUC gate and has no collapse, but the
 final-only tail remains tracked as a cross-case diagnostic. Evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_phase_precision_20260714_143051/15_small_outliers_3k_g128_pct20_noise1_bf80/`.
+
+## 2026-07-14 Case-16 retained-posterior norm denominator
+
+Case 16 first diverges at iteration 3 even after the translation-phase fix.
+An exact iteration-3 replay from RELION's iteration-2 state matches all 3,000
+hard poses, proving that the scorer is correct for identical inputs. Component
+factorials instead localize the autonomous divergence to continuous M-step
+state, dominated by a nearly common image-normalization multiplier.
+
+Pinned RELION source provides the formula-level cause. It adds each updated
+particle `normcorr` to `wsum_model.avg_norm_correction` without posterior
+weighting, then divides by `wsum_model.pdf_class.sum()`. The latter is the
+retained significant-support posterior mass and is slightly smaller than the
+particle count. RECOVAR used the ordinary arithmetic mean and, at the K=1
+K-class wrapper boundary, replaced the engine's retained `NoiseStats.sumw`
+with the full class responsibility `N`.
+
+The narrow fix preserves the K=1 engine's retained pose mass and divides the
+unweighted norm-correction numerator by it. Same-A100 jobs `11183647` and
+`11183648` validate the production plumbing: the two half-set denominators are
+`1468.013404/1469` and `1529.966030/1531`, versus RELION-inferred
+`1468.013624` and `1529.967028`. The internal average norm corrections move
+from `5209.3864/5209.2030` to `5212.8874/5212.7233`, explaining about 90% of
+the previous common drift. Default and diagnostic float32 fine-posterior paths
+agree, so no diagnostic environment override is required. Full autonomous
+case-16 trajectory and FSC/FSC-AUC validation remain pending before this fix
+is accepted end to end.
+
+Root-cause evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_phase_precision_20260714_143051/16_small_anisotropic_outliers_3k_g128_pct25_noise3_bf80/audit_case16_divergence_20260714/exact_iter3_score_20260714_145500/analysis/NORM_SUM_WEIGHT_ROOT_CAUSE.md`.
+Validation root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/`.

@@ -806,7 +806,6 @@ def update_relion_norm_scale_corrections(
     do_norm_correction: bool = True,
     do_scale_correction: bool = True,
     scale_relaxation_mu: float = 0.0,
-    image_weights_per_half=None,
     eps: float = 1e-30,
 ) -> NormScaleCorrectionUpdateResult:
     """Update RELION-style per-image norm and per-group scale corrections.
@@ -820,6 +819,13 @@ def update_relion_norm_scale_corrections(
     ``wsum_model.wsum_signal_product`` and ``wsum_model.wsum_reference_power``:
     the collection site must divide XA by the old scale and AA by its square
     before accumulation.
+
+    RELION's average norm-correction numerator contains one updated
+    ``normcorr`` per particle, without posterior weighting.  Its denominator
+    is ``wsum_model.pdf_class.sum()``, i.e. the retained significant-support
+    posterior mass.  That mass is normally slightly smaller than the particle
+    count, so using a conventional arithmetic mean introduces a systematic
+    normalization drift.
     """
 
     stats_per_half = _half_list_or_none(noise_stats_per_half, n_halves=2, name="noise_stats_per_half")
@@ -841,8 +847,6 @@ def update_relion_norm_scale_corrections(
     )
     if avg_norm_in is None:
         raise ValueError("avg_norm_correction_per_half must be a 2-element list/tuple or None")
-    weights_in = _half_list_or_none(image_weights_per_half, n_halves=2, name="image_weights_per_half")
-
     if not (0.0 <= float(scale_relaxation_mu) <= 1.0):
         raise ValueError(f"scale_relaxation_mu must be in [0, 1], got {scale_relaxation_mu}")
 
@@ -960,18 +964,9 @@ def update_relion_norm_scale_corrections(
             valid_norm = norm_residual > eps
             zero_norm_count = int(n_images - np.count_nonzero(valid_norm))
             normcorr_from_stats = old_norm_over_avg * np.sqrt(np.maximum(2.0 * norm_residual, 0.0))
-            weights = (
-                np.ones(n_images, dtype=np.float64)
-                if weights_in[half_idx] is None
-                else np.asarray(weights_in[half_idx], dtype=np.float64).reshape(-1)
-            )
-            if weights.shape != (n_images,):
-                raise ValueError(f"image_weights_per_half[{half_idx}] has shape {weights.shape}, expected ({n_images},)")
-            if np.any(weights < 0.0):
-                raise ValueError("image weights must be non-negative")
-            valid_weight_sum = float(np.sum(weights[valid_norm]))
-            if valid_weight_sum > 0.0:
-                target_avg_norm = float(np.sum(weights[valid_norm] * normcorr_from_stats[valid_norm]) / valid_weight_sum)
+            retained_sum_weight = float(getattr(stats, "sumw", 0.0))
+            if retained_sum_weight > 0.0:
+                target_avg_norm = float(np.sum(normcorr_from_stats[valid_norm]) / retained_sum_weight)
             elif np.any(valid_norm):
                 target_avg_norm = float(np.mean(normcorr_from_stats[valid_norm]))
             else:

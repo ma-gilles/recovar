@@ -88,6 +88,7 @@ from recovar.em.dense_single_volume.iteration_loop import (
 )
 from recovar.em.dense_single_volume.k_class import (
     KClassEMResult,
+    _resolve_class_mstep_posterior_sums,
     _sum_noise_stats,
     run_dense_k_class_em,
     run_local_k_class_em,
@@ -5289,6 +5290,25 @@ def test_local_k_class_can_report_noise_support_class_sums(monkeypatch):
     np.testing.assert_allclose(float(result.aggregate_noise_stats.sumw), sum(support_sumw))
 
 
+def test_k1_mstep_preserves_retained_pose_support_mass():
+    """K=1 must not replace significant-support mass with image count."""
+    retained_sumw = 2.9975
+    stats = NoiseStats(
+        wsum_sigma2_noise=jnp.ones(1, dtype=jnp.float32),
+        wsum_img_power=jnp.ones(1, dtype=jnp.float32),
+        wsum_sigma2_offset=0.0,
+        sumw=retained_sumw,
+    )
+
+    got = _resolve_class_mstep_posterior_sums(
+        noise_stats=(stats,),
+        class_posterior_sums_full=np.asarray([3.0], dtype=np.float64),
+        class_posterior_sums_override=None,
+    )
+
+    np.testing.assert_array_equal(got, np.asarray([retained_sumw], dtype=np.float64))
+
+
 def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
     import recovar.em.dense_single_volume.k_class as k_class_module
 
@@ -7797,6 +7817,34 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(np.asarray(got.scale_corrections_per_half[0]), expected_scale, rtol=1e-6)
         np.testing.assert_allclose(np.asarray(got.image_corrections_per_half[0]), expected_image_corr, rtol=1e-6)
 
+    def test_relion_norm_update_divides_by_retained_posterior_mass(self):
+        """RELION divides its unweighted normcorr sum by significant support mass."""
+        stats = NoiseStats(
+            wsum_sigma2_noise=jnp.array([0.0], dtype=jnp.float32),
+            wsum_img_power=jnp.array([0.0], dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=3.5,
+            wsum_norm_correction=jnp.array([2.0, 8.0, 18.0, 0.5], dtype=jnp.float32),
+        )
+        group_ids = np.zeros(4, dtype=np.int64)
+        old_scale = np.ones(4, dtype=np.float64)
+        old_image_corr = np.array([2.0, 0.5, 2.0, 1.0], dtype=np.float64)
+
+        got = update_relion_norm_scale_corrections(
+            noise_stats_per_half=[stats, stats],
+            image_corrections_per_half=[old_image_corr, old_image_corr],
+            scale_corrections_per_half=[old_scale, old_scale],
+            group_ids_per_half=[group_ids, group_ids],
+            do_scale_correction=False,
+        )
+
+        expected_normcorr = np.array([1.0, 8.0, 3.0, 1.0], dtype=np.float64)
+        expected_avg_norm = float(np.sum(expected_normcorr) / stats.sumw)
+        expected_image_corr = expected_avg_norm / expected_normcorr
+        np.testing.assert_allclose(np.asarray(got.norm_corrections_per_half[0]), expected_normcorr, rtol=1e-6)
+        assert got.avg_norm_correction_per_half[0] == pytest.approx(expected_avg_norm)
+        np.testing.assert_allclose(np.asarray(got.image_corrections_per_half[0]), expected_image_corr, rtol=1e-6)
+
     def test_relion_norm_scale_update_accepts_single_active_class3d_half(self):
         """Class3D-style single-half runs still update active-half corrections."""
         active = NoiseStats(
@@ -7946,7 +7994,7 @@ class TestRelionModeSmokeTest:
             wsum_sigma2_noise=jnp.array([0.0], dtype=jnp.float32),
             wsum_img_power=jnp.array([0.0], dtype=jnp.float32),
             wsum_sigma2_offset=0.0,
-            sumw=3.0,
+            sumw=2.0,
             wsum_norm_correction=jnp.array([12.5, 0.0, 12.5], dtype=jnp.float32),
         )
         group_ids = np.zeros(3, dtype=np.int64)
