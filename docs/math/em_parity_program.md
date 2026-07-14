@@ -1817,3 +1817,18 @@ The active experiment is a clean autonomous case-22 full trajectory from
 `b658bd8d`, with shellwise FSC/FSC-AUC, exact current-size schedule,
 convergence iteration, finalization, and phase-generation timing as the
 acceptance gates. Correlation is not an acceptance metric.
+
+### First robustness acceptance after the phase fix
+
+Case 15 (3k/128, 20% outliers, noise scale 1) clean-head job `11178306_1`
+passes the complete automated and manual K=1 robustness gate. All 12 numbered
+iterations pass per-half and merged FSC-AUC, the current-size schedule matches
+RELION exactly (including the formerly divergent iteration-9 size 78), and
+convergence/finalization semantics agree. Final merged cross-FSC-AUC is
+`0.996927042`; RECOVAR GT FSC-AUC exceeds RELION by `+0.019123653`.
+
+The final cross curve has a shallow high-frequency tail: minimum shell FSC is
+`0.993255592` at shell 62, fifth percentile `0.993867482`, and no shell is
+below `0.99`. This passes the predefined AUC gate and has no collapse, but the
+final-only tail remains tracked as a cross-case diagnostic. Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_phase_precision_20260714_143051/15_small_outliers_3k_g128_pct20_noise1_bf80/`.

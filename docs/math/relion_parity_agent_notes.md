@@ -1899,3 +1899,22 @@ comparison.
   The next gate is the autonomous case-22 trajectory at the exact clean head,
   judged by shellwise FSC/FSC-AUC plus schedule/convergence/finalization. Track
   phase-generation timing because the generic precision change is cross-cutting.
+
+# 2026-07-14: first phase-corrected robustness cell accepted
+
+- Clean-head A100 job `11178306_1` completes case 15 (3k/128, 20% outliers,
+  noise scale 1) in `00:12:42` at commit `6604b129`.
+- All 12 numbered per-half/merged FSC-AUC gates pass. The exact RELION size
+  schedule is `[56,56,64,66,66,66,68,68,78,82,82,82]`; the old run used 76
+  instead of 78 at iteration 9. Convergence and the single valid final
+  all-data path now match exactly.
+- Final merged cross-FSC-AUC is `0.996927042`, and RECOVAR GT FSC-AUC exceeds
+  RELION by `+0.019123653`. The final non-DC shell minimum is `0.993255592`,
+  fifth percentile `0.993867482`, and no shell is below `0.99`. Manual review
+  accepts the predefined gate while retaining the shallow high-shell tail as
+  a final-boundary diagnostic.
+- The phase timing audit finds no slowdown: for the same 16 ledger entries,
+  total phase time changes from `0.483892` to `0.479649` seconds and the
+  post-first median from `0.006245` to `0.006081` seconds.
+- Evidence and manual sign-off:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_phase_precision_20260714_143051/15_small_outliers_3k_g128_pct20_noise1_bf80/`.
