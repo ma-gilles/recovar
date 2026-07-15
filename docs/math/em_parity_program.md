@@ -3158,3 +3158,40 @@ post-M-step follower TSVs; merely claiming current manifest paths is
 insufficient.  The hardened K=4 reusable oracle has ID
 `ddb61ddd4d9d8abec93fab9f9ac7e41863c1f7e9da14f2bd65ecc15ad5c2937b`
 and 36 manifest artifacts.
+
+## 2026-07-15 Scoped K=1 BPref capture and K=4 particle-3591 boundary
+
+The scoped K=1 BPref capture now has a validated target at iteration 5, half 1,
+original particle 396.  Its host replay is exact, while the device shadow is at
+the expected float32 reduction scale (data relative L1 `4.06e-8`, weight
+relative L1 `3.78e-8`).  The immutable science root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it5_h1_p396_scoped_capture_commit63ec1bdc_h100_prepared_20260715_133414/`;
+the corrected post-hoc audit, using the native SPA CTF width of 9, is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_it5_posthoc_validator_job11225077_20260715_140300/target_capture_audit.json`.
+
+The five-arm unreachable-target experiment did not change any discrete state,
+but several small continuous differences exceeded the paired control envelope.
+That is unresolved rather than evidence that the inactive diagnostic changed
+the algorithm.  The earliest difference is the iteration-1 `tau2_shell_sum`;
+its inputs still match and the shell sum uses the JAX/GPU `bincount` reduction,
+not a host NumPy fallback.  The next discriminator freezes the iteration-1,
+half-1 boundary across four ordinary and four unreachable-environment fresh
+processes, records effective mode hashes and zero launch counters, and compares
+`H_comb`, `Ft`, and shell sums before invoking canonical float64 replay.  The
+five-arm report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it2_fivearm_single_h100_prepared_20260715_132747/analysis/five_arm_report.json`.
+
+For K=4, the six-arm particle-3591 fixture isolates the first behavioral
+divergence to the iteration-1 `firstiter_cc` fine winner: RECOVAR selects fine
+candidate 30 and RELION candidate 18, with all class assignments and all other
+poses identical.  The two candidates are separated by sub-micro-score margins.
+FSC remains the map quality gate: class-2 cross-engine FSC-AUC is
+`0.99989358`, versus `0.99999998505` for the RECOVAR repeat.  A frozen operand
+factorial exonerates production-precision PPref generation, image/CTF/phase
+operands, and reduction order in isolation; a RELION-style 256-lane tree over
+RECOVAR operands still selects candidate 30.  The remaining earliest boundary
+is device-produced projected-reference interpolation from the common PPref and
+matched matrices.  The immutable science root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_p3591_cross_engine_identity6_globalwinner_h100_prepared_20260715_134127/`,
+and the preliminary factorial audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_p3591_operand_factorial_20260715_143600/AUDIT.md`.
