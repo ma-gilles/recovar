@@ -3397,6 +3397,20 @@ algorithmic.  The exact harness is under
 the full A/B is under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_projection_cache_ab_111b8fde_h100_retry2_prepared_20260715_185750/`.
 
+That same-cache control is now complete in job `11237485`, and it exposes an
+important nonlinear repeat branch.  Two independent cache-on/no-dump processes
+have identical class, rotation, and translation decisions through iteration 2,
+but particle 5993's Pmax is `0.7309870` in one and `0.6777922` in the other.
+Across all particles the Pmax absolute difference has p95 `3.43e-6` and maximum
+`0.0531948`; four significant-support counts differ by one.  The minimum
+per-class repeat FSC-AUC is still `0.999998971966`.  The low Pmax branch is the
+same value previously attributed to score-dump instrumentation, so that
+attribution is withdrawn: it is an ordinary autonomous GPU-reduction
+butterfly.  A dump capture may be interpreted only against this repeat envelope
+and then frozen at one exact incoming boundary for canonical float32 and
+float64 replay.  The repeat report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_cache_on_repeat_111b8fde_h100_prepared_20260715_190604/analysis/cache_on_repeat.json`.
+
 The real-data K=1 10,000-particle full trajectory in job `11235095` provides a
 separate convergence-scale result.  RELION and RECOVAR both converge at
 numbered iteration 16 on the same A100-SXM4-80GB.  Strict array gates first
