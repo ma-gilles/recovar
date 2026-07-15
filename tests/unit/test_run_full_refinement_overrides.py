@@ -11,11 +11,13 @@ relative to RELION (cf. iteration_loop.py:4667-4703).
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from scripts import run_full_refinement
 from scripts.run_full_refinement import (
     _build_replay_iteration_overrides,
     _default_refinement_subsets,
@@ -535,7 +537,7 @@ def test_runner_keeps_input_particle_names_for_replay_mapping():
 
     assert bind in source
     assert source.index(bind) < source.index(first_replay_use)
-    assert "max(int(args.max_iter) - 1, 0)" in source
+    assert "max(int(args.max_iter) - 1, 0)" not in source
 
 
 def test_replay_mapping_distinguishes_repeated_indices_across_stacks(tmp_path):
@@ -1136,6 +1138,16 @@ def test_replay_overrides_include_max_iter_state_for_final_all_data(tmp_path):
     prior_h1, prior_h2 = overrides[2]["direction_prior"]
     np.testing.assert_allclose(prior_h1, direction_prior, rtol=1e-5, atol=1e-6)
     np.testing.assert_allclose(prior_h2, direction_prior, rtol=1e-5, atol=1e-6)
+
+
+def test_full_refinement_requests_max_iter_replay_state_for_final_all_data():
+    source = inspect.getsource(run_full_refinement.main)
+    start = source.index("replay_iteration_overrides = _build_replay_iteration_overrides(")
+    end = source.index("\n        )", start)
+    replay_call = source[start:end]
+
+    assert "int(args.max_iter)," in replay_call
+    assert "max(int(args.max_iter) - 1, 0)" not in replay_call
 
 
 def test_autorefine_continuation_noise_emulates_relion_rank1_broadcast(tmp_path):

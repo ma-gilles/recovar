@@ -2507,11 +2507,12 @@ def main():
             args.perturb_replay_relion_dir,
             half1_idx,
             half2_idx,
-            # Numbered expectation k consumes the state written before it.
-            # A max_iter=N trajectory therefore needs run_it000..run_it{N-1};
-            # RELION's converged all-data pass is unnumbered and deliberately
-            # reuses the last available numbered override.
-            max(int(args.max_iter) - 1, 0),
+            # Numbered expectation k consumes the state written before it, so
+            # iterations 1..N use run_it000..run_it{N-1}.  After convergence,
+            # RELION's unnumbered all-data expectation consumes the state just
+            # written by iteration N and therefore needs run_it{N} as the
+            # extra final-only override.
+            int(args.max_iter),
             ds_voxel=ds.voxel_size,
             ds_grid=ds.grid_size,
             include_normcorr=replay_normcorr,
