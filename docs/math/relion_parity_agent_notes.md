@@ -2316,9 +2316,11 @@ Matrix evidence:
 # 2026-07-14: case-26 raw operands explain the residual
 
 - Same-H100 jobs `11197096`/`11197128` establish a one-to-one mapping for all
-  1,227 active pixels.  Image, CTF, translation, and phase residuals after
-  exact convention conversion are only `1.5e-7`, `2.2--2.6e-7`, `2.6e-8`,
-  and `1.9--3.7e-8`, respectively.
+  1,227 active pixels.  Image and CTF residuals after exact convention
+  conversion are only `1.5e-7` and `2.2--2.6e-7`.  Translation coefficients
+  differ by at most one float32 ULP over all candidates; both actual WTA
+  winners and their 1,227 phase arguments are bit-exact, so phase is not part
+  of the residual.
 - Minvsigma2 is the largest raw difference at `9.062e-7`; combined pre-atomic
   data and weight differ at `1.0--1.5e-6` and `9.8e-7`.  This fully explains
   the prior value-signature gap.  Do not revisit scatter layout, native WAVG,

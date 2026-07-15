@@ -2333,8 +2333,11 @@ and mapped RELION indices are unique, so support, folding, and layout are
 closed exactly.
 
 After applying only known representation conventions, relative L2 residuals
-are `1.49e-7` for the unshifted image, `2.18--2.64e-7` for CTF,
-`2.63e-8` for translations, and `1.87--3.68e-8` for the winning phase.
+are `1.49e-7` for the unshifted image and `2.18--2.64e-7` for CTF.
+Across all 116 translations, coefficient differences are at most one float32
+ULP; for the two actual WTA winners, both coefficients and all 1,227
+per-pixel float32 phase arguments are bit-exact, so phase contributes no
+operand discrepancy.
 Inverse noise is the largest raw residual at `9.062e-7`; the resulting
 pre-atomic data/weight residuals are `1.00--1.50e-6` and
 `9.78--9.84e-7`.  These quantitatively reproduce the earlier aggregate
