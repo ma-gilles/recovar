@@ -3084,6 +3084,23 @@ step for every parity run and not a proposal to change production precision.
 Keep its artifact schema limited to the boundary being tested; use exact array
 metrics internally and FSC/FSC-AUC for map effects.
 
+The reusable implementation is
+`scripts/validate_bpref_device_signature.py`.  Its deterministic
+`logical_host_order` is explicitly not a reconstruction of CUDA atomic order.
+Cross-engine mode requires complete, non-overlapping signature shards and a
+native accumulator panel for each engine, verifies the frozen pass/class and
+compact-window boundary, and fails nonexact comparisons by default.  Casting
+captured float32 operands to float64 is labeled as such and cannot justify a
+precision diagnosis.  A `precision_consistent_with_verified_recomputation`
+classification requires a versioned, hash-bound artifact that certifies
+upstream float64/complex128 operand generation; the diagnostic currently
+validates that contract but does not yet produce such recomputed operands.
+The hardened CLI and 46 focused tests pass at commit
+`df154023c3e0935fcf2b34f97db7371a3326a046`.  A real particle-396 validation
+replays 46,728 atomic contributions exactly and passes an exact self-compare;
+its audit root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/canonical_bpref_hardened_validation_20260715_175600/`.
+
 ### Clean uninterrupted K=4 three-iteration gate
 
 H100 job `11210525` is the first fully immutable, autonomous three-iteration
