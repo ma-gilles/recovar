@@ -2188,8 +2188,10 @@ Matrix evidence:
 
 - Iteration-1 hard-WTA E-step decisions are exact: every pose, translation,
   and Pmax equals RELION.  Matched patched-RELION and RECOVAR H100 captures
-  place the first non-bitwise boundary in the pre-reconstruct accelerated
-  BPref accumulator, before low-resolution joining or reconstruction.
+  place the first non-bitwise boundary in the accelerated BPref accumulator,
+  before low-resolution joining or reconstruction.  The exact comparison is
+  RECOVAR post-x0 against RELION pre-lowres-join.  RELION pre-reconstruct is
+  already after the 40-Angstrom half join and is not the same boundary.
 - On radius `<56`, RECOVAR-vs-RELION relative-L2 is `5.663e-6/2.993e-6`
   (numerator/weight) for half 1 and `6.141e-6/2.914e-6` for half 2.  Scale fits
   near `1+2e-7` do not improve the residual.  The resulting iteration-1 maps
@@ -2216,3 +2218,57 @@ Matrix evidence:
   contribution, scatter coordinate, or arithmetic operation.
 - Audit root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916`.
+
+# 2026-07-14: source-faithful accelerated image preprocessing integrated
+
+- Commit `bdda53c47cc6426ea7b816fc8335606236304c60` adds explicit typed
+  `image_fourier_backend="relion_cuda"`; `host_numpy` remains the default and
+  `jax_gpu` remains the FFT-only diagnostic.  Unsupported CPU, dtype, shift,
+  multiplier, mask-geometry, or custom-CUDA configurations fail closed.
+- The CUDA FFI preserves RELION's stored float32 normalization and zero-fill
+  translation stages, then launches exactly 128 blocks of 128 threads for the
+  background reduction, atomically accumulates 128 lanes, performs the two CUB
+  sums and float32 division, and uses CUDA `sqrtf`/`cospif` for the cosine fill.
+  JAX/cuFFT performs the already-qualified centered rFFT and current-size
+  window afterward.
+- H100 job `11195746` and A100 job `11195763` each ran 100 repeats for captured
+  particles 365 and 469.  Normalized/shifted pixels are bit exact 65536/65536
+  on every launch.  Both particles reach a fully bit-exact 65536-pixel mask
+  and bit-exact 1300/1300 current-size-50 Fourier window on both architectures.
+  Worst mask relative-L2 is approximately `8e-9--1.1e-8`, explained by the
+  deliberately RELION-compatible unordered inter-block atomic background
+  addition; the captured RELION background occurs repeatedly on every GPU.
+- Main-checkout validation built
+  `recovar/cuda/libcuda_backproject.so` from commit `bdda53c4` and passed the
+  focused GPU suite `72/72` on local A100 GPU 1 with checkout-bound RECOVAR and
+  Pixi JAX imports.  The isolated branch also passed five CPU strict-routing
+  tests, the 16-test EM fast guard, and selected Ruff checks.
+- This closes the captured preprocessing operand boundary, not case-20
+  trajectory quality.  The next gate is fixed-state score/logZ/posterior array
+  comparison followed by a same-GPU full trajectory using explicit
+  `relion_cuda`; judge maps only with FSC/FSC-AUC and GT FSC summaries.
+- Full audit and reproduction commands:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case20_rel_preprocess_boundary_20260714_220000/AUDIT.md`.
+
+# 2026-07-14: case-26 strict scatter topology is not causal
+
+- Same-H100 job `11195923` repeated iteration 1 with block topology,
+  per-particle launches, fused real/imaginary/weight atomics, and sequential
+  float32 translation reduction all enabled.  The correct comparison remains
+  RECOVAR post-x0 versus RELION pre-lowres-join.
+- Strict residuals are half-1 `5.797640e-6/3.010545e-6` and half-2
+  `5.992257e-6/2.930651e-6` for numerator/weight.  Recomputed baseline job
+  `11195621` is `5.798215e-6/3.010871e-6` and
+  `5.993527e-6/2.931076e-6`.  The full strict topology improves only
+  `0.01--0.02%`; launch grouping and fused atomic order are not causal.
+- The residual is widespread and unbiased: only about `0.5%` of supported
+  numerator components and `1.2%` of weights are bit equal; median final-value
+  distances are 65--67 ULP for numerator components and 24--25 ULP for
+  weights, while total supported weight is conserved within about `2.5e-8`.
+- RELION constructs translated complex values and Fweight inside `BP.cuh`,
+  including factor placement and `sincosf`, before neighbor atomics.  RECOVAR
+  precomputes phases and reduces translations into `summed`/`ctf_probs` before
+  the CUDA scatter.  RELION job `11195897` and RECOVAR job `11195923` captured
+  complete value signatures for all 1000 particles.  Compare these pre-atomic
+  rows and then bisect deterministic per-particle prefixes; do not revisit
+  launch topology unless those operands match.

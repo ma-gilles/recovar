@@ -28,7 +28,7 @@ as the next product milestone rather than mixing it into the first closure.
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `47020c3311d9f294e13b2737c10efea11321f219`
+Current accepted code checkpoint: `bdda53c47cc6426ea7b816fc8335606236304c60`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -170,8 +170,10 @@ The next K=1 identity target is severe case 26, whose corrected final cross
 FSC-AUC remains `0.999605407`; the other six corrected cases are at least
 `0.999961340`.  Its first autonomous departure is now localized before
 reconstruction to the iteration-1 accelerated BPref accumulator.  Iteration-1
-hard-WTA poses, translations, and Pmax are exact, but the matched pre-reconstruct
-RECOVAR-vs-RELION BPref numerator/weight relative-L2 residual is `3e-6--6e-6`.
+hard-WTA poses, translations, and Pmax are exact, but the matched RECOVAR
+post-x0 versus RELION pre-lowres-join BPref numerator/weight relative-L2
+residual is `3e-6--6e-6`.  Do not compare against RELION pre-reconstruct here;
+that boundary is already after the 40-Angstrom half join.
 Three same-H100 RELION captures vary by only `1.0e-8--1.3e-8`, so this residual
 is reproducible code arithmetic rather than atomic-order noise.  Substituting
 the resulting tiny RECOVAR map residual into the iteration-3 production sparse
@@ -187,15 +189,17 @@ GT FSC-AUCs are `0.317329223` and `0.317318952` (delta `+1.0271e-5`), confirming
 the post-hoc boundary through the real finalization path.  Keep
 `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` unset/off outside named strict-parity
 diagnostics because the current GUI-quality default remains grid-off.  In
-parallel, finish the source-derived exact Gaussian scorer trajectory gate and
-close the case-20 accelerated preprocessing
-boundary.  The latter is bit-exact through raw loading, float32 normalization,
-and zero-fill translation; the first divergence is host mask/background
-arithmetic, followed independently by NumPy FFT.  JAX GPU `rfft2` and
-windowing are bit-exact to RELION cuFFT when fed the same masked image.  Typed
-`image_fourier_backend="jax_gpu"` support is now committed; the existing host
-default is unchanged until the remaining real-space preprocessing stages are
-source-faithful.
+parallel, retain the exact-Gaussian diagnostic conclusion and close the
+case-20 accelerated preprocessing
+boundary.  Typed `image_fourier_backend="relion_cuda"` at commit `bdda53c4`
+now reproduces the source-faithful float32 normalization, zero-fill
+translation, 128-by-128 CUDA background reduction, `sqrtf`/`cospif` mask, and
+JAX/cuFFT window.  On both A100 and H100, captured particles 365 and 469 reach
+bit-exact 65536-pixel masks and 1300/1300 Fourier windows within RELION's own
+unordered atomic background envelope.  The existing `host_numpy` default is
+unchanged.  Next validate fixed-state score arrays and then the full case-20
+trajectory with explicit `relion_cuda`; the captured operand gate alone is not
+an end-to-end quality claim.
 
 The source-derived exact fine-Gaussian scorer remains isolated and unmerged.
 Same-H100 sequential job `11194268` matched the full current-size schedule and
