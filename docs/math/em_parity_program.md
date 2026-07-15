@@ -2359,3 +2359,59 @@ Audit artifacts:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/case26_paired_raw_operand_audit_11197096_11197128.json`
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/case26_paired_raw_operand_audit_11197096_11197128.md`.
+
+## 2026-07-14 Explicit RELION CUDA full-trajectory gate
+
+Case-20 H100 job `11197313` exercises the explicit `relion_cuda` path through
+the complete autonomous workflow.  The science command exits zero after 11
+numbered iterations and the valid post-convergence all-data pass.  RECOVAR
+matches RELION's convergence at iteration 11 and the complete current-size
+trajectory `[56,56,52,52,50,50,50,52,50,52,50]`.  Total science time is
+638.1 seconds, external refinement wall time is 672 seconds, and observed GPU
+memory peaks at 42,339 MiB on H100.
+
+Every numbered merged cross FSC-AUC is at least `0.999988902`; numbered half
+cross FSC-AUC is at least `0.999986015`.  The numbered RECOVAR-minus-RELION GT
+FSC-AUC delta ranges from `-1.89e-6` to `+1.118e-5`.  The post-convergence
+merged map has cross FSC-AUC `0.997634223`; RECOVAR and RELION final GT
+FSC-AUC are `0.085752642` and `0.084608151`, respectively.  Mid-trajectory
+particle decisions show a small real divergence rather than mere rounding,
+but they contract by iteration 11: Pmax mean absolute difference `4.76e-4`,
+rotation mean error `0.00681` degrees, and translation mean error `0.00154`
+pixels.  Map quality and convergence remain matched.
+
+Slurm records wrapper exit 2 only because the generic completion summarizer
+was given a noncanonical directory layout after the successful science run.
+The direct FSC-only audit supersedes that reporting failure; science was not
+rerun.  Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_relion_cuda_aeb337df_full_20260714_233032/full_trajectory_fsc_audit.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_relion_cuda_aeb337df_full_20260714_233032/full_trajectory_fsc_audit.md`.
+
+## 2026-07-14 Serialized-sigma discriminator proves the case-26 boundary
+
+H100 job `11198286` reruns the same fresh RELION first-iteration workflow with
+the serialized iteration-0 noise spectrum supplied through RELION's `--sigma`
+boundary.  This preserves firstiter-CC, sampling, the 56x29 runtime layout,
+the iteration-0 maps (byte-exact; FSC-AUC 1), and both audited WTA winners.
+It avoids RELION continuation, which would disable firstiter-CC.
+
+After this single state alignment, Minvsigma2 matches RECOVAR 1,227/1,227
+float32 values for both particles with zero relative L2 and zero maximum
+error, versus 298/1,227 in the retained in-memory bootstrap run.  Image and
+CTF are bit-exact between the two RELION runs and retain their expected
+RECOVAR residuals.  The iteration-1 maps before/after sigma alignment have
+non-DC FSC-AUC `0.999999999983/0.999999999984` by half.  The remaining
+combined pre-atomic residual is therefore ordinary cross-implementation
+float32 FFT/CTF arithmetic: data `1.279e-6/8.260e-7` and weight
+`1.010e-6/1.013e-6` for the two particles.  This proves the noise-state
+attribution while showing that noise was not the only component of the
+composite residual.
+
+The phase-correction addendum supersedes only the phase fields in the first
+paired audit: the actual WTA coefficients and arguments are bit-exact.
+Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_serialized_sigma_discriminator_20260714_234311/analysis/serialized_sigma_discriminator.json`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_serialized_sigma_discriminator_20260714_234311/analysis/serialized_sigma_operand_metrics.json`,
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/case26_paired_raw_operand_audit_phase_correction_addendum_11197096_11197128.json`.

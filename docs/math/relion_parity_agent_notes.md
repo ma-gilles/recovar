@@ -2335,3 +2335,38 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/case26_paired_raw_operand_audit_11197096_11197128.json`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/case26_paired_raw_operand_audit_11197096_11197128.md`.
+
+# 2026-07-14: explicit `relion_cuda` full trajectory clears case 20
+
+- H100 job `11197313` completes 11 numbered iterations plus the valid final
+  all-data pass in 638.1 science seconds, with 42,339 MiB peak device memory.
+  Current sizes and convergence at iteration 11 match RELION exactly.
+- Numbered merged/half cross FSC-AUC minima are `0.999988902` and
+  `0.999986015`; numbered GT FSC-AUC deltas stay within
+  `[-1.89e-6,+1.118e-5]`.  Final merged cross FSC-AUC is `0.997634223`, and
+  RECOVAR final GT FSC-AUC is `0.085752642` versus RELION `0.084608151`.
+- Particle arrays have small genuine mid-trajectory differences, not only
+  ties or serialization noise, but the errors contract by iteration 11 and do
+  not perturb schedule, convergence, or FSC quality.
+- Slurm exit 2 is a post-science generic-summarizer layout error.  The science
+  command exited zero; use the direct FSC-only audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_relion_cuda_aeb337df_full_20260714_233032/full_trajectory_fsc_audit.json`.
+
+# 2026-07-14: serialized sigma makes the strict state boundary exact
+
+- H100 job `11198286` uses a fresh RELION run plus `--sigma`; do not use
+  `--continue run_it000_optimiser.star`, because RELION disables firstiter-CC
+  on continuation.
+- Minvsigma2 becomes 1,227/1,227 bit-exact to RECOVAR for both audited
+  particles, from 298/1,227 in the retained in-memory run.  Sampling, WTA
+  winners, runtime layout, and iteration-0 maps remain exact.
+- The residual composite values after exact noise alignment are still about
+  `1e-6`, now fully localized to normal float32 FFT/CTF arithmetic.  Iteration-1
+  maps change only at non-DC FSC-AUC approximately `1-1.6e-11`.
+- The first paired audit's reconstructed phase metric is superseded by
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/case26_paired_raw_operand_audit_phase_correction_addendum_11197096_11197128.json`;
+  actual winning phase coefficients and arguments are bit-exact.
+- Machine results:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_serialized_sigma_discriminator_20260714_234311/analysis/serialized_sigma_discriminator.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_serialized_sigma_discriminator_20260714_234311/analysis/serialized_sigma_operand_metrics.json`.
