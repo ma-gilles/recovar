@@ -11621,6 +11621,7 @@ class TestRelionDefault:
                 perturb_replay_relion_prefix="custom",
                 emulate_relion_firstiter_cc=True,
                 do_solvent_fsc_correction=True,
+                image_fourier_backend="jax_gpu",
             ),
             k_class=KClassOptions(n_classes=4),
             replay=ReplayState(init_group_count=[7, 8]),
@@ -11653,6 +11654,7 @@ class TestRelionDefault:
         assert captured["perturb_replay_relion_prefix"] == "custom"
         assert captured["emulate_relion_firstiter_cc"] is True
         assert captured["do_solvent_fsc_correction"] is True
+        assert captured["image_fourier_backend"] == "jax_gpu"
         assert captured["n_classes"] == 4
         assert captured["init_group_count"] == [7, 8]
 

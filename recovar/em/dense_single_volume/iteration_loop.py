@@ -3326,6 +3326,7 @@ def refine_single_volume(
     do_solvent_fsc_correction=False,
     first_iteration_score_mode="gaussian",
     first_iteration_reconstruction_mode="soft",
+    image_fourier_backend="host_numpy",
     force_max_iter_after_convergence=False,
     n_classes=1,
     init_class_log_priors=None,
@@ -3406,6 +3407,10 @@ def refine_single_volume(
     particle_diameter_ang : float or None
         RELION particle diameter in Angstrom for the adaptive coarse-image-size
         formula. When None, fall back to ``ori_size * pixel_size``.
+    image_fourier_backend : {"host_numpy", "jax_gpu"}
+        Fourier backend for RELION background-filled particle images. The
+        default preserves the established host path; ``jax_gpu`` uses cuFFT
+        and requires a JAX GPU backend.
 
     Returns
     -------
@@ -3468,6 +3473,7 @@ def refine_single_volume(
         do_solvent_fsc_correction = parity.do_solvent_fsc_correction
         first_iteration_score_mode = parity.first_iteration_score_mode
         first_iteration_reconstruction_mode = parity.first_iteration_reconstruction_mode
+        image_fourier_backend = parity.image_fourier_backend
 
         local_search = options.local_search
         auto_local_healpix_order = local_search.auto_local_healpix_order
@@ -3561,6 +3567,7 @@ def refine_single_volume(
         do_solvent_fsc_correction=do_solvent_fsc_correction,
         first_iteration_score_mode=first_iteration_score_mode,
         first_iteration_reconstruction_mode=first_iteration_reconstruction_mode,
+        image_fourier_backend=image_fourier_backend,
         force_max_iter_after_convergence=force_max_iter_after_convergence,
         n_classes=n_classes,
         init_class_log_priors=init_class_log_priors,
@@ -3635,6 +3642,7 @@ def _run_relion_iteration_loop(
     do_solvent_fsc_correction=False,
     first_iteration_score_mode="gaussian",
     first_iteration_reconstruction_mode="soft",
+    image_fourier_backend="host_numpy",
     force_max_iter_after_convergence=False,
     n_classes=1,
     init_class_log_priors=None,
@@ -3657,6 +3665,12 @@ def _run_relion_iteration_loop(
     See docs/relion5_auto_refine_algorithm.md.
     """
     from recovar.reconstruction import regularization
+
+    if image_fourier_backend not in {"host_numpy", "jax_gpu"}:
+        raise ValueError(
+            "image_fourier_backend must be 'host_numpy' or 'jax_gpu', "
+            f"got {image_fourier_backend!r}"
+        )
 
     setup_t0 = time.time()
     setup_phase_seconds = {}
@@ -3696,6 +3710,8 @@ def _run_relion_iteration_loop(
         backend = _image_backend(ds)
         if backend is not None and hasattr(backend, "image_mask_mode"):
             backend.image_mask_mode = "multiply"
+        if backend is not None and hasattr(backend, "set_relion_fourier_backend"):
+            backend.set_relion_fourier_backend(image_fourier_backend)
     if particle_diameter_ang is not None and particle_diameter_ang > 0:
         from recovar.core.mask import relion_soft_image_mask
 

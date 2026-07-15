@@ -71,6 +71,56 @@ def test_particle_image_dataset_relion_background_fill_mask_mode(monkeypatch):
     np.testing.assert_allclose(processed, expected, atol=1e-6)
 
 
+def test_particle_image_dataset_relion_half_preprocess_defaults_to_numpy(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    imgs, _p_idx, _t_idx = ds[2]
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    masked = image_backends._apply_relion_soft_image_mask_numpy(imgs, ds.image_mask)
+    expected = image_backends._centered_rfft2_numpy(masked).reshape((1, -1)).astype(np.complex64)
+
+    assert ds.relion_fourier_backend == "host_numpy"
+    np.testing.assert_array_equal(ds.process_images_half(imgs, apply_image_mask=True), expected)
+
+
+@pytest.mark.gpu
+def test_particle_image_dataset_relion_jax_fourier_backend_avoids_numpy_fft(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    imgs, _p_idx, _t_idx = ds[2]
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    masked = image_backends._apply_relion_soft_image_mask_numpy(imgs, ds.image_mask)
+    expected = image_backends._centered_rfft2_jax(masked).reshape((1, -1)).astype(np.complex64)
+    ds.set_relion_fourier_backend("jax_gpu")
+    monkeypatch.setattr(
+        image_backends,
+        "_centered_rfft2_numpy",
+        lambda _images: pytest.fail("jax_gpu mode must not call the NumPy rFFT"),
+    )
+
+    processed = ds.process_images_half(imgs, apply_image_mask=True)
+
+    assert processed.dtype == np.complex64
+    np.testing.assert_array_equal(np.asarray(processed), np.asarray(expected))
+
+
+def test_particle_image_dataset_rejects_unknown_relion_fourier_backend(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    with pytest.raises(ValueError, match="Unsupported RELION Fourier backend"):
+        ds.set_relion_fourier_backend("not-a-backend")
+
+
+def test_relion_jax_fourier_backend_requires_gpu(monkeypatch):
+    monkeypatch.setattr(image_backends.jax, "default_backend", lambda: "cpu")
+
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        image_backends._centered_rfft2_jax(np.zeros((8, 8), dtype=np.float32))
+
+
 def test_particle_image_dataset_data_multiplier_and_mult_share_state(monkeypatch):
     monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
     ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
