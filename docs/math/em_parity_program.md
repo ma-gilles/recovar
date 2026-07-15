@@ -2268,3 +2268,57 @@ norms are localization diagnostics only.
 
 Evidence root:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it2_gaussian_capture_20260714_182500/`.
+
+## 2026-07-14 Explicit RELION CUDA preprocessing runtime integration
+
+Commit `241db84d` closes a real end-to-end routing bug in the explicit
+`relion_cuda` image-preprocessing option.  The source-faithful CUDA operand
+kernel was already qualified, but the adaptive coarse significance and sparse
+pass-2 paths did not pass per-image float32 normalization factors and int32
+integer pre-shifts to it.  The option therefore failed closed before its first
+score rather than running the promised workflow.
+
+The fix uses one typed batch-operand selector in both coarse significance
+loops and sparse pass 2.  CUDA receives the unshifted real image plus explicit
+normalization and shift operands; downstream scoring applies only the
+remaining RELION group scale, avoiding a second normalization.  Host behavior
+is unchanged.  Focused main-checkout tests pass `67/67`.
+
+H100 job `11196916` at isolated commit `aeb337df` exercised both halves through
+coarse normalized-CC scoring and sparse score/reconstruction and completed
+one full iteration in 62.5 science seconds (Slurm elapsed 1m49s).  Canonical
+non-DC sign-invariant FSC-AUC against RELION iteration 1 is
+`0.999999999500` merged and `0.999999999448/0.999999999451` by half.  The
+iteration-1 GT FSC-AUC is `0.098134227300` for RECOVAR and
+`0.098134193656` for RELION (delta `+3.36e-8`).  The global map sign is the
+known arbitrary sign boundary; no correlation metric participates in this
+gate.  Evidence root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_relion_cuda_aeb337df_iter1_20260714_232010/`.
+
+## 2026-07-14 Case-26 native WAVG/atomic discriminator rejected
+
+The source-faithful native CUDA WAVG diagnostic is not a causal repair and
+must remain isolated.  An initial two-particle run (`11196641`) exposed a
+diagnostic adapter bug: centered RECOVAR source indices were confused with
+RELION FFTW scatter-coordinate indices.  Corrected job `11196729` separates
+the two typed index vectors and proves exact first-iteration WTA semantics:
+one positive float32 posterior equal to one per particle, matching RELION's
+`sum_weight=1` and `significant_weight=0.9990000129`.
+
+All-1000 H100 job `11196772` then couples RELION-style translation reduction,
+`sincosf`, factor placement, and atomics in one kernel.  It changes the
+half-1/half-2 numerator residual only from
+`5.782326e-6/5.985726e-6` to `5.781899e-6/5.986944e-6`, and the weight
+residual from `2.992471e-6/2.913891e-6` to
+`2.993837e-6/2.914697e-6`.  The mixed `0.007--0.046%` changes remain hundreds
+of times above RELION's `1.0--1.3e-8` same-H100 repeat floor.  Accumulation
+topology is therefore rejected.
+
+The retained earliest boundary is upstream pre-atomic arithmetic.  Aggregate
+source values differ by approximately `7.2e-7/1.58e-6` for numerator and
+`2.25e-7/2.21e-7` for weight by half, while geometry is exact.  Since
+`Fweight=CTF^2*Minvsigma2` in this exact-WTA case, CTF and/or inverse-noise
+construction must differ before image or translation phase can matter.  Raw
+RELION operand capture job `11197096` and paired RECOVAR job `11197128` are
+the next discriminator.  Audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/native_wavg_all1000_report_11196772.md`.

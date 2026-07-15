@@ -2272,3 +2272,43 @@ Matrix evidence:
   complete value signatures for all 1000 particles.  Compare these pre-atomic
   rows and then bisect deterministic per-particle prefixes; do not revisit
   launch topology unless those operands match.
+
+# 2026-07-14: adaptive `relion_cuda` plumbing fixed and runtime-qualified
+
+- Commit `241db84d` wires typed float32 normalization and int32 integer-shift
+  operands through both adaptive coarse significance loops and sparse pass 2.
+  CUDA consumes unshifted real images and downstream code applies only the
+  remaining group scale, so normalization is not doubled.  Host defaults are
+  unchanged and unsupported operands still fail closed.
+- Main-checkout focused guard: `67/67` passed.  H100 job `11196916` completed
+  both halves of iteration 1 in 62.5 science seconds without OOM or routing
+  failure.
+- Direct iteration-1 non-DC sign-invariant FSC-AUC versus RELION is
+  `0.999999999500` merged and `0.999999999448/0.999999999451` by half.  GT
+  FSC-AUC is `0.098134227300` RECOVAR versus `0.098134193656` RELION.  The
+  maps differ only by the known arbitrary global sign at this gate; no
+  correlation metric is used.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_relion_cuda_aeb337df_iter1_20260714_232010/`.
+
+# 2026-07-14: native WAVG/atomic emulation is a decisive null
+
+- The corrected two-particle adapter (`11196729`) separates centered source
+  indices from RELION FFTW scatter coordinates and proves exact WTA 1/0
+  posterior semantics.  The initial scrambled-index run `11196641` is
+  inadmissible scientific evidence but retained as an audit failure.
+- All-1000 H100 job `11196772` changes the case-26 BPref numerator/weight
+  residual by only `0.007--0.046%`, with mixed signs.  Final residuals remain
+  approximately `5.78e-6/5.99e-6` for numerator and
+  `2.99e-6/2.91e-6` for weight, versus RELION repeat jitter near `1e-8`.
+  Reject and do not merge this diagnostic path.
+- Geometry, launch topology, translation-loop placement, factor placement,
+  and atomic ordering are closed.  The remaining upstream pre-atomic value
+  boundary is approximately `1e-6`.  In exact WTA, Fweight contains no image
+  or phase term, so compare raw CTF and Minvsigma2 first, then Fimg and
+  translation vectors.  RELION raw capture `11197096` and RECOVAR raw capture
+  `11197128` are active.
+- Machine audit and report:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/native_wavg_all1000_audit_11196772.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/native_wavg_all1000_report_11196772.md`.
