@@ -28,7 +28,7 @@ as the next product milestone rather than mixing it into the first closure.
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `bdda53c47cc6426ea7b816fc8335606236304c60`
+Current accepted code checkpoint: `7302610c23c3839d9acec1a7781d244b9d20e0d6`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -56,6 +56,13 @@ Known evidence:
   fixed 3k/128 per-iteration boundary gate. It does **not** close the autonomous
   trajectory gate: `scripts/run_multi_iter_parity.py` injects RELION particle,
   noise, direction-prior, and optimiser-control state at each iteration.
+- Current-head autonomous case-20 job `11197313` closes that small-trajectory
+  qualification: exact current-size schedule and iteration-11 convergence,
+  every numbered half/merged cross FSC-AUC at least `0.999986`, and final
+  merged cross FSC-AUC `0.997634`.  RECOVAR final GT FSC-AUC is `+0.001144`
+  above RELION.  The science command completed successfully; the recorded
+  Slurm exit 2 is only a noncanonical-layout error in the post-run generic
+  summarizer.
 - K=4 100k/256 map quality is close/better by GT FSC-AUC, but particle-level
   state parity is incomplete: recorded class agreement `0.89025`, pose within
   5 degrees `0.71669`, translation within 1 px `0.77529`. Runtime is `2.181x`
