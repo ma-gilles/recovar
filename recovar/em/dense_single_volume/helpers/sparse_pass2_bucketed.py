@@ -311,6 +311,62 @@ def _bpref_diagnostic_ownership_indices(
     return owners[rows]
 
 
+def _resolve_bpref_bucket_diagnostic_modes(
+    *,
+    device_signature_requested: bool,
+    contribution_diagnostics_active: bool,
+    target_particle_rows,
+    high_precision_operand_bundle_requested: bool,
+) -> dict[str, bool]:
+    """Limit scoped device diagnostics to buckets containing a target row."""
+
+    target_bucket_active = bool(
+        device_signature_requested and np.asarray(target_particle_rows).size
+    )
+    bucket_contribution_diagnostics_active = bool(
+        contribution_diagnostics_active
+        and (not device_signature_requested or target_bucket_active)
+    )
+    return {
+        "device_signature_requested": target_bucket_active,
+        "contribution_diagnostics_active": bucket_contribution_diagnostics_active,
+        "shadow_only": target_bucket_active,
+        "high_precision_operand_bundle": bool(
+            bucket_contribution_diagnostics_active
+            and high_precision_operand_bundle_requested
+        ),
+    }
+
+
+def _validate_bpref_positive_rotation_rows(
+    positive_rotation_rows,
+    target_particle_rows,
+    *,
+    device_signature_requested: bool,
+    winner_take_all: bool,
+) -> None:
+    """Validate only owners represented by the requested diagnostic."""
+
+    counts = np.asarray(positive_rotation_rows, dtype=np.int64)
+    if device_signature_requested:
+        rows = np.asarray(target_particle_rows, dtype=np.int64)
+        if rows.size == 0:
+            return
+        if np.any(rows < 0) or np.any(rows >= counts.size):
+            raise RuntimeError("BPref device signature target row is outside the sparse bucket")
+        counts = counts[rows]
+    if winner_take_all:
+        if not np.all(counts == 1):
+            raise RuntimeError(
+                "RELION WTA per-particle diagnostic requires exactly one positive rotation row per particle"
+            )
+    elif np.any(counts < 1) or not np.any(counts > 1):
+        raise RuntimeError(
+            "RECOVAR soft-particle causal arm requires at least one positive row per particle "
+            "and multiple positive rows for at least one particle"
+        )
+
+
 def _guard_bpref_target_rotation_chunking(
     rotation_chunk_size,
     *,
@@ -6737,7 +6793,7 @@ def compute_pass2_stats_sparse_bucketed(
     ]
     diagnostic_per_particle_launches = execution_modes["diagnostic_per_particle_launches"]
     fused_atomics_requested = scoped_diagnostic_flags["fused_atomics"]
-    shadow_only_mode = execution_modes["shadow_only"]
+    shadow_only_mode_requested = execution_modes["shadow_only"]
     # A scoped device capture is observational: ordinary score/reduction/
     # adjoint outputs remain authoritative and the requested RELION-order
     # variants execute only as checked diagnostic shadows.
@@ -7098,7 +7154,7 @@ def compute_pass2_stats_sparse_bucketed(
         logger.info(
             "Sparse pass-2 RELION x-half M-step diagnostic: sequential float32 "
             "translation reduction runs as %s",
-            "a checked shadow" if shadow_only_mode else "the standalone diagnostic path",
+            "a checked shadow" if shadow_only_mode_requested else "the standalone diagnostic path",
         )
     if use_relion_f32_fine_posterior:
         logger.info(
@@ -7515,6 +7571,26 @@ def compute_pass2_stats_sparse_bucketed(
             candidate_mask = bucket_arrays["candidate_mask"]
             parent_map_padded = bucket_arrays["parent_map"]
             actual_counts = bucket_arrays["actual_counts"]
+        target_particle_rows = (
+            _bpref_contribution_target_rows(experiment_dataset, image_indices)
+            if device_signature_requested
+            else np.empty((0,), dtype=np.int64)
+        )
+        bucket_diagnostic_modes = _resolve_bpref_bucket_diagnostic_modes(
+            device_signature_requested=device_signature_requested,
+            contribution_diagnostics_active=contribution_diagnostics_active,
+            target_particle_rows=target_particle_rows,
+            high_precision_operand_bundle_requested=scoped_diagnostic_flags[
+                "high_precision_operand_bundle"
+            ],
+        )
+        bucket_device_signature_requested = bucket_diagnostic_modes[
+            "device_signature_requested"
+        ]
+        bucket_contribution_diagnostics_active = bucket_diagnostic_modes[
+            "contribution_diagnostics_active"
+        ]
+        bucket_shadow_only_mode = bucket_diagnostic_modes["shadow_only"]
         bucket_group_ids = (
             jnp.asarray(group_ids_np[image_indices], dtype=jnp.int32)
             if group_ids_np is not None
@@ -7546,10 +7622,10 @@ def compute_pass2_stats_sparse_bucketed(
             bucket_translation_prior = jnp.asarray(fine_translation_prior_2d[image_indices], dtype=jnp.float32)
 
         contribution_preprocess_operands = None
-        high_precision_operand_bundle = scoped_diagnostic_flags[
+        high_precision_operand_bundle = bucket_diagnostic_modes[
             "high_precision_operand_bundle"
         ]
-        if contribution_diagnostics_active and high_precision_operand_bundle:
+        if high_precision_operand_bundle:
             (
                 diagnostic_relion_cuda_preprocess,
                 diagnostic_integer_pre_shifts,
@@ -7688,17 +7764,12 @@ def compute_pass2_stats_sparse_bucketed(
             )
         elif use_window and projection_cache is not None and not dump_this_bucket and not score_only:
             rotation_chunk_size = _cached_score_rotation_chunk_size_for_pass(bucket_size)
-        target_particle_rows = (
-            _bpref_contribution_target_rows(experiment_dataset, image_indices)
-            if device_signature_requested
-            else np.empty((0,), dtype=np.int64)
-        )
         rotation_chunk_size = _guard_bpref_target_rotation_chunking(
             rotation_chunk_size,
             bucket_size=bucket_size,
             target_particle_rows=target_particle_rows,
         )
-        if device_signature_requested and target_particle_rows.size:
+        if bucket_device_signature_requested:
             logger.info(
                 "Scoped BPref device capture preserves production rotation planning: "
                 "target_particles=%d bucket_size=%d rotation_chunk_size=%s naturally_unchunked=true",
@@ -8215,7 +8286,7 @@ def compute_pass2_stats_sparse_bucketed(
                 jnp.asarray(candidate_mask),
             )
             preprior_scores = scores
-            if shadow_only_mode:
+            if bucket_shadow_only_mode:
                 shadow_scores = _score_pass2_bucket_normalized_cc(
                     shifted_corrected_score_split,
                     ctf2_over_nv_score,
@@ -8226,7 +8297,7 @@ def compute_pass2_stats_sparse_bucketed(
                 _require_bpref_shadow_exact("normalized-CC score", scores, shadow_scores)
                 shadow_score_bitwise_equal = True
         else:
-            if contribution_diagnostics_active:
+            if bucket_contribution_diagnostics_active:
                 scores = _score_pass2_bucket_relion_gpu_diff2(
                     shifted_corrected_score_split,
                     ctf2_over_nv_score,
@@ -8329,7 +8400,7 @@ def compute_pass2_stats_sparse_bucketed(
                     winner_take_all=winner_take_all,
                 )
             )
-            if contribution_diagnostics_active:
+            if bucket_contribution_diagnostics_active:
                 (
                     shadow_reconstruction_probs,
                     shadow_reconstruction_mask,
@@ -8412,7 +8483,7 @@ def compute_pass2_stats_sparse_bucketed(
             dump_summed = summed
             dump_ctf_probs = ctf_probs
             shadow_reduction_agreement = None
-            if shadow_only_mode:
+            if bucket_shadow_only_mode:
                 shadow_summed, shadow_ctf_probs = compute_local_mstep_sums(
                     mstep_probs,
                     shifted_recon_split,
@@ -8509,19 +8580,25 @@ def compute_pass2_stats_sparse_bucketed(
                 ),
                 image_shape=image_shape,
                 volume_shape=recon_volume_shape,
-                shadow_only_mode=shadow_only_mode,
+                shadow_only_mode=bucket_shadow_only_mode,
                 shadow_score_bitwise_equal=shadow_score_bitwise_equal,
                 shadow_reduction_agreement=shadow_reduction_agreement,
-                device_signature_active=bpref_device_signature_active,
+                device_signature_active=bucket_device_signature_requested,
             )
 
             diagnostic_particle_launches_effective = bool(
-                use_relion_x_half_mstep and diagnostic_per_particle_launches
+                use_relion_x_half_mstep
+                and diagnostic_per_particle_launches
+                and (not device_signature_requested or bucket_device_signature_requested)
             )
             live_per_particle_launches = bool(
                 use_relion_x_half_mstep and use_per_particle_launches
             )
-            if fused_atomics_requested and not diagnostic_particle_launches_effective:
+            bucket_fused_atomics_requested = bool(
+                fused_atomics_requested
+                and (not device_signature_requested or bucket_device_signature_requested)
+            )
+            if bucket_fused_atomics_requested and not diagnostic_particle_launches_effective:
                 raise RuntimeError(
                     "RELION fused-atomics diagnostic requires the x-half M-step and "
                     "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH=1"
@@ -8531,16 +8608,12 @@ def compute_pass2_stats_sparse_bucketed(
                     np.asarray(jnp.sum(mstep_probs, axis=-1)) > 0,
                     axis=1,
                 )
-                if winner_take_all:
-                    if not np.all(positive_rotation_rows == 1):
-                        raise RuntimeError(
-                            "RELION WTA per-particle diagnostic requires exactly one positive rotation row per particle"
-                        )
-                elif np.any(positive_rotation_rows < 1) or not np.any(positive_rotation_rows > 1):
-                    raise RuntimeError(
-                        "RECOVAR soft-particle causal arm requires at least one positive row per particle "
-                        "and multiple positive rows for at least one particle"
-                    )
+                _validate_bpref_positive_rotation_rows(
+                    positive_rotation_rows,
+                    target_particle_rows,
+                    device_signature_requested=device_signature_requested,
+                    winner_take_all=winner_take_all,
+                )
                 diagnostic_owners = _bpref_diagnostic_ownership_indices(
                     image_indices,
                     target_particle_rows,

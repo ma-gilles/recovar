@@ -128,6 +128,95 @@ def test_scoped_device_capture_keeps_live_reduction_and_adjoint_modes_ordinary(m
     assert not modes["live_per_particle_launches"]
 
 
+def test_scoped_device_capture_disables_shadows_for_empty_target_bucket():
+    modes = sparse_pass2_bucketed._resolve_bpref_bucket_diagnostic_modes(
+        device_signature_requested=True,
+        contribution_diagnostics_active=True,
+        target_particle_rows=np.empty((0,), dtype=np.int64),
+        high_precision_operand_bundle_requested=True,
+    )
+
+    assert modes == {
+        "device_signature_requested": False,
+        "contribution_diagnostics_active": False,
+        "shadow_only": False,
+        "high_precision_operand_bundle": False,
+    }
+
+
+def test_scoped_device_capture_activates_only_bucket_with_target_rows():
+    target_modes = sparse_pass2_bucketed._resolve_bpref_bucket_diagnostic_modes(
+        device_signature_requested=True,
+        contribution_diagnostics_active=True,
+        target_particle_rows=np.asarray([2], dtype=np.int64),
+        high_precision_operand_bundle_requested=True,
+    )
+    assert all(target_modes.values())
+
+    legacy_modes = sparse_pass2_bucketed._resolve_bpref_bucket_diagnostic_modes(
+        device_signature_requested=False,
+        contribution_diagnostics_active=True,
+        target_particle_rows=np.empty((0,), dtype=np.int64),
+        high_precision_operand_bundle_requested=True,
+    )
+    assert legacy_modes == {
+        "device_signature_requested": False,
+        "contribution_diagnostics_active": True,
+        "shadow_only": False,
+        "high_precision_operand_bundle": True,
+    }
+
+
+def test_scoped_soft_row_gate_ignores_unrelated_zero_and_multiple_rows():
+    sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+        np.asarray([0, 2, 1], dtype=np.int64),
+        np.asarray([1], dtype=np.int64),
+        device_signature_requested=True,
+        winner_take_all=False,
+    )
+
+    with pytest.raises(RuntimeError, match="multiple positive rows"):
+        sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+            np.asarray([0, 1, 3], dtype=np.int64),
+            np.asarray([1], dtype=np.int64),
+            device_signature_requested=True,
+            winner_take_all=False,
+        )
+
+    with pytest.raises(RuntimeError, match="at least one positive row"):
+        sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+            np.asarray([0, 2], dtype=np.int64),
+            np.empty((0,), dtype=np.int64),
+            device_signature_requested=False,
+            winner_take_all=False,
+        )
+
+
+def test_scoped_wta_row_gate_checks_target_and_rejects_invalid_target_row():
+    sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+        np.asarray([0, 1, 3], dtype=np.int64),
+        np.asarray([1], dtype=np.int64),
+        device_signature_requested=True,
+        winner_take_all=True,
+    )
+
+    with pytest.raises(RuntimeError, match="exactly one positive rotation row"):
+        sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+            np.asarray([1, 2], dtype=np.int64),
+            np.asarray([1], dtype=np.int64),
+            device_signature_requested=True,
+            winner_take_all=True,
+        )
+
+    with pytest.raises(RuntimeError, match="outside the sparse bucket"):
+        sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+            np.asarray([1, 1], dtype=np.int64),
+            np.asarray([2], dtype=np.int64),
+            device_signature_requested=True,
+            winner_take_all=True,
+        )
+
+
 def test_target_dense_half_keeps_block_topology_inactive_for_live_work(monkeypatch):
     monkeypatch.setenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "/tmp/device")
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", "1")
@@ -362,7 +451,7 @@ def test_bucketed_source_has_no_unscoped_capture_branches():
     source = inspect.getsource(sparse_pass2_bucketed.compute_pass2_stats_sparse_bucketed)
     assert 'if os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR")' not in source
     assert "relion_x_half_bp_per_particle_launch_enabled()" not in source
-    assert "device_signature_active=bpref_device_signature_active" in source
+    assert "device_signature_active=bucket_device_signature_requested" in source
 
 
 def test_active_capture_rejects_fused_kclass_route(monkeypatch):
