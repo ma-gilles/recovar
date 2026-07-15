@@ -112,6 +112,20 @@ def _use_fused_sparse_k_class_pass2(n_classes: int) -> bool:
     return _env_flag_enabled("RECOVAR_SPARSE_KCLASS_FUSED", default=int(n_classes) > 1)
 
 
+def _validate_bpref_device_signature_sparse_route(
+    *,
+    active: bool,
+    n_classes: int,
+) -> None:
+    """Keep scoped BPref capture on the single-class sparse pass-2 route."""
+
+    if bool(active) and _use_fused_sparse_k_class_pass2(n_classes):
+        raise RuntimeError(
+            "active BPref device signature scope is incompatible with "
+            "RECOVAR_SPARSE_KCLASS_FUSED; use the single-class sparse pass-2 route"
+        )
+
+
 def _dense_pass2_rotation_fraction_threshold(n_classes: int) -> float | None:
     if int(n_classes) <= 1:
         return None
@@ -794,6 +808,9 @@ def _run_sparse_k_class_adaptive_pass2(
         fine_rotation_parent_override=rot_parent_map_np,
         fine_translations_override=fine_translations_np,
         fine_translation_parent_override=trans_parent_map_np,
+        bpref_device_signature_active=bool(
+            base_engine_kwargs.get("bpref_device_signature_active", False)
+        ),
     )
     mstep_accumulator_shape = (
         relion_backprojector_volume_shape(
@@ -1826,6 +1843,9 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         relion_x_half_mstep=bool(pass2_kwargs.get("mstep_relion_x_half", False)),
         relion_firstiter_score_mode="normalized_cc",
         relion_firstiter_winner_take_all=True,
+        bpref_device_signature_active=bool(
+            pass2_kwargs.get("bpref_device_signature_active", False)
+        ),
     )
     mstep_accumulator_shape = (
         relion_backprojector_volume_shape(
@@ -2644,6 +2664,7 @@ def run_dense_k_class_em_adaptive(
     relion_projector_r_max: int | None = None,
     fine_mstep_rotations_override=None,
     return_best_pose_details: bool = False,
+    bpref_device_signature_active: bool = False,
     **engine_kwargs,
 ) -> KClassEMResult:
     """K-class adaptive 2-pass EM: coarse pass-1 significance + fine pass-2 masked.
@@ -2914,18 +2935,50 @@ def run_dense_k_class_em_adaptive(
     if "current_size" not in pass2_kwargs and fine_current_size is not None:
         pass2_kwargs["current_size"] = fine_current_size
 
-    fused_atomic_diagnostic_requested = _env_flag_enabled(_RELION_X_HALF_BP_FUSED_ATOMICS_ENV)
-    fused_atomic_diagnostic_supported = (
+    device_signature_configured = bool(
+        os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
+    )
+    fused_atomic_env_enabled = _env_flag_enabled(_RELION_X_HALF_BP_FUSED_ATOMICS_ENV)
+    fused_atomic_diagnostic_requested = bool(
+        fused_atomic_env_enabled
+        and (bpref_device_signature_active or not device_signature_configured)
+    )
+    firstiter_fused_atomic_supported = (
         sparse_pass2_requested
         and firstiter_cc_pass2_only_best_coarse
         and coarse_class_assignments_for_override is not None
         and hasattr(experiment_dataset, "subset")
     )
+    later_soft_particle_fused_supported = (
+        bool(bpref_device_signature_active)
+        and device_signature_configured
+        and sparse_pass2_requested
+        and not firstiter_cc_pass2_only_best_coarse
+        and not skip_significance_pruning
+        and n_classes == 1
+        and bool(pass2_kwargs.get("mstep_relion_x_half", False))
+    )
+    fused_atomic_diagnostic_supported = bool(
+        firstiter_fused_atomic_supported or later_soft_particle_fused_supported
+    )
     if fused_atomic_diagnostic_requested and not fused_atomic_diagnostic_supported:
         raise RuntimeError(
             "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS is qualified only for the sparse "
-            "first-iteration global-winner subset pass 2"
+            "first-iteration global-winner subset or explicitly scoped later K=1 "
+            "soft-posterior pass 2"
         )
+    if bpref_device_signature_active:
+        if not device_signature_configured:
+            raise RuntimeError("active BPref device signature scope requires a device dump directory")
+        _validate_bpref_device_signature_sparse_route(
+            active=True,
+            n_classes=n_classes,
+        )
+        if not later_soft_particle_fused_supported and not firstiter_fused_atomic_supported:
+            raise RuntimeError(
+                "active BPref device signature scope requires supported sparse RELION x-half topology"
+            )
+        pass2_kwargs["bpref_device_signature_active"] = True
 
     if (
         sparse_pass2_requested

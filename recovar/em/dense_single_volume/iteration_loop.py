@@ -22,6 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import utils
+from recovar import cuda_backproject as _cuda_backproject_diagnostics
 from recovar.core import fourier_transform_utils
 from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.batch_planning import (
@@ -76,6 +77,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     shell_index_to_resolution_angstrom,
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
+from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as _sparse_pass2_diagnostics
 from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
@@ -188,6 +190,39 @@ from recovar.reconstruction.regularization import (  # noqa: F401
 _EM_RAW_IMAGE_CACHE_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE"
 _EM_RAW_IMAGE_CACHE_MAX_GB_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB"
 _EM_RAW_IMAGE_CACHE_DEFAULT_MAX_GB = 16.0
+
+
+def _bpref_device_signature_active_for_numbered_half(
+    *,
+    iteration: int,
+    half: int,
+    final_all_data: bool = False,
+    environ=None,
+) -> bool:
+    """Resolve one explicit numbered half boundary for device capture."""
+
+    env = os.environ if environ is None else environ
+    if not str(env.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "")).strip():
+        return False
+    raw_iteration = str(env.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION", "")).strip()
+    raw_half = str(env.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF", "")).strip()
+    if not raw_iteration or not raw_half:
+        raise RuntimeError(
+            "Scoped BPref device capture requires explicit positive "
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION and half 1 or 2"
+        )
+    try:
+        target_iteration = int(raw_iteration)
+        target_half = int(raw_half)
+    except ValueError as exc:
+        raise ValueError("BPref device capture iteration/half targets must be integers") from exc
+    if target_iteration <= 0 or target_half not in {1, 2}:
+        raise ValueError("BPref device capture requires target iteration > 0 and half 1 or 2")
+    if int(iteration) <= 0 or int(half) not in {1, 2}:
+        raise ValueError("BPref device capture context requires numbered iteration > 0 and half 1 or 2")
+    if final_all_data:
+        return False
+    return int(iteration) == target_iteration and int(half) == target_half
 
 logger = logging.getLogger(__name__)
 
@@ -1612,6 +1647,7 @@ def _score_kclass_firstiter_cc_pass2(
     fine_current_size: int | None = None,
     log_label: str = "",
     update_em_kwargs_image_batch_size: bool = False,
+    bpref_device_signature_active: bool = False,
 ):
     """RELION iter-1 ``--firstiter_cc`` K-class adaptive 2-pass dispatch.
 
@@ -1764,6 +1800,7 @@ def _score_kclass_firstiter_cc_pass2(
         coarse_healpix_order=int(current_healpix_order),
         oversampling_order=int(adaptive_os_local),
         fine_mstep_rotations_override=(fine_mstep_rot if firstiter_sparse_pass2 else None),
+        bpref_device_signature_active=bpref_device_signature_active,
         **extra,
         **firstiter_em_kwargs,
     )
@@ -1927,6 +1964,7 @@ def _score_half_dense(
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
     return_best_pose_details: bool = True,
+    bpref_device_signature_active: bool = False,
 ) -> HalfScoreResult:
     """Dense (non-local-search) E+M scoring for one half-set.
 
@@ -2043,6 +2081,7 @@ def _score_half_dense(
                 fine_current_size=firstiter_fine_current_size,
                 log_label=firstiter_log_label,
                 update_em_kwargs_image_batch_size=firstiter_updates_em_kwargs_ibs,
+                bpref_device_signature_active=bpref_device_signature_active,
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
         elif firstiter_coarse_current_size is not None and int(state.adaptive_oversampling) > 0:
@@ -2133,6 +2172,7 @@ def _score_half_dense(
                 oversampling_order=int(adaptive_os_local),
                 fine_mstep_rotations_override=(fine_mstep_rot if kclass_sparse_pass2 else None),
                 return_best_pose_details=return_best_pose_details,
+                bpref_device_signature_active=bpref_device_signature_active,
                 **adaptive_em_kwargs,
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
@@ -2317,6 +2357,7 @@ def _score_half_dense(
                 oversampling_order=int(adaptive_os_local),
                 fine_mstep_rotations_override=(fine_mstep_rot if k1_sparse_pass2 else None),
                 return_best_pose_details=return_best_pose_details,
+                bpref_device_signature_active=bpref_device_signature_active,
                 **adaptive_em_kwargs,
             )
         ha_k = np.asarray(k1_adaptive_result.pose_assignments, dtype=np.int32)
@@ -2420,6 +2461,20 @@ def _score_half_dense(
         noise_stats=noise_stats_k,
         mstep_accumulator_shape=None,
     )
+
+
+def _score_half_dense_in_bpref_scope(
+    *,
+    bpref_device_signature_active: bool,
+    **kwargs,
+) -> HalfScoreResult:
+    """Keep all authoritative dense-half work outside diagnostic CUDA scope."""
+
+    with _cuda_backproject_diagnostics.bpref_device_signature_scope(False):
+        return _score_half_dense(
+            bpref_device_signature_active=bpref_device_signature_active,
+            **kwargs,
+        )
 
 
 def _local_translation_prior_reference_translations(
@@ -3131,6 +3186,21 @@ _STATE_SWAP_STATE_NO_GRID_EXCLUDE = (
     _STATE_SWAP_STATE_FIELD_GROUPS["state_sampling_grid"]
     | _STATE_SWAP_STATE_FIELD_GROUPS["state_local_priors"]
 )
+
+
+def _score_half_local_in_bpref_scope(
+    *,
+    bpref_device_signature_active: bool,
+    **kwargs,
+) -> HalfScoreResult:
+    """Run local scoring with device-capture flags disabled or fail closed."""
+
+    if bpref_device_signature_active:
+        raise RuntimeError(
+            "BPref device signature capture is supported only by sparse adaptive pass 2"
+        )
+    with _cuda_backproject_diagnostics.bpref_device_signature_scope(False):
+        return _score_half_local(**kwargs)
 
 
 def _copy_optional_array(value):
@@ -5406,6 +5476,23 @@ def _run_relion_iteration_loop(
         scale_correction_data_vs_prior_this_iter = previous_data_vs_prior_for_scheduling
 
         for k in range(2):
+            _sparse_pass2_diagnostics.set_bpref_contribution_dump_context(
+                iteration=iteration + 1,
+                half=k + 1,
+            )
+            bpref_device_signature_active = (
+                _bpref_device_signature_active_for_numbered_half(
+                    iteration=iteration + 1,
+                    half=k + 1,
+                )
+            )
+            logger.info(
+                "BPREF_DEVICE_SIGNATURE_ACTIVATION iteration=%d half=%d "
+                "final_all_data=false active=%s",
+                iteration + 1,
+                k + 1,
+                str(bpref_device_signature_active).lower(),
+            )
             noise_variance_k = noise_variance_per_half[k]
             rotation_log_prior_k = rotation_log_prior_per_half[k]
             class_rotation_log_prior_k = class_rotation_log_prior_per_half[k]
@@ -5629,7 +5716,8 @@ def _run_relion_iteration_loop(
                 continue
             if use_local:
                 local_parent_oversampling_order = int(state.adaptive_oversampling) if state.adaptive_oversampling > 0 else 0
-                local_result = _score_half_local(
+                local_result = _score_half_local_in_bpref_scope(
+                    bpref_device_signature_active=bpref_device_signature_active,
                     k=k,
                     experiment_dataset=experiment_datasets[k],
                     means_k=means[k],
@@ -5695,7 +5783,8 @@ def _run_relion_iteration_loop(
                 score_result = local_result
 
             elif use_adaptive:
-                adaptive_result = _score_half_dense(
+                adaptive_result = _score_half_dense_in_bpref_scope(
+                    bpref_device_signature_active=bpref_device_signature_active,
                     k=k,
                     experiment_dataset=experiment_datasets[k],
                     means_k=means[k],
@@ -5766,7 +5855,8 @@ def _run_relion_iteration_loop(
 
             else:
                 # --- SINGLE-PASS E+M (no adaptive oversampling) ---
-                single_pass_result = _score_half_dense(
+                single_pass_result = _score_half_dense_in_bpref_scope(
+                    bpref_device_signature_active=bpref_device_signature_active,
                     k=k,
                     experiment_dataset=experiment_datasets[k],
                     means_k=means[k],
@@ -5901,6 +5991,30 @@ def _run_relion_iteration_loop(
                 Ft_y_0, Ft_ctf_0 = Ft_y_k, Ft_ctf_k
             else:
                 Ft_y_1, Ft_ctf_1 = Ft_y_k, Ft_ctf_k
+
+            _device_signature_target_iteration = os.environ.get(
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION"
+            )
+            _device_signature_target_half = os.environ.get(
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF"
+            )
+            if _device_signature_target_half and int(_device_signature_target_half) not in {1, 2}:
+                raise ValueError("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF must be 1 or 2")
+            if (
+                os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR")
+                and (
+                    not _device_signature_target_iteration
+                    or int(_device_signature_target_iteration) == iteration + 1
+                )
+                and (
+                    not _device_signature_target_half
+                    or int(_device_signature_target_half) == k + 1
+                )
+            ):
+                _sparse_pass2_diagnostics.flush_bpref_device_panel_accumulator(
+                    iteration=iteration + 1,
+                    half=k + 1,
+                )
 
             # Capture original-stack image indices for the half so dumps can be
             # matched to RELION's data.star image_name ordering.
@@ -6040,6 +6154,34 @@ def _run_relion_iteration_loop(
             per_half.mstep_full_half_axis,
             default_axis=-1,
         )
+
+        _bpref_prejoin_dir = os.environ.get("RECOVAR_BPREF_PREJOIN_DUMP_DIR")
+        _bpref_boundary_target_iteration = os.environ.get("RECOVAR_BPREF_BOUNDARY_DUMP_ITERATION")
+        _bpref_boundary_iteration_matches = (
+            not _bpref_boundary_target_iteration
+            or iteration + 1 == int(_bpref_boundary_target_iteration)
+        )
+        if _bpref_prejoin_dir and not k_class_enabled and _bpref_boundary_iteration_matches:
+            import pathlib
+
+            pathlib.Path(_bpref_prejoin_dir).mkdir(parents=True, exist_ok=True)
+            np.savez(
+                pathlib.Path(_bpref_prejoin_dir)
+                / f"recovar_bpref_prejoin_it{iteration + 1:03d}.npz",
+                schema=np.asarray("recovar-bpref-prejoin-v2"),
+                run_id=np.asarray(os.environ.get("RECOVAR_BPREF_BOUNDARY_DUMP_RUN_ID", "unset")),
+                iteration=np.int32(iteration + 1),
+                current_size=np.int32(cs),
+                padding_factor=np.int32(PADDING_FACTOR),
+                grid_size=np.int32(grid_size),
+                voxel_size=np.float32(cryo.voxel_size),
+                volume_shape=np.asarray(volume_shape, dtype=np.int32),
+                mstep_accumulator_shape=np.asarray(mstep_accumulator_shape, dtype=np.int32),
+                Ft_y_0=np.asarray(Ft_y_0),
+                Ft_y_1=np.asarray(Ft_y_1),
+                Ft_ctf_0=np.asarray(Ft_ctf_0).real,
+                Ft_ctf_1=np.asarray(Ft_ctf_1).real,
+            )
 
         # --- RELION's --low_resol_join_halves: average the low-resolution
         # shells of the per-half Fourier accumulators between the two halves
@@ -6371,12 +6513,14 @@ def _run_relion_iteration_loop(
             # comparison against RELION's RECOVAR_MSTEP_DUMP_DIR. Activated by
             # RECOVAR_BPREF_ACCUM_DUMP_DIR. One npz per iteration.
             _bpref_accum_dir = os.environ.get("RECOVAR_BPREF_ACCUM_DUMP_DIR")
-            if _bpref_accum_dir:
+            if _bpref_accum_dir and _bpref_boundary_iteration_matches:
                 import pathlib
 
                 pathlib.Path(_bpref_accum_dir).mkdir(parents=True, exist_ok=True)
                 np.savez(
                     pathlib.Path(_bpref_accum_dir) / f"recovar_bpref_accum_it{iteration + 1:03d}.npz",
+                    schema=np.asarray("recovar-bpref-accum-v2"),
+                    run_id=np.asarray(os.environ.get("RECOVAR_BPREF_BOUNDARY_DUMP_RUN_ID", "unset")),
                     iteration=np.int32(iteration + 1),
                     current_size=np.int32(cs),
                     padding_factor=np.int32(PADDING_FACTOR),
@@ -7484,6 +7628,10 @@ def _run_relion_iteration_loop(
 
         iteration += 1
 
+    # Numbered contribution/native dump identities must never leak into the
+    # return path or RELION's unnumbered final all-data pass.
+    _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
+
     # RELION's final all-data iteration is a real next iteration after
     # convergence flags are set at the top of the loop. Do not synthesize it
     # after plain max_iter exhaustion, but do run it when convergence is first
@@ -8267,7 +8415,14 @@ def _run_relion_iteration_loop(
     logger.info("=== RELION final all-data Nyquist iteration ===")
     final_outs = PerHalfOutputs.empty()
     for k in range(2):
+        _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
         final_half_t0 = time.time()
+        logger.info(
+            "BPREF_DEVICE_SIGNATURE_ACTIVATION iteration=%d half=%d "
+            "final_all_data=true active=false",
+            iteration + 1,
+            k + 1,
+        )
         logger.info(
             "RELION final all-data half-%d start: images=%d current_size=%d "
             "healpix_order=%d n_rot=%d n_trans=%d local_search=%s",
@@ -8359,7 +8514,8 @@ def _run_relion_iteration_loop(
                 final_direction_prior_healpix_order,
             )
         if final_use_local:
-            final_result = _score_half_local(
+            final_result = _score_half_local_in_bpref_scope(
+                bpref_device_signature_active=False,
                 k=k,
                 experiment_dataset=experiment_datasets[k],
                 means_k=final_join_means[k],
@@ -8415,7 +8571,8 @@ def _run_relion_iteration_loop(
                 relion_projector_r_max=final_relion_projector_r_max_by_half[k],
             )
         else:
-            final_result = _score_half_dense(
+            final_result = _score_half_dense_in_bpref_scope(
+                bpref_device_signature_active=False,
                 k=k,
             experiment_dataset=experiment_datasets[k],
             means_k=final_join_means[k],

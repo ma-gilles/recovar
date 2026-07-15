@@ -804,15 +804,76 @@ def test_relion_fused_x_half_cuda_source_interleaves_neighbor_atomics():
     assert "relion_fused_x_half_backproject_kernel" in text
     assert "for (int pix = (int)threadIdx.x; pix < n_pixels; pix += 128)" in text
     assert "dim3 block(128)" in text
-    assert "if (!(Fweight > 0.0f)) continue;" in text
+    assert "if (!(Fweight > 0.0f)) {" in text
     atomic_sequence = re.compile(
         r"atomicAdd\(&data_volume\[off\]\.x, sre\);\s*"
         r"atomicAdd\(&data_volume\[off\]\.y, sim\);\s*"
         r"atomicAdd\(&weight_volume\[off\], w \* Fweight\);"
     )
     assert atomic_sequence.search(text)
-    handler = text[text.index("RelionFusedXHalfBackproject, RelionFusedXHalfBackprojectImpl") :]
-    assert handler.split("ffi::Error ProjectImpl", 1)[0].count(".Ret<ffi::AnyBuffer>()") == 2
+    handler = text[
+        text.index("RelionFusedXHalfBackproject, RelionFusedXHalfBackprojectImpl") :
+        text.index(
+            "RelionFusedXHalfBackprojectSignature, "
+            "RelionFusedXHalfBackprojectSignatureImpl"
+        )
+    ]
+    assert handler.count(".Ret<ffi::AnyBuffer>()") == 2
+
+
+def test_relion_fused_x_half_signature_inertness_gate_rejects_shadow_mismatch():
+    data_accumulator = np.asarray([1.0 + 2.0j], dtype=np.complex64)
+    weight_accumulator = np.asarray([3.0], dtype=np.float32)
+    expected_operands = (
+        np.asarray([[4.0 + 5.0j]], dtype=np.complex64),
+        np.asarray([[6.0]], dtype=np.float32),
+        np.asarray([7], dtype=np.int32),
+        np.asarray([[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]], dtype=np.float32),
+        np.asarray([8], dtype=np.int32),
+        np.asarray([0], dtype=np.int32),
+    )
+    outputs = (
+        data_accumulator,
+        weight_accumulator,
+        *(np.asarray([0], dtype=np.int32) for _ in range(7)),
+        data_accumulator.copy(),
+        weight_accumulator.copy(),
+        *(operand.copy() for operand in expected_operands),
+    )
+    cuda_backproject._require_signature_inertness_outputs(outputs, expected_operands)
+
+    mismatched = list(outputs)
+    mismatched[12] = mismatched[12].copy()
+    mismatched[12][0, 0] = np.nextafter(
+        mismatched[12][0, 0], np.float32(np.inf), dtype=np.float32
+    )
+    with pytest.raises(RuntimeError, match="weight_rows"):
+        cuda_backproject._require_signature_inertness_outputs(
+            tuple(mismatched), expected_operands
+        )
+
+
+def test_relion_fused_x_half_signature_cuda_source_copies_before_read_only_kernel():
+    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
+    text = cuda_source.read_text()
+    start = text.index("cudaError_t launch_relion_fused_x_half_backproject_with_signature(")
+    launch = text[start : text.index("template <typename T>", start)]
+
+    ordinary = launch.index("launch_relion_fused_x_half_backproject(")
+    shadow = launch.index("cudaMemcpyAsync(accumulator_shadow_data")
+    signature = launch.index("relion_fused_x_half_backproject_kernel<true, false>")
+    assert ordinary < shadow < signature
+    assert "relion_fused_x_half_backproject_kernel<true, true>" not in launch
+    for name in (
+        "accumulator_shadow_weight",
+        "operand_shadow_data_rows",
+        "operand_shadow_weight_rows",
+        "operand_shadow_pixel_indices",
+        "operand_shadow_rot",
+        "operand_shadow_canonical_rotation_keys",
+        "operand_shadow_signature_row_indices",
+    ):
+        assert f"cudaMemcpyAsync({name}" in launch
 
 
 @pytest.mark.gpu

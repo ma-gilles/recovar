@@ -26,6 +26,7 @@ import pathlib
 import subprocess
 import tempfile
 import threading
+import contextvars
 from contextlib import contextmanager
 from types import ModuleType
 from typing import Tuple
@@ -57,6 +58,11 @@ _CUDA_LIB_ENV = "RECOVAR_CUDA_LIB"
 _CUDA_CACHE_DIR_ENV = "RECOVAR_CUDA_CACHE_DIR"
 _BUILD_LOCKFILE = ".build.lock"
 _RELION_X_HALF_BP_BLOCK_TOPOLOGY_ENV = "RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY"
+_BPREF_DEVICE_SIGNATURE_DUMP_DIR_ENV = "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR"
+_bpref_device_signature_scope = contextvars.ContextVar(
+    "recovar_bpref_device_signature_scope",
+    default=None,
+)
 
 
 def _env_flag(name: str) -> bool:
@@ -72,7 +78,27 @@ def relion_x_half_bp_block_topology_enabled() -> bool:
     invalidate an already cached executable.
     """
 
+    if os.environ.get(_BPREF_DEVICE_SIGNATURE_DUMP_DIR_ENV, "").strip():
+        if _bpref_device_signature_scope.get() is not True:
+            return False
+    return relion_x_half_bp_block_topology_requested()
+
+
+def relion_x_half_bp_block_topology_requested() -> bool:
+    """Return the raw diagnostic request without changing live-path scope."""
+
     return _env_flag(_RELION_X_HALF_BP_BLOCK_TOPOLOGY_ENV)
+
+
+@contextmanager
+def bpref_device_signature_scope(active: bool):
+    """Scope trace-time CUDA diagnostic flags to one explicit score boundary."""
+
+    token = _bpref_device_signature_scope.set(bool(active))
+    try:
+        yield
+    finally:
+        _bpref_device_signature_scope.reset(token)
 
 
 def custom_cuda_requested() -> bool:
@@ -385,6 +411,7 @@ _TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
 _TARGET_FUSED_BP = "cuda_fused_bp"
 _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
 _TARGET_RELION_FUSED_X_HALF_BP = "cuda_relion_fused_x_half_bp"
+_TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE = "cuda_relion_fused_x_half_bp_signature"
 _TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
 
 
@@ -635,6 +662,11 @@ def _ensure_ffi():
         jax.ffi.register_ffi_target(
             _TARGET_RELION_FUSED_X_HALF_BP,
             jax.ffi.pycapsule(lib.RelionFusedXHalfBackproject),
+            platform="CUDA",
+        )
+        jax.ffi.register_ffi_target(
+            _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE,
+            jax.ffi.pycapsule(lib.RelionFusedXHalfBackprojectSignature),
             platform="CUDA",
         )
         jax.ffi.register_ffi_target(
@@ -1171,6 +1203,236 @@ def relion_fused_x_half_backproject_indexed(
         weight_volume,
         **kw,
     )
+
+
+@functools.partial(jax.jit, static_argnums=(8, 9, 10))
+def _relion_fused_x_half_backproject_signature_indexed_impl(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    data_rows: jax.Array,
+    weight_rows: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    canonical_rotation_keys: jax.Array,
+    signature_row_indices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float | None,
+) -> tuple[jax.Array, ...]:
+    """Run the native fused x-half scatter and capture exact device geometry.
+
+    The handler first launches the ordinary production accumulator kernel.  A
+    stream-ordered signature-only kernel then executes the same templated
+    float32 coordinate/fold/neighbor code without atomics and writes unique
+    ``(row, pixel[, neighbor])`` slots.  The ordinary accumulator launch still
+    receives every source row; ``signature_row_indices`` limits only the
+    subsequent signature-only launch and its output allocation.  Thus neither
+    signature stores nor contributor filtering can perturb the accumulator's
+    atomic schedule.  ``canonical_rotation_keys`` is passed explicitly from
+    the candidate grid; no Euler nearest-neighbor matching is performed.
+    """
+
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if max_r is None:
+        raise ValueError("RELION fused x-half signature requires an explicit support radius")
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(f"RELION fused x-half signature requires an odd BPref grid, got {volume_shape}")
+    if data_volume.dtype != jnp.complex64 or data_rows.dtype != jnp.complex64:
+        raise TypeError("RELION fused x-half signature data rows/volume must be complex64")
+    if weight_volume.dtype != jnp.float32 or weight_rows.dtype != jnp.float32:
+        raise TypeError("RELION fused x-half signature weight rows/volume must be float32")
+    if (
+        pixel_indices.dtype != jnp.int32
+        or canonical_rotation_keys.dtype != jnp.int32
+        or signature_row_indices.dtype != jnp.int32
+    ):
+        raise TypeError(
+            "RELION fused x-half signature pixel, canonical rotation keys, and row indices must be int32"
+        )
+    if data_rows.ndim != 2 or data_rows.shape != weight_rows.shape:
+        raise ValueError("RELION fused x-half signature rows must have matching rank-2 shapes")
+    if pixel_indices.shape != (data_rows.shape[1],):
+        raise ValueError("RELION fused x-half signature pixel index length mismatch")
+    if rotation_matrices.shape != (data_rows.shape[0], 3, 3):
+        raise ValueError("RELION fused x-half signature rotations must have shape (n_rows, 3, 3)")
+    if canonical_rotation_keys.shape != (data_rows.shape[0],):
+        raise ValueError("RELION fused x-half signature canonical key length mismatch")
+    if signature_row_indices.ndim != 1 or signature_row_indices.shape[0] <= 0:
+        raise ValueError("RELION fused x-half signature row indices must be a nonempty rank-1 array")
+    expected_volume_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    if data_volume.shape != (expected_volume_size,) or weight_volume.shape != (expected_volume_size,):
+        raise ValueError("RELION fused x-half signature accumulator shape mismatch")
+
+    dense_data_rows, dense_indices, current_height, current_half_width = (
+        _prepare_relion_x_half_block_topology_operands(data_rows, pixel_indices, image_shape, max_r)
+    )
+    dense_weight_rows, weight_dense_indices, weight_height, weight_half_width = (
+        _prepare_relion_x_half_block_topology_operands(weight_rows, pixel_indices, image_shape, max_r)
+    )
+    if (weight_height, weight_half_width) != (current_height, current_half_width):
+        raise ValueError("RELION fused x-half signature topology metadata mismatch")
+    if weight_dense_indices.shape != dense_indices.shape:
+        raise ValueError("RELION fused x-half signature dense index shape mismatch")
+
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    kw["image_h"] = np.int64(current_height)
+    kw["image_w"] = np.int64(current_half_width)
+    kw["full_image_w"] = np.int64(current_height)
+    rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
+    rot6 = _rot_to_compact(rotation_matrices, jnp.float32)
+    signature_shape = (int(signature_row_indices.shape[0]), int(dense_data_rows.shape[1]))
+    out_types = (
+        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct((*signature_shape, 6), jnp.float32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.int32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.float32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.int32),
+        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+        jax.ShapeDtypeStruct(dense_data_rows.shape, dense_data_rows.dtype),
+        jax.ShapeDtypeStruct(dense_weight_rows.shape, dense_weight_rows.dtype),
+        jax.ShapeDtypeStruct(dense_indices.shape, dense_indices.dtype),
+        jax.ShapeDtypeStruct(rot6.shape, rot6.dtype),
+        jax.ShapeDtypeStruct(canonical_rotation_keys.shape, canonical_rotation_keys.dtype),
+        jax.ShapeDtypeStruct(signature_row_indices.shape, signature_row_indices.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE,
+        out_types,
+        input_output_aliases={6: 0, 7: 1},
+        vmap_method="sequential",
+    )(
+        dense_data_rows,
+        dense_weight_rows,
+        dense_indices,
+        rot6,
+        canonical_rotation_keys,
+        signature_row_indices,
+        data_volume,
+        weight_volume,
+        **kw,
+    )
+
+
+def _bitwise_array_equal(left, right) -> bool:
+    """Compare diagnostic device snapshots without numeric tolerance."""
+
+    left_np = np.asarray(left)
+    right_np = np.asarray(right)
+    return (
+        left_np.shape == right_np.shape
+        and left_np.dtype == right_np.dtype
+        and left_np.tobytes(order="C") == right_np.tobytes(order="C")
+    )
+
+
+def _require_signature_inertness_outputs(outputs, expected_operands) -> None:
+    """Fail closed unless signature capture is bitwise inert and input-exact."""
+
+    accumulator_pairs = (
+        ("data_accumulator", outputs[0], outputs[9]),
+        ("weight_accumulator", outputs[1], outputs[10]),
+    )
+    operand_names = (
+        "data_rows",
+        "weight_rows",
+        "pixel_indices",
+        "rot6",
+        "canonical_rotation_keys",
+        "signature_row_indices",
+    )
+    operand_pairs = tuple(
+        (name, expected, shadow)
+        for name, expected, shadow in zip(
+            operand_names, expected_operands, outputs[11:17], strict=True
+        )
+    )
+    mismatches = [
+        name
+        for name, expected, observed in (*accumulator_pairs, *operand_pairs)
+        if not _bitwise_array_equal(expected, observed)
+    ]
+    if mismatches:
+        raise RuntimeError(
+            "RELION fused x-half signature deterministic inertness gate failed for "
+            + ", ".join(mismatches)
+        )
+
+
+def relion_fused_x_half_backproject_signature_indexed(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    data_rows: jax.Array,
+    weight_rows: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    canonical_rotation_keys: jax.Array,
+    signature_row_indices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float | None,
+) -> tuple[jax.Array, ...]:
+    """Validate contributor row selection before invoking the jitted FFI."""
+
+    row_indices_np = np.asarray(signature_row_indices)
+    n_rows = int(data_rows.shape[0])
+    if (
+        row_indices_np.ndim != 1
+        or row_indices_np.dtype != np.dtype(np.int32)
+        or row_indices_np.size == 0
+        or np.any(row_indices_np < 0)
+        or np.any(row_indices_np >= n_rows)
+        or (row_indices_np.size > 1 and np.any(np.diff(row_indices_np) <= 0))
+    ):
+        raise ValueError(
+            "RELION fused x-half signature row indices must be nonempty, unique, "
+            "strictly increasing, and within the source-row range"
+        )
+    signature_row_indices_jax = jnp.asarray(row_indices_np, dtype=jnp.int32)
+    outputs = _relion_fused_x_half_backproject_signature_indexed_impl(
+        data_volume,
+        weight_volume,
+        data_rows,
+        weight_rows,
+        pixel_indices,
+        rotation_matrices,
+        canonical_rotation_keys,
+        signature_row_indices_jax,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+    dense_data_rows, dense_indices, _, _ = _prepare_relion_x_half_block_topology_operands(
+        data_rows, pixel_indices, image_shape, max_r
+    )
+    dense_weight_rows, weight_dense_indices, _, _ = _prepare_relion_x_half_block_topology_operands(
+        weight_rows, pixel_indices, image_shape, max_r
+    )
+    if not _bitwise_array_equal(dense_indices, weight_dense_indices):
+        raise RuntimeError("RELION fused x-half signature prepared pixel indices disagree by operand")
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(
+        rotation_matrices, jnp.float32
+    )
+    rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
+    _require_signature_inertness_outputs(
+        outputs,
+        (
+            dense_data_rows,
+            dense_weight_rows,
+            dense_indices,
+            rot6,
+            canonical_rotation_keys,
+            signature_row_indices_jax,
+        ),
+    )
+    # Shadow outputs are diagnostic gates only.  The public result retains the
+    # established accumulator + seven signature-array contract.
+    return outputs[:9]
 
 
 @functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))

@@ -161,9 +161,11 @@ from recovar.em.dense_single_volume.k_class import (
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_ctf_sums_from_probs_sum_t,
+    compute_local_mstep_sums,
     compute_local_weighted_sums,
     flatten_bucket_rows,
 )
+from scripts import validate_bpref_device_signature as bpref_signature_validator
 
 pytestmark = pytest.mark.unit
 
@@ -2095,6 +2097,390 @@ def test_relion_x_half_bp_fused_atomics_requires_block_topology(monkeypatch):
             max_r=2.0,
             log_label_prefix="test-prerequisite",
         )
+
+
+@pytest.mark.gpu
+def test_later_soft_posterior_scoped_fused_signature_fixture(
+    monkeypatch,
+    tmp_path,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """Separate translation-order, scatter-topology, and signature effects."""
+
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", "1")
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", raising=False)
+    monkeypatch.delenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", raising=False)
+
+    image_shape = (8, 8)
+    volume_shape = (7, 7, 7)
+    volume_size = 7 * 7 * 4
+    max_r = 2.0
+    probs_np = np.asarray(
+        [
+            [[0.19, 0.07, 0.03], [0.11, 0.13, 0.05], [0.09, 0.17, 0.16]],
+            [[0.04, 0.15, 0.09], [0.18, 0.06, 0.12], [0.10, 0.14, 0.12]],
+        ],
+        dtype=np.float32,
+    )
+    shifted_np = np.asarray(
+        [
+            [
+                [1.25 + 0.75j, -0.50 + 1.50j, 0.20 - 0.40j],
+                [-0.70 + 0.10j, 0.30 - 1.20j, 1.10 + 0.60j],
+                [0.45 - 0.90j, 1.40 + 0.20j, -0.80 + 0.35j],
+            ],
+            [
+                [-1.10 + 0.40j, 0.65 + 1.30j, 0.15 - 0.75j],
+                [0.90 - 0.55j, -1.25 + 0.30j, 0.70 + 0.80j],
+                [0.35 + 1.10j, 0.50 - 0.60j, -0.45 + 0.95j],
+            ],
+        ],
+        dtype=np.complex64,
+    )
+    ctf2_over_nv_np = np.asarray(
+        [[0.75, 1.25, 0.40], [1.10, 0.55, 1.35]],
+        dtype=np.float32,
+    )
+
+    def _z_rotation(degrees):
+        radians = np.deg2rad(np.asarray(degrees, dtype=np.float32))
+        cosine = np.cos(radians).astype(np.float32)
+        sine = np.sin(radians).astype(np.float32)
+        result = np.zeros((len(degrees), 3, 3), dtype=np.float32)
+        result[:, 0, 0] = cosine
+        result[:, 0, 1] = -sine
+        result[:, 1, 0] = sine
+        result[:, 1, 1] = cosine
+        result[:, 2, 2] = 1.0
+        return result
+
+    rotations_np = np.stack(
+        (_z_rotation([0.0, 37.0, -53.0]), _z_rotation([19.0, -31.0, 71.0])),
+        axis=0,
+    )
+    window_indices_np = np.asarray([1, 12, 36], dtype=np.int32)
+    actual_counts = np.asarray([3, 3], dtype=np.int32)
+    initial_data_np = (
+        np.linspace(-1.0e-4, 1.0e-4, volume_size, dtype=np.float32)
+        * np.complex64(1.0 + 0.25j)
+    ).astype(np.complex64)
+    initial_weight_np = np.linspace(1.0e-5, 2.0e-4, volume_size, dtype=np.float32)
+
+    frozen_sources = {
+        "probs": probs_np.copy(),
+        "shifted": shifted_np.copy(),
+        "ctf2_over_nv": ctf2_over_nv_np.copy(),
+        "rotations": rotations_np.copy(),
+        "window_indices": window_indices_np.copy(),
+        "actual_counts": actual_counts.copy(),
+        "initial_data": initial_data_np.copy(),
+        "initial_weight": initial_weight_np.copy(),
+    }
+
+    def _accumulate_separate(data_rows, weight_rows, label):
+        return bucketed_mod._accumulate_relion_x_half_per_particle_launches(
+            data_rows,
+            weight_rows,
+            rotations,
+            actual_counts,
+            jnp.asarray(initial_data_np),
+            jnp.asarray(initial_weight_np),
+            window_indices=window_indices,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            disc_type="linear_interp",
+            half_volume=True,
+            max_r=max_r,
+            log_label_prefix=label,
+        )
+
+    with cuda_backproject.jax.default_device(gpu_device):
+        probs = jnp.asarray(probs_np)
+        shifted = jnp.asarray(shifted_np)
+        ctf2_over_nv = jnp.asarray(ctf2_over_nv_np)
+        rotations = jnp.asarray(rotations_np)
+        window_indices = jnp.asarray(window_indices_np)
+
+        # A: production reduction, separate numerator/denominator adjoints.
+        ordinary_rows = compute_local_mstep_sums(
+            probs,
+            shifted,
+            ctf2_over_nv,
+            relion_x_half=True,
+            sequential_translation_reduction=False,
+        )
+        a_data, a_weight = _accumulate_separate(*ordinary_rows, "fixture-A-ordinary")
+
+        # B: only translation reduction changes; scatter remains separate.
+        sequential_rows = compute_local_mstep_sums(
+            probs,
+            shifted,
+            ctf2_over_nv,
+            relion_x_half=True,
+            sequential_translation_reduction=True,
+        )
+        frozen_sequential_rows = tuple(np.asarray(value).copy() for value in sequential_rows)
+        b_data, b_weight = _accumulate_separate(*sequential_rows, "fixture-B-sequential")
+
+        # C: reuse the exact B rows and change only to fused data/weight atomics.
+        monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
+        monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", "1")
+        monkeypatch.setenv(
+            "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR",
+            str(tmp_path / "device-signatures"),
+        )
+        with cuda_backproject.bpref_device_signature_scope(True):
+            c_data, c_weight = bucketed_mod._accumulate_relion_x_half_per_particle_launches(
+                *sequential_rows,
+                rotations,
+                actual_counts,
+                jnp.asarray(initial_data_np),
+                jnp.asarray(initial_weight_np),
+                window_indices=window_indices,
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                disc_type="linear_interp",
+                half_volume=True,
+                max_r=max_r,
+                log_label_prefix="fixture-C-fused",
+            )
+
+        # D: replay C's exact rows and particle launch boundaries through the
+        # signature FFI.  Each call enforces bitwise accumulator-shadow and
+        # prepared-operand inertness internally.
+        d_data = jnp.asarray(initial_data_np)
+        d_weight = jnp.asarray(initial_weight_np)
+        with cuda_backproject.bpref_device_signature_scope(True):
+            for particle_index, count in enumerate(actual_counts.tolist()):
+                outputs = cuda_backproject.relion_fused_x_half_backproject_signature_indexed(
+                    d_data,
+                    d_weight,
+                    data_rows=sequential_rows[0][particle_index, :count],
+                    weight_rows=sequential_rows[1][particle_index, :count],
+                    pixel_indices=window_indices,
+                    rotation_matrices=rotations[particle_index, :count],
+                    canonical_rotation_keys=jnp.asarray(
+                        particle_index * 100 + np.arange(count),
+                        dtype=jnp.int32,
+                    ),
+                    signature_row_indices=jnp.arange(count, dtype=jnp.int32),
+                    image_shape=image_shape,
+                    volume_shape=volume_shape,
+                    max_r=max_r,
+                )
+                d_data, d_weight = outputs[:2]
+
+    arrays = {
+        "a_data": np.asarray(a_data),
+        "a_weight": np.asarray(a_weight),
+        "b_data": np.asarray(b_data),
+        "b_weight": np.asarray(b_weight),
+        "c_data": np.asarray(c_data),
+        "c_weight": np.asarray(c_weight),
+        "d_data": np.asarray(d_data),
+        "d_weight": np.asarray(d_weight),
+    }
+
+    # Recompute the row operands from the frozen pre-reduction sources.  This
+    # is deliberately not a cast of A/B: it retains the exact float32 input
+    # values but performs every multiply and reduction in complex128/float64.
+    probs_64 = probs_np.astype(np.float64)
+    shifted_128 = shifted_np.astype(np.complex128)
+    ctf2_over_nv_64 = ctf2_over_nv_np.astype(np.float64)
+    canonical_rows = (
+        np.einsum("brt,btn->brn", probs_64, shifted_128, optimize=False),
+        np.sum(probs_64, axis=-1, dtype=np.float64)[..., None]
+        * ctf2_over_nv_64[:, None, :],
+    )
+    ordinary_rows_np = tuple(np.asarray(value) for value in ordinary_rows)
+    sequential_rows_np = tuple(np.asarray(value) for value in sequential_rows)
+
+    def _row_metrics(observed, canonical):
+        difference = np.abs(observed.astype(canonical.dtype) - canonical)
+        canonical_l1 = max(
+            float(np.sum(np.abs(canonical), dtype=np.float64)),
+            np.finfo(np.float64).tiny,
+        )
+        row_denominator = np.maximum(
+            np.sum(np.abs(canonical), axis=-1, dtype=np.float64),
+            np.finfo(np.float64).tiny,
+        )
+        return {
+            "rel_l1": float(np.sum(difference, dtype=np.float64) / canonical_l1),
+            "max_abs": float(np.max(difference)),
+            "max_row_rel_l1": float(
+                np.max(np.sum(difference, axis=-1, dtype=np.float64) / row_denominator)
+            ),
+        }
+
+    canonical_row_metrics = {
+        "A_data_vs_complex128": _row_metrics(ordinary_rows_np[0], canonical_rows[0]),
+        "A_weight_vs_float64": _row_metrics(ordinary_rows_np[1], canonical_rows[1]),
+        "B_data_vs_complex128": _row_metrics(sequential_rows_np[0], canonical_rows[0]),
+        "B_weight_vs_float64": _row_metrics(sequential_rows_np[1], canonical_rows[1]),
+    }
+
+    # Error-bound classification for the frozen operands.  A GPU dot may use
+    # TF32 products with FP32 accumulation; B explicitly performs FP32
+    # multiply/adds in translation order.  Bound real and imaginary channels
+    # independently, then combine them into a complex absolute-error bound.
+    n_translations = int(probs_np.shape[-1])
+    u_float32 = 2.0**-24
+    u_tf32 = 2.0**-11
+
+    def _gamma(operation_count, unit_roundoff):
+        product = operation_count * unit_roundoff
+        return product / (1.0 - product)
+
+    fp32_coefficient = _gamma(2 * n_translations + 2, u_float32)
+    tf32_coefficient = (
+        (1.0 + u_tf32) ** 2
+        * (1.0 + _gamma(n_translations + 1, u_float32))
+        - 1.0
+    )
+    abs_weighted_real = np.einsum(
+        "brt,btn->brn",
+        np.abs(probs_64),
+        np.abs(shifted_128.real),
+        optimize=False,
+    )
+    abs_weighted_imag = np.einsum(
+        "brt,btn->brn",
+        np.abs(probs_64),
+        np.abs(shifted_128.imag),
+        optimize=False,
+    )
+    fp32_data_bound = fp32_coefficient * np.hypot(abs_weighted_real, abs_weighted_imag)
+    tf32_data_bound = tf32_coefficient * np.hypot(abs_weighted_real, abs_weighted_imag)
+    abs_weight_terms = (
+        np.sum(np.abs(probs_64), axis=-1)[..., None]
+        * np.abs(ctf2_over_nv_64[:, None, :])
+    )
+    fp32_weight_bound = fp32_coefficient * abs_weight_terms
+    bound_slack = 1.10
+
+    def _within_bound(observed, canonical, bound):
+        error = np.abs(observed.astype(canonical.dtype) - canonical)
+        absolute_slack = 8.0 * np.finfo(np.float32).eps * np.finfo(np.float32).tiny
+        return bool(np.all(error <= bound_slack * bound + absolute_slack))
+
+    a_data_fp32_compatible = _within_bound(
+        ordinary_rows_np[0], canonical_rows[0], fp32_data_bound
+    )
+    a_data_tf32_compatible = _within_bound(
+        ordinary_rows_np[0], canonical_rows[0], tf32_data_bound
+    )
+    b_data_fp32_compatible = _within_bound(
+        sequential_rows_np[0], canonical_rows[0], fp32_data_bound
+    )
+    a_weight_fp32_compatible = _within_bound(
+        ordinary_rows_np[1], canonical_rows[1], fp32_weight_bound
+    )
+    b_weight_fp32_compatible = _within_bound(
+        sequential_rows_np[1], canonical_rows[1], fp32_weight_bound
+    )
+    if a_data_fp32_compatible:
+        reduction_classification = "A-and-B-fp32-order-compatible"
+    elif a_data_tf32_compatible:
+        reduction_classification = "A-tf32-compatible-B-fp32-order-compatible"
+    else:
+        reduction_classification = "unresolved-outside-tf32-error-bound"
+
+    assert b_data_fp32_compatible, canonical_row_metrics
+    assert a_weight_fp32_compatible, canonical_row_metrics
+    assert b_weight_fp32_compatible, canonical_row_metrics
+    assert a_data_tf32_compatible, canonical_row_metrics
+
+    def _transition(left, right):
+        denominator = max(
+            float(np.sum(np.abs(left), dtype=np.float64)),
+            np.finfo(np.float64).tiny,
+        )
+        fsc_auc, min_fsc, fsc = bpref_signature_validator._accumulator_fsc(
+            left,
+            right,
+            volume_shape,
+        )
+        return {
+            "rel_l1": float(np.sum(np.abs(right - left), dtype=np.float64) / denominator),
+            "max_abs": float(np.max(np.abs(right - left))),
+            "fsc_auc": fsc_auc,
+            "min_finite_shell_fsc": min_fsc,
+            "finite_non_dc_shell_count": int(np.count_nonzero(np.isfinite(fsc[1:]))),
+        }
+
+    metrics = {
+        "A_to_B_data": _transition(arrays["a_data"], arrays["b_data"]),
+        "A_to_B_weight": _transition(arrays["a_weight"], arrays["b_weight"]),
+        "B_to_C_data": _transition(arrays["b_data"], arrays["c_data"]),
+        "B_to_C_weight": _transition(arrays["b_weight"], arrays["c_weight"]),
+        "C_to_D_data_cross_launch": _transition(arrays["c_data"], arrays["d_data"]),
+        "C_to_D_weight_cross_launch": _transition(arrays["c_weight"], arrays["d_weight"]),
+    }
+    for transition, values in metrics.items():
+        assert np.all(np.isfinite(list(values.values()))), (transition, values)
+    # A/B is the explicitly classified translation-reduction transition.  Its
+    # array error is reported rather than hidden behind a loosened tolerance;
+    # map-space agreement remains an FSC quality sanity check.
+    for transition in ("A_to_B_data", "A_to_B_weight"):
+        values = metrics[transition]
+        assert values["fsc_auc"] > 0.9999, (transition, values)
+        assert values["min_finite_shell_fsc"] > 0.9999, (transition, values)
+    # B/C reuses bitwise-identical rows, so this remains the strict topology-
+    # only numerical gate.
+    for transition in ("B_to_C_data", "B_to_C_weight"):
+        values = metrics[transition]
+        assert values["rel_l1"] < 1.0e-5, (transition, values)
+        assert values["max_abs"] < 1.0e-5, (transition, values)
+        assert values["fsc_auc"] > 0.99999, (transition, values)
+        assert values["min_finite_shell_fsc"] > 0.99999, (transition, values)
+    # C/D are separate atomic launches and therefore may differ at the normal
+    # control-repeat scale.  Do not use a one-repeat envelope as a pass/fail
+    # gate.  Signature inertness is instead proved inside each D call by the
+    # stream-ordered bitwise accumulator shadow and exact operand snapshots.
+    for transition in (
+        "C_to_D_data_cross_launch",
+        "C_to_D_weight_cross_launch",
+    ):
+        values = metrics[transition]
+        assert values["fsc_auc"] > 0.9999, (transition, values)
+        assert values["min_finite_shell_fsc"] > 0.9999, (transition, values)
+
+    import json
+
+    print(
+        "BPREF_SOFT_POSTERIOR_FIXTURE_METRICS "
+        + json.dumps(
+            {
+                "reduction_classification": reduction_classification,
+                "signature_internal_bitwise_gate_passed": True,
+                "canonical_row_metrics": canonical_row_metrics,
+                "accumulator_transitions": metrics,
+            },
+            sort_keys=True,
+        )
+    )
+
+    for observed, expected in zip(sequential_rows, frozen_sequential_rows, strict=True):
+        np.testing.assert_array_equal(np.asarray(observed), expected)
+    for name, expected in frozen_sources.items():
+        observed = {
+            "probs": probs,
+            "shifted": shifted,
+            "ctf2_over_nv": ctf2_over_nv,
+            "rotations": rotations,
+            "window_indices": window_indices,
+            "actual_counts": actual_counts,
+            "initial_data": initial_data_np,
+            "initial_weight": initial_weight_np,
+        }[name]
+        np.testing.assert_array_equal(np.asarray(observed), expected)
 
 
 def test_sparse_pass2_active_flat_row_gather_chunking_matches_full_gather(monkeypatch):

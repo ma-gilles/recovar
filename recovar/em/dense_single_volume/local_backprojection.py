@@ -90,10 +90,16 @@ def compute_local_mstep_sums(
     *,
     relion_x_half: bool,
     default_probs_sum_t=None,
+    sequential_translation_reduction: bool | None = None,
 ):
     """Compute numerator/denominator sums, optionally using the x-half diagnostic."""
 
-    if relion_x_half and relion_x_half_sequential_translation_reduction_enabled():
+    use_sequential_reduction = (
+        relion_x_half_sequential_translation_reduction_enabled()
+        if sequential_translation_reduction is None
+        else bool(sequential_translation_reduction)
+    )
+    if relion_x_half and use_sequential_reduction:
         return compute_relion_f32_sequential_mstep_sums(probs, shifted, ctf2_over_nv)
     denominator = (
         compute_local_ctf_sums(probs, ctf2_over_nv)

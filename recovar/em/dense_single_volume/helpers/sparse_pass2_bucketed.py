@@ -27,6 +27,7 @@ do not perturb the M-step accumulators.
 from __future__ import annotations
 
 import logging
+import hashlib
 import os
 import subprocess
 import time
@@ -76,6 +77,7 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
     half_translation_phase_table,
     prepare_batch_preprocess_operands,
     process_half_image,
+    resolve_image_mask_for_half_preprocess,
 )
 from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
 from recovar.em.dense_single_volume.helpers.projection import (
@@ -213,6 +215,27 @@ _DEFAULT_PASS2_GROUP_PROGRESS_SECONDS = 300
 _DEFAULT_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER = 4
 
 _native_mstep_dump_counter = 0
+_bpref_contribution_dump_counter = 0
+_bpref_contribution_call_counter = 0
+_bpref_contribution_context = {"iteration": -1, "half": -1}
+_bpref_image_identity_cache: dict[str, np.ndarray] = {}
+_bpref_device_panel_accumulators: dict[tuple[int, int, str], tuple[jax.Array, jax.Array]] = {}
+_bpref_device_panel_launch_counters: dict[tuple[int, int, str], int] = {}
+_bpref_device_panel_metadata: dict[tuple[int, int, str], dict[str, object]] = {}
+
+
+def set_bpref_contribution_dump_context(*, iteration: int, half: int) -> None:
+    """Set explicit one-based iteration/half labels for diagnostic row dumps."""
+
+    _bpref_contribution_context["iteration"] = int(iteration)
+    _bpref_contribution_context["half"] = int(half)
+
+
+def clear_bpref_contribution_dump_context() -> None:
+    """Mark contribution and native M-step dumps as outside a numbered half."""
+
+    _bpref_contribution_context["iteration"] = -1
+    _bpref_contribution_context["half"] = -1
 _noise_block_chunk_log_keys: set[tuple[int, int, int, int]] = set()
 _active_noise_gather_chunk_log_keys: set[tuple[int, int, int, int]] = set()
 _active_flat_gather_chunk_log_keys: set[tuple[str, int, int, int, int]] = set()
@@ -242,6 +265,156 @@ def _original_indices_for_local(experiment_dataset, local_indices) -> np.ndarray
     if original_indices_all is None:
         return local_indices
     return np.asarray(original_indices_all, dtype=np.int64)[local_indices]
+
+
+def _bpref_contribution_target_rows(experiment_dataset, image_indices) -> np.ndarray:
+    """Return bucket rows selected by the optional frozen original-index target."""
+
+    local_indices = np.asarray(image_indices, dtype=np.int64)
+    target_raw = os.environ.get(
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES",
+        "",
+    ).strip()
+    if not target_raw:
+        return np.arange(local_indices.size, dtype=np.int64)
+    targets = np.asarray(
+        [int(value.strip()) for value in target_raw.split(",") if value.strip()],
+        dtype=np.int64,
+    )
+    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    return np.flatnonzero(np.isin(original_indices, targets)).astype(np.int64, copy=False)
+
+
+def _guard_bpref_target_rotation_chunking(
+    rotation_chunk_size,
+    *,
+    bucket_size: int,
+    target_particle_rows,
+):
+    """Preserve live chunk planning and reject only a genuinely chunked target."""
+
+    target_count = int(np.asarray(target_particle_rows).size)
+    if (
+        target_count
+        and rotation_chunk_size is not None
+        and int(rotation_chunk_size) < int(bucket_size)
+    ):
+        raise RuntimeError(
+            "BPref device signature target bucket is rotation-chunked in the "
+            "authoritative production plan; capture refuses to change that plan "
+            f"(bucket_size={int(bucket_size)}, rotation_chunk_size={int(rotation_chunk_size)}, "
+            f"target_particles={target_count})"
+        )
+    return rotation_chunk_size
+
+
+def _bpref_image_identities_for_original_indices(original_indices: np.ndarray) -> np.ndarray:
+    """Return exact ``rlnImageName`` identities for diagnostic particles.
+
+    The explicit mapping is required for cross-engine diagnostics because a
+    local dataset row or original integer index is not, by itself, a stable
+    identity across STAR readers.  Object arrays are deliberately rejected so
+    the diagnostic never needs pickle.
+    """
+
+    mapping_path = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY", "").strip()
+    if not mapping_path:
+        raise RuntimeError(
+            "RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY is required when "
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR is enabled"
+        )
+    resolved = str(Path(mapping_path).expanduser().resolve())
+    identities = _bpref_image_identity_cache.get(resolved)
+    if identities is None:
+        identities = np.load(resolved, allow_pickle=False)
+        if identities.ndim != 1 or identities.dtype.kind not in {"U", "S"}:
+            raise ValueError(
+                "BPref image identity mapping must be a rank-1 fixed-width string NPY, "
+                f"got shape={identities.shape} dtype={identities.dtype}"
+            )
+        identities = identities.astype(str, copy=False)
+        _bpref_image_identity_cache[resolved] = identities
+    original_indices = np.asarray(original_indices, dtype=np.int64)
+    if original_indices.size and (
+        int(original_indices.min()) < 0 or int(original_indices.max()) >= identities.size
+    ):
+        raise IndexError(
+            "BPref original particle index is outside the explicit image identity mapping: "
+            f"range=[{int(original_indices.min())}, {int(original_indices.max())}] "
+            f"mapping_size={identities.size}"
+        )
+    selected = identities[original_indices]
+    if np.any(np.char.find(selected, "@") <= 0):
+        raise ValueError("Every BPref image identity must be an exact 1-based-index@stack-path string")
+    for identity in selected.tolist():
+        _, stack_path = identity.split("@", 1)
+        if not Path(stack_path).is_absolute():
+            raise ValueError(f"BPref image identity stack path must be absolute, got {identity!r}")
+    return selected
+
+
+def _bpref_required_stack_checksum() -> str:
+    checksum = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256", "").strip().lower()
+    if len(checksum) != 64 or any(char not in "0123456789abcdef" for char in checksum):
+        raise RuntimeError(
+            "RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256 must contain the frozen source stack SHA256"
+        )
+    return checksum
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def flush_bpref_device_panel_accumulator(*, iteration: int, half: int) -> None:
+    """Write and release the exact native panel accumulator for one half."""
+
+    dump_dir = os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
+    if not dump_dir:
+        return
+    run_id = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID", "unset")
+    key = (int(iteration), int(half), run_id)
+    accumulators = _bpref_device_panel_accumulators.pop(key, None)
+    launch_count = _bpref_device_panel_launch_counters.pop(key, 0)
+    metadata = _bpref_device_panel_metadata.pop(key, None)
+    if metadata is None:
+        raise RuntimeError(f"No RECOVAR device panel metadata exists for {key}")
+    if accumulators is None:
+        raise RuntimeError(f"No RECOVAR device panel accumulator exists for {key}")
+    data_accumulator, weight_accumulator = accumulators
+    output = Path(dump_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        output
+        / (
+            f"recovar_device_panel_native_it{int(iteration):03d}_h{int(half)}"
+            f"_rank{int(metadata['rank']):03d}.npz"
+        ),
+        magic=np.asarray("RECOVAR_DEVICE_PANEL_NATIVE"),
+        schema=np.asarray("recovar-device-panel-native-v1"),
+        schema_version=np.int32(1),
+        run_id=np.asarray(run_id),
+        iteration=np.int32(iteration),
+        half=np.int32(half),
+        rank=np.int32(metadata["rank"]),
+        launch_count=np.int64(launch_count),
+        current_size=np.int32(metadata["current_size"]),
+        max_r=np.float32(metadata["max_r"]),
+        image_shape=np.asarray(metadata["image_shape"], dtype=np.int32),
+        volume_shape=np.asarray(metadata["volume_shape"], dtype=np.int32),
+        reconstruction_padding_factor=np.int32(metadata["reconstruction_padding_factor"]),
+        source_stack_sha256=np.asarray(metadata["source_stack_sha256"]),
+        causal_arm=np.asarray(metadata["causal_arm"]),
+        winner_take_all=np.bool_(metadata["winner_take_all"]),
+        topology_claim=np.asarray("causal-arm-not-relion-hypothesis-arithmetic-closure"),
+        accumulator_field_legend=np.asarray("data=complex64 x-half;weight=float32 x-half;flat C order"),
+        data_accumulator=np.asarray(data_accumulator),
+        weight_accumulator=np.asarray(weight_accumulator),
+    )
 
 
 class SparseKClassPass2FusedResult(NamedTuple):
@@ -445,6 +618,11 @@ def _maybe_dump_native_half_mstep(
     dump_dir = os.environ.get("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_DIR")
     if not dump_dir:
         return
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    context_half = int(_bpref_contribution_context["half"])
+    target_iteration = os.environ.get("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_ITERATION")
+    if target_iteration and context_iteration != int(target_iteration):
+        return
 
     global _native_mstep_dump_counter
     dump_idx = _native_mstep_dump_counter
@@ -452,8 +630,18 @@ def _maybe_dump_native_half_mstep(
 
     path = Path(dump_dir)
     path.mkdir(parents=True, exist_ok=True)
+    run_id = os.environ.get("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_RUN_ID", "unset")
     np.savez_compressed(
-        path / f"native_half_mstep_{dump_idx:03d}_{stage}_n{int(n_images):04d}_cs{int(current_size):03d}.npz",
+        path
+        / (
+            f"native_half_mstep_it{context_iteration:03d}_h{context_half}"
+            f"_dump{dump_idx:03d}_{stage}_n{int(n_images):04d}_cs{int(current_size):03d}.npz"
+        ),
+        schema=np.asarray("recovar-native-half-mstep-v2"),
+        dump_index=np.int64(dump_idx),
+        iteration=np.int32(context_iteration),
+        half=np.int32(context_half),
+        run_id=np.asarray(run_id),
         Ft_y=np.asarray(Ft_y_total),
         Ft_ctf=np.asarray(Ft_ctf_total),
         current_size=np.int32(current_size),
@@ -461,6 +649,578 @@ def _maybe_dump_native_half_mstep(
         recon_volume_shape=np.asarray(recon_volume_shape, dtype=np.int32),
         stage=np.asarray(stage),
     )
+
+
+def _maybe_dump_bpref_contribution_rows(
+    *,
+    experiment_dataset,
+    image_indices,
+    current_size,
+    summed,
+    ctf_probs,
+    rotations,
+    actual_counts,
+    rotation_indices,
+    fine_translations,
+    scores,
+    preprior_scores,
+    probs,
+    rotation_log_prior,
+    translation_log_prior,
+    log_z,
+    best_log_score,
+    reconstruction_probs,
+    reconstruction_mask,
+    reconstruction_sum_weight,
+    reconstruction_threshold,
+    candidate_mask,
+    high_precision_operand_bundle,
+    raw_batch_data,
+    ctf_params,
+    noise_variance_half,
+    integer_pre_shifts,
+    batch_image_corrections,
+    batch_scale_corrections,
+    relion_preprocess_normalization_factors,
+    relion_cuda_preprocess,
+    score_with_masked_images,
+    image_mask,
+    image_mask_mode,
+    voxel_size,
+    ctf_mode,
+    ctf_dose_per_tilt,
+    ctf_angle_per_tilt,
+    disc_type,
+    projection_padding_factor,
+    reconstruction_padding_factor,
+    use_relion_x_half_mstep,
+    winner_take_all,
+    max_r,
+    window_indices,
+    image_shape,
+    volume_shape,
+    shadow_only_mode,
+    shadow_score_bitwise_equal,
+    shadow_reduction_agreement,
+    device_signature_active: bool | None = None,
+):
+    """Dump posterior-reduced active rows for whole-accumulator scatter replay.
+
+    This diagnostic boundary is immediately before the x-half backprojection.
+    Files retain bucket execution order, particle ownership, and every valid
+    rotation row, including exact-zero rows.  The companion device signature
+    limits only its signature-only output arrays to exact positive-weight
+    contributors; its native accumulator launch still receives every row.
+    Replaying every contribution file in counter order therefore permits a
+    streaming closure check without materializing one 3-D accumulator per
+    particle.
+    """
+
+    if (
+        os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
+        and device_signature_active is not True
+    ):
+        return
+    dump_dir = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR")
+    if not dump_dir:
+        return
+    global _bpref_contribution_call_counter
+    call_idx = _bpref_contribution_call_counter
+    _bpref_contribution_call_counter += 1
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    context_half = int(_bpref_contribution_context["half"])
+    target_iteration = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION")
+    if target_iteration and context_iteration != int(target_iteration):
+        return
+    target_half = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF")
+    if target_half:
+        if int(target_half) not in {1, 2}:
+            raise ValueError("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF must be 1 or 2")
+        if context_half != int(target_half):
+            return
+    target_current_size = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE")
+    if target_current_size:
+        if current_size is None or int(current_size) != int(target_current_size):
+            return
+
+    local_indices = np.asarray(image_indices, dtype=np.int64)
+    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    image_identities = _bpref_image_identities_for_original_indices(original_indices)
+    stack_sha256 = _bpref_required_stack_checksum()
+    selected_particle_rows = _bpref_contribution_target_rows(
+        experiment_dataset,
+        local_indices,
+    )
+    if os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES", "").strip():
+        if selected_particle_rows.size == 0:
+            return
+        local_indices = local_indices[selected_particle_rows]
+        original_indices = original_indices[selected_particle_rows]
+        image_identities = image_identities[selected_particle_rows]
+
+    def _select_particle_axis(values):
+        values_np = np.asarray(values)
+        if values_np.ndim > 0 and values_np.shape[0] == np.asarray(image_indices).size:
+            return values_np[selected_particle_rows]
+        return values_np
+
+    actual_counts_np = _select_particle_axis(actual_counts).astype(np.int64, copy=False)
+    summed_np = _select_particle_axis(summed)
+    ctf_probs_np = _select_particle_axis(ctf_probs)
+    rotations_np = _select_particle_axis(rotations)
+    if summed_np.shape[:2] != ctf_probs_np.shape[:2] or summed_np.shape[:2] != rotations_np.shape[:2]:
+        raise ValueError("BPref contribution dump requires matching particle/rotation axes")
+    if actual_counts_np.shape != (summed_np.shape[0],):
+        raise ValueError("BPref contribution dump actual_counts shape mismatch")
+
+    rotation_rows = np.arange(summed_np.shape[1], dtype=np.int64)[None, :]
+    valid = rotation_rows < actual_counts_np[:, None]
+    # Preserve every valid rotation row, including exact-zero rows.  A strict
+    # RELION/RECOVAR four-arm replay must distinguish a genuine support/value
+    # difference from a row silently omitted by the diagnostic writer.
+    active = valid
+    active_particle_rows, active_rotation_rows = np.nonzero(active)
+    rotation_indices_np = _select_particle_axis(rotation_indices).astype(np.int64, copy=False)
+    if rotation_indices_np.ndim == 1:
+        rotation_indices_np = np.broadcast_to(rotation_indices_np[None, :], summed_np.shape[:2])
+    if rotation_indices_np.shape[:2] != summed_np.shape[:2]:
+        raise ValueError("BPref contribution dump rotation_indices shape mismatch")
+
+    global _bpref_contribution_dump_counter
+    dump_idx = _bpref_contribution_dump_counter
+    _bpref_contribution_dump_counter += 1
+    path = Path(dump_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    run_id = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID", "unset")
+    stack_indices = np.asarray([int(value.split("@", 1)[0]) for value in image_identities], dtype=np.int64)
+    stack_paths = np.asarray([value.split("@", 1)[1] for value in image_identities])
+    if high_precision_operand_bundle:
+        raw_real_images = _select_particle_axis(raw_batch_data)
+        if np.iscomplexobj(raw_real_images):
+            raise ValueError("BPref raw source images must be real, not Fourier/complex samples")
+        expected_raw_shape = (raw_real_images.shape[0], int(image_shape[0]), int(image_shape[1]))
+        if raw_real_images.ndim == 2 and raw_real_images.shape[1] == int(np.prod(image_shape)):
+            raw_real_images = raw_real_images.reshape(expected_raw_shape)
+        if raw_real_images.shape != expected_raw_shape:
+            raise ValueError(
+                "BPref raw source images must have shape (B,H,W) before FFT/preprocessing, "
+                f"got {raw_real_images.shape}, expected {expected_raw_shape}"
+            )
+        raw_source_dtype = str(raw_real_images.dtype)
+        raw_real_images = raw_real_images.astype(np.float32, copy=False)
+        captured_ctf_params = _select_particle_axis(ctf_params)
+        captured_noise_variance_half = np.asarray(noise_variance_half)
+        captured_integer_pre_shifts = _select_particle_axis(integer_pre_shifts).astype(np.int32, copy=False)
+        captured_image_corrections = _select_particle_axis(batch_image_corrections).astype(
+            np.float32, copy=False
+        )
+        captured_scale_corrections = _select_particle_axis(batch_scale_corrections).astype(
+            np.float32, copy=False
+        )
+        captured_normalization_factors = _select_particle_axis(
+            relion_preprocess_normalization_factors
+        ).astype(np.float32, copy=False)
+        captured_image_mask = np.asarray(image_mask, dtype=np.float32)
+    else:
+        raw_real_images = np.empty((0,), dtype=np.float32)
+        raw_source_dtype = ""
+        captured_ctf_params = np.empty((0,), dtype=np.float32)
+        captured_noise_variance_half = np.empty((0,), dtype=np.float32)
+        captured_integer_pre_shifts = np.empty((0, 2), dtype=np.int32)
+        captured_image_corrections = np.empty((0,), dtype=np.float32)
+        captured_scale_corrections = np.empty((0,), dtype=np.float32)
+        captured_normalization_factors = np.empty((0,), dtype=np.float32)
+        captured_image_mask = np.empty((0,), dtype=np.float32)
+    rotation_log_prior_np = _select_particle_axis(rotation_log_prior).astype(np.float64, copy=False)
+    translation_log_prior_np = _select_particle_axis(translation_log_prior).astype(np.float64, copy=False)
+    combined_scores_np = _select_particle_axis(scores).astype(np.float64, copy=False)
+    preprior_scores_np = _select_particle_axis(preprior_scores).astype(np.float64, copy=False)
+    best_log_score_np = _select_particle_axis(best_log_score).astype(np.float64, copy=False)
+    log_z_np = _select_particle_axis(log_z).astype(np.float64, copy=False)
+    normalized_sum_exp = np.exp(log_z_np - best_log_score_np)
+    scores_f32 = combined_scores_np.astype(np.float32)
+    best_f32 = np.max(np.where(np.isfinite(scores_f32), scores_f32, -np.inf), axis=(1, 2))
+    exponent_shift_f32 = np.float32(50.0) - best_f32
+    shifted_f32 = scores_f32 + exponent_shift_f32[:, None, None]
+    raw_exp_weights_f32 = np.where(
+        np.isfinite(shifted_f32) & (shifted_f32 >= np.float32(-88.0)),
+        np.exp(shifted_f32, dtype=np.float32),
+        np.float32(0.0),
+    ).astype(np.float32, copy=False)
+    contribution_path = path / (
+            f"bpref_contribution_rows_it{context_iteration:03d}_h{context_half}"
+            f"_call{call_idx:06d}_dump{dump_idx:06d}_cs{int(current_size):03d}.npz"
+        )
+    np.savez(
+        contribution_path,
+        magic=np.asarray("RECOVAR_BPREF_CONTRIBUTION_ROWS"),
+        schema=np.asarray("recovar-bpref-contribution-rows-v3"),
+        schema_version=np.int32(3),
+        dump_index=np.int64(dump_idx),
+        call_index=np.int64(call_idx),
+        iteration=np.int32(context_iteration),
+        half=np.int32(context_half),
+        rank=np.int32(int(os.environ.get("RECOVAR_BPREF_CONTRIBUTION_RANK", "0"))),
+        pass_index=np.int32(2),
+        class_index=np.int32(1),
+        run_id=np.asarray(run_id),
+        current_size=np.int64(current_size),
+        image_shape=np.asarray(image_shape, dtype=np.int32),
+        volume_shape=np.asarray(volume_shape, dtype=np.int32),
+        window_indices=np.asarray(window_indices, dtype=np.int32),
+        local_indices=local_indices,
+        original_indices=original_indices,
+        star_rows=original_indices,
+        image_identities=image_identities,
+        stack_indices_1based=stack_indices,
+        resolved_stack_paths=stack_paths,
+        source_stack_sha256=np.asarray(stack_sha256),
+        shadow_only_mode=np.bool_(shadow_only_mode),
+        shadow_score_bitwise_equal=np.bool_(shadow_score_bitwise_equal),
+        shadow_reduction_data_rel_l1=np.float64(
+            np.nan if shadow_reduction_agreement is None
+            else shadow_reduction_agreement["data_rel_l1"]
+        ),
+        shadow_reduction_data_normalized_max=np.float64(
+            np.nan if shadow_reduction_agreement is None
+            else shadow_reduction_agreement["data_normalized_max"]
+        ),
+        shadow_reduction_weight_rel_l1=np.float64(
+            np.nan if shadow_reduction_agreement is None
+            else shadow_reduction_agreement["weight_rel_l1"]
+        ),
+        shadow_reduction_weight_normalized_max=np.float64(
+            np.nan if shadow_reduction_agreement is None
+            else shadow_reduction_agreement["weight_normalized_max"]
+        ),
+        shadow_reduction_rel_l1_bound=np.float64(
+            np.nan if shadow_reduction_agreement is None
+            else shadow_reduction_agreement["rel_l1_bound"]
+        ),
+        shadow_reduction_normalized_max_bound=np.float64(
+            np.nan if shadow_reduction_agreement is None
+            else shadow_reduction_agreement["normalized_max_bound"]
+        ),
+        high_precision_operand_bundle=np.bool_(high_precision_operand_bundle),
+        raw_real_images=raw_real_images,
+        raw_source_dtype=np.asarray(raw_source_dtype),
+        raw_source_shape=np.asarray(raw_real_images.shape, dtype=np.int64),
+        ctf_params=captured_ctf_params,
+        ctf_parameter_convention=np.asarray(
+            "recovar.CTFParamIndex-v1:DFU[A],DFV[A],DFANG[deg],VOLT[kV],CS[mm],"
+            "W[amplitude_fraction],PHASE_SHIFT[deg],BFACTOR[A^2],CONTRAST,DOSE[e-/A^2],TILT_ANGLE[deg]"
+        ),
+        noise_variance_half=captured_noise_variance_half,
+        integer_pre_shifts=captured_integer_pre_shifts,
+        image_corrections=captured_image_corrections,
+        scale_corrections=captured_scale_corrections,
+        relion_preprocess_normalization_factors=captured_normalization_factors,
+        relion_cuda_preprocess=np.bool_(relion_cuda_preprocess),
+        preprocess_backend=np.asarray("relion_cuda" if relion_cuda_preprocess else "dataset_native"),
+        preprocess_convention=np.asarray("recovar-half-preprocess-v1"),
+        score_with_masked_images=np.bool_(score_with_masked_images),
+        image_mask=captured_image_mask,
+        image_mask_mode=np.asarray(image_mask_mode),
+        voxel_size=np.float64(voxel_size),
+        ctf_mode=np.asarray(ctf_mode),
+        ctf_dose_per_tilt=np.float64(ctf_dose_per_tilt),
+        ctf_angle_per_tilt=np.float64(ctf_angle_per_tilt),
+        disc_type=np.asarray(disc_type),
+        projection_padding_factor=np.int32(projection_padding_factor),
+        reconstruction_padding_factor=np.int32(reconstruction_padding_factor),
+        actual_counts=actual_counts_np,
+        oversampled_rotation_indices=rotation_indices_np,
+        fine_translations=np.asarray(fine_translations, dtype=np.float32),
+        candidate_preprior_scores=preprior_scores_np,
+        candidate_rotation_log_prior=rotation_log_prior_np,
+        candidate_translation_log_prior=translation_log_prior_np,
+        candidate_combined_scores=combined_scores_np,
+        candidate_best_log_score=best_log_score_np,
+        candidate_log_z=log_z_np,
+        candidate_normalized_sum_exp=normalized_sum_exp,
+        candidate_exponent_shift_f32=exponent_shift_f32,
+        candidate_raw_exp_weights_f32=raw_exp_weights_f32,
+        posterior_probs=_select_particle_axis(probs).astype(np.float64, copy=False),
+        reconstruction_probs=_select_particle_axis(reconstruction_probs).astype(np.float64, copy=False),
+        reconstruction_mask=_select_particle_axis(reconstruction_mask).astype(bool, copy=False),
+        reconstruction_sum_weight=_select_particle_axis(reconstruction_sum_weight).astype(np.float64, copy=False),
+        reconstruction_threshold=_select_particle_axis(reconstruction_threshold).astype(np.float64, copy=False),
+        candidate_mask=_select_particle_axis(candidate_mask).astype(bool, copy=False),
+        active_particle_rows=active_particle_rows.astype(np.int32, copy=False),
+        active_rotation_rows=active_rotation_rows.astype(np.int32, copy=False),
+        active_original_indices=original_indices[active_particle_rows],
+        active_global_rotation_indices=rotation_indices_np[active_particle_rows, active_rotation_rows],
+        active_summed=summed_np[active_particle_rows, active_rotation_rows],
+        active_ctf_probs=ctf_probs_np[active_particle_rows, active_rotation_rows],
+        active_rotations=rotations_np[active_particle_rows, active_rotation_rows],
+    )
+
+    device_dump_dir = os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
+    if device_dump_dir:
+        from recovar import cuda_backproject
+
+        _require_bpref_device_soft_particle_arm(
+            use_relion_x_half_mstep=bool(use_relion_x_half_mstep),
+        )
+        if max_r is None:
+            raise RuntimeError("RECOVAR device signature requires the explicit production support radius")
+        if context_iteration <= 0 or context_half not in {1, 2}:
+            raise RuntimeError("RECOVAR device signature requires explicit positive iteration/half context")
+        accumulator_key = (context_iteration, context_half, run_id)
+        accumulators = _bpref_device_panel_accumulators.get(accumulator_key)
+        accumulator_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+        if accumulators is None:
+            accumulators = (
+                jnp.zeros((accumulator_size,), dtype=jnp.complex64),
+                jnp.zeros((accumulator_size,), dtype=jnp.float32),
+            )
+        launch_ordinal = _bpref_device_panel_launch_counters.get(accumulator_key, 0)
+        signature_chunks = [[] for _ in range(7)]
+        signature_launch_ordinals = []
+        signature_particle_local_rows = []
+        signature_image_identities = []
+        signature_original_indices = []
+        signature_contributor_rotation_keys = []
+        particle_launch_ordinals = []
+        particle_total_row_counts = []
+        particle_contributor_row_counts = []
+        particle_noncontributor_row_counts = []
+        particle_noncontributor_zero_sha256 = []
+        particle_image_identities = []
+        particle_original_indices = []
+        # Production uses one stream-ordered CUDA launch per particle.  Keep
+        # those launch boundaries exact; flattening several particles into one
+        # grid changes inter-particle atomic scheduling.
+        for particle_row in range(summed_np.shape[0]):
+            row_count = int(actual_counts_np[particle_row])
+            if row_count <= 0:
+                continue
+            particle_rotation_keys = np.asarray(rotation_indices_np[particle_row, :row_count], dtype=np.int64)
+            if particle_rotation_keys.size and (
+                int(particle_rotation_keys.min()) < np.iinfo(np.int32).min
+                or int(particle_rotation_keys.max()) > np.iinfo(np.int32).max
+            ):
+                raise OverflowError("RECOVAR canonical rotation key exceeds device int32 range")
+            particle_summed = np.asarray(summed_np[particle_row, :row_count], dtype=np.complex64)
+            particle_weights = np.asarray(ctf_probs_np[particle_row, :row_count], dtype=np.float32)
+            if not np.all(np.isfinite(particle_summed)) or not np.all(np.isfinite(particle_weights)):
+                raise RuntimeError("RECOVAR soft-particle causal arm encountered a nonfinite scatter operand")
+            if np.any(particle_weights < 0):
+                raise RuntimeError("RECOVAR soft-particle causal arm encountered a negative scatter weight")
+            contributor_rows = np.flatnonzero(np.any(particle_weights > 0, axis=1)).astype(
+                np.int32, copy=False
+            )
+            noncontributor_mask = np.ones(row_count, dtype=bool)
+            noncontributor_mask[contributor_rows] = False
+            noncontributor_summed = np.ascontiguousarray(particle_summed[noncontributor_mask])
+            noncontributor_weights = np.ascontiguousarray(particle_weights[noncontributor_mask])
+            noncontributor_rows = np.flatnonzero(noncontributor_mask).astype(np.int32, copy=False)
+            noncontributor_rotation_keys = particle_rotation_keys[noncontributor_mask].astype(
+                np.int32, copy=False
+            )
+            if np.any(noncontributor_summed != 0) or np.any(noncontributor_weights != 0):
+                raise RuntimeError(
+                    "RECOVAR device signature requires every omitted signature row to be exactly zero"
+                )
+            zero_digest = hashlib.sha256()
+            zero_digest.update(noncontributor_rows.tobytes(order="C"))
+            zero_digest.update(noncontributor_rotation_keys.tobytes(order="C"))
+            zero_digest.update(str(noncontributor_summed.dtype).encode("ascii"))
+            zero_digest.update(np.asarray(noncontributor_summed.shape, dtype=np.int64).tobytes())
+            zero_digest.update(noncontributor_summed.tobytes(order="C"))
+            zero_digest.update(str(noncontributor_weights.dtype).encode("ascii"))
+            zero_digest.update(np.asarray(noncontributor_weights.shape, dtype=np.int64).tobytes())
+            zero_digest.update(noncontributor_weights.tobytes(order="C"))
+
+            ffi_args = (
+                accumulators[0],
+                accumulators[1],
+                jnp.asarray(particle_summed, dtype=jnp.complex64),
+                jnp.asarray(particle_weights, dtype=jnp.float32),
+                jnp.asarray(window_indices, dtype=jnp.int32),
+                jnp.asarray(rotations_np[particle_row, :row_count], dtype=jnp.float32),
+            )
+            if contributor_rows.size:
+                signature_outputs = cuda_backproject.relion_fused_x_half_backproject_signature_indexed(
+                    *ffi_args,
+                    jnp.asarray(particle_rotation_keys, dtype=jnp.int32),
+                    jnp.asarray(contributor_rows, dtype=jnp.int32),
+                    tuple(int(value) for value in image_shape),
+                    tuple(int(value) for value in volume_shape),
+                    float(max_r),
+                )
+                accumulators = signature_outputs[:2]
+                for output_index, output in enumerate(signature_outputs[2:]):
+                    signature_chunks[output_index].append(np.asarray(output))
+                signature_launch_ordinals.append(
+                    np.full(contributor_rows.size, launch_ordinal, dtype=np.int64)
+                )
+                signature_particle_local_rows.append(contributor_rows)
+                signature_image_identities.append(
+                    np.full(contributor_rows.size, image_identities[particle_row])
+                )
+                signature_original_indices.append(
+                    np.full(contributor_rows.size, original_indices[particle_row], dtype=np.int64)
+                )
+                signature_contributor_rotation_keys.append(
+                    particle_rotation_keys[contributor_rows].astype(np.int32, copy=False)
+                )
+            else:
+                # Preserve the native all-row launch even when no row passes
+                # its Fweight>0 gate; only the signature-only launch is absent.
+                accumulators = cuda_backproject.relion_fused_x_half_backproject_indexed(
+                    *ffi_args,
+                    tuple(int(value) for value in image_shape),
+                    tuple(int(value) for value in volume_shape),
+                    float(max_r),
+                )
+            particle_launch_ordinals.append(launch_ordinal)
+            particle_total_row_counts.append(row_count)
+            particle_contributor_row_counts.append(int(contributor_rows.size))
+            particle_noncontributor_row_counts.append(int(row_count - contributor_rows.size))
+            particle_noncontributor_zero_sha256.append(zero_digest.hexdigest())
+            particle_image_identities.append(image_identities[particle_row])
+            particle_original_indices.append(original_indices[particle_row])
+            launch_ordinal += 1
+        if not particle_launch_ordinals:
+            raise RuntimeError("RECOVAR device signature selected no particle launches")
+        if not signature_chunks[0]:
+            raise RuntimeError("RECOVAR device signature panel has no positive contributor rows")
+        _bpref_device_panel_accumulators[accumulator_key] = accumulators
+        _bpref_device_panel_launch_counters[accumulator_key] = launch_ordinal
+        metadata = {
+            "current_size": int(current_size),
+            "max_r": float(max_r),
+            "image_shape": tuple(int(value) for value in image_shape),
+            "volume_shape": tuple(int(value) for value in volume_shape),
+            "reconstruction_padding_factor": int(reconstruction_padding_factor),
+            "source_stack_sha256": stack_sha256,
+            "rank": int(os.environ.get("RECOVAR_BPREF_CONTRIBUTION_RANK", "0")),
+            "causal_arm": (
+                "winner-take-all-per-particle-fused-xhalf"
+                if winner_take_all
+                else "soft-posterior-per-particle-fused-xhalf"
+            ),
+            "winner_take_all": bool(winner_take_all),
+        }
+        previous_metadata = _bpref_device_panel_metadata.setdefault(accumulator_key, metadata)
+        if previous_metadata != metadata:
+            raise RuntimeError("RECOVAR device panel metadata changed within one half")
+        dense_height = 2 * int(round(float(max_r)))
+        dense_pixel_count = dense_height * (dense_height // 2 + 1)
+        if signature_chunks[0]:
+            (
+                signature_rotation_keys,
+                signature_pixel_indices,
+                signature_row_flags,
+                signature_source_values,
+                signature_neighbor_indices,
+                signature_neighbor_coefficients,
+                signature_neighbor_flags,
+            ) = (np.concatenate(chunks, axis=0) for chunks in signature_chunks)
+            signature_launch_ordinals = np.concatenate(signature_launch_ordinals)
+            signature_particle_local_rows = np.concatenate(signature_particle_local_rows)
+            signature_image_identities = np.concatenate(signature_image_identities)
+            signature_original_indices = np.concatenate(signature_original_indices)
+            signature_contributor_rotation_keys = np.concatenate(signature_contributor_rotation_keys)
+        device_path = Path(device_dump_dir)
+        device_path.mkdir(parents=True, exist_ok=True)
+        contribution_sha256 = _sha256_file(contribution_path)
+        np.savez(
+            device_path / f"{contribution_path.stem}.device.npz",
+            magic=np.asarray("RECOVAR_DEVICE_SCATTER_SIGNATURE"),
+            schema=np.asarray("recovar-device-scatter-signature-v1"),
+            schema_version=np.int32(1),
+            run_id=np.asarray(run_id),
+            iteration=np.int32(context_iteration),
+            half=np.int32(context_half),
+            rank=np.int32(int(os.environ.get("RECOVAR_BPREF_CONTRIBUTION_RANK", "0"))),
+            pass_index=np.int32(2),
+            class_index=np.int32(1),
+            call_index=np.int64(call_idx),
+            dump_index=np.int64(dump_idx),
+            source_stack_sha256=np.asarray(stack_sha256),
+            companion_contribution_path=np.asarray(str(contribution_path.resolve())),
+            companion_contribution_sha256=np.asarray(contribution_sha256),
+            image_shape=np.asarray(image_shape, dtype=np.int32),
+            volume_shape=np.asarray(volume_shape, dtype=np.int32),
+            current_size=np.int32(current_size),
+            max_r=np.float32(max_r),
+            causal_arm=np.asarray(
+                "winner-take-all-per-particle-fused-xhalf"
+                if winner_take_all
+                else "soft-posterior-per-particle-fused-xhalf"
+            ),
+            winner_take_all=np.bool_(winner_take_all),
+            topology_claim=np.asarray("causal-arm-not-relion-hypothesis-arithmetic-closure"),
+            signature_inertness_gate=np.asarray(
+                "bitwise-post-accum-shadow-and-operand-exact"
+            ),
+            signature_inertness_gate_passed=np.bool_(True),
+            signature_accumulator_shadow_bitwise_equal=np.bool_(True),
+            signature_prepared_operands_bitwise_equal=np.bool_(True),
+            signature_kernel_accumulate=np.bool_(False),
+            reconstruction_padding_factor=np.int32(reconstruction_padding_factor),
+            particle_launch_ordinals=np.asarray(particle_launch_ordinals, dtype=np.int64),
+            particle_total_row_counts=np.asarray(particle_total_row_counts, dtype=np.int32),
+            particle_contributor_row_counts=np.asarray(
+                particle_contributor_row_counts, dtype=np.int32
+            ),
+            particle_noncontributor_row_counts=np.asarray(
+                particle_noncontributor_row_counts, dtype=np.int32
+            ),
+            particle_noncontributor_exact_zero=np.ones(
+                len(particle_launch_ordinals), dtype=bool
+            ),
+            particle_noncontributor_zero_sha256=np.asarray(
+                particle_noncontributor_zero_sha256
+            ),
+            particle_image_identities=np.asarray(particle_image_identities),
+            particle_original_indices=np.asarray(particle_original_indices, dtype=np.int64),
+            signature_bytes_per_dense_row_pixel=np.int32(132),
+            signature_estimated_uncompressed_bytes=np.int64(
+                int(signature_contributor_rotation_keys.size) * dense_pixel_count * 132
+            ),
+            launch_ordinal=signature_launch_ordinals,
+            particle_local_row=signature_particle_local_rows,
+            image_identity=signature_image_identities,
+            original_indices=signature_original_indices,
+            contributor_canonical_rotation_keys=signature_contributor_rotation_keys,
+            canonical_rotation_keys=signature_rotation_keys,
+            canonical_pixel_indices=signature_pixel_indices,
+            row_flags=signature_row_flags,
+            source_values=signature_source_values,
+            neighbor_indices=signature_neighbor_indices,
+            neighbor_coefficients=signature_neighbor_coefficients,
+            neighbor_flags=signature_neighbor_flags,
+            program_row=signature_particle_local_rows,
+            program_lane=np.arange(dense_pixel_count, dtype=np.int32) % np.int32(128),
+            program_serial_pass=np.arange(dense_pixel_count, dtype=np.int32) // np.int32(128),
+            program_neighbor=np.arange(8, dtype=np.int32),
+            program_axis_sizes=np.asarray(
+                [
+                    int(signature_contributor_rotation_keys.size),
+                    dense_pixel_count,
+                    8,
+                ],
+                dtype=np.int64,
+            ),
+            signature_tensor_axis_legend=np.asarray(
+                "row-major [contributor_row,dense_pixel,neighbor]; program_row is the "
+                "particle-local source rotation row; lane=dense_pixel%128; "
+                "serial_pass=dense_pixel//128; neighbor=d0*4+d1*2+d2"
+            ),
+            atomic_component_program_order_legend=np.asarray(
+                "for each valid neighbor: atomicAdd(data_real), then atomicAdd(data_imag), "
+                "then atomicAdd(weight)"
+            ),
+            row_flag_legend=np.asarray(
+                "1=redundant-x0;2=2d-radius;4=nonpositive-weight;8=3d-radius;"
+                "16=orientation-fold;32=compact-oob;64=reached-scatter"
+            ),
+            neighbor_flag_legend=np.asarray("1=valid;2=hermitian-fold;4=nyquist;8=oob"),
+            source_value_legend=np.asarray("data_re,data_im,Fweight,rk0,rk1,rk2 (pre-orientation-fold)"),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2951,6 +3711,154 @@ def relion_x_half_bp_fused_atomics_enabled() -> bool:
     return _env_flag_enabled(_RELION_X_HALF_BP_FUSED_ATOMICS_ENV, default=False)
 
 
+def _scoped_bpref_diagnostic_flags(*, active: bool) -> dict[str, bool]:
+    """Resolve process flags against an explicit device-capture boundary."""
+
+    device_signature_configured = bool(
+        os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
+    )
+    scope_active = bool(active or not device_signature_configured)
+    return {
+        "device_signature_configured": device_signature_configured,
+        "sequential_translation_reduction": bool(
+            scope_active and relion_x_half_sequential_translation_reduction_enabled()
+        ),
+        "per_particle_launches": bool(
+            scope_active and relion_x_half_bp_per_particle_launch_enabled()
+        ),
+        "fused_atomics": bool(
+            scope_active and relion_x_half_bp_fused_atomics_enabled()
+        ),
+        "high_precision_operand_bundle": bool(
+            scope_active
+            and _env_flag_enabled(
+                "RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE",
+                default=False,
+            )
+        ),
+    }
+
+
+def _resolve_bpref_execution_modes(
+    scoped_diagnostic_flags: dict[str, bool],
+    *,
+    device_signature_requested: bool,
+) -> dict[str, bool]:
+    """Separate requested diagnostic shadows from authoritative live modes."""
+
+    shadow_only = bool(device_signature_requested)
+    diagnostic_sequential = bool(scoped_diagnostic_flags["sequential_translation_reduction"])
+    diagnostic_per_particle = bool(scoped_diagnostic_flags["per_particle_launches"])
+    return {
+        "shadow_only": shadow_only,
+        "diagnostic_sequential_translation_reduction": diagnostic_sequential,
+        "diagnostic_per_particle_launches": diagnostic_per_particle,
+        "live_sequential_translation_reduction": bool(diagnostic_sequential and not shadow_only),
+        "live_per_particle_launches": bool(diagnostic_per_particle and not shadow_only),
+    }
+
+
+def _require_bpref_shadow_exact(label: str, authoritative, shadow) -> None:
+    """Fail closed unless a target-only shadow exactly matches live output."""
+
+    authoritative_np = np.asarray(authoritative)
+    shadow_np = np.asarray(shadow)
+    if authoritative_np.shape != shadow_np.shape or authoritative_np.dtype != shadow_np.dtype:
+        raise RuntimeError(
+            f"BPref {label} shadow shape/dtype mismatch: "
+            f"{authoritative_np.shape}/{authoritative_np.dtype} vs "
+            f"{shadow_np.shape}/{shadow_np.dtype}"
+        )
+    if not np.array_equal(authoritative_np, shadow_np):
+        mismatch_count = int(np.count_nonzero(authoritative_np != shadow_np))
+        raise RuntimeError(
+            f"BPref {label} shadow is not bitwise equal to the authoritative path "
+            f"({mismatch_count}/{authoritative_np.size} elements differ)"
+        )
+
+
+def _require_bpref_reduction_shadow_agreement(
+    authoritative_summed,
+    authoritative_weights,
+    shadow_summed,
+    shadow_weights,
+    *,
+    rel_l1_bound: float = 1e-3,
+    normalized_max_bound: float = 1e-3,
+) -> dict[str, float]:
+    """Gate the sequential-f32 diagnostic rows against ordinary live rows."""
+
+    metrics: dict[str, float] = {}
+    for label, authoritative, shadow in (
+        ("data", authoritative_summed, shadow_summed),
+        ("weight", authoritative_weights, shadow_weights),
+    ):
+        authoritative_np = np.asarray(authoritative)
+        shadow_np = np.asarray(shadow)
+        if authoritative_np.shape != shadow_np.shape:
+            raise RuntimeError(
+                f"BPref {label} reduction shadow shape mismatch: "
+                f"{authoritative_np.shape} vs {shadow_np.shape}"
+            )
+        metric_dtype = np.complex128 if (
+            np.iscomplexobj(authoritative_np) or np.iscomplexobj(shadow_np)
+        ) else np.float64
+        authoritative_metric = authoritative_np.astype(metric_dtype, copy=False)
+        shadow_metric = shadow_np.astype(metric_dtype, copy=False)
+        if not np.all(np.isfinite(authoritative_metric)) or not np.all(np.isfinite(shadow_metric)):
+            raise RuntimeError(f"BPref {label} reduction shadow contains nonfinite values")
+        difference = np.abs(authoritative_metric - shadow_metric)
+        scale_l1 = max(float(np.sum(np.abs(authoritative_metric))), np.finfo(np.float64).tiny)
+        scale_max = max(float(np.max(np.abs(authoritative_metric), initial=0.0)), np.finfo(np.float64).tiny)
+        rel_l1 = float(np.sum(difference) / scale_l1)
+        normalized_max = float(np.max(difference, initial=0.0) / scale_max)
+        metrics[f"{label}_rel_l1"] = rel_l1
+        metrics[f"{label}_normalized_max"] = normalized_max
+        if rel_l1 > rel_l1_bound or normalized_max > normalized_max_bound:
+            raise RuntimeError(
+                f"BPref {label} reduction shadow exceeds the ordinary-path envelope: "
+                f"rel_l1={rel_l1:.6g} (bound={rel_l1_bound:.6g}), "
+                f"normalized_max={normalized_max:.6g} "
+                f"(bound={normalized_max_bound:.6g})"
+            )
+    metrics["rel_l1_bound"] = float(rel_l1_bound)
+    metrics["normalized_max_bound"] = float(normalized_max_bound)
+    return metrics
+
+
+def _require_bpref_device_soft_particle_arm(*, use_relion_x_half_mstep: bool) -> None:
+    """Fail closed unless capture shares the explicit soft-particle causal arm.
+
+    This arm is deliberately not called baseline production parity: RECOVAR
+    first reduces translations into one row per orientation, whereas RELION may
+    scatter orientation-by-translation hypotheses.  It is useful only as a
+    controlled causal arm, with ordinary-vs-arm and plain-vs-instrumented
+    controls recorded separately.
+    """
+
+    if not use_relion_x_half_mstep:
+        raise RuntimeError("RECOVAR device signature requires the RELION x-half M-step")
+    if not relion_x_half_bp_per_particle_launch_enabled():
+        raise RuntimeError(
+            "RECOVAR device signature requires RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH=1"
+        )
+    if not relion_x_half_sequential_translation_reduction_enabled():
+        raise RuntimeError(
+            "RECOVAR device signature requires "
+            "RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION=1"
+        )
+    if not relion_x_half_bp_fused_atomics_enabled():
+        raise RuntimeError(
+            "RECOVAR device signature requires RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS=1"
+        )
+    from recovar import cuda_backproject
+
+    if not cuda_backproject.relion_x_half_bp_block_topology_requested():
+        raise RuntimeError(
+            "RECOVAR device signature requires RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY=1"
+        )
+
+
 def _accumulate_relion_x_half_per_particle_launches(
     values,
     ctf_values,
@@ -2966,16 +3874,23 @@ def _accumulate_relion_x_half_per_particle_launches(
     half_volume,
     max_r,
     log_label_prefix: str,
+    winner_take_all: bool = False,
 ):
     """Accumulate one particle-owned orientation grid per FFI launch.
 
-    This matches RELION's particle launch boundary and preserves the local
-    orientation order. The optional fused-atomics diagnostic interleaves each
-    neighbor's real, imaginary, and weight atomics in one kernel. Translation
-    reduction remains outside CUDA in both modes.
+    This preserves a RELION-like particle launch boundary and local orientation
+    order.  In soft-posterior mode it remains a causal arm rather than strict
+    RELION closure because RECOVAR reduces translations before this boundary.
+    The optional fused-atomics diagnostic interleaves each neighbor's real,
+    imaginary, and weight atomics in one kernel.
     """
 
     use_fused_atomics = relion_x_half_bp_fused_atomics_enabled()
+    if not winner_take_all:
+        logger.warning(
+            "RECOVAR soft-posterior per-particle x-half causal arm enabled; "
+            "this does not claim RELION hypothesis-arithmetic closure"
+        )
     if use_fused_atomics:
         import recovar.cuda_backproject as cuda_backproject
 
@@ -3569,6 +4484,53 @@ def _build_k_class_bucket_arrays(
 # ---------------------------------------------------------------------------
 # Scoring + normalization (per-bucket, supports (B, R, T) mask)
 # ---------------------------------------------------------------------------
+
+
+@jax.jit
+def _score_pass2_bucket_relion_gpu_diff2_components(
+    shifted_corrected,  # (B, T, N) complex, image operand divided by score weight factors
+    corr_img_score,  # (B, N) real, Gaussian projection-norm score weight
+    proj_half,  # (B, R, N) complex
+    half_weights,  # (N,) real
+    rotation_log_prior,  # (B, R) real
+    translation_log_prior,  # (B, T) real
+    candidate_mask,  # (B, R, T) bool
+):
+    """RELION GPU-style direct ``diff2`` scoring for pass-2 diagnostics.
+
+    RELION's CUDA fine-search kernel first corrects the image by the same
+    scalar factors carried by the projection-norm weight, then accumulates a
+    direct ``|Fref - Fimg_corrected_shift|^2 * corr_img`` form.  This is
+    algebraically equivalent to the dense cross-minus-norm expression but has
+    different float32 rounding.  We remove the image-only constant so the
+    existing relative-score/log-evidence contract is unchanged.
+
+    Extremely small CTF/noise combinations can still overflow the direct form
+    on long 256px runs.  Treat non-finite candidates as impossible hypotheses
+    rather than letting NaNs enter posterior and noise accumulators.
+    """
+
+    weights = corr_img_score * half_weights[None, :]
+    cross = jnp.einsum(
+        "btn,bn,brn->brt",
+        jnp.conj(shifted_corrected),
+        weights,
+        proj_half,
+        precision=jax.lax.Precision.HIGHEST,
+    ).real
+    proj_abs2 = proj_half.real * proj_half.real + proj_half.imag * proj_half.imag
+    proj_norm = 0.5 * jnp.einsum(
+        "bn,brn->br",
+        weights,
+        proj_abs2,
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    preprior_scores = cross - proj_norm[:, :, None]
+    scores = preprior_scores + rotation_log_prior[:, :, None] + translation_log_prior[:, None, :]
+    scores = jnp.where(candidate_mask, scores, -jnp.inf)
+    scores = jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
+    preprior_scores = jnp.where(candidate_mask & jnp.isfinite(preprior_scores), preprior_scores, -jnp.inf)
+    return scores, preprior_scores
 
 
 @jax.jit
@@ -4953,6 +5915,7 @@ def _relion_pass2_reconstruction_probs_for_mstep(
     adaptive_fraction: float,
     use_relion_x_half_mstep: bool,
     winner_take_all: bool = False,
+    return_diagnostics: bool = False,
 ):
     """Select the default or diagnostic fine-posterior reconstruction path."""
 
@@ -4961,17 +5924,29 @@ def _relion_pass2_reconstruction_probs_for_mstep(
         and not winner_take_all
         and relion_x_half_f32_fine_posterior_enabled()
     ):
-        reconstruction_probs, mask, n_significant, _sum_weight, _threshold = (
+        reconstruction_probs, mask, n_significant, sum_weight, threshold = (
             _relion_f32_fine_reconstruction_probs(
                 scores,
                 adaptive_fraction=float(adaptive_fraction),
             )
         )
+        if return_diagnostics:
+            return reconstruction_probs, mask, n_significant, sum_weight, threshold
         return reconstruction_probs, mask, n_significant
-    return _relion_pass2_reconstruction_probs(
+    reconstruction_probs, mask, n_significant = _relion_pass2_reconstruction_probs(
         probs,
         adaptive_fraction=float(adaptive_fraction),
     )
+    if not return_diagnostics:
+        return reconstruction_probs, mask, n_significant
+    flat_probs = jnp.asarray(probs, dtype=jnp.float64).reshape(probs.shape[0], -1)
+    sum_weight = jnp.sum(flat_probs, axis=1, dtype=jnp.float64)
+    threshold = jnp.min(
+        jnp.where(mask.reshape(mask.shape[0], -1), flat_probs, jnp.inf),
+        axis=1,
+    )
+    threshold = jnp.where(jnp.isfinite(threshold), threshold, 0.0)
+    return reconstruction_probs, mask, n_significant, sum_weight, threshold
 
 
 def _relion_pass2_reconstruction_pair_probs(pair_probs, pair_mask, *, adaptive_fraction: float):
@@ -5708,11 +6683,51 @@ def compute_pass2_stats_sparse_bucketed(
     relion_projector_half=None,
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
+    bpref_device_signature_active: bool = False,
 ):
     """Bucketed batched implementation of sparse pass-2 oversampling.
 
     Returns the same tuple as ``compute_pass2_stats_sparse``.
     """
+    device_signature_configured = bool(
+        os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
+    )
+    device_signature_requested = bool(
+        device_signature_configured and bpref_device_signature_active
+    )
+    contribution_diagnostics_active = bool(
+        os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "").strip()
+        and (bpref_device_signature_active or not device_signature_configured)
+    )
+    scoped_diagnostic_flags = _scoped_bpref_diagnostic_flags(
+        active=bpref_device_signature_active
+    )
+    execution_modes = _resolve_bpref_execution_modes(
+        scoped_diagnostic_flags,
+        device_signature_requested=device_signature_requested,
+    )
+    diagnostic_sequential_translation_reduction = execution_modes[
+        "diagnostic_sequential_translation_reduction"
+    ]
+    diagnostic_per_particle_launches = execution_modes["diagnostic_per_particle_launches"]
+    fused_atomics_requested = scoped_diagnostic_flags["fused_atomics"]
+    shadow_only_mode = execution_modes["shadow_only"]
+    # A scoped device capture is observational: ordinary score/reduction/
+    # adjoint outputs remain authoritative and the requested RELION-order
+    # variants execute only as checked diagnostic shadows.
+    use_sequential_translation_reduction = execution_modes[
+        "live_sequential_translation_reduction"
+    ]
+    use_per_particle_launches = execution_modes["live_per_particle_launches"]
+    if device_signature_requested:
+        if not os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR"):
+            raise RuntimeError(
+                "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR requires "
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR"
+            )
+        _require_bpref_device_soft_particle_arm(
+            use_relion_x_half_mstep=bool(relion_x_half_mstep),
+        )
     from recovar.em.sampling import (
         get_oversampled_translation_grid,
         rotation_grid_size,
@@ -6053,10 +7068,11 @@ def compute_pass2_stats_sparse_bucketed(
         "Sparse pass-2 M-step: using %s backprojection",
         mstep_layout_label,
     )
-    if use_relion_x_half_mstep and relion_x_half_sequential_translation_reduction_enabled():
+    if use_relion_x_half_mstep and diagnostic_sequential_translation_reduction:
         logger.info(
-            "Sparse pass-2 RELION x-half M-step diagnostic: using sequential float32 "
-            "translation reduction"
+            "Sparse pass-2 RELION x-half M-step diagnostic: sequential float32 "
+            "translation reduction runs as %s",
+            "a checked shadow" if shadow_only_mode else "the standalone diagnostic path",
         )
     if use_relion_f32_fine_posterior:
         logger.info(
@@ -6503,6 +7519,51 @@ def compute_pass2_stats_sparse_bucketed(
         else:
             bucket_translation_prior = jnp.asarray(fine_translation_prior_2d[image_indices], dtype=jnp.float32)
 
+        contribution_preprocess_operands = None
+        high_precision_operand_bundle = scoped_diagnostic_flags[
+            "high_precision_operand_bundle"
+        ]
+        if contribution_diagnostics_active and high_precision_operand_bundle:
+            (
+                diagnostic_relion_cuda_preprocess,
+                diagnostic_integer_pre_shifts,
+                diagnostic_batch_corr,
+                diagnostic_batch_scale,
+                diagnostic_relion_preprocess_kwargs,
+            ) = prepare_batch_preprocess_operands(
+                experiment_dataset,
+                batch_data,
+                image_indices,
+                image_corrections=image_corrections,
+                scale_corrections=scale_corrections,
+                image_pre_shifts=image_pre_shifts,
+            )
+            if diagnostic_integer_pre_shifts is None:
+                diagnostic_integer_pre_shifts = np.zeros((batch, 2), dtype=np.int32)
+            if diagnostic_batch_corr is None:
+                diagnostic_batch_corr = np.ones(batch, dtype=np.float32)
+            if diagnostic_relion_preprocess_kwargs is None:
+                diagnostic_normalization_factors = np.ones(batch, dtype=np.float32)
+            else:
+                diagnostic_normalization_factors = np.asarray(
+                    diagnostic_relion_preprocess_kwargs["relion_normalization_factors"],
+                    dtype=np.float32,
+                )
+            diagnostic_image_mask, diagnostic_image_mask_mode = resolve_image_mask_for_half_preprocess(
+                experiment_dataset,
+                image_shape,
+                require_mask=bool(score_with_masked_images),
+            )
+            contribution_preprocess_operands = {
+                "integer_pre_shifts": diagnostic_integer_pre_shifts,
+                "batch_image_corrections": diagnostic_batch_corr,
+                "batch_scale_corrections": diagnostic_batch_scale,
+                "relion_preprocess_normalization_factors": diagnostic_normalization_factors,
+                "relion_cuda_preprocess": diagnostic_relion_cuda_preprocess,
+                "image_mask": diagnostic_image_mask,
+                "image_mask_mode": diagnostic_image_mask_mode,
+            }
+
         # Preprocess
         (
             shifted_score_half,
@@ -6601,11 +7662,35 @@ def compute_pass2_stats_sparse_bucketed(
             )
         elif use_window and projection_cache is not None and not dump_this_bucket and not score_only:
             rotation_chunk_size = _cached_score_rotation_chunk_size_for_pass(bucket_size)
+        target_particle_rows = (
+            _bpref_contribution_target_rows(experiment_dataset, image_indices)
+            if device_signature_requested
+            else np.empty((0,), dtype=np.int64)
+        )
+        rotation_chunk_size = _guard_bpref_target_rotation_chunking(
+            rotation_chunk_size,
+            bucket_size=bucket_size,
+            target_particle_rows=target_particle_rows,
+        )
+        if device_signature_requested and target_particle_rows.size:
+            logger.info(
+                "Scoped BPref device capture preserves production rotation planning: "
+                "target_particles=%d bucket_size=%d rotation_chunk_size=%s naturally_unchunked=true",
+                int(target_particle_rows.size),
+                int(bucket_size),
+                "unset" if rotation_chunk_size is None else str(int(rotation_chunk_size)),
+            )
+        if (
+            rotation_chunk_size is not None
+            and int(rotation_chunk_size) < bucket_size
+            and use_relion_x_half_mstep
+            and diagnostic_per_particle_launches
+            and not device_signature_requested
+        ):
+            raise RuntimeError(
+                "RELION per-particle launch diagnostic does not support rotation-chunked pass 2"
+            )
         if rotation_chunk_size is not None and int(rotation_chunk_size) < bucket_size:
-            if use_relion_x_half_mstep and relion_x_half_bp_per_particle_launch_enabled():
-                raise RuntimeError(
-                    "RELION per-particle launch diagnostic does not support rotation-chunked pass 2"
-                )
             rotation_chunk_size = max(1, int(rotation_chunk_size))
             if projection_cache is not None:
                 log_key = ("single-cached", int(bucket_size), int(batch), int(rotation_chunk_size))
@@ -6859,6 +7944,7 @@ def compute_pass2_stats_sparse_bucketed(
                         shifted_recon_split,
                         ctf2_over_nv_recon,
                         relion_x_half=use_relion_x_half_mstep,
+                        sequential_translation_reduction=use_sequential_translation_reduction,
                     )
                     flat_chunk_rotations = flatten_bucket_rotations(jnp.asarray(mstep_rotations[:, start:stop]))
                     if use_window:
@@ -7093,6 +8179,7 @@ def compute_pass2_stats_sparse_bucketed(
         # Score: (B, R, T)
         shifted_corrected_score_split = shifted_corrected_score.reshape(batch, n_fine_trans, -1)
         direct_half_weights = half_weights_windowed if use_window else half_weights
+        shadow_score_bitwise_equal = False
         if relion_firstiter_score_mode == "normalized_cc":
             scores = _score_pass2_bucket_normalized_cc(
                 shifted_corrected_score_split,
@@ -7101,16 +8188,50 @@ def compute_pass2_stats_sparse_bucketed(
                 direct_half_weights,
                 jnp.asarray(candidate_mask),
             )
+            preprior_scores = scores
+            if shadow_only_mode:
+                shadow_scores = _score_pass2_bucket_normalized_cc(
+                    shifted_corrected_score_split,
+                    ctf2_over_nv_score,
+                    proj_half,
+                    direct_half_weights,
+                    jnp.asarray(candidate_mask),
+                )
+                _require_bpref_shadow_exact("normalized-CC score", scores, shadow_scores)
+                shadow_score_bitwise_equal = True
         else:
-            scores = _score_pass2_bucket_relion_gpu_diff2(
-                shifted_corrected_score_split,
-                ctf2_over_nv_score,
-                proj_half,
-                direct_half_weights,
-                jnp.asarray(log_prior),
-                bucket_translation_prior,
-                jnp.asarray(candidate_mask),
-            )
+            if contribution_diagnostics_active:
+                scores = _score_pass2_bucket_relion_gpu_diff2(
+                    shifted_corrected_score_split,
+                    ctf2_over_nv_score,
+                    proj_half,
+                    direct_half_weights,
+                    jnp.asarray(log_prior),
+                    bucket_translation_prior,
+                    jnp.asarray(candidate_mask),
+                )
+                shadow_scores, preprior_scores = _score_pass2_bucket_relion_gpu_diff2_components(
+                    shifted_corrected_score_split,
+                    ctf2_over_nv_score,
+                    proj_half,
+                    direct_half_weights,
+                    jnp.asarray(log_prior),
+                    bucket_translation_prior,
+                    jnp.asarray(candidate_mask),
+                )
+                _require_bpref_shadow_exact("Gaussian score", scores, shadow_scores)
+                shadow_score_bitwise_equal = True
+            else:
+                scores = _score_pass2_bucket_relion_gpu_diff2(
+                    shifted_corrected_score_split,
+                    ctf2_over_nv_score,
+                    proj_half,
+                    direct_half_weights,
+                    jnp.asarray(log_prior),
+                    bucket_translation_prior,
+                    jnp.asarray(candidate_mask),
+                )
+                preprior_scores = None
 
         probs = None
         if return_score_log_z_only:
@@ -7170,6 +8291,8 @@ def compute_pass2_stats_sparse_bucketed(
         reconstruction_probs = None
         reconstruction_mask = None
         reconstruction_n_significant = None
+        reconstruction_sum_weight = None
+        reconstruction_threshold = None
         if probs is not None and use_relion_fine_mstep_prune and not score_only:
             reconstruction_probs, reconstruction_mask, reconstruction_n_significant = (
                 _relion_pass2_reconstruction_probs_for_mstep(
@@ -7180,6 +8303,36 @@ def compute_pass2_stats_sparse_bucketed(
                     winner_take_all=winner_take_all,
                 )
             )
+            if contribution_diagnostics_active:
+                (
+                    shadow_reconstruction_probs,
+                    shadow_reconstruction_mask,
+                    shadow_reconstruction_n_significant,
+                    reconstruction_sum_weight,
+                    reconstruction_threshold,
+                ) = _relion_pass2_reconstruction_probs_for_mstep(
+                    scores,
+                    probs,
+                    adaptive_fraction=float(adaptive_fraction),
+                    use_relion_x_half_mstep=use_relion_x_half_mstep,
+                    winner_take_all=winner_take_all,
+                    return_diagnostics=True,
+                )
+                _require_bpref_shadow_exact(
+                    "reconstruction probabilities",
+                    reconstruction_probs,
+                    shadow_reconstruction_probs,
+                )
+                _require_bpref_shadow_exact(
+                    "reconstruction mask",
+                    reconstruction_mask,
+                    shadow_reconstruction_mask,
+                )
+                _require_bpref_shadow_exact(
+                    "reconstruction significant counts",
+                    reconstruction_n_significant,
+                    shadow_reconstruction_n_significant,
+                )
         shifted_recon_split_for_dump = None
         ctf2_over_nv_recon_for_dump = None
         recon_window_indices_for_dump = None
@@ -7228,34 +8381,145 @@ def compute_pass2_stats_sparse_bucketed(
                 shifted_recon_split,
                 ctf2_over_nv_recon,
                 relion_x_half=use_relion_x_half_mstep,
+                sequential_translation_reduction=use_sequential_translation_reduction,
+            )
+            dump_summed = summed
+            dump_ctf_probs = ctf_probs
+            shadow_reduction_agreement = None
+            if shadow_only_mode:
+                shadow_summed, shadow_ctf_probs = compute_local_mstep_sums(
+                    mstep_probs,
+                    shifted_recon_split,
+                    ctf2_over_nv_recon,
+                    relion_x_half=use_relion_x_half_mstep,
+                    sequential_translation_reduction=diagnostic_sequential_translation_reduction,
+                )
+                shadow_reduction_agreement = _require_bpref_reduction_shadow_agreement(
+                    summed,
+                    ctf_probs,
+                    shadow_summed,
+                    shadow_ctf_probs,
+                )
+                dump_summed = shadow_summed
+                dump_ctf_probs = shadow_ctf_probs
+            _maybe_dump_bpref_contribution_rows(
+                experiment_dataset=experiment_dataset,
+                image_indices=image_indices,
+                current_size=current_size,
+                summed=dump_summed,
+                ctf_probs=dump_ctf_probs,
+                rotations=mstep_rotations,
+                actual_counts=actual_counts,
+                rotation_indices=rotation_indices,
+                fine_translations=fine_translations,
+                scores=scores,
+                preprior_scores=preprior_scores,
+                probs=probs,
+                rotation_log_prior=log_prior,
+                translation_log_prior=bucket_translation_prior,
+                log_z=log_Z,
+                best_log_score=best_log_score_bucket,
+                reconstruction_probs=mstep_probs,
+                reconstruction_mask=(
+                    reconstruction_mask
+                    if reconstruction_mask is not None
+                    else jnp.asarray(mstep_probs) > 0
+                ),
+                reconstruction_sum_weight=(
+                    reconstruction_sum_weight
+                    if reconstruction_sum_weight is not None
+                    else jnp.sum(jnp.asarray(probs).reshape(batch, -1), axis=1)
+                ),
+                reconstruction_threshold=(
+                    reconstruction_threshold
+                    if reconstruction_threshold is not None
+                    else jnp.zeros((batch,), dtype=jnp.float64)
+                ),
+                candidate_mask=candidate_mask,
+                high_precision_operand_bundle=high_precision_operand_bundle,
+                raw_batch_data=batch_data if high_precision_operand_bundle else None,
+                ctf_params=ctf_params if high_precision_operand_bundle else None,
+                noise_variance_half=noise_variance_half if high_precision_operand_bundle else None,
+                integer_pre_shifts=(
+                    contribution_preprocess_operands["integer_pre_shifts"]
+                    if high_precision_operand_bundle else None
+                ),
+                batch_image_corrections=(
+                    contribution_preprocess_operands["batch_image_corrections"]
+                    if high_precision_operand_bundle else None
+                ),
+                batch_scale_corrections=(
+                    contribution_preprocess_operands["batch_scale_corrections"]
+                    if high_precision_operand_bundle else None
+                ),
+                relion_preprocess_normalization_factors=(
+                    contribution_preprocess_operands["relion_preprocess_normalization_factors"]
+                    if high_precision_operand_bundle else None
+                ),
+                relion_cuda_preprocess=(
+                    contribution_preprocess_operands["relion_cuda_preprocess"]
+                    if high_precision_operand_bundle else False
+                ),
+                score_with_masked_images=score_with_masked_images,
+                image_mask=(contribution_preprocess_operands["image_mask"] if high_precision_operand_bundle else None),
+                image_mask_mode=(
+                    contribution_preprocess_operands["image_mask_mode"]
+                    if high_precision_operand_bundle else "not-captured"
+                ),
+                voxel_size=experiment_dataset.voxel_size,
+                ctf_mode=getattr(getattr(config.ctf, "mode", "legacy"), "name", "legacy"),
+                ctf_dose_per_tilt=getattr(config.ctf, "dose_per_tilt", 0.0),
+                ctf_angle_per_tilt=getattr(config.ctf, "angle_per_tilt", 0.0),
+                disc_type=disc_type,
+                projection_padding_factor=projection_padding_factor,
+                reconstruction_padding_factor=reconstruction_padding_factor,
+                use_relion_x_half_mstep=use_relion_x_half_mstep,
+                winner_take_all=winner_take_all,
+                max_r=float(current_size // 2) if use_window else None,
+                window_indices=(
+                    relion_x_half_recon_indices
+                    if use_relion_x_half_mstep
+                    else recon_window_indices
+                ),
+                image_shape=image_shape,
+                volume_shape=recon_volume_shape,
+                shadow_only_mode=shadow_only_mode,
+                shadow_score_bitwise_equal=shadow_score_bitwise_equal,
+                shadow_reduction_agreement=shadow_reduction_agreement,
+                device_signature_active=bpref_device_signature_active,
             )
 
-            fused_atomics_requested = relion_x_half_bp_fused_atomics_enabled()
-            use_per_particle_launches = (
-                use_relion_x_half_mstep and relion_x_half_bp_per_particle_launch_enabled()
+            diagnostic_particle_launches_effective = bool(
+                use_relion_x_half_mstep and diagnostic_per_particle_launches
             )
-            if fused_atomics_requested and not use_per_particle_launches:
+            live_per_particle_launches = bool(
+                use_relion_x_half_mstep and use_per_particle_launches
+            )
+            if fused_atomics_requested and not diagnostic_particle_launches_effective:
                 raise RuntimeError(
                     "RELION fused-atomics diagnostic requires the x-half M-step and "
                     "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH=1"
                 )
-            if use_per_particle_launches:
-                if not winner_take_all:
-                    raise RuntimeError(
-                        "RELION per-particle launch diagnostic is currently qualified only for winner-take-all"
-                    )
+            if diagnostic_particle_launches_effective:
                 positive_rotation_rows = np.count_nonzero(
                     np.asarray(jnp.sum(mstep_probs, axis=-1)) > 0,
                     axis=1,
                 )
-                if not np.all(positive_rotation_rows == 1):
+                if winner_take_all:
+                    if not np.all(positive_rotation_rows == 1):
+                        raise RuntimeError(
+                            "RELION WTA per-particle diagnostic requires exactly one positive rotation row per particle"
+                        )
+                elif np.any(positive_rotation_rows < 1) or not np.any(positive_rotation_rows > 1):
                     raise RuntimeError(
-                        "RELION per-particle launch diagnostic requires exactly one positive rotation row per particle"
+                        "RECOVAR soft-particle causal arm requires at least one positive row per particle "
+                        "and multiple positive rows for at least one particle"
                     )
                 if image_indices.size > 1 and not np.all(np.diff(image_indices) > 0):
                     raise RuntimeError(
                         "RELION per-particle launch diagnostic requires strictly increasing particle ownership order"
                     )
+            if live_per_particle_launches:
                 mstep_window_indices = (
                     relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
                 )
@@ -7272,6 +8536,7 @@ def compute_pass2_stats_sparse_bucketed(
                     disc_type="linear_interp",
                     half_volume=use_half_volume_mstep,
                     max_r=float(current_size // 2) if use_window else None,
+                    winner_take_all=winner_take_all,
                     log_label_prefix="single-particle-xhalf",
                 )
 
@@ -7281,7 +8546,7 @@ def compute_pass2_stats_sparse_bucketed(
             flat_summed = flatten_bucket_rows(summed)
             flat_ctf_probs = flatten_bucket_rows(ctf_probs)
             mstep_window_indices = relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
-            if not use_per_particle_launches and use_window:
+            if not live_per_particle_launches and use_window:
                 Ft_y_total = _accumulate_adjoint_block_chunked(
                     flat_summed,
                     flat_backproject_rotations,
@@ -7314,7 +8579,7 @@ def compute_pass2_stats_sparse_bucketed(
                     max_block_bytes=max_adjoint_block_bytes,
                     log_label="single-ctf-window",
                 )
-            elif not use_per_particle_launches and use_relion_x_half_mstep:
+            elif not live_per_particle_launches and use_relion_x_half_mstep:
                 Ft_y_total = _accumulate_adjoint_block_chunked(
                     flat_summed,
                     flat_backproject_rotations,
@@ -7347,7 +8612,7 @@ def compute_pass2_stats_sparse_bucketed(
                     max_block_bytes=max_adjoint_block_bytes,
                     log_label="single-ctf-xhalf",
                 )
-            elif not use_per_particle_launches:
+            elif not live_per_particle_launches:
                 Ft_y_total = _accumulate_adjoint_block_chunked(
                     flat_summed,
                     flat_backproject_rotations,
