@@ -329,9 +329,9 @@ history after iter 10. Merged-reference diagnostic `10992266` is worse at
 job `10992371` reaches final FSC-AUC `0.994488`; iter-1 ties explain most but
 not all of the free residual.
 
-The current strict path now also matches RELION's joined final noise semantic:
-both particle halves use half-1 `sigma2_noise` only in the post-convergence
-K=1 all-data E-step. Exact dumped operands then match a representative RELION
+The current strict path now also matches RELION's separate joined-final noise
+semantic: both particle halves use half-1 `sigma2_noise` in the
+post-convergence K=1 all-data E-step. Exact dumped operands then match a representative RELION
 posterior within the fixed-state numerical contract. Fixed-final job
 `10994996` still reaches only grid-off FSC-AUC `0.994497`, while RECOVAR GT
 FSC-AUC remains better (`0.669846` versus `0.650835`). Matched numbered iter-10
@@ -2534,3 +2534,539 @@ Reference replay evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it3_relion_reference_replay_h100_20260715_010941/analysis/reference_replay_fsc_state.json`.
 Decision audit:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_it3_decision_audit_20260715_014500/REPORT.md`.
+
+## 2026-07-15 Targeted posterior discriminators
+
+The K=1 iteration-12 fused-posterior implementation is not the local-search
+cause.  H100 jobs `11201155` and `11201156` independently capture the fused
+and forced-materialized fine paths with exact incoming RELION references.  The
+captures pass their instrumentation gates: merged map FSC-AUC is
+`0.999999994760/0.999999994665`, p05 non-DC FSC is
+`0.999999962714/0.999999961869`, and all Pmax differences from the undumped
+exact-reference control are zero.  For their four shared target particles,
+candidate rotations, translations, parent/child identities, masks, support,
+scores, log normalizers, posteriors, Pmax, and winners are bitwise identical.
+
+The remaining K=1 difference is structural relative to RELION, not a close
+tie.  For fixture index 6536 (STAR 85521), RELION's winner is absent from
+RECOVAR's finite fine support and the closest same-rotation RECOVAR candidate
+is separated by score `7.659`.  For fixture index 4194 (STAR 54772), RELION's
+translation is RECOVAR rank 4 with score gap `0.926178`; RECOVAR's close top
+pair does not contain the RELION winner.  Fixture indices 8421 and 9640
+choose the exact same winner in both programs, but RELION/RECOVAR Pmax are
+`0.364345/0.982648` and `0.380272/0.998304`, with RECOVAR top-two gaps
+`4.71278` and `6.64923`.
+
+The parent-to-fine expansion is also exact and is no longer a candidate cause.
+For all four targets, the finite fine mask is the exact 32-child expansion of
+the significant parent cells, with no candidate-ID, rotation, translation,
+parent-child, or mask mismatch.  The divergence is already present in the
+parent or fine score surface relative to RELION.  For fixture 6536, RELION's
+winner belongs to parent rotation 193770 / translation 13, which RECOVAR
+scores but prunes at the parent boundary: it is parent rank 2 with posterior
+`0.00075794` and score gap `7.18414`, while translation 14 alone is retained.
+For fixture 4194 the RELION parent is retained, but its fine translation falls
+to RECOVAR rank 4 with posterior `0.118761` and score gap `0.926178`.
+Fixtures 8421 and 9640 retain the same final winner but have substantially
+over-concentrated RECOVAR posteriors.  These are structural score/posterior
+differences, not discrete tie-breaking or fused-kernel behavior.  Instrumented
+RELION iteration-12 candidate captures localize them to parent scoring size as
+described below.
+
+K=1 capture evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it12_targeted_capture_bf49f93f_20260715_012401/fused_vs_fine_shared_comparison.json`.
+Parent-expansion evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it12_targeted_capture_bf49f93f_20260715_012401/parent_to_fine_support_comparison.json`.
+
+The instrumented RELION target captures further localize this to fine
+hypothesis/support construction, before priors or posterior normalization.
+The capture binary is not globally instrumentation-inert, so these arrays are
+used only after target-level qualification against the forced-perturbation
+no-dump control.  Targets 85521, 54772, and 126792 pass that target gate; target
+110844 differs only in Pmax by `1e-5` with identical winner, pose, shift, and
+significant count and remains explicitly marked failed-closed.  Orientation
+and offset log-priors agree within `1.43e-6` and `4.77e-7`.  Conditional on the
+common finite support, posterior total-variation distance is only
+`2.72e-5`, `2.50e-7`, `1.87e-4`, and `1.17e-6`.  The support itself is not the
+same: RELION/common/RECOVAR candidate counts are `128/32/32`, `128/64/160`,
+`384/160/192`, and `128/32/32`; RELION assigns only `0.2260`, `0.99998`,
+`0.36875`, and `0.38080` probability to the common support.  The large Pmax
+differences are therefore caused by absent/excluded hypotheses, not by prior
+or normalization arithmetic on a shared hypothesis set.
+
+The parent-support cause is the ordering of local angular refinement and
+Fourier-size selection.  RELION iteration 12 enters `expectation()` with
+sampling order 3, computes its pass-1 parent image size from the old 7.5-degree
+sampling (`56` pixels), and only then updates the sampling order to 4 for the
+current local parent grid and order-5 fine children.  RECOVAR updated the order
+first and recomputed the parent image size from 3.75 degrees, scoring at `110`
+pixels.  RELION consequently selects `4/4/12/4` parents for the four targets,
+while RECOVAR selects `1/5/6/1`; both expand every selected parent into exactly
+8 rotations by 4 translations.  Aligned parent scores across the wrong
+56-versus-110 Fourier bands have post-common-shift p95 residuals of
+approximately `27.19/26.71/8.85/16.47`, while inferred combined-prior
+residuals remain below `6.87e-5`; this is not a tie or prior effect.
+
+RELION/RECOVAR hypothesis-alignment evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it12_relion_target_capture_20260715_022636/analysis/relion_recovar_posterior_alignment.json`.
+Parent support-rule audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it12_relion_target_capture_20260715_022636/analysis/parent_support_rule_audit.json`.
+
+The K=4 iteration-2 outliers are instead inherited amplification from tiny
+reference drift.  With exact standard RELION iteration-1 references, corrected
+target-qualified RELION captures and RECOVAR have candidate-support Jaccard
+`1.0` for every class of original particles 2907 and 8083: 3,488/3,488 and
+3,168/3,168 total candidates, including identical reconstruction support and
+all eight classwise top keys.  Combined-prior error is at most `9.54e-7`,
+centered score-with-prior p95 is `7.34e-5--1.15e-4` (worst maximum
+`0.001005`), and posterior L1 after common renormalization is
+`7.51e-6--1.90e-5`.  No score, prior, support, or posterior behavior mismatch
+exists at this matched iteration-2 boundary.  The intrinsic K=4 investigation
+therefore remains at iteration 3, where exact iteration-2 reference replay did
+not close the trajectory cliff.
+
+K=4 score/support evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_orig2907_8083_recovar_exactref_pass2_h100_20260715_020900/analysis/score_support_no_correlation.json`.
+
+The K=4 iteration-3 raw-score cliff is caused by a group-scale state mismatch.
+For original particle 6388, RELION scores with runtime scale `0.972485065`
+while its rank-1 post-M-step model STAR serializes approximately `1.315036`;
+RECOVAR's exact replay used the serialized value.  A clean H100 one-factor A/B
+changes only that particle's scoring scale.  The serialized-scale arm retains
+the wrong class-3 branch, class masses approximately
+`[0, 0.0001786, 0.9998214, 0]`, support Jaccard
+`0.351/0.357/0.446`, and centered score-with-prior mean/p95/max error
+`16.655/31.314/43.710`.  The runtime-scale arm restores support Jaccard `1.0`
+and every classwise top key; RECOVAR class masses become
+`[0, 0.0166850, 0.3179502, 0.6653648]` versus RELION
+`[0, 0.0166907, 0.3178691, 0.6654402]`, with the exact class-4 winner.
+Centered score-with-prior mean/p95/max error falls to
+`0.001392/0.003004/0.005733`.  This is causal behavioral evidence, not a
+numerical tie or downstream support defect.
+
+A per-rank iteration-2 state dump identifies the underlying RELION behavior.
+The piecewise `MlWsumModel::pack` path sizes the group-scale XA/AA payload from
+the one optics group instead of the 10,000 particle groups.  Only group 0 is
+MPI-combined; among groups 1--9999, 5,027 have rank-1-only statistics and 4,972
+have rank-2-only statistics, with no overlap or both-zero group.  For target
+group 5989, rank 1 has raw XA/AA scale `1.348988547` and normalizes it to
+`1.314142312`, while rank 2 has zero AA, substitutes the default scale 1, and
+normalizes it to `0.973957723`.  The writer model matches rank 1 within
+`5e-7`; the particle's next E-step can use rank 2's live state instead.  Strict
+n=3 parity therefore requires follower-local scale vectors and exact
+iteration-to-iteration particle ownership; a single global or rank-1
+serialized scale vector cannot reproduce RELION.
+
+K=4 scale A/B evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it3_orig6388_runtime_scale_ab_h100_20260715_024500/runtime_scale/analysis/score_support_no_correlation.json`.
+K=4 per-rank scale-state evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_relion_scale_state_rank_audit_h100_20260715_034500/analysis/scale_rank_state_no_correlation.json`.
+
+## 2026-07-15 local-size and continuation-noise fixes
+
+The K=1 iteration-12 parent-score mismatch is closed.  The local-search loop
+now snapshots the incoming HEALPix order before RELION's sampling update and
+uses that order for pass-1 Fourier-size selection.  The corrected replay uses
+size 56 in both programs instead of RECOVAR's previous size 110.  This removes
+the structural p95 centered-score residuals of `8.85--27.19`.
+
+A second exact RELION restart semantic explained the remaining subset-2-only
+residual.  In `MlOptimiserMpi::initialise`, only follower rank 1 initializes
+`sigma2_noise`, then broadcasts its spectrum to every follower.  On an
+AutoRefine continuation, rank 1 has loaded the serialized half-1 model, so the
+first expectation after process start scores both subsets with half-1 noise.
+This broadcast occurs once at process initialization; later uninterrupted
+iterations update and retain half-specific spectra.  RECOVAR now emulates the
+broadcast only in replay slot 0 and in explicit continuation/final-only probe
+initialization.  Numbered replay slots 1 and later remain half-specific.
+
+After both fixes, the four qualified iteration-12 targets have centered raw
+score p95 residuals `0.002356/0.001899/0.000731/0.001178`, maximum posterior
+TV `7.70e-5`, and exact significance masks.  This is the float32 arithmetic
+envelope rather than a remaining behavioral mismatch.  Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it12_sizeorder_fix_target_h100_20260715_031500/analysis/size_order_and_process_start_noise_parent_score_gate.json`.
+
+Strict replay currently supports one optics-group noise spectrum per half.
+RELION broadcasts every optics group's spectrum, while RECOVAR's scorer is not
+yet optics-indexed.  Multi-optics model STAR input therefore fails closed
+instead of silently selecting `model_optics_group_1`.
+
+## 2026-07-15 dynamic MPI dispatch correction
+
+The first full K=4 follower-scale implementation used the exact seed-2803
+shuffle but incorrectly divided that shuffled order into two static equal
+rank ranges.  A three-rank H100 audit rejects that model: static ownership
+agrees with the rank-local XA/AA evidence for only 49.0849% of particles
+(5,091/9,999 nonzero groups disagree).  By contrast, every captured RELION
+leader dispatch bundle has a uniform observed owner.
+
+The source boundary explains the result.  `MlOptimiserMpi::expectation()` is
+an on-demand leader/follower queue: the leader sends the next contiguous
+shuffled-position bundle to whichever follower requests work next.  In the
+actual `--pool 3 --j 4` oracle, the leader's effective `nr_pool` is 12
+particles: each numbered iteration contains 834 non-overlapping jobs covering
+sorted positions 0--9999 exactly once.
+The initialization-time `divide_equally` ranges do not control expectation.
+The seed shuffle itself remains exact: a direct all-rank capture from job
+`11204924` is byte-identical to RECOVAR's `mt19937(random_seed + 1)` binding,
+and internal particle IDs follow the micrograph-sorted `run_it000_data.star`
+row order.  Only the runtime chunk-to-rank schedule was wrong.
+
+The static implementation's three-iteration K=4 trajectory is therefore
+rejected, despite closing iterations 1--2.  Its classwise cross FSC-AUC at
+iteration 3 is `[0.954334, 0.949943, 0.948496, 0.918550]` with class agreement
+0.9327.  Exact mode now fails closed unless given a per-iteration dispatch
+schedule captured from the same RELION oracle run; an explicit follower count
+of zero remains available only as a labeled non-parity diagnostic.  The
+schedule records dynamic owners in shuffled-position order, validates complete
+non-overlapping pool coverage, follower bounds, iteration coverage, pool size,
+particle count, and random seed, then remaps owners through the authoritative
+RELION data-STAR identity order for both scoring scales and XA/AA accumulation.
+
+Rank audit evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_relion_scale_state_rank_audit_h100_20260715_034500`.
+Shuffle capture evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_sorted_idx_relion_capture_h100_20260715_041000`.
+Same-run three-iteration dispatch/oracle evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_dynamic_dispatch_oracle3_h100_20260715_043500`.
+Rejected static-ownership trajectory:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_worker_scale_full3_h100_20260715_033000/analysis/trajectory_gate3.json`.
+
+The K=1 one-iteration boundary proof above is not yet promoted to a full
+trajectory claim.  An uninterrupted replay previously allowed RECOVAR's
+post-M-step state to advance to order 4 before iteration 12, so it still used
+coarse size 110.  Strict replay now carries the preceding numbered sampling
+STAR order separately from the live post-M-step state: iteration 12 uses the
+saved order 3 for size 56, then the current order 4 for parent/fine sampling.
+Full same-H100 trajectory job `11205287` confirms that this is a real causal
+fix, but does not promote the complete K=1 trajectory.  Iteration-12 merged
+cross FSC-AUC improves from `0.97005673` in the previous uninterrupted run to
+`0.98852049`; minimum/p05 non-DC FSC improve to
+`0.96042513/0.97207520`.  The corrected run nevertheless first fails the
+strict FSC-AUC gate at iteration 7 (`0.99483511`), reaches its lowest merged
+FSC-AUC at iteration 16 (`0.97643540`), and only recovers to `0.99435727` at
+iteration 22.  Its final all-data merged FSC-AUC is `0.98126001`.  This is
+trajectory-level behavior, not arithmetic noise.  Detectable drift starts
+earlier, and iteration 5 is the first materially amplified global boundary:
+merged FSC-AUC is `0.99776762`, per-particle Pmax MAE/p95 are
+`0.0139803/0.0442924`, and half-set direction-prior relative-L1 errors are
+approximately `1.24%/1.00%`.  Existing exact-incoming-RELION-map probes at
+iterations 3, 5, and 7 restore merged FSC-AUC to
+`0.99999776/0.99999885/0.99999828`, respectively.  The early failure is
+therefore recurrent amplification of a small one-step global E/M residual,
+not a schedule mismatch.  The next K=1 discriminator is a current-head exact
+iteration-5 boundary capture: compare posterior/support, BPref data/weight
+before and after the low-resolution half-join, and cross-reconstruct both
+RELION and RECOVAR accumulators through both reconstructors.  This separates
+scoring/posterior, accumulation/join, and reconstruction while the search is
+still global.
+
+Corrected K=1 full-trajectory evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_full22_saved_order_fix_h100_20260715_042500/analysis/fsc_gate.json`.
+
+The exact dynamic-dispatch K=4 replay is a decisive positive result.  Same-H100
+job `11205803` uses the captured owner schedule from the three-iteration
+RELION oracle.  Iterations 1 and 2 retain their prior parity.  At iteration 3,
+classwise cross FSC-AUC improves from the rejected static-owner values
+`[0.954334, 0.949943, 0.948496, 0.918550]` to
+`[0.999319, 0.998186, 0.999506, 0.998382]`; class agreement improves from
+`0.9327` (673 mismatches) to `0.9989` (11 mismatches).  Per-class GT FSC-AUC
+deltas are between `-7.75e-5` and `+1.86e-5`.  The dynamic queue ownership is
+therefore the dominant K=4 iteration-3 bug, and the static ownership model is
+retired.
+
+The K=4 discrete-decision gate remains fail-closed.  The 11 class changes, 51
+rotation changes, and 36 translation changes do not yet have complete
+candidate-score tie evidence.  Their map and GT FSC evidence is excellent but
+does not by itself prove that every flip is numerical.  The next K=4
+discriminator is a fixed iteration-3 replay for exactly those affected
+particles, capturing complete raw scores, priors, support, posterior, and
+winner margins from the same RELION/RECOVAR boundary.  Also, the schedule
+oracle used the previously identified non-inert rebuilt RELION executable;
+before a clean standard-RELION trajectory claim, repeat schedule capture with
+a production-inert logging method or establish same-run inertness explicitly.
+
+Dynamic-schedule replay evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_dynamic_dispatch_replay3_h100_20260715_044500/analysis/trajectory_gate3.json`.
+
+The iteration-3 RECOVAR score audit rejects a blanket numerical-tie
+explanation for the residual 11 class changes.  Job `11206124` captures every
+fine pass-2 class surface for the 59-particle union of class, rotation, and
+translation disagreements: 236 class-qualified files.  The dump path is
+science-inert relative to the undumped dynamic replay: per-class map FSC-AUC
+is at least `0.999999955` across all three iterations, class/rotation/
+translation decisions are identical, and the largest Pmax change is
+`4.43e-5`.  Five of the 11 class changes (original indices 1371, 1680, 2029,
+3749, and 9946) prefer the RECOVAR winner over the best candidate in RELION's
+reported class by more than `0.1` log-weight units; four exceed `1.0`, and the
+largest gap is `20.39`.  Only two class changes have a global top-two margin
+below `0.01`.  These are not all reduction-order ties on RECOVAR's propagated
+iteration-3 surface.
+
+This does not prove a scorer bug because the audit scores RECOVAR's own
+iteration-2 maps.  The matched-boundary discriminator instead closes the
+residual completely.  H100 job `11206519` combines exact RELION iteration-2
+references with the exact dynamic dispatch schedule.  At iteration 3, class
+agreement becomes `1.0`, class/rotation/translation mismatch counts are all
+zero, and classwise direct FSC-AUC is
+`[0.999999211, 0.999999290, 0.999996695, 0.999997948]`.  GT FSC-AUC deltas
+remain within `-5.23e-6--+4.30e-6`.  Therefore the 11 residual class changes
+and all observed iteration-3 map loss are amplification of the small
+incoming-map drift, not an additional hard-decision or support bug.  Pmax is
+not yet fully closed: mean/p95 absolute error falls to
+`7.66e-5/1.84e-4`, but original particle 8083 remains at
+`0.518075/0.641103` (absolute error `0.123028`) with the same class-4 winner;
+eight particles remain above `0.01`.  Their next discriminator is the
+incoming follower-scale/norm/noise/prior state, with post-iteration-2 live
+follower scale the leading hypothesis.  The owner-transition split makes that
+boundary much sharper: all 94 particles above `0.001`, including all eight
+above `0.01`, keep the same follower between iterations 2 and 3.  None of the
+4,792 owner-switch particles exceeds `3.55e-4`; stable-owner outliers are
+balanced 47/47 between the two followers and do not have extreme serialized
+rank-1 scales or norm factors.  Job `11206981` materializes RECOVAR's new
+pre-score/post-M-step follower-scale trajectories.  Its post-iteration-2
+follower-0 vector matches RELION's serialized rank-1 vector with mean/median/
+p95 absolute errors `4.54e-5/1.40e-6/2.29e-4`, but has a sparse maximum error
+of `0.0111584`.  That maximum is the physical group of the largest owner-0
+Pmax outlier.  Among stable owner-0 particles, 21/44 groups with scale error
+above `0.001` have Pmax error above `0.001`, versus 26/2524 below that scale
+threshold.  This is a real state discrepancy, not an unstructured score-jitter
+tail.
+
+A fail-closed diagnostic replay now accepts complete follower-scale matrices
+at selected numbered iterations and injects them before owner remapping and
+pre-score telemetry.  The first numbered iteration is rejected because its
+resident image-normalization/scale factorization does not yet exist.  Every
+requested row must be reached and applied exactly once before refinement may
+return a successful result.  H100 job `11207267` changes only iteration-3 follower 0
+to RELION's serialized post-iteration-2 rank-1 vector, retaining RECOVAR's
+captured follower-1 vector.  Stable-owner-0 Pmax errors above `0.001` collapse
+from 47 to 1 and errors above `0.01` from 3 to 0; mean/p95/max absolute error
+fall from `1.173e-4/4.132e-4/0.0413453` to
+`1.294e-5/4.028e-5/0.00489362`.  The three largest owner-0 errors become
+`9.05e-6/1.60e-5/1.50e-5`.  Stable owner 1 is unchanged at 47 errors above
+`0.001` and five above `0.01`, as required for a causal one-factor test.
+Class, Euler, and translation decisions remain exact, class mismatch versus
+RELION remains zero, classwise direct FSC-AUC is
+`[0.999999949, 0.999999595, 0.999996903, 0.999998020]`, and GT FSC-AUC deltas
+remain within `-2.58e-6--+1.87e-6`.  Follower-0 scale mismatch therefore
+causes essentially its entire Pmax residual family.  Same-oracle RELION
+rank-2 live state remains the sole large Pmax boundary.  The
+pass-1 dump count in
+`11206124` is zero because its filter incorrectly used fine size 46 while the
+iteration-3 coarse pass uses size 14; no rerun is needed because the
+matched-boundary discrete state is exact.
+
+K=4 pass-2 score-margin evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_dynamic_dispatch_score59_h100_20260715_052000/analysis/pass2_score_margin_audit.json`.
+Instrumentation gate:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_dynamic_dispatch_score59_h100_20260715_052000/analysis/instrumentation_inertness_fsc.json`.
+Matched-boundary exact-reference trajectory:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_dynamic_dispatch_exactref3_h100_20260715_052300/analysis/trajectory_gate3.json`.
+Pmax owner/state audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_dynamic_dispatch_exactref3_h100_20260715_052300/analysis/pmax_owner_scale_audit.md`.
+Post-iteration-2 follower-scale audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_dynamic_dispatch_scale_trajectory2_h100_20260715_054948/analysis/post_it2_follower_scale_audit.md`.
+Rank-1 causal replay:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_exactref3_rank1scale_hybrid_h100_20260715_061000/analysis/causal_result.md`.
+
+The decisive both-follower replay closes the K=4 state boundary. H100 job
+`11207973` uses the exact iteration-2 maps, exact dynamic dispatch row, and
+both followers' self-consistent post-iteration-2 scale matrices. The
+pre-score replay assertion passes bitwise. All 10,000 class assignments and
+class occupancies are exact; translations differ by at most `3.814e-7` pixel.
+Both stable-follower populations have zero Pmax errors above `0.001`, with
+maxima `3.204e-4/5.838e-4`. Overall Pmax mean/median/p95 absolute errors are
+`1.297e-5/5.368e-6/3.705e-5`. One particle remains unresolved: particle 6848
+has a 150.464-degree rotation change and Pmax `0.962491/0.983205`, while its
+complete competing score arrays were not captured. It is therefore not
+classified as a numerical tie. Direct per-class FSC-AUC is
+`[0.9999999802, 0.9999999797, 0.9999999715, 0.9997842943]`; GT FSC-AUC deltas
+are `[-1.34e-6, -3.96e-8, +8.64e-7, +1.50e-5]`. The remaining K=4 work is a
+complete-score capture for particle 6848 and then an uninterrupted trajectory
+using the now-verified dynamic-dispatch/follower-state boundary.
+
+Both-follower decisive result:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_exactref3_bothscale_selfconsistent_h100_20260715_064500/analysis/decisive_result.md`.
+Content-bound reusable schedule:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_dispatch_scale_oracle3_paired_h100_20260715_063000/schedule_v2/dispatch_schedule_schema2.npz`.
+Content-bound follower-scale replay:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_dispatch_scale_oracle3_paired_h100_20260715_063000/schedule_v2/follower_scale_replay_it3_schema1.npz`.
+
+A new self-consistent cold capture measures the full competing score arrays
+for the same particle identity but does not retroactively close the old
+trajectory residual.  Job `11208454` completes all three science iterations
+and writes the result NPZ in 821 seconds; Slurm reports `FAILED 1:0` only
+because its end-of-wrapper source hash guard correctly detects concurrent
+edits to `iteration_loop.py` and `run_full_refinement.py`.  Launch provenance
+is preserved and the science arrays pass the corrected strict analysis.
+Classes 1/2 have zero fine hypotheses in both implementations; classes 3/4
+have exact common support `128/256`, and reconstruction support is exactly
+three class-4 hypotheses in each.  Rotation matrices and translation keys are
+identical after class-specific permutation, and the winner is the same
+class-4 pose.  Across all 384 fine hypotheses, centered pre-prior score
+max/p95 errors are `0.002056/0.000747`, posterior L1 is `0.0001520`, and Pmax
+is `0.533119/0.533195`.  These are measured small residuals, not a blanket
+numerical-noise classification.  The cold RELION Pmax differs from the old
+oracle (`0.533` versus `0.962`), so particle 6848 in job `11207973` remains
+unresolved until its own complete competing scores are captured.
+
+The capture also exposed and fixed a comparison-tool bug: K-class matrix mode
+could select another class's larger fine-Euler table before filtering rows by
+class.  Fine-Euler discovery and minimum-row calculation are now
+class-specific, with a regression test; strict scratch analysis asserts exact
+fine and reconstruction common-support counts.
+
+Particle-6848 cold-capture audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_particle6848_scores_selfconsistent_h100_20260715_071500/analysis/particle6848_result.md`.
+
+The first K=1 iteration-5 BPref capture is quarantined.  Job `11206341`
+correctly stops before RECOVAR because its dump-enabled RELION arm misses the
+strict inertness threshold against the earlier oracle: iteration-5 half-1
+FSC-AUC is `0.999992807`, half-1 p05 FSC is `0.999982676`, and merged FSC-AUC
+is `0.999997049`.  No relaxed threshold is used and none of its BPref or
+particle arrays are admitted as causal evidence.  Same-job/same-H100 paired
+job `11206596` also fails closed: dump versus no-dump iteration-5 half-1 and
+merged FSC-AUC are `0.999993212/0.999997211`, half-1 p05 FSC is
+`0.999983314`, target 5400 differs only in Pmax by `1e-6`, and all-particle
+Pmax mean/p95/max absolute differences are
+`5.75e-5/1.69e-4/0.03545`.  RECOVAR again does not run under that strict
+cross-run gate.
+
+The required two-arm no-dump/no-dump control is decisive.  Same-job,
+same-physical-H100 job `11207058` runs the identical cold RELION command twice
+with every capture hook disabled.  By iteration 5 the two ordinary runs have
+half-1/merged FSC-AUC `0.996578561/0.998526844`, half-1 p05 FSC
+`0.993169764`, and Pmax mean/p95/max absolute differences
+`0.00710685/0.0234492/0.643981`.  Relative to that intrinsic cold-run
+envelope, the dump/no-dump map deficits are 504x smaller for half 1 and 528x
+smaller for the merged map; Pmax mean/p95/max are 124x/139x/18x smaller.
+Therefore the original strict gate remains red and is not relaxed, but the
+hook effect is substantially below ordinary RELION rerun variability.
+Captured arrays are admissible only for self-consistent within-run causal
+analysis tied to the dump arm's maps and state; they are never evidence of
+bitwise cross-run identity and must not be mixed with another cold oracle.
+
+K=1 rejected-capture gate:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it5_exact_boundary_h100_20260715_051100/analysis/inertness_gate.json`.
+Paired same-H100 rejected-capture gate:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it5_paired_inertness_h100_20260715_052612/analysis/paired_inertness_gate.json`.
+Hook-versus-intrinsic classification:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it5_paired_inertness_h100_20260715_052612/analysis/hook_vs_intrinsic_envelope.md`.
+Two-no-dump envelope:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it5_two_nodump_h100_20260715_055424/analysis/two_nodump_envelope.json`.
+
+A separate strict K>1 correctness bug is fixed before convergence testing.
+The final joined all-data expectation previously reused the last numbered
+iteration's particle owners even though RELION launches a new dynamic work
+queue.  The final path now requires the next absolute-iteration dispatch row,
+selects post-numbered live follower scales with those owners, preserves the
+resident norm/scale ratio, rebuilds expanded XA/AA worker-group IDs, and fails
+closed when the final row is absent.  This bug cannot explain numbered
+iteration-3 results, does not apply to K=1, and only affects K>1 runs that
+actually enter the converged final expectation.
+
+The K=1 iteration-5 within-run boundary capture completed in Slurm job
+`11207474`; its wrapper failed only after science because a generic final-map
+helper requested `run_class001.mrc` from a deliberately non-converged,
+five-numbered-iteration RELION run.  The capture manifest itself passes.  The
+raw pre-join accumulator difference is not an RECOVAR M-step error: RELION's
+low-resolution half join changes its own numerator by approximately `3.8%`
+relative L2 and its weight by `0.324%`.  After that join, RECOVAR versus RELION
+relative L2 is `1.028e-4/9.548e-5` for the half-1/half-2 numerators and
+`2.148e-5/2.014e-5` for the weights.  RELION's post-join and pre-reconstruct
+arrays are exactly identical.  These residuals are small but not declared
+numerical noise until the captured cross-reconstruction matrix determines
+their FSC/FSC-AUC effect.
+
+The same within-run matched boundary already rules out a hidden score/support
+bug for the captured particle.  Its aligned 32-candidate raw-score residual
+has p95/max absolute values `0.00148/0.00218`, posterior total variation is
+`3.98e-6`, the winner is identical, and both implementations select exactly
+two reconstruction candidates with no support disagreement.  With exact
+RELION iteration-4 half maps and state injected at the iteration-5 scoring
+boundary, the resulting half-1/half-2/merged map FSC-AUC values are
+`0.999999981/0.999999982/0.999999984`.  Thus the one-step iteration-5 boundary
+is closed to the numerical envelope; the bad uninterrupted trajectory is the
+amplification of small recurrent residuals, not a missing discrete branch at
+this boundary.
+
+The controlled two-by-two cross-reconstruction matrix localizes the residual
+further.  Switching only RELION versus RECOVAR post-join accumulators gives
+merged FSC-AUC `0.99999999562` through the RELION reconstructor and
+`0.99999999561` through the RECOVAR reconstructor.  Switching only the
+reconstructor gives `0.99999999980` on the RELION accumulator and
+`0.99999999997` on the RECOVAR accumulator.  RECOVAR's reconstruction
+implementation is therefore not the trajectory bug.  Replaying RECOVAR's
+native per-half tau closes another `1.07e-8` of FSC-AUC deficit, versus
+`4.39e-9` from the accumulator and approximately `2.0e-10` from the
+reconstructor.  Valid same-H100 job `11208106` confirms this
+ranking: its native-tau replay versus the saved RECOVAR map has merged FSC-AUC
+`0.999999994884`; A100/H100 AUC differences are at most `1.68e-11`.  The
+earlier job `11208095` is discarded because JAX fell back to CPU.  The
+remaining K=1 work is upstream numerical fidelity in the tau/FSC, BPref, and
+particle score/posterior operands; it is no longer a hardware,
+reconstruction-algorithm, or support question.
+
+The H100 microbatch-order discriminator further excludes reduction partition
+as the dominant cause.  Job `11208415` changes only the iteration-5 cap from
+`549550` to `35933` (2,500 two-image buckets), retaining the exact injected
+RELION iteration-4 maps and all earlier settings.  Post-join BPref numerator
+relative L2 changes by only `4.736e-6/4.861e-6` for half 1/2 and weight by
+`8.843e-7/9.047e-7`, approximately 4--5% of the persistent RELION gaps.
+There are no rotation or translation changes and Pmax changes by at most
+`1.407e-4`.  Merged map FSC-AUC versus RELION is
+`0.999999984013/0.999999984134` for the baseline/microcap arms, while the two
+RECOVAR arms have FSC-AUC `0.999999992781`.  Thus tau formula, shell binning,
+reconstruction, hardware, and dominant microbatch reduction order are ruled
+out.  The first real mismatch is upstream post-join BPref input arithmetic;
+broad matched posterior/contribution capture is still required to separate
+score/posterior arithmetic from interpolation/backprojection accumulation,
+so the residual is not labeled harmless numerical noise.
+
+Within-run iteration-5 boundary evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it5_withinrun_boundary_h100_20260715_061427/analysis/bpref_boundaries.json`.
+Particle score/support evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it5_withinrun_boundary_h100_20260715_061427/analysis/particle396_operands.json`.
+Numbered map FSC evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it5_withinrun_boundary_h100_20260715_061427/analysis/numbered_map_fsc.json`.
+Cross-reconstruction evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it5_withinrun_boundary_h100_20260715_061427/analysis/cross_reconstruct_it5.json`.
+Native-tau replay evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it5_withinrun_boundary_h100_20260715_061427/analysis/replay_recovar_native_tau_it5.json`.
+Same-H100 native-tau replay:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it5_withinrun_boundary_h100_20260715_061427/analysis/replay_recovar_native_tau_it5_h100.json`.
+Causal boundary conclusion:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it5_withinrun_boundary_h100_20260715_061427/analysis/causal_conclusion.json`.
+Microbatch-order discriminator:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it5_microcap35933_h100_20260715_074500/analysis/microcap_result.json`.
+
+Strict K>1 launchers now preserve this boundary instead of silently reverting
+to static or disabled follower ownership.  The 100k completion launcher
+requires an explicit `K4_RELION_DISPATCH_SCHEDULE` captured from its RELION
+fixture.  The K-class robustness launcher requires an absolute executable in
+`EM_KCLASS_MATRIX_RELION_REFINE_MPI` that honors `RELION_DISPATCH_LOG`, builds
+the schedule from that case's just-completed oracle, and passes it to RECOVAR.
+The stock RELION executable therefore fails before submission rather than
+wasting a long run that cannot produce strict parity evidence.  A strict
+replay may remain a numbered-iteration diagnostic without unnumbered final
+files, but if it enters RELION's final all-data boundary it now requires both
+`run_sampling.star` and `run_optimiser.star`; stale numbered-state or
+unperturbed fallbacks are not accepted as parity evidence.
+
+Schedule provenance is content-bound, not path-bound.  Its versioned schema
+stores a manifest hash over the exact RELION state artifacts and captured
+dispatch log plus a generated dispatch-topology metadata sidecar, a separate hash
+of particle identities and parity-relevant labels in authoritative row order,
+and a derived oracle ID.  The runner recomputes those hashes against the active
+replay/init directory; relocation without content changes remains valid, while
+missing/modified state, reordered particles, legacy schedules, and follower
+scale checkpoints from another oracle fail closed.  Follower-scale replay
+artifacts additionally declare their numbered pre-score boundary and source
+checkpoint paths; those checkpoint bytes must be present in the verified
+schedule manifest.  Validation also reconstructs the owner matrix from the raw
+dispatch chunks and reconstructs the numbered pre-score matrix from the prior
+post-M-step follower TSVs; merely claiming current manifest paths is
+insufficient.  The hardened K=4 reusable oracle has ID
+`ddb61ddd4d9d8abec93fab9f9ac7e41863c1f7e9da14f2bd65ecc15ad5c2937b`
+and 36 manifest artifacts.

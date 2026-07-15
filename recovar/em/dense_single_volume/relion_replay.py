@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -45,6 +46,52 @@ from recovar.em.dense_single_volume.relion_metadata import (
 # ``relion_replay``. See tests/unit/test_refine_relion_mode.py:5408.
 
 logger = logging.getLogger(__name__)
+
+
+def read_relion_single_optics_sigma2_noise(model, *, context):
+    """Read the sole supported RELION optics-group noise spectrum.
+
+    RELION carries one ``sigma2_noise`` spectrum per optics group. RECOVAR's
+    current EM scorer carries only one spectrum per random half, so silently
+    selecting optics group 1 would produce incorrect strict-parity results for
+    multi-optics data. Fail closed until scoring is optics-group indexed.
+    """
+
+    if not isinstance(model, dict):
+        return None
+    noise_keys = sorted(
+        key
+        for key, table in model.items()
+        if re.fullmatch(r"model_optics_group_\d+", str(key))
+        and hasattr(table, "columns")
+        and "rlnSigma2Noise" in table.columns
+    )
+    if len(noise_keys) > 1:
+        raise NotImplementedError(
+            f"Strict RELION replay does not yet support {len(noise_keys)} optics-group "
+            f"sigma2_noise tables in {context}: {noise_keys}"
+        )
+    if not noise_keys:
+        return None
+    return np.asarray(model[noise_keys[0]]["rlnSigma2Noise"], dtype=np.float64)
+
+
+def relion_mpi_process_start_scoring_noise_pair(noise_half1, noise_half2, *, split_random_halves):
+    """Return the noise arrays that RELION MPI uses at process-start scoring.
+
+    AutoRefine reads a model for each random subset, but MPI initialisation
+    then calls ``initialiseSigma2Noise`` only on follower rank 1 and broadcasts
+    that rank's ``mymodel.sigma2_noise`` to every follower. Consequently both
+    random subsets score with the half-1 spectrum at process start. Later
+    uninterrupted iterations update each follower independently. Class3D has
+    one shared model and does not need this emulation.
+    """
+
+    first = np.asarray(noise_half1, dtype=np.float32)
+    second = np.asarray(noise_half2, dtype=np.float32)
+    if split_random_halves:
+        second = first.copy()
+    return [first, second]
 
 
 def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: int) -> int:
@@ -187,6 +234,92 @@ class _RelionHalfInputState:
         )
 
 
+def _apply_replay_correction_overrides(*, relion_half_inputs, replay_override) -> list[str]:
+    """Apply replay norm/scale state while distinguishing serialized and live scale."""
+
+    replay_image_value = replay_override.get("image_corrections")
+    serialized_scale_value = replay_override.get("serialized_scale_corrections")
+    scoring_scale_value = replay_override.get("scoring_scale_corrections")
+    legacy_scale_value = replay_override.get("scale_corrections")
+    if legacy_scale_value is not None:
+        if serialized_scale_value is not None or scoring_scale_value is not None:
+            raise ValueError(
+                "Legacy scale_corrections cannot be combined with serialized_scale_corrections "
+                "or scoring_scale_corrections"
+            )
+        logger.warning(
+            "Replay override: scale_corrections is deprecated; treating it as an explicit "
+            "scoring scale and, when paired with image_corrections, its source scale"
+        )
+        scoring_scale_value = legacy_scale_value
+        if replay_image_value is not None:
+            # Historical callers supplied image and scale as one paired state.
+            # Treating the legacy scale as both source and target preserves
+            # those exact arrays instead of rescaling against resident state.
+            serialized_scale_value = legacy_scale_value
+
+    replay_images = _optional_float32_half_pair(replay_image_value)
+    serialized_scales = _optional_float32_half_pair(serialized_scale_value)
+    scoring_scales = _optional_float32_half_pair(scoring_scale_value)
+
+    for half_idx in range(2):
+        resident_image = relion_half_inputs.image_corrections[half_idx]
+        resident_scale = relion_half_inputs.scale_corrections[half_idx]
+        override_image = replay_images[half_idx]
+        serialized_scale = serialized_scales[half_idx]
+        explicit_scoring_scale = scoring_scales[half_idx]
+
+        # A model STAR is leader-serialized provenance, not necessarily the
+        # scale resident on the scorer rank. Preserve a live native scale
+        # unless an explicit scoring oracle is supplied. A cold start has no
+        # resident scale and therefore falls back to the serialized one.
+        target_scale = (
+            explicit_scoring_scale
+            if explicit_scoring_scale is not None
+            else resident_scale
+            if resident_scale is not None
+            else serialized_scale
+        )
+        base_image = override_image if override_image is not None else resident_image
+        base_scale = (
+            serialized_scale
+            if override_image is not None and serialized_scale is not None
+            else resident_scale
+        )
+
+        if target_scale is not None:
+            target_scale = np.asarray(target_scale, dtype=np.float32)
+            if not np.all(np.isfinite(target_scale)) or np.any(target_scale <= 0.0):
+                raise ValueError("scoring scale corrections must be finite and positive")
+        if base_scale is not None:
+            base_scale = np.asarray(base_scale, dtype=np.float32)
+            if not np.all(np.isfinite(base_scale)) or np.any(base_scale <= 0.0):
+                raise ValueError("source scale corrections must be finite and positive")
+        if base_image is not None:
+            base_image = np.asarray(base_image, dtype=np.float32)
+            if target_scale is not None and base_scale is None:
+                raise ValueError("Cannot preserve image_corrections/scale without a source scale")
+            if target_scale is not None and base_scale is not None:
+                if base_image.shape != base_scale.shape or base_image.shape != target_scale.shape:
+                    raise ValueError("image, source-scale, and scoring-scale corrections must have matching shapes")
+                base_image = base_image * (target_scale / base_scale)
+            relion_half_inputs.image_corrections[half_idx] = base_image
+        if explicit_scoring_scale is not None or resident_scale is None:
+            relion_half_inputs.scale_corrections[half_idx] = target_scale
+
+    applied_fields = []
+    if replay_image_value is not None:
+        applied_fields.append("image_corrections")
+        logger.info("Replay override: image_corrections <- norm state rescaled to live scoring scale")
+    if serialized_scale_value is not None and legacy_scale_value is None:
+        applied_fields.append("serialized_scale_corrections")
+        logger.info("Replay provenance: serialized_scale_corrections recorded; resident scoring scale preserved")
+    if scoring_scale_value is not None:
+        applied_fields.append("scale_corrections" if legacy_scale_value is not None else "scoring_scale_corrections")
+        logger.info("Replay override: scoring scale corrections <- explicit scorer oracle")
+    return applied_fields
+
+
 @dataclass
 class ReplayOverrideResult:
     """Iteration-state values touched by replay overrides.
@@ -237,6 +370,9 @@ def apply_iter_replay_overrides(
 ) -> ReplayOverrideResult:
     """Apply per-iteration replay overrides to the in-flight iteration state.
 
+    See ``docs/math/em_parity_program.md`` under the 2026-07-15 targeted
+    posterior discriminators for the serialized-versus-runtime scale contract.
+
     Mutates ``state``, ``relion_half_inputs``, and the four direction-prior
     lists in place. Returns explicit new values for everything else.
 
@@ -247,8 +383,8 @@ def apply_iter_replay_overrides(
        healpix order, local-search activation, sigma priors, translation
        range/step, current_size, and direction priors.
     2. ``iter_replay_override`` dict: explicit overrides for sigma_offset,
-       previous-best poses, image/scale corrections, noise variance, and
-       direction priors.
+       previous-best poses, image corrections, serialized/scoring scale
+       corrections, noise variance, and direction priors.
     """
 
     # Resolve sampling-module helpers through iteration_loop so test
@@ -575,22 +711,10 @@ def apply_iter_replay_overrides(
                 "set" if relion_half_inputs.previous_best_rotation_eulers[0] is not None else "none",
                 "set" if relion_half_inputs.previous_best_rotation_eulers[1] is not None else "none",
             )
-        _replay_img_corr = iter_replay_override.get("image_corrections")
-        if _replay_img_corr is not None:
-            relion_half_inputs.image_corrections = _optional_float32_half_pair(_replay_img_corr)
-            logger.info(
-                "Replay override: image_corrections <- half1=%s half2=%s",
-                "set" if relion_half_inputs.image_corrections[0] is not None else "none",
-                "set" if relion_half_inputs.image_corrections[1] is not None else "none",
-            )
-        _replay_scale_corr = iter_replay_override.get("scale_corrections")
-        if _replay_scale_corr is not None:
-            relion_half_inputs.scale_corrections = _optional_float32_half_pair(_replay_scale_corr)
-            logger.info(
-                "Replay override: scale_corrections <- half1=%s half2=%s",
-                "set" if relion_half_inputs.scale_corrections[0] is not None else "none",
-                "set" if relion_half_inputs.scale_corrections[1] is not None else "none",
-            )
+        _apply_replay_correction_overrides(
+            relion_half_inputs=relion_half_inputs,
+            replay_override=iter_replay_override,
+        )
         _replay_noise = iter_replay_override.get("noise_variance")
         if _replay_noise is not None:
             noise_variance_per_half = _normalize_noise_variance_per_half(_replay_noise, n_halves=2)

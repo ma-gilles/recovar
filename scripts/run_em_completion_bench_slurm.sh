@@ -55,6 +55,7 @@ K1_DATA_DIR="${K1_DATA_DIR:-/scratch/gpfs/GILLES/mg6942/em_relion_proj/pdb_k1_g2
 K1_RELION_DIR="${K1_RELION_DIR:-${K1_DATA_DIR}/relion_autorefine_k1_it015_os1}"
 K4_DATA_DIR="${K4_DATA_DIR:-/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123}"
 K4_RELION_DIR="${K4_RELION_DIR:-${K4_DATA_DIR}/relion_class3d_k4_it015_clean9d9}"
+K4_RELION_DISPATCH_SCHEDULE="${K4_RELION_DISPATCH_SCHEDULE:-}"
 
 K1_IMAGE_BATCH_SIZE="${K1_IMAGE_BATCH_SIZE:-187}"
 K1_ROTATION_BLOCK_SIZE="${K1_ROTATION_BLOCK_SIZE:-8192}"
@@ -113,6 +114,8 @@ Environment overrides:
   K1_RELION_DIR              K=1 RELION output directory
   K4_DATA_DIR                K=4 fixture directory
   K4_RELION_DIR              K=4 RELION output directory
+  K4_RELION_DISPATCH_SCHEDULE
+                             Exact dynamic MPI dispatch NPZ captured from K4_RELION_DIR
   K1_IMAGE_BATCH_SIZE        K=1 image batch size (default: ${K1_IMAGE_BATCH_SIZE})
   K1_ROTATION_BLOCK_SIZE     K=1 rotation block size (default: ${K1_ROTATION_BLOCK_SIZE})
   K1_MAX_ITER                K=1 max iteration cap (default: ${K1_MAX_ITER}; high enough for stored RELION final pass)
@@ -330,6 +333,14 @@ done
 require_file "${K4_RELION_DIR}/run_it000_model.star"
 require_file "${K4_RELION_DIR}/run_it001_optimiser.star"
 require_file "${K4_RELION_DIR}/run_it015_optimiser.star"
+if [[ "${RUN_K4}" -eq 1 ]]; then
+  if [[ -z "${K4_RELION_DISPATCH_SCHEDULE}" ]]; then
+    echo "K4_RELION_DISPATCH_SCHEDULE is required for strict K>1 RELION parity." >&2
+    echo "Capture the dynamic MPI dispatch from the same K4_RELION_DIR oracle run." >&2
+    exit 2
+  fi
+  require_file "${K4_RELION_DISPATCH_SCHEDULE}"
+fi
 
 # Guard against accidentally benchmarking tuned parameter variants. These are
 # the stored RELION GUI-default command shapes accepted in the EM completion
@@ -982,6 +993,7 @@ set +e
   --relion_optimiser "${K4_RELION_DIR}/run_it015_optimiser.star" \\
   --relion_init_dir "${K4_RELION_DIR}" \\
   --perturb_replay_relion_dir "${K4_RELION_DIR}" \\
+  --relion-dispatch-schedule "${K4_RELION_DISPATCH_SCHEDULE}" \\
   --particle_diameter_ang 380 \\
   --tau2_fudge 4.0 \\
   --benchmark_ledger_json "\${OUTPUT_DIR}/benchmark_ledger.json" \\
@@ -1151,6 +1163,7 @@ echo "K=1 max iter: ${K1_MAX_ITER}"
 echo "K=1 Slurm mem/time: ${K1_MEM}/${K1_TIME_LIMIT}"
 echo "K=4 fixture: ${K4_DATA_DIR}"
 echo "K=4 RELION:  ${K4_RELION_DIR}"
+echo "K=4 dispatch schedule: ${K4_RELION_DISPATCH_SCHEDULE:-<not requested>}"
 echo "K=4 max iter: ${K4_MAX_ITER}"
 echo "K=4 Slurm mem/time: ${K4_MEM}/${K4_TIME_LIMIT}"
 echo "K=4 fused sparse pass2: ${RUN_K4_FUSED_SPARSE_PASS2}"
@@ -1229,6 +1242,7 @@ K1_MEM=${K1_MEM}
 K1_TIME_LIMIT=${K1_TIME_LIMIT}
 K4_DATA_DIR=${K4_DATA_DIR}
 K4_RELION_DIR=${K4_RELION_DIR}
+K4_RELION_DISPATCH_SCHEDULE=${K4_RELION_DISPATCH_SCHEDULE}
 K4_IMAGE_BATCH_SIZE=${K4_IMAGE_BATCH_SIZE}
 K4_ROTATION_BLOCK_SIZE=${K4_ROTATION_BLOCK_SIZE}
 K4_MAX_ITER=${K4_MAX_ITER}

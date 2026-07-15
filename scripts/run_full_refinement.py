@@ -37,6 +37,20 @@ import numpy as np
 
 from recovar import utils
 from recovar.core import fourier_transform_utils as ftu
+from recovar.em.dense_single_volume.relion_replay import (
+    read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
+)
+from recovar.em.dense_single_volume.relion_replay import (
+    relion_mpi_process_start_scoring_noise_pair as _relion_mpi_process_start_scoring_noise_pair,
+)
+from recovar.em.dense_single_volume.relion_worker_scale import (
+    load_relion_dispatch_schedule,
+    load_relion_follower_scale_replay,
+    relion_class3d_follower_owners_from_schedule,
+    relion_ordered_particle_sha256,
+    validate_relion_follower_scale_replay,
+    verify_relion_dispatch_schedule_oracle,
+)
 from recovar.utils.parity_provenance import _safe_git_commit, git_worktree_provenance
 
 logging.basicConfig(
@@ -405,7 +419,10 @@ class NativeGroupLayout(NamedTuple):
     """RELION group labels in RECOVAR half order plus the full model axis."""
 
     group_ids_per_half: tuple[np.ndarray, np.ndarray]
+    particle_ids_per_half: tuple[np.ndarray, np.ndarray]
+    optics_group_ids_per_half: tuple[np.ndarray, np.ndarray]
     n_groups: int
+    n_optics_groups: int
     source: str
 
 
@@ -477,6 +494,25 @@ def _resolve_native_group_layout(
         [group_numbers_source[group_rows[identity]] - 1 for identity in our_rows],
         dtype=np.int64,
     )
+    particle_ids_by_our_row = np.asarray(
+        [group_rows[identity] for identity in our_rows],
+        dtype=np.int64,
+    )
+    if "rlnOpticsGroup" in group_particles.columns:
+        optics_numbers_source = np.asarray(group_particles["rlnOpticsGroup"], dtype=np.int64).reshape(-1)
+        if optics_numbers_source.shape != (len(group_particles),):
+            raise ValueError(
+                f"rlnOpticsGroup length {optics_numbers_source.size} does not match "
+                f"{source} particle count {len(group_particles)}",
+            )
+        if optics_numbers_source.size and int(np.min(optics_numbers_source)) < 1:
+            raise ValueError("RELION rlnOpticsGroup values must be 1-based positive integers")
+    else:
+        optics_numbers_source = np.ones(len(group_particles), dtype=np.int64)
+    optics_group_ids_by_our_row = np.asarray(
+        [optics_numbers_source[group_rows[identity]] - 1 for identity in our_rows],
+        dtype=np.int64,
+    )
     half_indices = []
     for label, values in (("half1_idx", half1_idx), ("half2_idx", half2_idx)):
         indices = np.asarray(values, dtype=np.int64).reshape(-1)
@@ -489,12 +525,22 @@ def _resolve_native_group_layout(
         raise ValueError("half1_idx and half2_idx overlap")
 
     n_groups = int(np.max(group_numbers_source)) if group_numbers_source.size else 0
+    n_optics_groups = int(np.max(optics_numbers_source)) if optics_numbers_source.size else 0
     return NativeGroupLayout(
         group_ids_per_half=(
             np.asarray(group_ids_by_our_row[half_indices[0]], dtype=np.int64),
             np.asarray(group_ids_by_our_row[half_indices[1]], dtype=np.int64),
         ),
+        particle_ids_per_half=(
+            np.asarray(particle_ids_by_our_row[half_indices[0]], dtype=np.int64),
+            np.asarray(particle_ids_by_our_row[half_indices[1]], dtype=np.int64),
+        ),
+        optics_group_ids_per_half=(
+            np.asarray(optics_group_ids_by_our_row[half_indices[0]], dtype=np.int64),
+            np.asarray(optics_group_ids_by_our_row[half_indices[1]], dtype=np.int64),
+        ),
         n_groups=n_groups,
+        n_optics_groups=n_optics_groups,
         source=source,
     )
 
@@ -510,6 +556,53 @@ def _load_native_group_ids_per_half(particles_star, half1_idx, half2_idx):
     return None if layout is None else list(layout.group_ids_per_half)
 
 
+def _load_replay_group_particles(relion_dir, *, init_relion_iteration=0):
+    """Load the first authoritative replay data STAR carrying group labels."""
+
+    if relion_dir is None:
+        return None
+    import starfile as _starfile
+
+    relion_dir = Path(relion_dir).resolve()
+    preferred = relion_dir / f"run_it{int(init_relion_iteration):03d}_data.star"
+    iter0 = relion_dir / "run_it000_data.star"
+    candidates = [preferred]
+    if iter0 != preferred:
+        candidates.append(iter0)
+    candidates.extend(sorted(relion_dir.glob("run_it*_data.star")))
+    seen = set()
+    for path in candidates:
+        if path in seen or not path.exists():
+            continue
+        seen.add(path)
+        data = _starfile.read(str(path))
+        particles = data["particles"] if isinstance(data, dict) else data
+        if "rlnGroupNumber" in particles.columns:
+            return particles, path
+    return None
+
+
+def _select_authoritative_group_particles(
+    *,
+    halfset_particles=None,
+    halfset_source=None,
+    replay_dirs=(),
+    init_relion_iteration=0,
+):
+    """Select a particle table that actually carries RELION group labels."""
+
+    if halfset_particles is not None and "rlnGroupNumber" in halfset_particles.columns:
+        return halfset_particles, None if halfset_source is None else Path(halfset_source).resolve()
+    for replay_dir in replay_dirs:
+        replay_groups = _load_replay_group_particles(
+            replay_dir,
+            init_relion_iteration=init_relion_iteration,
+        )
+        if replay_groups is not None:
+            return replay_groups
+    return None, None
+
+
 def _default_refinement_subsets(n_images, seed, n_classes):
     """Return default dataset splits for RELION-style refinement."""
 
@@ -521,37 +614,27 @@ def _default_refinement_subsets(n_images, seed, n_classes):
     return np.sort(indices[: int(n_images) // 2]), np.sort(indices[int(n_images) // 2 :])
 
 
-def _image_name_to_stack_index(name) -> int:
-    import re
-
-    match = re.match(r"(\d+)@", str(name))
-    return int(match.group(1)) if match else -1
-
-
 def _relion_halfset_and_accuracy_layout(our_particles, relion_particles):
     """Map RELION's internal data rows onto RECOVAR's half-local ordering."""
-    our_stack_indices = np.asarray(
-        [_image_name_to_stack_index(name) for name in our_particles["rlnImageName"]],
-        dtype=np.int64,
+    our_row_by_identity = _particle_identity_rows(
+        our_particles,
+        label="RECOVAR input STAR",
     )
-    relion_stack_indices = np.asarray(
-        [_image_name_to_stack_index(name) for name in relion_particles["rlnImageName"]],
-        dtype=np.int64,
+    relion_row_by_identity = _particle_identity_rows(
+        relion_particles,
+        label="RELION data STAR",
     )
-    if np.any(our_stack_indices < 0) or np.any(relion_stack_indices < 0):
-        raise ValueError("RELION/RECOVAR image names must use the '<index>@<stack>' form")
-    if np.unique(our_stack_indices).size != our_stack_indices.size:
-        raise ValueError("RECOVAR input STAR contains duplicate stack indices")
-    if np.unique(relion_stack_indices).size != relion_stack_indices.size:
-        raise ValueError("RELION data STAR contains duplicate stack indices")
-    our_row_by_stack = {int(stack_idx): row for row, stack_idx in enumerate(our_stack_indices)}
-    relion_row_by_stack = {int(stack_idx): row for row, stack_idx in enumerate(relion_stack_indices)}
-    if set(our_row_by_stack) != set(relion_row_by_stack):
-        raise ValueError("RELION and RECOVAR STAR files do not contain the same stack indices")
+    if set(our_row_by_identity) != set(relion_row_by_identity):
+        raise ValueError(
+            "RELION and RECOVAR STAR files do not contain the same "
+            "rlnImageName/stack identities"
+        )
+    our_identities = list(our_row_by_identity)
+    relion_identities = list(relion_row_by_identity)
 
     relion_subsets = np.asarray(relion_particles["rlnRandomSubset"], dtype=np.int64)
     our_relion_rows = np.asarray(
-        [relion_row_by_stack[int(stack_idx)] for stack_idx in our_stack_indices],
+        [relion_row_by_identity[identity] for identity in our_identities],
         dtype=np.int64,
     )
     our_subsets = relion_subsets[our_relion_rows]
@@ -561,7 +644,7 @@ def _relion_halfset_and_accuracy_layout(our_particles, relion_particles):
     half1_local_by_our_row = {int(our_row): local for local, our_row in enumerate(half1_idx)}
     half1_base_order_local = np.asarray(
         [
-            half1_local_by_our_row[our_row_by_stack[int(relion_stack_indices[relion_row])]]
+            half1_local_by_our_row[our_row_by_identity[relion_identities[relion_row]]]
             for relion_row in np.flatnonzero(relion_subsets == 1)
         ],
         dtype=np.int64,
@@ -617,6 +700,7 @@ def _build_replay_iteration_overrides(
     init_relion_iteration=0,
     particle_names=None,
     include_initial_state=False,
+    strict=False,
 ):
     """Build per-iter replay overrides keyed on recovar iteration index.
 
@@ -625,7 +709,8 @@ def _build_replay_iteration_overrides(
     (or the shared Class3D run_it{k:03d}_model.star) and builds an
     override dict containing:
       * image_corrections: per-image (avg_norm/normcorr) * group_scale
-      * scale_corrections: per-image group_scale alone
+      * serialized_scale_corrections: per-image model-STAR group scale,
+        retained as provenance rather than forced onto the live scorer
       * previous_best_translations / previous_best_rotation_eulers: RELION's
         previous hard assignments for local-search centering
 
@@ -653,10 +738,6 @@ def _build_replay_iteration_overrides(
 
     relion_dir = _Path(relion_dir).resolve()
 
-    def _idx(name):
-        m = _re.match(r"(\d+)@", str(name))
-        return int(m.group(1)) - 1 if m else -1
-
     def _model_has_class_direction_priors(model):
         return any(str(key).startswith("model_pdf_orient_class_") for key in model)
 
@@ -674,10 +755,13 @@ def _build_replay_iteration_overrides(
         return read_relion_direction_prior(model_path)
 
     def _read_model_noise_variance(model, *, image_shape):
-        optics = model.get("model_optics_group_1") if isinstance(model, dict) else None
-        if optics is None or "rlnSigma2Noise" not in optics:
+        radial = _read_relion_single_optics_sigma2_noise(
+            model,
+            context="replay model",
+        )
+        if radial is None:
             return None
-        radial = np.asarray(optics["rlnSigma2Noise"], dtype=np.float64) * float(ds_grid) ** 4
+        radial = radial * float(ds_grid) ** 4
         return np.asarray(
             utils.make_radial_image(jnp.asarray(radial), image_shape, extend_last_frequency=True),
             dtype=np.float32,
@@ -738,12 +822,13 @@ def _build_replay_iteration_overrides(
                 missing.append(str(data_star))
             if model_paths is None:
                 missing.append(f"{model_h1} + {model_h2} or {model_shared}")
-            logger.warning(
-                "Replay override for recovar iter %d (RELION iter %03d): missing %s — leaving unset",
-                recovar_iter + 1,
-                relion_iter,
-                "; ".join(missing),
+            message = (
+                f"Replay override for recovar iter {recovar_iter + 1} "
+                f"(RELION iter {relion_iter:03d}) is missing {'; '.join(missing)}"
             )
+            if strict:
+                raise ValueError(message)
+            logger.warning("%s — leaving unset", message)
             continue
 
         data = _sf.read(str(data_star))
@@ -751,8 +836,10 @@ def _build_replay_iteration_overrides(
         m1 = _sf.read(str(model_paths[0]))
         m2 = _sf.read(str(model_paths[1]))
 
-        names = list(parts["rlnImageName"])
-        idx_to_pos = {_idx(names[i]): i for i in range(len(names))}
+        replay_identity_rows = _particle_identity_rows(
+            parts,
+            label=f"RELION replay STAR {data_star}",
+        )
 
         nc = np.asarray(parts["rlnNormCorrection"], dtype=np.float64)
 
@@ -804,29 +891,34 @@ def _build_replay_iteration_overrides(
 
         # Map RELION particle order to recovar's half1/half2 ordering.
         # half1_idx / half2_idx are row positions in RECOVAR's input STAR,
-        # whereas idx_to_pos is keyed by the original stack index encoded in
-        # rlnImageName.  These coincide for synthetic contiguous fixtures but
-        # not for real-data subsets that retain their original stack indices.
+        # Match the complete ``(index, stack path)`` identity. Numeric stack
+        # indices can repeat across multi-stack real-data STAR files.
         if particle_names is None:
-            particle_stack_indices = None
+            particle_identities = None
         else:
-            particle_stack_indices = np.asarray([_idx(name) for name in particle_names], dtype=np.int64)
-            if np.any(particle_stack_indices < 0):
-                raise ValueError("RECOVAR input contains rlnImageName values without a '<index>@' prefix")
-            if np.unique(particle_stack_indices).size != particle_stack_indices.size:
-                raise ValueError("RECOVAR input contains duplicate particle stack indices")
+            particle_identities = [
+                _relion_image_identity(name, label="RECOVAR input STAR")
+                for name in particle_names
+            ]
+            if len(set(particle_identities)) != len(particle_identities):
+                raise ValueError("RECOVAR input contains duplicate rlnImageName/stack identities")
 
         def _to_half(values, half_idx):
             rows = np.asarray(half_idx, dtype=np.int64)
-            stack_indices = rows if particle_stack_indices is None else particle_stack_indices[rows]
-            missing = sorted({int(i) for i in stack_indices if int(i) not in idx_to_pos})
+            if particle_identities is None:
+                return np.asarray(values, dtype=np.float32)[rows]
+            identities = [particle_identities[int(row)] for row in rows]
+            missing = sorted({identity for identity in identities if identity not in replay_identity_rows})
             if missing:
-                preview = ", ".join(str(i + 1) for i in missing[:8])
+                preview = ", ".join(f"{index}@{stack}" for index, stack in missing[:8])
                 raise ValueError(
-                    f"RELION replay STAR is missing {len(missing)} RECOVAR particle stack indices "
-                    f"(1-based preview: {preview})"
+                    f"RELION replay STAR is missing {len(missing)} RECOVAR particle identities "
+                    f"(preview: {preview})"
                 )
-            return np.asarray([values[idx_to_pos[int(i)]] for i in stack_indices], dtype=np.float32)
+            return np.asarray(
+                [values[replay_identity_rows[identity]] for identity in identities],
+                dtype=np.float32,
+            )
 
         corr_h1 = _to_half(combined_h1, half1_idx)
         corr_h2 = _to_half(combined_h2, half2_idx)
@@ -877,18 +969,25 @@ def _build_replay_iteration_overrides(
             "previous_best_rotation_eulers": [euler_h1, euler_h2],
         }
         if noise_h1 is not None and noise_h2 is not None:
-            override_k["noise_variance"] = [noise_h1, noise_h2]
+            override_k["noise_variance"] = _relion_mpi_process_start_scoring_noise_pair(
+                noise_h1,
+                noise_h2,
+                # RELION performs this broadcast once in MPI initialise().
+                # Later uninterrupted iterations update each follower's noise
+                # independently, so only replay slot 0 is process-start state.
+                split_random_halves=(recovar_iter == 0 and model_paths[0] != model_paths[1]),
+            )
         if direction_prior_h1 is not None and direction_prior_h2 is not None:
             override_k["direction_prior"] = [direction_prior_h1, direction_prior_h2]
         if class_tau2 is not None:
             override_k["class_tau2"] = class_tau2
         if include_normcorr:
             override_k["image_corrections"] = [corr_h1, corr_h2]
-            override_k["scale_corrections"] = [scale_corr_h1, scale_corr_h2]
+            override_k["serialized_scale_corrections"] = [scale_corr_h1, scale_corr_h2]
         overrides[recovar_iter] = override_k
         if include_normcorr:
             logger.info(
-                "Replay override recovar iter %d: image_corr means=(%s, %s), scale_corr means=(%s, %s), "
+                "Replay override recovar iter %d: image_corr means=(%s, %s), serialized_scale_corr means=(%s, %s), "
                 "sigma_offset=(half1 %.4f Å, half2 %.4f Å, mean %.4f Å)",
                 recovar_iter + 1,
                 _format_replay_mean_for_log(corr_h1),
@@ -1387,6 +1486,36 @@ def main():
         "against a RELION reference run.",
     )
     parser.add_argument(
+        "--relion-scale-followers",
+        type=int,
+        default=None,
+        help=(
+            "Strict Class3D parity topology for RELION's follower-local group-scale state. "
+            "Requires --relion-dispatch-schedule because RELION assigns --pool chunks "
+            "dynamically. Pass 0 explicitly only for a non-parity diagnostic."
+        ),
+    )
+    parser.add_argument(
+        "--relion-dispatch-schedule",
+        default=None,
+        help=(
+            "NPZ containing per-iteration dynamic MPI follower ownership captured from "
+            "the same RELION oracle run. Its state-file and ordered-particle hashes are "
+            "verified against the active replay/init directory. Required by default for "
+            "strict K>1 replay/init."
+        ),
+    )
+    parser.add_argument(
+        "--relion-follower-scale-replay",
+        default=None,
+        help=(
+            "Diagnostic NPZ containing complete follower-scale matrices at selected "
+            "numbered RELION iterations. Requires strict K>1 follower topology and "
+            "a matching captured dispatch schedule. The first numbered iteration is "
+            "rejected because its resident image-normalization state does not yet exist."
+        ),
+    )
+    parser.add_argument(
         "--init_relion_iteration",
         type=int,
         default=0,
@@ -1713,6 +1842,8 @@ def main():
     expected_accuracy_half1_optics_group_ids = None
     expected_accuracy_half1_particle_ids = None
     relion_particles = None
+    relion_group_particles = None
+    relion_group_source = None
 
     if args.relion_half_sets is not None:
         # Use RELION's half-set split from rlnRandomSubset
@@ -1758,16 +1889,163 @@ def main():
     ds_half1 = ds.subset(half1_idx)
     ds_half2 = ds.subset(half2_idx)
     logger.info("Half-sets: %d + %d images", ds_half1.n_units, ds_half2.n_units)
+    relion_group_particles, relion_group_source = _select_authoritative_group_particles(
+        halfset_particles=relion_particles,
+        halfset_source=args.relion_half_sets,
+        replay_dirs=(args.perturb_replay_relion_dir, args.relion_init_dir),
+        init_relion_iteration=args.init_relion_iteration,
+    )
     native_group_layout = _resolve_native_group_layout(
         our_particles,
         half1_idx,
         half2_idx,
-        relion_particles=relion_particles,
+        relion_particles=relion_group_particles,
     )
     native_group_ids_per_half = (
         None if native_group_layout is None else list(native_group_layout.group_ids_per_half)
     )
     native_group_count = None if native_group_layout is None else native_group_layout.n_groups
+    strict_relion_scale_context = bool(
+        args.n_classes > 1
+        and (args.perturb_replay_relion_dir is not None or args.relion_init_dir is not None)
+    )
+    relion_dispatch_schedule = None
+    if args.relion_dispatch_schedule is not None:
+        if not strict_relion_scale_context:
+            raise SystemExit(
+                "--relion-dispatch-schedule is strict K>1 RELION replay/init state only"
+            )
+        try:
+            relion_dispatch_schedule = load_relion_dispatch_schedule(
+                args.relion_dispatch_schedule
+            )
+            oracle_dirs = []
+            for candidate in (args.perturb_replay_relion_dir, args.relion_init_dir):
+                if candidate is None:
+                    continue
+                resolved = Path(candidate).expanduser().resolve()
+                if resolved not in oracle_dirs:
+                    oracle_dirs.append(resolved)
+                    verify_relion_dispatch_schedule_oracle(
+                        relion_dispatch_schedule,
+                        resolved,
+                    )
+            def _require_manifested_oracle_file(path, *, label):
+                resolved_path = Path(path).expanduser().resolve()
+                for oracle_dir in oracle_dirs:
+                    try:
+                        relative = resolved_path.relative_to(oracle_dir).as_posix()
+                    except ValueError:
+                        continue
+                    if relative not in relion_dispatch_schedule.oracle_artifact_paths:
+                        raise ValueError(
+                            f"{label} is not included in the verified RELION oracle manifest: "
+                            f"{resolved_path}"
+                        )
+                    return
+                raise ValueError(
+                    f"{label} must belong to a verified RELION oracle directory: {resolved_path}"
+                )
+
+            discovered_optimiser = _find_relion_optimiser_star(args)
+            if discovered_optimiser is not None:
+                _require_manifested_oracle_file(
+                    discovered_optimiser,
+                    label="consumed RELION optimiser",
+                )
+            for oracle_dir in oracle_dirs:
+                sampling_candidates = list(oracle_dir.glob("run_it*_sampling.star"))
+                final_sampling = oracle_dir / "run_sampling.star"
+                if final_sampling.exists():
+                    sampling_candidates.append(final_sampling)
+                for sampling_path in sampling_candidates:
+                    _require_manifested_oracle_file(
+                        sampling_path,
+                        label="consumed RELION sampling state",
+                    )
+            observed_group_order = relion_ordered_particle_sha256(relion_group_particles)
+            if observed_group_order != relion_dispatch_schedule.particle_order_sha256:
+                raise ValueError(
+                    "authoritative RELION group/half-set particle order does not match "
+                    "the dispatch schedule"
+                )
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"Invalid --relion-dispatch-schedule: {exc}") from exc
+    if args.relion_scale_followers is None:
+        if strict_relion_scale_context and relion_dispatch_schedule is None:
+            raise SystemExit(
+                "Strict K>1 RELION replay requires --relion-dispatch-schedule captured "
+                "from the same oracle run: expectation follower ownership is a dynamic "
+                "MPI work queue and cannot be reconstructed from --seed. Pass "
+                "--relion-scale-followers 0 only for an explicit non-parity diagnostic."
+            )
+        relion_scale_followers = (
+            0 if relion_dispatch_schedule is None else relion_dispatch_schedule.n_followers
+        )
+    else:
+        relion_scale_followers = int(args.relion_scale_followers)
+        if relion_scale_followers < 0:
+            raise SystemExit("--relion-scale-followers must be non-negative")
+        if relion_scale_followers > 0 and not strict_relion_scale_context:
+            raise SystemExit(
+                "--relion-scale-followers is strict K>1 RELION replay/init state only; "
+                "provide --relion_init_dir or --perturb_replay_relion_dir"
+            )
+    if relion_scale_followers > 0 and relion_dispatch_schedule is None:
+        raise SystemExit(
+            "--relion-scale-followers > 0 requires --relion-dispatch-schedule; "
+            "seed-only/static ownership is not RELION-exact"
+        )
+    if (
+        relion_dispatch_schedule is not None
+        and relion_scale_followers != relion_dispatch_schedule.n_followers
+    ):
+        raise SystemExit(
+            "--relion-scale-followers disagrees with --relion-dispatch-schedule "
+            f"({relion_scale_followers} != {relion_dispatch_schedule.n_followers})"
+        )
+    if relion_scale_followers > 0 and native_group_layout is None:
+        raise SystemExit("Strict RELION follower-scale emulation requires an authoritative group layout")
+    if relion_scale_followers > 0 and int(args.init_relion_iteration) > 0:
+        raise SystemExit(
+            "Strict RELION follower-scale emulation cannot cold-start after iteration 0 from "
+            "a leader-serialized STAR; rerun from iteration 0 (full follower-scale checkpoint "
+            "input is not implemented)"
+        )
+    relion_follower_scale_replay = None
+    if args.relion_follower_scale_replay is not None:
+        if not strict_relion_scale_context or relion_scale_followers < 1:
+            raise SystemExit(
+                "--relion-follower-scale-replay requires strict K>1 RELION follower topology"
+            )
+        try:
+            relion_follower_scale_replay = load_relion_follower_scale_replay(
+                args.relion_follower_scale_replay
+            )
+            validate_relion_follower_scale_replay(
+                relion_follower_scale_replay,
+                n_followers=relion_scale_followers,
+                n_groups=native_group_layout.n_groups,
+                schedule_iterations=relion_dispatch_schedule.relion_iterations,
+                schedule_oracle_id=relion_dispatch_schedule.oracle_id,
+                schedule_artifact_paths=relion_dispatch_schedule.oracle_artifact_paths,
+                oracle_dir=oracle_dirs[0],
+                numbered_iterations=range(
+                    int(args.init_relion_iteration) + 1,
+                    int(args.init_relion_iteration) + int(args.max_iter) + 1,
+                ),
+                first_numbered_iteration=int(args.init_relion_iteration) + 1,
+            )
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"Invalid --relion-follower-scale-replay: {exc}") from exc
+        logger.info(
+            "Diagnostic RELION follower-scale replay: source=%s oracle_id=%s "
+            "iterations=%s shape=%s",
+            relion_follower_scale_replay.source,
+            relion_follower_scale_replay.oracle_id,
+            relion_follower_scale_replay.relion_iterations.tolist(),
+            relion_follower_scale_replay.follower_scales.shape,
+        )
     if native_group_layout is not None:
         logger.info(
             "Native RELION group layout: source=%s full_groups=%d half1_present=%d half2_present=%d",
@@ -1776,6 +2054,58 @@ def main():
             int(np.unique(native_group_ids_per_half[0]).size),
             int(np.unique(native_group_ids_per_half[1]).size),
         )
+        if relion_group_source is not None:
+            logger.info("Native RELION group layout provenance: %s", relion_group_source)
+    if relion_scale_followers > 0:
+        logger.info(
+            "Strict RELION follower-scale topology: followers=%d physical_groups=%d "
+            "optics_groups=%d dynamic_schedule=%s",
+            relion_scale_followers,
+            native_group_layout.n_groups,
+            native_group_layout.n_optics_groups,
+            relion_dispatch_schedule.source,
+        )
+        logger.info(
+            "Verified RELION dispatch oracle: oracle_id=%s artifacts=%d particle_star=%s",
+            relion_dispatch_schedule.oracle_id,
+            len(relion_dispatch_schedule.oracle_artifact_paths),
+            relion_dispatch_schedule.particle_star_relative_path,
+        )
+    relion_scale_follower_owners_by_iteration = None
+    if relion_scale_followers > 0:
+        relion_scale_follower_owners_by_iteration = {}
+        for relion_iteration_value in relion_dispatch_schedule.relion_iterations:
+            relion_iteration = int(relion_iteration_value)
+            try:
+                owners_half1 = relion_class3d_follower_owners_from_schedule(
+                    relion_dispatch_schedule,
+                    particle_ids_by_image=native_group_layout.particle_ids_per_half[0],
+                    optics_group_ids_by_image=native_group_layout.optics_group_ids_per_half[0],
+                    random_seed=int(args.seed),
+                    relion_iteration=relion_iteration,
+                )
+            except (RuntimeError, ValueError) as exc:
+                raise SystemExit(
+                    f"RELION dispatch schedule cannot supply iteration {relion_iteration}: {exc}"
+                ) from exc
+            relion_scale_follower_owners_by_iteration[relion_iteration] = [
+                owners_half1,
+                np.zeros(native_group_layout.particle_ids_per_half[1].size, dtype=np.int64),
+            ]
+        required_numbered_iterations = set(
+            range(
+                int(args.init_relion_iteration) + 1,
+                int(args.init_relion_iteration) + int(args.max_iter) + 1,
+            )
+        )
+        missing_numbered_iterations = sorted(
+            required_numbered_iterations - set(relion_scale_follower_owners_by_iteration)
+        )
+        if missing_numbered_iterations:
+            raise SystemExit(
+                "RELION dispatch schedule cannot supply requested numbered iterations: "
+                f"{missing_numbered_iterations}"
+            )
 
     optimiser_star = _find_relion_optimiser_star(args)
     relion_firstiter_ini_high_angstrom = None
@@ -2040,9 +2370,22 @@ def main():
         # run_k_class_parity.py:715-717).
         _n4 = ds.grid_size**4
         _relion_sigma2_per_model = [
-            np.asarray(_model["model_optics_group_1"]["rlnSigma2Noise"], dtype=np.float64)
-            for _model in _it0_models
+            _read_relion_single_optics_sigma2_noise(
+                _model,
+                context=f"RELION iteration-0 model {model_index + 1}",
+            )
+            for model_index, _model in enumerate(_it0_models)
         ]
+        if any(sigma2 is None for sigma2 in _relion_sigma2_per_model):
+            raise ValueError("RELION iteration-0 model is missing rlnSigma2Noise")
+        if _it0_model_bundle["source"] == "half-specific":
+            # RELION MPI follower rank 1 broadcasts its scoring noise spectrum
+            # to the half-2 follower during initialisation.
+            _relion_sigma2_per_model[1] = _relion_sigma2_per_model[0].copy()
+            logger.info(
+                "STRICT-PARITY: emulating RELION MPI rank-1 sigma2_noise broadcast "
+                "for both AutoRefine half-sets",
+            )
         if len(_relion_sigma2_per_model) == 1:
             _relion_sigma2 = _relion_sigma2_per_model[0]
             _relion_noise_radial = jnp.asarray(_relion_sigma2 * _n4)
@@ -2164,12 +2507,17 @@ def main():
             args.perturb_replay_relion_dir,
             half1_idx,
             half2_idx,
-            args.max_iter,
+            # Numbered expectation k consumes the state written before it.
+            # A max_iter=N trajectory therefore needs run_it000..run_it{N-1};
+            # RELION's converged all-data pass is unnumbered and deliberately
+            # reuses the last available numbered override.
+            max(int(args.max_iter) - 1, 0),
             ds_voxel=ds.voxel_size,
             ds_grid=ds.grid_size,
             include_normcorr=replay_normcorr,
             init_relion_iteration=args.init_relion_iteration,
             particle_names=our_names,
+            strict=True,
         )
 
     # ``--relion_init_dir`` is the strict cold-start contract, not merely a
@@ -2192,6 +2540,7 @@ def main():
             init_relion_iteration=0,
             particle_names=our_names,
             include_initial_state=True,
+            strict=True,
         )
         if initial_overrides[0] is not None:
             if replay_iteration_overrides is None:
@@ -2287,6 +2636,18 @@ def main():
         ),
         init_group_ids=native_group_ids_per_half,
         init_group_count=native_group_count,
+        relion_scale_follower_count=relion_scale_followers,
+        relion_scale_follower_owners_by_iteration=relion_scale_follower_owners_by_iteration,
+        relion_follower_scale_replay=relion_follower_scale_replay,
+        init_relion_particle_ids=(
+            None if native_group_layout is None else list(native_group_layout.particle_ids_per_half)
+        ),
+        init_relion_optics_group_ids=(
+            None if native_group_layout is None else list(native_group_layout.optics_group_ids_per_half)
+        ),
+        init_relion_optics_group_count=(
+            None if native_group_layout is None else native_group_layout.n_optics_groups
+        ),
         init_previous_best_translations=(
             None
             if init_previous_best_poses is None
@@ -2400,12 +2761,51 @@ def main():
         "half1_indices": half1_idx,
         "half2_indices": half2_idx,
     }
+    if relion_follower_scale_replay is not None:
+        save_dict["relion_follower_scale_replay_iterations"] = np.asarray(
+            relion_follower_scale_replay.relion_iterations,
+            dtype=np.int64,
+        )
+        save_dict["relion_follower_scale_replay_source"] = np.asarray(
+            relion_follower_scale_replay.source
+        )
+        save_dict["relion_follower_scale_replay_oracle_id"] = np.asarray(
+            relion_follower_scale_replay.oracle_id
+        )
+        save_dict["relion_follower_scale_replay_boundary"] = np.asarray(
+            relion_follower_scale_replay.boundary
+        )
+        save_dict["relion_follower_scale_replay_source_artifacts"] = np.asarray(
+            relion_follower_scale_replay.source_artifact_relative_paths
+        )
+    if relion_dispatch_schedule is not None:
+        save_dict["relion_dispatch_oracle_id"] = np.asarray(
+            relion_dispatch_schedule.oracle_id
+        )
+        save_dict["relion_dispatch_oracle_manifest_sha256"] = np.asarray(
+            relion_dispatch_schedule.oracle_manifest_sha256
+        )
+        save_dict["relion_dispatch_particle_order_sha256"] = np.asarray(
+            relion_dispatch_schedule.particle_order_sha256
+        )
 
     if "healpix_order_trajectory" in result:
         save_dict["healpix_order_trajectory"] = np.asarray(
             result["healpix_order_trajectory"],
             dtype=np.int32,
         )
+    for key, dtype in (
+        ("relion_follower_scale_replay_requested_iterations", np.int64),
+        ("relion_follower_scale_replay_applied_iterations", np.int64),
+        ("relion_scale_follower_scales", np.float64),
+        ("relion_scale_rank1_serialized", np.float64),
+        ("relion_scale_follower_owners_half1", np.int64),
+        ("relion_scale_follower_owners_half1_trajectory", np.int64),
+        ("relion_scale_follower_scales_numbered_pre_score_trajectory", np.float64),
+        ("relion_scale_follower_scales_numbered_post_mstep_trajectory", np.float64),
+    ):
+        if result.get(key) is not None:
+            save_dict[key] = np.asarray(result[key], dtype=dtype)
     if "ave_Pmax_trajectory" in result:
         save_dict["ave_Pmax_trajectory"] = np.asarray(
             result["ave_Pmax_trajectory"],

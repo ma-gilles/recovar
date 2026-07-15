@@ -396,6 +396,7 @@ def write_case_script(
     exclusive: bool,
     cuda_module: str,
     relion_module: str,
+    relion_refine_mpi: str,
     relion_mpi_ranks: int,
     relion_pool: int,
     particle_diameter: float,
@@ -445,6 +446,8 @@ CASE_ROOT={q(case_root)}
 DATA_DIR="${{CASE_ROOT}}/data"
 RECOVAR_DIR="${{CASE_ROOT}}/recovar"
 RELION_DIR="${{CASE_ROOT}}/relion_ref"
+RELION_DISPATCH_LOG="${{RELION_DIR}}/dispatch.tsv"
+RELION_DISPATCH_SCHEDULE="${{RELION_DIR}}/dispatch_schedule.npz"
 SUB_PDB_DIR="${{CASE_ROOT}}/pdbs_k{case.n_classes}"
 mkdir -p "${{CASE_ROOT}}" "${{DATA_DIR}}" "${{RECOVAR_DIR}}" "${{RELION_DIR}}" "${{SUB_PDB_DIR}}"
 
@@ -568,7 +571,9 @@ set +e
   fi
   ITER_PADDED="$(printf "%03d" {case.max_iter})"
   if [[ ! -s "${{RELION_DIR}}/run_it${{ITER_PADDED}}_model.star" ]]; then
-    mpirun -n {relion_mpi_ranks} relion_refine_mpi \\
+    rm -f "${{RELION_DISPATCH_LOG}}" "${{RELION_DISPATCH_SCHEDULE}}"
+    export RELION_DISPATCH_LOG
+    mpirun -n {relion_mpi_ranks} {q(relion_refine_mpi)} \\
       --i particles.star \\
       --ref reference_init_classes_relion.star \\
       --o "${{RELION_DIR}}/run" \\
@@ -595,6 +600,11 @@ set +e
       --j 4
   else
     echo "Reusing RELION output in ${{RELION_DIR}}"
+    if [[ ! -s "${{RELION_DISPATCH_SCHEDULE}}" ]]; then
+      echo "Refusing to reconstruct strict ownership from a loose/stale dispatch log." >&2
+      echo "A reused RELION run must already have its content-bound dispatch_schedule.npz." >&2
+      exit 2
+    fi
   fi
 ) 2>&1 | tee "${{CASE_ROOT}}/relion_class3d.log"
 RELION_STATUS="${{PIPESTATUS[0]}}"
@@ -605,6 +615,21 @@ cat > "${{RELION_DIR}}/slurm_walltime.json" <<JSON
 JSON
 if [[ "${{RELION_STATUS}}" -ne 0 ]]; then
   exit "${{RELION_STATUS}}"
+fi
+if [[ ! -s "${{RELION_DISPATCH_SCHEDULE}}" ]]; then
+  if [[ ! -s "${{RELION_DISPATCH_LOG}}" ]]; then
+    echo "Strict K>1 parity requires a same-run dynamic dispatch capture." >&2
+    echo "The selected RELION executable did not write ${{RELION_DISPATCH_LOG}} via RELION_DISPATCH_LOG." >&2
+    exit 2
+  fi
+  "${{PIXI_PY}}" -m scripts.build_relion_dispatch_schedule \\
+    --dispatch-log "${{RELION_DISPATCH_LOG}}" \\
+    --output "${{RELION_DISPATCH_SCHEDULE}}" \\
+    --n-particles {case.n_images} \\
+    --n-followers {relion_mpi_ranks - 1} \\
+    --pool-size {relion_pool * 4} \\
+    --random-seed {case.seed} \\
+    --oracle-dir "${{RELION_DIR}}"
 fi
 
 echo "=== Run RECOVAR K-class refinement: {case.name} ==="
@@ -627,6 +652,7 @@ set +e
   --relion_optimiser "${{RELION_DIR}}/run_it000_optimiser.star" \\
   --relion_init_dir "${{RELION_DIR}}" \\
   --perturb_replay_relion_dir "${{RELION_DIR}}" \\
+  --relion-dispatch-schedule "${{RELION_DISPATCH_SCHEDULE}}" \\
   --particle_diameter_ang {particle_diameter:g} \\
   --tau2_fudge 4.0 \\
   --benchmark_ledger_json "${{RECOVAR_DIR}}/benchmark_ledger.json" \\
@@ -792,6 +818,20 @@ def main() -> int:
     exclusive = os.environ.get("EM_KCLASS_MATRIX_EXCLUSIVE", "0") != "0"
     cuda_module = os.environ.get("CUDA_MODULE", "cudatoolkit/12.8")
     relion_module = os.environ.get("RELION_MODULE", "relion/5.0.1/gcc-11.5.0-gpu")
+    relion_refine_mpi = os.environ.get("EM_KCLASS_MATRIX_RELION_REFINE_MPI", "").strip()
+    if not relion_refine_mpi:
+        raise SystemExit(
+            "EM_KCLASS_MATRIX_RELION_REFINE_MPI must name an absolute, executable "
+            "RELION build instrumented to honor RELION_DISPATCH_LOG; the stock binary "
+            "cannot supply strict dynamic-dispatch parity."
+        )
+    relion_refine_path = Path(relion_refine_mpi).expanduser().resolve()
+    if not relion_refine_path.is_file() or not os.access(relion_refine_path, os.X_OK):
+        raise SystemExit(
+            "EM_KCLASS_MATRIX_RELION_REFINE_MPI is not an executable file: "
+            f"{relion_refine_path}"
+        )
+    relion_refine_mpi = str(relion_refine_path)
     relion_mpi_ranks = int(os.environ.get("RELION_MPI_RANKS", "3"))
     relion_pool = int(os.environ.get("EM_KCLASS_MATRIX_RELION_POOL", "3"))
     particle_diameter = float(os.environ.get("EM_KCLASS_MATRIX_PARTICLE_DIAMETER", "380"))
@@ -824,6 +864,7 @@ def main() -> int:
     print(f"Summary constraint: {summary_constraint or '<none>'}")
     print(f"Constraint: {constraint or '<none>'}")
     print(f"RELION module: {relion_module}")
+    print(f"RELION dispatch-capture executable: {relion_refine_mpi}")
     if max_iter_override_for_env:
         print(f"Max iter override: {max_iter_override_for_env}")
     if time_limit_override_for_env:
@@ -889,6 +930,7 @@ def main() -> int:
             exclusive=exclusive,
             cuda_module=cuda_module,
             relion_module=relion_module,
+            relion_refine_mpi=relion_refine_mpi,
             relion_mpi_ranks=relion_mpi_ranks,
             relion_pool=relion_pool,
             particle_diameter=particle_diameter,
@@ -938,6 +980,7 @@ def main() -> int:
                 f"SBATCH_ACCOUNT={account}",
                 f"SBATCH_CONSTRAINT={constraint}",
                 f"RELION_MODULE={relion_module}",
+                f"EM_KCLASS_MATRIX_RELION_REFINE_MPI={relion_refine_mpi}",
                 f"RELION_MPI_RANKS={relion_mpi_ranks}",
                 f"KCLASS_IMAGE_BATCH_SIZE={image_batch_size}",
                 f"KCLASS_ROTATION_BLOCK_SIZE={rotation_block_size}",

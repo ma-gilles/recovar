@@ -133,6 +133,8 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
 def test_completion_k4_resource_overrides_are_written(tmp_path):
     scratch = tmp_path / "scratch"
     runtime = tmp_path / "runtime"
+    dispatch_schedule = tmp_path / "dispatch_schedule.npz"
+    dispatch_schedule.write_bytes(b"placeholder")
     env = os.environ.copy()
     env.update(
         {
@@ -148,6 +150,7 @@ def test_completion_k4_resource_overrides_are_written(tmp_path):
             "EM_COMPLETION_SUMMARY_GRES": "",
             "K4_MEM": "128G",
             "K4_TIME_LIMIT": "04:00:00",
+            "K4_RELION_DISPATCH_SCHEDULE": str(dispatch_schedule),
             "RECOVAR_SPARSE_PASS2_MAX_NOISE_BLOCK_BYTES": "3221225472",
             "RECOVAR_SPARSE_PASS2_MAX_ADJOINT_BLOCK_BYTES": "1610612736",
             "RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO": "0.5",
@@ -180,6 +183,8 @@ def test_completion_k4_resource_overrides_are_written(tmp_path):
     assert "K4_ROTATION_BLOCK_SIZE=2000" in submission_env_text
     assert "K4_MEM=128G" in submission_env_text
     assert "K4_TIME_LIMIT=04:00:00" in submission_env_text
+    assert f'--relion-dispatch-schedule "{dispatch_schedule}"' in k4_text
+    assert f"K4_RELION_DISPATCH_SCHEDULE={dispatch_schedule}" in submission_env_text
     assert "RECOVAR_SPARSE_PASS2_MAX_NOISE_BLOCK_BYTES=3221225472" in k4_text
     assert "RECOVAR_SPARSE_PASS2_MAX_NOISE_BLOCK_BYTES=3221225472" in submission_env_text
     assert "RECOVAR_SPARSE_PASS2_MAX_ADJOINT_BLOCK_BYTES=1610612736" in k4_text
@@ -194,6 +199,8 @@ def test_completion_k4_resource_overrides_are_written(tmp_path):
 def test_completion_setup_defaults_to_cpu_partition(tmp_path):
     scratch = tmp_path / "scratch"
     runtime = tmp_path / "runtime"
+    dispatch_schedule = tmp_path / "dispatch_schedule.npz"
+    dispatch_schedule.write_bytes(b"placeholder")
     env = os.environ.copy()
     env.update(
         {
@@ -204,6 +211,7 @@ def test_completion_setup_defaults_to_cpu_partition(tmp_path):
             "SBATCH_CONSTRAINT": "",
             "EM_COMPLETION_SUMMARY_PARTITION": "cpu",
             "EM_COMPLETION_SUMMARY_CONSTRAINT": "",
+            "K4_RELION_DISPATCH_SCHEDULE": str(dispatch_schedule),
         }
     )
     env.pop("EM_COMPLETION_SETUP_PARTITION", None)

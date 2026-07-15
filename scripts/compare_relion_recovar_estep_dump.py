@@ -118,9 +118,15 @@ def _read_relion_flat_real(path: Path) -> np.ndarray | None:
     return data
 
 
-def _read_relion_fine_rotation_matrices(dump_dir: Path, *, min_rows: int | None = None) -> np.ndarray | None:
+def _read_relion_fine_rotation_matrices(
+    dump_dir: Path,
+    *,
+    min_rows: int | None = None,
+    class_index: int | None = None,
+) -> np.ndarray | None:
     candidates: list[tuple[int, np.ndarray]] = []
-    for path in sorted(dump_dir.glob("*class*_fine_eulers.bin")):
+    pattern = "*class*_fine_eulers.bin" if class_index is None else f"*class{int(class_index)}_fine_eulers.bin"
+    for path in sorted(dump_dir.glob(pattern)):
         data = _read_relion_flat_real(path)
         if data is None or data.size == 0 or data.size % 9:
             continue
@@ -833,8 +839,17 @@ def _candidate_table_from_relion(
         raise ValueError(f"RELION dump {path} has no candidates")
     if rot_matrices is None:
         compact_for_matrix = compact_rot_idx[:n]
+        if class_index is not None and candidate_class_idx is not None:
+            matrix_class_mask = (
+                np.asarray(candidate_class_idx, dtype=np.int64).reshape(-1)[:n] == int(class_index)
+            )
+            compact_for_matrix = compact_for_matrix[matrix_class_mask]
         min_rows = int(np.max(compact_for_matrix)) + 1 if compact_for_matrix.size else None
-        rot_matrices = _read_relion_fine_rotation_matrices(path, min_rows=min_rows)
+        rot_matrices = _read_relion_fine_rotation_matrices(
+            path,
+            min_rows=min_rows,
+            class_index=class_index,
+        )
 
     def trim_or_nan(arr: np.ndarray | None) -> np.ndarray:
         if arr is None:

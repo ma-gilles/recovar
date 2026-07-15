@@ -1,5 +1,7 @@
 import sys
 
+import pytest
+
 from scripts import run_em_kclass_robustness_matrix_slurm as launcher
 
 
@@ -63,6 +65,7 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
         exclusive=False,
         cuda_module="cudatoolkit/12.8",
         relion_module="relion/5.0.1/gcc-11.5.0-gpu",
+        relion_refine_mpi="/instrumented/relion_refine_mpi",
         relion_mpi_ranks=3,
         relion_pool=3,
         particle_diameter=380.0,
@@ -96,6 +99,9 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert "str(relion_bind_file).startswith(str(external_bind_root) + \"/\")" in text
     assert "      --firstiter_cc \\\n" in text
     assert "  --firstiter_cc \\\n" in text
+    assert "export RELION_DISPATCH_LOG" in text
+    assert "-m scripts.build_relion_dispatch_schedule" in text
+    assert '--relion-dispatch-schedule "${RELION_DISPATCH_SCHEDULE}"' in text
 
 
 def test_case_jobs_build_cuda_lib_atomically_under_lock(tmp_path):
@@ -112,6 +118,7 @@ def test_case_jobs_build_cuda_lib_atomically_under_lock(tmp_path):
         exclusive=False,
         cuda_module="cudatoolkit/12.8",
         relion_module="relion/5.0.1/gcc-11.5.0-gpu",
+        relion_refine_mpi="/instrumented/relion_refine_mpi",
         relion_mpi_ranks=3,
         relion_pool=3,
         particle_diameter=380.0,
@@ -171,6 +178,7 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     monkeypatch.setenv("SBATCH_PARTITION", "cryoem")
     monkeypatch.setenv("SBATCH_ACCOUNT", "gilles")
     monkeypatch.setenv("SBATCH_CONSTRAINT", "h100")
+    monkeypatch.setenv("EM_KCLASS_MATRIX_RELION_REFINE_MPI", "/bin/true")
     for name in (
         "EM_KCLASS_MATRIX_SETUP_PARTITION",
         "EM_KCLASS_MATRIX_SETUP_CONSTRAINT",
@@ -192,6 +200,25 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     assert "EM_KCLASS_MATRIX_SUMMARY_PARTITION=cpu" in submission
     assert "EM_KCLASS_MATRIX_SETUP_CONSTRAINT=" in submission
     assert "EM_KCLASS_MATRIX_SUMMARY_CONSTRAINT=" in submission
+
+
+def test_main_fails_closed_without_dispatch_capture_relion(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_em_kclass_robustness_matrix_slurm.py",
+            "--dry-run",
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--case",
+            "1",
+        ],
+    )
+    monkeypatch.delenv("EM_KCLASS_MATRIX_RELION_REFINE_MPI", raising=False)
+
+    with pytest.raises(SystemExit, match="must name an absolute, executable RELION build"):
+        launcher.main()
 
 
 def test_selected_cases_support_iteration_and_time_limit_overrides(monkeypatch):
@@ -240,6 +267,7 @@ def test_seed_offset_renames_case_and_updates_generated_commands(tmp_path, monke
     )
     monkeypatch.setenv("SBATCH_PARTITION", "cryoem")
     monkeypatch.setenv("SBATCH_ACCOUNT", "gilles")
+    monkeypatch.setenv("EM_KCLASS_MATRIX_RELION_REFINE_MPI", "/bin/true")
 
     launcher.main()
 
@@ -293,6 +321,7 @@ def test_outlier_kclass_case_uses_holdout_pdb_and_disables_streaming_mmap(tmp_pa
         exclusive=False,
         cuda_module="cudatoolkit/12.8",
         relion_module="relion/5.0.1/gcc-11.5.0-gpu",
+        relion_refine_mpi="/instrumented/relion_refine_mpi",
         relion_mpi_ranks=3,
         relion_pool=3,
         particle_diameter=380.0,

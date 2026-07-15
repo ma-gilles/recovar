@@ -139,6 +139,60 @@ def test_compare_relion_matrix_match_selects_dumped_kclass_fine_eulers(tmp_path)
     assert result["common_score_pre_prior_centered_diff"]["max_abs"] == 0.0
 
 
+def test_compare_relion_matrix_match_selects_requested_kclass_fine_eulers(tmp_path):
+    relion_dir = tmp_path / "relion"
+    relion_dir.mkdir()
+    _write_flat_int(relion_dir / "pass1_acc_rot_id.bin", [11, 22, 23])
+    _write_flat_int(relion_dir / "pass1_acc_rot_idx.bin", [0, 0, 1])
+    _write_flat_int(relion_dir / "pass1_acc_trans_idx.bin", [0, 0, 0])
+    _write_flat_int(relion_dir / "pass1_candidate_class_idx.bin", [0, 1, 1])
+    _write_flat_real(relion_dir / "pass1_candidate_weight_normalized.bin", [1.0, 0.4, 0.6])
+    _write_flat_real(relion_dir / "pass1_exp_Mweight_raw_preprior.bin", [-9.0, -2.0, -3.0])
+
+    class0_rot = np.array(
+        [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    class1_rots = np.stack(
+        [
+            np.eye(3),
+            np.diag([-1.0, -1.0, 1.0]),
+        ],
+        axis=0,
+    )
+    _write_flat_real(relion_dir / "pass1_class0_fine_eulers.bin", class0_rot.reshape(-1))
+    _write_flat_real(relion_dir / "pass1_class1_fine_eulers.bin", class1_rots.reshape(-1))
+
+    recovar_npz = tmp_path / "recovar_pass2.npz"
+    scores_pre = np.array([[9.0]], dtype=np.float64)
+    np.savez_compressed(
+        recovar_npz,
+        original_index=np.int64(7),
+        local_index=np.int64(7),
+        class_index=np.int64(0),
+        current_size=np.int64(56),
+        n_fine_trans=np.int64(1),
+        fine_translations=np.zeros((1, 2), dtype=np.float32),
+        rotations=class0_rot[None].astype(np.float32),
+        oversampled_rot_indices=np.array([0], dtype=np.int64),
+        parent_map=np.array([0], dtype=np.int32),
+        candidate_mask=np.ones((1, 1), dtype=bool),
+        scores_with_prior=scores_pre,
+        scores_pre_prior=scores_pre,
+        probs=np.ones((1, 1), dtype=np.float64),
+        rotation_log_prior=np.zeros(1, dtype=np.float64),
+        translation_log_prior=np.zeros(1, dtype=np.float64),
+    )
+
+    result = compare_dumps(relion_dir, recovar_npz, match_mode="matrix")
+
+    assert result["match_mode"] == "matrix"
+    assert result["common_candidate_count"] == 1
+    assert result["match_details"]["rotation_matrix_unique_relion_rows"] == 1
+    assert result["match_details"]["rotation_matrix_match_max_frobenius"] == 0.0
+    assert result["common_score_pre_prior_centered_diff"]["max_abs"] == 0.0
+
+
 def test_compare_relion_recovar_estep_dump_matches_candidate_keys(tmp_path):
     relion_dir = tmp_path / "relion"
     relion_dir.mkdir()

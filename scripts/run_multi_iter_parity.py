@@ -21,6 +21,12 @@ from pathlib import Path
 
 import numpy as np
 
+from recovar.em.dense_single_volume.relion_replay import (
+    read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
+)
+from recovar.em.dense_single_volume.relion_replay import (
+    relion_mpi_process_start_scoring_noise_pair as _relion_mpi_process_start_scoring_noise_pair,
+)
 from recovar.em.initial_model.gt_metrics import (
     DEFAULT_GT_ALIGN_HEALPIX_ORDER,
     DEFAULT_GT_ALIGN_MAX_SHELL,
@@ -700,8 +706,16 @@ def main():
     current_size = int(control_model_h1["model_general"]["rlnCurrentImageSize"])
     pixel_size = float(model_h1["model_general"]["rlnPixelSize"])
 
-    sigma2_h1 = np.array(model_h1["model_optics_group_1"]["rlnSigma2Noise"])
-    sigma2_h2 = np.array(model_h2["model_optics_group_1"]["rlnSigma2Noise"])
+    sigma2_h1 = _read_relion_single_optics_sigma2_noise(
+        model_h1,
+        context=f"RELION iteration {iteration} half 1",
+    )
+    sigma2_h2 = _read_relion_single_optics_sigma2_noise(
+        model_h2,
+        context=f"RELION iteration {iteration} half 2",
+    )
+    if sigma2_h1 is None or sigma2_h2 is None:
+        raise ValueError(f"RELION iteration {iteration} model is missing rlnSigma2Noise")
     class1 = model_h1["model_class_1"]
     # Prefer rlnReferenceTau2 (signal power, EMDL_MLMODEL_TAU2_REF) which is
     # what RELION's BackProjector::reconstruct uses for the Wiener prior.
@@ -799,7 +813,12 @@ def main():
     n4 = N**4
     noise_variance_h1 = jnp.asarray(recon_noise.make_radial_noise(sigma2_h1 * n4, (N, N)))
     noise_variance_h2 = jnp.asarray(recon_noise.make_radial_noise(sigma2_h2 * n4, (N, N)))
-    noise_variance = jnp.stack([noise_variance_h1.reshape(-1), noise_variance_h2.reshape(-1)], axis=0)
+    process_start_noise = _relion_mpi_process_start_scoring_noise_pair(
+        noise_variance_h1.reshape(-1),
+        noise_variance_h2.reshape(-1),
+        split_random_halves=True,
+    )
+    noise_variance = jnp.stack(process_start_noise, axis=0)
     mean_variance = jnp.asarray(utils.make_radial_image(tau2 * n4, (N, N, N), extend_last_frequency=True))
 
     # Volume: get_dft3(vol_real) produces the unnormalized centered DFT.
@@ -987,7 +1006,12 @@ def main():
         direction_prior = None
         print("  direction_prior: None (not found in model star)")
 
-    def _load_relion_iteration_override(previous_relion_iteration, control_relion_iteration):
+    def _load_relion_iteration_override(
+        previous_relion_iteration,
+        control_relion_iteration,
+        *,
+        process_start=False,
+    ):
         iter_prefix = relion_dir / f"{run_prefix}_it{previous_relion_iteration:03d}"
         model_h1_iter = starfile.read(f"{iter_prefix}_half1_model.star")
         model_h2_iter = starfile.read(f"{iter_prefix}_half2_model.star")
@@ -1012,15 +1036,24 @@ def main():
             _model_general_scalar(general_h2_iter, "rlnSigmaOffsetsAngst"),
         ]
         sigma_offset_iter = float(np.mean(sigma_offset_iter_per_half))
-        sigma2_h1_iter = np.array(model_h1_iter["model_optics_group_1"]["rlnSigma2Noise"])
-        sigma2_h2_iter = np.array(model_h2_iter["model_optics_group_1"]["rlnSigma2Noise"])
-        noise_variance_iter = jnp.stack(
-            [
-                jnp.asarray(recon_noise.make_radial_noise(sigma2_h1_iter * n4, (N, N))).reshape(-1),
-                jnp.asarray(recon_noise.make_radial_noise(sigma2_h2_iter * n4, (N, N))).reshape(-1),
-            ],
-            axis=0,
+        sigma2_h1_iter = _read_relion_single_optics_sigma2_noise(
+            model_h1_iter,
+            context=f"RELION iteration {previous_relion_iteration} half 1",
         )
+        sigma2_h2_iter = _read_relion_single_optics_sigma2_noise(
+            model_h2_iter,
+            context=f"RELION iteration {previous_relion_iteration} half 2",
+        )
+        if sigma2_h1_iter is None or sigma2_h2_iter is None:
+            raise ValueError(
+                f"RELION iteration {previous_relion_iteration} model is missing rlnSigma2Noise"
+            )
+        noise_pair_iter = _relion_mpi_process_start_scoring_noise_pair(
+            jnp.asarray(recon_noise.make_radial_noise(sigma2_h1_iter * n4, (N, N))).reshape(-1),
+            jnp.asarray(recon_noise.make_radial_noise(sigma2_h2_iter * n4, (N, N))).reshape(-1),
+            split_random_halves=process_start,
+        )
+        noise_variance_iter = jnp.stack(noise_pair_iter, axis=0)
 
         normcorr_iter = np.array(relion_iter_df["rlnNormCorrection"], dtype=np.float64)
         groups_h1_iter = model_h1_iter.get("model_groups", None)
@@ -1154,7 +1187,11 @@ def main():
             f"pre-shifts={trans_msg}"
         )
     if args.force_final_after_zero_iterations:
-        replay_iteration_overrides[0] = _load_relion_iteration_override(iteration, iteration + 1)
+        replay_iteration_overrides[0] = _load_relion_iteration_override(
+            iteration,
+            iteration + 1,
+            process_start=True,
+        )
         os.environ["RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER"] = "1"
         print(
             "  Diagnostic final-only replay: forcing K=1 final all-data after zero numbered iterations "

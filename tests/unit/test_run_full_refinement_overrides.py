@@ -20,19 +20,23 @@ from scripts.run_full_refinement import (
     _build_replay_iteration_overrides,
     _default_refinement_subsets,
     _format_replay_mean_for_log,
-    _load_initial_noise_cache,
     _load_init_noise_radial_npz,
     _load_init_previous_best_poses_npz,
-    _load_relion_it000_model_stars,
+    _load_initial_noise_cache,
     _load_native_group_ids_per_half,
+    _load_relion_it000_model_stars,
+    _load_replay_group_particles,
     _parse_relion_cli_ini_high,
     _parse_relion_tau2_fudge,
+    _read_relion_single_optics_sigma2_noise,
     _relion_halfset_and_accuracy_layout,
+    _relion_mpi_process_start_scoring_noise_pair,
     _replay_complete_initial_particle_state,
     _resolve_native_group_layout,
     _resolve_replay_normcorr,
     _resolve_tau2_fudge,
     _save_initial_noise_cache,
+    _select_authoritative_group_particles,
 )
 
 FIXTURE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0")
@@ -46,6 +50,39 @@ def test_complete_initial_particle_state_is_autorefine_only():
     assert _replay_complete_initial_particle_state(1, 0)
     assert not _replay_complete_initial_particle_state(4, 0)
     assert not _replay_complete_initial_particle_state(1, 1)
+
+
+def test_relion_mpi_autorefine_scoring_noise_uses_rank1_broadcast():
+    half1 = np.asarray([1.0, 2.0], dtype=np.float32)
+    half2 = np.asarray([3.0, 4.0], dtype=np.float32)
+
+    got = _relion_mpi_process_start_scoring_noise_pair(half1, half2, split_random_halves=True)
+
+    np.testing.assert_array_equal(got[0], half1)
+    np.testing.assert_array_equal(got[1], half1)
+    assert got[0] is not got[1]
+
+
+def test_relion_mpi_shared_model_scoring_noise_preserves_second_input():
+    half1 = np.asarray([1.0, 2.0], dtype=np.float32)
+    half2 = np.asarray([3.0, 4.0], dtype=np.float32)
+
+    got = _relion_mpi_process_start_scoring_noise_pair(half1, half2, split_random_halves=False)
+
+    np.testing.assert_array_equal(got[0], half1)
+    np.testing.assert_array_equal(got[1], half2)
+
+
+def test_relion_strict_replay_rejects_multiple_optics_noise_tables():
+    import pandas as pd
+
+    model = {
+        "model_optics_group_1": pd.DataFrame({"rlnSigma2Noise": [1.0, 2.0]}),
+        "model_optics_group_2": pd.DataFrame({"rlnSigma2Noise": [3.0, 4.0]}),
+    }
+
+    with pytest.raises(NotImplementedError, match="2 optics-group sigma2_noise tables"):
+        _read_relion_single_optics_sigma2_noise(model, context="unit-test model")
 
 
 def _read_relion_sigma(model_star: Path) -> float:
@@ -109,6 +146,32 @@ def test_refinement_results_persist_class_assignment_history():
     assert '"class_assignment_history"' in source
     assert "class_assignments_iter_" in source
     assert "class_assignments_by_image_iter_" in source
+
+
+def test_refinement_results_persist_numbered_follower_scale_boundaries():
+    source = RUN_FULL_REFINEMENT.read_text()
+
+    assert '("relion_scale_follower_scales_numbered_pre_score_trajectory", np.float64)' in source
+    assert '("relion_scale_follower_scales_numbered_post_mstep_trajectory", np.float64)' in source
+
+
+def test_runner_threads_fail_closed_sparse_follower_scale_replay():
+    source = RUN_FULL_REFINEMENT.read_text()
+
+    assert '"--relion-follower-scale-replay"' in source
+    assert "load_relion_follower_scale_replay(" in source
+    assert "validate_relion_follower_scale_replay(" in source
+    assert "schedule_oracle_id=relion_dispatch_schedule.oracle_id" in source
+    assert "verify_relion_dispatch_schedule_oracle(" in source
+    assert "numbered_iterations=range(" in source
+    assert "first_numbered_iteration=int(args.init_relion_iteration) + 1" in source
+    assert "relion_follower_scale_replay=relion_follower_scale_replay" in source
+    assert 'save_dict["relion_follower_scale_replay_iterations"]' in source
+    assert 'save_dict["relion_follower_scale_replay_source"]' in source
+    assert 'save_dict["relion_follower_scale_replay_oracle_id"]' in source
+    assert 'save_dict["relion_dispatch_oracle_id"]' in source
+    assert '("relion_follower_scale_replay_requested_iterations", np.int64)' in source
+    assert '("relion_follower_scale_replay_applied_iterations", np.int64)' in source
 
 
 def test_save_intermediates_skip_unregularized_passes_to_refinement_loop():
@@ -290,6 +353,7 @@ def test_native_group_layout_prefers_supplied_relion_groups_and_maps_exact_ident
                 "4@stack_a.mrcs",
             ],
             "rlnGroupNumber": [2, 4, 1, 7],
+            "rlnOpticsGroup": [1, 2, 1, 3],
         },
     )
 
@@ -303,8 +367,71 @@ def test_native_group_layout_prefers_supplied_relion_groups_and_maps_exact_ident
     assert layout is not None
     assert layout.source == "supplied RELION data STAR"
     assert layout.n_groups == 7
+    assert layout.n_optics_groups == 3
     np.testing.assert_array_equal(layout.group_ids_per_half[0], [0, 1])
     np.testing.assert_array_equal(layout.group_ids_per_half[1], [6, 3])
+    # Internal IDs are authoritative RELION data-STAR row numbers, mapped by
+    # full rlnImageName identity rather than RECOVAR row position.
+    np.testing.assert_array_equal(layout.particle_ids_per_half[0], [2, 0])
+    np.testing.assert_array_equal(layout.particle_ids_per_half[1], [3, 1])
+    np.testing.assert_array_equal(layout.optics_group_ids_per_half[0], [0, 0])
+    np.testing.assert_array_equal(layout.optics_group_ids_per_half[1], [2, 1])
+
+
+def test_replay_group_loader_uses_iter0_without_relion_half_sets(tmp_path):
+    pd = pytest.importorskip("pandas")
+    starfile = pytest.importorskip("starfile")
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": ["2@x.mrcs", "1@x.mrcs"],
+            "rlnGroupNumber": [7, 3],
+        }
+    )
+    starfile.write({"particles": particles}, tmp_path / "run_it000_data.star")
+
+    loaded, source = _load_replay_group_particles(tmp_path)
+
+    assert source == tmp_path / "run_it000_data.star"
+    np.testing.assert_array_equal(loaded["rlnGroupNumber"], [7, 3])
+
+
+def test_subset_only_halfset_does_not_block_permuted_replay_group_layout(tmp_path):
+    pd = pytest.importorskip("pandas")
+    starfile = pytest.importorskip("starfile")
+    our_particles = pd.DataFrame(
+        {"rlnImageName": ["3@x.mrcs", "1@x.mrcs", "2@x.mrcs"]}
+    )
+    subset_only = pd.DataFrame(
+        {
+            "rlnImageName": ["1@x.mrcs", "2@x.mrcs", "3@x.mrcs"],
+            "rlnRandomSubset": [1, 2, 1],
+        }
+    )
+    replay_particles = pd.DataFrame(
+        {
+            "rlnImageName": ["2@x.mrcs", "3@x.mrcs", "1@x.mrcs"],
+            "rlnGroupNumber": [7, 4, 2],
+        }
+    )
+    starfile.write({"particles": replay_particles}, tmp_path / "run_it000_data.star")
+
+    selected, source = _select_authoritative_group_particles(
+        halfset_particles=subset_only,
+        halfset_source=tmp_path / "halfsets.star",
+        replay_dirs=(tmp_path,),
+    )
+    layout = _resolve_native_group_layout(
+        our_particles,
+        half1_idx=np.asarray([0, 1], dtype=np.int64),
+        half2_idx=np.asarray([2], dtype=np.int64),
+        relion_particles=selected,
+    )
+
+    assert source == tmp_path / "run_it000_data.star"
+    assert layout is not None
+    assert layout.n_groups == 7
+    np.testing.assert_array_equal(layout.group_ids_per_half[0], [3, 1])
+    np.testing.assert_array_equal(layout.group_ids_per_half[1], [6])
 
 
 def test_native_group_layout_preserves_full_group_axis_when_half_max_is_absent():
@@ -376,6 +503,31 @@ def test_relion_expected_accuracy_layout_preserves_relion_particle_rows():
     np.testing.assert_array_equal(particle_ids, [2, 0, 3])
 
 
+def test_relion_expected_accuracy_layout_supports_repeated_indices_across_stacks():
+    pd = pytest.importorskip("pandas")
+    our_particles = pd.DataFrame(
+        {"rlnImageName": ["1@b.mrcs", "1@a.mrcs", "2@b.mrcs", "2@a.mrcs"]},
+    )
+    relion_particles = pd.DataFrame(
+        {
+            "rlnImageName": ["1@a.mrcs", "2@a.mrcs", "1@b.mrcs", "2@b.mrcs"],
+            "rlnRandomSubset": [1, 2, 1, 1],
+            "rlnOpticsGroup": [2, 1, 1, 2],
+        },
+    )
+
+    half1, half2, base_order, optics, particle_ids = _relion_halfset_and_accuracy_layout(
+        our_particles,
+        relion_particles,
+    )
+
+    np.testing.assert_array_equal(half1, [0, 1, 2])
+    np.testing.assert_array_equal(half2, [3])
+    np.testing.assert_array_equal(base_order, [1, 0, 2])
+    np.testing.assert_array_equal(optics, [1, 2, 2])
+    np.testing.assert_array_equal(particle_ids, [2, 0, 3])
+
+
 def test_runner_keeps_input_particle_names_for_replay_mapping():
     source = RUN_FULL_REFINEMENT.read_text()
     bind = 'our_names = np.asarray(our_particles["rlnImageName"])'
@@ -383,6 +535,53 @@ def test_runner_keeps_input_particle_names_for_replay_mapping():
 
     assert bind in source
     assert source.index(bind) < source.index(first_replay_use)
+    assert "max(int(args.max_iter) - 1, 0)" in source
+
+
+def test_replay_mapping_distinguishes_repeated_indices_across_stacks(tmp_path):
+    pd = pytest.importorskip("pandas")
+    starfile = pytest.importorskip("starfile")
+
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": ["1@a.mrcs", "1@b.mrcs"],
+            "rlnAngleRot": [10.0, 20.0],
+            "rlnAngleTilt": [11.0, 21.0],
+            "rlnAnglePsi": [12.0, 22.0],
+            "rlnOriginXAngst": [2.0, 4.0],
+            "rlnOriginYAngst": [-2.0, -4.0],
+            "rlnNormCorrection": [2.0, 4.0],
+            "rlnGroupNumber": [1, 1],
+        }
+    )
+    starfile.write({"particles": particles}, tmp_path / "run_it001_data.star")
+    starfile.write(
+        {
+            "model_general": pd.DataFrame(
+                {"rlnNormCorrectionAverage": [8.0], "rlnSigmaOffsetsAngst": [3.0]}
+            ),
+            "model_groups": pd.DataFrame({"rlnGroupScaleCorrection": [1.0]}),
+        },
+        tmp_path / "run_it001_model.star",
+    )
+
+    overrides = _build_replay_iteration_overrides(
+        tmp_path,
+        half1_idx=np.asarray([0], dtype=np.int64),
+        half2_idx=np.asarray([1], dtype=np.int64),
+        max_iter=1,
+        ds_voxel=2.0,
+        ds_grid=8,
+        include_normcorr=True,
+        particle_names=["1@b.mrcs", "1@a.mrcs"],
+    )
+
+    h1_corr, h2_corr = overrides[1]["image_corrections"]
+    np.testing.assert_allclose(h1_corr, [2.0])
+    np.testing.assert_allclose(h2_corr, [4.0])
+    h1_eulers, h2_eulers = overrides[1]["previous_best_rotation_eulers"]
+    np.testing.assert_allclose(h1_eulers[:, 0], [20.0])
+    np.testing.assert_allclose(h2_eulers[:, 0], [10.0])
 
 
 def test_native_group_ids_are_available_to_k_class_refinement():
@@ -393,7 +592,9 @@ def test_native_group_ids_are_available_to_k_class_refinement():
 
     assert "args.n_classes == 1" not in group_block
     assert "Native group-scale updates remain disabled for K-class refinement" not in source
-    assert "relion_particles=relion_particles" in group_block
+    assert "relion_particles=relion_group_particles" in group_block
+    replay_group_load = source.index("_select_authoritative_group_particles(", source.index("def main"))
+    assert replay_group_load < group_start
     assert "native_group_count =" in group_block
     assert "init_group_ids=native_group_ids_per_half" in source
     assert "init_group_count=native_group_count" in source
@@ -608,7 +809,7 @@ def test_replay_overrides_inject_per_iter_sigma_offset():
         # No normcorr/scale corrections when include_normcorr=False — only
         # sigma_offset, which is parity-critical regardless of normcorr replay.
         assert "image_corrections" not in overrides[recovar_iter]
-        assert "scale_corrections" not in overrides[recovar_iter]
+        assert "serialized_scale_corrections" not in overrides[recovar_iter]
 
         m1 = FIXTURE / f"run_it{recovar_iter:03d}_half1_model.star"
         m2 = FIXTURE / f"run_it{recovar_iter:03d}_half2_model.star"
@@ -649,7 +850,7 @@ def test_replay_overrides_can_load_complete_iter0_cold_start():
     assert cold_start["previous_best_rotation_eulers"][0].shape == (2515, 3)
     assert cold_start["previous_best_rotation_eulers"][1].shape == (2485, 3)
     assert cold_start["image_corrections"][0].shape == (2515,)
-    assert cold_start["scale_corrections"][1].shape == (2485,)
+    assert cold_start["serialized_scale_corrections"][1].shape == (2485,)
     assert cold_start["direction_prior"][0].ndim == 1
     assert cold_start["translation_sigma_angstrom"] == pytest.approx(
         0.5
@@ -717,7 +918,8 @@ def test_replay_overrides_include_normcorr_adds_image_corrections():
     )
 
     assert "image_corrections" in overrides[1]
-    assert "scale_corrections" in overrides[1]
+    assert "serialized_scale_corrections" in overrides[1]
+    assert "scoring_scale_corrections" not in overrides[1]
     assert "translation_sigma_angstrom" in overrides[1]
     h1, h2 = overrides[1]["image_corrections"]
     assert h1.shape == (2515,)
@@ -781,7 +983,7 @@ def test_replay_overrides_use_shared_class3d_model_star(tmp_path):
     h1, h2 = overrides[1]["image_corrections"]
     np.testing.assert_allclose(h1, np.asarray([30.0, 7.5], dtype=np.float32))
     np.testing.assert_allclose(h2, np.asarray([30.0, 12.0], dtype=np.float32))
-    s1, s2 = overrides[1]["scale_corrections"]
+    s1, s2 = overrides[1]["serialized_scale_corrections"]
     np.testing.assert_allclose(s1, np.asarray([10.0, 10.0], dtype=np.float32))
     np.testing.assert_allclose(s2, np.asarray([20.0, 20.0], dtype=np.float32))
     np.testing.assert_allclose(
@@ -934,6 +1136,100 @@ def test_replay_overrides_include_max_iter_state_for_final_all_data(tmp_path):
     prior_h1, prior_h2 = overrides[2]["direction_prior"]
     np.testing.assert_allclose(prior_h1, direction_prior, rtol=1e-5, atol=1e-6)
     np.testing.assert_allclose(prior_h2, direction_prior, rtol=1e-5, atol=1e-6)
+
+
+def test_autorefine_continuation_noise_emulates_relion_rank1_broadcast(tmp_path):
+    pd = pytest.importorskip("pandas")
+    starfile = pytest.importorskip("starfile")
+
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": ["1@particles.mrcs", "2@particles.mrcs"],
+            "rlnNormCorrection": [1.0, 1.0],
+            "rlnGroupNumber": [1, 1],
+        }
+    )
+    starfile.write({"particles": particles}, tmp_path / "run_it001_data.star")
+
+    def write_model(path, sigma2_noise):
+        starfile.write(
+            {
+                "model_general": pd.DataFrame(
+                    {
+                        "rlnNormCorrectionAverage": [1.0],
+                        "rlnSigmaOffsetsAngst": [2.0],
+                    }
+                ),
+                "model_optics_group_1": pd.DataFrame(
+                    {"rlnSigma2Noise": np.asarray(sigma2_noise, dtype=np.float64)}
+                ),
+                "model_groups": pd.DataFrame({"rlnGroupScaleCorrection": [1.0]}),
+            },
+            path,
+        )
+
+    write_model(tmp_path / "run_it001_half1_model.star", [1.0, 2.0, 3.0, 4.0, 5.0])
+    write_model(tmp_path / "run_it001_half2_model.star", [6.0, 7.0, 8.0, 9.0, 10.0])
+
+    overrides = _build_replay_iteration_overrides(
+        tmp_path,
+        half1_idx=np.asarray([0], dtype=np.int64),
+        half2_idx=np.asarray([1], dtype=np.int64),
+        max_iter=0,
+        ds_voxel=2.0,
+        ds_grid=8,
+        include_normcorr=False,
+        init_relion_iteration=1,
+    )
+
+    noise_h1, noise_h2 = overrides[0]["noise_variance"]
+    np.testing.assert_array_equal(noise_h2, noise_h1)
+    assert noise_h1 is not noise_h2
+    assert float(np.min(noise_h2)) == pytest.approx(1.0 * 8**4)
+    assert float(np.max(noise_h2)) == pytest.approx(5.0 * 8**4)
+
+
+def test_autorefine_later_replay_noise_remains_half_specific(tmp_path):
+    pd = pytest.importorskip("pandas")
+    starfile = pytest.importorskip("starfile")
+
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": ["1@particles.mrcs", "2@particles.mrcs"],
+            "rlnNormCorrection": [1.0, 1.0],
+            "rlnGroupNumber": [1, 1],
+        }
+    )
+    starfile.write({"particles": particles}, tmp_path / "run_it001_data.star")
+
+    for half, sigma2_noise in ((1, [1.0, 2.0, 3.0, 4.0, 5.0]), (2, [6.0, 7.0, 8.0, 9.0, 10.0])):
+        starfile.write(
+            {
+                "model_general": pd.DataFrame(
+                    {"rlnNormCorrectionAverage": [1.0], "rlnSigmaOffsetsAngst": [2.0]}
+                ),
+                "model_optics_group_1": pd.DataFrame(
+                    {"rlnSigma2Noise": np.asarray(sigma2_noise, dtype=np.float64)}
+                ),
+                "model_groups": pd.DataFrame({"rlnGroupScaleCorrection": [1.0]}),
+            },
+            tmp_path / f"run_it001_half{half}_model.star",
+        )
+
+    overrides = _build_replay_iteration_overrides(
+        tmp_path,
+        half1_idx=np.asarray([0], dtype=np.int64),
+        half2_idx=np.asarray([1], dtype=np.int64),
+        max_iter=1,
+        ds_voxel=2.0,
+        ds_grid=8,
+        include_normcorr=False,
+    )
+
+    noise_h1, noise_h2 = overrides[1]["noise_variance"]
+    assert not np.array_equal(noise_h2, noise_h1)
+    assert float(np.min(noise_h1)) == pytest.approx(1.0 * 8**4)
+    assert float(np.min(noise_h2)) == pytest.approx(6.0 * 8**4)
 
 
 def test_replay_overrides_respect_init_relion_iteration_offset(tmp_path):

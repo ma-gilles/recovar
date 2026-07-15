@@ -29,6 +29,7 @@ from recovar.em.dense_single_volume.em_engine import _batch_parameter_rows, run_
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch as _fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.convergence import (
     RefinementState,
+    healpix_angular_step,
     refine_angular_sampling,
     should_refine_angular_sampling,
 )
@@ -81,6 +82,8 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _combined_noise_stats,
     _estimate_relion_em_batch_sizes,
     _exhaustive_grid_order_for_state,
+    _relion_expectation_coarse_size_order,
+    _relion_local_pass1_current_size,
     _normalize_noise_variance_per_half,
     _replay_control_model_iteration,
     _rotation_eulers_for_canonical_or_custom_grid,
@@ -473,7 +476,7 @@ def test_replay_override_preserves_half_specific_sigma_offsets():
     assert result.current_sigma_offset_angstrom_per_half == pytest.approx([5.0, 7.0])
 
 
-def test_replay_override_replaces_native_norm_scale_state_but_keeps_group_ids():
+def test_replay_override_preserves_native_scale_and_rescales_star_image_correction():
     class State:
         healpix_order = 1
         max_healpix_order = 1
@@ -503,7 +506,7 @@ def test_replay_override_replaces_native_norm_scale_state_but_keeps_group_ids():
                 np.asarray([1.0, 2.0], dtype=np.float32),
                 np.asarray([3.0], dtype=np.float32),
             ],
-            "scale_corrections": [
+            "serialized_scale_corrections": [
                 np.asarray([4.0, 5.0], dtype=np.float32),
                 np.asarray([6.0], dtype=np.float32),
             ],
@@ -529,11 +532,167 @@ def test_replay_override_replaces_native_norm_scale_state_but_keeps_group_ids():
         global_direction_prior_order_per_half=[None, None],
     )
 
-    np.testing.assert_allclose(relion_half_inputs.image_corrections[0], [1.0, 2.0])
-    np.testing.assert_allclose(relion_half_inputs.scale_corrections[0], [4.0, 5.0])
+    np.testing.assert_allclose(relion_half_inputs.image_corrections[0], [1.75, 2.8])
+    np.testing.assert_allclose(relion_half_inputs.scale_corrections[0], [7.0, 7.0])
     np.testing.assert_array_equal(relion_half_inputs.group_ids[0], group_ids[0])
     np.testing.assert_array_equal(relion_half_inputs.group_ids[1], group_ids[1])
     assert relion_half_inputs.group_count == [3000, 3000]
+
+
+def test_replay_explicit_scoring_scale_preserves_image_to_scale_ratio():
+    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+        previous_best_translations=None,
+        previous_best_rotation_eulers=None,
+        image_corrections=None,
+        scale_corrections=None,
+    )
+
+    class State:
+        healpix_order = max_healpix_order = 1
+        auto_local_healpix_order = 4
+        do_local_search = False
+        sigma_rot = sigma_psi = 0.0
+        translation_range = 3.0
+        translation_step = 1.0
+
+    class Cryo:
+        voxel_size = 1.0
+
+    iteration_loop_module.apply_iter_replay_overrides(
+        iter_replay_override={
+            "image_corrections": [np.asarray([1.0, 2.0]), np.asarray([], dtype=np.float32)],
+            "serialized_scale_corrections": [np.asarray([4.0, 5.0]), np.asarray([], dtype=np.float32)],
+            "scoring_scale_corrections": [np.asarray([8.0, 10.0]), np.asarray([], dtype=np.float32)],
+        },
+        perturb_replay_relion_dir=None,
+        init_relion_iteration=0,
+        iteration=1,
+        state=State(),
+        cs=8,
+        cryo=Cryo(),
+        k_class_enabled=True,
+        n_classes=4,
+        relion_half_inputs=relion_half_inputs,
+        previous_best_rotations=[None, None],
+        noise_variance_per_half=[None, None],
+        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        previous_noise_radial_per_half=[None, None],
+        previous_noise_radial=None,
+        current_sigma_offset_angstrom=10.0,
+        class_direction_prior_per_half=[None, None],
+        class_direction_prior_order_per_half=[None, None],
+        global_direction_prior_per_half=[None, None],
+        global_direction_prior_order_per_half=[None, None],
+    )
+
+    np.testing.assert_allclose(relion_half_inputs.scale_corrections[0], [8.0, 10.0])
+    np.testing.assert_allclose(relion_half_inputs.image_corrections[0], [2.0, 4.0])
+
+
+def test_replay_cold_start_falls_back_to_serialized_scale():
+    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+        previous_best_translations=None,
+        previous_best_rotation_eulers=None,
+        image_corrections=None,
+        scale_corrections=None,
+    )
+    state = SimpleNamespace(
+        healpix_order=1,
+        max_healpix_order=1,
+        auto_local_healpix_order=4,
+        do_local_search=False,
+        sigma_rot=0.0,
+        sigma_psi=0.0,
+        translation_range=3.0,
+        translation_step=1.0,
+    )
+
+    iteration_loop_module.apply_iter_replay_overrides(
+        iter_replay_override={
+            "image_corrections": [np.asarray([1.0, 2.0]), np.asarray([], dtype=np.float32)],
+            "serialized_scale_corrections": [np.asarray([4.0, 5.0]), np.asarray([], dtype=np.float32)],
+        },
+        perturb_replay_relion_dir=None,
+        init_relion_iteration=0,
+        iteration=0,
+        state=state,
+        cs=8,
+        cryo=SimpleNamespace(voxel_size=1.0),
+        k_class_enabled=False,
+        n_classes=1,
+        relion_half_inputs=relion_half_inputs,
+        previous_best_rotations=[None, None],
+        noise_variance_per_half=[None, None],
+        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        previous_noise_radial_per_half=[None, None],
+        previous_noise_radial=None,
+        current_sigma_offset_angstrom=10.0,
+        class_direction_prior_per_half=[None, None],
+        class_direction_prior_order_per_half=[None, None],
+        global_direction_prior_per_half=[None, None],
+        global_direction_prior_order_per_half=[None, None],
+    )
+
+    np.testing.assert_allclose(relion_half_inputs.scale_corrections[0], [4.0, 5.0])
+    np.testing.assert_allclose(relion_half_inputs.image_corrections[0], [1.0, 2.0])
+
+
+@pytest.mark.parametrize("with_resident_state", [False, True])
+def test_replay_legacy_paired_image_scale_state_remains_exact(with_resident_state):
+    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+        previous_best_translations=None,
+        previous_best_rotation_eulers=None,
+        image_corrections=(
+            [np.asarray([9.0, 9.0]), np.asarray([], dtype=np.float32)]
+            if with_resident_state
+            else None
+        ),
+        scale_corrections=(
+            [np.asarray([7.0, 7.0]), np.asarray([], dtype=np.float32)]
+            if with_resident_state
+            else None
+        ),
+    )
+
+    iteration_loop_module._apply_replay_correction_overrides(
+        relion_half_inputs=relion_half_inputs,
+        replay_override={
+            "image_corrections": [np.asarray([1.0, 2.0]), np.asarray([], dtype=np.float32)],
+            "scale_corrections": [np.asarray([4.0, 5.0]), np.asarray([], dtype=np.float32)],
+        },
+    )
+
+    np.testing.assert_array_equal(relion_half_inputs.image_corrections[0], [1.0, 2.0])
+    np.testing.assert_array_equal(relion_half_inputs.scale_corrections[0], [4.0, 5.0])
+
+
+def test_final_all_data_replay_uses_shared_live_scale_correction_contract():
+    source = inspect.getsource(iteration_loop_module._run_relion_iteration_loop)
+    final_start = source.index("final_replay_last_numbered_state")
+    final_end = source.index("final_noise_variance_per_half =", final_start)
+    final_replay_source = source[final_start:final_end]
+
+    assert "_apply_replay_correction_overrides(" in final_replay_source
+    assert "_final_replay_img_corr" not in final_replay_source
+    assert "_final_replay_scale_corr" not in final_replay_source
+
+    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+        previous_best_translations=None,
+        previous_best_rotation_eulers=None,
+        image_corrections=[np.asarray([9.0, 9.0]), np.asarray([], dtype=np.float32)],
+        scale_corrections=[np.asarray([8.0, 10.0]), np.asarray([], dtype=np.float32)],
+    )
+    applied = iteration_loop_module._apply_replay_correction_overrides(
+        relion_half_inputs=relion_half_inputs,
+        replay_override={
+            "image_corrections": [np.asarray([1.0, 2.0]), np.asarray([], dtype=np.float32)],
+            "serialized_scale_corrections": [np.asarray([4.0, 5.0]), np.asarray([], dtype=np.float32)],
+        },
+    )
+
+    assert applied == ["image_corrections", "serialized_scale_corrections"]
+    np.testing.assert_allclose(relion_half_inputs.image_corrections[0], [2.0, 4.0])
+    np.testing.assert_array_equal(relion_half_inputs.scale_corrections[0], [8.0, 10.0])
 
 
 def _pack_fake_local_search_outputs(
@@ -7780,6 +7939,60 @@ class TestRelionModeSmokeTest:
         assert coarse_size == 14
         assert clamp_relion_coarse_image_size(coarse_size, current_size=44, ori_size=128) == 14
 
+    def test_local_order_transition_keeps_pre_update_coarse_size_and_updated_child_expansion(self):
+        """RELION sizes pass 1 before updating order, but expands the new parent grid."""
+        incoming_order = 3
+        updated_parent_order = 4
+        oversampling_order = 1
+        fine_order = updated_parent_order + oversampling_order
+
+        pass1_size = _relion_local_pass1_current_size(
+            pre_update_healpix_order=incoming_order,
+            pixel_size=3.28,
+            ori_size=128,
+            particle_diameter=280.0,
+            current_size=122,
+        )
+        updated_order_size = compute_coarse_image_size(
+            healpix_angular_step(updated_parent_order),
+            3.28,
+            128,
+            particle_diameter=280.0,
+        )
+        child_rotations, rotation_parent, _ = get_oversampled_rotation_grid_from_samples(
+            np.asarray([0], dtype=np.int32),
+            fine_order - oversampling_order,
+            oversampling_order=oversampling_order,
+            return_rotation_indices=True,
+        )
+        child_translations, translation_parent = get_oversampled_translation_grid(
+            np.zeros((1, 2), dtype=np.float32),
+            pixel_offset=1.0,
+            oversampling_order=oversampling_order,
+        )
+
+        assert pass1_size == 56
+        assert updated_order_size == 110
+        assert fine_order - oversampling_order == updated_parent_order
+        assert child_rotations.shape[0] == rotation_parent.size == 8
+        assert child_translations.shape[0] == translation_parent.size == 4
+        assert child_rotations.shape[0] * child_translations.shape[0] == 32
+
+    def test_replay_coarse_size_uses_previous_saved_order_not_live_post_mstep_state(self):
+        assert (
+            _relion_expectation_coarse_size_order(
+                state_healpix_order=4,
+                replay_saved_healpix_order=3,
+            )
+            == 3
+        )
+        assert (
+            _relion_expectation_coarse_size_order(
+                state_healpix_order=4,
+                replay_saved_healpix_order=None,
+            )
+            == 4
+        )
     def test_make_relion_direction_log_prior_matches_canonical_grid_indices(self):
         order = 2
         n_rot = rotation_grid_size(order)
