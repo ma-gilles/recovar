@@ -3242,3 +3242,20 @@ association caused by projector source operand order, not texture staging or
 reduction noise.  This is an intermediate-array proof only; the production
 change still requires a fresh K=4 FSC/FSC-AUC trajectory gate.  The report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_p3591_projector_coordinate_sm90_prepared_20260715_151900/analysis/projector_coordinate_report.json`.
+
+The production correction uses that exact operand order in both CUDA texture
+projector output paths.  H100 job `11229870` completed two clean control arms
+and one target capture on physical GPU
+`GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`; it failed only when an older
+instrumented-source validator required metadata fields that the clean current
+payload schema does not emit.  A hash-bound post-hoc adapter validates the
+current coarse/fine arrays and exact candidate geometry without fabricating
+those absent fields.  Candidate 18's target-pixel reference error falls from
+`1.509e-6` to `1.58e-10`, its centered-score residual is `1.49e-8`, and both
+engines select candidate 18.  All three RECOVAR-to-matched-RELION class-map
+comparisons use the identity permutation; the minimum FSC-AUC is
+`0.99999997377` and the minimum non-DC FSC is `0.9999995218`.  This closes the
+particle-3591 one-iteration projector boundary.  It does not replace the
+remaining multi-iteration and heterogeneous robustness gates.  The accepted
+reports are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_p3591_projector_fix3_posthoc_job11229870_20260715_160048/analysis/`.
