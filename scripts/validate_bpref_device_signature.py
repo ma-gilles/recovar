@@ -1425,6 +1425,20 @@ def main(argv=None):
             (_validate_signature(path) for path in args.compare_signatures),
             key=lambda result: (result["launch_min"], result["path"]),
         )
+        comparison_scalar_fields = tuple(
+            key for key in scalar_identity_fields if key != "run_id"
+        )
+        for result in compare_results:
+            for key in comparison_scalar_fields:
+                if _scalar(result["signature"], key) != _scalar(reference, key):
+                    raise ValueError(
+                        f"cross-engine signature boundary mismatch for {key}"
+                    )
+            for key in array_identity_fields:
+                if not np.array_equal(result["signature"][key], reference[key]):
+                    raise ValueError(
+                        f"cross-engine signature boundary mismatch for {key}"
+                    )
         compare_records = concatenate_contribution_records(
             [result["contribution_records"] for result in compare_results]
         )

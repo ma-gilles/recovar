@@ -7,7 +7,6 @@ import pytest
 
 from scripts import validate_bpref_device_signature as validator
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -287,6 +286,43 @@ def test_valid_signature_and_panel_replay(tmp_path, capsys):
     signature, panel = _artifacts(tmp_path)
     validator.main([str(signature), "--panel-native", str(panel)])
     assert '"status": "PASS"' in capsys.readouterr().out
+
+
+def test_cross_engine_self_compare_is_exact(tmp_path, capsys):
+    signature, panel = _artifacts(tmp_path)
+
+    validator.main(
+        [
+            str(signature),
+            "--panel-native",
+            str(panel),
+            "--compare-signatures",
+            str(signature),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert '"classification": "exact"' in output
+
+
+def test_cross_engine_compare_requires_same_frozen_boundary(tmp_path):
+    signature, panel = _artifacts(tmp_path)
+    with np.load(signature, allow_pickle=False) as archive:
+        compare_values = {key: archive[key] for key in archive.files}
+    compare_values["volume_shape"] = np.asarray([8, 8, 8], dtype=np.int32)
+    compare_signature = tmp_path / "compare.device.npz"
+    np.savez(compare_signature, **compare_values)
+
+    with pytest.raises(ValueError, match="boundary mismatch for volume_shape"):
+        validator.main(
+            [
+                str(signature),
+                "--panel-native",
+                str(panel),
+                "--compare-signatures",
+                str(compare_signature),
+            ]
+        )
 
 
 def test_v3_high_precision_replay_bundle_is_validated_and_reported(tmp_path, capsys):
