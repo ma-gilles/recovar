@@ -202,6 +202,9 @@ _SPARSE_PASS2_WINDOWED_PREPARE_ENV = "RECOVAR_SPARSE_PASS2_WINDOWED_PREPARE"
 _SPARSE_KCLASS_WINDOWED_TRANSLATION_TILE_CAP_ENV = (
     "RECOVAR_SPARSE_KCLASS_WINDOWED_TRANSLATION_TILE_CAP"
 )
+_SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES_ENV = (
+    "RECOVAR_SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES"
+)
 _SPARSE_PASS2_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER_ENV = (
     "RECOVAR_SPARSE_PASS2_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER"
 )
@@ -216,6 +219,7 @@ _DEFAULT_CACHED_SCORE_ROT_CHUNK_SIZE = 8192
 _DEFAULT_PASS2_GROUP_PROGRESS_CHUNKS = 1000
 _DEFAULT_PASS2_GROUP_PROGRESS_SECONDS = 300
 _DEFAULT_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER = 4
+_DEFAULT_KCLASS_RAW_HOST_STAGING_MAX_BYTES = 8 * 1024**3
 
 _native_mstep_dump_counter = 0
 _bpref_contribution_dump_counter = 0
@@ -4608,8 +4612,11 @@ def _build_k_class_bucket_arrays(
 # ---------------------------------------------------------------------------
 
 
+_RELION_CUDA_FINE_REF3D_BLOCK_SIZE = 256
+
+
 @jax.jit
-def _score_pass2_bucket_relion_gpu_diff2_components(
+def _score_pass2_bucket_gaussian_algebraic_components(
     shifted_corrected,  # (B, T, N) complex, image operand divided by score weight factors
     corr_img_score,  # (B, N) real, Gaussian projection-norm score weight
     proj_half,  # (B, R, N) complex
@@ -4618,18 +4625,10 @@ def _score_pass2_bucket_relion_gpu_diff2_components(
     translation_log_prior,  # (B, T) real
     candidate_mask,  # (B, R, T) bool
 ):
-    """RELION GPU-style direct ``diff2`` scoring for pass-2 diagnostics.
+    """Return historical algebraic Gaussian scores and their pre-prior terms.
 
-    RELION's CUDA fine-search kernel first corrects the image by the same
-    scalar factors carried by the projection-norm weight, then accumulates a
-    direct ``|Fref - Fimg_corrected_shift|^2 * corr_img`` form.  This is
-    algebraically equivalent to the dense cross-minus-norm expression but has
-    different float32 rounding.  We remove the image-only constant so the
-    existing relative-score/log-evidence contract is unchanged.
-
-    Extremely small CTF/noise combinations can still overflow the direct form
-    on long 256px runs.  Treat non-finite candidates as impossible hypotheses
-    rather than letting NaNs enter posterior and noise accumulators.
+    The extra output is used only by scoped BPref diagnostics. Production exact
+    RELION scoring uses the direct ``diff2`` tree below.
     """
 
     weights = corr_img_score * half_weights[None, :]
@@ -4656,27 +4655,20 @@ def _score_pass2_bucket_relion_gpu_diff2_components(
 
 
 @jax.jit
-def _score_pass2_bucket_relion_gpu_diff2(
-    shifted_corrected,  # (B, T, N) complex, image operand divided by score weight factors
-    corr_img_score,  # (B, N) real, Gaussian projection-norm score weight
-    proj_half,  # (B, R, N) complex
-    half_weights,  # (N,) real
-    rotation_log_prior,  # (B, R) real
-    translation_log_prior,  # (B, T) real
-    candidate_mask,  # (B, R, T) bool
+def _score_pass2_bucket_gaussian_algebraic(
+    shifted_corrected,
+    corr_img_score,
+    proj_half,
+    half_weights,
+    rotation_log_prior,
+    translation_log_prior,
+    candidate_mask,
 ):
-    """RELION GPU-style direct ``diff2`` scoring for pass-2 diagnostics.
+    """Historical algebraic Gaussian scorer used outside exact CUDA-f32 mode.
 
-    RELION's CUDA fine-search kernel first corrects the image by the same
-    scalar factors carried by the projection-norm weight, then accumulates a
-    direct ``|Fref - Fimg_corrected_shift|^2 * corr_img`` form.  This is
-    algebraically equivalent to the dense cross-minus-norm expression but has
-    different float32 rounding.  We remove the image-only constant so the
-    existing relative-score/log-evidence contract is unchanged.
-
-    Extremely small CTF/noise combinations can still overflow the direct form
-    on long 256px runs.  Treat non-finite candidates as impossible hypotheses
-    rather than letting NaNs enter posterior and noise accumulators.
+    In particular, this preserves the documented float64 scoring diagnostic.
+    The exact RELION CUDA scorer below intentionally casts to XFLOAT and must
+    therefore never be selected when ``use_float64_scoring=True``.
     """
 
     weights = corr_img_score * half_weights[None, :]
@@ -4694,22 +4686,27 @@ def _score_pass2_bucket_relion_gpu_diff2(
         proj_abs2,
         precision=jax.lax.Precision.HIGHEST,
     )
-    scores = cross - proj_norm[:, :, None] + rotation_log_prior[:, :, None] + translation_log_prior[:, None, :]
+    scores = (
+        cross
+        - proj_norm[:, :, None]
+        + rotation_log_prior[:, :, None]
+        + translation_log_prior[:, None, :]
+    )
     scores = jnp.where(candidate_mask, scores, -jnp.inf)
     return jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
 
 
 @jax.jit
-def _score_pass2_bucket_relion_gpu_diff2_single_cached(
-    shifted_corrected,  # (T, N) complex
-    corr_img_score,  # (N,) real
-    proj_half,  # (R, N) complex
-    half_weights,  # (N,) real
-    rotation_log_prior,  # (R,) real
-    translation_log_prior,  # (T,) real
-    candidate_mask,  # (R, T) bool
+def _score_pass2_bucket_gaussian_algebraic_single_cached(
+    shifted_corrected,
+    corr_img_score,
+    proj_half,
+    half_weights,
+    rotation_log_prior,
+    translation_log_prior,
+    candidate_mask,
 ):
-    """Single-image cached-projection variant that avoids a ``(1, R, N)`` copy."""
+    """Single-image cached variant of the historical algebraic scorer."""
 
     weights = corr_img_score * half_weights
     cross = jnp.einsum(
@@ -4726,9 +4723,483 @@ def _score_pass2_bucket_relion_gpu_diff2_single_cached(
         proj_abs2,
         precision=jax.lax.Precision.HIGHEST,
     )
-    scores = cross - proj_norm[:, None] + rotation_log_prior[:, None] + translation_log_prior[None, :]
+    scores = (
+        cross
+        - proj_norm[:, None]
+        + rotation_log_prior[:, None]
+        + translation_log_prior[None, :]
+    )
     scores = jnp.where(candidate_mask, scores, -jnp.inf)
     return jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
+
+
+def _relion_cuda_fine_reduce_lanes(lanes):
+    """Reduce the 256 shared-memory lanes used by RELION CUDA REF3D fine diff2."""
+
+    lanes = jnp.asarray(lanes, dtype=jnp.float32)
+    if lanes.shape[-1] != _RELION_CUDA_FINE_REF3D_BLOCK_SIZE:
+        raise ValueError(
+            "RELION CUDA fine reduction needs exactly "
+            f"{_RELION_CUDA_FINE_REF3D_BLOCK_SIZE} lanes, got {lanes.shape[-1]}"
+        )
+    for width in (128, 64, 32, 16, 8, 4, 2, 1):
+        lanes = lanes[..., :width] + lanes[..., width : 2 * width]
+    return lanes[..., 0]
+
+
+def _relion_cuda_fine_tree_sum(values):
+    """Reproduce RELION CUDA's 256-lane pixel-pass accumulation and tree."""
+
+    block_size = _RELION_CUDA_FINE_REF3D_BLOCK_SIZE
+    n_values = int(values.shape[-1])
+    if n_values == 0:
+        return jnp.zeros(values.shape[:-1], dtype=jnp.float32)
+    n_passes = (n_values + block_size - 1) // block_size
+    padded_size = n_passes * block_size
+    values = jnp.asarray(values, dtype=jnp.float32)
+    values = jnp.pad(values, [(0, 0)] * (values.ndim - 1) + [(0, padded_size - n_values)])
+    pass_values = values.reshape(values.shape[:-1] + (n_passes, block_size))
+    lanes = jnp.zeros(values.shape[:-1] + (block_size,), dtype=jnp.float32)
+    for pass_index in range(n_passes):
+        lanes = lanes + pass_values[..., pass_index, :]
+    return _relion_cuda_fine_reduce_lanes(lanes)
+
+
+def _relion_cuda_fine_full_to_compact_lookup(image_shape, current_size, compact_indices):
+    """Map RELION's full current-size packed pixel order to compact score rows."""
+
+    image_size = int(image_shape[0])
+    current_size = image_size if current_size is None else int(current_size)
+    original_half_width = int(image_shape[1]) // 2 + 1
+    current_half_width = current_size // 2 + 1
+    compact_indices = np.asarray(compact_indices, dtype=np.int64).reshape(-1)
+    centered_rows = compact_indices // original_half_width
+    columns = compact_indices % original_half_width
+    ky = centered_rows - image_size // 2
+    fftw_rows = np.where(ky < 0, ky + current_size, ky)
+    if np.any(fftw_rows < 0) or np.any(fftw_rows >= current_size):
+        raise ValueError("compact score indices contain rows outside the RELION current-size crop")
+    if np.any(columns < 0) or np.any(columns >= current_half_width):
+        raise ValueError("compact score indices contain columns outside the RELION current-size crop")
+    relion_flat_indices = fftw_rows * current_half_width + columns
+    if np.unique(relion_flat_indices).size != relion_flat_indices.size:
+        raise ValueError("compact score indices do not map uniquely into RELION's current-size layout")
+    lookup = np.full(current_size * current_half_width, -1, dtype=np.int32)
+    lookup[relion_flat_indices] = np.arange(compact_indices.size, dtype=np.int32)
+    return lookup
+
+
+def _relion_cuda_fine_diff2_sum(
+    reference,
+    shifted_image,
+    pixel_weight,
+    relion_full_to_compact=None,
+):
+    """Accumulate direct Gaussian diff2 without materializing ``(..., N)``.
+
+    Pinned RELION CUDA's ``REF3D=true, DATA3D=false`` path uses
+    ``D2F_BLOCK_SIZE_REF3D=256`` and ``D2F_CHUNK_REF3D=7``. The chunk controls
+    translation batching; thread ``tid`` still accumulates pixels
+    ``tid + pass * 256`` sequentially in XFLOAT (float32), followed by the
+    shared-memory 128,64,...,1 reduction tree. Keeping only the 256 lanes per
+    hypothesis avoids the much larger hypothesis-by-pixel temporary.
+    """
+
+    reference = jnp.asarray(reference, dtype=jnp.complex64)
+    shifted_image = jnp.asarray(shifted_image, dtype=jnp.complex64)
+    pixel_weight = jnp.asarray(pixel_weight, dtype=jnp.float32)
+    n_values = int(reference.shape[-1])
+    if shifted_image.shape[-1] != n_values or pixel_weight.shape[-1] != n_values:
+        raise ValueError(
+            "RELION CUDA fine diff2 operands must have the same pixel count: "
+            f"reference={reference.shape[-1]}, shifted={shifted_image.shape[-1]}, "
+            f"weight={pixel_weight.shape[-1]}"
+        )
+    output_shape = jnp.broadcast_shapes(
+        reference.shape[:-1], shifted_image.shape[:-1], pixel_weight.shape[:-1]
+    )
+    if n_values == 0:
+        return jnp.zeros(output_shape, dtype=jnp.float32)
+
+    if relion_full_to_compact is None:
+        relion_full_to_compact = jnp.arange(n_values, dtype=jnp.int32)
+    else:
+        relion_full_to_compact = jnp.asarray(relion_full_to_compact, dtype=jnp.int32)
+        if relion_full_to_compact.ndim != 1:
+            raise ValueError(
+                "RELION full-to-compact lookup must be one-dimensional, got "
+                f"{relion_full_to_compact.shape}"
+            )
+    full_image_size = int(relion_full_to_compact.shape[0])
+    block_size = _RELION_CUDA_FINE_REF3D_BLOCK_SIZE
+    n_passes = (full_image_size + block_size - 1) // block_size
+    padded_size = n_passes * block_size
+    relion_full_to_compact = jnp.pad(
+        relion_full_to_compact,
+        [(0, padded_size - full_image_size)],
+        constant_values=-1,
+    )
+    lanes = jnp.zeros(output_shape + (block_size,), dtype=jnp.float32)
+
+    def accumulate_pass(pass_index, lane_values):
+        start = pass_index * block_size
+        compact_rows = jax.lax.dynamic_slice_in_dim(
+            relion_full_to_compact, start, block_size, axis=-1
+        )
+        valid_pixel = compact_rows >= 0
+        safe_rows = jnp.where(valid_pixel, compact_rows, 0)
+        ref_pass = jnp.take(reference, safe_rows, axis=-1)
+        img_pass = jnp.take(shifted_image, safe_rows, axis=-1)
+        weight_pass = jnp.take(pixel_weight, safe_rows, axis=-1)
+        diff_real = ref_pass.real - img_pass.real
+        diff_imag = ref_pass.imag - img_pass.imag
+        terms = (
+            (diff_real * diff_real + diff_imag * diff_imag)
+            * jnp.asarray(0.5, dtype=jnp.float32)
+            * weight_pass
+        )
+        terms = jnp.where(valid_pixel, terms, jnp.asarray(0.0, dtype=jnp.float32))
+        return lane_values + terms
+
+    lanes = jax.lax.fori_loop(0, n_passes, accumulate_pass, lanes)
+    return _relion_cuda_fine_reduce_lanes(lanes)
+
+
+def _relion_cuda_fine_pixel_weights(corr_img_score, half_weights):
+    """Form RELION XFLOAT pixel weights without a float64 intermediate."""
+
+    return jnp.asarray(corr_img_score, dtype=jnp.float32) * jnp.asarray(
+        half_weights, dtype=jnp.float32
+    )
+
+
+_RELION_CUDA_POWERCLASS_BLOCK_SIZE = 128
+
+
+@partial(jax.jit, static_argnames=("image_shape", "current_size"))
+def _relion_cuda_powerclass_highres_xi2_half(
+    processed_score_half,
+    *,
+    image_shape,
+    current_size,
+):
+    """Reproduce the class-power high-resolution image tail used by fine diff2.
+
+    RELION's CUDA ``powerClass`` kernel (``cuda_kernels/helper.cuh``) bins the
+    unshifted, unnormalised ``Faux`` image in float32, reduces each contiguous
+    128-pixel block with a shared-memory tree, and atomically accumulates bins
+    at or above ``current_size / 2 + 1``. ``diff2_fine`` then adds half of that
+    scalar to every fine-search hypothesis (``cuda_kernels/diff2.cuh``).
+
+    RECOVAR stores the y axis centred and its FFT amplitudes are larger by the
+    real-space pixel count. Convert both conventions before reproducing the
+    float32 power and block reduction. The final cross-block accumulation uses
+    ascending block order; RELION's atomic arrival order is not specified, so
+    its last bit may vary between launches while the per-block arithmetic is
+    fixed.
+    """
+
+    image_height = int(image_shape[0])
+    image_width = int(image_shape[1])
+    if image_height != image_width:
+        raise ValueError(f"RELION powerClass parity requires square images, got {image_shape}")
+    half_width = image_width // 2 + 1
+    processed_score_half = jnp.asarray(processed_score_half, dtype=jnp.complex64)
+    if processed_score_half.ndim != 2 or processed_score_half.shape[-1] != image_height * half_width:
+        raise ValueError(
+            "RELION powerClass input must be flattened centred rfft images, got "
+            f"{processed_score_half.shape} for image_shape={image_shape}"
+        )
+    if current_size is None:
+        current_size = image_width
+    resolution_limit = int(current_size) // 2 + 1
+
+    # RELION's packed rows are 0,+1,...,+Nyquist,-Nyquist+1,...,-1. RECOVAR's
+    # rows are fftshift-centred, so move the first non-negative row to index 0.
+    relion_image = jnp.roll(
+        processed_score_half.reshape((-1, image_height, half_width)),
+        -(image_height // 2),
+        axis=1,
+    ).reshape((processed_score_half.shape[0], -1))
+    relion_image = relion_image / jnp.asarray(image_height * image_width, dtype=jnp.float32)
+
+    rows = np.arange(image_height, dtype=np.int32)[:, None]
+    columns = np.arange(half_width, dtype=np.int32)[None, :]
+    signed_rows = np.where(rows < half_width, rows, rows - image_height)
+    radius_squared = columns * columns + signed_rows * signed_rows
+    # CUDA __float2int_rn(sqrtf(...)): nearest-even float32 conversion.
+    shell = np.rint(np.sqrt(radius_squared.astype(np.float32))).astype(np.int32)
+    valid = (
+        (shell > 0)
+        & (shell < half_width)
+        & ~((columns == 0) & (signed_rows < 0))
+        & (shell >= resolution_limit)
+    ).reshape(-1)
+
+    power = relion_image.real * relion_image.real
+    power = jax.lax.optimization_barrier(power)
+    power = power + relion_image.imag * relion_image.imag
+    power = jnp.where(jnp.asarray(valid)[None, :], power, jnp.asarray(0.0, dtype=jnp.float32))
+
+    block_size = _RELION_CUDA_POWERCLASS_BLOCK_SIZE
+    n_blocks = (power.shape[-1] + block_size - 1) // block_size
+    power = jnp.pad(power, ((0, 0), (0, n_blocks * block_size - power.shape[-1])))
+    block_lanes = power.reshape((power.shape[0], n_blocks, block_size))
+    for width in (64, 32, 16, 8, 4, 2, 1):
+        block_lanes = block_lanes[..., :width] + block_lanes[..., width : 2 * width]
+        block_lanes = jax.lax.optimization_barrier(block_lanes)
+    block_sums = block_lanes[..., 0]
+
+    def add_block(block_index, total):
+        total = total + block_sums[:, block_index]
+        return jax.lax.optimization_barrier(total)
+
+    highres_xi2 = jax.lax.fori_loop(
+        0,
+        n_blocks,
+        add_block,
+        jnp.zeros((processed_score_half.shape[0],), dtype=jnp.float32),
+    )
+    return highres_xi2 * jnp.asarray(0.5, dtype=jnp.float32)
+
+
+def _relion_cuda_fine_diff2_min(diff2, candidate_mask):
+    """Return one finite float32 minimum per image over a raw diff2 tensor."""
+
+    minimum = _relion_cuda_fine_partition_diff2_min_or_inf(diff2, candidate_mask)
+    return jnp.where(
+        jnp.isfinite(minimum),
+        minimum,
+        jnp.asarray(0.0, dtype=jnp.float32),
+    )
+
+
+def _relion_cuda_fine_partition_diff2_min_or_inf(diff2, candidate_mask):
+    """Reduce one partition, retaining ``+inf`` for all-invalid images."""
+
+    diff2 = jnp.asarray(diff2, dtype=jnp.float32)
+    candidate_mask = jnp.asarray(candidate_mask, dtype=bool)
+    if diff2.shape != candidate_mask.shape:
+        raise ValueError(
+            "RELION raw diff2 and candidate mask shapes must match: "
+            f"diff2={diff2.shape}, mask={candidate_mask.shape}"
+        )
+    if diff2.ndim < 2:
+        raise ValueError(f"RELION raw diff2 needs a leading image axis, got {diff2.shape}")
+    valid = candidate_mask & jnp.isfinite(diff2)
+    reduction_axes = tuple(range(1, diff2.ndim))
+    return jnp.min(jnp.where(valid, diff2, jnp.inf), axis=reduction_axes)
+
+
+def _relion_cuda_fine_global_diff2_min(raw_diff2_by_partition, masks_by_partition):
+    """Return the common per-image minimum spanning chunks and/or classes."""
+
+    if len(raw_diff2_by_partition) != len(masks_by_partition):
+        raise ValueError("RELION raw diff2 partitions and masks must have equal lengths")
+    if not raw_diff2_by_partition:
+        raise ValueError("RELION common-min reduction needs at least one partition")
+    partition_minima = []
+    for raw_diff2, mask in zip(raw_diff2_by_partition, masks_by_partition, strict=True):
+        host_staged_partition = isinstance(raw_diff2, np.ndarray)
+        raw_diff2_device = jnp.asarray(raw_diff2, dtype=jnp.float32)
+        mask_device = jnp.asarray(mask, dtype=bool)
+        partition_minimum = _relion_cuda_fine_partition_diff2_min_or_inf(
+            raw_diff2_device,
+            mask_device,
+        )
+        if host_staged_partition:
+            # K-class staging deliberately serializes each D2H-staged class
+            # partition back through the device. Synchronize the tiny reduced
+            # result before releasing the raw upload so successive classes
+            # cannot become simultaneously resident through async dispatch.
+            partition_minimum = jax.block_until_ready(partition_minimum)
+        partition_minima.append(partition_minimum)
+        del raw_diff2_device
+    common_min = jnp.min(jnp.stack(partition_minima, axis=0), axis=0)
+    return jnp.where(jnp.isfinite(common_min), common_min, jnp.asarray(0.0, dtype=jnp.float32))
+
+
+def _relion_cuda_fine_log_evidence_offset(min_diff2):
+    """Undo RELION's common-min score centering for absolute log evidence."""
+
+    return -jnp.asarray(min_diff2, dtype=jnp.float32)
+
+
+def _relion_cuda_fine_diff2_to_scores(
+    diff2,
+    rotation_log_prior,
+    translation_log_prior,
+    candidate_mask,
+    *,
+    min_diff2=None,
+):
+    """Apply RELION's float32 fine diff2-to-log-weight conversion order.
+
+    RELION first finds one common minimum over the full valid fine candidate
+    set for each image. Its CUDA conversion kernel then evaluates, in XFLOAT,
+    ``((orientation_log_prior + translation_log_prior) + min_diff2) - diff2``.
+    The common-min term cancels algebraically in normalized probabilities but
+    its placement changes float32 tie-breaking at diff2 magnitudes around 1e3.
+
+    ``min_diff2`` may be supplied by a caller that splits one image's full
+    candidate set across score chunks or classes. Otherwise it is computed
+    over the candidate set represented by ``diff2``. K-class callers must
+    therefore supply an external minimum spanning every class; a per-class
+    call is not a claim of K-class bit parity.
+    """
+
+    diff2 = jnp.asarray(diff2, dtype=jnp.float32)
+    rotation_log_prior = jnp.asarray(rotation_log_prior, dtype=jnp.float32)
+    translation_log_prior = jnp.asarray(translation_log_prior, dtype=jnp.float32)
+    candidate_mask = jnp.asarray(candidate_mask, dtype=bool)
+    valid = candidate_mask & jnp.isfinite(diff2)
+    if min_diff2 is None:
+        local_min = _relion_cuda_fine_diff2_min(diff2, candidate_mask)
+    else:
+        local_min = jnp.asarray(min_diff2, dtype=jnp.float32)
+    has_valid = jnp.any(valid, axis=tuple(range(1, diff2.ndim)))
+    local_min = jnp.where(has_valid, local_min, jnp.asarray(0.0, dtype=jnp.float32))
+    min_shape = (diff2.shape[0],) + (1,) * (diff2.ndim - 1)
+    # RELION's exponentiation kernel rejects candidates below the supplied
+    # global minimum. This is normally impossible for a self-consistent
+    # partition, but is observable at cross-partition float32 boundaries.
+    valid = valid & (diff2 >= local_min.reshape(min_shape))
+
+    scores = rotation_log_prior + translation_log_prior
+    scores = jax.lax.optimization_barrier(scores)
+    scores = scores + local_min.reshape(min_shape)
+    scores = jax.lax.optimization_barrier(scores)
+    scores = scores - diff2
+    scores = jnp.where(valid & jnp.isfinite(scores), scores, -jnp.inf)
+    return scores
+
+
+@jax.jit
+def _score_pass2_bucket_relion_gpu_diff2_raw(
+    shifted_corrected,  # (B, T, N) complex, image operand divided by score weight factors
+    corr_img_score,  # (B, N) real, Gaussian projection-norm score weight
+    proj_half,  # (B, R, N) complex
+    half_weights,  # (N,) real
+    relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
+    highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
+):
+    """Return positive float32 RELION fine-pass costs without priors or centering."""
+
+    weights = _relion_cuda_fine_pixel_weights(
+        corr_img_score, jnp.asarray(half_weights)[None, :]
+    )
+    diff2 = _relion_cuda_fine_diff2_sum(
+        proj_half[:, :, None, :],
+        shifted_corrected[:, None, :, :],
+        weights[:, None, None, :],
+        relion_full_to_compact,
+    )
+    if highres_xi2_half is not None:
+        diff2 = diff2 + jnp.asarray(highres_xi2_half, dtype=jnp.float32)[:, None, None]
+    return diff2
+
+
+@jax.jit
+def _score_pass2_bucket_relion_gpu_diff2(
+    shifted_corrected,  # (B, T, N) complex, image operand divided by score weight factors
+    corr_img_score,  # (B, N) real, Gaussian projection-norm score weight
+    proj_half,  # (B, R, N) complex
+    half_weights,  # (N,) real
+    rotation_log_prior,  # (B, R) real
+    translation_log_prior,  # (B, T) real
+    candidate_mask,  # (B, R, T) bool
+    relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
+    min_diff2=None,  # (B,) optional external common minimum across chunks/classes
+    highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
+):
+    """RELION GPU-style direct ``diff2`` scoring for pass-2 diagnostics.
+
+    RELION's CUDA fine-search kernel first corrects the image by the same
+    scalar factors carried by the projection-norm weight, then accumulates a
+    direct ``|Fref - Fimg_corrected_shift|^2 * corr_img`` form.  This is
+    algebraically equivalent to the dense cross-minus-norm expression but has
+    different float32 rounding. The positive diff2 values are converted with
+    RELION's common-min and prior-addition order below.
+
+    Extremely small CTF/noise combinations can still overflow the direct form
+    on long 256px runs.  Treat non-finite candidates as impossible hypotheses
+    rather than letting NaNs enter posterior and noise accumulators.
+    """
+
+    rotation_log_prior = jnp.asarray(rotation_log_prior, dtype=jnp.float32)
+    translation_log_prior = jnp.asarray(translation_log_prior, dtype=jnp.float32)
+    diff2 = _score_pass2_bucket_relion_gpu_diff2_raw(
+        shifted_corrected,
+        corr_img_score,
+        proj_half,
+        half_weights,
+        relion_full_to_compact,
+        highres_xi2_half,
+    )
+    return _relion_cuda_fine_diff2_to_scores(
+        diff2,
+        rotation_log_prior[:, :, None],
+        translation_log_prior[:, None, :],
+        candidate_mask,
+        min_diff2=min_diff2,
+    )
+
+
+@jax.jit
+def _score_pass2_bucket_relion_gpu_diff2_single_cached_raw(
+    shifted_corrected,  # (T, N) complex
+    corr_img_score,  # (N,) real
+    proj_half,  # (R, N) complex
+    half_weights,  # (N,) real
+    relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
+    highres_xi2_half=None,  # scalar float32 powerClass tail already divided by two
+):
+    """Single-image cached positive-cost variant without priors or centering."""
+
+    weights = _relion_cuda_fine_pixel_weights(corr_img_score, half_weights)
+    diff2 = _relion_cuda_fine_diff2_sum(
+        proj_half[:, None, :],
+        shifted_corrected[None, :, :],
+        weights[None, None, :],
+        relion_full_to_compact,
+    )
+    if highres_xi2_half is not None:
+        diff2 = diff2 + jnp.asarray(highres_xi2_half, dtype=jnp.float32)
+    return diff2
+
+
+@jax.jit
+def _score_pass2_bucket_relion_gpu_diff2_single_cached(
+    shifted_corrected,  # (T, N) complex
+    corr_img_score,  # (N,) real
+    proj_half,  # (R, N) complex
+    half_weights,  # (N,) real
+    rotation_log_prior,  # (R,) real
+    translation_log_prior,  # (T,) real
+    candidate_mask,  # (R, T) bool
+    relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
+    min_diff2=None,  # scalar or (1,) optional external common minimum
+    highres_xi2_half=None,  # scalar float32 powerClass tail already divided by two
+):
+    """Single-image cached-projection variant that avoids a ``(1, R, N)`` copy."""
+
+    rotation_log_prior = jnp.asarray(rotation_log_prior, dtype=jnp.float32)
+    translation_log_prior = jnp.asarray(translation_log_prior, dtype=jnp.float32)
+    diff2 = _score_pass2_bucket_relion_gpu_diff2_single_cached_raw(
+        shifted_corrected,
+        corr_img_score,
+        proj_half,
+        half_weights,
+        relion_full_to_compact,
+        highres_xi2_half,
+    )
+    return _relion_cuda_fine_diff2_to_scores(
+        diff2[jnp.newaxis, :, :],
+        rotation_log_prior[jnp.newaxis, :, None],
+        translation_log_prior[jnp.newaxis, None, :],
+        candidate_mask[jnp.newaxis, :, :],
+        min_diff2=min_diff2,
+    )[0]
 
 
 @jax.jit
@@ -4794,29 +5265,23 @@ def _score_pass2_bucket_normalized_cc_single_cached(
 
 
 @jax.jit
-def _score_pass2_pairs_relion_gpu_diff2(
-    shifted_corrected,  # (B, T, N) complex, image / (CTF * scale)
-    corr_img_score,  # (B, N) real, Minvsigma2 * CTF^2 * scale^2
-    proj_half,  # (B, R, N) complex
-    half_weights,  # (N,) real
-    pair_rotation_log_prior,  # (B, P) real
-    translation_log_prior,  # (B, T) real
-    local_rotation_row,  # (B, P) int
-    translation_idx,  # (B, P) int
-    pair_mask,  # (B, P) bool
+def _score_pass2_pairs_gaussian_algebraic(
+    shifted_corrected,
+    corr_img_score,
+    proj_half,
+    half_weights,
+    pair_rotation_log_prior,
+    translation_log_prior,
+    local_rotation_row,
+    translation_idx,
+    pair_mask,
 ):
-    """RELION GPU-style Gaussian scoring for compact pass-2 pairs.
-
-    This is the pair-shaped analogue of
-    ``_score_pass2_bucket_relion_gpu_diff2``.  It is intentionally score-only:
-    compact M-step accumulation is a separate integration step.
-    """
+    """Compact-pair variant of the historical algebraic Gaussian scorer."""
 
     batch = shifted_corrected.shape[0]
     row = jnp.arange(batch)[:, None]
     safe_rotation_row = jnp.where(pair_mask, local_rotation_row, 0).astype(jnp.int32)
     safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
-
     shifted_pair = shifted_corrected[row, safe_translation_idx, :]
     proj_pair = proj_half[row, safe_rotation_row, :]
     weights = corr_img_score * half_weights[None, :]
@@ -4834,10 +5299,90 @@ def _score_pass2_pairs_relion_gpu_diff2(
         proj_abs2,
         precision=jax.lax.Precision.HIGHEST,
     )
-    trans_prior = translation_log_prior[row, safe_translation_idx]
-    scores = cross - proj_norm + pair_rotation_log_prior + trans_prior
+    translation_prior = translation_log_prior[row, safe_translation_idx]
+    scores = cross - proj_norm + pair_rotation_log_prior + translation_prior
     scores = jnp.where(pair_mask, scores, -jnp.inf)
     return jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
+
+
+@jax.jit
+def _score_pass2_pairs_relion_gpu_diff2_raw(
+    shifted_corrected,  # (B, T, N) complex, image / (CTF * scale)
+    corr_img_score,  # (B, N) real, Minvsigma2 * CTF^2 * scale^2
+    proj_half,  # (B, R, N) complex
+    half_weights,  # (N,) real
+    local_rotation_row,  # (B, P) int
+    translation_idx,  # (B, P) int
+    pair_mask,  # (B, P) bool
+    relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
+    highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
+):
+    """Return positive float32 RELION costs for compact candidate pairs."""
+
+    batch = shifted_corrected.shape[0]
+    row = jnp.arange(batch)[:, None]
+    safe_rotation_row = jnp.where(pair_mask, local_rotation_row, 0).astype(jnp.int32)
+    safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
+
+    shifted_pair = shifted_corrected[row, safe_translation_idx, :]
+    proj_pair = proj_half[row, safe_rotation_row, :]
+    weights = _relion_cuda_fine_pixel_weights(
+        corr_img_score, jnp.asarray(half_weights)[None, :]
+    )
+    diff2 = _relion_cuda_fine_diff2_sum(
+        proj_pair,
+        shifted_pair,
+        weights[:, None, :],
+        relion_full_to_compact,
+    )
+    if highres_xi2_half is not None:
+        diff2 = diff2 + jnp.asarray(highres_xi2_half, dtype=jnp.float32)[:, None]
+    return diff2
+
+
+@jax.jit
+def _score_pass2_pairs_relion_gpu_diff2(
+    shifted_corrected,  # (B, T, N) complex, image / (CTF * scale)
+    corr_img_score,  # (B, N) real, Minvsigma2 * CTF^2 * scale^2
+    proj_half,  # (B, R, N) complex
+    half_weights,  # (N,) real
+    pair_rotation_log_prior,  # (B, P) real
+    translation_log_prior,  # (B, T) real
+    local_rotation_row,  # (B, P) int
+    translation_idx,  # (B, P) int
+    pair_mask,  # (B, P) bool
+    relion_full_to_compact=None,  # (current_size * (current_size // 2 + 1),) int
+    min_diff2=None,  # (B,) optional external common minimum across classes
+    highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
+):
+    """RELION GPU-style Gaussian scoring for compact pass-2 pairs."""
+
+    batch = shifted_corrected.shape[0]
+    row = jnp.arange(batch)[:, None]
+    safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
+    pair_rotation_log_prior = jnp.asarray(pair_rotation_log_prior, dtype=jnp.float32)
+    translation_log_prior = jnp.asarray(translation_log_prior, dtype=jnp.float32)
+    trans_prior = jnp.asarray(
+        translation_log_prior[row, safe_translation_idx], dtype=jnp.float32
+    )
+    diff2 = _score_pass2_pairs_relion_gpu_diff2_raw(
+        shifted_corrected,
+        corr_img_score,
+        proj_half,
+        half_weights,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        relion_full_to_compact,
+        highres_xi2_half,
+    )
+    return _relion_cuda_fine_diff2_to_scores(
+        diff2,
+        pair_rotation_log_prior,
+        trans_prior,
+        pair_mask,
+        min_diff2=min_diff2,
+    )
 
 
 @jax.jit
@@ -6180,6 +6725,8 @@ def _maybe_dump_pass2_bucket(
     reconstruction_mask=None,
     reconstruction_probs=None,
     reconstruction_n_significant=None,
+    relion_highres_xi2_half=None,
+    relion_min_diff2=None,
 ):
     """Env-gated sparse pass-2 dump for RELION operand parity debugging."""
     dump_dir = os.environ.get("RECOVAR_PASS2_DUMP_DIR")
@@ -6221,6 +6768,10 @@ def _maybe_dump_pass2_bucket(
     shifted_recon_np = None if shifted_recon_split is None else np.asarray(shifted_recon_split)
     ctf2_recon_np = None if ctf2_over_nv_recon is None else np.asarray(ctf2_over_nv_recon, dtype=np.float64)
     recon_window_indices_np = None if recon_window_indices is None else np.asarray(recon_window_indices, dtype=np.int32)
+    highres_np = (
+        None if relion_highres_xi2_half is None else np.asarray(relion_highres_xi2_half, dtype=np.float32)
+    )
+    min_diff2_np = None if relion_min_diff2 is None else np.asarray(relion_min_diff2, dtype=np.float32)
 
     dump_count = 0
     for row in wanted_rows:
@@ -6242,6 +6793,10 @@ def _maybe_dump_pass2_bucket(
             reconstruction_fields["reconstruction_n_significant"] = (
                 recon_n_sig_np[row] if recon_n_sig_np.ndim else recon_n_sig_np
             )
+        if highres_np is not None:
+            reconstruction_fields["relion_highres_xi2_half"] = np.float32(highres_np[row])
+        if min_diff2_np is not None:
+            reconstruction_fields["relion_min_diff2"] = np.float32(min_diff2_np[row])
         np.savez_compressed(
             out_path,
             original_index=np.int64(original_idx),
@@ -6617,7 +7172,6 @@ def _prepare_bucket_io(
         shifted_recon_half = None
         shifted_score_half_with_dc = None
         ctf2_over_nv_half_with_dc = None
-        processed_score_half_for_noise = None
     else:
         if return_windowed_shifted:
             score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
@@ -6787,6 +7341,7 @@ def compute_pass2_stats_sparse_bucketed(
     scale_correction_data_vs_prior=None,
     normalization_log_z=None,
     normalization_other_score_log_z=None,
+    normalization_score_mode=None,
     return_score_log_z=False,
     return_score_log_z_only=False,
     disable_adjoint_y=False,
@@ -6802,6 +7357,7 @@ def compute_pass2_stats_sparse_bucketed(
     relion_fine_mstep_prune=False,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
+    relion_exact_fine_gaussian=True,
     relion_projector_half=None,
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
@@ -6810,6 +7366,10 @@ def compute_pass2_stats_sparse_bucketed(
     """Bucketed batched implementation of sparse pass-2 oversampling.
 
     Returns the same tuple as ``compute_pass2_stats_sparse``.
+
+    ``relion_exact_fine_gaussian`` enables RELION's float32 fine-search
+    diff2/minimum ordering. Float64 scoring deliberately uses the legacy
+    algebraic expression as a high-precision diagnostic route.
     """
     device_signature_configured = bool(
         os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
@@ -6860,6 +7420,11 @@ def compute_pass2_stats_sparse_bucketed(
             "relion_firstiter_score_mode must be 'gaussian' or 'normalized_cc', "
             f"got {relion_firstiter_score_mode!r}",
         )
+    use_exact_relion_gaussian = bool(
+        relion_exact_fine_gaussian
+        and relion_firstiter_score_mode == "gaussian"
+        and not use_float64_scoring
+    )
     winner_take_all = bool(relion_firstiter_winner_take_all)
     if bool(disable_adjoint_y) != bool(disable_adjoint_ctf):
         raise NotImplementedError("Sparse pass-2 currently supports disabling both M-step adjoints together")
@@ -6875,6 +7440,33 @@ def compute_pass2_stats_sparse_bucketed(
             raise ValueError("return_score_log_z_only cannot accumulate noise")
     if normalization_log_z is not None and normalization_other_score_log_z is not None:
         raise ValueError("normalization_log_z and normalization_other_score_log_z are mutually exclusive")
+    has_external_score_normalization = (
+        normalization_log_z is not None or normalization_other_score_log_z is not None
+    )
+    if normalization_score_mode is not None and normalization_score_mode not in {
+        "gaussian",
+        "normalized_cc",
+    }:
+        raise ValueError(
+            "normalization_score_mode must be 'gaussian' or 'normalized_cc', "
+            f"got {normalization_score_mode!r}",
+        )
+    if has_external_score_normalization and normalization_score_mode is None:
+        raise ValueError(
+            "external sparse pass-2 score normalization requires normalization_score_mode; "
+            "Gaussian logZ is absolute while normalized-CC logZ is centered"
+        )
+    if normalization_score_mode is not None and not has_external_score_normalization:
+        raise ValueError("normalization_score_mode requires an external score normalization")
+    if (
+        has_external_score_normalization
+        and normalization_score_mode is not None
+        and normalization_score_mode != relion_firstiter_score_mode
+    ):
+        raise ValueError(
+            "external score normalization mode does not match this pass: "
+            f"external={normalization_score_mode!r}, pass={relion_firstiter_score_mode!r}",
+        )
     if normalization_other_score_log_z is not None and not return_score_log_z:
         raise ValueError("normalization_other_score_log_z requires return_score_log_z=True")
     if score_only and accumulate_noise:
@@ -6897,6 +7489,16 @@ def compute_pass2_stats_sparse_bucketed(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     H, W = image_shape
+    if (
+        use_exact_relion_gaussian
+        and current_size is not None
+        and int(current_size) < int(W)
+        and (not half_spectrum_scoring or square_window)
+    ):
+        raise NotImplementedError(
+            "exact RELION fine Gaussian high-resolution scoring requires "
+            "half_spectrum_scoring=True and square_window=False"
+        )
     n_half = H * (W // 2 + 1)
     window_spec_kwargs = {}
     if relion_firstiter_score_mode == "normalized_cc":
@@ -7317,6 +7919,14 @@ def compute_pass2_stats_sparse_bucketed(
     if use_float64_scoring:
         half_weights = half_weights.astype(jnp.float64)
         half_weights_windowed = window_spec.score_values(half_weights)
+    relion_score_full_to_compact = jnp.asarray(
+        _relion_cuda_fine_full_to_compact_lookup(
+            image_shape,
+            current_size,
+            window_indices_np if use_window else np.arange(int(n_half), dtype=np.int32),
+        ),
+        dtype=jnp.int32,
+    )
 
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
 
@@ -7742,6 +8352,13 @@ def compute_pass2_stats_sparse_bucketed(
             translation_phases_half=translation_phases_half,
             return_windowed_shifted=windowed_prepare,
         )
+        relion_highres_xi2_half = None
+        if use_exact_relion_gaussian:
+            relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
+                processed_score_half_for_noise,
+                image_shape=image_shape,
+                current_size=current_size,
+            )
 
         # Window gather (if applicable)
         if use_window:
@@ -7858,7 +8475,7 @@ def compute_pass2_stats_sparse_bucketed(
             shifted_corrected_score_split = shifted_corrected_score.reshape(batch, n_fine_trans, -1)
             direct_half_weights = half_weights_windowed
 
-            def _score_rotation_chunk(start, stop, *, need_recon):
+            def _score_rotation_chunk(start, stop, *, need_recon, raw_diff2=False, min_diff2=None):
                 rot_count = int(stop - start)
                 if projection_cache is None:
                     rotations_chunk = jnp.asarray(rotations[:, start:stop])
@@ -7891,6 +8508,8 @@ def compute_pass2_stats_sparse_bucketed(
                         rotation_indices_chunk = jnp.asarray(rotation_indices[:, start:stop], dtype=jnp.int32)
                         proj_chunk = projection_cache["score"][rotation_indices_chunk]
                 if relion_firstiter_score_mode == "normalized_cc":
+                    if raw_diff2:
+                        raise ValueError("normalized-CC scoring has no raw Gaussian diff2 tensor")
                     score_chunk = _score_pass2_bucket_normalized_cc(
                         shifted_corrected_score_split,
                         ctf2_over_nv_score,
@@ -7898,8 +8517,33 @@ def compute_pass2_stats_sparse_bucketed(
                         direct_half_weights,
                         jnp.asarray(candidate_mask[:, start:stop, :]),
                     )
+                elif use_exact_relion_gaussian:
+                    if raw_diff2:
+                        score_chunk = _score_pass2_bucket_relion_gpu_diff2_raw(
+                            shifted_corrected_score_split,
+                            ctf2_over_nv_score,
+                            proj_chunk,
+                            direct_half_weights,
+                            relion_score_full_to_compact,
+                            relion_highres_xi2_half,
+                        )
+                    else:
+                        score_chunk = _score_pass2_bucket_relion_gpu_diff2(
+                            shifted_corrected_score_split,
+                            ctf2_over_nv_score,
+                            proj_chunk,
+                            direct_half_weights,
+                            jnp.asarray(log_prior[:, start:stop]),
+                            bucket_translation_prior,
+                            jnp.asarray(candidate_mask[:, start:stop, :]),
+                            relion_score_full_to_compact,
+                            min_diff2,
+                            relion_highres_xi2_half,
+                        )
                 else:
-                    score_chunk = _score_pass2_bucket_relion_gpu_diff2(
+                    if raw_diff2:
+                        raise ValueError("algebraic Gaussian scoring has no raw RELION diff2 tensor")
+                    score_chunk = _score_pass2_bucket_gaussian_algebraic(
                         shifted_corrected_score_split,
                         ctf2_over_nv_score,
                         proj_chunk,
@@ -7930,8 +8574,34 @@ def compute_pass2_stats_sparse_bucketed(
             global_log_z = jnp.full((batch,), -jnp.inf, dtype=jnp.float64)
             global_best_log_score = jnp.full((batch,), -jnp.inf, dtype=jnp.float64)
             global_best_argmax = jnp.zeros((batch,), dtype=jnp.int32)
+            global_min_diff2 = None
+            if use_exact_relion_gaussian:
+                global_min_diff2 = jnp.full((batch,), jnp.inf, dtype=jnp.float32)
+                for start, stop in chunk_ranges:
+                    raw_diff2_chunk = _score_rotation_chunk(
+                        start,
+                        stop,
+                        need_recon=False,
+                        raw_diff2=True,
+                    )[0]
+                    chunk_min = _relion_cuda_fine_partition_diff2_min_or_inf(
+                        raw_diff2_chunk,
+                        jnp.asarray(candidate_mask[:, start:stop, :]),
+                    )
+                    global_min_diff2 = jnp.minimum(global_min_diff2, chunk_min)
+                    del raw_diff2_chunk
+                global_min_diff2 = jnp.where(
+                    jnp.isfinite(global_min_diff2),
+                    global_min_diff2,
+                    jnp.asarray(0.0, dtype=jnp.float32),
+                )
             for start, stop in chunk_ranges:
-                scores_chunk, _, _, _ = _score_rotation_chunk(start, stop, need_recon=False)
+                scores_chunk = _score_rotation_chunk(
+                    start,
+                    stop,
+                    need_recon=False,
+                    min_diff2=global_min_diff2,
+                )[0]
                 chunk_log_z, chunk_best_log_score, chunk_best_argmax, _ = _normalize_pass2_bucket_score_only(
                     scores_chunk,
                 )
@@ -7946,9 +8616,17 @@ def compute_pass2_stats_sparse_bucketed(
                 global_best_log_score = jnp.where(take_chunk_best, chunk_best_log_score, global_best_log_score)
                 global_best_argmax = jnp.where(take_chunk_best, chunk_global_argmax, global_best_argmax)
                 global_log_z = jnp.logaddexp(global_log_z, chunk_log_z.astype(global_log_z.dtype))
+                del scores_chunk
 
+            score_log_offset_jax = (
+                _relion_cuda_fine_log_evidence_offset(global_min_diff2).astype(jnp.float64)
+                if use_exact_relion_gaussian
+                else -0.5 * jnp.squeeze(batch_norm, axis=1).astype(jnp.float64)
+            )
             if normalization_log_z_np is not None:
                 bucket_log_z = jnp.asarray(normalization_log_z_np[image_indices], dtype=jnp.float64)
+                if use_exact_relion_gaussian:
+                    bucket_log_z = bucket_log_z - score_log_offset_jax
                 local_score_log_z = None
             elif normalization_other_score_log_z_np is not None:
                 local_score_log_z = global_log_z
@@ -7956,18 +8634,29 @@ def compute_pass2_stats_sparse_bucketed(
                     normalization_other_score_log_z_np[image_indices],
                     dtype=jnp.float64,
                 )
-                bucket_log_z = jnp.logaddexp(local_score_log_z, bucket_other_log_z)
+                if not use_exact_relion_gaussian:
+                    bucket_log_z = jnp.logaddexp(local_score_log_z, bucket_other_log_z)
+                else:
+                    bucket_log_z_absolute = jnp.logaddexp(
+                        local_score_log_z + score_log_offset_jax,
+                        bucket_other_log_z,
+                    )
+                    bucket_log_z = bucket_log_z_absolute - score_log_offset_jax
             else:
                 bucket_log_z = global_log_z
                 local_score_log_z = None
 
             if return_score_log_z_only:
-                log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+                log_score_offset = np.asarray(score_log_offset_jax, dtype=np.float64)
                 log_Z_np = np.asarray(global_log_z, dtype=np.float64)
                 for row, image_idx in enumerate(image_indices.tolist()):
                     if np.isfinite(log_Z_np[row]):
                         log_evidence[image_idx] = float(log_Z_np[row] + log_score_offset[row])
-                        score_log_z[image_idx] = float(log_Z_np[row])
+                        score_log_z[image_idx] = float(
+                            log_Z_np[row] + log_score_offset[row]
+                            if use_exact_relion_gaussian
+                            else log_Z_np[row]
+                        )
                     else:
                         log_evidence[image_idx] = -np.inf
                         score_log_z[image_idx] = -np.inf
@@ -7985,10 +8674,18 @@ def compute_pass2_stats_sparse_bucketed(
             reconstruction_mask_chunks = None
             reconstruction_prob_chunks = None
             if use_relion_fine_mstep_prune and not score_only:
+                score_chunks = [
+                    _score_rotation_chunk(
+                        start,
+                        stop,
+                        need_recon=False,
+                        min_diff2=global_min_diff2,
+                    )[0]
+                    for start, stop in chunk_ranges
+                ]
                 if use_relion_f32_fine_posterior:
                     score_flat_chunks = []
-                    for start, stop in chunk_ranges:
-                        scores_chunk, _, _, _ = _score_rotation_chunk(start, stop, need_recon=False)
+                    for scores_chunk in score_chunks:
                         score_flat_chunks.append(scores_chunk.reshape(batch, -1))
                     all_scores_flat = jnp.concatenate(score_flat_chunks, axis=1)
                     (
@@ -8003,8 +8700,7 @@ def compute_pass2_stats_sparse_bucketed(
                     )
                 else:
                     mask_flat_chunks = []
-                    for start, stop in chunk_ranges:
-                        scores_chunk, _, _, _ = _score_rotation_chunk(start, stop, need_recon=False)
+                    for scores_chunk in score_chunks:
                         normalize_log_z = bucket_log_z
                         (
                             _chunk_log_z,
@@ -8043,6 +8739,7 @@ def compute_pass2_stats_sparse_bucketed(
                             )
                         )
                     offset += width
+                del score_chunks
             if accumulate_noise:
                 if translation_sqdist_ang is not None:
                     chunk_translation_posterior_total = np.zeros((batch, n_fine_trans), dtype=np.float64)
@@ -8057,9 +8754,15 @@ def compute_pass2_stats_sparse_bucketed(
                 mstep_window_indices = relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
 
             for chunk_idx, (start, stop) in enumerate(chunk_ranges):
-                scores_chunk, proj_half_chunk, proj_for_noise_chunk, proj_abs2_for_noise_chunk = (
-                    _score_rotation_chunk(start, stop, need_recon=not score_only)
+                _rescored_chunk, proj_half_chunk, proj_for_noise_chunk, proj_abs2_for_noise_chunk = (
+                    _score_rotation_chunk(
+                        start,
+                        stop,
+                        need_recon=not score_only,
+                        min_diff2=global_min_diff2,
+                    )
                 )
+                scores_chunk = _rescored_chunk
                 normalize_log_z = bucket_log_z
                 _chunk_log_z, probs, _chunk_best_log_score, _chunk_best_argmax, _chunk_max_posterior = (
                     _normalize_pass2_bucket_with_log_z(scores_chunk, normalize_log_z)
@@ -8226,7 +8929,14 @@ def compute_pass2_stats_sparse_bucketed(
                 best_rotation_indices[image_idx] = per_image_inputs["oversampled_rot_indices"][image_idx][r]
 
             if return_stats:
-                log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+                log_score_offset = (
+                    -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+                    if not use_exact_relion_gaussian
+                    else np.asarray(
+                        _relion_cuda_fine_log_evidence_offset(global_min_diff2),
+                        dtype=np.float64,
+                    )
+                )
                 log_Z_np = np.asarray(bucket_log_z, dtype=np.float64)
                 class_log_Z_np = (
                     np.asarray(local_score_log_z, dtype=np.float64)
@@ -8239,7 +8949,11 @@ def compute_pass2_stats_sparse_bucketed(
                     if np.isfinite(best_log_score_np[row]):
                         log_evidence[image_idx] = float(class_log_Z_np[row] + log_score_offset[row])
                         if score_log_z is not None:
-                            score_log_z[image_idx] = float(class_log_Z_np[row])
+                            score_log_z[image_idx] = float(
+                                class_log_Z_np[row] + log_score_offset[row]
+                                if use_exact_relion_gaussian
+                                else class_log_Z_np[row]
+                            )
                     else:
                         log_evidence[image_idx] = -np.inf
                         if score_log_z is not None:
@@ -8321,6 +9035,7 @@ def compute_pass2_stats_sparse_bucketed(
         direct_half_weights = half_weights_windowed if use_window else half_weights
         shadow_score_bitwise_equal = False
         if relion_firstiter_score_mode == "normalized_cc":
+            min_diff2 = None
             scores = _score_pass2_bucket_normalized_cc(
                 shifted_corrected_score_split,
                 ctf2_over_nv_score,
@@ -8339,9 +9054,38 @@ def compute_pass2_stats_sparse_bucketed(
                 )
                 _require_bpref_shadow_exact("normalized-CC score", scores, shadow_scores)
                 shadow_score_bitwise_equal = True
-        else:
+        elif use_exact_relion_gaussian:
+            raw_diff2 = _score_pass2_bucket_relion_gpu_diff2_raw(
+                shifted_corrected_score_split,
+                ctf2_over_nv_score,
+                proj_half,
+                direct_half_weights,
+                relion_score_full_to_compact,
+                relion_highres_xi2_half,
+            )
+            min_diff2 = _relion_cuda_fine_diff2_min(
+                raw_diff2,
+                jnp.asarray(candidate_mask),
+            )
+            scores = _relion_cuda_fine_diff2_to_scores(
+                raw_diff2,
+                jnp.asarray(log_prior)[:, :, None],
+                jnp.asarray(bucket_translation_prior)[:, None, :],
+                jnp.asarray(candidate_mask),
+                min_diff2=min_diff2,
+            )
+            preprior_scores = None
             if bucket_contribution_diagnostics_active:
-                scores = _score_pass2_bucket_relion_gpu_diff2(
+                zero_rotation_prior = jnp.zeros_like(jnp.asarray(log_prior))[:, :, None]
+                zero_translation_prior = jnp.zeros_like(bucket_translation_prior)[:, None, :]
+                preprior_scores = _relion_cuda_fine_diff2_to_scores(
+                    raw_diff2,
+                    zero_rotation_prior,
+                    zero_translation_prior,
+                    jnp.asarray(candidate_mask),
+                    min_diff2=min_diff2,
+                )
+                shadow_scores = _score_pass2_bucket_relion_gpu_diff2(
                     shifted_corrected_score_split,
                     ctf2_over_nv_score,
                     proj_half,
@@ -8349,20 +9093,48 @@ def compute_pass2_stats_sparse_bucketed(
                     jnp.asarray(log_prior),
                     bucket_translation_prior,
                     jnp.asarray(candidate_mask),
+                    relion_score_full_to_compact,
+                    min_diff2,
+                    relion_highres_xi2_half,
                 )
-                shadow_scores, preprior_scores = _score_pass2_bucket_relion_gpu_diff2_components(
-                    shifted_corrected_score_split,
-                    ctf2_over_nv_score,
-                    proj_half,
-                    direct_half_weights,
-                    jnp.asarray(log_prior),
-                    bucket_translation_prior,
-                    jnp.asarray(candidate_mask),
-                )
-                _require_bpref_shadow_exact("Gaussian score", scores, shadow_scores)
+                _require_bpref_shadow_exact("exact Gaussian score", scores, shadow_scores)
                 shadow_score_bitwise_equal = True
+        else:
+            min_diff2 = None
+            if bucket_contribution_diagnostics_active:
+                scores, preprior_scores = _score_pass2_bucket_gaussian_algebraic_components(
+                    shifted_corrected_score_split,
+                    ctf2_over_nv_score,
+                    proj_half,
+                    direct_half_weights,
+                    jnp.asarray(log_prior),
+                    bucket_translation_prior,
+                    jnp.asarray(candidate_mask),
+                )
+                shadow_scores = _score_pass2_bucket_gaussian_algebraic(
+                    shifted_corrected_score_split,
+                    ctf2_over_nv_score,
+                    proj_half,
+                    direct_half_weights,
+                    jnp.asarray(log_prior),
+                    bucket_translation_prior,
+                    jnp.asarray(candidate_mask),
+                )
+                _require_bpref_shadow_exact("algebraic Gaussian score", scores, shadow_scores)
+                shadow_score_bitwise_equal = True
+            elif identity_full_projection_cache_rows and projection_cache is not None:
+                scores = _score_pass2_bucket_gaussian_algebraic_single_cached(
+                    shifted_corrected_score_split[0],
+                    ctf2_over_nv_score[0],
+                    projection_cache["score"],
+                    direct_half_weights,
+                    jnp.asarray(log_prior[0]),
+                    bucket_translation_prior[0],
+                    jnp.asarray(candidate_mask[0]),
+                )[jnp.newaxis, :, :]
+                preprior_scores = None
             else:
-                scores = _score_pass2_bucket_relion_gpu_diff2(
+                scores = _score_pass2_bucket_gaussian_algebraic(
                     shifted_corrected_score_split,
                     ctf2_over_nv_score,
                     proj_half,
@@ -8373,15 +9145,24 @@ def compute_pass2_stats_sparse_bucketed(
                 )
                 preprior_scores = None
 
+        score_log_offset_jax = (
+            _relion_cuda_fine_log_evidence_offset(min_diff2).astype(jnp.float64)
+            if use_exact_relion_gaussian
+            else -0.5 * jnp.squeeze(batch_norm, axis=1).astype(jnp.float64)
+        )
         probs = None
         if return_score_log_z_only:
             log_Z = _logsumexp_pass2_bucket_score_only(scores)
-            log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+            log_score_offset = np.asarray(score_log_offset_jax, dtype=np.float64)
             log_Z_np = np.asarray(log_Z, dtype=np.float64)
             for row, image_idx in enumerate(image_indices.tolist()):
                 if np.isfinite(log_Z_np[row]):
                     log_evidence[image_idx] = float(log_Z_np[row] + log_score_offset[row])
-                    score_log_z[image_idx] = float(log_Z_np[row])
+                    score_log_z[image_idx] = float(
+                        log_Z_np[row] + log_score_offset[row]
+                        if use_exact_relion_gaussian
+                        else log_Z_np[row]
+                    )
                 else:
                     log_evidence[image_idx] = -np.inf
                     score_log_z[image_idx] = -np.inf
@@ -8404,6 +9185,8 @@ def compute_pass2_stats_sparse_bucketed(
                 normalization_log_z_np[image_indices],
                 dtype=precision_policy.normalization_real_dtype,
             )
+            if use_exact_relion_gaussian:
+                bucket_log_z = bucket_log_z - score_log_offset_jax
             log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
                 _normalize_pass2_bucket_with_log_z(scores, bucket_log_z)
             )
@@ -8413,7 +9196,14 @@ def compute_pass2_stats_sparse_bucketed(
                 normalization_other_score_log_z_np[image_indices],
                 dtype=local_score_log_z.dtype,
             )
-            bucket_log_z = jnp.logaddexp(local_score_log_z, bucket_other_log_z)
+            if not use_exact_relion_gaussian:
+                bucket_log_z = jnp.logaddexp(local_score_log_z, bucket_other_log_z)
+            else:
+                bucket_log_z_absolute = jnp.logaddexp(
+                    local_score_log_z + score_log_offset_jax,
+                    bucket_other_log_z,
+                )
+                bucket_log_z = bucket_log_z_absolute - score_log_offset_jax
             log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
                 _normalize_pass2_bucket_with_log_z(scores, bucket_log_z)
             )
@@ -8507,6 +9297,8 @@ def compute_pass2_stats_sparse_bucketed(
                 shifted_recon_split=shifted_recon_split_for_dump,
                 ctf2_over_nv_recon=ctf2_over_nv_recon_for_dump,
                 recon_window_indices=recon_window_indices_for_dump,
+                relion_highres_xi2_half=relion_highres_xi2_half,
+                relion_min_diff2=min_diff2,
             )
 
         if not score_only:
@@ -8883,7 +9675,14 @@ def compute_pass2_stats_sparse_bucketed(
             best_rotation_indices[image_idx] = per_image_inputs["oversampled_rot_indices"][image_idx][r]
 
         if return_stats:
-            log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+            log_score_offset = (
+                np.asarray(
+                    _relion_cuda_fine_log_evidence_offset(min_diff2),
+                    dtype=np.float64,
+                )
+                if use_exact_relion_gaussian
+                else -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+            )
             log_Z_np = np.asarray(log_Z, dtype=np.float64)
             class_log_Z_np = (
                 np.asarray(local_score_log_z, dtype=np.float64) if local_score_log_z is not None else log_Z_np
@@ -8894,7 +9693,11 @@ def compute_pass2_stats_sparse_bucketed(
                 if np.isfinite(best_log_score_np[row]):
                     log_evidence[image_idx] = float(class_log_Z_np[row] + log_score_offset[row])
                     if score_log_z is not None:
-                        score_log_z[image_idx] = float(class_log_Z_np[row])
+                        score_log_z[image_idx] = float(
+                            class_log_Z_np[row] + log_score_offset[row]
+                            if use_exact_relion_gaussian
+                            else class_log_Z_np[row]
+                        )
                 else:
                     log_evidence[image_idx] = -np.inf
                     if score_log_z is not None:
@@ -9088,6 +9891,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     relion_fine_mstep_prune_mode: str | None = None,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
+    relion_exact_fine_gaussian=True,
     relion_projector_half=None,
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
@@ -9119,6 +9923,11 @@ def compute_k_class_pass2_stats_sparse_fused(
             "relion_firstiter_score_mode must be 'gaussian' or 'normalized_cc', "
             f"got {relion_firstiter_score_mode!r}",
         )
+    use_exact_relion_gaussian = bool(
+        relion_exact_fine_gaussian
+        and relion_firstiter_score_mode == "gaussian"
+        and not use_float64_scoring
+    )
 
     volumes = jnp.asarray(volumes)
     n_classes = int(volumes.shape[0])
@@ -9150,6 +9959,16 @@ def compute_k_class_pass2_stats_sparse_fused(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     H, W = image_shape
+    if (
+        use_exact_relion_gaussian
+        and current_size is not None
+        and int(current_size) < int(W)
+        and (not half_spectrum_scoring or square_window)
+    ):
+        raise NotImplementedError(
+            "exact RELION fine Gaussian high-resolution scoring requires "
+            "half_spectrum_scoring=True and square_window=False"
+        )
     n_half = H * (W // 2 + 1)
     winner_take_all = bool(relion_firstiter_winner_take_all)
     window_spec_kwargs = {}
@@ -9867,6 +10686,14 @@ def compute_k_class_pass2_stats_sparse_fused(
         half_weights = half_weights.astype(jnp.float64)
         half_weights_windowed = window_spec.score_values(half_weights)
     direct_half_weights = half_weights_windowed if use_window else half_weights
+    relion_score_full_to_compact = jnp.asarray(
+        _relion_cuda_fine_full_to_compact_lookup(
+            image_shape,
+            current_size,
+            window_indices_np if use_window else np.arange(int(n_half), dtype=np.int32),
+        ),
+        dtype=jnp.int32,
+    )
 
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(shared_noise_variance, image_shape).squeeze()
     if accumulate_noise:
@@ -10085,7 +10912,38 @@ def compute_k_class_pass2_stats_sparse_fused(
     rectangular_noise_active_rows = 0
     rectangular_noise_padded_active_rows = 0
     rectangular_noise_rectangular_rows = 0
+    raw_host_staging_max_bytes = _optional_positive_int_env(
+        _SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES_ENV,
+    )
+    if raw_host_staging_max_bytes is None:
+        raw_host_staging_max_bytes = _DEFAULT_KCLASS_RAW_HOST_STAGING_MAX_BYTES
+    raw_host_staging_total_bytes = 0
+    raw_host_staging_peak_bytes = 0
+    raw_host_staging_s = 0.0
+
+    def _stage_raw_diff2_on_host(raw_diff2, current_bucket_bytes):
+        nonlocal raw_host_staging_total_bytes
+        nonlocal raw_host_staging_peak_bytes
+        nonlocal raw_host_staging_s
+
+        raw_nbytes = int(raw_diff2.size) * np.dtype(np.float32).itemsize
+        next_bucket_bytes = int(current_bucket_bytes) + raw_nbytes
+        if next_bucket_bytes > int(raw_host_staging_max_bytes):
+            raise MemoryError(
+                "fused K-class raw diff2 host staging would exceed its hard cap: "
+                f"requested={next_bucket_bytes} bytes, cap={raw_host_staging_max_bytes} bytes. "
+                f"Increase {_SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES_ENV} or lower the "
+                "sparse pass-2 hypothesis microbatch cap."
+            )
+        stage_t0 = time.time()
+        raw_host = np.asarray(raw_diff2, dtype=np.float32)
+        raw_host_staging_s += time.time() - stage_t0
+        raw_host_staging_total_bytes += raw_nbytes
+        raw_host_staging_peak_bytes = max(raw_host_staging_peak_bytes, next_bucket_bytes)
+        return raw_host, next_bucket_bytes
+
     for bucket_meta in execution_buckets:
+        bucket_raw_host_staging_bytes = 0
         execution_mode = str(bucket_meta["_execution_mode"])
         execution_bucket_size_key = str(bucket_meta["_execution_size_key"])
         bucket_uses_compact_pairs = execution_mode == "compact_pair"
@@ -10340,6 +11198,13 @@ def compute_k_class_pass2_stats_sparse_fused(
             return_windowed_shifted=windowed_prepare,
             return_shifted_score=not half_spectrum_scoring,
         )
+        relion_highres_xi2_half = None
+        if use_exact_relion_gaussian:
+            relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
+                processed_score_half_for_noise,
+                image_shape=image_shape,
+                current_size=current_size,
+            )
         if use_window:
             ctf2_over_nv_score = ctf2_over_nv_half if windowed_prepare else ctf2_over_nv_half[:, window_indices]
             shifted_corrected_score = (
@@ -10365,6 +11230,11 @@ def compute_k_class_pass2_stats_sparse_fused(
         _add_sparse_group_timing(group_timing, "prepare", time.time() - stage_t0)
         scores_by_class = []
         class_score_log_z_bucket = []
+        raw_diff2_by_class = []
+        raw_diff2_masks_by_class = []
+        raw_diff2_rotation_priors_by_class = []
+        raw_diff2_translation_priors_by_class = []
+        score_projection_for_compact_check_by_class = []
         flat_backproject_rotations_by_class = []
         proj_for_noise_by_class = []
         proj_abs2_by_class = []
@@ -10500,8 +11370,43 @@ def compute_k_class_pass2_stats_sparse_fused(
                         jnp.asarray(compact_arrays["translation_idx"]),
                         pair_mask,
                     )
+                    class_log_z_for_bucket = _logsumexp_pass2_pairs_score_only(scores, pair_mask)
+                elif use_exact_relion_gaussian:
+                    local_rotation_row = jnp.asarray(compact_arrays["local_rotation_row"])
+                    translation_idx = jnp.asarray(compact_arrays["translation_idx"])
+                    raw_diff2 = _score_pass2_pairs_relion_gpu_diff2_raw(
+                        shifted_corrected_score_split,
+                        ctf2_over_nv_score,
+                        proj_half,
+                        direct_half_weights,
+                        local_rotation_row,
+                        translation_idx,
+                        pair_mask,
+                        relion_score_full_to_compact,
+                        relion_highres_xi2_half,
+                    )
+                    row = jnp.arange(batch)[:, None]
+                    safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
+                    # The joint minimum is not known until every class has
+                    # scored. Offload each raw partition immediately so K
+                    # device-resident raw tensors cannot overlap the K score
+                    # tensors built below.
+                    raw_host, bucket_raw_host_staging_bytes = _stage_raw_diff2_on_host(
+                        raw_diff2,
+                        bucket_raw_host_staging_bytes,
+                    )
+                    raw_diff2_by_class.append(raw_host)
+                    raw_diff2_masks_by_class.append(pair_mask)
+                    raw_diff2_rotation_priors_by_class.append(
+                        jnp.asarray(compact_arrays["log_prior"], dtype=jnp.float32)
+                    )
+                    raw_diff2_translation_priors_by_class.append(
+                        jnp.asarray(bucket_translation_prior[row, safe_translation_idx], dtype=jnp.float32)
+                    )
+                    scores = None
+                    class_log_z_for_bucket = None
                 else:
-                    scores = _score_pass2_pairs_relion_gpu_diff2(
+                    scores = _score_pass2_pairs_gaussian_algebraic(
                         shifted_corrected_score_split,
                         ctf2_over_nv_score,
                         proj_half,
@@ -10512,7 +11417,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         jnp.asarray(compact_arrays["translation_idx"]),
                         pair_mask,
                     )
-                class_log_z_for_bucket = _logsumexp_pass2_pairs_score_only(scores, pair_mask)
+                    class_log_z_for_bucket = _logsumexp_pass2_pairs_score_only(scores, pair_mask)
             else:
                 if relion_firstiter_score_mode == "normalized_cc":
                     if identity_full_cache_rows and cached_score_2d is not None:
@@ -10531,9 +11436,45 @@ def compute_k_class_pass2_stats_sparse_fused(
                             direct_half_weights,
                             jnp.asarray(arrays["candidate_mask"]),
                         )
+                elif use_exact_relion_gaussian:
+                    if identity_full_cache_rows and cached_score_2d is not None:
+                        raw_diff2 = _score_pass2_bucket_relion_gpu_diff2_single_cached_raw(
+                            shifted_corrected_score_split[0],
+                            ctf2_over_nv_score[0],
+                            cached_score_2d,
+                            direct_half_weights,
+                            relion_score_full_to_compact,
+                            relion_highres_xi2_half[0],
+                        )[jnp.newaxis, :, :]
+                    else:
+                        raw_diff2 = _score_pass2_bucket_relion_gpu_diff2_raw(
+                            shifted_corrected_score_split,
+                            ctf2_over_nv_score,
+                            proj_half,
+                            direct_half_weights,
+                            relion_score_full_to_compact,
+                            relion_highres_xi2_half,
+                        )
+                    # Keep the inter-class staging on the host. The score
+                    # microbatch cap applies to device residency; retaining
+                    # all raw class tensors here would nearly double its peak.
+                    raw_host, bucket_raw_host_staging_bytes = _stage_raw_diff2_on_host(
+                        raw_diff2,
+                        bucket_raw_host_staging_bytes,
+                    )
+                    raw_diff2_by_class.append(raw_host)
+                    raw_diff2_masks_by_class.append(jnp.asarray(arrays["candidate_mask"]))
+                    raw_diff2_rotation_priors_by_class.append(
+                        jnp.asarray(arrays["log_prior"], dtype=jnp.float32)[:, :, None]
+                    )
+                    raw_diff2_translation_priors_by_class.append(
+                        jnp.asarray(bucket_translation_prior, dtype=jnp.float32)[:, None, :]
+                    )
+                    scores = None
+                    class_log_z_for_bucket = None
                 else:
                     if identity_full_cache_rows and cached_score_2d is not None:
-                        scores = _score_pass2_bucket_relion_gpu_diff2_single_cached(
+                        scores = _score_pass2_bucket_gaussian_algebraic_single_cached(
                             shifted_corrected_score_split[0],
                             ctf2_over_nv_score[0],
                             cached_score_2d,
@@ -10543,7 +11484,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                             jnp.asarray(arrays["candidate_mask"][0]),
                         )[jnp.newaxis, :, :]
                     else:
-                        scores = _score_pass2_bucket_relion_gpu_diff2(
+                        scores = _score_pass2_bucket_gaussian_algebraic(
                             shifted_corrected_score_split,
                             ctf2_over_nv_score,
                             proj_half,
@@ -10552,9 +11493,16 @@ def compute_k_class_pass2_stats_sparse_fused(
                             bucket_translation_prior,
                             jnp.asarray(arrays["candidate_mask"]),
                         )
-                class_log_z_for_bucket = _logsumexp_pass2_bucket_score_only(scores)
+                if not use_exact_relion_gaussian:
+                    class_log_z_for_bucket = _logsumexp_pass2_bucket_score_only(scores)
             scores_by_class.append(scores)
-            if compact_pair_inputs_by_class_for_check is not None:
+            score_projection_for_compact_check_by_class.append(
+                proj_half if compact_pair_inputs_by_class_for_check is not None else None
+            )
+            if (
+                compact_pair_inputs_by_class_for_check is not None
+                and relion_firstiter_score_mode == "normalized_cc"
+            ):
                 compact_inputs = compact_pair_inputs_by_class_for_check[class_index]
                 pair_counts = np.asarray(compact_inputs["pair_counts"], dtype=np.int64)[image_indices]
                 pair_bucket_size = max(1, int(pair_counts.max(initial=0)))
@@ -10575,6 +11523,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     jnp.asarray(compact_arrays["local_rotation_row"]),
                     jnp.asarray(compact_arrays["translation_idx"]),
                     jnp.asarray(compact_arrays["pair_mask"]),
+                    relion_score_full_to_compact,
                 )
                 compact_log_z = _logsumexp_pass2_pairs_score_only(
                     compact_scores,
@@ -10595,7 +11544,12 @@ def compute_k_class_pass2_stats_sparse_fused(
             class_score_log_z_bucket.append(class_log_z_for_bucket)
             if cache is None and use_window and defer_compact_recon_projection:
                 try:
-                    class_log_z_for_bucket.block_until_ready()
+                    ready_value = (
+                        raw_diff2
+                        if use_exact_relion_gaussian
+                        else class_log_z_for_bucket
+                    )
+                    ready_value.block_until_ready()
                 except AttributeError:
                     pass
                 del proj_half
@@ -10625,6 +11579,104 @@ def compute_k_class_pass2_stats_sparse_fused(
                 )
             proj_for_noise_by_class.append(proj_for_noise)
             proj_abs2_by_class.append(proj_abs2_for_noise)
+
+        global_min_diff2 = None
+        if use_exact_relion_gaussian:
+            if len(raw_diff2_by_class) != n_classes:
+                raise RuntimeError(
+                    "RELION Gaussian K-class scoring did not retain one raw diff2 tensor per class"
+                )
+            global_min_diff2 = _relion_cuda_fine_global_diff2_min(
+                raw_diff2_by_class,
+                raw_diff2_masks_by_class,
+            )
+            scores_by_class = []
+            class_score_log_z_bucket = []
+            for class_index, raw_diff2 in enumerate(raw_diff2_by_class):
+                score = _relion_cuda_fine_diff2_to_scores(
+                    jnp.asarray(raw_diff2, dtype=jnp.float32),
+                    raw_diff2_rotation_priors_by_class[class_index],
+                    raw_diff2_translation_priors_by_class[class_index],
+                    raw_diff2_masks_by_class[class_index],
+                    min_diff2=global_min_diff2,
+                )
+                scores_by_class.append(score)
+                bucket_raw_host_staging_bytes -= int(raw_diff2.nbytes)
+                raw_diff2_by_class[class_index] = None
+                if bucket_uses_compact_pairs:
+                    class_log_z_for_bucket = _logsumexp_pass2_pairs_score_only(
+                        score,
+                        raw_diff2_masks_by_class[class_index],
+                    )
+                else:
+                    class_log_z_for_bucket = _logsumexp_pass2_bucket_score_only(score)
+                class_score_log_z_bucket.append(class_log_z_for_bucket)
+
+                if compact_pair_inputs_by_class_for_check is not None:
+                    compact_inputs = compact_pair_inputs_by_class_for_check[class_index]
+                    pair_counts = np.asarray(compact_inputs["pair_counts"], dtype=np.int64)[image_indices]
+                    pair_bucket_size = max(1, int(pair_counts.max(initial=0)))
+                    compact_arrays = _build_compact_pair_bucket_arrays(
+                        {
+                            "pair_bucket_size": pair_bucket_size,
+                            "image_indices": image_indices,
+                        },
+                        compact_inputs,
+                    )
+                    pair_mask = jnp.asarray(compact_arrays["pair_mask"])
+                    local_rotation_row = jnp.asarray(compact_arrays["local_rotation_row"])
+                    translation_idx = jnp.asarray(compact_arrays["translation_idx"])
+                    compact_raw_diff2 = _score_pass2_pairs_relion_gpu_diff2_raw(
+                        shifted_corrected_score_split,
+                        ctf2_over_nv_score,
+                        score_projection_for_compact_check_by_class[class_index],
+                        direct_half_weights,
+                        local_rotation_row,
+                        translation_idx,
+                        pair_mask,
+                        relion_score_full_to_compact,
+                        relion_highres_xi2_half,
+                    )
+                    row = jnp.arange(batch)[:, None]
+                    safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
+                    compact_scores = _relion_cuda_fine_diff2_to_scores(
+                        compact_raw_diff2,
+                        jnp.asarray(compact_arrays["log_prior"], dtype=jnp.float32),
+                        jnp.asarray(
+                            bucket_translation_prior[row, safe_translation_idx],
+                            dtype=jnp.float32,
+                        ),
+                        pair_mask,
+                        min_diff2=global_min_diff2,
+                    )
+                    compact_log_z = _logsumexp_pass2_pairs_score_only(compact_scores, pair_mask)
+                    dense_log_z_np = np.asarray(class_log_z_for_bucket, dtype=np.float64)
+                    compact_log_z_np = np.asarray(compact_log_z, dtype=np.float64)
+                    dense_finite = np.isfinite(dense_log_z_np)
+                    compact_finite = np.isfinite(compact_log_z_np)
+                    both_finite = dense_finite & compact_finite
+                    if np.any(both_finite):
+                        compact_pair_check_max_abs_diff = max(
+                            compact_pair_check_max_abs_diff,
+                            float(
+                                np.max(
+                                    np.abs(
+                                        dense_log_z_np[both_finite]
+                                        - compact_log_z_np[both_finite]
+                                    )
+                                )
+                            ),
+                        )
+                    compact_pair_check_finite_mismatches += int(
+                        np.count_nonzero(dense_finite != compact_finite)
+                    )
+                    compact_pair_check_rows += int(dense_log_z_np.size)
+            del raw_diff2_by_class
+            if bucket_raw_host_staging_bytes != 0:
+                raise RuntimeError(
+                    "fused K-class raw diff2 host staging accounting did not return to zero: "
+                    f"{bucket_raw_host_staging_bytes} bytes"
+                )
         _add_sparse_group_timing(group_timing, "score", time.time() - stage_t0)
 
         global_score_log_z_bucket = _logsumexp_class_log_z(jnp.stack(class_score_log_z_bucket, axis=0))
@@ -10780,7 +11832,14 @@ def compute_k_class_pass2_stats_sparse_fused(
                     "None" if current_size is None else str(int(current_size)),
                 )
                 raise Pass2DumpComplete(dump_count=bucket_dump_count, current_size=current_size)
-        log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+        log_score_offset = (
+            np.asarray(
+                _relion_cuda_fine_log_evidence_offset(global_min_diff2),
+                dtype=np.float64,
+            )
+            if use_exact_relion_gaussian
+            else -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+        )
         shifted_recon_split = shifted_recon.reshape(batch, n_fine_trans, -1)
         if accumulate_noise:
             shifted_noise_split = (
@@ -11542,7 +12601,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                 best_rotation_indices[class_index][image_idx] = fine_rot_idx
                 if np.isfinite(class_log_z_np[row]):
                     class_log_evidence[class_index, image_idx] = float(class_log_z_np[row] + log_score_offset[row])
-                    class_score_log_z[class_index, image_idx] = float(class_log_z_np[row])
+                    class_score_log_z[class_index, image_idx] = float(
+                        class_log_z_np[row] + log_score_offset[row]
+                        if use_exact_relion_gaussian
+                        else class_log_z_np[row]
+                    )
                 else:
                     class_log_evidence[class_index, image_idx] = -np.inf
                     class_score_log_z[class_index, image_idx] = -np.inf
@@ -11611,6 +12674,15 @@ def compute_k_class_pass2_stats_sparse_fused(
         rectangular_rotation_slots,
         compact_slot_ratio,
     )
+    if raw_host_staging_total_bytes:
+        logger.info(
+            "Sparse fused K-class raw diff2 host staging: transferred=%.3f GiB "
+            "peak_per_bucket=%.3f GiB cap=%.3f GiB d2h=%.3fs",
+            raw_host_staging_total_bytes / float(1024**3),
+            raw_host_staging_peak_bytes / float(1024**3),
+            raw_host_staging_max_bytes / float(1024**3),
+            raw_host_staging_s,
+        )
     if compact_active_rows:
         mstep_active_ratio = (
             float(compact_mstep_active_rows) / float(compact_mstep_rectangular_rows)
@@ -11801,6 +12873,11 @@ def compute_k_class_pass2_stats_sparse_fused(
         "sparse_kclass_compact_pair_dense_mstep_max_bytes": np.int64(compact_pair_dense_mstep_max_bytes),
         "sparse_kclass_max_noise_block_bytes": np.int64(max_noise_block_bytes),
         "sparse_kclass_max_adjoint_block_bytes": np.int64(max_adjoint_block_bytes),
+        "sparse_kclass_raw_host_staging_max_bytes": np.int64(raw_host_staging_max_bytes),
+        "sparse_kclass_raw_host_staging_total_bytes": np.int64(raw_host_staging_total_bytes),
+        "sparse_kclass_raw_host_staging_peak_bytes": np.int64(raw_host_staging_peak_bytes),
+        "sparse_kclass_raw_host_staging_s": np.float64(raw_host_staging_s),
+        "sparse_kclass_exact_relion_gaussian": bool(use_exact_relion_gaussian),
         "sparse_kclass_score_pixels": np.int64(int(budget_window_spec.n_score)),
         "sparse_kclass_device_memory_bytes": np.int64(-1 if device_memory_bytes is None else int(device_memory_bytes)),
         "sparse_kclass_windowed_prepare": bool(windowed_prepare),

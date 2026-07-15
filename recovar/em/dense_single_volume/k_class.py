@@ -802,6 +802,16 @@ def _run_sparse_k_class_adaptive_pass2(
         relion_x_half_mstep=bool(base_engine_kwargs.get("mstep_relion_x_half", False)),
         adaptive_fraction=float(base_engine_kwargs.get("adaptive_fraction", 0.999)),
         relion_fine_mstep_prune=bool(base_engine_kwargs.get("relion_fine_mstep_prune", False)) and n_classes == 1,
+        relion_firstiter_score_mode=base_engine_kwargs.get(
+            "relion_firstiter_score_mode",
+            "gaussian",
+        ),
+        relion_exact_fine_gaussian=bool(
+            base_engine_kwargs.get("relion_exact_fine_gaussian", True)
+        ),
+        relion_firstiter_winner_take_all=bool(
+            base_engine_kwargs.get("relion_firstiter_winner_take_all", False)
+        ),
         random_perturbation=float(random_perturbation),
         fine_rotations_override=fine_rotations_np,
         fine_mstep_rotations_override=fine_mstep_rotations_np,
@@ -833,7 +843,18 @@ def _run_sparse_k_class_adaptive_pass2(
             )
         return class_common
 
-    if _use_fused_sparse_k_class_pass2(n_classes):
+    use_fused_pass2 = _use_fused_sparse_k_class_pass2(n_classes)
+    strict_exact_gaussian = bool(
+        common["relion_exact_fine_gaussian"]
+        and common["relion_firstiter_score_mode"] == "gaussian"
+        and not common["use_float64_scoring"]
+    )
+    if strict_exact_gaussian and n_classes > 1 and not use_fused_pass2:
+        raise RuntimeError(
+            "strict exact RELION Gaussian K-class pass2 requires fused scoring "
+            "with one common class-by-pose minimum"
+        )
+    if use_fused_pass2:
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
             compute_k_class_pass2_stats_sparse_fused,
         )
@@ -861,6 +882,11 @@ def _run_sparse_k_class_adaptive_pass2(
                 **fused_common,
             )
         except NotImplementedError as exc:
+            if strict_exact_gaussian:
+                raise RuntimeError(
+                    "strict exact RELION Gaussian K-class pass2 cannot fall back to "
+                    "independent per-class minima"
+                ) from exc
             logger.info("Sparse fused K-class pass2 unavailable; falling back to 2K-1 sparse path: %s", exc)
         else:
             logger.info(
@@ -985,6 +1011,7 @@ def _run_sparse_k_class_adaptive_pass2(
         rotation_log_prior=_class_rotation_prior(last_class_index),
         accumulate_noise=accumulate_noise,
         normalization_other_score_log_z=other_score_log_z,
+        normalization_score_mode=common["relion_firstiter_score_mode"],
         return_score_log_z=True,
         relion_projector_half=_select_projector_half_for_class(
             relion_projector_half_by_class,
@@ -1010,6 +1037,7 @@ def _run_sparse_k_class_adaptive_pass2(
             rotation_log_prior=_class_rotation_prior(class_index),
             accumulate_noise=accumulate_noise,
             normalization_log_z=global_score_log_z,
+            normalization_score_mode=common["relion_firstiter_score_mode"],
             relion_projector_half=_select_projector_half_for_class(
                 relion_projector_half_by_class,
                 class_index,
