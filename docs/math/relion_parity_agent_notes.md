@@ -2105,3 +2105,36 @@ comparison.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_particle1203_factorial_20260714_201047/relion_fine_projection_capture/fine_projection_comparison.json`.
 - Self-jitter FSC audit:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_particle1203_self_jitter_20260714_202700/self_jitter_audit.json`.
+
+# 2026-07-14: broad K=1 final-map gridding-correction boundary
+
+The immutable seven-case K=1 matrix at detached commit
+`f0ef1f0c6c231ff1f9183371d235e0b37a15b825` completed as Slurm jobs
+`11192470--11192477`.  All cases match RELION's complete current-size schedule
+and converge on the same numbered iteration.  The numbered and final joined
+FSC curves already localize the systematic output residual after convergence.
+
+Applying RECOVAR's source-derived RELION radial sinc-squared correction
+`_gridding_correct_trilinear_np(map, 128, 2)` to the existing final joined map
+gives the following canonical non-DC FSC-AUC results.  These use
+`regularization.get_fsc_gpu` and the normalized trapezoid convention used by
+`run_multi_iter_parity.py`; no correlation metric is used.
+
+| case | cross, grid off | cross, grid on | REC GT, grid on | RELION GT | GT delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 21 | 0.998350520 | 0.999998612 | 0.388073525 | 0.388074334 | -0.000000809 |
+| 23 | 0.998368802 | 0.999991464 | 0.441903887 | 0.441903639 | +0.000000248 |
+| 24 | 0.998345948 | 0.999998285 | 0.351268986 | 0.351266822 | +0.000002164 |
+| 25 | 0.998163030 | 0.999961340 | 0.317328521 | 0.317318189 | +0.000010333 |
+| 26 | 0.997395347 | 0.999605407 | 0.211284140 | 0.211293473 | -0.000009333 |
+| 29 | 0.998869708 | 0.999999692 | 0.842265375 | 0.842262860 | +0.000002515 |
+| 30 | 0.998823366 | 0.999999673 | 0.767898858 | 0.767898392 | +0.000000466 |
+
+This closes the systematic RECOVAR-better-than-RELION GT FSC-AUC offset as an
+explicit gridding-correction behavior difference, not numerical noise.  The
+remaining corrected identity target is severe case 26.  End-to-end grid-on
+confirmation jobs `11193476--11193478` are queued as a named diagnostic; keep
+the quality-path default unchanged until that production result is recorded.
+
+Matrix evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_broad_f0ef1f0c_immutable_20260714_211000/k1_robustness_matrix_summary.json`.

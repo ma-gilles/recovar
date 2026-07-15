@@ -156,6 +156,31 @@ checkpoint.
 
 ### Next experiment
 
+Current status on 2026-07-14: the seven-case immutable K=1 robustness matrix
+at detached commit `f0ef1f0c6c231ff1f9183371d235e0b37a15b825` matches every
+RELION current-size schedule and convergence iteration.  The previously
+systematic final-map offset is now localized to an explicit output behavior,
+not trajectory noise: the quality-oriented RECOVAR final path leaves RELION's
+radial sinc-squared gridding correction disabled.  Applying the exact
+`padding_factor=2` correction post hoc raises final RECOVAR-vs-RELION FSC-AUC
+from `0.997395--0.998870` to `0.999605--0.9999997`.  Corrected RECOVAR-minus-
+RELION GT FSC-AUC is between `-9.33e-6` and `+1.03e-5` in all seven cases.
+
+The next K=1 identity target is severe case 26, whose corrected final cross
+FSC-AUC remains `0.999605407`; the other six corrected cases are at least
+`0.999961340`.  Keep `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` unset/off outside a
+named diagnostic until the queued end-to-end production confirmation
+`11193476--11193478` completes.  In parallel, finish the source-derived exact
+Gaussian scorer guards and close the case-20 accelerated preprocessing
+boundary.  The latter is bit-exact through raw loading, float32 normalization,
+and zero-fill translation; the first divergence is host mask/background
+arithmetic, followed independently by NumPy FFT.  JAX GPU `rfft2` and
+windowing are bit-exact to RELION cuFFT when fed the same masked image.
+
+After those K=1 gates, advance to K=4 quality/state parity.  Performance is
+not yet accepted: the broad matrix measures RECOVAR at `1.64--5.89x` RELION
+wall time with approximately `97.6%` of an H100's memory occupied.
+
 The current clean autonomous K=1 gate is job `11151255` at commit
 `5a5769df37e49674c118697f60e73cbdd706b880`.  All ten numbered iterations
 match RELION's current-size schedule `[56,56,66,68,80,80,80,80,80,80]`,
