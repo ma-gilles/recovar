@@ -647,9 +647,9 @@ fi
 pixi run --frozen python recovar/relion_bind/build.py
 '
 PIXI_PY="\$(pixi run --frozen which python)"
-$(write_refresh_pixi_cuda_libs)
-$(write_build_cuda_lib)
-test -s "\${RECOVAR_CUDA_LIB}"
+# The default setup partition is CPU-only.  Install RECOVAR and build the
+# host RELION binding here; each GPU case builds/reuses the shared custom CUDA
+# library under cuda/build.lock after CUDA is actually available.
 
 "\${PIXI_PY}" - <<'PY'
 import os
@@ -668,7 +668,6 @@ external_bind_root = pathlib.Path(external_bind_dir).resolve() if external_bind_
 print("recovar.__file__ =", recovar_file)
 print("relion_bind.__file__ =", relion_bind_file)
 print("jax.__file__ =", jax_file)
-print("jax.devices() =", jax.devices())
 assert str(recovar_file).startswith(str(repo) + "/"), recovar_file
 assert str(relion_bind_file).startswith(str(repo) + "/") or (
     external_bind_root is not None
