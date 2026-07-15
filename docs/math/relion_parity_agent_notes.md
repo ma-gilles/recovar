@@ -2148,3 +2148,71 @@ named strict-parity diagnostics.
 
 Matrix evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_broad_f0ef1f0c_immutable_20260714_211000/k1_robustness_matrix_summary.json`.
+
+# 2026-07-14: case-20 exact-Gaussian paired control rejects a causal quality claim
+
+- Isolated candidate `7ad2526da4ce41a0a5b32736b41b9d23c08d81f4`
+  implements RELION's float32 fine-Gaussian diff2 tree, common minimum, prior
+  addition order, and high-resolution tail.  It remains unmerged.
+- Same-H100 job `11194268` ran exact then algebraic modes sequentially with the
+  same immutable checkout and replay inputs.  Both modes used current sizes
+  `[56,56,52,52,50,50,50,52,50,52,50]`, converged at iteration 11, and ran
+  the converged final-all-data path.
+- The exact/algebraic maps already differ at iteration 1, where normalized CC
+  bypasses the Gaussian scorer.  Their iteration-1 merged FSC-AUC is
+  `0.999999999952`; this is the sequential reconstruction/atomic jitter floor,
+  not a scorer effect.  Numbered exact-vs-RELION minus algebraic-vs-RELION
+  FSC-AUC changes sign and remains between approximately `-1.04e-9` and
+  `+3.54e-9`.
+- Raw saved-final exact/algebraic RECOVAR-vs-RELION FSC-AUC is
+  `0.997633868321/0.997633784286` (exact `+8.40e-8`).  After applying the
+  explicit RELION radial sinc-squared final boundary it is
+  `0.999502423092/0.999502801876` (exact `-3.79e-7`).  Exact also changes raw
+  and strict-grid GT FSC-AUC by `-3.51e-8` and `-2.02e-8`.  There is no
+  consistent FSC/FSC-AUC quality benefit above the jitter floor.
+- External wall is `776` seconds exact versus `742` seconds algebraic
+  (`+4.58%`); sampled peak GPU memory is `41245/42049` MiB.  Production did
+  not save bounded raw hypothesis-score arrays, so this trajectory cannot
+  promote the feature from array-level diagnostic to default behavior.
+- Focused exact-score tests passed, including the captured particle-469
+  one-ULP operation-order boundary, the CUDA-tree NumPy oracle within one ULP,
+  and array-equal dense/cached/compact routes.  Additional local validation:
+  `tests/unit/test_sparse_pass2_relion_diff2_tree.py` passed `16/16`, and the
+  existing K-class fused-vs-two-pass node passed `1/1`.
+- Conclusion and FSC-only artifacts:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_exact_gaussian_ab_7ad2526d_20260714_215100/PAIRED_AUDIT_CONCLUSION.md`,
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_exact_gaussian_ab_7ad2526d_20260714_215100/audit_exact_vs_algebraic/trajectory_fsc_audit.json`, and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_exact_gaussian_ab_7ad2526d_20260714_215100/audit_exact_vs_algebraic/shellwise_fsc_curves.npz`.
+
+# 2026-07-14: case-26 first real divergence is accelerated BPref arithmetic
+
+- Iteration-1 hard-WTA E-step decisions are exact: every pose, translation,
+  and Pmax equals RELION.  Matched patched-RELION and RECOVAR H100 captures
+  place the first non-bitwise boundary in the pre-reconstruct accelerated
+  BPref accumulator, before low-resolution joining or reconstruction.
+- On radius `<56`, RECOVAR-vs-RELION relative-L2 is `5.663e-6/2.993e-6`
+  (numerator/weight) for half 1 and `6.141e-6/2.914e-6` for half 2.  Scale fits
+  near `1+2e-7` do not improve the residual.  The resulting iteration-1 maps
+  still have half-map FSC-AUC `0.9999999566/0.9999999528` against RELION, but
+  that tiny map difference is causally material later.
+- Three same-H100 RELION controls, jobs `11194466`, `11195696`, and `11195697`,
+  vary by only `1.0e-8--1.3e-8` relative-L2 in raw BPref.  Their map FSC-AUC is
+  1.0 to printed precision with minimum shell FSC at least `0.99999982`.
+  RECOVAR's `3e-6--6e-6` residual is `250--600x` larger and cannot be
+  classified as RELION atomic nondeterminism.
+- Production sparse-pass job `11195695` closes both iteration-3 pose changes.
+  Particle 207 has identical 352-candidate support: the RELION map selects
+  `(fine89300,t54)` by `0.002684`, while the RECOVAR map selects
+  `(fine89302,t55)` by `0.001415`, a `3.689` degree change.  Particle 236's
+  common candidates have a RELION margin of only `0.000881`; the RECOVAR map
+  shifts their relative order by about `0.006386` and selects a candidate
+  `26.039` degrees away with margin `0.005505`.  Its 32 RELION-only support
+  candidates are irrelevant to the winner.
+- The causal chain is therefore BPref accumulation residual -> tiny
+  post-iteration-1 map residual -> ordinary Gaussian score-surface reorder ->
+  later hard pose changes.  Do not patch tie-breaking or sparse candidate
+  reporting.  The next discriminating experiment is a same-H100
+  per-particle/prefix accumulator comparison to identify the first differing
+  contribution, scatter coordinate, or arithmetic operation.
+- Audit root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916`.

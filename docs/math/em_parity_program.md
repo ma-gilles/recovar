@@ -28,7 +28,7 @@ as the next product milestone rather than mixing it into the first closure.
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `d07915fad1c0e3761d75ba3603cc60455d0a01bb`
+Current accepted code checkpoint: `47020c3311d9f294e13b2737c10efea11321f219`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -168,7 +168,18 @@ RELION GT FSC-AUC is between `-9.33e-6` and `+1.03e-5` in all seven cases.
 
 The next K=1 identity target is severe case 26, whose corrected final cross
 FSC-AUC remains `0.999605407`; the other six corrected cases are at least
-`0.999961340`.  The explicit production grid-on case-25 diagnostic completed
+`0.999961340`.  Its first autonomous departure is now localized before
+reconstruction to the iteration-1 accelerated BPref accumulator.  Iteration-1
+hard-WTA poses, translations, and Pmax are exact, but the matched pre-reconstruct
+RECOVAR-vs-RELION BPref numerator/weight relative-L2 residual is `3e-6--6e-6`.
+Three same-H100 RELION captures vary by only `1.0e-8--1.3e-8`, so this residual
+is reproducible code arithmetic rather than atomic-order noise.  Substituting
+the resulting tiny RECOVAR map residual into the iteration-3 production sparse
+score surface causally flips both observed particles: `3.689` degrees for
+particle 207 and `26.039` degrees for particle 236.  Continue with per-particle
+or prefix BPref accumulation bisection; do not add a score tie-break.
+
+The explicit production grid-on case-25 diagnostic completed
 as repaired jobs `11194076--11194077`: it matched RELION's current-size
 schedule and iteration-8 convergence, logged radial correction enabled, and
 reached final RECOVAR-vs-RELION FSC-AUC `0.999961353`.  Its RECOVAR and RELION
@@ -185,6 +196,19 @@ windowing are bit-exact to RELION cuFFT when fed the same masked image.  Typed
 `image_fourier_backend="jax_gpu"` support is now committed; the existing host
 default is unchanged until the remaining real-space preprocessing stages are
 source-faithful.
+
+The source-derived exact fine-Gaussian scorer remains isolated and unmerged.
+Same-H100 sequential job `11194268` matched the full current-size schedule and
+iteration-11 convergence in exact and algebraic modes, but the modes already
+differed at iteration 1 when normalized CC bypassed the Gaussian scorer
+(merged FSC-AUC `0.999999999952`).  This establishes a reconstruction-jitter
+floor inside the A/B.  Exact scoring changed raw final RECOVAR-vs-RELION
+FSC-AUC by only `+8.40e-8`, changed strict grid-corrected FSC-AUC by
+`-3.79e-7`, slightly worsened both GT FSC-AUC comparisons, and cost `4.58%`
+wall time.  Do not claim the older cross-run improvement as causal.  Retain
+the candidate only as an array-level diagnostic until it has typed
+configuration, saved score/logZ/posterior provenance, and replicated K=1/K=4
+stress evidence.
 
 After those K=1 gates, advance to K=4 quality/state parity.  Performance is
 not yet accepted: the broad matrix measures RECOVAR at `1.64--5.89x` RELION
