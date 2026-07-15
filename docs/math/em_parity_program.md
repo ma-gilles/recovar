@@ -2920,6 +2920,36 @@ fine and reconstruction common-support counts.
 Particle-6848 cold-capture audit:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_particle6848_scores_selfconsistent_h100_20260715_071500/analysis/particle6848_result.md`.
 
+The old particle-6848 boundary was then tested directly rather than inferred
+from the cold capture.  A restart from the saved old `run_it002` checkpoint
+with the full-precision rank-1 scale vector first exposed two continuation
+changes: sampling perturbation advanced from `-0.38530` to `-0.35825`, and
+pool size reset from 3 to 1.  Forcing the old perturbation and pool makes the
+RELION continuation select the RECOVAR hypothesis: Pmax `0.983191` versus
+RECOVAR `0.983204722`, rotation geodesic error `0.000172` degree, and
+translation error `2.16e-5` Angstrom.  The old uninterrupted RELION result
+remains Pmax `0.962491` with a 150.464-degree different rotation.  H100 job
+`11210025` repeats the probe with the original two-follower MPI/projector
+broadcast topology and produces the same RECOVAR-like result, ruling out MPI
+topology.  Iteration 3 is a global search, so rounded previous Euler centers
+are not the primary explanation.
+
+The strongest remaining boundary distinction is reference precision:
+uninterrupted RELION builds PPref from the resident CPU-double Iref, whereas
+both continuation and exact-boundary RECOVAR reload the mode-2 float MRC and
+rebuild PPref.  The old live Iref/PPref was not captured, so its score arrays
+cannot be retroactively reconstructed.  The mismatch remains real and
+unresolved, but is now classified specifically as a serialized-boundary
+diagnostic artifact, not generic numerical noise and not a demonstrated bug
+in an uninterrupted RECOVAR trajectory.
+
+Old-boundary restart audit root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_old6848_boundary_recapture_h100_20260715_073828/`.
+The human-readable and machine-readable audit records are respectively
+`analysis/OLD6848_RECAPTURE_AUDIT.md` and
+`analysis/old6848_recapture_audit.json`; `provenance/final_audit.sha256`
+binds the final evidence bundle.
+
 The first K=1 iteration-5 BPref capture is quarantined.  Job `11206341`
 correctly stops before RECOVAR because its dump-enabled RELION arm misses the
 strict inertness threshold against the earlier oracle: iteration-5 half-1
