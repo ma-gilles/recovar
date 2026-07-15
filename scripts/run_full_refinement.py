@@ -1414,6 +1414,16 @@ def main():
         "using other per-iteration replay overrides.",
     )
     parser.add_argument("--init_resolution", type=float, default=30.0, help="Initial resolution (Angstrom)")
+    parser.add_argument(
+        "--image-fourier-backend",
+        choices=("host_numpy", "jax_gpu", "relion_cuda"),
+        default="host_numpy",
+        help=(
+            "Fourier preprocessing backend for RELION-masked particle images. "
+            "The default preserves the established host NumPy path; relion_cuda "
+            "selects the source-faithful CUDA normalization, translation, and mask path."
+        ),
+    )
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
     parser.add_argument(
         "--rotation_block_size",
@@ -2270,6 +2280,7 @@ def main():
         replay_iteration_overrides=replay_iteration_overrides,
         init_relion_iteration=args.init_relion_iteration,
         n_classes=args.n_classes,
+        image_fourier_backend=args.image_fourier_backend,
         emulate_relion_firstiter_cc=bool(args.firstiter_cc),
         relion_firstiter_ini_high_angstrom=(
             relion_firstiter_ini_high_angstrom if args.firstiter_cc else None
