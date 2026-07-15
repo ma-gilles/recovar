@@ -1927,6 +1927,46 @@ acceptance of the complete robustness cell.
 Audit:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_explicit_cross_full_20260714_174700/audit_job_11185459.json`.
 
+### Case-22 iteration-2 ordinary-Gaussian operand audit
+
+The native first difference after the firstiter-CC fix is one iteration-2
+particle, original index 1203.  The aggregate map is still essentially equal
+at that point: merged cross-FSC-AUC is `0.999993339694`.  The difference is
+nevertheless trajectory-relevant because the autonomous run later reaches
+only `0.990561796343` at iteration 9 and `0.824573534720` in the joined final
+map.
+
+A direct A100 RELION operand capture and a reference-fixed, metadata-matched
+RECOVAR capture do not reproduce the hard winner difference.  Over
+2,349,728 common fine candidates, both choose RECOVAR row 50295, translation
+82 (global rotation 98175).  After an additive-constant alignment, the common
+log-weight field differs by maximum `7.783e-4`, RMS `1.465e-4`, and 95th
+percentile `2.585e-4`.  This experiment deliberately excludes post-cold-start
+norm/group-correction replay, so it is not a fully bit-fixed-state claim.
+
+The two supports each contain 2,349,792 candidates but swap 64 keys.  These
+decode to two coarse pass-0 significance-boundary pairs per side: ranks
+73430--73434, with score/log-weight margins between about `2.29e-5` and
+`1.14e-4`.  Each coarse pair expands to eight rotation children by four
+translation children.  This is a real cumulative-significance boundary, not
+a fine-key mapping error, but none of the swapped keys is the fixed-capture
+winner.
+
+At the shared winner, RECOVAR's exact 1,860-position, 256-lane full-grid tree
+gives raw `diff2=130.319137573`, versus RELION `130.355621338`.  Substituting
+RELION's captured image explains `+0.008590698`; substituting its weight
+explains `-0.000152588`; both leave `+0.028045654` unexplained.  The remaining
+term cannot be assigned without RELION's fine projected reference.  Thus the
+native hard mismatch is classified as upstream operand/state sensitivity,
+not an intrinsic fixed-reference Gaussian winner-selection bug.  The next
+one-factor experiment must replace the reference, norm/image correction,
+noise/weight, and fine projected reference independently.
+
+Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_fixed_relion_capture_20260714_192000/EARLIEST_DIVERGENCE_AND_OPERAND_AUDIT.md`.
+Machine audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_fixed_relion_capture_20260714_192000/case22_it2_fixed_relion_field_audit.json`.
+
 ## 2026-07-14 Case-16 final SamplingPerturbation order
 
 An exact RELION iteration-11 state replay through RECOVAR's final all-data
