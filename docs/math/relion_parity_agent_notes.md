@@ -2312,3 +2312,24 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/native_wavg_all1000_audit_11196772.json`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/native_wavg_all1000_report_11196772.md`.
+
+# 2026-07-14: case-26 raw operands explain the residual
+
+- Same-H100 jobs `11197096`/`11197128` establish a one-to-one mapping for all
+  1,227 active pixels.  Image, CTF, translation, and phase residuals after
+  exact convention conversion are only `1.5e-7`, `2.2--2.6e-7`, `2.6e-8`,
+  and `1.9--3.7e-8`, respectively.
+- Minvsigma2 is the largest raw difference at `9.062e-7`; combined pre-atomic
+  data and weight differ at `1.0--1.5e-6` and `9.8e-7`.  This fully explains
+  the prior value-signature gap.  Do not revisit scatter layout, native WAVG,
+  or atomic topology absent contradictory evidence.
+- RECOVAR is bit-exact to the rounded iteration-0 model STAR.  Fresh RELION is
+  bit-exact to its repeatable, higher-precision in-memory bootstrap noise and
+  does not re-read the STAR before iteration 1.  This is a harness/state
+  boundary, not a noise-formula bug.  For strict underlying-array comparison,
+  restart RELION from the serialized state or capture/feed its full-precision
+  state; otherwise allow only the quantified near-tie consequences.
+- Audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/case26_paired_raw_operand_audit_11197096_11197128.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/case26_paired_raw_operand_audit_11197096_11197128.md`.

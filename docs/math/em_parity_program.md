@@ -2322,3 +2322,37 @@ construction must differ before image or translation phase can matter.  Raw
 RELION operand capture job `11197096` and paired RECOVAR job `11197128` are
 the next discriminator.  Audit:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/native_wavg_all1000_report_11196772.md`.
+
+## 2026-07-14 Case-26 paired raw operands close the accumulation branch
+
+Same-H100 jobs `11197096` (RELION) and `11197128` (RECOVAR) capture the two
+paired hard winners RECOVAR-original 212/842 and RELION-particle 128/827.
+All 1,227 active Fourier pixels map one-to-one between RECOVAR's 128x65 half
+image and RELION's 56x29 current-size half image.  Source, scatter-coordinate,
+and mapped RELION indices are unique, so support, folding, and layout are
+closed exactly.
+
+After applying only known representation conventions, relative L2 residuals
+are `1.49e-7` for the unshifted image, `2.18--2.64e-7` for CTF,
+`2.63e-8` for translations, and `1.87--3.68e-8` for the winning phase.
+Inverse noise is the largest raw residual at `9.062e-7`; the resulting
+pre-atomic data/weight residuals are `1.00--1.50e-6` and
+`9.78--9.84e-7`.  These quantitatively reproduce the earlier aggregate
+signature gap without invoking a scatter or atomic-order explanation.
+
+The inverse-noise attribution is independently demonstrated.  RECOVAR is
+1,227/1,227 bit-exact to the float32 reciprocal reconstructed from serialized
+`run_it000_half1_model.star`.  Fresh RELION's captured Minvsigma2 is exact to
+the reciprocal of its retained in-memory bootstrap spectrum for all 29 used
+shells.  That spectrum repeats bit-exactly on the same H100 yet differs from
+the rounded STAR in all 65 shells.  RELION computes and broadcasts the double
+spectrum, writes the model, and continues without re-reading it.  Thus no
+science-formula, coordinate, or accumulation bug is supported, but a strict
+boundary comparison must either restart RELION from the serialized state or
+capture/feed the full-precision in-memory state.  Otherwise near-tie winner
+drift at approximately `1e-6` is built into the comparison harness.
+
+Audit artifacts:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/case26_paired_raw_operand_audit_11197096_11197128.json`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/case26_paired_raw_operand_audit_11197096_11197128.md`.
