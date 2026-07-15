@@ -3137,9 +3137,14 @@ files, but if it enters RELION's final all-data boundary it now requires both
 `run_sampling.star` and `run_optimiser.star`; stale numbered-state or
 unperturbed fallbacks are not accepted as parity evidence.
 
-Schedule provenance is content-bound, not path-bound.  Its versioned schema
-stores a manifest hash over the exact RELION state artifacts and captured
-dispatch log plus a generated dispatch-topology metadata sidecar, a separate hash
+Schedule provenance is content-bound, not path-bound.  RELION text-log schema
+v2 records `(iteration, rank, sorted_position, original_particle_id)` for every
+particle.  RECOVAR schedule NPZ schema v3 persists both follower ownership and
+the exact `original_particle_id_by_sorted_position` permutation for every
+iteration; schema-v2 schedules and legacy four-column logs cannot be migrated
+exactly and fail closed.  The schedule stores a manifest hash over the exact
+RELION state artifacts and captured dispatch log plus a generated
+dispatch-topology metadata sidecar, a separate hash
 of particle identities and parity-relevant labels in authoritative row order,
 and a derived oracle ID.  The runner recomputes those hashes against the active
 replay/init directory; relocation without content changes remains valid, while

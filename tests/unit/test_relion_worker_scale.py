@@ -123,6 +123,7 @@ def test_dynamic_dispatch_chunks_cover_every_sorted_position_once():
         chunk_last=[2, 5, 6, 2, 5, 6],
         chunk_ranks=[1, 2, 1, 2, 1, 2],
         n_particles=7,
+        original_particle_id_by_sorted_position=np.tile(np.arange(7), (2, 1)),
         n_followers=2,
         pool_size=3,
         random_seed=2802,
@@ -144,6 +145,7 @@ def test_dynamic_dispatch_rejects_overlap_and_missing_positions():
         chunk_last=[2, 4],
         chunk_ranks=[1, 2],
         n_particles=6,
+        original_particle_id_by_sorted_position=np.arange(6)[None, :],
         n_followers=2,
         pool_size=3,
         random_seed=2802,
@@ -177,9 +179,13 @@ def test_class3d_shuffle_is_always_original_seed_plus_one():
 def test_captured_schedule_maps_dynamic_owners_to_recovar_image_order():
     n_particles = 10_000
     owners = (np.arange(n_particles, dtype=np.int64) // 3) % 2
+    sorted_particle_ids = np.roll(np.arange(n_particles, dtype=np.int64), 17)
     schedule = RelionDispatchSchedule(
         relion_iterations=np.asarray([1, 2]),
         owner_by_sorted_position=np.stack([owners, 1 - owners]),
+        original_particle_id_by_sorted_position=np.stack(
+            [sorted_particle_ids, sorted_particle_ids]
+        ),
         n_followers=2,
         pool_size=3,
         random_seed=2802,
@@ -204,10 +210,10 @@ def test_captured_schedule_maps_dynamic_owners_to_recovar_image_order():
         relion_iteration=2,
     )
 
-    # Internal particle 5989 is sorted position 626; the captured owner may
-    # change in the next iteration even though the shuffle does not.
-    assert iter1[5989] == owners[626]
-    assert iter2[5989] == 1 - owners[626]
+    sorted_position = int(np.flatnonzero(sorted_particle_ids == 5989)[0])
+    # The persisted identity map, not a regenerated shuffle, resolves owners.
+    assert iter1[5989] == owners[sorted_position]
+    assert iter2[5989] == 1 - owners[sorted_position]
     np.testing.assert_array_equal(iter2, 1 - iter1)
 
 
@@ -215,9 +221,10 @@ def test_dispatch_schedule_npz_loads_and_fails_closed_on_seed_mismatch(tmp_path)
     path = tmp_path / "dispatch.npz"
     np.savez(
         path,
-        schema_version=np.int64(2),
+        schema_version=np.int64(3),
         relion_iterations=np.asarray([1]),
         owner_by_sorted_position=np.asarray([[0, 0, 1, 1]], dtype=np.int64),
+        original_particle_id_by_sorted_position=np.arange(4, dtype=np.int64)[None, :],
         n_followers=np.int64(2),
         pool_size=np.int64(2),
         random_seed=np.int64(9),
@@ -259,11 +266,13 @@ def test_dispatch_oracle_identity_is_portable_and_content_bound(tmp_path):
     )
     starfile.write({"particles": particles}, oracle / "run_it000_data.star")
     (oracle / "run_it000_model.star").write_text("model-state\n")
-    (oracle / "dispatch.tsv").write_text("1 1 0 1\n")
+    (oracle / "dispatch.tsv").write_text("2 1 1 0 0\n2 1 1 1 1\n")
     (oracle / "dispatch.tsv.recovar_schedule.json").write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
+                "dispatch_log_schema_version": 2,
+                "schedule_schema_version": 3,
                 "dispatch_log_relative_path": "dispatch.tsv",
                 "n_particles": 2,
                 "n_followers": 1,
@@ -294,6 +303,7 @@ def test_dispatch_oracle_identity_is_portable_and_content_bound(tmp_path):
         chunk_last=[1],
         chunk_ranks=[1],
         n_particles=2,
+        original_particle_id_by_sorted_position=np.arange(2)[None, :],
         n_followers=1,
         pool_size=2,
         random_seed=9,
@@ -311,7 +321,7 @@ def test_dispatch_oracle_identity_is_portable_and_content_bound(tmp_path):
     shutil.copytree(oracle, relocated)
     verify_relion_dispatch_schedule_oracle(schedule, relocated)
 
-    (relocated / "dispatch.tsv").write_text("1 1 0 0\n1 1 1 1\n")
+    (relocated / "dispatch.tsv").write_text("2 1 1 0 1\n2 1 1 1 0\n")
     with np.testing.assert_raises_regex(ValueError, "state manifest does not match"):
         verify_relion_dispatch_schedule_oracle(schedule, relocated)
     shutil.copy2(oracle / "dispatch.tsv", relocated / "dispatch.tsv")
@@ -371,7 +381,7 @@ def test_dispatch_builder_writes_verified_oracle_schema(tmp_path, monkeypatch):
     starfile.write({"particles": particles}, oracle / "run_it000_data.star")
     (oracle / "run_it000_model.star").write_text("model\n")
     dispatch_log = oracle / "dispatch.log"
-    dispatch_log.write_text("1 1 0 0\n1 2 1 1\n")
+    dispatch_log.write_text("2 1 1 0 1\n2 1 2 1 0\n")
     scale_state = oracle / "iter2_rank1_post.tsv"
     scale_state.write_text("rank\tscale\n1\t1.0\n")
     output = tmp_path / "dispatch.npz"
@@ -422,12 +432,124 @@ def test_dispatch_builder_writes_verified_oracle_schema(tmp_path, monkeypatch):
         verify_relion_dispatch_schedule_oracle(tampered_schedule, oracle)
 
 
+def test_dispatch_builder_accepts_v2_identity_records(tmp_path, monkeypatch):
+    import pandas as pd
+    import starfile
+
+    from scripts import build_relion_dispatch_schedule
+
+    oracle = tmp_path / "oracle_v2"
+    oracle.mkdir()
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": ["1@x.mrcs", "2@x.mrcs", "3@x.mrcs"],
+            "rlnOpticsGroup": [1, 1, 1],
+            "rlnGroupNumber": [1, 2, 3],
+        }
+    )
+    starfile.write({"particles": particles}, oracle / "run_it000_data.star")
+    (oracle / "run_it000_model.star").write_text("model\n")
+    dispatch_log = oracle / "dispatch_v2.log"
+    dispatch_log.write_text(
+        "2 1 1 0 2\n"
+        "2 1 2 1 0\n"
+        "2 1 1 2 1\n"
+    )
+    output = tmp_path / "dispatch_v2.npz"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_relion_dispatch_schedule.py",
+            "--dispatch-log",
+            str(dispatch_log),
+            "--output",
+            str(output),
+            "--n-particles",
+            "3",
+            "--n-followers",
+            "2",
+            "--pool-size",
+            "3",
+            "--random-seed",
+            "9",
+            "--oracle-dir",
+            str(oracle),
+        ],
+    )
+
+    build_relion_dispatch_schedule.main()
+    schedule = load_relion_dispatch_schedule(output)
+    np.testing.assert_array_equal(schedule.owner_by_sorted_position, [[0, 1, 0]])
+    np.testing.assert_array_equal(
+        schedule.original_particle_id_by_sorted_position, [[2, 0, 1]]
+    )
+    verify_relion_dispatch_schedule_oracle(schedule, oracle)
+
+    with np.load(output, allow_pickle=False) as stored:
+        tampered_payload = {name: np.asarray(stored[name]) for name in stored.files}
+    tampered_payload["original_particle_id_by_sorted_position"] = np.asarray(
+        [[0, 1, 2]], dtype=np.int64
+    )
+    tampered = tmp_path / "dispatch_v2_tampered_identity.npz"
+    np.savez_compressed(tampered, **tampered_payload)
+    tampered_schedule = load_relion_dispatch_schedule(tampered)
+    with np.testing.assert_raises_regex(
+        ValueError, "particle identities were not derived from the bound dispatch"
+    ):
+        verify_relion_dispatch_schedule_oracle(tampered_schedule, oracle)
+
+
+def test_dispatch_builder_rejects_nonbijective_v2_original_ids(tmp_path, monkeypatch):
+    import pandas as pd
+    import starfile
+
+    from scripts import build_relion_dispatch_schedule
+
+    oracle = tmp_path / "oracle_bad_v2"
+    oracle.mkdir()
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": ["1@x.mrcs", "2@x.mrcs"],
+            "rlnOpticsGroup": [1, 1],
+            "rlnGroupNumber": [1, 2],
+        }
+    )
+    starfile.write({"particles": particles}, oracle / "run_it000_data.star")
+    dispatch_log = oracle / "dispatch_bad_v2.log"
+    dispatch_log.write_text("2 1 1 0 0\n2 1 2 1 0\n")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_relion_dispatch_schedule.py",
+            "--dispatch-log",
+            str(dispatch_log),
+            "--output",
+            str(tmp_path / "bad.npz"),
+            "--n-particles",
+            "2",
+            "--n-followers",
+            "2",
+            "--pool-size",
+            "2",
+            "--random-seed",
+            "9",
+            "--oracle-dir",
+            str(oracle),
+        ],
+    )
+    with np.testing.assert_raises_regex(SystemExit, "original particle IDs are not a bijection"):
+        build_relion_dispatch_schedule.main()
+
+
 def test_dispatch_schedule_rejects_noninteger_schema_fields_before_cast(tmp_path):
     path = tmp_path / "dispatch_bad_dtype.npz"
     valid = {
-        "schema_version": np.int64(2),
+        "schema_version": np.int64(3),
         "relion_iterations": np.asarray([1], dtype=np.int64),
         "owner_by_sorted_position": np.asarray([[0, 0]], dtype=np.int64),
+        "original_particle_id_by_sorted_position": np.arange(2, dtype=np.int64)[None, :],
         "n_followers": np.int64(1),
         "pool_size": np.int64(2),
         "random_seed": np.int64(9),
@@ -441,12 +563,26 @@ def test_dispatch_schedule_rejects_noninteger_schema_fields_before_cast(tmp_path
         "dispatch_log_relative_path": np.asarray("dispatch.tsv"),
     }
 
+    values = dict(valid)
+    values["schema_version"] = np.int64(2)
+    np.savez(path, **values)
+    with np.testing.assert_raises_regex(
+        ValueError, "schema v2 lacks.*rebuild schema v3"
+    ):
+        load_relion_dispatch_schedule(path)
+
     for key in ("relion_iterations", "n_followers", "pool_size", "random_seed"):
         values = dict(valid)
         values[key] = np.asarray([1.0]) if key == "relion_iterations" else np.float64(1.0)
         np.savez(path, **values)
         with np.testing.assert_raises_regex(ValueError, rf"{key} must have an integer dtype"):
             load_relion_dispatch_schedule(path)
+
+    values = dict(valid)
+    values["original_particle_id_by_sorted_position"] = np.asarray([[0, 0]])
+    np.savez(path, **values)
+    with np.testing.assert_raises_regex(ValueError, "must be a permutation"):
+        load_relion_dispatch_schedule(path)
 
 
 def test_dispatch_schedule_allows_idle_followers_but_rejects_invalid_owners(tmp_path):
@@ -457,6 +593,7 @@ def test_dispatch_schedule_allows_idle_followers_but_rejects_invalid_owners(tmp_
         chunk_last=[3],
         chunk_ranks=[3],
         n_particles=4,
+        original_particle_id_by_sorted_position=np.arange(4)[None, :],
         n_followers=4,
         pool_size=4,
         random_seed=9,
@@ -466,9 +603,12 @@ def test_dispatch_schedule_allows_idle_followers_but_rejects_invalid_owners(tmp_
     path = tmp_path / "dispatch_idle_followers.npz"
     np.savez(
         path,
-        schema_version=np.int64(2),
+        schema_version=np.int64(3),
         relion_iterations=schedule.relion_iterations,
         owner_by_sorted_position=schedule.owner_by_sorted_position,
+        original_particle_id_by_sorted_position=(
+            schedule.original_particle_id_by_sorted_position
+        ),
         n_followers=np.int64(schedule.n_followers),
         pool_size=np.int64(schedule.pool_size),
         random_seed=np.int64(schedule.random_seed),
@@ -488,9 +628,10 @@ def test_dispatch_schedule_allows_idle_followers_but_rejects_invalid_owners(tmp_
 
     np.savez(
         path,
-        schema_version=np.int64(2),
+        schema_version=np.int64(3),
         relion_iterations=np.asarray([1], dtype=np.int64),
         owner_by_sorted_position=np.asarray([[-1, -1]], dtype=np.int64),
+        original_particle_id_by_sorted_position=np.arange(2, dtype=np.int64)[None, :],
         n_followers=np.int64(4),
         pool_size=np.int64(2),
         random_seed=np.int64(9),

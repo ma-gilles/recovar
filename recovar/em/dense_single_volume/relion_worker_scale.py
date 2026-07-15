@@ -46,6 +46,7 @@ class RelionDispatchSchedule:
 
     relion_iterations: np.ndarray
     owner_by_sorted_position: np.ndarray
+    original_particle_id_by_sorted_position: np.ndarray
     n_followers: int
     pool_size: int
     random_seed: int
@@ -72,7 +73,7 @@ class RelionFollowerScaleReplay:
 
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
-_RELION_ORACLE_SCHEMA_VERSION = 2
+_RELION_ORACLE_SCHEMA_VERSION = 3
 _RELION_FOLLOWER_REPLAY_SCHEMA_VERSION = 1
 _RELION_FOLLOWER_REPLAY_BOUNDARY = "numbered_pre_score"
 
@@ -89,12 +90,41 @@ def _load_relion_dispatch_rows(path: Path) -> np.ndarray:
         rows = np.loadtxt(path, dtype=np.int64, comments="#", ndmin=2)
     except (OSError, ValueError) as exc:
         raise ValueError(f"cannot parse RELION dispatch log {path}: {exc}") from exc
-    if rows.ndim != 2 or rows.shape[1] != 4 or rows.shape[0] < 1:
+    if rows.ndim != 2 or rows.shape[1] not in (4, 5) or rows.shape[0] < 1:
         raise ValueError(
-            f"RELION dispatch log {path} must contain four integer columns; "
+            f"RELION dispatch log {path} must contain legacy four-column ranges "
+            "or v2 five-column identity records; "
             f"observed shape {rows.shape}"
         )
+    if rows.shape[1] == 5 and not np.all(rows[:, 0] == 2):
+        raise ValueError(f"RELION dispatch log {path} contains a non-v2 schema record")
     return rows
+
+
+def _relion_dispatch_chunk_columns(rows: np.ndarray, n_particles: int):
+    """Return replay chunk columns without conflating sorted and original IDs."""
+
+    if rows.shape[1] == 4:
+        raise ValueError(
+            "legacy four-column dispatch ranges do not contain the authoritative "
+            "sorted-position to original-particle mapping"
+        )
+    iterations = rows[:, 1]
+    ranks = rows[:, 2]
+    sorted_positions = rows[:, 3]
+    original_ids = rows[:, 4]
+    expected = np.arange(int(n_particles), dtype=np.int64)
+    for iteration in np.unique(iterations):
+        selected = iterations == iteration
+        if not np.array_equal(np.sort(sorted_positions[selected]), expected):
+            raise ValueError(
+                f"v2 dispatch sorted positions are not a bijection at iteration {iteration}"
+            )
+        if not np.array_equal(np.sort(original_ids[selected]), expected):
+            raise ValueError(
+                f"v2 dispatch original particle IDs are not a bijection at iteration {iteration}"
+            )
+    return iterations, ranks, sorted_positions, sorted_positions, original_ids
 
 
 def _load_relion_follower_scale_sources(
@@ -272,7 +302,9 @@ def verify_relion_dispatch_schedule_oracle(
     except (OSError, ValueError, TypeError) as exc:
         raise ValueError(f"cannot read dispatch metadata {metadata_path}: {exc}") from exc
     expected_metadata = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "dispatch_log_schema_version": 2,
+        "schedule_schema_version": 3,
         "dispatch_log_relative_path": schedule.dispatch_log_relative_path,
         "n_particles": int(schedule.owner_by_sorted_position.shape[1]),
         "n_followers": int(schedule.n_followers),
@@ -285,13 +317,23 @@ def verify_relion_dispatch_schedule_oracle(
             f"observed={metadata!r} expected={expected_metadata!r}"
         )
     rows = _load_relion_dispatch_rows(root / schedule.dispatch_log_relative_path)
+    chunk_iterations, chunk_ranks, chunk_first, chunk_last, chunk_original_ids = _relion_dispatch_chunk_columns(
+        rows, expected_metadata["n_particles"]
+    )
+    original_by_sorted = np.empty(
+        (schedule.relion_iterations.size, expected_metadata["n_particles"]), dtype=np.int64
+    )
+    for row_idx, iteration in enumerate(schedule.relion_iterations):
+        selected = chunk_iterations == iteration
+        original_by_sorted[row_idx, chunk_first[selected]] = chunk_original_ids[selected]
     reconstructed = make_relion_dispatch_schedule_from_chunks(
-        relion_iterations=np.unique(rows[:, 0]),
-        chunk_iterations=rows[:, 0],
-        chunk_ranks=rows[:, 1],
-        chunk_first=rows[:, 2],
-        chunk_last=rows[:, 3],
+        relion_iterations=np.unique(chunk_iterations),
+        chunk_iterations=chunk_iterations,
+        chunk_ranks=chunk_ranks,
+        chunk_first=chunk_first,
+        chunk_last=chunk_last,
         n_particles=expected_metadata["n_particles"],
+        original_particle_id_by_sorted_position=original_by_sorted,
         n_followers=expected_metadata["n_followers"],
         pool_size=expected_metadata["pool_size"],
         random_seed=expected_metadata["random_seed"],
@@ -310,6 +352,11 @@ def verify_relion_dispatch_schedule_oracle(
         schedule.owner_by_sorted_position,
     ):
         raise ValueError("schedule follower owners were not derived from the bound dispatch log")
+    if not np.array_equal(
+        reconstructed.original_particle_id_by_sorted_position,
+        schedule.original_particle_id_by_sorted_position,
+    ):
+        raise ValueError("schedule particle identities were not derived from the bound dispatch log")
 
 
 def validate_relion_follower_scale_replay(
@@ -517,6 +564,7 @@ def load_relion_dispatch_schedule(path: str | Path) -> RelionDispatchSchedule:
             "schema_version",
             "relion_iterations",
             "owner_by_sorted_position",
+            "original_particle_id_by_sorted_position",
             "n_followers",
             "pool_size",
             "random_seed",
@@ -537,6 +585,13 @@ def load_relion_dispatch_schedule(path: str | Path) -> RelionDispatchSchedule:
             raise ValueError("schema_version must be an integer scalar")
         schema_version = int(schema_raw.reshape(()))
         if schema_version != _RELION_ORACLE_SCHEMA_VERSION:
+            if schema_version == 2:
+                raise ValueError(
+                    "RELION dispatch schedule schema v2 lacks the authoritative "
+                    "original_particle_id_by_sorted_position mapping; rebuild schema v3 "
+                    "from a five-column RELION text-log schema v2 capture. Legacy "
+                    "four-column logs cannot be migrated exactly."
+                )
             raise ValueError(
                 "unsupported RELION dispatch schedule schema_version "
                 f"{schema_version}; expected {_RELION_ORACLE_SCHEMA_VERSION}"
@@ -549,6 +604,10 @@ def load_relion_dispatch_schedule(path: str | Path) -> RelionDispatchSchedule:
         if not np.issubdtype(owners_raw.dtype, np.integer):
             raise ValueError("owner_by_sorted_position must have an integer dtype")
         owners = np.asarray(owners_raw, dtype=np.int64)
+        originals_raw = np.asarray(values["original_particle_id_by_sorted_position"])
+        if not np.issubdtype(originals_raw.dtype, np.integer):
+            raise ValueError("original_particle_id_by_sorted_position must have an integer dtype")
+        originals = np.asarray(originals_raw, dtype=np.int64)
         integer_scalars = {}
         for key in ("n_followers", "pool_size", "random_seed"):
             raw_value = np.asarray(values[key])
@@ -615,6 +674,16 @@ def load_relion_dispatch_schedule(path: str | Path) -> RelionDispatchSchedule:
         raise ValueError(
             "owner_by_sorted_position must have shape (n_iterations, n_particles)"
         )
+    if originals.shape != owners.shape:
+        raise ValueError(
+            "original_particle_id_by_sorted_position must match owner_by_sorted_position shape"
+        )
+    expected_originals = np.arange(owners.shape[1], dtype=np.int64)
+    for row_idx in range(originals.shape[0]):
+        if not np.array_equal(np.sort(originals[row_idx]), expected_originals):
+            raise ValueError(
+                "original_particle_id_by_sorted_position must be a permutation in every iteration"
+            )
     if n_followers < 1:
         raise ValueError("n_followers must be positive")
     if pool_size < 1:
@@ -624,6 +693,7 @@ def load_relion_dispatch_schedule(path: str | Path) -> RelionDispatchSchedule:
     return RelionDispatchSchedule(
         relion_iterations=iterations,
         owner_by_sorted_position=owners,
+        original_particle_id_by_sorted_position=originals,
         n_followers=n_followers,
         pool_size=pool_size,
         random_seed=random_seed,
@@ -645,6 +715,7 @@ def make_relion_dispatch_schedule_from_chunks(
     chunk_last,
     chunk_ranks,
     n_particles: int,
+    original_particle_id_by_sorted_position,
     n_followers: int,
     pool_size: int,
     random_seed: int,
@@ -663,6 +734,7 @@ def make_relion_dispatch_schedule_from_chunks(
     first = np.asarray(chunk_first, dtype=np.int64).reshape(-1)
     last = np.asarray(chunk_last, dtype=np.int64).reshape(-1)
     ranks = np.asarray(chunk_ranks, dtype=np.int64).reshape(-1)
+    originals = np.asarray(original_particle_id_by_sorted_position)
     if not (chunk_iters.shape == first.shape == last.shape == ranks.shape):
         raise ValueError("dispatch chunk columns must have identical shapes")
     n_particles = int(n_particles)
@@ -672,6 +744,20 @@ def make_relion_dispatch_schedule_from_chunks(
         raise ValueError("relion_iterations must be non-empty and unique")
     if n_particles < 1 or n_followers < 1 or pool_size < 1:
         raise ValueError("n_particles, n_followers, and pool_size must be positive")
+    if not np.issubdtype(originals.dtype, np.integer):
+        raise ValueError("original_particle_id_by_sorted_position must have an integer dtype")
+    originals = np.asarray(originals, dtype=np.int64)
+    if originals.shape != (iterations.size, n_particles):
+        raise ValueError(
+            "original_particle_id_by_sorted_position must have shape "
+            "(n_iterations, n_particles)"
+        )
+    expected_originals = np.arange(n_particles, dtype=np.int64)
+    for row in originals:
+        if not np.array_equal(np.sort(row), expected_originals):
+            raise ValueError(
+                "original_particle_id_by_sorted_position must be a permutation in every iteration"
+            )
     if np.any(first < 0) or np.any(last < first) or np.any(last >= n_particles):
         raise ValueError("dispatch chunks contain invalid sorted-position bounds")
     if np.any(last - first + 1 > pool_size):
@@ -730,6 +816,7 @@ def make_relion_dispatch_schedule_from_chunks(
     return RelionDispatchSchedule(
         relion_iterations=iterations.copy(),
         owner_by_sorted_position=owners,
+        original_particle_id_by_sorted_position=originals.copy(),
         n_followers=n_followers,
         pool_size=pool_size,
         random_seed=int(random_seed),
@@ -863,13 +950,11 @@ def relion_class3d_follower_owners_from_schedule(
             f"RELION dispatch schedule does not contain iteration {int(relion_iteration)}"
         )
     particle_ids = np.asarray(particle_ids_by_image, dtype=np.int64).reshape(-1)
-    sorted_particle_ids = relion_class3d_sorted_particle_ids(
-        particle_ids_by_image=particle_ids,
-        optics_group_ids_by_image=optics_group_ids_by_image,
-        random_seed=random_seed,
-    )
     row = np.asarray(schedule.owner_by_sorted_position[int(matches[0])], dtype=np.int64)
-    if row.shape != sorted_particle_ids.shape:
+    sorted_particle_ids = np.asarray(
+        schedule.original_particle_id_by_sorted_position[int(matches[0])], dtype=np.int64
+    )
+    if row.shape != sorted_particle_ids.shape or row.shape != particle_ids.shape:
         raise ValueError(
             "RELION dispatch schedule particle count does not match the authoritative data STAR "
             f"({row.size} != {sorted_particle_ids.size})"

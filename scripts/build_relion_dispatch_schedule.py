@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 """Convert a captured RELION MPI leader dispatch log to a strict replay NPZ.
 
-The input is whitespace-separated with four integer columns and an optional
-header/comment prefix::
+The current v2 input is whitespace-separated with five integer columns::
 
-    iteration follower_rank first_sorted_position last_sorted_position
+    schema_version iteration follower_rank sorted_position original_part_id
 
-Only positive work replies belong in the log; RELION's terminal ``-1 -1``
-messages must be omitted (the supplied instrumentation does this).
+The original particle ID makes the sorted-position namespace unambiguous.
+Legacy four-column range logs are rejected because they cannot populate the
+schema-v3 identity mapping; callers must never interpret ranges as original IDs.
 """
 
 from __future__ import annotations
@@ -115,15 +115,42 @@ def main() -> None:
         raise SystemExit(f"RELION oracle particle STAR does not exist: {particle_path}")
 
     rows = np.loadtxt(log_path, dtype=np.int64, comments="#", ndmin=2)
-    if rows.ndim != 2 or rows.shape[1] != 4:
+    if rows.ndim != 2 or rows.shape[1] not in (4, 5):
         raise SystemExit(
-            f"{log_path} must contain four integer columns; observed shape {rows.shape}"
+            f"{log_path} must contain legacy four-column ranges or v2 five-column "
+            f"identity records; observed shape {rows.shape}"
+        )
+    if rows.shape[1] == 5:
+        if not np.all(rows[:, 0] == 2):
+            raise SystemExit(f"{log_path} contains a non-v2 dispatch schema record")
+        chunk_iterations = rows[:, 1]
+        chunk_ranks = rows[:, 2]
+        chunk_first = rows[:, 3]
+        chunk_last = rows[:, 3]
+        original_ids = rows[:, 4]
+        for iteration in np.unique(chunk_iterations):
+            selected = chunk_iterations == iteration
+            expected = np.arange(int(args.n_particles), dtype=np.int64)
+            if not np.array_equal(np.sort(chunk_first[selected]), expected):
+                raise SystemExit(
+                    f"v2 dispatch sorted positions are not a bijection at iteration {iteration}"
+                )
+            if not np.array_equal(np.sort(original_ids[selected]), expected):
+                raise SystemExit(
+                    f"v2 dispatch original particle IDs are not a bijection at iteration {iteration}"
+                )
+    else:
+        raise SystemExit(
+            "legacy four-column dispatch ranges cannot produce schema v3 because they lack "
+            "the authoritative original_particle_id_by_sorted_position mapping"
         )
     dispatch_metadata_relative = relion_dispatch_metadata_relative_path(dispatch_relative)
     dispatch_metadata_path = oracle_dir / dispatch_metadata_relative
     dispatch_metadata_path.parent.mkdir(parents=True, exist_ok=True)
     dispatch_metadata = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "dispatch_log_schema_version": 2,
+        "schedule_schema_version": 3,
         "dispatch_log_relative_path": dispatch_relative,
         "n_particles": int(args.n_particles),
         "n_followers": int(args.n_followers),
@@ -165,14 +192,19 @@ def main() -> None:
         manifest_sha256=manifest_sha256,
         particle_order_sha256=particle_order_sha256,
     )
-    iterations = np.unique(rows[:, 0])
+    iterations = np.unique(chunk_iterations)
+    original_by_sorted = np.empty((iterations.size, int(args.n_particles)), dtype=np.int64)
+    for row_idx, iteration in enumerate(iterations):
+        selected = chunk_iterations == iteration
+        original_by_sorted[row_idx, chunk_first[selected]] = original_ids[selected]
     schedule = make_relion_dispatch_schedule_from_chunks(
         relion_iterations=iterations,
-        chunk_iterations=rows[:, 0],
-        chunk_ranks=rows[:, 1],
-        chunk_first=rows[:, 2],
-        chunk_last=rows[:, 3],
+        chunk_iterations=chunk_iterations,
+        chunk_ranks=chunk_ranks,
+        chunk_first=chunk_first,
+        chunk_last=chunk_last,
         n_particles=args.n_particles,
+        original_particle_id_by_sorted_position=original_by_sorted,
         n_followers=args.n_followers,
         pool_size=args.pool_size,
         random_seed=args.random_seed,
@@ -188,9 +220,12 @@ def main() -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         output,
-        schema_version=np.int64(2),
+        schema_version=np.int64(3),
         relion_iterations=schedule.relion_iterations,
         owner_by_sorted_position=schedule.owner_by_sorted_position,
+        original_particle_id_by_sorted_position=(
+            schedule.original_particle_id_by_sorted_position
+        ),
         n_followers=np.int64(schedule.n_followers),
         pool_size=np.int64(schedule.pool_size),
         random_seed=np.int64(schedule.random_seed),
