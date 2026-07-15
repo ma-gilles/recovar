@@ -168,14 +168,23 @@ RELION GT FSC-AUC is between `-9.33e-6` and `+1.03e-5` in all seven cases.
 
 The next K=1 identity target is severe case 26, whose corrected final cross
 FSC-AUC remains `0.999605407`; the other six corrected cases are at least
-`0.999961340`.  Keep `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` unset/off outside a
-named diagnostic until the queued end-to-end production confirmation
-`11193476--11193478` completes.  In parallel, finish the source-derived exact
-Gaussian scorer guards and close the case-20 accelerated preprocessing
+`0.999961340`.  The explicit production grid-on case-25 diagnostic completed
+as repaired jobs `11194076--11194077`: it matched RELION's current-size
+schedule and iteration-8 convergence, logged radial correction enabled, and
+reached final RECOVAR-vs-RELION FSC-AUC `0.999961353`.  Its RECOVAR and RELION
+GT FSC-AUCs are `0.317329223` and `0.317318952` (delta `+1.0271e-5`), confirming
+the post-hoc boundary through the real finalization path.  Keep
+`RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` unset/off outside named strict-parity
+diagnostics because the current GUI-quality default remains grid-off.  In
+parallel, finish the source-derived exact Gaussian scorer trajectory gate and
+close the case-20 accelerated preprocessing
 boundary.  The latter is bit-exact through raw loading, float32 normalization,
 and zero-fill translation; the first divergence is host mask/background
 arithmetic, followed independently by NumPy FFT.  JAX GPU `rfft2` and
-windowing are bit-exact to RELION cuFFT when fed the same masked image.
+windowing are bit-exact to RELION cuFFT when fed the same masked image.  Typed
+`image_fourier_backend="jax_gpu"` support is now committed; the existing host
+default is unchanged until the remaining real-space preprocessing stages are
+source-faithful.
 
 After those K=1 gates, advance to K=4 quality/state parity.  Performance is
 not yet accepted: the broad matrix measures RECOVAR at `1.64--5.89x` RELION

@@ -2132,9 +2132,19 @@ gives the following canonical non-DC FSC-AUC results.  These use
 
 This closes the systematic RECOVAR-better-than-RELION GT FSC-AUC offset as an
 explicit gridding-correction behavior difference, not numerical noise.  The
-remaining corrected identity target is severe case 26.  End-to-end grid-on
-confirmation jobs `11193476--11193478` are queued as a named diagnostic; keep
-the quality-path default unchanged until that production result is recorded.
+remaining corrected identity target is severe case 26.
+
+The end-to-end grid-on confirmation completed in repaired jobs
+`11194076--11194077` under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case25_grid_on_7ee984cb_20260714_213300`.
+Case 25 matched the RELION current-size schedule and converged at numbered
+iteration 8.  The final path explicitly logged radial gridding correction
+enabled.  Canonical normalized non-DC FSC-AUC is `0.999961352645` versus the
+RELION final map; RECOVAR-vs-GT is `0.317329222939` and RELION-vs-GT is
+`0.317318951714` (delta `+1.02712e-5`).  This agrees with the post-hoc result
+and establishes the systematic seven-case final-map offset as an actual
+output-option boundary.  Keep the quality-path default unchanged outside
+named strict-parity diagnostics.
 
 Matrix evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_broad_f0ef1f0c_immutable_20260714_211000/k1_robustness_matrix_summary.json`.
