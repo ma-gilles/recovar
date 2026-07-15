@@ -3071,38 +3071,18 @@ Causal boundary conclusion:
 Microbatch-order discriminator:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it5_microcap35933_h100_20260715_074500/analysis/microcap_result.json`.
 
-### Permanent high-precision canonical-replay diagnostic
+### Optional high-precision canonical replay
 
-When a small residual cannot yet be classified as an algorithmic mismatch or
-floating-point noise, float32-versus-float64 replay is a required diagnostic,
-not an optional one-off.  The reusable harness must freeze one iteration
-boundary (images, maps/projectors, poses, CTF, posterior weights, and support)
-and bind a versioned contribution schema containing complete identities,
-pre-fold complex values, real weights, the eight device-produced indices and
-coefficients, and all Hermitian/fold/conjugation flags.
-
-The same contribution list must be replayable in four modes:
-
-1. production complex64/float32 in original program order;
-2. production complex64/float32 in one deterministic canonical order;
-3. complex128/float64 in each program's original order; and
-4. complex128/float64 in one shared deterministic canonical order.
-
-Casting captured float32 operands to float64 only diagnoses reduction and
-ordering sensitivity.  The harness must separately support recomputing the
-operands themselves in complex128/float64 from the frozen upstream inputs, so
-precision already lost during operand generation is not hidden.  It must
-compare control/control repeat variation, order-only variation,
-RELION/RECOVAR variation, and high-precision canonical variation, then classify
-the earliest difference as operand generation, geometry, reduction ordering,
-precision, or unresolved.  Intermediate gates use exact identities and array
-metrics; map gates use shell FSC and FSC-AUC only, never correlation.  The
-float64 path is diagnostic and is not a proposal to change the production
-default.  A small targeted fixture belongs in the regression suite, with a
-larger Slurm confirmation for production-sized boundaries.  The current K=1
-device-contribution capture is the first consumer of this permanent harness,
-but the schema and replay engine must remain applicable to other GPU
-reductions.
+When cheaper boundary checks still cannot distinguish an algorithmic mismatch
+from floating-point effects, use a small reusable replay diagnostic.  Freeze
+the relevant operands and geometry, then compare float32 in original and
+canonical order with float64 in each program's order and a shared canonical
+order.  If upstream precision is in question, optionally recompute the
+operands themselves in float64 rather than merely casting captured float32
+values.  This is an escalation tool for ambiguous residuals, not a mandatory
+step for every parity run and not a proposal to change production precision.
+Keep its artifact schema limited to the boundary being tested; use exact array
+metrics internally and FSC/FSC-AUC for map effects.
 
 ### Clean uninterrupted K=4 three-iteration gate
 
