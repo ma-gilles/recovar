@@ -285,6 +285,32 @@ def _bpref_contribution_target_rows(experiment_dataset, image_indices) -> np.nda
     return np.flatnonzero(np.isin(original_indices, targets)).astype(np.int64, copy=False)
 
 
+def _bpref_diagnostic_ownership_indices(
+    image_indices,
+    target_particle_rows,
+    *,
+    device_signature_requested: bool,
+) -> np.ndarray:
+    """Return particle owners relevant to the requested diagnostic.
+
+    A scoped device signature captures only the configured target rows.  The
+    surrounding sparse bucket may be ordered by support size rather than by
+    particle id, so requiring every unrelated bucket row to be monotone can
+    abort an otherwise target-only observational capture.  Unscoped
+    per-particle diagnostics retain the original full-bucket ordering gate.
+    """
+
+    owners = np.asarray(image_indices, dtype=np.int64)
+    if not device_signature_requested:
+        return owners
+    rows = np.asarray(target_particle_rows, dtype=np.int64)
+    if rows.size == 0:
+        return np.empty((0,), dtype=np.int64)
+    if np.any(rows < 0) or np.any(rows >= owners.size):
+        raise RuntimeError("BPref device signature target row is outside the sparse bucket")
+    return owners[rows]
+
+
 def _guard_bpref_target_rotation_chunking(
     rotation_chunk_size,
     *,
@@ -8515,7 +8541,12 @@ def compute_pass2_stats_sparse_bucketed(
                         "RECOVAR soft-particle causal arm requires at least one positive row per particle "
                         "and multiple positive rows for at least one particle"
                     )
-                if image_indices.size > 1 and not np.all(np.diff(image_indices) > 0):
+                diagnostic_owners = _bpref_diagnostic_ownership_indices(
+                    image_indices,
+                    target_particle_rows,
+                    device_signature_requested=device_signature_requested,
+                )
+                if diagnostic_owners.size > 1 and not np.all(np.diff(diagnostic_owners) > 0):
                     raise RuntimeError(
                         "RELION per-particle launch diagnostic requires strictly increasing particle ownership order"
                     )
