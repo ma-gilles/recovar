@@ -252,12 +252,17 @@ Conclusion:
   schedule, convergence, and finalization semantics. Correlation was not
   computed.
 - The per-half final-noise workflow bug is closed by commit `24c5157f`.
-- Arithmetic parity is not fully closed: matched-grid iteration-9 particle
-  1466 and final particle 188 retain structured score residuals. These are
-  localization diagnostics and do not override the FSC/FSC-AUC acceptance,
-  but they remain active parity work.
+- The iteration-9 particle-1466 structured residual is retracted. It came
+  from a restarted RELION diagnostic that broadcast half-1 `sigma2_noise` to
+  the subset-2 follower. Fixed-state job `11192981` validates both RELION and
+  RECOVAR against the half-2 model-star spectrum shellwise and leaves only
+  maximum/RMS `0.001709/0.000237`, the same winner, and Pmax delta `-8.8e-8`.
+  Final particle 188 remains a localization diagnostic; it does not override
+  the FSC/FSC-AUC acceptance.
 - FSC-only audit:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_integrated_d07915fa_immutable_retry_20260714_201100/integrated_fsc_audit.json`.
+- Corrected fixed-state operand audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_it9_z1466_fixed_half_noise_20260714_211456/FIXED_STATE_OPERAND_AUDIT.md`.
 
 ### 2026-07-14 `k1-case22-iteration2-numerical-butterfly`
 

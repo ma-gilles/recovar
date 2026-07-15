@@ -2079,16 +2079,39 @@ cross-FSC-AUC is `0.997779297632`.  Final merged GT FSC-AUC is
 within `8.9e-11` and final merged FSC-AUC within `1.70e-8`.  Correlation was
 not computed.
 
-This accepts the aggregate case-13 FSC/FSC-AUC trajectory but does not close
-all arithmetic parity.  Correctly indexed matched-grid captures retain two
-structured score residuals: iteration-9 particle 1466 has centered raw-score
-maximum/RMS `0.446167/0.180758` and a captured winner difference; final
-particle 188 has `0.187515/0.065117`, although its replay winner agrees and
-the replay does not reproduce the uninterrupted hard-pose boundary.  Final
+This accepts the aggregate case-13 FSC/FSC-AUC trajectory.  Retract the prior
+claim that iteration-9 particle 1466 retained a structured
+`0.446167/0.180758` raw-score maximum/RMS difference and winner flip.  That
+RELION diagnostic was started with `--continue run_it008_optimiser.star`.
+Pinned RELION broadcasts `mymodel.sigma2_noise` from rank 1 during MPI
+initialization, so the restarted subset-2 follower silently received half-1
+noise.  RECOVAR correctly retained the half-2 curve used by the uninterrupted
+trajectory.  Shellwise inversion of `corr_img` proved that the contaminated
+RELION capture matched half 1 at relative RMS `2.75e-6`, while RECOVAR matched
+half 2 at `3.00e-6`; the apparent weight ratio was exactly
+`sigma2_half1/sigma2_half2`.
+
+Fixed-state A100 job `11192981` preserved each follower's loaded continuation
+noise and then failed closed on the subset-2 half-2 spectrum.  RELION and
+RECOVAR effective sigma2 match half 2 at relative RMS `2.75e-6/3.00e-6`.
+The captured RELION operands replay all 192 costs at maximum/RMS
+`6.10e-5/2.45e-5`.  Replacing every active operand with RECOVAR's gives
+maximum/RMS `0.001709/0.000237`, the same winner `(17,43)`, and Pmax
+`0.445093562` versus fixed RELION `0.445093651` (delta `-8.8e-8`).  The
+iteration-9 structured residual is therefore closed as diagnostic restart
+state contamination, not a production RECOVAR behavior difference.
+
+Final particle 188 remains a separate localization target with replay
+maximum/RMS `0.187515/0.065117`, although its replay winner agrees and the
+replay does not reproduce the uninterrupted hard-pose boundary.  Final
 particle 2701 is an exact RELION top tie with only a few-ULP residual, and
-particle 2828 has the same robust winner with a few-ULP residual.  Continue
-one-factor operand substitution on iteration-9 particle 1466 before changing
-production behavior.
+particle 2828 has the same robust winner with a few-ULP residual.
+
+Fail-closed capture rule: a mid-trajectory RELION restart is inadmissible for
+per-half score attribution unless the capture either runs uninterrupted or
+records the particle random subset and proves shellwise that
+`CTF^2 * group_scale^2 / corr_img` matches that subset's previous-iteration
+model STAR.  A score-array match alone does not validate the state.
 
 Corrected operand evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_exact_it9_final_20260714_145938/relion_score_pair_capture_d476e6/case13_matched_rel_rec_operand_analysis.json`.
@@ -2098,6 +2121,13 @@ Immutable integrated FSC-only audit:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_integrated_d07915fa_immutable_retry_20260714_201100/integrated_fsc_audit.json`.
 Matched-grid score audit:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_targeted_scores_d079_20260714_201200/JOINT_RELION_RECOVAR_SCORE_AUDIT.md`.
+Corrected fixed-state operand audit, job `11192981`:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_it9_z1466_fixed_half_noise_20260714_211456/FIXED_STATE_OPERAND_AUDIT.md`.
+Machine-readable operand and raw shell audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_it9_z1466_fixed_half_noise_20260714_211456/operand_substitution_audit.json`.
+Corrected capture stdout/stderr:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_it9_z1466_fixed_half_noise_20260714_211456/logs/run_11192981.out` and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_it9_z1466_fixed_half_noise_20260714_211456/logs/run_11192981.err`.
 
 ## 2026-07-14 Clean-head case-20 scale result
 

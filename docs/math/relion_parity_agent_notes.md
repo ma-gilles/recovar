@@ -2035,13 +2035,22 @@ comparison.
   centered score residual of only `0.003113` maximum (`0.000855` RMS).
   Final particle 2828 has the same robust winner and the same few-ULP maximum;
   its uninterrupted `0.142079` Pmax gap is not reproduced by the replay.
-- Two structured residuals remain. Iteration-9 particle 1466 aligns exactly
-  on 192 candidates and six parent poses, but centered raw scores differ by
-  `0.446167` maximum (`0.180758` RMS) and the captured winner changes. Final
-  particle 188 aligns on 128 candidates/four parents and differs by
-  `0.187515` maximum (`0.065117` RMS), but its captured winner agrees and the
-  replay does not reproduce the original hard-pose boundary. Factorize
-  iteration-9 particle 1466 first; treat particle 188 as the second target.
+- Retract the iteration-9 particle-1466 structured-residual claim. The
+  restarted RELION diagnostic broadcast rank-1 `sigma2_noise` to the subset-2
+  follower during MPI initialization, while RECOVAR retained the correct
+  half-2 curve. The contaminated `0.446167/0.180758` maximum/RMS and winner
+  flip are not an uninterrupted trajectory comparison. Fixed-state A100 job
+  `11192981` proves both effective curves match half 2 (RELION/RECOVAR relative
+  RMS `2.75e-6/3.00e-6`) and reduces the all-RECOVAR-operand residual to
+  maximum/RMS `0.001709/0.000237`, with the same `(17,43)` winner and Pmax
+  delta `-8.8e-8`. Final particle 188 remains the next separate localization
+  target: 128 candidates/four parents, `0.187515/0.065117`, agreeing replay
+  winner, and no reproduction of the original hard-pose boundary.
+- Mid-trajectory RELION restart captures are fail-closed unless they run
+  uninterrupted or record the particle random subset and shellwise prove that
+  `CTF^2 * group_scale^2 / corr_img` matches that subset's previous-iteration
+  model STAR. Do not infer formula parity from a restarted score dump without
+  this state gate.
 - RELION array `11191084_[0-2]` completed. Task `11191084_3` exited 1 because
   a `6e-7` check was stricter than five-decimal STAR serialization; its
   iteration-9 dump was independently hash-checked and perturbation-checked at
@@ -2053,6 +2062,12 @@ comparison.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_targeted_scores_d079_20260714_201200/JOINT_RELION_RECOVAR_SCORE_AUDIT.md`.
 - RELION postvalidation details and exact hashes:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_targeted_relion_scores_d476_exactperturb_20260714_204000/RELION_EXACT_PERTURB_POSTVALIDATION.md`.
+- Corrected fixed-state job `11192981`, audit, machine-readable shells, and
+  logs:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_it9_z1466_fixed_half_noise_20260714_211456/FIXED_STATE_OPERAND_AUDIT.md`,
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_it9_z1466_fixed_half_noise_20260714_211456/operand_substitution_audit.json`,
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_it9_z1466_fixed_half_noise_20260714_211456/logs/run_11192981.out`, and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_it9_z1466_fixed_half_noise_20260714_211456/logs/run_11192981.err`.
 
 # 2026-07-14: case-22 iteration-2 qualified numerical butterfly
 

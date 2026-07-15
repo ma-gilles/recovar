@@ -200,6 +200,12 @@ GILLES project filesystem. Preserve curated fixtures in place.
 - Pin and record the RELION source commit, patched-build identity, complete
   command, STAR metadata, GPU model, MPI layout, and seed. Do not trust help
   text for GUI defaults; inspect `pipeline_jobs.cpp` and output model STARs.
+- Fail closed on mid-trajectory restarted per-half captures. RELION MPI
+  initialization can broadcast rank-1 `sigma2_noise` to every follower and
+  overwrite a loaded half-2 curve. Either capture the trajectory
+  uninterrupted or record the target random subset and prove shellwise that
+  `CTF^2 * group_scale^2 / corr_img` matches that subset's
+  previous-iteration model STAR before attributing any score difference.
 - Use the shared env-gated dump build under
   `/scratch/gpfs/GILLES/mg6942/relion/build_patched/`; do not create another
   RELION clone. Coordinate before editing or rebuilding this shared resource.
