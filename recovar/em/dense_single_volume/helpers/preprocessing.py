@@ -57,11 +57,14 @@ def process_half_image(
     experiment_dataset,
     batch,
     apply_image_mask: bool,
+    *,
+    relion_preprocess_kwargs=None,
 ):
     process_half_fn = getattr(experiment_dataset, "process_images_half", None)
     if process_half_fn is None:
         raise ValueError("Dense EM requires experiment_dataset.process_images_half")
-    return process_half_fn(batch, apply_image_mask=apply_image_mask)
+    kwargs = {} if relion_preprocess_kwargs is None else dict(relion_preprocess_kwargs)
+    return process_half_fn(batch, apply_image_mask=apply_image_mask, **kwargs)
 
 
 def _dense_batch_half_inputs(
@@ -72,11 +75,14 @@ def _dense_batch_half_inputs(
     translations,
     config,
     apply_image_mask: bool,
+    *,
+    relion_preprocess_kwargs=None,
 ):
     processed_half = process_half_image(
         experiment_dataset,
         batch,
         apply_image_mask,
+        relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     ctf_half = config.compute_ctf_half(ctf_params)
     noise_variance_half = jnp.asarray(noise_variance)
@@ -96,6 +102,7 @@ def preprocess_batch(
     score_complex_dtype=None,
     score_real_dtype=None,
     norm_real_dtype=None,
+    relion_preprocess_kwargs=None,
 ):
     """Preprocess one dense image batch for E-step scoring."""
 
@@ -107,6 +114,7 @@ def preprocess_batch(
         translations,
         config,
         score_with_masked_images,
+        relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     shift_processed_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
         processed_half,
@@ -146,6 +154,7 @@ def prepare_reconstruction_batch(
     *,
     score_complex_dtype=None,
     score_real_dtype=None,
+    relion_preprocess_kwargs=None,
 ):
     """Preprocess one dense image batch for the unmasked M-step path."""
 
@@ -157,6 +166,7 @@ def prepare_reconstruction_batch(
         translations,
         config,
         False,
+        relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     shift_processed_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
         processed_half,
@@ -185,6 +195,7 @@ def preprocess_batch_firstiter_cc(
     score_complex_dtype=None,
     score_real_dtype=None,
     norm_real_dtype=None,
+    relion_preprocess_kwargs=None,
 ):
     """Preprocess one dense image batch for RELION's iter-1 normalized CC scoring.
 
@@ -205,6 +216,7 @@ def preprocess_batch_firstiter_cc(
         translations,
         config,
         score_with_masked_images,
+        relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     # RELION ml_optimiser.cpp:8758-8774 (do_firstiter_cc CC branch) iterates
     # `Frefctf = CTF * F_proj` against `Fimg_shift = Fimg * shift_phase` directly:

@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 NVTX_DOMAIN_DATA_IO = "data_io"
 
-RelionFourierBackend = Literal["host_numpy", "jax_gpu"]
-_RELION_FOURIER_BACKENDS = frozenset(("host_numpy", "jax_gpu"))
+RelionFourierBackend = Literal["host_numpy", "jax_gpu", "relion_cuda"]
+_RELION_FOURIER_BACKENDS = frozenset(("host_numpy", "jax_gpu", "relion_cuda"))
 
 
 def _apply_relion_soft_image_mask_numpy(images: np.ndarray, image_mask: np.ndarray) -> np.ndarray:
@@ -328,10 +328,50 @@ class ParticleImageDataset:
         images = pad.padded_dft(images * self.data_multiplier, self.D, self.padding)
         return images.astype(self.dtype, copy=False)
 
-    def process_images_half(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
+    def process_images_half(
+        self,
+        images: np.ndarray,
+        apply_image_mask: bool = False,
+        *,
+        relion_normalization_factors=None,
+        relion_integer_shifts=None,
+    ) -> np.ndarray:
         """Return preprocessed images directly in packed half-spectrum layout."""
 
         if self.image_mask_mode == "relion_background_fill":
+            if self.relion_fourier_backend == "relion_cuda":
+                if self._relion_image_mask_params is None:
+                    raise RuntimeError(
+                        "relion_cuda preprocessing requires set_relion_image_mask() "
+                        "so radius and cosine width are explicit"
+                    )
+                if relion_normalization_factors is None or relion_integer_shifts is None:
+                    raise RuntimeError(
+                        "relion_cuda preprocessing requires per-image float32 normalization "
+                        "factors and int32 integer shifts"
+                    )
+                if self.mult != 1:
+                    raise RuntimeError(
+                        "relion_cuda preprocessing requires data_multiplier=1; "
+                        "folding an additional multiplier into RELION's stored float32 stage is unsupported"
+                    )
+                from recovar.cuda_backproject import relion_preprocess_real_f32
+
+                pixel_size, particle_diameter_ang, width_mask_edge_px = self._relion_image_mask_params
+                radius = float(particle_diameter_ang) / (2.0 * float(pixel_size))
+                images_f32 = jnp.asarray(images, dtype=jnp.float32)
+                factors_f32 = jnp.asarray(relion_normalization_factors)
+                shifts_i32 = jnp.asarray(relion_integer_shifts)
+                _normalized_shifted, preprocessed = relion_preprocess_real_f32(
+                    images_f32,
+                    factors_f32,
+                    shifts_i32,
+                    radius,
+                    float(width_mask_edge_px),
+                    apply_image_mask,
+                )
+                transformed = _centered_rfft2_jax(preprocessed)
+                return transformed.reshape((transformed.shape[0], -1)).astype(jnp.complex64)
             try:
                 images_np = np.asarray(images)
             except Exception as exc:

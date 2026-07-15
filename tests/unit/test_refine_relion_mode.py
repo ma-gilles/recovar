@@ -7374,6 +7374,45 @@ class MockDataset:
         return np.asarray(indices, dtype=np.int64)
 
 
+def test_dense_engine_routes_relion_cuda_norm_and_shift_before_fft(rng):
+    dataset = MockDataset(1, rng)
+    dataset.image_source.backend.image_mask_mode = "relion_background_fill"
+    dataset.image_source.backend.relion_fourier_backend = "relion_cuda"
+    captured = {}
+
+    class _CapturedStrictPreprocess(RuntimeError):
+        pass
+
+    def capture_process(batch, apply_image_mask=False, **kwargs):
+        captured.update(batch=np.asarray(batch), apply_image_mask=apply_image_mask, **kwargs)
+        raise _CapturedStrictPreprocess
+
+    dataset.process_images_half = capture_process
+    with pytest.raises(_CapturedStrictPreprocess):
+        run_em(
+            dataset,
+            _hermitian_volume(VOLUME_SHAPE, seed=881),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            _make_rotations(1, seed=882),
+            np.zeros((1, 2), dtype=np.float32),
+            "linear_interp",
+            image_batch_size=1,
+            rotation_block_size=1,
+            score_with_masked_images=True,
+            image_corrections=np.asarray([0.8], dtype=np.float32),
+            scale_corrections=np.asarray([2.0], dtype=np.float32),
+            image_pre_shifts=np.asarray([[1.0, -1.0]], dtype=np.float32),
+        )
+
+    # Raw pixels reach strict CUDA unchanged; RELION normalization and the
+    # zero-fill shift are explicit operands for the CUDA boundary.
+    np.testing.assert_array_equal(captured["batch"], dataset._images)
+    np.testing.assert_array_equal(captured["relion_normalization_factors"], np.asarray([0.4], np.float32))
+    np.testing.assert_array_equal(captured["relion_integer_shifts"], np.asarray([[1, -1]], np.int32))
+    assert captured["apply_image_mask"] is True
+
+
 class RawRealImageDataset:
     """Minimal raw real-space dataset for native half-preprocess tests."""
 

@@ -3407,10 +3407,11 @@ def refine_single_volume(
     particle_diameter_ang : float or None
         RELION particle diameter in Angstrom for the adaptive coarse-image-size
         formula. When None, fall back to ``ori_size * pixel_size``.
-    image_fourier_backend : {"host_numpy", "jax_gpu"}
+    image_fourier_backend : {"host_numpy", "jax_gpu", "relion_cuda"}
         Fourier backend for RELION background-filled particle images. The
         default preserves the established host path; ``jax_gpu`` uses cuFFT
-        and requires a JAX GPU backend.
+        from host-masked pixels. ``relion_cuda`` additionally requires the
+        source-faithful CUDA normalization/translation/mask operands.
 
     Returns
     -------
@@ -3666,9 +3667,9 @@ def _run_relion_iteration_loop(
     """
     from recovar.reconstruction import regularization
 
-    if image_fourier_backend not in {"host_numpy", "jax_gpu"}:
+    if image_fourier_backend not in {"host_numpy", "jax_gpu", "relion_cuda"}:
         raise ValueError(
-            "image_fourier_backend must be 'host_numpy' or 'jax_gpu', "
+            "image_fourier_backend must be 'host_numpy', 'jax_gpu', or 'relion_cuda', "
             f"got {image_fourier_backend!r}"
         )
 
@@ -3725,9 +3726,16 @@ def _run_relion_iteration_loop(
             backend = _image_backend(ds)
             if backend is None:
                 continue
-            backend.image_mask = relion_mask
-            if hasattr(backend, "image_mask_mode"):
-                backend.image_mask_mode = "relion_background_fill"
+            if hasattr(backend, "set_relion_image_mask"):
+                backend.set_relion_image_mask(
+                    pixel_size=cryo.voxel_size,
+                    particle_diameter_ang=particle_diameter_ang,
+                    width_mask_edge_px=RELION_WIDTH_MASK_EDGE,
+                )
+            else:
+                backend.image_mask = relion_mask
+                if hasattr(backend, "image_mask_mode"):
+                    backend.image_mask_mode = "relion_background_fill"
         logger.info(
             "RELION mode: image mask radius=%.1f px (particle_diameter=%.1f A, edge=%d px)",
             particle_diameter_ang / (2.0 * cryo.voxel_size),

@@ -385,6 +385,7 @@ _TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
 _TARGET_FUSED_BP = "cuda_fused_bp"
 _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
 _TARGET_RELION_FUSED_X_HALF_BP = "cuda_relion_fused_x_half_bp"
+_TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
 
 
 _preflight_ok: bool | None = None  # None = not checked yet
@@ -634,6 +635,11 @@ def _ensure_ffi():
         jax.ffi.register_ffi_target(
             _TARGET_RELION_FUSED_X_HALF_BP,
             jax.ffi.pycapsule(lib.RelionFusedXHalfBackproject),
+            platform="CUDA",
+        )
+        jax.ffi.register_ffi_target(
+            _TARGET_RELION_PREPROCESS_REAL_F32,
+            jax.ffi.pycapsule(lib.RelionPreprocessRealF32),
             platform="CUDA",
         )
         _ffi_registered = True
@@ -932,6 +938,71 @@ def backproject(
         input_output_aliases={2: 0},
         vmap_method="sequential",
     )(images, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5))
+def relion_preprocess_real_f32(
+    images: jax.Array,
+    normalization_factors: jax.Array,
+    integer_shifts: jax.Array,
+    radius: float,
+    cosine_width: float,
+    apply_mask: bool = True,
+) -> tuple[jax.Array, jax.Array]:
+    """Apply RELION's accelerated float32 real-space preprocessing.
+
+    Returns ``(normalized_shifted, masked)`` so captured operand tests can
+    gate both stored RELION boundaries.  The implementation preserves
+    RELION's separate float32 normalization and zero-filled translation,
+    128-lane atomic background reduction, CUB final sums, and CUDA
+    ``sqrtf``/``cospif`` mask arithmetic.
+    """
+
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION CUDA preprocessing requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION CUDA preprocessing was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+    if images.dtype != jnp.float32:
+        raise TypeError(f"images must be float32, got {images.dtype}")
+    if normalization_factors.dtype != jnp.float32:
+        raise TypeError(
+            f"normalization_factors must be float32, got {normalization_factors.dtype}"
+        )
+    if integer_shifts.dtype != jnp.int32:
+        raise TypeError(f"integer_shifts must be int32, got {integer_shifts.dtype}")
+    if images.ndim != 3 or images.shape[-2] != images.shape[-1]:
+        raise ValueError(f"images must have shape (batch, D, D), got {images.shape}")
+    batch_size = images.shape[0]
+    if normalization_factors.shape != (batch_size,):
+        raise ValueError(
+            "normalization_factors must have shape "
+            f"({batch_size},), got {normalization_factors.shape}"
+        )
+    if integer_shifts.shape != (batch_size, 2):
+        raise ValueError(
+            f"integer_shifts must have shape ({batch_size}, 2), got {integer_shifts.shape}"
+        )
+    if not np.isfinite(radius) or radius <= 0.0:
+        raise ValueError(f"radius must be finite and positive, got {radius}")
+    if not np.isfinite(cosine_width) or cosine_width <= 0.0:
+        raise ValueError(f"cosine_width must be finite and positive, got {cosine_width}")
+
+    out_type = jax.ShapeDtypeStruct(images.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_PREPROCESS_REAL_F32,
+        (out_type, out_type),
+        vmap_method="sequential",
+    )(
+        images,
+        normalization_factors,
+        integer_shifts,
+        radius=np.float32(radius),
+        cosine_width=np.float32(cosine_width),
+        apply_mask=np.int64(int(apply_mask)),
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))

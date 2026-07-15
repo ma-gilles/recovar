@@ -181,7 +181,7 @@ class ImageSource:
     def process_images(self, images, apply_image_mask=False):
         raise NotImplementedError
 
-    def process_images_half(self, images, apply_image_mask=False):
+    def process_images_half(self, images, apply_image_mask=False, **kwargs):
         raise NotImplementedError("ImageSource subclasses must implement native process_images_half")
 
     def iter_batches(
@@ -278,10 +278,10 @@ class BackendImageSource(ImageSource):
     def process_images(self, images, apply_image_mask=False):
         return self.backend.process_images(images, apply_image_mask=apply_image_mask)
 
-    def process_images_half(self, images, apply_image_mask=False):
+    def process_images_half(self, images, apply_image_mask=False, **kwargs):
         if not hasattr(self.backend, "process_images_half"):
             raise ValueError("Image backend must implement native process_images_half")
-        return self.backend.process_images_half(images, apply_image_mask=apply_image_mask)
+        return self.backend.process_images_half(images, apply_image_mask=apply_image_mask, **kwargs)
 
     def iter_batches(
         self,
@@ -390,8 +390,8 @@ class SubsetImageSource(ImageSource):
     def process_images(self, images, apply_image_mask=False):
         return self.parent.process_images(images, apply_image_mask=apply_image_mask)
 
-    def process_images_half(self, images, apply_image_mask=False):
-        return self.parent.process_images_half(images, apply_image_mask=apply_image_mask)
+    def process_images_half(self, images, apply_image_mask=False, **kwargs):
+        return self.parent.process_images_half(images, apply_image_mask=apply_image_mask, **kwargs)
 
     def _remap_parent_images(self, parent_local_image_indices):
         parent_original_image_indices = self.parent.index_layout.original_image_indices_for_local(

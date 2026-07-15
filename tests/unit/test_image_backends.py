@@ -1,12 +1,13 @@
 from types import SimpleNamespace
 
+import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 import pytest
-
-from recovar.data_io import image_backends
-from recovar.core import fourier_transform_utils, mask
 from helpers import tiny_synthetic
+
+from recovar.core import fourier_transform_utils, mask
+from recovar.data_io import image_backends
 
 pytestmark = pytest.mark.unit
 
@@ -119,6 +120,59 @@ def test_relion_jax_fourier_backend_requires_gpu(monkeypatch):
 
     with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
         image_backends._centered_rfft2_jax(np.zeros((8, 8), dtype=np.float32))
+
+
+def test_particle_image_dataset_relion_cuda_routes_explicit_operands(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    ds.set_relion_fourier_backend("relion_cuda")
+    images, _p_idx, _t_idx = ds[2]
+    factors = np.asarray([0.75], dtype=np.float32)
+    shifts = np.asarray([[2, -1]], dtype=np.int32)
+    captured = {}
+
+    def fake_preprocess(got_images, got_factors, got_shifts, radius, width, apply_mask):
+        captured.update(
+            images=np.asarray(got_images),
+            factors=np.asarray(got_factors),
+            shifts=np.asarray(got_shifts),
+            radius=radius,
+            width=width,
+            apply_mask=apply_mask,
+        )
+        return got_images, got_images + jnp.float32(3.0)
+
+    monkeypatch.setattr(cuda_backproject, "relion_preprocess_real_f32", fake_preprocess)
+    monkeypatch.setattr(image_backends, "_centered_rfft2_jax", lambda x: x.astype(jnp.complex64))
+
+    result = ds.process_images_half(
+        images,
+        apply_image_mask=True,
+        relion_normalization_factors=factors,
+        relion_integer_shifts=shifts,
+    )
+
+    np.testing.assert_array_equal(captured["images"], images.astype(np.float32))
+    np.testing.assert_array_equal(captured["factors"], factors)
+    np.testing.assert_array_equal(captured["shifts"], shifts)
+    assert captured["radius"] == 3.0
+    assert captured["width"] == 2.0
+    assert captured["apply_mask"] is True
+    np.testing.assert_array_equal(np.asarray(result).reshape(images.shape).real, images + 3.0)
+
+
+def test_particle_image_dataset_relion_cuda_fails_closed_without_operands(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+    ds.set_relion_image_mask(pixel_size=1.0, particle_diameter_ang=6.0, width_mask_edge_px=2.0)
+    ds.set_relion_fourier_backend("relion_cuda")
+    images, _p_idx, _t_idx = ds[2]
+
+    with pytest.raises(RuntimeError, match="requires per-image float32 normalization"):
+        ds.process_images_half(images, apply_image_mask=True)
 
 
 def test_particle_image_dataset_data_multiplier_and_mult_share_state(monkeypatch):

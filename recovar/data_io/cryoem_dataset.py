@@ -374,9 +374,9 @@ class CryoEMDataset:
         """Apply windowing + full DFT preprocessing to raw images."""
         return self.image_source.process_images(images, apply_image_mask=apply_image_mask)
 
-    def process_images_half(self, images, apply_image_mask=False):
+    def process_images_half(self, images, apply_image_mask=False, **kwargs):
         """Apply windowing + rfft2 preprocessing → half-spectrum output."""
-        return self.image_source.process_images_half(images, apply_image_mask=apply_image_mask)
+        return self.image_source.process_images_half(images, apply_image_mask=apply_image_mask, **kwargs)
 
     @property
     def image_mask(self):

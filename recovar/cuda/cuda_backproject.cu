@@ -37,6 +37,8 @@
  */
 
 #include <cuda_runtime.h>
+#include <cub/cub.cuh>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -3068,6 +3070,299 @@ cudaError_t launch_batch_project(
 /* ================================================================== */
 /*                    XLA  FFI  handlers                               */
 /* ================================================================== */
+
+namespace {
+
+constexpr int kRelionPreprocessBlockSize = 128;
+constexpr int kRelionSoftMaskBlocks = 128;
+
+__global__ void relion_normalize_f32_kernel(
+    const float* images,
+    const float* normalization_factors,
+    float* normalized,
+    int64_t pixels_per_image,
+    int64_t total_pixels)
+{
+    int64_t pixel = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (pixel >= total_pixels) return;
+    int64_t image = pixel / pixels_per_image;
+    normalized[pixel] = images[pixel] * normalization_factors[image];
+}
+
+__global__ void relion_translate2d_f32_kernel(
+    const float* normalized,
+    const int32_t* shifts,
+    float* shifted,
+    int64_t pixels_per_image,
+    int image_h,
+    int image_w,
+    int64_t total_pixels)
+{
+    int64_t flat = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (flat >= total_pixels) return;
+    int64_t image = flat / pixels_per_image;
+    int pixel = static_cast<int>(flat - image * pixels_per_image);
+    int x = pixel % image_w;
+    int y = pixel / image_w;
+    int xp = x + shifts[2 * image];
+    int yp = y + shifts[2 * image + 1];
+    if (xp >= 0 && xp < image_w && yp >= 0 && yp < image_h) {
+        int64_t out = image * pixels_per_image + static_cast<int64_t>(yp) * image_w + xp;
+        shifted[out] = normalized[flat];
+    }
+}
+
+__global__ void relion_softmask_background_f32_kernel(
+    const float* image,
+    int64_t image_size,
+    int image_w,
+    int image_h,
+    int xinit,
+    int yinit,
+    float radius,
+    float radius_p,
+    float cosine_width,
+    float* lane_sum,
+    float* lane_sum_bg)
+{
+    int tid = threadIdx.x;
+    int bid = blockIdx.x;
+    float partial_sum = 0.0f;
+    float partial_sum_bg = 0.0f;
+    int64_t passes = (image_size + kRelionPreprocessBlockSize * gridDim.x - 1) /
+                     (kRelionPreprocessBlockSize * gridDim.x);
+    int64_t texel = static_cast<int64_t>(bid) * kRelionPreprocessBlockSize * passes + tid;
+
+    for (int64_t pass = 0; pass < passes; ++pass, texel += kRelionPreprocessBlockSize) {
+        if (texel >= image_size) continue;
+        float value = __ldg(&image[texel]);
+        int y = static_cast<int>(texel / image_w) - yinit;
+        int x = static_cast<int>(texel % image_w) - xinit;
+        float r = sqrtf(static_cast<float>(x * x + y * y));
+        if (r < radius) continue;
+        if (r > radius_p) {
+            partial_sum += 1.0f;
+            partial_sum_bg += value;
+        } else {
+            float raisedcos = 0.5f + 0.5f * cospif((radius_p - r) / cosine_width);
+            partial_sum += raisedcos;
+            partial_sum_bg += raisedcos * value;
+        }
+    }
+
+    atomicAdd(&lane_sum[tid], partial_sum);
+    atomicAdd(&lane_sum_bg[tid], partial_sum_bg);
+}
+
+__global__ void relion_cosine_fill_f32_kernel(
+    float* image,
+    int64_t image_size,
+    int image_w,
+    int image_h,
+    int xinit,
+    int yinit,
+    float radius,
+    float radius_p,
+    float cosine_width,
+    float bg_value)
+{
+    int tid = threadIdx.x;
+    int bid = blockIdx.x;
+    int64_t passes = (image_size + kRelionPreprocessBlockSize * gridDim.x - 1) /
+                     (kRelionPreprocessBlockSize * gridDim.x);
+    int64_t texel = static_cast<int64_t>(bid) * kRelionPreprocessBlockSize * passes + tid;
+
+    for (int64_t pass = 0; pass < passes; ++pass, texel += kRelionPreprocessBlockSize) {
+        if (texel >= image_size) continue;
+        float value = __ldg(&image[texel]);
+        int y = static_cast<int>(texel / image_w) - yinit;
+        int x = static_cast<int>(texel % image_w) - xinit;
+        float r = sqrtf(static_cast<float>(x * x + y * y));
+        if (r < radius) continue;
+        if (r > radius_p) {
+            value = bg_value;
+        } else {
+            float raisedcos = 0.5f + 0.5f * cospif((radius_p - r) / cosine_width);
+            value = value * (1.0f - raisedcos) + bg_value * raisedcos;
+        }
+        image[texel] = value;
+    }
+}
+
+cudaError_t launch_relion_preprocess_real_f32(
+    cudaStream_t stream,
+    const float* images,
+    const float* normalization_factors,
+    const int32_t* shifts,
+    float* normalized_shifted,
+    float* masked,
+    int64_t batch_size,
+    int image_h,
+    int image_w,
+    float radius,
+    float cosine_width,
+    bool apply_mask)
+{
+    int64_t pixels_per_image = static_cast<int64_t>(image_h) * image_w;
+    int64_t total_pixels = batch_size * pixels_per_image;
+    size_t image_bytes = static_cast<size_t>(total_pixels) * sizeof(float);
+    int blocks = static_cast<int>((total_pixels + kRelionPreprocessBlockSize - 1) /
+                                  kRelionPreprocessBlockSize);
+
+    // `masked` is temporary normalized storage until translation completes.
+    relion_normalize_f32_kernel<<<blocks, kRelionPreprocessBlockSize, 0, stream>>>(
+        images, normalization_factors, masked, pixels_per_image, total_pixels);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+    err = cudaMemsetAsync(normalized_shifted, 0, image_bytes, stream);
+    if (err != cudaSuccess) return err;
+    relion_translate2d_f32_kernel<<<blocks, kRelionPreprocessBlockSize, 0, stream>>>(
+        masked, shifts, normalized_shifted, pixels_per_image, image_h, image_w, total_pixels);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+    err = cudaMemcpyAsync(masked, normalized_shifted, image_bytes, cudaMemcpyDeviceToDevice, stream);
+    if (err != cudaSuccess || !apply_mask) return err;
+
+    float* lane_storage = nullptr;
+    float* reduce_values = nullptr;
+    void* reduce_temp = nullptr;
+    size_t reduce_temp_bytes = 0;
+    err = cudaMalloc(reinterpret_cast<void**>(&lane_storage), 2 * kRelionPreprocessBlockSize * sizeof(float));
+    if (err != cudaSuccess) return err;
+    err = cudaMalloc(reinterpret_cast<void**>(&reduce_values), 2 * sizeof(float));
+    if (err != cudaSuccess) {
+        cudaFree(lane_storage);
+        return err;
+    }
+    err = cub::DeviceReduce::Sum(
+        nullptr, reduce_temp_bytes, lane_storage, reduce_values,
+        kRelionPreprocessBlockSize, stream);
+    if (err == cudaSuccess)
+        err = cudaMalloc(&reduce_temp, reduce_temp_bytes == 0 ? 1 : reduce_temp_bytes);
+    if (err != cudaSuccess) {
+        cudaFree(reduce_values);
+        cudaFree(lane_storage);
+        return err;
+    }
+
+    float radius_p = radius + cosine_width;
+    for (int64_t image = 0; image < batch_size; ++image) {
+        float* lane_sum = lane_storage;
+        float* lane_sum_bg = lane_storage + kRelionPreprocessBlockSize;
+        err = cudaMemsetAsync(lane_storage, 0, 2 * kRelionPreprocessBlockSize * sizeof(float), stream);
+        if (err != cudaSuccess) break;
+        float* image_ptr = masked + image * pixels_per_image;
+        relion_softmask_background_f32_kernel<<<
+            kRelionSoftMaskBlocks, kRelionPreprocessBlockSize, 0, stream>>>(
+            image_ptr, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
+            radius, radius_p, cosine_width, lane_sum, lane_sum_bg);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) break;
+        err = cub::DeviceReduce::Sum(
+            reduce_temp, reduce_temp_bytes, lane_sum, reduce_values,
+            kRelionPreprocessBlockSize, stream);
+        if (err != cudaSuccess) break;
+        err = cub::DeviceReduce::Sum(
+            reduce_temp, reduce_temp_bytes, lane_sum_bg, reduce_values + 1,
+            kRelionPreprocessBlockSize, stream);
+        if (err != cudaSuccess) break;
+        float host_sums[2];
+        err = cudaMemcpyAsync(
+            host_sums, reduce_values, 2 * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        if (err != cudaSuccess) break;
+        err = cudaStreamSynchronize(stream);
+        if (err != cudaSuccess) break;
+        if (!(host_sums[0] > 0.0f) || !std::isfinite(host_sums[0]) || !std::isfinite(host_sums[1])) {
+            err = cudaErrorInvalidValue;
+            break;
+        }
+        float bg_value = host_sums[1] / host_sums[0];
+        relion_cosine_fill_f32_kernel<<<
+            kRelionSoftMaskBlocks, kRelionPreprocessBlockSize, 0, stream>>>(
+            image_ptr, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
+            radius, radius_p, cosine_width, bg_value);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) break;
+    }
+
+    cudaError_t free_temp_err = cudaFree(reduce_temp);
+    cudaError_t free_values_err = cudaFree(reduce_values);
+    cudaError_t free_lanes_err = cudaFree(lane_storage);
+    if (err != cudaSuccess) return err;
+    if (free_temp_err != cudaSuccess) return free_temp_err;
+    if (free_values_err != cudaSuccess) return free_values_err;
+    return free_lanes_err;
+}
+
+}  // namespace
+
+ffi::Error RelionPreprocessRealF32Impl(
+    cudaStream_t stream,
+    float radius,
+    float cosine_width,
+    int64_t apply_mask,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer normalization_factors,
+    ffi::AnyBuffer integer_shifts,
+    ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
+    ffi::Result<ffi::AnyBuffer> masked_out)
+{
+    if (images.element_type() != ffi::DataType::F32 ||
+        normalization_factors.element_type() != ffi::DataType::F32 ||
+        normalized_shifted_out->element_type() != ffi::DataType::F32 ||
+        masked_out->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: images/factors/outputs must be F32");
+    if (integer_shifts.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: shifts must be S32");
+    auto image_dims = images.dimensions();
+    auto factor_dims = normalization_factors.dimensions();
+    auto shift_dims = integer_shifts.dimensions();
+    auto normshift_dims = normalized_shifted_out->dimensions();
+    auto masked_dims = masked_out->dimensions();
+    if (image_dims.size() != 3 || image_dims[0] <= 0 || image_dims[1] <= 0 || image_dims[1] != image_dims[2])
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: images must have shape (batch,D,D)");
+    if (factor_dims.size() != 1 || factor_dims[0] != image_dims[0])
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: factors must have shape (batch,)");
+    if (shift_dims.size() != 2 || shift_dims[0] != image_dims[0] || shift_dims[1] != 2)
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: shifts must have shape (batch,2)");
+    if (normshift_dims.size() != 3 || masked_dims.size() != 3 ||
+        normshift_dims[0] != image_dims[0] || normshift_dims[1] != image_dims[1] ||
+        normshift_dims[2] != image_dims[2] || masked_dims[0] != image_dims[0] ||
+        masked_dims[1] != image_dims[1] || masked_dims[2] != image_dims[2])
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: output shapes must match images");
+    if (!(radius > 0.0f) || !(cosine_width > 0.0f) ||
+        !std::isfinite(radius) || !std::isfinite(cosine_width))
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: radius/width must be finite and positive");
+    if (apply_mask != 0 && apply_mask != 1)
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: apply_mask must be 0 or 1");
+
+    cudaError_t err = launch_relion_preprocess_real_f32(
+        stream,
+        static_cast<const float*>(images.untyped_data()),
+        static_cast<const float*>(normalization_factors.untyped_data()),
+        static_cast<const int32_t*>(integer_shifts.untyped_data()),
+        static_cast<float*>(normalized_shifted_out->untyped_data()),
+        static_cast<float*>(masked_out->untyped_data()),
+        image_dims[0], static_cast<int>(image_dims[1]), static_cast<int>(image_dims[2]),
+        radius, cosine_width, apply_mask != 0);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionPreprocessRealF32, RelionPreprocessRealF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<float>("radius")
+        .Attr<float>("cosine_width")
+        .Attr<int64_t>("apply_mask")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
 
 ffi::Error BackprojectImpl(
     cudaStream_t stream,

@@ -78,3 +78,32 @@ def test_firstiter_cc_inverse_power_stays_in_score_dtype_before_tile_multiply():
 
     assert inv_xi2.dtype == jnp.float32
     assert scaled.dtype == jnp.complex64
+
+
+def test_dense_preprocessing_forwards_relion_cuda_operands():
+    captured = {}
+
+    class _StrictHalfDataset:
+        def process_images_half(self, batch, apply_image_mask=False, **kwargs):
+            captured.update(apply_image_mask=apply_image_mask, **kwargs)
+            return jnp.ones((batch.shape[0], 40), dtype=jnp.complex64)
+
+    factors = jnp.asarray([0.9, 1.1], dtype=jnp.float32)
+    shifts = jnp.asarray([[1, -1], [0, 2]], dtype=jnp.int32)
+    preprocess_batch(
+        _StrictHalfDataset(),
+        jnp.zeros((2, 64), dtype=jnp.float32),
+        jnp.ones((2, 9), dtype=jnp.float64),
+        np.ones(40, dtype=np.float64),
+        np.zeros((1, 2), dtype=np.float64),
+        _Float64CtfConfig(),
+        score_with_masked_images=True,
+        relion_preprocess_kwargs={
+            "relion_normalization_factors": factors,
+            "relion_integer_shifts": shifts,
+        },
+    )
+
+    assert captured["apply_image_mask"] is True
+    np.testing.assert_array_equal(np.asarray(captured["relion_normalization_factors"]), np.asarray(factors))
+    np.testing.assert_array_equal(np.asarray(captured["relion_integer_shifts"]), np.asarray(shifts))

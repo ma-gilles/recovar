@@ -75,6 +75,7 @@ from .helpers.image_shifts import (
 )
 from .helpers.jax_runtime import block_until_ready as _block_until_ready
 from .helpers.preprocessing import (
+    image_preprocess_backend,
     prepare_reconstruction_batch as _prepare_reconstruction_batch,
 )
 from .helpers.preprocessing import (
@@ -1103,8 +1104,14 @@ def run_em(
             np.arange(actual_batch_size, dtype=np.int64),
             batch=batch_data,
         )
+        preprocess_backend = image_preprocess_backend(experiment_dataset)
+        relion_cuda_preprocess = getattr(preprocess_backend, "relion_fourier_backend", None) == "relion_cuda"
+        if relion_cuda_preprocess and batch_image_pre_shifts_np is not None and integer_pre_shifts is None:
+            raise RuntimeError("relion_cuda preprocessing requires integral RELION image pre-shifts")
+        if relion_cuda_preprocess and integer_pre_shifts is None:
+            integer_pre_shifts = np.zeros((actual_batch_size, 2), dtype=np.int32)
         real_space_pre_shift_applied = integer_pre_shifts is not None
-        if real_space_pre_shift_applied:
+        if real_space_pre_shift_applied and not relion_cuda_preprocess:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
         if use_dense_big_jit:
             (
@@ -1118,6 +1125,50 @@ def run_em(
         batch_size = int(np.asarray(batch_data).shape[0])
         valid_image_mask = jnp.asarray(valid_image_mask_np, dtype=bool)
         batch_data = jnp.asarray(batch_data)
+        if scale_corrections is not None:
+            batch_scale_np = _batch_parameter_rows(
+                scale_corrections,
+                batch_indices=batch_indices_np,
+                start=start_idx,
+                end=end_idx,
+                selected_image_count=n_images,
+                source_image_count=source_image_count,
+                selected_position=selected_position,
+                name="scale_corrections",
+            ).astype(np.float32, copy=False)
+            if use_dense_big_jit and batch_size != actual_batch_size:
+                batch_scale_np = pad_axis(batch_scale_np, 0, batch_size, value=1)
+        else:
+            batch_scale_np = np.ones(batch_size, dtype=np.float32)
+        if image_corrections is not None:
+            batch_corr_np = _batch_parameter_rows(
+                image_corrections,
+                batch_indices=batch_indices_np,
+                start=start_idx,
+                end=end_idx,
+                selected_image_count=n_images,
+                source_image_count=source_image_count,
+                selected_position=selected_position,
+                name="image_corrections",
+            ).astype(np.float32, copy=False)
+            if use_dense_big_jit and batch_size != actual_batch_size:
+                batch_corr_np = pad_axis(batch_corr_np, 0, batch_size, value=1)
+        else:
+            batch_corr_np = None
+        relion_preprocess_kwargs = None
+        if relion_cuda_preprocess:
+            padded_integer_shifts = integer_pre_shifts
+            if batch_size != actual_batch_size:
+                padded_integer_shifts = pad_axis(integer_pre_shifts, 0, batch_size, value=0)
+            normalization_factors = (
+                batch_corr_np / batch_scale_np
+                if batch_corr_np is not None
+                else np.ones(batch_size, dtype=np.float32)
+            )
+            relion_preprocess_kwargs = {
+                "relion_normalization_factors": jnp.asarray(normalization_factors, dtype=jnp.float32),
+                "relion_integer_shifts": jnp.asarray(padded_integer_shifts, dtype=jnp.int32),
+            }
         translation_sqdist_ang = None
         if translation_prior_centers_np is not None:
             centers = translation_prior_centers_for_images(
@@ -1157,6 +1208,7 @@ def run_em(
                 score_complex_dtype=precision_policy.score_complex_dtype,
                 score_real_dtype=precision_policy.score_real_dtype,
                 norm_real_dtype=precision_policy.normalization_real_dtype,
+                relion_preprocess_kwargs=relion_preprocess_kwargs,
             )
         else:
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
@@ -1170,6 +1222,7 @@ def run_em(
                 score_complex_dtype=precision_policy.score_complex_dtype,
                 score_real_dtype=precision_policy.score_real_dtype,
                 norm_real_dtype=precision_policy.normalization_real_dtype,
+                relion_preprocess_kwargs=relion_preprocess_kwargs,
             )
             ctf2_half_score = None
         if score_only:
@@ -1185,6 +1238,7 @@ def run_em(
                     config,
                     score_complex_dtype=precision_policy.score_complex_dtype,
                     score_real_dtype=precision_policy.score_real_dtype,
+                    relion_preprocess_kwargs=relion_preprocess_kwargs,
                 )
                 if (score_with_masked_images or relion_firstiter_score_mode == "normalized_cc")
                 else shifted_half
@@ -1195,22 +1249,7 @@ def run_em(
         timing.preprocess_s += time.time() - preprocess_t0
 
         score_prep_t0 = time.time()
-        if scale_corrections is not None:
-            batch_scale_np = _batch_parameter_rows(
-                scale_corrections,
-                batch_indices=batch_indices_np,
-                start=start_idx,
-                end=end_idx,
-                selected_image_count=n_images,
-                source_image_count=source_image_count,
-                selected_position=selected_position,
-                name="scale_corrections",
-            ).astype(np.float32, copy=False)
-            if use_dense_big_jit and batch_size != actual_batch_size:
-                batch_scale_np = pad_axis(batch_scale_np, 0, batch_size, value=1)
-            batch_scale = jnp.asarray(batch_scale_np)
-        else:
-            batch_scale = jnp.ones(batch_size, dtype=batch_norm.dtype)
+        batch_scale = jnp.asarray(batch_scale_np, dtype=batch_norm.dtype)
 
         # -- Per-image corrections (RELION parity: avg_norm/normcorr * scale) --
         # RELION: img *= avg_norm_correction / normcorr  (ml_optimiser.cpp:6240)
@@ -1221,29 +1260,20 @@ def run_em(
         # the per-image correction across n_trans copies.
         image_only_corr = None
         if image_corrections is not None:
-            batch_corr_np = _batch_parameter_rows(
-                image_corrections,
-                batch_indices=batch_indices_np,
-                start=start_idx,
-                end=end_idx,
-                selected_image_count=n_images,
-                source_image_count=source_image_count,
-                selected_position=selected_position,
-                name="image_corrections",
-            ).astype(np.float32, copy=False)
-            if use_dense_big_jit and batch_size != actual_batch_size:
-                batch_corr_np = pad_axis(batch_corr_np, 0, batch_size, value=1)
             batch_corr = jnp.asarray(batch_corr_np)
             score_batch_corr, image_only_corr = _relion_image_correction_factors(
                 batch_corr,
                 batch_scale,
                 score_mode=relion_firstiter_score_mode,
             )
-            score_corr_expanded = jnp.repeat(score_batch_corr, n_trans)
-            recon_corr_expanded = jnp.repeat(batch_corr, n_trans)
+            applied_image_corr = batch_scale if relion_cuda_preprocess else score_batch_corr
+            applied_recon_corr = batch_scale if relion_cuda_preprocess else batch_corr
+            score_corr_expanded = jnp.repeat(applied_image_corr, n_trans)
+            recon_corr_expanded = jnp.repeat(applied_recon_corr, n_trans)
             shifted_half = shifted_half * score_corr_expanded[:, None]
             shifted_recon_half = shifted_recon_half * recon_corr_expanded[:, None]
-            batch_norm = batch_norm * (image_only_corr**2)[:, None]
+            if not relion_cuda_preprocess:
+                batch_norm = batch_norm * (image_only_corr**2)[:, None]
         else:
             batch_corr = None
 
@@ -1336,8 +1366,9 @@ def run_em(
                 experiment_dataset,
                 batch_data,
                 score_with_masked_images,
+                relion_preprocess_kwargs=relion_preprocess_kwargs,
             )
-            if image_only_corr is not None:
+            if image_only_corr is not None and not relion_cuda_preprocess:
                 processed_masked_half = processed_masked_half * image_only_corr[:, None]
             # Sum |img|^2 over images in this batch, bin to shells (FULL spectrum, not windowed)
             batch_img_power = jnp.sum(jnp.abs(processed_masked_half) ** 2, axis=0)  # (N_half,)
