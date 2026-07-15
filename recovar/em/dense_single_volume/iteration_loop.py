@@ -354,7 +354,7 @@ def _maybe_debug_replay_relion_references(
     volume_shape,
     n_classes: int,
 ):
-    """Debug hook: replace current K=1 scoring references with RELION half maps."""
+    """Debug hook: replace current scoring references with RELION maps."""
 
     iteration_number = int(iteration) + 1
     if not _debug_replay_relion_references_enabled(iteration_number):
@@ -366,9 +366,6 @@ def _maybe_debug_replay_relion_references(
             iteration_number,
         )
         return means
-    if int(n_classes) != 1:
-        raise ValueError(f"{_DEBUG_REPLAY_RELION_REFERENCES_ENV} currently supports K=1 only")
-
     from pathlib import Path
 
     from recovar.core import fourier_transform_utils
@@ -378,31 +375,45 @@ def _maybe_debug_replay_relion_references(
     relion_dir = Path(perturb_replay_relion_dir)
     replayed_means = []
     for half_idx in range(2):
-        map_path = relion_dir / (
-            f"{perturb_replay_relion_prefix}_it{relion_iter:03d}_half{half_idx + 1}_class001.mrc"
-        )
-        if not map_path.exists():
-            shared_path = relion_dir / f"{perturb_replay_relion_prefix}_it{relion_iter:03d}_class001.mrc"
-            if shared_path.exists():
-                map_path = shared_path
-        if not map_path.exists():
-            raise FileNotFoundError(
-                f"{_DEBUG_REPLAY_RELION_REFERENCES_ENV}=1 requested RELION reference "
-                f"for scoring iteration {iteration_number}, but {map_path} is missing"
+        replayed_classes = []
+        for class_idx in range(int(n_classes)):
+            class_number = class_idx + 1
+            map_path = relion_dir / (
+                f"{perturb_replay_relion_prefix}_it{relion_iter:03d}_half{half_idx + 1}_"
+                f"class{class_number:03d}.mrc"
             )
-        real_volume = np.asarray(_load_relion_volume(str(map_path)), dtype=np.float32)
-        if tuple(real_volume.shape) != tuple(volume_shape):
-            raise ValueError(
-                f"RELION replay reference {map_path} has shape {real_volume.shape}, "
-                f"expected {tuple(volume_shape)}"
+            if not map_path.exists():
+                shared_path = relion_dir / (
+                    f"{perturb_replay_relion_prefix}_it{relion_iter:03d}_class{class_number:03d}.mrc"
+                )
+                if shared_path.exists():
+                    map_path = shared_path
+            if not map_path.exists():
+                raise FileNotFoundError(
+                    f"{_DEBUG_REPLAY_RELION_REFERENCES_ENV}=1 requested RELION reference "
+                    f"for scoring iteration {iteration_number}, half {half_idx + 1}, "
+                    f"class {class_number}, but {map_path} is missing"
+                )
+            real_volume = np.asarray(_load_relion_volume(str(map_path)), dtype=np.float32)
+            if tuple(real_volume.shape) != tuple(volume_shape):
+                raise ValueError(
+                    f"RELION replay reference {map_path} has shape {real_volume.shape}, "
+                    f"expected {tuple(volume_shape)}"
+                )
+            replayed_classes.append(
+                jnp.asarray(fourier_transform_utils.get_dft3(real_volume).reshape(-1))
             )
-        replayed_means.append(jnp.asarray(fourier_transform_utils.get_dft3(real_volume).reshape(-1)))
-        logger.info(
-            "Debug RELION reference replay: scoring iter %d half %d <- %s",
-            iteration_number,
-            half_idx + 1,
-            map_path,
-        )
+            logger.info(
+                "Debug RELION reference replay: scoring iter %d half %d class %d <- %s",
+                iteration_number,
+                half_idx + 1,
+                class_number,
+                map_path,
+            )
+        if int(n_classes) == 1:
+            replayed_means.append(replayed_classes[0])
+        else:
+            replayed_means.append(jnp.stack(replayed_classes, axis=0))
     return replayed_means
 
 
