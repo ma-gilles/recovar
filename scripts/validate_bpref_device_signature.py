@@ -16,10 +16,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-
 
 SIGNATURE_MAGIC = "RECOVAR_DEVICE_SCATTER_SIGNATURE"
 SIGNATURE_SCHEMA = "recovar-device-scatter-signature-v1"
@@ -29,6 +29,57 @@ CONTRIBUTION_MAGIC = "RECOVAR_BPREF_CONTRIBUTION_ROWS"
 CONTRIBUTION_SCHEMA = "recovar-bpref-contribution-rows-v3"
 ROW_FLAG_MASK = 1 | 2 | 4 | 8 | 16 | 32 | 64
 NEIGHBOR_FLAG_MASK = 1 | 2 | 4 | 8
+CAPTURED_F32_CAST = "captured-f32-cast"
+RECOMPUTED_HIGH_PRECISION = "recomputed-high-precision"
+
+
+@dataclass(frozen=True)
+class ContributionRecords:
+    """One record per valid BPref neighbor contribution.
+
+    ``source_data`` is the captured complex value before either recorded
+    Hermitian fold.  The optional recomputed arrays must come from an actual
+    high-precision operand computation; casting the captured arrays does not
+    populate them.
+    """
+
+    target_indices: np.ndarray
+    coefficients: np.ndarray
+    source_data: np.ndarray
+    source_weight: np.ndarray
+    row_conjugated: np.ndarray
+    neighbor_conjugated: np.ndarray
+    launch_ordinal: np.ndarray
+    particle_local_row: np.ndarray
+    original_index: np.ndarray
+    canonical_rotation_key: np.ndarray
+    dense_pixel: np.ndarray
+    neighbor: np.ndarray
+    recomputed_coefficients: np.ndarray | None = None
+    recomputed_source_data: np.ndarray | None = None
+    recomputed_source_weight: np.ndarray | None = None
+
+    @property
+    def size(self) -> int:
+        return int(self.target_indices.size)
+
+    @property
+    def has_recomputed_high_precision(self) -> bool:
+        optional = (
+            self.recomputed_coefficients,
+            self.recomputed_source_data,
+            self.recomputed_source_weight,
+        )
+        return all(value is not None for value in optional)
+
+
+@dataclass(frozen=True)
+class ReplayResult:
+    data: np.ndarray
+    weight: np.ndarray
+    order: str
+    precision: str
+    operand_provenance: str
 
 
 def _scalar(values: dict[str, np.ndarray], key: str):
@@ -407,6 +458,469 @@ def reconstruct_atomic_tuples(signature: dict[str, np.ndarray], volume_size: int
     return targets.astype(np.int32, copy=False), atomic_values, program
 
 
+def extract_contribution_records(signature: dict[str, np.ndarray]) -> ContributionRecords:
+    """Purely extract valid-neighbor records from a validated schema-v1 signature."""
+
+    _require_header(signature, magic=SIGNATURE_MAGIC, schema=SIGNATURE_SCHEMA)
+    row_flags = _require_array(signature, "row_flags", dtype=np.dtype(np.int32))
+    if row_flags.ndim != 2:
+        raise ValueError("row_flags must have shape (contributor rows, dense pixels)")
+    row_count, pixel_count = row_flags.shape
+    source = _require_array(
+        signature,
+        "source_values",
+        shape=(row_count, pixel_count, 6),
+        dtype=np.dtype(np.float32),
+    )
+    neighbor_shape = (row_count, pixel_count, 8)
+    targets = _require_array(
+        signature, "neighbor_indices", shape=neighbor_shape, dtype=np.dtype(np.int32)
+    )
+    coefficients = _require_array(
+        signature,
+        "neighbor_coefficients",
+        shape=neighbor_shape,
+        dtype=np.dtype(np.float32),
+    )
+    neighbor_flags = _require_array(
+        signature, "neighbor_flags", shape=neighbor_shape, dtype=np.dtype(np.int32)
+    )
+    if np.any(row_flags & ~ROW_FLAG_MASK):
+        raise ValueError("unknown row flag bit")
+    if np.any(neighbor_flags & ~NEIGHBOR_FLAG_MASK):
+        raise ValueError("unknown neighbor flag bit")
+    primary_bits = np.stack(
+        [(row_flags & bit) != 0 for bit in (1, 2, 4, 8, 32, 64)], axis=-1
+    )
+    if np.any(np.sum(primary_bits, axis=-1) != 1):
+        raise ValueError("each row-pixel must have exactly one primary gate/scatter state")
+    reached = (row_flags & 64) != 0
+    valid = (neighbor_flags & 1) != 0
+    if np.any(~np.isin(neighbor_flags, np.asarray([1, 3, 5, 8], dtype=np.int32))):
+        raise ValueError("neighbor flag value is outside {1,3,5,8}")
+    if np.any(valid & ~reached[..., None]):
+        raise ValueError("valid neighbor belongs to a row that did not reach scatter")
+    invalid = ~valid
+    if np.any(targets[invalid] != -1) or np.any(coefficients[invalid] != 0):
+        raise ValueError("invalid neighbor does not carry index/weight sentinels")
+    if np.any(~np.isfinite(coefficients[valid])):
+        raise ValueError("valid neighbor coefficient is nonfinite")
+    if np.any(targets[valid] < 0):
+        raise ValueError("valid neighbor index is negative")
+
+    row_fields = {
+        "launch_ordinal": np.int64,
+        "particle_local_row": np.int32,
+        "original_indices": np.int64,
+        "contributor_canonical_rotation_keys": np.int32,
+    }
+    rows = {}
+    for key, dtype in row_fields.items():
+        rows[key] = _require_array(
+            signature, key, shape=(row_count,), dtype=np.dtype(dtype)
+        )
+    row_index, pixel_index, neighbor_index = np.nonzero(reached[..., None] & valid)
+    source_values = source[row_index, pixel_index]
+    if not np.all(np.isfinite(source_values)):
+        raise ValueError("reached-scatter source tuple is nonfinite")
+    records = ContributionRecords(
+        target_indices=targets[row_index, pixel_index, neighbor_index],
+        coefficients=coefficients[row_index, pixel_index, neighbor_index],
+        source_data=(source_values[:, 0] + 1j * source_values[:, 1]).astype(
+            np.complex64
+        ),
+        source_weight=source_values[:, 2],
+        row_conjugated=(row_flags[row_index, pixel_index] & 16) != 0,
+        neighbor_conjugated=(
+            neighbor_flags[row_index, pixel_index, neighbor_index] & 2
+        )
+        != 0,
+        launch_ordinal=rows["launch_ordinal"][row_index],
+        particle_local_row=rows["particle_local_row"][row_index],
+        original_index=rows["original_indices"][row_index],
+        canonical_rotation_key=rows["contributor_canonical_rotation_keys"][row_index],
+        dense_pixel=pixel_index.astype(np.int32),
+        neighbor=neighbor_index.astype(np.int32),
+    )
+    _validate_contribution_records(records)
+    return records
+
+
+def concatenate_contribution_records(parts: list[ContributionRecords]) -> ContributionRecords:
+    """Concatenate signature shards without changing either replay ordering key."""
+
+    if not parts:
+        raise ValueError("at least one contribution-record shard is required")
+    fields = (
+        "target_indices",
+        "coefficients",
+        "source_data",
+        "source_weight",
+        "row_conjugated",
+        "neighbor_conjugated",
+        "launch_ordinal",
+        "particle_local_row",
+        "original_index",
+        "canonical_rotation_key",
+        "dense_pixel",
+        "neighbor",
+    )
+    kwargs = {key: np.concatenate([getattr(part, key) for part in parts]) for key in fields}
+    if all(part.has_recomputed_high_precision for part in parts):
+        for key in (
+            "recomputed_coefficients",
+            "recomputed_source_data",
+            "recomputed_source_weight",
+        ):
+            kwargs[key] = np.concatenate([getattr(part, key) for part in parts])
+    elif any(part.has_recomputed_high_precision for part in parts):
+        raise ValueError("recomputed high-precision operands are missing from some shards")
+    records = ContributionRecords(**kwargs)
+    _validate_contribution_records(records)
+    return records
+
+
+def _validate_contribution_records(records: ContributionRecords) -> None:
+    fields = (
+        "target_indices",
+        "coefficients",
+        "source_data",
+        "source_weight",
+        "row_conjugated",
+        "neighbor_conjugated",
+        "launch_ordinal",
+        "particle_local_row",
+        "original_index",
+        "canonical_rotation_key",
+        "dense_pixel",
+        "neighbor",
+    )
+    if records.size == 0:
+        raise ValueError("contribution records must not be empty")
+    if any(np.asarray(getattr(records, key)).shape != (records.size,) for key in fields):
+        raise ValueError("every contribution-record field must be a same-length vector")
+    expected_dtypes = {
+        "target_indices": np.dtype(np.int32),
+        "coefficients": np.dtype(np.float32),
+        "source_data": np.dtype(np.complex64),
+        "source_weight": np.dtype(np.float32),
+        "row_conjugated": np.dtype(np.bool_),
+        "neighbor_conjugated": np.dtype(np.bool_),
+        "launch_ordinal": np.dtype(np.int64),
+        "particle_local_row": np.dtype(np.int32),
+        "original_index": np.dtype(np.int64),
+        "canonical_rotation_key": np.dtype(np.int32),
+        "dense_pixel": np.dtype(np.int32),
+        "neighbor": np.dtype(np.int32),
+    }
+    for key, expected_dtype in expected_dtypes.items():
+        actual_dtype = np.asarray(getattr(records, key)).dtype
+        if actual_dtype != expected_dtype:
+            raise ValueError(
+                f"{key} must have dtype {expected_dtype}, got {actual_dtype}"
+            )
+    if np.any(records.target_indices < 0):
+        raise ValueError("target_indices contains a negative index")
+    for key in ("coefficients", "source_data", "source_weight"):
+        if not np.all(np.isfinite(getattr(records, key))):
+            raise ValueError(f"{key} contains nonfinite values")
+    if np.any((records.neighbor < 0) | (records.neighbor >= 8)):
+        raise ValueError("neighbor lies outside [0, 8)")
+    optional = (
+        records.recomputed_coefficients,
+        records.recomputed_source_data,
+        records.recomputed_source_weight,
+    )
+    if any(value is not None for value in optional) and not all(
+        value is not None for value in optional
+    ):
+        raise ValueError("recomputed high-precision operand fields are incomplete")
+    if records.has_recomputed_high_precision:
+        expected_recomputed_dtypes = (
+            np.dtype(np.float64),
+            np.dtype(np.complex128),
+            np.dtype(np.float64),
+        )
+        for value, expected_dtype in zip(optional, expected_recomputed_dtypes):
+            if np.asarray(value).shape != (records.size,) or not np.all(np.isfinite(value)):
+                raise ValueError("recomputed high-precision operands are malformed")
+            if np.asarray(value).dtype != expected_dtype:
+                raise ValueError(
+                    "recomputed high-precision operands must have dtypes "
+                    "float64/complex128/float64"
+                )
+
+
+def _semantic_order(records: ContributionRecords) -> np.ndarray:
+    """Return the common deterministic order, rejecting ambiguous identities."""
+
+    identity_fields = (
+        records.original_index,
+        records.canonical_rotation_key,
+        records.dense_pixel,
+        records.neighbor,
+    )
+    order = np.lexsort(tuple(reversed(identity_fields)))
+    if records.size > 1:
+        duplicate = np.ones(records.size - 1, dtype=bool)
+        for field in identity_fields:
+            sorted_field = field[order]
+            duplicate &= sorted_field[1:] == sorted_field[:-1]
+        if np.any(duplicate):
+            raise ValueError(
+                "canonical contribution identity is not unique; capture a complete "
+                "semantic identity before canonical replay"
+            )
+    return order
+
+
+def _record_order(records: ContributionRecords, order: str) -> np.ndarray:
+    if order == "program":
+        keys = (
+            records.neighbor,
+            records.dense_pixel,
+            records.particle_local_row,
+            records.launch_ordinal,
+        )
+    elif order == "canonical":
+        # This excludes launch and particle-local row because they describe
+        # program scheduling rather than a cross-engine semantic identity.
+        return _semantic_order(records)
+    else:
+        raise ValueError(f"unknown replay order {order!r}")
+    return np.lexsort(keys)
+
+
+def replay_contribution_records(
+    records: ContributionRecords,
+    volume_size: int,
+    *,
+    order: str,
+    precision: str,
+    operand_provenance: str = CAPTURED_F32_CAST,
+) -> ReplayResult:
+    """Replay contribution records with explicit order, precision, and provenance."""
+
+    _validate_contribution_records(records)
+    if volume_size <= 0 or np.any(records.target_indices >= volume_size):
+        raise ValueError("target index lies outside the replay accumulator")
+    if precision not in {"float32", "float64"}:
+        raise ValueError(f"unknown replay precision {precision!r}")
+    if operand_provenance == RECOMPUTED_HIGH_PRECISION:
+        if precision != "float64":
+            raise ValueError("recomputed high-precision operands require float64 replay")
+        if not records.has_recomputed_high_precision:
+            raise ValueError("recomputed high-precision operands are unavailable")
+        coefficients = records.recomputed_coefficients
+        source_data = records.recomputed_source_data
+        source_weight = records.recomputed_source_weight
+    elif operand_provenance == CAPTURED_F32_CAST:
+        coefficients = records.coefficients
+        source_data = records.source_data
+        source_weight = records.source_weight
+    else:
+        raise ValueError(f"unknown operand provenance {operand_provenance!r}")
+
+    dtype = np.float32 if precision == "float32" else np.float64
+    complex_dtype = np.complex64 if precision == "float32" else np.complex128
+    indices = _record_order(records, order)
+    coefficients = np.asarray(coefficients, dtype=dtype)[indices]
+    source_data = np.asarray(source_data, dtype=complex_dtype)[indices]
+    source_weight = np.asarray(source_weight, dtype=dtype)[indices]
+    conjugated = np.logical_xor(
+        records.row_conjugated[indices], records.neighbor_conjugated[indices]
+    )
+    effective_data = np.where(conjugated, np.conj(source_data), source_data)
+    data_values = (coefficients * effective_data).astype(complex_dtype)
+    weight_values = (coefficients * source_weight).astype(dtype)
+    targets = records.target_indices[indices]
+    data = np.zeros(volume_size, dtype=complex_dtype)
+    weight = np.zeros(volume_size, dtype=dtype)
+    np.add.at(data, targets, data_values)
+    np.add.at(weight, targets, weight_values)
+    return ReplayResult(data, weight, order, precision, operand_provenance)
+
+
+def exact_array_metrics(left: np.ndarray, right: np.ndarray) -> dict:
+    """Return exact/absolute array diagnostics; deliberately no correlation."""
+
+    left = np.asarray(left)
+    right = np.asarray(right)
+    if left.shape != right.shape:
+        return {
+            "shape_equal": False,
+            "left_shape": list(left.shape),
+            "right_shape": list(right.shape),
+        }
+    promoted = np.result_type(left.dtype, right.dtype)
+    delta = np.asarray(left, dtype=promoted) - np.asarray(right, dtype=promoted)
+    abs_delta = np.abs(delta).astype(np.float64)
+    denom_l1 = max(float(np.sum(np.abs(right), dtype=np.float64)), np.finfo(np.float64).tiny)
+    denom_l2 = max(float(np.linalg.norm(np.asarray(right).ravel())), np.finfo(np.float64).tiny)
+    return {
+        "shape_equal": True,
+        "array_equal": bool(np.array_equal(left, right)),
+        "mismatch_count": int(np.count_nonzero(left != right)),
+        "max_abs": float(np.max(abs_delta, initial=0.0)),
+        "relative_l1": float(np.sum(abs_delta, dtype=np.float64) / denom_l1),
+        "relative_l2": float(np.linalg.norm(delta.ravel()) / denom_l2),
+    }
+
+
+def _replay_metrics(left: ReplayResult, right: ReplayResult) -> dict:
+    return {
+        "left": {
+            "order": left.order,
+            "precision": left.precision,
+            "operand_provenance": left.operand_provenance,
+        },
+        "right": {
+            "order": right.order,
+            "precision": right.precision,
+            "operand_provenance": right.operand_provenance,
+        },
+        "data": exact_array_metrics(left.data, right.data),
+        "weight": exact_array_metrics(left.weight, right.weight),
+    }
+
+
+def canonical_replay_diagnostics(
+    records: ContributionRecords,
+    volume_size: int,
+) -> dict:
+    """Compare program/canonical order and float32/captured-cast-float64 replay."""
+
+    replays = {
+        (order, precision): replay_contribution_records(
+            records, volume_size, order=order, precision=precision
+        )
+        for order in ("program", "canonical")
+        for precision in ("float32", "float64")
+    }
+    return {
+        "captured_operand_provenance": CAPTURED_F32_CAST,
+        "captured_f32_cast_limitation": (
+            "float64/complex128 replay casts captured float32 operands and cannot "
+            "recover precision lost during upstream operand generation"
+        ),
+        "recomputed_high_precision_available": records.has_recomputed_high_precision,
+        "order_only_float32": _replay_metrics(
+            replays[("program", "float32")], replays[("canonical", "float32")]
+        ),
+        "order_only_float64": _replay_metrics(
+            replays[("program", "float64")], replays[("canonical", "float64")]
+        ),
+        "precision_in_canonical_order": _replay_metrics(
+            replays[("canonical", "float32")], replays[("canonical", "float64")]
+        ),
+    }
+
+
+def compare_contribution_engines(
+    left: ContributionRecords,
+    right: ContributionRecords,
+    volume_size: int,
+) -> dict:
+    """Compare two captured engines and classify the earliest supported boundary."""
+
+    _validate_contribution_records(left)
+    _validate_contribution_records(right)
+    left_order = _semantic_order(left)
+    right_order = _semantic_order(right)
+    identity_fields = (
+        "original_index",
+        "canonical_rotation_key",
+        "dense_pixel",
+        "neighbor",
+    )
+    same_identity = left.size == right.size and all(
+        np.array_equal(getattr(left, key)[left_order], getattr(right, key)[right_order])
+        for key in identity_fields
+    )
+    same_geometry = same_identity and all(
+        np.array_equal(getattr(left, key)[left_order], getattr(right, key)[right_order])
+        for key in (
+            "target_indices",
+            "coefficients",
+            "row_conjugated",
+            "neighbor_conjugated",
+        )
+    )
+    same_operands = same_identity and all(
+        np.array_equal(getattr(left, key)[left_order], getattr(right, key)[right_order])
+        for key in ("source_data", "source_weight")
+    )
+    same_program_keys = same_identity and all(
+        np.array_equal(getattr(left, key)[left_order], getattr(right, key)[right_order])
+        for key in ("launch_ordinal", "particle_local_row", "dense_pixel", "neighbor")
+    )
+
+    cross = {}
+    for order in ("program", "canonical"):
+        for precision in ("float32", "float64"):
+            left_replay = replay_contribution_records(
+                left, volume_size, order=order, precision=precision
+            )
+            right_replay = replay_contribution_records(
+                right, volume_size, order=order, precision=precision
+            )
+            cross[f"{order}_{precision}"] = _replay_metrics(left_replay, right_replay)
+
+    recomputed_equal = None
+    recomputed_cross = None
+    if left.has_recomputed_high_precision and right.has_recomputed_high_precision:
+        recomputed_equal = same_identity and all(
+            np.array_equal(getattr(left, key)[left_order], getattr(right, key)[right_order])
+            for key in (
+                "recomputed_coefficients",
+                "recomputed_source_data",
+                "recomputed_source_weight",
+            )
+        )
+        recomputed_cross = _replay_metrics(
+            replay_contribution_records(
+                left,
+                volume_size,
+                order="canonical",
+                precision="float64",
+                operand_provenance=RECOMPUTED_HIGH_PRECISION,
+            ),
+            replay_contribution_records(
+                right,
+                volume_size,
+                order="canonical",
+                precision="float64",
+                operand_provenance=RECOMPUTED_HIGH_PRECISION,
+            ),
+        )
+
+    if not same_identity or not same_geometry:
+        classification = "geometry"
+    elif not same_operands:
+        classification = "precision" if recomputed_equal else "operand"
+    elif not same_program_keys:
+        classification = "order"
+    elif all(
+        metrics[field]["array_equal"]
+        for metrics in cross.values()
+        for field in ("data", "weight")
+    ):
+        classification = "exact"
+    else:
+        classification = "unresolved"
+    return {
+        "classification": classification,
+        "identity_equal": same_identity,
+        "geometry_equal": same_geometry,
+        "captured_operands_equal": same_operands,
+        "program_keys_equal": same_program_keys,
+        "captured_operand_provenance": CAPTURED_F32_CAST,
+        "recomputed_high_precision_equal": recomputed_equal,
+        "cross_engine": cross,
+        "recomputed_high_precision_cross_engine": recomputed_cross,
+    }
+
+
 def _validate_signature(path: Path):
     signature = _load(path)
     _require_header(signature, magic=SIGNATURE_MAGIC, schema=SIGNATURE_SCHEMA)
@@ -684,6 +1198,9 @@ def _validate_signature(path: Path):
         raise ValueError("device source values do not close against companion dense expansion")
 
     targets, atomic_values, program = reconstruct_atomic_tuples(signature, volume_size)
+    contribution_records = extract_contribution_records(signature)
+    if not np.array_equal(contribution_records.target_indices, targets):
+        raise ValueError("canonical contribution targets do not close against atomic tuples")
     atomic_launches = contributor_launches[program[:, 0]]
     atomic_local_rows = contributor_rows[program[:, 0]]
     atomic_rotation_keys = canonical_keys[program[:, 0]]
@@ -714,6 +1231,7 @@ def _validate_signature(path: Path):
         "atomic_local_rows": atomic_local_rows,
         "atomic_rotation_keys": atomic_rotation_keys,
         "atomic_tuple_sha256": tuple_digest.hexdigest(),
+        "contribution_records": contribution_records,
     }
 
 
@@ -835,6 +1353,12 @@ def parse_args(argv=None):
     parser.add_argument("--atomic-tuples-out", type=Path)
     parser.add_argument("--summary-out", type=Path)
     parser.add_argument("--max-replay-rel-l1", type=float, default=1e-4)
+    parser.add_argument(
+        "--compare-signatures",
+        nargs="+",
+        type=Path,
+        help="optional second engine's schema-v1 signature shards",
+    )
     return parser.parse_args(argv)
 
 
@@ -889,6 +1413,24 @@ def main(argv=None):
 
     volume_shape = results[0]["volume_shape"]
     volume_size = volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    contribution_records = concatenate_contribution_records(
+        [result["contribution_records"] for result in results]
+    )
+    canonical_diagnostics = canonical_replay_diagnostics(
+        contribution_records, volume_size
+    )
+    cross_engine_diagnostics = None
+    if args.compare_signatures:
+        compare_results = sorted(
+            (_validate_signature(path) for path in args.compare_signatures),
+            key=lambda result: (result["launch_min"], result["path"]),
+        )
+        compare_records = concatenate_contribution_records(
+            [result["contribution_records"] for result in compare_results]
+        )
+        cross_engine_diagnostics = compare_contribution_engines(
+            contribution_records, compare_records, volume_size
+        )
     if np.asarray(panel["data_accumulator"]).dtype != np.dtype(np.complex64):
         raise ValueError("panel data accumulator must be complex64")
     if np.asarray(panel["weight_accumulator"]).dtype != np.dtype(np.float32):
@@ -963,6 +1505,8 @@ def main(argv=None):
             float(value) if np.isfinite(value) else None for value in weight_fsc
         ],
         "replay_bound": args.max_replay_rel_l1,
+        "canonical_contribution_replay": canonical_diagnostics,
+        "cross_engine_contribution_replay": cross_engine_diagnostics,
     }
     text = json.dumps(summary, indent=2) + "\n"
     if args.summary_out:
