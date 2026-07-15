@@ -2053,3 +2053,40 @@ comparison.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_targeted_scores_d079_20260714_201200/JOINT_RELION_RECOVAR_SCORE_AUDIT.md`.
 - RELION postvalidation details and exact hashes:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_targeted_relion_scores_d476_exactperturb_20260714_204000/RELION_EXACT_PERTURB_POSTVALIDATION.md`.
+
+# 2026-07-14: case-22 iteration-2 qualified numerical butterfly
+
+- RECOVAR debug iteration names are zero-based here: `it000` is the
+  post-iteration-1 reference consumed by iteration 2. Using `it001` would be
+  a post-iteration-2 look-ahead and is invalid for this comparison.
+- Original particle 1203 is a true one-float32-ULP boundary. The native
+  RECOVAR post-iteration-1 reference gives exact full-grid trees
+  `130.3276519775`/`130.3276672363`, so the native candidate wins by one ULP.
+  Replacing only that reference with RELION's post-iteration-1 reference gives
+  `130.3275909424`/`130.3275756836`, so the RELION candidate wins by one ULP.
+  This preserves a causal role for the small accumulator/BPref-to-reference
+  perturbation even though it is globally almost invisible by FSC.
+- Isolated RELION `AccProjectorKernel` capture for the same RELION reference
+  closes the missing projector factor. On the 1,461 `corr_img>0` pixels, the
+  RELION-versus-RECOVAR projector relative L2 is `6.20e-9` for the native
+  candidate and `1.05e-6` for the RELION candidate; the corresponding
+  corr-weighted values are `2.68e-8` and `7.28e-6`. The apparent full-grid
+  relative L2 near `0.5` is confined to 399 zero-weight pixels. RELION and
+  RECOVAR projectors produce bit-identical 256-lane float32 trees and the same
+  one-ULP RELION winner on the identical active operands.
+- RELION is numerically nondeterministic below that decision boundary: the
+  captured high-resolution Xi2 half-constant varied from float32 bits
+  `0x3ce5b2d8` through `0x3ce5b2db`. Subtracting it reproduces the exact trees,
+  and adding it leaves both raw candidate scores and their margin unchanged.
+  Two cross-device A100 repeats and two serial repeats on physical GPU UUID
+  `GPU-4bccbe72-c64a-5f5f-1fa8-ecf0bf6acf37` all select the RELION candidate
+  by exactly one ULP. The same-device map FSC-AUC is
+  `0.9999999999988929`; no correlation metric was computed.
+- Classification: qualified numerical butterfly, not an intrinsic active-grid
+  projector or high-resolution-constant bug. Do not add a tie-break patch for
+  this particle. Continue upstream at the accumulation/reference arithmetic,
+  and retain the autonomous case-22 FSC/FSC-AUC failure as unresolved.
+- Projector audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_particle1203_factorial_20260714_201047/relion_fine_projection_capture/fine_projection_comparison.json`.
+- Self-jitter FSC audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_particle1203_self_jitter_20260714_202700/self_jitter_audit.json`.

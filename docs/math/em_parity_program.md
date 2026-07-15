@@ -1967,6 +1967,53 @@ Evidence:
 Machine audit:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_fixed_relion_capture_20260714_192000/case22_it2_fixed_relion_field_audit.json`.
 
+#### Closure of the missing projector/high-resolution factors
+
+The follow-up exact-factor experiment uses the correct zero-based RECOVAR
+debug state: `it000` is the post-iteration-1 reference scored in iteration 2.
+It resolves the previously unexplained absolute score offset. RELION's
+captured `highres_Xi2/2` is about `0.02803938`; subtracting it in float32 gives
+the factorial trees exactly, while adding it preserves the candidate margin.
+Across accepted captures its last bits jitter from `0x3ce5b2d8` through
+`0x3ce5b2db`, proving numerical nondeterminism in the atomic reduction, but
+all final candidate raw scores are bit-identical at this scale.
+
+The isolated RELION `AccProjectorKernel` capture also separates inactive-grid
+values from scoring values. The rectangular 60-by-31 buffer contains 399
+pixels with `corr_img=0`; these explain effectively all of the apparent
+full-grid projector relative-L2 near `0.5`. On the 1,461 active pixels,
+RELION-versus-RECOVAR projector relative-L2 is `6.1965e-9` and `1.0538e-6`
+for the two candidates, with corr-weighted values `2.6777e-8` and
+`7.2781e-6`. Those residuals change the float64 term sums by only
+`-1.70e-7` and `+5.70e-7`; both collapse to zero in RELION's exact 256-lane
+float32 tree. With the same RELION reference, image, weight, and translations,
+both projector implementations therefore give trees
+`130.3275909424`/`130.3275756836`, raw scores
+`130.3556365967`/`130.3556213379`, and the same one-ULP RELION winner.
+
+The causal factor is the iteration-1 reference, not an active projector or
+high-resolution-constant mismatch. Under one fixed RECOVAR projector, the
+native reference gives `130.3276519775`/`130.3276672363` and a one-ULP native
+winner; replacing only the reference with RELION's gives the one-ULP RELION
+winner above. The two references have FSC-AUC about `0.999999999632`, so this
+is a qualified numerical butterfly: an accumulator/BPref-to-reference
+perturbation that is globally FSC-inert can still be causal at a knife-edge
+candidate. It must not be erased by a new tie-break rule.
+
+Two cross-device A100 repeats and two serial repeats on the same physical A100
+all reproduce the RELION raw scores and winner exactly. The same-device
+post-iteration-1 map FSC-AUC is `0.9999999999988929`. Across eight RELION maps,
+pairwise FSC-AUC lies in
+`[0.9999999999982315, 0.9999999999993140]`; maximum non-DC per-shell curve
+spread is `1.2258e-11`. Map acceptance remains FSC/FSC-AUC only; correlation
+was not computed. This local classification does not accept the autonomous
+case-22 trajectory, whose final FSC-AUC deficit remains unresolved.
+
+Exact projector audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_particle1203_factorial_20260714_201047/relion_fine_projection_capture/fine_projection_comparison.json`.
+Same-device and cross-device FSC audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_particle1203_self_jitter_20260714_202700/self_jitter_audit.json`.
+
 ## 2026-07-14 Case-16 final SamplingPerturbation order
 
 An exact RELION iteration-11 state replay through RECOVAR's final all-data

@@ -259,6 +259,54 @@ Conclusion:
 - FSC-only audit:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_integrated_d07915fa_immutable_retry_20260714_201100/integrated_fsc_audit.json`.
 
+### 2026-07-14 `k1-case22-iteration2-numerical-butterfly`
+
+Run metadata:
+
+- Commit documented: `f0ef1f0c6c231ff1f9183371d235e0b37a15b825`
+- Fixture: `22_small_severe_outliers_3k_g128_radial_noise5_bf80`,
+  3,000 particles, box 128, K=1 supplied-map iteration-2 diagnostic
+- RELION capture jobs: `11191426` projector capture; cross-device repeats
+  `11191025_[0-1]`; same-device serial repeats `11191385`
+- Analysis jobs: `11191947` exact projector/score replay; `11191779`
+  FSC-only jitter audit
+- Hardware: A100; strict serial gate used physical UUID
+  `GPU-4bccbe72-c64a-5f5f-1fa8-ecf0bf6acf37`
+- Artifacts:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_particle1203_factorial_20260714_201047/relion_fine_projection_capture`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_particle1203_self_jitter_20260714_202700`
+  (`SAFE_TO_DELETE` markers present)
+
+Quality/localization comparison:
+
+| Metric | Required/reference | Current | Status |
+|--------|--------------------|---------|--------|
+| Exact REL projector raw-score replay | captured RELION raw scores | bit-identical for both candidates | pass |
+| Identical-reference REL vs REC projector winner | same active operands | same REL candidate by one float32 ULP | pass/localized |
+| Same-device repeat winner | stable decision | same REL candidate by one ULP in both serial runs | pass |
+| Same-device post-iteration-1 map FSC-AUC | arithmetic-level repeatability | `0.9999999999988929` | pass |
+| Eight-map RELION self FSC-AUC | arithmetic-level repeatability | `0.9999999999982315` to `0.9999999999993140` | pass |
+| Maximum RELION self-FSC per-shell spread, non-DC | arithmetic-level repeatability | `1.2258e-11` | pass |
+| Native REC reference vs RELION references FSC-AUC | localization only | about `0.999999999632` | globally FSC-inert |
+
+Conclusion:
+
+- This is a local qualified numerical-butterfly classification, not an
+  aggregate case-22 quality acceptance. Correlation was not computed.
+- Active projector differences and the jittering high-resolution constant are
+  score-inert at the exact 256-lane float32 reduction. Replacing only the
+  iteration-1 reference flips the candidate from a one-ULP RECOVAR winner to
+  a one-ULP RELION winner. Therefore accumulator/BPref-to-reference arithmetic
+  remains causally relevant despite near-unity FSC/FSC-AUC.
+- Do not add a tie-break workaround. Continue the autonomous case-22 parity
+  investigation upstream at accumulation/reference arithmetic and retain the
+  existing full-trajectory FSC/FSC-AUC failure.
+- Exact score audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_particle1203_factorial_20260714_201047/relion_fine_projection_capture/fine_projection_comparison.json`.
+- FSC-only jitter audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_particle1203_self_jitter_20260714_202700/self_jitter_audit.json`.
+
 ## Required Metric Template
 
 Use this template for each new completion benchmark.
