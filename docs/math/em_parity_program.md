@@ -3370,3 +3370,54 @@ cache-on.  If the two cache-off arms agree while cache-on differs, dumping is
 inert under a matched execution path and the cache implementation becomes the
 production bug candidate.  No float64 classification is warranted before
 that structural A/B closes.
+
+## 2026-07-15 Projection-cache exoneration and K=1 full trajectory
+
+The matched no-dump projection-cache A/B closes that structural discriminator.
+Job `11236836` ran cache-on and cache-off through two K=4 iterations on the
+same H100 with identical inputs and execution controls.  All class, rotation,
+and translation decisions are equal.  Iteration-2 Pmax differs by at most
+`3.09e-5` (p95 `3.46e-6`), particle 5993 differs by `4.05e-6`, and the minimum
+per-class cache-on/cache-off FSC-AUC is `0.999999954461`.  Both arms retain the
+production particle-5993 value near `0.73098`, rather than the quarantined
+capture value near `0.67779`.  The cache therefore does not explain the
+RELION-versus-RECOVAR score gap.
+
+An independent exact projector harness reaches the same conclusion at the
+operand boundary.  For all four classes and all 4,608 fine rotations, caching
+the complete projection table and gathering the target rows is bitwise equal
+to projecting those target rows directly for score, reconstruction, and
+absolute-square arrays.  Across fresh full-EM processes, iteration-1 BPref
+accumulators vary only at float32 CUDA atomic-reduction scale: data relative L1
+is about `5.45e-8` and weight relative L1 about `1.7e-8`, whether the cache
+setting is changed or held fixed.  A same-cache repeat is retained as the
+control envelope before classifying any later amplified difference as
+algorithmic.  The exact harness is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_projection_cache_audit_20260715_190008/`;
+the full A/B is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_projection_cache_ab_111b8fde_h100_retry2_prepared_20260715_185750/`.
+
+The real-data K=1 10,000-particle full trajectory in job `11235095` provides a
+separate convergence-scale result.  RELION and RECOVAR both converge at
+numbered iteration 16 on the same A100-SXM4-80GB.  Strict array gates first
+fail at iteration 2: Pmax absolute error has p95 `3.527e-4` and maximum
+`0.02159`.  Direct map FSC-AUC first falls below `0.995` at iteration 7, with
+half1, half2, and merged values `0.992872475`, `0.993256130`, and
+`0.994349457`.  The lowest half-map value is `0.980633266` at iteration 11;
+the numbered iteration-16 maps recover to `0.99481158`, `0.99565323`, and
+`0.99597422`.  Matching termination therefore does not make the intervening
+trajectory a parity pass.
+
+That job also exposed a real final-boundary off-by-one defect.  After numbered
+iteration 16, RECOVAR requested the RELION `run_it016` state but fell back to
+`run_it015`; RELION's final all-data expectation consumes the state written by
+numbered iteration 16.  The contaminated final output is explicitly invalid
+and is not used as quality evidence.  Commit `999278bd` allocates and loads the
+extra replay slot so numbered expectations 1--N consume `run_it000` through
+`run_it{N-1}`, while the converged final all-data expectation consumes
+`run_itN`.  The focused caller regression has 58 passing CPU tests.  A fresh
+same-A100 run must confirm the corrected final boundary.  The immutable
+before-fix science root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_fulltraj_f10c0386_a10080_retry5_prepared_20260715_181156/`;
+the fail-closed post-hoc audit is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_real10076_job11235095_posthoc_hardened_20260715_191601/`.
