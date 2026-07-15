@@ -585,12 +585,12 @@ def test_relion_x_half_cuda_rotates_before_applying_padding_factor():
     expected_rk0 = "(R[3] * k1_unscaled + R[0] * k0_unscaled) *"
     expected_rk1 = "(R[4] * k1_unscaled + R[1] * k0_unscaled) *"
     expected_rk2 = "(R[5] * k1_unscaled + R[2] * k0_unscaled) *"
-    assert text.count(expected_rk0) == 3  # indexed, batch, and fused backprojectors
-    assert text.count(expected_rk1) == 3
-    assert text.count(expected_rk2) == 3
-    # Projector arithmetic is a separate RELION kernel boundary and remains on
-    # its already-captured score-path operation order.
-    assert text.count("(k0_unscaled * R[0] + k1_unscaled * R[3]) *") == 2
+    # Indexed, batch, and fused backprojectors plus the C64 and double-output
+    # texture projectors all preserve RELION's matrix-x*source-x-first order.
+    assert text.count(expected_rk0) == 5
+    assert text.count(expected_rk1) == 5
+    assert text.count(expected_rk2) == 5
+    assert "(k0_unscaled * R[0] + k1_unscaled * R[3]) *" not in text
     assert "matrix-x*source-x first" in text
     assert "Reversing the addends changes CUDA's contracted FMA" in text
 

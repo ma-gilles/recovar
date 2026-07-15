@@ -66,3 +66,13 @@ def test_cuda_harness_stages_before_texture_copy_and_keeps_variants_explicit():
     assert "__fadd_rn(__fmul_rn(e[0], x), __fmul_rn(e[1], y))" in source
     assert "floorf(y_scaled) / 256.0f" in source
     assert "ceilf(y_scaled) / 256.0f" in source
+
+
+@pytest.mark.unit
+def test_generated_run_manifest_is_moved_after_hash_enumeration():
+    script = prepare.render_sbatch(Path("/tmp/k4_projector_harness"), Path("/tmp/python"))
+
+    assert 'RUN_MANIFEST_TMP="${ROOT}/.run_artifacts_${SLURM_JOB_ID}.sha256.tmp"' in script
+    assert 'xargs -0 sha256sum > "${RUN_MANIFEST_TMP}"' in script
+    assert 'mv "${RUN_MANIFEST_TMP}" "${RUN_MANIFEST}"' in script
+    assert '> "${ROOT}/provenance/run_artifacts_' not in script

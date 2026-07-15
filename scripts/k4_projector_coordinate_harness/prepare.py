@@ -285,9 +285,11 @@ grep -Eq '(^|, )9\\.0(,|$)' <<<"${{GPU_RECORD}}"
 "${{PY}}" "${{ROOT}}/validate.py" --root "${{ROOT}}" \
   --output "${{ROOT}}/analysis/projector_coordinate_report.json"
 grep -q '"status": "pass"' "${{ROOT}}/analysis/projector_coordinate_report.json"
+RUN_MANIFEST_TMP="${{ROOT}}/.run_artifacts_${{SLURM_JOB_ID}}.sha256.tmp"
+RUN_MANIFEST="${{ROOT}}/provenance/run_artifacts_${{SLURM_JOB_ID}}.sha256"
 find "${{ROOT}}/results" "${{ROOT}}/analysis" "${{ROOT}}/provenance" \
-  -type f -print0 | sort -z | xargs -0 sha256sum \
-  > "${{ROOT}}/provenance/run_artifacts_${{SLURM_JOB_ID}}.sha256"
+  -type f -print0 | sort -z | xargs -0 sha256sum > "${{RUN_MANIFEST_TMP}}"
+mv "${{RUN_MANIFEST_TMP}}" "${{RUN_MANIFEST}}"
 echo "K4_PROJECTOR_COORDINATE_PASS job=${{SLURM_JOB_ID}}"
 """
 

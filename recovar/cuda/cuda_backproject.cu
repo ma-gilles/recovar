@@ -1818,13 +1818,13 @@ project_texture_kernel(
     float2* img2 = reinterpret_cast<float2*>(img);
     const int img_off = img_idx * n_pixels + pix;
 
-    /* Match RELION AccProjectorKernel arithmetic: rotate integer image
-     * coordinates first, then multiply by padding_factor. Scaling the image
-     * coordinates before the dot product changes CUDA texture fractions by a
-     * few ulps and is visible in borderline per-particle Pmax comparisons. */
-    const float rk0 = (k0_unscaled * R[0] + k1_unscaled * R[3]) * (float)upsampling;
-    const float rk1 = (k0_unscaled * R[1] + k1_unscaled * R[4]) * (float)upsampling;
-    const float rk2 = (k0_unscaled * R[2] + k1_unscaled * R[5]) * (float)upsampling;
+    /* Match RELION AccProjectorKernel source order exactly under RECOVAR's
+     * compact row-swapped R mapping: matrix-x*source-x is the first addend.
+     * Reversing the addends changes CUDA's contracted FMA association and can
+     * cross a texture interpolation fraction-bin boundary. */
+    const float rk0 = (R[3] * k1_unscaled + R[0] * k0_unscaled) * (float)upsampling;
+    const float rk1 = (R[4] * k1_unscaled + R[1] * k0_unscaled) * (float)upsampling;
+    const float rk2 = (R[5] * k1_unscaled + R[2] * k0_unscaled) * (float)upsampling;
 
     if ((int)(rk0 * rk0 + rk1 * rk1 + rk2 * rk2) > maxR2_padded) {
         img2[img_off] = make_float2(0.0f, 0.0f);
@@ -1885,11 +1885,10 @@ project_texture_double_kernel(
     double2* img2 = reinterpret_cast<double2*>(img);
     const int img_off = img_idx * n_pixels + pix;
 
-    /* Match RELION AccProjectorKernel arithmetic: rotate integer image
-     * coordinates first, then multiply by padding_factor. */
-    const float rk0 = (k0_unscaled * R[0] + k1_unscaled * R[3]) * (float)upsampling;
-    const float rk1 = (k0_unscaled * R[1] + k1_unscaled * R[4]) * (float)upsampling;
-    const float rk2 = (k0_unscaled * R[2] + k1_unscaled * R[5]) * (float)upsampling;
+    /* Keep the exact RELION source operand order used by the C64 path. */
+    const float rk0 = (R[3] * k1_unscaled + R[0] * k0_unscaled) * (float)upsampling;
+    const float rk1 = (R[4] * k1_unscaled + R[1] * k0_unscaled) * (float)upsampling;
+    const float rk2 = (R[5] * k1_unscaled + R[2] * k0_unscaled) * (float)upsampling;
 
     if ((int)(rk0 * rk0 + rk1 * rk1 + rk2 * rk2) > maxR2_padded) {
         img2[img_off] = make_double2(0.0, 0.0);
