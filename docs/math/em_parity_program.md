@@ -3181,6 +3181,20 @@ processes, records effective mode hashes and zero launch counters, and compares
 five-arm report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it2_fivearm_single_h100_prepared_20260715_132747/analysis/five_arm_report.json`.
 
+That frozen-boundary discriminator is now complete.  Job `11228588` emitted
+all eight independent replay payloads on H100 UUID
+`GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`; the Slurm step failed only after
+science because the original analyzer looked up one cross pair in reverse
+lexical order.  Hash-verified post-hoc analysis shows one exact effective-mode
+hash, zero diagnostic launches, and exact `H_comb`, shell sums, and shell
+counts across every arm.  The maximum unreachable-to-ordinary relative-L1 is
+`7.489e-8` for `Ft_y` and `2.879e-8` for `Ft_ctf`, versus ordinary repeat
+diameters `7.461e-8` and `2.827e-8`; both remain inside the predeclared twice-
+control envelope.  This closes only the concern that an unreachable diagnostic
+target perturbs this iteration-1/half-1 boundary.  It is not a general K=1
+trajectory-parity claim.  The independently checked audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_it1_h1_frozen_boundary_retry3_posthoc_20260715_152900/AUDIT.md`.
+
 For K=4, the six-arm particle-3591 fixture isolates the first behavioral
 divergence to the iteration-1 `firstiter_cc` fine winner: RECOVAR selects fine
 candidate 30 and RELION candidate 18, with all class assignments and all other
@@ -3213,3 +3227,18 @@ sufficient to select candidate 30.  This proves the projected-reference operand
 boundary explains this discrete near-tie; it does not yet distinguish texture
 staging from sub-ULP coordinate/texture-fraction behavior.  The hashed report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_p3591_projection_compare_job11227130_20260715_145100/projected_reference_comparison.json`.
+
+The target-only H100 microharness in job `11228213` resolves that last
+distinction.  The RECOVAR compact staging path and the RELION-direct staging
+path produce bitwise-identical real and imaginary float32 texture arrays.
+Using RELION's exact matrix-x-times-source-x-first expression order then
+reproduces every captured RELION projected-reference value bitwise over all
+eight rotations and 840 pixels.  RECOVAR's reversed addend order differs from
+RELION at exactly the known row-4/pixel-242 boundary at material scale.  At
+that pixel the two source orders move the `y` texture coordinate by one
+float32 ULP across the hardware interpolation half-bin and change the complex
+reference by `1.509e-6`.  Thus the earliest proven K=4 defect is contracted-FMA
+association caused by projector source operand order, not texture staging or
+reduction noise.  This is an intermediate-array proof only; the production
+change still requires a fresh K=4 FSC/FSC-AUC trajectory gate.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_p3591_projector_coordinate_sm90_prepared_20260715_151900/analysis/projector_coordinate_report.json`.
