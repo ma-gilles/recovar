@@ -3,10 +3,9 @@
 
 The signature captures exact device-computed scatter geometry for positive
 contributor rows while the companion contribution dump proves that every
-omitted row is exactly zero. Replay uses deterministic lexicographic
-``(launch, particle-local row, dense pixel, neighbor)`` host order; it is not a
-claim about the inter-block GPU atomic schedule and is expected to differ from
-the native CUDA accumulator by float32 atomic-order noise. This script reports
+omitted row is exactly zero. Replay uses a deterministic lexicographic
+``(launch, particle-local row, dense pixel, neighbor)`` logical host order. It
+does not observe or reconstruct the CUDA atomic schedule. This script reports
 (and optionally gates) relative L1 and accumulator FSC/FSC-AUC differences
 rather than requiring bitwise equality.
 """
@@ -16,7 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +30,34 @@ ROW_FLAG_MASK = 1 | 2 | 4 | 8 | 16 | 32 | 64
 NEIGHBOR_FLAG_MASK = 1 | 2 | 4 | 8
 CAPTURED_F32_CAST = "captured-f32-cast"
 RECOMPUTED_HIGH_PRECISION = "recomputed-high-precision"
+RECOMPUTATION_MAGIC = "RECOVAR_BPREF_F64_RECOMPUTATION"
+RECOMPUTATION_SCHEMA = "recovar-bpref-f64-recomputation-v1"
+RECOMPUTATION_NUMERIC_POLICY = "operands-recomputed-float64-complex128"
+RECOMPUTATION_FORMULA_NAME = "recovar-bpref-trilinear-operands"
+RECOMPUTATION_FORMULA_VERSION = "1"
+RECOMPUTATION_SOURCE_POLICY = "upstream-sources-recomputed-float64-complex128"
+_VERIFIED_RECOMPUTATION_TOKEN = object()
+
+
+@dataclass(frozen=True)
+class VerifiedRecomputationProvenance:
+    """Validated provenance for operands recomputed above production precision.
+
+    Instances that justify a ``precision`` classification are created only by
+    :func:`load_verified_recomputation`.  The private token prevents arbitrary
+    dataclass construction from being treated as evidence.
+    """
+
+    artifact_path: str
+    artifact_sha256: str
+    parent_signature_sha256: tuple[str, ...]
+    companion_contribution_sha256: tuple[str, ...]
+    semantic_identity_sha256: str
+    formula_name: str
+    formula_version: str
+    numeric_policy: str
+    source_dtype: str
+    _validation_token: object | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +85,7 @@ class ContributionRecords:
     recomputed_coefficients: np.ndarray | None = None
     recomputed_source_data: np.ndarray | None = None
     recomputed_source_weight: np.ndarray | None = None
+    recomputation_provenance: VerifiedRecomputationProvenance | None = None
 
     @property
     def size(self) -> int:
@@ -71,6 +99,15 @@ class ContributionRecords:
             self.recomputed_source_weight,
         )
         return all(value is not None for value in optional)
+
+    @property
+    def has_verified_recomputed_high_precision(self) -> bool:
+        provenance = self.recomputation_provenance
+        return (
+            self.has_recomputed_high_precision
+            and provenance is not None
+            and provenance._validation_token is _VERIFIED_RECOMPUTATION_TOKEN
+        )
 
 
 @dataclass(frozen=True)
@@ -172,6 +209,135 @@ def _require_finite(values, key, **kwargs):
     if not np.all(np.isfinite(array)):
         raise ValueError(f"field {key!r} contains nonfinite values")
     return array
+
+
+def _semantic_identity_digest(records: ContributionRecords) -> str:
+    """Hash semantic identity and discrete geometry in canonical order."""
+
+    order = _semantic_order(records)
+    digest = hashlib.sha256()
+    for key in (
+        "original_index",
+        "canonical_rotation_key",
+        "dense_pixel",
+        "neighbor",
+        "target_indices",
+        "row_conjugated",
+        "neighbor_conjugated",
+    ):
+        values = np.ascontiguousarray(getattr(records, key)[order])
+        digest.update(key.encode("ascii"))
+        digest.update(str(values.dtype).encode("ascii"))
+        digest.update(np.asarray(values.shape, dtype=np.int64).tobytes())
+        digest.update(values.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def _validated_sha256_vector(values, key: str) -> tuple[str, ...]:
+    array = _require_array(values, key)
+    if array.ndim != 1 or array.size == 0:
+        raise ValueError(f"field {key!r} must be a nonempty vector")
+    result = tuple(str(value) for value in array)
+    if any(len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value) for value in result):
+        raise ValueError(f"field {key!r} contains an invalid lowercase SHA256")
+    return result
+
+
+def load_verified_recomputation(
+    path: Path,
+    records: ContributionRecords,
+    *,
+    parent_signature_paths: tuple[Path, ...],
+    companion_contribution_paths: tuple[Path, ...],
+) -> ContributionRecords:
+    """Load and validate a versioned float64/complex128 operand artifact.
+
+    The artifact must freeze the parent signature and companion hashes and the
+    exact semantic contribution identity. Merely attaching float64 arrays to a
+    :class:`ContributionRecords` instance is intentionally unverified.
+    """
+
+    _validate_contribution_records(records)
+    artifact_path = Path(path).resolve()
+    artifact = _load(artifact_path)
+    _require_header(
+        artifact,
+        magic=RECOMPUTATION_MAGIC,
+        schema=RECOMPUTATION_SCHEMA,
+    )
+    if not parent_signature_paths or not companion_contribution_paths:
+        raise ValueError("recomputation provenance requires parent and companion files")
+    expected_parent = tuple(_sha256_file(Path(item)) for item in parent_signature_paths)
+    expected_companion = tuple(
+        _sha256_file(Path(item)) for item in companion_contribution_paths
+    )
+    recorded_parent = _validated_sha256_vector(artifact, "parent_signature_sha256")
+    recorded_companion = _validated_sha256_vector(
+        artifact, "companion_contribution_sha256"
+    )
+    if recorded_parent != expected_parent:
+        raise ValueError("recomputation parent-signature hashes do not match frozen inputs")
+    if recorded_companion != expected_companion:
+        raise ValueError("recomputation companion hashes do not match frozen inputs")
+    semantic_digest = _semantic_identity_digest(records)
+    if str(_scalar(artifact, "semantic_identity_sha256")) != semantic_digest:
+        raise ValueError("recomputation semantic identity digest mismatch")
+
+    formula_name = str(_scalar(artifact, "formula_name"))
+    formula_version = str(_scalar(artifact, "formula_version"))
+    numeric_policy = str(_scalar(artifact, "numeric_policy"))
+    source_dtype = str(_scalar(artifact, "source_dtype"))
+    if formula_name != RECOMPUTATION_FORMULA_NAME:
+        raise ValueError("recomputation formula is not recognized")
+    if formula_version != RECOMPUTATION_FORMULA_VERSION:
+        raise ValueError("recomputation formula version is not recognized")
+    if numeric_policy != RECOMPUTATION_NUMERIC_POLICY:
+        raise ValueError("recomputation numeric policy is not recognized")
+    if source_dtype != RECOMPUTATION_SOURCE_POLICY:
+        raise ValueError(
+            "recomputation source policy must certify upstream float64/complex128 "
+            "operand generation; captured-float32 promotion is not sufficient"
+        )
+
+    coefficients = _require_finite(
+        artifact,
+        "recomputed_coefficients",
+        shape=(records.size,),
+        dtype=np.dtype(np.float64),
+    )
+    source_data = _require_finite(
+        artifact,
+        "recomputed_source_data",
+        shape=(records.size,),
+        dtype=np.dtype(np.complex128),
+    )
+    source_weight = _require_finite(
+        artifact,
+        "recomputed_source_weight",
+        shape=(records.size,),
+        dtype=np.dtype(np.float64),
+    )
+    provenance = VerifiedRecomputationProvenance(
+        artifact_path=str(artifact_path),
+        artifact_sha256=_sha256_file(artifact_path),
+        parent_signature_sha256=recorded_parent,
+        companion_contribution_sha256=recorded_companion,
+        semantic_identity_sha256=semantic_digest,
+        formula_name=formula_name,
+        formula_version=formula_version,
+        numeric_policy=numeric_policy,
+        source_dtype=source_dtype,
+        _validation_token=_VERIFIED_RECOMPUTATION_TOKEN,
+    )
+    verified = replace(
+        records,
+        recomputed_coefficients=coefficients,
+        recomputed_source_data=source_data,
+        recomputed_source_weight=source_weight,
+        recomputation_provenance=provenance,
+    )
+    _validate_contribution_records(verified)
+    return verified
 
 
 def _validate_v3_replay_bundle(contribution):
@@ -575,6 +741,8 @@ def concatenate_contribution_records(parts: list[ContributionRecords]) -> Contri
             kwargs[key] = np.concatenate([getattr(part, key) for part in parts])
     elif any(part.has_recomputed_high_precision for part in parts):
         raise ValueError("recomputed high-precision operands are missing from some shards")
+    # A concatenated operand set requires its own artifact and semantic digest.
+    # Do not propagate per-shard verification to a new combined identity.
     records = ContributionRecords(**kwargs)
     _validate_contribution_records(records)
     return records
@@ -635,6 +803,11 @@ def _validate_contribution_records(records: ContributionRecords) -> None:
         value is not None for value in optional
     ):
         raise ValueError("recomputed high-precision operand fields are incomplete")
+    provenance = records.recomputation_provenance
+    if provenance is not None and not records.has_recomputed_high_precision:
+        raise ValueError("recomputation provenance has no complete operand arrays")
+    if provenance is not None and provenance._validation_token is not _VERIFIED_RECOMPUTATION_TOKEN:
+        raise ValueError("recomputation provenance was not produced by the validated loader")
     if records.has_recomputed_high_precision:
         expected_recomputed_dtypes = (
             np.dtype(np.float64),
@@ -649,6 +822,9 @@ def _validate_contribution_records(records: ContributionRecords) -> None:
                     "recomputed high-precision operands must have dtypes "
                     "float64/complex128/float64"
                 )
+    if records.has_verified_recomputed_high_precision:
+        if provenance.semantic_identity_sha256 != _semantic_identity_digest(records):
+            raise ValueError("verified recomputation semantic identity no longer matches records")
 
 
 def _semantic_order(records: ContributionRecords) -> np.ndarray:
@@ -675,7 +851,7 @@ def _semantic_order(records: ContributionRecords) -> np.ndarray:
 
 
 def _record_order(records: ContributionRecords, order: str) -> np.ndarray:
-    if order == "program":
+    if order == "logical_host_order":
         keys = (
             records.neighbor,
             records.dense_pixel,
@@ -709,8 +885,10 @@ def replay_contribution_records(
     if operand_provenance == RECOMPUTED_HIGH_PRECISION:
         if precision != "float64":
             raise ValueError("recomputed high-precision operands require float64 replay")
-        if not records.has_recomputed_high_precision:
-            raise ValueError("recomputed high-precision operands are unavailable")
+        if not records.has_verified_recomputed_high_precision:
+            raise ValueError(
+                "recomputed high-precision operands lack validated provenance"
+            )
         coefficients = records.recomputed_coefficients
         source_data = records.recomputed_source_data
         source_weight = records.recomputed_source_weight
@@ -753,6 +931,8 @@ def exact_array_metrics(left: np.ndarray, right: np.ndarray) -> dict:
             "right_shape": list(right.shape),
         }
     promoted = np.result_type(left.dtype, right.dtype)
+    if np.issubdtype(promoted, np.bool_):
+        promoted = np.dtype(np.int8)
     delta = np.asarray(left, dtype=promoted) - np.asarray(right, dtype=promoted)
     abs_delta = np.abs(delta).astype(np.float64)
     denom_l1 = max(float(np.sum(np.abs(right), dtype=np.float64)), np.finfo(np.float64).tiny)
@@ -784,17 +964,38 @@ def _replay_metrics(left: ReplayResult, right: ReplayResult) -> dict:
     }
 
 
+def _provenance_report(provenance):
+    if provenance is None:
+        return None
+    return {
+        "artifact_path": provenance.artifact_path,
+        "artifact_sha256": provenance.artifact_sha256,
+        "parent_signature_sha256": list(provenance.parent_signature_sha256),
+        "companion_contribution_sha256": list(
+            provenance.companion_contribution_sha256
+        ),
+        "semantic_identity_sha256": provenance.semantic_identity_sha256,
+        "formula_name": provenance.formula_name,
+        "formula_version": provenance.formula_version,
+        "numeric_policy": provenance.numeric_policy,
+        "source_dtype": provenance.source_dtype,
+        "validated": (
+            provenance._validation_token is _VERIFIED_RECOMPUTATION_TOKEN
+        ),
+    }
+
+
 def canonical_replay_diagnostics(
     records: ContributionRecords,
     volume_size: int,
 ) -> dict:
-    """Compare program/canonical order and float32/captured-cast-float64 replay."""
+    """Compare logical-host/canonical order and captured-cast precision."""
 
     replays = {
         (order, precision): replay_contribution_records(
             records, volume_size, order=order, precision=precision
         )
-        for order in ("program", "canonical")
+        for order in ("logical_host_order", "canonical")
         for precision in ("float32", "float64")
     }
     return {
@@ -803,12 +1004,17 @@ def canonical_replay_diagnostics(
             "float64/complex128 replay casts captured float32 operands and cannot "
             "recover precision lost during upstream operand generation"
         ),
-        "recomputed_high_precision_available": records.has_recomputed_high_precision,
-        "order_only_float32": _replay_metrics(
-            replays[("program", "float32")], replays[("canonical", "float32")]
+        "caller_supplied_high_precision_arrays_present": records.has_recomputed_high_precision,
+        "verified_recomputed_high_precision_available": (
+            records.has_verified_recomputed_high_precision
         ),
-        "order_only_float64": _replay_metrics(
-            replays[("program", "float64")], replays[("canonical", "float64")]
+        "logical_host_vs_canonical_float32": _replay_metrics(
+            replays[("logical_host_order", "float32")],
+            replays[("canonical", "float32")],
+        ),
+        "logical_host_vs_canonical_float64": _replay_metrics(
+            replays[("logical_host_order", "float64")],
+            replays[("canonical", "float64")],
         ),
         "precision_in_canonical_order": _replay_metrics(
             replays[("canonical", "float32")], replays[("canonical", "float64")]
@@ -833,30 +1039,38 @@ def compare_contribution_engines(
         "dense_pixel",
         "neighbor",
     )
-    same_identity = left.size == right.size and all(
-        np.array_equal(getattr(left, key)[left_order], getattr(right, key)[right_order])
-        for key in identity_fields
+    discrete_geometry_fields = (
+        "target_indices",
+        "row_conjugated",
+        "neighbor_conjugated",
     )
-    same_geometry = same_identity and all(
-        np.array_equal(getattr(left, key)[left_order], getattr(right, key)[right_order])
-        for key in (
-            "target_indices",
-            "coefficients",
-            "row_conjugated",
-            "neighbor_conjugated",
+    captured_operand_fields = ("coefficients", "source_data", "source_weight")
+    logical_schedule_fields = ("launch_ordinal", "particle_local_row")
+    compared_fields = (
+        identity_fields
+        + discrete_geometry_fields
+        + captured_operand_fields
+        + logical_schedule_fields
+    )
+    field_metrics = {
+        key: exact_array_metrics(
+            getattr(left, key)[left_order], getattr(right, key)[right_order]
         )
-    )
-    same_operands = same_identity and all(
-        np.array_equal(getattr(left, key)[left_order], getattr(right, key)[right_order])
-        for key in ("source_data", "source_weight")
-    )
-    same_program_keys = same_identity and all(
-        np.array_equal(getattr(left, key)[left_order], getattr(right, key)[right_order])
-        for key in ("launch_ordinal", "particle_local_row", "dense_pixel", "neighbor")
-    )
+        for key in compared_fields
+    }
+
+    def fields_equal(fields):
+        return left.size == right.size and all(
+            field_metrics[key].get("array_equal", False) for key in fields
+        )
+
+    same_identity = fields_equal(identity_fields)
+    same_geometry = same_identity and fields_equal(discrete_geometry_fields)
+    same_operands = same_identity and fields_equal(captured_operand_fields)
+    same_logical_schedule = same_identity and fields_equal(logical_schedule_fields)
 
     cross = {}
-    for order in ("program", "canonical"):
+    for order in ("logical_host_order", "canonical"):
         for precision in ("float32", "float64"):
             left_replay = replay_contribution_records(
                 left, volume_size, order=order, precision=precision
@@ -868,13 +1082,41 @@ def compare_contribution_engines(
 
     recomputed_equal = None
     recomputed_cross = None
-    if left.has_recomputed_high_precision and right.has_recomputed_high_precision:
-        recomputed_equal = same_identity and all(
-            np.array_equal(getattr(left, key)[left_order], getattr(right, key)[right_order])
+    recomputed_field_metrics = None
+    provenance_compatible = False
+    if (
+        left.has_verified_recomputed_high_precision
+        and right.has_verified_recomputed_high_precision
+    ):
+        left_provenance = left.recomputation_provenance
+        right_provenance = right.recomputation_provenance
+        provenance_compatible = all(
+            getattr(left_provenance, key) == getattr(right_provenance, key)
             for key in (
-                "recomputed_coefficients",
-                "recomputed_source_data",
-                "recomputed_source_weight",
+                "semantic_identity_sha256",
+                "formula_name",
+                "formula_version",
+                "numeric_policy",
+                "source_dtype",
+            )
+        )
+        recomputed_fields = (
+            "recomputed_coefficients",
+            "recomputed_source_data",
+            "recomputed_source_weight",
+        )
+        recomputed_field_metrics = {
+            key: exact_array_metrics(
+                getattr(left, key)[left_order], getattr(right, key)[right_order]
+            )
+            for key in recomputed_fields
+        }
+        recomputed_equal = (
+            same_identity
+            and provenance_compatible
+            and all(
+                metrics.get("array_equal", False)
+                for metrics in recomputed_field_metrics.values()
             )
         )
         recomputed_cross = _replay_metrics(
@@ -894,12 +1136,24 @@ def compare_contribution_engines(
             ),
         )
 
+    unverified_arrays_present = (
+        left.has_recomputed_high_precision
+        or right.has_recomputed_high_precision
+    ) and not (
+        left.has_verified_recomputed_high_precision
+        and right.has_verified_recomputed_high_precision
+    )
     if not same_identity or not same_geometry:
-        classification = "geometry"
+        classification = "discrete_geometry_difference"
     elif not same_operands:
-        classification = "precision" if recomputed_equal else "operand"
-    elif not same_program_keys:
-        classification = "order"
+        if recomputed_equal:
+            classification = "precision_consistent_with_verified_recomputation"
+        elif unverified_arrays_present or recomputed_equal is False:
+            classification = "unresolved"
+        else:
+            classification = "operand_generation_difference"
+    elif not same_logical_schedule:
+        classification = "logical_schedule_difference"
     elif all(
         metrics[field]["array_equal"]
         for metrics in cross.values()
@@ -911,11 +1165,21 @@ def compare_contribution_engines(
     return {
         "classification": classification,
         "identity_equal": same_identity,
-        "geometry_equal": same_geometry,
+        "discrete_geometry_equal": same_geometry,
         "captured_operands_equal": same_operands,
-        "program_keys_equal": same_program_keys,
+        "logical_schedule_keys_equal": same_logical_schedule,
+        "field_metrics": field_metrics,
         "captured_operand_provenance": CAPTURED_F32_CAST,
+        "caller_supplied_high_precision_arrays_unverified": unverified_arrays_present,
+        "verified_recomputation_provenance_compatible": provenance_compatible,
+        "left_verified_recomputation_provenance": _provenance_report(
+            left.recomputation_provenance
+        ),
+        "right_verified_recomputation_provenance": _provenance_report(
+            right.recomputation_provenance
+        ),
         "recomputed_high_precision_equal": recomputed_equal,
+        "recomputed_high_precision_field_metrics": recomputed_field_metrics,
         "cross_engine": cross,
         "recomputed_high_precision_cross_engine": recomputed_cross,
     }
@@ -1346,6 +1610,61 @@ def _accumulator_fsc(a_flat, b_flat, volume_shape):
     return _normalized_fsc_auc(fsc), float(np.min(values)), fsc
 
 
+def _validate_shard_set(results, panel, *, label: str, scalar_fields, array_fields):
+    """Validate one engine's complete native-panel launch coverage."""
+
+    if not results:
+        raise ValueError(f"{label} signature shard set is empty")
+    reference = results[0]["signature"]
+    for result in results:
+        for key in scalar_fields:
+            if _scalar(result["signature"], key) != _scalar(reference, key):
+                raise ValueError(f"{label} signature identity/topology mismatch for {key}")
+        for key in array_fields:
+            if not np.array_equal(result["signature"][key], reference[key]):
+                raise ValueError(f"{label} signature shape topology mismatch for {key}")
+        expected_count = result["launch_max"] - result["launch_min"] + 1
+        if result["particle_count"] != expected_count:
+            raise ValueError(f"{label} shard launch range/count mismatch")
+    for key in scalar_fields:
+        if _scalar(panel, key) != _scalar(reference, key):
+            raise ValueError(f"{label} panel/signature identity/topology mismatch for {key}")
+    for key in array_fields:
+        if not np.array_equal(panel[key], reference[key]):
+            raise ValueError(f"{label} panel/signature shape topology mismatch for {key}")
+    for previous, current in zip(results, results[1:]):
+        if current["launch_min"] <= previous["launch_max"]:
+            raise ValueError(f"{label} signature launch ranges overlap")
+        if current["launch_min"] != previous["launch_max"] + 1:
+            raise ValueError(f"{label} signature files do not form a consecutive launch sequence")
+    if results[0]["launch_min"] != 0:
+        raise ValueError(f"{label} validated panel launch sequence must begin at zero")
+    launch_count = int(_scalar(panel, "launch_count"))
+    total_particles = sum(result["particle_count"] for result in results)
+    if launch_count != total_particles:
+        raise ValueError(
+            f"{label} panel launch_count does not equal the validated particle manifest"
+        )
+    if results[-1]["launch_max"] != launch_count - 1:
+        raise ValueError(
+            f"{label} validated launch sequence does not end at panel.launch_count-1"
+        )
+    return total_particles
+
+
+def _validate_native_panel_arrays(panel, volume_size: int, *, label: str):
+    data = np.asarray(panel["data_accumulator"])
+    weight = np.asarray(panel["weight_accumulator"])
+    if data.dtype != np.dtype(np.complex64):
+        raise ValueError(f"{label} panel data accumulator must be complex64")
+    if weight.dtype != np.dtype(np.float32):
+        raise ValueError(f"{label} panel weight accumulator must be float32")
+    if data.shape != (volume_size,) or weight.shape != (volume_size,):
+        raise ValueError(f"{label} panel accumulator shape does not match volume_shape")
+    if not np.all(np.isfinite(data)) or not np.all(np.isfinite(weight)):
+        raise ValueError(f"{label} panel accumulator contains nonfinite values")
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("signatures", nargs="+", type=Path)
@@ -1359,11 +1678,32 @@ def parse_args(argv=None):
         type=Path,
         help="optional second engine's schema-v1 signature shards",
     )
+    parser.add_argument(
+        "--compare-panel-native",
+        type=Path,
+        help="required native panel closing the second engine's complete shard set",
+    )
+    parser.add_argument(
+        "--allow-nonexact-cross-diagnostic",
+        action="store_true",
+        help=(
+            "exit zero for a nonexact cross-engine result while labeling the overall "
+            "result DIAGNOSTIC_NONEXACT"
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
+    if bool(args.compare_signatures) != bool(args.compare_panel_native):
+        raise ValueError(
+            "--compare-signatures and --compare-panel-native must be supplied together"
+        )
+    if args.allow_nonexact_cross_diagnostic and not args.compare_signatures:
+        raise ValueError(
+            "--allow-nonexact-cross-diagnostic requires a cross-engine comparison"
+        )
     results = sorted(
         (_validate_signature(path) for path in args.signatures),
         key=lambda result: (result["launch_min"], result["path"]),
@@ -1385,31 +1725,15 @@ def main(argv=None):
     )
     array_identity_fields = ("image_shape", "volume_shape")
     reference = results[0]["signature"]
-    for result in results:
-        for key in scalar_identity_fields:
-            if _scalar(result["signature"], key) != _scalar(reference, key):
-                raise ValueError(f"signature identity/topology mismatch for {key}")
-        for key in array_identity_fields:
-            if not np.array_equal(result["signature"][key], reference[key]):
-                raise ValueError(f"signature shape topology mismatch for {key}")
-    for key in scalar_identity_fields:
-        if _scalar(panel, key) != _scalar(reference, key):
-            raise ValueError(f"panel/signature identity/topology mismatch for {key}")
-    for key in array_identity_fields:
-        if not np.array_equal(panel[key], reference[key]):
-            raise ValueError(f"panel/signature shape topology mismatch for {key}")
+    total_particles = _validate_shard_set(
+        results,
+        panel,
+        label="primary",
+        scalar_fields=scalar_identity_fields,
+        array_fields=array_identity_fields,
+    )
     if any(result["volume_shape"] != results[0]["volume_shape"] for result in results):
         raise ValueError("signature volume shapes differ")
-    for previous, current in zip(results, results[1:]):
-        if current["launch_min"] != previous["launch_max"] + 1:
-            raise ValueError("signature files do not form a consecutive launch sequence")
-    total_particles = sum(result["particle_count"] for result in results)
-    if results[0]["launch_min"] != 0:
-        raise ValueError("validated panel launch sequence must begin at zero")
-    if int(_scalar(panel, "launch_count")) != total_particles:
-        raise ValueError("panel launch_count does not equal the validated particle manifest")
-    if results[-1]["launch_max"] != int(_scalar(panel, "launch_count")) - 1:
-        raise ValueError("validated launch sequence does not end at panel.launch_count-1")
 
     volume_shape = results[0]["volume_shape"]
     volume_size = volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
@@ -1420,16 +1744,30 @@ def main(argv=None):
         contribution_records, volume_size
     )
     cross_engine_diagnostics = None
+    compare_native_replay = None
     if args.compare_signatures:
         compare_results = sorted(
             (_validate_signature(path) for path in args.compare_signatures),
             key=lambda result: (result["launch_min"], result["path"]),
         )
-        comparison_scalar_fields = tuple(
-            key for key in scalar_identity_fields if key != "run_id"
+        signature_boundary_fields = (
+            "iteration",
+            "half",
+            "rank",
+            "pass_index",
+            "class_index",
+            "call_index",
+            "dump_index",
+            "current_size",
+            "max_r",
+            "reconstruction_padding_factor",
+            "source_stack_sha256",
+            "causal_arm",
+            "winner_take_all",
+            "topology_claim",
         )
         for result in compare_results:
-            for key in comparison_scalar_fields:
+            for key in signature_boundary_fields:
                 if _scalar(result["signature"], key) != _scalar(reference, key):
                     raise ValueError(
                         f"cross-engine signature boundary mismatch for {key}"
@@ -1439,24 +1777,67 @@ def main(argv=None):
                     raise ValueError(
                         f"cross-engine signature boundary mismatch for {key}"
                     )
+        companion_boundary_fields = (
+            "window_indices",
+            "local_indices",
+            "image_identities",
+            "original_indices",
+            "star_rows",
+            "stack_indices_1based",
+            "resolved_stack_paths",
+        )
+        primary_companion = results[0]["contribution"]
+        for result in results[1:]:
+            for key in companion_boundary_fields:
+                if not np.array_equal(result["contribution"][key], primary_companion[key]):
+                    raise ValueError(
+                        f"primary companion boundary mismatch for {key}"
+                    )
+        compare_companion = compare_results[0]["contribution"]
+        for result in compare_results[1:]:
+            for key in companion_boundary_fields:
+                if not np.array_equal(result["contribution"][key], compare_companion[key]):
+                    raise ValueError(
+                        f"compare companion boundary mismatch for {key}"
+                    )
+        for key in companion_boundary_fields:
+            if not np.array_equal(primary_companion[key], compare_companion[key]):
+                raise ValueError(f"cross-engine companion boundary mismatch for {key}")
+        compare_panel = _load(args.compare_panel_native)
+        _require_header(compare_panel, magic=PANEL_MAGIC, schema=PANEL_SCHEMA)
+        compare_total_particles = _validate_shard_set(
+            compare_results,
+            compare_panel,
+            label="compare",
+            scalar_fields=scalar_identity_fields,
+            array_fields=array_identity_fields,
+        )
+        if compare_total_particles != total_particles:
+            raise ValueError("cross-engine particle manifest counts differ")
+        _validate_native_panel_arrays(compare_panel, volume_size, label="compare")
         compare_records = concatenate_contribution_records(
             [result["contribution_records"] for result in compare_results]
         )
         cross_engine_diagnostics = compare_contribution_engines(
             contribution_records, compare_records, volume_size
         )
-    if np.asarray(panel["data_accumulator"]).dtype != np.dtype(np.complex64):
-        raise ValueError("panel data accumulator must be complex64")
-    if np.asarray(panel["weight_accumulator"]).dtype != np.dtype(np.float32):
-        raise ValueError("panel weight accumulator must be float32")
-    if np.asarray(panel["data_accumulator"]).shape != (volume_size,) or np.asarray(
-        panel["weight_accumulator"]
-    ).shape != (volume_size,):
-        raise ValueError("panel accumulator shape does not match volume_shape")
-    if not np.all(np.isfinite(panel["data_accumulator"])) or not np.all(
-        np.isfinite(panel["weight_accumulator"])
-    ):
-        raise ValueError("panel accumulator contains nonfinite values")
+        compare_replay_values = _replay(compare_results, compare_panel)
+        compare_native_replay = {
+            "panel_native": str(args.compare_panel_native.resolve()),
+            "host_replay_data_rel_l1": compare_replay_values[2],
+            "host_replay_weight_rel_l1": compare_replay_values[3],
+        }
+        if (
+            compare_replay_values[2] > args.max_replay_rel_l1
+            or compare_replay_values[3] > args.max_replay_rel_l1
+        ):
+            raise ValueError(
+                "compare host replay exceeds relative-L1 bound: "
+                f"data={compare_replay_values[2]:.6g}, "
+                f"weight={compare_replay_values[3]:.6g}, "
+                f"bound={args.max_replay_rel_l1:.6g}"
+            )
+    _validate_native_panel_arrays(panel, volume_size, label="primary")
 
     (
         replay_data,
@@ -1494,8 +1875,26 @@ def main(argv=None):
             replay_data_accumulator=replay_data,
             replay_weight_accumulator=replay_weight,
         )
+    cross_classification = (
+        None if cross_engine_diagnostics is None else cross_engine_diagnostics["classification"]
+    )
+    cross_exact = cross_classification in (None, "exact")
+    if cross_classification is None:
+        overall_status = "PASS"
+        cross_status = "NOT_REQUESTED"
+    elif cross_exact:
+        overall_status = "PASS"
+        cross_status = "PASS"
+    elif args.allow_nonexact_cross_diagnostic:
+        overall_status = "DIAGNOSTIC_NONEXACT"
+        cross_status = "DIAGNOSTIC_NONEXACT"
+    else:
+        overall_status = "FAIL"
+        cross_status = "FAIL"
     summary = {
-        "status": "PASS",
+        "status": overall_status,
+        "artifact_validation_status": "PASS",
+        "cross_comparison_status": cross_status,
         "signature_files": [result["path"] for result in results],
         "panel_native": str(args.panel_native.resolve()),
         "particle_count": total_particles,
@@ -1521,12 +1920,15 @@ def main(argv=None):
         "replay_bound": args.max_replay_rel_l1,
         "canonical_contribution_replay": canonical_diagnostics,
         "cross_engine_contribution_replay": cross_engine_diagnostics,
+        "compare_native_replay": compare_native_replay,
     }
     text = json.dumps(summary, indent=2) + "\n"
     if args.summary_out:
         args.summary_out.parent.mkdir(parents=True, exist_ok=True)
         args.summary_out.write_text(text)
     print(text, end="")
+    if not cross_exact and not args.allow_nonexact_cross_diagnostic:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

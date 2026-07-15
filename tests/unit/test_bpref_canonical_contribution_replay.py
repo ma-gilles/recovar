@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -32,8 +33,53 @@ def _permute(records, permutation):
     values = {}
     for key in records.__dataclass_fields__:
         value = getattr(records, key)
-        values[key] = None if value is None else value[permutation]
+        if key == "recomputation_provenance":
+            values[key] = value
+        else:
+            values[key] = None if value is None else value[permutation]
     return validator.ContributionRecords(**values)
+
+
+def _verified_records(
+    tmp_path: Path,
+    name: str,
+    records,
+    *,
+    coefficients,
+    source_data,
+    source_weight,
+):
+    parent_path = tmp_path / f"{name}.parent.npz"
+    companion_path = tmp_path / f"{name}.companion.npz"
+    np.savez(parent_path, identity=np.asarray(name))
+    np.savez(companion_path, identity=np.asarray(name))
+    parent_sha = (validator._sha256_file(parent_path),)
+    companion_sha = (validator._sha256_file(companion_path),)
+    path = tmp_path / f"{name}.npz"
+    np.savez(
+        path,
+        magic=np.asarray(validator.RECOMPUTATION_MAGIC),
+        schema=np.asarray(validator.RECOMPUTATION_SCHEMA),
+        schema_version=np.int32(1),
+        parent_signature_sha256=np.asarray(parent_sha),
+        companion_contribution_sha256=np.asarray(companion_sha),
+        semantic_identity_sha256=np.asarray(
+            validator._semantic_identity_digest(records)
+        ),
+        formula_name=np.asarray(validator.RECOMPUTATION_FORMULA_NAME),
+        formula_version=np.asarray(validator.RECOMPUTATION_FORMULA_VERSION),
+        numeric_policy=np.asarray(validator.RECOMPUTATION_NUMERIC_POLICY),
+        source_dtype=np.asarray(validator.RECOMPUTATION_SOURCE_POLICY),
+        recomputed_coefficients=np.asarray(coefficients, dtype=np.float64),
+        recomputed_source_data=np.asarray(source_data, dtype=np.complex128),
+        recomputed_source_weight=np.asarray(source_weight, dtype=np.float64),
+    )
+    return validator.load_verified_recomputation(
+        path,
+        records,
+        parent_signature_paths=(parent_path,),
+        companion_contribution_paths=(companion_path,),
+    )
 
 
 def _minimal_signature():
@@ -70,59 +116,138 @@ def test_canonical_replay_is_invariant_to_record_permutation():
     assert np.array_equal(actual.weight, expected.weight)
 
 
-def test_program_order_is_float32_sensitive_and_collapses_in_float64():
+def test_logical_host_order_is_float32_sensitive_and_collapses_in_float64():
     records = _records((1e8, 1.0, -1e8))
     reordered = replace(records, launch_ordinal=np.asarray([0, 2, 1], dtype=np.int64))
 
     left32 = validator.replay_contribution_records(
-        records, 1, order="program", precision="float32"
+        records, 1, order="logical_host_order", precision="float32"
     )
     right32 = validator.replay_contribution_records(
-        reordered, 1, order="program", precision="float32"
+        reordered, 1, order="logical_host_order", precision="float32"
     )
     left64 = validator.replay_contribution_records(
-        records, 1, order="program", precision="float64"
+        records, 1, order="logical_host_order", precision="float64"
     )
     right64 = validator.replay_contribution_records(
-        reordered, 1, order="program", precision="float64"
+        reordered, 1, order="logical_host_order", precision="float64"
     )
 
     assert not np.array_equal(left32.data, right32.data)
     assert np.array_equal(left64.data, right64.data)
     assert validator.compare_contribution_engines(records, reordered, 1)[
         "classification"
-    ] == "order"
+    ] == "logical_schedule_difference"
 
 
-def test_matching_recomputed_float64_operands_classify_captured_gap_as_precision():
+def test_coefficient_precision_closure_requires_verified_provenance(tmp_path):
     base = _records((1.0,))
-    high_precision = {
-        "recomputed_coefficients": np.ones(1, dtype=np.float64),
-        "recomputed_source_data": np.asarray([1.0 + 0j], dtype=np.complex128),
-        "recomputed_source_weight": np.ones(1, dtype=np.float64),
-    }
-    left = replace(base, **high_precision)
-    right = replace(
+    changed = replace(
         base,
-        source_data=np.nextafter(
-            base.source_data.real, np.float32(2.0)
-        ).astype(np.complex64),
-        source_weight=np.nextafter(base.source_weight, np.float32(2.0)),
-        **high_precision,
+        coefficients=np.nextafter(base.coefficients, np.float32(2.0)),
+    )
+    left = _verified_records(
+        tmp_path,
+        "left0",
+        base,
+        coefficients=[1.0],
+        source_data=[1.0 + 0j],
+        source_weight=[1.0],
+    )
+    right = _verified_records(
+        tmp_path,
+        "right1",
+        changed,
+        coefficients=[1.0],
+        source_data=[1.0 + 0j],
+        source_weight=[1.0],
     )
 
     report = validator.compare_contribution_engines(left, right, 1)
 
-    assert report["classification"] == "precision"
+    assert report["classification"] == (
+        "precision_consistent_with_verified_recomputation"
+    )
     assert report["recomputed_high_precision_equal"] is True
     assert report["recomputed_high_precision_cross_engine"]["data"]["array_equal"]
+
+
+def test_arbitrary_float64_casts_are_unverified_and_cannot_justify_precision():
+    base = _records((1.0,))
+    unverified = {
+        "recomputed_coefficients": base.coefficients.astype(np.float64),
+        "recomputed_source_data": base.source_data.astype(np.complex128),
+        "recomputed_source_weight": base.source_weight.astype(np.float64),
+    }
+    left = replace(base, **unverified)
+    right = replace(
+        base,
+        coefficients=np.nextafter(base.coefficients, np.float32(2.0)),
+        **unverified,
+    )
+
+    report = validator.compare_contribution_engines(left, right, 1)
+
+    assert report["classification"] == "unresolved"
+    assert report["caller_supplied_high_precision_arrays_unverified"] is True
+    with pytest.raises(ValueError, match="lack validated provenance"):
+        validator.replay_contribution_records(
+            left,
+            1,
+            order="canonical",
+            precision="float64",
+            operand_provenance=validator.RECOMPUTED_HIGH_PRECISION,
+        )
+
+
+def test_verified_loader_rejects_captured_float32_promotion(tmp_path):
+    records = _records((1.0,))
+    parent_path = tmp_path / "parent.npz"
+    companion_path = tmp_path / "companion.npz"
+    np.savez(parent_path, identity=np.asarray("parent"))
+    np.savez(companion_path, identity=np.asarray("companion"))
+    artifact_path = tmp_path / "recompute.npz"
+    np.savez(
+        artifact_path,
+        magic=np.asarray(validator.RECOMPUTATION_MAGIC),
+        schema=np.asarray(validator.RECOMPUTATION_SCHEMA),
+        schema_version=np.int32(1),
+        parent_signature_sha256=np.asarray([validator._sha256_file(parent_path)]),
+        companion_contribution_sha256=np.asarray(
+            [validator._sha256_file(companion_path)]
+        ),
+        semantic_identity_sha256=np.asarray(
+            validator._semantic_identity_digest(records)
+        ),
+        formula_name=np.asarray(validator.RECOMPUTATION_FORMULA_NAME),
+        formula_version=np.asarray(validator.RECOMPUTATION_FORMULA_VERSION),
+        numeric_policy=np.asarray(validator.RECOMPUTATION_NUMERIC_POLICY),
+        source_dtype=np.asarray("captured-float32-promoted-before-formula"),
+        recomputed_coefficients=np.ones(1, dtype=np.float64),
+        recomputed_source_data=np.ones(1, dtype=np.complex128),
+        recomputed_source_weight=np.ones(1, dtype=np.float64),
+    )
+
+    with pytest.raises(ValueError, match="captured-float32 promotion"):
+        validator.load_verified_recomputation(
+            artifact_path,
+            records,
+            parent_signature_paths=(parent_path,),
+            companion_contribution_paths=(companion_path,),
+        )
 
 
 @pytest.mark.parametrize(
     ("changed", "classification"),
     [
-        ({"source_weight": np.asarray([2.0], dtype=np.float32)}, "operand"),
-        ({"target_indices": np.asarray([1], dtype=np.int32)}, "geometry"),
+        (
+            {"source_weight": np.asarray([2.0], dtype=np.float32)},
+            "operand_generation_difference",
+        ),
+        (
+            {"target_indices": np.asarray([1], dtype=np.int32)},
+            "discrete_geometry_difference",
+        ),
     ],
 )
 def test_cross_engine_classifies_operand_and_geometry_boundaries(
@@ -180,7 +305,7 @@ def test_float64_capture_replay_is_labeled_as_cast_not_recomputation():
     report = validator.canonical_replay_diagnostics(_records(), 1)
 
     assert report["captured_operand_provenance"] == validator.CAPTURED_F32_CAST
-    assert report["recomputed_high_precision_available"] is False
+    assert report["verified_recomputed_high_precision_available"] is False
     assert "cannot recover precision lost" in report["captured_f32_cast_limitation"]
     assert "correlation" not in str(report).lower()
 
@@ -218,7 +343,7 @@ def test_canonical_replay_rejects_incomplete_semantic_identity():
         )
 
 
-def test_particle_local_row_difference_is_classified_as_program_order():
+def test_particle_local_row_difference_is_classified_as_logical_schedule():
     base = _records((1.0, 2.0))
     reordered = replace(
         base, particle_local_row=np.asarray([4, 3], dtype=np.int32)
@@ -227,5 +352,5 @@ def test_particle_local_row_difference_is_classified_as_program_order():
     report = validator.compare_contribution_engines(base, reordered, 1)
 
     assert report["identity_equal"] is True
-    assert report["geometry_equal"] is True
-    assert report["classification"] == "order"
+    assert report["discrete_geometry_equal"] is True
+    assert report["classification"] == "logical_schedule_difference"

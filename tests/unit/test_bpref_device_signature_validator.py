@@ -11,7 +11,34 @@ pytestmark = pytest.mark.unit
 
 
 def _save(path: Path, values: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(path, **values)
+
+
+def _rewrite_signature(path: Path, updates: dict):
+    with np.load(path, allow_pickle=False) as archive:
+        values = {key: archive[key] for key in archive.files}
+    values.update(updates)
+    _save(path, values)
+
+
+def _make_nonexact_coefficient_compare(signature: Path, panel: Path):
+    with np.load(signature, allow_pickle=False) as archive:
+        values = {key: archive[key] for key in archive.files}
+    coefficients = values["neighbor_coefficients"].copy()
+    coefficients[0, 0, 0] = np.float32(2.0)
+    values["neighbor_coefficients"] = coefficients
+    _save(signature, values)
+
+    with np.load(panel, allow_pickle=False) as archive:
+        panel_values = {key: archive[key] for key in archive.files}
+    data = panel_values["data_accumulator"].copy()
+    weight = panel_values["weight_accumulator"].copy()
+    data[97] += np.complex64(1.0 + 1.0j)
+    weight[97] += np.float32(1.0)
+    panel_values["data_accumulator"] = data
+    panel_values["weight_accumulator"] = weight
+    _save(panel, panel_values)
 
 
 def _artifacts(
@@ -298,6 +325,8 @@ def test_cross_engine_self_compare_is_exact(tmp_path, capsys):
             str(panel),
             "--compare-signatures",
             str(signature),
+            "--compare-panel-native",
+            str(panel),
         ]
     )
 
@@ -321,8 +350,122 @@ def test_cross_engine_compare_requires_same_frozen_boundary(tmp_path):
                 str(panel),
                 "--compare-signatures",
                 str(compare_signature),
+                "--compare-panel-native",
+                str(panel),
             ]
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("pass_index", np.int32(1)),
+        ("class_index", np.int32(2)),
+        ("window_indices", np.asarray([6, 7, 3, 4], dtype=np.int32)),
+    ],
+)
+def test_cross_engine_compare_rejects_wrong_pass_class_or_window_boundary(
+    tmp_path, field, value
+):
+    primary_signature, primary_panel = _artifacts(tmp_path / "primary")
+    compare_signature, compare_panel = _artifacts(tmp_path / "compare")
+    if field in {"pass_index", "class_index", "window_indices"}:
+        with np.load(compare_signature, allow_pickle=False) as archive:
+            signature_values = {key: archive[key] for key in archive.files}
+        contribution_path = Path(str(signature_values["companion_contribution_path"]))
+        with np.load(contribution_path, allow_pickle=False) as archive:
+            contribution_values = {key: archive[key] for key in archive.files}
+        contribution_values[field] = value
+        _save(contribution_path, contribution_values)
+        if field != "window_indices":
+            signature_values[field] = value
+        signature_values["companion_contribution_sha256"] = np.asarray(
+            validator._sha256_file(contribution_path)
+        )
+        _save(compare_signature, signature_values)
+    else:
+        _rewrite_signature(compare_signature, {field: value})
+
+    expected = (
+        f"companion boundary mismatch for {field}"
+        if field == "window_indices"
+        else f"boundary mismatch for {field}"
+    )
+    with pytest.raises(ValueError, match=expected):
+        validator.main(
+            [
+                str(primary_signature),
+                "--panel-native",
+                str(primary_panel),
+                "--compare-signatures",
+                str(compare_signature),
+                "--compare-panel-native",
+                str(compare_panel),
+            ]
+        )
+
+
+@pytest.mark.parametrize("coverage", ["incomplete", "overlap"])
+def test_compare_shard_set_must_be_complete_and_nonoverlapping(tmp_path, coverage):
+    primary_signature, primary_panel = _artifacts(tmp_path / "primary")
+    compare_signature, compare_panel = _artifacts(tmp_path / "compare")
+    compare_args = [str(compare_signature)]
+    if coverage == "incomplete":
+        _rewrite_signature(
+            compare_signature,
+            {
+                "particle_launch_ordinals": np.asarray([1], dtype=np.int64),
+                "launch_ordinal": np.asarray([1], dtype=np.int64),
+            },
+        )
+        message = "begin at zero"
+    else:
+        compare_args.append(str(compare_signature))
+        message = "ranges overlap"
+
+    with pytest.raises(ValueError, match=message):
+        validator.main(
+            [
+                str(primary_signature),
+                "--panel-native",
+                str(primary_panel),
+                "--compare-signatures",
+                *compare_args,
+                "--compare-panel-native",
+                str(compare_panel),
+            ]
+        )
+
+
+def test_nonexact_cross_compare_fails_by_default_and_diagnostic_is_labeled(
+    tmp_path, capsys
+):
+    primary_signature, primary_panel = _artifacts(tmp_path / "primary")
+    compare_signature, compare_panel = _artifacts(tmp_path / "compare")
+    _make_nonexact_coefficient_compare(compare_signature, compare_panel)
+    args = [
+        str(primary_signature),
+        "--panel-native",
+        str(primary_panel),
+        "--compare-signatures",
+        str(compare_signature),
+        "--compare-panel-native",
+        str(compare_panel),
+    ]
+
+    with pytest.raises(SystemExit) as error:
+        validator.main(args)
+    assert error.value.code == 1
+    failed = capsys.readouterr().out
+    assert '"status": "FAIL"' in failed
+    assert '"artifact_validation_status": "PASS"' in failed
+    assert '"cross_comparison_status": "FAIL"' in failed
+
+    validator.main([*args, "--allow-nonexact-cross-diagnostic"])
+    diagnostic = capsys.readouterr().out
+    assert '"status": "DIAGNOSTIC_NONEXACT"' in diagnostic
+    assert '"cross_comparison_status": "DIAGNOSTIC_NONEXACT"' in diagnostic
+    assert '"status": "PASS"' not in diagnostic
 
 
 def test_v3_high_precision_replay_bundle_is_validated_and_reported(tmp_path, capsys):
