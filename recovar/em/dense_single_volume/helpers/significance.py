@@ -691,13 +691,13 @@ def _compute_significance_batched(
     )
     from recovar.em.dense_single_volume.helpers.image_shifts import (
         apply_relion_integer_pre_shifts,
-        integer_pre_shifts_or_none,
         tiled_half_image_phase_factors,
     )
     from recovar.em.dense_single_volume.helpers.oversampling import (
         find_significant_rotations as _find_sig,
     )
     from recovar.em.dense_single_volume.helpers.preprocessing import (
+        prepare_batch_preprocess_operands,
         preprocess_batch as _preprocess_batch,
     )
     from recovar.em.dense_single_volume.helpers.projection import (
@@ -980,9 +980,22 @@ def _compute_significance_batched(
     ):
         batch_size = len(indices)
         end_idx = start_idx + batch_size
-        integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, indices, batch=batch_data)
+        (
+            relion_cuda_preprocess,
+            integer_pre_shifts,
+            batch_corr_np,
+            batch_scale_np,
+            relion_preprocess_kwargs,
+        ) = prepare_batch_preprocess_operands(
+            experiment_dataset,
+            batch_data,
+            indices,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+        )
         real_space_pre_shift_applied = integer_pre_shifts is not None
-        if real_space_pre_shift_applied:
+        if real_space_pre_shift_applied and not relion_cuda_preprocess:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
         batch_data = jnp.asarray(batch_data)
         if translation_log_prior is None:
@@ -994,7 +1007,7 @@ def _compute_significance_batched(
                 translation_log_prior[start_idx:end_idx],
             )
 
-        if use_relion_numpy_preprocess:
+        if use_relion_numpy_preprocess and not relion_cuda_preprocess:
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch_relion_numpy(
                 batch_data,
                 ctf_params,
@@ -1009,25 +1022,26 @@ def _compute_significance_batched(
                 translations,
                 config,
                 score_with_masked_images,
+                relion_preprocess_kwargs=relion_preprocess_kwargs,
             )
 
-        batch_scale = None
-        if scale_corrections is not None:
-            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
+        batch_scale = jnp.asarray(batch_scale_np)
 
         if image_corrections is not None:
-            batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
-            corr_expanded = jnp.repeat(batch_corr, n_trans)
+            batch_corr = jnp.asarray(batch_corr_np)
+            applied_corr = batch_scale if relion_cuda_preprocess else batch_corr
+            corr_expanded = jnp.repeat(applied_corr, n_trans)
             shifted_half = shifted_half * corr_expanded[:, None]
             # ``image_corrections`` carries ``(avg_norm/normcorr)*scale``;
             # the image-only ``|F_img|^2`` term must drop ``scale`` so it is
             # not double-counted with the reference-side ``ctf2 *= scale^2``
             # below. Matches em_engine._relion_image_correction_factors and
             # ``ml_optimiser.cpp:6240,7298,8516``.
-            norm_corr = batch_corr if batch_scale is None else batch_corr / batch_scale
-            batch_norm = batch_norm * (norm_corr**2)[:, None]
+            if not relion_cuda_preprocess:
+                norm_corr = batch_corr / batch_scale
+                batch_norm = batch_norm * (norm_corr**2)[:, None]
 
-        if batch_scale is not None:
+        if scale_corrections is not None:
             ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
 
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
@@ -1309,13 +1323,13 @@ def _compute_k_class_significance_batched(
     )
     from recovar.em.dense_single_volume.helpers.image_shifts import (
         apply_relion_integer_pre_shifts,
-        integer_pre_shifts_or_none,
         tiled_half_image_phase_factors,
     )
     from recovar.em.dense_single_volume.helpers.oversampling import (
         find_significant_rotations as _find_sig,
     )
     from recovar.em.dense_single_volume.helpers.preprocessing import (
+        prepare_batch_preprocess_operands,
         preprocess_batch as _preprocess_batch,
     )
     from recovar.em.dense_single_volume.helpers.preprocessing import (
@@ -1645,9 +1659,22 @@ def _compute_k_class_significance_batched(
     ):
         batch_size = len(indices)
         end_idx = start_idx + batch_size
-        integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, indices, batch=batch_data)
+        (
+            relion_cuda_preprocess,
+            integer_pre_shifts,
+            batch_corr_np,
+            batch_scale_np,
+            relion_preprocess_kwargs,
+        ) = prepare_batch_preprocess_operands(
+            experiment_dataset,
+            batch_data,
+            indices,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+        )
         real_space_pre_shift_applied = integer_pre_shifts is not None
-        if real_space_pre_shift_applied:
+        if real_space_pre_shift_applied and not relion_cuda_preprocess:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
         batch_data = jnp.asarray(batch_data)
         if translation_log_prior is None:
@@ -1673,8 +1700,9 @@ def _compute_k_class_significance_batched(
                 score_complex_dtype=score_complex_dtype,
                 score_real_dtype=score_real_dtype,
                 norm_real_dtype=jnp.float64,
+                relion_preprocess_kwargs=relion_preprocess_kwargs,
             )
-        elif use_relion_numpy_preprocess:
+        elif use_relion_numpy_preprocess and not relion_cuda_preprocess:
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch_relion_numpy(
                 batch_data,
                 ctf_params,
@@ -1689,13 +1717,13 @@ def _compute_k_class_significance_batched(
                 translations,
                 config,
                 score_with_masked_images,
+                relion_preprocess_kwargs=relion_preprocess_kwargs,
             )
-        batch_scale = None
-        if scale_corrections is not None:
-            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
+        batch_scale = jnp.asarray(batch_scale_np)
         if image_corrections is not None:
-            batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
-            corr_expanded = jnp.repeat(batch_corr, n_trans)
+            batch_corr = jnp.asarray(batch_corr_np)
+            applied_corr = batch_scale if relion_cuda_preprocess else batch_corr
+            corr_expanded = jnp.repeat(applied_corr, n_trans)
             shifted_half = shifted_half * corr_expanded[:, None]
             # ``image_corrections`` carries ``(avg_norm/normcorr) * scale``;
             # ``scale_corrections`` carries ``scale``. The image-only
@@ -1707,9 +1735,10 @@ def _compute_k_class_significance_batched(
             # ``scale^2`` in the Wiener score offset. See
             # ``em_engine._relion_image_correction_factors`` and
             # ``ml_optimiser.cpp:6240,7298,8516``.
-            norm_corr = batch_corr if batch_scale is None else batch_corr / batch_scale
-            batch_norm = batch_norm * (norm_corr**2)[:, None]
-        if batch_scale is not None:
+            if not relion_cuda_preprocess:
+                norm_corr = batch_corr / batch_scale
+                batch_norm = batch_norm * (norm_corr**2)[:, None]
+        if scale_corrections is not None:
             ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
             if score_mode == "normalized_cc":
                 ctf2_half_score = ctf2_half_score * (batch_scale**2)[:, None]

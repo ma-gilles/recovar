@@ -70,11 +70,11 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     half_image_phase_factors,
-    integer_pre_shifts_or_none,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     apply_half_translation_phases,
     half_translation_phase_table,
+    prepare_batch_preprocess_operands,
     process_half_image,
 )
 from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
@@ -5398,9 +5398,22 @@ def _prepare_bucket_io(
     image_shape = config.image_shape
     use_normalized_cc = score_mode == "normalized_cc"
     batch_size = int(batch.shape[0])
-    integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, image_indices, batch=batch)
+    (
+        relion_cuda_preprocess,
+        integer_pre_shifts,
+        batch_corr_np,
+        batch_scale_np,
+        relion_preprocess_kwargs,
+    ) = prepare_batch_preprocess_operands(
+        experiment_dataset,
+        batch,
+        image_indices,
+        image_corrections=image_corrections,
+        scale_corrections=scale_corrections,
+        image_pre_shifts=image_pre_shifts,
+    )
     real_space_pre_shift_applied = integer_pre_shifts is not None
-    if real_space_pre_shift_applied:
+    if real_space_pre_shift_applied and not relion_cuda_preprocess:
         batch = apply_relion_integer_pre_shifts(batch, integer_pre_shifts)
 
     ctf_half = config.compute_ctf_half(ctf_params)
@@ -5410,9 +5423,19 @@ def _prepare_bucket_io(
     # Raw processed half-spectrum images (BEFORE any per-image correction).
     # The score path uses masked images iff ``score_with_masked_images`` is True,
     # while the reconstruction path always uses the unmasked (raw) images.
-    processed_score_half_raw = process_half_image(experiment_dataset, batch, score_with_masked_images)
+    processed_score_half_raw = process_half_image(
+        experiment_dataset,
+        batch,
+        score_with_masked_images,
+        relion_preprocess_kwargs=relion_preprocess_kwargs,
+    )
     if score_with_masked_images:
-        processed_recon_half_raw = process_half_image(experiment_dataset, batch, False)
+        processed_recon_half_raw = process_half_image(
+            experiment_dataset,
+            batch,
+            False,
+            relion_preprocess_kwargs=relion_preprocess_kwargs,
+        )
     else:
         processed_recon_half_raw = processed_score_half_raw
 
@@ -5438,28 +5461,27 @@ def _prepare_bucket_io(
     sparse_score_input_half = processed_score_half_raw * ctf_half if use_normalized_cc else processed_score_half_raw
     processed_score_half_for_noise = processed_score_half_raw
 
-    if scale_corrections is not None:
-        batch_scale = jnp.asarray(np.asarray(scale_corrections)[np.asarray(image_indices)])
-    else:
-        batch_scale = jnp.ones(batch_size, dtype=ctf_half.dtype)
+    batch_scale = jnp.asarray(batch_scale_np, dtype=ctf_half.dtype)
 
     # Per-image image corrections follow dense run_em's image-only convention.
     if image_corrections is not None:
-        batch_corr = jnp.asarray(np.asarray(image_corrections)[np.asarray(image_indices)])
+        batch_corr = jnp.asarray(batch_corr_np)
         image_only_corr = batch_corr / batch_scale
         # Note: corrections are applied to the per-translation-tiled arrays in
         # run_em, but multiplication by a per-image scalar commutes with the
         # tiling and shifting so we apply it before tiling for efficiency.
-        score_weighted_half = score_weighted_half * batch_corr[:, None]
-        recon_weighted_half = recon_weighted_half * batch_corr[:, None]
+        applied_corr = batch_scale if relion_cuda_preprocess else batch_corr
+        score_weighted_half = score_weighted_half * applied_corr[:, None]
+        recon_weighted_half = recon_weighted_half * applied_corr[:, None]
         if return_direct_scoring_io:
             direct_raw_corr = batch_corr / batch_scale
             if use_normalized_cc:
-                sparse_score_input_half = sparse_score_input_half * batch_corr[:, None]
-            else:
+                sparse_score_input_half = sparse_score_input_half * applied_corr[:, None]
+            elif not relion_cuda_preprocess:
                 sparse_score_input_half = sparse_score_input_half * direct_raw_corr[:, None]
-        batch_norm = batch_norm * (image_only_corr**2)[:, None]
-        processed_score_half_for_noise = processed_score_half_for_noise * image_only_corr[:, None]
+        if not relion_cuda_preprocess:
+            batch_norm = batch_norm * (image_only_corr**2)[:, None]
+            processed_score_half_for_noise = processed_score_half_for_noise * image_only_corr[:, None]
 
     # Per-image scale correction on CTF^2/noise.
     if scale_corrections is not None:

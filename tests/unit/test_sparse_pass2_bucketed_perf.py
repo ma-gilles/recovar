@@ -4816,6 +4816,61 @@ def test_prepare_bucket_io_windowed_shifted_matches_full_half_slice(monkeypatch)
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-6, atol=1e-6)
 
 
+def test_prepare_bucket_io_routes_relion_cuda_operands_to_score_and_reconstruction():
+    ds = MockDataset(n_images=2, seed=714)
+
+    class _Backend:
+        image_mask_mode = "relion_background_fill"
+        relion_fourier_backend = "relion_cuda"
+
+    ds.image_source.backend = _Backend()
+    calls = []
+
+    def capture_process(batch, apply_image_mask=False, **kwargs):
+        calls.append((np.asarray(batch), apply_image_mask, kwargs))
+        processed = _raw_real_process_half(batch, apply_image_mask=apply_image_mask)
+        factors = jnp.asarray(kwargs["relion_normalization_factors"], dtype=processed.real.dtype)
+        return processed * factors[:, None]
+
+    ds.process_images_half = capture_process
+    batch_indices = np.asarray([0, 1], dtype=np.int64)
+    batch = jnp.asarray(ds._images[batch_indices])
+    config = ForwardModelConfig.from_dataset(ds, disc_type="linear_interp", process_fn=ds.process_images)
+    n_half = IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1)
+    image_corrections = np.asarray([0.8, 1.5], dtype=np.float32)
+    scale_corrections = np.asarray([2.0, 0.5], dtype=np.float32)
+    image_pre_shifts = np.asarray([[1.0, -1.0], [-2.0, 1.0]], dtype=np.float32)
+
+    result = _prepare_bucket_io(
+        ds,
+        batch,
+        jnp.asarray(ds.CTF_params[batch_indices]),
+        batch_indices,
+        jnp.ones(n_half, dtype=jnp.float32),
+        jnp.zeros((1, 2), dtype=jnp.float32),
+        config,
+        1,
+        True,
+        False,
+        image_corrections,
+        scale_corrections,
+        image_pre_shifts,
+        False,
+    )
+
+    assert [call[1] for call in calls] == [True, False]
+    for raw_batch, _, kwargs in calls:
+        np.testing.assert_array_equal(raw_batch, ds._images)
+        np.testing.assert_array_equal(
+            kwargs["relion_normalization_factors"],
+            image_corrections / scale_corrections,
+        )
+        np.testing.assert_array_equal(kwargs["relion_integer_shifts"], image_pre_shifts.astype(np.int32))
+
+    expected_recon = _raw_real_process_half(batch) * jnp.asarray(image_corrections)[:, None]
+    np.testing.assert_allclose(np.asarray(result[1]), np.asarray(expected_recon), rtol=1e-6, atol=1e-6)
+
+
 def test_prepare_bucket_io_windowed_reuses_unmasked_recon_shift_for_noise(monkeypatch):
     """Unmasked windowed prepare can reuse the recon-window shifted image."""
 

@@ -280,6 +280,59 @@ def image_preprocess_backend(experiment_dataset):
     return getattr(image_source, "backend", image_source)
 
 
+def prepare_batch_preprocess_operands(
+    experiment_dataset,
+    batch,
+    image_indices,
+    *,
+    image_corrections=None,
+    scale_corrections=None,
+    image_pre_shifts=None,
+):
+    """Select typed per-image operands for host or strict CUDA preprocessing."""
+
+    from .image_shifts import integer_pre_shifts_or_none
+
+    image_indices_np = np.asarray(image_indices)
+    batch_size = int(batch.shape[0])
+    integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, image_indices_np, batch=batch)
+    backend = image_preprocess_backend(experiment_dataset)
+    relion_cuda_preprocess = getattr(backend, "relion_fourier_backend", None) == "relion_cuda"
+    if relion_cuda_preprocess and image_pre_shifts is not None and integer_pre_shifts is None:
+        raise RuntimeError("relion_cuda preprocessing requires integral RELION image pre-shifts")
+    if relion_cuda_preprocess and integer_pre_shifts is None:
+        integer_pre_shifts = np.zeros((batch_size, 2), dtype=np.int32)
+
+    batch_scale_np = (
+        np.asarray(scale_corrections)[image_indices_np].astype(np.float32, copy=False)
+        if scale_corrections is not None
+        else np.ones(batch_size, dtype=np.float32)
+    )
+    batch_corr_np = (
+        np.asarray(image_corrections)[image_indices_np].astype(np.float32, copy=False)
+        if image_corrections is not None
+        else None
+    )
+    relion_preprocess_kwargs = None
+    if relion_cuda_preprocess:
+        normalization_factors = (
+            batch_corr_np / batch_scale_np
+            if batch_corr_np is not None
+            else np.ones(batch_size, dtype=np.float32)
+        )
+        relion_preprocess_kwargs = {
+            "relion_normalization_factors": jnp.asarray(normalization_factors, dtype=jnp.float32),
+            "relion_integer_shifts": jnp.asarray(integer_pre_shifts, dtype=jnp.int32),
+        }
+    return (
+        relion_cuda_preprocess,
+        integer_pre_shifts,
+        batch_corr_np,
+        batch_scale_np,
+        relion_preprocess_kwargs,
+    )
+
+
 def resolve_image_mask_for_half_preprocess(
     experiment_dataset,
     image_shape,
