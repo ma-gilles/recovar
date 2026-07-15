@@ -2016,17 +2016,40 @@ comparison.
   for global search. Focused merge guards pass `23/23`; EM fast guard passes
   `16/16`. Require corrected autonomous case-16 FSC/FSC-AUC before acceptance.
 
-# 2026-07-14: case-13 tie versus real coarse-support mismatch
+# 2026-07-14: corrected case-13 classification and integrated validation
 
-- Particle 2701 is an explainable cancellation tie: RELION's net margin is
-  about `0.19` raw float32 ULP and RECOVAR differs by about `2.07` ULP.
-- Particle 1682 is a real Gaussian coarse-score mismatch. RELION directly
-  measures `t10-t5=-18.06005859375`; RECOVAR gives `-18.28744506836`.
-  The `-0.22738647461` difference moves the same finite candidate across the
-  0.999 retained-mass threshold and excludes the eventual fine winner.
-- Index mapping, posterior sorting/cutoff, priors, corrections, coordinates,
-  and manual/texture projector choice are null. Translation-wise error is a
-  smooth quadratic (`R^2=.9996576`), so continue at shared Gaussian
-  projection/image-phase operands and reduction.
-- Classification:
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_exact_it9_final_20260714_145938/relion_score_pair_capture_d476e6/CASE13_TWO_SIDED_CLASSIFICATION.md`.
+- Retract the earlier claim that particle 1682 demonstrated an intrinsic
+  Gaussian coarse-scorer mismatch. That analysis used zero-based RECOVAR
+  index 1682 as if it were RELION's one-based stack index 1682. The corrected
+  target is `1683@particles.128.mrcs`. Its measured score gap is explained by
+  a real workflow bug: the final joined E-step duplicated half-1 noise for
+  both random subsets. Half-2 noise substitution leaves only a qualified
+  float32 arithmetic residual. Commit `24c5157f` fixes the per-half routing.
+- Clean immutable A100 job `11190363` at `d07915fa` matches case-13's exact
+  nine-iteration size schedule and convergence boundary. Worst numbered
+  merged cross-FSC-AUC is `0.999999970691`; final joined cross-FSC-AUC is
+  `0.997779297632`. Final merged GT FSC-AUC is `0.312357369405` for RECOVAR
+  versus `0.301136422552` for RELION. Correlation was not computed.
+- Correctly indexed matched-grid captures distinguish numerical ties from
+  remaining behavior. Final particle 2701 has an exact RELION top tie and a
+  centered score residual of only `0.003113` maximum (`0.000855` RMS).
+  Final particle 2828 has the same robust winner and the same few-ULP maximum;
+  its uninterrupted `0.142079` Pmax gap is not reproduced by the replay.
+- Two structured residuals remain. Iteration-9 particle 1466 aligns exactly
+  on 192 candidates and six parent poses, but centered raw scores differ by
+  `0.446167` maximum (`0.180758` RMS) and the captured winner changes. Final
+  particle 188 aligns on 128 candidates/four parents and differs by
+  `0.187515` maximum (`0.065117` RMS), but its captured winner agrees and the
+  replay does not reproduce the original hard-pose boundary. Factorize
+  iteration-9 particle 1466 first; treat particle 188 as the second target.
+- RELION array `11191084_[0-2]` completed. Task `11191084_3` exited 1 because
+  a `6e-7` check was stricter than five-decimal STAR serialization; its
+  iteration-9 dump was independently hash-checked and perturbation-checked at
+  `3e-6`, then marked `PASS_RELION_EXACT_PERTURB_DUMP_POSTVALIDATED`. Do not
+  describe the whole array as completed. RECOVAR `11191497_1` completed the
+  fine capture; `11191497_0` requested a parent/probe hook absent from the
+  numbered path and produced no scientific artifact.
+- Durable joint audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_targeted_scores_d079_20260714_201200/JOINT_RELION_RECOVAR_SCORE_AUDIT.md`.
+- RELION postvalidation details and exact hashes:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_targeted_relion_scores_d476_exactperturb_20260714_204000/RELION_EXACT_PERTURB_POSTVALIDATION.md`.

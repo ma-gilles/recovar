@@ -218,6 +218,47 @@ authoritative post-convergence all-data oracle is the unnumbered joined
 at
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/case16_norm_sumw_fix_validation_20260714_171639/autonomous_final_hp_fix_commit_a78ec7c0/analysis/FINAL_HP_AUDIT.md`.
 
+### 2026-07-14 `k1-case13-integrated-per-half-noise`
+
+Run metadata:
+
+- Commit: `d07915fad1c0e3761d75ba3603cc60455d0a01bb`
+- Branch: `codex/em-parity-checkpoint-20260711`
+- Worktree:
+  `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_case13_d07915fa_immutable_20260714`
+- Fixture: `13_small_anisotropic_3k_g128_white_noise3_bf80`, 3,000 particles,
+  box 128
+- K: 1 supplied-map full trajectory and converged final all-data
+- Slurm job: `11190363`, A100, `COMPLETED 0:0`, elapsed `00:07:15`
+- Artifacts:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_integrated_d07915fa_immutable_retry_20260714_201100`
+  (`SAFE_TO_DELETE` present)
+
+Quality comparison:
+
+| Metric | Required/reference | Current | Delta | Status |
+|--------|--------------------|---------|-------|--------|
+| Exact current-size schedule | RELION `[56,56,48,48,48,48,48,48,48]` | exact | 0 | same/pass |
+| Convergence/finalization | iteration 9, final-all-data once | exact | 0 | same/pass |
+| Worst numbered merged cross FSC-AUC | `>=0.995` | `0.999999970691` | `+0.004999970691` margin | pass |
+| Final merged cross FSC-AUC | `>=0.995` | `0.997779297632` | `+0.002779297632` margin | pass |
+| Final merged GT FSC-AUC, RECOVAR/RELION | RECOVAR no worse by `0.002` | `0.312357369405 / 0.301136422552` | `+0.011220946854` | better/pass |
+| Repeatability, numbered merged FSC-AUC | independent identical commit | maximum delta `8.9e-11` | arithmetic-level | pass |
+| Repeatability, final merged FSC-AUC | independent identical commit | delta `1.70e-8` | arithmetic-level | pass |
+
+Conclusion:
+
+- Aggregate case-13 quality trajectory: accepted by FSC/FSC-AUC, exact
+  schedule, convergence, and finalization semantics. Correlation was not
+  computed.
+- The per-half final-noise workflow bug is closed by commit `24c5157f`.
+- Arithmetic parity is not fully closed: matched-grid iteration-9 particle
+  1466 and final particle 188 retain structured score residuals. These are
+  localization diagnostics and do not override the FSC/FSC-AUC acceptance,
+  but they remain active parity work.
+- FSC-only audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_integrated_d07915fa_immutable_retry_20260714_201100/integrated_fsc_audit.json`.
+
 ## Required Metric Template
 
 Use this template for each new completion benchmark.

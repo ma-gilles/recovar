@@ -28,7 +28,7 @@ as the next product milestone rather than mixing it into the first closure.
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `b658bd8d12bac32a72040d309bad6f259a8e2f87`
+Current accepted code checkpoint: `d07915fad1c0e3761d75ba3603cc60455d0a01bb`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -2020,13 +2020,37 @@ The narrow fix retains the two half-specific noise spectra for the joined
 final E-step.  A fixed-state full final replay improves merged
 RECOVAR-vs-RELION FSC-AUC from `0.993421942` to `0.997786`, clearing the
 `0.995` gate.  RECOVAR merged GT FSC-AUC is `0.312351999`, versus RELION
-`0.301136412`; both have FSC<0.5 at shell 19 and FSC<0.143 at shell 27.  A
-clean autonomous trajectory remains the end-to-end acceptance gate.
+`0.301136412`; both have FSC<0.5 at shell 19 and FSC<0.143 at shell 27.
+
+Clean immutable A100 job `11190363` at integrated commit `d07915fa` supplies
+the end-to-end validation.  It matches convergence at iteration 9 and the
+exact current-size schedule `[56,56,48,48,48,48,48,48,48]`.  Every numbered
+merged cross-FSC-AUC is at least `0.999999970691`; the final joined-map
+cross-FSC-AUC is `0.997779297632`.  Final merged GT FSC-AUC is
+`0.312357369405` for RECOVAR and `0.301136422552` for RELION, delta
+`+0.011220946854`.  An independent repeat agrees in numbered merged FSC-AUC
+within `8.9e-11` and final merged FSC-AUC within `1.70e-8`.  Correlation was
+not computed.
+
+This accepts the aggregate case-13 FSC/FSC-AUC trajectory but does not close
+all arithmetic parity.  Correctly indexed matched-grid captures retain two
+structured score residuals: iteration-9 particle 1466 has centered raw-score
+maximum/RMS `0.446167/0.180758` and a captured winner difference; final
+particle 188 has `0.187515/0.065117`, although its replay winner agrees and
+the replay does not reproduce the uninterrupted hard-pose boundary.  Final
+particle 2701 is an exact RELION top tie with only a few-ULP residual, and
+particle 2828 has the same robust winner with a few-ULP residual.  Continue
+one-factor operand substitution on iteration-9 particle 1466 before changing
+production behavior.
 
 Corrected operand evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_exact_it9_final_20260714_145938/relion_score_pair_capture_d476e6/case13_matched_rel_rec_operand_analysis.json`.
 Fixed-state FSC evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_exact_it9_final_20260714_145938/relion_score_pair_capture_d476e6/recovar_parent_pass_dump_20260714/p1682_half_noise_fix_2d7ada89_cuda/benchmark_ledger.json`.
+Immutable integrated FSC-only audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_integrated_d07915fa_immutable_retry_20260714_201100/integrated_fsc_audit.json`.
+Matched-grid score audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case13_targeted_scores_d079_20260714_201200/JOINT_RELION_RECOVAR_SCORE_AUDIT.md`.
 
 ## 2026-07-14 Clean-head case-20 scale result
 
