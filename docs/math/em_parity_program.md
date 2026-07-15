@@ -3195,3 +3195,21 @@ matched matrices.  The immutable science root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_p3591_cross_engine_identity6_globalwinner_h100_prepared_20260715_134127/`,
 and the preliminary factorial audit is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_p3591_operand_factorial_20260715_143600/AUDIT.md`.
+
+The follow-up RELION device-operand job `11227130` completed on one H100 with
+the control and capture arms bound to the same physical GPU.  Target identity,
+all 32 candidates, and all 840 packed pixels passed.  Capture inertness is at
+repeat scale: per-class FSC-AUC is at least `0.99999999960`, and minimum
+non-DC FSC is at least `0.99999999519`.  The capture root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_p3591_relion_fine_operands_sm90_prepared_20260715_151500/`.
+
+An exact layout-and-scale-mapped comparison now localizes the winner change.
+Seven projected-reference rotation rows have maximum absolute errors below
+`1.96e-8`; rotation row 4 contains one `1.509e-6` outlier at RELION packed
+pixel 242 (`y=11`, `x=11`).  With otherwise identical captured RELION
+image-side operands, the RELION reference selects candidate 18 and the RECOVAR
+reference selects candidate 30.  Replacing only that one candidate-18 pixel is
+sufficient to select candidate 30.  This proves the projected-reference operand
+boundary explains this discrete near-tie; it does not yet distinguish texture
+staging from sub-ULP coordinate/texture-fraction behavior.  The hashed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_p3591_projection_compare_job11227130_20260715_145100/projected_reference_comparison.json`.
