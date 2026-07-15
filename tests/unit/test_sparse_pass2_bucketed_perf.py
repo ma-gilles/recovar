@@ -126,12 +126,15 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
     _projection_cache_budget_complex_dtype,
+    _projection_cache_enabled_for_pass,
     _projection_cache_fits_budget,
     _projection_cache_max_bytes_for_pass,
     _projection_cache_transient_bytes,
     _projection_gather_bytes_per_rotation_row,
     _projection_budget_pixels_for_pass,
     _projection_rotation_chunk_size,
+    _pass2_conservative_dump_execution_enabled,
+    _pass2_dump_enabled,
     _rectangular_active_prematmul_is_efficient,
     _relion_fine_mstep_prune_mode,
     _relion_joint_winner_take_all_masks,
@@ -202,6 +205,78 @@ def test_k_class_pass2_dump_stop_is_env_gated_diagnostic_only():
     assert 'RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET' in source
     assert "if bucket_dump_count:" in source
     assert "raise Pass2DumpComplete" in source
+
+
+def test_pass2_dump_does_not_change_planner_without_conservative_opt_in(monkeypatch):
+    monkeypatch.delenv("RECOVAR_PASS2_DUMP_DIR", raising=False)
+    monkeypatch.delenv("RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", raising=False)
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES", raising=False)
+
+    def planned_cap():
+        return _max_hypotheses_per_microbatch_for_pass(
+            score_only=True,
+            use_window=True,
+            has_external_normalization=False,
+            conservative_dump_execution=_pass2_conservative_dump_execution_enabled(),
+            n_score_pixels=652,
+            device_memory_bytes=80 * 1024**3,
+        )
+
+    production_cap = planned_cap()
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", "/tmp/pass2-dump")
+    assert _pass2_dump_enabled()
+    assert not _pass2_conservative_dump_execution_enabled()
+    assert planned_cap() == production_cap
+
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION", "1")
+    assert _pass2_conservative_dump_execution_enabled()
+    assert planned_cap() < production_cap
+
+
+def test_pass2_projection_cache_override_supports_matched_dump_ab(monkeypatch):
+    fine_rotations = np.zeros((3, 3, 3), dtype=np.float32)
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE", raising=False)
+
+    assert _projection_cache_enabled_for_pass(
+        fine_rotations_override=fine_rotations,
+        dump_pass2_operands=False,
+    )
+    assert not _projection_cache_enabled_for_pass(
+        fine_rotations_override=fine_rotations,
+        dump_pass2_operands=True,
+    )
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE", "on")
+    assert _projection_cache_enabled_for_pass(
+        fine_rotations_override=fine_rotations,
+        dump_pass2_operands=False,
+    )
+    assert _projection_cache_enabled_for_pass(
+        fine_rotations_override=fine_rotations,
+        dump_pass2_operands=True,
+    )
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE", "off")
+    assert not _projection_cache_enabled_for_pass(
+        fine_rotations_override=fine_rotations,
+        dump_pass2_operands=False,
+    )
+    assert not _projection_cache_enabled_for_pass(
+        fine_rotations_override=fine_rotations,
+        dump_pass2_operands=True,
+    )
+    assert not _projection_cache_enabled_for_pass(
+        fine_rotations_override=None,
+        dump_pass2_operands=False,
+    )
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE", "invalid")
+    with pytest.raises(ValueError, match="must be 'auto', 'on', or 'off'"):
+        _projection_cache_enabled_for_pass(
+            fine_rotations_override=fine_rotations,
+            dump_pass2_operands=False,
+        )
 
 
 def _assert_relion_stats_close(actual, expected, *, rtol=1e-5, atol=1e-5):
@@ -915,7 +990,7 @@ def test_score_only_sparse_pass_uses_larger_default_bucket_budget(monkeypatch):
             score_only=True,
             use_window=True,
             has_external_normalization=False,
-            dump_pass2_operands=False,
+            conservative_dump_execution=False,
             n_score_pixels=n_score_pixels,
             device_memory_bytes=device_memory,
         )
@@ -923,7 +998,7 @@ def test_score_only_sparse_pass_uses_larger_default_bucket_budget(monkeypatch):
             score_only=False,
             use_window=True,
             has_external_normalization=False,
-            dump_pass2_operands=False,
+            conservative_dump_execution=False,
             n_score_pixels=n_score_pixels,
             device_memory_bytes=device_memory,
         )
@@ -933,7 +1008,7 @@ def test_score_only_sparse_pass_uses_larger_default_bucket_budget(monkeypatch):
             score_only=True,
             use_window=True,
             has_external_normalization=False,
-            dump_pass2_operands=False,
+            conservative_dump_execution=False,
             n_score_pixels=n_score_pixels * 2,
             device_memory_bytes=device_memory,
         )
@@ -941,7 +1016,7 @@ def test_score_only_sparse_pass_uses_larger_default_bucket_budget(monkeypatch):
             score_only=True,
             use_window=True,
             has_external_normalization=False,
-            dump_pass2_operands=False,
+            conservative_dump_execution=False,
             n_score_pixels=n_score_pixels,
             device_memory_bytes=device_memory,
         )
@@ -953,7 +1028,7 @@ def test_score_only_sparse_pass_uses_larger_default_bucket_budget(monkeypatch):
             score_only=True,
             use_window=True,
             has_external_normalization=False,
-            dump_pass2_operands=False,
+            conservative_dump_execution=False,
             n_score_pixels=n_score_pixels,
             device_memory_bytes=device_memory,
         )
@@ -971,7 +1046,7 @@ def test_sparse_pass2_auto_hypothesis_cap_matches_80gb_probe_scale(monkeypatch):
         score_only=True,
         use_window=True,
         has_external_normalization=False,
-        dump_pass2_operands=False,
+        conservative_dump_execution=False,
         n_score_pixels=n_score_pixels,
         device_memory_bytes=device_memory,
     )
@@ -989,7 +1064,7 @@ def test_sparse_pass2_hypothesis_cap_accounts_for_score_dtype(monkeypatch):
         score_only=False,
         use_window=True,
         has_external_normalization=False,
-        dump_pass2_operands=False,
+        conservative_dump_execution=False,
         fused_k_class=True,
         n_score_pixels=n_score_pixels,
         device_memory_bytes=device_memory,
@@ -999,7 +1074,7 @@ def test_sparse_pass2_hypothesis_cap_accounts_for_score_dtype(monkeypatch):
         score_only=False,
         use_window=True,
         has_external_normalization=False,
-        dump_pass2_operands=False,
+        conservative_dump_execution=False,
         fused_k_class=True,
         n_score_pixels=n_score_pixels,
         device_memory_bytes=device_memory,
@@ -1018,7 +1093,7 @@ def test_fused_k_class_sparse_pass2_uses_larger_joint_hypothesis_cap(monkeypatch
         score_only=False,
         use_window=True,
         has_external_normalization=False,
-        dump_pass2_operands=False,
+        conservative_dump_execution=False,
         n_score_pixels=n_score_pixels,
         device_memory_bytes=device_memory,
     )
@@ -1026,7 +1101,7 @@ def test_fused_k_class_sparse_pass2_uses_larger_joint_hypothesis_cap(monkeypatch
         score_only=False,
         use_window=True,
         has_external_normalization=False,
-        dump_pass2_operands=False,
+        conservative_dump_execution=False,
         fused_k_class=True,
         n_score_pixels=n_score_pixels,
         device_memory_bytes=device_memory,
@@ -1041,7 +1116,7 @@ def test_fused_k_class_sparse_pass2_uses_larger_joint_hypothesis_cap(monkeypatch
             score_only=False,
             use_window=True,
             has_external_normalization=False,
-            dump_pass2_operands=False,
+            conservative_dump_execution=False,
             fused_k_class=True,
             n_score_pixels=n_score_pixels,
             device_memory_bytes=device_memory,
@@ -1058,7 +1133,7 @@ def test_sparse_pass2_warns_when_env_cap_is_below_auto(monkeypatch, caplog):
         score_only=False,
         use_window=True,
         has_external_normalization=False,
-        dump_pass2_operands=False,
+        conservative_dump_execution=False,
         fused_k_class=True,
         n_score_pixels=652,
         device_memory_bytes=80 * 1024**3,

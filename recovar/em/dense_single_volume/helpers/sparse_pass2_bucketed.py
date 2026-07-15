@@ -190,7 +190,10 @@ _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_
 _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
 _RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV = "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH"
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
+_PASS2_DUMP_DIR_ENV = "RECOVAR_PASS2_DUMP_DIR"
+_PASS2_DUMP_CONSERVATIVE_EXECUTION_ENV = "RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
+_SPARSE_PASS2_PROJECTION_CACHE_ENV = "RECOVAR_SPARSE_PASS2_PROJECTION_CACHE"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_JOINT_MODES = {"joint", "global", "class_pose", "class-pose"}
 _SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK_ENV = "RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK"
 _SPARSE_PASS2_GROUP_PROGRESS_CHUNKS_ENV = "RECOVAR_SPARSE_PASS2_GROUP_PROGRESS_CHUNKS"
@@ -2336,6 +2339,43 @@ def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _pass2_dump_enabled() -> bool:
+    return bool(os.environ.get(_PASS2_DUMP_DIR_ENV))
+
+
+def _pass2_conservative_dump_execution_enabled() -> bool:
+    """Keep dump-only planner changes behind an explicit diagnostic opt-in."""
+
+    return _pass2_dump_enabled() and _env_flag_enabled(
+        _PASS2_DUMP_CONSERVATIVE_EXECUTION_ENV,
+        default=False,
+    )
+
+
+def _projection_cache_enabled_for_pass(
+    *,
+    fine_rotations_override,
+    dump_pass2_operands: bool,
+) -> bool:
+    """Resolve the diagnostic projection-cache override without changing defaults."""
+
+    if fine_rotations_override is None:
+        return False
+    raw = os.environ.get(_SPARSE_PASS2_PROJECTION_CACHE_ENV)
+    mode = "auto" if raw is None or raw.strip() == "" else raw.strip().lower()
+    if mode == "auto":
+        # Preserve the currently qualified paths while cache-on/cache-off is
+        # adjudicated: production uses the cache and operand dumps do not.
+        return not bool(dump_pass2_operands)
+    if mode in {"1", "true", "yes", "on"}:
+        return True
+    if mode in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{_SPARSE_PASS2_PROJECTION_CACHE_ENV} must be 'auto', 'on', or 'off', got {raw!r}",
+    )
+
+
 def _cached_score_rotation_chunk_size_for_pass(bucket_size: int) -> int:
     override = _optional_positive_int_env(_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK_ENV)
     chunk_size = _DEFAULT_CACHED_SCORE_ROT_CHUNK_SIZE if override is None else int(override)
@@ -2778,13 +2818,13 @@ def _max_hypotheses_per_microbatch_for_pass(
     score_only: bool,
     use_window: bool,
     has_external_normalization: bool,
-    dump_pass2_operands: bool,
+    conservative_dump_execution: bool,
     fused_k_class: bool = False,
     n_score_pixels: int | None = None,
     device_memory_bytes: int | None = None,
     score_complex_dtype=np.complex64,
 ) -> int:
-    if score_only and use_window and not has_external_normalization and not dump_pass2_operands:
+    if score_only and use_window and not has_external_normalization and not conservative_dump_execution:
         override = _optional_positive_int_env(_SCORE_ONLY_MAX_HYPOTHESES_ENV)
         auto = _auto_hypotheses_per_microbatch(
             score_only=True,
@@ -7032,7 +7072,7 @@ def compute_pass2_stats_sparse_bucketed(
         score_only=score_only,
         use_window=budget_window_spec.use_window,
         has_external_normalization=normalization_log_z is not None or normalization_other_score_log_z is not None,
-        dump_pass2_operands=bool(os.environ.get("RECOVAR_PASS2_DUMP_DIR")),
+        conservative_dump_execution=_pass2_conservative_dump_execution_enabled(),
         n_score_pixels=budget_window_spec.n_score,
         device_memory_bytes=device_memory_bytes,
         score_complex_dtype=precision_policy.score_complex_dtype,
@@ -7313,10 +7353,13 @@ def compute_pass2_stats_sparse_bucketed(
                 "normalization_other_score_log_z must have shape "
                 f"({n_images},), got {normalization_other_score_log_z_np.shape}",
             )
-    dump_pass2_operands = bool(os.environ.get("RECOVAR_PASS2_DUMP_DIR"))
+    dump_pass2_operands = _pass2_dump_enabled()
 
     projection_cache = None
-    if fine_rotations_override is not None and not dump_pass2_operands:
+    if _projection_cache_enabled_for_pass(
+        fine_rotations_override=fine_rotations_override,
+        dump_pass2_operands=dump_pass2_operands,
+    ):
         n_fine_rot = int(np.asarray(fine_rotations_override).shape[0])
         if use_window:
             # The RELION centered projector materializes a larger full-half
@@ -9285,7 +9328,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         score_only=False,
         use_window=budget_window_spec.use_window,
         has_external_normalization=False,
-        dump_pass2_operands=bool(os.environ.get("RECOVAR_PASS2_DUMP_DIR")),
+        conservative_dump_execution=_pass2_conservative_dump_execution_enabled(),
         fused_k_class=True,
         n_score_pixels=budget_window_spec.n_score,
         device_memory_bytes=device_memory_bytes,
@@ -9857,8 +9900,11 @@ def compute_k_class_pass2_stats_sparse_fused(
         ]
 
     projection_cache_by_class = [None] * n_classes
-    dump_pass2_operands = bool(os.environ.get("RECOVAR_PASS2_DUMP_DIR"))
-    if fine_rotations_override is not None and not dump_pass2_operands:
+    dump_pass2_operands = _pass2_dump_enabled()
+    if _projection_cache_enabled_for_pass(
+        fine_rotations_override=fine_rotations_override,
+        dump_pass2_operands=dump_pass2_operands,
+    ):
         n_fine_rot = int(np.asarray(fine_rotations_override).shape[0])
         if use_window:
             # See the single-class cache above: cap the full-half RELION
