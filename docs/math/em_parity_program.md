@@ -3325,3 +3325,48 @@ The checksum-bound post-hoc root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_cold3_job11232258_posthoc_20260715_170527/`;
 its artifact manifest SHA-256 is
 `bdfadc9574d9bd78c65a880e89108f60034308fa9a80dcf053084b9733ddbcae`.
+
+## 2026-07-15 K=4 score-capture quarantine and projection-cache discriminator
+
+The first score-discriminator launch, job `11234038`, completed its RELION
+arms but rejected the package before RECOVAR because its validator expected
+only iteration-2/3 state files while the capture intentionally emitted the
+complete iteration-1--3 state set.  Retry job `11234492` corrected that
+validator and completed both three-iteration RECOVAR arms on H100 UUID
+`GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`.  The original job then failed on
+an older capture-schema check after all science had finished.  A hash-bound
+post-hoc recovery verifies the checkout, frozen CUDA library, same physical
+GPU, complete captures, and FSC/FSC-AUC inertness metrics.
+
+The result is quarantined: the score capture is not inert and therefore cannot
+explain the production trajectory.  For iteration-2 particle 5993, the
+ordinary RECOVAR arm has Pmax `0.73098427`, while enabling the score dump
+changes it to `0.67779261`, close to RELION capture's `0.67780534`.  RELION's
+instrumented and control arms keep all iteration-2 discrete decisions equal,
+but their Pmax values differ by as much as `3.42e-4`; by iteration 3 this
+amplifies to per-class control-versus-capture FSC-AUC values
+`0.9605575/0.9456710/0.9594118/0.9224703`.  Captured candidate arrays are thus
+observations from a perturbed trajectory, not production parity evidence.
+
+Within that quarantined capture only, particle 5993 has 4,576 RELION and 4,608
+RECOVAR candidates, with 4,576 shared and 32 RECOVAR-only candidates.  The
+extra candidates carry total posterior mass `6.57e-14`, have zero
+reconstruction support, and do not contain the winner.  Seven other targets
+have full candidate-geometry bijections.  These facts are retained for
+debugging but are explicitly not promoted to production support or score
+mismatches.  The accepted quarantine report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_it23_job11234492_posthoc_hardened_20260715_180550/analysis/POSTHOC_RECOVERY.json`;
+its prepared-artifact manifest SHA-256 is
+`44dae2ea25d55460907d8c3395e80d6f3f37eb102a1a636093d0c1d184a70504`.
+
+The capture unexpectedly disables the sparse pass-2 projection cache.  This
+is now a leading causal discriminator rather than an assumed instrumentation
+detail: the no-cache captured arm is much closer to RELION at particle 5993
+than the ordinary cached arm.  Commit `148e85a7` adds explicit cache
+`auto/on/off` and dump-conservative-execution diagnostic controls while
+preserving production defaults.  The next fixed-state experiment compares
+no-dump cache-on, no-dump cache-off, dump cache-off, and, if needed, dump
+cache-on.  If the two cache-off arms agree while cache-on differs, dumping is
+inert under a matched execution path and the cache implementation becomes the
+production bug candidate.  No float64 classification is warranted before
+that structural A/B closes.
