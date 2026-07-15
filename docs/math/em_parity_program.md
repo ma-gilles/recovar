@@ -3259,3 +3259,52 @@ particle-3591 one-iteration projector boundary.  It does not replace the
 remaining multi-iteration and heterogeneous robustness gates.  The accepted
 reports are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_p3591_projector_fix3_posthoc_job11229870_20260715_160048/analysis/`.
+
+## 2026-07-15 K=4 projector-fix three-iteration trajectory
+
+The first clean multi-iteration retry exposed a real routing bug after its
+iteration-1 science completed.  Job `11231468` reached the fused K-class pass-2
+route at iteration 2 and failed because the common sparse dispatcher forwarded
+the inactive `bpref_device_signature_active` diagnostic flag to
+`compute_k_class_pass2_stats_sparse_fused`, whose signature did not accept it.
+Commit `111b8fde65725bb2cebbcfae82dd1f251221dcb9` makes the inactive flag an
+explicit optional argument on that fused route.  The false/default path is
+inert; an attempted active capture still fails closed because active capture is
+currently single-class and non-fused only.  Focused fused-versus-legacy,
+signature-scope, API, and Ruff checks pass.
+
+The fresh same-H100 three-iteration trajectory in job `11232258` then completes
+all RELION and RECOVAR science.  RELION takes 189 seconds; RECOVAR takes 606
+seconds, including 581.2 seconds in refinement.  Postprocessing in the original
+launcher fails after science because it opens a trusted local object-bearing
+NPZ with `allow_pickle=False` and assumes a root-local fixture path.  A
+read-only, checksum-bound post-hoc recovery validates the prepared package,
+science inputs, external fixture, native binaries, runtime libraries, source
+commit, and results before evaluating the trajectory.
+
+Every declared map-quality gate passes.  Direct per-class RECOVAR-versus-RELION
+FSC-AUC minima are `0.999999973956`, `0.999998968049`, and
+`0.999636237928` for iterations 1--3.  The minimum RECOVAR-minus-RELION GT
+FSC-AUC delta is `-3.51164e-6`, well inside the `-0.002` gate.  Current sizes
+`40/44/46`, HEALPix order 1, non-convergence through iteration 3, and the lack
+of an invalid final-all-data step also match.
+
+Strict underlying-array parity is not yet closed.  The earliest nontrivial
+continuous difference is iteration-2 particle 5993, whose Pmax differs by
+`0.0531957` although its discrete decisions match.  At iteration 3, particle
+1513 changes class; particles 1513, 2136, 4685, 7661, 7700, and 9357 change
+rotation; and all except 7700 also change translation.  Class agreement is
+`0.9999`; iteration-3 Pmax absolute differences have mean `0.000213818`, p95
+`0.000544221`, and maximum `0.408298`.  These are unresolved parity failures,
+not declared numerical ties, because the run did not capture the complete
+candidate scores, priors, normalization, support, and posteriors.  The next
+diagnostic freezes the exact incoming iteration-2/iteration-3 boundaries for
+those particles plus a matched low-error control and captures those arrays
+before considering a float64 canonical replay.
+
+The immutable science root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_cold3_projector_fix_111b8fde_h100_retry2_prepared_20260715_164432/`.
+The checksum-bound post-hoc root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_cold3_job11232258_posthoc_20260715_170527/`;
+its artifact manifest SHA-256 is
+`bdfadc9574d9bd78c65a880e89108f60034308fa9a80dcf053084b9733ddbcae`.
