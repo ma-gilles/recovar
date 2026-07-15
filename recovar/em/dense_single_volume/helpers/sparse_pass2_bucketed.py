@@ -9048,6 +9048,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     relion_projector_half=None,
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
+    bpref_device_signature_active: bool = False,
 ) -> SparseKClassPass2FusedResult:
     """Evaluate K-class sparse pass-2 in one joint class-normalized sweep.
 
@@ -9057,6 +9058,11 @@ def compute_k_class_pass2_stats_sparse_fused(
     class noise model; callers should fall back to the existing per-class path
     when noise differs by class.
     """
+
+    if bpref_device_signature_active:
+        raise RuntimeError(
+            "active BPref device signature scope is incompatible with fused sparse K-class pass-2"
+        )
 
     from recovar.em.sampling import (
         get_oversampled_translation_grid,

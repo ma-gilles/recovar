@@ -6566,6 +6566,9 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
         engine_kwargs={
             "current_size": None,
             "relion_half_volume_mstep": False,
+            # Numbered iterations after firstiter_cc explicitly forward the
+            # inactive diagnostic scope through the fused K-class route.
+            "bpref_device_signature_active": False,
             "group_ids": np.asarray([0, 1, 0, 1, 2], dtype=np.int64),
             "scale_correction_group_count": 7,
             "scale_corrections": np.asarray([1.0, 1.08, 0.91, 1.03, 0.97], dtype=np.float32),
@@ -7282,6 +7285,31 @@ def test_fused_sparse_k1_default_compact_pairs_matches_existing_sparse_path(monk
     assert fused.profile_summary["sparse_kclass_compact_pairs"] is True
     assert fused.profile_summary["sparse_kclass_valid_pair_reduction"] > 1.0
     np.testing.assert_array_equal(np.asarray(fused.class_assignments), np.zeros(n_images, dtype=np.int32))
+
+
+def test_fused_sparse_k_class_rejects_active_bpref_device_signature():
+    """Only the inactive numbered-iteration scope is valid on fused K-class pass 2."""
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    signature = inspect.signature(bucketed_mod.compute_k_class_pass2_stats_sparse_fused)
+    assert "bpref_device_signature_active" in signature.parameters
+
+    with pytest.raises(RuntimeError, match="incompatible with fused sparse K-class pass-2"):
+        bucketed_mod.compute_k_class_pass2_stats_sparse_fused(
+            None,
+            np.zeros((2, 1), dtype=np.complex64),
+            np.ones(1, dtype=np.float32),
+            np.ones(1, dtype=np.float32),
+            np.zeros((1, 2), dtype=np.float32),
+            [[], []],
+            rotation_log_priors_by_class=[None, None],
+            nside_level=0,
+            disc_type="linear_interp",
+            oversampling_order=0,
+            current_size=None,
+            bpref_device_signature_active=True,
+        )
 
 
 def test_sparse_kclass_fused_default_keeps_k1_on_single_class_path(monkeypatch):
