@@ -606,6 +606,10 @@ CUDA_LIB_TMP="\${RECOVAR_CUDA_LIB}.\${SLURM_JOB_ID:-\$\$}.tmp"
 export CUDA_LIB_TMP PIXI_PY
 flock "${SCRATCH_DIR}/cuda/build.lock" bash -lc '
   set -euo pipefail
+  if [[ -s "\${RECOVAR_CUDA_LIB}" ]]; then
+    echo "Reusing shared CUDA library \${RECOVAR_CUDA_LIB}"
+    exit 0
+  fi
   rm -f "\${CUDA_LIB_TMP}"
   env PYTHON="\${PIXI_PY}" make -C recovar/cuda LIB="\${CUDA_LIB_TMP}" all
   mv -f "\${CUDA_LIB_TMP}" "\${RECOVAR_CUDA_LIB}"
@@ -644,6 +648,8 @@ pixi run --frozen python recovar/relion_bind/build.py
 '
 PIXI_PY="\$(pixi run --frozen which python)"
 $(write_refresh_pixi_cuda_libs)
+$(write_build_cuda_lib)
+test -s "\${RECOVAR_CUDA_LIB}"
 
 "\${PIXI_PY}" - <<'PY'
 import os
