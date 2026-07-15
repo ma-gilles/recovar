@@ -37,6 +37,7 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     enforce_half_volume_x0,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
+    relion_backprojector_volume_shape,
 )
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
@@ -116,6 +117,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR,
     EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
     EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
+    LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
     _build_reconstruction_pack_indices,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_max_hypotheses_per_microbatch,
@@ -550,6 +552,23 @@ def _pack_fake_local_search_outputs(
     if kwargs.get("return_profile", False):
         outputs.append({"reconstruction_sample_indices_by_image": [None] * int(n_units)})
     return tuple(outputs)
+
+
+def _mock_reconstruction_accumulator_size(experiment_dataset, kwargs, *, current_size=None):
+    """Match the active full-grid or RELION x-half BackProjector layout."""
+
+    padding_factor = int(kwargs.get("reconstruction_padding_factor", 1))
+    if kwargs.get("mstep_relion_x_half", False) and "rotation_grid_mstep_rotations" in kwargs:
+        if current_size is None and kwargs.get("relion_projector_r_max") is not None:
+            current_size = 2 * int(kwargs["relion_projector_r_max"])
+        shape = relion_backprojector_volume_shape(
+            experiment_dataset.volume_shape,
+            padding_factor,
+            current_size=current_size,
+        )
+    else:
+        shape = tuple(int(size) * padding_factor for size in experiment_dataset.volume_shape)
+    return int(np.prod(shape))
 
 
 class _RawCacheFakeLoader:
@@ -6471,6 +6490,7 @@ def test_local_score_debug_dump_only_materializes_target_bucket(monkeypatch, rng
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "2")
     monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR", str(fused_dump_dir))
     monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES", "2")
+    monkeypatch.setenv(LOCAL_SCORE_DUMP_TARGET_ONLY_ENV, "0")
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT", raising=False)
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", raising=False)
 
@@ -6541,6 +6561,7 @@ def test_local_score_debug_force_split_only_splits_target_bucket(monkeypatch, rn
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", str(score_dump_dir))
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "2")
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT", "1")
+    monkeypatch.setenv(LOCAL_SCORE_DUMP_TARGET_ONLY_ENV, "0")
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", raising=False)
 
     result = run_local_em_exact(
@@ -8395,7 +8416,7 @@ class TestRelionModeSmokeTest:
             run_em_call["idx"] += 1
             n_images = experiment_dataset.n_units
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
-            recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+            recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
             ctf_value = ctf_values[idx]
             return (
                 None,
@@ -8809,7 +8830,7 @@ class TestRelionModeSmokeTest:
                 }
             )
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
-            recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+            recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
             base_outputs = (
                 jnp.zeros(recon_vol_size, dtype=jnp.complex64),
                 jnp.ones(recon_vol_size, dtype=jnp.complex64),
@@ -11103,7 +11124,7 @@ class TestRelionModeSmokeTest:
             offset_wsum = noise_offset_wsums[min(idx, len(noise_offset_wsums) - 1)]
             n_images = experiment_dataset.n_units
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
-            recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+            recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
             return (
                 None,
                 np.zeros(n_images, dtype=np.int32),
@@ -11180,7 +11201,7 @@ class TestRelionModeSmokeTest:
             captured_noise.append(np.asarray(noise_variance, dtype=np.float32))
             n_images = experiment_dataset.n_units
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
-            recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+            recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
             return (
                 None,
                 np.zeros(n_images, dtype=np.int32),
@@ -11224,14 +11245,14 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(captured_noise[0], half1_noise)
         np.testing.assert_allclose(captured_noise[1], half2_noise)
 
-    def test_k1_adaptive_significant_counts_feed_accuracy_estimate(
+    def test_k1_adaptive_significant_counts_do_not_replace_exact_accuracy(
         self,
         half_datasets,
         init_volume,
         translations,
         monkeypatch,
     ):
-        """K=1 adaptive pass-2 counts should make acc_rot finite."""
+        """K=1 adaptive counts remain diagnostic when exact accuracy is unavailable."""
         import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         monkeypatch.delenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
@@ -11300,7 +11321,7 @@ class TestRelionModeSmokeTest:
             fine_mstep_prune_values.append(kwargs.get("relion_fine_mstep_prune"))
             n_images = int(experiment_dataset.n_units)
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
-            recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+            recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
             counts = counts_by_half[half_idx]
             assert counts.shape == (n_images,)
             return KClassEMResult(
@@ -11373,7 +11394,8 @@ class TestRelionModeSmokeTest:
             np.asarray(result["significant_counts"][0], dtype=np.int32),
             np.concatenate(counts_by_half),
         )
-        assert np.isfinite(result["acc_rot_trajectory"][0])
+        assert np.isnan(result["acc_rot_trajectory"][0])
+        assert result["expected_accuracy_status_trajectory"] == ["unavailable_inputs"]
         assert np.isinf(result["convergence_state"].acc_rot)
 
     def test_k1_zero_oversampling_skips_adaptive_engine(
@@ -11483,7 +11505,7 @@ class TestRelionModeSmokeTest:
             n_images = int(experiment_dataset.n_units)
             n_classes = 2
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
-            recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+            recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
             counts = counts_by_half[half_idx]
             assert counts.shape == (n_images,)
             per_class_stats = tuple(
@@ -12055,7 +12077,7 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
             }
         )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
@@ -12260,7 +12282,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
             }
         )
         n_shells = half_datasets[0].image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
@@ -12397,7 +12419,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
     ):
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return (
             None,
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
@@ -12459,7 +12481,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         )
         local_prior_translations.append(np.asarray(prior_translations, dtype=np.float32).copy())
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
@@ -12578,7 +12600,7 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
     ):
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return (
             None,
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
@@ -12643,7 +12665,7 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
             np.asarray(kwargs["translation_prior_reference_translations"], dtype=np.float32).copy()
         )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
@@ -12747,7 +12769,7 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
     ):
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return (
             None,
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
@@ -12771,7 +12793,7 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
         _ = args
         reconstruct_flags.append(kwargs["reconstruct_significant_only"])
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
@@ -12853,7 +12875,7 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
     ):
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return (
             None,
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
@@ -12877,7 +12899,7 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
         _ = args
         image_batch_sizes.append(int(kwargs["image_batch_size"]))
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
@@ -12993,7 +13015,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
     ):
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return (
             None,
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
@@ -13058,7 +13080,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
             np.asarray(kwargs["translation_prior_reference_translations"], dtype=np.float32).copy()
         )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
@@ -13106,7 +13128,9 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         refine_mod,
         "read_relion_sampling_metadata",
         lambda _path: {
-            "random_perturbation": -0.13168,
+            "random_perturbation": refine_mod.relion_sampling_perturbation_for_iteration(
+                0.5, 0, 14
+            ),
             "perturbation_factor": 0.5,
             "healpix_order": 5,
             "offset_range": replay_offset_range,
@@ -13185,7 +13209,7 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         dense_calls.append(int(np.asarray(rotations).shape[0]))
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return (
             None,
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
@@ -13250,7 +13274,7 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
             }
         )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
@@ -13357,7 +13381,7 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         dense_calls.append(int(np.asarray(rotations).shape[0]))
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return (
             None,
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
@@ -13422,7 +13446,7 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
             }
         )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
@@ -13524,7 +13548,7 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
     ):
         _ = (mean, mean_variance, noise_variance, rotations, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         hard_assignment = np.full(experiment_dataset.n_units, 1, dtype=np.int32)
         return (
             None,
@@ -13630,7 +13654,7 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         del mean_variance, noise_variance, translations, disc_type
         n_images = int(experiment_dataset.n_units)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         per_class_stats = tuple(
             RelionStats(
                 log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
@@ -13822,7 +13846,7 @@ def test_relion_mode_dense_k_class_writes_absolute_translations_from_previous_of
         n_classes = int(np.asarray(means).shape[0])
         n_images = int(experiment_dataset.n_units)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         selected = np.broadcast_to(selected_by_half[half_idx], (n_images, 2)).astype(np.float32)
         per_class_stats = tuple(
             RelionStats(
@@ -13965,7 +13989,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
     ):
         _ = (mean, mean_variance, noise_variance, rotations, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return (
             None,
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
@@ -14026,7 +14050,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
             kwargs,
         )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         assignment = np.full(
             experiment_dataset.n_units,
             fine_idx * np.asarray(translations).shape[0] + trans_idx,

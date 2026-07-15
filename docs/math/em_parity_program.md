@@ -2422,3 +2422,115 @@ Evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_serialized_sigma_discriminator_20260714_234311/analysis/serialized_sigma_operand_metrics.json`,
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_earliest_score_audit_20260714_214916/case26_paired_raw_operand_audit_phase_correction_addendum_11197096_11197128.json`.
+
+## 2026-07-15 K=1 real-particle full trajectory and exact-reference boundary
+
+The explicit `relion_cuda` workflow now completes the 10,000-particle real
+10076 fixture on H100.  RELION and RECOVAR both converge at numbered iteration
+22.  RELION takes 1,154 external seconds and peaks at 79,949 MiB; RECOVAR takes
+1,835 seconds and peaks at 42,421 MiB.  These are same-GPU-model measurements,
+not yet performance acceptance gates.
+
+The numbered merged cross FSC-AUC first falls below the strict 0.995 gate at
+iteration 7 (`0.994590971`).  The first local-search iteration, iteration 12,
+is the sharpest early boundary at `0.970153731`, with minimum/p05 non-DC FSC
+`0.896640744/0.927132339`.  Both programs have exact replayed incoming
+poses, translations, optimiser controls, and half-set assignments at that
+scoring boundary.  The post-convergence final all-data outputs are kept
+separate because the current GUI-quality RECOVAR path intentionally leaves
+final grid correction off.
+
+Exact RELION incoming-reference probes separate accumulated map drift from an
+intrinsic iteration-engine mismatch.  Jobs `11200283`, `11200284`, and
+`11200243` replace the scoring references at global iterations 3, 5, and 7;
+their merged output FSC-AUC values become `0.999997757`, `0.999998854`, and
+`0.999998278`, respectively.  Their per-particle Pmax mean absolute errors are
+only `1.28e-4--1.48e-4`.  The global engine is therefore effectively correct
+given exact incoming references, while small early reconstruction differences
+are amplified across autonomous iterations.
+
+The same intervention at the first local iteration is decisive in the other
+direction.  Job `11199901` improves iteration-12 merged FSC-AUC only from
+`0.970153731` to `0.976932488`; minimum/p05 non-DC FSC remain
+`0.920176938/0.943454456`.  Pmax mean absolute error remains `0.0556090`, with
+43.24% of particles above 0.01 and 18.68% above 0.1.  Thus accumulated map
+drift is a secondary amplifier, but a material intrinsic local-path mismatch
+exists at the first local iteration.
+
+Seven of the ten largest iteration-12 Pmax outliers choose a neighboring fine
+translation exactly one 0.5-pixel grid step away, with directions varying by
+particle.  Two other outliers retain the identical winning pose while Pmax
+differs by approximately 0.618.  This rejects a constant translation-origin
+offset and proves that posterior score spacing, normalization, or support must
+be inspected independently of the discrete winner.  The next discriminator is
+three separate exact-reference captures: the untouched fused posterior, the
+materialized fine score/operands at current size 122, and the parent
+significance score/operands.  Each capture must pass an FSC-AUC/state
+instrumentation-inertness gate before its arrays are used.
+
+Primary evidence root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_relcuda_h100_plan_20260714_234251`.
+Exact-reference audits are under
+`reference_replay_iter{3,5,7,12}/fsc_pmax_audit.json` in that root.
+
+## 2026-07-15 K=4 iteration-3 cliff and rejected causes
+
+The clean H100 five-iteration K=4 trajectory closes iteration 1 but exposes a
+real behavior cliff at iteration 3.  Direct classwise cross FSC-AUC is
+`[0.999999979, 0.999893582, 0.999999980, 0.999999974]` at iteration 1 and
+`[0.999997892, 0.999883088, 0.999969918, 0.999843680]` at iteration 2, then
+falls to `[0.961838483, 0.953936126, 0.955462580, 0.918876565]` at iteration
+3.  Class agreement falls from 0.999 at iteration 2 to 0.9386 at iteration 3;
+614 classes, 1,339 rotations, and 864 translations differ.  GT FSC-AUC deltas
+remain within approximately `9.8e-4`, so the current fixture has not yet lost
+ground-truth quality even though strict trajectory parity clearly fails.
+
+The lone iteration-1 pose difference, original particle 3591, is a qualified
+numerical tie: both implementations have the same 66,816 coarse candidates,
+winner, and 32 fine candidate IDs/order.  RECOVAR's winner margin is
+`1.639e-7`, RELION's is `4.470e-7`, and the aligned centered score residual
+envelope is `9.537e-7`.  No blanket tie explanation is accepted later:
+iteration 2 has 23 unique affected particles, and original particles 2907 and
+8083 have the two largest Pmax discrepancies in the entire 10,000-particle
+set while also changing rotation/support.
+
+Two controlled hypotheses are rejected.  Same-numbered RELION tau2 replay is
+an exact trajectory null; an independent fixed-accumulator substitution
+changes supported FSC-AUC by at most `1.73e-6`.  Forcing the manual projector
+is worse from iteration 1, so the production texture interpolation remains
+the correct path.  Exact RELION iteration-2 class references also fail to
+repair iteration 3: classwise FSC-AUC improves by only
+`0.000101--0.000451`, class agreement only from 0.9386 to 0.9394, and Pmax
+mean absolute error only from `0.047604` to `0.045975`.  The iteration-3 cliff
+is therefore intrinsic to K-class scoring/posterior/support or M-step
+behavior, not inherited map drift.
+
+Original particle 6388 (RELION internal row 5989) is the primary matched-score
+target.  It agrees through iteration 2, including class, pose, shift,
+significant count, and Pmax (`0.158637/0.157887`), then changes class with
+Pmax `0.975441/0.221761`, 171.577 degrees angular separation, and a one-pixel
+shift at iteration 3.  The first H100 capture, job `11200644`, fails the
+mandatory instrumentation-inertness gate: its RELION iteration-3 row changes
+from the clean class-4, Pmax-`0.221761`, 97-significant-sample result to class
+1, Pmax `0.976015`, and 108 significant samples.  None of that job's active
+operand/CC-component arrays are admissible causal evidence.  A passive-only
+retry, job `11201054`, disables those active paths but also fails the strict
+gate.  Its iterations 1--2 remain extremely close (classwise map FSC-AUC above
+`0.999999996` at iteration 2), yet its small Pmax/numerical drift is
+chaotically amplified at iteration 3 into 644 class changes; target 6388 has
+the clean significant count and Pmax within `3.1e-4` but selects class 1
+instead of class 4.  Its arrays are therefore excluded too.  A no-dump control,
+job `11201123`, reproduces the same cliff, proving that the rebuilt patched
+RELION binary itself is non-inert even when all dump environments are disabled.
+An attempted one-iteration continuation from the clean iteration-2 optimiser
+boundary is also invalid because it does not reproduce the clean continuation
+state.  The causal capture therefore moves to the stable iteration-2 boundary,
+targeting original particles 2907 and 8083, whose large Pmax/support/rotation
+differences precede chaotic iteration-3 amplification.
+
+Trajectory evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_current_head_full5_relcuda_h100_20260715_003000/analysis/trajectory_gate.json`.
+Reference replay evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it3_relion_reference_replay_h100_20260715_010941/analysis/reference_replay_fsc_state.json`.
+Decision audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it2_it3_decision_audit_20260715_014500/REPORT.md`.
