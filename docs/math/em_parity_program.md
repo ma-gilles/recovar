@@ -3071,6 +3071,79 @@ Causal boundary conclusion:
 Microbatch-order discriminator:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_it5_microcap35933_h100_20260715_074500/analysis/microcap_result.json`.
 
+### Permanent high-precision canonical-replay diagnostic
+
+When a small residual cannot yet be classified as an algorithmic mismatch or
+floating-point noise, float32-versus-float64 replay is a required diagnostic,
+not an optional one-off.  The reusable harness must freeze one iteration
+boundary (images, maps/projectors, poses, CTF, posterior weights, and support)
+and bind a versioned contribution schema containing complete identities,
+pre-fold complex values, real weights, the eight device-produced indices and
+coefficients, and all Hermitian/fold/conjugation flags.
+
+The same contribution list must be replayable in four modes:
+
+1. production complex64/float32 in original program order;
+2. production complex64/float32 in one deterministic canonical order;
+3. complex128/float64 in each program's original order; and
+4. complex128/float64 in one shared deterministic canonical order.
+
+Casting captured float32 operands to float64 only diagnoses reduction and
+ordering sensitivity.  The harness must separately support recomputing the
+operands themselves in complex128/float64 from the frozen upstream inputs, so
+precision already lost during operand generation is not hidden.  It must
+compare control/control repeat variation, order-only variation,
+RELION/RECOVAR variation, and high-precision canonical variation, then classify
+the earliest difference as operand generation, geometry, reduction ordering,
+precision, or unresolved.  Intermediate gates use exact identities and array
+metrics; map gates use shell FSC and FSC-AUC only, never correlation.  The
+float64 path is diagnostic and is not a proposal to change the production
+default.  A small targeted fixture belongs in the regression suite, with a
+larger Slurm confirmation for production-sized boundaries.  The current K=1
+device-contribution capture is the first consumer of this permanent harness,
+but the schema and replay engine must remain applicable to other GPU
+reductions.
+
+### Clean uninterrupted K=4 three-iteration gate
+
+H100 job `11210525` is the first fully immutable, autonomous three-iteration
+K=4 boundary in this series.  It uses clean detached RECOVAR commit
+`8fa143f9e24457fa2cb67781b8ea1b91ff57ea98` and RELION commit
+`f2c1a384400aec37dc6805856a5ba645650a44f1`, root-local CUDA and RELION-binding
+builds, a same-run content-bound dispatch schedule, both rank-local scale
+states, and verified pre/post input manifests.  The science completes and the
+job exits 2 at the intended strict trajectory gate.
+
+Quality remains high but a real recurrent residual compounds.  Minimum direct
+per-class RECOVAR-versus-RELION FSC-AUC is `0.999893582`, `0.999843695`, and
+`0.998209732` in iterations 1--3.  Maximum absolute per-class GT FSC-AUC delta
+grows from `2.56e-6` to `2.27e-5` to `8.84e-5`, while class agreement is
+`1.0/0.9990/0.9981`.  The union of particles with a class, rotation, or
+translation decision mismatch grows from `1` to `23` to `61`.  Divergent
+particles have Pmax absolute differences up to `0`, `0.39890`, and `0.56936`;
+several later class flips therefore cannot be declared harmless close ties
+without their candidate arrays.
+
+The earliest mismatch is iteration-1 particle 3591: its rotation is
+16.92 degrees different while first-iteration Pmax is hard at one and all
+follower scales are one.  Follower-scale topology is therefore not the root
+cause, although exact rank-local replay remains necessary: after iteration 2,
+rank 2 differs from the serialized rank-1 writer state by mean/max
+`0.13394/0.73682`.  RECOVAR's remaining iteration-3 local-scale error is not
+enriched among divergent particles and is not demonstrated as the cause.
+The next K=4 diagnostic must capture complete pre-argmax candidate scores,
+priors, normalization, support, canonical candidate identities, owner/scale,
+and incoming live projector fingerprints beginning at particle 3591; the run
+must not be extended beyond iteration 3 until that earliest boundary is
+classified.  On the same H100, RELION takes 192 seconds and RECOVAR 576 seconds,
+so the current strict implementation is approximately 3x slower.
+
+Immutable K=4 evidence root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_uninterrupted_cold3_dynamic_scale_commit8fa143f9_h100_20260715_083000_retry3/`.
+The principal records are `analysis/trajectory_gate.json`,
+`analysis/particle_arrays.npz`, `analysis/live_vs_serialized_scale.json`, and
+`provenance/science_artifacts.sha256`.
+
 Strict K>1 launchers now preserve this boundary instead of silently reverting
 to static or disabled follower ownership.  The 100k completion launcher
 requires an explicit `K4_RELION_DISPATCH_SCHEDULE` captured from its RELION
