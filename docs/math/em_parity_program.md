@@ -3758,3 +3758,51 @@ Evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_exact_rotation_fulltraj_d302a760_20260716_012500/`
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_residual_dualarm_d302a760_20260716_024500/analysis/`.
+
+## 2026-07-16 K=1 recurrent score-boundary classification
+
+The particle-8494 firstiter-CC translation difference is a one-float32-ULP
+near tie.  Replacing that one translation removes `88.4%` of the anomalous
+half-2 raw-BPref data residual, leaving the same approximately `1.25e-4`
+continuous residual seen in half 1.  Production device contribution capture,
+canonical float32 replay, and promoted-float64 replay rule out BPref reduction
+order as the source of that remainder.
+
+The completed particle-1491 paired capture then freezes the earliest recurrent
+iteration-2 boundary.  Coarse geometry, winner, 30-parent set, and 173 retained
+hypothesis count agree; one threshold-tail membership differs.  On the aligned
+fine surface, RECOVAR production differs from RELION by Pmax `1.37773e-3` and
+posterior L1 `9.31928e-3`.  RELION's full-grid
+256-lane float32 reduction applied to the captured RECOVAR operands reduces
+those errors to `9.87415e-5` and `3.01462e-4`; promoted canonical float64
+reduces them to `3.88798e-5` and `2.30408e-4`.  Float32 order controls are
+material while promoted-float64 order controls collapse to approximately
+`1e-11`.  The dominant boundary is therefore fine-score reduction topology,
+with a smaller unresolved captured-operand/upstream-precision remainder.  The
+float64 result is diagnostic only because the captured operands were already
+complex64.
+
+The 10,000-particle iteration-2 distribution has no signed bias and no isolated
+systematic subgroup.  RECOVAR-versus-RELION absolute Pmax error has mean
+`2.7855e-5`, p95 `8.9897e-5`, and maximum `1.33390e-3`, compared with
+RELION/RELION control mean `6.2361e-6`, p95 `3.0e-5`, and maximum `6.38e-4`.
+Error varies smoothly with confidence, support size, and defocus.  Stop serial
+particle debugging unless aggregate evidence later identifies a subgroup.
+
+Candidate `7ad2526d` now has direct evidence that it repairs a real local
+arithmetic mismatch, but its earlier same-GPU trajectory showed no consistent
+FSC-AUC gain and a `4.58%` wall-time cost.  It remains a controlled
+boundary/aggregate A/B candidate, not a production merge.  The next gates are:
+
+1. distribution-level score/posterior A/B and controlled iteration-boundary
+   substitutions;
+2. complete numbered and final FSC/FSC-AUC trajectories;
+3. the paired K=1 robustness matrix, followed by 10k and 100k scale and real
+   data;
+4. K=4 strict quality parity.
+
+Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_p1491_paired_a92c35ef_20260716_081502/analysis/p1491_fine_score_replay.json`,
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_p1491_paired_a92c35ef_20260716_081502/analysis/aggregate_it2_pmax_support_distribution.json`,
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it1_p8494_device_capture_fix_fb4e6b73_20260716_082324/analysis/production_translation_swap.json`.
