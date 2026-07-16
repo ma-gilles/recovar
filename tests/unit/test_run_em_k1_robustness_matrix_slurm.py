@@ -75,7 +75,7 @@ def test_noctf_simulator_cases_use_sanitized_relion_ctf_by_default(tmp_path):
     assert 'if [[ "1" == "1" ]]; then' in text
     assert 'RELION_CTF_ARGS=(--ctf)' in text
     assert 'RELION_INPUT_STAR="particles_relion_identity_ctf.star"' in text
-    assert '"${PIXI_PY}" -m scripts.make_relion_identity_ctf_star \\' in text
+    assert f'"${{PIXI_PY}}" "{IDENTITY_CTF_STAR}" \\' in text
     assert 'particles_relion_identity_ctf.json' in text
     assert '--phase-shift-deg 180.0' in text
     assert 'RELION_INPUT_STAR=${RELION_INPUT_STAR}' in text
