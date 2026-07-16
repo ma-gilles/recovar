@@ -3411,6 +3411,40 @@ and then frozen at one exact incoming boundary for canonical float32 and
 float64 replay.  The repeat report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_cache_on_repeat_111b8fde_h100_prepared_20260715_190604/analysis/cache_on_repeat.json`.
 
+The follow-up candidate audit localizes that branch to one coarse pass-1
+support decision.  The low branch contains 4,608 fine candidates for particle
+5993, while the high branch is its exact 4,576-candidate subset.  The missing
+32 candidates are the eight rotation and four translation children of coarse
+parent `(class=0, rotation=14, translation=20)`.  They are also present in
+RELION, carry total low-branch posterior mass `0.0727703450`, and include the
+second-ranked candidate with posterior `0.0679322077`.  Removing them predicts
+Pmax `0.7309867850`, only `1.17e-6` from the observed high-branch value.  Shared
+scores differ by at most `3.81e-5`; fixed-support posterior precision and order
+span only `1.32e-6`.  The coarse significant count changes `144 -> 143`.
+
+This material parent is distinct from the 32 old-RECOVAR-only candidates that
+RELION omits: those come from parent `(class=0, rotation=1, translation=14)`,
+carry only `6.57e-14` total mass, and have no reconstruction support.  Given
+either branch's fine candidate set, RECOVAR's current threshold and the
+source-matched RELION ascending-float32 threshold reproduce the same fine
+reconstruction mask (`85` low, `84` high).  The unresolved boundary is
+therefore coarse pass-1 significance formation.  RELION filters positive
+float32 weights, sorts ascending, and uses a CUB float32 inclusive scan of the
+lower tail; RECOVAR currently sorts normalized weights descending and sums the
+retained mass with JAX.  These are algebraically equivalent but not
+finite-precision/order equivalent.  Raw coarse weights and cutoff-neighbor
+cumulative sums must be captured before changing production behavior.  The
+versioned three-way report and audit are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_p5993_dump_posthoc_20260715_203600/`.
+
+Job `11238115` completed both cache-on science arms and all 32 requested dump
+payloads.  Its Slurm exit is a post-science harness failure: the environment
+regex matched `RECOVAR=` but omitted every `RECOVAR_*` variable, and the exact
+log comparison retained leading timestamps.  Envelope-qualified post-hoc
+analysis places the dump arm inside the autonomous repeat at trajectory and map
+boundaries; its minimum 16-map FSC-AUC is `0.999999954237`.  This validates the
+payloads without falsely claiming independent GPU processes are bitwise inert.
+
 The real-data K=1 10,000-particle full trajectory in job `11235095` provides a
 separate convergence-scale result.  RELION and RECOVAR both converge at
 numbered iteration 16 on the same A100-SXM4-80GB.  Strict array gates first
