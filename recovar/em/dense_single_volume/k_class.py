@@ -2909,7 +2909,10 @@ def run_dense_k_class_em_adaptive(
             [np.array([int(coarse_per_class_assn[k, i])], dtype=np.int32) for i in range(n_images)]
             for k in range(n_classes)
         ]
-        significant_counts_for_result = np.full(n_images, n_classes, dtype=np.int32)
+        # RELION one-hot encodes the joint class/pose coarse posterior in
+        # firstiter_cc and serializes one retained sample, even though the
+        # per-class child lists above remain convenient for pass-2 routing.
+        significant_counts_for_result = np.ones(n_images, dtype=np.int32)
     elif skip_significance_pruning:
         # Trivial mask: every fine pose is significant (None means all-True).
         sig_sample_indices_by_class = [[None] * n_images for _ in range(n_classes)]

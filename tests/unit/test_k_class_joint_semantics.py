@@ -1224,6 +1224,17 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
     np.testing.assert_array_equal(np.asarray(result.class_assignments), np.asarray([0, 1, 1, 0], dtype=np.int32))
     np.testing.assert_allclose(np.asarray(result.class_posterior_sums), np.asarray([2.0, 2.0], dtype=np.float32))
     np.testing.assert_array_equal(np.asarray(result.pose_assignments), np.asarray([0, 2, 3, 1], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(result.significant_counts), np.ones(4, dtype=np.int32))
+    # Significant-count serialization is result metadata only; the per-class
+    # M-step accumulators returned by the sparse global-winner route survive.
+    np.testing.assert_array_equal(
+        np.asarray(result.Ft_y),
+        np.asarray([[1, 1, 1, 1], [2, 2, 2, 2]], dtype=np.complex64),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(result.Ft_ctf),
+        np.asarray([[2, 2, 2, 2], [3, 3, 3, 3]], dtype=np.float32),
+    )
 
 
 def test_lazy_k_class_adaptive_mask_matches_dense_blocks_without_materializing():
