@@ -150,6 +150,7 @@ _DEFAULT_ADJOINT_BLOCK_MAX_BYTES = 512 * 1024**2
 _EXACT_RAW_DIFF2_CACHE_MAX_BYTES = 512 * 1024**2
 _EXACT_RAW_DIFF2_CACHE_DEVICE_FRACTION = 0.01
 _EXACT_RAW_DIFF2_CACHE_FREE_FRACTION = 0.25
+_EXACT_RAW_DIFF2_CACHE_MAX_BYTES_ENV = "RECOVAR_SPARSE_PASS2_EXACT_RAW_DIFF2_CACHE_MAX_BYTES"
 _MAX_HYPOTHESES_ENV = "RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES"
 _SCORE_ONLY_MAX_HYPOTHESES_ENV = "RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES"
 _MAX_TRANSLATION_TILE_BYTES_ENV = "RECOVAR_SPARSE_PASS2_MAX_TRANSLATION_TILE_BYTES"
@@ -2852,23 +2853,64 @@ def _device_free_memory_bytes() -> int | None:
     return None
 
 
+def _jax_allocator_free_memory_bytes() -> int | None:
+    """Return unused bytes in the active JAX GPU allocator, if reported."""
+
+    try:
+        devices = [device for device in jax.devices() if getattr(device, "platform", "") in {"gpu", "cuda"}]
+        if not devices:
+            return None
+        stats = devices[0].memory_stats()
+    except Exception:
+        return None
+    if not stats:
+        return None
+
+    limit = next(
+        (
+            int(stats[key])
+            for key in ("bytes_limit", "bytesLimit", "memory_limit", "total_memory")
+            if stats.get(key) is not None and int(stats[key]) > 0
+        ),
+        None,
+    )
+    bytes_in_use = next(
+        (
+            int(stats[key])
+            for key in ("bytes_in_use", "bytesInUse", "memory_in_use")
+            if stats.get(key) is not None and int(stats[key]) >= 0
+        ),
+        None,
+    )
+    if limit is None or bytes_in_use is None:
+        return None
+    return max(0, limit - bytes_in_use)
+
+
 def _exact_raw_diff2_cache_limit_bytes(
     device_memory_bytes: int | None,
     free_device_memory_bytes: int | None,
+    allocator_free_memory_bytes: int | None,
+    *,
+    max_cache_bytes: int = _EXACT_RAW_DIFF2_CACHE_MAX_BYTES,
 ) -> int:
     """Return the strict per-bucket cap for exact fine-score reuse."""
 
     if (
         device_memory_bytes is None
         or free_device_memory_bytes is None
+        or allocator_free_memory_bytes is None
         or int(device_memory_bytes) <= 0
         or int(free_device_memory_bytes) <= 0
+        or int(allocator_free_memory_bytes) <= 0
+        or int(max_cache_bytes) <= 0
     ):
         return 0
     return min(
-        _EXACT_RAW_DIFF2_CACHE_MAX_BYTES,
+        int(max_cache_bytes),
         int(int(device_memory_bytes) * _EXACT_RAW_DIFF2_CACHE_DEVICE_FRACTION),
         int(int(free_device_memory_bytes) * _EXACT_RAW_DIFF2_CACHE_FREE_FRACTION),
+        int(int(allocator_free_memory_bytes) * _EXACT_RAW_DIFF2_CACHE_FREE_FRACTION),
     )
 
 
@@ -8210,18 +8252,30 @@ def compute_pass2_stats_sparse_bucketed(
     exact_raw_diff2_cache_admission_logged = False
     if use_exact_relion_gaussian:
         free_device_memory_bytes = _device_free_memory_bytes()
+        allocator_free_memory_bytes = _jax_allocator_free_memory_bytes()
+        exact_raw_diff2_cache_max_bytes = _optional_nonnegative_int_env(
+            _EXACT_RAW_DIFF2_CACHE_MAX_BYTES_ENV,
+        )
+        if exact_raw_diff2_cache_max_bytes is None:
+            exact_raw_diff2_cache_max_bytes = _EXACT_RAW_DIFF2_CACHE_MAX_BYTES
         exact_raw_diff2_cache_limit_bytes = _exact_raw_diff2_cache_limit_bytes(
             device_memory_bytes,
             free_device_memory_bytes,
+            allocator_free_memory_bytes,
+            max_cache_bytes=exact_raw_diff2_cache_max_bytes,
         )
         logger.info(
             "Sparse pass-2 exact raw-diff2 reuse cap: %.2f MiB "
-            "(device=%.2f GiB free=%s)",
+            "(device=%.2f GiB physical_free=%s allocator_free=%s configured_max=%.2f MiB)",
             exact_raw_diff2_cache_limit_bytes / float(1024**2),
             0.0 if device_memory_bytes is None else device_memory_bytes / float(1024**3),
             "unknown"
             if free_device_memory_bytes is None
             else f"{free_device_memory_bytes / float(1024**3):.2f} GiB",
+            "unknown"
+            if allocator_free_memory_bytes is None
+            else f"{allocator_free_memory_bytes / float(1024**3):.2f} GiB",
+            exact_raw_diff2_cache_max_bytes / float(1024**2),
         )
 
     bucket_group_stats = _bucket_group_stats(buckets)
