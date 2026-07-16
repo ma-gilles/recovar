@@ -694,6 +694,7 @@ def job_preamble(
     scratch_dir: Path,
     cuda_lib: Path,
     cuda_module: str,
+    relion_src_dir: Path,
     job_name: str,
     expected_commit: str,
 ) -> str:
@@ -710,6 +711,7 @@ done < <(env)
 unset TF_GPU_ALLOCATOR
 export PYTHONNOUSERSITE=1
 export RECOVAR_EXPECTED_REPO_ROOT={q(REPO_ROOT)}
+export RELION_SRC_DIR={q(relion_src_dir)}
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
 RUNTIME_ROOT={q(DEFAULT_RUNTIME_ROOT / job_name)}_${{SLURM_JOB_ID}}
@@ -782,6 +784,7 @@ def write_setup_script(
     constraint: str,
     setup_gres: str,
     cuda_module: str,
+    relion_src_dir: Path,
     expected_commit: str | None = None,
 ) -> Path:
     expected_commit = expected_commit or git_text("rev-parse", "HEAD")
@@ -798,7 +801,7 @@ def write_setup_script(
 #SBATCH --mem=64G
 #SBATCH --time=01:00:00
 
-{job_preamble(scratch_dir=scratch_dir, cuda_lib=cuda_lib, cuda_module=cuda_module, job_name="em_kclass_matrix_setup", expected_commit=expected_commit)}
+{job_preamble(scratch_dir=scratch_dir, cuda_lib=cuda_lib, cuda_module=cuda_module, relion_src_dir=relion_src_dir, job_name="em_kclass_matrix_setup", expected_commit=expected_commit)}
 
 flock {q(REPO_ROOT / ".pixi" / "install-recovar.lock")} bash -lc '
 set -euo pipefail
@@ -842,6 +845,7 @@ def write_case_script(
     constraint: str,
     exclusive: bool,
     cuda_module: str,
+    relion_src_dir: Path,
     relion_module: str,
     relion_refine_mpi: str,
     relion_mpi_ranks: int,
@@ -889,7 +893,7 @@ echo "Using holdout outlier PDB: ${{OUTLIER_PDB}}"
 #SBATCH --mem={case.mem}
 #SBATCH --time={case.time_limit}
 
-{job_preamble(scratch_dir=scratch_dir, cuda_lib=cuda_lib, cuda_module=cuda_module, job_name=f"em_kclass_matrix_{case.index}_{case.name}", expected_commit=expected_commit)}
+{job_preamble(scratch_dir=scratch_dir, cuda_lib=cuda_lib, cuda_module=cuda_module, relion_src_dir=relion_src_dir, job_name=f"em_kclass_matrix_{case.index}_{case.name}", expected_commit=expected_commit)}
 
 CASE_ROOT={q(case_root)}
 DATA_DIR="${{CASE_ROOT}}/data"
@@ -1356,6 +1360,17 @@ def main() -> int:
     setup_gres = os.environ.get("EM_KCLASS_MATRIX_SETUP_GRES", "")
     exclusive = os.environ.get("EM_KCLASS_MATRIX_EXCLUSIVE", "0") != "0"
     cuda_module = os.environ.get("CUDA_MODULE", "cudatoolkit/12.8")
+    relion_src_value = os.environ.get("RELION_SRC_DIR", "").strip()
+    if not relion_src_value:
+        raise SystemExit("RELION_SRC_DIR must name an absolute RELION source directory containing projector.h")
+    relion_src_path = Path(relion_src_value).expanduser()
+    if not relion_src_path.is_absolute():
+        raise SystemExit(f"RELION_SRC_DIR must be absolute: {relion_src_path}")
+    relion_src_dir = relion_src_path.resolve()
+    if not (relion_src_dir / "projector.h").is_file():
+        raise SystemExit(
+            f"RELION_SRC_DIR must name an absolute RELION source directory containing projector.h: {relion_src_dir}"
+        )
     relion_module = os.environ.get("RELION_MODULE", "relion/5.0.1/gcc-11.5.0-gpu")
     relion_refine_mpi = os.environ.get("EM_KCLASS_MATRIX_RELION_REFINE_MPI", "").strip()
     if not relion_refine_mpi:
@@ -1401,6 +1416,7 @@ def main() -> int:
     print(f"Summary partition: {summary_partition}")
     print(f"Summary constraint: {summary_constraint or '<none>'}")
     print(f"Constraint: {constraint or '<none>'}")
+    print(f"RELION source: {relion_src_dir}")
     print(f"RELION module: {relion_module}")
     print(f"RELION dispatch-capture executable: {relion_refine_mpi}")
     if max_iter_override_for_env:
@@ -1449,6 +1465,7 @@ def main() -> int:
         constraint=setup_constraint,
         setup_gres=setup_gres,
         cuda_module=cuda_module,
+        relion_src_dir=relion_src_dir,
         expected_commit=expected_commit,
     )
     setup_job = submit(setup_script, dry_run=args.dry_run)
@@ -1468,6 +1485,7 @@ def main() -> int:
             constraint=constraint,
             exclusive=exclusive,
             cuda_module=cuda_module,
+            relion_src_dir=relion_src_dir,
             relion_module=relion_module,
             relion_refine_mpi=relion_refine_mpi,
             relion_mpi_ranks=relion_mpi_ranks,
@@ -1525,6 +1543,7 @@ def main() -> int:
                 f"SBATCH_ACCOUNT={account}",
                 f"SBATCH_CONSTRAINT={constraint}",
                 f"RELION_MODULE={relion_module}",
+                f"RELION_SRC_DIR={relion_src_dir}",
                 f"EM_KCLASS_MATRIX_RELION_REFINE_MPI={relion_refine_mpi}",
                 f"RELION_MPI_RANKS={relion_mpi_ranks}",
                 f"KCLASS_IMAGE_BATCH_SIZE={image_batch_size}",

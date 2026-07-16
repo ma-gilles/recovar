@@ -5,6 +5,14 @@ import pytest
 from scripts import run_em_kclass_robustness_matrix_slurm as launcher
 
 
+def _set_relion_src(tmp_path, monkeypatch):
+    relion_src = tmp_path / "relion_src"
+    relion_src.mkdir()
+    (relion_src / "projector.h").write_text("// fixture\n")
+    monkeypatch.setenv("RELION_SRC_DIR", str(relion_src))
+    return relion_src
+
+
 def test_default_cases_cover_all_available_cryobench_pdb_families():
     pdb_dirs = {case.pdb_dir for case in launcher.DEFAULT_CASES}
 
@@ -121,6 +129,7 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
         constraint="a100",
         exclusive=False,
         cuda_module="cudatoolkit/12.8",
+        relion_src_dir=tmp_path / "relion_src",
         relion_module="relion/5.0.1/gcc-11.5.0-gpu",
         relion_refine_mpi="/instrumented/relion_refine_mpi",
         relion_mpi_ranks=3,
@@ -179,6 +188,7 @@ def test_case_jobs_build_cuda_lib_atomically_under_lock(tmp_path):
         constraint="a100",
         exclusive=False,
         cuda_module="cudatoolkit/12.8",
+        relion_src_dir=tmp_path / "relion_src",
         relion_module="relion/5.0.1/gcc-11.5.0-gpu",
         relion_refine_mpi="/instrumented/relion_refine_mpi",
         relion_mpi_ranks=3,
@@ -212,6 +222,7 @@ def test_setup_script_allows_external_relion_bind_build_dir(tmp_path):
         constraint="",
         setup_gres="",
         cuda_module="cudatoolkit/12.8",
+        relion_src_dir=tmp_path / "relion_src",
     )
 
     text = script.read_text()
@@ -221,6 +232,7 @@ def test_setup_script_allows_external_relion_bind_build_dir(tmp_path):
 
 
 def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monkeypatch):
+    relion_src = _set_relion_src(tmp_path, monkeypatch)
     pdb_dir = tmp_path / "pdbs"
     pdb_dir.mkdir()
     case = launcher.replace(launcher.DEFAULT_CASES[0], pdb_dir=pdb_dir)
@@ -276,9 +288,12 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     assert f"EXPECTED_GIT_HEAD={expected_head}" in submission
     assert "CASE_JOB_IDS='DRYRUN DRYRUN'" in submission
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}" in submission
+    assert f"export RELION_SRC_DIR={relion_src}" in setup_text
+    assert f"RELION_SRC_DIR={relion_src}" in submission
 
 
 def test_main_fails_closed_without_dispatch_capture_relion(tmp_path, monkeypatch):
+    _set_relion_src(tmp_path, monkeypatch)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -294,6 +309,25 @@ def test_main_fails_closed_without_dispatch_capture_relion(tmp_path, monkeypatch
     monkeypatch.delenv("EM_KCLASS_MATRIX_RELION_REFINE_MPI", raising=False)
 
     with pytest.raises(SystemExit, match="must name an absolute, executable RELION build"):
+        launcher.main()
+
+
+def test_main_fails_closed_without_relion_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_em_kclass_robustness_matrix_slurm.py",
+            "--dry-run",
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--case",
+            "1",
+        ],
+    )
+    monkeypatch.delenv("RELION_SRC_DIR", raising=False)
+
+    with pytest.raises(SystemExit, match="RELION_SRC_DIR must name"):
         launcher.main()
 
 
@@ -322,6 +356,7 @@ def test_max_iter_override_is_recorded_in_case_rows(monkeypatch):
 
 
 def test_seed_offset_renames_case_and_updates_generated_commands(tmp_path, monkeypatch):
+    _set_relion_src(tmp_path, monkeypatch)
     pdb_dir = tmp_path / "pdbs"
     pdb_dir.mkdir()
     case = launcher.replace(launcher.DEFAULT_CASES[1], pdb_dir=pdb_dir)
@@ -396,6 +431,7 @@ def test_outlier_kclass_case_uses_holdout_pdb_and_disables_streaming_mmap(tmp_pa
         constraint="",
         exclusive=False,
         cuda_module="cudatoolkit/12.8",
+        relion_src_dir=tmp_path / "relion_src",
         relion_module="relion/5.0.1/gcc-11.5.0-gpu",
         relion_refine_mpi="/instrumented/relion_refine_mpi",
         relion_mpi_ranks=3,
