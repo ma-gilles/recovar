@@ -3531,3 +3531,56 @@ frozen candidate/operand comparison; they are not classified as reduction
 noise.  The immutable repeat root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_relion_repeat_envelope_a10080_retry4_prepared_20260715_195515/`,
 with the versioned report at `analysis/repeat_envelope.json`.
+
+## 2026-07-15 K=1 iteration-2 exact-reference boundary
+
+Job `11240978` completed all four RECOVAR science arms and failed only in its
+post-science analyzer import.  The recovered versioned report passes its
+instrumentation gate.  With exact RELION iteration-1 incoming half maps and
+state, six of seven sampled iteration-2 Pmax differences contract to between
+approximately `4e-6` and `9.4e-5`.  Fixture row 7881 (stack image 103528) is
+the isolated exception: RECOVAR Pmax is `0.2810158432` versus RELION
+`0.260604`, a residual `+0.0204118432`.
+
+The exact-reference dump/no-dump control has maximum Pmax change `1.389e-5`,
+zero Euler or translation mismatches, one significant-count difference by
+one, and half-map FSC-AUC `0.9999999860/0.9999999862`.  Row 7881 has the same
+1,536 fine candidates and reconstruction support in the autonomous-map and
+exact-map RECOVAR arms.  Canonical replay of the captured RECOVAR operands has
+maximum float32-versus-float64 score change `1.406e-5`, float64-versus-
+complex128 change about `5.68e-14`, and zero order-only change in this replay.
+Those effects are far too small to classify the `0.02041` Pmax residual as
+ordinary reduction precision or order variation.
+
+RELION records 49 significant coarse samples for row 7881, while RECOVAR
+records 48 and expands them to exactly `48 * 32 = 1536` fine children.  One
+additional RELION parent with full-posterior mass `0.0726359` would explain the
+entire Pmax residual by support renormalization.  This is a testable leading
+hypothesis, not yet a conclusion: passive RELION pass-0/pass-1 arrays and a
+full RECOVAR coarse surface must identify the parent and its mass before any
+production change.  Row 6202 is the matched control at 15 samples in both
+programs.  The report and replay artifact are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_current_exactref_capture_bdc50_20260715_194900/analysis_rows/`.
+
+## 2026-07-15 K=4 particle-5993 frozen-boundary provenance correction
+
+Job `11241611` completed the corrected old-map float32 science arm and then
+failed its intentionally strict `144`-parent gate.  An independent exact-set
+audit proves that count was overstrict: the current 143-parent support is the
+material old-low branch.  It retains `(class 0, global coarse rotation 255,
+translation 20)` and differs from the historical 144-parent old-low set only
+by excluding `(class 0, rotation 14, translation 14)`.  The excluded parent's
+32 fine children had total posterior mass `6.56684e-14` and zero reconstruction
+support.
+
+Current versus historical old-low Pmax is `0.6777920723` versus
+`0.6777926087`, while class, Euler pose, and translation are exact.  The
+material retained parent and negligible excluded parent are ranks 143 and
+144, with weights `1.8615471406e-5` and `1.8615400394e-5`; their difference is
+only `7.10123e-11`.  Fixture data, particle order, half layout, dispatch,
+iteration state, and all eight scoring maps match, including an exact map-frame
+round trip.  The archived run did not save the coarse operands or reduction
+trace and used a different H100/CUDA binary, so exact reproduction of the
+negligible 144th parent is neither possible nor a valid branch-identity gate.
+The audit is at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_p5993_archive_provenance_audit_20260715_210100/`.
