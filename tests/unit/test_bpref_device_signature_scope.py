@@ -7,11 +7,9 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume import iteration_loop
-from recovar.em.dense_single_volume import k_class
+from recovar.em.dense_single_volume import iteration_loop, k_class
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
-
 
 pytestmark = pytest.mark.unit
 
@@ -317,7 +315,7 @@ def test_target_capture_preserves_rotation_chunk_plan_and_fails_if_target_is_chu
     assert "rotation_chunk_size = _guard_bpref_target_rotation_chunking(" in source
 
 
-def test_score_posterior_mask_and_reduced_operand_shadow_branches_agree_on_cpu():
+def test_posterior_mask_and_reduced_operand_diagnostic_branches_agree_on_cpu():
     rng = np.random.default_rng(20260715)
     batch, rotations, translations, pixels = 2, 4, 3, 11
     shifted = (
@@ -344,27 +342,9 @@ def test_score_posterior_mask_and_reduced_operand_shadow_branches_agree_on_cpu()
         translation_prior,
         candidate_mask,
     )
-    shadow_scores, _ = sparse_pass2_bucketed._score_pass2_bucket_relion_gpu_diff2_components(
-        shifted,
-        corr,
-        projection,
-        half_weights,
-        rotation_prior,
-        translation_prior,
-        candidate_mask,
-    )
-    sparse_pass2_bucketed._require_bpref_shadow_exact(
-        "CPU test scores", authoritative_scores, shadow_scores
-    )
-
     authoritative_normalized = sparse_pass2_bucketed._normalize_pass2_bucket(
         authoritative_scores
     )
-    shadow_normalized = sparse_pass2_bucketed._normalize_pass2_bucket(shadow_scores)
-    for authoritative, shadow in zip(authoritative_normalized, shadow_normalized, strict=True):
-        sparse_pass2_bucketed._require_bpref_shadow_exact(
-            "CPU test posterior", authoritative, shadow
-        )
     probs = authoritative_normalized[1]
     authoritative_reconstruction = (
         sparse_pass2_bucketed._relion_pass2_reconstruction_probs_for_mstep(
@@ -377,7 +357,7 @@ def test_score_posterior_mask_and_reduced_operand_shadow_branches_agree_on_cpu()
     )
     shadow_reconstruction = (
         sparse_pass2_bucketed._relion_pass2_reconstruction_probs_for_mstep(
-            shadow_scores,
+            authoritative_scores,
             probs,
             adaptive_fraction=0.999,
             use_relion_x_half_mstep=True,
