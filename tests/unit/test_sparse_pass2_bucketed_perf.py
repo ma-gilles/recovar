@@ -21,10 +21,8 @@ We use a tiny mock dataset so the test is fast on a login node.
 from __future__ import annotations
 
 import inspect
-import gc
 import logging
 import os
-import weakref
 
 import numpy as np
 import pytest
@@ -147,10 +145,8 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _prepare_bucket_io,
     _score_pass2_bucket_normalized_cc,
     _score_pass2_bucket_relion_gpu_diff2,
-    _score_pass2_bucket_relion_gpu_diff2_raw,
     _score_pass2_pairs_normalized_cc,
     _score_pass2_pairs_relion_gpu_diff2,
-    _score_pass2_pairs_relion_gpu_diff2_raw,
     _select_active_noise_rows,
     _small_bucket_coalesce_size_for_pass,
     _split_compact_pair_buckets_by_projection_gather_budget,
@@ -5910,30 +5906,12 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
 
     score_chunk_sizes = []
     original_score = bucketed_mod._score_pass2_bucket_relion_gpu_diff2
-    original_raw_score = bucketed_mod._score_pass2_bucket_relion_gpu_diff2_raw
-    raw_score_refs = []
-    raw_score_rotation_sizes = []
-    max_live_raw_score_arrays = 0
 
     def counting_score(*args, **score_kwargs):
         score_chunk_sizes.append(int(args[2].shape[1]))
         return original_score(*args, **score_kwargs)
 
-    def counting_raw_score(*args, **score_kwargs):
-        nonlocal max_live_raw_score_arrays
-        gc.collect()
-        max_live_raw_score_arrays = max(
-            max_live_raw_score_arrays,
-            sum(ref() is not None for ref in raw_score_refs),
-        )
-        result = original_raw_score(*args, **score_kwargs)
-        jax.block_until_ready(result)
-        raw_score_rotation_sizes.append(int(args[2].shape[1]))
-        raw_score_refs.append(weakref.ref(result))
-        return result
-
     monkeypatch.setattr(bucketed_mod, "_score_pass2_bucket_relion_gpu_diff2", counting_score)
-    monkeypatch.setattr(bucketed_mod, "_score_pass2_bucket_relion_gpu_diff2_raw", counting_raw_score)
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK", "4")
     chunked = compute_pass2_stats_sparse(**kwargs)
 
@@ -5947,9 +5925,6 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
     np.testing.assert_allclose(np.asarray(chunked[7]), np.asarray(unchunked[7]), rtol=1e-6, atol=1e-6)
     _assert_noise_stats_close((chunked[8],), (unchunked[8],), rtol=1e-5, atol=1e-5)
     assert score_chunk_sizes == [4, 4, 4, 4, 4, 4, 4, 4]
-    assert len(raw_score_refs) >= 4
-    assert max(raw_score_rotation_sizes) <= 4
-    assert max_live_raw_score_arrays <= 1
 
 
 def test_sparse_pass2_projection_cache_chunks_non_identity_indices(monkeypatch):
@@ -6112,50 +6087,6 @@ def test_score_log_z_only_matches_full_score_probe(monkeypatch):
 
     np.testing.assert_allclose(np.asarray(log_evidence), np.asarray(full[6].log_evidence_per_image), rtol=0, atol=0)
     np.testing.assert_allclose(np.asarray(score_log_z), np.asarray(full[7]), rtol=0, atol=0)
-    # Gaussian score logZ is absolute (the common diff2 minimum has been
-    # removed), so it is directly commensurate across independent calls.
-    np.testing.assert_allclose(np.asarray(score_log_z), np.asarray(log_evidence), rtol=0, atol=0)
-    assert np.all(np.asarray(full[6].best_log_score_per_image) <= np.asarray(log_evidence))
-
-    cc_kwargs = dict(
-        experiment_dataset=ds,
-        volume=volume,
-        mean_variance=mean_variance,
-        noise_variance=noise_variance,
-        translations=translations,
-        significant_sample_indices=significant_samples,
-        nside_level=1,
-        disc_type="linear_interp",
-        oversampling_order=1,
-        current_size=None,
-        accumulate_noise=False,
-        fine_rotations_override=fine_rotations,
-        fine_rotation_parent_override=fine_parent,
-        fine_translations_override=fine_translations,
-        fine_translation_parent_override=fine_translation_parent,
-        relion_firstiter_score_mode="normalized_cc",
-    )
-    cc_full = compute_pass2_stats_sparse(
-        **cc_kwargs,
-        return_stats=True,
-        return_score_log_z=True,
-        disable_adjoint_y=True,
-        disable_adjoint_ctf=True,
-    )
-    cc_log_evidence, cc_score_log_z = compute_pass2_stats_sparse(
-        **cc_kwargs,
-        return_score_log_z_only=True,
-        disable_adjoint_y=True,
-        disable_adjoint_ctf=True,
-    )
-    np.testing.assert_allclose(
-        np.asarray(cc_log_evidence),
-        np.asarray(cc_full[6].log_evidence_per_image),
-        rtol=0,
-        atol=0,
-    )
-    np.testing.assert_allclose(np.asarray(cc_score_log_z), np.asarray(cc_full[7]), rtol=0, atol=0)
-    assert np.any(np.asarray(cc_score_log_z) != np.asarray(cc_log_evidence))
 
 
 def test_fused_other_class_log_z_matches_two_pass_normalization(monkeypatch):
@@ -6226,7 +6157,6 @@ def test_fused_other_class_log_z_matches_two_pass_normalization(monkeypatch):
         translations,
         significant_samples,
         normalization_log_z=global_score_log_z,
-        normalization_score_mode="gaussian",
         **common,
     )
     fused = compute_pass2_stats_sparse(
@@ -6237,7 +6167,6 @@ def test_fused_other_class_log_z_matches_two_pass_normalization(monkeypatch):
         translations,
         significant_samples,
         normalization_other_score_log_z=score_a,
-        normalization_score_mode="gaussian",
         return_score_log_z=True,
         **common,
     )
@@ -6260,7 +6189,6 @@ def test_fused_other_class_log_z_matches_two_pass_normalization(monkeypatch):
     )
     np.testing.assert_allclose(np.asarray(fused[6].log_evidence_per_image), np.asarray(log_evidence_b), rtol=0, atol=0)
     np.testing.assert_allclose(np.asarray(fused[7]), np.asarray(score_b), rtol=0, atol=0)
-    np.testing.assert_allclose(np.asarray(score_b), np.asarray(log_evidence_b), rtol=0, atol=0)
 
 
 def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(monkeypatch):
@@ -6436,25 +6364,12 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(monkeypa
     unchunked_external = compute_pass2_stats_sparse(
         **common_no_noise,
         normalization_log_z=external_log_z,
-        normalization_score_mode="gaussian",
     )
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", "512")
     chunked_external = compute_pass2_stats_sparse(
         **common_no_noise,
         normalization_log_z=external_log_z,
-        normalization_score_mode="gaussian",
     )
-    with pytest.raises(ValueError, match="external score normalization mode"):
-        compute_pass2_stats_sparse(
-            **common_no_noise,
-            normalization_log_z=external_log_z,
-            normalization_score_mode="normalized_cc",
-        )
-    with pytest.raises(ValueError, match="requires normalization_score_mode"):
-        compute_pass2_stats_sparse(
-            **common_no_noise,
-            normalization_log_z=external_log_z,
-        )
 
     np.testing.assert_allclose(
         np.asarray(chunked_external[0]),
@@ -6659,20 +6574,6 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
 
-    fused_score_results = []
-    original_fused_pass2 = bucketed_mod.compute_k_class_pass2_stats_sparse_fused
-
-    def capture_fused_score_result(*args, **kwargs):
-        result = original_fused_pass2(*args, **kwargs)
-        fused_score_results.append(result)
-        return result
-
-    monkeypatch.setattr(
-        bucketed_mod,
-        "compute_k_class_pass2_stats_sparse_fused",
-        capture_fused_score_result,
-    )
-
     n_images = 5
     n_classes = 2
     n_coarse_rot = rotation_grid_size(1)
@@ -6757,11 +6658,7 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
 
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTED_ROTATIONS", "3")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "0")
-    with pytest.raises(RuntimeError, match="requires fused scoring"):
-        _run_sparse_k_class_adaptive_pass2(**kwargs)
-    kwargs["engine_kwargs"]["relion_exact_fine_gaussian"] = False
     legacy = _run_sparse_k_class_adaptive_pass2(**kwargs)
-    kwargs["engine_kwargs"].pop("relion_exact_fine_gaussian")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "1")
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_STATS", raising=False)
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", raising=False)
@@ -6775,46 +6672,11 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
 
     monkeypatch.setattr(
         bucketed_mod,
-        "_score_pass2_pairs_relion_gpu_diff2_raw",
+        "_score_pass2_pairs_relion_gpu_diff2",
         fail_if_compact_pair_scorer_is_called,
     )
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED_NOISE_NORM", "0")
-
-    def unsupported_fused_pass2(*args, **kwargs):
-        del args, kwargs
-        raise NotImplementedError("forced unsupported fused route")
-
-    monkeypatch.setattr(
-        bucketed_mod,
-        "compute_k_class_pass2_stats_sparse_fused",
-        unsupported_fused_pass2,
-    )
-    with pytest.raises(RuntimeError, match="cannot fall back"):
-        _run_sparse_k_class_adaptive_pass2(**kwargs)
-    monkeypatch.setattr(
-        bucketed_mod,
-        "compute_k_class_pass2_stats_sparse_fused",
-        capture_fused_score_result,
-    )
     fused = _run_sparse_k_class_adaptive_pass2(**kwargs)
-    assert fused_score_results
-    np.testing.assert_allclose(
-        np.asarray(fused_score_results[-1].class_score_log_z),
-        np.asarray(fused_score_results[-1].class_log_evidence),
-        rtol=0,
-        atol=0,
-    )
-    assert fused.profile_summary["sparse_kclass_raw_host_staging_total_bytes"] > 0
-    assert (
-        fused.profile_summary["sparse_kclass_raw_host_staging_peak_bytes"]
-        <= fused.profile_summary["sparse_kclass_raw_host_staging_max_bytes"]
-    )
-    assert fused.profile_summary["sparse_kclass_raw_host_staging_s"] >= 0.0
-    assert fused.profile_summary["sparse_kclass_exact_relion_gaussian"] is True
-    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES", "1")
-    with pytest.raises(MemoryError, match="raw diff2 host staging would exceed"):
-        _run_sparse_k_class_adaptive_pass2(**kwargs)
-    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES", raising=False)
     assert fused.profile_summary["sparse_kclass_rectangular_active_rows"] is True
     assert fused.profile_summary["sparse_kclass_rectangular_active_prematmul"] is False
     assert fused.profile_summary["sparse_kclass_rectangular_active_rows_min_bucket_size"] == 4096
@@ -6939,10 +6801,6 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
     window_kwargs["engine_kwargs"] = {
         **kwargs["engine_kwargs"],
         "current_size": 2,
-        # This block compares window-preparation mechanics, including the
-        # intentionally non-fused legacy path. Exact reduced-size scoring is
-        # covered separately and rejects this full-spectrum configuration.
-        "relion_exact_fine_gaussian": False,
     }
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_WINDOWED_PREPARE", "0")
     window_full_prepare = _run_sparse_k_class_adaptive_pass2(**window_kwargs)
@@ -7069,8 +6927,8 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
 
     monkeypatch.setattr(
         bucketed_mod,
-        "_score_pass2_pairs_relion_gpu_diff2_raw",
-        _score_pass2_pairs_relion_gpu_diff2_raw,
+        "_score_pass2_pairs_relion_gpu_diff2",
+        _score_pass2_pairs_relion_gpu_diff2,
     )
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
@@ -7274,20 +7132,20 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
 
     def counting_rectangular_score(*args, **kwargs):
         scorer_calls["rectangular"] += 1
-        return _score_pass2_bucket_relion_gpu_diff2_raw(*args, **kwargs)
+        return _score_pass2_bucket_relion_gpu_diff2(*args, **kwargs)
 
     def counting_compact_pair_score(*args, **kwargs):
         scorer_calls["compact_pair"] += 1
-        return _score_pass2_pairs_relion_gpu_diff2_raw(*args, **kwargs)
+        return _score_pass2_pairs_relion_gpu_diff2(*args, **kwargs)
 
     monkeypatch.setattr(
         bucketed_mod,
-        "_score_pass2_bucket_relion_gpu_diff2_raw",
+        "_score_pass2_bucket_relion_gpu_diff2",
         counting_rectangular_score,
     )
     monkeypatch.setattr(
         bucketed_mod,
-        "_score_pass2_pairs_relion_gpu_diff2_raw",
+        "_score_pass2_pairs_relion_gpu_diff2",
         counting_compact_pair_score,
     )
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "32")

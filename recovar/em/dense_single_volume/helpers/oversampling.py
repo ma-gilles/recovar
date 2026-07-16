@@ -590,7 +590,6 @@ def compute_pass2_stats_sparse(
     translation_prior_centers=None,
     normalization_log_z=None,
     normalization_other_score_log_z=None,
-    normalization_score_mode=None,
     return_score_log_z=False,
     return_score_log_z_only=False,
     disable_adjoint_y=False,
@@ -605,7 +604,6 @@ def compute_pass2_stats_sparse(
     relion_fine_mstep_prune=False,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
-    relion_exact_fine_gaussian=True,
     relion_projector_half=None,
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
@@ -630,40 +628,9 @@ def compute_pass2_stats_sparse(
     :func:`_compute_pass2_stats_sparse_perimage_reference` for testing
     parity; it can be selected by setting ``use_perimage_reference=True``.
     The two paths must produce identical outputs (modulo float rounding).
-
-    ``relion_exact_fine_gaussian`` selects the float32 scorer that follows
-    RELION's fine-search diff2/minimum ordering. Float64 diagnostics retain
-    the historical algebraic scorer so they do not silently downcast.
     """
-    has_external_score_normalization = (
-        normalization_log_z is not None or normalization_other_score_log_z is not None
-    )
-    if has_external_score_normalization and normalization_score_mode is None:
-        raise ValueError(
-            "external sparse pass-2 score normalization requires normalization_score_mode; "
-            "Gaussian logZ is absolute while normalized-CC logZ is centered"
-        )
-    if normalization_score_mode is not None and not has_external_score_normalization:
-        raise ValueError("normalization_score_mode requires an external score normalization")
-    if (
-        normalization_score_mode is not None
-        and normalization_score_mode != relion_firstiter_score_mode
-    ):
-        raise ValueError(
-            "external score normalization mode does not match this pass: "
-            f"external={normalization_score_mode!r}, pass={relion_firstiter_score_mode!r}"
-        )
     if use_perimage_reference and (return_score_log_z or return_score_log_z_only):
         raise NotImplementedError("score-logZ returns are only implemented for the bucketed sparse pass-2 path")
-    if (
-        use_perimage_reference
-        and relion_exact_fine_gaussian
-        and relion_firstiter_score_mode == "gaussian"
-        and not use_float64_scoring
-    ):
-        raise NotImplementedError(
-            "exact RELION fine Gaussian scoring requires the bucketed sparse pass-2 path"
-        )
     if use_perimage_reference and group_ids is not None:
         logger.warning(
             "Sparse per-image reference pass-2 does not accumulate native group-scale correction stats; "
@@ -679,7 +646,6 @@ def compute_pass2_stats_sparse(
         and not return_score_log_z_only
         and normalization_log_z is None
         and normalization_other_score_log_z is None
-        and normalization_score_mode is None
         and group_ids is None
         and scale_correction_group_count is None
         and scale_correction_data_vs_prior is None
@@ -692,10 +658,6 @@ def compute_pass2_stats_sparse(
         and not relion_fine_mstep_prune
         and relion_firstiter_score_mode == "gaussian"
         and not relion_firstiter_winner_take_all
-        and not (
-            relion_exact_fine_gaussian
-            and not use_float64_scoring
-        )
     )
     if not use_perimage_reference and not full_grid_reference:
         from .sparse_pass2_bucketed import compute_pass2_stats_sparse_bucketed
@@ -733,7 +695,6 @@ def compute_pass2_stats_sparse(
             random_perturbation=random_perturbation,
             normalization_log_z=normalization_log_z,
             normalization_other_score_log_z=normalization_other_score_log_z,
-            normalization_score_mode=normalization_score_mode,
             return_score_log_z=return_score_log_z,
             return_score_log_z_only=return_score_log_z_only,
             disable_adjoint_y=disable_adjoint_y,
@@ -748,7 +709,6 @@ def compute_pass2_stats_sparse(
             relion_fine_mstep_prune=relion_fine_mstep_prune,
             relion_firstiter_score_mode=relion_firstiter_score_mode,
             relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
-            relion_exact_fine_gaussian=relion_exact_fine_gaussian,
             relion_projector_half=relion_projector_half,
             relion_projector_r_max=relion_projector_r_max,
             adaptive_fraction=adaptive_fraction,
