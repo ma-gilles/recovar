@@ -4473,3 +4473,28 @@ replay.  Rotation enumeration IDs are recorded but are not used as the primary
 join key.  A pre-scatter difference is not classified as precision versus
 formulation until the float64/order controls and accumulator substitution are
 also complete.
+
+## 2026-07-16 real-10076 aggregate pre-scatter substitution
+
+The aggregate substitution closes the iteration-1 half-2 numerator boundary.
+On the same frozen ordinary indexed geometry, deterministic complex128/float64
+replay gives RECOVAR-versus-RELION source-data relative L2 `0.0010909493`;
+replacing the RELION source row for stack `111721` (original particle `8494`)
+with RECOVAR reduces it to `0.0001144435`. That particle contributes `0.99434`
+of the full data-delta L2 norm and is the already-classified discrete
+translation-support outlier.
+
+With one common RELION target weight and tau, the independently reconstructed
+RECOVAR-source map has FSC-AUC `0.9999988141`, while the RELION-source map has
+FSC-AUC `0.99999999999593`. These reproduce the sealed canonical-float32
+results within the same-GPU order-control envelope. Excluding particle 8494
+from the RELION-source substitution returns FSC-AUC to `0.9999988356`, showing
+that the known discrete support difference dominates this map effect. The
+absolute target-map replay is not hash-identical (FSC-AUC `0.9999133341`), so
+only the controlled relative FSC/FSC-AUC effect is classified; no bitwise map
+claim is made.
+
+This causally classifies the observed aggregate BPref map gap as pre-scatter
+operand generation, not ordinary scatter geometry or reduction order. Do not
+extend serial particle tracing. Continue with distribution-level score and
+posterior comparisons and controlled iteration-boundary substitutions.
