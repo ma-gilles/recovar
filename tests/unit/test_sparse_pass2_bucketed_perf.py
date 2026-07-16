@@ -5588,22 +5588,60 @@ def test_sparse_pass2_device_memory_probe_honors_visible_device():
     assert _nvidia_smi_visible_device_memory_bytes(smi_output, None) == 40960 * 1024**2
 
 
-def test_exact_raw_diff2_cache_budget_admission_and_fallback():
+def test_exact_raw_diff2_cache_budget_admission_and_fallback(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
     gib = 1024**3
     mib = 1024**2
 
-    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 40 * gib) == 512 * mib
-    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 1 * gib) == 256 * mib
-    assert _exact_raw_diff2_cache_limit_bytes(None, 40 * gib) == 0
-    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, None) == 0
-    assert _exact_raw_diff2_cache_limit_bytes(0, 40 * gib) == 0
-    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 0) == 0
+    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 40 * gib, 20 * gib) == 512 * mib
+    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 1 * gib, 20 * gib) == 256 * mib
+    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 40 * gib, 1 * gib) == 256 * mib
+    assert _exact_raw_diff2_cache_limit_bytes(None, 40 * gib, 20 * gib) == 0
+    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, None, 20 * gib) == 0
+    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 40 * gib, None) == 0
+    assert _exact_raw_diff2_cache_limit_bytes(0, 40 * gib, 20 * gib) == 0
+    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 0, 20 * gib) == 0
+    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 40 * gib, 0) == 0
+    assert _exact_raw_diff2_cache_limit_bytes(
+        80 * gib,
+        40 * gib,
+        20 * gib,
+        max_cache_bytes=128 * mib,
+    ) == 128 * mib
+    assert _exact_raw_diff2_cache_limit_bytes(
+        80 * gib,
+        40 * gib,
+        20 * gib,
+        max_cache_bytes=0,
+    ) == 0
 
     estimated = _exact_raw_diff2_cache_estimated_bytes(2, 131_072, 116)
     assert estimated == 116 * mib
     assert _exact_raw_diff2_cache_fits_budget(estimated, estimated)
     assert not _exact_raw_diff2_cache_fits_budget(estimated + 4, estimated)
     assert not _exact_raw_diff2_cache_fits_budget(0, estimated)
+    allocator_near_cap = estimated * 4 - 1
+    near_cap_limit = _exact_raw_diff2_cache_limit_bytes(
+        80 * gib,
+        40 * gib,
+        allocator_near_cap,
+    )
+    assert near_cap_limit < estimated
+    assert not _exact_raw_diff2_cache_fits_budget(estimated, near_cap_limit)
+
+    class FakeGpu:
+        platform = "gpu"
+
+        @staticmethod
+        def memory_stats():
+            return {"bytes_limit": 40 * gib, "bytes_in_use": 7 * gib}
+
+    monkeypatch.setattr(bucketed_mod.jax, "devices", lambda: [FakeGpu()])
+    assert bucketed_mod._jax_allocator_free_memory_bytes() == 33 * gib
+
+    monkeypatch.setattr(FakeGpu, "memory_stats", staticmethod(lambda: {"bytes_limit": 40 * gib}))
+    assert bucketed_mod._jax_allocator_free_memory_bytes() is None
 
 
 def test_half_translation_phase_table_matches_generic_translate_images():
@@ -6511,6 +6549,7 @@ def test_exact_raw_diff2_cache_matches_fallback_bitwise_and_removes_recompute(mo
     monkeypatch.delenv("RECOVAR_PASS2_DUMP_DIR", raising=False)
     monkeypatch.setattr(bucketed_mod, "_projection_cache_fits_budget", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(bucketed_mod, "_device_memory_limit_bytes", lambda: 80 * 1024**3)
+    monkeypatch.setattr(bucketed_mod, "_jax_allocator_free_memory_bytes", lambda: 20 * 1024**3)
 
     n_images = 2
     fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 8, axis=0)
@@ -6564,12 +6603,26 @@ def test_exact_raw_diff2_cache_matches_fallback_bitwise_and_removes_recompute(mo
     cached = compute_pass2_stats_sparse(**common)
     cached_combined_score_calls = combined_score_calls
 
+    combined_score_calls = 0
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_EXACT_RAW_DIFF2_CACHE_MAX_BYTES", "0")
+    disabled = compute_pass2_stats_sparse(**common)
+    disabled_combined_score_calls = combined_score_calls
+
     assert cached_combined_score_calls < fallback_combined_score_calls
+    assert disabled_combined_score_calls == fallback_combined_score_calls
     fallback_leaves = jax.tree_util.tree_leaves(fallback)
     cached_leaves = jax.tree_util.tree_leaves(cached)
+    disabled_leaves = jax.tree_util.tree_leaves(disabled)
     assert len(cached_leaves) == len(fallback_leaves)
-    for cached_leaf, fallback_leaf in zip(cached_leaves, fallback_leaves, strict=True):
+    assert len(disabled_leaves) == len(fallback_leaves)
+    for cached_leaf, disabled_leaf, fallback_leaf in zip(
+        cached_leaves,
+        disabled_leaves,
+        fallback_leaves,
+        strict=True,
+    ):
         np.testing.assert_array_equal(np.asarray(cached_leaf), np.asarray(fallback_leaf))
+        np.testing.assert_array_equal(np.asarray(disabled_leaf), np.asarray(fallback_leaf))
 
 
 def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonmatching_dump(monkeypatch, tmp_path):
