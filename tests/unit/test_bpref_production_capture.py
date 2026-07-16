@@ -43,6 +43,38 @@ def test_array_metrics_and_repeat_envelope_are_exact_array_diagnostics():
     )
 
 
+def test_real10076_lowres_join_mask_has_independent_expected_geometry():
+    inside, outside = validator.lowres_join_masks((99, 99, 99), 22)
+    assert inside.shape == (99, 99, 99)
+    assert np.count_nonzero(inside) == 44_473
+    assert np.count_nonzero(outside) == 925_826
+    assert inside[49, 49, 49]
+    assert inside[49 + 22, 49, 49]
+    assert not inside[49 + 23, 49, 49]
+    drifted, _ = validator.lowres_join_masks((99, 99, 99), 21)
+    assert np.count_nonzero(drifted) == 38_911
+    with pytest.raises(ValueError, match="odd cubic"):
+        validator.lowres_join_masks((98, 99, 99), 22)
+
+
+def test_unexpected_change_outside_join_fails_calibrated_gate():
+    inside, outside = validator.lowres_join_masks((5, 5, 5), 1)
+    baseline_data = np.ones((5, 5, 5), dtype=np.complex64)
+    baseline_weight = np.ones((5, 5, 5), dtype=np.float32)
+    changed_data = baseline_data.copy()
+    changed_weight = baseline_weight.copy()
+    changed_data[0, 0, 0] += np.complex64(1e-3)
+    changed_weight[0, 0, 0] += np.float32(1e-3)
+    assert not inside[0, 0, 0] and outside[0, 0, 0]
+    metrics = {
+        "data": validator.array_metrics(baseline_data, changed_data, outside),
+        "weight": validator.array_metrics(baseline_weight, changed_weight, outside),
+    }
+    assert not validator.metrics_within_envelopes(
+        metrics, {"data": 1e-7, "weight": 1e-7}
+    )
+
+
 def test_load_stage_rejects_nonproduction_topology(tmp_path):
     path = tmp_path / "pre.npz"
     values = np.zeros(75, dtype=np.complex64)

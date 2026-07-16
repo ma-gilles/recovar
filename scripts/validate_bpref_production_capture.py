@@ -68,11 +68,21 @@ def load_stage(path: Path, expected_stage: str) -> dict[str, object]:
     return values
 
 
-def array_metrics(lhs, rhs) -> dict[str, object]:
+def array_metrics(lhs, rhs, support=None) -> dict[str, object]:
     left = np.asarray(lhs)
     right = np.asarray(rhs)
     if left.shape != right.shape:
         raise ValueError(f"array shape mismatch: {left.shape} != {right.shape}")
+    if support is None:
+        selected = np.ones(left.shape, dtype=bool)
+    else:
+        selected = np.asarray(support, dtype=bool)
+        if selected.shape != left.shape:
+            raise ValueError(f"support shape mismatch: {selected.shape} != {left.shape}")
+    left = left[selected]
+    right = right[selected]
+    if left.size == 0:
+        raise ValueError("comparison support is empty")
     metric_dtype = (
         np.complex128 if np.iscomplexobj(left) or np.iscomplexobj(right) else np.float64
     )
@@ -104,6 +114,29 @@ def calibrated_envelope(repeat_metrics: dict[str, object]) -> float:
     if not np.isfinite(repeat) or repeat < 0:
         raise ValueError("repeat metric must be finite and nonnegative")
     return max(5.0 * repeat, np.finfo(np.float64).tiny)
+
+
+def lowres_join_masks(shape, max_padded_radius: int):
+    shape = tuple(int(size) for size in shape)
+    if len(shape) != 3 or len(set(shape)) != 1 or shape[0] % 2 != 1:
+        raise ValueError(f"low-resolution join requires one odd cubic grid, got {shape}")
+    if not 0 <= max_padded_radius < shape[0] // 2:
+        raise ValueError("low-resolution join radius must lie inside the padded grid")
+    centered_axes = [np.arange(size, dtype=np.int64) - size // 2 for size in shape]
+    squared_radius = sum(
+        coordinate**2
+        for coordinate in np.meshgrid(*centered_axes, indexing="ij")
+    )
+    inside = squared_radius <= max_padded_radius**2
+    return inside, ~inside
+
+
+def metrics_within_envelopes(metrics_by_field, envelopes) -> bool:
+    return all(
+        float(metrics_by_field[field]["delta_rms_over_lhs_rms"])
+        <= float(envelopes[field])
+        for field in ("data", "weight")
+    )
 
 
 def validate_companion(
@@ -236,6 +269,7 @@ def parse_args(argv=None):
     parser.add_argument("--panel", required=True, type=Path)
     parser.add_argument("--contribution-dir", required=True, type=Path)
     parser.add_argument("--signature-dir", required=True, type=Path)
+    parser.add_argument("--lowres-join-max-padded-radius", required=True, type=int)
     parser.add_argument("--capture-gpu-uuid", required=True)
     parser.add_argument("--repeat-a-gpu-uuid", required=True)
     parser.add_argument("--repeat-b-gpu-uuid", required=True)
@@ -328,9 +362,18 @@ def main(argv=None) -> None:
             np.load(args.repeat_b_weight).reshape(shape).real,
         ),
     }
+    inside_join, outside_join = lowres_join_masks(
+        shape, args.lowres_join_max_padded_radius
+    )
     closure = {
-        "data": array_metrics(public_data, live["data"]),
-        "weight": array_metrics(public_weight, live["weight"]),
+        "outside_lowres_join": {
+            "data": array_metrics(public_data, live["data"], outside_join),
+            "weight": array_metrics(public_weight, live["weight"], outside_join),
+        },
+        "inside_lowres_join": {
+            "data": array_metrics(public_data, live["data"], inside_join),
+            "weight": array_metrics(public_weight, live["weight"], inside_join),
+        },
     }
     instrumented_vs_repeat_a = {
         "data": array_metrics(np.load(args.repeat_a_data).reshape(shape), live["data"]),
@@ -339,14 +382,11 @@ def main(argv=None) -> None:
         ),
     }
     envelopes = {field: calibrated_envelope(repeats[field]) for field in ("data", "weight")}
-    closure_pass = all(
-        float(closure[field]["delta_rms_over_lhs_rms"]) <= envelopes[field]
-        for field in ("data", "weight")
+    closure_pass = metrics_within_envelopes(
+        closure["outside_lowres_join"], envelopes
     )
-    inertness_pass = all(
-        float(instrumented_vs_repeat_a[field]["delta_rms_over_lhs_rms"])
-        <= envelopes[field]
-        for field in ("data", "weight")
+    inertness_pass = metrics_within_envelopes(
+        instrumented_vs_repeat_a, envelopes
     )
     companion = validate_companion(
         args.panel,
@@ -374,11 +414,10 @@ def main(argv=None) -> None:
         "data": array_metrics(post_data, panel_post_data),
         "weight": array_metrics(post_weight, panel_post_weight),
     }
-    panel_closure_pass = all(
-        float(panel_pre_x0[field]["delta_rms_over_lhs_rms"]) <= envelopes[field]
-        and float(panel_post_x0[field]["delta_rms_over_lhs_rms"])
-        <= envelopes[field]
-        for field in ("data", "weight")
+    panel_closure_pass = metrics_within_envelopes(
+        panel_pre_x0, envelopes
+    ) and metrics_within_envelopes(
+        panel_post_x0, envelopes
     )
     passed = bool(
         stage_exact
@@ -402,7 +441,13 @@ def main(argv=None) -> None:
         "stage_exact": stage_exact,
         "repeat_calibration": repeats,
         "normalized_rms_envelopes": envelopes,
-        "captured_public_vs_live": closure,
+        "captured_prejoin_public_vs_postjoin_live": closure,
+        "low_resolution_half_join": {
+            "max_padded_radius": args.lowres_join_max_padded_radius,
+            "inside_voxel_count": int(np.count_nonzero(inside_join)),
+            "outside_voxel_count": int(np.count_nonzero(outside_join)),
+            "closure_gate_support": "outside_lowres_join",
+        },
         "instrumented_live_vs_repeat_a": instrumented_vs_repeat_a,
         "closure_pass": closure_pass,
         "capture_inertness_pass": inertness_pass,
