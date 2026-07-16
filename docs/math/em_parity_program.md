@@ -23,6 +23,67 @@ as the next product milestone rather than mixing it into the first closure.
 - **Performance:** exact accepted quality behavior with timing instrumentation;
   no algorithmic approximation without separate quality qualification.
 
+## Reproducing the RELION dispatch-v2 oracle
+
+Strict K-class replay needs RELION's authoritative mapping from sorted particle
+position to MPI follower and original particle ID.  The diagnostic patch is
+versioned at
+`docs/patches/relion_dispatch_log_schema_v2_d476e6f.patch` (SHA-256
+`6987c5ce397cbdd98835682cf1481a150c38c48cda621e006341d01a77e11c11`).
+Apply it only to RELION base
+`d476e6f6a4f1f37627c06ace5227fc374c0c2b05`:
+
+```bash
+test "$(git -C "$RELION_SRC" rev-parse HEAD)" = \
+  d476e6f6a4f1f37627c06ace5227fc374c0c2b05
+git -C "$RELION_SRC" apply \
+  "$RECOVAR_SRC/docs/patches/relion_dispatch_log_schema_v2_d476e6f.patch"
+
+source /etc/profile.d/modules.sh
+module purge
+module load relion/5.0.1/gcc-11.5.0-gpu
+cmake --fresh -S "$RELION_SRC" -B "$RELION_BUILD" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER="$(command -v gcc)" \
+  -DCMAKE_CXX_COMPILER="$(command -v g++)" \
+  -DMPI_C_COMPILER="$(command -v mpicc)" \
+  -DMPI_CXX_COMPILER="$(command -v mpicxx)" \
+  -DCUDA=ON -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-12.6 \
+  -DCUDA_ARCH=80 -DGUI=OFF -DBUILD_TESTS=OFF
+cmake --build "$RELION_BUILD" --target refine_mpi --parallel 8
+strings "$RELION_BUILD/bin/relion_refine_mpi" \
+  | grep -Fx RELION_DISPATCH_LOG_SCHEMA_V2
+```
+
+The qualified Della build used GCC 11, OpenMPI 4.1.6, CUDA 12.6, and RELION's
+existing FFTW installation.  Set `RELION_DISPATCH_LOG` for a one-iteration
+K-class smoke with the same fixture, MPI follower count, pool size, and seed as
+the intended replay.  The leader writes the marker followed by five integer
+columns:
+
+```text
+# RELION_DISPATCH_LOG_SCHEMA_V2
+2 iteration follower_rank sorted_position original_part_id
+```
+
+Require the marker, then use the RECOVAR builder as the smoke validator; it
+rejects non-v2 rows and non-bijective sorted positions or original IDs:
+
+```bash
+test "$(head -n 1 "$RELION_DISPATCH_LOG")" = \
+  '# RELION_DISPATCH_LOG_SCHEMA_V2'
+pixi run python -m scripts.build_relion_dispatch_schedule \
+  --dispatch-log "$RELION_DISPATCH_LOG" \
+  --output "$ORACLE_DIR/dispatch_schedule.npz" \
+  --oracle-dir "$ORACLE_DIR" --n-particles "$N_PARTICLES" \
+  --n-followers "$N_FOLLOWERS" --pool-size "$POOL_SIZE" \
+  --random-seed "$RANDOM_SEED"
+```
+
+The hook is inert when `RELION_DISPATCH_LOG` is unset.  Keep the patch and
+RELION source identity in run provenance; do not substitute a legacy
+four-column range capture.
+
 ## Current State — 2026-07-14
 
 Authoritative clean candidate checkout:
