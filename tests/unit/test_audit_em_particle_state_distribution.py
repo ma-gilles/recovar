@@ -164,6 +164,51 @@ def test_class_agreement_is_hungarian_matched_and_retains_raw_confusion():
 
 
 @pytest.mark.unit
+def test_class_ids_are_converted_from_zero_based_when_class_zero_is_absent():
+    recovar_zero_based = np.asarray([1, 1, 2, 2])
+    relion_one_based = np.asarray([2, 2, 3, 3])
+
+    summary = auditor._class_summary(recovar_zero_based, relion_one_based)
+
+    assert summary["raw_agreement"] == pytest.approx(1.0)
+    assert summary["labels"] == [2, 3]
+    assert summary["hungarian_recovar_to_relion"] == [
+        {"recovar_class": 2, "relion_class": 2},
+        {"recovar_class": 3, "relion_class": 3},
+    ]
+
+
+@pytest.mark.unit
+def test_subgroup_class_agreement_uses_whole_iteration_mapping():
+    recovar_zero_based = np.asarray([0, 0, 0, 1, 1])
+    relion_one_based = np.asarray([1, 1, 2, 2, 2])
+    overall = auditor._class_summary(recovar_zero_based, relion_one_based)
+    mapping = {
+        item["recovar_class"]: item["relion_class"]
+        for item in overall["hungarian_recovar_to_relion"]
+    }
+
+    subgroup = auditor._class_summary(
+        recovar_zero_based[2:3],
+        relion_one_based[2:3],
+        class_mapping=mapping,
+    )
+
+    assert overall["agreement"] == pytest.approx(0.8)
+    assert subgroup["matching_scope"] == "whole_iteration"
+    assert subgroup["agreement"] == pytest.approx(0.0)
+
+
+@pytest.mark.unit
+def test_identical_euler_arrays_have_exact_zero_angular_error():
+    eulers = np.asarray([[13.2, 51.7, -108.3], [-179.0, 90.1, 179.5]])
+
+    errors = auditor._angular_error_deg(eulers, eulers.copy())
+
+    np.testing.assert_array_equal(errors, np.zeros(2))
+
+
+@pytest.mark.unit
 def test_cli_writes_versioned_json_and_has_explicit_help(tmp_path):
     results, source, relion, _control = _fixture(tmp_path)
     output = tmp_path / "audit.json"

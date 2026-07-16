@@ -3933,8 +3933,9 @@ iteration.  When a same-physical-GPU RELION repeat is supplied, the report also
 measures RECOVAR errors relative to that numerical control envelope.  An
 independent repeat pair can be supplied with `--relion-control-reference-star`
 and `--relion-control-star`, so the control envelope need not share the
-cross-engine reference arm.  K-class
-agreement is Hungarian-matched while retaining raw label agreement and the full
+cross-engine reference arm.  K-class agreement is Hungarian-matched once per
+iteration and that fixed mapping is used for every subgroup, while retaining
+raw label agreement and the full
 confusion matrix.  Intermediate gates use these exact/array metrics; map-quality
 gates remain FSC/FSC-AUC only.  Escalate from this aggregate report to a
 particle capture only when it identifies a systematic cohort or an FSC

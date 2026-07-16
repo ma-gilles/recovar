@@ -165,18 +165,39 @@ def _relion_euler_matrices(eulers_deg: np.ndarray) -> np.ndarray:
 def _angular_error_deg(lhs_eulers: np.ndarray, rhs_eulers: np.ndarray) -> np.ndarray:
     # Angular distance is unchanged by the transpose that converts RELION's
     # projector matrix into RECOVAR's rotation-frame representation.
+    lhs_eulers = np.asarray(lhs_eulers, dtype=np.float64).reshape(-1, 3)
+    rhs_eulers = np.asarray(rhs_eulers, dtype=np.float64).reshape(-1, 3)
     lhs = _relion_euler_matrices(lhs_eulers)
     rhs = _relion_euler_matrices(rhs_eulers)
-    trace = np.einsum("nij,nij->n", lhs, rhs)
-    cosine = np.clip((trace - 1.0) * 0.5, -1.0, 1.0)
-    return np.degrees(np.arccos(cosine))
+    relative = np.einsum("nij,nkj->nik", lhs, rhs)
+    cosine = np.clip((np.trace(relative, axis1=1, axis2=2) - 1.0) * 0.5, -1.0, 1.0)
+    skew = np.stack(
+        [
+            relative[:, 2, 1] - relative[:, 1, 2],
+            relative[:, 0, 2] - relative[:, 2, 0],
+            relative[:, 1, 0] - relative[:, 0, 1],
+        ],
+        axis=1,
+    )
+    sine = 0.5 * np.linalg.norm(skew, axis=1)
+    angles = np.degrees(np.arctan2(sine, cosine))
+    angles[np.all(lhs_eulers == rhs_eulers, axis=1)] = 0.0
+    return angles
 
 
-def _class_summary(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
+def _class_summary(
+    lhs: np.ndarray,
+    rhs: np.ndarray,
+    *,
+    lhs_zero_based: bool = True,
+    class_mapping: dict[int, int] | None = None,
+) -> dict[str, Any]:
     lhs = np.asarray(lhs, dtype=np.int64).reshape(-1)
     rhs = np.asarray(rhs, dtype=np.int64).reshape(-1)
-    # RECOVAR serializes internal K-class ids zero-based; STAR ids are one-based.
-    if lhs.size and np.min(lhs) == 0:
+    if lhs_zero_based:
+        # RECOVAR serializes internal K-class ids zero-based; STAR ids are
+        # one-based.  Convert unconditionally: class zero may be absent from a
+        # collapsed iteration or a subgroup.
         lhs = lhs + 1
     if lhs.size == 0:
         return {
@@ -186,6 +207,7 @@ def _class_summary(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
             "agreement_count": 0,
             "raw_agreement": None,
             "raw_agreement_count": 0,
+            "matching_scope": "whole_iteration" if class_mapping is not None else "current_cohort",
             "labels": [],
             "hungarian_recovar_to_relion": [],
             "confusion_rows_recovar_cols_relion": [],
@@ -195,8 +217,20 @@ def _class_summary(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
     confusion = np.zeros((len(labels), len(labels)), dtype=np.int64)
     for rec_class, rel_class in zip(lhs, rhs, strict=True):
         confusion[positions[int(rec_class)], positions[int(rel_class)]] += 1
-    rows, columns = linear_sum_assignment(-confusion)
-    matched_count = int(confusion[rows, columns].sum())
+    if class_mapping is None:
+        rows, columns = linear_sum_assignment(-confusion)
+        class_mapping = {
+            labels[int(row)]: labels[int(column)] for row, column in zip(rows, columns, strict=True)
+        }
+        matching_scope = "current_cohort"
+    else:
+        class_mapping = {int(key): int(value) for key, value in class_mapping.items()}
+        matching_scope = "whole_iteration"
+    matched_count = int(
+        np.count_nonzero(
+            np.asarray([class_mapping.get(int(rec_class), -1) for rec_class in lhs], dtype=np.int64) == rhs
+        )
+    )
     raw_count = int(np.count_nonzero(lhs == rhs))
     return {
         "status": "measured",
@@ -208,10 +242,11 @@ def _class_summary(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
         "agreement_count": matched_count,
         "raw_agreement": float(raw_count / lhs.size),
         "raw_agreement_count": raw_count,
+        "matching_scope": matching_scope,
         "labels": labels,
         "hungarian_recovar_to_relion": [
-            {"recovar_class": labels[int(row)], "relion_class": labels[int(column)]}
-            for row, column in zip(rows, columns, strict=True)
+            {"recovar_class": rec_class, "relion_class": rel_class}
+            for rec_class, rel_class in sorted(class_mapping.items())
         ],
         "confusion_rows_recovar_cols_relion": confusion.tolist(),
     }
@@ -316,7 +351,14 @@ def _half_labels(npz, source_table, n_images: int) -> np.ndarray:
     return halves
 
 
-def _cohort_metrics(mask: np.ndarray, rec: dict[str, Any], rel: dict[str, Any]) -> dict[str, Any]:
+def _cohort_metrics(
+    mask: np.ndarray,
+    rec: dict[str, Any],
+    rel: dict[str, Any],
+    *,
+    rec_classes_zero_based: bool = True,
+    class_mapping: dict[int, int] | None = None,
+) -> dict[str, Any]:
     indices = np.asarray(mask, dtype=bool)
     result: dict[str, Any] = {
         "status": "measured",
@@ -337,7 +379,12 @@ def _cohort_metrics(mask: np.ndarray, rec: dict[str, Any], rel: dict[str, Any]) 
     else:
         result["translation_error"] = _not_measured("translations unavailable in one or both engines")
     if rec.get("classes") is not None and rel.get("classes") is not None:
-        result["class_assignment"] = _class_summary(rec["classes"][indices], rel["classes"][indices])
+        result["class_assignment"] = _class_summary(
+            rec["classes"][indices],
+            rel["classes"][indices],
+            lhs_zero_based=rec_classes_zero_based,
+            class_mapping=class_mapping,
+        )
     else:
         result["class_assignment"] = _not_measured("class assignments unavailable in one or both engines")
     return result
@@ -545,6 +592,12 @@ def audit(
             rel_state, _ = _load_relion_state(relion_stars[rel_iteration], identities)
             rec_state = _load_recovar_state(npz, rec_iteration, n_images, rel_state["translation_units"])
             overall = _cohort_metrics(np.ones(n_images, dtype=bool), rec_state, rel_state)
+            class_mapping = None
+            if overall["class_assignment"]["status"] == "measured":
+                class_mapping = {
+                    int(item["recovar_class"]): int(item["relion_class"])
+                    for item in overall["class_assignment"]["hungarian_recovar_to_relion"]
+                }
             group_masks: dict[str, list[tuple[str, np.ndarray]]] = {
                 "half": [(f"half{half}", halves == half) for half in sorted(np.unique(halves))],
                 "relion_pmax_bin": _fixed_pmax_groups(rel_state["pmax"]),
@@ -557,7 +610,10 @@ def audit(
                     defocus, prefix="q", quantiles=(0.0, 1 / 3, 2 / 3, 1.0)
                 )
             groups = {
-                family: {label: _cohort_metrics(mask, rec_state, rel_state) for label, mask in masks}
+                family: {
+                    label: _cohort_metrics(mask, rec_state, rel_state, class_mapping=class_mapping)
+                    for label, mask in masks
+                }
                 for family, masks in group_masks.items()
             }
 
@@ -571,7 +627,10 @@ def audit(
                         control_reference_stars[rel_iteration], identities
                     )
                 control = _cohort_metrics(
-                    np.ones(n_images, dtype=bool), control_state, control_reference_state
+                    np.ones(n_images, dtype=bool),
+                    control_state,
+                    control_reference_state,
+                    rec_classes_zero_based=False,
                 )
                 relative_to_control = _control_error_comparison(
                     rec_state, rel_state, control_state, control_reference_state
