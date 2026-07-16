@@ -3979,3 +3979,34 @@ Canonical evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_strict_dispatchv2_d3b0d78d_20260716_113000/k4_trajectory_matrix_summary.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_p9056_it1_capture_d3b0d78d_a100_20260716_132500/analysis/p9056_adjudication_v1.json`
+
+## 2026-07-16 K=1 exact-BPref robustness closure and performance boundary
+
+The current exact-BPref eight-case 3k/128 matrix at source `fc70abc3` passes
+the canonical full-trajectory audit in Slurm job `11269304`. Across all
+numbered boundaries, minimum merged cross-engine FSC-AUC is `0.9997416604`,
+minimum half-map cross-engine FSC-AUC is `0.9996432483`, and minimum merged
+RECOVAR-minus-RELION GT FSC-AUC is `-0.0003181674`. Minimum final merged
+cross-engine FSC-AUC is `0.9975110649`; every final merged GT delta is
+positive, with a minimum of `+0.0082881294`. All eight cases pass, including
+the severe 50%-outlier/radial-noise case. Correlation was not used or
+computed by the acceptance summary.
+
+Quality and performance are separate at this checkpoint. In the severe case,
+RELION takes `959` seconds and RECOVAR takes `4250` seconds. RECOVAR iteration
+2 alone takes `3421.4` seconds after support expands to roughly 100 million
+hypotheses per half; later iterations return to tens of seconds. Matched
+large-support buckets are about `3x` slower per image than the preceding
+algebraic-score checkpoint even though the current support is slightly
+smaller and GPU utilization is higher. The exact direct CUDA-order Gaussian
+path computes a global-min raw-diff2 prepass and then recomputes exact diff2
+for downstream conversion and M-step work. A bounded raw-diff2 reuse path is
+therefore the next performance target, with mandatory exact intermediate and
+FSC/FSC-AUC non-regression gates. Same-GPU exact/algebraic/exact job
+`11270918` is an isolated confirmation and is not required for the accepted
+quality result.
+
+Canonical evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_exact_bpref_fc70abc3_20260716_111000/trajectory_matrix_fsc_only_summary_v2.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_exact_bpref_fc70abc3_20260716_111000/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/trajectory_analysis/k1_case22_iter2_performance_diagnosis_v1.json`
