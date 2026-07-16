@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from recovar.em.global_winner_analysis import (
+    RELION_DISPATCH_CAPTURE_PENDING,
     analyze_summaries,
     load_recovar_summary,
     load_relion_summary,
@@ -355,6 +356,40 @@ def test_relion_summary_round_trip_and_evidence_limitation(tmp_path):
     np.testing.assert_array_equal(summary.class_posterior_mass.sum(axis=1), 1.0)
 
 
+def test_relion_summary_binds_pending_capture_to_verified_schedule(monkeypatch, tmp_path):
+    summary_dir, star, input_manifest, executable, dispatch, schedule, shard = _write_relion_fixture(
+        tmp_path
+    )
+    text = shard.read_text().replace(
+        f"# dispatch_oracle_sha256={_sha256(schedule)}",
+        f"# dispatch_oracle_sha256={RELION_DISPATCH_CAPTURE_PENDING}",
+    )
+    shard.write_text(text)
+    verified = []
+    monkeypatch.setattr(
+        "recovar.em.global_winner_analysis.load_relion_dispatch_schedule",
+        lambda path: ("schedule", Path(path)),
+    )
+    monkeypatch.setattr(
+        "recovar.em.global_winner_analysis.verify_relion_dispatch_schedule_oracle",
+        lambda loaded, oracle_dir: verified.append((loaded, oracle_dir)),
+    )
+
+    summary = load_relion_summary(
+        summary_dir,
+        data_star=star,
+        input_manifest=input_manifest,
+        executable=executable,
+        dispatch_log=dispatch,
+        dispatch_schedule=schedule,
+        label="relion_a",
+    )
+
+    assert verified == [(('schedule', schedule), tmp_path)]
+    assert summary.metadata["declared_dispatch_oracle"] == RELION_DISPATCH_CAPTURE_PENDING
+    assert summary.metadata["dispatch_oracle_sha256"] == _sha256(schedule)
+
+
 def test_relion_summary_rejects_dispatch_manifest_mismatch(tmp_path):
     summary_dir, star, input_manifest, executable, dispatch, schedule, _shard = _write_relion_fixture(tmp_path)
     with np.load(schedule) as payload:
@@ -540,6 +575,63 @@ def test_analysis_reports_repeat_normalization_sign_and_ulp(monkeypatch, tmp_pat
         "1_vs_3",
         "2_vs_3",
     }
+
+
+def test_analysis_accepts_exact_paired_per_arm_dispatch_contexts(monkeypatch, tmp_path):
+    paths = []
+    for label in ("a", "b"):
+        path = tmp_path / f"recovar_{label}.npz"
+        _recovar_env(monkeypatch, path)
+        monkeypatch.setenv("RECOVAR_GLOBAL_WINNER_SUMMARY_RUN_ID", label)
+        maybe_dump_global_winner_summary(
+            experiment_dataset=_dataset(np.arange(4)),
+            full_stats=_full_stats(),
+            n_classes=4,
+            n_rotations=3,
+            n_translations=2,
+            iteration=1,
+        )
+        paths.append(path)
+    recovar_a = load_recovar_summary(paths[0], label="recovar_controlA")
+    recovar_b = load_recovar_summary(paths[1], label="recovar_controlB")
+    recovar_b = replace(
+        recovar_b,
+        metadata={**recovar_b.metadata, "dispatch_oracle_sha256": "e" * 64},
+    )
+    relion_a = replace(recovar_a, label="relion_controlA", engine="relion")
+    relion_b = replace(recovar_b, label="relion_controlB", engine="relion")
+
+    report = analyze_summaries([recovar_a, recovar_b, relion_a, relion_b])
+
+    assert set(report["dispatch_contexts"]) == {"d" * 64, "e" * 64}
+    matching_pair = next(
+        pair
+        for pair in report["pairwise"]
+        if pair["left"] == "recovar_controlA" and pair["right"] == "relion_controlA"
+    )
+    assert matching_pair["same_dispatch_context"]
+
+
+def test_analysis_rejects_unpaired_dispatch_context(monkeypatch, tmp_path):
+    path = tmp_path / "recovar.npz"
+    _recovar_env(monkeypatch, path)
+    maybe_dump_global_winner_summary(
+        experiment_dataset=_dataset(np.arange(4)),
+        full_stats=_full_stats(),
+        n_classes=4,
+        n_rotations=3,
+        n_translations=2,
+        iteration=1,
+    )
+    first = load_recovar_summary(path, label="recovar_controlA")
+    second = replace(
+        first,
+        label="recovar_controlB",
+        metadata={**first.metadata, "dispatch_oracle_sha256": "e" * 64},
+    )
+
+    with pytest.raises(ValueError, match="both RECOVAR and RELION"):
+        analyze_summaries([first, second])
 
 
 def test_analysis_rejects_pose_topology_mismatch(monkeypatch, tmp_path):

@@ -10,7 +10,14 @@ from pathlib import Path
 
 import numpy as np
 
+from recovar.em.dense_single_volume.relion_worker_scale import (
+    load_relion_dispatch_schedule,
+    verify_relion_dispatch_schedule_oracle,
+)
 from recovar.em.global_winner_summary import MAX_SUPPORTED_BYTES, SCHEMA, sha256_file
+
+
+RELION_DISPATCH_CAPTURE_PENDING = "capture_pending_v1"
 
 
 @dataclass(frozen=True)
@@ -275,7 +282,11 @@ def load_relion_summary(
         raise ValueError("RELION input manifest SHA-256 does not match the declared fixture manifest")
     if shared_metadata.get("executable_sha256") != executable_sha256:
         raise ValueError("RELION executable SHA-256 does not match the invoked binary")
-    if shared_metadata.get("dispatch_oracle_sha256") != dispatch_schedule_sha256:
+    declared_dispatch_oracle = shared_metadata.get("dispatch_oracle_sha256")
+    if declared_dispatch_oracle == RELION_DISPATCH_CAPTURE_PENDING:
+        schedule = load_relion_dispatch_schedule(dispatch_schedule)
+        verify_relion_dispatch_schedule_oracle(schedule, Path(dispatch_log).resolve().parent)
+    elif declared_dispatch_oracle != dispatch_schedule_sha256:
         raise ValueError("RELION dispatch manifest SHA-256 does not match the sealed schedule")
 
     part_id = np.asarray([int(row["part_id_zero_based"]) for row in records], dtype=np.int64)
@@ -432,6 +443,8 @@ def load_relion_summary(
             "dispatch_particle_order_identity_exact": True,
             "dispatch_owner_matches_recovar_oracle": dispatch_owner_mismatch_count == 0,
             "dispatch_owner_mismatch_count": dispatch_owner_mismatch_count,
+            "dispatch_oracle_sha256": dispatch_schedule_sha256,
+            "declared_dispatch_oracle": declared_dispatch_oracle,
             "class_counts_from_star": np.bincount(star_class, minlength=4).tolist(),
         }
     )
@@ -651,11 +664,32 @@ def analyze_summaries(summaries: list[WinnerSummary]) -> dict:
         if not np.array_equal(summary.identity, canonical_identity):
             raise ValueError(f"identity vector mismatch for {summary.label}")
     input_hashes = {summary.metadata.get("input_manifest_sha256") for summary in summaries}
+    labels = [summary.label for summary in summaries]
+    if len(set(labels)) != len(labels):
+        raise ValueError("summary labels must be unique across engines and controls")
     dispatch_hashes = {summary.metadata.get("dispatch_oracle_sha256") for summary in summaries}
     if len(input_hashes) != 1:
         raise ValueError("summaries do not share one exact input manifest")
-    if len(dispatch_hashes) != 1:
-        raise ValueError("summaries do not share one exact dispatch manifest")
+    if None in dispatch_hashes:
+        raise ValueError("every summary must declare an exact dispatch manifest")
+    dispatch_contexts = {
+        dispatch_hash: [
+            summary.label
+            for summary in summaries
+            if summary.metadata.get("dispatch_oracle_sha256") == dispatch_hash
+        ]
+        for dispatch_hash in sorted(dispatch_hashes)
+    }
+    if len(dispatch_contexts) > 1:
+        for dispatch_hash, context_labels in dispatch_contexts.items():
+            engines = {
+                summary.engine for summary in summaries if summary.label in context_labels
+            }
+            if engines != {"recovar", "relion"}:
+                raise ValueError(
+                    "each distinct dispatch context must contain both RECOVAR and RELION "
+                    f"summaries ({dispatch_hash}: {sorted(engines)})"
+                )
     pose_topologies = {summary.pose_topology for summary in summaries}
     if len(pose_topologies) != 1:
         raise ValueError(f"summaries have incompatible class-local pose topologies: {sorted(pose_topologies)}")
@@ -706,6 +740,10 @@ def analyze_summaries(summaries: list[WinnerSummary]) -> dict:
             score_abs_metrics = _array_metrics(np.abs(score_delta))
             margin_abs_metrics = _array_metrics(np.abs(left.margin - right.margin))
             same_engine = left.engine == right.engine
+            same_dispatch_context = (
+                left.metadata.get("dispatch_oracle_sha256")
+                == right.metadata.get("dispatch_oracle_sha256")
+            )
             pairwise.append(
                 {
                     "left": left.label,
@@ -727,6 +765,7 @@ def analyze_summaries(summaries: list[WinnerSummary]) -> dict:
                         if same_engine
                         else "descriptive only; cross-engine grid-index bijection is not yet proven"
                     ),
+                    "same_dispatch_context": same_dispatch_context,
                     "winner_confusion_matrix_left_rows_right_columns": confusion.tolist(),
                     "class_pair_signed_margin_confusion": _class_pair_sign_confusion(left, right),
                     "centered_class_loss_abs_delta": score_abs_metrics,
@@ -822,6 +861,7 @@ def analyze_summaries(summaries: list[WinnerSummary]) -> dict:
             "recomputed float64/complex128 controls are required for final classification"
         ),
         "arms": arms,
+        "dispatch_contexts": dispatch_contexts,
         "native_repeat_floor": repeat_floor,
         "pairwise": pairwise,
     }
