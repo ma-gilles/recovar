@@ -27,6 +27,7 @@ NVTX_DOMAIN_EM = "recovar_em"
 _RUN_EM_ALLOWED_KWARGS = frozenset(inspect.signature(run_em).parameters)
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
+_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV = "RECOVAR_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES"
 
 
 class KClassEMResult(NamedTuple):
@@ -101,6 +102,79 @@ def _env_value_or_none(name: str) -> str | None:
         return None
     value = value.strip()
     return value if value else None
+
+
+def _parse_diagnostic_firstiter_class_overrides(value: str, *, n_classes: int) -> dict[int, int]:
+    """Parse ``original_image_index:zero_based_class`` diagnostic overrides."""
+
+    overrides: dict[int, int] = {}
+    for token in value.split(","):
+        token = token.strip()
+        fields = token.split(":")
+        if len(fields) != 2 or not fields[0].strip() or not fields[1].strip():
+            raise ValueError(
+                f"Invalid {_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV} entry {token!r}; "
+                "expected original_image_index:zero_based_class"
+            )
+        try:
+            original_index = int(fields[0])
+            class_index = int(fields[1])
+        except ValueError as error:
+            raise ValueError(
+                f"Invalid {_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV} entry {token!r}; "
+                "both fields must be integers"
+            ) from error
+        if original_index < 0:
+            raise ValueError("diagnostic firstiter original image indices must be non-negative")
+        if not 0 <= class_index < int(n_classes):
+            raise ValueError(
+                f"diagnostic firstiter class {class_index} is outside [0, {int(n_classes)})"
+            )
+        if original_index in overrides:
+            raise ValueError(f"duplicate diagnostic firstiter override for original image {original_index}")
+        overrides[original_index] = class_index
+    return overrides
+
+
+def _diagnostic_firstiter_class_assignments(
+    experiment_dataset,
+    class_assignments: np.ndarray,
+    *,
+    n_classes: int,
+) -> np.ndarray:
+    """Copy and override routing assignments when the explicit diagnostic is active."""
+
+    value = _env_value_or_none(_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV)
+    if value is None:
+        return class_assignments
+    overrides = _parse_diagnostic_firstiter_class_overrides(value, n_classes=n_classes)
+    local_indices = np.arange(class_assignments.size, dtype=np.int64)
+    resolver = getattr(experiment_dataset, "original_image_indices_from_local", None)
+    if resolver is None:
+        raise ValueError(
+            f"{_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV} requires "
+            "experiment_dataset.original_image_indices_from_local"
+        )
+    original_indices = np.asarray(resolver(local_indices), dtype=np.int64)
+    if original_indices.shape != local_indices.shape:
+        raise ValueError(
+            "original_image_indices_from_local returned an invalid shape for diagnostic firstiter overrides"
+        )
+    result = np.asarray(class_assignments, dtype=np.int32).copy()
+    observed: set[int] = set()
+    for row, original_index in enumerate(original_indices.tolist()):
+        if original_index in overrides:
+            result[row] = overrides[original_index]
+            observed.add(original_index)
+    missing = sorted(set(overrides) - observed)
+    if missing:
+        raise ValueError(f"diagnostic firstiter override image indices are absent from this dataset: {missing}")
+    logger.warning(
+        "Applied %d diagnostic firstiter class-routing override(s) from %s; score evidence is unchanged",
+        len(observed),
+        _DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV,
+    )
+    return result
 
 
 def _use_fused_sparse_k_class_pass2(n_classes: int) -> bool:
@@ -2906,6 +2980,11 @@ def run_dense_k_class_em_adaptive(
         coarse_class_assignments_for_override = np.asarray(
             coarse_result.class_assignments,
             dtype=np.int32,
+        )
+        coarse_class_assignments_for_override = _diagnostic_firstiter_class_assignments(
+            experiment_dataset,
+            coarse_class_assignments_for_override,
+            n_classes=n_classes,
         )
         sig_sample_indices_by_class = [
             [np.array([int(coarse_per_class_assn[k, i])], dtype=np.int32) for i in range(n_images)]

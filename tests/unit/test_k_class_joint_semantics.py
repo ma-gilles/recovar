@@ -1104,6 +1104,43 @@ def test_adaptive_k_class_firstiter_fine_pass_uses_global_winner_subsets(monkeyp
     np.testing.assert_array_equal(np.asarray(result.significant_counts), np.ones(4, dtype=np.int32))
 
 
+def test_diagnostic_firstiter_class_override_uses_original_image_identity(monkeypatch):
+    class Dataset:
+        def original_image_indices_from_local(self, local_indices):
+            np.testing.assert_array_equal(local_indices, np.arange(4, dtype=np.int64))
+            return np.asarray([91, 7915, 17, 3], dtype=np.int64)
+
+    native = np.asarray([1, 1, 0, 1], dtype=np.int32)
+    monkeypatch.setenv("RECOVAR_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES", "7915:0")
+    routed = k_class_module._diagnostic_firstiter_class_assignments(
+        Dataset(), native, n_classes=2
+    )
+    np.testing.assert_array_equal(routed, np.asarray([1, 0, 0, 1], dtype=np.int32))
+    np.testing.assert_array_equal(native, np.asarray([1, 1, 0, 1], dtype=np.int32))
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "7915", "7915:", ":0", "bad:0", "-1:0", "7915:-1", "7915:2", "7915:0,7915:1"],
+)
+def test_diagnostic_firstiter_class_override_rejects_invalid_values(value):
+    if not value:
+        assert k_class_module._env_value_or_none("ABSENT_DIAGNOSTIC_TEST_ENV") is None
+        return
+    with pytest.raises(ValueError):
+        k_class_module._parse_diagnostic_firstiter_class_overrides(value, n_classes=2)
+
+
+def test_diagnostic_firstiter_class_override_is_inert_when_unset(monkeypatch):
+    class Dataset:
+        def original_image_indices_from_local(self, _local_indices):
+            raise AssertionError("identity resolver must not run while the diagnostic is inactive")
+
+    monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES", raising=False)
+    native = np.asarray([1, 0], dtype=np.int32)
+    assert k_class_module._diagnostic_firstiter_class_assignments(Dataset(), native, n_classes=2) is native
+
+
 def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(monkeypatch):
     from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
     from recovar.em.sampling import rotation_grid_size
