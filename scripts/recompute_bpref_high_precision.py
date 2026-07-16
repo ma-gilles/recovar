@@ -33,7 +33,6 @@ import numpy as np
 
 from scripts import validate_bpref_device_signature as validator
 
-
 _MISMATCH_SAMPLE_LIMIT = 32
 
 
@@ -242,6 +241,91 @@ def _source_rows_float64(
     return source_data, source_weight
 
 
+def _optional_text(values: dict[str, np.ndarray], key: str) -> str | None:
+    """Return one optional scalar metadata field without inventing a default."""
+
+    if key not in values:
+        return None
+    value = np.asarray(values[key])
+    if value.shape != ():
+        raise ValueError(f"{key} must be scalar metadata, got shape {value.shape}")
+    return str(value.item())
+
+
+def _captured_source_reduction_policy(
+    contribution: dict[str, np.ndarray],
+    signature: dict[str, np.ndarray],
+) -> dict[str, str | bool | None]:
+    """Resolve the reduction that produced ``active_summed`` from capture metadata.
+
+    Version-3 ordinary-production captures explicitly label the authoritative
+    GEMM/flattened-adjoint operand source.  Newer per-particle causal-arm
+    captures instead save the checked sequential-f32 shadow.  These are
+    different order controls and must never be substituted for one another.
+    """
+
+    operand_source = _optional_text(contribution, "operand_source")
+    production_topology = _optional_text(
+        contribution, "production_adjoint_topology"
+    )
+    topology_claim = _optional_text(signature, "topology_claim")
+    causal_arm = _optional_text(signature, "causal_arm")
+
+    ordinary_labels = {
+        "authoritative-ordinary-translation-reduction",
+        "ordinary-flattened-production-adjoint",
+    }
+    ordinary_claimed = (
+        operand_source in ordinary_labels
+        or production_topology in ordinary_labels
+        or topology_claim == "ordinary-flattened-production-adjoint"
+    )
+    causal_claimed = topology_claim == "causal-arm-not-relion-hypothesis-arithmetic-closure"
+    if ordinary_claimed and causal_claimed:
+        raise ValueError(
+            "BPref contribution mixes ordinary-production and causal-arm reduction metadata"
+        )
+    if ordinary_claimed:
+        return {
+            "name": "authoritative-ordinary-translation-reduction",
+            "sequential_translation_reduction": False,
+            "order_control_name": "relion-f32-sequential-translation-reduction",
+            "operand_source": operand_source,
+            "production_adjoint_topology": production_topology,
+            "topology_claim": topology_claim,
+            "causal_arm": causal_arm,
+        }
+    if causal_claimed and causal_arm in {
+        "soft-posterior-per-particle-fused-xhalf",
+        "winner-take-all-per-particle-fused-xhalf",
+    }:
+        return {
+            "name": "relion-f32-sequential-translation-reduction",
+            "sequential_translation_reduction": True,
+            "order_control_name": "ordinary-gemm-translation-reduction",
+            "operand_source": operand_source,
+            "production_adjoint_topology": production_topology,
+            "topology_claim": topology_claim,
+            "causal_arm": causal_arm,
+        }
+    raise ValueError(
+        "BPref source recomputation requires explicit ordinary-production or "
+        "per-particle causal-arm reduction metadata"
+    )
+
+
+def _select_captured_and_order_reductions(
+    policy: dict[str, str | bool | None],
+    ordinary: tuple[object, object],
+    sequential: tuple[object, object],
+) -> tuple[tuple[object, object], tuple[object, object]]:
+    """Keep the metadata-selected capture path separate from its order control."""
+
+    if bool(policy["sequential_translation_reduction"]):
+        return sequential, ordinary
+    return ordinary, sequential
+
+
 def _source_rows_production_f32(
     contribution: dict[str, np.ndarray],
     signature: dict[str, np.ndarray],
@@ -258,7 +342,7 @@ def _source_rows_production_f32(
         _half_translation_phase_table_for_indices,
     )
     from recovar.em.dense_single_volume.local_backprojection import (
-        compute_relion_f32_sequential_mstep_sums,
+        compute_local_mstep_sums,
     )
 
     if jax.default_backend() != "gpu":
@@ -322,13 +406,32 @@ def _source_rows_production_f32(
     ).reshape(raw.shape[0], phases.shape[0], compact_indices.shape[0])
     ctf_weight = ctf_half[:, compact_indices] ** 2 / noise_half[compact_indices]
     ctf_weight = ctf_weight * (scale**2)[:, None]
-    numerator, denominator = compute_relion_f32_sequential_mstep_sums(
+    ordinary_numerator, ordinary_denominator = compute_local_mstep_sums(
         jnp.asarray(contribution["reconstruction_probs"]),
         shifted,
         ctf_weight,
+        relion_x_half=True,
+        sequential_translation_reduction=False,
+    )
+    sequential_numerator, sequential_denominator = compute_local_mstep_sums(
+        jnp.asarray(contribution["reconstruction_probs"]),
+        shifted,
+        ctf_weight,
+        relion_x_half=True,
+        sequential_translation_reduction=True,
+    )
+    reduction_policy = _captured_source_reduction_policy(contribution, signature)
+    (numerator, denominator), (order_numerator, order_denominator) = (
+        _select_captured_and_order_reductions(
+            reduction_policy,
+            (ordinary_numerator, ordinary_denominator),
+            (sequential_numerator, sequential_denominator),
+        )
     )
     numerator = np.asarray(numerator)
     denominator = np.asarray(denominator)
+    order_numerator = np.asarray(order_numerator)
+    order_denominator = np.asarray(order_denominator)
     active_particle = np.asarray(contribution["active_particle_rows"], dtype=np.int32)
     active_row = np.asarray(contribution["active_rotation_rows"], dtype=np.int32)
     recomputed_active_data = numerator[active_particle, active_row]
@@ -347,7 +450,11 @@ def _source_rows_production_f32(
         row_weight.append(denominator[particle, int(local_row)])
 
     metrics = {
-        "backend": "relion_cuda_preprocess+cuFFT/JAX_CTF_phase+RELION_f32_sequential_reduction",
+        "backend": (
+            "relion_cuda_preprocess+cuFFT/JAX_CTF_phase+"
+            + str(reduction_policy["name"])
+        ),
+        "captured_source_reduction_policy": reduction_policy,
         "device": str(jax.devices()[0]),
         "device_kind": str(jax.devices()[0].device_kind),
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
@@ -363,6 +470,16 @@ def _source_rows_production_f32(
         ),
         "weight_vs_captured_active": validator.exact_array_metrics(
             recomputed_active_weight, contribution["active_ctf_probs"]
+        ),
+        "reduction_order_control_data": validator.exact_array_metrics(
+            numerator, order_numerator
+        ),
+        "reduction_order_control_weight": validator.exact_array_metrics(
+            denominator, order_denominator
+        ),
+        "reduction_order_control_policy": (
+            "diagnostic only: the alternate reduction order is reported but is never "
+            "accepted in place of the metadata-selected captured production source"
         ),
     }
     return np.asarray(row_data), np.asarray(row_weight), metrics
