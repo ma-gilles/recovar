@@ -4463,3 +4463,13 @@ frozen RECOVAR shards for the corresponding MPI follower/half.  Capture/control
 BPref repeats on the same physical GPU
 remain mandatory because the passive capture introduces a stream
 synchronization that can alter atomic reduction order.
+
+After both gates pass, `scripts/compare_relion_recovar_bpref_prescatter.py`
+aligns the selected follower with RECOVAR by canonical stack identity, exact
+Fourier support, and the RELION-transpose rotation-matrix convention.  It
+reports exact/global, shellwise, and per-particle array errors for the complex
+numerator and real weight and emits aligned arrays for controlled geometry
+replay.  Rotation enumeration IDs are recorded but are not used as the primary
+join key.  A pre-scatter difference is not classified as precision versus
+formulation until the float64/order controls and accumulator substitution are
+also complete.

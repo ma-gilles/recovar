@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import struct
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from scripts import compare_relion_recovar_bpref_prescatter as comparator
 from scripts import validate_relion_bpref_prescatter as validator
 
 pytestmark = pytest.mark.unit
@@ -100,3 +102,59 @@ def test_validate_directory_rejects_unsealed_temporary_file(tmp_path: Path):
 
     with pytest.raises(ValueError, match="incomplete temporary artifacts"):
         validator.validate_directory(tmp_path)
+
+
+def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    _write_artifact(capture, part=10, stack=101, rank=1)
+    _write_artifact(capture, part=11, stack=202, rank=2)
+
+    contributions = tmp_path / "contributions"
+    contributions.mkdir()
+    summed = np.zeros((8, 1), dtype=np.complex64)
+    ctf = np.zeros((8, 1), dtype=np.float32)
+    summed[0, 0] = np.complex64(complex(-2.0, 3.0) * (2.0**-16))
+    ctf[0, 0] = np.float32(4.0 * (2.0**-32))
+    contribution_path = contributions / "rows.npz"
+    np.savez(
+        contribution_path,
+        shadow_only_mode=np.asarray(False),
+        stack_indices_1based=np.asarray([202], dtype=np.int64),
+        active_particle_rows=np.zeros(8, dtype=np.int32),
+        active_summed=summed,
+        active_ctf_probs=ctf,
+        active_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (8, 3, 3)),
+        active_global_rotation_indices=np.arange(136, 144, dtype=np.int64),
+        window_indices=np.asarray([1], dtype=np.int32),
+    )
+    geometry = tmp_path / "geometry"
+    geometry.mkdir()
+    np.savez(
+        geometry / "geometry.npz",
+        companion_contribution_path=np.asarray(str(contribution_path)),
+        signature_particle_rows=np.asarray([0], dtype=np.int32),
+        signature_pixel_indices=np.asarray([[1]], dtype=np.int32),
+        signature_row_flags=np.asarray([[64]], dtype=np.uint32),
+    )
+    validation = tmp_path / "validation.json"
+    validation.write_text(json.dumps({"classification_ready": True, "particle_count": 2}))
+    inertness = tmp_path / "inertness.json"
+    inertness.write_text(json.dumps({"capture_inertness_qualified": True}))
+
+    report, arrays = comparator.compare(
+        capture,
+        contributions,
+        geometry,
+        validation_json=validation,
+        inertness_json=inertness,
+        mpi_rank=2,
+    )
+
+    assert report["gates"]["comparison_ready"] is True
+    assert report["classification"] == "pre_scatter_operand_generation_difference"
+    assert report["operands"]["data_numerator_recovar_vs_scaled_negative_relion"][
+        "exact_equal"
+    ] is True
+    assert report["operands"]["real_weight_recovar_vs_scaled_relion"]["exact_equal"] is True
+    assert np.array_equal(arrays["stack_indices_1based"], np.asarray([202]))
