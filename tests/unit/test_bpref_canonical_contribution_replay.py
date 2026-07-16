@@ -379,7 +379,13 @@ def test_high_precision_source_control_requires_exact_capture_and_repeat(
     }
     call_count = 0
 
-    def fake_source_rows(_contribution, _signature):
+    def fake_source_rows(
+        _contribution,
+        _signature,
+        *,
+        legacy_reconstruction_prob_dtype=None,
+    ):
+        del legacy_reconstruction_prob_dtype
         nonlocal call_count
         call_count += 1
         value = np.complex64(2.0 + (repeat_delta if call_count == 2 else 0.0))
@@ -492,6 +498,90 @@ def test_causal_arm_policy_keeps_sequential_as_explicit_captured_reduction():
     assert policy["name"] == "relion-f32-sequential-translation-reduction"
     assert policy["sequential_translation_reduction"] is True
     assert policy["order_control_name"] == "ordinary-gemm-translation-reduction"
+
+
+def test_serialized_probability_dtype_cannot_silently_determine_live_dtype():
+    from scripts import recompute_bpref_high_precision
+
+    contribution = {
+        "reconstruction_probs": np.asarray([0.0, 0.25, 1.0], dtype=np.float64),
+    }
+
+    with pytest.raises(ValueError, match="lacks reconstruction_probs_native_dtype"):
+        recompute_bpref_high_precision._production_reconstruction_probabilities(
+            contribution,
+            legacy_dtype=None,
+        )
+
+    restored, policy = (
+        recompute_bpref_high_precision._production_reconstruction_probabilities(
+            contribution,
+            legacy_dtype="float32",
+        )
+    )
+    assert restored.dtype == np.float32
+    assert policy["source"] == "explicit-legacy-command-line-override"
+    assert policy["storage_roundtrip_exact"] is True
+
+
+def test_probability_dtype_metadata_rejects_conflicting_legacy_override():
+    from scripts import recompute_bpref_high_precision
+
+    contribution = {
+        "reconstruction_probs": np.asarray([0.0, 1.0], dtype=np.float32),
+        "reconstruction_probs_native_dtype": np.asarray("float32"),
+        "reconstruction_probs_native_itemsize": np.int32(4),
+        "reconstruction_probs_native_nbytes": np.int64(8),
+        "reconstruction_probs_storage_policy": np.asarray(
+            "native-dtype-preserved;dtype-itemsize-nbytes-bound"
+        ),
+    }
+
+    with pytest.raises(ValueError, match="override conflicts"):
+        recompute_bpref_high_precision._production_reconstruction_probabilities(
+            contribution,
+            legacy_dtype="float64",
+        )
+
+
+def test_probability_dtype_metadata_restores_and_validates_native_bytes():
+    from scripts import recompute_bpref_high_precision
+
+    values = np.asarray([[0.0, 0.25, 1.0]], dtype=np.float32)
+    restored, policy = (
+        recompute_bpref_high_precision._production_reconstruction_probabilities(
+            {
+                "reconstruction_probs": values,
+                "reconstruction_probs_native_dtype": np.asarray("float32"),
+                "reconstruction_probs_native_itemsize": np.int32(4),
+                "reconstruction_probs_native_nbytes": np.int64(values.nbytes),
+                "reconstruction_probs_storage_policy": np.asarray(
+                    "native-dtype-preserved;dtype-itemsize-nbytes-bound"
+                ),
+            },
+            legacy_dtype=None,
+        )
+    )
+
+    assert np.array_equal(restored, values)
+    assert restored.dtype == np.float32
+    assert policy["source"] == "capture-native-dtype-metadata"
+    assert policy["production_itemsize"] == "4"
+    assert policy["stored_nbytes"] == str(values.nbytes)
+
+
+def test_probability_dtype_restore_requires_exact_storage_roundtrip():
+    from scripts import recompute_bpref_high_precision
+
+    contribution = {
+        "reconstruction_probs": np.asarray([0.1], dtype=np.float64),
+    }
+
+    with pytest.raises(ValueError, match="do not exactly round-trip"):
+        recompute_bpref_high_precision._production_reconstruction_probabilities(
+            contribution,
+            legacy_dtype="float32",
+        )
 
 
 @pytest.mark.parametrize(

@@ -16,10 +16,18 @@ by the current same-target replay schema.
 
 Before interpreting any float64 difference, this script recomputes the source
 operands through RECOVAR's production CUDA preprocessing, cuFFT/JAX CTF and
-translation-phase path, and RELION-order float32 reduction.  That control must
+translation-phase path, and the metadata-selected production reduction.  That control must
 match the captured complex64/float32 operands exactly on two repeats.  A failed
 or unavailable control is reported as ``OPERAND_RECOMPUTE_UNVALIDATED`` and no
 high-precision replay artifact is written.
+
+Current version-3 writers preserve reconstruction probabilities in their
+native dtype and bind additive dtype/itemsize/nbytes metadata; this remains
+backward-compatible because NPZ readers ignore unknown members.  Early v3
+bundles widened those probabilities to float64 without dtype metadata and
+therefore require an explicit ``--legacy-reconstruction-prob-dtype`` override
+from audited capture provenance.  The stored dtype is never silently treated
+as the production dtype.
 """
 
 from __future__ import annotations
@@ -252,6 +260,15 @@ def _optional_text(values: dict[str, np.ndarray], key: str) -> str | None:
     return str(value.item())
 
 
+def _required_int(values: dict[str, np.ndarray], key: str) -> int:
+    if key not in values:
+        raise ValueError(f"capture-native probability dtype metadata requires {key}")
+    value = np.asarray(values[key])
+    if value.shape != () or not np.issubdtype(value.dtype, np.integer):
+        raise ValueError(f"{key} must be one scalar integer, got {value.shape}/{value.dtype}")
+    return int(value.item())
+
+
 def _captured_source_reduction_policy(
     contribution: dict[str, np.ndarray],
     signature: dict[str, np.ndarray],
@@ -326,9 +343,105 @@ def _select_captured_and_order_reductions(
     return ordinary, sequential
 
 
+def _production_reconstruction_probabilities(
+    contribution: dict[str, np.ndarray],
+    *,
+    legacy_dtype: str | None,
+) -> tuple[np.ndarray, dict[str, str | bool]]:
+    """Restore the live posterior dtype without trusting its storage dtype.
+
+    Early version-3 bundles widened this array to float64 while writing it.
+    Such storage cannot identify the live GEMM dtype, so those bundles require
+    an explicit command-line override.  New bundles carry native dtype
+    metadata and reject a conflicting override.
+    """
+
+    stored = np.asarray(contribution["reconstruction_probs"])
+    recorded = _optional_text(contribution, "reconstruction_probs_native_dtype")
+    if recorded is None:
+        additive_fields = {
+            "reconstruction_probs_native_itemsize",
+            "reconstruction_probs_native_nbytes",
+            "reconstruction_probs_storage_policy",
+        }
+        unexpected = additive_fields.intersection(contribution)
+        if unexpected:
+            raise ValueError(
+                "BPref contribution has partial reconstruction probability dtype metadata: "
+                + ", ".join(sorted(unexpected))
+            )
+        if legacy_dtype is None:
+            raise ValueError(
+                "legacy BPref contribution lacks reconstruction_probs_native_dtype; "
+                "pass --legacy-reconstruction-prob-dtype from audited capture provenance"
+            )
+        production_dtype = np.dtype(legacy_dtype)
+        source = "explicit-legacy-command-line-override"
+        recorded_itemsize = None
+        recorded_nbytes = None
+        storage_policy = "legacy-v3-float64-widened-storage"
+    else:
+        production_dtype = np.dtype(recorded)
+        source = "capture-native-dtype-metadata"
+        if legacy_dtype is not None and np.dtype(legacy_dtype) != production_dtype:
+            raise ValueError(
+                "legacy reconstruction probability dtype override conflicts with capture metadata"
+            )
+        recorded_itemsize = _required_int(
+            contribution, "reconstruction_probs_native_itemsize"
+        )
+        recorded_nbytes = _required_int(
+            contribution, "reconstruction_probs_native_nbytes"
+        )
+        storage_policy = _optional_text(
+            contribution, "reconstruction_probs_storage_policy"
+        )
+        if storage_policy != "native-dtype-preserved;dtype-itemsize-nbytes-bound":
+            raise ValueError(
+                "capture-native reconstruction probability storage policy is missing or unknown"
+            )
+    if production_dtype not in {np.dtype(np.float32), np.dtype(np.float64)}:
+        raise ValueError(
+            "production reconstruction probability dtype must be float32 or float64, "
+            f"got {production_dtype}"
+        )
+    if recorded is not None:
+        if stored.dtype != production_dtype:
+            raise ValueError(
+                "capture-native reconstruction probability dtype does not match stored array: "
+                f"{production_dtype} vs {stored.dtype}"
+            )
+        if recorded_itemsize != production_dtype.itemsize:
+            raise ValueError(
+                "capture-native reconstruction probability itemsize does not match dtype"
+            )
+        if recorded_nbytes != stored.nbytes:
+            raise ValueError(
+                "capture-native reconstruction probability nbytes does not match array"
+            )
+    restored = stored.astype(production_dtype, copy=False)
+    roundtrip = restored.astype(stored.dtype, copy=False)
+    if not np.array_equal(roundtrip, stored):
+        raise ValueError(
+            "stored reconstruction probabilities do not exactly round-trip through "
+            f"the claimed production dtype {production_dtype}"
+        )
+    return restored, {
+        "source": source,
+        "stored_dtype": str(stored.dtype),
+        "production_dtype": str(production_dtype),
+        "storage_roundtrip_exact": True,
+        "storage_policy": storage_policy,
+        "production_itemsize": str(production_dtype.itemsize),
+        "stored_nbytes": str(stored.nbytes),
+    }
+
+
 def _source_rows_production_f32(
     contribution: dict[str, np.ndarray],
     signature: dict[str, np.ndarray],
+    *,
+    legacy_reconstruction_prob_dtype: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
     """Recompute captured source rows through the exact production GPU path."""
 
@@ -406,15 +519,22 @@ def _source_rows_production_f32(
     ).reshape(raw.shape[0], phases.shape[0], compact_indices.shape[0])
     ctf_weight = ctf_half[:, compact_indices] ** 2 / noise_half[compact_indices]
     ctf_weight = ctf_weight * (scale**2)[:, None]
+    production_probs, probability_dtype_policy = (
+        _production_reconstruction_probabilities(
+            contribution,
+            legacy_dtype=legacy_reconstruction_prob_dtype,
+        )
+    )
+    production_probs = jnp.asarray(production_probs)
     ordinary_numerator, ordinary_denominator = compute_local_mstep_sums(
-        jnp.asarray(contribution["reconstruction_probs"]),
+        production_probs,
         shifted,
         ctf_weight,
         relion_x_half=True,
         sequential_translation_reduction=False,
     )
     sequential_numerator, sequential_denominator = compute_local_mstep_sums(
-        jnp.asarray(contribution["reconstruction_probs"]),
+        production_probs,
         shifted,
         ctf_weight,
         relion_x_half=True,
@@ -455,6 +575,7 @@ def _source_rows_production_f32(
             + str(reduction_policy["name"])
         ),
         "captured_source_reduction_policy": reduction_policy,
+        "reconstruction_probability_dtype_policy": probability_dtype_policy,
         "device": str(jax.devices()[0]),
         "device_kind": str(jax.devices()[0].device_kind),
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
@@ -485,14 +606,22 @@ def _source_rows_production_f32(
     return np.asarray(row_data), np.asarray(row_weight), metrics
 
 
-def _validate_production_source_control(result: dict) -> dict:
+def _validate_production_source_control(
+    result: dict,
+    *,
+    legacy_reconstruction_prob_dtype: str | None = None,
+) -> dict:
     """Require exact captured closure and exact control/control repeat closure."""
 
     first_data, first_weight, metrics = _source_rows_production_f32(
-        result["contribution"], result["signature"]
+        result["contribution"],
+        result["signature"],
+        legacy_reconstruction_prob_dtype=legacy_reconstruction_prob_dtype,
     )
     repeat_data, repeat_weight, _ = _source_rows_production_f32(
-        result["contribution"], result["signature"]
+        result["contribution"],
+        result["signature"],
+        legacy_reconstruction_prob_dtype=legacy_reconstruction_prob_dtype,
     )
     records = result["contribution_records"]
     signature = result["signature"]
@@ -769,6 +898,14 @@ def parse_args(argv=None):
     parser.add_argument("signatures", nargs="+", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--summary-out", type=Path)
+    parser.add_argument(
+        "--legacy-reconstruction-prob-dtype",
+        choices=("float32", "float64"),
+        help=(
+            "explicit live dtype for legacy bundles that widened reconstruction_probs "
+            "without recording their native dtype"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -795,7 +932,10 @@ def main(argv=None) -> None:
     production_source_controls = []
     for result in results:
         try:
-            control = _validate_production_source_control(result)
+            control = _validate_production_source_control(
+                result,
+                legacy_reconstruction_prob_dtype=args.legacy_reconstruction_prob_dtype,
+            )
         except Exception as exc:
             control = {
                 "validated": False,
