@@ -255,7 +255,7 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         )
         captured.update(kwargs)
         current_size_shape = (19, 19, 19)
-        return (
+        outputs = (
             np.zeros(int(np.prod(current_size_shape)), dtype=np.complex64),
             np.zeros(int(np.prod(current_size_shape)), dtype=np.float32),
             np.array([0], dtype=np.int32),
@@ -265,6 +265,9 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
             _Stats(),
             "noise",
         )
+        if kwargs.get("return_significant_counts"):
+            outputs += (np.array([7], dtype=np.int32),)
+        return outputs
 
     monkeypatch.delenv("RECOVAR_K1_RELION_X_HALF_MSTEP", raising=False)
     monkeypatch.setattr(iteration_loop, "_k1_relion_x_half_mstep_default_available", lambda: True)
@@ -325,6 +328,8 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
     )
 
     assert captured["mstep_relion_x_half"] is True
+    assert captured["return_significant_counts"] is True
+    np.testing.assert_array_equal(result.significant_counts, np.array([7], dtype=np.int32))
     assert result.mstep_full_half_axis == 0
     assert result.mstep_accumulator_shape == (19, 19, 19)
 

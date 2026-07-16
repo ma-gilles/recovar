@@ -53,6 +53,7 @@ class _LocalSearchIterationResult:
     relion_stats: RelionStats
     noise_stats: NoiseStats | None = None
     profile_summary: dict | None = None
+    significant_counts: np.ndarray | None = None
     best_pose_rotations: object | None = None
     best_pose_translations: object | None = None
     best_pose_rotation_ids: object | None = None
@@ -67,6 +68,7 @@ def _unpack_local_search_engine_outputs(
     accumulate_noise: bool,
     return_profile: bool,
     return_best_pose_details: bool,
+    return_significant_counts: bool,
     class_details=None,
 ) -> _LocalSearchIterationResult:
     cursor = 0
@@ -81,6 +83,8 @@ def _unpack_local_search_engine_outputs(
     noise_stats = engine_outputs[cursor] if accumulate_noise else None
     cursor += int(accumulate_noise)
     profile_summary = engine_outputs[cursor] if return_profile else None
+    cursor += int(return_profile)
+    significant_counts = engine_outputs[cursor] if return_significant_counts else None
     if class_details is None:
         class_assignments = class_posterior_sums = class_full_posterior_sums = None
     else:
@@ -96,6 +100,7 @@ def _unpack_local_search_engine_outputs(
         relion_stats=relion_stats,
         noise_stats=noise_stats,
         profile_summary=profile_summary,
+        significant_counts=significant_counts,
         best_pose_rotations=best_pose_rotations,
         best_pose_translations=best_pose_translations,
         best_pose_rotation_ids=best_pose_rotation_ids,
@@ -111,6 +116,7 @@ def _pack_local_search_iteration_result(
     accumulate_noise: bool,
     return_profile: bool,
     return_best_pose_details: bool,
+    return_significant_counts: bool,
     return_class_details: bool,
 ):
     output = [result.Ft_y, result.Ft_ctf, result.hard_assignment]
@@ -127,6 +133,8 @@ def _pack_local_search_iteration_result(
         output.append(result.noise_stats)
     if return_profile:
         output.append(result.profile_summary)
+    if return_significant_counts:
+        output.append(result.significant_counts)
     if return_class_details:
         if (
             result.class_assignments is None
@@ -206,6 +214,7 @@ def _run_local_search_iteration(
     class_log_priors=None,
     return_class_details=False,
     return_reconstruction_sample_indices=False,
+    return_significant_counts=False,
     apply_max_significants_to_support=False,
     stats_use_reconstruction_probs=False,
     score_only=False,
@@ -354,6 +363,8 @@ def _run_local_search_iteration(
     if class_log_priors is not None:
         if return_reconstruction_sample_indices:
             raise NotImplementedError("K-class local search does not return reconstruction sample indices")
+        if return_significant_counts:
+            raise NotImplementedError("K-class local search does not return significant counts")
         if score_only:
             raise NotImplementedError("K-class local search does not support score_only")
         if return_profile:
@@ -478,6 +489,7 @@ def _run_local_search_iteration(
             normalization_log_evidence=normalization_log_evidence,
             translation_prior_centers=translation_prior_centers,
             return_reconstruction_sample_indices=return_reconstruction_sample_indices,
+            return_significant_counts=return_significant_counts,
             stats_use_reconstruction_probs=stats_use_reconstruction_probs,
             score_only=score_only,
         )
@@ -487,6 +499,7 @@ def _run_local_search_iteration(
         accumulate_noise=accumulate_noise,
         return_profile=return_profile,
         return_best_pose_details=return_best_pose_details,
+        return_significant_counts=return_significant_counts,
         class_details=class_details,
     )
 
@@ -501,5 +514,6 @@ def _run_local_search_iteration(
         accumulate_noise=accumulate_noise,
         return_profile=return_profile,
         return_best_pose_details=return_best_pose_details,
+        return_significant_counts=return_significant_counts,
         return_class_details=return_class_details,
     )

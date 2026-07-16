@@ -2468,6 +2468,7 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
     np.testing.assert_array_equal(captured["rotation_grid_mstep_rotations"], mstep_grid)
     assert captured["generate_relion_mstep_rotations"] is True
     assert (captured["class_log_priors"] is not None) is k_class_enabled
+    assert captured["return_significant_counts"] is (not k_class_enabled)
 
 
 def test_build_local_hypothesis_layout_parent_expands_translation_grid_and_priors():
@@ -3752,7 +3753,7 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         captured["max_significants"] = kwargs.get("max_significants")
         captured["use_float64_scoring"] = kwargs.get("use_float64_scoring")
         captured["use_float64_normalization"] = kwargs.get("use_float64_normalization")
-        return (
+        output = (
             jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
             jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
             np.zeros(mock_dataset.n_units, dtype=np.int32),
@@ -3769,6 +3770,9 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
                 sumw=0.0,
             ),
         )
+        if kwargs.get("return_significant_counts"):
+            output += (np.full(mock_dataset.n_units, 7, dtype=np.int32),)
+        return output
 
     monkeypatch.setattr(iteration_loop_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
     monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
@@ -3800,6 +3804,7 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         current_size=4,
         accumulate_noise=True,
         translation_prior_reference_translations=reference_translations,
+        return_significant_counts=True,
     )
 
     assert captured["offset_range_pixels"] is None
@@ -3816,7 +3821,8 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         reference_translations,
         atol=1e-6,
     )
-    assert len(outputs) == 5
+    assert len(outputs) == 6
+    np.testing.assert_array_equal(outputs[-1], np.full(mock_dataset.n_units, 7, dtype=np.int32))
 
 
 @pytest.mark.parametrize("k_class_enabled", [False, True])
@@ -5244,11 +5250,13 @@ def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
         reconstruct_significant_only=True,
         max_significants=1,
         stats_use_reconstruction_probs=True,
+        return_significant_counts=True,
     )
 
     stats_base = base[3]
     stats_support = support_stats[3]
     noise_support = support_stats[4]
+    significant_counts = support_stats[5]
     np.testing.assert_allclose(
         np.sum(np.asarray(stats_base.rotation_posterior_sums)),
         dataset.n_images,
@@ -5262,6 +5270,7 @@ def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
         atol=1e-5,
     )
     assert float(noise_support.sumw) < float(dataset.n_images)
+    np.testing.assert_array_equal(significant_counts, np.ones(dataset.n_images, dtype=np.int32))
 
 
 def test_run_local_em_exact_collects_unpruned_probability_values_for_global_threshold(rng):

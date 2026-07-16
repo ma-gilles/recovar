@@ -3058,6 +3058,7 @@ def _score_half_local(
         rotation_log_prior=None if pass2_layout is not None else relion_local_rotation_log_prior_k,
         class_log_priors=class_log_priors if k_class_enabled else None,
         return_class_details=k_class_enabled,
+        return_significant_counts=not k_class_enabled,
         score_only=diagnostic_score_only,
         rotation_grid_mstep_rotations=local_search_mstep_rotations,
         generate_relion_mstep_rotations=True,
@@ -3094,6 +3095,10 @@ def _score_half_local(
                 ),
                 **local_profile_k,
             )
+    significant_counts_k = None
+    if not k_class_enabled:
+        significant_counts_k = np.asarray(_local_tail[_tail_idx], dtype=np.int32)
+        _tail_idx += 1
     if k_class_enabled:
         class_assignments_k, class_posterior_sums_k = _local_tail[_tail_idx : _tail_idx + 2]
         _tail_idx += 2
@@ -3121,6 +3126,7 @@ def _score_half_local(
         best_pose_rotations=best_pose_rotations[k],
         best_pose_rotation_eulers=best_pose_rotation_eulers[k],
         best_pose_translations=best_pose_translations[k],
+        significant_counts=significant_counts_k,
         mstep_full_half_axis=0 if local_relion_x_half_mstep else None,
         mstep_accumulator_shape=(
             # Must match the current-size BPref grid allocated by the local

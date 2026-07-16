@@ -273,6 +273,7 @@ class _LocalPostprocessBuffers:
     seen_global_rotations: np.ndarray
     seen_nonzero_global_rotations: np.ndarray
     seen_reconstruction_global_rotations: np.ndarray
+    significant_counts: np.ndarray | None = None
     best_pose_rotations: np.ndarray | None = None
     best_pose_translations: np.ndarray | None = None
     best_pose_rotation_ids: np.ndarray | None = None
@@ -759,11 +760,13 @@ def _local_em_return_tuple(
     accumulate_noise: bool,
     return_profile: bool,
     return_best_pose_details: bool,
+    return_significant_counts: bool = False,
     best_pose_rotations=None,
     best_pose_translations=None,
     best_pose_rotation_ids=None,
     noise_stats=None,
     profile_summary=None,
+    significant_counts=None,
 ):
     result = [Ft_y, Ft_ctf, hard_assignment]
     if return_best_pose_details:
@@ -779,6 +782,8 @@ def _local_em_return_tuple(
         result.append(noise_stats)
     if return_profile:
         result.append(profile_summary)
+    if return_significant_counts:
+        result.append(significant_counts)
     return tuple(result)
 
 
@@ -1127,8 +1132,14 @@ def _postprocess_local_bucket(
 
     transfer_t0 = time.time()
     probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
-    n_significant_samples_np = np.asarray(n_significant_samples, dtype=np.int32) if collect_profile_stats else None
+    collect_significant_counts = collect_profile_stats or buffers.significant_counts is not None
+    n_significant_samples_np = (
+        np.asarray(n_significant_samples, dtype=np.int32) if collect_significant_counts else None
+    )
     buffers.transfer_profile["postprocess_posterior_to_host_s"] += time.time() - transfer_t0
+
+    if buffers.significant_counts is not None:
+        buffers.significant_counts[image_indices_np] = n_significant_samples_np
 
     posterior_ids_np = (
         local_rotation_ids_np
@@ -1704,6 +1715,7 @@ def run_local_em_exact(
     reconstruction_probability_threshold: np.ndarray | None = None,
     return_reconstruction_probability_values: bool = False,
     return_reconstruction_sample_indices: bool = False,
+    return_significant_counts: bool = False,
     score_only: bool = False,
 ):
     """Run exact local EM over per-image local hypothesis sets."""
@@ -1924,6 +1936,7 @@ def run_local_em_exact(
     log_evidence_per_image = np.empty(n_images, dtype=np.float32)
     best_log_score_per_image = np.empty(n_images, dtype=np.float32)
     max_posterior_per_image = np.empty(n_images, dtype=np.float32)
+    significant_counts = np.empty(n_images, dtype=np.int32) if return_significant_counts else None
     rotation_posterior_sums = np.zeros(int(local_layout.n_global_rotations), dtype=np.float64)
     best_pose_rotations = np.empty((n_images, 3, 3), dtype=np.float32) if return_best_pose_details else None
     best_pose_translations = (
@@ -2035,6 +2048,7 @@ def run_local_em_exact(
         seen_global_rotations=seen_global_rotations,
         seen_nonzero_global_rotations=seen_nonzero_global_rotations,
         seen_reconstruction_global_rotations=seen_reconstruction_global_rotations,
+        significant_counts=significant_counts,
         best_pose_rotations=best_pose_rotations,
         best_pose_translations=best_pose_translations,
         best_pose_rotation_ids=best_pose_rotation_ids,
@@ -4692,10 +4706,12 @@ def run_local_em_exact(
             accumulate_noise=accumulate_noise,
             return_profile=False,
             return_best_pose_details=return_best_pose_details,
+            return_significant_counts=return_significant_counts,
             best_pose_rotations=best_pose_rotations,
             best_pose_translations=best_pose_translations,
             best_pose_rotation_ids=best_pose_rotation_ids,
             noise_stats=noise_stats,
+            significant_counts=significant_counts,
         )
 
     _block_until_ready(Ft_y, Ft_ctf)
@@ -4790,9 +4806,11 @@ def run_local_em_exact(
         accumulate_noise=accumulate_noise,
         return_profile=True,
         return_best_pose_details=return_best_pose_details,
+        return_significant_counts=return_significant_counts,
         best_pose_rotations=best_pose_rotations,
         best_pose_translations=best_pose_translations,
         best_pose_rotation_ids=best_pose_rotation_ids,
         noise_stats=noise_stats,
         profile_summary=profile_summary,
+        significant_counts=significant_counts,
     )
