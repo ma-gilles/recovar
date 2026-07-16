@@ -4051,31 +4051,29 @@ Authoritative evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/real10076_control_envelope_shellwise_v1.npz`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/analysis/p8240_boundary.json`
 
-## 2026-07-16 provisional K=4 incoming-reference substitution
+## 2026-07-16 authoritative K=4 incoming-reference substitution
 
 A serial A/B substitution inside one single-GPU Slurm allocation isolates the
 case-8 iteration-5 class-2 map cliff to the incoming iteration-4 reference.
-The autonomous arm has direct cross-engine FSC-AUC `0.9782348744`; replacing
+The autonomous arm has direct cross-engine FSC-AUC `0.9782344460`; replacing
 only the incoming RECOVAR iteration-4 reference with the exact RELION
-reference raises iteration-5 class-2 FSC-AUC to `0.9999999957`, a gain of
-`0.0217651213`.  Its RECOVAR-minus-RELION GT FSC-AUC delta contracts from
-`-4.7261e-6` to `-1.6119e-8`.  The substitution arm has exact class
-agreement, zero support-count differences at iteration 5, and only
-float32-scale pose and Pmax residuals.
+reference raises iteration-5 class-2 FSC-AUC to `0.9999999956`, a gain of
+`0.02176555`.  Its RECOVAR-minus-RELION GT FSC-AUC delta changes from
+`-4.84e-6` to `+3.26e-7`.  Hard assignments are identical between the two
+RECOVAR arms.
 
-This provisionally classifies the visible iteration-5 failure as inherited
+This classifies the visible iteration-5 failure as inherited
 map-state amplification rather than an iteration-5 E-step or M-step
 formulation bug.  It does not yet identify the earlier map-state source, so
 the autonomous full-trajectory gate remains required.  Map acceptance uses
-shellwise FSC and FSC-AUC only.  The generated report incorrectly claims a
-fail-closed physical UUID check: its provenance file contains the literal
-query error `Nodeviceswerefound`.  Serial execution in a one-GPU allocation
-still pairs the arms, but a regex-hardened UUID repeat is required before this
-becomes authoritative.
+shellwise FSC and FSC-AUC only.  Regex-hardened provenance confirms the same
+physical A100 UUID `GPU-a1de512c-f178-a5e1-6c95-c54c6d07c9f3` at allocation,
+RELION, and both RECOVAR
+boundaries.
 
 Evidence:
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_it5_relref_ab_03c0969b_20260716_124414/analysis/ab_summary.json`
-(SHA-256 `8cbccfecba7eeaebdf6a13aa7c9142d8e357e6f6132bd8a48b1b49cdc3203458`).
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_it5_relref_ab_uuidfix_03c0969b_20260716_131422/analysis/ab_summary.json`
+(SHA-256 `4eea996fb6f186290fcf408516eb7e25fb362a45ddc2bbb401e908005475d389`).
 
 ## 2026-07-16 K=1 local significant-count semantics
 
@@ -4094,9 +4092,47 @@ still controls every M-step reconstruction, posterior statistic, noise term,
 and accumulator; non-adaptive local search retains its existing fallback.
 A mocked boundary test deliberately returns parent counts `[2,3]` and fine
 counts `[17,19]` and verifies that only the reported count selects the parent
-values while `Ft_y`, `Ft_ctf`, and noise remain from the fine pass.  Focused
-CPU tests pass; a full trajectory confirmation remains the next gate before
-the count boundary is declared closed.
+values while `Ft_y`, `Ft_ctf`, and noise remain from the fine pass.  The full
+trajectory job `11275201` closes the serialization bug: iterations 1, 3, 6,
+and 7 match all 3,000 counts exactly.  The other six iterations contain only
+16 particle-iteration residuals in total (1--7 particles per iteration), and
+every residual is exactly one count.  Iteration 4 improves from 2,691
+mismatches to 2; iteration 10 mean absolute error improves from `75.8343` to
+`0.002333`.  The remaining sparse boundaries are upstream coarse-support
+differences, not count serialization or fine M-step support.  Across 23
+old/new maps on different A100s, minimum FSC-AUC is `0.999999985554`; this is
+an envelope, not a bitwise claim.
 
-Discovery artifact:
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_serialization_2e40e614_20260716_130500/cases/11_small_baseline_3k_g128_white_noise1_bf80/trajectory_analysis/particle_state_distribution_full.json`.
+Authoritative artifacts:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_fulltraj_52178ed3_20260716_135924/analysis/REPORT_v2.md`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_fulltraj_52178ed3_20260716_135924/analysis/validation_v2.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_fulltraj_52178ed3_20260716_135924/analysis/residual_coarse_count_particles_v2.tsv`
+
+The `SHA256SUMS_v2` manifest SHA-256 is
+`190ace970540dd6ad2eb7a35627a2d8e66345fba1f0a3cf536df0c77ba3ee803`.
+
+## 2026-07-16 K=4 heterogeneous robustness expansion
+
+The hardened same-A100 trajectory gate now has an accepted 30k-particle
+Tomotwin case and a genuine failing 10k-particle IgG/outlier case.  Case 12
+(Tomotwin, white noise, uniform classes) passes all three iterations in job
+`11274946`: minimum direct cross-engine FSC-AUC is `0.999820693`,
+`0.999157434`, and `0.996495854`; minimum assignment agreement is `0.9986`,
+and the worst RECOVAR-minus-RELION GT FSC-AUC delta is `-6.28e-5`.
+
+Case 11 (IgG, white noise, uniform classes, 20% outliers) is a real trajectory
+failure.  Iteration 1 is effectively exact (minimum direct FSC-AUC
+`0.999330786`, one class mismatch), but iteration 2 already has 9,999/10,000
+Pmax differences, 1,166 support differences, and 24 class mismatches.
+Iteration 3 amplifies this into class-2 direct FSC-AUC `0.9735133506`, below
+the `0.995` gate.  The GT delta remains small (`-8.363e-5`), but that does not
+excuse the cross-engine trajectory failure.  This is a distribution-level
+E-step boundary, not a serial single-particle chase.  An exact incoming
+RELION-iteration-2 reference substitution is running to distinguish inherited
+map-state amplification from an intrinsic iteration-3 scoring divergence.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_robust_expand_recovery_b5dd574a_20260716_133400/cases/11_igg_k4_10k_g128_white_noise1_uniform_outliers_pct20/trajectory_analysis/particle_state_distribution.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_robust_expand_uuid_recovery2_b5dd574a_20260716_135200/cases/12_tomotwin_k4_10k_g128_white_noise1_uniform/trajectory_analysis/k4_fsc_trajectory.json`

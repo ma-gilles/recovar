@@ -2632,22 +2632,21 @@ Matrix evidence:
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/analysis/p8240_boundary.json`.
 
-# 2026-07-16: provisional incoming-reference K=4 case-8 discriminator
+# 2026-07-16: authoritative incoming-reference K=4 case-8 discriminator
 
 - A serial A/B in one single-GPU Slurm allocation changes only the incoming
   iteration-4 reference.
-  Class-2 iteration-5 direct FSC-AUC rises from `0.9782348744` to
-  `0.9999999957`; the GT FSC-AUC delta contracts from `-4.7261e-6` to
-  `-1.6119e-8`.
-- The substituted arm has exact class agreement and no iteration-5 support
-  count differences.  The visible cliff is inherited map-state amplification,
-  not an iteration-5 E/M formulation error.  The earlier source remains open.
-- The report's stated fail-closed UUID policy is invalid: its captured value is
-  `Nodeviceswerefound`.  Treat this discriminator as provisional until the
-  regex-hardened UUID repeat completes.
+  Class-2 iteration-5 direct FSC-AUC rises from `0.9782344460` to
+  `0.9999999956`; the GT FSC-AUC delta changes from `-4.84e-6` to `+3.26e-7`.
+- Assignments are identical between RECOVAR arms.  The visible cliff is
+  inherited map-state amplification, not an iteration-5 E/M formulation
+  error.  The earlier source remains open.
+- The regex-hardened repeat confirms one physical A100 UUID
+  (`GPU-a1de512c-f178-a5e1-6c95-c54c6d07c9f3`) at allocation, RELION, and both
+  RECOVAR boundaries.
 - Evidence:
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_it5_relref_ab_03c0969b_20260716_124414/analysis/ab_summary.json`
-  (SHA-256 `8cbccfecba7eeaebdf6a13aa7c9142d8e357e6f6132bd8a48b1b49cdc3203458`).
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_it5_relref_ab_uuidfix_03c0969b_20260716_131422/analysis/ab_summary.json`
+  (SHA-256 `4eea996fb6f186290fcf408516eb7e25fb362a45ddc2bbb401e908005475d389`).
 
 # 2026-07-16: K=1 local runs recorded the wrong pass's significant count
 
@@ -2660,7 +2659,35 @@ Matrix evidence:
   M-step arrays and statistics; the change is not a support or map-quality
   intervention.
 - Focused CPU tests pass, including a parent `[2,3]` versus fine `[17,19]`
-  behavioral discriminator.  Require a trajectory replay before closing the
-  boundary.
-- Discovery artifact:
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_serialization_2e40e614_20260716_130500/cases/11_small_baseline_3k_g128_white_noise1_bf80/trajectory_analysis/particle_state_distribution_full.json`.
+  behavioral discriminator.  Full trajectory job `11275201` closes the
+  serialization bug: four iterations match all 3,000 counts, and only 16
+  particle-iteration residuals remain elsewhere, each exactly one count.
+  Iteration 4 drops from 2,691 mismatches to 2; iteration 10 mean absolute
+  error drops from `75.8343` to `0.002333`.
+- The remaining 16 targets are upstream coarse-support boundaries, not a
+  serialization or fine-M-step-support error.  They are materialized for the
+  next direct-score replay.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_fulltraj_52178ed3_20260716_135924/analysis/REPORT_v2.md`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_fulltraj_52178ed3_20260716_135924/analysis/residual_coarse_count_particles_v2.tsv`.
+  The manifest SHA-256 is
+  `190ace970540dd6ad2eb7a35627a2d8e66345fba1f0a3cf536df0c77ba3ee803`.
+
+# 2026-07-16: heterogeneous K=4 robustness has one pass and one real failure
+
+- Hardened same-A100 case 12 (30k Tomotwin, white noise, uniform classes) passes
+  in job `11274946`.  Iteration direct FSC-AUC minima are `0.999820693`,
+  `0.999157434`, and `0.996495854`; minimum assignment agreement is `0.9986`,
+  and worst GT FSC-AUC delta is `-6.28e-5`.
+- Case 11 (10k IgG, white noise, uniform classes, 20% outliers) fails by
+  iteration 3: class-2 direct FSC-AUC is `0.9735133506`.  Its earliest
+  nonordinary distribution boundary is iteration 2, with 9,999 Pmax
+  differences, 1,166 support differences, and 24 class mismatches.  Treat this
+  as a distribution-level E-step failure, not a serial particle chase.
+- An exact incoming-RELION-reference iteration-3 A/B is running to determine
+  whether the visible failure is inherited map-state amplification.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_robust_expand_recovery_b5dd574a_20260716_133400/cases/11_igg_k4_10k_g128_white_noise1_uniform_outliers_pct20/trajectory_analysis/particle_state_distribution.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_robust_expand_uuid_recovery2_b5dd574a_20260716_135200/cases/12_tomotwin_k4_10k_g128_white_noise1_uniform/trajectory_analysis/k4_fsc_trajectory.json`.
