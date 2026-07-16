@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+import struct
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from scripts import validate_relion_bpref_prescatter as validator
+
+pytestmark = pytest.mark.unit
+
+
+def _float_bits(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _write_artifact(
+    directory: Path,
+    *,
+    part: int,
+    stack: int,
+    rank: int,
+    expected_particles: int = 2,
+    excluded: int = 1,
+) -> Path:
+    rotations = np.zeros(1, dtype=validator.ROTATION_DTYPE)
+    rotations["orientation_class_key"] = 17
+    rotations["oversampled_rotation"] = 0
+    rotations["matrix"][0] = np.eye(3, dtype=np.float32).reshape(-1)
+    rotations["orientation_local"] = 0
+
+    rows = np.zeros(1, dtype=validator.ROW_DTYPE)
+    rows["state"] = 1
+    rows["orientation_local"] = 0
+    rows["pixel"] = 1
+    rows["flags"] = validator.ROW_FLAG_FWEIGHT_POSITIVE | validator.ROW_FLAG_RADIUS_SUPPORT
+    rows["x"] = 1
+    rows["source_re"] = 2.0
+    rows["source_im"] = -3.0
+    rows["source_weight"] = 4.0
+
+    values = [0] * 40
+    values[0:5] = [1, 336, 40, 64, 32]
+    values[5:20] = [1, 1, part, stack, part, rank, 0, 3, 3, 1, 9, 1, 1, 2, 4]
+    values[20:25] = [_float_bits(2.0), _float_bits(0.1), _float_bits(1.0), 0, 0]
+    values[25:30] = [expected_particles, 1, 2, 10_000_000, 1_000_000]
+    values[30:38] = [1234, 2000 + stack, 9, 9, 9, 0, 0, 1]
+    values[38:40] = [rows.size + excluded, excluded]
+    header = validator.HEADER_STRUCT.pack(validator.HEADER_MAGIC, *values)
+    footer = validator.FOOTER_STRUCT.pack(validator.FOOTER_MAGIC, rows.size, rotations.size)
+    path = directory / f"part{part}_stack{stack}_img{part}_class1.bpre-v1.bin"
+    path.write_bytes(header + rotations.tobytes() + rows.tobytes() + footer)
+    return path
+
+
+def test_validate_complete_directory_and_recovar_identities(tmp_path: Path):
+    _write_artifact(tmp_path, part=10, stack=101, rank=1)
+    _write_artifact(tmp_path, part=11, stack=202, rank=2)
+    shard = tmp_path / "recovar.npz"
+    np.savez(shard, stack_indices_1based=np.asarray([202, 101], dtype=np.int64))
+
+    expected = validator.load_recovar_stack_indices((tmp_path,))
+    artifacts, summary = validator.validate_directory(
+        tmp_path, expected_particles=2, expected_stack_indices=expected
+    )
+
+    assert len(artifacts) == 2
+    assert summary["particle_count"] == 2
+    assert summary["emitted_supported_row_count"] == 2
+    assert summary["positive_fweight_candidate_count"] == 4
+    assert summary["radius_excluded_positive_fweight_count"] == 2
+    assert summary["classification_ready"] is True
+
+
+def test_load_artifact_rejects_truncation(tmp_path: Path):
+    path = _write_artifact(tmp_path, part=10, stack=101, rank=1)
+    path.write_bytes(path.read_bytes()[:-1])
+
+    with pytest.raises(ValueError, match="artifact byte count mismatch"):
+        validator.load_artifact(path)
+
+
+def test_validate_directory_rejects_support_accounting_mismatch(tmp_path: Path):
+    path = _write_artifact(tmp_path, part=10, stack=101, rank=1, expected_particles=1)
+    payload = bytearray(path.read_bytes())
+    struct.pack_into("<Q", payload, 16 + 38 * 8, 99)
+    path.write_bytes(payload)
+
+    with pytest.raises(ValueError, match="candidate/support accounting mismatch"):
+        validator.validate_directory(tmp_path)
+
+
+def test_validate_directory_rejects_unsealed_temporary_file(tmp_path: Path):
+    _write_artifact(tmp_path, part=10, stack=101, rank=1, expected_particles=1)
+    (tmp_path / "part10.tmp.1").write_bytes(b"partial")
+
+    with pytest.raises(ValueError, match="incomplete temporary artifacts"):
+        validator.validate_directory(tmp_path)
