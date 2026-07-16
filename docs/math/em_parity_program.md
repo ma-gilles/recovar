@@ -4536,3 +4536,63 @@ Sealed evidence (absolute path followed by SHA-256):
 is explicitly superseded: it integrated float32 FSC values slightly above
 one, and its mode arrays were overwritten by the independent v2 repeat and
 are not sealed.
+
+## 2026-07-16 K=4 particle-7916 precision classification
+
+The final bounded replay classifies the sole recurrent case-11 firstiter
+winner difference as `reduction_order_or_accumulation_precision_sensitive`.
+RECOVAR's production float32 scores are tied at their stored precision and
+route particle 7916 to zero-based class 1, whereas RELION selects class 0 by
+one float32 ULP. Recomputing only RECOVAR's scoring arithmetic in float64 over
+the same production complex64/float32 PPref representation selects class 0 by
+`1.031123392e-7`, at the same pose. This agrees with RELION and with the
+one-particle causal trajectory repair.
+
+This is not a genuine upstream complex128 classification: the projector
+operands remain production complex64/float32, and a RELION double-accumulator
+or common complex128 operand replay was not completed. The reusable replay
+therefore preserves ties and distinguishes promoted captured operands from
+genuinely recomputed high-precision operands instead of labeling this result
+more strongly.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7916_float64_replay_20260716/analysis/FINAL_CLASSIFICATION.json` (SHA-256 `6f8bf46d864b1b10d26c97704120b76edc23766168dfb4b024c779dc40794ebf`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7916_float64_replay_20260716/provenance/FINAL_MANIFEST.sha256` (SHA-256 `009d3db710817243f3c561021e773ab5a225af989aae81917e33b8c4367f4ea1`)
+
+## 2026-07-16 real-10076 aggregate pre-scatter classification
+
+The complete passive capture contains 10,000 particles and exactly accounts
+for every positive RELION BPref candidate. For all 5,000 half-2 particles,
+stack identities, source support, oversampled rotation identities, and
+rotation matrices are exact after the known RELION transpose convention.
+Capture maps remain inside the same-A100 repeat envelope.
+
+One particle, stack 111721, supplies `98.9083%` of numerator-difference energy
+because RELION selects an adjacent 0.5-pixel translation absent from RECOVAR's
+pass-2 child mask. Phase substitution reduces that particle's relative L2
+from `0.153695` to `0.000207170`; its coarse selection remains separately
+unresolved pending a complete float32/float64 score replay.
+
+The other 4,999 particles expose a systematic composite-operand boundary.
+Keeping all 4,483,086 source pixels and 35,864,688 device-produced RECOVAR
+neighbors fixed, substituting RELION's captured complex source numerator
+reduces BPref data relative L2 from `0.00109094374` to `2.79785117e-6`, removing
+`99.7435%` of the residual. With common RELION weight and tau, map FSC-AUC
+improves from `0.999998815829` to `0.999999999995716`; minimum shell FSC is
+`0.999999999993895`. A true float64/complex128 RECOVAR source replay removes
+only `0.554455%` of the cross-engine residual, so the recurrent bucket is
+composite numerator formulation/generation, not materially production
+precision, scatter geometry, or reduction order.
+
+The next bounded discriminator is a stratified 32-particle capture that splits
+the composite numerator into preprocessed FFT, translation phase, CTF,
+`Minvsigma2`, posterior normalization, per-translation terms, and reduction.
+Stack 111721 requires a separate complete coarse-score and generated-child-list
+replay. Intermediate gates remain exact/array metrics; map gates use FSC and
+FSC-AUC only.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_relion_prescatter_20260716T224000Z/CLASSIFICATION.md` (SHA-256 `a2ea3a990e872089904079ac4f05ca7d7fdc0b2138b1ef8620fb711374150bc4`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_relion_prescatter_20260716T224000Z/aggregate_comparison_v1/SHA256SUMS` (SHA-256 `b3dc0908306a0eded53fb162116096f1d0aee6f77f6726c776929ad867488408`)
