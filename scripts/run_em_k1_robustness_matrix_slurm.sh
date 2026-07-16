@@ -439,6 +439,10 @@ unset CONDA_DEFAULT_ENV CONDA_EXE CONDA_PYTHON_EXE CONDA_PROMPT_MODIFIER CONDA_S
 # Submit shells often run CPU-only local tests. GPU Slurm jobs must not inherit
 # those overrides or the CUDA provenance gate will correctly fail.
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
+# Strict quality matrices must also ignore diagnostic/refinement overrides that
+# are not explicit K=1 launcher controls.
+unset RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN
+unset RECOVAR_USE_FLOAT64_SCORING RECOVAR_USE_FLOAT64_PROJECTIONS
 export PYTHONNOUSERSITE=1
 export RECOVAR_EXPECTED_REPO_ROOT="${REPO_ROOT}"
 export PYTHONFAULTHANDLER="\${PYTHONFAULTHANDLER:-1}"
@@ -715,6 +719,30 @@ DATA_DIR="${data_dir}"
 RECOVAR_DIR="${recovar_dir}"
 RELION_DIR="${relion_dir}"
 mkdir -p "\${CASE_ROOT}" "\${DATA_DIR}" "\${RECOVAR_DIR}" "\${RELION_DIR}"
+
+capture_physical_gpu_uuid() {
+  local gpu_token="\${SLURM_JOB_GPUS:-}"
+  gpu_token="\${gpu_token%%,*}"
+  local gpu_uuid=""
+  if [[ "\${gpu_token}" == GPU-* ]]; then
+    gpu_uuid="\${gpu_token}"
+  elif [[ -n "\${gpu_token}" ]]; then
+    gpu_uuid="\$(nvidia-smi --id="\${gpu_token}" --query-gpu=uuid --format=csv,noheader 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+  fi
+  if [[ -z "\${gpu_uuid}" ]]; then
+    mapfile -t visible_uuids < <(nvidia-smi --query-gpu=uuid --format=csv,noheader | sed 's/[[:space:]]//g' | sed '/^$/d')
+    if [[ "\${#visible_uuids[@]}" -ne 1 ]]; then
+      echo "ERROR: cannot identify exactly one physical GPU (found \${#visible_uuids[@]})" >&2
+      return 2
+    fi
+    gpu_uuid="\${visible_uuids[0]}"
+  fi
+  printf '%s\n' "\${gpu_uuid}"
+}
+
+CASE_GPU_UUID="\$(capture_physical_gpu_uuid)"
+printf '%s\n' "\${CASE_GPU_UUID}" > "\${CASE_ROOT}/physical_gpu_uuid.txt"
+nvidia-smi --query-gpu=timestamp,index,name,uuid,memory.total,driver_version --format=csv > "\${CASE_ROOT}/physical_gpu_inventory.csv"
 if [[ -n "\${RECOVAR_BPREF_ACCUM_DUMP_DIR:-}" ]]; then
   export RECOVAR_BPREF_ACCUM_DUMP_DIR="\${RECOVAR_BPREF_ACCUM_DUMP_DIR%/}/${idx}_${name}"
   mkdir -p "\${RECOVAR_BPREF_ACCUM_DUMP_DIR}"
@@ -883,8 +911,15 @@ if [[ "\${PREP_STATUS}" -ne 0 ]]; then
   exit "\${PREP_STATUS}"
 fi
 
+RELION_GPU_UUID=""
 if [[ "${RUN_RELION}" -eq 1 ]]; then
   echo "=== Run RELION AutoRefine ${name} ==="
+  RELION_GPU_UUID="\$(capture_physical_gpu_uuid)"
+  if [[ "\${RELION_GPU_UUID}" != "\${CASE_GPU_UUID}" ]]; then
+    echo "ERROR: RELION physical GPU changed: expected \${CASE_GPU_UUID}, got \${RELION_GPU_UUID}" >&2
+    exit 2
+  fi
+  printf '%s\n' "\${RELION_GPU_UUID}" > "\${RELION_DIR}/physical_gpu_uuid.txt"
   RELION_START="\$(date +%s)"
   (
     unset LD_LIBRARY_PATH
@@ -896,6 +931,12 @@ if [[ "${RUN_RELION}" -eq 1 ]]; then
     set +u
     module load "${RELION_MODULE}"
     set -u
+    RELION_RUNTIME_GPU_UUID="\$(capture_physical_gpu_uuid)"
+    if [[ "\${RELION_RUNTIME_GPU_UUID}" != "\${CASE_GPU_UUID}" ]]; then
+      echo "ERROR: RELION runtime physical GPU changed: expected \${CASE_GPU_UUID}, got \${RELION_RUNTIME_GPU_UUID}" >&2
+      exit 2
+    fi
+    printf '%s\n' "\${RELION_RUNTIME_GPU_UUID}" > "\${RELION_DIR}/runtime_physical_gpu_uuid.txt"
     if [[ -n "${RELION_EXTRA_LD_LIBRARY_PATH}" ]]; then
       export LD_LIBRARY_PATH="${RELION_EXTRA_LD_LIBRARY_PATH}:\${LD_LIBRARY_PATH:-}"
     fi
@@ -980,6 +1021,12 @@ JSON
   if [[ "\${RELION_STATUS}" -ne 0 ]]; then
     exit "\${RELION_STATUS}"
   fi
+  RELION_POST_GPU_UUID="\$(capture_physical_gpu_uuid)"
+  if [[ "\${RELION_POST_GPU_UUID}" != "\${RELION_GPU_UUID}" ]]; then
+    echo "ERROR: RELION physical GPU changed during its run: expected \${RELION_GPU_UUID}, got \${RELION_POST_GPU_UUID}" >&2
+    exit 2
+  fi
+  printf '%s\n' "\${RELION_POST_GPU_UUID}" > "\${RELION_DIR}/post_physical_gpu_uuid.txt"
 fi
 
 echo "=== Run RECOVAR K=1 EM ${name} ==="
@@ -1039,6 +1086,15 @@ if [[ "${RUN_RELION}" -eq 1 ]]; then
   fi
   echo "RECOVAR strict RELION replay args: \${RECOVAR_RELION_REPLAY_ARGS[*]}"
 fi
+RECOVAR_GPU_UUID="\$(capture_physical_gpu_uuid)"
+if [[ "\${RECOVAR_GPU_UUID}" != "\${CASE_GPU_UUID}" || ( -n "\${RELION_GPU_UUID}" && "\${RECOVAR_GPU_UUID}" != "\${RELION_GPU_UUID}" ) ]]; then
+  echo "ERROR: RECOVAR and RELION did not use the same physical GPU: RELION=\${RELION_GPU_UUID:-<not-run>} RECOVAR=\${RECOVAR_GPU_UUID}" >&2
+  exit 2
+fi
+printf '%s\n' "\${RECOVAR_GPU_UUID}" > "\${RECOVAR_DIR}/physical_gpu_uuid.txt"
+cat > "\${CASE_ROOT}/paired_gpu_uuid.json" <<JSON
+{"physical_gpu_uuid":"\${CASE_GPU_UUID}","relion_gpu_uuid":"\${RELION_GPU_UUID}","recovar_gpu_uuid":"\${RECOVAR_GPU_UUID}"}
+JSON
 START_EPOCH="\$(date +%s)"
 set +e
 "\${PIXI_PY}" -m scripts.run_full_refinement \\
@@ -1071,6 +1127,12 @@ END_EPOCH="\$(date +%s)"
 cat > "\${RECOVAR_DIR}/slurm_walltime.json" <<JSON
 {"slurm_job_id":"\${SLURM_JOB_ID}","start_epoch":\${START_EPOCH},"end_epoch":\${END_EPOCH},"external_wall_s":\$((END_EPOCH - START_EPOCH)),"exit_status":\${STATUS}}
 JSON
+RECOVAR_POST_GPU_UUID="\$(capture_physical_gpu_uuid)"
+if [[ "\${RECOVAR_POST_GPU_UUID}" != "\${CASE_GPU_UUID}" || ( -n "\${RELION_GPU_UUID}" && "\${RECOVAR_POST_GPU_UUID}" != "\${RELION_GPU_UUID}" ) ]]; then
+  echo "ERROR: RECOVAR physical GPU changed during its run: expected \${RELION_GPU_UUID:-\${CASE_GPU_UUID}}, got \${RECOVAR_POST_GPU_UUID}" >&2
+  exit 2
+fi
+printf '%s\n' "\${RECOVAR_POST_GPU_UUID}" > "\${RECOVAR_DIR}/runtime_physical_gpu_uuid.txt"
 if [[ "\${STATUS}" -eq 0 ]]; then
   echo "=== Summarize RECOVAR K=1 EM ${name} ==="
   SUMMARY_ARGS=()
@@ -1124,6 +1186,8 @@ set -euo pipefail
 cd "${REPO_ROOT}"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 unset CONDA_DEFAULT_ENV CONDA_EXE CONDA_PYTHON_EXE CONDA_PROMPT_MODIFIER CONDA_SHLVL
+unset RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN
+unset RECOVAR_USE_FLOAT64_SCORING RECOVAR_USE_FLOAT64_PROJECTIONS
 export PYTHONNOUSERSITE=1
 export RECOVAR_DISABLE_CUDA=1
 export CUDA_VISIBLE_DEVICES=""

@@ -212,6 +212,28 @@ def test_case_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     assert "recovar/relion_bind/build.py" not in case_text
 
 
+def test_queued_jobs_unset_inherited_non_matrix_refinement_overrides(tmp_path):
+    inherited_overrides = {
+        "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER": "1",
+        "RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN": "1",
+        "RECOVAR_USE_FLOAT64_SCORING": "1",
+        "RECOVAR_USE_FLOAT64_PROJECTIONS": "1",
+    }
+    proc, scratch = _dry_run_launcher(tmp_path, case="14", extra_env=inherited_overrides)
+
+    assert proc.returncode == 0, proc.stdout
+    job_texts = [path.read_text() for path in sorted((scratch / "jobs").glob("*.sh"))]
+    assert len(job_texts) == 3
+    for text in job_texts:
+        assert (
+            "unset RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER "
+            "RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN"
+        ) in text
+        assert "unset RECOVAR_USE_FLOAT64_SCORING RECOVAR_USE_FLOAT64_PROJECTIONS" in text
+        for name, value in inherited_overrides.items():
+            assert f"export {name}={value}" not in text
+
+
 def test_case_jobs_build_cuda_lib_atomically_under_lock(tmp_path):
     proc, scratch = _dry_run_launcher(tmp_path, case="14")
 
@@ -437,6 +459,11 @@ def test_relion_binary_identity_is_recorded_in_case_job(tmp_path):
     case_script = next((scratch / "jobs").glob("em_k1_matrix_32_*.sh")).read_text()
     assert "RELION_REFINE_MPI_RESOLVED=" in case_script
     assert "RELION_REFINE_MPI_SHA256=" in case_script
+    assert 'CASE_GPU_UUID="$(capture_physical_gpu_uuid)"' in case_script
+    assert 'RELION_GPU_UUID="$(capture_physical_gpu_uuid)"' in case_script
+    assert 'RECOVAR_GPU_UUID="$(capture_physical_gpu_uuid)"' in case_script
+    assert "paired_gpu_uuid.json" in case_script
+    assert "physical_gpu_inventory.csv" in case_script
 
 
 def test_k1_dense_pass2_diagnostic_env_is_forwarded(tmp_path):
