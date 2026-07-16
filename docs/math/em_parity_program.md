@@ -208,18 +208,17 @@ unchanged.  Next validate fixed-state score arrays and then the full case-20
 trajectory with explicit `relion_cuda`; the captured operand gate alone is not
 an end-to-end quality claim.
 
-The source-derived exact fine-Gaussian scorer remains isolated and unmerged.
-Same-H100 sequential job `11194268` matched the full current-size schedule and
-iteration-11 convergence in exact and algebraic modes, but the modes already
-differed at iteration 1 when normalized CC bypassed the Gaussian scorer
-(merged FSC-AUC `0.999999999952`).  This establishes a reconstruction-jitter
-floor inside the A/B.  Exact scoring changed raw final RECOVAR-vs-RELION
-FSC-AUC by only `+8.40e-8`, changed strict grid-corrected FSC-AUC by
-`-3.79e-7`, slightly worsened both GT FSC-AUC comparisons, and cost `4.58%`
-wall time.  Do not claim the older cross-run improvement as causal.  Retain
-the candidate only as an array-level diagnostic until it has typed
-configuration, saved score/logZ/posterior provenance, and replicated K=1/K=4
-stress evidence.
+The replacement exact fine-Gaussian reducer is now the default float32
+Gaussian path.  A same-A100 paired iteration-2 run changed only
+`RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN=1`: mean Pmax error against RELION
+fell from `2.78821e-5` to `1.99846e-5`, rows above `1e-4` fell from 371 to 168,
+and wall time fell from `1065.49` to `538.72` seconds.  Iteration-1 state was
+bitwise equal; iteration-2 merged cross-engine FSC-AUC was non-regressing
+(`0.999999981423` to `0.999999981578`).  This real-data fixture has no GT, so
+the result is not a GT-quality claim.  K=1 robustness must be rerun at the
+integrated commit, and K=4 remains gated on production-size trajectory
+evidence.  The older candidate and its negative result remain documented
+below; it is not the implementation that was promoted.
 
 After those K=1 gates, advance to K=4 quality/state parity.  Performance is
 not yet accepted: the broad matrix measures RECOVAR at `1.64--5.89x` RELION

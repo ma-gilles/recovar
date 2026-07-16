@@ -2184,6 +2184,29 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_exact_gaussian_ab_7ad2526d_20260714_215100/audit_exact_vs_algebraic/trajectory_fsc_audit.json`, and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_exact_gaussian_ab_7ad2526d_20260714_215100/audit_exact_vs_algebraic/shellwise_fsc_curves.npz`.
 
+# 2026-07-16: replacement exact fine-Gaussian reducer promoted
+
+- Commit `dbb4a916` promotes the replacement RELION CUDA-style float32 fine
+  `diff2` reduction.  It is default-on only for Gaussian float32 scoring;
+  normalized CC and float64 diagnostics retain the prior route.  Disable only
+  for paired diagnostics with `RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN=1`.
+- Same-A100 iteration-2 A/B evidence changed only that disable flag.  Exact
+  reduced mean Pmax error against RELION by `28.3248%`
+  (`2.78821e-5 -> 1.99846e-5`), reduced rows above `1e-4` from 371 to 168, and
+  reduced wall time by `49.439%` (`1065.49 -> 538.72` seconds).  Iteration-1
+  state was bitwise equal and iteration-2 cross-engine merged FSC-AUC changed
+  by only `+1.55e-10`.  The real fixture has no GT.
+- The implementation uses the RELION 256-lane/tree reduction, zero-gap
+  full-grid topology, and one common class-by-pose minimum.  K>1 refuses an
+  unsafe per-class fallback, and host staging is capped by
+  `RECOVAR_SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES` (8 GiB by default).
+- Sealed evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_exact_gaussian_it2_ab_f62eb37e_20260716_091600/analysis/SEALED_ANALYSIS.json`.
+  Its SHA-256 is
+  `bc1e27f16437913e8e2c081016a838d0a05b7b6539adcacb07f3d9ff4cc1a993`.
+  Rerun the K=1 matrix at the integrated commit; do not treat K=4 as proven
+  until a production-size trajectory run passes.
+
 # 2026-07-14: case-26 first real divergence is accelerated BPref arithmetic
 
 - Iteration-1 hard-WTA E-step decisions are exact: every pose, translation,
