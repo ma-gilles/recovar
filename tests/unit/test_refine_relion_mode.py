@@ -10365,6 +10365,7 @@ class TestRelionModeSmokeTest:
             rotation_log_prior=rotation_log_prior,
             collect_significance=False,
             return_class_best=True,
+            return_class_second=True,
             score_mode="normalized_cc",
             **common_kwargs,
         )
@@ -10378,6 +10379,15 @@ class TestRelionModeSmokeTest:
             np.stack(expected_best, axis=0),
             rtol=1e-6,
             atol=1e-6,
+        )
+        second_scores = np.asarray(full_stats["class_second_best_log_score_per_image"], dtype=np.float32)
+        np.testing.assert_array_less(
+            second_scores,
+            np.asarray(full_stats["class_best_log_score_per_image"], dtype=np.float32),
+        )
+        assert np.all(
+            np.asarray(full_stats["class_second_hard_assignments"], dtype=np.int32)
+            != np.asarray(full_stats["class_hard_assignments"], dtype=np.int32)
         )
 
     @pytest.mark.parametrize(

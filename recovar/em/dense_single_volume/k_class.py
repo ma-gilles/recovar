@@ -1477,8 +1477,20 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         score_mode="normalized_cc",
         collect_significance=bool(os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR")),
         return_class_best=True,
+        return_class_second=bool(os.environ.get("RECOVAR_GLOBAL_WINNER_SUMMARY_PATH", "").strip()),
         debug_iteration=engine_kwargs.get("debug_iteration"),
     )[-1]
+
+    from recovar.em.global_winner_summary import maybe_dump_global_winner_summary
+
+    maybe_dump_global_winner_summary(
+        experiment_dataset=experiment_dataset,
+        full_stats=full_stats,
+        n_classes=n_classes,
+        n_rotations=n_rot,
+        n_translations=int(np.asarray(translations).shape[0]),
+        iteration=engine_kwargs.get("debug_iteration"),
+    )
 
     class_log_evidence = np.asarray(full_stats["class_log_evidence_per_image"], dtype=np.float64)
     per_class_hard = np.asarray(full_stats["class_hard_assignments"], dtype=np.int32)
