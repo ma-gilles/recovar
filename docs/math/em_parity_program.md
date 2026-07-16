@@ -3101,6 +3101,16 @@ replays 46,728 atomic contributions exactly and passes an exact self-compare;
 its audit root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/canonical_bpref_hardened_validation_20260715_175600/`.
 
+Coarse Gaussian score reductions have a separate fail-closed replay in
+`recovar/em/gaussian_reduction_replay.py`.  Its v1 schema is deliberately
+pinned to the frozen K=1 row-7881 RELION boundary, including source and
+executable hashes, GPU UUID, scientific inputs, candidate geometry, and the
+exact CUDA lane layout.  It distinguishes production float32, reordered
+float32, promoted captured operands, and genuinely recomputed
+complex128/float64 contributions; genuine high-precision conclusions are
+centered-only unless the initial image-energy term is also recomputed.  This
+module is diagnostic only and is not called by production EM scoring.
+
 ### Clean uninterrupted K=4 three-iteration gate
 
 H100 job `11210525` is the first fully immutable, autonomous three-iteration
