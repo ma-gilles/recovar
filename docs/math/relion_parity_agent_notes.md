@@ -2608,3 +2608,47 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_current_65d2c3f1_20260716_091500/`
   (case jobs `11264619--11264626`, summary `11264627`, trajectory audit
   `11265312`).
+
+# 2026-07-16: bounded exact raw-diff2 reuse is parity-safe at the frozen boundary
+
+- The sealed case-22 A1 iteration-2 aggregate replay compares cache OFF twice,
+  cache ON, and reversed-input cache OFF. After canonical particle ordering,
+  saved score/log-evidence/log-Z/Pmax arrays, support counts, assignments, best
+  rotations/translations, and rotation-posterior sums are bitwise identical.
+- All six merged-map pairings have complex128-input normalized FSC-AUC
+  `0.999999999997208--0.999999999997247`, or defect
+  `2.753e-12--2.792e-12`. Cache ON is no worse than same-GPU OFF/OFF repeat
+  and input-order controls; the residual accumulator/map variation is GPU
+  reduction noise. Correlation is not an acceptance metric.
+- Cache ON is `9.7%` faster than the mean same-order OFF controls (`75.07` vs
+  `83.10` seconds) only on this bounded high-support probe. Do not quote it as
+  a full-iteration or full-run speedup.
+- Production commit `7e48bcd85f735548f4d39ba1d5cc856581d5d8a2` admits the cache only within
+  512 MiB, 1% physical-device, 25% physical-free, and 25% JAX-allocator-free
+  caps. Any unavailable/nonpositive memory observation fails closed; set
+  `RECOVAR_SPARSE_PASS2_EXACT_RAW_DIFF2_CACHE_MAX_BYTES=0` to disable it.
+- Frozen source was `d4bc78fbfe976287ad86af507aaa9ec4ae8ab71e` on GPU
+  `GPU-dc6576aa-e1e4-6055-4a5e-d0fa809f3983`. The pinned CUDA library is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_reuse_aba_hardened_frozen_20260716_153618/native/optimized/libcuda_backproject.so`
+  (`206c3d486d738b9c40a872cc47cee2be34499559dfd59fd4e0a5bea414c12ae3`),
+  and the RELION binding is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_reuse_aba_hardened_frozen_20260716_153618/relion_bind_build/shared/_relion_bind_core.cpython-311-x86_64-linux-gnu.so`
+  (`1e9f0cf04f254e00abb5f742b74ed09c50c0a13ee883fe628613320e2fd755b6`).
+- Authoritative artifacts are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/artifacts/FINAL_REPORT_v2.md`
+  (`6c74453da31015d5b109c3d6e750063a455a46ba94af6137307409e91daaf537`),
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/artifacts/analysis_v2.json`
+  (`62abe127d20fb28b11ef1a3dd66757856c6a18f0dd5dbcc57170a0cd6b98fb5a`),
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/boundary/manifest.json`
+  (`7b062d5d8126f74fb9d8969b39791cf7e9a5ce4dfb97be02297a5c6f50c0d320`),
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/provenance/artifact_manifest.sha256`
+  (`7737332f72c5ae8981b2fbf73222105cff6a323d514fe199d93d1f1e2504894b`),
+  and `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/SEALED_v2.txt`
+  (`dc164525bf61fd4d7a9a915a4fe2f13631503252dc7b18ff561429354b62c779`).
+  The allocator guard probe is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_raw_diff2_allocator_probe_7e48bcd8_20260716_164400/allocator_probe.log`
+  (`19c74ab7657b560e06fccc5373beded700a1e5e54a04ec3e6c308b14eba759f8`).
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/artifacts/analysis_v1.json`
+  (`65dc3de3e6c3b47fdc3b31d7b8a47aa1ed03c019ccd5bfbb393af9707047b302`)
+  is superseded because it integrated float32 FSC values above one; its mode
+  arrays were overwritten by the independent v2 repeat and are not sealed.
