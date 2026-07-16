@@ -3814,3 +3814,30 @@ Evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_p1491_paired_a92c35ef_20260716_081502/analysis/aggregate_it2_pmax_support_distribution.json`,
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it1_p8494_device_capture_fix_fb4e6b73_20260716_082324/analysis/continuous_residual_localization/report.json`.
+
+## 2026-07-16 K=1 eight-case robustness trajectory gate
+
+The current eight-case 3k/128 matrix passes the complete numbered FSC audit.
+RECOVAR and RELION stop after the same numbered iteration in every case
+(`9--15` iterations).  Across all numbered maps, merged cross-engine FSC-AUC
+is at least `0.999838371`, and the minimum RECOVAR-minus-RELION merged GT
+FSC-AUC is `-0.000279612`.  This covers uniform, anisotropic and Kent angular
+distributions, contrast/noise-scale variation, image offsets, no-CTF radial
+noise, and two outlier regimes.
+
+With the GUI-quality grid correction intentionally unset/off, final merged
+cross-engine FSC-AUC spans `0.997233874--0.998704958`.  RECOVAR final merged GT
+FSC-AUC is higher in all eight cases by `+0.007711695--+0.020127071`.  Keep
+this final-output policy separate from numbered-map algorithm parity; do not
+enable grid correction to improve the cross-engine number.
+
+Quality is closed for this small matrix, but speed is not: RECOVAR takes
+`1.41--2.47x` RELION wall time.  The severe-outlier case is `2.18x`; its
+iteration 2 alone takes `1285.9` seconds after the posterior expands to about
+`100M` hypotheses per half, then later iterations return to tens of seconds.
+Treat that support explosion as the first K=1 performance target after the
+pending exact coarse-operand and RELION CUDA BPref classifications.
+
+Evidence root and jobs:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_current_65d2c3f1_20260716_091500/`
+(`11264619--11264626`, summary `11264627`, FSC audit `11265312`).

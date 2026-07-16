@@ -2545,3 +2545,23 @@ Matrix evidence:
   robustness/scale/real-data gates, and then K=4.
 - Report:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_p1491_paired_a92c35ef_20260716_081502/analysis/aggregate_it2_pmax_support_distribution.json`.
+
+# 2026-07-16: the current K=1 small robustness matrix passes full trajectories
+
+- All eight 3k/128 cases pass the numbered FSC/FSC-AUC audit and terminate on
+  the same numbered iteration as RELION (`9--15`).  Minimum numbered merged
+  cross-engine FSC-AUC is `0.999838371`; minimum RECOVAR-minus-RELION merged GT
+  FSC-AUC is `-0.000279612`.
+- With `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` unset/off, final merged
+  cross-engine FSC-AUC is `0.997233874--0.998704958`, while RECOVAR final GT
+  FSC-AUC exceeds RELION by `+0.007711695--+0.020127071` in all cases.  This is
+  the intended GUI-quality output policy, not a reason to turn grid correction
+  on.
+- RECOVAR remains `1.41--2.47x` slower.  The severe-outlier case is `2.18x`:
+  iteration 2 retains about `100M` hypotheses per half and takes `1285.9`
+  seconds, while subsequent iterations contract to tens of seconds.  Preserve
+  the completed quality artifact before testing performance changes.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_current_65d2c3f1_20260716_091500/`
+  (case jobs `11264619--11264626`, summary `11264627`, trajectory audit
+  `11265312`).
