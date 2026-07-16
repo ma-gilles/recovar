@@ -4503,3 +4503,36 @@ the BPref numerator. Do not continue serial particle-by-particle probes. The
 next bounded experiment is an aggregate RELION pre-scatter numerator/support
 capture, distribution comparison against frozen RECOVAR rows, and controlled
 RELION-numerator substitution through RECOVAR's closed ordinary geometry.
+## 2026-07-16 K=1 bounded raw-diff2 reuse closure
+
+At the frozen case-22 A1 iteration-2 boundary, cache OFF repeat, cache ON,
+and reversed-input cache OFF are bitwise identical after restoring particle
+order for every saved score, log-evidence/log-Z, Pmax, support count, hard
+assignment, best pose, and rotation-posterior sum. All six pairwise merged-map
+comparisons have normalized FSC-AUC `0.999999999997208--0.999999999997247`
+(`1-FSC-AUC = 2.753e-12--2.792e-12`), so cache-ON variation is inside the
+same-GPU repeat/order reduction envelope. FSC was evaluated from complex128
+inputs and physically clipped before integration; correlation was not used.
+
+Cache ON took `75.07` seconds versus `83.10` seconds for the mean of the two
+same-order OFF controls, a `9.7%` speedup on this bounded high-support probe.
+This is not a full-iteration or full-run speedup claim. Commit `7e48bcd85f735548f4d39ba1d5cc856581d5d8a2`
+subsequently hardened admission to the minimum of 512 MiB, 1% of physical
+device memory, 25% of physical free memory, and 25% of free JAX allocator
+memory. Unknown/nonpositive memory disables reuse, as does
+`RECOVAR_SPARSE_PASS2_EXACT_RAW_DIFF2_CACHE_MAX_BYTES=0`.
+
+Sealed evidence (absolute path followed by SHA-256):
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/artifacts/FINAL_REPORT_v2.md` — `6c74453da31015d5b109c3d6e750063a455a46ba94af6137307409e91daaf537`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/artifacts/analysis_v2.json` — `62abe127d20fb28b11ef1a3dd66757856c6a18f0dd5dbcc57170a0cd6b98fb5a`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/boundary/manifest.json` — `7b062d5d8126f74fb9d8969b39791cf7e9a5ce4dfb97be02297a5c6f50c0d320`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/provenance/artifact_manifest.sha256` — `7737332f72c5ae8981b2fbf73222105cff6a323d514fe199d93d1f1e2504894b`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/SEALED_v2.txt` — `dc164525bf61fd4d7a9a915a4fe2f13631503252dc7b18ff561429354b62c779`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_raw_diff2_allocator_probe_7e48bcd8_20260716_164400/allocator_probe.log` — `19c74ab7657b560e06fccc5373beded700a1e5e54a04ec3e6c308b14eba759f8`
+
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_boundary_probe_20260716_184500/artifacts/analysis_v1.json`
+(`65dc3de3e6c3b47fdc3b31d7b8a47aa1ed03c019ccd5bfbb393af9707047b302`)
+is explicitly superseded: it integrated float32 FSC values slightly above
+one, and its mode arrays were overwritten by the independent v2 repeat and
+are not sealed.
