@@ -109,26 +109,58 @@ def test_stage_fixture_replays_x0_and_public_layout_exactly(tmp_path):
 def test_companion_requires_authoritative_production_operands(tmp_path):
     panel = tmp_path / "panel.npz"
     contributions = tmp_path / "contributions"
+    signatures = tmp_path / "signatures"
     contributions.mkdir()
+    signatures.mkdir()
     np.savez(
         panel,
         operand_source=np.asarray(validator.PRODUCTION_OPERANDS),
         production_adjoint_topology=np.asarray(validator.PRODUCTION_TOPOLOGY),
         topology_claim=np.asarray(validator.PANEL_TOPOLOGY),
+        iteration=np.int32(1),
+        half=np.int32(2),
+        run_id=np.asarray("fixture"),
+        current_size=np.int32(4),
+        rank=np.int32(0),
+        launch_count=np.int64(4),
     )
+    contribution_path = contributions / "part.npz"
     np.savez(
-        contributions / "part.npz",
+        contribution_path,
         operand_source=np.asarray(validator.PRODUCTION_OPERANDS),
         production_adjoint_topology=np.asarray(validator.PRODUCTION_TOPOLOGY),
+        iteration=np.int32(1),
+        half=np.int32(2),
+        run_id=np.asarray("fixture"),
+        current_size=np.int32(4),
+        rank=np.int32(0),
+        class_index=np.int32(1),
+        call_index=np.int64(3),
+        dump_index=np.int64(0),
         original_indices=np.arange(4, dtype=np.int64),
+        image_identities=np.asarray([f"{index + 1}@/stack.mrcs" for index in range(4)]),
     )
-    result = validator.validate_companion(panel, contributions)
+    np.savez(
+        signatures / "part.device.npz",
+        iteration=np.int32(1),
+        half=np.int32(2),
+        run_id=np.asarray("fixture"),
+        current_size=np.int32(4),
+        rank=np.int32(0),
+        call_index=np.int64(3),
+        dump_index=np.int64(0),
+        companion_contribution_path=np.asarray(str(contribution_path.resolve())),
+        companion_contribution_sha256=np.asarray(validator.sha256(contribution_path)),
+    )
+    result = validator.validate_companion(panel, contributions, signatures)
     assert result["particle_count"] == 4
     assert result["contribution_shards"] == 1
+    assert result["signature_shards"] == 1
+    assert result["bijective_signature_contribution_binding"] is True
 
     with np.load(panel, allow_pickle=False) as archive:
         copied = {key: archive[key] for key in archive.files}
     copied["operand_source"] = np.asarray("sequential-shadow-reduction")
     np.savez(panel, **copied)
     with pytest.raises(ValueError, match="production-reduced operands"):
-        validator.validate_companion(panel, contributions)
+        validator.validate_companion(panel, contributions, signatures)

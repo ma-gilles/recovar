@@ -106,7 +106,11 @@ def calibrated_envelope(repeat_metrics: dict[str, object]) -> float:
     return max(5.0 * repeat, np.finfo(np.float64).tiny)
 
 
-def validate_companion(panel_path: Path, contribution_dir: Path) -> dict[str, object]:
+def validate_companion(
+    panel_path: Path,
+    contribution_dir: Path,
+    signature_dir: Path,
+) -> dict[str, object]:
     with np.load(panel_path, allow_pickle=False) as panel:
         panel_fields = {key: panel[key] for key in panel.files}
     if _scalar(panel_fields, "operand_source") != PRODUCTION_OPERANDS:
@@ -115,24 +119,106 @@ def validate_companion(panel_path: Path, contribution_dir: Path) -> dict[str, ob
         raise ValueError("signature companion production topology is missing or inconsistent")
     if _scalar(panel_fields, "topology_claim") != PANEL_TOPOLOGY:
         raise ValueError("panel topology does not distinguish its diagnostic geometry companion")
-    paths = sorted(contribution_dir.glob("*.npz"))
-    if not paths:
+    contribution_paths = sorted(contribution_dir.glob("*.npz"))
+    signature_paths = sorted(signature_dir.glob("*.device.npz"))
+    if not contribution_paths:
         raise ValueError(f"no contribution artifacts under {contribution_dir}")
-    particle_count = 0
-    for path in paths:
+    if len(signature_paths) != len(contribution_paths):
+        raise ValueError(
+            "contribution/signature shard count mismatch: "
+            f"{len(contribution_paths)} != {len(signature_paths)}"
+        )
+    panel_identity = {
+        field: _scalar(panel_fields, field)
+        for field in ("iteration", "half", "run_id", "current_size", "rank")
+    }
+    contribution_hashes = {}
+    signature_hashes = {}
+    original_index_parts = []
+    image_identity_parts = []
+    shard_identities = set()
+    contribution_by_path = {}
+    class_indices = set()
+    for path in contribution_paths:
         with np.load(path, allow_pickle=False) as contribution:
             if _scalar(contribution, "operand_source") != PRODUCTION_OPERANDS:
                 raise ValueError(f"non-production operands in {path}")
             if _scalar(contribution, "production_adjoint_topology") != PRODUCTION_TOPOLOGY:
                 raise ValueError(f"production topology mismatch in {path}")
-            particle_count += int(np.asarray(contribution["original_indices"]).size)
+            for field, expected in panel_identity.items():
+                if _scalar(contribution, field) != expected:
+                    raise ValueError(f"panel/contribution {field} mismatch in {path}")
+            shard_identity = (
+                int(_scalar(contribution, "call_index")),
+                int(_scalar(contribution, "dump_index")),
+            )
+            if shard_identity in shard_identities:
+                raise ValueError(f"duplicate contribution shard identity {shard_identity}")
+            shard_identities.add(shard_identity)
+            class_indices.add(int(_scalar(contribution, "class_index")))
+            original_index_parts.append(
+                np.asarray(contribution["original_indices"], dtype=np.int64)
+            )
+            image_identity_parts.append(np.asarray(contribution["image_identities"], dtype=str))
+        resolved = path.resolve()
+        digest = sha256(path)
+        contribution_hashes[str(resolved)] = digest
+        contribution_by_path[str(resolved)] = (digest, shard_identity)
+
+    seen_companions = set()
+    for path in signature_paths:
+        with np.load(path, allow_pickle=False) as signature:
+            for field, expected in panel_identity.items():
+                if _scalar(signature, field) != expected:
+                    raise ValueError(f"panel/signature {field} mismatch in {path}")
+            companion = str(Path(str(_scalar(signature, "companion_contribution_path"))).resolve())
+            if companion not in contribution_by_path:
+                raise ValueError(f"signature companion escapes contribution set: {companion}")
+            expected_hash, expected_shard = contribution_by_path[companion]
+            if str(_scalar(signature, "companion_contribution_sha256")) != expected_hash:
+                raise ValueError(f"signature companion SHA256 mismatch in {path}")
+            signature_shard = (
+                int(_scalar(signature, "call_index")),
+                int(_scalar(signature, "dump_index")),
+            )
+            if signature_shard != expected_shard:
+                raise ValueError(f"signature/contribution shard identity mismatch in {path}")
+            if companion in seen_companions:
+                raise ValueError(f"duplicate signature companion binding: {companion}")
+            seen_companions.add(companion)
+        signature_hashes[str(path.resolve())] = sha256(path)
+    if seen_companions != set(contribution_by_path):
+        raise ValueError("signature/contribution companion binding is not bijective")
+
+    original_indices = np.concatenate(original_index_parts)
+    image_identities = np.concatenate(image_identity_parts)
+    if original_indices.size != int(_scalar(panel_fields, "launch_count")):
+        raise ValueError(
+            "particle count does not close to panel launch count: "
+            f"{original_indices.size} != {_scalar(panel_fields, 'launch_count')}"
+        )
+    if np.unique(original_indices).size != original_indices.size:
+        raise ValueError("original particle identities are not unique and complete")
+    if np.unique(image_identities).size != image_identities.size:
+        raise ValueError("image identities are not unique and complete")
+    if len(class_indices) != 1:
+        raise ValueError(f"capture spans multiple class indices: {sorted(class_indices)}")
     return {
         "panel_path": str(panel_path.resolve()),
         "panel_topology_claim": PANEL_TOPOLOGY,
         "operand_source": PRODUCTION_OPERANDS,
         "production_adjoint_topology": PRODUCTION_TOPOLOGY,
-        "contribution_shards": len(paths),
-        "particle_count": particle_count,
+        "panel_identity": panel_identity,
+        "class_index": next(iter(class_indices)),
+        "contribution_shards": len(contribution_paths),
+        "signature_shards": len(signature_paths),
+        "particle_count": int(original_indices.size),
+        "original_index_min": int(original_indices.min()),
+        "original_index_max": int(original_indices.max()),
+        "unique_original_particle_identities": True,
+        "bijective_signature_contribution_binding": True,
+        "contribution_sha256": contribution_hashes,
+        "signature_sha256": signature_hashes,
     }
 
 
@@ -149,6 +235,7 @@ def parse_args(argv=None):
     parser.add_argument("--repeat-b-weight", required=True, type=Path)
     parser.add_argument("--panel", required=True, type=Path)
     parser.add_argument("--contribution-dir", required=True, type=Path)
+    parser.add_argument("--signature-dir", required=True, type=Path)
     parser.add_argument("--capture-gpu-uuid", required=True)
     parser.add_argument("--repeat-a-gpu-uuid", required=True)
     parser.add_argument("--repeat-b-gpu-uuid", required=True)
@@ -175,6 +262,8 @@ def main(argv=None) -> None:
             raise FileNotFoundError(path)
     if not args.contribution_dir.is_dir():
         raise FileNotFoundError(args.contribution_dir)
+    if not args.signature_dir.is_dir():
+        raise FileNotFoundError(args.signature_dir)
     gpu_uuids = {
         args.capture_gpu_uuid,
         args.repeat_a_gpu_uuid,
@@ -259,7 +348,11 @@ def main(argv=None) -> None:
         <= envelopes[field]
         for field in ("data", "weight")
     )
-    companion = validate_companion(args.panel, args.contribution_dir)
+    companion = validate_companion(
+        args.panel,
+        args.contribution_dir,
+        args.signature_dir,
+    )
     with np.load(args.panel, allow_pickle=False) as panel:
         panel_data = np.asarray(panel["data_accumulator"])
         panel_weight = np.asarray(panel["weight_accumulator"])
