@@ -13,6 +13,7 @@ from recovar.em.global_winner_analysis import (
     load_recovar_summary,
     load_relion_summary,
 )
+from scripts.analyze_k4_global_winner_summary import _dispatch_schedules_by_label
 from recovar.em.global_winner_summary import (
     MAX_SUPPORTED_BYTES,
     maybe_dump_global_winner_summary,
@@ -555,3 +556,37 @@ def test_analysis_rejects_pose_topology_mismatch(monkeypatch, tmp_path):
     summary = load_recovar_summary(path, label="a")
     with pytest.raises(ValueError, match="incompatible class-local pose topologies"):
         analyze_summaries([summary, replace(summary, label="b", pose_topology=(2, 3))])
+
+
+def test_global_winner_analysis_resolves_legacy_shared_dispatch_schedule():
+    schedules = _dispatch_schedules_by_label(["shared.npz"], ["controlA", "controlB"])
+
+    assert schedules == {
+        "controlA": Path("shared.npz"),
+        "controlB": Path("shared.npz"),
+    }
+
+
+def test_global_winner_analysis_resolves_per_arm_dispatch_schedules():
+    schedules = _dispatch_schedules_by_label(
+        ["controlA=a.npz", "controlB=b.npz"],
+        ["controlA", "controlB"],
+    )
+
+    assert schedules == {
+        "controlA": Path("a.npz"),
+        "controlB": Path("b.npz"),
+    }
+
+
+@pytest.mark.parametrize(
+    "values,labels,match",
+    [
+        (["controlA=a.npz"], ["controlA", "controlB"], "missing=.*controlB"),
+        (["controlA=a.npz", "controlA=b.npz"], ["controlA"], "duplicate"),
+        (["a.npz", "b.npz"], ["controlA", "controlB"], "LABEL=PATH"),
+    ],
+)
+def test_global_winner_analysis_rejects_ambiguous_dispatch_schedules(values, labels, match):
+    with pytest.raises(ValueError, match=match):
+        _dispatch_schedules_by_label(values, labels)
