@@ -55,6 +55,8 @@ def _full_stats(n_images: int = 4):
     return {
         "class_best_log_score_per_image": scores,
         "class_second_best_log_score_per_image": scores - np.float32(0.5),
+        "class_best_offset_free_log_score_per_image": scores.copy(),
+        "class_second_best_offset_free_log_score_per_image": scores - np.float32(0.5),
         "class_hard_assignments": best_poses,
         "class_second_hard_assignments": (best_poses + 1) % 6,
         "class_log_evidence_per_image": scores.astype(np.float64) + 0.25,
@@ -93,7 +95,7 @@ def test_recovar_summary_round_trip_and_semantics(monkeypatch, tmp_path):
     assert output == path.resolve()
     assert path.stat().st_size < MAX_SUPPORTED_BYTES
     summary = load_recovar_summary(path, label="recovar_a")
-    assert summary.metadata["raw_score_semantics"].startswith("per-class best normalized-CC")
+    assert summary.metadata["raw_score_semantics"].startswith("per-class best native float32 normalized-CC")
     assert summary.class_log_evidence is not None
     assert summary.global_log_z is not None
     np.testing.assert_array_equal(summary.winner, [0, 1, 2, 3])
@@ -116,11 +118,14 @@ def test_recovar_summary_uses_original_image_mapping_not_dataset_indices(monkeyp
     np.testing.assert_array_equal(summary.identity, original_indices)
 
 
-def test_recovar_summary_preserves_actual_winner_when_stored_float32_scores_tie(monkeypatch, tmp_path):
+def test_recovar_summary_uses_offset_free_scores_when_absolute_float32_scores_tie(monkeypatch, tmp_path):
     path = tmp_path / "recovar_tie.npz"
     _recovar_env(monkeypatch, path)
     full_stats = _full_stats()
-    full_stats["class_best_log_score_per_image"][1, 0] = full_stats["class_best_log_score_per_image"][0, 0]
+    full_stats["class_best_log_score_per_image"][:, 0] = np.float32(-1_000_000.0)
+    full_stats["class_second_best_log_score_per_image"][:, 0] = np.float32(-1_000_000.0)
+    full_stats["class_best_offset_free_log_score_per_image"][:, 0] = [1.0, 1.125, 0.75, 0.5]
+    full_stats["class_second_best_offset_free_log_score_per_image"][:, 0] = [0.5, 1.0, 0.5, 0.25]
     full_stats["class_assignments"][0] = 1
     maybe_dump_global_winner_summary(
         experiment_dataset=_dataset(np.arange(4)),
@@ -133,7 +138,10 @@ def test_recovar_summary_preserves_actual_winner_when_stored_float32_scores_tie(
     summary = load_recovar_summary(path, label="recovar_tie")
     assert summary.winner[0] == 1
     assert summary.runner_up[0] == 0
-    assert summary.margin[0] == 0.0
+    assert summary.margin[0] == 0.125
+    with np.load(path, allow_pickle=False) as payload:
+        assert np.unique(payload["class_best_absolute_log_score_with_image_offset"][0]).size == 1
+        np.testing.assert_array_equal(payload["class_best_raw_score_pre_prior"][0], [1.0, 1.125, 0.75, 0.5])
 
 
 @pytest.mark.parametrize("indices", [np.asarray([0, 1, 1, 3]), np.asarray([0, 1, 2])])
@@ -517,6 +525,8 @@ def test_analysis_reports_repeat_normalization_sign_and_ulp(monkeypatch, tmp_pat
     )
     pair = report["pairwise"][0]
     assert pair["mismatch_count"] == 0
+    assert pair["raw_pose_index_interpretation"] == "exact same-engine index repeat control"
+    assert "cross-engine geometry remains unresolved" in report["pose_index_comparison_policy"]
     assert pair["native_float32_ulp"]["max_ulp"] == 0
     assert pair["best_pose_exact_mismatches"]["total_element_count"] == 0
     assert pair["second_pose_exact_mismatches"]["total_element_count"] == 0

@@ -52,9 +52,11 @@ def load_recovar_summary(path: str | Path, *, label: str) -> WinnerSummary:
             "original_index_zero_based",
             "class_best_raw_score_pre_prior",
             "class_best_total_score",
+            "class_best_absolute_log_score_with_image_offset",
             "class_best_pose_index",
             "class_second_best_raw_score_pre_prior",
             "class_second_best_total_score",
+            "class_second_best_absolute_log_score_with_image_offset",
             "class_second_best_pose_index",
             "class_within_pose_margin",
             "winner_class_zero_based",
@@ -82,6 +84,14 @@ def load_recovar_summary(path: str | Path, *, label: str) -> WinnerSummary:
         if not np.array_equal(raw_scores_native, total_scores_native):
             raise ValueError("RECOVAR firstiter_cc raw and total scores must be identical")
         class_scores = np.asarray(raw_scores_native, dtype=np.float32)
+        absolute_scores_native = payload["class_best_absolute_log_score_with_image_offset"]
+        absolute_second_scores_native = payload["class_second_best_absolute_log_score_with_image_offset"]
+        if absolute_scores_native.dtype != np.float32 or absolute_second_scores_native.dtype != np.float32:
+            raise ValueError("RECOVAR absolute diagnostic class scores must be float32")
+        if absolute_scores_native.shape != class_scores.shape or absolute_second_scores_native.shape != class_scores.shape:
+            raise ValueError("RECOVAR absolute diagnostic class scores have unexpected shapes")
+        if not np.all(np.isfinite(absolute_scores_native)) or not np.all(np.isfinite(absolute_second_scores_native)):
+            raise ValueError("RECOVAR absolute diagnostic class scores contain non-finite values")
         class_pose = np.asarray(payload["class_best_pose_index"], dtype=np.int32)
         class_second_scores_native = payload["class_second_best_raw_score_pre_prior"]
         class_second_total_scores_native = payload["class_second_best_total_score"]
@@ -142,18 +152,19 @@ def load_recovar_summary(path: str | Path, *, label: str) -> WinnerSummary:
         if not metadata.get(provenance_key):
             raise ValueError(f"RECOVAR metadata lacks {provenance_key}")
     expected_recovar_semantics = {
-        "score_mode": "firstiter_cc_normalized_log_score_higher_is_better",
+        "score_mode": "firstiter_cc_offset_free_normalized_log_score_higher_is_better",
         "raw_score_semantics": (
-            "per-class best normalized-CC log score before class/orientation/translation priors; "
-            "includes the class-common per-image normalization offset"
+            "per-class best native float32 normalized-CC log score before class/orientation/translation priors "
+            "and before the class-common per-image normalization offset"
         ),
         "total_score_semantics": ("identical to raw score in firstiter_cc because RELION bypasses priors before WTA"),
+        "absolute_score_semantics": (
+            "diagnostic float32 normalized-CC log score after adding the class-common per-image normalization "
+            "offset; retained for absolute-score/evidence context and not used for class or pose margins"
+        ),
         "evidence_semantics": "per-class logsumexp evidence before firstiter_cc one-hot posterior",
         "posterior_semantics": "post-firstiter_cc one-hot class mass",
-        "winner_semantics": (
-            "actual joint class-pose argmax before WTA; captured float32 scores may tie after "
-            "adding the class-common normalization offset"
-        ),
+        "winner_semantics": "actual joint class-pose argmax of native offset-free float32 scores before WTA",
         "support_semantics": "post-firstiter_cc exactly one global class-pose sample per particle",
         "pre_wta_support_semantics": "all coarse candidates scored; no posterior threshold before WTA",
         "significant_count_semantics": "post-WTA global class-pose support cardinality; exactly one",
@@ -711,6 +722,11 @@ def analyze_summaries(summaries: list[WinnerSummary]) -> dict:
                         for index in mismatches
                     ],
                     "same_engine": same_engine,
+                    "raw_pose_index_interpretation": (
+                        "exact same-engine index repeat control"
+                        if same_engine
+                        else "descriptive only; cross-engine grid-index bijection is not yet proven"
+                    ),
                     "winner_confusion_matrix_left_rows_right_columns": confusion.tolist(),
                     "class_pair_signed_margin_confusion": _class_pair_sign_confusion(left, right),
                     "centered_class_loss_abs_delta": score_abs_metrics,
@@ -797,6 +813,10 @@ def analyze_summaries(summaries: list[WinnerSummary]) -> dict:
             "flattening": "rotation_major_then_translation",
         },
         "metric_policy": "exact/array score and margin metrics; no correlation",
+        "pose_index_comparison_policy": (
+            "raw pose indices are exact same-engine repeat controls; cross-engine geometry remains unresolved "
+            "until an explicit grid-index bijection is validated"
+        ),
         "numerical_classification_policy": (
             "cross-engine native-float32 aggregates cannot establish numerical-noise equivalence; "
             "recomputed float64/complex128 controls are required for final classification"

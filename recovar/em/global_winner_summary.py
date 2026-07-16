@@ -80,9 +80,14 @@ def maybe_dump_global_winner_summary(
     if not 0 < max_bytes <= MAX_SUPPORTED_BYTES:
         raise RuntimeError(f"RECOVAR_GLOBAL_WINNER_SUMMARY_MAX_BYTES must be in (0, {MAX_SUPPORTED_BYTES}]")
 
-    class_scores = np.asarray(full_stats["class_best_log_score_per_image"])
-    class_second_scores = np.asarray(full_stats["class_second_best_log_score_per_image"])
-    if class_scores.dtype != np.float32 or class_second_scores.dtype != np.float32:
+    class_scores = np.asarray(full_stats["class_best_offset_free_log_score_per_image"])
+    class_second_scores = np.asarray(full_stats["class_second_best_offset_free_log_score_per_image"])
+    class_scores_with_offset = np.asarray(full_stats["class_best_log_score_per_image"])
+    class_second_scores_with_offset = np.asarray(full_stats["class_second_best_log_score_per_image"])
+    if any(
+        array.dtype != np.float32
+        for array in (class_scores, class_second_scores, class_scores_with_offset, class_second_scores_with_offset)
+    ):
         raise RuntimeError("RECOVAR global-winner summary requires native float32 best/second class scores")
     class_pose_indices = np.asarray(full_stats["class_hard_assignments"], dtype=np.int32)
     class_second_pose_indices = np.asarray(full_stats["class_second_hard_assignments"], dtype=np.int32)
@@ -91,8 +96,10 @@ def maybe_dump_global_winner_summary(
     global_log_z = np.asarray(full_stats["normalization_log_z"], dtype=np.float64)
     expected_shape = (n_classes, expected_particles)
     for name, array in (
-        ("class_best_log_score_per_image", class_scores),
-        ("class_second_best_log_score_per_image", class_second_scores),
+        ("class_best_offset_free_log_score_per_image", class_scores),
+        ("class_second_best_offset_free_log_score_per_image", class_second_scores),
+        ("class_best_log_score_per_image_with_offset", class_scores_with_offset),
+        ("class_second_best_log_score_per_image_with_offset", class_second_scores_with_offset),
         ("class_hard_assignments", class_pose_indices),
         ("class_second_hard_assignments", class_second_pose_indices),
         ("class_log_evidence_per_image", class_log_evidence),
@@ -104,6 +111,8 @@ def maybe_dump_global_winner_summary(
     if (
         not np.all(np.isfinite(class_scores))
         or not np.all(np.isfinite(class_second_scores))
+        or not np.all(np.isfinite(class_scores_with_offset))
+        or not np.all(np.isfinite(class_second_scores_with_offset))
         or not np.all(np.isfinite(class_log_evidence))
     ):
         raise RuntimeError("RECOVAR global-winner summary refuses non-finite class scores/evidence")
@@ -126,10 +135,9 @@ def maybe_dump_global_winner_summary(
     winner_score = class_scores[winner_class, columns]
     if not np.array_equal(winner_score, np.max(class_scores, axis=0)):
         raise RuntimeError("RECOVAR winner classes are not optimal in the captured class scores")
-    # The class-common normalization offset is added before storage as
-    # float32, so distinct pre-offset scores can collapse to an exact tie.
-    # Preserve the actual pre-offset winner and select the runner-up after
-    # excluding it, using stable class order for any remaining tie.
+    # Preserve the actual device-selected winner and select the runner-up
+    # after excluding it, using stable class order for any remaining native
+    # float32 tie.
     scores_without_winner = class_scores.copy()
     scores_without_winner[winner_class, columns] = -np.inf
     runner_up_class = np.argmax(scores_without_winner, axis=0).astype(np.int32)
@@ -152,18 +160,19 @@ def maybe_dump_global_winner_summary(
         "expected_particles": expected_particles,
         "expected_classes": expected_classes,
         "max_bytes": max_bytes,
-        "score_mode": "firstiter_cc_normalized_log_score_higher_is_better",
+        "score_mode": "firstiter_cc_offset_free_normalized_log_score_higher_is_better",
         "raw_score_semantics": (
-            "per-class best normalized-CC log score before class/orientation/translation priors; "
-            "includes the class-common per-image normalization offset"
+            "per-class best native float32 normalized-CC log score before class/orientation/translation priors "
+            "and before the class-common per-image normalization offset"
         ),
         "total_score_semantics": ("identical to raw score in firstiter_cc because RELION bypasses priors before WTA"),
+        "absolute_score_semantics": (
+            "diagnostic float32 normalized-CC log score after adding the class-common per-image normalization "
+            "offset; retained for absolute-score/evidence context and not used for class or pose margins"
+        ),
         "evidence_semantics": "per-class logsumexp evidence before firstiter_cc one-hot posterior",
         "posterior_semantics": "post-firstiter_cc one-hot class mass",
-        "winner_semantics": (
-            "actual joint class-pose argmax before WTA; captured float32 scores may tie after "
-            "adding the class-common normalization offset"
-        ),
+        "winner_semantics": "actual joint class-pose argmax of native offset-free float32 scores before WTA",
         "support_semantics": "post-firstiter_cc exactly one global class-pose sample per particle",
         "pre_wta_support_semantics": "all coarse candidates scored; no posterior threshold before WTA",
         "significant_count_semantics": "post-WTA global class-pose support cardinality; exactly one",
@@ -192,9 +201,11 @@ def maybe_dump_global_winner_summary(
             original_index_zero_based=original_index,
             class_best_raw_score_pre_prior=class_scores.T,
             class_best_total_score=class_scores.T,
+            class_best_absolute_log_score_with_image_offset=class_scores_with_offset.T,
             class_best_pose_index=class_pose_indices.T,
             class_second_best_raw_score_pre_prior=class_second_scores.T,
             class_second_best_total_score=class_second_scores.T,
+            class_second_best_absolute_log_score_with_image_offset=class_second_scores_with_offset.T,
             class_second_best_pose_index=class_second_pose_indices.T,
             class_within_pose_margin=class_within_pose_margin.T,
             class_log_evidence=class_log_evidence.T,

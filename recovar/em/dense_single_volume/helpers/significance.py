@@ -30,6 +30,16 @@ _GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_GLOBAL_PASS1_PROJEC
 NVTX_DOMAIN_EM = "recovar_em"
 
 
+def _capture_offset_free_and_absolute_float32_scores(scores, log_score_offset):
+    """Capture native score margins before adding a large common offset."""
+
+    offset_free = np.asarray(scores, dtype=np.float32)
+    absolute = (
+        np.asarray(scores, dtype=np.float64) + np.asarray(log_score_offset, dtype=np.float64)
+    ).astype(np.float32)
+    return offset_free, absolute
+
+
 def _global_pass1_relion_projector_texture_enabled() -> bool:
     """Whether dense/global pass-1 significance uses texture arithmetic.
 
@@ -1675,6 +1685,15 @@ def _compute_k_class_significance_batched(
     class_second_best_log_score = (
         np.empty((n_classes, n_images), dtype=np.float32) if return_class_second else None
     )
+    # Diagnostic-only native scores before the large, class-common image
+    # normalization offset.  The offset is useful for absolute log evidence,
+    # but adding it before a float32 cast can erase class and pose margins.
+    class_best_offset_free_log_score = (
+        np.empty((n_classes, n_images), dtype=np.float32) if return_class_best else None
+    )
+    class_second_best_offset_free_log_score = (
+        np.empty((n_classes, n_images), dtype=np.float32) if return_class_second else None
+    )
     class_hard_assignment = (
         np.empty((n_classes, n_images), dtype=np.int32) if return_class_best else None
     )
@@ -2098,18 +2117,24 @@ def _compute_k_class_significance_batched(
             )
         if return_class_best:
             for class_index in range(n_classes):
-                class_best_log_score[class_index, start_idx:end_idx] = (
-                    np.asarray(class_best_scores[class_index], dtype=np.float64) + log_score_offset
-                ).astype(np.float32)
+                offset_free, absolute = _capture_offset_free_and_absolute_float32_scores(
+                    class_best_scores[class_index],
+                    log_score_offset,
+                )
+                class_best_offset_free_log_score[class_index, start_idx:end_idx] = offset_free
+                class_best_log_score[class_index, start_idx:end_idx] = absolute
                 class_hard_assignment[class_index, start_idx:end_idx] = np.asarray(
                     class_best_argmaxes[class_index],
                     dtype=np.int32,
                 )
         if return_class_second:
             for class_index in range(n_classes):
-                class_second_best_log_score[class_index, start_idx:end_idx] = (
-                    np.asarray(class_second_best_scores[class_index], dtype=np.float64) + log_score_offset
-                ).astype(np.float32)
+                offset_free, absolute = _capture_offset_free_and_absolute_float32_scores(
+                    class_second_best_scores[class_index],
+                    log_score_offset,
+                )
+                class_second_best_offset_free_log_score[class_index, start_idx:end_idx] = offset_free
+                class_second_best_log_score[class_index, start_idx:end_idx] = absolute
                 class_second_hard_assignment[class_index, start_idx:end_idx] = np.asarray(
                     class_second_best_argmaxes[class_index],
                     dtype=np.int32,
@@ -2189,8 +2214,10 @@ def _compute_k_class_significance_batched(
     }
     if return_class_best:
         full_stats["class_best_log_score_per_image"] = class_best_log_score
+        full_stats["class_best_offset_free_log_score_per_image"] = class_best_offset_free_log_score
         full_stats["class_hard_assignments"] = class_hard_assignment
     if return_class_second:
         full_stats["class_second_best_log_score_per_image"] = class_second_best_log_score
         full_stats["class_second_hard_assignments"] = class_second_hard_assignment
+        full_stats["class_second_best_offset_free_log_score_per_image"] = class_second_best_offset_free_log_score
     return sig_rot_any, n_sig_all, hard_assignment, class_assignment, significant_sample_indices, full_stats

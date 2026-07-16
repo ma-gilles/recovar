@@ -72,6 +72,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
 )
 from recovar.em.dense_single_volume.helpers.score_constraints import DenseScoreConstraints
 from recovar.em.dense_single_volume.helpers.significance import (
+    _capture_offset_free_and_absolute_float32_scores,
     _compute_k_class_significance_batched,
     _compute_significance_batched,
 )
@@ -183,6 +184,24 @@ N_ROTATIONS = 5
 N_TRANSLATIONS = 3
 N_IMAGES = 4  # tiny: 2 per half-set
 SEED = 42
+
+
+def test_significance_offset_free_capture_preserves_margin_lost_after_large_common_offset():
+    best = np.asarray([1.125, 2.25], dtype=np.float32)
+    second = np.asarray([1.0, 2.0], dtype=np.float32)
+    common_offset = np.asarray([-100_000_000.0, -100_000_000.0], dtype=np.float64)
+
+    best_offset_free, best_absolute = _capture_offset_free_and_absolute_float32_scores(
+        best,
+        common_offset,
+    )
+    second_offset_free, second_absolute = _capture_offset_free_and_absolute_float32_scores(
+        second,
+        common_offset,
+    )
+
+    np.testing.assert_array_equal(best_offset_free - second_offset_free, [0.125, 0.25])
+    np.testing.assert_array_equal(best_absolute, second_absolute)
 
 
 def test_final_all_data_grid_correct_env_defaults_to_quality_mode(monkeypatch):
@@ -10385,6 +10404,15 @@ class TestRelionModeSmokeTest:
             second_scores,
             np.asarray(full_stats["class_best_log_score_per_image"], dtype=np.float32),
         )
+        offset_free_best = np.asarray(
+            full_stats["class_best_offset_free_log_score_per_image"],
+            dtype=np.float32,
+        )
+        offset_free_second = np.asarray(
+            full_stats["class_second_best_offset_free_log_score_per_image"],
+            dtype=np.float32,
+        )
+        np.testing.assert_array_less(offset_free_second, offset_free_best)
         assert np.all(
             np.asarray(full_stats["class_second_hard_assignments"], dtype=np.int32)
             != np.asarray(full_stats["class_hard_assignments"], dtype=np.int32)
@@ -10425,6 +10453,14 @@ class TestRelionModeSmokeTest:
             np.asarray(full_stats["class_second_best_log_score_per_image"], dtype=np.float32),
             rtol=1e-6,
             atol=1e-6,
+        )
+        np.testing.assert_array_equal(
+            np.asarray(chunked_stats["class_best_offset_free_log_score_per_image"], dtype=np.float32),
+            offset_free_best,
+        )
+        np.testing.assert_array_equal(
+            np.asarray(chunked_stats["class_second_best_offset_free_log_score_per_image"], dtype=np.float32),
+            offset_free_second,
         )
 
     @pytest.mark.parametrize(
