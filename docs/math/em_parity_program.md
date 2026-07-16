@@ -4331,9 +4331,27 @@ tests pass (74 affected tests in the integrated checkout).
 Fresh same-physical-GPU job `11280871` ran two RELION and two RECOVAR arms
 serially on GPU UUID `GPU-ed3fe7be-abe7-7c79-06da-bc76e74d6025`.  RELION's
 iteration-1 class counts are `[4293,846,797,4064]`; RECOVAR's are
-`[4292,847,797,4064]`.  Exact image-identity alignment finds one and only one
-class difference among 10,000 particles: zero-based particle 7915
-(`7916@particles.128.mrcs`) moves from RELION class 1 to RECOVAR class 2.
+`[4292,847,797,4064]`.  In that selected RECOVAR control arm, exact
+image-identity alignment finds one class difference among 10,000 particles:
+zero-based particle 7915 (`7916@particles.128.mrcs`) moves from RELION class 1
+to RECOVAR class 2.  This is an arm-specific statement, not a claim that every
+RECOVAR repeat has exactly one mismatch.
+
+The subsequent six-arm same-H100 seal resolves that repeat qualification.
+All three RELION arms are membership-identical with counts
+`[4293,846,797,4064]`.  RECOVAR control A and its capture are identical with
+counts `[4292,846,798,4064]`, while RECOVAR control B has counts
+`[4292,847,797,4064]`.  Particle `6326@particles.128.mrcs` changes between
+RECOVAR classes 3 and 2 across native repeats and is therefore inside the
+observed RECOVAR repeat envelope.  Particle `7916@particles.128.mrcs` remains
+RELION class 1 versus RECOVAR class 2 in every observed arm and is the recurrent
+cross-engine decision boundary.  Its 66,816 coarse candidates have an exact
+rotation bijection and at most `2.583333094e-7` pixel translation difference;
+the centered sign-converted score residual envelope is `1.162290573e-6`, while
+the RECOVAR and RELION winner margins are `1.192092896e-7` and
+`5.960464478e-8`.  This places the decision inside the measured cross-engine
+float32 score envelope but does not replace native-repeat and recomputed
+float64/complex128 aggregate controls.
 
 That one-particle transfer explains the class-dependent M-step residual.
 Classes 1 and 2 have raw-map FSC-AUC `0.9998612051` and `0.9992620898` and
@@ -4364,3 +4382,4 @@ Canonical evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/RESULTS.md` (SHA-256 `393e9b2613662f3d6a0a8aba702d12ca0595443944c9b62621eedb93d2a633fa`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/provenance/CLASSIFICATION_SEAL.json` (SHA-256 `02cb2f88bc9dd6c4fdfbddfbb69c706b805b067afa60ab56ab7a6cfc7f9c4f94`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/analysis/fresh_f32/summary.json` (SHA-256 `1a42b1eb7e2b615c8154759c7a9cf72f3812330315bc4bc555bbcef1d26872a7`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7916_identity6_h100_20260716_165455/analysis/six_arm_global_membership_repeat_join_v1.json` (SHA-256 `c8a0449b611eb77976d3c4f8dce052c757da958052206b88b23cf3b2e550dfeb`)

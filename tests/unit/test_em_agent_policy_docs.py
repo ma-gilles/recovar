@@ -37,10 +37,14 @@ def test_em_best_metrics_ledger_has_quality_and_perf_contract():
     ledger = LEDGER.read_text()
     required = [
         ">=100k, >=256x256",
-        "final_half1_corr_vs_RELION",
-        "final_half2_corr_vs_RELION",
-        "merged_corr_vs_RELION",
-        "recovar_corr_vs_GT",
+        "final_half1_FSC_AUC_vs_RELION",
+        "final_half2_FSC_AUC_vs_RELION",
+        "merged_FSC_AUC_vs_RELION",
+        "recovar_FSC_AUC_vs_GT",
+        "relion_FSC_AUC_vs_GT",
+        "minimum_non_DC_shell_FSC_vs_RELION",
+        "FSC_0.5_shell_RECOVAR",
+        "FSC_0.143_shell_RECOVAR",
         "Pmax_gap_RECOVAR_minus_RELION",
         "pose_angle_error_vs_RELION",
         "translation_error_vs_RELION",
@@ -55,3 +59,5 @@ def test_em_best_metrics_ledger_has_quality_and_perf_contract():
     ]
     for text in required:
         assert text in ledger
+    assert "Correlation values in legacy" in ledger
+    assert "cannot accept or reject" in ledger
