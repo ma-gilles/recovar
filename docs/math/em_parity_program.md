@@ -3500,3 +3500,34 @@ Its principal records are `analysis/corrected_final_state_gate.json`,
 `analysis/trajectory_classification.json` under that root.  The next K=1
 causal target remains the frozen iteration-2 posterior boundary, not the now
 validated final-state router.
+
+## 2026-07-15 Same-GPU RELION trajectory repeat envelope
+
+Job `11239471` runs two independent autonomous RELION refinements sequentially
+on the same physical A100
+`GPU-bd720f2f-c28a-09c0-d51e-d08b1897125a`.  Both arms have the same numbered
+schedule, both converge after 16 numbered iterations, and their trajectory
+controls are equal.  Runtime is `1459.57` versus `1466.42` seconds.  This is the
+required control for separating deterministic cross-engine defects from
+nonlinear amplification of RELION's own GPU reductions.
+
+The repeat is not a near-bitwise full-trajectory null.  Iteration-2 Pmax
+absolute differences have mean `5.9033e-6`, p95 `2.9e-5`, and maximum
+`0.00146`.  By iteration 8, half1 map FSC-AUC is `0.993115371097`; the lowest
+numbered half-map FSC-AUC is `0.979059637119` at iteration 11.  Final merged
+FSC-AUC is `0.967954843425`, and the minimum across the 37 compared maps is
+`0.954744985471` for the final unfiltered half1 map.  Thus late trajectory map
+differences, even below the nominal `0.995` point gate, need adjudication
+against the same-GPU RELION repeat envelope.  This does not turn them into a
+parity pass; it prevents attributing RELION's own nonlinear repeat variation to
+RECOVAR without earlier continuous-array evidence.
+
+The two leading K=1 iteration-2 cross-engine targets remain far outside that
+envelope.  RELION repeat Pmax differs by only `5.2e-5` for fixture row 6202
+(stack image 80654), versus RECOVAR/RELION `0.0216427`, about 416 times larger.
+RELION repeat Pmax is identical for fixture row 7881 (stack image 103528),
+versus RECOVAR/RELION about `0.02042`.  These targets therefore require the
+frozen candidate/operand comparison; they are not classified as reduction
+noise.  The immutable repeat root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_relion_repeat_envelope_a10080_retry4_prepared_20260715_195515/`,
+with the versioned report at `analysis/repeat_envelope.json`.
