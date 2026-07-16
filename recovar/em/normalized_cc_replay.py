@@ -9,11 +9,13 @@ exact device replay must supply contributions captured after device operand
 formation so compiler contraction and texture/interpolation effects are not
 silently attributed to reduction order.
 
-The RELION reducer mirrors ``cuda_kernel_diff2_CC_fine`` in
+The RELION reducers mirror ``cuda_kernel_diff2_CC_coarse`` and
+``cuda_kernel_diff2_CC_fine`` in
 ``src/acc/cuda/cuda_kernels/diff2.cuh`` for the SPA ``REF3D`` path: 256 lanes
-first accumulate pixels ``lane + 256 * pass`` and are then reduced by the
-shared-memory 128, 64, ..., 1 tree.  The input must therefore retain the full
-packed-grid pixel order, including zero-contribution pixels outside support.
+for fine scoring and 128 lanes for coarse scoring.  Lanes first accumulate
+pixels ``lane + lane_count * pass`` and are then reduced by the shared-memory
+power-of-two tree.  The input must therefore retain the full packed-grid pixel
+order, including zero-contribution pixels outside support.
 
 Map-level effects of a diagnosed score difference must be assessed with
 shellwise FSC/FSC-AUC, not map correlation.
@@ -22,13 +24,14 @@ shellwise FSC/FSC-AUC, not map correlation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Sequence
 
 import numpy as np
 
 REPLAY_SCHEMA = "recovar-normalized-cc-replay-v1"
 REPLAY_SCHEMA_VERSION = 1
 RELION_FINE_REDUCTION_LANES = 256
+RELION_COARSE_REDUCTION_LANES = 128
 
 PrecisionOrigin = Literal[
     "captured_production",
@@ -185,6 +188,63 @@ class NormalizedCCReplayReport:
         }
 
 
+@dataclass(frozen=True)
+class NormalizedCCCandidateReplay:
+    """Winner-preserving replay of several candidates from one engine.
+
+    Ties are retained as a tuple instead of being resolved by array order.
+    This is important at parity boundaries where an arbitrary discrete
+    tie-break is not evidence of an algorithmic mismatch.
+    """
+
+    candidate_ids: tuple[int, ...]
+    production_scores: tuple[float, ...]
+    canonical_float64_scores: tuple[float, ...]
+    production_winners: tuple[int, ...]
+    canonical_float64_winners: tuple[int, ...]
+    production_reducer: str
+    precision_origin: PrecisionOrigin
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "candidate_ids": list(self.candidate_ids),
+            "production_scores": list(self.production_scores),
+            "canonical_float64_scores": list(self.canonical_float64_scores),
+            "production_winners": list(self.production_winners),
+            "canonical_float64_winners": list(self.canonical_float64_winners),
+            "production_reducer": self.production_reducer,
+            "precision_origin": self.precision_origin,
+        }
+
+
+@dataclass(frozen=True)
+class NormalizedCCCrossEngineClassification:
+    """Earliest classified source of a cross-engine winner difference."""
+
+    classification: str
+    recovar: NormalizedCCCandidateReplay
+    relion: NormalizedCCCandidateReplay
+    geometry_equal: bool
+    genuine_float64_recovar: NormalizedCCCandidateReplay | None = None
+    genuine_float64_relion: NormalizedCCCandidateReplay | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema": REPLAY_SCHEMA,
+            "schema_version": REPLAY_SCHEMA_VERSION,
+            "classification": self.classification,
+            "geometry_equal": self.geometry_equal,
+            "recovar": self.recovar.to_dict(),
+            "relion": self.relion.to_dict(),
+            "genuine_float64_recovar": (
+                None if self.genuine_float64_recovar is None else self.genuine_float64_recovar.to_dict()
+            ),
+            "genuine_float64_relion": (
+                None if self.genuine_float64_relion is None else self.genuine_float64_relion.to_dict()
+            ),
+        }
+
+
 def normalized_cc_pixel_contributions(
     projection,
     shifted_image,
@@ -294,6 +354,26 @@ def relion_256lane_float32_reduce(values) -> np.float32:
         lane = pixel % RELION_FINE_REDUCTION_LANES
         lanes[lane] = np.float32(lanes[lane] + value)
     width = RELION_FINE_REDUCTION_LANES // 2
+    while width:
+        lanes[:width] = np.add(lanes[:width], lanes[width : 2 * width], dtype=np.float32)
+        width //= 2
+    return lanes[0]
+
+
+def relion_128lane_float32_reduce(values) -> np.float32:
+    """Replay RELION SPA coarse-CC CUDA's exact 128-lane float32 tree.
+
+    This is the reducer used by ``cuda_kernel_diff2_CC_coarse`` during the
+    first-iteration CC pass.  As with the fine replay, ``values`` must retain
+    every packed-grid pixel so lane ownership is unchanged.
+    """
+
+    values = _as_1d(values, dtype=np.float32, name="values")
+    lanes = np.zeros(RELION_COARSE_REDUCTION_LANES, dtype=np.float32)
+    for pixel, value in enumerate(values):
+        lane = pixel % RELION_COARSE_REDUCTION_LANES
+        lanes[lane] = np.float32(lanes[lane] + value)
+    width = RELION_COARSE_REDUCTION_LANES // 2
     while width:
         lanes[:width] = np.add(lanes[:width], lanes[width : 2 * width], dtype=np.float32)
         width //= 2
@@ -418,4 +498,119 @@ def replay_normalized_cc(
         relion_256lane_float32=relion,
         canonical_float32=canonical_f32,
         canonical_float64=canonical_f64,
+    )
+
+
+def _winner_ids(candidate_ids: tuple[int, ...], scores: Sequence[float]) -> tuple[int, ...]:
+    values = np.asarray(scores)
+    if values.shape != (len(candidate_ids),):
+        raise ValueError("candidate score count does not match candidate ids")
+    if not np.all(np.isfinite(values)):
+        raise ValueError("candidate scores must be finite")
+    best = np.max(values)
+    return tuple(candidate_ids[index] for index in np.flatnonzero(values == best))
+
+
+def replay_normalized_cc_candidates(
+    candidate_ids: Sequence[int],
+    contributions: Sequence[NormalizedCCContributions],
+    *,
+    production_reducer: Literal["recovar_flat", "relion_coarse_128", "relion_fine_256"],
+    canonical_identities: Sequence[np.ndarray | None] | None = None,
+) -> NormalizedCCCandidateReplay:
+    """Replay a candidate set without silently resolving exact score ties."""
+
+    candidate_ids = tuple(int(value) for value in candidate_ids)
+    contributions = tuple(contributions)
+    if not candidate_ids or len(candidate_ids) != len(contributions):
+        raise ValueError("candidate_ids and contributions must have one common non-zero length")
+    if len(set(candidate_ids)) != len(candidate_ids):
+        raise ValueError("candidate_ids must be unique")
+    if canonical_identities is None:
+        canonical_identities = (None,) * len(contributions)
+    else:
+        canonical_identities = tuple(canonical_identities)
+        if len(canonical_identities) != len(contributions):
+            raise ValueError("canonical_identities must have one entry per candidate")
+
+    reducer = {
+        "recovar_flat": recovar_logical_float32_reduce,
+        "relion_coarse_128": relion_128lane_float32_reduce,
+        "relion_fine_256": relion_256lane_float32_reduce,
+    }[production_reducer]
+    production_scores = []
+    canonical_float64_scores = []
+    for operand_set, identities in zip(contributions, canonical_identities):
+        production_scores.append(
+            _reduction_result(operand_set, reducer, accumulation_dtype=np.float32).score
+        )
+        canonical_float64_scores.append(
+            _reduction_result(
+                operand_set,
+                canonical_float64_reduce,
+                accumulation_dtype=np.float64,
+                identities=identities,
+            ).score
+        )
+    origins = {operand_set.provenance.precision_origin for operand_set in contributions}
+    if len(origins) != 1:
+        raise ValueError("all candidates in one replay must have one precision origin")
+    origin = origins.pop()
+    return NormalizedCCCandidateReplay(
+        candidate_ids=candidate_ids,
+        production_scores=tuple(production_scores),
+        canonical_float64_scores=tuple(canonical_float64_scores),
+        production_winners=_winner_ids(candidate_ids, production_scores),
+        canonical_float64_winners=_winner_ids(candidate_ids, canonical_float64_scores),
+        production_reducer=production_reducer,
+        precision_origin=origin,
+    )
+
+
+def classify_normalized_cc_candidate_replays(
+    recovar: NormalizedCCCandidateReplay,
+    relion: NormalizedCCCandidateReplay,
+    *,
+    geometry_equal: bool,
+    genuine_float64_recovar: NormalizedCCCandidateReplay | None = None,
+    genuine_float64_relion: NormalizedCCCandidateReplay | None = None,
+) -> NormalizedCCCrossEngineClassification:
+    """Classify the earliest supported cause of a winner disagreement.
+
+    Captured float32 operands can distinguish reduction ordering from operand
+    differences, but promoted float64 cannot diagnose precision already lost
+    upstream.  Therefore the stronger ``precision`` classification is emitted
+    only when both optional replays were genuinely recomputed from high-
+    precision operands.
+    """
+
+    if recovar.candidate_ids != relion.candidate_ids or not geometry_equal:
+        classification = "geometry"
+    elif recovar.production_winners == relion.production_winners:
+        classification = "production_agreement"
+    elif recovar.canonical_float64_winners == relion.canonical_float64_winners:
+        classification = "reduction_order_or_accumulation_precision"
+    elif genuine_float64_recovar is None or genuine_float64_relion is None:
+        classification = "operand_generation_or_upstream_precision_unresolved"
+    else:
+        if (
+            genuine_float64_recovar.precision_origin != "recomputed_high_precision"
+            or genuine_float64_relion.precision_origin != "recomputed_high_precision"
+        ):
+            raise ValueError("genuine float64 classifications require recomputed_high_precision operands")
+        if genuine_float64_recovar.candidate_ids != recovar.candidate_ids:
+            raise ValueError("RECOVAR genuine-float64 candidate identities differ")
+        if genuine_float64_relion.candidate_ids != relion.candidate_ids:
+            raise ValueError("RELION genuine-float64 candidate identities differ")
+        if genuine_float64_recovar.canonical_float64_winners == genuine_float64_relion.canonical_float64_winners:
+            classification = "precision"
+        else:
+            classification = "operand_generation"
+    return NormalizedCCCrossEngineClassification(
+        classification=classification,
+        recovar=recovar,
+        relion=relion,
+        geometry_equal=bool(geometry_equal),
+        genuine_float64_recovar=genuine_float64_recovar,
+        genuine_float64_relion=genuine_float64_relion,
     )

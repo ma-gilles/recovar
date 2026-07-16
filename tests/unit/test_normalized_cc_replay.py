@@ -4,14 +4,18 @@ import numpy as np
 import pytest
 
 from recovar.em.normalized_cc_replay import (
+    RELION_COARSE_REDUCTION_LANES,
     RELION_FINE_REDUCTION_LANES,
     REPLAY_SCHEMA,
     canonical_float32_reduce,
     canonical_float64_reduce,
+    classify_normalized_cc_candidate_replays,
     normalized_cc_pixel_contributions,
     recovar_logical_float32_reduce,
+    relion_128lane_float32_reduce,
     relion_256lane_float32_reduce,
     replay_normalized_cc,
+    replay_normalized_cc_candidates,
 )
 
 pytestmark = pytest.mark.unit
@@ -60,7 +64,12 @@ def test_recovar_logical_replay_matches_production_normalized_cc_score():
     replay = replay_normalized_cc(contributions)
 
     replay_bits = np.asarray(replay.recovar_logical_float32.score, dtype=np.float32).view(np.uint32)
-    assert replay_bits == production.view(np.uint32)
+    # XLA is free to select a backend-specific reduction tree; the pure NumPy
+    # flat fold is a logical control, not a bitwise device replay.  Device-
+    # captured contributions plus the explicit RELION reducers below provide
+    # the bitwise replay path.
+    production_bits = production.view(np.uint32)
+    assert abs(int(replay_bits) - int(production_bits)) <= 1
     assert replay.schema == REPLAY_SCHEMA
     assert replay.schema_version == 1
 
@@ -80,6 +89,24 @@ def test_relion_256lane_reduction_matches_hand_reference():
             lanes[lane] = np.float32(lanes[lane] + lanes[lane + stride])
 
     actual = relion_256lane_float32_reduce(values)
+    assert actual.view(np.uint32) == lanes[0].view(np.uint32)
+
+
+def test_relion_128lane_coarse_reduction_matches_hand_reference():
+    rng = np.random.default_rng(128)
+    values = rng.normal(size=649).astype(np.float32)
+
+    # Independent transcription of cuda_kernel_diff2_CC_coarse: each lane
+    # walks its pixel passes, followed by the explicit shared-memory tree.
+    lanes = np.zeros(RELION_COARSE_REDUCTION_LANES, dtype=np.float32)
+    for lane in range(RELION_COARSE_REDUCTION_LANES):
+        for pixel in range(lane, values.size, RELION_COARSE_REDUCTION_LANES):
+            lanes[lane] = np.float32(lanes[lane] + values[pixel])
+    for stride in (64, 32, 16, 8, 4, 2, 1):
+        for lane in range(stride):
+            lanes[lane] = np.float32(lanes[lane] + lanes[lane + stride])
+
+    actual = relion_128lane_float32_reduce(values)
     assert actual.view(np.uint32) == lanes[0].view(np.uint32)
 
 
@@ -160,3 +187,77 @@ def test_promoted_float64_is_marked_and_guarded_from_genuine_source_claim():
             arithmetic_dtype=np.float64,
             precision_origin="recomputed_high_precision",
         )
+
+
+def _candidate_contributions(numerator_values, *, high_precision=False):
+    source_complex = np.complex128 if high_precision else np.complex64
+    source_float = np.float64 if high_precision else np.float32
+    arithmetic = np.float64 if high_precision else np.float32
+    origin = "recomputed_high_precision" if high_precision else "captured_production"
+    return normalized_cc_pixel_contributions(
+        np.ones(len(numerator_values), dtype=source_complex),
+        np.asarray(numerator_values, dtype=source_complex),
+        np.ones(len(numerator_values), dtype=source_float),
+        np.ones(len(numerator_values), dtype=source_float),
+        arithmetic_dtype=arithmetic,
+        precision_origin=origin,
+    )
+
+
+def test_candidate_replay_preserves_ties_and_classifies_precision_only_with_genuine_float64():
+    # Captured operand sets disagree canonically, so promoted float64 alone is
+    # correctly unresolved rather than being mislabeled as precision noise.
+    rec_captured = replay_normalized_cc_candidates(
+        [0, 1],
+        [_candidate_contributions([1.0]), _candidate_contributions([1.0])],
+        production_reducer="recovar_flat",
+    )
+    rel_captured = replay_normalized_cc_candidates(
+        [0, 1],
+        [_candidate_contributions([1.0 + 2e-7]), _candidate_contributions([1.0])],
+        production_reducer="relion_coarse_128",
+    )
+    unresolved = classify_normalized_cc_candidate_replays(
+        rec_captured,
+        rel_captured,
+        geometry_equal=True,
+    )
+    assert rec_captured.production_winners == (0, 1)
+    assert rel_captured.production_winners == (0,)
+    assert unresolved.classification == "operand_generation_or_upstream_precision_unresolved"
+
+    # A genuine high-precision recomputation agrees on class 1 in both
+    # engines, which upgrades the diagnosis to precision.
+    rec_high = replay_normalized_cc_candidates(
+        [0, 1],
+        [_candidate_contributions([1.0], high_precision=True), _candidate_contributions([1.1], high_precision=True)],
+        production_reducer="recovar_flat",
+    )
+    rel_high = replay_normalized_cc_candidates(
+        [0, 1],
+        [_candidate_contributions([1.0], high_precision=True), _candidate_contributions([1.1], high_precision=True)],
+        production_reducer="relion_coarse_128",
+    )
+    classified = classify_normalized_cc_candidate_replays(
+        rec_captured,
+        rel_captured,
+        geometry_equal=True,
+        genuine_float64_recovar=rec_high,
+        genuine_float64_relion=rel_high,
+    )
+    assert classified.classification == "precision"
+
+
+def test_candidate_replay_classifies_geometry_before_scores():
+    rec = replay_normalized_cc_candidates(
+        [0, 1],
+        [_candidate_contributions([1.0]), _candidate_contributions([2.0])],
+        production_reducer="recovar_flat",
+    )
+    rel = replay_normalized_cc_candidates(
+        [0, 1],
+        [_candidate_contributions([2.0]), _candidate_contributions([1.0])],
+        production_reducer="relion_coarse_128",
+    )
+    report = classify_normalized_cc_candidate_replays(rec, rel, geometry_equal=False)
+    assert report.classification == "geometry"
