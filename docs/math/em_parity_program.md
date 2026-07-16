@@ -4189,8 +4189,9 @@ FSC-AUC `0.999820693`, `0.999157434`, and `0.996495854`, minimum assignment
 agreement `0.9986`, and worst GT delta `-6.28e-5`.  Case 14 remains essentially
 exact, with minimum direct FSC-AUC `0.999999959` and class agreement `1.0`.
 
-Case 11 (IgG, white noise, uniform classes, 20% outliers) has a genuine
-cross-engine trajectory difference pending its own stock-repeat calibration.
+Case 11 (IgG, white noise, uniform classes, 20% outliers) has a genuine early
+cross-engine reconstructed-reference difference.  Its later class cliff is
+not itself a stable parity boundary.
 Iteration 1 is effectively exact (minimum direct FSC-AUC
 `0.999330786`, one class mismatch), but iteration 2 already has 9,999/10,000
 Pmax differences, 1,166 support differences, and 24 class mismatches.
@@ -4209,9 +4210,35 @@ at iteration 3 by minimum direct FSC-AUC `0.973508472`, so the intervention is
 material.  Pmax mean/p95/maximum absolute errors fall from
 `0.00380994/0.0159218/0.5462` to `2.96e-5/1.33e-4/0.0100`, while particles with
 different support sizes fall from 1,114 to 31.  This rules out an intrinsic
-iteration-3 scoring/M-step cause; the next same-GPU A/B injects exact RELION
-iteration-1 maps only for scoring iteration 2 to locate where the broad state
-drift first appears.
+iteration-3 scoring/M-step cause.
+
+The predecessor A/B closes the boundary one iteration earlier.  Job
+`11276736` ran both arms serially on physical A100 UUID
+`GPU-8321d67b-1e79-11ea-92b6-4347aa290a77` and completed `0:0`.  Arm B changes
+only the four iteration-1 class maps used as RECOVAR scoring references for
+iteration 2.  Its minimum direct RELION FSC-AUC rises from `0.998533895` to
+`0.999999956` at iteration 2 and from `0.973512396` to `0.999924228` at
+iteration 3.  Iteration-3 class agreement rises from `0.9964` to `1.0`, while
+the worst GT FSC-AUC delta is only `-5.18e-6`.  The two arms differ materially
+at iteration 2 (`0.998533543` minimum direct FSC-AUC) and iteration 3
+(`0.973511552`).  The broad case-11 state drift therefore begins at the
+iteration-1 reconstructed-reference boundary, not at the isolated class tie
+or at later scoring.
+
+The hardened same-A100 stock RELION repeat, job `11277907`, adjudicates the
+magnitude.  Independent RELION runs on physical UUID
+`GPU-6f45f415-9d0b-d562-9ff3-c9fb7bc53aa7` have minimum matched map FSC-AUC
+`0.9999999995` at iteration 1 and `0.9999999975` at iteration 2; iteration-2
+class agreement is exact, all support sizes agree, and the maximum GT FSC-AUC
+change is `1.19e-6`.  RECOVAR/RELION's iteration-2 minimum `0.998533895` is far
+outside that native repeat floor, so the iteration-1 reconstructed-reference
+boundary is an actionable parity defect.  By iteration 3 the stock RELION
+repeat itself bifurcates to minimum map FSC-AUC `0.725582397`, class agreement
+`0.9719`, 2,297 support differences, and angle p99 `118.12` degrees.  The
+RECOVAR/RELION iteration-3 value `0.973512396` is inside that nonlinear repeat
+envelope and must not be treated as an independent defect.  Fix and gate the
+stable iteration-1/iteration-2 map and distribution boundary; use the late
+iteration only as a sensitivity outcome.
 
 The sole iteration-1 label mismatch is particle 7915.  Its RECOVAR class-2
 score `0.5038749576` exceeds class 1 `0.5038748384` by exactly
@@ -4231,4 +4258,8 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_robust_expand_uuid_recovery2_b5dd574a_20260716_135200/authoritative_combined_k4_robustness_summary.json` (SHA-256 `9f2efdfcb32ae64e77b8076fb71995025fb460c26b85b38128e64901b68b47a8`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it3_relref_ab_b5dd574a_20260716_141000/analysis/ab_summary.json` (SHA-256 `680ef82e336150058a0d37a3e8bfd77a99ff2232c3621b182c9af4ecb8bcc804`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it3_relref_ab_b5dd574a_20260716_141000/provenance/POSTHOC_SEAL.json` (SHA-256 `14fd581eabb63cd7e4af5ee664c9d740db35c31529862fe5eb3548f4d17cadc9`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it2_relref_ab_b5dd574a_20260716_143300/analysis/ab_summary.json` (SHA-256 `6715f73fa5aa14787e3a84f4a6dfb22338edfeca58fb17bd964d989c90c1b04e`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it2_relref_ab_b5dd574a_20260716_143300/provenance/SEAL.json` (SHA-256 `ca4ff7a2100529831c69a6a846523b927599ccfa86d38d137b133fed08fd0b82`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_relion_repeat_full3_hardened_20260716_145000/analysis/relion_repeat_full3.json` (SHA-256 `86e8e5e12dfb75be7289169611a953b0fce9f810d440e3e2bfbb578933ee2e3f`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_relion_repeat_full3_hardened_20260716_145000/provenance/SEAL.json` (SHA-256 `3ceb14d3b11cd46a17648a645e8c02d0ef80e0389c5b202415decba01de03a6f`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7915_rec_capture_b5dd574a_20260716_142900/analysis.json` (SHA-256 `59af9e01552dbb0d35a6277b232ee6594c0a70306b3f654d6acb86c8b2951d15`)

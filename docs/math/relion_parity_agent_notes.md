@@ -2708,20 +2708,37 @@ Matrix evidence:
   The manifest SHA-256 is
   `190ace970540dd6ad2eb7a35627a2d8e66345fba1f0a3cf536df0c77ba3ee803`.
 
-# 2026-07-16: heterogeneous K=4 robustness has one pass and one real failure
+# 2026-07-16: heterogeneous K=4 robustness localizes case 11 to the first map boundary
 
 - Hardened same-A100 case 12 (30k Tomotwin, white noise, uniform classes) passes
   in job `11274946`.  Iteration direct FSC-AUC minima are `0.999820693`,
   `0.999157434`, and `0.996495854`; minimum assignment agreement is `0.9986`,
   and worst GT FSC-AUC delta is `-6.28e-5`.
-- Case 11 (10k IgG, white noise, uniform classes, 20% outliers) fails by
+- Case 11 (10k IgG, white noise, uniform classes, 20% outliers) diverges by
   iteration 3: class-2 direct FSC-AUC is `0.9735133506`.  Its earliest
   nonordinary distribution boundary is iteration 2, with 9,999 Pmax
-  differences, 1,166 support differences, and 24 class mismatches.  Treat this
-  as a distribution-level E-step failure, not a serial particle chase.
-- An exact incoming-RELION-reference iteration-3 A/B is running to determine
-  whether the visible failure is inherited map-state amplification.
+  differences, 1,166 support differences, and 24 class mismatches.
+- Exact incoming-reference A/Bs localize this causally.  Supplying RELION's
+  iteration-2 maps only for scoring iteration 3 raises the minimum direct
+  FSC-AUC from `0.973512763` to `0.999999632`.  Supplying RELION's iteration-1
+  maps only for scoring iteration 2 raises iteration-2 minimum direct FSC-AUC
+  from `0.998533895` to `0.999999956` and prevents the iteration-3 cliff
+  (`0.999924228`, class agreement `1.0`).  The broad drift begins at the
+  iteration-1 reconstructed-reference boundary, not later scoring.
+- Particle 7915 is the sole iteration-1 label mismatch and is an exact
+  one-float32-ULP score tie at the same pose.  It is not an adequate cause for
+  the distribution-wide next-iteration drift.
+- Same-A100 stock RELION job `11277907` proves the first map boundary exceeds
+  native variation: iteration-2 repeat minimum FSC-AUC is `0.9999999975`, with
+  exact class agreement and support sizes, versus RECOVAR/RELION
+  `0.998533895`.  This is an actionable reconstructed-reference parity defect.
+  RELION itself bifurcates at iteration 3 (minimum FSC-AUC `0.725582397`, class
+  agreement `0.9719`), so the RECOVAR/RELION iteration-3 cliff is inside the
+  native nonlinear envelope and is not a separate defect.  Gate the stable
+  iteration-1/iteration-2 boundary.
 - Evidence:
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_robust_expand_recovery_b5dd574a_20260716_133400/cases/11_igg_k4_10k_g128_white_noise1_uniform_outliers_pct20/trajectory_analysis/particle_state_distribution.json`
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it3_relref_ab_b5dd574a_20260716_141000/analysis/ab_summary.json`,
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it2_relref_ab_b5dd574a_20260716_143300/analysis/ab_summary.json`,
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_relion_repeat_full3_hardened_20260716_145000/analysis/relion_repeat_full3.json`,
   and
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_robust_expand_uuid_recovery2_b5dd574a_20260716_135200/cases/12_tomotwin_k4_10k_g128_white_noise1_uniform/trajectory_analysis/k4_fsc_trajectory.json`.
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7915_rec_capture_b5dd574a_20260716_142900/analysis.json`.
