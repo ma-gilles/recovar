@@ -1655,6 +1655,7 @@ def _compute_k_class_significance_batched(
 
     sig_rot_any = np.zeros((n_classes, n_rot), dtype=bool)
     n_sig_all = np.empty(n_images, dtype=np.int32)
+    cutoff_count_all = np.empty(n_images, dtype=np.int32)
     hard_assignment = np.empty(n_images, dtype=np.int32)
     class_assignment = np.empty(n_images, dtype=np.int32)
     significant_sample_indices = [[None] * n_images for _ in range(n_classes)] if collect_significance else None
@@ -2002,19 +2003,22 @@ def _compute_k_class_significance_batched(
                 class_weight_mats.append(jnp.concatenate(class_weight_blocks, axis=1))
 
             batch_weights = jnp.concatenate(class_weight_mats, axis=1)
-            batch_sig_mask, batch_sig_rot_mask, batch_n_sig = _find_sig(
+            batch_sig_mask, batch_sig_rot_mask, batch_n_sig, batch_cutoff_count = _find_sig(
                 batch_weights,
                 n_classes * n_rot,
                 n_trans,
                 adaptive_fraction=adaptive_fraction,
                 max_significants=max_significants,
+                return_cutoff_count=True,
             )
             batch_sig_mask_np = np.asarray(batch_sig_mask, dtype=bool)
             sig_rot_any |= np.asarray(jnp.any(batch_sig_rot_mask, axis=0), dtype=bool).reshape(n_classes, n_rot)
             n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig, dtype=np.int32)
+            cutoff_count_all[start_idx:end_idx] = np.asarray(batch_cutoff_count, dtype=np.int32)
         else:
             batch_sig_mask_np = None
             n_sig_all[start_idx:end_idx] = 0
+            cutoff_count_all[start_idx:end_idx] = 0
 
         hard_assignment[start_idx:end_idx] = np.asarray(best_argmax_batch, dtype=np.int32)
         class_assignment[start_idx:end_idx] = np.asarray(best_class_batch, dtype=np.int32)
@@ -2109,6 +2113,9 @@ def _compute_k_class_significance_batched(
         "max_posterior_per_image": max_posterior,
         "class_log_evidence_per_image": class_log_evidence,
         "class_assignments": class_assignment,
+        # RELION serializes the cutoff rank before inclusive threshold ties
+        # expand the pass-2/M-step support represented by ``n_sig_all``.
+        "significant_cutoff_counts": cutoff_count_all,
     }
     if return_class_best:
         full_stats["class_best_log_score_per_image"] = class_best_log_score

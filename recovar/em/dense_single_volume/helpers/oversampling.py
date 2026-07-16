@@ -57,8 +57,13 @@ def map_translation_log_prior_to_fine_grid(
 # ---------------------------------------------------------------------------
 
 
-@partial(jax.jit, static_argnums=(1, 2))
-def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_significants=500):
+@partial(jax.jit, static_argnums=(1, 2, 3))
+def _find_significant_mask_full_sort(
+    weights_flat,
+    adaptive_fraction=0.999,
+    max_significants=500,
+    return_cutoff_count=False,
+):
     """Find significant orientation x translation pairs per image.
 
     For each image, identifies the smallest set of (rotation, translation)
@@ -83,7 +88,11 @@ def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_
     mask : jnp.ndarray, shape (n_images, n_rot * n_trans), dtype bool
         True for significant samples.
     n_significant : jnp.ndarray, shape (n_images,), dtype int32
-        Number of significant samples per image (after capping).
+        Number of significant samples per image after expanding cutoff ties.
+    cutoff_count : jnp.ndarray, shape (n_images,), dtype int32, optional
+        Pre-tie cutoff rank, returned only when ``return_cutoff_count=True``.
+        This is the count RELION serializes as ``rlnNrOfSignificantSamples``;
+        the threshold-expanded mask remains the support used by pass 2.
     """
     n_images, _ = weights_flat.shape
 
@@ -123,12 +132,21 @@ def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_
 
     # Count significant samples per image
     n_significant = jnp.sum(mask, axis=-1).astype(jnp.int32)
+    cutoff_count = jnp.minimum(threshold_idx + 1, positive_counts).astype(jnp.int32)
 
+    if return_cutoff_count:
+        return mask, n_significant, cutoff_count
     return mask, n_significant
 
 
-@partial(jax.jit, static_argnums=(1, 2, 3))
-def _find_significant_mask_topk(weights_flat, adaptive_fraction=0.999, max_significants=500, topk=64):
+@partial(jax.jit, static_argnums=(1, 2, 3, 4))
+def _find_significant_mask_topk(
+    weights_flat,
+    adaptive_fraction=0.999,
+    max_significants=500,
+    topk=64,
+    return_cutoff_count=False,
+):
     """Fast exact significance thresholding when the cutoff lives in the top-k.
 
     This mirrors RELION semantics exactly when the significant-weight threshold
@@ -173,10 +191,19 @@ def _find_significant_mask_topk(weights_flat, adaptive_fraction=0.999, max_signi
     threshold_val = top_weights[jnp.arange(n_images), threshold_idx]
     mask = (weights_flat > 0.0) & (weights_flat >= threshold_val[:, None])
     n_significant = jnp.sum(mask, axis=-1).astype(jnp.int32)
+    cutoff_count = jnp.minimum(threshold_idx + 1, positive_counts).astype(jnp.int32)
+    if return_cutoff_count:
+        return mask, n_significant, topk_covers_threshold, cutoff_count
     return mask, n_significant, topk_covers_threshold
 
 
-def find_significant_mask(weights_flat, adaptive_fraction=0.999, max_significants=500):
+def find_significant_mask(
+    weights_flat,
+    adaptive_fraction=0.999,
+    max_significants=500,
+    *,
+    return_cutoff_count=False,
+):
     """Find significant orientation x translation pairs per image.
 
     Uses an exact top-k threshold when possible and falls back to the original
@@ -190,24 +217,41 @@ def find_significant_mask(weights_flat, adaptive_fraction=0.999, max_significant
             weights_flat,
             adaptive_fraction=adaptive_fraction,
             max_significants=max_significants,
+            return_cutoff_count=return_cutoff_count,
         )
 
-    fast_mask, fast_n_significant, topk_covers_threshold = _find_significant_mask_topk(
+    fast_result = _find_significant_mask_topk(
         weights_flat,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
         topk=topk,
+        return_cutoff_count=return_cutoff_count,
     )
+    if return_cutoff_count:
+        fast_mask, fast_n_significant, topk_covers_threshold, fast_cutoff_count = fast_result
+    else:
+        fast_mask, fast_n_significant, topk_covers_threshold = fast_result
     if bool(np.all(np.asarray(topk_covers_threshold))):
+        if return_cutoff_count:
+            return fast_mask, fast_n_significant, fast_cutoff_count
         return fast_mask, fast_n_significant
     return _find_significant_mask_full_sort(
         weights_flat,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        return_cutoff_count=return_cutoff_count,
     )
 
 
-def find_significant_rotations(weights_flat, n_rot, n_trans, adaptive_fraction=0.999, max_significants=500):
+def find_significant_rotations(
+    weights_flat,
+    n_rot,
+    n_trans,
+    adaptive_fraction=0.999,
+    max_significants=500,
+    *,
+    return_cutoff_count=False,
+):
     """Find significant coarse rotations per image from (rot x trans) weights.
 
     This extracts the unique rotation indices that have at least one
@@ -235,18 +279,27 @@ def find_significant_rotations(weights_flat, n_rot, n_trans, adaptive_fraction=0
         True for rotations that have at least one significant translation.
     n_significant : jnp.ndarray, shape (n_images,), dtype int32
         Total significant (rot x trans) samples per image.
+    cutoff_count : jnp.ndarray, shape (n_images,), dtype int32, optional
+        Pre-tie cutoff rank, returned only when ``return_cutoff_count=True``.
     """
-    sig_mask, n_significant = find_significant_mask(
+    significance_result = find_significant_mask(
         weights_flat,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        return_cutoff_count=return_cutoff_count,
     )
+    if return_cutoff_count:
+        sig_mask, n_significant, cutoff_count = significance_result
+    else:
+        sig_mask, n_significant = significance_result
 
     # Reshape to (n_images, n_rot, n_trans) and check if any translation
     # is significant for each rotation
     sig_2d = sig_mask.reshape(-1, n_rot, n_trans)
     sig_rot_mask = jnp.any(sig_2d, axis=-1)  # (n_images, n_rot)
 
+    if return_cutoff_count:
+        return sig_mask, sig_rot_mask, n_significant, cutoff_count
     return sig_mask, sig_rot_mask, n_significant
 
 

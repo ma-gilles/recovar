@@ -156,18 +156,18 @@ def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatc
     def fake_significance(*_args, **_kwargs):
         return (
             None,
-            np.ones(1, dtype=np.int32),
+            np.full(1, 6, dtype=np.int32),
             np.zeros(1, dtype=np.int32),
             np.zeros(1, dtype=np.int32),
             [[np.asarray([0], dtype=np.int32)]],
-            None,
+            {"significant_cutoff_counts": np.full(1, 5, dtype=np.int32)},
         )
 
     sparse_result = _assemble_result(
         class_log_evidence=np.zeros((1, 1), dtype=np.float64),
         new_means=None,
-        Ft_y=[jnp.zeros(4, dtype=jnp.complex64)],
-        Ft_ctf=[jnp.zeros(4, dtype=jnp.float32)],
+        Ft_y=[jnp.asarray([1, 2, 3, 4], dtype=jnp.complex64)],
+        Ft_ctf=[jnp.asarray([5, 6, 7, 8], dtype=jnp.float32)],
         per_class_hard_assignments=np.zeros((1, 1), dtype=np.int32),
         per_class_stats=(
             make_relion_stats(
@@ -212,7 +212,9 @@ def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatc
     )
 
     assert len(sparse_calls) == 1
-    assert result.significant_counts is not None
+    np.testing.assert_array_equal(np.asarray(result.significant_counts), np.array([5], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(result.Ft_y), np.array([[1, 2, 3, 4]], dtype=np.complex64))
+    np.testing.assert_array_equal(np.asarray(result.Ft_ctf), np.array([[5, 6, 7, 8]], dtype=np.float32))
 
 
 def test_k_class_hard_assignment_uses_joint_best_pose_not_marginal_class():

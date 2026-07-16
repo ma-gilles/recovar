@@ -277,6 +277,46 @@ class TestSignificanceMaskFraction:
         )
         np.testing.assert_array_equal(np.asarray(n_sig), np.array([3], dtype=np.int32))
 
+    def test_cutoff_count_is_pre_tie_rank_without_changing_mask(self):
+        """RELION metadata stores the cutoff rank, while pass 2 expands ties."""
+        w = jnp.array([[0.60, 0.20, 0.10, 0.05, 0.025, 0.025]], dtype=jnp.float32)
+
+        mask, support_count, cutoff_count = find_significant_mask(
+            w,
+            adaptive_fraction=0.96,
+            max_significants=-1,
+            return_cutoff_count=True,
+        )
+
+        np.testing.assert_array_equal(np.asarray(mask), np.ones((1, 6), dtype=bool))
+        np.testing.assert_array_equal(np.asarray(support_count), np.array([6], dtype=np.int32))
+        np.testing.assert_array_equal(np.asarray(cutoff_count), np.array([5], dtype=np.int32))
+
+        rot_mask, _, rot_support_count, rot_cutoff_count = find_significant_rotations(
+            w,
+            n_rot=2,
+            n_trans=3,
+            adaptive_fraction=0.96,
+            max_significants=-1,
+            return_cutoff_count=True,
+        )
+        np.testing.assert_array_equal(np.asarray(rot_mask), np.asarray(mask))
+        np.testing.assert_array_equal(np.asarray(rot_support_count), np.asarray(support_count))
+        np.testing.assert_array_equal(np.asarray(rot_cutoff_count), np.asarray(cutoff_count))
+
+    def test_cutoff_count_matches_support_count_without_ties(self):
+        w = jnp.array([[0.40, 0.25, 0.15, 0.10, 0.06, 0.04]], dtype=jnp.float32)
+
+        _, support_count, cutoff_count = find_significant_mask(
+            w,
+            adaptive_fraction=0.90,
+            max_significants=-1,
+            return_cutoff_count=True,
+        )
+
+        np.testing.assert_array_equal(np.asarray(support_count), np.array([5], dtype=np.int32))
+        np.testing.assert_array_equal(np.asarray(cutoff_count), np.array([5], dtype=np.int32))
+
     def test_single_dominant(self):
         """When one sample has ~100% weight, mask should select just that one."""
         n_images = 2
@@ -306,37 +346,52 @@ class TestSignificanceMaskFraction:
         raw_w[:, 2] += 50.0
         w = jnp.array(raw_w / raw_w.sum(axis=-1, keepdims=True))
 
-        mask_fast, n_sig_fast = find_significant_mask(
+        mask_fast, n_sig_fast, cutoff_fast = find_significant_mask(
             w,
             adaptive_fraction=0.999,
             max_significants=-1,
+            return_cutoff_count=True,
         )
-        mask_ref, n_sig_ref = _find_significant_mask_full_sort(
+        mask_ref, n_sig_ref, cutoff_ref = _find_significant_mask_full_sort(
             w,
             adaptive_fraction=0.999,
             max_significants=-1,
+            return_cutoff_count=True,
         )
 
         np.testing.assert_array_equal(np.asarray(mask_fast), np.asarray(mask_ref))
         np.testing.assert_array_equal(np.asarray(n_sig_fast), np.asarray(n_sig_ref))
+        np.testing.assert_array_equal(np.asarray(cutoff_fast), np.asarray(cutoff_ref))
 
     def test_fast_topk_falls_back_to_full_sort_when_cutoff_is_wide(self):
         """Uniform posteriors force the wrapper to recover the full-sort result."""
         w = jnp.ones((4, 512), dtype=jnp.float32) / 512.0
 
-        mask_fast, n_sig_fast = find_significant_mask(
+        mask_fast, n_sig_fast, cutoff_fast = find_significant_mask(
             w,
-            adaptive_fraction=0.999,
+            adaptive_fraction=0.5,
             max_significants=-1,
+            return_cutoff_count=True,
         )
-        mask_ref, n_sig_ref = _find_significant_mask_full_sort(
+        mask_ref, n_sig_ref, cutoff_ref = _find_significant_mask_full_sort(
             w,
-            adaptive_fraction=0.999,
+            adaptive_fraction=0.5,
             max_significants=-1,
+            return_cutoff_count=True,
         )
 
         np.testing.assert_array_equal(np.asarray(mask_fast), np.asarray(mask_ref))
         np.testing.assert_array_equal(np.asarray(n_sig_fast), np.asarray(n_sig_ref))
+        np.testing.assert_array_equal(np.asarray(cutoff_fast), np.full(4, 257, dtype=np.int32))
+        np.testing.assert_array_equal(np.asarray(cutoff_fast), np.asarray(cutoff_ref))
+
+    def test_default_tuple_arities_remain_backward_compatible(self):
+        w = jnp.array([[0.7, 0.2, 0.1]], dtype=jnp.float32)
+
+        assert len(find_significant_mask(w)) == 2
+        assert len(find_significant_rotations(w, n_rot=1, n_trans=3)) == 3
+        assert len(_find_significant_mask_full_sort(w)) == 2
+        assert len(_find_significant_mask_topk(w, topk=3)) == 3
 
 
 # ===========================================================================
@@ -382,6 +437,32 @@ class TestSignificanceMaskCap:
                 f"Image {i}: {int(n_sig2[i])} significants, expected <= ~50 "
                 f"(max_significants=10 sets threshold, ties may exceed)"
             )
+
+    def test_uniform_cap_serializes_rank_but_preserves_full_tied_support(self):
+        w = jnp.ones((2, 200), dtype=jnp.float32) / 200.0
+
+        mask, support_count, cutoff_count = find_significant_mask(
+            w,
+            adaptive_fraction=0.999,
+            max_significants=10,
+            return_cutoff_count=True,
+        )
+
+        np.testing.assert_array_equal(np.asarray(mask), np.ones((2, 200), dtype=bool))
+        np.testing.assert_array_equal(np.asarray(support_count), np.full(2, 200, dtype=np.int32))
+        np.testing.assert_array_equal(np.asarray(cutoff_count), np.full(2, 10, dtype=np.int32))
+
+        topk_mask, topk_support_count, topk_covers, topk_cutoff_count = _find_significant_mask_topk(
+            w,
+            adaptive_fraction=0.999,
+            max_significants=10,
+            topk=64,
+            return_cutoff_count=True,
+        )
+        np.testing.assert_array_equal(np.asarray(topk_mask), np.asarray(mask))
+        np.testing.assert_array_equal(np.asarray(topk_support_count), np.asarray(support_count))
+        np.testing.assert_array_equal(np.asarray(topk_covers), np.ones(2, dtype=bool))
+        np.testing.assert_array_equal(np.asarray(topk_cutoff_count), np.asarray(cutoff_count))
 
     def test_cap_1_selects_best(self):
         """With max_significants=1, threshold is set from the top-1 value."""

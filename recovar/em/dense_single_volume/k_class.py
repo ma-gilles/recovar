@@ -2839,17 +2839,6 @@ def run_dense_k_class_em_adaptive(
     sig_ibs = int(significance_image_batch_size or image_batch_size)
     sig_rbs = int(significance_rotation_block_size or rotation_block_size)
 
-    def _counts_from_significant_samples(sig_sample_indices_by_class) -> np.ndarray:
-        counts = np.zeros(n_images, dtype=np.int32)
-        full_coarse_pose_count = int(n_rot_coarse * n_trans_coarse)
-        for image_idx in range(n_images):
-            total = 0
-            for class_idx in range(n_classes):
-                samples = sig_sample_indices_by_class[class_idx][image_idx]
-                total += significant_sample_count(samples, full_coarse_pose_count)
-            counts[image_idx] = total
-        return counts
-
     # Pass-1 priors fall back to pass-2 priors when not supplied separately.
     if coarse_translation_log_prior is None:
         coarse_translation_log_prior = engine_kwargs.get("translation_log_prior")
@@ -2964,10 +2953,11 @@ def run_dense_k_class_em_adaptive(
                 class_log_priors=log_priors,
                 **sig_kwargs,
             )
-        significant_counts_for_result = (
-            _counts_from_significant_samples(sig_sample_indices_by_class)
-            if _n_sig_per_image is None
-            else np.asarray(_n_sig_per_image, dtype=np.int32)
+        if _full_coarse_stats is None or "significant_cutoff_counts" not in _full_coarse_stats:
+            raise RuntimeError("K-class significance did not return RELION cutoff-rank counts")
+        significant_counts_for_result = np.asarray(
+            _full_coarse_stats["significant_cutoff_counts"],
+            dtype=np.int32,
         )
     pass1_s = time.time() - pass1_t0
 
