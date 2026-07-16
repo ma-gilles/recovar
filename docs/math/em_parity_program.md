@@ -3469,3 +3469,34 @@ before-fix science root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_fulltraj_f10c0386_a10080_retry5_prepared_20260715_181156/`;
 the fail-closed post-hoc audit is under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_real10076_job11235095_posthoc_hardened_20260715_191601/`.
+
+## 2026-07-15 Corrected K=1 converged-state replay
+
+Fresh same-A100 job `11238154` confirms the final-boundary correction.  A new
+autonomous RELION run and RECOVAR both produce 18 numbered iterations and
+converge at iteration 18.  RECOVAR's final all-data branch consumes the exact
+`run_it018` state with no fallback, uses sampling iteration 19, and runs with
+the strict diagnostic gridding correction enabled.  All expected numbered
+STAR files and half maps exist through iteration 18.  The versioned
+`em_k1_corrected_final_state_gate_v1` control report passes without exception.
+This closes the off-by-one state-loading defect from job `11235095`.
+
+It does not close K=1 trajectory parity.  The fail-closed continuous audit
+first rejects iteration 2 Pmax: absolute error has p95
+`0.0003533333164453489` and maximum `0.021642681756019605`.  Map FSC-AUC first
+falls below `0.995` at iteration 7, with half1, half2, and merged values
+`0.993608422474`, `0.993329608226`, and `0.994727977169`.  The lowest half-map
+FSC-AUC is `0.977435296241` at iteration 13.  Numbered iteration 18 recovers to
+`0.994551451225`, `0.994562872376`, and `0.995379792244`, while the corrected
+final all-data merged FSC-AUC is only `0.984411252872`.  Final Pmax absolute
+error has p95 `0.0911828649503` and maximum `0.562462863297`.  These values are
+FSC/FSC-AUC and exact-array evidence; correlation is not a quality gate.
+
+The Slurm state is `FAILED` with exit code 2 only because the completed science
+correctly failed its strict parity classifier.  The immutable run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_fulltraj_999278bd_a10080_correctedstate_prepared_20260715_192500/`.
+Its principal records are `analysis/corrected_final_state_gate.json`,
+`analysis/trajectory_gate.json`, and
+`analysis/trajectory_classification.json` under that root.  The next K=1
+causal target remains the frozen iteration-2 posterior boundary, not the now
+validated final-state router.
