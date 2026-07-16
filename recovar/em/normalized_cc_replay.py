@@ -341,6 +341,23 @@ def recovar_logical_float32_reduce(values) -> np.float32:
     return total
 
 
+def _relion_tree_float32_reduce(values, *, lane_count: int) -> np.float32:
+    """Replay one power-of-two RELION CUDA lane tree."""
+
+    values = _as_1d(values, dtype=np.float32, name="values")
+    if lane_count <= 0 or lane_count & (lane_count - 1):
+        raise ValueError(f"lane_count must be a positive power of two, got {lane_count}")
+    lanes = np.zeros(lane_count, dtype=np.float32)
+    for pixel, value in enumerate(values):
+        lane = pixel % lane_count
+        lanes[lane] = np.float32(lanes[lane] + value)
+    width = lane_count // 2
+    while width:
+        lanes[:width] = np.add(lanes[:width], lanes[width : 2 * width], dtype=np.float32)
+        width //= 2
+    return lanes[0]
+
+
 def relion_256lane_float32_reduce(values) -> np.float32:
     """Replay RELION SPA fine-score CUDA's exact 256-lane float32 tree.
 
@@ -348,16 +365,7 @@ def relion_256lane_float32_reduce(values) -> np.float32:
     zero positions changes lane ownership and therefore changes this result.
     """
 
-    values = _as_1d(values, dtype=np.float32, name="values")
-    lanes = np.zeros(RELION_FINE_REDUCTION_LANES, dtype=np.float32)
-    for pixel, value in enumerate(values):
-        lane = pixel % RELION_FINE_REDUCTION_LANES
-        lanes[lane] = np.float32(lanes[lane] + value)
-    width = RELION_FINE_REDUCTION_LANES // 2
-    while width:
-        lanes[:width] = np.add(lanes[:width], lanes[width : 2 * width], dtype=np.float32)
-        width //= 2
-    return lanes[0]
+    return _relion_tree_float32_reduce(values, lane_count=RELION_FINE_REDUCTION_LANES)
 
 
 def relion_128lane_float32_reduce(values) -> np.float32:
@@ -368,16 +376,7 @@ def relion_128lane_float32_reduce(values) -> np.float32:
     every packed-grid pixel so lane ownership is unchanged.
     """
 
-    values = _as_1d(values, dtype=np.float32, name="values")
-    lanes = np.zeros(RELION_COARSE_REDUCTION_LANES, dtype=np.float32)
-    for pixel, value in enumerate(values):
-        lane = pixel % RELION_COARSE_REDUCTION_LANES
-        lanes[lane] = np.float32(lanes[lane] + value)
-    width = RELION_COARSE_REDUCTION_LANES // 2
-    while width:
-        lanes[:width] = np.add(lanes[:width], lanes[width : 2 * width], dtype=np.float32)
-        width //= 2
-    return lanes[0]
+    return _relion_tree_float32_reduce(values, lane_count=RELION_COARSE_REDUCTION_LANES)
 
 
 def _canonical_values(values, identities, *, dtype) -> np.ndarray:
