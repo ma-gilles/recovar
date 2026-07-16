@@ -3015,11 +3015,13 @@ def test_sparse_pass2_auto_projection_cap_prevents_one_image_tail_oversize(monke
 
 
 def _minimal_per_image_inputs(rotation_counts, n_fine_trans):
+    oversampled_rots = [
+        np.broadcast_to(np.eye(3, dtype=np.float32), (int(count), 3, 3)).copy()
+        for count in rotation_counts
+    ]
     return {
-        "oversampled_rots": [
-            np.broadcast_to(np.eye(3, dtype=np.float32), (int(count), 3, 3)).copy()
-            for count in rotation_counts
-        ],
+        "oversampled_rots": oversampled_rots,
+        "oversampled_mstep_rots": oversampled_rots,
         "oversampled_rot_indices": [
             np.arange(int(count), dtype=np.int64)
             for count in rotation_counts
@@ -5072,7 +5074,9 @@ def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypat
         return_abs2,
         centered_rows,
         dense_scale,
+        projector_output_size=None,
     ):
+        del projector_output_size
         calls.append(
             {
                 "n_rot": int(rotations_block.shape[0]),
@@ -5511,7 +5515,7 @@ def test_prepare_bucket_io_windowed_shifted_score_modes_match_full_half_slice(
         assert windowed[1] is None
         assert windowed[4] is None
         assert windowed[5] is None
-        assert windowed[6] is None
+        np.testing.assert_allclose(np.asarray(windowed[6]), np.asarray(full[6]), rtol=0, atol=0)
     else:
         np.testing.assert_allclose(
             np.asarray(windowed[0]),
@@ -7441,6 +7445,7 @@ def test_fused_sparse_k1_default_compact_pairs_matches_existing_sparse_path(monk
         coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         coarse_translations_np=coarse_translations,
         fine_rotations_np=fine_rotations,
+        fine_mstep_rotations_np=None,
         rot_parent_map_np=fine_parent,
         fine_translations_np=fine_translations,
         trans_parent_map_np=fine_translation_parent,
@@ -7603,6 +7608,7 @@ def test_compact_pair_half_spectrum_reuses_mstep_sums_for_noise(monkeypatch):
         coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         coarse_translations_np=coarse_translations,
         fine_rotations_np=fine_rotations,
+        fine_mstep_rotations_np=None,
         rot_parent_map_np=fine_parent,
         fine_translations_np=fine_translations,
         trans_parent_map_np=fine_translation_parent,
@@ -7747,6 +7753,7 @@ def test_compact_pair_tail_coalesced_execution_matches_uncoalesced(monkeypatch):
         coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         coarse_translations_np=coarse_translations,
         fine_rotations_np=fine_rotations,
+        fine_mstep_rotations_np=None,
         rot_parent_map_np=fine_parent,
         fine_translations_np=fine_translations,
         trans_parent_map_np=fine_translation_parent,
@@ -7865,6 +7872,7 @@ def test_compact_pair_masked_scoring_reuses_noise_ctf_sums(monkeypatch):
         coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         coarse_translations_np=coarse_translations,
         fine_rotations_np=fine_rotations,
+        fine_mstep_rotations_np=None,
         rot_parent_map_np=fine_parent,
         fine_translations_np=fine_translations,
         trans_parent_map_np=fine_translation_parent,
@@ -8021,6 +8029,7 @@ def test_fused_sparse_k_class_relion_half_mstep_keeps_half_accumulators(monkeypa
         coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         coarse_translations_np=coarse_translations,
         fine_rotations_np=fine_rotations,
+        fine_mstep_rotations_np=None,
         rot_parent_map_np=fine_parent,
         fine_translations_np=fine_translations,
         trans_parent_map_np=fine_translation_parent,
@@ -8080,6 +8089,7 @@ def test_fused_sparse_k_class_fine_mstep_prune_flag_exercises_compact_pairs(monk
         coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         coarse_translations_np=coarse_translations,
         fine_rotations_np=fine_rotations,
+        fine_mstep_rotations_np=None,
         rot_parent_map_np=fine_parent,
         fine_translations_np=fine_translations,
         trans_parent_map_np=fine_translation_parent,
@@ -8164,6 +8174,7 @@ def test_fused_sparse_k_class_joint_fine_mstep_prune_flag(monkeypatch):
         coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         coarse_translations_np=coarse_translations,
         fine_rotations_np=fine_rotations,
+        fine_mstep_rotations_np=None,
         rot_parent_map_np=fine_parent,
         fine_translations_np=fine_translations,
         trans_parent_map_np=fine_translation_parent,
@@ -8406,6 +8417,7 @@ def test_compact_pair_xhalf_gpu_matches_rectangular_fused(monkeypatch):
         coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         coarse_translations_np=coarse_translations,
         fine_rotations_np=fine_rotations,
+        fine_mstep_rotations_np=None,
         rot_parent_map_np=fine_parent,
         fine_translations_np=fine_translations,
         trans_parent_map_np=fine_translation_parent,

@@ -2184,11 +2184,12 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_exact_gaussian_ab_7ad2526d_20260714_215100/audit_exact_vs_algebraic/trajectory_fsc_audit.json`, and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_exact_gaussian_ab_7ad2526d_20260714_215100/audit_exact_vs_algebraic/shellwise_fsc_curves.npz`.
 
-# 2026-07-16: replacement exact fine-Gaussian reducer evaluated and reverted
+# 2026-07-16: replacement exact fine-Gaussian reducer integrated provisionally
 
-- Commit `dbb4a916` briefly integrated the replacement RELION CUDA-style
-  float32 fine `diff2` reduction, and commit `5800245f` reverted it.  The
-  reducer is not the production default.
+- Commit `0cacb891` reintroduces the replacement RELION CUDA-style float32 fine
+  `diff2` reduction.  Commit `49e8f416` adds routing guards, fail-closed sparse
+  behavior, and restored parity checks.  It remains provisional pending the
+  production-size K=1 and K=4 trajectory gates below.
 - Same-A100 iteration-2 A/B evidence changed only that disable flag.  Exact
   reduced mean Pmax error against RELION by `28.3248%`
   (`2.78821e-5 -> 1.99846e-5`), reduced rows above `1e-4` from 371 to 168, and
@@ -2204,8 +2205,8 @@ Matrix evidence:
   Its SHA-256 is
   `bc1e27f16437913e8e2c081016a838d0a05b7b6539adcacb07f3d9ff4cc1a993`.
   Rerun the K=1 matrix at the integrated commit; do not treat K=4 as proven
-  until its routing/fallback/test blockers are fixed and production-size K=1
-  and K=4 trajectory runs pass.
+  until production-size K=1 and K=4 trajectory runs pass.  Revert the
+  integration if either quality gate regresses.
 
 # 2026-07-14: case-26 first real divergence is accelerated BPref arithmetic
 

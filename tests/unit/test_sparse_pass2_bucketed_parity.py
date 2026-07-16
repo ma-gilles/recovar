@@ -630,7 +630,7 @@ class TestSparsePass2Bucketed:
         square_window=False,
         relion_firstiter_score_mode="gaussian",
         relion_firstiter_winner_take_all=False,
-        relion_exact_fine_gaussian=True,
+        relion_exact_fine_gaussian=False,
     ):
         ds, vol, mv, nv, trans, nside = self._common_args(sig_indices)
 
@@ -762,13 +762,19 @@ class TestSparsePass2Bucketed:
     def test_exact_gaussian_highres_rejects_unsupported_score_supports(self):
         sig_indices = [np.asarray([0, 1], dtype=np.int32)] * 2
         with pytest.raises(NotImplementedError, match="half_spectrum_scoring=True"):
-            self._run_both(sig_indices, current_size=6, half_spectrum_scoring=False)
+            self._run_both(
+                sig_indices,
+                current_size=6,
+                half_spectrum_scoring=False,
+                relion_exact_fine_gaussian=True,
+            )
         with pytest.raises(NotImplementedError, match="square_window=False"):
             self._run_both(
                 sig_indices,
                 current_size=6,
                 half_spectrum_scoring=True,
                 square_window=True,
+                relion_exact_fine_gaussian=True,
             )
 
     def test_float64_and_explicit_feature_bypass_preserve_algebraic_route(self, monkeypatch):
@@ -787,6 +793,7 @@ class TestSparsePass2Bucketed:
             current_size=6,
             half_spectrum_scoring=False,
             use_float64_scoring=True,
+            relion_exact_fine_gaussian=True,
         )
         # Bucketed accumulation order differs slightly from the per-image
         # reference even though both score in float64.

@@ -210,17 +210,17 @@ unchanged.  Next validate fixed-state score arrays and then the full case-20
 trajectory with explicit `relion_cuda`; the captured operand gate alone is not
 an end-to-end quality claim.
 
-The replacement exact fine-Gaussian reducer remains isolated and is not the
-production default.  A same-A100 paired iteration-2 run changed only
+The replacement exact fine-Gaussian reducer is integrated provisionally as the
+default float32 Gaussian path.  A same-A100 paired iteration-2 run changed only
 `RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN=1`: mean Pmax error against RELION
 fell from `2.78821e-5` to `1.99846e-5`, rows above `1e-4` fell from 371 to 168,
 and wall time fell from `1065.49` to `538.72` seconds.  Iteration-1 state was
 bitwise equal; iteration-2 merged cross-engine FSC-AUC was non-regressing
 (`0.999999981423` to `0.999999981578`).  This real-data fixture has no GT, so
-the result is not a GT-quality claim.  Commit `dbb4a916` was reverted by
-`5800245f` because the candidate still had routing, fallback, test, and K=4
-qualification blockers.  Retain it as a diagnostic candidate until those
-blockers and full K=1/K=4 trajectory gates are closed.
+the result is not a GT-quality claim.  Commit `49e8f416` adds fail-closed
+routing, removes unsafe fallback behavior, and restores the relevant tests.
+The integration remains experimental until full K=1 and K=4 trajectory gates
+pass; revert it if either quality gate regresses.
 
 After those K=1 gates, advance to K=4 quality/state parity.  Performance is
 not yet accepted: the broad matrix measures RECOVAR at `1.64--5.89x` RELION
