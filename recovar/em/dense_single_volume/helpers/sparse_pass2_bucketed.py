@@ -936,6 +936,12 @@ def _maybe_dump_bpref_contribution_rows(
     best_log_score_np = _select_particle_axis(best_log_score).astype(np.float64, copy=False)
     log_z_np = _select_particle_axis(log_z).astype(np.float64, copy=False)
     normalized_sum_exp = np.exp(log_z_np - best_log_score_np)
+    captured_reconstruction_probs = _select_particle_axis(reconstruction_probs)
+    if captured_reconstruction_probs.dtype not in {np.dtype(np.float32), np.dtype(np.float64)}:
+        raise ValueError(
+            "BPref reconstruction probabilities must retain native float32/float64 dtype, "
+            f"got {captured_reconstruction_probs.dtype}"
+        )
     scores_f32 = combined_scores_np.astype(np.float32)
     best_f32 = np.max(np.where(np.isfinite(scores_f32), scores_f32, -np.inf), axis=(1, 2))
     exponent_shift_f32 = np.float32(50.0) - best_f32
@@ -1039,7 +1045,21 @@ def _maybe_dump_bpref_contribution_rows(
         candidate_exponent_shift_f32=exponent_shift_f32,
         candidate_raw_exp_weights_f32=raw_exp_weights_f32,
         posterior_probs=_select_particle_axis(probs).astype(np.float64, copy=False),
-        reconstruction_probs=_select_particle_axis(reconstruction_probs).astype(np.float64, copy=False),
+        reconstruction_probs=captured_reconstruction_probs,
+        reconstruction_probs_native_dtype=np.asarray(
+            str(captured_reconstruction_probs.dtype)
+        ),
+        reconstruction_probs_native_itemsize=np.int32(
+            captured_reconstruction_probs.dtype.itemsize
+        ),
+        reconstruction_probs_native_nbytes=np.int64(
+            captured_reconstruction_probs.nbytes
+        ),
+        # Additive v3 fields: old readers ignore unknown NPZ members, while
+        # new high-precision replay fails closed if any member is missing.
+        reconstruction_probs_storage_policy=np.asarray(
+            "native-dtype-preserved;dtype-itemsize-nbytes-bound"
+        ),
         reconstruction_mask=_select_particle_axis(reconstruction_mask).astype(bool, copy=False),
         reconstruction_sum_weight=_select_particle_axis(reconstruction_sum_weight).astype(np.float64, copy=False),
         reconstruction_threshold=_select_particle_axis(reconstruction_threshold).astype(np.float64, copy=False),
