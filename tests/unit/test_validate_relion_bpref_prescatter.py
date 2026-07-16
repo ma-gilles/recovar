@@ -58,11 +58,14 @@ def test_validate_complete_directory_and_recovar_identities(tmp_path: Path):
     _write_artifact(tmp_path, part=10, stack=101, rank=1)
     _write_artifact(tmp_path, part=11, stack=202, rank=2)
     shard = tmp_path / "recovar.npz"
-    np.savez(shard, stack_indices_1based=np.asarray([202, 101], dtype=np.int64))
+    np.savez(shard, stack_indices_1based=np.asarray([202], dtype=np.int64))
 
     expected = validator.load_recovar_stack_indices((tmp_path,))
     artifacts, summary = validator.validate_directory(
-        tmp_path, expected_particles=2, expected_stack_indices=expected
+        tmp_path,
+        expected_particles=2,
+        expected_stack_indices=expected,
+        expected_stack_mpi_rank=2,
     )
 
     assert len(artifacts) == 2

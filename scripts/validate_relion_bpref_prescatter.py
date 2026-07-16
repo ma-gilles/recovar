@@ -248,11 +248,15 @@ def validate_directory(
     *,
     expected_particles: int | None = None,
     expected_stack_indices: np.ndarray | None = None,
+    expected_stack_mpi_rank: int | None = None,
 ) -> tuple[tuple[CaptureArtifact, ...], dict[str, object]]:
     """Validate a complete capture directory before any scientific comparison."""
 
     directory = Path(directory)
     _require(directory.is_dir(), f"capture directory does not exist: {directory}")
+    if expected_stack_mpi_rank is not None:
+        _require(expected_stack_indices is not None, "MPI-rank stack selection requires expected stack identities")
+        _require(expected_stack_mpi_rank >= 0, "expected stack MPI rank must be nonnegative")
     incomplete = sorted(directory.glob("*.tmp.*"))
     if incomplete:
         raise ValueError(f"incomplete temporary artifacts remain: {incomplete[0]}")
@@ -287,7 +291,19 @@ def validate_directory(
     if expected_stack_indices is not None:
         expected = np.asarray(expected_stack_indices, dtype=np.uint64)
         _require(np.unique(expected).size == expected.size, "expected stack identities are duplicated")
-        _require(np.array_equal(np.sort(stack_indices), np.sort(expected)), "RELION/RECOVAR stack identity sets differ")
+        if expected_stack_mpi_rank is None:
+            observed = stack_indices
+        else:
+            observed = np.asarray(
+                [
+                    artifact.stack_index
+                    for artifact in artifacts
+                    if artifact.mpi_rank == expected_stack_mpi_rank
+                ],
+                dtype=np.uint64,
+            )
+            _require(observed.size > 0, f"no artifacts for MPI rank {expected_stack_mpi_rank}")
+        _require(np.array_equal(np.sort(observed), np.sort(expected)), "RELION/RECOVAR stack identity sets differ")
 
     total_rows = sum(artifact.rows.size for artifact in artifacts)
     total_positive = sum(artifact.header[38] for artifact in artifacts)
@@ -315,6 +331,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("capture_directory", type=Path)
     parser.add_argument("--expected-particles", type=int)
     parser.add_argument("--recovar-shard", action="append", default=[], type=Path)
+    parser.add_argument("--recovar-mpi-rank", type=int)
     parser.add_argument("--output-json", type=Path)
     return parser
 
@@ -328,6 +345,7 @@ def main() -> None:
         args.capture_directory,
         expected_particles=args.expected_particles,
         expected_stack_indices=expected_stack_indices,
+        expected_stack_mpi_rank=args.recovar_mpi_rank,
     )
     encoded = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     if args.output_json is not None:
