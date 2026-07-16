@@ -11501,7 +11501,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             )
             if (
                 compact_pair_inputs_by_class_for_check is not None
-                and relion_firstiter_score_mode == "normalized_cc"
+                and not use_exact_relion_gaussian
             ):
                 compact_inputs = compact_pair_inputs_by_class_for_check[class_index]
                 pair_counts = np.asarray(compact_inputs["pair_counts"], dtype=np.int64)[image_indices]
@@ -12878,6 +12878,13 @@ def compute_k_class_pass2_stats_sparse_fused(
         "sparse_kclass_raw_host_staging_peak_bytes": np.int64(raw_host_staging_peak_bytes),
         "sparse_kclass_raw_host_staging_s": np.float64(raw_host_staging_s),
         "sparse_kclass_exact_relion_gaussian": bool(use_exact_relion_gaussian),
+        "sparse_kclass_compact_pair_check_rows": np.int64(compact_pair_check_rows),
+        "sparse_kclass_compact_pair_check_finite_mismatches": np.int64(
+            compact_pair_check_finite_mismatches,
+        ),
+        "sparse_kclass_compact_pair_check_max_abs_log_z_diff": np.float64(
+            compact_pair_check_max_abs_diff,
+        ),
         "sparse_kclass_score_pixels": np.int64(int(budget_window_spec.n_score)),
         "sparse_kclass_device_memory_bytes": np.int64(-1 if device_memory_bytes is None else int(device_memory_bytes)),
         "sparse_kclass_windowed_prepare": bool(windowed_prepare),

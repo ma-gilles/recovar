@@ -2201,6 +2201,9 @@ def _score_half_dense(
             dense_em_kwargs.pop("group_ids", None)
             dense_em_kwargs.pop("scale_correction_group_count", None)
             dense_em_kwargs.pop("scale_correction_data_vs_prior", None)
+            # Exact fine-Gaussian scoring is implemented only by sparse pass 2.
+            # A non-adaptive dense iteration has no fine pass to select.
+            dense_em_kwargs.pop("relion_exact_fine_gaussian", None)
             k_class_result = run_dense_k_class_em(
                 experiment_dataset,
                 means_k,
@@ -2457,6 +2460,9 @@ def _score_half_dense(
     direct_em_kwargs.pop("group_ids", None)
     direct_em_kwargs.pop("scale_correction_group_count", None)
     direct_em_kwargs.pop("scale_correction_data_vs_prior", None)
+    # Exact fine-Gaussian scoring is implemented only by sparse pass 2.  This
+    # branch is the single dense pass used when adaptive oversampling is off.
+    direct_em_kwargs.pop("relion_exact_fine_gaussian", None)
     _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
         experiment_dataset,
         means_k,

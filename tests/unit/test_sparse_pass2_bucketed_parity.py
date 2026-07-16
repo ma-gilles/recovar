@@ -173,8 +173,6 @@ def _compare_outputs(
     out_bucket,
     atol=1e-5,
     rtol=1e-5,
-    *,
-    compare_absolute_gaussian_scores=True,
 ):
     """Compare per-image and accumulated outputs with tight tolerance."""
     (
@@ -207,19 +205,18 @@ def _compare_outputs(
     np.testing.assert_allclose(np.asarray(best_tr_ref), np.asarray(best_tr_b), atol=1e-6)
 
     # RELION stats must match within float32 precision.
-    if compare_absolute_gaussian_scores:
-        np.testing.assert_allclose(
-            np.asarray(stats_ref.log_evidence_per_image),
-            np.asarray(stats_b.log_evidence_per_image),
-            atol=atol,
-            rtol=rtol,
-        )
-        np.testing.assert_allclose(
-            np.asarray(stats_ref.best_log_score_per_image),
-            np.asarray(stats_b.best_log_score_per_image),
-            atol=atol,
-            rtol=rtol,
-        )
+    np.testing.assert_allclose(
+        np.asarray(stats_ref.log_evidence_per_image),
+        np.asarray(stats_b.log_evidence_per_image),
+        atol=atol,
+        rtol=rtol,
+    )
+    np.testing.assert_allclose(
+        np.asarray(stats_ref.best_log_score_per_image),
+        np.asarray(stats_b.best_log_score_per_image),
+        atol=atol,
+        rtol=rtol,
+    )
     np.testing.assert_allclose(
         np.asarray(stats_ref.max_posterior_per_image),
         np.asarray(stats_b.max_posterior_per_image),
@@ -835,18 +832,20 @@ class TestSparsePass2Bucketed:
             out_bucket,
             atol=1e-4,
             rtol=1e-4,
-            compare_absolute_gaussian_scores=False,
         )
 
     def test_full_candidate_lists_match(self):
         """``sig_samples is None`` (full coarse grid) per image."""
         n_images = 3
         sig_indices = [None] * n_images
-        out_ref, out_bucket = self._run_both(sig_indices, return_stats=True)
-        # The default exact scorer deliberately routes full support through the
-        # bucketed path. It follows RELION's float32 diff2 order, while the
-        # legacy reference uses the algebraic form and per-image reductions.
-        _compare_outputs(out_ref, out_bucket, atol=1e-4, rtol=1e-4)
+        out_ref, out_bucket = self._run_both(
+            sig_indices,
+            return_stats=True,
+            relion_exact_fine_gaussian=False,
+        )
+        # Bucketed and per-image algebraic reductions differ only by float32
+        # accumulation order.
+        _compare_outputs(out_ref, out_bucket, atol=5e-5, rtol=5e-5)
 
     def test_exact_full_candidate_lists_route_to_bucketed_scorer(self, monkeypatch):
         """Full support must not silently bypass the exact RELION scorer."""
@@ -905,7 +904,6 @@ class TestSparsePass2Bucketed:
             out_bucket,
             atol=1e-4,
             rtol=1e-4,
-            compare_absolute_gaussian_scores=False,
         )
         assert np.asarray(out_bucket[6].log_evidence_per_image).dtype == np.float64
         assert np.asarray(out_bucket[6].best_log_score_per_image).dtype == np.float64
@@ -945,7 +943,6 @@ class TestSparsePass2Bucketed:
             out_bucket,
             atol=1e-4,
             rtol=1e-4,
-            compare_absolute_gaussian_scores=False,
         )
 
     def test_firstiter_cc_winner_take_all_match(self):

@@ -417,6 +417,23 @@ def _is_class_lazy_mask(value) -> bool:
     return hasattr(value, "for_class") and hasattr(value, "shape")
 
 
+def _strict_exact_fine_gaussian_requested(
+    engine_kwargs: dict,
+    *,
+    firstiter_cc_pass2_only_best_coarse: bool = False,
+) -> bool:
+    score_mode = (
+        "normalized_cc"
+        if firstiter_cc_pass2_only_best_coarse
+        else engine_kwargs.get("relion_firstiter_score_mode", "gaussian")
+    )
+    return bool(
+        engine_kwargs.get("relion_exact_fine_gaussian", True)
+        and score_mode == "gaussian"
+        and not engine_kwargs.get("use_float64_scoring", False)
+    )
+
+
 def _dense_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_classes: int) -> dict:
     kwargs = dict(engine_kwargs)
     coarse_translation_log_prior = kwargs.pop("coarse_translation_log_prior", None)
@@ -2807,6 +2824,16 @@ def run_dense_k_class_em_adaptive(
     if int(trans_parent_map_np.max(initial=-1)) >= n_trans_coarse:
         raise ValueError("trans_parent_map values must be < n_trans_coarse")
     n_images = _dataset_image_count(experiment_dataset)
+    sparse_pass2_requested = bool(engine_kwargs.get("sparse_pass2", False))
+    strict_exact_fine_gaussian = _strict_exact_fine_gaussian_requested(
+        engine_kwargs,
+        firstiter_cc_pass2_only_best_coarse=firstiter_cc_pass2_only_best_coarse,
+    )
+    if strict_exact_fine_gaussian and not sparse_pass2_requested:
+        raise RuntimeError(
+            "exact RELION fine Gaussian scoring requires sparse adaptive pass 2; "
+            "disable relion_exact_fine_gaussian for the algebraic dense A/B route",
+        )
     image_batch_size = int(engine_kwargs.get("image_batch_size", 500))
     rotation_block_size = int(engine_kwargs.get("rotation_block_size", 5000))
     sig_ibs = int(significance_image_batch_size or image_batch_size)
@@ -3067,6 +3094,7 @@ def run_dense_k_class_em_adaptive(
         and dense_support_threshold is not None
         and not firstiter_cc_pass2_only_best_coarse
         and not skip_significance_pruning
+        and not strict_exact_fine_gaussian
     ):
         dense_mean_support_threshold = _dense_pass2_mean_rotation_fraction_threshold(n_classes)
         support_stats = _fine_support_stats(
@@ -3251,6 +3279,12 @@ def run_dense_k_class_em_adaptive(
             time.time() - overall_t0,
         )
         return _with_significant_counts(result)
+
+    if strict_exact_fine_gaussian:
+        raise RuntimeError(
+            "exact RELION fine Gaussian scoring has no sparse pass-2 route for "
+            "this adaptive configuration; refusing to fall back to algebraic dense scoring",
+        )
 
     if fine_mstep_rotations_np is not None:
         raise NotImplementedError(

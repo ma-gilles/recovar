@@ -7380,10 +7380,16 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", raising=False)
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", "1")
     checked = _run_sparse_k_class_adaptive_pass2(**kwargs)
+    assert checked.profile_summary["sparse_kclass_compact_pair_check_rows"] > 0
     np.testing.assert_allclose(np.asarray(checked.Ft_y), np.asarray(fused.Ft_y), rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(checked.Ft_ctf), np.asarray(fused.Ft_ctf), rtol=1e-6, atol=1e-6)
     np.testing.assert_array_equal(np.asarray(checked.class_assignments), np.asarray(fused.class_assignments))
     np.testing.assert_array_equal(np.asarray(checked.pose_assignments), np.asarray(fused.pose_assignments))
+
+    kwargs["engine_kwargs"]["relion_exact_fine_gaussian"] = False
+    checked_algebraic = _run_sparse_k_class_adaptive_pass2(**kwargs)
+    assert checked_algebraic.profile_summary["sparse_kclass_compact_pair_check_rows"] > 0
+    kwargs["engine_kwargs"].pop("relion_exact_fine_gaussian")
 
 
 def test_fused_sparse_k1_default_compact_pairs_matches_existing_sparse_path(monkeypatch):

@@ -229,6 +229,7 @@ def test_relion_bpref_adaptive_diagnostic_recomputes_same_window_logz():
     assert "current_size=current_size" in source
     assert 'bpref_full_stats["normalization_log_z"]' in source
     assert 'significant_full_stats["normalization_log_z"]' not in source.split("if args.relion_bpref_mstep:", 1)[1]
+    assert 'normalization_score_mode="gaussian"' in source
 
 
 def test_relion_bpref_diagnostic_is_bounded_and_nonfatal():

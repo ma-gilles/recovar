@@ -1467,6 +1467,7 @@ def main() -> None:
                     square_window=False,
                     random_perturbation=random_perturbation,
                     normalization_log_z=normalization_log_z,
+                    normalization_score_mode="gaussian",
                     relion_projector_half=relion_projector_half_by_class[class_index],
                     relion_projector_r_max=relion_projector_r_max,
                 )[:2]

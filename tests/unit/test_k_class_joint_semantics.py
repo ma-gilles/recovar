@@ -20,6 +20,7 @@ from recovar.em.dense_single_volume.k_class import (
     _dense_engine_kwargs_for_class,
     _expand_subset_noise_stats,
     _run_sparse_k_class_adaptive_pass2,
+    _strict_exact_fine_gaussian_requested,
     _zero_subset_noise_stats,
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
@@ -105,6 +106,113 @@ def test_compact_sparse_pass2_preference_respects_env_overrides(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", "1")
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", raising=False)
     assert not _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
+
+
+def test_exact_fine_gaussian_requires_sparse_float32_gaussian_pass2():
+    assert _strict_exact_fine_gaussian_requested({})
+    assert not _strict_exact_fine_gaussian_requested(
+        {"relion_exact_fine_gaussian": False},
+    )
+    assert not _strict_exact_fine_gaussian_requested(
+        {"use_float64_scoring": True},
+    )
+    assert not _strict_exact_fine_gaussian_requested(
+        {"relion_firstiter_score_mode": "normalized_cc"},
+    )
+    assert not _strict_exact_fine_gaussian_requested(
+        {},
+        firstiter_cc_pass2_only_best_coarse=True,
+    )
+
+
+def test_adaptive_exact_fine_gaussian_rejects_explicit_dense_pass2():
+    class TinyDataset:
+        n_images = 1
+
+    with pytest.raises(RuntimeError, match="requires sparse adaptive pass 2"):
+        run_dense_k_class_em_adaptive(
+            TinyDataset(),
+            jnp.zeros((1, 4), dtype=jnp.complex64),
+            jnp.ones(4, dtype=jnp.float32),
+            jnp.ones(1, dtype=jnp.float32),
+            np.eye(3, dtype=np.float32)[None],
+            np.zeros((1, 2), dtype=np.float32),
+            np.eye(3, dtype=np.float32)[None],
+            np.zeros((1, 2), dtype=np.float32),
+            np.zeros(1, dtype=np.int64),
+            np.zeros(1, dtype=np.int64),
+            "linear_interp",
+            sparse_pass2=False,
+            relion_exact_fine_gaussian=True,
+        )
+
+
+def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import significance as significance_module
+
+    class TinyDataset:
+        n_images = 1
+
+    def fake_significance(*_args, **_kwargs):
+        return (
+            None,
+            np.ones(1, dtype=np.int32),
+            np.zeros(1, dtype=np.int32),
+            np.zeros(1, dtype=np.int32),
+            [[np.asarray([0], dtype=np.int32)]],
+            None,
+        )
+
+    sparse_result = _assemble_result(
+        class_log_evidence=np.zeros((1, 1), dtype=np.float64),
+        new_means=None,
+        Ft_y=[jnp.zeros(4, dtype=jnp.complex64)],
+        Ft_ctf=[jnp.zeros(4, dtype=jnp.float32)],
+        per_class_hard_assignments=np.zeros((1, 1), dtype=np.int32),
+        per_class_stats=(
+            make_relion_stats(
+                log_evidence_per_image=np.zeros(1, dtype=np.float32),
+                best_log_score_per_image=np.zeros(1, dtype=np.float32),
+                max_posterior_per_image=np.ones(1, dtype=np.float32),
+                rotation_posterior_sums=np.ones(1, dtype=np.float32),
+            ),
+        ),
+        noise_stats=None,
+    )
+    sparse_calls = []
+
+    def fake_sparse(*args, **kwargs):
+        sparse_calls.append((args, kwargs))
+        return sparse_result
+
+    def fail_dense(*_args, **_kwargs):
+        raise AssertionError("exact Gaussian broad support silently fell back to dense")
+
+    monkeypatch.setattr(significance_module, "_compute_k_class_significance_batched", fake_significance)
+    monkeypatch.setattr(k_class_module, "_run_sparse_k_class_adaptive_pass2", fake_sparse)
+    monkeypatch.setattr(k_class_module, "run_dense_k_class_em", fail_dense)
+    monkeypatch.setattr(k_class_module, "_dense_pass2_rotation_fraction_threshold", lambda _n_classes: 0.0)
+
+    result = run_dense_k_class_em_adaptive(
+        TinyDataset(),
+        jnp.zeros((1, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(1, dtype=jnp.float32),
+        np.eye(3, dtype=np.float32)[None],
+        np.zeros((1, 2), dtype=np.float32),
+        np.eye(3, dtype=np.float32)[None],
+        np.zeros((1, 2), dtype=np.float32),
+        np.zeros(1, dtype=np.int64),
+        np.zeros(1, dtype=np.int64),
+        "linear_interp",
+        coarse_healpix_order=0,
+        oversampling_order=0,
+        sparse_pass2=True,
+        relion_exact_fine_gaussian=True,
+    )
+
+    assert len(sparse_calls) == 1
+    assert result.significant_counts is not None
 
 
 def test_k_class_hard_assignment_uses_joint_best_pose_not_marginal_class():
@@ -1261,12 +1369,14 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
         np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         np.zeros((1, 2), dtype=np.float32),
         np.repeat(np.eye(3, dtype=np.float32)[None], n_fine_rot, axis=0),
-        np.repeat(np.eye(3, dtype=np.float32)[None], n_fine_rot, axis=0),
-        np.repeat(np.arange(n_coarse_rot, dtype=np.int64), n_fine_rot // n_coarse_rot),
-        np.zeros((2, 2), dtype=np.float32),
-        np.asarray([0, 0], dtype=np.int64),
-        [[np.asarray([0], dtype=np.int32)] * TinyDataset.n_units for _ in range(2)],
-        "linear_interp",
+        fine_mstep_rotations_np=None,
+        rot_parent_map_np=np.repeat(np.arange(n_coarse_rot, dtype=np.int64), n_fine_rot // n_coarse_rot),
+        fine_translations_np=np.zeros((2, 2), dtype=np.float32),
+        trans_parent_map_np=np.asarray([0, 0], dtype=np.int64),
+        sig_sample_indices_by_class=[
+            [np.asarray([0], dtype=np.int32)] * TinyDataset.n_units for _ in range(2)
+        ],
+        disc_type="linear_interp",
         class_log_priors=np.log(np.asarray([0.5, 0.5], dtype=np.float64)),
         accumulate_noise=False,
         return_best_pose_details=False,
@@ -1360,16 +1470,16 @@ def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypa
         np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
         np.zeros((1, 2), dtype=np.float32),
         np.repeat(np.eye(3, dtype=np.float32)[None], n_fine_rot, axis=0),
-        np.repeat(np.eye(3, dtype=np.float32)[None], n_fine_rot, axis=0),
-        np.repeat(np.arange(n_coarse_rot, dtype=np.int64), n_fine_rot // n_coarse_rot),
-        np.zeros((2, 2), dtype=np.float32),
-        np.asarray([0, 0], dtype=np.int64),
-        [
+        fine_mstep_rotations_np=None,
+        rot_parent_map_np=np.repeat(np.arange(n_coarse_rot, dtype=np.int64), n_fine_rot // n_coarse_rot),
+        fine_translations_np=np.zeros((2, 2), dtype=np.float32),
+        trans_parent_map_np=np.asarray([0, 0], dtype=np.int64),
+        sig_sample_indices_by_class=[
             [np.asarray([0], dtype=np.int32)] * n_images,
             [np.asarray([0, 1, 2, 3, 4], dtype=np.int32)] * n_images,
             [np.asarray([0, 1], dtype=np.int32)] * n_images,
         ],
-        "linear_interp",
+        disc_type="linear_interp",
         class_log_priors=np.log(np.full(n_classes, 1.0 / n_classes, dtype=np.float64)),
         accumulate_noise=False,
         return_best_pose_details=False,
