@@ -3945,3 +3945,37 @@ required state arrays; the default remains fail-closed rather than silently
 omitting missing support.  Without that explicit selection, a RELION particle
 STAR is required for every numbered RECOVAR iteration; omitted middle or
 trailing iterations are errors.
+
+## 2026-07-16 K=4 strict Class3D trajectory closure
+
+The corrected Class3D auditor now follows the actual RELION topology: three
+one-based full-map Class3D iterations are compared with the arithmetic means
+of the corresponding zero-based RECOVAR half maps. For these capped,
+nonconverged runs, the last numbered RELION maps are the final reference and
+all RECOVAR `final_classNNN` products must exactly equal the last numbered
+half averages. The auditor rejects those semantics if final all-data ran.
+
+Both 10k/128 strict cases pass every per-class shellwise FSC/FSC-AUC and GT
+gate. The white/uniform case has minimum numbered direct FSC-AUC
+`0.9965686801` and minimum RECOVAR-minus-RELION GT FSC-AUC delta
+`-6.1969e-6`. The radial/nonuniform case has minimum numbered direct FSC-AUC
+`0.9999188078` and minimum GT delta `-3.5824e-5`. All final RECOVAR class
+products exactly match their last numbered half averages. Map correlation
+was not computed.
+
+The sole white-case iteration-1 class/pose outlier, particle 9056, is a
+classified float32 tie rather than an algorithmic mismatch. All 66,816
+candidate identities align, rotations are exact, translations differ by at
+most `1.516e-7` pixels, and priors are uniform. RELION's top two coarse
+scores are bitwise equal; RECOVAR has the same top-two candidate set split by
+`1.788139343e-7`, exactly three float32 ULPs and only `0.103x` the full
+centered cross-engine residual envelope. The different fine supports are
+entirely downstream of that coarse tie. Same-engine map repeat FSC-AUC is
+effectively one, and cross-engine per-class FSC-AUC spans
+`0.99991548--0.99999998`; float64 replay is unnecessary because the float32
+evidence already resolves the classification.
+
+Canonical evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_strict_dispatchv2_d3b0d78d_20260716_113000/k4_trajectory_matrix_summary.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_p9056_it1_capture_d3b0d78d_a100_20260716_132500/analysis/p9056_adjudication_v1.json`
