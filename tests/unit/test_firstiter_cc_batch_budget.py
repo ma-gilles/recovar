@@ -298,6 +298,8 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
         best_pose_translations=[None, None],
         firstiter_coarse_current_size=40,
         firstiter_fine_current_size=90,
+        bpref_device_signature_active=True,
+        debug_iteration=7,
     )
 
     assert calls == [
@@ -309,6 +311,8 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
     assert captured["significance_image_batch_size"] == 187
     assert captured["rotation_block_size"] == min(700, _safe_dense_k_class_rotation_block_size(116, captured["image_batch_size"]))
     assert captured["significance_rotation_block_size"] == 700
+    assert captured["bpref_device_signature_active"] is True
+    assert captured["debug_iteration"] == 7
     assert np.all(captured["fine_mstep_rotations_override"] == 0.25)
     assert result.ha.shape == (3,)
     assert result.coarse_ha.shape == (3,)

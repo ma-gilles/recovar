@@ -2290,6 +2290,8 @@ def _score_half_dense(
                 fine_current_size=firstiter_fine_current_size,
                 log_label="K=1 ",
                 update_em_kwargs_image_batch_size=firstiter_updates_em_kwargs_ibs,
+                bpref_device_signature_active=bpref_device_signature_active,
+                debug_iteration=debug_iteration,
             )
         else:
             (
