@@ -4129,25 +4129,55 @@ The `SHA256SUMS_v2` manifest SHA-256 is
 
 ## 2026-07-16 K=4 heterogeneous robustness expansion
 
-The hardened same-A100 trajectory gate now has an accepted 30k-particle
-Tomotwin case and a genuine failing 10k-particle IgG/outlier case.  Case 12
-(Tomotwin, white noise, uniform classes) passes all three iterations in job
-`11274946`: minimum direct cross-engine FSC-AUC is `0.999820693`,
-`0.999157434`, and `0.996495854`; minimum assignment agreement is `0.9986`,
-and the worst RECOVAR-minus-RELION GT FSC-AUC delta is `-6.28e-5`.
+The authoritative four-case, exact-UUID robustness gate passes three cases
+and fails one at source `b5dd574a`.  The radial-noise/nonuniform/outlier Ribo
+case 10 passes in job `11274945`: its iteration-1--3 minimum direct FSC-AUC is
+`0.999634051`, `0.999666644`, and `0.999446341`, minimum class agreement is
+`0.9956`, and the worst RECOVAR-minus-RELION GT FSC-AUC delta is `-8.00e-5`.
+The 30k-particle Tomotwin case 12 passes in job `11274946` with minimum direct
+FSC-AUC `0.999820693`, `0.999157434`, and `0.996495854`, minimum assignment
+agreement `0.9986`, and worst GT delta `-6.28e-5`.  Case 14 remains essentially
+exact, with minimum direct FSC-AUC `0.999999959` and class agreement `1.0`.
 
-Case 11 (IgG, white noise, uniform classes, 20% outliers) is a real trajectory
-failure.  Iteration 1 is effectively exact (minimum direct FSC-AUC
+Case 11 (IgG, white noise, uniform classes, 20% outliers) is the genuine
+trajectory failure.  Iteration 1 is effectively exact (minimum direct FSC-AUC
 `0.999330786`, one class mismatch), but iteration 2 already has 9,999/10,000
 Pmax differences, 1,166 support differences, and 24 class mismatches.
 Iteration 3 amplifies this into class-2 direct FSC-AUC `0.9735133506`, below
 the `0.995` gate.  The GT delta remains small (`-8.363e-5`), but that does not
-excuse the cross-engine trajectory failure.  This is a distribution-level
-E-step boundary, not a serial single-particle chase.  An exact incoming
-RELION-iteration-2 reference substitution is running to distinguish inherited
-map-state amplification from an intrinsic iteration-3 scoring divergence.
+excuse the cross-engine trajectory failure.
+
+A serial exact-incoming-reference A/B on physical A100 UUID
+`GPU-6a3cea75-90ac-d3de-7c1a-a8158412a9f4` proves that the iteration-3 cliff
+is inherited from the incoming iteration-2 map state.  Replacing only the
+four RECOVAR iteration-2 maps used to score iteration 3 with their exact
+RELION counterparts raises minimum direct iteration-3 FSC-AUC from
+`0.973512763` to `0.999999632`, raises class agreement from `0.9964` to `1.0`,
+and leaves the GT delta at `-1.02e-6`.  The two RECOVAR arms themselves differ
+at iteration 3 by minimum direct FSC-AUC `0.973508472`, so the intervention is
+material.  Pmax mean/p95/maximum absolute errors fall from
+`0.00380994/0.0159218/0.5462` to `2.96e-5/1.33e-4/0.0100`, while particles with
+different support sizes fall from 1,114 to 31.  This closes iteration 3 as an
+intrinsic scoring/M-step cause; the next same-GPU A/B injects exact RELION
+iteration-1 maps only for scoring iteration 2 to locate where the broad state
+drift first appears.
+
+The sole iteration-1 label mismatch is particle 7915.  Its RECOVAR class-2
+score `0.5038749576` exceeds class 1 `0.5038748384` by exactly
+`1.1920928955e-7`, one float32 ULP, at the same rotation and translation.
+Treat this isolated discrete label as a numerical tie, not as the cause of the
+distribution-wide iteration-2 boundary.
+
+The Slurm allocation for the iteration-3 A/B is recorded as `FAILED 1:0` only
+because its final hashing epilogue passed a generated `jobs/__pycache__`
+directory to `sha256sum`.  Both science arms, UUID assertions, FSC audits,
+particle-state audits, input-manifest stability check, and A/B summary had
+already completed successfully; the posthoc seal records that limited
+packaging failure.  Map acceptance uses shellwise FSC and FSC-AUC only.
 
 Evidence:
 
-- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_robust_expand_recovery_b5dd574a_20260716_133400/cases/11_igg_k4_10k_g128_white_noise1_uniform_outliers_pct20/trajectory_analysis/particle_state_distribution.json`
-- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_robust_expand_uuid_recovery2_b5dd574a_20260716_135200/cases/12_tomotwin_k4_10k_g128_white_noise1_uniform/trajectory_analysis/k4_fsc_trajectory.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_robust_expand_uuid_recovery2_b5dd574a_20260716_135200/authoritative_combined_k4_robustness_summary.json` (SHA-256 `9f2efdfcb32ae64e77b8076fb71995025fb460c26b85b38128e64901b68b47a8`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it3_relref_ab_b5dd574a_20260716_141000/analysis/ab_summary.json` (SHA-256 `680ef82e336150058a0d37a3e8bfd77a99ff2232c3621b182c9af4ecb8bcc804`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it3_relref_ab_b5dd574a_20260716_141000/provenance/POSTHOC_SEAL.json` (SHA-256 `14fd581eabb63cd7e4af5ee664c9d740db35c31529862fe5eb3548f4d17cadc9`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7915_rec_capture_b5dd574a_20260716_142900/analysis.json` (SHA-256 `59af9e01552dbb0d35a6277b232ee6594c0a70306b3f654d6acb86c8b2951d15`)
