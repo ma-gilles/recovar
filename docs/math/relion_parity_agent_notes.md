@@ -2399,3 +2399,69 @@ Matrix evidence:
   strict custom-CUDA requirement should remain parity-mode-only.
 - Authoritative analysis root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_gaussian_cross_engine_analyzer_20260715_225010/analysis_v2_authoritative`.
+
+# 2026-07-16: exact scorer rotations restore K=1 convergence, but residual quality differences remain
+
+- Same-physical-A100 job `11250218`, at commit `d302a760`, completed all 16
+  numbered iterations and converged at iteration 16, exactly matching RELION's
+  convergence boundary.  The valid post-convergence all-data pass ran once,
+  with `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` unset/off and the forced after-max
+  path unset.  Science/external/Slurm wall times were 1,699.2/1,764/1,930
+  seconds (the last includes audits), sampled peak device memory was 34,463
+  MiB, and all 338 sealed science artifacts re-hash successfully.
+- The rotation fix improves all 48 numbered half1/half2/merged FSC-AUC checks
+  against the previous trajectory.  Representative half-map changes are iteration 2
+  `0.999993119/0.999998046` to `0.999999848/0.999999180`, iteration 7
+  `0.992872475/0.993256130` to `0.994870962/0.997492541`, and iteration 9
+  `0.987277787/0.987370194` to `0.989869677/0.993149298`.  The corrected run's
+  merged FSC-AUC remains above 0.995 through iteration 8, then falls below the
+  strict gate at iteration 9 before recovering above 0.995 by iteration 14.
+- Grid-off final merged FSC-AUC is `0.989787314`.  Do not causally compare this
+  final map to the prior grid-on trajectory; the numbered maps and the frozen
+  iteration-2 counterfactual provide the admissible fix evidence.  Final
+  minimum non-DC FSC is `0.968028261`.
+- The earliest remaining continuous-array failure is iteration-2 Pmax:
+  absolute-error p95 `1.1868439569e-4`, maximum `1.4683530460e-2`.  Original
+  particle 8240 is the persistent maximum and was almost unchanged by the
+  rotation fix; particle 257 is the largest newly exposed regression.  Capture
+  and adjudicate their underlying candidate scores before interpreting later
+  discrete pose or support differences.
+- Current-policy classification is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_exact_rotation_fulltraj_d302a760_20260716_012500/analysis/trajectory_classification_current_grid_policy.json`
+  (SHA-256 `653d4af535573d3af6bc61f8e0a8745b06aed1c52565a6e0fd6f33cb9b89d107`).
+  The older classifier's requirement that final gridding correction be on is
+  stale and must not be used for the current GUI-quality policy.  Map gates use
+  FSC/FSC-AUC only; no correlation metric is used.
+
+# 2026-07-16: remaining iteration-2 residuals inherit the iteration-1 map
+
+- A same-code, same-physical-A100 two-arm run compared the autonomous state
+  with exact RELION iteration-1 reference maps while holding iteration-2
+  images, candidate geometry, priors, translations, CTF, and support inputs
+  fixed.  Particle 257 changes from 15 to 16 coarse parents because cumulative
+  mass at rank 15 moves from `0.9990000254` to `0.9989998528`, only
+  `1.73e-7` across the `0.999` cutoff.  Its winner remains exactly `312367`.
+  Particle 8240 retains 20 parents and winner `88406`; its change is continuous.
+  The map substitution reduces their previously measured Pmax errors by
+  `53.18x` and `143.71x`, respectively.  The remaining causal boundary is
+  therefore iteration-1 map generation, not iteration-2 cutoff or tie-breaking.
+- Against the frozen RELION raw-BPref dump, current commit `d302a760` reduces
+  supported data relative L2 by `137.8x/14.7x` and weight relative L2 by
+  `5553x/6631x` for halves 1/2 versus the older boundary.  Current weight
+  residuals are `9.14e-7/9.06e-7`; data residuals are
+  `1.2639e-4/1.0816e-3`, above same-code repeat controls of about `5.7e-8`.
+  Iteration-1 map FSC-AUC is `0.999999988768/0.999999954399`.
+- Exactly one of 10,000 iteration-1 translations differs by more than
+  `1e-4` pixels: original particle 8494 in half 2 selects an adjacent
+  x-translation displaced by `0.49999974` pixels.  Capture its complete
+  firstiter-CC candidate surface before attributing the larger half-2 data
+  residual.  The smaller continuous residual still requires the existing
+  canonical BPref contribution replay to separate operand generation,
+  geometry, and accumulation precision/order.
+- Authoritative paired artifacts are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_residual_dualarm_d302a760_20260716_024500/analysis/dualarm_significance_comparison.json`
+  (SHA-256 `5a3edcfd251837ddfb0f5ba9d9960296fc680b058d4d07003e8d4936b63c2772`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_residual_dualarm_d302a760_20260716_024500/analysis/it1_bpref_current_vs_relion.json`
+  (SHA-256 `8964832f0b399de806d66526c638e6db39d56dcc43c7646d5abf7b5841fada14`).
+  Map quality uses FSC/FSC-AUC only.

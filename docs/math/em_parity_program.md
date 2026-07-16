@@ -3726,3 +3726,35 @@ late RELION repeat variation as either parity or a RECOVAR defect.
 
 The deterministic report, script, audit, and verified manifests are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_fulltraj_repeat_envelope_classifier_v1_20260715_221500/`.
+
+## 2026-07-16 K=1 exact-rotation trajectory and next boundary
+
+Commit `d302a760` restores exact convergence parity on the canonical 10k
+fixture: RECOVAR and RELION both converge at numbered iteration 16, and all 48
+numbered half1/half2/merged FSC-AUC comparisons improve over the preceding
+trajectory.  This is a major correction but not yet a quality pass: grid-off
+final merged FSC-AUC is `0.989787314`, and the strict numbered-map gate is
+missed during iterations 9--13.
+
+A same-A100 exact-reference counterfactual now localizes the earliest remaining
+iteration-2 Pmax/support differences to the iteration-1 map.  For particle 257,
+a posterior cumulative-mass movement of only `1.73e-7` across the `0.999`
+cutoff changes 15 to 16 significant parents without changing the winner;
+particle 8240 also keeps its winner and support count.  The iteration-1 raw
+BPref weight arrays are already within about `9.1e-7` relative L2 of RELION.
+Data relative L2 is `1.26e-4/1.08e-3` for halves 1/2, and the larger half-2
+residual coincides with the sole material iteration-1 pose-output difference:
+particle 8494 selects an adjacent translation displaced by 0.5 pixels.
+
+The immediate order is therefore: adjudicate particle 8494 from complete
+candidate arrays; then use the existing canonical contribution replay on the
+remaining continuous BPref residual.  Escalate to genuine float64/complex128
+operand recomputation only if original/canonical float32 and promoted-float64
+replays remain ambiguous.  Do not change the production cutoff or accept a
+discrete winner merely to match RELION.  Intermediate gates use exact/array
+metrics and map gates use FSC/FSC-AUC, never correlation.
+
+Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_exact_rotation_fulltraj_d302a760_20260716_012500/`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_residual_dualarm_d302a760_20260716_024500/analysis/`.
