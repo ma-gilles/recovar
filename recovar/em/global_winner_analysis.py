@@ -385,11 +385,16 @@ def load_relion_summary(
     expected_winner = np.asarray([star_class_by_part[int(value)] for value in part_id], dtype=np.int32)
     if not np.array_equal(expected_winner, winner):
         raise ValueError("RELION summary winners disagree with run_it001_data.star")
-    dispatch_owner = read_dispatch_owners(dispatch_log, iteration=int(row_iteration[0]))
-    schedule_owner = read_dispatch_schedule_owners(dispatch_schedule, iteration=int(row_iteration[0]))
-    if dispatch_owner != schedule_owner:
-        raise ValueError("RELION dispatch-v2 log disagrees with its sealed schedule")
-    expected_rank = np.asarray([dispatch_owner[int(value)] for value in part_id], dtype=np.int32)
+    dispatch_records = read_dispatch_records(dispatch_log, iteration=int(row_iteration[0]))
+    schedule_records = read_dispatch_schedule_records(dispatch_schedule, iteration=int(row_iteration[0]))
+    if dispatch_records.keys() != schedule_records.keys() or any(
+        dispatch_records[part][1] != schedule_records[part][1] for part in dispatch_records
+    ):
+        raise ValueError("RELION dispatch-v2 particle/order identity disagrees with its sealed schedule")
+    dispatch_owner_mismatch_count = sum(
+        dispatch_records[part][0] != schedule_records[part][0] for part in dispatch_records
+    )
+    expected_rank = np.asarray([dispatch_records[int(value)][0] for value in part_id], dtype=np.int32)
     if not np.array_equal(expected_rank, rank):
         raise ValueError("RELION summary rank ownership disagrees with dispatch-v2")
     order = np.argsort(original_identity, kind="stable")
@@ -413,6 +418,9 @@ def load_relion_summary(
             "executable_sha256_verified": executable_sha256,
             "dispatch_log_sha256": dispatch_log_sha256,
             "dispatch_schedule_sha256": dispatch_schedule_sha256,
+            "dispatch_particle_order_identity_exact": True,
+            "dispatch_owner_matches_recovar_oracle": dispatch_owner_mismatch_count == 0,
+            "dispatch_owner_mismatch_count": dispatch_owner_mismatch_count,
             "class_counts_from_star": np.bincount(star_class, minlength=4).tolist(),
         }
     )
@@ -561,8 +569,10 @@ def _read_star_loops(path: str | Path) -> list[tuple[list[str], list[list[str]]]
     return loops
 
 
-def read_dispatch_owners(path: str | Path, *, iteration: int) -> dict[int, int]:
-    owners = {}
+def read_dispatch_records(path: str | Path, *, iteration: int) -> dict[int, tuple[int, int]]:
+    """Return internal particle ID -> (one-based rank, sorted position)."""
+
+    records = {}
     marker_seen = False
     with Path(path).open() as handle:
         for raw in handle:
@@ -572,18 +582,25 @@ def read_dispatch_owners(path: str | Path, *, iteration: int) -> dict[int, int]:
             if line.startswith("#"):
                 marker_seen |= "RELION_DISPATCH_LOG_SCHEMA_V2" in line
                 continue
-            schema, row_iteration, rank, _sorted_position, part = map(int, line.split("\t"))
+            schema, row_iteration, rank, sorted_position, part = map(int, line.split("\t"))
             if schema != 2 or row_iteration != iteration:
                 continue
-            if part in owners:
+            if part in records:
                 raise ValueError(f"duplicate dispatch identity {part}")
-            owners[part] = rank
-    if not marker_seen or not owners:
+            records[part] = (rank, sorted_position)
+    if not marker_seen or not records:
         raise ValueError("dispatch-v2 marker/rows are missing")
-    return owners
+    positions = sorted(position for _rank, position in records.values())
+    if positions != list(range(len(records))):
+        raise ValueError("dispatch-v2 sorted positions are not an exact dense range")
+    return records
 
 
-def read_dispatch_schedule_owners(path: str | Path, *, iteration: int) -> dict[int, int]:
+def read_dispatch_owners(path: str | Path, *, iteration: int) -> dict[int, int]:
+    return {part: rank for part, (rank, _position) in read_dispatch_records(path, iteration=iteration).items()}
+
+
+def read_dispatch_schedule_records(path: str | Path, *, iteration: int) -> dict[int, tuple[int, int]]:
     with np.load(path, allow_pickle=False) as payload:
         required = {
             "relion_iterations",
@@ -605,7 +622,14 @@ def read_dispatch_schedule_owners(path: str | Path, *, iteration: int) -> dict[i
         part_ids = np.asarray(payload["original_particle_id_by_sorted_position"][row], dtype=np.int64)
     if owners_zero_based.shape != part_ids.shape or np.unique(part_ids).size != part_ids.size:
         raise ValueError("dispatch schedule has invalid topology/particle identities")
-    return {int(part): int(owner + 1) for part, owner in zip(part_ids, owners_zero_based, strict=True)}
+    return {
+        int(part): (int(owner + 1), int(position))
+        for position, (part, owner) in enumerate(zip(part_ids, owners_zero_based, strict=True))
+    }
+
+
+def read_dispatch_schedule_owners(path: str | Path, *, iteration: int) -> dict[int, int]:
+    return {part: rank for part, (rank, _position) in read_dispatch_schedule_records(path, iteration=iteration).items()}
 
 
 def analyze_summaries(summaries: list[WinnerSummary]) -> dict:

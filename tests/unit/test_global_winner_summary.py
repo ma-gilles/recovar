@@ -367,7 +367,7 @@ def test_relion_summary_rejects_dispatch_manifest_mismatch(tmp_path):
 def test_relion_summary_rejects_dispatch_v2_owner_mismatch(tmp_path):
     summary_dir, star, input_manifest, executable, dispatch, schedule, _shard = _write_relion_fixture(tmp_path)
     dispatch.write_text(dispatch.read_text().replace("2\t1\t1\t0\t2", "2\t1\t2\t0\t2"))
-    with pytest.raises(ValueError, match="dispatch-v2 log disagrees"):
+    with pytest.raises(ValueError, match="rank ownership"):
         load_relion_summary(
             summary_dir,
             data_star=star,
@@ -377,6 +377,48 @@ def test_relion_summary_rejects_dispatch_v2_owner_mismatch(tmp_path):
             dispatch_schedule=schedule,
             label="relion_a",
         )
+
+
+def test_relion_summary_rejects_dispatch_v2_sorted_identity_mismatch(tmp_path):
+    summary_dir, star, input_manifest, executable, dispatch, schedule, _shard = _write_relion_fixture(tmp_path)
+    text = dispatch.read_text()
+    text = text.replace("2\t1\t1\t0\t2", "2\t1\t1\t1\t2").replace("2\t1\t1\t1\t0", "2\t1\t1\t0\t0")
+    dispatch.write_text(text)
+    with pytest.raises(ValueError, match="particle/order identity"):
+        load_relion_summary(
+            summary_dir,
+            data_star=star,
+            input_manifest=input_manifest,
+            executable=executable,
+            dispatch_log=dispatch,
+            dispatch_schedule=schedule,
+            label="relion_a",
+        )
+
+
+def test_relion_summary_allows_native_owner_variation_with_exact_particle_order(tmp_path):
+    summary_dir, star, input_manifest, executable, dispatch, schedule, shard = _write_relion_fixture(tmp_path)
+    dispatch.write_text(dispatch.read_text().replace("\t1\t1\t", "\t1\t2\t"))
+    lines = shard.read_text().splitlines()
+    header_index = next(index for index, line in enumerate(lines) if not line.startswith("#"))
+    columns = lines[header_index].split("\t")
+    for row_index in range(header_index + 1, len(lines)):
+        row = lines[row_index].split("\t")
+        row[columns.index("mpi_rank")] = "2"
+        lines[row_index] = "\t".join(row)
+    shard.write_text("\n".join(lines) + "\n")
+    summary = load_relion_summary(
+        summary_dir,
+        data_star=star,
+        input_manifest=input_manifest,
+        executable=executable,
+        dispatch_log=dispatch,
+        dispatch_schedule=schedule,
+        label="relion_owner_varied",
+    )
+    assert summary.metadata["dispatch_particle_order_identity_exact"] is True
+    assert summary.metadata["dispatch_owner_matches_recovar_oracle"] is False
+    assert summary.metadata["dispatch_owner_mismatch_count"] == 4
 
 
 @pytest.mark.parametrize("mode", ["duplicate", "missing"])
