@@ -436,6 +436,59 @@ def test_clear_dump_context_marks_contribution_and_native_dumps_inactive():
     }
 
 
+def test_native_production_dump_filters_half_and_records_topology(monkeypatch, tmp_path):
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_ITERATION", "5")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_HALF", "2")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_RUN_ID", "fixture")
+    monkeypatch.setattr(sparse_pass2_bucketed, "_native_mstep_dump_counter", 0)
+    data = np.zeros(75, dtype=np.complex64)
+    weight = np.zeros(75, dtype=np.float32)
+
+    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=5, half=1)
+    sparse_pass2_bucketed._maybe_dump_native_half_mstep(
+        data,
+        weight,
+        current_size=2,
+        n_images=4,
+        recon_volume_shape=(5, 5, 5),
+        stage="pre_x0",
+    )
+    assert not list(tmp_path.glob("*.npz"))
+
+    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=5, half=2)
+    sparse_pass2_bucketed._maybe_dump_native_half_mstep(
+        data,
+        weight,
+        current_size=2,
+        n_images=4,
+        recon_volume_shape=(5, 5, 5),
+        stage="pre_x0",
+    )
+    [path] = list(tmp_path.glob("*.npz"))
+    with np.load(path, allow_pickle=False) as archive:
+        assert archive["magic"].item() == "RECOVAR_PRODUCTION_BPREF_ACCUMULATOR"
+        assert archive["schema"].item() == "recovar-production-bpref-accumulator-v1"
+        assert archive["topology_claim"].item() == "ordinary-flattened-production-adjoint"
+        assert archive["accumulator_layout"].item() == "relion-x-half-flat-c-order"
+        assert not archive["arithmetic_mutated"].item()
+
+
+def test_native_production_dump_rejects_invalid_target_half(monkeypatch, tmp_path):
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_HALF", "3")
+    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=5, half=2)
+    with pytest.raises(ValueError, match="must be 1 or 2"):
+        sparse_pass2_bucketed._maybe_dump_native_half_mstep(
+            np.zeros(75, dtype=np.complex64),
+            np.zeros(75, dtype=np.float32),
+            current_size=2,
+            n_images=4,
+            recon_volume_shape=(5, 5, 5),
+            stage="pre_x0",
+        )
+
+
 def test_iteration_loop_clears_dump_context_before_every_final_exit_or_half():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     final_decision = source.index("should_run_final_iteration =")
@@ -452,6 +505,16 @@ def test_bucketed_source_has_no_unscoped_capture_branches():
     assert 'if os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR")' not in source
     assert "relion_x_half_bp_per_particle_launch_enabled()" not in source
     assert "device_signature_active=bucket_device_signature_requested" in source
+
+
+def test_device_capture_panel_uses_ordinary_flattened_production_adjoint():
+    source = inspect.getsource(
+        sparse_pass2_bucketed._maybe_dump_bpref_contribution_rows
+    )
+    assert '"authoritative-ordinary-translation-reduction"' in source
+    assert "flat_production_summed" in source
+    assert "_adjoint_slice_volume_windowed(" in source
+    assert "accumulators = signature_outputs[:2]" not in source
 
 
 def test_active_capture_rejects_fused_kclass_route(monkeypatch):

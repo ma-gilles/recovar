@@ -136,6 +136,12 @@ _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE = 4096
 _DEFAULT_PROJECTION_GATHER_MAX_BYTES = 1024 * 1024**2
 _DEFAULT_NOISE_BLOCK_MAX_BYTES = 512 * 1024**2
 _DEFAULT_ADJOINT_BLOCK_MAX_BYTES = 512 * 1024**2
+_PRODUCTION_CAPTURE_ARM = (
+    "ordinary-flattened-production-accumulator-with-diagnostic-geometry-companion"
+)
+_PRODUCTION_CAPTURE_TOPOLOGY = (
+    "production-accumulator;diagnostic-per-particle-signature"
+)
 _MAX_HYPOTHESES_ENV = "RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES"
 _SCORE_ONLY_MAX_HYPOTHESES_ENV = "RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES"
 _MAX_TRANSLATION_TILE_BYTES_ENV = "RECOVAR_SPARSE_PASS2_MAX_TRANSLATION_TILE_BYTES"
@@ -499,7 +505,9 @@ def flush_bpref_device_panel_accumulator(*, iteration: int, half: int) -> None:
         source_stack_sha256=np.asarray(metadata["source_stack_sha256"]),
         causal_arm=np.asarray(metadata["causal_arm"]),
         winner_take_all=np.bool_(metadata["winner_take_all"]),
-        topology_claim=np.asarray("causal-arm-not-relion-hypothesis-arithmetic-closure"),
+        topology_claim=np.asarray(_PRODUCTION_CAPTURE_TOPOLOGY),
+        operand_source=np.asarray(metadata["operand_source"]),
+        production_adjoint_topology=np.asarray("ordinary-flattened-production-adjoint"),
         accumulator_field_legend=np.asarray("data=complex64 x-half;weight=float32 x-half;flat C order"),
         data_accumulator=np.asarray(data_accumulator),
         weight_accumulator=np.asarray(weight_accumulator),
@@ -712,6 +720,12 @@ def _maybe_dump_native_half_mstep(
     target_iteration = os.environ.get("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_ITERATION")
     if target_iteration and context_iteration != int(target_iteration):
         return
+    target_half = os.environ.get("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_HALF")
+    if target_half:
+        if int(target_half) not in {1, 2}:
+            raise ValueError("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_HALF must be 1 or 2")
+        if context_half != int(target_half):
+            return
 
     global _native_mstep_dump_counter
     dump_idx = _native_mstep_dump_counter
@@ -726,7 +740,9 @@ def _maybe_dump_native_half_mstep(
             f"native_half_mstep_it{context_iteration:03d}_h{context_half}"
             f"_dump{dump_idx:03d}_{stage}_n{int(n_images):04d}_cs{int(current_size):03d}.npz"
         ),
-        schema=np.asarray("recovar-native-half-mstep-v2"),
+        magic=np.asarray("RECOVAR_PRODUCTION_BPREF_ACCUMULATOR"),
+        schema=np.asarray("recovar-production-bpref-accumulator-v1"),
+        schema_version=np.int32(1),
         dump_index=np.int64(dump_idx),
         iteration=np.int32(context_iteration),
         half=np.int32(context_half),
@@ -737,6 +753,13 @@ def _maybe_dump_native_half_mstep(
         n_images=np.int32(n_images),
         recon_volume_shape=np.asarray(recon_volume_shape, dtype=np.int32),
         stage=np.asarray(stage),
+        topology_claim=np.asarray("ordinary-flattened-production-adjoint"),
+        accumulator_layout=np.asarray(
+            "relion-x-half-flat-c-order"
+            if stage in {"pre_x0", "post_x0"}
+            else "public-full-c-order"
+        ),
+        arithmetic_mutated=np.bool_(False),
     )
 
 
@@ -964,6 +987,8 @@ def _maybe_dump_bpref_contribution_rows(
         stack_indices_1based=stack_indices,
         resolved_stack_paths=stack_paths,
         source_stack_sha256=np.asarray(stack_sha256),
+        operand_source=np.asarray("authoritative-ordinary-translation-reduction"),
+        production_adjoint_topology=np.asarray("ordinary-flattened-production-adjoint"),
         shadow_only_mode=np.bool_(shadow_only_mode),
         shadow_score_bitwise_equal=np.bool_(shadow_score_bitwise_equal),
         shadow_reduction_data_rel_l1=np.float64(
@@ -1063,6 +1088,49 @@ def _maybe_dump_bpref_contribution_rows(
                 jnp.zeros((accumulator_size,), dtype=jnp.complex64),
                 jnp.zeros((accumulator_size,), dtype=jnp.float32),
             )
+        # Re-run the exact ordinary flattened production adjoint on the
+        # authoritative reduced rows.  This passive companion has the same
+        # bucket call order and input layout as the live call below; it does
+        # not feed any production result.  The separate per-particle fused
+        # calls are signature-only geometry companions and never update this
+        # production-topology panel.
+        flat_production_summed = jnp.asarray(
+            summed_np.reshape(-1, summed_np.shape[-1]), dtype=jnp.complex64
+        )
+        flat_production_weights = jnp.asarray(
+            ctf_probs_np.reshape(-1, ctf_probs_np.shape[-1]), dtype=jnp.float32
+        )
+        flat_production_rotations = jnp.asarray(
+            rotations_np.reshape(-1, 3, 3), dtype=jnp.float32
+        )
+        accumulators = (
+            _adjoint_slice_volume_windowed(
+                flat_production_summed,
+                jnp.asarray(window_indices, dtype=jnp.int32),
+                flat_production_rotations,
+                accumulators[0],
+                tuple(int(value) for value in image_shape),
+                tuple(int(value) for value in volume_shape),
+                "linear_interp",
+                True,
+                True,
+                float(max_r),
+                True,
+            ),
+            _adjoint_slice_volume_windowed(
+                flat_production_weights,
+                jnp.asarray(window_indices, dtype=jnp.int32),
+                flat_production_rotations,
+                accumulators[1],
+                tuple(int(value) for value in image_shape),
+                tuple(int(value) for value in volume_shape),
+                "linear_interp",
+                True,
+                True,
+                float(max_r),
+                True,
+            ),
+        )
         launch_ordinal = _bpref_device_panel_launch_counters.get(accumulator_key, 0)
         signature_chunks = [[] for _ in range(7)]
         signature_launch_ordinals = []
@@ -1077,9 +1145,9 @@ def _maybe_dump_bpref_contribution_rows(
         particle_noncontributor_zero_sha256 = []
         particle_image_identities = []
         particle_original_indices = []
-        # Production uses one stream-ordered CUDA launch per particle.  Keep
-        # those launch boundaries exact; flattening several particles into one
-        # grid changes inter-particle atomic scheduling.
+        # The geometry companion retains particle identity and local row
+        # order.  Its fused launches do not feed the production-topology panel
+        # above and are not described as the live reduction schedule.
         for particle_row in range(summed_np.shape[0]):
             row_count = int(actual_counts_np[particle_row])
             if row_count <= 0:
@@ -1093,9 +1161,9 @@ def _maybe_dump_bpref_contribution_rows(
             particle_summed = np.asarray(summed_np[particle_row, :row_count], dtype=np.complex64)
             particle_weights = np.asarray(ctf_probs_np[particle_row, :row_count], dtype=np.float32)
             if not np.all(np.isfinite(particle_summed)) or not np.all(np.isfinite(particle_weights)):
-                raise RuntimeError("RECOVAR soft-particle causal arm encountered a nonfinite scatter operand")
+                raise RuntimeError("RECOVAR production-operand companion encountered a nonfinite scatter operand")
             if np.any(particle_weights < 0):
-                raise RuntimeError("RECOVAR soft-particle causal arm encountered a negative scatter weight")
+                raise RuntimeError("RECOVAR production-operand companion encountered a negative scatter weight")
             contributor_rows = np.flatnonzero(np.any(particle_weights > 0, axis=1)).astype(
                 np.int32, copy=False
             )
@@ -1121,9 +1189,13 @@ def _maybe_dump_bpref_contribution_rows(
             zero_digest.update(np.asarray(noncontributor_weights.shape, dtype=np.int64).tobytes())
             zero_digest.update(noncontributor_weights.tobytes(order="C"))
 
+            signature_scratch = (
+                jnp.zeros((accumulator_size,), dtype=jnp.complex64),
+                jnp.zeros((accumulator_size,), dtype=jnp.float32),
+            )
             ffi_args = (
-                accumulators[0],
-                accumulators[1],
+                signature_scratch[0],
+                signature_scratch[1],
                 jnp.asarray(particle_summed, dtype=jnp.complex64),
                 jnp.asarray(particle_weights, dtype=jnp.float32),
                 jnp.asarray(window_indices, dtype=jnp.int32),
@@ -1138,7 +1210,6 @@ def _maybe_dump_bpref_contribution_rows(
                     tuple(int(value) for value in volume_shape),
                     float(max_r),
                 )
-                accumulators = signature_outputs[:2]
                 for output_index, output in enumerate(signature_outputs[2:]):
                     signature_chunks[output_index].append(np.asarray(output))
                 signature_launch_ordinals.append(
@@ -1153,15 +1224,6 @@ def _maybe_dump_bpref_contribution_rows(
                 )
                 signature_contributor_rotation_keys.append(
                     particle_rotation_keys[contributor_rows].astype(np.int32, copy=False)
-                )
-            else:
-                # Preserve the native all-row launch even when no row passes
-                # its Fweight>0 gate; only the signature-only launch is absent.
-                accumulators = cuda_backproject.relion_fused_x_half_backproject_indexed(
-                    *ffi_args,
-                    tuple(int(value) for value in image_shape),
-                    tuple(int(value) for value in volume_shape),
-                    float(max_r),
                 )
             particle_launch_ordinals.append(launch_ordinal)
             particle_total_row_counts.append(row_count)
@@ -1185,12 +1247,9 @@ def _maybe_dump_bpref_contribution_rows(
             "reconstruction_padding_factor": int(reconstruction_padding_factor),
             "source_stack_sha256": stack_sha256,
             "rank": int(os.environ.get("RECOVAR_BPREF_CONTRIBUTION_RANK", "0")),
-            "causal_arm": (
-                "winner-take-all-per-particle-fused-xhalf"
-                if winner_take_all
-                else "soft-posterior-per-particle-fused-xhalf"
-            ),
+            "causal_arm": _PRODUCTION_CAPTURE_ARM,
             "winner_take_all": bool(winner_take_all),
+            "operand_source": "authoritative-ordinary-translation-reduction",
         }
         previous_metadata = _bpref_device_panel_metadata.setdefault(accumulator_key, metadata)
         if previous_metadata != metadata:
@@ -1235,13 +1294,11 @@ def _maybe_dump_bpref_contribution_rows(
             volume_shape=np.asarray(volume_shape, dtype=np.int32),
             current_size=np.int32(current_size),
             max_r=np.float32(max_r),
-            causal_arm=np.asarray(
-                "winner-take-all-per-particle-fused-xhalf"
-                if winner_take_all
-                else "soft-posterior-per-particle-fused-xhalf"
-            ),
+            causal_arm=np.asarray(_PRODUCTION_CAPTURE_ARM),
             winner_take_all=np.bool_(winner_take_all),
-            topology_claim=np.asarray("causal-arm-not-relion-hypothesis-arithmetic-closure"),
+            topology_claim=np.asarray(_PRODUCTION_CAPTURE_TOPOLOGY),
+            operand_source=np.asarray("authoritative-ordinary-translation-reduction"),
+            production_adjoint_topology=np.asarray("ordinary-flattened-production-adjoint"),
             signature_inertness_gate=np.asarray(
                 "bitwise-post-accum-shadow-and-operand-exact"
             ),
@@ -9315,6 +9372,12 @@ def compute_pass2_stats_sparse_bucketed(
                 relion_x_half=use_relion_x_half_mstep,
                 sequential_translation_reduction=use_sequential_translation_reduction,
             )
+            # Contribution artifacts always retain the operands consumed by
+            # the authoritative ordinary flattened adjoint.  A configured
+            # sequential/fused capture remains a checked companion used only
+            # to expose geometry and reduction-order controls; substituting
+            # its reduced rows here would sever the diagnostic from the
+            # production accumulator it is meant to explain.
             dump_summed = summed
             dump_ctf_probs = ctf_probs
             shadow_reduction_agreement = None
@@ -9332,8 +9395,6 @@ def compute_pass2_stats_sparse_bucketed(
                     shadow_summed,
                     shadow_ctf_probs,
                 )
-                dump_summed = shadow_summed
-                dump_ctf_probs = shadow_ctf_probs
             _maybe_dump_bpref_contribution_rows(
                 experiment_dataset=experiment_dataset,
                 image_indices=image_indices,
@@ -9788,6 +9849,14 @@ def compute_pass2_stats_sparse_bucketed(
                 Ft_ctf_total,
                 recon_volume_shape,
             )
+        _maybe_dump_native_half_mstep(
+            Ft_y_total,
+            Ft_ctf_total,
+            current_size=current_size,
+            n_images=n_images,
+            recon_volume_shape=recon_volume_shape,
+            stage="post_public_layout",
+        )
 
     best_translations = fine_translations[hard_assignment % n_fine_trans]
 
