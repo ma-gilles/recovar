@@ -4459,6 +4459,7 @@ accounting.  Header fields 38 and 39 record all positive-Fweight candidates and
 the subset excluded by RELION's production radius; field 17 records emitted
 supported rows.  Classification is allowed only when field 38 equals fields 17
 plus 39 for every particle and the stack-identity set exactly matches the
-frozen RECOVAR shards.  Capture/control BPref repeats on the same physical GPU
+frozen RECOVAR shards for the corresponding MPI follower/half.  Capture/control
+BPref repeats on the same physical GPU
 remain mandatory because the passive capture introduces a stream
 synchronization that can alter atomic reduction order.
