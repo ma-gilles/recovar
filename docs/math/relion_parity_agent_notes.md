@@ -2708,7 +2708,7 @@ Matrix evidence:
   The manifest SHA-256 is
   `190ace970540dd6ad2eb7a35627a2d8e66345fba1f0a3cf536df0c77ba3ee803`.
 
-# 2026-07-16: heterogeneous K=4 robustness localizes case 11 to the first map boundary
+# 2026-07-16: K=4 case 11 has a stable first-map boundary and unstable late trajectory
 
 - Hardened same-A100 case 12 (30k Tomotwin, white noise, uniform classes) passes
   in job `11274946`.  Iteration direct FSC-AUC minima are `0.999820693`,
@@ -2726,19 +2726,32 @@ Matrix evidence:
   (`0.999924228`, class agreement `1.0`).  The broad drift begins at the
   iteration-1 reconstructed-reference boundary, not later scoring.
 - Particle 7915 is the sole iteration-1 label mismatch and is an exact
-  one-float32-ULP score tie at the same pose.  It is not an adequate cause for
-  the distribution-wide next-iteration drift.
+  one-float32-ULP score tie at the same pose.  This closes the discrete label
+  decision as numerical but does not explain every aggregate map operand.
 - Same-A100 stock RELION job `11277907` proves the first map boundary exceeds
   native variation: iteration-2 repeat minimum FSC-AUC is `0.9999999975`, with
   exact class agreement and support sizes, versus RECOVAR/RELION
-  `0.998533895`.  This is an actionable reconstructed-reference parity defect.
+  `0.998533895`.  This is a real stable reconstructed-reference parity target,
+  but it is not yet classified as an algorithm bug versus numerical
+  representation/reduction sensitivity.
   RELION itself bifurcates at iteration 3 (minimum FSC-AUC `0.725582397`, class
   agreement `0.9719`), so the RECOVAR/RELION iteration-3 cliff is inside the
-  native nonlinear envelope and is not a separate defect.  Gate the stable
-  iteration-1/iteration-2 boundary.
+  native nonlinear envelope and is not a separate defect.
+- Freeze the iteration-1 reconstruction boundary and compare production order,
+  canonical order, and recomputed float64/complex128 operands.  Continue with
+  aggregate arrays and FSC/FSC-AUC; do not resume serial particle debugging.
 - Evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it3_relref_ab_b5dd574a_20260716_141000/analysis/ab_summary.json`,
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it2_relref_ab_b5dd574a_20260716_143300/analysis/ab_summary.json`,
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_relion_repeat_full3_hardened_20260716_145000/analysis/relion_repeat_full3.json`,
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7915_rec_capture_b5dd574a_20260716_142900/analysis.json`.
+
+# 2026-07-16: K=4 tied cutoff counts are metadata-only
+
+- RELION writes the pre-tie cutoff rank while retaining all threshold ties in
+  pass 2.  RECOVAR wrote the expanded support cardinality.
+- K=4 significance helpers now return the existing cutoff rank only when
+  requested.  Metadata uses that rank; masks, posterior weights, and Ft_y/Ft_CTF
+  remain unchanged.  Default helper tuple arities and firstiter count `1` are
+  preserved.  The integrated affected-module run passes 74 tests.

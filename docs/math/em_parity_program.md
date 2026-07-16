@@ -4179,8 +4179,9 @@ The `SHA256SUMS_v2` manifest SHA-256 is
 
 ## 2026-07-16 K=4 heterogeneous robustness expansion
 
-The authoritative four-case, exact-UUID robustness gate passes three cases
-and fails one at source `b5dd574a`.  The radial-noise/nonuniform/outlier Ribo
+The authoritative four-case, exact-UUID robustness gate has three direct
+passes and one case with a stable early boundary followed by an unstable late
+trajectory at source `b5dd574a`.  The radial-noise/nonuniform/outlier Ribo
 case 10 passes in job `11274945`: its iteration-1--3 minimum direct FSC-AUC is
 `0.999634051`, `0.999666644`, and `0.999446341`, minimum class agreement is
 `0.9956`, and the worst RECOVAR-minus-RELION GT FSC-AUC delta is `-8.00e-5`.
@@ -4189,15 +4190,15 @@ FSC-AUC `0.999820693`, `0.999157434`, and `0.996495854`, minimum assignment
 agreement `0.9986`, and worst GT delta `-6.28e-5`.  Case 14 remains essentially
 exact, with minimum direct FSC-AUC `0.999999959` and class agreement `1.0`.
 
-Case 11 (IgG, white noise, uniform classes, 20% outliers) has a genuine early
-cross-engine reconstructed-reference difference.  Its later class cliff is
-not itself a stable parity boundary.
-Iteration 1 is effectively exact (minimum direct FSC-AUC
+Case 11 (IgG, white noise, uniform classes, 20% outliers) has a stable early
+cross-engine reconstructed-reference boundary whose numerical-versus-
+algorithmic cause remains unresolved.  Its later class cliff is not itself a
+stable parity boundary.  Iteration 1 is effectively exact (minimum direct
+FSC-AUC
 `0.999330786`, one class mismatch), but iteration 2 already has 9,999/10,000
 Pmax differences, 1,166 support differences, and 24 class mismatches.
 Iteration 3 amplifies this into class-2 direct FSC-AUC `0.9735133506`, below
-the `0.995` gate.  The GT delta remains small (`-8.363e-5`), but that does not
-excuse the cross-engine trajectory failure.
+the uncalibrated `0.995` gate.
 
 A serial exact-incoming-reference A/B on physical A100 UUID
 `GPU-6a3cea75-90ac-d3de-7c1a-a8158412a9f4` proves that the iteration-3 cliff
@@ -4232,19 +4233,25 @@ magnitude.  Independent RELION runs on physical UUID
 class agreement is exact, all support sizes agree, and the maximum GT FSC-AUC
 change is `1.19e-6`.  RECOVAR/RELION's iteration-2 minimum `0.998533895` is far
 outside that native repeat floor, so the iteration-1 reconstructed-reference
-boundary is an actionable parity defect.  By iteration 3 the stock RELION
+state is a real stable parity boundary.  By iteration 3 the stock RELION
 repeat itself bifurcates to minimum map FSC-AUC `0.725582397`, class agreement
 `0.9719`, 2,297 support differences, and angle p99 `118.12` degrees.  The
 RECOVAR/RELION iteration-3 value `0.973512396` is inside that nonlinear repeat
-envelope and must not be treated as an independent defect.  Fix and gate the
-stable iteration-1/iteration-2 map and distribution boundary; use the late
-iteration only as a sensitivity outcome.
+envelope and must not be treated as an independent defect.
+
+The stable boundary is not yet classified as an algorithm bug.  The sole
+hard-class mismatch is a one-float32-ULP tie, and small aggregate pose/map
+differences may also be reduction or representation effects.  Freeze the
+iteration-1 reconstruction operands and compare production order, canonical
+order, and recomputed float64/complex128 operands before changing production.
+Gate the early arrays and FSC/FSC-AUC; use iteration 3 only as a sensitivity
+outcome.
 
 The sole iteration-1 label mismatch is particle 7915.  Its RECOVAR class-2
 score `0.5038749576` exceeds class 1 `0.5038748384` by exactly
 `1.1920928955e-7`, one float32 ULP, at the same rotation and translation.
-Treat this isolated discrete label as a numerical tie, not as the cause of the
-distribution-wide iteration-2 boundary.
+This closes that discrete decision as numerical, but does not by itself prove
+that all aggregate iteration-1 map differences come from this particle.
 
 The Slurm allocation for the iteration-3 A/B is recorded as `FAILED 1:0` only
 because its final hashing epilogue passed a generated `jobs/__pycache__`
@@ -4263,3 +4270,14 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_relion_repeat_full3_hardened_20260716_145000/analysis/relion_repeat_full3.json` (SHA-256 `86e8e5e12dfb75be7289169611a953b0fce9f810d440e3e2bfbb578933ee2e3f`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_relion_repeat_full3_hardened_20260716_145000/provenance/SEAL.json` (SHA-256 `3ceb14d3b11cd46a17648a645e8c02d0ef80e0389c5b202415decba01de03a6f`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7915_rec_capture_b5dd574a_20260716_142900/analysis.json` (SHA-256 `59af9e01552dbb0d35a6277b232ee6594c0a70306b3f654d6acb86c8b2951d15`)
+
+## 2026-07-16 K=4 significant-count tie metadata
+
+RELION serializes the pre-tie cutoff rank as
+`rlnNrOfSignificantSamples`, while its inclusive threshold mask retains every
+sample tied at that cutoff.  RECOVAR previously serialized the expanded mask
+cardinality.  The K=4 path now exposes the cutoff rank from the existing
+top-k/full-sort computation and uses it only for metadata; the expanded mask,
+posterior, and all reconstruction accumulators are unchanged.  Tied, capped,
+fallback, tuple-compatibility, first-iteration, and accumulator-invariance
+tests pass (74 affected tests in the integrated checkout).
