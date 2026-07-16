@@ -580,7 +580,8 @@ def test_final_all_data_iteration_stays_on_shared_dense_scoring_path():
     final_reconstruct_block = final_block[final_block.index(final_reconstruct_marker) :]
 
     assert "final_current_size = int(grid_size)" in source
-    assert final_block.count("_score_half_dense(") == 1
+    assert final_block.count("_score_half_dense_in_bpref_scope(") == 1
+    assert "bpref_device_signature_active=False" in final_block
     assert "cs_for_engine=final_current_size" in final_block
     assert final_reconstruct_block.count("current_size=final_current_size") == 4
     assert "relion_firstiter_cc_this_iter=False" in final_block
@@ -644,7 +645,7 @@ def test_final_all_data_grid_correction_defaults_to_quality_mode(monkeypatch):
 
 def test_final_all_data_local_search_uses_replayed_translation_range():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
-    final_call_idx = source.index("final_result = _score_half_local(")
+    final_call_idx = source.index("final_result = _score_half_local_in_bpref_scope(")
     final_call = source[final_call_idx : source.index("            )", final_call_idx)]
     assert "current_translation_range=final_translation_range" in final_call
     assert "current_translation_range=float(state.translation_range)" not in final_call
