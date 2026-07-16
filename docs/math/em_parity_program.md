@@ -3862,3 +3862,16 @@ RELION CUDA BPref coefficient-order fix is validated.
 Evidence root and jobs:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_current_65d2c3f1_20260716_091500/`
 (`11264619--11264626`, summary `11264627`, FSC audit `11265312`).
+
+## Aggregate particle-state diagnostic
+
+Use `scripts/audit_em_particle_state_distribution.py` after full runs to align
+particles by exact `rlnImageName` and compare Pmax, significant-support, pose,
+translation, and K-class distributions across every available numbered
+iteration.  When a same-physical-GPU RELION repeat is supplied, the report also
+measures RECOVAR errors relative to that numerical control envelope.  K-class
+agreement is Hungarian-matched while retaining raw label agreement and the full
+confusion matrix.  Intermediate gates use these exact/array metrics; map-quality
+gates remain FSC/FSC-AUC only.  Escalate from this aggregate report to a
+particle capture only when it identifies a systematic cohort or an FSC
+trajectory localizes a reproducible boundary.
