@@ -13,12 +13,20 @@ The output is the hash-bound schema accepted by
 recomputation fails closed when its float64 geometry changes a captured target
 index; such a boundary is a geometry/precision result and cannot be represented
 by the current same-target replay schema.
+
+Before interpreting any float64 difference, this script recomputes the source
+operands through RECOVAR's production CUDA preprocessing, cuFFT/JAX CTF and
+translation-phase path, and RELION-order float32 reduction.  That control must
+match the captured complex64/float32 operands exactly on two repeats.  A failed
+or unavailable control is reported as ``OPERAND_RECOMPUTE_UNVALIDATED`` and no
+high-precision replay artifact is written.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -232,6 +240,188 @@ def _source_rows_float64(
         )
         source_weight[q_row] = np.sum(row_probs, dtype=np.float64) * ctf_weight
     return source_data, source_weight
+
+
+def _source_rows_production_f32(
+    contribution: dict[str, np.ndarray],
+    signature: dict[str, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    """Recompute captured source rows through the exact production GPU path."""
+
+    import jax
+    import jax.numpy as jnp
+
+    from recovar.core.ctf import _compute_spa_ctf
+    from recovar.cuda_backproject import relion_preprocess_real_f32
+    from recovar.data_io.image_backends import _centered_rfft2_jax
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _half_translation_phase_table_for_indices,
+    )
+    from recovar.em.dense_single_volume.local_backprojection import (
+        compute_relion_f32_sequential_mstep_sums,
+    )
+
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("production-f32 source control requires a JAX GPU backend")
+    if not bool(np.asarray(contribution["relion_cuda_preprocess"]).item()):
+        raise NotImplementedError(
+            "production-f32 source control requires the frozen relion_cuda boundary"
+        )
+    ctf_mode = str(np.asarray(contribution["ctf_mode"]).item())
+    if ctf_mode not in {"legacy", "SPA"}:
+        raise NotImplementedError(
+            f"production-f32 source control does not support CTF mode {ctf_mode!r}"
+        )
+    if float(np.asarray(contribution["ctf_dose_per_tilt"]).item()) != 0.0:
+        raise NotImplementedError("dose-weighted production source control is not implemented")
+
+    image_shape = tuple(int(value) for value in contribution["image_shape"])
+    height, width = image_shape
+    half_width = width // 2 + 1
+    fftw_indices = np.asarray(contribution["window_indices"], dtype=np.int64)
+    fftw_rows = fftw_indices // half_width
+    compact_indices_np = (
+        ((fftw_rows - height // 2) % height) * half_width
+        + fftw_indices % half_width
+    ).astype(np.int32, copy=False)
+    compact_indices = jnp.asarray(compact_indices_np, dtype=jnp.int32)
+    raw = jnp.asarray(contribution["raw_real_images"], dtype=jnp.float32)
+    normalization = jnp.asarray(
+        contribution["relion_preprocess_normalization_factors"], dtype=jnp.float32
+    )
+    integer_shifts = jnp.asarray(contribution["integer_pre_shifts"], dtype=jnp.int32)
+    # This is deliberately unmasked.  ``_prepare_bucket_io`` may mask the
+    # score image, but always constructs ``processed_recon_half_raw`` for the
+    # M-step/active_summed boundary from the unmasked reconstruction image.
+    _, preprocessed = relion_preprocess_real_f32(
+        raw,
+        normalization,
+        integer_shifts,
+        1.0,
+        1.0,
+        False,
+    )
+    processed_half = _centered_rfft2_jax(preprocessed).reshape(raw.shape[0], -1)
+    processed_half = processed_half.astype(jnp.complex64)
+    ctf_half = _compute_spa_ctf(
+        jnp.asarray(contribution["ctf_params"], dtype=jnp.float32),
+        image_shape,
+        float(np.asarray(contribution["voxel_size"]).item()),
+        half_image=True,
+    )
+    noise_half = jnp.asarray(contribution["noise_variance_half"])
+    scale = jnp.asarray(contribution["scale_corrections"], dtype=ctf_half.dtype)
+    weighted = processed_half[:, compact_indices] * ctf_half[:, compact_indices]
+    weighted = weighted / noise_half[compact_indices]
+    weighted = weighted * scale[:, None]
+    phases = _half_translation_phase_table_for_indices(
+        contribution["fine_translations"], image_shape, compact_indices
+    )
+    shifted = (
+        weighted[:, None, :] * phases[None, :, :]
+    ).reshape(raw.shape[0], phases.shape[0], compact_indices.shape[0])
+    ctf_weight = ctf_half[:, compact_indices] ** 2 / noise_half[compact_indices]
+    ctf_weight = ctf_weight * (scale**2)[:, None]
+    numerator, denominator = compute_relion_f32_sequential_mstep_sums(
+        jnp.asarray(contribution["reconstruction_probs"]),
+        shifted,
+        ctf_weight,
+    )
+    numerator = np.asarray(numerator)
+    denominator = np.asarray(denominator)
+    active_particle = np.asarray(contribution["active_particle_rows"], dtype=np.int32)
+    active_row = np.asarray(contribution["active_rotation_rows"], dtype=np.int32)
+    recomputed_active_data = numerator[active_particle, active_row]
+    recomputed_active_weight = denominator[active_particle, active_row]
+
+    particle_launches = np.asarray(signature["particle_launch_ordinals"], dtype=np.int64)
+    launch_to_particle = {int(value): index for index, value in enumerate(particle_launches)}
+    row_data = []
+    row_weight = []
+    for launch, local_row in zip(
+        np.asarray(signature["launch_ordinal"], dtype=np.int64),
+        np.asarray(signature["particle_local_row"], dtype=np.int32),
+    ):
+        particle = launch_to_particle[int(launch)]
+        row_data.append(numerator[particle, int(local_row)])
+        row_weight.append(denominator[particle, int(local_row)])
+
+    metrics = {
+        "backend": "relion_cuda_preprocess+cuFFT/JAX_CTF_phase+RELION_f32_sequential_reduction",
+        "device": str(jax.devices()[0]),
+        "device_kind": str(jax.devices()[0].device_kind),
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+        "reconstruction_mask_policy": (
+            "apply_mask=false: active_summed is the unmasked M-step reconstruction path; "
+            "score_with_masked_images affects score operands, not processed_recon_half_raw"
+        ),
+        "captured_score_with_masked_images": bool(
+            np.asarray(contribution["score_with_masked_images"]).item()
+        ),
+        "data_vs_captured_active": validator.exact_array_metrics(
+            recomputed_active_data, contribution["active_summed"]
+        ),
+        "weight_vs_captured_active": validator.exact_array_metrics(
+            recomputed_active_weight, contribution["active_ctf_probs"]
+        ),
+    }
+    return np.asarray(row_data), np.asarray(row_weight), metrics
+
+
+def _validate_production_source_control(result: dict) -> dict:
+    """Require exact captured closure and exact control/control repeat closure."""
+
+    first_data, first_weight, metrics = _source_rows_production_f32(
+        result["contribution"], result["signature"]
+    )
+    repeat_data, repeat_weight, _ = _source_rows_production_f32(
+        result["contribution"], result["signature"]
+    )
+    records = result["contribution_records"]
+    signature = result["signature"]
+    row_keys = {
+        (int(launch), int(local_row)): index
+        for index, (launch, local_row) in enumerate(
+            zip(signature["launch_ordinal"], signature["particle_local_row"])
+        )
+    }
+    q_index = np.asarray(
+        [row_keys[(int(launch), int(local_row))] for launch, local_row in zip(
+            records.launch_ordinal, records.particle_local_row
+        )],
+        dtype=np.int64,
+    )
+    dense_height = 2 * int(round(float(np.asarray(signature["max_r"]).item())))
+    dense_lookup = _dense_to_compact(result["contribution"], dense_height)
+    compact_position = dense_lookup[records.dense_pixel]
+    if np.any(compact_position < 0):
+        raise ValueError("production source control found a record outside the compact window")
+    metrics.update(
+        {
+            "data_vs_captured_signature": validator.exact_array_metrics(
+                first_data[q_index, compact_position], records.source_data
+            ),
+            "weight_vs_captured_signature": validator.exact_array_metrics(
+                first_weight[q_index, compact_position], records.source_weight
+            ),
+            "control_repeat_data": validator.exact_array_metrics(first_data, repeat_data),
+            "control_repeat_weight": validator.exact_array_metrics(first_weight, repeat_weight),
+            "acceptance_policy": (
+                "all captured-active, captured-signature, and control/control comparisons "
+                "must be exactly array-equal; no tolerance is inferred from float64 results"
+            ),
+        }
+    )
+    required = (
+        "data_vs_captured_active",
+        "weight_vs_captured_active",
+        "data_vs_captured_signature",
+        "weight_vs_captured_signature",
+        "control_repeat_data",
+        "control_repeat_weight",
+    )
+    metrics["validated"] = all(bool(metrics[key]["array_equal"]) for key in required)
+    return metrics
 
 
 def _geometry_float64(
@@ -485,6 +675,46 @@ def main(argv=None) -> None:
         if current != boundary:
             raise ValueError("recomputation shards mix iteration/half/class/rank boundaries")
 
+    production_source_controls = []
+    for result in results:
+        try:
+            control = _validate_production_source_control(result)
+        except Exception as exc:
+            control = {
+                "validated": False,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "acceptance_policy": (
+                    "production source recomputation must be available and exactly close "
+                    "captured-active, captured-signature, and control/control comparisons"
+                ),
+            }
+        control["signature"] = result["path"]
+        production_source_controls.append(control)
+    if not all(bool(control["validated"]) for control in production_source_controls):
+        summary = {
+            "schema": "recovar-bpref-high-precision-recomputation-report-v2",
+            "status": "OPERAND_RECOMPUTE_UNVALIDATED",
+            "classification": "operand-recompute-unvalidated",
+            "iteration": boundary[0],
+            "half": boundary[1],
+            "class_index_zero_based": boundary[2],
+            "rank": boundary[3],
+            "signature_count": len(results),
+            "production_source_controls": production_source_controls,
+            "artifact_written": False,
+            "reason": (
+                "the production complex64/float32 source recomputation did not exactly "
+                "close its captured and repeat controls; float64 differences are not classified"
+            ),
+        }
+        text = json.dumps(summary, indent=2) + "\n"
+        if args.summary_out is not None:
+            args.summary_out.parent.mkdir(parents=True, exist_ok=True)
+            args.summary_out.write_text(text)
+        print(text, end="")
+        raise SystemExit(3)
+
     coefficients, source_data, source_weight, geometry = [], [], [], []
     for result in results:
         shard_coefficients, shard_data, shard_weight, shard_geometry = _recompute_shard(result)
@@ -506,7 +736,7 @@ def main(argv=None) -> None:
                 "geometry-incompatible recomputation unexpectedly created an output artifact"
             )
         summary = {
-            "schema": "recovar-bpref-high-precision-recomputation-report-v1",
+            "schema": "recovar-bpref-high-precision-recomputation-report-v2",
             "status": "GEOMETRY_PRECISION_BOUNDARY",
             "classification": "discrete_geometry_difference_under_float64_recomputation",
             "iteration": boundary[0],
@@ -514,6 +744,7 @@ def main(argv=None) -> None:
             "class_index_zero_based": boundary[2],
             "rank": boundary[3],
             "signature_count": len(results),
+            "production_source_controls": production_source_controls,
             "geometry_by_shard": geometry,
             "artifact_written": False,
             "reason": (
@@ -569,6 +800,22 @@ def main(argv=None) -> None:
         posterior_weight_policy=np.asarray(
             "captured reconstruction_probs frozen at M-step boundary"
         ),
+        production_source_control_validated=np.bool_(True),
+        production_source_control_sha256=np.asarray(
+            validator._sha256_named_arrays((
+                (
+                    "production_source_controls_json",
+                    np.frombuffer(
+                        json.dumps(
+                            production_source_controls,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8"),
+                        dtype=np.uint8,
+                    ),
+                ),
+            ))
+        ),
         canonical_sort_key_legend=np.asarray(
             "original_index,canonical_rotation_key,dense_pixel,neighbor"
         ),
@@ -612,7 +859,7 @@ def main(argv=None) -> None:
         companion_contribution_paths=tuple(companions),
     )
     summary = {
-        "schema": "recovar-bpref-high-precision-recomputation-report-v1",
+        "schema": "recovar-bpref-high-precision-recomputation-report-v2",
         "status": "PASS",
         "iteration": boundary[0],
         "half": boundary[1],
@@ -624,6 +871,7 @@ def main(argv=None) -> None:
             "native float32 stack pixels; normalization, integer shift, FFT, CTF, "
             "translation phase, posterior-weighted source, and geometry recomputed in float64/complex128"
         ),
+        "production_source_controls": production_source_controls,
         "geometry_by_shard": geometry,
         "artifact": str(args.output.resolve()),
         "artifact_sha256": validator._sha256_file(args.output),
