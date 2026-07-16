@@ -3673,12 +3673,46 @@ boundary.  The remaining work is exact per-pixel operand and operation-
 semantics comparison; no production cutoff change is justified by this
 evidence.
 
+Manual supplied-PPref diagnostic job `11244670` does produce 49 row-7881
+parents, but only through a compensating error and is rejected as a fix.  Its
+selected-union centered-score RMS error against RELION is `0.009148`, versus
+`0.002103` for texture, and its coarse Pmax is farther from RELION.  On the
+matched row-6202 control, manual RMS error is `0.003159`, versus `0.0001623`
+for texture, about 19.5 times worse.  Manual-versus-texture half-map FSC-AUC is
+`0.9999689/0.9998694`; exact intermediate arrays, not the accidental support
+match, retain texture as the strict coarse projector.
+
 The sealed passive audit is under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_cross_engine_alignment_audit_20260715_211308/`.
 The float64-scoring audit is under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_coarse_float64_399de551_a100_20260715_213200/`.
 The float64 projection-plus-scoring audit is under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_coarse_float64_scoreproj_399de551_a100_20260715_214600/`.
+The rejected manual-projector diagnostic is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_manual_ppref_f32_399de551_a100_20260715_220033/`.
 RELION's dumped `ihidden_overs` field is corrupt and non-unique in this hook;
 the audit rejects it and uses the unique device tuple plus exact rotation and
 translation geometry instead.
+
+## 2026-07-15 K=1 trajectory repeat-envelope classification
+
+The versioned post-hoc trajectory classifier compares the corrected RECOVAR-
+versus-RELION run against the same-physical-A100 RELION repeat pair.  Exact
+current size, Healpix order, and perturbation schedules align only through
+iteration 7; RELION itself changes to a different Healpix schedule at
+iteration 8.  Iterations 8 and later are therefore observational nonlinear
+amplification, not eligible for a new causal parity classification.
+
+Within the aligned prefix, iteration 1 already exceeds the repeat map envelope:
+half1 FSC-AUC loss is `1.49246e-6` cross-engine versus `1.81529e-10` in the
+RELION repeat, while Pmax remains exact.  Iteration 2 is the earliest
+continuous Pmax exceedance and the strongest early boundary: cross-engine
+mean/p95/maximum absolute errors are
+`1.15158e-4/3.53333e-4/2.16427e-2`, versus
+`5.90331e-6/2.9e-5/1.46e-3` in the RELION repeat.  Rare discrete pose and
+translation outputs differ at iteration 1 but are not used alone as causal
+evidence.  The classifier fails closed rather than treating the substantial
+late RELION repeat variation as either parity or a RECOVAR defect.
+
+The deterministic report, script, audit, and verified manifests are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_fulltraj_repeat_envelope_classifier_v1_20260715_221500/`.
