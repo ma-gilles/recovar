@@ -6476,6 +6476,9 @@ def _run_relion_iteration_loop(
                     import pathlib
 
                     pathlib.Path(_kclass_dump_dir).mkdir(parents=True, exist_ok=True)
+                    _preserve_kclass_dump_dtype = os.environ.get(
+                        "RECOVAR_KCLASS_DUMP_PRESERVE_DTYPE", ""
+                    ).strip().lower() not in {"", "0", "false", "no", "off"}
                     np.savez(
                         pathlib.Path(_kclass_dump_dir)
                         / f"recovar_kclass_mstep_it{iteration + 1:03d}_c{class_idx + 1:02d}.npz",
@@ -6491,18 +6494,35 @@ def _run_relion_iteration_loop(
                         previous_mean=np.asarray(previous_means[0][class_idx], dtype=np.complex64),
                         previous_mean_half0=np.asarray(previous_means[0][class_idx], dtype=np.complex64),
                         previous_mean_half1=np.asarray(previous_means[1][class_idx], dtype=np.complex64),
-                        Ft_y_combined=np.asarray(Ft_y_combined[class_idx], dtype=np.complex64),
+                        Ft_y_combined=(
+                            np.asarray(Ft_y_combined[class_idx])
+                            if _preserve_kclass_dump_dtype
+                            else np.asarray(Ft_y_combined[class_idx], dtype=np.complex64)
+                        ),
                         Ft_ctf_0=(
-                            np.asarray(Ft_ctf_0[class_idx], dtype=np.complex64)
+                            (
+                                np.asarray(Ft_ctf_0[class_idx])
+                                if _preserve_kclass_dump_dtype
+                                else np.asarray(Ft_ctf_0[class_idx], dtype=np.complex64)
+                            )
                             if Ft_ctf_0 is not None
                             else np.empty(0, dtype=np.complex64)
                         ),
                         Ft_ctf_1=(
-                            np.asarray(Ft_ctf_1[class_idx], dtype=np.complex64)
+                            (
+                                np.asarray(Ft_ctf_1[class_idx])
+                                if _preserve_kclass_dump_dtype
+                                else np.asarray(Ft_ctf_1[class_idx], dtype=np.complex64)
+                            )
                             if Ft_ctf_1 is not None
                             else np.empty(0, dtype=np.complex64)
                         ),
-                        Ft_ctf_combined=np.asarray(Ft_ctf_combined[class_idx], dtype=np.complex64),
+                        Ft_ctf_combined=(
+                            np.asarray(Ft_ctf_combined[class_idx])
+                            if _preserve_kclass_dump_dtype
+                            else np.asarray(Ft_ctf_combined[class_idx], dtype=np.complex64)
+                        ),
+                        dump_preserve_dtype=np.int32(int(_preserve_kclass_dump_dtype)),
                         tau2_shells=np.asarray(tau2_shells_recovar_frame_k, dtype=np.float64),
                         tau2_shells_relion=np.asarray(tau2_shells_relion_frame_k, dtype=np.float64),
                         tau2_source=np.asarray(kclass_tau2_source),
