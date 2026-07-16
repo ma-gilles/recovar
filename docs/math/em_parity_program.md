@@ -4035,8 +4035,24 @@ fine descendants.  RELION-only descendants carry `0.0777750465` posterior
 mass, which explains the Pmax change from `0.174813433` to `0.189518494`.
 Same-physical-GPU complex128/float64 source scoring preserves RECOVAR's support,
 so ordinary float32 reduction precision is not the cause.  Geometry, priors,
-and fine reduction are also ruled out; the unresolved split is upstream
-operand generation versus coarse score formulation.
+fine reduction, and coarse score formulation are also ruled out.  A frozen
+two-candidate substitution identifies projected-reference generation as the
+dominant operand: swapping only the RECOVAR projection into otherwise RELION
+operands moves the canonical float64 score margin by `-0.00192113`, within
+`1.55e-6` of the full RECOVAR margin.  Image and CTF/noise substitutions move
+it by only `+1.59e-6` and `-3.54e-8`.  The raw device rotation matrices are
+bitwise exact across all 18 entries, and RELION's production score lies inside
+its enumerated 576-order float32 reduction envelope.
+
+The projected-reference delta is `0.01138468` RMS, or `2.96e-5` relative, and
+is concentrated in radius 8--16 rather than Nyquist/support-edge pixels.
+RELION resident-double versus serialized-MRC PPref precision is not the cause:
+the exact same-run corner delta is only `2.20e-11` RMS and `1.86e-9` maximum,
+7,889x/1,460x smaller than the raw projection delta.  Replaying the serialized
+RELION PPref through RECOVAR's texture path also moves in the wrong direction.
+The remaining bounded split is therefore RECOVAR PPref staging versus sub-ULP
+texture-coordinate generation; capture exact RECOVAR corners and coordinates
+before considering a production change.
 
 At iteration 13 the worst-arm deficits are `1.264x`, `3.203x`, and `1.786x`
 the observed repeat deficit for half 1, half 2, and merged maps.  At iteration
@@ -4052,6 +4068,7 @@ Authoritative evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/real10076_completed_dual_repeat_envelope_v1.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/audit_artifacts.sha256`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/analysis/p8240_boundary.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/distribution_substitution_v1/FINAL_SEAL.txt` (manifest SHA-256 `467e1ec8a7e6b927000f92a9574850ef9a4ffddbec59f98f6be5cf7df3c62892`)
 
 ## 2026-07-16 authoritative K=4 incoming-reference substitutions
 

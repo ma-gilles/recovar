@@ -2620,9 +2620,13 @@ Matrix evidence:
   coarse `0.999`-support swap creates 32 different fine descendants and the
   RELION-only branch holds `0.0777750465` posterior mass.
 - Same-GPU complex128/float64 source scoring preserves RECOVAR's p8240
-  support.  Geometry, priors, fine reduction, and ordinary float32 reduction
-  precision are ruled out; upstream operand generation versus coarse score
-  formulation remains unresolved.
+  support.  Frozen factor substitution localizes the score gap to projected
+  reference generation; image, CTF/noise, score formulation, reduction order,
+  priors, fine reduction, and exact raw rotation matrices are excluded.
+  RELION resident-double versus serialized-MRC PPref corners differ by only
+  `2.20e-11` RMS, far below the `1.74e-7` raw projection delta.  The remaining
+  bounded split is RECOVAR PPref staging versus sub-ULP texture coordinates;
+  capture those exact device operands next rather than changing production.
 - Treat the one repeat as an empirical same-model scale, not a confidence
   interval.  Do not gate iteration 17 or final maps against it because the
   control trajectories terminate differently.  Final RELION A/B FSC-AUC is
@@ -2630,7 +2634,7 @@ Matrix evidence:
 - Evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/real10076_completed_dual_repeat_envelope_v1.json`
   and
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/analysis/p8240_boundary.json`.
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/distribution_substitution_v1/FINAL_SEAL.txt`.
 
 # 2026-07-16: authoritative incoming-reference K=4 discriminators
 
