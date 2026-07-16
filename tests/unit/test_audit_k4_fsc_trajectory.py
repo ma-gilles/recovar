@@ -22,8 +22,9 @@ def _make_case(
     *,
     recovar_indices: tuple[int, ...] = (0, 1),
     relion_iterations: tuple[int, ...] = (1, 2),
-    missing_numbered: tuple[str, int, int, int] | None = None,
-    missing_final: tuple[str, int] | None = None,
+    missing_numbered: tuple[str, int, int, int] | tuple[str, int, int] | None = None,
+    missing_final_recovar_class: int | None = None,
+    final_all_data_ran: bool = False,
 ) -> tuple[Path, dict[Path, np.ndarray]]:
     case_root = tmp_path / "case"
     recovar_dir = case_root / "recovar"
@@ -46,21 +47,27 @@ def _make_case(
                     continue
                 # Production debug dumps intentionally spell this class1, not class001.
                 arrays[_touch(intermediates / f"it{iteration:03d}_half{half}_class{class_id}_reg.mrc")] = volume
-    for iteration in relion_iterations:
-        for half in (1, 2):
-            for class_id, source_id in enumerate(relion_source, start=1):
-                if missing_numbered == ("relion", iteration, half, class_id):
-                    continue
-                arrays[_touch(relion_dir / f"run_it{iteration:03d}_half{half}_class{class_id:03d}.mrc")] = gt[source_id]
-    for class_id, volume in enumerate(gt, start=1):
-        if missing_final != ("recovar", class_id):
-            arrays[_touch(recovar_dir / f"final_class{class_id:03d}.mrc")] = volume
+    # Actual Class3D naming: one full map per class, not AutoRefine-style
+    # numbered half maps.  Iteration zero is the supplied initial reference and
+    # is intentionally excluded from the audited trajectory.
     for class_id, source_id in enumerate(relion_source, start=1):
-        if missing_final != ("relion", class_id):
-            arrays[_touch(relion_dir / f"run_class{class_id:03d}.mrc")] = gt[source_id]
+        arrays[_touch(relion_dir / f"run_it000_class{class_id:03d}.mrc")] = gt[source_id]
+    for iteration in relion_iterations:
+        for class_id, source_id in enumerate(relion_source, start=1):
+            if missing_numbered == ("relion", iteration, class_id):
+                continue
+            arrays[_touch(relion_dir / f"run_it{iteration:03d}_class{class_id:03d}.mrc")] = gt[source_id]
+    for class_id, volume in enumerate(gt, start=1):
+        if missing_final_recovar_class != class_id:
+            arrays[_touch(recovar_dir / f"final_class{class_id:03d}.mrc")] = volume
 
     recovar_dir.mkdir(parents=True, exist_ok=True)
-    np.savez(recovar_dir / "refinement_results.npz", current_sizes=np.arange(len(recovar_indices)))
+    np.savez(
+        recovar_dir / "refinement_results.npz",
+        current_sizes=np.arange(len(recovar_indices)),
+        convergence_has_converged=np.bool_(False),
+        final_all_data_ran=np.bool_(final_all_data_ran),
+    )
 
     def load(path: Path) -> np.ndarray:
         return arrays[Path(path).resolve()]
@@ -105,13 +112,20 @@ def test_complete_k4_trajectory_matches_each_iteration_and_final_by_fsc_auc(tmp_
     assert report["numbered_iterations"][0]["matched_pair_to_gt_assignment"] == [1, 2, 3, 4]
     assert len(report["numbered_iterations"][0]["classes"]) == 4
     assert report["final"]["recovar_to_relion_assignment"] == [2, 4, 1, 3]
+    assert report["final"]["recovar_source_index"] == 1
+    assert report["final"]["relion_source_iteration"] == 2
+    assert report["final"]["recovar_final_matches_last_numbered_half_average"] is True
+    assert report["finalization_state"] == {
+        "convergence_has_converged": False,
+        "final_all_data_ran": False,
+    }
     assert all(
-        item["cross_engine"]["merged"]["fsc_auc"] == pytest.approx(1.0)
+        item["cross_engine"]["fsc_auc"] == pytest.approx(1.0)
         for item in report["numbered_iterations"][0]["classes"]
     )
     with np.load(output_npz, allow_pickle=False) as curves:
-        assert "it001_rec001_rel002_cross_half1" in curves.files
-        assert "it002_rec004_gt004_merged" in curves.files
+        assert "it001_rec001_rel002_cross" in curves.files
+        assert "it002_rec004_gt004" in curves.files
         assert "final_rec003_rel001_cross" in curves.files
     markdown = (tmp_path / "report.md").read_text()
     assert "Correlation was not computed" in markdown
@@ -138,6 +152,23 @@ def test_missing_numbered_class_fails_closed(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
+def test_missing_relion_class3d_full_map_fails_closed(tmp_path, monkeypatch):
+    case_root, _ = _make_case(
+        tmp_path,
+        monkeypatch,
+        recovar_indices=(0,),
+        relion_iterations=(1,),
+        missing_numbered=("relion", 1, 4),
+    )
+
+    status, report, _ = _run(case_root, tmp_path)
+
+    assert status == 2
+    assert report["status"] == "error"
+    assert "RELION numbered Class3D K=4 topology is incomplete" in report["earliest_failure"]
+
+
+@pytest.mark.unit
 def test_noncontiguous_iteration_fails_closed(tmp_path, monkeypatch):
     case_root, _ = _make_case(
         tmp_path,
@@ -153,27 +184,72 @@ def test_noncontiguous_iteration_fails_closed(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
+def test_noncontiguous_relion_class3d_iteration_fails_closed(tmp_path, monkeypatch):
+    case_root, _ = _make_case(
+        tmp_path,
+        monkeypatch,
+        recovar_indices=(0, 1),
+        relion_iterations=(1, 3),
+    )
+
+    status, report, _ = _run(case_root, tmp_path)
+
+    assert status == 2
+    assert "RELION iterations are not contiguous one-based" in report["earliest_failure"]
+
+
+@pytest.mark.unit
 def test_incomplete_final_class_products_fail_closed(tmp_path, monkeypatch):
     case_root, _ = _make_case(
         tmp_path,
         monkeypatch,
         recovar_indices=(0,),
         relion_iterations=(1,),
-        missing_final=("relion", 4),
+        missing_final_recovar_class=4,
     )
 
     status, report, _ = _run(case_root, tmp_path)
 
     assert status == 2
-    assert "RELION final K=4 products are incomplete" in report["earliest_failure"]
+    assert "RECOVAR final K=4 products are incomplete" in report["earliest_failure"]
+
+
+@pytest.mark.unit
+def test_final_recovar_map_must_equal_last_numbered_half_average(tmp_path, monkeypatch):
+    case_root, arrays = _make_case(tmp_path, monkeypatch, recovar_indices=(0,), relion_iterations=(1,))
+    arrays[(case_root / "recovar" / "final_class004.mrc").resolve()] = np.zeros((8, 8, 8), dtype=np.float64)
+
+    status, report, _ = _run(case_root, tmp_path)
+
+    assert status == 2
+    assert report["status"] == "error"
+    assert "final class 4 does not exactly match the last numbered half-average" in report["earliest_failure"]
+
+
+@pytest.mark.unit
+def test_final_all_data_run_does_not_reuse_last_numbered_class3d_comparator(tmp_path, monkeypatch):
+    case_root, _ = _make_case(
+        tmp_path,
+        monkeypatch,
+        recovar_indices=(0,),
+        relion_iterations=(1,),
+        final_all_data_ran=True,
+    )
+
+    status, report, _ = _run(case_root, tmp_path)
+
+    assert status == 2
+    assert report["status"] == "error"
+    assert "last-numbered Class3D comparator is valid only when final_all_data_ran=false" in report[
+        "earliest_failure"
+    ]
 
 
 @pytest.mark.unit
 def test_one_bad_class_fails_direct_fsc_gate_without_mean_hiding_it(tmp_path, monkeypatch):
     case_root, arrays = _make_case(tmp_path, monkeypatch, recovar_indices=(0,), relion_iterations=(1,))
     rng = np.random.default_rng(91)
-    arrays[(case_root / "relion_ref" / "run_it001_half1_class002.mrc").resolve()] = rng.normal(size=(8, 8, 8))
-    arrays[(case_root / "relion_ref" / "run_it001_half2_class002.mrc").resolve()] = rng.normal(size=(8, 8, 8))
+    arrays[(case_root / "relion_ref" / "run_it001_class002.mrc").resolve()] = rng.normal(size=(8, 8, 8))
 
     status, report, _ = _run(case_root, tmp_path)
 
@@ -234,14 +310,14 @@ def test_each_class_gt_delta_is_gated_individually():
     passing_class = {
         "recovar_class": 1,
         "relion_class": 1,
-        "cross_engine": {"merged": {"fsc_auc": 0.999}},
-        "merged_gt_fsc_auc_delta": 0.0,
+        "cross_engine": {"fsc_auc": 0.999},
+        "gt_fsc_auc_delta": 0.0,
     }
     failing_class = {
         **passing_class,
         "recovar_class": 4,
         "relion_class": 2,
-        "merged_gt_fsc_auc_delta": -0.003,
+        "gt_fsc_auc_delta": -0.003,
     }
     row = {
         "relion_iteration": 1,

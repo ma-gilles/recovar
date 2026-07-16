@@ -3,10 +3,12 @@
 
 RECOVAR intermediate names are zero-based and use the production debug-dump
 spelling ``it000_half1_class1_reg.mrc`` (the class number is not padded).
-RELION numbered products are one-based.  Classes are matched independently at
-every iteration with a Hungarian assignment that maximizes normalized FSC-AUC.
-Map quality is reported only with shellwise FSC and normalized FSC-AUC;
-correlation is intentionally not computed.
+Their two regularized half maps are averaged before comparison.  RELION
+Class3D products are one-based full maps named ``run_it001_class001.mrc``;
+Class3D does not emit AutoRefine-style numbered half maps.  Classes are matched
+independently at every iteration with a Hungarian assignment that maximizes
+normalized FSC-AUC.  Map quality is reported only with shellwise FSC and
+normalized FSC-AUC; correlation is intentionally not computed.
 """
 
 from __future__ import annotations
@@ -37,10 +39,10 @@ else:
     )
 
 
-SCHEMA = "em_k4_fsc_trajectory_audit_v1"
+SCHEMA = "em_k4_fsc_trajectory_audit_v2"
 N_CLASSES = 4
 RECOVAR_MAP_RE = re.compile(r"^it(\d{3})_half([12])_class(\d{1,3})_reg\.mrc$")
-RELION_MAP_RE = re.compile(r"^run_it(\d{3})_half([12])_class(\d{3})\.mrc$")
+RELION_MAP_RE = re.compile(r"^run_it(\d{3})_class(\d{3})\.mrc$")
 
 
 class AuditError(RuntimeError):
@@ -92,40 +94,44 @@ def _hungarian_max(scores: np.ndarray, *, label: str) -> list[int]:
     return [int(value) for value in cols]
 
 
-def _discover_numbered_maps(
-    directory: Path,
-    pattern: re.Pattern[str],
-    *,
-    engine: str,
-) -> dict[int, dict[int, dict[int, Path]]]:
+def _discover_recovar_maps(directory: Path) -> dict[int, dict[int, dict[int, Path]]]:
     grouped: dict[int, dict[int, dict[int, Path]]] = {}
     for path in directory.glob("*.mrc"):
-        match = pattern.match(path.name)
+        match = RECOVAR_MAP_RE.match(path.name)
         if match is None:
             continue
         iteration, half, class_id = (int(match.group(i)) for i in range(1, 4))
-        if engine == "RELION" and iteration == 0:
-            continue
         slot = grouped.setdefault(iteration, {}).setdefault(half, {})
         if class_id in slot:
-            raise AuditError(f"duplicate {engine} iteration {iteration} half {half} class {class_id}")
+            raise AuditError(f"duplicate RECOVAR iteration {iteration} half {half} class {class_id}")
         slot[class_id] = path
     return grouped
 
 
-def _validate_engine_topology(
-    maps: dict[int, dict[int, dict[int, Path]]],
-    *,
-    engine: str,
-    expected_iterations: list[int],
-) -> None:
+def _discover_relion_maps(directory: Path) -> dict[int, dict[int, Path]]:
+    grouped: dict[int, dict[int, Path]] = {}
+    for path in directory.glob("*.mrc"):
+        match = RELION_MAP_RE.match(path.name)
+        if match is None:
+            continue
+        iteration, class_id = (int(match.group(i)) for i in range(1, 3))
+        if iteration == 0:
+            continue
+        slot = grouped.setdefault(iteration, {})
+        if class_id in slot:
+            raise AuditError(f"duplicate RELION iteration {iteration} class {class_id}")
+        slot[class_id] = path
+    return grouped
+
+
+def _validate_recovar_topology(maps: dict[int, dict[int, dict[int, Path]]]) -> None:
     if not maps:
-        raise AuditError(f"no {engine} numbered K=4 maps found")
+        raise AuditError("no RECOVAR numbered K=4 half maps found")
     iterations = sorted(maps)
+    expected_iterations = list(range(len(iterations)))
     if iterations != expected_iterations:
-        base = "zero-based" if engine == "RECOVAR" else "one-based"
         raise AuditError(
-            f"{engine} iterations are not contiguous {base}: found {iterations}, expected {expected_iterations}"
+            f"RECOVAR iterations are not contiguous zero-based: found {iterations}, expected {expected_iterations}"
         )
     expected_classes = set(range(1, N_CLASSES + 1))
     incomplete: list[str] = []
@@ -138,26 +144,37 @@ def _validate_engine_topology(
             if classes != expected_classes:
                 incomplete.append(f"it{iteration:03d} half{half} classes={sorted(classes)}")
     if incomplete:
-        raise AuditError(f"{engine} numbered K=4 topology is incomplete: {incomplete}")
+        raise AuditError(f"RECOVAR numbered K=4 topology is incomplete: {incomplete}")
+
+
+def _validate_relion_topology(maps: dict[int, dict[int, Path]]) -> None:
+    if not maps:
+        raise AuditError("no RELION numbered Class3D K=4 full maps found")
+    iterations = sorted(maps)
+    expected_iterations = list(range(1, len(iterations) + 1))
+    if iterations != expected_iterations:
+        raise AuditError(
+            f"RELION iterations are not contiguous one-based: found {iterations}, expected {expected_iterations}"
+        )
+    expected_classes = set(range(1, N_CLASSES + 1))
+    incomplete = [
+        f"it{iteration:03d} classes={sorted(classes)}"
+        for iteration, classes in maps.items()
+        if set(classes) != expected_classes
+    ]
+    if incomplete:
+        raise AuditError(f"RELION numbered Class3D K=4 topology is incomplete: {incomplete}")
 
 
 def _validate_numbered_topology(
     recovar_maps: dict[int, dict[int, dict[int, Path]]],
-    relion_maps: dict[int, dict[int, dict[int, Path]]],
+    relion_maps: dict[int, dict[int, Path]],
     refinement_results: Path,
 ) -> list[tuple[int, int]]:
     rec_iterations = sorted(recovar_maps)
     rel_iterations = sorted(relion_maps)
-    _validate_engine_topology(
-        recovar_maps,
-        engine="RECOVAR",
-        expected_iterations=list(range(len(rec_iterations))),
-    )
-    _validate_engine_topology(
-        relion_maps,
-        engine="RELION",
-        expected_iterations=list(range(1, len(rel_iterations) + 1)),
-    )
+    _validate_recovar_topology(recovar_maps)
+    _validate_relion_topology(relion_maps)
     if len(rec_iterations) != len(rel_iterations):
         raise AuditError(
             f"numbered iteration count mismatch: RECOVAR={len(rec_iterations)} RELION={len(rel_iterations)}"
@@ -175,14 +192,17 @@ def _validate_numbered_topology(
     return list(zip(rec_iterations, rel_iterations, strict=True))
 
 
-def _load_numbered_classes(
+def _load_recovar_numbered_classes(
     paths: dict[int, dict[int, Path]],
-    loader,
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
-    half1 = [loader(paths[1][class_id]) for class_id in range(1, N_CLASSES + 1)]
-    half2 = [loader(paths[2][class_id]) for class_id in range(1, N_CLASSES + 1)]
+    half1 = [_load_recovar_volume(paths[1][class_id]) for class_id in range(1, N_CLASSES + 1)]
+    half2 = [_load_recovar_volume(paths[2][class_id]) for class_id in range(1, N_CLASSES + 1)]
     merged = [0.5 * (lhs + rhs) for lhs, rhs in zip(half1, half2, strict=True)]
     return half1, half2, merged
+
+
+def _load_relion_numbered_classes(paths: dict[int, Path]) -> list[np.ndarray]:
+    return [_load_relion_volume(paths[class_id]) for class_id in range(1, N_CLASSES + 1)]
 
 
 def _assignment_score_matrix(lhs: list[np.ndarray], rhs: list[np.ndarray]) -> np.ndarray:
@@ -208,8 +228,8 @@ def _gt_pair_assignment(
 def _selected_class_metrics(
     *,
     prefix: str,
-    rec_halves: tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]],
-    rel_halves: tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]],
+    rec_merged: list[np.ndarray],
+    rel_full: list[np.ndarray],
     gt: list[np.ndarray],
     rel_for_rec: list[int],
     gt_for_rec: list[int],
@@ -219,30 +239,26 @@ def _selected_class_metrics(
     for rec_id in range(N_CLASSES):
         rel_id = rel_for_rec[rec_id]
         gt_id = gt_for_rec[rec_id]
-        cross: dict[str, Any] = {}
-        rec_gt: dict[str, Any] = {}
-        rel_gt: dict[str, Any] = {}
-        for index, label in enumerate(("half1", "half2", "merged")):
-            cross[label] = _map_metric(
-                rec_halves[index][rec_id],
-                rel_halves[index][rel_id],
-                shellwise_key=f"{prefix}_rec{rec_id + 1:03d}_rel{rel_id + 1:03d}_cross_{label}",
-                shellwise=shellwise,
-            )
-            rec_gt[label] = _map_metric(
-                rec_halves[index][rec_id],
-                gt[gt_id],
-                shellwise_key=f"{prefix}_rec{rec_id + 1:03d}_gt{gt_id + 1:03d}_{label}",
-                shellwise=shellwise,
-            )
-            rel_gt[label] = _map_metric(
-                rel_halves[index][rel_id],
-                gt[gt_id],
-                shellwise_key=f"{prefix}_rel{rel_id + 1:03d}_gt{gt_id + 1:03d}_{label}",
-                shellwise=shellwise,
-            )
-        rec_auc = rec_gt["merged"]["fsc_auc"]
-        rel_auc = rel_gt["merged"]["fsc_auc"]
+        cross = _map_metric(
+            rec_merged[rec_id],
+            rel_full[rel_id],
+            shellwise_key=f"{prefix}_rec{rec_id + 1:03d}_rel{rel_id + 1:03d}_cross",
+            shellwise=shellwise,
+        )
+        rec_gt = _map_metric(
+            rec_merged[rec_id],
+            gt[gt_id],
+            shellwise_key=f"{prefix}_rec{rec_id + 1:03d}_gt{gt_id + 1:03d}",
+            shellwise=shellwise,
+        )
+        rel_gt = _map_metric(
+            rel_full[rel_id],
+            gt[gt_id],
+            shellwise_key=f"{prefix}_rel{rel_id + 1:03d}_gt{gt_id + 1:03d}",
+            shellwise=shellwise,
+        )
+        rec_auc = rec_gt["fsc_auc"]
+        rel_auc = rel_gt["fsc_auc"]
         delta = None if rec_auc is None or rel_auc is None else float(rec_auc - rel_auc)
         out.append(
             {
@@ -251,7 +267,7 @@ def _selected_class_metrics(
                 "gt_class": gt_id + 1,
                 "cross_engine": cross,
                 "vs_gt": {"recovar": rec_gt, "relion": rel_gt},
-                "merged_gt_fsc_auc_delta": delta,
+                "gt_fsc_auc_delta": delta,
             }
         )
     return out
@@ -335,18 +351,18 @@ def _numbered_row(
     rec_iteration: int,
     rel_iteration: int,
     rec_paths: dict[int, dict[int, Path]],
-    rel_paths: dict[int, dict[int, Path]],
+    rel_paths: dict[int, Path],
     gt: list[np.ndarray],
     shellwise: dict[str, np.ndarray],
     refinement_results: Path,
     relion_dir: Path,
     fixture_particles_star: Path,
 ) -> dict[str, Any]:
-    rec = _load_numbered_classes(rec_paths, _load_recovar_volume)
-    rel = _load_numbered_classes(rel_paths, _load_relion_volume)
-    score_matrix = _assignment_score_matrix(rec[2], rel[2])
+    rec = _load_recovar_numbered_classes(rec_paths)
+    rel = _load_relion_numbered_classes(rel_paths)
+    score_matrix = _assignment_score_matrix(rec[2], rel)
     rel_for_rec = _hungarian_max(score_matrix, label=f"it{rel_iteration:03d} RECOVAR-to-RELION")
-    gt_for_rec, gt_score_matrix = _gt_pair_assignment(rec[2], rel[2], rel_for_rec, gt)
+    gt_for_rec, gt_score_matrix = _gt_pair_assignment(rec[2], rel, rel_for_rec, gt)
     return {
         "recovar_index": rec_iteration,
         "relion_iteration": rel_iteration,
@@ -356,8 +372,8 @@ def _numbered_row(
         "pairwise_matched_pair_gt_mean_fsc_auc": gt_score_matrix.tolist(),
         "classes": _selected_class_metrics(
             prefix=f"it{rel_iteration:03d}",
-            rec_halves=rec,
-            rel_halves=rel,
+            rec_merged=rec[2],
+            rel_full=rel,
             gt=gt,
             rel_for_rec=rel_for_rec,
             gt_for_rec=gt_for_rec,
@@ -387,16 +403,41 @@ def _discover_final(directory: Path, pattern: re.Pattern[str], *, engine: str) -
     return found
 
 
+def _finalization_state(refinement_results: Path) -> dict[str, bool]:
+    with np.load(refinement_results, allow_pickle=False) as payload:
+        required = ("convergence_has_converged", "final_all_data_ran")
+        missing = [key for key in required if key not in payload.files]
+        if missing:
+            raise AuditError(f"missing finalization state {missing} in {refinement_results}")
+        state = {key: bool(np.asarray(payload[key]).item()) for key in required}
+    if state["final_all_data_ran"]:
+        raise AuditError(
+            "K=4 final-all-data products require a dedicated RELION comparator; "
+            "the last-numbered Class3D comparator is valid only when final_all_data_ran=false"
+        )
+    return state
+
+
 def _final_metrics(
     recovar_dir: Path,
-    relion_dir: Path,
+    recovar_last_paths: dict[int, dict[int, Path]],
+    relion_last_paths: dict[int, Path],
+    *,
+    recovar_iteration: int,
+    relion_iteration: int,
     gt: list[np.ndarray],
     shellwise: dict[str, np.ndarray],
 ) -> dict[str, Any]:
     rec_paths = _discover_final(recovar_dir, re.compile(r"^final_class(\d{3})\.mrc$"), engine="RECOVAR")
-    rel_paths = _discover_final(relion_dir, re.compile(r"^run_class(\d{3})\.mrc$"), engine="RELION")
     rec = [_load_recovar_volume(rec_paths[class_id]) for class_id in range(1, N_CLASSES + 1)]
-    rel = [_load_relion_volume(rel_paths[class_id]) for class_id in range(1, N_CLASSES + 1)]
+    rec_last = _load_recovar_numbered_classes(recovar_last_paths)[2]
+    for class_id, (final_map, numbered_map) in enumerate(zip(rec, rec_last, strict=True), start=1):
+        if not np.array_equal(final_map, numbered_map):
+            raise AuditError(
+                f"RECOVAR final class {class_id} does not exactly match the last numbered "
+                f"half-average at iteration {recovar_iteration}"
+            )
+    rel = _load_relion_numbered_classes(relion_last_paths)
     score_matrix = _assignment_score_matrix(rec, rel)
     rel_for_rec = _hungarian_max(score_matrix, label="final RECOVAR-to-RELION")
     gt_for_rec, gt_score_matrix = _gt_pair_assignment(rec, rel, rel_for_rec, gt)
@@ -433,6 +474,9 @@ def _final_metrics(
             }
         )
     return {
+        "recovar_source_index": recovar_iteration,
+        "relion_source_iteration": relion_iteration,
+        "recovar_final_matches_last_numbered_half_average": True,
         "recovar_to_relion_assignment": [value + 1 for value in rel_for_rec],
         "matched_pair_to_gt_assignment": [value + 1 for value in gt_for_rec],
         "pairwise_cross_engine_fsc_auc": score_matrix.tolist(),
@@ -456,8 +500,8 @@ def _apply_gates(
     ]:
         for item in classes:
             class_label = f"{label} RECOVAR class {item['recovar_class']} / RELION class {item['relion_class']}"
-            cross = item["cross_engine"]["merged"]["fsc_auc"] if label != "final" else item["cross_engine"]["fsc_auc"]
-            delta = item["merged_gt_fsc_auc_delta"] if label != "final" else item["gt_fsc_auc_delta"]
+            cross = item["cross_engine"]["fsc_auc"]
+            delta = item["gt_fsc_auc_delta"]
             if cross is None or not math.isfinite(float(cross)) or float(cross) < min_cross:
                 failures.append(f"{class_label} direct FSC-AUC {cross!r} < {min_cross:.9f}")
             if delta is None or not math.isfinite(float(delta)) or float(delta) < min_gt_delta:
@@ -489,10 +533,11 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         raise AuditError(f"missing K=4 GT maps: {missing_gt}")
     gt = [_load_recovar_volume(path) for path in gt_paths]
 
-    rec_maps = _discover_numbered_maps(intermediates, RECOVAR_MAP_RE, engine="RECOVAR")
-    rel_maps = _discover_numbered_maps(relion_dir, RELION_MAP_RE, engine="RELION")
+    rec_maps = _discover_recovar_maps(intermediates)
+    rel_maps = _discover_relion_maps(relion_dir)
     refinement_results = recovar_dir / "refinement_results.npz"
     pairs = _validate_numbered_topology(rec_maps, rel_maps, refinement_results)
+    finalization = _finalization_state(refinement_results)
     shellwise: dict[str, np.ndarray] = {}
     rows = [
         _numbered_row(
@@ -508,7 +553,16 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         )
         for rec_iteration, rel_iteration in pairs
     ]
-    final = _final_metrics(recovar_dir, relion_dir, gt, shellwise)
+    final_rec_iteration, final_rel_iteration = pairs[-1]
+    final = _final_metrics(
+        recovar_dir,
+        rec_maps[final_rec_iteration],
+        rel_maps[final_rel_iteration],
+        recovar_iteration=final_rec_iteration,
+        relion_iteration=final_rel_iteration,
+        gt=gt,
+        shellwise=shellwise,
+    )
     failures = _apply_gates(
         rows,
         final,
@@ -535,8 +589,14 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
             },
             "n_classes": N_CLASSES,
             "numbered_map_policy": (
-                "per-class merged maps are the arithmetic mean of the two saved regularized half maps"
+                "each RECOVAR per-class map is the arithmetic mean of its two saved regularized half maps; "
+                "each RELION Class3D product is the corresponding one-based numbered full map"
             ),
+            "final_map_policy": (
+                "when final_all_data_ran=false, RECOVAR final_class maps must exactly equal the last numbered "
+                "half-average and are compared to RELION's last numbered Class3D full maps"
+            ),
+            "finalization_state": finalization,
             "thresholds": {
                 "per_class_direct_fsc_auc_min": float(args.min_cross_fsc_auc),
                 "per_class_recovar_minus_relion_gt_fsc_auc_min": float(args.min_gt_delta),
@@ -574,10 +634,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         for item in row["classes"]:
             lines.append(
                 f"| it{row['relion_iteration']:03d} | {item['recovar_class']} | {item['relion_class']} | "
-                f"{item['gt_class']} | {_fmt(item['cross_engine']['merged']['fsc_auc'])} | "
-                f"{_fmt(item['vs_gt']['recovar']['merged']['fsc_auc'])} | "
-                f"{_fmt(item['vs_gt']['relion']['merged']['fsc_auc'])} | "
-                f"{_fmt(item['merged_gt_fsc_auc_delta'])} | {agreement_text} |"
+                f"{item['gt_class']} | {_fmt(item['cross_engine']['fsc_auc'])} | "
+                f"{_fmt(item['vs_gt']['recovar']['fsc_auc'])} | "
+                f"{_fmt(item['vs_gt']['relion']['fsc_auc'])} | "
+                f"{_fmt(item['gt_fsc_auc_delta'])} | {agreement_text} |"
             )
     final = report.get("final")
     if final:
