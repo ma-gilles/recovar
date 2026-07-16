@@ -2474,47 +2474,55 @@ Matrix evidence:
   winner.  This is numerical tie sensitivity, not a geometry or support-rule
   mismatch.
 - Replacing only that translation in the production device-derived BPref
-  contribution reduces the half-2 raw-data relative-L2 residual from about
-  `1.0825e-3` to `1.2549e-4`, an `88.4%` reduction.  Float32 logical and
-  canonical replay agree, while promoted float64 is effectively unchanged;
-  the translation-invariant weight is unaffected.
-- The production CUDA contribution signature agrees with a corrected
-  standalone fused replay to one `3.64e-12` data element and exact weight.
-  The remaining approximately `1.25e-4` data residual is continuous and must
-  not be attributed to the discrete translation tie.
+  contribution reduces the half-2 raw-data relative-L2 residual from
+  `1.08160e-3` to `1.25343e-4`, an `88.4%` reduction; the
+  translation-invariant weight is unaffected.
+- The production GPU path reaches 897 pixels while the double-precision C++
+  oracle reaches 896.  The sole difference is a radius-boundary pixel whose
+  production float32 radius is inside (`r^2=2303.999759`) while the C++ double
+  radius is outside (`r^2=2304.000138`).  All 896 common pixels agree.  Removing
+  that pixel reduces the apparent panel data residual from `1.35819e-2` to
+  `6.21507e-6`, so this closes a diagnostic-oracle mismatch, not a production
+  bug.
+- Genuine downstream float64/complex128 recomputation from the captured raw
+  float32 image changes the final unmasked operand by only `4.39994e-7` in
+  relative L2.  The aggregate approximately `1.25e-4` residual remains
+  unresolved.  The next decisive comparison is an actual RELION CUDA
+  `storeWeightedSums` capture of the unmasked operand and scatter; RELION's
+  available masked pass-1 Fimg is not a valid substitute.
 - Evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it1_p8494_neartie_capture_d302a760_20260716_024559/analysis/p8494_score_boundary_report_v2/report.json`
   and
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it1_p8494_device_capture_fix_fb4e6b73_20260716_082324/analysis/production_translation_swap.json`.
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it1_p8494_device_capture_fix_fb4e6b73_20260716_082324/analysis/continuous_residual_localization/report.json`.
 
 # 2026-07-16: particle 1491 classifies the recurrent iteration-2 score boundary
 
 - A paired same-physical-A100 capture freezes the earliest recurrent
   iteration-2 boundary.  Every one of RELION's 36,336 coarse rotations maps
   exactly to the transpose of a unique RECOVAR rotation; translation order,
-  the coarse winner, all 30 coarse parent rotations, and the significance count
-  of 173 agree.  One threshold-tail membership differs: RELION's retained tail
-  produces 32 additional fine candidates, but the fine winner is the same
-  physical candidate.
-- After exact candidate alignment, production RECOVAR Pmax is `0.3080509505`
-  versus RELION `0.3066732211` (absolute error `1.37773e-3`, posterior L1
-  `9.31928e-3`).  Replaying the captured RECOVAR operands with RELION's
-  float32 full-grid 256-lane reduction reduces the Pmax error to `9.87415e-5`
-  and L1 to `3.01462e-4`.  Promoted canonical float64 reduces them further to
-  `3.88798e-5` and `2.30408e-4`.
-- Float32 sequential-versus-256-lane order controls have centered raw-score
-  RMS about `2.73e-3`; the corresponding promoted-float64 full-versus-compact
-  order RMS is `7.64e-12`.  The dominant mismatch is therefore fine-score
-  reduction topology.  A smaller captured-operand/upstream-precision remainder
-  is unresolved because the saved image and projection operands are complex64;
-  this is not a genuine upstream complex128 recomputation.
-- The exact-fine-reduction candidate at `7ad2526d` is now supported as a real
-  boundary diagnostic, but remains unmerged: its earlier paired trajectory had
-  no consistent FSC-AUC improvement and cost `4.58%` wall time.  Test it next
-  through controlled aggregate/boundary substitutions, not more serial
-  particle probes.
+  the coarse winner, and all 30 coarse parent rotations agree.  RELION's
+  metadata threshold rank is 173, but its `>=` tie expansion evaluates 174
+  hypotheses while RECOVAR evaluates 173.  The sole RELION-only coarse pair
+  creates 32 fine descendants with posterior mass `0.004659639`.
+- The support difference dominates the visible posterior error.  All-support
+  L1 is `9.31920e-3`; on independently renormalized shared support, L1 is
+  `2.48768e-4`, relative L2 is `1.88068e-4`, and Pmax error is `5.79469e-5`.
+  RELION's full-grid 256-lane replay on the restored support is slightly worse
+  than that shared-support production comparison (L1 `3.01462e-4`, Pmax error
+  `9.87415e-5`), so fine reduction topology is not the first cause.
+- Same-physical-GPU float64 scoring leaves support unchanged and reduces
+  centered coarse-score RMS against RELION only from `1.68293e-4` to
+  `1.64606e-4` (`2.19%`).  A preliminary complex128-projector-plus-float64
+  scoring arm also leaves the boundary unchanged and is much farther from
+  RELION; because it ran on another physical GPU, do not use its aggregate
+  effects causally without a same-GPU repeat.  Ordinary score precision does
+  not explain this boundary; the next target is exact coarse pass-1
+  operand/formulation parity.
+- Candidate `7ad2526d` remains unmerged: it does not fix the first cause, its
+  earlier paired trajectory had no consistent FSC-AUC improvement, and it cost
+  `4.58%` wall time.
 - Evidence:
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_p1491_paired_a92c35ef_20260716_081502/analysis/p1491_fine_score_replay.json`
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_p1491_paired_a92c35ef_20260716_081502/analysis/p1491_coarse_boundary.json`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_p1491_paired_a92c35ef_20260716_081502/SCIENCE_COMPLETE.txt`.
 
@@ -2529,10 +2537,11 @@ Matrix evidence:
   with Pmax, support size, and defocus rather than concentrating in a discrete
   population; support count differs for 43/10,000 particles versus 14/10,000
   in the RELION control.
-- This supports the numerical-reduction classification and ends serial
-  particle-by-particle debugging unless a later aggregate analysis identifies
-  a systematic subgroup.  Continue with distribution-level score/posterior
-  comparisons, controlled iteration-boundary substitutions, complete
-  FSC/FSC-AUC trajectories, robustness/scale/real-data gates, and then K=4.
+- This does not classify the remaining difference as reduction noise.  It only
+  fails to isolate a systematic subgroup and therefore ends serial
+  particle-by-particle debugging unless later aggregate evidence identifies
+  one.  Continue with exact coarse operand/formulation replay, controlled
+  iteration-boundary substitutions, complete FSC/FSC-AUC trajectories,
+  robustness/scale/real-data gates, and then K=4.
 - Report:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_p1491_paired_a92c35ef_20260716_081502/analysis/aggregate_it2_pmax_support_distribution.json`.
