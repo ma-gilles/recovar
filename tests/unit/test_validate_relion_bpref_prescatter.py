@@ -44,7 +44,7 @@ def _write_artifact(
 
     values = [0] * 40
     values[0:5] = [1, 336, 40, 64, 32]
-    values[5:20] = [1, 1, part, stack, part, rank, 0, 3, 3, 1, 9, 1, 1, 2, 4]
+    values[5:20] = [1, 1, part, stack, part, rank, 0, 129, 256, 1, 33024, 1, 1, 2, 4]
     values[20:25] = [_float_bits(2.0), _float_bits(0.1), _float_bits(1.0), 0, 0]
     values[25:30] = [expected_particles, 1, 2, 10_000_000, 1_000_000]
     values[30:38] = [1234, 2000 + stack, 9, 9, 9, 0, 0, 1]
@@ -112,10 +112,14 @@ def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
 
     contributions = tmp_path / "contributions"
     contributions.mkdir()
-    summed = np.zeros((8, 1), dtype=np.complex64)
-    ctf = np.zeros((8, 1), dtype=np.float32)
+    summed = np.zeros((8, 2), dtype=np.complex64)
+    ctf = np.zeros((8, 2), dtype=np.float32)
     summed[0, 0] = np.complex64(complex(-2.0, 3.0) * (2.0**-16))
     ctf[0, 0] = np.float32(4.0 * (2.0**-32))
+    # Pixel 2 is in the RECOVAR source window but did not reach the indexed
+    # device scatter. It is outside the aligned pre-scatter comparison support.
+    summed[0, 1] = np.complex64(99 + 100j)
+    ctf[0, 1] = np.float32(101)
     contribution_path = contributions / "rows.npz"
     np.savez(
         contribution_path,
@@ -126,7 +130,7 @@ def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
         active_ctf_probs=ctf,
         active_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (8, 3, 3)),
         active_global_rotation_indices=np.arange(136, 144, dtype=np.int64),
-        window_indices=np.asarray([1], dtype=np.int32),
+        window_indices=np.asarray([1, 2], dtype=np.int32),
     )
     geometry = tmp_path / "geometry"
     geometry.mkdir()
@@ -134,8 +138,8 @@ def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
         geometry / "geometry.npz",
         companion_contribution_path=np.asarray(str(contribution_path)),
         signature_particle_rows=np.asarray([0], dtype=np.int32),
-        signature_pixel_indices=np.asarray([[1]], dtype=np.int32),
-        signature_row_flags=np.asarray([[64]], dtype=np.uint32),
+        signature_pixel_indices=np.asarray([[1, 2]], dtype=np.int32),
+        signature_row_flags=np.asarray([[64, 0]], dtype=np.uint32),
     )
     validation = tmp_path / "validation.json"
     validation.write_text(json.dumps({"classification_ready": True, "particle_count": 2}))
@@ -158,3 +162,4 @@ def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
     ] is True
     assert report["operands"]["real_weight_recovar_vs_scaled_relion"]["exact_equal"] is True
     assert np.array_equal(arrays["stack_indices_1based"], np.asarray([202]))
+    assert np.array_equal(arrays["recovar_device_support_mask"], np.asarray([[True, False]]))
