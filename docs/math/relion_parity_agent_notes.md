@@ -2609,12 +2609,12 @@ Matrix evidence:
   (case jobs `11264619--11264626`, summary `11264627`, trajectory audit
   `11265312`).
 
-# 2026-07-16: real-10076 differences exceed the observed RELION repeat scale
+# 2026-07-16: real-10076 approaches the observed repeat scale late
 
-- In all 48 calibrated iteration-1--16 half1/half2/merged comparisons, the
-  RECOVAR-versus-RELION FSC-AUC deficit exceeds the single observed
-  RELION-versus-RELION repeat deficit.  This is not strict trajectory parity,
-  although iteration-1 absolute FSC-AUC remains at least `0.9999999545`.
+- In 44 of 48 calibrated iteration-1--16 half1/half2/merged comparisons, the
+  worse of the two RECOVAR-versus-corresponding-RELION FSC-AUC deficits
+  exceeds the single observed RELION-A/B deficit.  Half 1 at iterations
+  14--16 and merged iteration 16 are within that empirical control scale.
 - Iteration-1 particle 8494 is closed as a one-float32-ULP coarse tie; it does
   not support a fine-scorer bug.  Iteration-2 particle 8240 is different: one
   coarse `0.999`-support swap creates 32 different fine descendants and the
@@ -2623,30 +2623,37 @@ Matrix evidence:
   support.  Geometry, priors, fine reduction, and ordinary float32 reduction
   precision are ruled out; upstream operand generation versus coarse score
   formulation remains unresolved.
-- The compared and control pairs are each same-physical-A100, but the pairs
-  used different UUIDs.  Treat the control as an empirical same-model scale,
-  not a confidence interval.  Do not gate iterations 17--18 or final maps
-  against it because the control trajectories terminate differently.
+- Treat the one repeat as an empirical same-model scale, not a confidence
+  interval.  Do not gate iteration 17 or final maps against it because the
+  control trajectories terminate differently.  Final RELION A/B FSC-AUC is
+  `0.946113`; final RECOVAR A/B is `0.948730`.
 - Evidence:
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/real10076_control_envelope_adjudication_v1.json`
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/real10076_completed_dual_repeat_envelope_v1.json`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/analysis/p8240_boundary.json`.
 
-# 2026-07-16: authoritative incoming-reference K=4 case-8 discriminator
+# 2026-07-16: authoritative incoming-reference K=4 discriminators
 
-- A serial A/B in one single-GPU Slurm allocation changes only the incoming
-  iteration-4 reference.
-  Class-2 iteration-5 direct FSC-AUC rises from `0.9782344460` to
-  `0.9999999956`; the GT FSC-AUC delta changes from `-4.84e-6` to `+3.26e-7`.
-- Assignments are identical between RECOVAR arms.  The visible cliff is
-  inherited map-state amplification, not an iteration-5 E/M formulation
-  error.  The earlier source remains open.
-- The regex-hardened repeat confirms one physical A100 UUID
-  (`GPU-a1de512c-f178-a5e1-6c95-c54c6d07c9f3`) at allocation, RELION, and both
-  RECOVAR boundaries.
+- Hardened same-A100 job `11273615` changes only the incoming case-8
+  iteration-4 reference.  Class-2 iteration-5 direct FSC-AUC rises from
+  `0.978234446` to `0.999999996`; the substituted arm's minimum over all
+  classes is `0.999999946`.  The same UUID
+  `GPU-a1de512c-f178-a5e1-6c95-c54c6d07c9f3` is recorded at all boundaries.
+- The substituted arm has exact class agreement and no iteration-5 support
+  count differences.  The visible cliff is inherited map-state amplification,
+  not an iteration-5 E/M formulation error.  The earlier source remains open.
+- In case 2, hardened job `11273364` closes iteration 2--5 when each previous
+  RELION reference is supplied: iteration-5 minimum direct FSC-AUC is
+  `0.999999974`, class agreement is `1.0`, and the minimum GT FSC-AUC delta is
+  `-6.57e-7`.  Focus further work on the earlier reconstructed-reference
+  boundary, not later particle scoring.
+- A float64 M-step perturbation worsens case-8 class 2 to `0.658960344`; this
+  demonstrates numerical sensitivity but is not canonical cross-program
+  float64 closure.  Require a full five-iteration RELION/RELION repeat.
 - Evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_it5_relref_ab_uuidfix_03c0969b_20260716_131422/analysis/ab_summary.json`
-  (SHA-256 `4eea996fb6f186290fcf408516eb7e25fb362a45ddc2bbb401e908005475d389`).
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case2_relref_ab_03c0969b_hardened_20260716_131700/analysis/ab_summary.json`.
 
 # 2026-07-16: K=1 local runs recorded the wrong pass's significant count
 
@@ -2654,16 +2661,18 @@ Matrix evidence:
   RECOVAR serialized the fine M-step support count after local search began,
   causing 2,691/3,000 count differences at iteration 4 and a mean absolute
   error of `75.834` by iteration 10.
-- Production now returns the parent-pass count for trajectory serialization
-  and the approximate-accuracy diagnostic.  Fine support still controls all
-  M-step arrays and statistics; the change is not a support or map-quality
-  intervention.
-- Focused CPU tests pass, including a parent `[2,3]` versus fine `[17,19]`
-  behavioral discriminator.  Full trajectory job `11275201` closes the
-  serialization bug: four iterations match all 3,000 counts, and only 16
-  particle-iteration residuals remain elsewhere, each exactly one count.
-  Iteration 4 drops from 2,691 mismatches to 2; iteration 10 mean absolute
-  error drops from `75.8343` to `0.002333`.
+- Full trajectory job `11275201` closes the parent-pass serialization bug:
+  four iterations match all 3,000 counts, and only 16 particle-iteration
+  residuals remain elsewhere, each exactly one count.  Iteration 4 drops from
+  2,691 mismatches to 2; iteration-10 mean absolute error drops from
+  `75.8343` to `0.002333`.
+- Production now counts the explicit retained parent-pass index lists for
+  serialization and the approximate-accuracy diagnostic.  It does not expose
+  the fine engine count as RELION metadata, and non-adaptive local search
+  reports this field unavailable.  Fine support still controls all M-step
+  arrays and statistics; the change is not a map-quality intervention.
+- Targeted guards pass, including valid local-GPU composite coverage of 363
+  tests.  Replay the exact extraction refinement as a final runtime guard.
 - The remaining 16 targets are upstream coarse-support boundaries, not a
   serialization or fine-M-step-support error.  They are materialized for the
   next direct-score replay.

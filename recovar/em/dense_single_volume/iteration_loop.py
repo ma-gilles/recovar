@@ -131,7 +131,7 @@ from recovar.em.dense_single_volume.relion_metadata import (
     _radial_profile_from_noise_variance,
     _relion_metadata_translations,
     _relion_rotation_grid_float32,
-    _rotation_eulers_for_canonical_or_custom_grid,
+    _rotation_eulers_for_canonical_or_custom_grid,  # noqa: F401 -- test-compatible re-export
 )
 from recovar.em.dense_single_volume.relion_replay import (
     _RelionHalfInputState,
@@ -2525,6 +2525,17 @@ def _local_translation_prior_reference_translations(
     return current, "current", True
 
 
+def _relion_coarse_significant_counts(significant_sample_indices):
+    """Count explicit retained pass-1 samples using RELION metadata semantics."""
+
+    if any(indices is None for indices in significant_sample_indices):
+        return None
+    return np.asarray(
+        [np.asarray(indices).size for indices in significant_sample_indices],
+        dtype=np.int32,
+    )
+
+
 def _score_half_local(
     *,
     k: int,
@@ -2668,7 +2679,7 @@ def _score_half_local(
             int(local_n_trans),
         )
     pass2_layout = None
-    parent_significant_counts_k = None
+    relion_significant_counts_k = None
     local_adaptive_pass2_parent_mode = "none"
     local_adaptive_pass2_denominator_layout = None
     local_normalization_log_evidence = None
@@ -2774,14 +2785,24 @@ def _score_half_local(
             translation_prior_centers=trans_prior_center_for_engine,
             rotation_log_prior=relion_local_rotation_log_prior_k,
             return_reconstruction_sample_indices=True,
-            return_significant_counts=True,
             apply_max_significants_to_support=True,
             score_only=True,
         )
-        parent_profile = parent_outputs[-2]
-        parent_significant_counts_k = np.asarray(parent_outputs[-1], dtype=np.int32)
+        parent_profile = parent_outputs[-1]
         significant_sample_indices = parent_profile["reconstruction_sample_indices_by_image"]
         pruned_parent_significant_sample_indices = significant_sample_indices
+        # RELION's rlnNrOfSignificantSamples records the number of retained
+        # coarse hypotheses from pass 1, not the number of fine hypotheses
+        # used for reconstruction in pass 2. Preserve this before any
+        # diagnostic expansion of the pass-2 parent support.
+        relion_significant_counts_k = _relion_coarse_significant_counts(
+            pruned_parent_significant_sample_indices
+        )
+        if relion_significant_counts_k is None:
+            logger.warning(
+                "RELION local adaptive pass 1 did not return explicit retained support; "
+                "rlnNrOfSignificantSamples-compatible counts are unavailable"
+            )
         if local_adaptive_pass2_full_parent:
             significant_sample_indices = [None] * len(significant_sample_indices)
             logger.info(
@@ -3061,7 +3082,9 @@ def _score_half_local(
         rotation_log_prior=None if pass2_layout is not None else relion_local_rotation_log_prior_k,
         class_log_priors=class_log_priors if k_class_enabled else None,
         return_class_details=k_class_enabled,
-        return_significant_counts=not k_class_enabled,
+        # The engine count describes fine-pass reconstruction support. It is
+        # deliberately not exposed as RELION's coarse pass-1 metadata count.
+        return_significant_counts=False,
         score_only=diagnostic_score_only,
         rotation_grid_mstep_rotations=local_search_mstep_rotations,
         generate_relion_mstep_rotations=True,
@@ -3098,18 +3121,6 @@ def _score_half_local(
                 ),
                 **local_profile_k,
             )
-    fine_significant_counts_k = None
-    if not k_class_enabled:
-        fine_significant_counts_k = np.asarray(_local_tail[_tail_idx], dtype=np.int32)
-        _tail_idx += 1
-    # RELION serializes rlnNrOfSignificantSamples from pass 1.  The fine
-    # significant support above still controls the M-step; only trajectory
-    # diagnostics/convergence consume this selected count.
-    significant_counts_k = (
-        parent_significant_counts_k
-        if parent_significant_counts_k is not None
-        else fine_significant_counts_k
-    )
     if k_class_enabled:
         class_assignments_k, class_posterior_sums_k = _local_tail[_tail_idx : _tail_idx + 2]
         _tail_idx += 2
@@ -3137,7 +3148,7 @@ def _score_half_local(
         best_pose_rotations=best_pose_rotations[k],
         best_pose_rotation_eulers=best_pose_rotation_eulers[k],
         best_pose_translations=best_pose_translations[k],
-        significant_counts=significant_counts_k,
+        significant_counts=relion_significant_counts_k,
         mstep_full_half_axis=0 if local_relion_x_half_mstep else None,
         mstep_accumulator_shape=(
             # Must match the current-size BPref grid allocated by the local

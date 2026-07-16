@@ -204,16 +204,32 @@ def test_k1_local_parent_probe_applies_relion_max_significants_cap():
     score_source = inspect.getsource(iteration_loop._score_half_local)
     parent_call = score_source[
         score_source.index("parent_outputs = _run_local_search_iteration") : score_source.index(
-            "parent_profile = parent_outputs[-2]"
+            "parent_profile = parent_outputs[-1]"
         )
     ]
     assert "max_significants=max_significants" in parent_call
     assert "apply_max_significants_to_support=True" in parent_call
-    assert "return_significant_counts=True" in parent_call
 
     wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
     assert "apply_max_significants_to_support=False" in wrapper_source
     assert "max_significants=max_significants if apply_max_significants_to_support else -1" in wrapper_source
+
+
+def test_k1_local_records_coarse_parent_support_not_fine_reconstruction_count():
+    source = inspect.getsource(iteration_loop._score_half_local)
+
+    parent_count_start = source.index("pruned_parent_significant_sample_indices = significant_sample_indices")
+    parent_count_end = source.index("if local_adaptive_pass2_full_parent:", parent_count_start)
+    parent_count_source = source[parent_count_start:parent_count_end]
+    assert "relion_significant_counts_k = _relion_coarse_significant_counts(" in parent_count_source
+    assert "return_significant_counts=False" in source
+    assert "significant_counts=relion_significant_counts_k" in source
+
+    counts = iteration_loop._relion_coarse_significant_counts(
+        [np.array([2, 8], dtype=np.int64), np.array([1, 3, 5, 7], dtype=np.int64)]
+    )
+    np.testing.assert_array_equal(counts, np.array([2, 4], dtype=np.int32))
+    assert iteration_loop._relion_coarse_significant_counts([np.array([2]), None]) is None
 
 
 def test_k1_local_search_does_not_score_learned_global_direction_prior():
@@ -329,15 +345,14 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
     )
 
     assert captured["mstep_relion_x_half"] is True
-    assert captured["return_significant_counts"] is True
-    np.testing.assert_array_equal(result.significant_counts, np.array([7], dtype=np.int32))
+    assert captured["return_significant_counts"] is False
+    assert result.significant_counts is None
     assert result.mstep_full_half_axis == 0
     assert result.mstep_accumulator_shape == (19, 19, 19)
 
 
 def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monkeypatch):
     parent_counts = np.array([2, 3], dtype=np.int32)
-    fine_counts = np.array([17, 19], dtype=np.int32)
     best_rotation = np.array(
         [
             [0.93629336, -0.27509585, 0.21835066],
@@ -379,7 +394,6 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
                         np.array([0, 1, 2], dtype=np.int64),
                     ),
                 },
-                parent_counts,
             )
         return (
             "fine_ft_y",
@@ -390,7 +404,6 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
             np.array([0, 1], dtype=np.int32),
             _Stats(),
             "fine_noise",
-            fine_counts,
         )
 
     monkeypatch.setattr(iteration_loop, "build_local_search_grid_metadata", lambda _order: {})
@@ -463,13 +476,13 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
     assert len(calls) == 2
     parent_call, fine_call = calls
     assert parent_call["score_only"] is True
-    assert parent_call["return_significant_counts"] is True
+    assert parent_call.get("return_significant_counts", False) is False
     assert parent_call["apply_max_significants_to_support"] is True
     assert parent_call["max_significants"] == 23
     assert fine_call["score_only"] is False
     assert fine_call["reconstruct_significant_only"] is True
     assert fine_call["stats_use_reconstruction_probs"] is True
-    assert fine_call["return_significant_counts"] is True
+    assert fine_call["return_significant_counts"] is False
     assert result.Ft_y == "fine_ft_y"
     assert result.Ft_ctf == "fine_ft_ctf"
     assert result.noise_stats == "fine_noise"

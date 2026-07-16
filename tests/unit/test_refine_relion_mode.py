@@ -2469,7 +2469,7 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
     np.testing.assert_array_equal(captured["rotation_grid_mstep_rotations"], mstep_grid)
     assert captured["generate_relion_mstep_rotations"] is True
     assert (captured["class_log_priors"] is not None) is k_class_enabled
-    assert captured["return_significant_counts"] is (not k_class_enabled)
+    assert captured["return_significant_counts"] is False
 
 
 def test_build_local_hypothesis_layout_parent_expands_translation_grid_and_priors():
@@ -4163,13 +4163,12 @@ def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatc
 def test_local_adaptive_parent_support_probe_is_score_only():
     source = Path(iteration_loop_module.__file__).read_text()
     start = source.index("parent_outputs = _run_local_search_iteration(")
-    end = source.index("parent_profile = parent_outputs[-2]", start)
+    end = source.index("parent_profile = parent_outputs[-1]", start)
     parent_call = source[start:end]
 
     assert "disable_adjoint_y=True" in parent_call
     assert "disable_adjoint_ctf=True" in parent_call
     assert "return_reconstruction_sample_indices=True" in parent_call
-    assert "return_significant_counts=True" in parent_call
     assert "score_only=True" in parent_call
 
 
@@ -8765,13 +8764,11 @@ class TestRelionModeSmokeTest:
         monkeypatch.setattr(iteration_loop_module, "rotation_grid_size", fake_rotation_grid_size)
         monkeypatch.setattr(
             iteration_loop_module,
-            "get_relion_rotation_grid",
-            lambda _order: np.asarray(rotations, dtype=np.float32),
-        )
-        monkeypatch.setattr(
-            iteration_loop_module,
-            "get_relion_rotation_grid_eulers",
-            lambda _order: custom_eulers,
+            "_relion_rotation_grid_float32",
+            lambda _order: (
+                np.asarray(rotations, dtype=np.float32),
+                custom_eulers,
+            ),
         )
         monkeypatch.setattr(
             iteration_loop_module,
