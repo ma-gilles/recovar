@@ -103,7 +103,16 @@ def load_recovar_summary(path: str | Path, *, label: str) -> WinnerSummary:
         n_translations = int(_as_scalar(payload["n_translations"], "n_translations"))
     if n_rotations <= 0 or n_translations <= 0:
         raise ValueError("RECOVAR pose topology must be positive")
-    _validate_summary_arrays(identity, winner, runner_up, margin, class_scores, class_pose, higher_is_better=True)
+    _validate_summary_arrays(
+        identity,
+        winner,
+        runner_up,
+        margin,
+        class_scores,
+        class_pose,
+        higher_is_better=True,
+        allow_tied_selected_winner=True,
+    )
     _validate_within_class_runner_up(
         class_scores,
         class_pose,
@@ -141,7 +150,10 @@ def load_recovar_summary(path: str | Path, *, label: str) -> WinnerSummary:
         "total_score_semantics": ("identical to raw score in firstiter_cc because RELION bypasses priors before WTA"),
         "evidence_semantics": "per-class logsumexp evidence before firstiter_cc one-hot posterior",
         "posterior_semantics": "post-firstiter_cc one-hot class mass",
-        "winner_semantics": "stable first-class argmax of native float32 class-best scores before WTA",
+        "winner_semantics": (
+            "actual joint class-pose argmax before WTA; captured float32 scores may tie after "
+            "adding the class-common normalization offset"
+        ),
         "support_semantics": "post-firstiter_cc exactly one global class-pose sample per particle",
         "pre_wta_support_semantics": "all coarse candidates scored; no posterior threshold before WTA",
         "significant_count_semantics": "post-WTA global class-pose support cardinality; exactly one",
