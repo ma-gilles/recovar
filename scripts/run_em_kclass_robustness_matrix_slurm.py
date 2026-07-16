@@ -712,6 +712,10 @@ unset TF_GPU_ALLOCATOR
 export PYTHONNOUSERSITE=1
 export RECOVAR_EXPECTED_REPO_ROOT={q(REPO_ROOT)}
 export RELION_SRC_DIR={q(relion_src_dir)}
+if [[ ! -f "${{RELION_SRC_DIR}}/projector.h" ]]; then
+  echo "ERROR: RELION_SRC_DIR does not contain projector.h: ${{RELION_SRC_DIR}}" >&2
+  exit 2
+fi
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
 RUNTIME_ROOT={q(DEFAULT_RUNTIME_ROOT / job_name)}_${{SLURM_JOB_ID}}

@@ -284,6 +284,7 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     assert "git status --short --untracked-files=no" in setup_text
     assert "git status --short --untracked-files=no" in summary_text
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_setup_" in setup_text
+    assert f"export RELION_SRC_DIR={relion_src}" in setup_text
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_summary_" in summary_text
     assert f"EXPECTED_GIT_HEAD={expected_head}" in submission
     assert "CASE_JOB_IDS='DRYRUN DRYRUN'" in submission
