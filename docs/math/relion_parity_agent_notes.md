@@ -2649,11 +2649,32 @@ Matrix evidence:
   boundary, not later particle scoring.
 - A float64 M-step perturbation worsens case-8 class 2 to `0.658960344`; this
   demonstrates numerical sensitivity but is not canonical cross-program
-  float64 closure.  Require a full five-iteration RELION/RELION repeat.
+  float64 closure.
 - Evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_it5_relref_ab_uuidfix_03c0969b_20260716_131422/analysis/ab_summary.json`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case2_relref_ab_03c0969b_hardened_20260716_131700/analysis/ab_summary.json`.
+
+# 2026-07-16: late K=4 case-2/case-8 gaps are inside stock RELION instability
+
+- Same-A100 stock RELION repeats are effectively identical through iteration
+  2, then become chaotic.  Case 8 reaches matched-class repeat FSC-AUC minima
+  `0.756449`, `0.377412`, and `0.223965` at iterations 3--5; iteration-5 class
+  agreement is `0.8880`.  Case 2 reaches `0.900719`, `0.893286`, and `0.863441`.
+- RECOVAR/RELION is substantially closer than RELION/RELION at the visible
+  late boundaries: case-8 minority class is `0.978234`; case-2 iteration-4 is
+  `0.991908` with agreement `0.9914`, versus native-repeat class values
+  `0.893286--0.904928` and agreement `0.9019`.
+- Dispatch schedule non-rank columns are exact, while runtime follower owners
+  differ for `25,468/50,000` case-8 and `19,712/50,000` case-2 rows.  Treat
+  previous-reference substitution as a sensitivity control, not proof of a
+  reconstruction bug.  Do not pursue those late cliffs unless a difference
+  exceeds the case-specific stock-repeat envelope; keep early stable arrays,
+  convergence, and FSC/FSC-AUC trajectory gates.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_relion_repeat_full5_uuidfix_20260716_141807/analysis/relion_repeat_full5.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case2_relion_repeat_full5_uuidfix_20260716_144006/analysis/relion_repeat_full5.json`.
 
 # 2026-07-16: K=1 local runs recorded the wrong pass's significant count
 

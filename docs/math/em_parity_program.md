@@ -4072,19 +4072,52 @@ contracts angle p99 from `26.99` degrees to float32 scale.  Job `11273364`
 used one validated A100 UUID for both arms.
 
 These controls classify the later E-step/pose/posterior machinery as capable
-of parity when supplied RELION's preceding maps.  The open defect is the
-earlier RECOVAR reconstructed-reference boundary.  A separate case-8
-complex128/float64 M-step perturbation makes the minority cliff much worse
+of parity when supplied RELION's preceding maps.  They demonstrate strong
+incoming-reference sensitivity, but do not by themselves prove that the
+earlier RECOVAR reconstructed-reference boundary is defective.  A separate
+case-8 complex128/float64 M-step perturbation makes the minority cliff much worse
 (`0.658960344` at iteration 5 versus `0.978235509` in production), proving
-strong numerical sensitivity but not cross-program float64 closure.  A full
-five-iteration stock RELION/RELION repeat is still required to calibrate the
-late minority-class envelope.  Map acceptance uses shell FSC/FSC-AUC only.
+strong numerical sensitivity but not cross-program float64 closure.  Map
+acceptance uses shell FSC/FSC-AUC only.
 
 Evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_it5_relref_ab_uuidfix_03c0969b_20260716_131422/analysis/ab_summary.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case2_relref_ab_03c0969b_hardened_20260716_131700/analysis/ab_summary.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_mstep64_ab_03c0969b_hardened_20260716_131600/analysis/ab_summary.json`
+
+## 2026-07-16 K=4 stock-RELION repeat calibration
+
+Hardened same-A100 stock RELION/RELION repeats show that the late case-2 and
+case-8 Class3D trajectories are intrinsically unstable.  Case 8 is effectively
+identical through iteration 2, then its matched-class repeat FSC-AUC minimum
+falls to `0.756448814` at iteration 3, `0.377412354` at iteration 4, and
+`0.223965129` at iteration 5.  Assignment agreement falls to `0.8880` and the
+iteration-5 angle-error p99 is `170.55` degrees.  The original RECOVAR/RELION
+minority-class value `0.978234446` is therefore well inside the much larger
+native RELION repeat envelope.
+
+Case 2 behaves similarly.  Its repeat minimum is `0.9999999993` at iteration 1
+and `0.9999999968` at iteration 2, but falls to `0.900718820` at iteration 3,
+`0.893285765` at iteration 4, and `0.863440629` at iteration 5.  Iteration-4
+assignment agreement is `0.9019`, compared with RECOVAR/RELION agreement
+`0.9914`; RECOVAR/RELION direct FSC-AUC `0.991907530` is much closer than any
+of the four matched native-repeat class values (`0.893286--0.904928`).
+
+Both repeats preserve exact dispatch non-rank columns, but runtime follower
+ownership changes for `25,468/50,000` case-8 particle-iterations and
+`19,712/50,000` case-2 particle-iterations.  That rank/reduction-order seed is
+small through iteration 2 and then class dynamics amplify it.  Consequently,
+late reference-substitution closure is evidence of trajectory sensitivity,
+not an actionable RECOVAR algorithm bug unless a cross-engine difference
+exceeds the case-specific native repeat envelope.  Early stable boundaries,
+full distribution arrays, GT FSC/FSC-AUC, convergence, and case-specific
+repeat controls remain required; bitwise class decisions are not a gate.
+
+Authoritative evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_relion_repeat_full5_uuidfix_20260716_141807/analysis/relion_repeat_full5.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case2_relion_repeat_full5_uuidfix_20260716_144006/analysis/relion_repeat_full5.json`
 
 ## 2026-07-16 K=1 local significant-count semantics
 
