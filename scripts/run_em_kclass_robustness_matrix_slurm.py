@@ -15,17 +15,17 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
-import time
 import subprocess
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RIBO_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/Ribosembly/pdbs")
 DEFAULT_IGG_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/IgG-1D/pdbs")
 DEFAULT_TOMOTWIN_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/Tomotwin-100/pdbs")
 DEFAULT_IGG_RL_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/IgG-RL/pdbs")
+DEFAULT_RUNTIME_ROOT = Path("/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime")
 
 
 @dataclass(frozen=True)
@@ -97,42 +97,6 @@ DEFAULT_CASES: tuple[Case, ...] = (
     Case(14, "igg_rl_k4_10k_g128_white_noise1_uniform", DEFAULT_IGG_RL_PDB_DIR, 4, 10_000, 128, 1.0, "white", "uniform", "uniform", 2814, 80.0, 10, 0.0, 0.0, 0.7, 0.0, 0.0, 5, "06:00:00", "256G", 500, False),
     Case(15, "igg_rl_k4_10k_g128_radial_noise3_nonuniform_outliers_pct20", DEFAULT_IGG_RL_PDB_DIR, 4, 10_000, 128, 3.0, "radial1", "nonuniform", "linear", 2815, 80.0, 10, 0.2, 0.2, 0.7, 0.5, 0.20, 5, "06:00:00", "256G", 500, False),
 )
-
-RECOVAR_OPTIONAL_ENV_PASSTHROUGH = (
-    "TF_GPU_ALLOCATOR",
-    "RECOVAR_SPARSE_KCLASS_GROUP_TIMING",
-    "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE",
-    "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT",
-    "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER",
-    "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT",
-    "RECOVAR_RELION_FIRSTITER_RECON_COMPLEX_BUDGET",
-    "RECOVAR_K_CLASS_DENSE_PASS2",
-    "RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION",
-    "RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION",
-    "RECOVAR_K_CLASS_DENSE_PASS2_SMALL_DATASET_IMAGES",
-    "RECOVAR_K_CLASS_DENSE_PASS2_SMALL_DATASET_MEAN_SUPPORT_FRACTION",
-    "RECOVAR_K_CLASS_RELION_X_HALF_MSTEP",
-    "RECOVAR_K_CLASS_FULL_VOLUME_MSTEP",
-    "RECOVAR_K_CLASS_HALF_VOLUME_MSTEP",
-    "RECOVAR_KCLASS_REPLAY_TAU2",
-    "RECOVAR_KCLASS_REPLAY_TAU2_SAME_ITER",
-    "RECOVAR_SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS",
-    "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS",
-    "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS",
-    "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK",
-    "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_STATS",
-    "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTEP",
-    "RECOVAR_SPARSE_KCLASS_COMPACT_ACTIVE_ROWS",
-    "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE",
-    "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE",
-    "RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL",
-    "RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO",
-    "RECOVAR_SPARSE_PASS2_MAX_NOISE_BLOCK_BYTES",
-    "RECOVAR_SPARSE_PASS2_MAX_ADJOINT_BLOCK_BYTES",
-    "RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES",
-    "RECOVAR_KCLASS_DUMP_DIR",
-)
-
 
 def q(value: str | Path) -> str:
     return shlex.quote(str(value))
@@ -235,46 +199,66 @@ def sbatch_directive(flag: str, value: str | None) -> str:
     return f"#SBATCH {flag}={value}" if value else ""
 
 
-def optional_exports(names: tuple[str, ...]) -> str:
-    lines = []
-    for name in names:
-        value = os.environ.get(name)
-        if value:
-            lines.append(f"export {name}={q(value)}")
-    return "\n".join(lines)
-
-
-def build_cuda_lib_command(*, scratch_dir: Path) -> str:
-    return f"""mkdir -p "$(dirname "${{RECOVAR_CUDA_LIB}}")"
-CUDA_LIB_TMP="${{RECOVAR_CUDA_LIB}}.${{SLURM_JOB_ID:-$$}}.tmp"
+def build_cuda_lib_command() -> str:
+    return """mkdir -p "$(dirname "${RECOVAR_CUDA_LIB}")"
+CUDA_LIB_TMP="${RECOVAR_CUDA_LIB}.${SLURM_JOB_ID:-$$}.tmp"
 export CUDA_LIB_TMP PIXI_PY
-flock {q(scratch_dir / "cuda" / "build.lock")} bash -lc '
+flock "$(dirname "${RECOVAR_CUDA_LIB}")/build.lock" bash -lc '
   set -euo pipefail
-  rm -f "${{CUDA_LIB_TMP}}"
-  env PYTHON="${{PIXI_PY}}" make -C recovar/cuda LIB="${{CUDA_LIB_TMP}}" all
-  mv -f "${{CUDA_LIB_TMP}}" "${{RECOVAR_CUDA_LIB}}"
+  rm -f "${CUDA_LIB_TMP}"
+  env PYTHON="${PIXI_PY}" make -C recovar/cuda LIB="${CUDA_LIB_TMP}" all
+  mv -f "${CUDA_LIB_TMP}" "${RECOVAR_CUDA_LIB}"
 '
 """
 
 
-def job_preamble(*, scratch_dir: Path, cuda_lib: Path, cuda_module: str, job_name: str) -> str:
+def git_provenance_gate(*, expected_commit: str) -> str:
+    return f"""EXPECTED_GIT_HEAD={q(expected_commit)}
+ACTUAL_GIT_HEAD="$(git rev-parse HEAD)"
+if [[ "${{ACTUAL_GIT_HEAD}}" != "${{EXPECTED_GIT_HEAD}}" ]]; then
+  echo "ERROR: queued-job Git HEAD drift: expected ${{EXPECTED_GIT_HEAD}}, got ${{ACTUAL_GIT_HEAD}}" >&2
+  exit 2
+fi
+TRACKED_GIT_STATUS="$(git status --short --untracked-files=no)"
+if [[ -n "${{TRACKED_GIT_STATUS}}" ]]; then
+  echo "ERROR: queued-job worktree has tracked changes:" >&2
+  printf '%s\\n' "${{TRACKED_GIT_STATUS}}" >&2
+  exit 2
+fi
+echo "Queued-job Git provenance gate ok: ${{ACTUAL_GIT_HEAD}}"
+"""
+
+
+def job_preamble(
+    *,
+    scratch_dir: Path,
+    cuda_lib: Path,
+    cuda_module: str,
+    job_name: str,
+    expected_commit: str,
+) -> str:
     return f"""set -euo pipefail
 cd {q(REPO_ROOT)}
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 unset CONDA_DEFAULT_ENV CONDA_EXE CONDA_PYTHON_EXE CONDA_PROMPT_MODIFIER CONDA_SHLVL
-# Submit shells often run CPU-only local tests. GPU Slurm jobs must not inherit
-# those overrides or the CUDA provenance gate will correctly fail.
-unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
+# Strict matrix jobs do not inherit experiment/debug toggles from the submitter.
+while IFS='=' read -r ENV_NAME _; do
+  case "${{ENV_NAME}}" in
+    RECOVAR_*|RELION_*|JAX_*|XLA_*) unset "${{ENV_NAME}}" ;;
+  esac
+done < <(env)
+unset TF_GPU_ALLOCATOR
 export PYTHONNOUSERSITE=1
 export RECOVAR_EXPECTED_REPO_ROOT={q(REPO_ROOT)}
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
-export TMPDIR={q(scratch_dir)}/tmp/{job_name}_${{SLURM_JOB_ID}}
-export PIXI_HOME={q(scratch_dir)}/pixi_home/{job_name}_${{SLURM_JOB_ID}}
-export RATTLER_CACHE_DIR={q(scratch_dir)}/rattler_cache/{job_name}_${{SLURM_JOB_ID}}
+RUNTIME_ROOT={q(DEFAULT_RUNTIME_ROOT / job_name)}_${{SLURM_JOB_ID}}
+export TMPDIR="${{RUNTIME_ROOT}}/tmp"
+export PIXI_HOME="${{RUNTIME_ROOT}}/pixi_home"
+export RATTLER_CACHE_DIR="${{RUNTIME_ROOT}}/rattler_cache"
 export RECOVAR_JAX_CACHE_DIR={q(scratch_dir)}/jax_cache
 export JAX_COMPILATION_CACHE_DIR="${{RECOVAR_JAX_CACHE_DIR}}"
-export RECOVAR_CUDA_LIB={q(cuda_lib)}
+export RECOVAR_CUDA_LIB={q(cuda_lib.parent)}/${{SLURM_JOB_ID}}/{q(cuda_lib.name)}
 export RECOVAR_CUDA_CACHE_DIR={q(scratch_dir)}/cuda_cache/{job_name}_${{SLURM_JOB_ID}}
 export RECOVAR_RELION_BIND_BUILD_DIR={q(scratch_dir)}/relion_bind_build/{job_name}_${{SLURM_JOB_ID}}
 mkdir -p "${{TMPDIR}}" "${{PIXI_HOME}}" "${{RATTLER_CACHE_DIR}}" "${{RECOVAR_JAX_CACHE_DIR}}" "${{RECOVAR_CUDA_CACHE_DIR}}" "${{RECOVAR_RELION_BIND_BUILD_DIR}}" "$(dirname "${{RECOVAR_CUDA_LIB}}")" {q(REPO_ROOT / ".pixi")}
@@ -310,6 +294,8 @@ if [[ -z "${{CUDA_VISIBLE_DEVICES:-}}" ]]; then
   fi
 fi
 
+{git_provenance_gate(expected_commit=expected_commit)}
+
 echo "=== {job_name} ==="
 echo "Repo: {REPO_ROOT}"
 echo "HEAD: $(git rev-parse HEAD)"
@@ -322,8 +308,7 @@ echo "CUDA_VISIBLE_DEVICES=${{CUDA_VISIBLE_DEVICES:-}}"
 echo "TMPDIR=${{TMPDIR}}"
 echo "RECOVAR_CUDA_LIB=${{RECOVAR_CUDA_LIB}}"
 echo "RECOVAR_RELION_BIND_BUILD_DIR=${{RECOVAR_RELION_BIND_BUILD_DIR}}"
-nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
-{optional_exports(RECOVAR_OPTIONAL_ENV_PASSTHROUGH)}
+nvidia-smi --query-gpu=index,name,uuid,memory.total --format=csv,noheader || true
 """
 
 
@@ -337,7 +322,9 @@ def write_setup_script(
     constraint: str,
     setup_gres: str,
     cuda_module: str,
+    expected_commit: str | None = None,
 ) -> Path:
+    expected_commit = expected_commit or git_text("rev-parse", "HEAD")
     script = jobs_dir / "em_kclass_matrix_setup.sh"
     text = f"""#!/usr/bin/env bash
 #SBATCH --job-name=em_kclass_setup
@@ -351,7 +338,7 @@ def write_setup_script(
 #SBATCH --mem=64G
 #SBATCH --time=01:00:00
 
-{job_preamble(scratch_dir=scratch_dir, cuda_lib=cuda_lib, cuda_module=cuda_module, job_name="em_kclass_matrix_setup")}
+{job_preamble(scratch_dir=scratch_dir, cuda_lib=cuda_lib, cuda_module=cuda_module, job_name="em_kclass_matrix_setup", expected_commit=expected_commit)}
 
 flock {q(REPO_ROOT / ".pixi" / "install-recovar.lock")} bash -lc '
 set -euo pipefail
@@ -404,7 +391,9 @@ def write_case_script(
     rotation_block_size: int,
     gt_align_refine_orders: str,
     noise_rng_batch_size: str,
+    expected_commit: str | None = None,
 ) -> Path:
+    expected_commit = expected_commit or git_text("rev-parse", "HEAD")
     case_root = scratch_dir / "cases" / f"{case.index}_{case.name}"
     script = jobs_dir / f"em_kclass_matrix_{case.index}_{case.name}.sh"
     exclusive_directive = "#SBATCH --exclusive" if exclusive else ""
@@ -440,16 +429,41 @@ echo "Using holdout outlier PDB: ${{OUTLIER_PDB}}"
 #SBATCH --mem={case.mem}
 #SBATCH --time={case.time_limit}
 
-{job_preamble(scratch_dir=scratch_dir, cuda_lib=cuda_lib, cuda_module=cuda_module, job_name=f"em_kclass_matrix_{case.index}_{case.name}")}
+{job_preamble(scratch_dir=scratch_dir, cuda_lib=cuda_lib, cuda_module=cuda_module, job_name=f"em_kclass_matrix_{case.index}_{case.name}", expected_commit=expected_commit)}
 
 CASE_ROOT={q(case_root)}
 DATA_DIR="${{CASE_ROOT}}/data"
 RECOVAR_DIR="${{CASE_ROOT}}/recovar"
+RECOVAR_INTERMEDIATES_DIR="${{RECOVAR_DIR}}/numbered_intermediates"
 RELION_DIR="${{CASE_ROOT}}/relion_ref"
 RELION_DISPATCH_LOG="${{RELION_DIR}}/dispatch.tsv"
 RELION_DISPATCH_SCHEDULE="${{RELION_DIR}}/dispatch_schedule.npz"
 SUB_PDB_DIR="${{CASE_ROOT}}/pdbs_k{case.n_classes}"
-mkdir -p "${{CASE_ROOT}}" "${{DATA_DIR}}" "${{RECOVAR_DIR}}" "${{RELION_DIR}}" "${{SUB_PDB_DIR}}"
+mkdir -p "${{CASE_ROOT}}" "${{DATA_DIR}}" "${{RECOVAR_DIR}}" "${{RECOVAR_INTERMEDIATES_DIR}}" "${{RELION_DIR}}" "${{SUB_PDB_DIR}}"
+
+capture_physical_gpu_uuid() {{
+  local gpu_token="${{SLURM_JOB_GPUS:-}}"
+  gpu_token="${{gpu_token%%,*}}"
+  local gpu_uuid=""
+  if [[ "${{gpu_token}}" == GPU-* ]]; then
+    gpu_uuid="${{gpu_token}}"
+  elif [[ -n "${{gpu_token}}" ]]; then
+    gpu_uuid="$(nvidia-smi --id="${{gpu_token}}" --query-gpu=uuid --format=csv,noheader 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+  fi
+  if [[ -z "${{gpu_uuid}}" ]]; then
+    mapfile -t visible_uuids < <(nvidia-smi --query-gpu=uuid --format=csv,noheader | sed 's/[[:space:]]//g' | sed '/^$/d')
+    if [[ "${{#visible_uuids[@]}}" -ne 1 ]]; then
+      echo "ERROR: cannot identify exactly one physical GPU (found ${{#visible_uuids[@]}})" >&2
+      return 2
+    fi
+    gpu_uuid="${{visible_uuids[0]}}"
+  fi
+  printf '%s\\n' "${{gpu_uuid}}"
+}}
+
+CASE_GPU_UUID="$(capture_physical_gpu_uuid)"
+printf '%s\\n' "${{CASE_GPU_UUID}}" > "${{CASE_ROOT}}/physical_gpu_uuid.txt"
+nvidia-smi --query-gpu=timestamp,index,name,uuid,memory.total,driver_version --format=csv > "${{CASE_ROOT}}/physical_gpu_inventory.csv"
 
 cat > "${{CASE_ROOT}}/case_config.json" <<JSON
 {{
@@ -495,7 +509,7 @@ done
 flock {q(REPO_ROOT / ".pixi" / "install-recovar.lock")} bash -lc 'pixi run --frozen install-recovar'
 PIXI_PY="$(pixi run --frozen which python)"
 "${{PIXI_PY}}" recovar/relion_bind/build.py
-{build_cuda_lib_command(scratch_dir=scratch_dir)}
+{build_cuda_lib_command()}
 "${{PIXI_PY}}" - <<'PY'
 import os
 import pathlib
@@ -545,6 +559,12 @@ echo "=== Prepare K-class dataset: {case.name} ==="
   2>&1 | tee "${{CASE_ROOT}}/prepare.log"
 
 echo "=== Run RELION Class3D: {case.name} ==="
+RELION_GPU_UUID="$(capture_physical_gpu_uuid)"
+if [[ "${{RELION_GPU_UUID}}" != "${{CASE_GPU_UUID}}" ]]; then
+  echo "ERROR: RELION physical GPU changed: expected ${{CASE_GPU_UUID}}, got ${{RELION_GPU_UUID}}" >&2
+  exit 2
+fi
+printf '%s\\n' "${{RELION_GPU_UUID}}" > "${{RELION_DIR}}/physical_gpu_uuid.txt"
 RELION_START="$(date +%s)"
 set +e
 (
@@ -556,7 +576,12 @@ set +e
   set +u
   module load {q(relion_module)}
   set -u
-  export CUDA_VISIBLE_DEVICES=0
+  RELION_RUNTIME_GPU_UUID="$(capture_physical_gpu_uuid)"
+  if [[ "${{RELION_RUNTIME_GPU_UUID}}" != "${{CASE_GPU_UUID}}" ]]; then
+    echo "ERROR: RELION runtime physical GPU changed: expected ${{CASE_GPU_UUID}}, got ${{RELION_RUNTIME_GPU_UUID}}" >&2
+    exit 2
+  fi
+  printf '%s\\n' "${{RELION_RUNTIME_GPU_UUID}}" > "${{RELION_DIR}}/runtime_physical_gpu_uuid.txt"
   RELION_TMPDIR="${{SLURM_TMPDIR:-/tmp/${{USER:-mg6942}}/relion_${{SLURM_JOB_ID:-manual}}_{case.index}_{case.name}}}"
   mkdir -p "${{RELION_TMPDIR}}"
   export TMPDIR="${{RELION_TMPDIR}}"
@@ -580,13 +605,13 @@ set +e
       --iter {case.max_iter} \\
       --tau2_fudge 4 \\
       --particle_diameter {particle_diameter:g} \\
-	      --K {case.n_classes} \\
-	      --flatten_solvent \\
-	      --zero_mask \\
-	      --firstiter_cc \\
-	      "${{RELION_CTF_ARGS[@]}}" \\
-	      --norm \\
-	      --scale \\
+      --K {case.n_classes} \\
+      --flatten_solvent \\
+      --zero_mask \\
+      --firstiter_cc \\
+      "${{RELION_CTF_ARGS[@]}}" \\
+      --norm \\
+      --scale \\
       --sym C1 \\
       --oversampling 1 \\
       --healpix_order 1 \\
@@ -633,6 +658,17 @@ if [[ ! -s "${{RELION_DISPATCH_SCHEDULE}}" ]]; then
 fi
 
 echo "=== Run RECOVAR K-class refinement: {case.name} ==="
+RECOVAR_GPU_UUID="$(capture_physical_gpu_uuid)"
+if [[ "${{RECOVAR_GPU_UUID}}" != "${{CASE_GPU_UUID}}" || "${{RECOVAR_GPU_UUID}}" != "${{RELION_GPU_UUID}}" ]]; then
+  echo "ERROR: RECOVAR and RELION did not use the same physical GPU: RELION=${{RELION_GPU_UUID}} RECOVAR=${{RECOVAR_GPU_UUID}}" >&2
+  exit 2
+fi
+printf '%s\\n' "${{RECOVAR_GPU_UUID}}" > "${{RECOVAR_DIR}}/physical_gpu_uuid.txt"
+cat > "${{CASE_ROOT}}/paired_gpu_uuid.json" <<JSON
+{{"physical_gpu_uuid":"${{CASE_GPU_UUID}}","relion_gpu_uuid":"${{RELION_GPU_UUID}}","recovar_gpu_uuid":"${{RECOVAR_GPU_UUID}}"}}
+JSON
+rm -rf "${{RECOVAR_INTERMEDIATES_DIR}}"
+mkdir -p "${{RECOVAR_INTERMEDIATES_DIR}}"
 START_EPOCH="$(date +%s)"
 set +e
 "${{PIXI_PY}}" -m scripts.run_full_refinement \\
@@ -642,12 +678,13 @@ set +e
   --n_classes {case.n_classes} \\
   --healpix_order 1 \\
   --offset_range 6 \\
-	  --offset_step 2 \\
-	  --adaptive_oversampling 1 \\
-	  --init_resolution 30.0 \\
-	  --firstiter_cc \\
-	  --image_batch_size {image_batch_size} \\
-	  --rotation_block_size {rotation_block_size} \\
+  --offset_step 2 \\
+  --adaptive_oversampling 1 \\
+  --init_resolution 30.0 \\
+  --firstiter_cc \\
+  --image-fourier-backend relion_cuda \\
+  --image_batch_size {image_batch_size} \\
+  --rotation_block_size {rotation_block_size} \\
   --seed {case.seed} \\
   --relion_optimiser "${{RELION_DIR}}/run_it000_optimiser.star" \\
   --relion_init_dir "${{RELION_DIR}}" \\
@@ -657,6 +694,7 @@ set +e
   --tau2_fudge 4.0 \\
   --benchmark_ledger_json "${{RECOVAR_DIR}}/benchmark_ledger.json" \\
   --timing_dir "${{RECOVAR_DIR}}/timing" \\
+  --save_intermediates_dir "${{RECOVAR_INTERMEDIATES_DIR}}" \\
   2>&1 | tee "${{RECOVAR_DIR}}/run_full_refinement.log"
 STATUS="${{PIPESTATUS[0]}}"
 set -e
@@ -667,6 +705,32 @@ JSON
 if [[ "${{STATUS}}" -ne 0 ]]; then
   exit "${{STATUS}}"
 fi
+RECOVAR_POST_GPU_UUID="$(capture_physical_gpu_uuid)"
+if [[ "${{RECOVAR_POST_GPU_UUID}}" != "${{RELION_GPU_UUID}}" ]]; then
+  echo "ERROR: RECOVAR runtime physical GPU changed: expected ${{RELION_GPU_UUID}}, got ${{RECOVAR_POST_GPU_UUID}}" >&2
+  exit 2
+fi
+printf '%s\\n' "${{RECOVAR_POST_GPU_UUID}}" > "${{RECOVAR_DIR}}/runtime_physical_gpu_uuid.txt"
+
+MISSING_INTERMEDIATE=0
+for iteration in $(seq 0 $(({case.max_iter} - 1))); do
+  iteration_padded="$(printf '%03d' "${{iteration}}")"
+  for half in 1 2; do
+    for class_no in $(seq 1 {case.n_classes}); do
+      map_path="${{RECOVAR_INTERMEDIATES_DIR}}/it${{iteration_padded}}_half${{half}}_class${{class_no}}_reg.mrc"
+      if [[ ! -s "${{map_path}}" ]]; then
+        echo "ERROR: missing numbered RECOVAR class map: ${{map_path}}" >&2
+        MISSING_INTERMEDIATE=1
+      fi
+    done
+  done
+done
+if [[ "${{MISSING_INTERMEDIATE}}" -ne 0 ]]; then
+  exit 2
+fi
+find "${{RECOVAR_INTERMEDIATES_DIR}}" -maxdepth 1 -type f -name 'it*_half*_class*_reg.mrc' -print0 \
+  | sort -z \
+  | xargs -0 sha256sum > "${{RECOVAR_INTERMEDIATES_DIR}}/numbered_class_maps.sha256"
 
 echo "=== Evaluate K-class GT metrics: {case.name} ==="
 ITER_PADDED="$(printf "%03d" {case.max_iter})"
@@ -713,7 +777,9 @@ def write_summary_script(
     constraint: str,
     dependency: str,
     tracked_jobs: list[str],
+    expected_commit: str | None = None,
 ) -> Path:
+    expected_commit = expected_commit or git_text("rev-parse", "HEAD")
     script = jobs_dir / "em_kclass_matrix_summary.sh"
     text = f"""#!/usr/bin/env bash
 #SBATCH --job-name=em_kclass_summary
@@ -730,17 +796,26 @@ def write_summary_script(
 set -euo pipefail
 cd {q(REPO_ROOT)}
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
+while IFS='=' read -r ENV_NAME _; do
+  case "${{ENV_NAME}}" in
+    RECOVAR_*|RELION_*|JAX_*|XLA_*) unset "${{ENV_NAME}}" ;;
+  esac
+done < <(env)
+unset TF_GPU_ALLOCATOR
 export PYTHONNOUSERSITE=1
 export RECOVAR_DISABLE_CUDA=1
 export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
 export PIXI_FROZEN=true
-export TMPDIR={q(scratch_dir)}/tmp/em_kclass_matrix_summary_${{SLURM_JOB_ID}}
-export PIXI_HOME={q(scratch_dir)}/pixi_home/em_kclass_matrix_summary_${{SLURM_JOB_ID}}
-export RATTLER_CACHE_DIR={q(scratch_dir)}/rattler_cache/em_kclass_matrix_summary_${{SLURM_JOB_ID}}
+RUNTIME_ROOT={q(DEFAULT_RUNTIME_ROOT / "em_kclass_matrix_summary")}_${{SLURM_JOB_ID}}
+export TMPDIR="${{RUNTIME_ROOT}}/tmp"
+export PIXI_HOME="${{RUNTIME_ROOT}}/pixi_home"
+export RATTLER_CACHE_DIR="${{RUNTIME_ROOT}}/rattler_cache"
 export RECOVAR_JAX_CACHE_DIR={q(scratch_dir)}/jax_cache
 export JAX_COMPILATION_CACHE_DIR="${{RECOVAR_JAX_CACHE_DIR}}"
 mkdir -p "${{TMPDIR}}" "${{PIXI_HOME}}" "${{RATTLER_CACHE_DIR}}" "${{RECOVAR_JAX_CACHE_DIR}}"
+
+{git_provenance_gate(expected_commit=expected_commit)}
 
 echo "=== EM K-class robustness matrix summary ==="
 echo "Repo: {REPO_ROOT}"
@@ -792,6 +867,9 @@ def git_text(*args: str, default: str = "<unknown>") -> str:
 
 def main() -> int:
     args = parse_args()
+    expected_commit = git_text("rev-parse", "HEAD")
+    if expected_commit == "<unknown>":
+        raise SystemExit("Cannot resolve the repository commit for queued-job provenance")
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     run_id = f"em_kclass_robustness_{timestamp}_{os.getpid()}"
     scratch_dir = args.scratch_dir or Path(
@@ -849,11 +927,11 @@ def main() -> int:
     seed_offset_for_env = getattr(args, "seed_offset", None)
     if seed_offset_for_env is None:
         seed_offset_for_env = os.environ.get("EM_KCLASS_MATRIX_SEED_OFFSET", "")
-    cuda_lib = scratch_dir / "cuda" / "libcuda_backproject.so"
+    setup_cuda_lib = scratch_dir / "cuda" / "setup" / "libcuda_backproject.so"
 
     print("EM K-class robustness matrix launcher")
     print(f"Repo: {REPO_ROOT}")
-    print(f"HEAD: {git_text('rev-parse', 'HEAD')}")
+    print(f"HEAD: {expected_commit}")
     print(f"Branch: {git_text('symbolic-ref', '--short', 'HEAD', default='<detached>')}")
     print(f"Scratch: {scratch_dir}")
     print(f"Cases: {', '.join(str(case.index) for case in cases)}")
@@ -905,12 +983,13 @@ def main() -> int:
     setup_script = write_setup_script(
         scratch_dir=scratch_dir,
         jobs_dir=jobs_dir,
-        cuda_lib=cuda_lib,
+        cuda_lib=setup_cuda_lib,
         account=account,
         partition=setup_partition,
         constraint=setup_constraint,
         setup_gres=setup_gres,
         cuda_module=cuda_module,
+        expected_commit=expected_commit,
     )
     setup_job = submit(setup_script, dry_run=args.dry_run)
     tracked_jobs = [setup_job]
@@ -923,7 +1002,7 @@ def main() -> int:
             case=case,
             scratch_dir=scratch_dir,
             jobs_dir=jobs_dir,
-            cuda_lib=cuda_lib,
+            cuda_lib=scratch_dir / "cuda" / f"case_{case.index}_{case.name}" / "libcuda_backproject.so",
             account=account,
             partition=partition,
             constraint=constraint,
@@ -938,6 +1017,7 @@ def main() -> int:
             rotation_block_size=rotation_block_size,
             gt_align_refine_orders=gt_align_refine_orders,
             noise_rng_batch_size=noise_rng_batch_size,
+            expected_commit=expected_commit,
         )
         job_id = submit(script, dry_run=args.dry_run, extra_args=[f"--dependency=afterok:{setup_job}"] if not args.dry_run else None)
         tracked_jobs.append(job_id)
@@ -956,6 +1036,7 @@ def main() -> int:
         constraint=summary_constraint,
         dependency=dependency,
         tracked_jobs=tracked_jobs,
+        expected_commit=expected_commit,
     )
     summary_job = submit(summary_script, dry_run=args.dry_run)
     print(f"Setup job: {setup_job}")
@@ -967,6 +1048,8 @@ def main() -> int:
         "\n".join(
             [
                 f"REPO_ROOT={REPO_ROOT}",
+                f"EXPECTED_GIT_HEAD={expected_commit}",
+                f"RUNTIME_ROOT={DEFAULT_RUNTIME_ROOT}",
                 f"SCRATCH_DIR={scratch_dir}",
                 f"EM_KCLASS_MATRIX_SETUP_PARTITION={setup_partition}",
                 f"EM_KCLASS_MATRIX_SETUP_CONSTRAINT={setup_constraint}",
@@ -989,7 +1072,6 @@ def main() -> int:
                 f"EM_KCLASS_MATRIX_TIME_LIMIT={time_limit_override_for_env}",
                 f"EM_KCLASS_MATRIX_SEED={seed_override_for_env}",
                 f"EM_KCLASS_MATRIX_SEED_OFFSET={seed_offset_for_env}",
-                *[f"{name}={os.environ.get(name, '')}" for name in RECOVAR_OPTIONAL_ENV_PASSTHROUGH],
             ]
         )
         + "\n",

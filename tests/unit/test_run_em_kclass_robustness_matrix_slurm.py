@@ -80,25 +80,27 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert "  --noise-rng-batch-size 256 \\\n  --relion-normalize \\" in text
     assert f"export RECOVAR_JAX_CACHE_DIR={tmp_path}/jax_cache" in text
     assert 'export JAX_COMPILATION_CACHE_DIR="${RECOVAR_JAX_CACHE_DIR}"' in text
-    assert "unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA" in text
-    assert "export RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=1" in text
-    assert "export RECOVAR_K_CLASS_DENSE_PASS2=1" in text
-    assert "export RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION=0" in text
-    assert "export RECOVAR_K_CLASS_RELION_X_HALF_MSTEP=1" in text
-    assert "export RECOVAR_K_CLASS_FULL_VOLUME_MSTEP=1" in text
-    assert "export RECOVAR_K_CLASS_HALF_VOLUME_MSTEP=1" in text
-    assert "export RECOVAR_SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS=1" in text
-    assert "export RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS=0" in text
-    assert "export RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE=8192" in text
-    assert "export RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO=0.5" in text
-    assert "export RECOVAR_SPARSE_PASS2_MAX_NOISE_BLOCK_BYTES=2147483648" in text
-    assert "export RECOVAR_SPARSE_PASS2_MAX_ADJOINT_BLOCK_BYTES=1073741824" in text
-    assert "export RECOVAR_RELION_FIRSTITER_RECON_COMPLEX_BUDGET=805306368" in text
-    assert f"export RECOVAR_KCLASS_DUMP_DIR={tmp_path}/kclass_dumps" in text
+    assert 'RECOVAR_*|RELION_*|JAX_*|XLA_*) unset "${ENV_NAME}"' in text
+    assert "unset TF_GPU_ALLOCATOR" in text
+    assert "export XLA_PYTHON_CLIENT_PREALLOCATE=false" in text
+    assert "export RECOVAR_FINAL_ALL_DATA_GRID_CORRECT" not in text
+    assert "export RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER" not in text
+    assert "export RECOVAR_K_CLASS_DENSE_PASS2" not in text
+    assert "export RECOVAR_K_CLASS_RELION_X_HALF_MSTEP" not in text
+    assert "export RECOVAR_KCLASS_DUMP_DIR" not in text
     assert "external_bind_dir = os.environ.get(\"RECOVAR_RELION_BIND_BUILD_DIR\")" in text
     assert "str(relion_bind_file).startswith(str(external_bind_root) + \"/\")" in text
     assert "      --firstiter_cc \\\n" in text
     assert "  --firstiter_cc \\\n" in text
+    assert "  --image-fourier-backend relion_cuda \\\n" in text
+    assert '--save_intermediates_dir "${RECOVAR_INTERMEDIATES_DIR}"' in text
+    assert 'map_path="${RECOVAR_INTERMEDIATES_DIR}/it${iteration_padded}_half${half}_class${class_no}_reg.mrc"' in text
+    assert 'numbered_class_maps.sha256' in text
+    assert 'RELION_GPU_UUID="$(capture_physical_gpu_uuid)"' in text
+    assert 'RECOVAR_GPU_UUID="$(capture_physical_gpu_uuid)"' in text
+    assert 'paired_gpu_uuid.json' in text
+    assert "Queued-job Git provenance gate ok" in text
+    assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_1_" in text
     assert "export RELION_DISPATCH_LOG" in text
     assert "-m scripts.build_relion_dispatch_schedule" in text
     assert '--relion-dispatch-schedule "${RELION_DISPATCH_SCHEDULE}"' in text
@@ -131,7 +133,8 @@ def test_case_jobs_build_cuda_lib_atomically_under_lock(tmp_path):
     text = script.read_text()
     assert 'CUDA_LIB_TMP="${RECOVAR_CUDA_LIB}.${SLURM_JOB_ID:-$$}.tmp"' in text
     assert "export CUDA_LIB_TMP PIXI_PY" in text
-    assert f"flock {tmp_path}/cuda/build.lock" in text
+    assert 'flock "$(dirname "${RECOVAR_CUDA_LIB}")/build.lock"' in text
+    assert f"export RECOVAR_CUDA_LIB={tmp_path}/${{SLURM_JOB_ID}}/librecovar_cuda.so" in text
     assert 'rm -f "${CUDA_LIB_TMP}"' in text
     assert 'make -C recovar/cuda LIB="${CUDA_LIB_TMP}" all' in text
     assert 'mv -f "${CUDA_LIB_TMP}" "${RECOVAR_CUDA_LIB}"' in text
@@ -200,6 +203,15 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     assert "EM_KCLASS_MATRIX_SUMMARY_PARTITION=cpu" in submission
     assert "EM_KCLASS_MATRIX_SETUP_CONSTRAINT=" in submission
     assert "EM_KCLASS_MATRIX_SUMMARY_CONSTRAINT=" in submission
+    expected_head = launcher.git_text("rev-parse", "HEAD")
+    assert f"EXPECTED_GIT_HEAD={expected_head}" in setup_text
+    assert f"EXPECTED_GIT_HEAD={expected_head}" in summary_text
+    assert "git status --short --untracked-files=no" in setup_text
+    assert "git status --short --untracked-files=no" in summary_text
+    assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_setup_" in setup_text
+    assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_summary_" in summary_text
+    assert f"EXPECTED_GIT_HEAD={expected_head}" in submission
+    assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}" in submission
 
 
 def test_main_fails_closed_without_dispatch_capture_relion(tmp_path, monkeypatch):
