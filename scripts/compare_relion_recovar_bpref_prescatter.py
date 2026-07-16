@@ -46,6 +46,17 @@ def _array_metrics(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, object]:
     reference_l2 = max(float(np.linalg.norm(left)), np.finfo(np.float64).tiny)
     significant = reference > max(float(reference.max(initial=0.0)) * 1e-8, 1e-30)
     relative = absolute[significant] / reference[significant]
+    relative_quantiles = {
+        "relative_significant_p50": None,
+        "relative_significant_p95": None,
+        "relative_significant_p99": None,
+    }
+    if relative.size:
+        relative_quantiles = {
+            "relative_significant_p50": float(np.quantile(relative, 0.50)),
+            "relative_significant_p95": float(np.quantile(relative, 0.95)),
+            "relative_significant_p99": float(np.quantile(relative, 0.99)),
+        }
     return {
         "shape": list(lhs.shape),
         "lhs_dtype": str(lhs.dtype),
@@ -58,9 +69,7 @@ def _array_metrics(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, object]:
         "delta_p95_abs": float(np.quantile(absolute, 0.95)),
         "delta_p99_abs": float(np.quantile(absolute, 0.99)),
         "delta_max_abs": float(np.max(absolute)),
-        "relative_significant_p50": float(np.quantile(relative, 0.50)),
-        "relative_significant_p95": float(np.quantile(relative, 0.95)),
-        "relative_significant_p99": float(np.quantile(relative, 0.99)),
+        **relative_quantiles,
     }
 
 
@@ -213,11 +222,19 @@ def _align_relion(
     radius_excluded = np.empty(stacks.size, dtype=np.int64)
     for index, artifact in enumerate(selected):
         rows = artifact.rows
+        box_size = int(artifact.header[13])
+        _require(
+            int(artifact.header[12]) == box_size // 2 + 1 and int(artifact.header[14]) == 1,
+            f"unexpected RELION half-spectrum shape: {artifact.path}",
+        )
         orientations = np.unique(rows["orientation_local"])
         _require(orientations.size == 1, f"expected one RELION active winner orientation: {artifact.path}")
         orientation = int(orientations[0])
         rotation = artifact.rotations[orientation]
-        full_indices = (rows["y"].astype(np.int64) % 256) * 129 + rows["x"]
+        full_indices = (
+            (rows["y"].astype(np.int64) % box_size) * (box_size // 2 + 1)
+            + rows["x"]
+        )
         _require(np.unique(full_indices).size == full_indices.size, f"duplicate RELION support pixel: {artifact.path}")
         window_order = np.argsort(window)
         positions = np.searchsorted(window[window_order], full_indices)
@@ -232,14 +249,18 @@ def _align_relion(
             np.array_equal(np.sort(output_columns), expected_columns),
             f"RELION/RECOVAR device support sets differ: {artifact.path}",
         )
-        # RELION's forward FFT is scaled by 1/N^2. RECOVAR's is unnormalised;
-        # the data numerator therefore converts by -N^2 and weight by N^4.
+        # The capture stores RELION's native pre-scatter values. Use the same
+        # qualified RELION-to-RECOVAR conversion as the sealed aggregate BPref
+        # comparison: -1/N^2 for data and 1/N^4 for weight. Derive N from the
+        # capture header without attributing it to either forward-FFT convention.
         relion_data[index] = 0
         relion_weight[index] = 0
         relion_data[index, output_columns] = (
             rows["source_re"] + 1j * rows["source_im"]
-        ) * np.float32(-(2.0**-16))
-        relion_weight[index, output_columns] = rows["source_weight"] * np.float32(2.0**-32)
+        ) * np.float32(-1.0 / box_size**2)
+        relion_weight[index, output_columns] = rows["source_weight"] * np.float32(
+            1.0 / box_size**4
+        )
         relion_rotations[index] = rotation["matrix"].reshape(3, 3)
         orientation_keys[index] = rotation["orientation_class_key"]
         oversampled_rotations[index] = rotation["oversampled_rotation"]
@@ -256,6 +277,7 @@ def _align_relion(
         "supported_rows": supported_rows,
         "positive_candidates": positive_candidates,
         "radius_excluded": radius_excluded,
+        "image_box_size": np.asarray(int(selected[0].header[13]), dtype=np.int64),
     }
 
 
@@ -313,6 +335,7 @@ def compare(
             "mpi_rank": mpi_rank,
             "particle_count": int(recovar["stack_indices"].size),
             "pixels_per_particle": int(recovar["window_indices"].size),
+            "relion_image_box_size": int(relion["image_box_size"]),
             "recovar_shard_count": int(recovar["shard_count"]),
             "recovar_exact_zero_nonwinner_rows": int(recovar["exact_zero_nonwinner_rows"]),
             "relion_supported_rows": int(np.sum(relion["supported_rows"])),
