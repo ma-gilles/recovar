@@ -40,9 +40,7 @@ def _original_indices(experiment_dataset, n_images: int) -> np.ndarray:
     try:
         indices = np.asarray(resolver(local_indices), dtype=np.int64)
     except Exception as exc:
-        raise RuntimeError(
-            "RECOVAR global-winner summary could not resolve one original identity per image"
-        ) from exc
+        raise RuntimeError("RECOVAR global-winner summary could not resolve one original identity per image") from exc
     if indices.shape != (n_images,):
         raise RuntimeError(
             "RECOVAR global-winner summary requires one original identity per image; "
@@ -124,15 +122,17 @@ def maybe_dump_global_winner_summary(
     if np.any(class_within_pose_margin < 0):
         raise RuntimeError("RECOVAR global-winner summary observed a negative within-class pose margin")
 
-    # Scores are log scores, so larger is better. Stable sorting makes the
-    # runner-up convention deterministic for exact ties.
-    descending = np.argsort(-class_scores, axis=0, kind="stable")
-    derived_winner = descending[0].astype(np.int32)
-    if not np.array_equal(derived_winner, winner_class):
-        raise RuntimeError("RECOVAR winner classes disagree with the recorded class-score argmax")
-    runner_up_class = descending[1].astype(np.int32)
     columns = np.arange(expected_particles)
     winner_score = class_scores[winner_class, columns]
+    if not np.array_equal(winner_score, np.max(class_scores, axis=0)):
+        raise RuntimeError("RECOVAR winner classes are not optimal in the captured class scores")
+    # The class-common normalization offset is added before storage as
+    # float32, so distinct pre-offset scores can collapse to an exact tie.
+    # Preserve the actual pre-offset winner and select the runner-up after
+    # excluding it, using stable class order for any remaining tie.
+    scores_without_winner = class_scores.copy()
+    scores_without_winner[winner_class, columns] = -np.inf
+    runner_up_class = np.argmax(scores_without_winner, axis=0).astype(np.int32)
     runner_up_score = class_scores[runner_up_class, columns]
     winner_margin = winner_score - runner_up_score
     class_posterior_mass = np.zeros((n_classes, expected_particles), dtype=np.float32)
@@ -160,7 +160,10 @@ def maybe_dump_global_winner_summary(
         "total_score_semantics": ("identical to raw score in firstiter_cc because RELION bypasses priors before WTA"),
         "evidence_semantics": "per-class logsumexp evidence before firstiter_cc one-hot posterior",
         "posterior_semantics": "post-firstiter_cc one-hot class mass",
-        "winner_semantics": "stable first-class argmax of native float32 class-best scores before WTA",
+        "winner_semantics": (
+            "actual joint class-pose argmax before WTA; captured float32 scores may tie after "
+            "adding the class-common normalization offset"
+        ),
         "support_semantics": "post-firstiter_cc exactly one global class-pose sample per particle",
         "pre_wta_support_semantics": "all coarse candidates scored; no posterior threshold before WTA",
         "significant_count_semantics": "post-WTA global class-pose support cardinality; exactly one",

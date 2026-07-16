@@ -116,6 +116,26 @@ def test_recovar_summary_uses_original_image_mapping_not_dataset_indices(monkeyp
     np.testing.assert_array_equal(summary.identity, original_indices)
 
 
+def test_recovar_summary_preserves_actual_winner_when_stored_float32_scores_tie(monkeypatch, tmp_path):
+    path = tmp_path / "recovar_tie.npz"
+    _recovar_env(monkeypatch, path)
+    full_stats = _full_stats()
+    full_stats["class_best_log_score_per_image"][1, 0] = full_stats["class_best_log_score_per_image"][0, 0]
+    full_stats["class_assignments"][0] = 1
+    maybe_dump_global_winner_summary(
+        experiment_dataset=_dataset(np.arange(4)),
+        full_stats=full_stats,
+        n_classes=4,
+        n_rotations=3,
+        n_translations=2,
+        iteration=1,
+    )
+    summary = load_recovar_summary(path, label="recovar_tie")
+    assert summary.winner[0] == 1
+    assert summary.runner_up[0] == 0
+    assert summary.margin[0] == 0.0
+
+
 @pytest.mark.parametrize("indices", [np.asarray([0, 1, 1, 3]), np.asarray([0, 1, 2])])
 def test_recovar_summary_rejects_duplicate_or_missing_original_identity(monkeypatch, tmp_path, indices):
     path = tmp_path / "recovar.npz"
