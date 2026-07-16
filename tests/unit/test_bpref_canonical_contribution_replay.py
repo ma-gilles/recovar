@@ -413,6 +413,87 @@ def test_high_precision_source_control_requires_exact_capture_and_repeat(
     assert control["control_repeat_data"]["array_equal"] is (repeat_delta == 0.0)
 
 
+def test_ordinary_capture_policy_cannot_silently_select_sequential_reduction():
+    from scripts import recompute_bpref_high_precision
+
+    contribution = {
+        "operand_source": np.asarray(
+            "authoritative-ordinary-translation-reduction"
+        ),
+        "production_adjoint_topology": np.asarray(
+            "ordinary-flattened-production-adjoint"
+        ),
+    }
+    signature = {
+        "topology_claim": np.asarray("ordinary-flattened-production-adjoint"),
+    }
+
+    policy = recompute_bpref_high_precision._captured_source_reduction_policy(
+        contribution, signature
+    )
+
+    assert policy["name"] == "authoritative-ordinary-translation-reduction"
+    assert policy["sequential_translation_reduction"] is False
+    assert policy["order_control_name"] == (
+        "relion-f32-sequential-translation-reduction"
+    )
+    ordinary = (
+        np.asarray([[1.0 + 0.0j]], dtype=np.complex64),
+        np.asarray([[1.0]], dtype=np.float32),
+    )
+    sequential = (
+        np.asarray([[2.0 + 0.0j]], dtype=np.complex64),
+        np.asarray([[1.0]], dtype=np.float32),
+    )
+    selected, order_control = (
+        recompute_bpref_high_precision._select_captured_and_order_reductions(
+            policy, ordinary, sequential
+        )
+    )
+    assert np.array_equal(selected[0], ordinary[0])
+    assert np.array_equal(order_control[0], sequential[0])
+    assert not validator.exact_array_metrics(selected[0], sequential[0])["array_equal"]
+
+
+def test_source_reduction_policy_rejects_conflicting_topology_metadata():
+    from scripts import recompute_bpref_high_precision
+
+    contribution = {
+        "operand_source": np.asarray(
+            "authoritative-ordinary-translation-reduction"
+        ),
+    }
+    signature = {
+        "topology_claim": np.asarray(
+            "causal-arm-not-relion-hypothesis-arithmetic-closure"
+        ),
+        "causal_arm": np.asarray("soft-posterior-per-particle-fused-xhalf"),
+    }
+
+    with pytest.raises(ValueError, match="mixes ordinary-production and causal-arm"):
+        recompute_bpref_high_precision._captured_source_reduction_policy(
+            contribution, signature
+        )
+
+
+def test_causal_arm_policy_keeps_sequential_as_explicit_captured_reduction():
+    from scripts import recompute_bpref_high_precision
+
+    policy = recompute_bpref_high_precision._captured_source_reduction_policy(
+        {},
+        {
+            "topology_claim": np.asarray(
+                "causal-arm-not-relion-hypothesis-arithmetic-closure"
+            ),
+            "causal_arm": np.asarray("soft-posterior-per-particle-fused-xhalf"),
+        },
+    )
+
+    assert policy["name"] == "relion-f32-sequential-translation-reduction"
+    assert policy["sequential_translation_reduction"] is True
+    assert policy["order_control_name"] == "ordinary-gemm-translation-reduction"
+
+
 @pytest.mark.parametrize(
     ("changed", "classification"),
     [
