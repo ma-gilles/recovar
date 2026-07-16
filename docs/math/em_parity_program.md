@@ -89,7 +89,8 @@ four-column range capture.
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `b30e8f892ae089bb43caf9fac0d31e924ae24e70`
+Current integrated implementation checkpoint before this board update:
+`964d6e8265f722710d092e63d0eee90a3a57bc48`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -228,25 +229,24 @@ Current status on 2026-07-16: the eight-case autonomous K=1 robustness matrix
 passes every FSC/FSC-AUC trajectory, schedule, convergence, and finalization
 gate.  The remaining K=1 completion cells are the running 100k/256 trajectory
 and the real-10076 repeat-qualified production-boundary confirmation.  The
-bounded exact raw-diff2 cache is performance-only and remains disabled from
-the accepted checkpoint until the running OFF/OFF/ON/reverse-order frozen
-boundary control places its aggregate arrays and FSC/FSC-AUC inside the native
-repeat/order envelope.
+bounded exact raw-diff2 cache has passed its frozen-boundary and same-A100
+repeat controls and is integrated as a performance-only optimization.  Cache
+and recompute are bitwise identical at the changed boundary; all 3,000 poses,
+translations, and hard assignments remain exact, direct map FSC-AUC is at
+least `0.999999999845`, and the clean controls improve wall time by
+`10.7--15.8%`.
 
 K=4 case 11 now has a recurrent aggregate iteration-1 membership boundary:
 RELION and RECOVAR agree for 9,999/10,000 particles in a same-A100 six-arm
 control, and zero-based particle 7915 is the sole recurrent class transfer.
-The next discriminator is a same-A100 RELION stock / RECOVAR stock / RECOVAR
-class-override control that routes particle 7915 through RELION's class while
-leaving its score surface unchanged.  Compare per-class production
-accumulators and maps using exact/array metrics and shellwise FSC/FSC-AUC.  If
-that common-membership intervention closes the class-1/class-2 reconstruction
-residual, the firstiter global-winner boundary is causal and a full-class
-pre-scatter capture is unnecessary.  Otherwise return to an aggregate
-full-class pre-scatter replay.  Use offset-free native-float32 score captures
-and targeted float64/complex128 subgroup replay to classify close aggregate
-decisions; do not return to serial particle tracing or unstable iteration-3+
-cliffs.
+A same-A100 class-routing intervention changes exactly that particle and
+restores all four RELION-vs-RECOVAR class-map FSC-AUC values to at least
+`0.9999999671`.  The global-winner boundary is therefore causal and a
+full-class pre-scatter capture is unnecessary.  The remaining discriminator
+is a frozen canonical float64/complex128 replay of that one decision, with
+native float32 closure controls, to classify operand generation versus
+reduction/order/precision.  Do not return to serial particle tracing or
+unstable iteration-3+ cliffs.
 
 Current status on 2026-07-14: the seven-case immutable K=1 robustness matrix
 at detached commit `f0ef1f0c6c231ff1f9183371d235e0b37a15b825` matches every
@@ -4031,10 +4031,25 @@ FSC/FSC-AUC non-regression gates. Same-GPU exact/algebraic/exact job
 changed after the native-library manifest. Its partial timings are
 inadmissible and are not required for the accepted quality result.
 
+That target is now accepted and integrated. Frozen case-22 replay proves the
+retained raw diff2, converted score, winner, and bounded Pmax are bitwise
+identical to recomputation and to an independent RELION 256-lane float32 tree.
+The promoted complex128/float64 replay changes centered diff2 by at most
+`2.11653e-5` without changing the winner, classifying the available residual
+as ordinary reduction precision rather than cache behavior. Two independent
+same-A100 trajectory groups preserve all 3,000 poses, translations, and hard
+assignments; their direct map FSC-AUC is
+`0.999999999845--0.999999999985`, and wall time improves by
+`10.7--15.8%`. The original analyzer's iteration-1 failures were false
+positives because the cache is inactive there and the analyzer treated a
+two-sample native repeat minimum as a hard quality floor.
+
 Canonical evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_exact_bpref_fc70abc3_20260716_111000/trajectory_matrix_fsc_only_summary_v2.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_exact_bpref_fc70abc3_20260716_111000/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/trajectory_analysis/k1_case22_iter2_performance_diagnosis_v1.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_float64_audit_20260716_190000/AUDIT.md` (SHA-256 `1cadfd76d816a89359a2b9e68bb72717d466269289021e337021dd229e5caf2d`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_raw_diff2_float64_audit_20260716_190000/provenance/FINAL_MANIFEST.sha256` (SHA-256 `eef8c4ef0c38eed9e9c71b1bf029d85d78628efe4bfe903cda53f9a08e374477`)
 
 ## 2026-07-16 real-data repeat-control adjudication
 
@@ -4416,12 +4431,35 @@ the downstream BPref capture is non-discriminating.  Intermediate gates remain
 exact/array metrics and map gates remain shellwise FSC/FSC-AUC; correlation is
 not a gate.
 
+The causal intervention and aggregate control are now complete. Slurm job
+`11284582` changed only particle 7916's pass-2/M-step routing from RECOVAR
+class 2 to RELION class 1. Native class counts `[4292,847,797,4064]` became
+`[4293,846,797,4064]`, and RELION-vs-RECOVAR class-map FSC-AUC improved from
+`[0.9998860711,0.9993307849,0.9999999891,0.9999999668]` to
+`[0.9999999671,0.9999999887,0.9999999892,0.9999999693]`. This proves the
+single membership decision fully explains the downstream reconstruction
+residual.
+
+Slurm job `11285753` then captured all 10,000 global winners for two RELION
+and two RECOVAR arms on one A100 with each arm bound to its own verified
+dynamic MPI dispatch schedule. Both engines are internally winner-identical;
+the only cross-engine mismatch is particle 7916. RECOVAR selects class 2 at a
+captured zero margin, while RELION selects class 1 with margin
+`5.960464478e-8`. Native float32 evidence alone cannot determine whether that
+last score difference is upstream operand generation or reduction precision,
+so the remaining experiment is the bounded canonical float64/complex128 replay
+of this decision.
+
 Canonical evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/RESULTS.md` (SHA-256 `393e9b2613662f3d6a0a8aba702d12ca0595443944c9b62621eedb93d2a633fa`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/provenance/CLASSIFICATION_SEAL.json` (SHA-256 `02cb2f88bc9dd6c4fdfbddfbb69c706b805b067afa60ab56ab7a6cfc7f9c4f94`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/analysis/fresh_f32/summary.json` (SHA-256 `1a42b1eb7e2b615c8154759c7a9cf72f3812330315bc4bc555bbcef1d26872a7`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7916_identity6_h100_20260716_165455/analysis/six_arm_global_membership_repeat_join_v1.json` (SHA-256 `c8a0449b611eb77976d3c4f8dce052c757da958052206b88b23cf3b2e550dfeb`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7916_forced_membership_20260716_180500/RESULTS.md`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7916_forced_membership_20260716_180500/provenance/CLASSIFICATION_SEAL.json` (SHA-256 `f8ed739400fc18cd6abe78e9f7c11442c9128e3e9a518d9a0c82e62322ae3ac3`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_global_winner_aggregate_dynamic_context_de2c_retry2_20260716_185100/analysis/global_winner_analysis.json` (SHA-256 `131b8fe31fb8f5690fa1b572492127e4e764f142a6c7cb6646eea620063a0be2`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_global_winner_aggregate_dynamic_context_de2c_retry2_20260716_185100/provenance/FINAL_MANIFEST.sha256` (SHA-256 `063b38a73432ee2c49bb6d0408a38b76805c279dd173f611c2a932051920dd70`)
 
 ## 2026-07-16 real-10076 iteration-2 ordinary BPref classification
 
