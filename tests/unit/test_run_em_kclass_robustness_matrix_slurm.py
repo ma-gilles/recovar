@@ -224,8 +224,9 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     pdb_dir = tmp_path / "pdbs"
     pdb_dir.mkdir()
     case = launcher.replace(launcher.DEFAULT_CASES[0], pdb_dir=pdb_dir)
+    second_case = launcher.replace(case, index=2, name="second_case")
     scratch = tmp_path / "scratch"
-    monkeypatch.setattr(launcher, "DEFAULT_CASES", (case,))
+    monkeypatch.setattr(launcher, "DEFAULT_CASES", (case, second_case))
     monkeypatch.setattr(
         sys,
         "argv",
@@ -236,6 +237,8 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
             str(scratch),
             "--case",
             "1",
+            "--case",
+            "2",
         ],
     )
     monkeypatch.setenv("SBATCH_PARTITION", "cryoem")
@@ -271,6 +274,7 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_setup_" in setup_text
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_summary_" in summary_text
     assert f"EXPECTED_GIT_HEAD={expected_head}" in submission
+    assert "CASE_JOB_IDS='DRYRUN DRYRUN'" in submission
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}" in submission
 
 

@@ -1518,7 +1518,7 @@ def main() -> int:
                 f"EM_KCLASS_MATRIX_SUMMARY_PARTITION={summary_partition}",
                 f"EM_KCLASS_MATRIX_SUMMARY_CONSTRAINT={summary_constraint}",
                 f"SETUP_JOB_ID={setup_job}",
-                f"CASE_JOB_IDS={' '.join(case_jobs)}",
+                f"CASE_JOB_IDS={q(' '.join(case_jobs))}",
                 f"SUMMARY_JOB_ID={summary_job}",
                 f"CASE_TABLE={case_table}",
                 f"SBATCH_PARTITION={partition}",
