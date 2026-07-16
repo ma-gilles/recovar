@@ -405,6 +405,26 @@ def _reconstruct_and_postprocess_means(
             import pathlib
 
             pathlib.Path(_premask_dump).mkdir(parents=True, exist_ok=True)
+            _preserve_premask_dtype = os.environ.get(
+                "RECOVAR_PREMASK_DUMP_PRESERVE_DTYPE", ""
+            ).strip().lower() not in {"", "0", "false", "no", "off"}
+            _premask_fourier = np.asarray(means[k])
+            if k_class_enabled:
+                _premask_real = np.stack(
+                    [
+                        np.asarray(
+                            fourier_transform_utils.get_idft3(
+                                means[k][class_idx].reshape(volume_shape)
+                            )
+                        ).real
+                        for class_idx in range(n_classes)
+                    ],
+                    axis=0,
+                )
+            else:
+                _premask_real = np.asarray(
+                    fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
+                ).real
             np.savez(
                 pathlib.Path(_premask_dump) / f"recovar_premask_it{iteration + 1:03d}_half{k + 1}.npz",
                 iteration=np.int32(iteration + 1),
@@ -413,7 +433,17 @@ def _reconstruct_and_postprocess_means(
                 grid_size=np.int32(grid_size),
                 voxel_size=np.float32(cryo.voxel_size),
                 volume_shape=np.asarray(volume_shape, dtype=np.int32),
-                means_premask=np.asarray(means[k], dtype=np.complex64),
+                means_premask=(
+                    _premask_fourier
+                    if _preserve_premask_dtype
+                    else np.asarray(_premask_fourier, dtype=np.complex64)
+                ),
+                means_premask_real=(
+                    _premask_real
+                    if _preserve_premask_dtype
+                    else np.asarray(_premask_real, dtype=np.float32)
+                ),
+                dump_preserve_dtype=np.int32(int(_preserve_premask_dtype)),
             )
 
         # RELION filters Iref inside maximizationOtherParameters, then calls

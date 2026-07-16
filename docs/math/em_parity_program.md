@@ -4326,3 +4326,36 @@ top-k/full-sort computation and uses it only for metadata; the expanded mask,
 posterior, and all reconstruction accumulators are unchanged.  Tied, capped,
 fallback, tuple-compatibility, first-iteration, and accumulator-invariance
 tests pass (74 affected tests in the integrated checkout).
+## 2026-07-16 K=4 case-11 firstiter winner boundary
+
+Fresh same-physical-GPU job `11280871` ran two RELION and two RECOVAR arms
+serially on GPU UUID `GPU-ed3fe7be-abe7-7c79-06da-bc76e74d6025`.  RELION's
+iteration-1 class counts are `[4293,846,797,4064]`; RECOVAR's are
+`[4292,847,797,4064]`.  Exact image-identity alignment finds one and only one
+class difference among 10,000 particles: zero-based particle 7915
+(`7916@particles.128.mrcs`) moves from RELION class 1 to RECOVAR class 2.
+
+That one-particle transfer explains the class-dependent M-step residual.
+Classes 1 and 2 have raw-map FSC-AUC `0.9998612051` and `0.9992620898` and
+accumulator residuals tens to hundreds of thousands of times above the
+same-engine repeat floor.  Classes 3 and 4 retain identical membership and
+have raw-map FSC-AUC above `0.9999999992`, near the repeat envelope.  The
+earliest justified boundary is therefore the `firstiter_cc` coarse
+global-winner decision and its per-class pass-2/M-step subset, upstream of
+backprojection; no backprojection-kernel defect is supported while membership
+differs.
+
+The dtype-preserving dump hook is not bit-exact, but its perturbation is within
+the native RECOVAR repeat envelope.  The float64 accumulator arm is explicitly
+noncanonical because it does not freeze identical operands and geometry; it
+cannot adjudicate the remaining score difference.  The next discriminator is
+the existing six-arm global-winner harness retargeted to particle 7916, with
+exact geometry/identity alignment, centered score arrays, and winner margin
+measured against the repeat floor.  Intermediate gates remain exact/array
+metrics and map gates remain shellwise FSC/FSC-AUC; correlation is not a gate.
+
+Canonical evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/RESULTS.md` (SHA-256 `393e9b2613662f3d6a0a8aba702d12ca0595443944c9b62621eedb93d2a633fa`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/provenance/CLASSIFICATION_SEAL.json` (SHA-256 `02cb2f88bc9dd6c4fdfbddfbb69c706b805b067afa60ab56ab7a6cfc7f9c4f94`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/analysis/fresh_f32/summary.json` (SHA-256 `1a42b1eb7e2b615c8154759c7a9cf72f3812330315bc4bc555bbcef1d26872a7`)
