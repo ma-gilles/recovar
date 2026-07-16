@@ -4348,11 +4348,16 @@ differs.
 The dtype-preserving dump hook is not bit-exact, but its perturbation is within
 the native RECOVAR repeat envelope.  The float64 accumulator arm is explicitly
 noncanonical because it does not freeze identical operands and geometry; it
-cannot adjudicate the remaining score difference.  The next discriminator is
-the existing six-arm global-winner harness retargeted to particle 7916, with
-exact geometry/identity alignment, centered score arrays, and winner margin
-measured against the repeat floor.  Intermediate gates remain exact/array
-metrics and map gates remain shellwise FSC/FSC-AUC; correlation is not a gate.
+cannot adjudicate the remaining score difference.  The already-submitted
+six-arm particle-7916 harness may be sealed as one bounded control, but do not
+extend serial particle tracing.  The next discriminator is an aggregate
+all-10,000-particle comparison of global-winner scores, margins, class
+posteriors, and support, with float32/float64 controls used to classify close
+decisions.  If a controlled common-membership M-step still leaves a
+reconstruction residual, return to a full-class pre-scatter capture; otherwise
+the downstream BPref capture is non-discriminating.  Intermediate gates remain
+exact/array metrics and map gates remain shellwise FSC/FSC-AUC; correlation is
+not a gate.
 
 Canonical evidence:
 
