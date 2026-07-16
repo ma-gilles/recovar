@@ -335,6 +335,25 @@ def test_v2_verified_recomputation_manifest_binds_frozen_inputs(tmp_path):
     assert verified.has_verified_recomputed_high_precision
 
 
+def test_high_precision_recompute_refuses_stale_output_and_bounds_mismatch_sample(tmp_path):
+    from scripts import recompute_bpref_high_precision
+
+    stale = tmp_path / "stale.npz"
+    stale.write_bytes(b"not-a-current-artifact")
+    with pytest.raises(FileExistsError, match="output already exists"):
+        recompute_bpref_high_precision._require_new_output_path(stale)
+
+    mask = np.ones((100, 2), dtype=bool)
+    diagnostic = recompute_bpref_high_precision._mismatch_diagnostic(
+        mask,
+        label="test_mismatch",
+    )
+    assert diagnostic["test_mismatch_count"] == 200
+    assert diagnostic["test_mismatch_sample_limit"] == 32
+    assert len(diagnostic["test_mismatch_sample"]) == 32
+    assert len(diagnostic["test_mismatch_mask_sha256"]) == 64
+
+
 @pytest.mark.parametrize(
     ("changed", "classification"),
     [

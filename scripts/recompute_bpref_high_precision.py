@@ -26,6 +26,46 @@ import numpy as np
 from scripts import validate_bpref_device_signature as validator
 
 
+_MISMATCH_SAMPLE_LIMIT = 32
+
+
+def _require_new_output_path(path: Path) -> None:
+    """Refuse to leave or overwrite a stale replay artifact."""
+
+    if path.exists():
+        raise FileExistsError(
+            f"high-precision recomputation output already exists: {path}; "
+            "use a new path so a geometry-boundary result cannot coexist with a stale artifact"
+        )
+
+
+def _mismatch_diagnostic(mask: np.ndarray, *, label: str) -> dict:
+    """Return bounded, hash-bound evidence for a potentially dense mismatch mask."""
+
+    values = np.asarray(mask, dtype=bool)
+    mismatch_count = int(np.count_nonzero(values))
+    flat = values.reshape(-1)
+    sample_flat: list[int] = []
+    chunk_size = 1_000_000
+    for start in range(0, flat.size, chunk_size):
+        local = np.flatnonzero(flat[start : start + chunk_size])
+        remaining = _MISMATCH_SAMPLE_LIMIT - len(sample_flat)
+        sample_flat.extend((local[:remaining] + start).tolist())
+        if len(sample_flat) == _MISMATCH_SAMPLE_LIMIT:
+            break
+    sample = (
+        np.stack(np.unravel_index(sample_flat, values.shape), axis=-1).tolist()
+        if sample_flat
+        else []
+    )
+    return {
+        f"{label}_count": mismatch_count,
+        f"{label}_mask_sha256": validator._sha256_named_arrays(((label, values),)),
+        f"{label}_sample_limit": _MISMATCH_SAMPLE_LIMIT,
+        f"{label}_sample": sample,
+    }
+
+
 def _shift_real_image(image: np.ndarray, shift: np.ndarray) -> np.ndarray:
     image = np.asarray(image, dtype=np.float64)
     dx, dy = np.asarray(shift, dtype=np.int64).tolist()
@@ -336,6 +376,10 @@ def _geometry_float64(
     )
     reached_device = (np.asarray(signature["row_flags"], dtype=np.int32) & 64) != 0
     support_mismatch = reached_f64 != reached_device
+    support_diagnostic = _mismatch_diagnostic(
+        support_mismatch,
+        label="float64_reached_support_mismatch",
+    )
     control = {
         "rotation_formula": (
             "rk0=(R[0,2]*x+R[1,2]*y)*padding; "
@@ -351,8 +395,7 @@ def _geometry_float64(
         "promoted_f32_coordinate_control_policy": (
             "two float32 eps relative to coordinate scale; host matrix/add contraction differs from device"
         ),
-        "float64_reached_support_mismatch_count": int(np.count_nonzero(support_mismatch)),
-        "float64_reached_support_mismatch_dense_rows": np.argwhere(support_mismatch).tolist(),
+        **support_diagnostic,
     }
     return coefficients, targets, folded, control
 
@@ -393,8 +436,8 @@ def _recompute_shard(result: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, 
     fold_mismatch = folded[q_index, records.dense_pixel] != records.row_conjugated
     geometry = {
         "record_count": int(records.size),
-        "target_mismatch_count": int(np.count_nonzero(target_mismatch)),
-        "row_fold_mismatch_count": int(np.count_nonzero(fold_mismatch)),
+        **_mismatch_diagnostic(target_mismatch, label="target_mismatch"),
+        **_mismatch_diagnostic(fold_mismatch, label="row_fold_mismatch"),
         "coefficient_max_abs_vs_captured_f32": float(
             np.max(np.abs(recomputed_coefficients - records.coefficients.astype(np.float64)))
         ),
@@ -424,6 +467,7 @@ def parse_args(argv=None):
 
 def main(argv=None) -> None:
     args = parse_args(argv)
+    _require_new_output_path(args.output)
     results = sorted(
         (validator._validate_signature(path) for path in args.signatures),
         key=lambda result: (result["launch_min"], result["path"]),
@@ -454,6 +498,13 @@ def main(argv=None) -> None:
         item for item in geometry if not item["same_target_replay_compatible"]
     ]
     if incompatible_geometry:
+        # This is a classification result, not a replay artifact.  Never
+        # replay recomputed values onto captured targets when f64 changed
+        # support, folding, or a target index.
+        if args.output.exists():
+            raise RuntimeError(
+                "geometry-incompatible recomputation unexpectedly created an output artifact"
+            )
         summary = {
             "schema": "recovar-bpref-high-precision-recomputation-report-v1",
             "status": "GEOMETRY_PRECISION_BOUNDARY",
