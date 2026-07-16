@@ -3935,4 +3935,7 @@ agreement is Hungarian-matched while retaining raw label agreement and the full
 confusion matrix.  Intermediate gates use these exact/array metrics; map-quality
 gates remain FSC/FSC-AUC only.  Escalate from this aggregate report to a
 particle capture only when it identifies a systematic cohort or an FSC
-trajectory localizes a reproducible boundary.
+trajectory localizes a reproducible boundary.  Use repeated
+`--recovar-iteration` arguments when only an explicit boundary subset has all
+required state arrays; the default remains fail-closed rather than silently
+omitting missing support.

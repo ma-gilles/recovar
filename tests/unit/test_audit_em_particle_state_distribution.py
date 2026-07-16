@@ -276,3 +276,16 @@ def test_half_order_fallback_is_reindexed_to_image_identity(tmp_path):
     )
 
     assert report["iterations"][0]["recovar_vs_relion"]["pmax"]["signed"]["mean"] == pytest.approx(0.0, abs=1e-15)
+
+
+@pytest.mark.unit
+def test_explicit_iteration_selection_fails_closed_when_boundary_is_absent(tmp_path):
+    results, source, relion, _control = _fixture(tmp_path)
+
+    with pytest.raises(auditor.AuditError, match="requested RECOVAR iterations are absent"):
+        auditor.audit(
+            recovar_results=results,
+            recovar_particles_star=source,
+            relion_stars={1: relion},
+            recovar_iterations={3},
+        )

@@ -490,6 +490,7 @@ def audit(
     recovar_particles_star: Path,
     relion_stars: dict[int, Path],
     control_stars: dict[int, Path] | None = None,
+    recovar_iterations: set[int] | None = None,
 ) -> dict[str, Any]:
     recovar_results = recovar_results.expanduser().resolve()
     recovar_particles_star = recovar_particles_star.expanduser().resolve()
@@ -504,9 +505,20 @@ def audit(
             raise AuditError(
                 f"RECOVAR NPZ n_images={int(np.asarray(npz['n_images']))} disagrees with identity STAR rows={n_images}"
             )
-        rec_iterations = sorted(
+        available_rec_iterations = sorted(
             {int(match.group(1)) for key in npz.files if (match := RECOVAR_ITERATION_RE.match(key)) is not None}
         )
+        if recovar_iterations is None:
+            rec_iterations = available_rec_iterations
+        else:
+            requested = sorted(int(iteration) for iteration in recovar_iterations)
+            missing_requested = sorted(set(requested) - set(available_rec_iterations))
+            if missing_requested:
+                raise AuditError(
+                    "requested RECOVAR iterations are absent from the result archive: "
+                    f"{missing_requested}; available={available_rec_iterations}"
+                )
+            rec_iterations = requested
         matched = [
             (rec_iteration, rec_iteration + 1) for rec_iteration in rec_iterations if rec_iteration + 1 in relion_stars
         ]
@@ -582,6 +594,7 @@ def audit(
         },
         "iteration_alignment": {
             "recovar_zero_based_to_relion_one_based": True,
+            "selected_recovar_iterations": rec_iterations,
             "missing_relion_iterations": missing_relion,
             "unused_relion_iterations": unused_relion,
         },
@@ -615,6 +628,15 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         help="Optional RELION repeat/control run_itNNN_data.star; repeat per iteration",
     )
+    parser.add_argument(
+        "--recovar-iteration",
+        action="append",
+        type=int,
+        help=(
+            "Optional zero-based RECOVAR iteration to audit; repeat to select an explicit complete boundary subset. "
+            "Unselected iterations are not claimed."
+        ),
+    )
     parser.add_argument("--output-json", required=True, type=Path)
     return parser
 
@@ -628,6 +650,7 @@ def main(argv: list[str] | None = None) -> int:
             recovar_particles_star=args.recovar_particles_star,
             relion_stars=_star_specs(args.relion_star, label="RELION"),
             control_stars=_star_specs(args.relion_control_star, label="RELION control"),
+            recovar_iterations=None if args.recovar_iteration is None else set(args.recovar_iteration),
         )
         status = 0
     except (AuditError, OSError, ValueError) as exc:
