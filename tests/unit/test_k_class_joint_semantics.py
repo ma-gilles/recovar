@@ -1099,6 +1099,7 @@ def test_adaptive_k_class_firstiter_fine_pass_uses_global_winner_subsets(monkeyp
     assert [call[1] for call in fine_calls] == [(0, 3), (1, 2)]
     np.testing.assert_array_equal(np.asarray(result.class_assignments), np.asarray([0, 1, 1, 0], dtype=np.int32))
     np.testing.assert_allclose(np.asarray(result.class_posterior_sums), np.asarray([2.0, 2.0], dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(result.significant_counts), np.ones(4, dtype=np.int32))
 
 
 def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(monkeypatch):
