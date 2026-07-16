@@ -4070,6 +4070,12 @@ still open.  The device capture is inert, with half1/half2/merged FSC-AUC
 `0.99999997850/0.99999997795/0.99999998428` on the same A100 UUID
 `GPU-64011c8c-bd98-eb41-2c46-dd201730ef64`.
 
+The serial p8240 diagnostic stops at this upstream grid-value boundary.  Do
+not trace the particle's preceding construction input or operation unless an
+aggregate audit identifies a systematic cohort.  Continue with
+distribution-level PPref-grid comparisons and controlled boundary
+substitutions before considering a production change.
+
 At iteration 13 the worst-arm deficits are `1.264x`, `3.203x`, and `1.786x`
 the observed repeat deficit for half 1, half 2, and merged maps.  At iteration
 16 they are `0.658x`, `1.404x`, and `0.845x`, respectively.  Iteration 17 is

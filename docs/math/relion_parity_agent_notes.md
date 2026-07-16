@@ -2629,7 +2629,11 @@ Matrix evidence:
   ordinary RECOVAR scoring bitwise.  A serialized RELION PPref replay through
   the identical RECOVAR staging path is within `2.20e-11` RMS at corners and
   `1.19e-11` RMS after hardware projection.  Staging and interpolation geometry
-  are excluded; continue upstream at PPref grid-value construction.
+  are excluded.  The serial p8240 diagnostic stops at the upstream PPref
+  grid-value boundary; do not trace its preceding construction input unless
+  an aggregate audit identifies a systematic cohort.  Continue with
+  distribution-level PPref-grid comparisons and controlled boundary
+  substitutions.
 - The capture is inert at minimum half/merged FSC-AUC `0.99999997795` on A100
   UUID `GPU-64011c8c-bd98-eb41-2c46-dd201730ef64`.
 - Treat the one repeat as an empirical same-model scale, not a confidence
