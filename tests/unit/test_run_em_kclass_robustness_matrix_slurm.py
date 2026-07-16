@@ -37,6 +37,63 @@ def test_extra_pdb_family_case_can_be_selected_by_name(monkeypatch):
     assert case.class_distribution == "head-heavy"
 
 
+def _write_numbered_class_maps(root, *, iterations, n_classes=4):
+    root.mkdir(parents=True, exist_ok=True)
+    for iteration in iterations:
+        for half in (1, 2):
+            for class_number in range(1, n_classes + 1):
+                (root / f"it{iteration:03d}_half{half}_class{class_number}_reg.mrc").write_bytes(
+                    f"{iteration}:{half}:{class_number}".encode()
+                )
+
+
+def test_numbered_class_map_audit_accepts_early_convergence(tmp_path):
+    relion_dir = tmp_path / "relion"
+    intermediates = tmp_path / "recovar" / "intermediates"
+    relion_dir.mkdir()
+    for iteration in (0, 1, 2):
+        (relion_dir / f"run_it{iteration:03d}_model.star").write_text("model\n")
+    _write_numbered_class_maps(intermediates, iterations=(0, 1))
+
+    report = launcher.audit_numbered_class_maps(
+        recovar_intermediates_dir=intermediates,
+        relion_dir=relion_dir,
+        n_classes=4,
+    )
+
+    assert report["relion_numbered_iterations"] == [1, 2]
+    assert report["recovar_numbered_iterations"] == [0, 1]
+    assert report["maps_per_iteration"] == 8
+    assert report["map_count"] == 16
+    assert (intermediates / "numbered_class_map_audit.json").is_file()
+    assert len((intermediates / "numbered_class_maps.sha256").read_text().splitlines()) == 16
+
+
+def test_numbered_class_map_audit_rejects_iteration_gaps_and_map_mismatches(tmp_path):
+    relion_dir = tmp_path / "relion"
+    intermediates = tmp_path / "recovar" / "intermediates"
+    relion_dir.mkdir()
+    for iteration in (0, 1, 3):
+        (relion_dir / f"run_it{iteration:03d}_model.star").write_text("model\n")
+    _write_numbered_class_maps(intermediates, iterations=(0, 1, 2))
+
+    with pytest.raises(ValueError, match="RELION numbered iterations are not contiguous"):
+        launcher.audit_numbered_class_maps(
+            recovar_intermediates_dir=intermediates,
+            relion_dir=relion_dir,
+            n_classes=4,
+        )
+
+    (relion_dir / "run_it003_model.star").unlink()
+    (intermediates / "it001_half2_class4_reg.mrc").unlink()
+    with pytest.raises(ValueError, match="do not match the actual RELION trajectory"):
+        launcher.audit_numbered_class_maps(
+            recovar_intermediates_dir=intermediates,
+            relion_dir=relion_dir,
+            n_classes=4,
+        )
+
+
 def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypatch):
     jobs_dir = tmp_path / "jobs"
     jobs_dir.mkdir()
@@ -93,9 +150,12 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert "      --firstiter_cc \\\n" in text
     assert "  --firstiter_cc \\\n" in text
     assert "  --image-fourier-backend relion_cuda \\\n" in text
+    assert 'RECOVAR_INTERMEDIATES_DIR="${RECOVAR_DIR}/intermediates"' in text
     assert '--save_intermediates_dir "${RECOVAR_INTERMEDIATES_DIR}"' in text
-    assert 'map_path="${RECOVAR_INTERMEDIATES_DIR}/it${iteration_padded}_half${half}_class${class_no}_reg.mrc"' in text
-    assert 'numbered_class_maps.sha256' in text
+    assert "from scripts.run_em_kclass_robustness_matrix_slurm import audit_numbered_class_maps" in text
+    assert '"${RECOVAR_INTERMEDIATES_DIR}" "${RELION_DIR}" 2' in text
+    assert "for iteration in $(seq 0" not in text
+    assert "Numbered class-map audit ok" in text
     assert 'RELION_GPU_UUID="$(capture_physical_gpu_uuid)"' in text
     assert 'RECOVAR_GPU_UUID="$(capture_physical_gpu_uuid)"' in text
     assert 'paired_gpu_uuid.json' in text

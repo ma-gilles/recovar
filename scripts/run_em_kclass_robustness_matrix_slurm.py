@@ -13,7 +13,10 @@ GUI-style Class3D defaults, evaluates both against GT, and writes artifacts that
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -100,6 +103,101 @@ DEFAULT_CASES: tuple[Case, ...] = (
 
 def q(value: str | Path) -> str:
     return shlex.quote(str(value))
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def audit_numbered_class_maps(
+    *,
+    recovar_intermediates_dir: Path,
+    relion_dir: Path,
+    n_classes: int,
+) -> dict[str, object]:
+    """Validate RECOVAR numbered class maps against actual RELION iterations."""
+
+    if n_classes <= 0:
+        raise ValueError("n_classes must be positive")
+
+    relion_pattern = re.compile(r"run_it(\d{3})_model\.star")
+    relion_iterations = sorted(
+        int(match.group(1))
+        for path in relion_dir.glob("run_it*_model.star")
+        if (match := relion_pattern.fullmatch(path.name)) is not None and int(match.group(1)) > 0
+    )
+    if not relion_iterations:
+        raise ValueError(f"No numbered RELION model STARs found in {relion_dir}")
+    expected_relion_iterations = list(range(1, relion_iterations[-1] + 1))
+    if relion_iterations != expected_relion_iterations:
+        raise ValueError(
+            "RELION numbered iterations are not contiguous: "
+            f"expected {expected_relion_iterations}, found {relion_iterations}"
+        )
+
+    map_pattern = re.compile(r"it(\d{3})_half([12])_class(\d+)_reg\.mrc")
+    map_paths = sorted(recovar_intermediates_dir.glob("it*_half*_class*_reg.mrc"))
+    actual_maps: dict[tuple[int, int, int], Path] = {}
+    for path in map_paths:
+        match = map_pattern.fullmatch(path.name)
+        if match is None:
+            raise ValueError(f"Malformed numbered RECOVAR class-map name: {path}")
+        key = tuple(int(value) for value in match.groups())
+        if key in actual_maps:
+            raise ValueError(f"Duplicate numbered RECOVAR class-map identity {key}: {path}")
+        if path.stat().st_size <= 0:
+            raise ValueError(f"Empty numbered RECOVAR class map: {path}")
+        actual_maps[key] = path
+
+    expected_maps = {
+        (relion_iteration - 1, half, class_number)
+        for relion_iteration in relion_iterations
+        for half in (1, 2)
+        for class_number in range(1, n_classes + 1)
+    }
+    actual_keys = set(actual_maps)
+    missing = sorted(expected_maps - actual_keys)
+    unexpected = sorted(actual_keys - expected_maps)
+    if missing or unexpected:
+        raise ValueError(
+            "RECOVAR numbered class maps do not match the actual RELION trajectory: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+    checksums = []
+    for key in sorted(actual_maps):
+        path = actual_maps[key]
+        checksums.append(
+            {
+                "recovar_iteration": key[0],
+                "relion_iteration": key[0] + 1,
+                "half": key[1],
+                "class": key[2],
+                "path": str(path.resolve()),
+                "sha256": _sha256_file(path),
+            }
+        )
+    report: dict[str, object] = {
+        "schema_version": 1,
+        "n_classes": n_classes,
+        "relion_numbered_iterations": relion_iterations,
+        "recovar_numbered_iterations": [iteration - 1 for iteration in relion_iterations],
+        "maps_per_iteration": 2 * n_classes,
+        "map_count": len(checksums),
+        "maps": checksums,
+    }
+    recovar_intermediates_dir.mkdir(parents=True, exist_ok=True)
+    (recovar_intermediates_dir / "numbered_class_map_audit.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n"
+    )
+    (recovar_intermediates_dir / "numbered_class_maps.sha256").write_text(
+        "".join(f"{row['sha256']}  {row['path']}\n" for row in checksums)
+    )
+    return report
 
 
 def parse_args() -> argparse.Namespace:
@@ -434,7 +532,7 @@ echo "Using holdout outlier PDB: ${{OUTLIER_PDB}}"
 CASE_ROOT={q(case_root)}
 DATA_DIR="${{CASE_ROOT}}/data"
 RECOVAR_DIR="${{CASE_ROOT}}/recovar"
-RECOVAR_INTERMEDIATES_DIR="${{RECOVAR_DIR}}/numbered_intermediates"
+RECOVAR_INTERMEDIATES_DIR="${{RECOVAR_DIR}}/intermediates"
 RELION_DIR="${{CASE_ROOT}}/relion_ref"
 RELION_DISPATCH_LOG="${{RELION_DIR}}/dispatch.tsv"
 RELION_DISPATCH_SCHEDULE="${{RELION_DIR}}/dispatch_schedule.npz"
@@ -712,25 +810,24 @@ if [[ "${{RECOVAR_POST_GPU_UUID}}" != "${{RELION_GPU_UUID}}" ]]; then
 fi
 printf '%s\\n' "${{RECOVAR_POST_GPU_UUID}}" > "${{RECOVAR_DIR}}/runtime_physical_gpu_uuid.txt"
 
-MISSING_INTERMEDIATE=0
-for iteration in $(seq 0 $(({case.max_iter} - 1))); do
-  iteration_padded="$(printf '%03d' "${{iteration}}")"
-  for half in 1 2; do
-    for class_no in $(seq 1 {case.n_classes}); do
-      map_path="${{RECOVAR_INTERMEDIATES_DIR}}/it${{iteration_padded}}_half${{half}}_class${{class_no}}_reg.mrc"
-      if [[ ! -s "${{map_path}}" ]]; then
-        echo "ERROR: missing numbered RECOVAR class map: ${{map_path}}" >&2
-        MISSING_INTERMEDIATE=1
-      fi
-    done
-  done
-done
-if [[ "${{MISSING_INTERMEDIATE}}" -ne 0 ]]; then
-  exit 2
-fi
-find "${{RECOVAR_INTERMEDIATES_DIR}}" -maxdepth 1 -type f -name 'it*_half*_class*_reg.mrc' -print0 \
-  | sort -z \
-  | xargs -0 sha256sum > "${{RECOVAR_INTERMEDIATES_DIR}}/numbered_class_maps.sha256"
+"${{PIXI_PY}}" - "${{RECOVAR_INTERMEDIATES_DIR}}" "${{RELION_DIR}}" {case.n_classes} <<'PY'
+import pathlib
+import sys
+
+from scripts.run_em_kclass_robustness_matrix_slurm import audit_numbered_class_maps
+
+report = audit_numbered_class_maps(
+    recovar_intermediates_dir=pathlib.Path(sys.argv[1]),
+    relion_dir=pathlib.Path(sys.argv[2]),
+    n_classes=int(sys.argv[3]),
+)
+print(
+    "Numbered class-map audit ok: "
+    f"RELION iterations={{report['relion_numbered_iterations']}} "
+    f"RECOVAR iterations={{report['recovar_numbered_iterations']}} "
+    f"maps={{report['map_count']}}"
+)
+PY
 
 echo "=== Evaluate K-class GT metrics: {case.name} ==="
 ITER_PADDED="$(printf "%03d" {case.max_iter})"
