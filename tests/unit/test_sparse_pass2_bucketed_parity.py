@@ -37,6 +37,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _winner_take_all_bucket_probs,
 )
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_pass2_module
+from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
 
 pytestmark = pytest.mark.unit
 
@@ -167,7 +168,14 @@ def _max_relative_error(a, b, eps=1e-12):
     return float(np.max(diff / denom))
 
 
-def _compare_outputs(out_ref, out_bucket, atol=1e-5, rtol=1e-5):
+def _compare_outputs(
+    out_ref,
+    out_bucket,
+    atol=1e-5,
+    rtol=1e-5,
+    *,
+    compare_absolute_gaussian_scores=True,
+):
     """Compare per-image and accumulated outputs with tight tolerance."""
     (
         Ft_y_ref,
@@ -199,18 +207,19 @@ def _compare_outputs(out_ref, out_bucket, atol=1e-5, rtol=1e-5):
     np.testing.assert_allclose(np.asarray(best_tr_ref), np.asarray(best_tr_b), atol=1e-6)
 
     # RELION stats must match within float32 precision.
-    np.testing.assert_allclose(
-        np.asarray(stats_ref.log_evidence_per_image),
-        np.asarray(stats_b.log_evidence_per_image),
-        atol=atol,
-        rtol=rtol,
-    )
-    np.testing.assert_allclose(
-        np.asarray(stats_ref.best_log_score_per_image),
-        np.asarray(stats_b.best_log_score_per_image),
-        atol=atol,
-        rtol=rtol,
-    )
+    if compare_absolute_gaussian_scores:
+        np.testing.assert_allclose(
+            np.asarray(stats_ref.log_evidence_per_image),
+            np.asarray(stats_b.log_evidence_per_image),
+            atol=atol,
+            rtol=rtol,
+        )
+        np.testing.assert_allclose(
+            np.asarray(stats_ref.best_log_score_per_image),
+            np.asarray(stats_b.best_log_score_per_image),
+            atol=atol,
+            rtol=rtol,
+        )
     np.testing.assert_allclose(
         np.asarray(stats_ref.max_posterior_per_image),
         np.asarray(stats_b.max_posterior_per_image),
@@ -254,8 +263,8 @@ def _compare_outputs(out_ref, out_bucket, atol=1e-5, rtol=1e-5):
 # ---------------------------------------------------------------------------
 
 
-def test_sparse_pass2_score_matches_direct_diff2_for_finite_inputs():
-    """Sparse pass-2 scores must preserve direct diff2 algebra."""
+def test_sparse_pass2_score_matches_relion_common_min_direct_diff2_for_finite_inputs():
+    """Sparse pass-2 uses RELION's common-min float32 direct-diff2 scores."""
     rng = np.random.default_rng(123)
     batch, n_rot, n_trans, n_half = 2, 3, 4, 5
     image = (
@@ -286,11 +295,15 @@ def test_sparse_pass2_score_matches_direct_diff2_for_finite_inputs():
     expected = np.empty((batch, n_rot, n_trans), dtype=np.float32)
     for b in range(batch):
         weights = corr_img_score[b] * half_weights
-        image_constant = 0.5 * np.sum(np.abs(shifted_corrected[b]) ** 2 * weights[None, :], axis=-1)
+        raw_diff2 = np.empty((n_rot, n_trans), dtype=np.float32)
         for r in range(n_rot):
             diff = proj[b, r][None, :] - shifted_corrected[b]
             diff2 = 0.5 * np.sum(np.abs(diff) ** 2 * weights[None, :], axis=-1)
-            expected[b, r] = -diff2 + image_constant + rot_prior[b, r] + trans_prior[b]
+            raw_diff2[r] = diff2.astype(np.float32)
+        common_min = np.min(raw_diff2)
+        for r in range(n_rot):
+            prior = np.float32(np.float32(rot_prior[b, r]) + trans_prior[b])
+            expected[b, r] = np.float32(np.float32(prior + common_min) - raw_diff2[r])
 
     np.testing.assert_allclose(np.asarray(scores), expected, atol=5e-5, rtol=5e-5)
 
@@ -617,8 +630,10 @@ class TestSparsePass2Bucketed:
         image_pre_shifts=None,
         translation_prior_centers=None,
         current_size=None,
+        square_window=False,
         relion_firstiter_score_mode="gaussian",
         relion_firstiter_winner_take_all=False,
+        relion_exact_fine_gaussian=True,
     ):
         ds, vol, mv, nv, trans, nside = self._common_args(sig_indices)
 
@@ -627,6 +642,7 @@ class TestSparsePass2Bucketed:
             disc_type="linear_interp",
             oversampling_order=oversampling_order,
             current_size=current_size,
+            square_window=square_window,
             rotation_log_prior=rotation_log_prior,
             translation_log_prior=translation_log_prior,
             return_stats=return_stats,
@@ -640,9 +656,14 @@ class TestSparsePass2Bucketed:
             translation_prior_centers=translation_prior_centers,
             relion_firstiter_score_mode=relion_firstiter_score_mode,
             relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+            relion_exact_fine_gaussian=relion_exact_fine_gaussian,
         )
 
-        out_ref = _compute_pass2_stats_sparse_perimage_reference(ds, vol, mv, nv, trans, sig_indices, **common_kwargs)
+        reference_kwargs = dict(common_kwargs)
+        reference_kwargs.pop("relion_exact_fine_gaussian")
+        out_ref = _compute_pass2_stats_sparse_perimage_reference(
+            ds, vol, mv, nv, trans, sig_indices, **reference_kwargs
+        )
         out_bucket = compute_pass2_stats_sparse(ds, vol, mv, nv, trans, sig_indices, **common_kwargs)
         return out_ref, out_bucket
 
@@ -741,6 +762,48 @@ class TestSparsePass2Bucketed:
         )
         _compare_outputs(out_ref, out_bucket, atol=1e-4, rtol=1e-4)
 
+    def test_exact_gaussian_highres_rejects_unsupported_score_supports(self):
+        sig_indices = [np.asarray([0, 1], dtype=np.int32)] * 2
+        with pytest.raises(NotImplementedError, match="half_spectrum_scoring=True"):
+            self._run_both(sig_indices, current_size=6, half_spectrum_scoring=False)
+        with pytest.raises(NotImplementedError, match="square_window=False"):
+            self._run_both(
+                sig_indices,
+                current_size=6,
+                half_spectrum_scoring=True,
+                square_window=True,
+            )
+
+    def test_float64_and_explicit_feature_bypass_preserve_algebraic_route(self, monkeypatch):
+        def fail_exact_raw(*args, **kwargs):
+            del args, kwargs
+            raise AssertionError("exact float32 RELION scorer must be bypassed")
+
+        monkeypatch.setattr(
+            sparse_pass2_module,
+            "_score_pass2_bucket_relion_gpu_diff2_raw",
+            fail_exact_raw,
+        )
+        sig_indices = [np.asarray([0, 1], dtype=np.int32)] * 2
+        out_ref, out_bucket = self._run_both(
+            sig_indices,
+            current_size=6,
+            half_spectrum_scoring=False,
+            use_float64_scoring=True,
+        )
+        # Bucketed accumulation order differs slightly from the per-image
+        # reference even though both score in float64.
+        _compare_outputs(out_ref, out_bucket, atol=1e-6, rtol=1e-6)
+
+        out_ref, out_bucket = self._run_both(
+            sig_indices,
+            current_size=6,
+            half_spectrum_scoring=True,
+            square_window=True,
+            relion_exact_fine_gaussian=False,
+        )
+        _compare_outputs(out_ref, out_bucket, atol=1e-4, rtol=1e-4)
+
     def test_with_translation_prior_centers_noise_match(self):
         """Bucketed pass-2 must accumulate RELION sigma-offset posterior mass."""
         sig_indices = [
@@ -767,17 +830,59 @@ class TestSparsePass2Bucketed:
             translation_prior_centers=translation_prior_centers,
         )
         assert out_ref[7].wsum_sigma2_offset > 0.0
-        _compare_outputs(out_ref, out_bucket, atol=1e-4, rtol=1e-4)
+        _compare_outputs(
+            out_ref,
+            out_bucket,
+            atol=1e-4,
+            rtol=1e-4,
+            compare_absolute_gaussian_scores=False,
+        )
 
     def test_full_candidate_lists_match(self):
         """``sig_samples is None`` (full coarse grid) per image."""
         n_images = 3
         sig_indices = [None] * n_images
         out_ref, out_bucket = self._run_both(sig_indices, return_stats=True)
-        # The bucketed path accumulates all images in one GPU reduction, while
-        # the reference adds per-image reductions.  The remaining difference is
-        # float32 accumulation order in Ft_y, not candidate selection logic.
-        _compare_outputs(out_ref, out_bucket, atol=5e-5, rtol=5e-5)
+        # The default exact scorer deliberately routes full support through the
+        # bucketed path. It follows RELION's float32 diff2 order, while the
+        # legacy reference uses the algebraic form and per-image reductions.
+        _compare_outputs(out_ref, out_bucket, atol=1e-4, rtol=1e-4)
+
+    def test_exact_full_candidate_lists_route_to_bucketed_scorer(self, monkeypatch):
+        """Full support must not silently bypass the exact RELION scorer."""
+        sentinel = object()
+
+        def capture_bucketed(*args, **kwargs):
+            del args
+            assert kwargs["relion_exact_fine_gaussian"] is True
+            return sentinel
+
+        def fail_legacy(*args, **kwargs):
+            del args, kwargs
+            raise AssertionError("exact full support must not use the legacy per-image scorer")
+
+        monkeypatch.setattr(
+            sparse_pass2_module,
+            "compute_pass2_stats_sparse_bucketed",
+            capture_bucketed,
+        )
+        monkeypatch.setattr(
+            oversampling_module,
+            "_compute_pass2_stats_sparse_perimage_reference",
+            fail_legacy,
+        )
+        routed = oversampling_module.compute_pass2_stats_sparse(
+            None,
+            None,
+            None,
+            None,
+            None,
+            [None],
+            nside_level=0,
+            disc_type="linear_interp",
+            relion_exact_fine_gaussian=True,
+        )
+        assert routed is sentinel
 
     def test_relion_mode_kwargs_match(self):
         """Match the exact production call: half_spectrum + float64 + masked + noise."""
@@ -795,7 +900,13 @@ class TestSparsePass2Bucketed:
             half_spectrum_scoring=True,
             use_float64_scoring=True,
         )
-        _compare_outputs(out_ref, out_bucket, atol=1e-4, rtol=1e-4)
+        _compare_outputs(
+            out_ref,
+            out_bucket,
+            atol=1e-4,
+            rtol=1e-4,
+            compare_absolute_gaussian_scores=False,
+        )
         assert np.asarray(out_bucket[6].log_evidence_per_image).dtype == np.float64
         assert np.asarray(out_bucket[6].best_log_score_per_image).dtype == np.float64
 
@@ -829,7 +940,13 @@ class TestSparsePass2Bucketed:
             scale_corrections=scale_corrections,
             image_pre_shifts=image_pre_shifts,
         )
-        _compare_outputs(out_ref, out_bucket, atol=1e-4, rtol=1e-4)
+        _compare_outputs(
+            out_ref,
+            out_bucket,
+            atol=1e-4,
+            rtol=1e-4,
+            compare_absolute_gaussian_scores=False,
+        )
 
     def test_firstiter_cc_winner_take_all_match(self):
         """Sparse normalized-CC WTA must match dense per-image run_em."""

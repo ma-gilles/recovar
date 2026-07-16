@@ -1155,6 +1155,16 @@ _DENSE_EM_STATIC_KWARGS: dict = {
         _os_for_f64.environ.get("RECOVAR_USE_FLOAT64_PROJECTIONS", "0").strip().lower()
         in {"1", "true", "yes", "on"}
     ),
+    # Default to RELION's float32 fine-search diff2/minimum ordering. This
+    # diagnostic bypass retains the historical algebraic sparse scorer for
+    # controlled full-trajectory A/B comparisons.
+    "relion_exact_fine_gaussian": not bool(
+        _os_for_f64.environ.get(
+            "RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN",
+            "0",
+        ).strip().lower()
+        in {"1", "true", "yes", "on"}
+    ),
     "do_gridding_correction": True,
     "square_window": RELION_FOURIER_WINDOW_SQUARE,
     "sparse_pass2": False,
