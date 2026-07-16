@@ -355,6 +355,65 @@ def test_high_precision_recompute_refuses_stale_output_and_bounds_mismatch_sampl
 
 
 @pytest.mark.parametrize(
+    ("active_delta", "repeat_delta"),
+    [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)],
+)
+def test_high_precision_source_control_requires_exact_capture_and_repeat(
+    monkeypatch, active_delta, repeat_delta
+):
+    from scripts import recompute_bpref_high_precision
+
+    records = _records((2.0,))
+    result = {
+        "contribution": {
+            "image_shape": np.asarray([2, 2], dtype=np.int32),
+            "window_indices": np.asarray([0], dtype=np.int32),
+        },
+        "signature": {
+            "max_r": np.float32(1.0),
+            "particle_launch_ordinals": np.asarray([0], dtype=np.int64),
+            "launch_ordinal": np.asarray([0], dtype=np.int64),
+            "particle_local_row": np.asarray([0], dtype=np.int32),
+        },
+        "contribution_records": records,
+    }
+    call_count = 0
+
+    def fake_source_rows(_contribution, _signature):
+        nonlocal call_count
+        call_count += 1
+        value = np.complex64(2.0 + (repeat_delta if call_count == 2 else 0.0))
+        metrics = {
+            "data_vs_captured_active": validator.exact_array_metrics(
+                np.asarray([2.0 + active_delta], dtype=np.complex64),
+                np.asarray([2.0], dtype=np.complex64),
+            ),
+            "weight_vs_captured_active": validator.exact_array_metrics(
+                np.asarray([2.0], dtype=np.float32),
+                np.asarray([2.0], dtype=np.float32),
+            ),
+        }
+        return (
+            np.asarray([[value]], dtype=np.complex64),
+            np.asarray([[2.0]], dtype=np.float32),
+            metrics,
+        )
+
+    monkeypatch.setattr(
+        recompute_bpref_high_precision,
+        "_source_rows_production_f32",
+        fake_source_rows,
+    )
+
+    control = recompute_bpref_high_precision._validate_production_source_control(result)
+
+    assert control["validated"] is (active_delta == 0.0 and repeat_delta == 0.0)
+    assert control["data_vs_captured_signature"]["array_equal"]
+    assert control["weight_vs_captured_signature"]["array_equal"]
+    assert control["control_repeat_data"]["array_equal"] is (repeat_delta == 0.0)
+
+
+@pytest.mark.parametrize(
     ("changed", "classification"),
     [
         (
