@@ -136,6 +136,20 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _sha256_named_arrays(items) -> str:
+    """Hash typed, shaped arrays with stable field labels and input order."""
+
+    digest = hashlib.sha256()
+    for label, value in items:
+        array = np.ascontiguousarray(value)
+        digest.update(str(label).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(array.dtype).encode("ascii"))
+        digest.update(np.asarray(array.shape, dtype=np.int64).tobytes())
+        digest.update(array.tobytes(order="C"))
+    return digest.hexdigest()
+
+
 def _load(path: Path) -> dict[str, np.ndarray]:
     with np.load(path, allow_pickle=False) as archive:
         return {key: archive[key] for key in archive.files}
@@ -260,10 +274,14 @@ def load_verified_recomputation(
     _validate_contribution_records(records)
     artifact_path = Path(path).resolve()
     artifact = _load(artifact_path)
+    version = int(_scalar(artifact, "schema_version"))
+    if version not in {1, 2}:
+        raise ValueError("recomputation schema_version must be 1 or 2")
     _require_header(
         artifact,
         magic=RECOMPUTATION_MAGIC,
         schema=RECOMPUTATION_SCHEMA,
+        version=version,
     )
     if not parent_signature_paths or not companion_contribution_paths:
         raise ValueError("recomputation provenance requires parent and companion files")
@@ -282,6 +300,63 @@ def load_verified_recomputation(
     semantic_digest = _semantic_identity_digest(records)
     if str(_scalar(artifact, "semantic_identity_sha256")) != semantic_digest:
         raise ValueError("recomputation semantic identity digest mismatch")
+    if version == 2:
+        manifest_arrays = {
+            "canonical_original_index": records.original_index,
+            "canonical_rotation_key": records.canonical_rotation_key,
+            "canonical_dense_pixel": records.dense_pixel,
+            "canonical_neighbor": records.neighbor,
+            "captured_target_indices": records.target_indices,
+            "captured_row_conjugated": records.row_conjugated,
+            "captured_neighbor_conjugated": records.neighbor_conjugated,
+        }
+        for key, expected in manifest_arrays.items():
+            actual = _require_array(artifact, key, shape=expected.shape, dtype=expected.dtype)
+            if not np.array_equal(actual, expected):
+                raise ValueError(f"recomputation v2 manifest mismatch for {key}")
+        required_text = {
+            "fft_layout": "centered-y packed-x rfft; flattened C order",
+            "fft_normalization": "unnormalized forward numpy.fft.rfft2",
+            "posterior_weight_policy": "captured reconstruction_probs frozen at M-step boundary",
+            "canonical_sort_key_legend": (
+                "original_index,canonical_rotation_key,dense_pixel,neighbor"
+            ),
+            "source_boundary": (
+                "native float32 stack pixels; downstream operands recomputed without "
+                "captured-complex64 promotion"
+            ),
+        }
+        for key, expected in required_text.items():
+            if str(_scalar(artifact, key)) != expected:
+                raise ValueError(f"recomputation v2 manifest policy mismatch for {key}")
+        companion_values = [_load(Path(path)) for path in companion_contribution_paths]
+        digest_specs = {
+            "raw_image_identity_sha256": ("image_identities",),
+            "raw_image_input_sha256": (
+                "raw_real_images", "integer_pre_shifts",
+                "relion_preprocess_normalization_factors",
+            ),
+            "ctf_noise_input_sha256": (
+                "ctf_params", "noise_variance_half", "scale_corrections",
+                "voxel_size", "ctf_mode", "ctf_dose_per_tilt", "ctf_angle_per_tilt",
+            ),
+            "posterior_weight_sha256": (
+                "reconstruction_probs", "reconstruction_mask",
+                "reconstruction_sum_weight", "reconstruction_threshold",
+            ),
+            "hypothesis_geometry_input_sha256": (
+                "active_particle_rows", "active_rotation_rows", "active_rotations",
+                "oversampled_rotation_indices", "fine_translations", "window_indices",
+            ),
+        }
+        for digest_key, fields in digest_specs.items():
+            expected_digest = _sha256_named_arrays(
+                (f"shard{shard}:{field}", values[field])
+                for shard, values in enumerate(companion_values)
+                for field in fields
+            )
+            if str(_scalar(artifact, digest_key)) != expected_digest:
+                raise ValueError(f"recomputation v2 input digest mismatch for {digest_key}")
 
     formula_name = str(_scalar(artifact, "formula_name"))
     formula_version = str(_scalar(artifact, "formula_version"))
@@ -998,7 +1073,7 @@ def canonical_replay_diagnostics(
         for order in ("logical_host_order", "canonical")
         for precision in ("float32", "float64")
     }
-    return {
+    report = {
         "captured_operand_provenance": CAPTURED_F32_CAST,
         "captured_f32_cast_limitation": (
             "float64/complex128 replay casts captured float32 operands and cannot "
@@ -1020,6 +1095,27 @@ def canonical_replay_diagnostics(
             replays[("canonical", "float32")], replays[("canonical", "float64")]
         ),
     }
+    if records.has_verified_recomputed_high_precision:
+        recomputed = {
+            order: replay_contribution_records(
+                records,
+                volume_size,
+                order=order,
+                precision="float64",
+                operand_provenance=RECOMPUTED_HIGH_PRECISION,
+            )
+            for order in ("logical_host_order", "canonical")
+        }
+        report["verified_recomputation_provenance"] = _provenance_report(
+            records.recomputation_provenance
+        )
+        report["recomputed_logical_vs_canonical_float64"] = _replay_metrics(
+            recomputed["logical_host_order"], recomputed["canonical"]
+        )
+        report["captured_cast_vs_recomputed_canonical_float64"] = _replay_metrics(
+            replays[("canonical", "float64")], recomputed["canonical"]
+        )
+    return report
 
 
 def compare_contribution_engines(
@@ -1616,7 +1712,10 @@ def _validate_shard_set(results, panel, *, label: str, scalar_fields, array_fiel
     if not results:
         raise ValueError(f"{label} signature shard set is empty")
     reference = results[0]["signature"]
+    class_index = int(_scalar(reference, "class_index"))
     for result in results:
+        if int(_scalar(result["signature"], "class_index")) != class_index:
+            raise ValueError(f"{label} signature shards mix class indices")
         for key in scalar_fields:
             if _scalar(result["signature"], key) != _scalar(reference, key):
                 raise ValueError(f"{label} signature identity/topology mismatch for {key}")
@@ -1629,6 +1728,8 @@ def _validate_shard_set(results, panel, *, label: str, scalar_fields, array_fiel
     for key in scalar_fields:
         if _scalar(panel, key) != _scalar(reference, key):
             raise ValueError(f"{label} panel/signature identity/topology mismatch for {key}")
+    if "class_index" in panel and int(_scalar(panel, "class_index")) != class_index:
+        raise ValueError(f"{label} panel/signature class_index mismatch")
     for key in array_fields:
         if not np.array_equal(panel[key], reference[key]):
             raise ValueError(f"{label} panel/signature shape topology mismatch for {key}")
@@ -1670,6 +1771,14 @@ def parse_args(argv=None):
     parser.add_argument("signatures", nargs="+", type=Path)
     parser.add_argument("--panel-native", required=True, type=Path)
     parser.add_argument("--atomic-tuples-out", type=Path)
+    parser.add_argument(
+        "--recomputed-high-precision",
+        type=Path,
+        help=(
+            "optional versioned float64/complex128 recomputation artifact bound "
+            "to every primary signature and companion shard"
+        ),
+    )
     parser.add_argument("--summary-out", type=Path)
     parser.add_argument("--max-replay-rel-l1", type=float, default=1e-4)
     parser.add_argument(
@@ -1740,6 +1849,16 @@ def main(argv=None):
     contribution_records = concatenate_contribution_records(
         [result["contribution_records"] for result in results]
     )
+    if args.recomputed_high_precision is not None:
+        contribution_records = load_verified_recomputation(
+            args.recomputed_high_precision,
+            contribution_records,
+            parent_signature_paths=tuple(Path(result["path"]) for result in results),
+            companion_contribution_paths=tuple(
+                Path(str(_scalar(result["signature"], "companion_contribution_path")))
+                for result in results
+            ),
+        )
     canonical_diagnostics = canonical_replay_diagnostics(
         contribution_records, volume_size
     )

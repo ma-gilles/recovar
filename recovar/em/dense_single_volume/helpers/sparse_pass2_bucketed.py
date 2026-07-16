@@ -226,9 +226,10 @@ _bpref_contribution_dump_counter = 0
 _bpref_contribution_call_counter = 0
 _bpref_contribution_context = {"iteration": -1, "half": -1}
 _bpref_image_identity_cache: dict[str, np.ndarray] = {}
-_bpref_device_panel_accumulators: dict[tuple[int, int, str], tuple[jax.Array, jax.Array]] = {}
-_bpref_device_panel_launch_counters: dict[tuple[int, int, str], int] = {}
-_bpref_device_panel_metadata: dict[tuple[int, int, str], dict[str, object]] = {}
+_BPrefPanelKey = tuple[int, int, str, int]
+_bpref_device_panel_accumulators: dict[_BPrefPanelKey, tuple[jax.Array, jax.Array]] = {}
+_bpref_device_panel_launch_counters: dict[_BPrefPanelKey, int] = {}
+_bpref_device_panel_metadata: dict[_BPrefPanelKey, dict[str, object]] = {}
 
 
 def set_bpref_contribution_dump_context(*, iteration: int, half: int) -> None:
@@ -460,50 +461,54 @@ def _sha256_file(path: Path) -> str:
 
 
 def flush_bpref_device_panel_accumulator(*, iteration: int, half: int) -> None:
-    """Write and release the exact native panel accumulator for one half."""
+    """Write and release every exact native class panel for one half."""
 
     dump_dir = os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
     if not dump_dir:
         return
     run_id = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID", "unset")
-    key = (int(iteration), int(half), run_id)
-    accumulators = _bpref_device_panel_accumulators.pop(key, None)
-    launch_count = _bpref_device_panel_launch_counters.pop(key, 0)
-    metadata = _bpref_device_panel_metadata.pop(key, None)
-    if metadata is None:
-        raise RuntimeError(f"No RECOVAR device panel metadata exists for {key}")
-    if accumulators is None:
-        raise RuntimeError(f"No RECOVAR device panel accumulator exists for {key}")
-    data_accumulator, weight_accumulator = accumulators
+    prefix = (int(iteration), int(half), run_id)
+    keys = sorted(key for key in _bpref_device_panel_metadata if key[:3] == prefix)
+    if not keys:
+        raise RuntimeError(f"No RECOVAR device panel metadata exists for {prefix}")
     output = Path(dump_dir)
     output.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        output
-        / (
-            f"recovar_device_panel_native_it{int(iteration):03d}_h{int(half)}"
-            f"_rank{int(metadata['rank']):03d}.npz"
-        ),
-        magic=np.asarray("RECOVAR_DEVICE_PANEL_NATIVE"),
-        schema=np.asarray("recovar-device-panel-native-v1"),
-        schema_version=np.int32(1),
-        run_id=np.asarray(run_id),
-        iteration=np.int32(iteration),
-        half=np.int32(half),
-        rank=np.int32(metadata["rank"]),
-        launch_count=np.int64(launch_count),
-        current_size=np.int32(metadata["current_size"]),
-        max_r=np.float32(metadata["max_r"]),
-        image_shape=np.asarray(metadata["image_shape"], dtype=np.int32),
-        volume_shape=np.asarray(metadata["volume_shape"], dtype=np.int32),
-        reconstruction_padding_factor=np.int32(metadata["reconstruction_padding_factor"]),
-        source_stack_sha256=np.asarray(metadata["source_stack_sha256"]),
-        causal_arm=np.asarray(metadata["causal_arm"]),
-        winner_take_all=np.bool_(metadata["winner_take_all"]),
-        topology_claim=np.asarray("causal-arm-not-relion-hypothesis-arithmetic-closure"),
-        accumulator_field_legend=np.asarray("data=complex64 x-half;weight=float32 x-half;flat C order"),
-        data_accumulator=np.asarray(data_accumulator),
-        weight_accumulator=np.asarray(weight_accumulator),
-    )
+    for key in keys:
+        accumulators = _bpref_device_panel_accumulators.pop(key, None)
+        launch_count = _bpref_device_panel_launch_counters.pop(key, 0)
+        metadata = _bpref_device_panel_metadata.pop(key)
+        if accumulators is None:
+            raise RuntimeError(f"No RECOVAR device panel accumulator exists for {key}")
+        data_accumulator, weight_accumulator = accumulators
+        class_index = int(metadata["class_index"])
+        np.savez(
+            output
+            / (
+                f"recovar_device_panel_native_it{int(iteration):03d}_h{int(half)}"
+                f"_class{class_index + 1:03d}_rank{int(metadata['rank']):03d}.npz"
+            ),
+            magic=np.asarray("RECOVAR_DEVICE_PANEL_NATIVE"),
+            schema=np.asarray("recovar-device-panel-native-v1"),
+            schema_version=np.int32(1),
+            run_id=np.asarray(run_id),
+            iteration=np.int32(iteration),
+            half=np.int32(half),
+            class_index=np.int32(class_index),
+            rank=np.int32(metadata["rank"]),
+            launch_count=np.int64(launch_count),
+            current_size=np.int32(metadata["current_size"]),
+            max_r=np.float32(metadata["max_r"]),
+            image_shape=np.asarray(metadata["image_shape"], dtype=np.int32),
+            volume_shape=np.asarray(metadata["volume_shape"], dtype=np.int32),
+            reconstruction_padding_factor=np.int32(metadata["reconstruction_padding_factor"]),
+            source_stack_sha256=np.asarray(metadata["source_stack_sha256"]),
+            causal_arm=np.asarray(metadata["causal_arm"]),
+            winner_take_all=np.bool_(metadata["winner_take_all"]),
+            topology_claim=np.asarray("causal-arm-not-relion-hypothesis-arithmetic-closure"),
+            accumulator_field_legend=np.asarray("data=complex64 x-half;weight=float32 x-half;flat C order"),
+            data_accumulator=np.asarray(data_accumulator),
+            weight_accumulator=np.asarray(weight_accumulator),
+        )
 
 
 class SparseKClassPass2FusedResult(NamedTuple):
@@ -792,6 +797,7 @@ def _maybe_dump_bpref_contribution_rows(
     shadow_score_bitwise_equal,
     shadow_reduction_agreement,
     device_signature_active: bool | None = None,
+    class_index: int = 0,
 ):
     """Dump posterior-reduced active rows for whole-accumulator scatter replay.
 
@@ -813,6 +819,9 @@ def _maybe_dump_bpref_contribution_rows(
     dump_dir = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR")
     if not dump_dir:
         return
+    class_index = int(class_index)
+    if class_index < 0:
+        raise ValueError("BPref contribution class_index must be non-negative")
     global _bpref_contribution_call_counter
     call_idx = _bpref_contribution_call_counter
     _bpref_contribution_call_counter += 1
@@ -951,7 +960,7 @@ def _maybe_dump_bpref_contribution_rows(
         half=np.int32(context_half),
         rank=np.int32(int(os.environ.get("RECOVAR_BPREF_CONTRIBUTION_RANK", "0"))),
         pass_index=np.int32(2),
-        class_index=np.int32(1),
+        class_index=np.int32(class_index),
         run_id=np.asarray(run_id),
         current_size=np.int64(current_size),
         image_shape=np.asarray(image_shape, dtype=np.int32),
@@ -1055,7 +1064,7 @@ def _maybe_dump_bpref_contribution_rows(
             raise RuntimeError("RECOVAR device signature requires the explicit production support radius")
         if context_iteration <= 0 or context_half not in {1, 2}:
             raise RuntimeError("RECOVAR device signature requires explicit positive iteration/half context")
-        accumulator_key = (context_iteration, context_half, run_id)
+        accumulator_key = (context_iteration, context_half, run_id, int(class_index))
         accumulators = _bpref_device_panel_accumulators.get(accumulator_key)
         accumulator_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
         if accumulators is None:
@@ -1191,6 +1200,7 @@ def _maybe_dump_bpref_contribution_rows(
                 else "soft-posterior-per-particle-fused-xhalf"
             ),
             "winner_take_all": bool(winner_take_all),
+            "class_index": int(class_index),
         }
         previous_metadata = _bpref_device_panel_metadata.setdefault(accumulator_key, metadata)
         if previous_metadata != metadata:
@@ -1225,7 +1235,7 @@ def _maybe_dump_bpref_contribution_rows(
             half=np.int32(context_half),
             rank=np.int32(int(os.environ.get("RECOVAR_BPREF_CONTRIBUTION_RANK", "0"))),
             pass_index=np.int32(2),
-            class_index=np.int32(1),
+            class_index=np.int32(class_index),
             call_index=np.int64(call_idx),
             dump_index=np.int64(dump_idx),
             source_stack_sha256=np.asarray(stack_sha256),
@@ -7362,6 +7372,7 @@ def compute_pass2_stats_sparse_bucketed(
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
     bpref_device_signature_active: bool = False,
+    bpref_class_index: int = 0,
 ):
     """Bucketed batched implementation of sparse pass-2 oversampling.
 
@@ -9419,6 +9430,7 @@ def compute_pass2_stats_sparse_bucketed(
                 shadow_score_bitwise_equal=shadow_score_bitwise_equal,
                 shadow_reduction_agreement=shadow_reduction_agreement,
                 device_signature_active=bucket_device_signature_requested,
+                class_index=int(bpref_class_index),
             )
 
             diagnostic_particle_launches_effective = bool(

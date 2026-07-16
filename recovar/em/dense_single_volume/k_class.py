@@ -1972,6 +1972,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
                 n_classes,
             ),
             relion_projector_r_max=relion_projector_r_max,
+            bpref_class_index=class_index,
             **common,
         )
         class_Ft_y, class_Ft_ctf, hard_subset, best_rots, best_trans, best_rot_ids, stats_subset = output[:7]

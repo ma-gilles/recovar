@@ -237,6 +237,104 @@ def test_verified_loader_rejects_captured_float32_promotion(tmp_path):
         )
 
 
+def test_v2_verified_recomputation_manifest_binds_frozen_inputs(tmp_path):
+    records = _records((1.0,))
+    parent_path = tmp_path / "parent.npz"
+    companion_path = tmp_path / "companion.npz"
+    np.savez(parent_path, identity=np.asarray("parent"))
+    companion = {
+        "image_identities": np.asarray(["1@/frozen/particles.mrcs"]),
+        "raw_real_images": np.ones((1, 2, 2), dtype=np.float32),
+        "integer_pre_shifts": np.zeros((1, 2), dtype=np.int32),
+        "relion_preprocess_normalization_factors": np.ones(1, dtype=np.float32),
+        "ctf_params": np.ones((1, 9), dtype=np.float32),
+        "noise_variance_half": np.ones(4, dtype=np.float32),
+        "scale_corrections": np.ones(1, dtype=np.float32),
+        "voxel_size": np.float64(1.0),
+        "ctf_mode": np.asarray("legacy"),
+        "ctf_dose_per_tilt": np.float64(0.0),
+        "ctf_angle_per_tilt": np.float64(0.0),
+        "reconstruction_probs": np.ones((1, 1, 1), dtype=np.float64),
+        "reconstruction_mask": np.ones((1, 1, 1), dtype=bool),
+        "reconstruction_sum_weight": np.ones(1, dtype=np.float64),
+        "reconstruction_threshold": np.ones(1, dtype=np.float64),
+        "active_particle_rows": np.zeros(1, dtype=np.int32),
+        "active_rotation_rows": np.zeros(1, dtype=np.int32),
+        "active_rotations": np.eye(3, dtype=np.float32)[None],
+        "oversampled_rotation_indices": np.zeros((1, 1), dtype=np.int64),
+        "fine_translations": np.zeros((1, 2), dtype=np.float32),
+        "window_indices": np.arange(4, dtype=np.int32),
+    }
+    np.savez(companion_path, **companion)
+
+    def digest(fields):
+        return validator._sha256_named_arrays(
+            (f"shard0:{field}", companion[field]) for field in fields
+        )
+
+    artifact_path = tmp_path / "recompute-v2.npz"
+    np.savez(
+        artifact_path,
+        magic=np.asarray(validator.RECOMPUTATION_MAGIC),
+        schema=np.asarray(validator.RECOMPUTATION_SCHEMA),
+        schema_version=np.int32(2),
+        parent_signature_sha256=np.asarray([validator._sha256_file(parent_path)]),
+        companion_contribution_sha256=np.asarray([validator._sha256_file(companion_path)]),
+        semantic_identity_sha256=np.asarray(validator._semantic_identity_digest(records)),
+        formula_name=np.asarray(validator.RECOMPUTATION_FORMULA_NAME),
+        formula_version=np.asarray(validator.RECOMPUTATION_FORMULA_VERSION),
+        numeric_policy=np.asarray(validator.RECOMPUTATION_NUMERIC_POLICY),
+        source_dtype=np.asarray(validator.RECOMPUTATION_SOURCE_POLICY),
+        source_boundary=np.asarray(
+            "native float32 stack pixels; downstream operands recomputed without captured-complex64 promotion"
+        ),
+        fft_layout=np.asarray("centered-y packed-x rfft; flattened C order"),
+        fft_normalization=np.asarray("unnormalized forward numpy.fft.rfft2"),
+        posterior_weight_policy=np.asarray(
+            "captured reconstruction_probs frozen at M-step boundary"
+        ),
+        canonical_sort_key_legend=np.asarray(
+            "original_index,canonical_rotation_key,dense_pixel,neighbor"
+        ),
+        raw_image_identity_sha256=np.asarray(digest(("image_identities",))),
+        raw_image_input_sha256=np.asarray(digest((
+            "raw_real_images", "integer_pre_shifts",
+            "relion_preprocess_normalization_factors",
+        ))),
+        ctf_noise_input_sha256=np.asarray(digest((
+            "ctf_params", "noise_variance_half", "scale_corrections", "voxel_size",
+            "ctf_mode", "ctf_dose_per_tilt", "ctf_angle_per_tilt",
+        ))),
+        posterior_weight_sha256=np.asarray(digest((
+            "reconstruction_probs", "reconstruction_mask",
+            "reconstruction_sum_weight", "reconstruction_threshold",
+        ))),
+        hypothesis_geometry_input_sha256=np.asarray(digest((
+            "active_particle_rows", "active_rotation_rows", "active_rotations",
+            "oversampled_rotation_indices", "fine_translations", "window_indices",
+        ))),
+        canonical_original_index=records.original_index,
+        canonical_rotation_key=records.canonical_rotation_key,
+        canonical_dense_pixel=records.dense_pixel,
+        canonical_neighbor=records.neighbor,
+        captured_target_indices=records.target_indices,
+        captured_row_conjugated=records.row_conjugated,
+        captured_neighbor_conjugated=records.neighbor_conjugated,
+        recomputed_coefficients=np.ones(1, dtype=np.float64),
+        recomputed_source_data=np.ones(1, dtype=np.complex128),
+        recomputed_source_weight=np.ones(1, dtype=np.float64),
+    )
+
+    verified = validator.load_verified_recomputation(
+        artifact_path,
+        records,
+        parent_signature_paths=(parent_path,),
+        companion_contribution_paths=(companion_path,),
+    )
+
+    assert verified.has_verified_recomputed_high_precision
+
+
 @pytest.mark.parametrize(
     ("changed", "classification"),
     [
