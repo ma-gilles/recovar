@@ -2370,3 +2370,32 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_serialized_sigma_discriminator_20260714_234311/analysis/serialized_sigma_discriminator.json`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_serialized_sigma_discriminator_20260714_234311/analysis/serialized_sigma_operand_metrics.json`.
+
+# 2026-07-16: RELION-exact CUDA scorer rotations close the K=1 iteration-2 cutoff
+
+- A same-A100, cross-engine operand capture localized the earliest material
+  iteration-2 difference to scorer rotation generation.  RELION constructs
+  float32 Euler matrices with device `sincosf` and explicitly evaluates the
+  perturbation product in float32; the prior RECOVAR path used host float64
+  trigonometry followed by a float32 cast.  The authoritative classification
+  is `rotation operand generation/precision`, not reduction noise.
+- A passive counterfactual using the captured RELION matrices reduced maximum
+  projection error by `937.5x` and the critical rank-48/rank-47 score-gap error
+  by `757x`.  Its device matrices matched all 36 captured RELION float32 values
+  bitwise.  Instrumentation inertness passed; map checks used FSC/FSC-AUC only.
+- Production now has a result-only CUDA FFI for RELION's Euler construction and
+  optional `A @ R` product.  Scorer matrices use this device result, while the
+  separate M-step inverse-matrix path and Euler metadata remain unchanged.
+- Same-physical-A100 production job `11249915` completed successfully.  For
+  original particle 7881 it changed the ordinary iteration-2 coarse support
+  from 48 to RELION's 49 significant parents.  The production capture is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_exact_rotation_production_it2_20260716_011500/significance/significance_orig007881_it002_cs056.npz`
+  with SHA-256
+  `364413a24a8c5f72ae788ed20994ae732b30e71c3a0107cac2b6301e43dab97c`.
+- This closes the targeted cutoff boundary, not full-trajectory acceptance.
+  The next gate is an uninterrupted K=1 trajectory with per-iteration arrays,
+  schedule/convergence, and map FSC/FSC-AUC.  Before scale/performance work,
+  batch or cache local per-image scorer-matrix FFI calls and decide whether the
+  strict custom-CUDA requirement should remain parity-mode-only.
+- Authoritative analysis root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_gaussian_cross_engine_analyzer_20260715_225010/analysis_v2_authoritative`.

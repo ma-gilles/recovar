@@ -57,10 +57,17 @@ def _relion_rotation_grid_float32(healpix_order: int):
     from recovar.em.dense_single_volume import iteration_loop as _il
 
     order = int(healpix_order)
-    return (
-        _il.get_relion_rotation_grid(order).astype(np.float32),
-        _il.get_relion_rotation_grid_eulers(order).astype(np.float32),
-    )
+    eulers = _il.get_relion_rotation_grid_eulers(order).astype(np.float32)
+    rotations = _il.get_relion_rotation_grid(order).astype(np.float32)
+    # On GPU, generate the scorer operand through RELION's exact device
+    # arithmetic.  Keep the host grid as the CPU fallback and as the source of
+    # canonical Euler metadata.
+    from recovar.em.sampling import _relion_device_scoring_rotations_f32
+
+    device_rotations = _relion_device_scoring_rotations_f32(eulers)
+    if device_rotations is not None:
+        rotations = device_rotations
+    return rotations, eulers
 
 
 def _rotation_eulers_for_canonical_or_custom_grid(rotations: np.ndarray, healpix_order: int) -> np.ndarray:

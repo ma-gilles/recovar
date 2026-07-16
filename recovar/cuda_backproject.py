@@ -18,6 +18,7 @@ Quick start::
 
 from __future__ import annotations
 
+import contextvars
 import ctypes
 import functools
 import logging
@@ -26,7 +27,6 @@ import pathlib
 import subprocess
 import tempfile
 import threading
-import contextvars
 from contextlib import contextmanager
 from types import ModuleType
 from typing import Tuple
@@ -413,6 +413,7 @@ _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
 _TARGET_RELION_FUSED_X_HALF_BP = "cuda_relion_fused_x_half_bp"
 _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE = "cuda_relion_fused_x_half_bp_signature"
 _TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
+_TARGET_RELION_MAKE_SCORING_ROTATIONS_F32 = "cuda_relion_make_scoring_rotations_f32"
 
 
 _preflight_ok: bool | None = None  # None = not checked yet
@@ -672,6 +673,11 @@ def _ensure_ffi():
         jax.ffi.register_ffi_target(
             _TARGET_RELION_PREPROCESS_REAL_F32,
             jax.ffi.pycapsule(lib.RelionPreprocessRealF32),
+            platform="CUDA",
+        )
+        jax.ffi.register_ffi_target(
+            _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32,
+            jax.ffi.pycapsule(lib.RelionMakeScoringRotationsF32),
             platform="CUDA",
         )
         _ffi_registered = True
@@ -970,6 +976,49 @@ def backproject(
         input_output_aliases={2: 0},
         vmap_method="sequential",
     )(images, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(2,))
+def relion_make_scoring_rotations_f32(
+    eulers_deg: jax.Array,
+    right_matrix: jax.Array,
+    do_right: bool = True,
+) -> jax.Array:
+    """Build scorer rotations with RELION's accelerated float32 arithmetic.
+
+    This reproduces ``cuda_kernel_make_eulers_3D<true,false,do_right>``
+    through its Euler construction and optional ``B = A @ R`` product.  The
+    returned matrices use RECOVAR's scorer convention ``B``.  RELION stores
+    the inverse-projector convention ``B.T``, so a frozen RELION device dump
+    must be transposed before a bitwise comparison with this result.
+
+    This is a strict CUDA primitive: it has no CPU or JAX arithmetic fallback.
+    """
+
+    if eulers_deg.dtype != jnp.float32:
+        raise TypeError(f"eulers_deg must be float32, got {eulers_deg.dtype}")
+    if right_matrix.dtype != jnp.float32:
+        raise TypeError(f"right_matrix must be float32, got {right_matrix.dtype}")
+    if eulers_deg.ndim != 2 or eulers_deg.shape[1:] != (3,):
+        raise ValueError(f"eulers_deg must have shape (N, 3), got {eulers_deg.shape}")
+    if right_matrix.shape != (3, 3):
+        raise ValueError(f"right_matrix must have shape (3, 3), got {right_matrix.shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION scorer-rotation construction requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("RELION scorer-rotation construction was explicitly requested but custom CUDA is disabled")
+    _ensure_ffi()
+
+    out_type = jax.ShapeDtypeStruct((eulers_deg.shape[0], 3, 3), jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        eulers_deg,
+        right_matrix,
+        do_right=np.int64(int(do_right)),
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4, 5))

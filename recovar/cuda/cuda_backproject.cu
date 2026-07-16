@@ -3260,6 +3260,72 @@ namespace {
 
 constexpr int kRelionPreprocessBlockSize = 128;
 constexpr int kRelionSoftMaskBlocks = 128;
+constexpr int kRelionEulerBlockSize = 128;
+
+template <bool DoRight>
+__global__ void relion_make_scoring_rotations_f32_kernel(
+    const float* eulers_deg,
+    const float* right_matrix,
+    float* scorer_rotations,
+    int64_t orientation_count)
+{
+    int64_t oid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (oid >= orientation_count) return;
+
+    float a = eulers_deg[3 * oid] * static_cast<float>(3.14159265358979323846) /
+              static_cast<float>(180.0);
+    float b = eulers_deg[3 * oid + 1] * static_cast<float>(3.14159265358979323846) /
+              static_cast<float>(180.0);
+    float g = eulers_deg[3 * oid + 2] * static_cast<float>(3.14159265358979323846) /
+              static_cast<float>(180.0);
+    float ca, sa, cb, sb, cg, sg, cc, cs, sc, ss;
+    float A[9], B[9];
+    sincosf(a, &sa, &ca);
+    sincosf(b, &sb, &cb);
+    sincosf(g, &sg, &cg);
+    cc = cb * ca;
+    cs = cb * sa;
+    sc = sb * ca;
+    ss = sb * sa;
+    A[0] = cg * cc - sg * sa;
+    A[1] = cg * cs + sg * ca;
+    A[2] = -cg * sb;
+    A[3] = -sg * cc - cg * sa;
+    A[4] = -sg * cs + cg * ca;
+    A[5] = sg * sb;
+    A[6] = sc;
+    A[7] = ss;
+    A[8] = cb;
+
+    if constexpr (DoRight) {
+        for (int i = 0; i < 9; ++i) B[i] = 0.0f;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                for (int k = 0; k < 3; ++k)
+                    B[3 * i + j] += A[3 * i + k] * right_matrix[3 * k + j];
+    } else {
+        for (int i = 0; i < 9; ++i) B[i] = A[i];
+    }
+
+    for (int i = 0; i < 9; ++i) scorer_rotations[9 * oid + i] = B[i];
+}
+
+template <bool DoRight>
+cudaError_t launch_relion_make_scoring_rotations_f32(
+    cudaStream_t stream,
+    const float* eulers_deg,
+    const float* right_matrix,
+    float* scorer_rotations,
+    int64_t orientation_count)
+{
+    if (orientation_count == 0) return cudaSuccess;
+    int blocks = static_cast<int>(
+        (orientation_count + kRelionEulerBlockSize - 1) / kRelionEulerBlockSize);
+    relion_make_scoring_rotations_f32_kernel<DoRight>
+        <<<blocks, kRelionEulerBlockSize, 0, stream>>>(
+            eulers_deg, right_matrix, scorer_rotations, orientation_count);
+    return cudaGetLastError();
+}
 
 __global__ void relion_normalize_f32_kernel(
     const float* images,
@@ -3480,6 +3546,59 @@ cudaError_t launch_relion_preprocess_real_f32(
 }
 
 }  // namespace
+
+ffi::Error RelionMakeScoringRotationsF32Impl(
+    cudaStream_t stream,
+    int64_t do_right,
+    ffi::AnyBuffer eulers_deg,
+    ffi::AnyBuffer right_matrix,
+    ffi::Result<ffi::AnyBuffer> scorer_rotations)
+{
+    if (eulers_deg.element_type() != ffi::DataType::F32 ||
+        right_matrix.element_type() != ffi::DataType::F32 ||
+        scorer_rotations->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionMakeScoringRotationsF32: inputs/output must be F32");
+    if (do_right != 0 && do_right != 1)
+        return ffi::Error::InvalidArgument(
+            "RelionMakeScoringRotationsF32: do_right must be 0 or 1");
+
+    auto euler_dims = eulers_deg.dimensions();
+    auto right_dims = right_matrix.dimensions();
+    auto output_dims = scorer_rotations->dimensions();
+    if (euler_dims.size() != 2 || euler_dims[1] != 3)
+        return ffi::Error::InvalidArgument(
+            "RelionMakeScoringRotationsF32: eulers_deg must have shape (N,3)");
+    if (right_dims.size() != 2 || right_dims[0] != 3 || right_dims[1] != 3)
+        return ffi::Error::InvalidArgument(
+            "RelionMakeScoringRotationsF32: right_matrix must have shape (3,3)");
+    if (output_dims.size() != 3 || output_dims[0] != euler_dims[0] ||
+        output_dims[1] != 3 || output_dims[2] != 3)
+        return ffi::Error::InvalidArgument(
+            "RelionMakeScoringRotationsF32: output must have shape (N,3,3)");
+
+    const float* eulers_ptr = static_cast<const float*>(eulers_deg.untyped_data());
+    const float* right_ptr = static_cast<const float*>(right_matrix.untyped_data());
+    float* output_ptr = static_cast<float*>(scorer_rotations->untyped_data());
+    cudaError_t err = do_right
+        ? launch_relion_make_scoring_rotations_f32<true>(
+              stream, eulers_ptr, right_ptr, output_ptr, euler_dims[0])
+        : launch_relion_make_scoring_rotations_f32<false>(
+              stream, eulers_ptr, right_ptr, output_ptr, euler_dims[0]);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionMakeScoringRotationsF32, RelionMakeScoringRotationsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("do_right")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
 
 ffi::Error RelionPreprocessRealF32Impl(
     cudaStream_t stream,

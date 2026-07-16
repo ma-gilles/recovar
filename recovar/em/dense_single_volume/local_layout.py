@@ -24,7 +24,6 @@ from recovar.em.sampling import (
     rotation_indices_to_relion_eulers,
 )
 
-
 EXACT_LOCAL_BUCKET_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_QUANTUM"
 EXACT_LOCAL_BUCKET_MIN_QUANTUM = 256
 
@@ -442,7 +441,14 @@ def _selected_rotation_matrices(
             float(angular_sampling_deg),
         )
     else:
-        rotations = utils.R_from_relion(selected_eulers, degrees=True)
+        # This also routes GPU RELION-parity runs through the exact device
+        # ``sincosf`` scorer-matrix constructor.  Its CPU fallback is the
+        # existing NumPy Euler conversion.
+        rotations, _ = apply_relion_rotation_perturbation_to_eulers(
+            selected_eulers,
+            0.0,
+            0.0,
+        )
     return rotations.astype(np.float32, copy=False)[inverse]
 
 

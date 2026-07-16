@@ -2,6 +2,7 @@ import functools
 
 import healpy as hp
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 from recovar import utils
@@ -542,6 +543,45 @@ def _relion_mstep_rotations_from_eulers(eulers_deg: np.ndarray) -> np.ndarray:
     return np.swapaxes(inverse, 1, 2).astype(np.float32)
 
 
+def _relion_device_scoring_rotations_f32(
+    eulers_deg: np.ndarray,
+    right_matrix: np.ndarray | None = None,
+) -> np.ndarray | None:
+    """Build RELION scorer matrices with its exact CUDA float32 arithmetic.
+
+    RELION constructs projector matrices on the device from float32 Euler
+    rows using ``sincosf``.  When sampling perturbation is active, its CUDA
+    kernel explicitly accumulates ``A @ right_matrix`` in float32.  Rebuilding
+    the same matrices through NumPy's float64 trigonometry changes a handful
+    of entries by several float32 ulps and can move significance boundaries.
+
+    Return ``None`` on CPU so CPU-only tools retain the existing NumPy path.
+    A GPU RELION-parity run is deliberately fail-closed if the custom CUDA
+    implementation is unavailable; silently using the nearby NumPy result
+    would make an exact-parity run claim arithmetic it did not execute.
+    """
+
+    if jax.default_backend() != "gpu":
+        return None
+
+    from recovar import cuda_backproject
+
+    eulers_f32 = np.asarray(eulers_deg, dtype=np.float32).reshape(-1, 3)
+    do_right = right_matrix is not None
+    if right_matrix is None:
+        right_f32 = np.eye(3, dtype=np.float32)
+    else:
+        right_f32 = np.asarray(right_matrix, dtype=np.float32)
+        if right_f32.shape != (3, 3):
+            raise ValueError(f"right_matrix must have shape (3, 3), got {right_f32.shape}")
+    rotations = cuda_backproject.relion_make_scoring_rotations_f32(
+        jnp.asarray(eulers_f32),
+        jnp.asarray(right_f32),
+        do_right=do_right,
+    )
+    return np.asarray(jax.device_get(rotations), dtype=np.float32)
+
+
 def apply_relion_rotation_perturbation_to_eulers(
     eulers_deg,
     random_perturbation,
@@ -551,11 +591,10 @@ def apply_relion_rotation_perturbation_to_eulers(
 ):
     """Apply RELION's SamplingPerturbation and return eulers plus matrices.
 
-    RELION does not score ``A @ R_perturb`` directly. It converts that product
-    back to Euler angles with ``Euler_matrix2angles`` and later regenerates
-    projector matrices with ``generateEulerMatrices``. The round trip changes
-    some float32 matrix entries by one ulp; CUDA texture interpolation can
-    amplify that into measurable Pmax differences for borderline particles.
+    RELION's CUDA scorer constructs ``A`` from the source float32 Euler rows
+    and scores ``A @ R_perturb`` directly with device float32 arithmetic.  It
+    separately converts the product back to Euler angles for metadata and for
+    the host-side inverse matrices used by weighted-sum backprojection.
 
     When ``return_mstep_rotations`` is true, a third array contains the
     RECOVAR-frame matrices produced by RELION's separate host-side inverse
@@ -564,7 +603,12 @@ def apply_relion_rotation_perturbation_to_eulers(
     """
     eulers = np.asarray(eulers_deg, dtype=np.float64).reshape(-1, 3)
     if abs(float(random_perturbation)) < 1e-12:
-        rotations = _relion_euler_angles_to_matrix(eulers).astype(np.float32)
+        device_rotations = _relion_device_scoring_rotations_f32(eulers)
+        rotations = (
+            device_rotations
+            if device_rotations is not None
+            else _relion_euler_angles_to_matrix(eulers).astype(np.float32)
+        )
         if return_mstep_rotations:
             return rotations, eulers.astype(np.float32), _relion_mstep_rotations_from_eulers(eulers)
         return rotations, eulers.astype(np.float32)
@@ -574,7 +618,12 @@ def apply_relion_rotation_perturbation_to_eulers(
     R_perturb = _relion_euler_angles_to_matrix(np.array([[myperturb, myperturb, myperturb]], dtype=np.float64))[0]
     perturbed_A = np.einsum("nij,jk->nik", A, R_perturb)
     perturbed_eulers = _relion_matrix_to_euler_angles(perturbed_A)
-    perturbed_rotations = _relion_euler_angles_to_matrix(perturbed_eulers).astype(np.float32)
+    device_rotations = _relion_device_scoring_rotations_f32(eulers, R_perturb)
+    perturbed_rotations = (
+        device_rotations
+        if device_rotations is not None
+        else _relion_euler_angles_to_matrix(perturbed_eulers).astype(np.float32)
+    )
     if return_mstep_rotations:
         return (
             perturbed_rotations,
@@ -1027,8 +1076,14 @@ def get_oversampled_rotation_grid_from_samples(
         matrices = perturbed[0]
         mstep_rotations = perturbed[2] if return_mstep_rotations else None
     else:
-        matrices = _relion_euler_angles_to_matrix(euler_angles).astype(np.float32)
-        mstep_rotations = _relion_mstep_rotations_from_eulers(euler_angles) if return_mstep_rotations else None
+        unperturbed = apply_relion_rotation_perturbation_to_eulers(
+            euler_angles,
+            0.0,
+            0.0,
+            return_mstep_rotations=return_mstep_rotations,
+        )
+        matrices = unperturbed[0]
+        mstep_rotations = unperturbed[2] if return_mstep_rotations else None
     parent_map = np.repeat(parent_map, psi_factor)
 
     outputs = [matrices, parent_map]
