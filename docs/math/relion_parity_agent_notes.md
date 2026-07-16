@@ -2819,3 +2819,37 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_algebraic_exact_aba_fc70abc3_retry_dedicated_cuda_20260716_135000/analysis/aba_performance_analysis_v2.seal.json`
   (SHA-256
   `57621195df54a846875273d9ba6337f797c3ea9e91aeda53cc1976cccebbd24c`).
+
+# 2026-07-16: K=4 float64 source/geometry sensitivity is validated but not causal
+
+- The frozen case-11 iteration-1 RECOVAR capture is inert by FSC/FSC-AUC: its
+  per-class capture/control map FSC-AUC is
+  `0.9999999748/0.9999999925/0.9999999925/0.9999999782`.  Exact hard and coarse
+  assignments are unchanged.  This does not close the cross-engine boundary;
+  class-2 RECOVAR-versus-RELION direct FSC-AUC remains `0.999330787`, far
+  outside the stock RELION repeat value `0.9999999975`.
+- Commit `a8b8bd995f941f81a9d65e09c36b913ef06c13ce` adds a fail-closed production
+  float32 source control before any high-precision interpretation.  Across 12
+  capture shards, all 72 active, signature, and control-repeat array
+  comparisons are bitwise equal.  Thus the frozen raw images, normalization,
+  integer shifts, cuFFT/JAX CTF and phase path, posterior reduction, and source
+  row interpretation reproduce the captured complex64/float32 operands.
+- With that control closed, recomputed float64/complex128 geometry changes
+  `21,885` support decisions and `32` target indices over `50,195,816`
+  contributions.  Per-class target mismatches are `16/0/0/16`; support
+  mismatches are `9,425/1,881/1,730/8,849`; Hermitian-fold flags never differ.
+  Genuine float64 source relative-L1 differences are approximately
+  `1.94e-7--1.97e-7` for data and `1.58e-7--1.61e-7` for weights.
+- This validates a real precision-sensitive source/geometry boundary, but it
+  does not make it the cause of the class-2 map gap.  The capture does not
+  contain RELION's complete contribution list or RECOVAR's production atomic
+  schedule.  Next capture RELION's full 847-particle iteration-1 class-2
+  pre-scatter boundary and compare both engines in a common deterministic
+  float64 geometry/reduction replay.  Do not resume serial particle tracing.
+- Sealed summary:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_case11_it1_frozen_boundary_20260716/capture_jobs/joblocal_a100gpu1_b1ce7242_20260716_1620/analysis_followup_7877b2b3_source_control/all_class_summary.json`
+  (SHA-256
+  `9d78b69479bd541e544409e24854fd18892d25bf0fd47cc7039e5d196f8fe66f`).
+  The manifest is `artifacts.sha256` (SHA-256
+  `c3b012271a1fad632386acbb231a0e845a0ae0bc3f2400c3bc232086d0b672f9`)
+  and passes `sha256sum -c`.

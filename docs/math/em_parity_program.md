@@ -84,12 +84,12 @@ The hook is inert when `RELION_DISPATCH_LOG` is unset.  Keep the patch and
 RELION source identity in run provenance; do not substitute a legacy
 four-column range capture.
 
-## Current State — 2026-07-14
+## Current State — 2026-07-16
 
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `7302610c23c3839d9acec1a7781d244b9d20e0d6`
+Current accepted code checkpoint: `a8b8bd995f941f81a9d65e09c36b913ef06c13ce`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -223,6 +223,28 @@ is Milestone 2; future changes must be small logical commits on top of the
 checkpoint.
 
 ### Next experiment
+
+Current status on 2026-07-16: the eight-case autonomous K=1 robustness matrix
+passes every FSC/FSC-AUC trajectory, schedule, convergence, and finalization
+gate.  The remaining K=1 completion cells are the running 100k/256 trajectory
+and a real-10076 aggregate production-adjoint capture.  For real-10076, the
+first canonical replay used a diagnostic shadow panel that did not close to
+the live production accumulator and is rejected as production-order evidence.
+Do not interpret canonical or promoted-float64 results there until the
+ordinary production operands and contribution-derived panel close inside a
+same-GPU repeat envelope.
+
+K=4 case 11 has a stable iteration-1 reconstructed-reference boundary outside
+the stock RELION repeat envelope.  The frozen aggregate RECOVAR capture now
+recomputes every complex64/float32 source operand exactly on two controls and
+proves genuine float64 source/geometry sensitivity, but it does not explain
+the class-2 map gap: the current capture does not contain RELION's complete
+contribution list or the production atomic schedule.  The next K=4 experiment
+is one aggregate RELION iteration-1 class-2 pre-scatter capture for the full
+847-particle class: posterior-reduced complex source rows, real weights, exact
+rotation matrices, support, and canonical identities.  Replay that boundary
+beside RECOVAR in one common deterministic float64 geometry/reduction harness.
+Do not return to serial particle tracing or the unstable iteration-3+ cliffs.
 
 Current status on 2026-07-14: the seven-case immutable K=1 robustness matrix
 at detached commit `f0ef1f0c6c231ff1f9183371d235e0b37a15b825` matches every
