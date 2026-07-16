@@ -4389,29 +4389,31 @@ the RECOVAR and RELION winner margins are `1.192092896e-7` and
 float32 score envelope but does not replace native-repeat and recomputed
 float64/complex128 aggregate controls.
 
-That one-particle transfer explains the class-dependent M-step residual.
-Classes 1 and 2 have raw-map FSC-AUC `0.9998612051` and `0.9992620898` and
-accumulator residuals tens to hundreds of thousands of times above the
-same-engine repeat floor.  Classes 3 and 4 retain identical membership and
-have raw-map FSC-AUC above `0.9999999992`, near the repeat envelope.  The
-earliest justified boundary is therefore the `firstiter_cc` coarse
-global-winner decision and its per-class pass-2/M-step subset, upstream of
-backprojection; no backprojection-kernel defect is supported while membership
-differs.
+The subsequent sealed same-A100 causal intervention closes that M-step
+boundary.  Stock RELION, RECOVAR control, and RECOVAR with only original
+zero-based particle 7915 forced from class 1 to class 0 ran serially on one
+physical GPU.  The override exactly matches RELION's membership and counts for
+all 10,000 particles.  It removes `99.970257%` and `99.998274%` of the
+zero-based class-0 and class-1 FSC-AUC defects, raising their RELION/RECOVAR
+FSC-AUC from `0.9998860754/0.9993307839` to
+`0.9999999661/0.9999999884`.  Classes 2 and 3 remain at the native numerical
+floor.  Thus the sole recurrent firstiter winner routing is causally
+sufficient for essentially the entire affected first-map gap; no
+backprojection-kernel defect is supported at this boundary.
 
-The dtype-preserving dump hook is not bit-exact, but its perturbation is within
-the native RECOVAR repeat envelope.  The float64 accumulator arm is explicitly
-noncanonical because it does not freeze identical operands and geometry; it
-cannot adjudicate the remaining score difference.  The already-submitted
-six-arm particle-7916 harness may be sealed as one bounded control, but do not
-extend serial particle tracing.  The next discriminator is an aggregate
-all-10,000-particle comparison of global-winner scores, margins, class
-posteriors, and support, with float32/float64 controls used to classify close
-decisions.  If a controlled common-membership M-step still leaves a
-reconstruction residual, return to a full-class pre-scatter capture; otherwise
-the downstream BPref capture is non-discriminating.  Intermediate gates remain
-exact/array metrics and map gates remain shellwise FSC/FSC-AUC; correlation is
-not a gate.
+The analyzer initially required bitwise identity for the two unaffected
+classes, but the sealed data reject that assumption at the measured GPU atomic
+repeat/order floor.  Affected/unaffected accumulator residual ratios are at
+least `121,698x` for `Ft_y` and `45,685x` for `Ft_ctf`; the experiment's
+descriptive `100x` fail-close is not a general tolerance or confidence
+interval.  The next discriminator is the integrated offset-free
+all-10,000-particle comparison of winner scores, margins, posteriors, and
+support.  Only if that aggregate evidence identifies a systematic
+near-boundary subgroup should a bounded canonical float32 and recomputed
+float64/complex128 subgroup replay follow.  Do not return to serial particle
+tracing or full-class BPref capture without such evidence.  Intermediate gates
+remain exact/array metrics and map gates remain shellwise FSC/FSC-AUC;
+correlation is not a gate.
 
 Canonical evidence:
 
@@ -4419,3 +4421,5 @@ Canonical evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/provenance/CLASSIFICATION_SEAL.json` (SHA-256 `02cb2f88bc9dd6c4fdfbddfbb69c706b805b067afa60ab56ab7a6cfc7f9c4f94`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/analysis/fresh_f32/summary.json` (SHA-256 `1a42b1eb7e2b615c8154759c7a9cf72f3812330315bc4bc555bbcef1d26872a7`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7916_identity6_h100_20260716_165455/analysis/six_arm_global_membership_repeat_join_v1.json` (SHA-256 `c8a0449b611eb77976d3c4f8dce052c757da958052206b88b23cf3b2e550dfeb`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_particle7915_causal_mstep_a100_20260716_184912/analysis/causal_mstep_report_v1.json` (SHA-256 `564fa793a617303556432fd2f60157d0c208d69473e965d2368b2e4f4062fccd`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_particle7915_causal_mstep_a100_20260716_184912/provenance/completion_seal_v1.json` (SHA-256 `cd3970196647ea6ae59a996883ed7b553b1dc12b660a0529789d4f35b396b8f1`)

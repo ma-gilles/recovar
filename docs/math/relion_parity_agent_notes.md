@@ -2853,3 +2853,44 @@ Matrix evidence:
   The manifest is `artifacts.sha256` (SHA-256
   `c3b012271a1fad632386acbb231a0e845a0ae0bc3f2400c3bc232086d0b672f9`)
   and passes `sha256sum -c`.
+
+# 2026-07-16: K=4 particle 7915 routing causally closes the first-map boundary
+
+- A sealed three-arm intervention ran stock RELION, RECOVAR control, and
+  RECOVAR with only original zero-based particle 7915 forced from class 1 to
+  class 0, serially on the same A100.  RELION and the override have identical
+  class counts `[4293,846,797,4064]` and exact membership for all 10,000
+  particles.  Control differs from RELION only at particle 7915.
+- The intervention raises zero-based class-0 RELION/RECOVAR FSC-AUC from
+  `0.9998860754` to `0.9999999661`, removing `99.970257%` of its FSC-AUC
+  defect.  Class 1 rises from `0.9993307839` to `0.9999999884`, removing
+  `99.998274%`.  Classes 2 and 3 remain at the native numerical floor, with
+  defect ratios `0.997275` and `1.003540`.  Map conclusions use shellwise FSC
+  and FSC-AUC; correlation is not a gate.
+- The analyzer's initial assumption that the two unaffected classes must be
+  bitwise identical was rejected.  GPU atomic repeat/order variation makes
+  that too strict: affected/unaffected accumulator residual ratios are at
+  least `121,698x` for `Ft_y` and `45,685x` for `Ft_ctf`.  These measured-floor
+  ratios classify this intervention; the descriptive `100x` fail-close is not
+  a general program tolerance or confidence interval.
+- Therefore the sole recurrent first-iteration class-routing decision is
+  causally sufficient for essentially the entire affected first-map gap.  No
+  backprojection-kernel defect is supported at this boundary.  RELION raw
+  accumulators were not captured, so this conclusion is map-level causal
+  closure, not a cross-engine claim of bitwise accumulator equality.
+- Continue with the integrated offset-free all-particle winner summary to
+  classify why the score boundary occurs.  If a smaller replay is still
+  needed, select an aggregate near-boundary subgroup and use canonical
+  float32 plus recomputed float64/complex128 controls; do not resume serial
+  particle-by-particle debugging.
+- Sealed evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_particle7915_causal_mstep_a100_20260716_184912/analysis/causal_mstep_report_v1.json`
+  (SHA-256
+  `564fa793a617303556432fd2f60157d0c208d69473e965d2368b2e4f4062fccd`),
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_particle7915_causal_mstep_a100_20260716_184912/analysis/causal_mstep_shellwise_fsc_v1.npz`
+  (SHA-256
+  `945dd9b3cc59025fcf766ab88747c1d158ca160dcd3f866a930baa13c0c5e0bb`),
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_particle7915_causal_mstep_a100_20260716_184912/provenance/completion_seal_v1.json`
+  (SHA-256
+  `cd3970196647ea6ae59a996883ed7b553b1dc12b660a0529789d4f35b396b8f1`).
