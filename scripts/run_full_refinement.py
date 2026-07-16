@@ -180,6 +180,27 @@ def _pose_history_by_image(iter_entry, half_indices, n_images, trailing_shape, *
     return out
 
 
+def _add_significant_count_artifacts(save_dict, significant_counts, half_indices, n_images):
+    """Save significant-count history in both half and original image order."""
+    half_order_indices = np.concatenate(
+        [np.asarray(indices, dtype=np.int64) for indices in half_indices],
+    )
+    for iteration, counts in enumerate(significant_counts):
+        if counts is None:
+            continue
+        counts_half_order = np.asarray(counts)
+        # Keep the legacy key value/shape/dtype-compatible: it has always
+        # stored the concatenated half-1, half-2 refinement-loop order.
+        save_dict[f"sig_counts_iter_{iteration:03d}"] = counts_half_order
+        save_dict[f"sig_counts_half_order_iter_{iteration:03d}"] = counts_half_order
+        flat_counts = counts_half_order.reshape(-1)
+        if flat_counts.shape[0] != half_order_indices.shape[0]:
+            continue
+        counts_by_image = np.full(int(n_images), -1, dtype=flat_counts.dtype)
+        counts_by_image[half_order_indices] = flat_counts
+        save_dict[f"sig_counts_by_image_iter_{iteration:03d}"] = counts_by_image
+
+
 def _jsonable_profile_value(value):
     if value is None or isinstance(value, (str, bool, int, float)):
         return value
@@ -2930,10 +2951,14 @@ def main():
     for i, fsc in enumerate(result["fsc_history"]):
         save_dict[f"fsc_iter_{i:03d}"] = np.asarray(fsc)
 
-    # Save significant counts per iteration (if available)
-    for i, counts in enumerate(result["significant_counts"]):
-        if counts is not None:
-            save_dict[f"sig_counts_iter_{i:03d}"] = np.asarray(counts)
+    # Save significant counts per iteration (if available). The refinement
+    # loop concatenates half 1 then half 2, which is not generally image order.
+    _add_significant_count_artifacts(
+        save_dict,
+        result["significant_counts"],
+        [half1_idx, half2_idx],
+        n_images,
+    )
 
     if "data_vs_prior_trajectory" in result:
         for i, dvp in enumerate(result["data_vs_prior_trajectory"]):
