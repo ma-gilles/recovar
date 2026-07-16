@@ -2791,3 +2791,31 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_parent_exact_parent_aba_52178ed3_8fd704ab_20260716_152025/provenance/analyzer_revision_v3.json`
   (SHA-256
   `720f3551a7d3e18df92fda8dfefb7b00a72e402e3cbfa23ceb67231a9e259b3e`).
+
+# 2026-07-16: exact fine-Gaussian arithmetic is the dominant case-22 cost
+
+- Same-A100 exact/algebraic/exact job `11274919` completed all three arms on
+  UUID `GPU-5e619c2e-82b4-ff79-cbcb-ab29514a9f30`.  Exact A/C environments
+  are identical; algebraic B adds only
+  `RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN=1`.  Source, native-library, and
+  input manifests reverify.
+- Iteration-2 wall is `3401.041/1265.114/3398.249` seconds for A/B/C.  Relative
+  to the exact-control mean, algebraic is `2.687x` faster; external wall is
+  `2.575x` faster and the aggregate two-half sparse M-step is `2.728x` faster.
+  Exact C/A iteration-2 timing ratio is `0.999179`, so this penalty is stable.
+- Exact support equality is not a valid gate: iteration-2 by-image mismatches
+  are `27/33/25` for A-B/A-C/B-C, and the B-versus-best-exact support RMS is
+  smaller than the native A-C repeat.  All 88 comparable bucket identities
+  happen to match and only those identities enter matched-bucket timing.
+- This is performance evidence only.  Although all support arrays are inside
+  the exact-repeat RMS envelope, only 9/13 continuous-state and 2/8 accumulator
+  arrays are.  No maps were loaded and no FSC/FSC-AUC was computed; a separate
+  FSC/FSC-AUC quality experiment is required before enabling algebraic scoring.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_algebraic_exact_aba_fc70abc3_retry_dedicated_cuda_20260716_135000/analysis/aba_performance_analysis_v2.json`
+  (SHA-256
+  `eff0f31da149369a3fd50bff16751ef2c229e9ed37407a0e987fca51ab787016`),
+  with sealed provenance in
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_exact_algebraic_exact_aba_fc70abc3_retry_dedicated_cuda_20260716_135000/analysis/aba_performance_analysis_v2.seal.json`
+  (SHA-256
+  `57621195df54a846875273d9ba6337f797c3ea9e91aeda53cc1976cccebbd24c`).
