@@ -3942,4 +3942,6 @@ particle capture only when it identifies a systematic cohort or an FSC
 trajectory localizes a reproducible boundary.  Use repeated
 `--recovar-iteration` arguments when only an explicit boundary subset has all
 required state arrays; the default remains fail-closed rather than silently
-omitting missing support.
+omitting missing support.  Without that explicit selection, a RELION particle
+STAR is required for every numbered RECOVAR iteration; omitted middle or
+trailing iterations are errors.

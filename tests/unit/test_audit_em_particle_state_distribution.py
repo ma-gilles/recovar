@@ -233,6 +233,58 @@ def test_cli_writes_versioned_json_and_has_explicit_help(tmp_path):
     assert "image identities" in help_text
 
 
+def _add_recovar_iterations(results: Path, iterations: tuple[int, ...]) -> None:
+    with np.load(results, allow_pickle=False) as payload:
+        data = {key: payload[key] for key in payload.files}
+    for iteration in iterations:
+        for stem in ("pmax_per_image_by_image", "sig_counts_by_image"):
+            data[f"{stem}_iter_{iteration:03d}"] = data[f"{stem}_iter_000"]
+    np.savez(results, **data)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("supplied_iterations", "missing_iteration"),
+    [
+        ((1, 3), 2),
+        ((1, 2), 3),
+    ],
+    ids=("omitted-middle", "omitted-trailing"),
+)
+def test_cli_fails_closed_when_relion_iteration_is_omitted(
+    tmp_path, supplied_iterations, missing_iteration
+):
+    results, source, relion, _control = _fixture(tmp_path)
+    _add_recovar_iterations(results, (1, 2))
+    relion_stars = {}
+    for iteration in (1, 2, 3):
+        path = tmp_path / f"run_it{iteration:03d}_data.star"
+        if iteration == 1:
+            path = relion
+        else:
+            path.write_text(relion.read_text())
+        relion_stars[iteration] = path
+    output = tmp_path / f"missing_{missing_iteration}.json"
+    args = [
+        "--recovar-results",
+        str(results),
+        "--recovar-particles-star",
+        str(source),
+    ]
+    for iteration in supplied_iterations:
+        args.extend(["--relion-star", str(relion_stars[iteration])])
+    args.extend(["--output-json", str(output)])
+
+    status = auditor.main(args)
+
+    report = json.loads(output.read_text())
+    assert status == 2
+    assert report["status"] == "error"
+    assert report["missing_relion_iterations"] == [missing_iteration]
+    assert report["earliest_failure"] == f"missing_relion_iterations=[{missing_iteration}]"
+    assert "iterations" not in report
+
+
 @pytest.mark.unit
 def test_identity_set_mismatch_fails_closed_without_particle_dump(tmp_path):
     results, source, relion, _control = _fixture(tmp_path)
@@ -334,6 +386,37 @@ def test_explicit_iteration_selection_fails_closed_when_boundary_is_absent(tmp_p
             relion_stars={1: relion},
             recovar_iterations={3},
         )
+
+
+@pytest.mark.unit
+def test_cli_explicit_iteration_selection_allows_complete_boundary_subset(tmp_path):
+    results, source, relion, _control = _fixture(tmp_path)
+    _add_recovar_iterations(results, (1, 2))
+    relion_it002 = tmp_path / "run_it002_data.star"
+    relion_it002.write_text(relion.read_text())
+    output = tmp_path / "explicit_boundary.json"
+
+    status = auditor.main(
+        [
+            "--recovar-results",
+            str(results),
+            "--recovar-particles-star",
+            str(source),
+            "--recovar-iteration",
+            "1",
+            "--relion-star",
+            str(relion_it002),
+            "--output-json",
+            str(output),
+        ]
+    )
+
+    report = json.loads(output.read_text())
+    assert status == 0
+    assert report["status"] == "complete"
+    assert report["iteration_alignment"]["selected_recovar_iterations"] == [1]
+    assert report["iteration_alignment"]["missing_relion_iterations"] == []
+    assert [(row["recovar_iteration"], row["relion_iteration"]) for row in report["iterations"]] == [(1, 2)]
 
 
 @pytest.mark.unit

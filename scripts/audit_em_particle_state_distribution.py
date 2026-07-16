@@ -39,6 +39,14 @@ class AuditError(RuntimeError):
     """Raised when required particle state or identity provenance is invalid."""
 
 
+class MissingRelionIterationsError(AuditError):
+    """Raised when a RECOVAR iteration has no supplied RELION state."""
+
+    def __init__(self, missing_relion_iterations: list[int]):
+        self.missing_relion_iterations = [int(value) for value in missing_relion_iterations]
+        super().__init__(f"missing_relion_iterations={self.missing_relion_iterations}")
+
+
 def _not_measured(reason: str) -> dict[str, str]:
     return {"status": "not_measured", "reason": reason}
 
@@ -570,13 +578,15 @@ def audit(
                     f"{missing_requested}; available={available_rec_iterations}"
                 )
             rec_iterations = requested
-        matched = [
-            (rec_iteration, rec_iteration + 1) for rec_iteration in rec_iterations if rec_iteration + 1 in relion_stars
-        ]
-        if not matched:
+        expected_relion_iterations = {iteration + 1 for iteration in rec_iterations}
+        missing_relion = sorted(expected_relion_iterations - set(relion_stars))
+        if missing_relion:
+            raise MissingRelionIterationsError(missing_relion)
+        if not rec_iterations:
             raise AuditError(
                 f"no matched iterations: RECOVAR zero-based={rec_iterations}, RELION one-based={sorted(relion_stars)}"
             )
+        matched = [(rec_iteration, rec_iteration + 1) for rec_iteration in rec_iterations]
         halves = _half_labels(npz, source_table, n_images)
         defocus_u = _column(source_table, "rlnDefocusU")
         defocus_v = _column(source_table, "rlnDefocusV")
@@ -648,7 +658,6 @@ def audit(
                 }
             )
 
-    missing_relion = sorted(set(iteration + 1 for iteration in rec_iterations) - set(relion_stars))
     unused_relion = sorted(set(relion_stars) - set(iteration + 1 for iteration in rec_iterations))
     return {
         "schema": SCHEMA,
@@ -671,7 +680,7 @@ def audit(
         "iteration_alignment": {
             "recovar_zero_based_to_relion_one_based": True,
             "selected_recovar_iterations": rec_iterations,
-            "missing_relion_iterations": missing_relion,
+            "missing_relion_iterations": [],
             "unused_relion_iterations": unused_relion,
         },
         "systematic_cohort_rule": {
@@ -741,6 +750,14 @@ def main(argv: list[str] | None = None) -> int:
             recovar_iterations=None if args.recovar_iteration is None else set(args.recovar_iteration),
         )
         status = 0
+    except MissingRelionIterationsError as exc:
+        report = {
+            "schema": SCHEMA,
+            "status": "error",
+            "earliest_failure": str(exc),
+            "missing_relion_iterations": exc.missing_relion_iterations,
+        }
+        status = 2
     except (AuditError, OSError, ValueError) as exc:
         report = {"schema": SCHEMA, "status": "error", "earliest_failure": str(exc)}
         status = 2
