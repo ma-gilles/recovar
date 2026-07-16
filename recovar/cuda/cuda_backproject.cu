@@ -405,20 +405,31 @@ static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
 {
     const float g0 = rk0 + c0;
     const float g1 = rk1 + c1;
+    const int ic0 = (int)c0;
+    const int ic1 = (int)c1;
     const int ic2 = (int)c2;
     const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
     const float g2_full = rk2 + c2;
 
+    /* The caller's compact all-neighbor gate already proves these bounds for
+     * RELION BPref shapes; retain this as a defensive array-safety check. */
     if (g0 < -1.0f || g0 >= (float)N0 ||
         g1 < -1.0f || g1 >= (float)N1 ||
         g2_full < -1.0f || g2_full >= (float)N2_full) return;
 
-    const int b0 = floor_int(g0);
-    const int b1 = floor_int(g1);
-    const int b2 = floor_int(g2_full);
-    const float f0 = g0 - (float)b0;
-    const float f1 = g1 - (float)b1;
-    const float f2 = g2_full - (float)b2;
+    /* RELION forms each interpolation fraction from the rotated coordinate
+     * before applying the integer model origin.  Adding the origin first is
+     * mathematically equivalent but loses float32 mantissa bits and changes
+     * the trilinear coefficients by several ulp. */
+    const int r0 = floor_int(rk0);
+    const int r1 = floor_int(rk1);
+    const int r2 = floor_int(rk2);
+    const int b0 = r0 + ic0;
+    const int b1 = r1 + ic1;
+    const int b2 = r2 + ic2;
+    const float f0 = rk0 - (float)r0;
+    const float f1 = rk1 - (float)r1;
+    const float f2 = rk2 - (float)r2;
     const float w0[2] = {1.0f - f0, f0};
     const float w1[2] = {1.0f - f1, f1};
     const float w2[2] = {1.0f - f2, f2};

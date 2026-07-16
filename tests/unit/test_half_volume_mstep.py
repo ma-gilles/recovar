@@ -877,6 +877,89 @@ def test_relion_fused_x_half_signature_cuda_source_copies_before_read_only_kerne
 
 
 @pytest.mark.gpu
+def test_relion_fused_x_half_signature_matches_relion_fraction_before_origin_oracle(
+    monkeypatch, custom_cuda_lib, gpu_device
+):
+    """The integer BPref origin must not perturb float32 interpolation fractions."""
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    image_shape = (256, 256)
+    volume_shape = (99, 99, 99)
+    volume_half_x = volume_shape[2] // 2 + 1
+    volume_size = volume_shape[0] * volume_shape[1] * volume_half_x
+    ky, kx = 7, 11
+    pixel_indices = jnp.asarray(
+        [(ky % image_shape[0]) * (image_shape[1] // 2 + 1) + kx],
+        dtype=jnp.int32,
+    )
+    # Deliberately non-integral device coordinates.  Adding the integer origin
+    # before taking the fraction changes these values by several float32 ulp.
+    rotations = jnp.asarray(
+        [
+            [
+                [0.812345, 0.212345, 0.112345],
+                [0.123456, 0.923456, 0.223456],
+                [0.0, 0.0, 1.0],
+            ]
+        ],
+        dtype=jnp.float32,
+    )
+
+    with cuda_backproject.jax.default_device(gpu_device):
+        outputs = cuda_backproject.relion_fused_x_half_backproject_signature_indexed(
+            jnp.zeros(volume_size, dtype=jnp.complex64),
+            jnp.zeros(volume_size, dtype=jnp.float32),
+            jnp.asarray([[1.25 - 0.75j]], dtype=jnp.complex64),
+            jnp.asarray([[2.0]], dtype=jnp.float32),
+            pixel_indices,
+            rotations,
+            jnp.asarray([17], dtype=jnp.int32),
+            jnp.asarray([0], dtype=jnp.int32),
+            image_shape,
+            volume_shape,
+            24.0,
+        )
+
+    row_flags = np.asarray(outputs[4])[0]
+    reached = np.flatnonzero((row_flags & 64) != 0)
+    np.testing.assert_array_equal(reached, np.asarray([ky * 25 + kx]))
+    pixel = int(reached[0])
+    source = np.asarray(outputs[5])[0, pixel]
+    coordinates_zyx = source[3:6].astype(np.float32, copy=True)
+    if row_flags[pixel] & 16:
+        coordinates_zyx *= np.float32(-1.0)
+
+    coordinate_floor = np.floor(coordinates_zyx).astype(np.int32)
+    fractions = coordinates_zyx - coordinate_floor.astype(np.float32)
+    complements = np.float32(1.0) - fractions
+    expected_coefficients = []
+    expected_indices = []
+    center = np.asarray([49, 49, 0], dtype=np.int32)
+    strides = np.asarray([99 * 50, 50, 1], dtype=np.int32)
+    for dz in range(2):
+        for dy in range(2):
+            zy_weight = np.float32(
+                (fractions[0] if dz else complements[0])
+                * (fractions[1] if dy else complements[1])
+            )
+            for dx in range(2):
+                expected_coefficients.append(
+                    np.float32(zy_weight * (fractions[2] if dx else complements[2]))
+                )
+                neighbor = coordinate_floor + center + np.asarray([dz, dy, dx])
+                expected_indices.append(int(np.sum(neighbor * strides)))
+
+    np.testing.assert_array_equal(
+        np.asarray(outputs[7])[0, pixel], np.asarray(expected_coefficients, dtype=np.float32)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(outputs[6])[0, pixel], np.asarray(expected_indices, dtype=np.int32)
+    )
+    np.testing.assert_array_equal(np.asarray(outputs[8])[0, pixel], np.ones(8, dtype=np.int32))
+
+
+@pytest.mark.gpu
 def test_relion_fused_x_half_cuda_matches_separate_topology(
     monkeypatch, custom_cuda_lib, gpu_device
 ):
