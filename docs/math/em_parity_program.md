@@ -4448,3 +4448,17 @@ the BPref numerator. Do not continue serial particle-by-particle probes. The
 next bounded experiment is an aggregate RELION pre-scatter numerator/support
 capture, distribution comparison against frozen RECOVAR rows, and controlled
 RELION-numerator substitution through RECOVAR's closed ordinary geometry.
+
+## 2026-07-16 Aggregate RELION BPref pre-scatter gate
+
+Before comparing aggregate RELION numerator/support rows with RECOVAR, run
+`scripts/validate_relion_bpref_prescatter.py`.  The validator rejects truncated
+or temporary files, schema/layout ambiguity, duplicate identities, incomplete
+particle or follower coverage, non-canonical rows, and inconsistent support
+accounting.  Header fields 38 and 39 record all positive-Fweight candidates and
+the subset excluded by RELION's production radius; field 17 records emitted
+supported rows.  Classification is allowed only when field 38 equals fields 17
+plus 39 for every particle and the stack-identity set exactly matches the
+frozen RECOVAR shards.  Capture/control BPref repeats on the same physical GPU
+remain mandatory because the passive capture introduces a stream
+synchronization that can alter atomic reduction order.
