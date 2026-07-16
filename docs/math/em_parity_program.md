@@ -4172,8 +4172,9 @@ FSC-AUC `0.999820693`, `0.999157434`, and `0.996495854`, minimum assignment
 agreement `0.9986`, and worst GT delta `-6.28e-5`.  Case 14 remains essentially
 exact, with minimum direct FSC-AUC `0.999999959` and class agreement `1.0`.
 
-Case 11 (IgG, white noise, uniform classes, 20% outliers) is the genuine
-trajectory failure.  Iteration 1 is effectively exact (minimum direct FSC-AUC
+Case 11 (IgG, white noise, uniform classes, 20% outliers) has a genuine
+cross-engine trajectory difference pending its own stock-repeat calibration.
+Iteration 1 is effectively exact (minimum direct FSC-AUC
 `0.999330786`, one class mismatch), but iteration 2 already has 9,999/10,000
 Pmax differences, 1,166 support differences, and 24 class mismatches.
 Iteration 3 amplifies this into class-2 direct FSC-AUC `0.9735133506`, below
@@ -4190,8 +4191,8 @@ and leaves the GT delta at `-1.02e-6`.  The two RECOVAR arms themselves differ
 at iteration 3 by minimum direct FSC-AUC `0.973508472`, so the intervention is
 material.  Pmax mean/p95/maximum absolute errors fall from
 `0.00380994/0.0159218/0.5462` to `2.96e-5/1.33e-4/0.0100`, while particles with
-different support sizes fall from 1,114 to 31.  This closes iteration 3 as an
-intrinsic scoring/M-step cause; the next same-GPU A/B injects exact RELION
+different support sizes fall from 1,114 to 31.  This rules out an intrinsic
+iteration-3 scoring/M-step cause; the next same-GPU A/B injects exact RELION
 iteration-1 maps only for scoring iteration 2 to locate where the broad state
 drift first appears.
 
