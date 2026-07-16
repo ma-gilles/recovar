@@ -1331,9 +1331,13 @@ def _compute_k_class_significance_batched(
     score_mode: str = "gaussian",
     collect_significance: bool = True,
     return_class_best: bool = False,
+    return_class_second: bool = False,
     debug_iteration: int | None = None,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
+
+    if return_class_second and not return_class_best:
+        raise ValueError("return_class_second requires return_class_best")
 
     from recovar import core
     from recovar.core.configs import ForwardModelConfig
@@ -1668,8 +1672,14 @@ def _compute_k_class_significance_batched(
     class_best_log_score = (
         np.empty((n_classes, n_images), dtype=np.float32) if return_class_best else None
     )
+    class_second_best_log_score = (
+        np.empty((n_classes, n_images), dtype=np.float32) if return_class_second else None
+    )
     class_hard_assignment = (
         np.empty((n_classes, n_images), dtype=np.int32) if return_class_best else None
+    )
+    class_second_hard_assignment = (
+        np.empty((n_classes, n_images), dtype=np.int32) if return_class_second else None
     )
 
     start_idx = 0
@@ -1824,6 +1834,12 @@ def _compute_k_class_significance_batched(
         best_class_batch = jnp.zeros(batch_size, dtype=jnp.int32)
         class_best_scores = [jnp.full(batch_size, -jnp.inf) for _ in range(n_classes)] if return_class_best else None
         class_best_argmaxes = [jnp.zeros(batch_size, dtype=jnp.int32) for _ in range(n_classes)] if return_class_best else None
+        class_second_best_scores = (
+            [jnp.full(batch_size, -jnp.inf) for _ in range(n_classes)] if return_class_second else None
+        )
+        class_second_best_argmaxes = (
+            [jnp.zeros(batch_size, dtype=jnp.int32) for _ in range(n_classes)] if return_class_second else None
+        )
         cache_score_blocks = collect_significance and _significance_score_cache_enabled(
             batch_size,
             n_classes,
@@ -1945,23 +1961,68 @@ def _compute_k_class_significance_batched(
                         cached_score_blocks.append(scores)
                     class_max, class_sum = _update_logsumexp(class_max, class_sum, scores)
                     global_max, global_sum = _update_logsumexp(global_max, global_sum, scores)
-                block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
-                block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
+                flat_scores = scores.reshape(batch_size, -1)
+                block_best = jnp.max(flat_scores, axis=1)
+                block_argmax = jnp.argmax(flat_scores, axis=1)
                 improved = block_best > best_score_batch
                 best_score_batch = jnp.where(improved, block_best, best_score_batch)
                 best_argmax_batch = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax_batch)
                 best_class_batch = jnp.where(improved, class_index, best_class_batch)
                 if return_class_best:
-                    class_improved = block_best > class_best_scores[class_index]
+                    previous_best = class_best_scores[class_index]
+                    previous_best_argmax = class_best_argmaxes[class_index]
+                    class_improved = block_best > previous_best
+                    if return_class_second:
+                        if flat_scores.shape[1] < 2:
+                            raise RuntimeError("class runner-up diagnostic requires at least two poses per block")
+                        rows = jnp.arange(batch_size)
+                        block_without_best = flat_scores.at[rows, block_argmax].set(-jnp.inf)
+                        block_second = jnp.max(block_without_best, axis=1)
+                        block_second_argmax = jnp.argmax(block_without_best, axis=1)
+                        previous_second = class_second_best_scores[class_index]
+                        previous_second_argmax = class_second_best_argmaxes[class_index]
+
+                        improved_second_from_previous = previous_best >= block_second
+                        improved_second = jnp.where(
+                            improved_second_from_previous,
+                            previous_best,
+                            block_second,
+                        )
+                        improved_second_argmax = jnp.where(
+                            improved_second_from_previous,
+                            previous_best_argmax,
+                            block_second_argmax + r0 * n_trans,
+                        )
+                        retained_second_from_previous = previous_second >= block_best
+                        retained_second = jnp.where(
+                            retained_second_from_previous,
+                            previous_second,
+                            block_best,
+                        )
+                        retained_second_argmax = jnp.where(
+                            retained_second_from_previous,
+                            previous_second_argmax,
+                            block_argmax + r0 * n_trans,
+                        )
+                        class_second_best_scores[class_index] = jnp.where(
+                            class_improved,
+                            improved_second,
+                            retained_second,
+                        )
+                        class_second_best_argmaxes[class_index] = jnp.where(
+                            class_improved,
+                            improved_second_argmax,
+                            retained_second_argmax,
+                        )
                     class_best_scores[class_index] = jnp.where(
                         class_improved,
                         block_best,
-                        class_best_scores[class_index],
+                        previous_best,
                     )
                     class_best_argmaxes[class_index] = jnp.where(
                         class_improved,
                         block_argmax + r0 * n_trans,
-                        class_best_argmaxes[class_index],
+                        previous_best_argmax,
                     )
             if cached_class_score_blocks is not None:
                 cached_class_score_blocks.append(cached_score_blocks)
@@ -2044,6 +2105,15 @@ def _compute_k_class_significance_batched(
                     class_best_argmaxes[class_index],
                     dtype=np.int32,
                 )
+        if return_class_second:
+            for class_index in range(n_classes):
+                class_second_best_log_score[class_index, start_idx:end_idx] = (
+                    np.asarray(class_second_best_scores[class_index], dtype=np.float64) + log_score_offset
+                ).astype(np.float32)
+                class_second_hard_assignment[class_index, start_idx:end_idx] = np.asarray(
+                    class_second_best_argmaxes[class_index],
+                    dtype=np.int32,
+                )
 
         if debug_dump_enabled:
             # Concatenate per-class per-block raw scores for the dump targets
@@ -2120,4 +2190,7 @@ def _compute_k_class_significance_batched(
     if return_class_best:
         full_stats["class_best_log_score_per_image"] = class_best_log_score
         full_stats["class_hard_assignments"] = class_hard_assignment
+    if return_class_second:
+        full_stats["class_second_best_log_score_per_image"] = class_second_best_log_score
+        full_stats["class_second_hard_assignments"] = class_second_hard_assignment
     return sig_rot_any, n_sig_all, hard_assignment, class_assignment, significant_sample_indices, full_stats
