@@ -3584,3 +3584,48 @@ trace and used a different H100/CUDA binary, so exact reproduction of the
 negligible 144th parent is neither possible nor a valid branch-identity gate.
 The audit is at
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_p5993_archive_provenance_audit_20260715_210100/`.
+
+## 2026-07-15 K=4 frozen cutoff precision classification
+
+Same-H100 job `11242446` completed four frozen particle-5993 arms: old-low and
+new-high incoming maps, each with production float32 and genuine upstream
+float64 scoring.  The two float32 arms reproduce the nonlinear branches while
+keeping exact class, Euler pose, and translation.  Both retain 143 coarse
+parents, but ranks 143 and 144 swap.  Old-low retains material parent
+`(class 0, rotation 255, translation 20)` and gives Pmax `0.6777920723`;
+new-high retains negligible parent `(0, 14, 14)` instead and gives Pmax
+`0.7309843898`.
+
+The source-matched CUDA replay applies device float32 max, `expf`, positive
+filtering, CUB radix sort, and CUB inclusive scan.  It is bit-exact with each
+recorded float32 mask, including the parent swap, so the threshold backend is
+not the cause.  Genuine float64 scoring changes all 66,816 scores in each arm.
+It leaves old-low unchanged but flips exactly the two cutoff parents in
+new-high, restoring the material parent while retaining a 143-parent count.
+The float32-versus-float64 maximum score differences are `9.93e-5` and
+`1.09e-4` for old-low and new-high.  This classifies the branch as score-
+generation precision sensitivity around a near tie, not a stable algorithmic
+support mismatch.  The immutable evidence root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_p5993_frozen_pass1_material_continuation_d67ec0a3_h100_prepared_20260715_210300/`.
+
+## 2026-07-15 K=1 current-engine coarse cutoff capture
+
+Job `11242768` passively captures the complete iteration-2 coarse surfaces for
+the failing row 7881 and control row 6202 while using exact RELION incoming
+maps.  Instrumentation is inert: Euler and translation arrays are exact,
+maximum Pmax change is `1.1683e-5`, and half-map FSC-AUC is
+`0.9999999864/0.9999999864`.  RECOVAR selects 48 parents for row 7881; its
+first excluded parent is `(rotation 30039, translation 2)` with coarse
+posterior `0.00011504446`.  The selected 48 parents expand exactly to the
+observed 1,536 fine children.  Row 6202 selects 15 parents as expected.
+
+Independent A100 CUDA 12.6 job `11243285` replays RELION's source sequence on
+the captured RECOVAR float32 scores.  Its masks are bit-exact with RECOVAR: 48
+and 15 parents, respectively.  CUB/JAX cutoff ordering alone therefore cannot
+explain RELION's observed 49-parent row 7881.  Passive RELION candidate and
+operand arrays are still required before assigning the earliest difference to
+score generation, priors, or candidate geometry.  The current-engine capture
+is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_coarse_significance_399de551_a100_20260715_211300/`,
+and the CUDA replay is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_coarse_cub_replay_a100_cuda126_20260715_212900/`.
