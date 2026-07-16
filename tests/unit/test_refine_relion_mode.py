@@ -10390,6 +10390,43 @@ class TestRelionModeSmokeTest:
             != np.asarray(full_stats["class_hard_assignments"], dtype=np.int32)
         )
 
+        # A multi-block scan must retain the same global runner-up as the
+        # single-block reference, including when the previous block's winner
+        # becomes the second-best pose.
+        chunked_kwargs = dict(common_kwargs)
+        chunked_kwargs["rotation_block_size"] = 2
+        *_, chunked_stats = _compute_k_class_significance_batched(
+            dataset,
+            means,
+            noise,
+            rotations,
+            translations,
+            "linear_interp",
+            class_log_priors=class_log_priors,
+            adaptive_fraction=1.0,
+            max_significants=1,
+            rotation_log_prior=rotation_log_prior,
+            collect_significance=False,
+            return_class_best=True,
+            return_class_second=True,
+            score_mode="normalized_cc",
+            **chunked_kwargs,
+        )
+        np.testing.assert_array_equal(
+            np.asarray(chunked_stats["class_hard_assignments"], dtype=np.int32),
+            np.asarray(full_stats["class_hard_assignments"], dtype=np.int32),
+        )
+        np.testing.assert_array_equal(
+            np.asarray(chunked_stats["class_second_hard_assignments"], dtype=np.int32),
+            np.asarray(full_stats["class_second_hard_assignments"], dtype=np.int32),
+        )
+        np.testing.assert_allclose(
+            np.asarray(chunked_stats["class_second_best_log_score_per_image"], dtype=np.float32),
+            np.asarray(full_stats["class_second_best_log_score_per_image"], dtype=np.float32),
+            rtol=1e-6,
+            atol=1e-6,
+        )
+
     @pytest.mark.parametrize(
         "with_image_corr,with_scale_corr,with_pre_shifts",
         [
