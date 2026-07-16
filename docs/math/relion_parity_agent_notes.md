@@ -2623,10 +2623,15 @@ Matrix evidence:
   support.  Frozen factor substitution localizes the score gap to projected
   reference generation; image, CTF/noise, score formulation, reduction order,
   priors, fine reduction, and exact raw rotation matrices are excluded.
-  RELION resident-double versus serialized-MRC PPref corners differ by only
-  `2.20e-11` RMS, far below the `1.74e-7` raw projection delta.  The remaining
-  bounded split is RECOVAR PPref staging versus sub-ULP texture coordinates;
-  capture those exact device operands next rather than changing production.
+  Production-device capture now proves coordinates, coefficients, eight
+  corner indices, and conjugation flags bitwise exact.  All 20,064 native
+  corner values differ (`1.806e-7` RMS), and the captured projection reproduces
+  ordinary RECOVAR scoring bitwise.  A serialized RELION PPref replay through
+  the identical RECOVAR staging path is within `2.20e-11` RMS at corners and
+  `1.19e-11` RMS after hardware projection.  Staging and interpolation geometry
+  are excluded; continue upstream at PPref grid-value construction.
+- The capture is inert at minimum half/merged FSC-AUC `0.99999997795` on A100
+  UUID `GPU-64011c8c-bd98-eb41-2c46-dd201730ef64`.
 - Treat the one repeat as an empirical same-model scale, not a confidence
   interval.  Do not gate iteration 17 or final maps against it because the
   control trajectories terminate differently.  Final RELION A/B FSC-AUC is
@@ -2634,7 +2639,9 @@ Matrix evidence:
 - Evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/real10076_completed_dual_repeat_envelope_v1.json`
   and
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/distribution_substitution_v1/FINAL_SEAL.txt`.
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/distribution_substitution_v1/FINAL_SEAL.txt`
+  (manifest SHA-256
+  `b92c370d690a77ed1d03be0cb7727d69d0339cfc1dffda3edf5de76e2c50a76f`).
 
 # 2026-07-16: authoritative incoming-reference K=4 discriminators
 

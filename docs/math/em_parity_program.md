@@ -4048,11 +4048,27 @@ The projected-reference delta is `0.01138468` RMS, or `2.96e-5` relative, and
 is concentrated in radius 8--16 rather than Nyquist/support-edge pixels.
 RELION resident-double versus serialized-MRC PPref precision is not the cause:
 the exact same-run corner delta is only `2.20e-11` RMS and `1.86e-9` maximum,
-7,889x/1,460x smaller than the raw projection delta.  Replaying the serialized
-RELION PPref through RECOVAR's texture path also moves in the wrong direction.
-The remaining bounded split is therefore RECOVAR PPref staging versus sub-ULP
-texture-coordinate generation; capture exact RECOVAR corners and coordinates
-before considering a production change.
+7,889x/1,460x smaller than the raw projection delta.
+
+The production-device discriminator closes the remaining interpolation split.
+Across all in-support samples, RECOVAR and RELION texture coordinates,
+float32 coefficients, all eight corner indices, and conjugation flags are
+bitwise exact.  All 20,064 corner-value accesses differ instead, at raw RMS
+`1.80614e-7` and maximum `3.10020e-6`; the resulting hardware projection RMS
+is `1.75617e-7`.  The captured projection reproduces ordinary same-run RECOVAR
+scoring bitwise after the production output disk and scale.  Supplying RELION
+staged values at the common geometry shifts the canonical score margin by
+`+0.001919855`, closing the projected-reference factor.
+
+A stronger controlled replay routes the same-run serialized RELION half-2
+PPref through the identical RECOVAR device staging path.  Coordinates and
+indices remain bitwise exact, while corners and hardware projection differ
+from RELION by only `2.20e-11` and `1.19e-11` RMS.  Device staging is therefore
+excluded materially.  The earliest proved boundary is upstream PPref grid-
+value generation; the specific preceding construction input or operation is
+still open.  The device capture is inert, with half1/half2/merged FSC-AUC
+`0.99999997850/0.99999997795/0.99999998428` on the same A100 UUID
+`GPU-64011c8c-bd98-eb41-2c46-dd201730ef64`.
 
 At iteration 13 the worst-arm deficits are `1.264x`, `3.203x`, and `1.786x`
 the observed repeat deficit for half 1, half 2, and merged maps.  At iteration
@@ -4068,7 +4084,8 @@ Authoritative evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/real10076_completed_dual_repeat_envelope_v1.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/audit_artifacts.sha256`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/analysis/p8240_boundary.json`
-- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/distribution_substitution_v1/FINAL_SEAL.txt` (manifest SHA-256 `467e1ec8a7e6b927000f92a9574850ef9a4ffddbec59f98f6be5cf7df3c62892`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/distribution_substitution_v1/analysis/recovar_device_corner_coordinate_report.json` (SHA-256 `9e12292a35cdf4d2d6c69a96d682e804bcdf486805f40f4ae66a84f8faf9ea4f`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/distribution_substitution_v1/FINAL_SEAL.txt` (manifest SHA-256 `b92c370d690a77ed1d03be0cb7727d69d0339cfc1dffda3edf5de76e2c50a76f`)
 
 ## 2026-07-16 authoritative K=4 incoming-reference substitutions
 
