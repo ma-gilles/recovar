@@ -4450,6 +4450,15 @@ last score difference is upstream operand generation or reduction precision,
 so the remaining experiment is the bounded canonical float64/complex128 replay
 of this decision.
 
+The three-iteration causal replay also passes. Slurm job `11286050` applies
+only the same particle-7916 firstiter routing correction, then runs iterations
+2 and 3 autonomously. Class agreement is `1.0000`, `0.9999`, and `1.0000`;
+minimum per-class cross-engine FSC-AUC is `0.9999999661`, `0.9999999568`, and
+`0.9999242330`. The old iteration-3 minimum was `0.9735133506`. The worst
+RECOVAR-minus-RELION GT FSC-AUC delta is `-3.52431e-6`. This seals the entire
+case-11 trajectory defect as a downstream cascade from the one firstiter
+membership decision; only the score-boundary classification remains open.
+
 Canonical evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/RESULTS.md` (SHA-256 `393e9b2613662f3d6a0a8aba702d12ca0595443944c9b62621eedb93d2a633fa`)
@@ -4460,6 +4469,8 @@ Canonical evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7916_forced_membership_20260716_180500/provenance/CLASSIFICATION_SEAL.json` (SHA-256 `f8ed739400fc18cd6abe78e9f7c11442c9128e3e9a518d9a0c82e62322ae3ac3`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_global_winner_aggregate_dynamic_context_de2c_retry2_20260716_185100/analysis/global_winner_analysis.json` (SHA-256 `131b8fe31fb8f5690fa1b572492127e4e764f142a6c7cb6646eea620063a0be2`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_global_winner_aggregate_dynamic_context_de2c_retry2_20260716_185100/provenance/FINAL_MANIFEST.sha256` (SHA-256 `063b38a73432ee2c49bb6d0408a38b76805c279dd173f611c2a932051920dd70`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_forced7916_fulltraj_20260716_192000/analysis/forced_fulltraj_report.json` (SHA-256 `6d9779a242f738ea147628d86b3f9db8ed6124fe8ca2f683e55e957a9afb4c82`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_forced7916_fulltraj_20260716_192000/provenance/FINAL_MANIFEST.sha256` (SHA-256 `029b796d10cb717b990a528d5ba5d0dce588c44b85d70aba405687e0f92c7b79`)
 
 ## 2026-07-16 real-10076 iteration-2 ordinary BPref classification
 
