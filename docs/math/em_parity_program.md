@@ -89,7 +89,7 @@ four-column range capture.
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current accepted code checkpoint: `a8b8bd995f941f81a9d65e09c36b913ef06c13ce`
+Current accepted code checkpoint: `b30e8f892ae089bb43caf9fac0d31e924ae24e70`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -227,24 +227,26 @@ checkpoint.
 Current status on 2026-07-16: the eight-case autonomous K=1 robustness matrix
 passes every FSC/FSC-AUC trajectory, schedule, convergence, and finalization
 gate.  The remaining K=1 completion cells are the running 100k/256 trajectory
-and a real-10076 aggregate production-adjoint capture.  For real-10076, the
-first canonical replay used a diagnostic shadow panel that did not close to
-the live production accumulator and is rejected as production-order evidence.
-Do not interpret canonical or promoted-float64 results there until the
-ordinary production operands and contribution-derived panel close inside a
-same-GPU repeat envelope.
+and the real-10076 repeat-qualified production-boundary confirmation.  The
+bounded exact raw-diff2 cache is performance-only and remains disabled from
+the accepted checkpoint until the running OFF/OFF/ON/reverse-order frozen
+boundary control places its aggregate arrays and FSC/FSC-AUC inside the native
+repeat/order envelope.
 
-K=4 case 11 has a stable iteration-1 reconstructed-reference boundary outside
-the stock RELION repeat envelope.  The frozen aggregate RECOVAR capture now
-recomputes every complex64/float32 source operand exactly on two controls and
-proves genuine float64 source/geometry sensitivity, but it does not explain
-the class-2 map gap: the current capture does not contain RELION's complete
-contribution list or the production atomic schedule.  The next K=4 experiment
-is one aggregate RELION iteration-1 class-2 pre-scatter capture for the full
-847-particle class: posterior-reduced complex source rows, real weights, exact
-rotation matrices, support, and canonical identities.  Replay that boundary
-beside RECOVAR in one common deterministic float64 geometry/reduction harness.
-Do not return to serial particle tracing or the unstable iteration-3+ cliffs.
+K=4 case 11 now has a recurrent aggregate iteration-1 membership boundary:
+RELION and RECOVAR agree for 9,999/10,000 particles in a same-A100 six-arm
+control, and zero-based particle 7915 is the sole recurrent class transfer.
+The next discriminator is a same-A100 RELION stock / RECOVAR stock / RECOVAR
+class-override control that routes particle 7915 through RELION's class while
+leaving its score surface unchanged.  Compare per-class production
+accumulators and maps using exact/array metrics and shellwise FSC/FSC-AUC.  If
+that common-membership intervention closes the class-1/class-2 reconstruction
+residual, the firstiter global-winner boundary is causal and a full-class
+pre-scatter capture is unnecessary.  Otherwise return to an aggregate
+full-class pre-scatter replay.  Use offset-free native-float32 score captures
+and targeted float64/complex128 subgroup replay to classify close aggregate
+decisions; do not return to serial particle tracing or unstable iteration-3+
+cliffs.
 
 Current status on 2026-07-14: the seven-case immutable K=1 robustness matrix
 at detached commit `f0ef1f0c6c231ff1f9183371d235e0b37a15b825` matches every
