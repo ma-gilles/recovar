@@ -402,6 +402,7 @@ _ffi_lock = threading.Lock()
 # FFI target name constants
 _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
+_TARGET_BACKPROJECT_INDEXED_SIGNATURE = "cuda_backproject_indexed_signature"
 _TARGET_PROJECT = "cuda_project"
 _TARGET_PROJECT_INDEXED = "cuda_project_indexed"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
@@ -640,6 +641,11 @@ def _ensure_ffi():
         jax.ffi.register_ffi_target(
             _TARGET_BACKPROJECT_INDEXED,
             jax.ffi.pycapsule(lib.BackprojectIndexed),
+            platform="CUDA",
+        )
+        jax.ffi.register_ffi_target(
+            _TARGET_BACKPROJECT_INDEXED_SIGNATURE,
+            jax.ffi.pycapsule(lib.BackprojectIndexedSignature),
             platform="CUDA",
         )
         jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
@@ -1137,6 +1143,146 @@ def backproject_indexed(
         input_output_aliases={3: 0},
         vmap_method="sequential",
     )(images, pixel_indices, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(6, 7, 8))
+def _backproject_indexed_signature_impl(
+    volume: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    canonical_rotation_keys: jax.Array,
+    signature_row_indices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, ...]:
+    """Run the ordinary indexed production kernel plus its inert signature companion."""
+
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
+    if int(volume_shape[2]) % 2 == 0:
+        raise ValueError(f"ordinary indexed signature requires an odd BPref grid, got {volume_shape}")
+    if volume.dtype != jnp.complex64 or images.dtype != jnp.complex64:
+        raise TypeError("ordinary indexed signature volume/images must be complex64")
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError("ordinary indexed signature pixel indices must be int32")
+    if canonical_rotation_keys.dtype != jnp.int32 or signature_row_indices.dtype != jnp.int32:
+        raise TypeError("ordinary indexed signature keys/selected rows must be int32")
+    if images.ndim != 2 or pixel_indices.shape != (images.shape[1],):
+        raise ValueError("ordinary indexed signature requires rank-2 rows and matching pixel indices")
+    if rotation_matrices.shape != (images.shape[0], 3, 3):
+        raise ValueError("ordinary indexed signature rotations must have shape (n_rows,3,3)")
+    if canonical_rotation_keys.shape != (images.shape[0],):
+        raise ValueError("ordinary indexed signature rotation key length mismatch")
+    expected_volume_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    if volume.shape != (expected_volume_size,):
+        raise ValueError("ordinary indexed signature accumulator shape mismatch")
+
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    kw["relion_fold_x"] = np.int64(1)
+    kw["relion_block_topology"] = np.int64(0)
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(
+        rotation_matrices, jnp.float32
+    )
+    rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
+    signature_shape = (int(signature_row_indices.shape[0]), int(images.shape[1]))
+    out_types = (
+        jax.ShapeDtypeStruct(volume.shape, volume.dtype),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct(signature_shape, jnp.int32),
+        jax.ShapeDtypeStruct((*signature_shape, 5), jnp.float32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.int32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.float32),
+        jax.ShapeDtypeStruct((*signature_shape, 8), jnp.int32),
+        jax.ShapeDtypeStruct(volume.shape, volume.dtype),
+        jax.ShapeDtypeStruct(images.shape, images.dtype),
+        jax.ShapeDtypeStruct(pixel_indices.shape, pixel_indices.dtype),
+        jax.ShapeDtypeStruct(rot6.shape, rot6.dtype),
+        jax.ShapeDtypeStruct(canonical_rotation_keys.shape, canonical_rotation_keys.dtype),
+        jax.ShapeDtypeStruct(signature_row_indices.shape, signature_row_indices.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_BACKPROJECT_INDEXED_SIGNATURE,
+        out_types,
+        input_output_aliases={5: 0},
+        vmap_method="sequential",
+    )(
+        images,
+        pixel_indices,
+        rot6,
+        canonical_rotation_keys,
+        signature_row_indices,
+        volume,
+        **kw,
+    )
+
+
+def backproject_indexed_signature(
+    volume: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    canonical_rotation_keys: jax.Array,
+    signature_row_indices: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, ...]:
+    """Capture ordinary indexed CUDA geometry without changing its atomic launch."""
+
+    row_indices = np.asarray(signature_row_indices)
+    n_rows = int(images.shape[0])
+    if (
+        row_indices.ndim != 1
+        or row_indices.dtype != np.dtype(np.int32)
+        or row_indices.size == 0
+        or np.any(row_indices < 0)
+        or np.any(row_indices >= n_rows)
+        or (row_indices.size > 1 and np.any(np.diff(row_indices) <= 0))
+    ):
+        raise ValueError(
+            "ordinary indexed signature rows must be nonempty, unique, strictly increasing, and in range"
+        )
+    selected = jnp.asarray(row_indices, dtype=jnp.int32)
+    pixels = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    keys = jnp.asarray(canonical_rotation_keys, dtype=jnp.int32).reshape(-1)
+    outputs = _backproject_indexed_signature_impl(
+        volume,
+        images,
+        pixels,
+        rotation_matrices,
+        keys,
+        selected,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+    kernel_rotations = _relion_x_half_backproject_rotation_to_kernel(
+        rotation_matrices, jnp.float32
+    )
+    rot6 = _rot_to_compact(kernel_rotations, jnp.float32)
+    expected = (images, pixels, rot6, keys, selected)
+    observed = outputs[9:14]
+    mismatches = [
+        name
+        for name, lhs, rhs in zip(
+            ("images", "pixel_indices", "rot6", "rotation_keys", "signature_rows"),
+            expected,
+            observed,
+            strict=True,
+        )
+        if not _bitwise_array_equal(lhs, rhs)
+    ]
+    if not _bitwise_array_equal(outputs[0], outputs[8]):
+        mismatches.insert(0, "accumulator")
+    if mismatches:
+        raise RuntimeError(
+            "ordinary indexed signature deterministic inertness gate failed for "
+            + ", ".join(mismatches)
+        )
+    return outputs[:8]
 
 
 @functools.partial(jax.jit, static_argnums=(6, 7, 8))

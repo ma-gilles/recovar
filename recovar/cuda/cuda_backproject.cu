@@ -936,6 +936,170 @@ backproject_indexed_kernel(
     }
 }
 
+/* Diagnostic companion for the ordinary indexed production kernel above.
+ * It receives a strictly increasing subset of source rows and writes unique
+ * signature slots without atomics. Coordinate, fold, compact-support, and
+ * trilinear expressions deliberately mirror backproject_indexed_kernel and
+ * scatter_trilinear<float,true,0,false>, including formation of fractions
+ * after adding the integer volume origin. */
+__global__ void __launch_bounds__(BLOCK_SIZE)
+backproject_indexed_signature_kernel(
+    const float2* __restrict__ img,
+    const int32_t* __restrict__ pixel_indices,
+    const float* __restrict__ rot,
+    const int32_t* __restrict__ canonical_rotation_keys,
+    const int32_t* __restrict__ signature_row_indices,
+    int32_t* __restrict__ signature_rotation_keys,
+    int32_t* __restrict__ signature_pixel_indices,
+    int32_t* __restrict__ signature_row_flags,
+    float* __restrict__ signature_source_values,
+    int32_t* __restrict__ signature_neighbor_indices,
+    float* __restrict__ signature_neighbor_coefficients,
+    int32_t* __restrict__ signature_neighbor_flags,
+    int n_signature_rows, int n_source_rows, int n_pixels,
+    int image_h, int image_w,
+    int N0, int N1, int N2_eff,
+    float c0, float c1, float c2,
+    int upsampling, float max_r2)
+{
+    __shared__ float R[6];
+    const int output_row = (int)blockIdx.x;
+    const int source_row = (int)signature_row_indices[output_row];
+    const int pix = (int)blockIdx.y * BLOCK_SIZE + (int)threadIdx.x;
+    if ((unsigned)source_row >= (unsigned)n_source_rows) return;
+    if (threadIdx.x < 6) R[threadIdx.x] = rot[source_row * 6 + threadIdx.x];
+    __syncthreads();
+    if (pix >= n_pixels) return;
+
+    const int row_pixel = output_row * n_pixels + pix;
+    const int source_row_pixel = source_row * n_pixels + pix;
+    const int orig_pix = (int)pixel_indices[pix];
+    signature_rotation_keys[row_pixel] = canonical_rotation_keys[source_row];
+    signature_pixel_indices[row_pixel] = orig_pix;
+    signature_row_flags[row_pixel] = 0;
+    #pragma unroll
+    for (int value_index = 0; value_index < 5; ++value_index)
+        signature_source_values[row_pixel * 5 + value_index] = nanf("");
+    #pragma unroll
+    for (int slot = 0; slot < 8; ++slot) {
+        const int out = row_pixel * 8 + slot;
+        signature_neighbor_indices[out] = -1;
+        signature_neighbor_coefficients[out] = 0.0f;
+        signature_neighbor_flags[out] = 8;
+    }
+
+    const int k0_idx = orig_pix / image_w;
+    const int k1_idx = orig_pix % image_w;
+    const float k0_unscaled = (k0_idx < image_w)
+        ? (float)k0_idx
+        : (float)(k0_idx - image_h);
+    const float k1_unscaled = (float)k1_idx;
+    const float k0 = k0_unscaled * (float)upsampling;
+    const float k1 = k1_unscaled * (float)upsampling;
+
+    if (k1_idx == 0 && k0_idx >= image_w) {
+        signature_row_flags[row_pixel] = 1;
+        return;
+    }
+    if (max_r2 >= 0.0f && k0 * k0 + k1 * k1 > max_r2) {
+        signature_row_flags[row_pixel] = 2;
+        return;
+    }
+
+    const float2 source_value = img[source_row_pixel];
+    float val_re = source_value.x;
+    float val_im = source_value.y;
+    float rk0 = (R[3] * k1_unscaled + R[0] * k0_unscaled) * (float)upsampling;
+    float rk1 = (R[4] * k1_unscaled + R[1] * k0_unscaled) * (float)upsampling;
+    float rk2 = (R[5] * k1_unscaled + R[2] * k0_unscaled) * (float)upsampling;
+    signature_source_values[row_pixel * 5 + 0] = val_re;
+    signature_source_values[row_pixel * 5 + 1] = val_im;
+    signature_source_values[row_pixel * 5 + 2] = rk0;
+    signature_source_values[row_pixel * 5 + 3] = rk1;
+    signature_source_values[row_pixel * 5 + 4] = rk2;
+
+    if (max_r2 >= 0.0f && relion_radius_squared(rk0, rk1, rk2) > max_r2) {
+        signature_row_flags[row_pixel] = 8;
+        return;
+    }
+    int32_t row_flags = 0;
+    if (rk2 < 0.0f) {
+        row_flags |= 16;
+        rk0 = -rk0;
+        rk1 = -rk1;
+        rk2 = -rk2;
+        val_im = -val_im;
+    }
+    if (max_r2 >= 0.0f) {
+        const int maxR = (int)floor(sqrt((double)max_r2) + 0.5);
+        if (relion_compact_trilinear_oob<float>(rk2, rk1, rk0, maxR)) {
+            signature_row_flags[row_pixel] = row_flags | 32;
+            return;
+        }
+    }
+    signature_row_flags[row_pixel] = row_flags | 64;
+
+    const float g0 = rk0 + c0;
+    const float g1 = rk1 + c1;
+    const int ic2 = (int)c2;
+    const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
+    const float g2_full = rk2 + c2;
+    if (g0 < -1.0f || g0 >= (float)N0 ||
+        g1 < -1.0f || g1 >= (float)N1 ||
+        g2_full < -1.0f || g2_full >= (float)N2_full)
+        return;
+    const int b0 = floor_int(g0);
+    const int b1 = floor_int(g1);
+    const int b2 = floor_int(g2_full);
+    const float f0 = g0 - (float)b0;
+    const float f1 = g1 - (float)b1;
+    const float f2 = g2_full - (float)b2;
+    const float w0[2] = {1.0f - f0, f0};
+    const float w1[2] = {1.0f - f1, f1};
+    const float w2[2] = {1.0f - f2, f2};
+    const int stride1 = N2_eff;
+    const int stride0 = N1 * N2_eff;
+    #pragma unroll
+    for (int d0 = 0; d0 < 2; ++d0) {
+        const int j0 = b0 + d0;
+        #pragma unroll
+        for (int d1 = 0; d1 < 2; ++d1) {
+            const int j1 = b1 + d1;
+            const float ww = w0[d0] * w1[d1];
+            #pragma unroll
+            for (int d2 = 0; d2 < 2; ++d2) {
+                const int slot = d0 * 4 + d1 * 2 + d2;
+                const int out = row_pixel * 8 + slot;
+                const int j2 = b2 + d2;
+                if ((unsigned)j0 >= (unsigned)N0 ||
+                    (unsigned)j1 >= (unsigned)N1 ||
+                    (unsigned)j2 >= (unsigned)N2_full)
+                    continue;
+                const int kz = j2 - ic2;
+                int sj0 = j0;
+                int sj1 = j1;
+                int hkz;
+                int32_t neighbor_flags = 1;
+                if (kz >= 0) {
+                    hkz = kz;
+                } else if ((N2_full & 1) == 0 && -kz == ic2) {
+                    hkz = ic2;
+                    neighbor_flags |= 4;
+                } else {
+                    sj0 = (N0 - (N0 & 1) - j0) % N0;
+                    sj1 = (N1 - (N1 & 1) - j1) % N1;
+                    hkz = -kz;
+                    neighbor_flags |= 2;
+                }
+                if (hkz > ic2) continue;
+                signature_neighbor_indices[out] = sj0 * stride0 + sj1 * stride1 + hkz;
+                signature_neighbor_coefficients[out] = ww * w2[d2];
+                signature_neighbor_flags[out] = neighbor_flags;
+            }
+        }
+    }
+}
+
 /* Batched indexed backprojection: same semantics as
  * backproject_indexed_kernel, but scatter a small batch of images into
  * matching independent volumes while reusing pixel coordinates and rotations.
@@ -2048,6 +2212,85 @@ cudaError_t launch_backproject_indexed(
         }
         #undef RBPI
     }
+    return cudaGetLastError();
+}
+
+cudaError_t launch_backproject_indexed_with_signature(
+    cudaStream_t stream,
+    float* volume,
+    const float* images,
+    const int32_t* pixel_indices,
+    const float* rot,
+    const int32_t* canonical_rotation_keys,
+    const int32_t* signature_row_indices,
+    int32_t* signature_rotation_keys,
+    int32_t* signature_pixel_indices,
+    int32_t* signature_row_flags,
+    float* signature_source_values,
+    int32_t* signature_neighbor_indices,
+    float* signature_neighbor_coefficients,
+    int32_t* signature_neighbor_flags,
+    float* accumulator_shadow,
+    float* operand_shadow_images,
+    int32_t* operand_shadow_pixel_indices,
+    float* operand_shadow_rot,
+    int32_t* operand_shadow_canonical_rotation_keys,
+    int32_t* operand_shadow_signature_row_indices,
+    int64_t n_rows,
+    int64_t n_signature_rows,
+    int64_t n_pixels,
+    int64_t image_h,
+    int64_t image_w,
+    int64_t N0,
+    int64_t N1,
+    int64_t N2,
+    int64_t upsampling,
+    int64_t max_r2_x4)
+{
+    cudaError_t err = launch_backproject_indexed<float>(
+        stream, volume, images, pixel_indices, rot,
+        n_rows, n_pixels, image_h, image_w, N0, N1, N2,
+        upsampling, 1, 1, 1, image_h, 0, max_r2_x4, 1, 0);
+    if (err != cudaSuccess) return err;
+    const int N2_eff = (int)(N2 / 2 + 1);
+    const size_t volume_size = (size_t)N0 * (size_t)N1 * (size_t)N2_eff;
+    err = cudaMemcpyAsync(accumulator_shadow, volume,
+                          volume_size * sizeof(float2), cudaMemcpyDeviceToDevice, stream);
+    if (err != cudaSuccess) return err;
+    err = cudaMemcpyAsync(operand_shadow_images, images,
+                          (size_t)n_rows * (size_t)n_pixels * sizeof(float2),
+                          cudaMemcpyDeviceToDevice, stream);
+    if (err != cudaSuccess) return err;
+    err = cudaMemcpyAsync(operand_shadow_pixel_indices, pixel_indices,
+                          (size_t)n_pixels * sizeof(int32_t), cudaMemcpyDeviceToDevice, stream);
+    if (err != cudaSuccess) return err;
+    err = cudaMemcpyAsync(operand_shadow_rot, rot,
+                          (size_t)n_rows * 6 * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+    if (err != cudaSuccess) return err;
+    err = cudaMemcpyAsync(operand_shadow_canonical_rotation_keys, canonical_rotation_keys,
+                          (size_t)n_rows * sizeof(int32_t), cudaMemcpyDeviceToDevice, stream);
+    if (err != cudaSuccess) return err;
+    err = cudaMemcpyAsync(operand_shadow_signature_row_indices, signature_row_indices,
+                          (size_t)n_signature_rows * sizeof(int32_t),
+                          cudaMemcpyDeviceToDevice, stream);
+    if (err != cudaSuccess) return err;
+
+    const float c0 = (float)(N0 / 2);
+    const float c1 = (float)(N1 / 2);
+    const float c2 = (float)(N2 / 2);
+    const float max_r2 = (float)max_r2_x4 / 4.0f;
+    dim3 grid((unsigned)n_signature_rows,
+              ((unsigned)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    dim3 block(BLOCK_SIZE);
+    backproject_indexed_signature_kernel<<<grid, block, 0, stream>>>(
+        reinterpret_cast<const float2*>(images), pixel_indices, rot,
+        canonical_rotation_keys, signature_row_indices,
+        signature_rotation_keys, signature_pixel_indices, signature_row_flags,
+        signature_source_values, signature_neighbor_indices,
+        signature_neighbor_coefficients, signature_neighbor_flags,
+        (int)n_signature_rows, (int)n_rows, (int)n_pixels,
+        (int)image_h, (int)image_w, (int)N0, (int)N1, N2_eff,
+        c0, c1, c2, (int)upsampling, max_r2);
     return cudaGetLastError();
 }
 
@@ -3794,6 +4037,143 @@ ffi::Error BackprojectIndexedImpl(
     return ffi::Error::Success();
 }
 
+ffi::Error BackprojectIndexedSignatureImpl(
+    cudaStream_t stream,
+    int64_t image_h, int64_t image_w,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t upsampling, int64_t order,
+    int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4,
+    int64_t relion_fold_x,
+    int64_t relion_block_topology,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer pixel_indices,
+    ffi::AnyBuffer rot,
+    ffi::AnyBuffer canonical_rotation_keys,
+    ffi::AnyBuffer signature_row_indices,
+    ffi::AnyBuffer volume_in,
+    ffi::Result<ffi::AnyBuffer> volume_out,
+    ffi::Result<ffi::AnyBuffer> signature_rotation_keys,
+    ffi::Result<ffi::AnyBuffer> signature_pixel_indices,
+    ffi::Result<ffi::AnyBuffer> signature_row_flags,
+    ffi::Result<ffi::AnyBuffer> signature_source_values,
+    ffi::Result<ffi::AnyBuffer> signature_neighbor_indices,
+    ffi::Result<ffi::AnyBuffer> signature_neighbor_coefficients,
+    ffi::Result<ffi::AnyBuffer> signature_neighbor_flags,
+    ffi::Result<ffi::AnyBuffer> accumulator_shadow,
+    ffi::Result<ffi::AnyBuffer> operand_shadow_images,
+    ffi::Result<ffi::AnyBuffer> operand_shadow_pixel_indices,
+    ffi::Result<ffi::AnyBuffer> operand_shadow_rot,
+    ffi::Result<ffi::AnyBuffer> operand_shadow_canonical_rotation_keys,
+    ffi::Result<ffi::AnyBuffer> operand_shadow_signature_row_indices)
+{
+    if (images.element_type() != ffi::DataType::C64 ||
+        volume_in.element_type() != ffi::DataType::C64 ||
+        volume_out->element_type() != ffi::DataType::C64 ||
+        accumulator_shadow->element_type() != ffi::DataType::C64 ||
+        operand_shadow_images->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "BackprojectIndexedSignature: images/volumes/shadows must be complex64");
+    if (rot.element_type() != ffi::DataType::F32 ||
+        signature_source_values->element_type() != ffi::DataType::F32 ||
+        signature_neighbor_coefficients->element_type() != ffi::DataType::F32 ||
+        operand_shadow_rot->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "BackprojectIndexedSignature: rotations/source/coefficients must be float32");
+    if (pixel_indices.element_type() != ffi::DataType::S32 ||
+        canonical_rotation_keys.element_type() != ffi::DataType::S32 ||
+        signature_row_indices.element_type() != ffi::DataType::S32 ||
+        signature_rotation_keys->element_type() != ffi::DataType::S32 ||
+        signature_pixel_indices->element_type() != ffi::DataType::S32 ||
+        signature_row_flags->element_type() != ffi::DataType::S32 ||
+        signature_neighbor_indices->element_type() != ffi::DataType::S32 ||
+        signature_neighbor_flags->element_type() != ffi::DataType::S32 ||
+        operand_shadow_pixel_indices->element_type() != ffi::DataType::S32 ||
+        operand_shadow_canonical_rotation_keys->element_type() != ffi::DataType::S32 ||
+        operand_shadow_signature_row_indices->element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument(
+            "BackprojectIndexedSignature: signature indices/keys/flags must be int32");
+    if (order != 1 || half_volume != 1 || half_image != 1 ||
+        relion_fold_x != 1 || relion_block_topology != 0)
+        return ffi::Error::InvalidArgument(
+            "BackprojectIndexedSignature: requires ordinary order-1 RELION x-half topology");
+    if (N0 <= 0 || N0 != N1 || N1 != N2 || (N2 & 1) == 0 ||
+        image_h <= 0 || image_w <= 0 || full_image_w != image_h ||
+        upsampling <= 0 || max_r2_x4 < 0)
+        return ffi::Error::InvalidArgument(
+            "BackprojectIndexedSignature: invalid image/volume/radius attributes");
+
+    const auto image_dims = images.dimensions();
+    const auto pixel_dims = pixel_indices.dimensions();
+    const auto rot_dims = rot.dimensions();
+    const auto key_dims = canonical_rotation_keys.dimensions();
+    const auto selected_dims = signature_row_indices.dimensions();
+    if (image_dims.size() != 2 || image_dims[0] <= 0 || image_dims[1] <= 0 ||
+        pixel_dims.size() != 1 || pixel_dims[0] != image_dims[1] ||
+        rot_dims.size() != 2 || rot_dims[0] != image_dims[0] || rot_dims[1] != 6 ||
+        key_dims.size() != 1 || key_dims[0] != image_dims[0] ||
+        selected_dims.size() != 1 || selected_dims[0] <= 0 ||
+        selected_dims[0] > image_dims[0])
+        return ffi::Error::InvalidArgument(
+            "BackprojectIndexedSignature: inconsistent row/pixel/rotation shapes");
+    const int64_t n_rows = image_dims[0];
+    const int64_t n_pixels = image_dims[1];
+    const int64_t n_signature_rows = selected_dims[0];
+    const int64_t volume_size = N0 * N1 * (N2 / 2 + 1);
+
+    auto has_shape = [](auto dims, int64_t d0, int64_t d1, int64_t d2) {
+        if (d2 > 0)
+            return dims.size() == 3 && dims[0] == d0 && dims[1] == d1 && dims[2] == d2;
+        if (d1 > 0)
+            return dims.size() == 2 && dims[0] == d0 && dims[1] == d1;
+        return dims.size() == 1 && dims[0] == d0;
+    };
+    if (!has_shape(volume_in.dimensions(), volume_size, 0, 0) ||
+        !has_shape(volume_out->dimensions(), volume_size, 0, 0) ||
+        !has_shape(accumulator_shadow->dimensions(), volume_size, 0, 0) ||
+        !has_shape(signature_rotation_keys->dimensions(), n_signature_rows, n_pixels, 0) ||
+        !has_shape(signature_pixel_indices->dimensions(), n_signature_rows, n_pixels, 0) ||
+        !has_shape(signature_row_flags->dimensions(), n_signature_rows, n_pixels, 0) ||
+        !has_shape(signature_source_values->dimensions(), n_signature_rows, n_pixels, 5) ||
+        !has_shape(signature_neighbor_indices->dimensions(), n_signature_rows, n_pixels, 8) ||
+        !has_shape(signature_neighbor_coefficients->dimensions(), n_signature_rows, n_pixels, 8) ||
+        !has_shape(signature_neighbor_flags->dimensions(), n_signature_rows, n_pixels, 8) ||
+        !has_shape(operand_shadow_images->dimensions(), n_rows, n_pixels, 0) ||
+        !has_shape(operand_shadow_pixel_indices->dimensions(), n_pixels, 0, 0) ||
+        !has_shape(operand_shadow_rot->dimensions(), n_rows, 6, 0) ||
+        !has_shape(operand_shadow_canonical_rotation_keys->dimensions(), n_rows, 0, 0) ||
+        !has_shape(operand_shadow_signature_row_indices->dimensions(), n_signature_rows, 0, 0))
+        return ffi::Error::InvalidArgument(
+            "BackprojectIndexedSignature: output/shadow shapes are inconsistent");
+
+    cudaError_t err = launch_backproject_indexed_with_signature(
+        stream,
+        static_cast<float*>(volume_out->untyped_data()),
+        static_cast<const float*>(images.untyped_data()),
+        static_cast<const int32_t*>(pixel_indices.untyped_data()),
+        static_cast<const float*>(rot.untyped_data()),
+        static_cast<const int32_t*>(canonical_rotation_keys.untyped_data()),
+        static_cast<const int32_t*>(signature_row_indices.untyped_data()),
+        static_cast<int32_t*>(signature_rotation_keys->untyped_data()),
+        static_cast<int32_t*>(signature_pixel_indices->untyped_data()),
+        static_cast<int32_t*>(signature_row_flags->untyped_data()),
+        static_cast<float*>(signature_source_values->untyped_data()),
+        static_cast<int32_t*>(signature_neighbor_indices->untyped_data()),
+        static_cast<float*>(signature_neighbor_coefficients->untyped_data()),
+        static_cast<int32_t*>(signature_neighbor_flags->untyped_data()),
+        static_cast<float*>(accumulator_shadow->untyped_data()),
+        static_cast<float*>(operand_shadow_images->untyped_data()),
+        static_cast<int32_t*>(operand_shadow_pixel_indices->untyped_data()),
+        static_cast<float*>(operand_shadow_rot->untyped_data()),
+        static_cast<int32_t*>(operand_shadow_canonical_rotation_keys->untyped_data()),
+        static_cast<int32_t*>(operand_shadow_signature_row_indices->untyped_data()),
+        n_rows, n_signature_rows, n_pixels,
+        image_h, image_w, N0, N1, N2, upsampling, max_r2_x4);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
 ffi::Error RelionFusedXHalfBackprojectImpl(
     cudaStream_t stream,
     int64_t image_h, int64_t image_w,
@@ -4101,6 +4481,45 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()           /* rot           */
         .Arg<ffi::AnyBuffer>()           /* vol_in        */
         .Ret<ffi::AnyBuffer>()           /* vol_out (aliased with vol_in) */
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    BackprojectIndexedSignature, BackprojectIndexedSignatureImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("N0")
+        .Attr<int64_t>("N1")
+        .Attr<int64_t>("N2")
+        .Attr<int64_t>("upsampling")
+        .Attr<int64_t>("order")
+        .Attr<int64_t>("half_volume")
+        .Attr<int64_t>("half_image")
+        .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
+        .Attr<int64_t>("relion_fold_x")
+        .Attr<int64_t>("relion_block_topology")
+        .Arg<ffi::AnyBuffer>()           /* images */
+        .Arg<ffi::AnyBuffer>()           /* pixel_indices */
+        .Arg<ffi::AnyBuffer>()           /* rot */
+        .Arg<ffi::AnyBuffer>()           /* canonical_rotation_keys */
+        .Arg<ffi::AnyBuffer>()           /* signature_row_indices */
+        .Arg<ffi::AnyBuffer>()           /* volume_in */
+        .Ret<ffi::AnyBuffer>()           /* volume_out (aliased) */
+        .Ret<ffi::AnyBuffer>()           /* signature_rotation_keys */
+        .Ret<ffi::AnyBuffer>()           /* signature_pixel_indices */
+        .Ret<ffi::AnyBuffer>()           /* signature_row_flags */
+        .Ret<ffi::AnyBuffer>()           /* signature_source_values */
+        .Ret<ffi::AnyBuffer>()           /* signature_neighbor_indices */
+        .Ret<ffi::AnyBuffer>()           /* signature_neighbor_coefficients */
+        .Ret<ffi::AnyBuffer>()           /* signature_neighbor_flags */
+        .Ret<ffi::AnyBuffer>()           /* accumulator_shadow */
+        .Ret<ffi::AnyBuffer>()           /* operand_shadow_images */
+        .Ret<ffi::AnyBuffer>()           /* operand_shadow_pixel_indices */
+        .Ret<ffi::AnyBuffer>()           /* operand_shadow_rot */
+        .Ret<ffi::AnyBuffer>()           /* operand_shadow_canonical_rotation_keys */
+        .Ret<ffi::AnyBuffer>()           /* operand_shadow_signature_row_indices */
 );
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(

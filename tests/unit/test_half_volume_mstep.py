@@ -585,11 +585,12 @@ def test_relion_x_half_cuda_rotates_before_applying_padding_factor():
     expected_rk0 = "(R[3] * k1_unscaled + R[0] * k0_unscaled) *"
     expected_rk1 = "(R[4] * k1_unscaled + R[1] * k0_unscaled) *"
     expected_rk2 = "(R[5] * k1_unscaled + R[2] * k0_unscaled) *"
-    # Indexed, batch, and fused backprojectors plus the C64 and double-output
-    # texture projectors all preserve RELION's matrix-x*source-x-first order.
-    assert text.count(expected_rk0) == 5
-    assert text.count(expected_rk1) == 5
-    assert text.count(expected_rk2) == 5
+    # Indexed, its diagnostic signature companion, batch, and fused
+    # backprojectors plus the C64 and double-output texture projectors all
+    # preserve RELION's matrix-x*source-x-first order.
+    assert text.count(expected_rk0) == 6
+    assert text.count(expected_rk1) == 6
+    assert text.count(expected_rk2) == 6
     assert "(k0_unscaled * R[0] + k1_unscaled * R[3]) *" not in text
     assert "matrix-x*source-x first" in text
     assert "Reversing the addends changes CUDA's contracted FMA" in text
@@ -603,7 +604,7 @@ def test_relion_x_half_cuda_pins_physical_radius_accumulation_order():
     assert "__fmul_rn(rk1, rk1)" in helper
     assert "__fmaf_rn(rk2, rk2, y2)" in helper
     assert "__fmaf_rn(rk0, rk0, xy2)" in helper
-    assert text.count("relion_radius_squared(rk0, rk1, rk2)") == 3
+    assert text.count("relion_radius_squared(rk0, rk1, rk2)") == 4
 
 
 def test_relion_x_half_bp_block_topology_env_is_off_by_default(monkeypatch):
@@ -851,6 +852,162 @@ def test_relion_fused_x_half_signature_inertness_gate_rejects_shadow_mismatch():
         cuda_backproject._require_signature_inertness_outputs(
             tuple(mismatched), expected_operands
         )
+
+
+def test_ordinary_indexed_signature_inertness_gate_rejects_shadow_mismatch(monkeypatch):
+    volume = jnp.zeros(7 * 7 * 4, dtype=jnp.complex64)
+    images = jnp.asarray([[1.0 + 2.0j], [3.0 + 4.0j]], dtype=jnp.complex64)
+    pixels = jnp.asarray([0], dtype=jnp.int32)
+    rotations = jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (2, 3, 3))
+    keys = jnp.asarray([11, 12], dtype=jnp.int32)
+    selected = np.asarray([0], dtype=np.int32)
+
+    def fake_impl(
+        volume_arg,
+        images_arg,
+        pixels_arg,
+        rotations_arg,
+        keys_arg,
+        selected_arg,
+        *_args,
+    ):
+        rot6 = cuda_backproject._rot_to_compact(
+            cuda_backproject._relion_x_half_backproject_rotation_to_kernel(
+                rotations_arg, jnp.float32
+            ),
+            jnp.float32,
+        )
+        signature_shape = (selected_arg.shape[0], images_arg.shape[1])
+        signature = (
+            jnp.zeros(signature_shape, dtype=jnp.int32),
+            jnp.zeros(signature_shape, dtype=jnp.int32),
+            jnp.zeros(signature_shape, dtype=jnp.int32),
+            jnp.zeros((*signature_shape, 5), dtype=jnp.float32),
+            jnp.zeros((*signature_shape, 8), dtype=jnp.int32),
+            jnp.zeros((*signature_shape, 8), dtype=jnp.float32),
+            jnp.zeros((*signature_shape, 8), dtype=jnp.int32),
+        )
+        return (
+            volume_arg,
+            *signature,
+            volume_arg.copy(),
+            images_arg.copy(),
+            pixels_arg.copy(),
+            rot6.copy(),
+            keys_arg.copy(),
+            selected_arg.copy(),
+        )
+
+    monkeypatch.setattr(cuda_backproject, "_backproject_indexed_signature_impl", fake_impl)
+    outputs = cuda_backproject.backproject_indexed_signature(
+        volume,
+        images,
+        pixels,
+        rotations,
+        keys,
+        selected,
+        (8, 8),
+        (7, 7, 7),
+        2.0,
+    )
+    assert len(outputs) == 8
+
+    def mismatched_impl(*args, **kwargs):
+        result = list(fake_impl(*args, **kwargs))
+        result[9] = result[9].at[0, 0].set(9.0 + 2.0j)
+        return tuple(result)
+
+    monkeypatch.setattr(cuda_backproject, "_backproject_indexed_signature_impl", mismatched_impl)
+    with pytest.raises(RuntimeError, match="images"):
+        cuda_backproject.backproject_indexed_signature(
+            volume,
+            images,
+            pixels,
+            rotations,
+            keys,
+            selected,
+            (8, 8),
+            (7, 7, 7),
+            2.0,
+        )
+
+
+def test_ordinary_indexed_signature_cuda_source_copies_after_production_launch():
+    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
+    text = cuda_source.read_text()
+    start = text.index("cudaError_t launch_backproject_indexed_with_signature(")
+    launch = text[start : text.index("cudaError_t launch_relion_fused_x_half_backproject(", start)]
+
+    ordinary = launch.index("launch_backproject_indexed<float>(")
+    accumulator_shadow = launch.index("cudaMemcpyAsync(accumulator_shadow")
+    operand_shadow = launch.index("cudaMemcpyAsync(operand_shadow_images")
+    signature = launch.index("backproject_indexed_signature_kernel<<<")
+    assert ordinary < accumulator_shadow < operand_shadow < signature
+    assert launch.count("launch_backproject_indexed<float>(") == 1
+    assert launch.count("backproject_indexed_signature_kernel<<<") == 1
+
+
+def test_ordinary_indexed_signature_matches_production_fraction_order():
+    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
+    text = cuda_source.read_text()
+    production = text[
+        text.index("static __device__ __forceinline__ void scatter_trilinear(") :
+        text.index("/* Strict RELION x-half diagnostic:")
+    ]
+    signature = text[
+        text.index("backproject_indexed_signature_kernel(") :
+        text.index("/* Batched indexed backprojection:")
+    ]
+
+    # The ordinary indexed kernel calls the generic half-volume scatter, whose
+    # active float32 arithmetic forms fractions after adding the integer
+    # volume origin. The fused strict-RELION path is a distinct formulation
+    # and deliberately forms its fractions before adding the origin.
+    for expression in (
+        "const float g0 = rk0 + c0;",
+        "const float g1 = rk1 + c1;",
+        "const float g2_full = rk2 + c2;",
+        "const float f0 = g0 - (float)b0;",
+        "const float f1 = g1 - (float)b1;",
+        "const float f2 = g2_full - (float)b2;",
+    ):
+        assert expression in signature
+    for expression in (
+        "const T g0 = rk0 + c0;",
+        "const T g1 = rk1 + c1;",
+        "const T g2_full = rk2 + c2;",
+        "const T f0 = g0 - (T)b0, f1 = g1 - (T)b1, f2 = g2_full - (T)b2;",
+    ):
+        assert expression in production
+    assert "const float f0 = rk0 -" not in signature
+
+
+@pytest.mark.gpu
+def test_ordinary_indexed_signature_ffi_smoke(monkeypatch, custom_cuda_lib, gpu_device):
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    image_shape = (8, 8)
+    volume_shape = (7, 7, 7)
+    volume_size = volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+
+    with cuda_backproject.jax.default_device(gpu_device):
+        outputs = cuda_backproject.backproject_indexed_signature(
+            jnp.zeros(volume_size, dtype=jnp.complex64),
+            jnp.asarray([[1.25 - 0.75j]], dtype=jnp.complex64),
+            jnp.asarray([1], dtype=jnp.int32),
+            jnp.eye(3, dtype=jnp.float32)[None],
+            jnp.asarray([17], dtype=jnp.int32),
+            np.asarray([0], dtype=np.int32),
+            image_shape,
+            volume_shape,
+            1.0,
+        )
+
+    assert len(outputs) == 8
+    np.testing.assert_array_equal(np.asarray(outputs[1]), np.asarray([[17]]))
+    np.testing.assert_array_equal(np.asarray(outputs[2]), np.asarray([[1]]))
+    assert int(np.asarray(outputs[3])[0, 0]) & 64
+    assert np.count_nonzero(np.asarray(outputs[0])) > 0
 
 
 def test_relion_fused_x_half_signature_cuda_source_copies_before_read_only_kernel():

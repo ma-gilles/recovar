@@ -4362,6 +4362,7 @@ top-k/full-sort computation and uses it only for metadata; the expanded mask,
 posterior, and all reconstruction accumulators are unchanged.  Tied, capped,
 fallback, tuple-compatibility, first-iteration, and accumulator-invariance
 tests pass (74 affected tests in the integrated checkout).
+
 ## 2026-07-16 K=4 case-11 firstiter winner boundary
 
 Fresh same-physical-GPU job `11280871` ran two RELION and two RECOVAR arms
@@ -4419,3 +4420,31 @@ Canonical evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/provenance/CLASSIFICATION_SEAL.json` (SHA-256 `02cb2f88bc9dd6c4fdfbddfbb69c706b805b067afa60ab56ab7a6cfc7f9c4f94`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_it1_mstep_boundary_b5dd_20260716_153035/analysis/fresh_f32/summary.json` (SHA-256 `1a42b1eb7e2b615c8154759c7a9cf72f3812330315bc4bc555bbcef1d26872a7`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case11_p7916_identity6_h100_20260716_165455/analysis/six_arm_global_membership_repeat_join_v1.json` (SHA-256 `c8a0449b611eb77976d3c4f8dce052c757da958052206b88b23cf3b2e550dfeb`)
+
+## 2026-07-16 real-10076 iteration-2 ordinary BPref classification
+
+The sealed particle-8240 boundary now excludes ordinary indexed geometry,
+atomic order, and production float32 precision as material explanations for
+the recurrent iteration-2 numerator gap. The production flattened capture
+closes its known later half-join boundary at data relative L2 `5.16e-8`. A
+same-A100 order replay changes the accumulator by at most `2.86e-7`, only
+`0.0242%` of the RELION gap, and its minimum map FSC-AUC is
+`0.9999999916`. Device-produced ordinary indexed geometry closes the live
+production accumulator at relative L2 `1.30e-7`.
+
+Recomputing operands from the raw source in float64/complex128 changes the
+accumulator by `1.22e-4` but removes only `0.554%` of the RELION residual; the
+controlled map remains at FSC-AUC `0.9999999869` versus production. This is a
+real internal precision effect, but not a material explanation for the parity
+gap. The reusable ordinary indexed signature path captures exact production
+source values, rotation/pixel identities, eight neighbor indices and
+coefficients, fold/support flags, and bitwise shadows of every input and the
+production accumulator. Its coefficient arithmetic is pinned to the actual
+generic production scatter (fractions after adding the integer origin), not
+the distinct fused strict-RELION formulation.
+
+The remaining classification is upstream algorithm/formulation difference in
+the BPref numerator. Do not continue serial particle-by-particle probes. The
+next bounded experiment is an aggregate RELION pre-scatter numerator/support
+capture, distribution comparison against frozen RECOVAR rows, and controlled
+RELION-numerator substitution through RECOVAR's closed ordinary geometry.
