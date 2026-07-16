@@ -26,8 +26,8 @@ do not perturb the M-step accumulators.
 
 from __future__ import annotations
 
-import logging
 import hashlib
+import logging
 import os
 import subprocess
 import time
@@ -43,6 +43,8 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
+)
+from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
@@ -65,13 +67,14 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
     relion_backprojector_volume_shape,
-    relion_x_half_mstep_accumulator_dtypes,
     relion_x_half_accumulators_to_public_layout,
+    relion_x_half_mstep_accumulator_dtypes,
 )
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     half_image_phase_factors,
 )
+from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     apply_half_translation_phases,
     half_translation_phase_table,
@@ -79,13 +82,22 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
     process_half_image,
     resolve_image_mask_for_half_preprocess,
 )
-from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_norm_residual_per_image as _compute_norm_residual_per_image,
-    compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_projections_block as _compute_projections_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
 )
 from recovar.em.dense_single_volume.helpers.significance import (
@@ -98,7 +110,6 @@ from recovar.em.dense_single_volume.helpers.translation_prior import (
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.local_backprojection import (
-    compute_local_ctf_sums,
     compute_local_ctf_sums_from_probs_sum_t,
     compute_local_mstep_sums,
     compute_local_weighted_sums,
