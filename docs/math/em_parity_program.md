@@ -3800,11 +3800,22 @@ production on independently renormalized shared support.  Candidate
 `7ad2526d` therefore remains unmerged; its prior trajectory also showed no
 consistent FSC-AUC gain and cost `4.58%` wall time.
 
+The subsequent exact coarse-operand capture classifies this particular tie as
+numerical rather than a formulation mismatch.  Candidate geometry is exact,
+and cross-program reference, weight, and shifted-image operands are all below
+`7.11e-7` relative L2.  The combined production candidate residual is
+`-3.62396e-4`; recomputing from the captured operands in float64 reduces it to
+`+7.663e-6` (direct) or `+4.456e-6` (decomposed).  The matched-prior float32
+reduction envelope `[-2.3079e-4,+1.3542e-4]` spans the support tie.  This closes
+particle 1491 without a cutoff change, but does not establish global parity:
+the diagnostic hook was not globally inert for every particle and its exact
+continuation arm correctly failed closed when sampling geometry changed.
+
 Across 10,000 particles the remaining iteration-2 Pmax error has no signed bias
-or isolated subgroup.  Continue with aggregate boundary substitutions and an
-exact coarse Gaussian contribution/reduction replay, plus the RELION CUDA
-unmasked BPref operand capture.  Then rerun complete numbered/final FSC and
-FSC-AUC trajectories, the K=1 robustness/scale/real-data gates, and K=4.  Do
+or isolated subgroup.  Continue with aggregate boundary substitutions and the
+RELION CUDA unmasked BPref operand/scatter classification.  Then rerun complete
+numbered/final FSC and FSC-AUC trajectories, the K=1
+robustness/scale/real-data gates, and K=4.  Do
 not change cutoff semantics to force this one tie and do not use correlation as
 a map-quality gate.
 
@@ -3813,6 +3824,9 @@ Evidence:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_p1491_paired_a92c35ef_20260716_081502/analysis/aggregate_it2_pmax_support_distribution.json`,
 and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it1_p8494_device_capture_fix_fb4e6b73_20260716_082324/analysis/continuous_residual_localization/report.json`.
+The exact coarse replay seal is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/p1491_coarse_operand_replay_20260716_094000/analysis/FINAL_SEAL.json`
+(SHA-256 `a4e559c3bc5a2f378d9f2af37ddb2e5348cf630afe529c2a0e736b742d37b274`).
 
 ## 2026-07-16 K=1 eight-case robustness trajectory gate
 
@@ -3835,7 +3849,7 @@ Quality is closed for this small matrix, but speed is not: RECOVAR takes
 iteration 2 alone takes `1285.9` seconds after the posterior expands to about
 `100M` hypotheses per half, then later iterations return to tens of seconds.
 Treat that support explosion as the first K=1 performance target after the
-pending exact coarse-operand and RELION CUDA BPref classifications.
+RELION CUDA BPref coefficient-order fix is validated.
 
 Evidence root and jobs:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_current_65d2c3f1_20260716_091500/`

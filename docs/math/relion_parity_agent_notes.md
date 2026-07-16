@@ -2538,9 +2538,16 @@ Matrix evidence:
   `1.64606e-4` (`2.19%`).  A preliminary complex128-projector-plus-float64
   scoring arm also leaves the boundary unchanged and is much farther from
   RELION; because it ran on another physical GPU, do not use its aggregate
-  effects causally without a same-GPU repeat.  Ordinary score precision does
-  not explain this boundary; the next target is exact coarse pass-1
-  operand/formulation parity.
+  effects causally without a same-GPU repeat.  These broad controls did not
+  classify the boundary and motivated the exact coarse pass-1 capture below.
+- The exact coarse contribution capture now resolves this specific pair.
+  Reference, weight, and shifted-image operands agree below `7.11e-7`
+  relative L2.  The production cross-program candidate residual is
+  `-3.62396e-4`, while float64 arithmetic from the captured operands reduces
+  it to `+7.663e-6` direct and `+4.456e-6` decomposed.  The matched-prior
+  float32 replay envelope `[-2.3079e-4,+1.3542e-4]` spans the tie.  Classify
+  particle 1491 as numerical operand/reduction sensitivity, not a formulation
+  bug; do not generalize that conclusion to all particles.
 - Candidate `7ad2526d` remains unmerged: it does not fix the first cause, its
   earlier paired trajectory had no consistent FSC-AUC improvement, and it cost
   `4.58%` wall time.
@@ -2548,6 +2555,9 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_p1491_paired_a92c35ef_20260716_081502/analysis/p1491_coarse_boundary.json`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_p1491_paired_a92c35ef_20260716_081502/SCIENCE_COMPLETE.txt`.
+  The final replay seal is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/p1491_coarse_operand_replay_20260716_094000/analysis/FINAL_SEAL.json`
+  (SHA-256 `a4e559c3bc5a2f378d9f2af37ddb2e5348cf630afe529c2a0e736b742d37b274`).
 
 # 2026-07-16: aggregate iteration-2 differences do not isolate a subgroup
 
