@@ -13,6 +13,14 @@ def _set_relion_src(tmp_path, monkeypatch):
     return relion_src
 
 
+def _set_dispatch_capture_executable(tmp_path, monkeypatch):
+    executable = tmp_path / "relion_refine_mpi_dispatch_v2"
+    executable.write_text("#!/bin/sh\n# RELION_DISPATCH_LOG_SCHEMA_V2\nexit 0\n")
+    executable.chmod(0o755)
+    monkeypatch.setenv("EM_KCLASS_MATRIX_RELION_REFINE_MPI", str(executable))
+    return executable
+
+
 def test_default_cases_cover_all_available_cryobench_pdb_families():
     pdb_dirs = {case.pdb_dir for case in launcher.DEFAULT_CASES}
 
@@ -171,6 +179,9 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert "Queued-job Git provenance gate ok" in text
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_1_" in text
     assert "export RELION_DISPATCH_LOG" in text
+    assert "RELION_DISPATCH_LOG_SCHEMA_V2" in text
+    assert 'grep -aFq -- "${RELION_DISPATCH_SCHEMA_MARKER}"' in text
+    assert "legacy four-column range capture is rejected" in text
     assert "-m scripts.build_relion_dispatch_schedule" in text
     assert '--relion-dispatch-schedule "${RELION_DISPATCH_SCHEDULE}"' in text
 
@@ -256,7 +267,7 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     monkeypatch.setenv("SBATCH_PARTITION", "cryoem")
     monkeypatch.setenv("SBATCH_ACCOUNT", "gilles")
     monkeypatch.setenv("SBATCH_CONSTRAINT", "h100")
-    monkeypatch.setenv("EM_KCLASS_MATRIX_RELION_REFINE_MPI", "/bin/true")
+    _set_dispatch_capture_executable(tmp_path, monkeypatch)
     for name in (
         "EM_KCLASS_MATRIX_SETUP_PARTITION",
         "EM_KCLASS_MATRIX_SETUP_CONSTRAINT",
@@ -311,6 +322,32 @@ def test_main_fails_closed_without_dispatch_capture_relion(tmp_path, monkeypatch
 
     with pytest.raises(SystemExit, match="must name an absolute, executable RELION build"):
         launcher.main()
+
+
+def test_main_fails_closed_for_legacy_dispatch_capture_schema(tmp_path, monkeypatch):
+    _set_relion_src(tmp_path, monkeypatch)
+    executable = tmp_path / "legacy_relion_refine_mpi"
+    executable.write_text("#!/bin/sh\n# legacy four-column dispatch ranges\nexit 0\n")
+    executable.chmod(0o755)
+    monkeypatch.setenv("EM_KCLASS_MATRIX_RELION_REFINE_MPI", str(executable))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_em_kclass_robustness_matrix_slurm.py",
+            "--dry-run",
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--case",
+            "1",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="RELION_DISPATCH_LOG_SCHEMA_V2") as error:
+        launcher.main()
+
+    assert "five-column identity records" in str(error.value)
+    assert "legacy four-column range capture is rejected" in str(error.value)
 
 
 def test_main_fails_closed_without_relion_source(tmp_path, monkeypatch):
@@ -379,7 +416,7 @@ def test_seed_offset_renames_case_and_updates_generated_commands(tmp_path, monke
     )
     monkeypatch.setenv("SBATCH_PARTITION", "cryoem")
     monkeypatch.setenv("SBATCH_ACCOUNT", "gilles")
-    monkeypatch.setenv("EM_KCLASS_MATRIX_RELION_REFINE_MPI", "/bin/true")
+    _set_dispatch_capture_executable(tmp_path, monkeypatch)
 
     launcher.main()
 

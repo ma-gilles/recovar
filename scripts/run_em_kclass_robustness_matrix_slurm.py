@@ -29,6 +29,7 @@ DEFAULT_IGG_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/IgG-1D/pdbs")
 DEFAULT_TOMOTWIN_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/Tomotwin-100/pdbs")
 DEFAULT_IGG_RL_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/IgG-RL/pdbs")
 DEFAULT_RUNTIME_ROOT = Path("/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime")
+RELION_DISPATCH_LOG_SCHEMA_MARKER = b"RELION_DISPATCH_LOG_SCHEMA_V2"
 
 
 @dataclass(frozen=True)
@@ -474,6 +475,38 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _file_contains_marker(path: Path, marker: bytes) -> bool:
+    """Return whether *marker* occurs in *path* without loading the whole file."""
+
+    overlap = b""
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            candidate = overlap + chunk
+            if marker in candidate:
+                return True
+            overlap = candidate[-(len(marker) - 1) :] if len(marker) > 1 else b""
+    return False
+
+
+def validate_relion_dispatch_executable(value: str) -> Path:
+    """Validate that RELION can emit the v2 five-column dispatch capture."""
+
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise SystemExit(f"EM_KCLASS_MATRIX_RELION_REFINE_MPI must be absolute: {path}")
+    path = path.resolve()
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise SystemExit(f"EM_KCLASS_MATRIX_RELION_REFINE_MPI is not an executable file: {path}")
+    if not _file_contains_marker(path, RELION_DISPATCH_LOG_SCHEMA_MARKER):
+        marker = RELION_DISPATCH_LOG_SCHEMA_MARKER.decode("ascii")
+        raise SystemExit(
+            "EM_KCLASS_MATRIX_RELION_REFINE_MPI lacks required instrumentation marker "
+            f"{marker}: {path}. Strict K>1 parity requires RELION dispatch-log schema v2 "
+            "five-column identity records; legacy four-column range capture is rejected."
+        )
+    return path
+
+
 def audit_numbered_class_maps(
     *,
     recovar_intermediates_dir: Path,
@@ -908,6 +941,13 @@ RELION_DISPATCH_LOG="${{RELION_DIR}}/dispatch.tsv"
 RELION_DISPATCH_SCHEDULE="${{RELION_DIR}}/dispatch_schedule.npz"
 SUB_PDB_DIR="${{CASE_ROOT}}/pdbs_k{case.n_classes}"
 mkdir -p "${{CASE_ROOT}}" "${{DATA_DIR}}" "${{RECOVAR_DIR}}" "${{RECOVAR_INTERMEDIATES_DIR}}" "${{RELION_DIR}}" "${{SUB_PDB_DIR}}"
+
+RELION_DISPATCH_SCHEMA_MARKER={q(RELION_DISPATCH_LOG_SCHEMA_MARKER.decode("ascii"))}
+if ! LC_ALL=C grep -aFq -- "${{RELION_DISPATCH_SCHEMA_MARKER}}" {q(relion_refine_mpi)}; then
+  echo "ERROR: RELION dispatch-capture executable lacks required instrumentation marker ${{RELION_DISPATCH_SCHEMA_MARKER}}: {q(relion_refine_mpi)}" >&2
+  echo "Strict K>1 parity requires dispatch-log schema v2 five-column identity records; legacy four-column range capture is rejected." >&2
+  exit 2
+fi
 
 capture_physical_gpu_uuid() {{
   local gpu_token="${{SLURM_JOB_GPUS:-}}"
@@ -1383,9 +1423,7 @@ def main() -> int:
             "RELION build instrumented to honor RELION_DISPATCH_LOG; the stock binary "
             "cannot supply strict dynamic-dispatch parity."
         )
-    relion_refine_path = Path(relion_refine_mpi).expanduser().resolve()
-    if not relion_refine_path.is_file() or not os.access(relion_refine_path, os.X_OK):
-        raise SystemExit(f"EM_KCLASS_MATRIX_RELION_REFINE_MPI is not an executable file: {relion_refine_path}")
+    relion_refine_path = validate_relion_dispatch_executable(relion_refine_mpi)
     relion_refine_mpi = str(relion_refine_path)
     relion_mpi_ranks = int(os.environ.get("RELION_MPI_RANKS", "3"))
     relion_pool = int(os.environ.get("EM_KCLASS_MATRIX_RELION_POOL", "3"))
