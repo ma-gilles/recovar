@@ -664,6 +664,7 @@ def compute_pass2_stats_sparse(
     adaptive_fraction=0.999,
     use_perimage_reference=False,
     bpref_device_signature_active: bool = False,
+    bpref_class_index: int = 0,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -806,6 +807,7 @@ def compute_pass2_stats_sparse(
             relion_projector_r_max=relion_projector_r_max,
             adaptive_fraction=adaptive_fraction,
             bpref_device_signature_active=bpref_device_signature_active,
+            bpref_class_index=bpref_class_index,
         )
 
     if relion_projector_half is not None:

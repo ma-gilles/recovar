@@ -315,6 +315,17 @@ def test_valid_signature_and_panel_replay(tmp_path, capsys):
     assert '"status": "PASS"' in capsys.readouterr().out
 
 
+def test_panel_class_identity_mismatch_fails_closed(tmp_path):
+    signature, panel = _artifacts(tmp_path)
+    with np.load(panel, allow_pickle=False) as archive:
+        values = {key: archive[key] for key in archive.files}
+    values["class_index"] = np.int32(7)
+    _save(panel, values)
+
+    with pytest.raises(ValueError, match="panel/signature class_index mismatch"):
+        validator.main([str(signature), "--panel-native", str(panel)])
+
+
 def test_cross_engine_self_compare_is_exact(tmp_path, capsys):
     signature, panel = _artifacts(tmp_path)
 

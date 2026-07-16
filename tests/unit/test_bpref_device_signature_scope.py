@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -165,6 +166,64 @@ def test_scoped_device_capture_activates_only_bucket_with_target_rows():
         "shadow_only": False,
         "high_precision_operand_bundle": True,
     }
+
+
+def test_device_panel_flush_writes_separate_class_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID", "class-aware")
+    prefix = (1, 2, "class-aware")
+    common = {
+        "current_size": 4,
+        "max_r": 2.0,
+        "image_shape": (4, 4),
+        "volume_shape": (5, 5, 5),
+        "reconstruction_padding_factor": 2,
+        "source_stack_sha256": "a" * 64,
+        "rank": 0,
+        "causal_arm": "winner-take-all-per-particle-fused-xhalf",
+        "winner_take_all": True,
+    }
+    for class_index in (0, 3):
+        key = (*prefix, class_index)
+        sparse_pass2_bucketed._bpref_device_panel_accumulators[key] = (
+            np.zeros(75, dtype=np.complex64),
+            np.zeros(75, dtype=np.float32),
+        )
+        sparse_pass2_bucketed._bpref_device_panel_launch_counters[key] = class_index + 1
+        sparse_pass2_bucketed._bpref_device_panel_metadata[key] = {
+            **common,
+            "class_index": class_index,
+        }
+
+    sparse_pass2_bucketed.flush_bpref_device_panel_accumulator(iteration=1, half=2)
+
+    outputs = sorted(Path(tmp_path).glob("recovar_device_panel_native_*.npz"))
+    assert [path.name for path in outputs] == [
+        "recovar_device_panel_native_it001_h2_class001_rank000.npz",
+        "recovar_device_panel_native_it001_h2_class004_rank000.npz",
+    ]
+    assert [int(np.load(path)["class_index"]) for path in outputs] == [0, 3]
+
+
+def test_legacy_native_half_dump_remains_independent_of_class_index(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_RUN_ID", "native-control")
+    monkeypatch.setitem(sparse_pass2_bucketed._bpref_contribution_context, "iteration", 1)
+    monkeypatch.setitem(sparse_pass2_bucketed._bpref_contribution_context, "half", 1)
+
+    sparse_pass2_bucketed._maybe_dump_native_half_mstep(
+        np.zeros(4, dtype=np.complex64),
+        np.zeros(4, dtype=np.float32),
+        current_size=2,
+        n_images=1,
+        recon_volume_shape=(2, 2, 2),
+        stage="pre_x0",
+    )
+
+    outputs = list(Path(tmp_path).glob("native_half_mstep_*.npz"))
+    assert len(outputs) == 1
+    with np.load(outputs[0]) as artifact:
+        assert artifact["run_id"] == "native-control"
 
 
 def test_scoped_soft_row_gate_ignores_unrelated_zero_and_multiple_rows():
