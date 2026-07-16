@@ -104,6 +104,9 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _compute_sparse_pass2_projections_block,
     _compute_sparse_pass2_windowed_projections_block,
     _compact_pair_hybrid_threshold_reports,
+    _exact_raw_diff2_cache_estimated_bytes,
+    _exact_raw_diff2_cache_fits_budget,
+    _exact_raw_diff2_cache_limit_bytes,
     _flat_image_indices_for_rotation_rows,
     _hybrid_k_class_compact_pair_execution_buckets,
     _validate_k_class_execution_bucket_partition,
@@ -5585,6 +5588,24 @@ def test_sparse_pass2_device_memory_probe_honors_visible_device():
     assert _nvidia_smi_visible_device_memory_bytes(smi_output, None) == 40960 * 1024**2
 
 
+def test_exact_raw_diff2_cache_budget_admission_and_fallback():
+    gib = 1024**3
+    mib = 1024**2
+
+    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 40 * gib) == 512 * mib
+    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 1 * gib) == 256 * mib
+    assert _exact_raw_diff2_cache_limit_bytes(None, 40 * gib) == 0
+    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, None) == 0
+    assert _exact_raw_diff2_cache_limit_bytes(0, 40 * gib) == 0
+    assert _exact_raw_diff2_cache_limit_bytes(80 * gib, 0) == 0
+
+    estimated = _exact_raw_diff2_cache_estimated_bytes(2, 131_072, 116)
+    assert estimated == 116 * mib
+    assert _exact_raw_diff2_cache_fits_budget(estimated, estimated)
+    assert not _exact_raw_diff2_cache_fits_budget(estimated + 4, estimated)
+    assert not _exact_raw_diff2_cache_fits_budget(0, estimated)
+
+
 def test_half_translation_phase_table_matches_generic_translate_images():
     rng = np.random.default_rng(13)
     image_shape = (16, 16)
@@ -6479,6 +6500,76 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(monkeypa
         rtol=1e-4,
         atol=1e-4,
     )
+
+
+def test_exact_raw_diff2_cache_matches_fallback_bitwise_and_removes_recompute(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", "512")
+    monkeypatch.delenv("RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN", raising=False)
+    monkeypatch.delenv("RECOVAR_PASS2_DUMP_DIR", raising=False)
+    monkeypatch.setattr(bucketed_mod, "_projection_cache_fits_budget", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(bucketed_mod, "_device_memory_limit_bytes", lambda: 80 * 1024**3)
+
+    n_images = 2
+    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 8, axis=0)
+    fine_translations = np.asarray(
+        [[0.25 * x, float(y)] for y in range(2) for x in range(4)],
+        dtype=np.float32,
+    )
+    common = dict(
+        experiment_dataset=MockDataset(n_images=n_images, seed=1301),
+        volume=_hermitian_volume(VOLUME_SHAPE, seed=1303),
+        mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0,
+        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        translations=jnp.array([[0.0, 0.0], [1.0, 0.0]], dtype=jnp.float32),
+        significant_sample_indices=[
+            np.asarray([parent * 2 + image_idx for parent in range(8)], dtype=np.int32)
+            for image_idx in range(n_images)
+        ],
+        nside_level=1,
+        disc_type="linear_interp",
+        oversampling_order=1,
+        current_size=4,
+        return_stats=True,
+        return_score_log_z=True,
+        accumulate_noise=False,
+        half_spectrum_scoring=True,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=np.arange(8, dtype=np.int64),
+        fine_translations_override=fine_translations,
+        fine_translation_parent_override=np.repeat(np.arange(2, dtype=np.int32), 4),
+    )
+
+    combined_score_calls = 0
+    original_combined_score = bucketed_mod._score_pass2_bucket_relion_gpu_diff2
+
+    def count_combined_score_calls(*args, **kwargs):
+        nonlocal combined_score_calls
+        combined_score_calls += 1
+        return original_combined_score(*args, **kwargs)
+
+    monkeypatch.setattr(
+        bucketed_mod,
+        "_score_pass2_bucket_relion_gpu_diff2",
+        count_combined_score_calls,
+    )
+    monkeypatch.setattr(bucketed_mod, "_device_free_memory_bytes", lambda: None)
+    fallback = compute_pass2_stats_sparse(**common)
+    fallback_combined_score_calls = combined_score_calls
+
+    combined_score_calls = 0
+    monkeypatch.setattr(bucketed_mod, "_device_free_memory_bytes", lambda: 40 * 1024**3)
+    cached = compute_pass2_stats_sparse(**common)
+    cached_combined_score_calls = combined_score_calls
+
+    assert cached_combined_score_calls < fallback_combined_score_calls
+    fallback_leaves = jax.tree_util.tree_leaves(fallback)
+    cached_leaves = jax.tree_util.tree_leaves(cached)
+    assert len(cached_leaves) == len(fallback_leaves)
+    for cached_leaf, fallback_leaf in zip(cached_leaves, fallback_leaves, strict=True):
+        np.testing.assert_array_equal(np.asarray(cached_leaf), np.asarray(fallback_leaf))
 
 
 def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonmatching_dump(monkeypatch, tmp_path):

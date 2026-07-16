@@ -147,6 +147,9 @@ _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE = 4096
 _DEFAULT_PROJECTION_GATHER_MAX_BYTES = 1024 * 1024**2
 _DEFAULT_NOISE_BLOCK_MAX_BYTES = 512 * 1024**2
 _DEFAULT_ADJOINT_BLOCK_MAX_BYTES = 512 * 1024**2
+_EXACT_RAW_DIFF2_CACHE_MAX_BYTES = 512 * 1024**2
+_EXACT_RAW_DIFF2_CACHE_DEVICE_FRACTION = 0.01
+_EXACT_RAW_DIFF2_CACHE_FREE_FRACTION = 0.25
 _MAX_HYPOTHESES_ENV = "RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES"
 _SCORE_ONLY_MAX_HYPOTHESES_ENV = "RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES"
 _MAX_TRANSLATION_TILE_BYTES_ENV = "RECOVAR_SPARSE_PASS2_MAX_TRANSLATION_TILE_BYTES"
@@ -2824,6 +2827,68 @@ def _device_memory_limit_bytes() -> int | None:
     return None
 
 
+def _device_free_memory_bytes() -> int | None:
+    """Return current free memory for the selected physical GPU, if known."""
+
+    try:
+        query = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,uuid,memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+        if query.returncode == 0:
+            return _nvidia_smi_visible_device_memory_bytes(
+                query.stdout,
+                os.environ.get("CUDA_VISIBLE_DEVICES"),
+            )
+    except Exception:
+        pass
+    return None
+
+
+def _exact_raw_diff2_cache_limit_bytes(
+    device_memory_bytes: int | None,
+    free_device_memory_bytes: int | None,
+) -> int:
+    """Return the strict per-bucket cap for exact fine-score reuse."""
+
+    if (
+        device_memory_bytes is None
+        or free_device_memory_bytes is None
+        or int(device_memory_bytes) <= 0
+        or int(free_device_memory_bytes) <= 0
+    ):
+        return 0
+    return min(
+        _EXACT_RAW_DIFF2_CACHE_MAX_BYTES,
+        int(int(device_memory_bytes) * _EXACT_RAW_DIFF2_CACHE_DEVICE_FRACTION),
+        int(int(free_device_memory_bytes) * _EXACT_RAW_DIFF2_CACHE_FREE_FRACTION),
+    )
+
+
+def _exact_raw_diff2_cache_estimated_bytes(
+    batch_size: int,
+    bucket_size: int,
+    n_fine_translations: int,
+) -> int:
+    return (
+        int(batch_size)
+        * int(bucket_size)
+        * int(n_fine_translations)
+        * np.dtype(np.float32).itemsize
+    )
+
+
+def _exact_raw_diff2_cache_fits_budget(estimated_bytes: int, cache_limit_bytes: int) -> bool:
+    return int(estimated_bytes) > 0 and int(estimated_bytes) <= int(cache_limit_bytes)
+
+
 def _dtype_itemsize(dtype) -> int:
     return int(np.dtype(dtype).itemsize)
 
@@ -5138,6 +5203,25 @@ def _score_pass2_bucket_relion_gpu_diff2_raw(
     if highres_xi2_half is not None:
         diff2 = diff2 + jnp.asarray(highres_xi2_half, dtype=jnp.float32)[:, None, None]
     return diff2
+
+
+@jax.jit
+def _score_pass2_bucket_relion_gpu_diff2_from_raw(
+    diff2,
+    rotation_log_prior,
+    translation_log_prior,
+    candidate_mask,
+    min_diff2,
+):
+    """Convert retained raw costs with the same jitted exact score arithmetic."""
+
+    return _relion_cuda_fine_diff2_to_scores(
+        diff2,
+        rotation_log_prior[:, :, None],
+        translation_log_prior[:, None, :],
+        candidate_mask,
+        min_diff2=min_diff2,
+    )
 
 
 @jax.jit
@@ -8122,6 +8206,24 @@ def compute_pass2_stats_sparse_bucketed(
             int(n_fine_trans),
         )
 
+    exact_raw_diff2_cache_limit_bytes = 0
+    exact_raw_diff2_cache_admission_logged = False
+    if use_exact_relion_gaussian:
+        free_device_memory_bytes = _device_free_memory_bytes()
+        exact_raw_diff2_cache_limit_bytes = _exact_raw_diff2_cache_limit_bytes(
+            device_memory_bytes,
+            free_device_memory_bytes,
+        )
+        logger.info(
+            "Sparse pass-2 exact raw-diff2 reuse cap: %.2f MiB "
+            "(device=%.2f GiB free=%s)",
+            exact_raw_diff2_cache_limit_bytes / float(1024**2),
+            0.0 if device_memory_bytes is None else device_memory_bytes / float(1024**3),
+            "unknown"
+            if free_device_memory_bytes is None
+            else f"{free_device_memory_bytes / float(1024**3):.2f} GiB",
+        )
+
     bucket_group_stats = _bucket_group_stats(buckets)
     last_bucket_size_logged = None
     group_t0 = None
@@ -8617,7 +8719,29 @@ def compute_pass2_stats_sparse_bucketed(
             global_best_log_score = jnp.full((batch,), -jnp.inf, dtype=jnp.float64)
             global_best_argmax = jnp.zeros((batch,), dtype=jnp.int32)
             global_min_diff2 = None
+            cached_raw_diff2_chunks = None
             if use_exact_relion_gaussian:
+                raw_diff2_cache_bytes = _exact_raw_diff2_cache_estimated_bytes(
+                    batch,
+                    bucket_size,
+                    n_fine_trans,
+                )
+                if _exact_raw_diff2_cache_fits_budget(
+                    raw_diff2_cache_bytes,
+                    exact_raw_diff2_cache_limit_bytes,
+                ):
+                    cached_raw_diff2_chunks = []
+                    if not exact_raw_diff2_cache_admission_logged:
+                        logger.info(
+                            "Sparse pass-2 exact raw-diff2 reuse enabled: "
+                            "estimated=%.2f MiB cap=%.2f MiB bucket_size=%d batch=%d chunks=%d",
+                            raw_diff2_cache_bytes / float(1024**2),
+                            exact_raw_diff2_cache_limit_bytes / float(1024**2),
+                            bucket_size,
+                            batch,
+                            len(chunk_ranges),
+                        )
+                        exact_raw_diff2_cache_admission_logged = True
                 global_min_diff2 = jnp.full((batch,), jnp.inf, dtype=jnp.float32)
                 for start, stop in chunk_ranges:
                     raw_diff2_chunk = _score_rotation_chunk(
@@ -8631,19 +8755,32 @@ def compute_pass2_stats_sparse_bucketed(
                         jnp.asarray(candidate_mask[:, start:stop, :]),
                     )
                     global_min_diff2 = jnp.minimum(global_min_diff2, chunk_min)
-                    del raw_diff2_chunk
+                    if cached_raw_diff2_chunks is None:
+                        del raw_diff2_chunk
+                    else:
+                        cached_raw_diff2_chunks.append(raw_diff2_chunk)
                 global_min_diff2 = jnp.where(
                     jnp.isfinite(global_min_diff2),
                     global_min_diff2,
                     jnp.asarray(0.0, dtype=jnp.float32),
                 )
-            for start, stop in chunk_ranges:
-                scores_chunk = _score_rotation_chunk(
-                    start,
-                    stop,
-                    need_recon=False,
-                    min_diff2=global_min_diff2,
-                )[0]
+            for chunk_idx, (start, stop) in enumerate(chunk_ranges):
+                if cached_raw_diff2_chunks is None:
+                    scores_chunk = _score_rotation_chunk(
+                        start,
+                        stop,
+                        need_recon=False,
+                        min_diff2=global_min_diff2,
+                    )[0]
+                else:
+                    scores_chunk = _score_pass2_bucket_relion_gpu_diff2_from_raw(
+                        cached_raw_diff2_chunks[chunk_idx],
+                        jnp.asarray(log_prior[:, start:stop]),
+                        bucket_translation_prior,
+                        jnp.asarray(candidate_mask[:, start:stop, :]),
+                        global_min_diff2,
+                    )
+                    cached_raw_diff2_chunks[chunk_idx] = None
                 chunk_log_z, chunk_best_log_score, chunk_best_argmax, _ = _normalize_pass2_bucket_score_only(
                     scores_chunk,
                 )
@@ -8659,6 +8796,7 @@ def compute_pass2_stats_sparse_bucketed(
                 global_best_argmax = jnp.where(take_chunk_best, chunk_global_argmax, global_best_argmax)
                 global_log_z = jnp.logaddexp(global_log_z, chunk_log_z.astype(global_log_z.dtype))
                 del scores_chunk
+            del cached_raw_diff2_chunks
 
             score_log_offset_jax = (
                 _relion_cuda_fine_log_evidence_offset(global_min_diff2).astype(jnp.float64)

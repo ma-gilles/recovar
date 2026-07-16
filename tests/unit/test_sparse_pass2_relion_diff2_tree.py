@@ -23,6 +23,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_tree_sum,
     _relion_cuda_powerclass_highres_xi2_half,
     _score_pass2_bucket_relion_gpu_diff2,
+    _score_pass2_bucket_relion_gpu_diff2_from_raw,
     _score_pass2_bucket_relion_gpu_diff2_raw,
     _score_pass2_bucket_relion_gpu_diff2_single_cached,
     _score_pass2_bucket_relion_gpu_diff2_single_cached_raw,
@@ -213,6 +214,48 @@ def test_relion_cuda_fine_raw_routes_add_powerclass_tail_once_per_hypothesis():
     np.testing.assert_array_equal(dense, np.full((1, 3, 2), expected, dtype=np.float32))
     np.testing.assert_array_equal(cached, dense[0])
     np.testing.assert_array_equal(pairs, np.full((1, 3), expected, dtype=np.float32))
+
+
+def test_relion_cuda_fine_retained_raw_conversion_matches_recompute_bitwise():
+    rng = np.random.default_rng(12131)
+    shifted = jnp.asarray(
+        (rng.normal(size=(2, 4, 17)) + 1j * rng.normal(size=(2, 4, 17))).astype(np.complex64)
+    )
+    projection = jnp.asarray(
+        (rng.normal(size=(2, 5, 17)) + 1j * rng.normal(size=(2, 5, 17))).astype(np.complex64)
+    )
+    corr = jnp.asarray(rng.uniform(0.2, 2.0, size=(2, 17)), dtype=jnp.float32)
+    half_weight = jnp.asarray(rng.choice([1.0, 2.0], size=17), dtype=jnp.float32)
+    rotation_prior = jnp.asarray(rng.normal(size=(2, 5)), dtype=jnp.float32)
+    translation_prior = jnp.asarray(rng.normal(size=(2, 4)), dtype=jnp.float32)
+    candidate_mask = jnp.asarray(rng.random(size=(2, 5, 4)) > 0.2)
+
+    raw = _score_pass2_bucket_relion_gpu_diff2_raw(
+        shifted,
+        corr,
+        projection,
+        half_weight,
+    )
+    common_min = _relion_cuda_fine_diff2_min(raw, candidate_mask)
+    retained_scores = _score_pass2_bucket_relion_gpu_diff2_from_raw(
+        raw,
+        rotation_prior,
+        translation_prior,
+        candidate_mask,
+        common_min,
+    )
+    recomputed_scores = _score_pass2_bucket_relion_gpu_diff2(
+        shifted,
+        corr,
+        projection,
+        half_weight,
+        rotation_prior,
+        translation_prior,
+        candidate_mask,
+        min_diff2=common_min,
+    )
+
+    np.testing.assert_array_equal(np.asarray(retained_scores), np.asarray(recomputed_scores))
 
 
 def test_relion_cuda_fine_conversion_uses_common_min_and_source_operation_order():
