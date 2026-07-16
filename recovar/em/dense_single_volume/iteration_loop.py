@@ -1648,6 +1648,7 @@ def _score_kclass_firstiter_cc_pass2(
     log_label: str = "",
     update_em_kwargs_image_batch_size: bool = False,
     bpref_device_signature_active: bool = False,
+    debug_iteration: int | None = None,
 ):
     """RELION iter-1 ``--firstiter_cc`` K-class adaptive 2-pass dispatch.
 
@@ -1801,6 +1802,7 @@ def _score_kclass_firstiter_cc_pass2(
         oversampling_order=int(adaptive_os_local),
         fine_mstep_rotations_override=(fine_mstep_rot if firstiter_sparse_pass2 else None),
         bpref_device_signature_active=bpref_device_signature_active,
+        debug_iteration=debug_iteration,
         **extra,
         **firstiter_em_kwargs,
     )
@@ -1965,6 +1967,7 @@ def _score_half_dense(
     relion_projector_r_max: int | None = None,
     return_best_pose_details: bool = True,
     bpref_device_signature_active: bool = False,
+    debug_iteration: int | None = None,
 ) -> HalfScoreResult:
     """Dense (non-local-search) E+M scoring for one half-set.
 
@@ -2082,6 +2085,7 @@ def _score_half_dense(
                 log_label=firstiter_log_label,
                 update_em_kwargs_image_batch_size=firstiter_updates_em_kwargs_ibs,
                 bpref_device_signature_active=bpref_device_signature_active,
+                debug_iteration=debug_iteration,
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
         elif firstiter_coarse_current_size is not None and int(state.adaptive_oversampling) > 0:
@@ -2173,6 +2177,7 @@ def _score_half_dense(
                 fine_mstep_rotations_override=(fine_mstep_rot if kclass_sparse_pass2 else None),
                 return_best_pose_details=return_best_pose_details,
                 bpref_device_signature_active=bpref_device_signature_active,
+                debug_iteration=debug_iteration,
                 **adaptive_em_kwargs,
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
@@ -2358,6 +2363,7 @@ def _score_half_dense(
                 fine_mstep_rotations_override=(fine_mstep_rot if k1_sparse_pass2 else None),
                 return_best_pose_details=return_best_pose_details,
                 bpref_device_signature_active=bpref_device_signature_active,
+                debug_iteration=debug_iteration,
                 **adaptive_em_kwargs,
             )
         ha_k = np.asarray(k1_adaptive_result.pose_assignments, dtype=np.int32)
@@ -5837,6 +5843,7 @@ def _run_relion_iteration_loop(
                     firstiter_updates_em_kwargs_ibs=True,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
+                    debug_iteration=iteration + 1,
                 )
                 ha_k = adaptive_result.ha
                 Ft_y_k = adaptive_result.Ft_y
@@ -5900,6 +5907,7 @@ def _run_relion_iteration_loop(
                     best_pose_translations=best_pose_translations,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
+                    debug_iteration=iteration + 1,
                 )
                 ha_k = single_pass_result.ha
                 Ft_y_k = single_pass_result.Ft_y
@@ -8621,6 +8629,7 @@ def _run_relion_iteration_loop(
                 firstiter_log_label="final all-data ",
                 firstiter_updates_em_kwargs_ibs=True,
                 return_best_pose_details=not k_class_enabled,
+                debug_iteration=final_sampling_relion_iteration,
             )
         if final_result.best_pose_translations is not None:
             final_result.best_pose_translations = _relion_metadata_translations(

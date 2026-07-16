@@ -356,6 +356,24 @@ def test_kclass_dump_call_site_passes_operand_kwargs():
     )
 
 
+def test_kclass_significance_dump_threads_one_based_iteration():
+    assert "debug_iteration" in inspect.signature(iteration_loop._score_half_dense).parameters
+    assert "debug_iteration" in inspect.signature(
+        k_class_mod.run_dense_k_class_em_adaptive
+    ).parameters
+    assert "debug_iteration" in inspect.signature(
+        sig_mod._compute_k_class_significance_batched
+    ).parameters
+    loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    score_source = inspect.getsource(iteration_loop._score_half_dense)
+    adaptive_source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
+    significance_source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
+    assert "debug_iteration=iteration + 1" in loop_source
+    assert score_source.count("debug_iteration=debug_iteration") >= 3
+    assert adaptive_source.count("debug_iteration=debug_iteration") >= 1
+    assert "debug_iteration=debug_iteration" in significance_source
+
+
 def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     """End-to-end behavioral test: a one-particle invocation of
     ``_maybe_dump_k_class_significance_batch`` with operands set writes
@@ -402,6 +420,7 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     dump_dir.mkdir()
     monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_DIR", str(dump_dir))
     monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES", "42")
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ITERATION", "2")
     sig_mod._maybe_dump_k_class_significance_batch(
         experiment_dataset=experiment_dataset,
         indices=indices,
@@ -427,9 +446,10 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
         ctf2_data=ctf2_data,
         window_indices=window_indices,
         half_weights_used=half_weights_used,
+        debug_iteration=2,
     )
     files = sorted(os.listdir(dump_dir))
-    assert files, "Dump helper failed to write any npz files"
+    assert files == ["significance_orig000042_it002_cs014.npz"]
     payload = np.load(dump_dir / files[0])
     for name in ("shifted_data", "ctf2_data", "window_indices", "half_weights"):
         assert name in payload.files, f"Dump npz is missing schema field {name!r}"
@@ -442,6 +462,41 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     assert int(payload["n_classes"]) == n_classes
     assert int(payload["n_rot"]) == n_rot
     assert int(payload["n_trans"]) == n_trans
+    assert int(payload["debug_iteration"]) == 2
+    assert int(payload["one_based_iteration"]) == 2
+
+
+def test_kclass_significance_dump_iteration_gate_suppresses_other_iterations(monkeypatch, tmp_path):
+    dump_dir = tmp_path / "dump"
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_DIR", str(dump_dir))
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES", "42")
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ITERATION", "2")
+
+    sig_mod._maybe_dump_k_class_significance_batch(
+        experiment_dataset=None,
+        indices=None,
+        n_classes=1,
+        rotations=None,
+        translations=None,
+        class_weight_mats=None,
+        batch_sig_mask=None,
+        batch_n_sig=None,
+        hard_assignment_batch=None,
+        class_assignment_batch=None,
+        global_log_z=None,
+        class_log_z_values=None,
+        best_score=None,
+        max_posterior=None,
+        rotation_log_prior_padded=None,
+        batch_translation_log_prior=None,
+        class_log_priors=None,
+        current_size=14,
+        adaptive_fraction=0.999,
+        max_significants=-1,
+        debug_iteration=1,
+    )
+
+    assert not dump_dir.exists()
 
 
 def test_kclass_significance_dump_uses_original_index_mapper(monkeypatch, tmp_path):

@@ -1432,6 +1432,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         score_mode="normalized_cc",
         collect_significance=bool(os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR")),
         return_class_best=True,
+        debug_iteration=engine_kwargs.get("debug_iteration"),
     )[-1]
 
     class_log_evidence = np.asarray(full_stats["class_log_evidence_per_image"], dtype=np.float64)
@@ -2665,6 +2666,7 @@ def run_dense_k_class_em_adaptive(
     fine_mstep_rotations_override=None,
     return_best_pose_details: bool = False,
     bpref_device_signature_active: bool = False,
+    debug_iteration: int | None = None,
     **engine_kwargs,
 ) -> KClassEMResult:
     """K-class adaptive 2-pass EM: coarse pass-1 significance + fine pass-2 masked.
@@ -2825,6 +2827,7 @@ def run_dense_k_class_em_adaptive(
         coarse_probe_kwargs["current_size"] = (
             coarse_current_size if coarse_current_size is not None else fine_current_size
         )
+        coarse_probe_kwargs["debug_iteration"] = debug_iteration
         with _DenseScoreDumpPhaseLabel("coarse"):
             with nvtx.annotate("kclass.adaptive.coarse_probe", color="yellow", domain=NVTX_DOMAIN_EM):
                 coarse_result = _run_dense_k_class_score_probe(
@@ -2882,6 +2885,7 @@ def run_dense_k_class_em_adaptive(
             relion_projector_half=relion_projector_half,
             relion_projector_r_max=relion_projector_r_max,
             relion_projector_texture_interp=coarse_relion_projector_texture_interp,
+            debug_iteration=debug_iteration,
         )
 
         with nvtx.annotate("kclass.adaptive.significance", color="orange", domain=NVTX_DOMAIN_EM):

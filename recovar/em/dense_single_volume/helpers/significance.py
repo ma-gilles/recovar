@@ -303,6 +303,7 @@ def _maybe_dump_significance_batch(
     batch_norm=None,
     window_indices=None,
     half_weights_used=None,
+    debug_iteration=None,
 ):
     """Env-gated debug dump for RELION pass-1 significance parity."""
     import os
@@ -316,6 +317,11 @@ def _maybe_dump_significance_batch(
     target_current_size = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE")
     if target_current_size:
         if current_size is None or int(current_size) != int(target_current_size):
+            return
+    target_iteration = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_ITERATION")
+    if target_iteration:
+        # Iteration identifiers follow RELION's one-based numbered STAR files.
+        if debug_iteration is None or int(debug_iteration) != int(target_iteration):
             return
 
     local_indices = np.asarray(indices, dtype=np.int64)
@@ -350,14 +356,18 @@ def _maybe_dump_significance_batch(
             ctf2_target = ctf2_arr[image_rows]
         else:
             ctf2_target = None
+        iteration_suffix = "" if not target_iteration else f"_it{int(debug_iteration):03d}"
         out_path = os.path.join(
             dump_dir,
-            f"significance_orig{int(original_idx):06d}_cs{(-1 if current_size is None else int(current_size)):03d}.npz",
+            f"significance_orig{int(original_idx):06d}{iteration_suffix}_cs"
+            f"{(-1 if current_size is None else int(current_size)):03d}.npz",
         )
         np.savez_compressed(
             out_path,
             original_index=np.int64(original_idx),
             local_index=np.int64(local_indices[local_pos]),
+            debug_iteration=np.int64(-1 if debug_iteration is None else int(debug_iteration)),
+            one_based_iteration=np.int64(-1 if debug_iteration is None else int(debug_iteration)),
             current_size=np.int64(-1 if current_size is None else int(current_size)),
             adaptive_fraction=np.float64(adaptive_fraction),
             max_significants=np.int64(max_significants),
@@ -452,6 +462,7 @@ def _maybe_dump_k_class_significance_batch(
     ctf2_data=None,
     window_indices=None,
     half_weights_used=None,
+    debug_iteration=None,
 ):
     """Env-gated debug dump for the K-class significance pass.
 
@@ -469,6 +480,11 @@ def _maybe_dump_k_class_significance_batch(
     target_current_size = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE")
     if target_current_size:
         if current_size is None or int(current_size) != int(target_current_size):
+            return
+    target_iteration = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_ITERATION")
+    if target_iteration:
+        # Iteration identifiers follow RELION's one-based numbered STAR files.
+        if debug_iteration is None or int(debug_iteration) != int(target_iteration):
             return
 
     local_indices = np.asarray(indices, dtype=np.int64)
@@ -549,13 +565,17 @@ def _maybe_dump_k_class_significance_batch(
                 else ctf2_arr[image_rows]
             )
 
+        iteration_suffix = "" if not target_iteration else f"_it{int(debug_iteration):03d}"
         out_path = os.path.join(
             dump_dir,
-            f"significance_orig{int(original_idx):06d}_cs{(-1 if current_size is None else int(current_size)):03d}.npz",
+            f"significance_orig{int(original_idx):06d}{iteration_suffix}_cs"
+            f"{(-1 if current_size is None else int(current_size)):03d}.npz",
         )
         save_kwargs = dict(
             original_index=np.int64(original_idx),
             local_index=np.int64(local_indices[local_pos]),
+            debug_iteration=np.int64(-1 if debug_iteration is None else int(debug_iteration)),
+            one_based_iteration=np.int64(-1 if debug_iteration is None else int(debug_iteration)),
             current_size=np.int64(-1 if current_size is None else int(current_size)),
             adaptive_fraction=np.float64(adaptive_fraction),
             max_significants=np.int64(max_significants),
@@ -1311,6 +1331,7 @@ def _compute_k_class_significance_batched(
     score_mode: str = "gaussian",
     collect_significance: bool = True,
     return_class_best: bool = False,
+    debug_iteration: int | None = None,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
 
@@ -2064,6 +2085,7 @@ def _compute_k_class_significance_batched(
                 ctf2_data=ctf2_data,
                 window_indices=window_indices,
                 half_weights_used=half_weights_windowed if use_window else half_weights,
+                debug_iteration=debug_iteration,
             )
 
         if collect_significance:
