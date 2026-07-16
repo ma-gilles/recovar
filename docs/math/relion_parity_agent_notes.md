@@ -2608,3 +2608,59 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_current_65d2c3f1_20260716_091500/`
   (case jobs `11264619--11264626`, summary `11264627`, trajectory audit
   `11265312`).
+
+# 2026-07-16: real-10076 differences exceed the observed RELION repeat scale
+
+- In all 48 calibrated iteration-1--16 half1/half2/merged comparisons, the
+  RECOVAR-versus-RELION FSC-AUC deficit exceeds the single observed
+  RELION-versus-RELION repeat deficit.  This is not strict trajectory parity,
+  although iteration-1 absolute FSC-AUC remains at least `0.9999999545`.
+- Iteration-1 particle 8494 is closed as a one-float32-ULP coarse tie; it does
+  not support a fine-scorer bug.  Iteration-2 particle 8240 is different: one
+  coarse `0.999`-support swap creates 32 different fine descendants and the
+  RELION-only branch holds `0.0777750465` posterior mass.
+- Same-GPU complex128/float64 source scoring preserves RECOVAR's p8240
+  support.  Geometry, priors, fine reduction, and ordinary float32 reduction
+  precision are ruled out; upstream operand generation versus coarse score
+  formulation remains unresolved.
+- The compared and control pairs are each same-physical-A100, but the pairs
+  used different UUIDs.  Treat the control as an empirical same-model scale,
+  not a confidence interval.  Do not gate iterations 17--18 or final maps
+  against it because the control trajectories terminate differently.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/real10076_control_envelope_adjudication_v1.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/analysis/p8240_boundary.json`.
+
+# 2026-07-16: provisional incoming-reference K=4 case-8 discriminator
+
+- A serial A/B in one single-GPU Slurm allocation changes only the incoming
+  iteration-4 reference.
+  Class-2 iteration-5 direct FSC-AUC rises from `0.9782348744` to
+  `0.9999999957`; the GT FSC-AUC delta contracts from `-4.7261e-6` to
+  `-1.6119e-8`.
+- The substituted arm has exact class agreement and no iteration-5 support
+  count differences.  The visible cliff is inherited map-state amplification,
+  not an iteration-5 E/M formulation error.  The earlier source remains open.
+- The report's stated fail-closed UUID policy is invalid: its captured value is
+  `Nodeviceswerefound`.  Treat this discriminator as provisional until the
+  regex-hardened UUID repeat completes.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_it5_relref_ab_03c0969b_20260716_124414/analysis/ab_summary.json`
+  (SHA-256 `8cbccfecba7eeaebdf6a13aa7c9142d8e357e6f6132bd8a48b1b49cdc3203458`).
+
+# 2026-07-16: K=1 local runs recorded the wrong pass's significant count
+
+- RELION's `_rlnNrOfSignificantSamples` is the first/coarse-pass count.
+  RECOVAR serialized the fine M-step support count after local search began,
+  causing 2,691/3,000 count differences at iteration 4 and a mean absolute
+  error of `75.834` by iteration 10.
+- Production now returns the parent-pass count for trajectory serialization
+  and the approximate-accuracy diagnostic.  Fine support still controls all
+  M-step arrays and statistics; the change is not a support or map-quality
+  intervention.
+- Focused CPU tests pass, including a parent `[2,3]` versus fine `[17,19]`
+  behavioral discriminator.  Require a trajectory replay before closing the
+  boundary.
+- Discovery artifact:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_serialization_2e40e614_20260716_130500/cases/11_small_baseline_3k_g128_white_noise1_bf80/trajectory_analysis/particle_state_distribution_full.json`.

@@ -204,11 +204,12 @@ def test_k1_local_parent_probe_applies_relion_max_significants_cap():
     score_source = inspect.getsource(iteration_loop._score_half_local)
     parent_call = score_source[
         score_source.index("parent_outputs = _run_local_search_iteration") : score_source.index(
-            "parent_profile = parent_outputs[-1]"
+            "parent_profile = parent_outputs[-2]"
         )
     ]
     assert "max_significants=max_significants" in parent_call
     assert "apply_max_significants_to_support=True" in parent_call
+    assert "return_significant_counts=True" in parent_call
 
     wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
     assert "apply_max_significants_to_support=False" in wrapper_source
@@ -332,6 +333,147 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
     np.testing.assert_array_equal(result.significant_counts, np.array([7], dtype=np.int32))
     assert result.mstep_full_half_axis == 0
     assert result.mstep_accumulator_shape == (19, 19, 19)
+
+
+def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monkeypatch):
+    parent_counts = np.array([2, 3], dtype=np.int32)
+    fine_counts = np.array([17, 19], dtype=np.int32)
+    best_rotation = np.array(
+        [
+            [0.93629336, -0.27509585, 0.21835066],
+            [0.28962948, 0.95642509, -0.03695701],
+            [-0.19866933, 0.09784340, 0.97517033],
+        ],
+        dtype=np.float32,
+    )
+    calls = []
+
+    class _Stats:
+        max_posterior_per_image = np.array([0.75, 0.5], dtype=np.float32)
+        rotation_posterior_sums = np.array([1.0, 1.0], dtype=np.float32)
+
+    parent_layout = SimpleNamespace(
+        rotation_counts=np.array([2, 2], dtype=np.int32),
+        rotation_offsets=np.array([0, 2, 4], dtype=np.int64),
+        sample_mask_flat=None,
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+    )
+    fine_layout = SimpleNamespace(
+        rotation_counts=np.array([2, 2], dtype=np.int32),
+        rotation_offsets=np.array([0, 2, 4], dtype=np.int64),
+        sample_mask_flat=None,
+        translation_grid=np.zeros((4, 2), dtype=np.float32),
+    )
+
+    def fake_run_local_search_iteration(*_args, **kwargs):
+        calls.append(dict(kwargs))
+        if kwargs["score_only"]:
+            return (
+                "parent_ft_y",
+                "parent_ft_ctf",
+                np.zeros(2, dtype=np.int32),
+                _Stats(),
+                {
+                    "reconstruction_sample_indices_by_image": (
+                        np.array([0, 1], dtype=np.int64),
+                        np.array([0, 1, 2], dtype=np.int64),
+                    ),
+                },
+                parent_counts,
+            )
+        return (
+            "fine_ft_y",
+            "fine_ft_ctf",
+            np.array([4, 5], dtype=np.int32),
+            np.broadcast_to(best_rotation, (2, 3, 3)).copy(),
+            np.zeros((2, 2), dtype=np.float32),
+            np.array([0, 1], dtype=np.int32),
+            _Stats(),
+            "fine_noise",
+            fine_counts,
+        )
+
+    monkeypatch.setattr(iteration_loop, "build_local_search_grid_metadata", lambda _order: {})
+    monkeypatch.setattr(iteration_loop, "build_local_hypothesis_layout", lambda *_args, **_kwargs: parent_layout)
+    monkeypatch.setattr(
+        iteration_loop,
+        "build_local_adaptive_pass2_hypothesis_layout",
+        lambda *_args, **_kwargs: fine_layout,
+    )
+    monkeypatch.setattr(iteration_loop, "_local_adaptive_pass2_full_parent_enabled", lambda: False)
+    monkeypatch.setattr(iteration_loop, "_local_adaptive_pass2_rotation_only_enabled", lambda: False)
+    monkeypatch.setattr(iteration_loop, "_local_adaptive_pass2_denominator_support_mode", lambda: None)
+    monkeypatch.setattr(iteration_loop, "_k1_relion_x_half_mstep_enabled", lambda: False)
+    monkeypatch.setattr(iteration_loop, "_run_local_search_iteration", fake_run_local_search_iteration)
+
+    result = iteration_loop._score_half_local(
+        k=0,
+        experiment_dataset=SimpleNamespace(
+            voxel_size=1.0,
+            image_shape=(16, 16),
+            volume_shape=(16, 16, 16),
+        ),
+        means_k="mean",
+        mean_variance="variance",
+        noise_variance_k="noise_variance",
+        previous_best_rotation_eulers_k=np.zeros((2, 3), dtype=np.float32),
+        local_search_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)).copy(),
+        local_search_rotation_eulers=np.zeros((2, 3), dtype=np.float32),
+        local_search_order=1,
+        sigma_rot=0.1,
+        sigma_psi=0.1,
+        current_translations=np.zeros((1, 2), dtype=np.float32),
+        base_translations=np.zeros((1, 2), dtype=np.float32),
+        trans_prior_center=np.zeros((2, 2), dtype=np.float32),
+        trans_prior_center_for_engine=np.zeros((2, 2), dtype=np.float32),
+        current_sigma_offset_angstrom=1.0,
+        current_translation_range=1.0,
+        disc_type="linear_interp",
+        cs_for_engine=8,
+        local_pass1_current_size=8,
+        image_corrections_k=None,
+        scale_corrections_k=None,
+        translation_search_base=None,
+        disable_adjoint_y=False,
+        disable_adjoint_ctf=False,
+        max_significants=23,
+        state=SimpleNamespace(adaptive_oversampling=1),
+        iteration=3,
+        save_intermediates_dir=None,
+        local_search_random_perturbation=0.0,
+        local_search_angular_sampling_deg=None,
+        local_parent_oversampling_order=1,
+        local_search_translation_prior_mode="coarse",
+        replay_prior_translations=None,
+        rotation_log_prior_k=None,
+        class_log_priors=None,
+        k_class_enabled=False,
+        collect_local_search_profile=False,
+        diagnostic_score_only=False,
+        safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
+        class_assignments=[None, None],
+        class_posterior_per_half=[None, None],
+        class_full_posterior_per_half=[None, None],
+        best_pose_rotations=[None, None],
+        best_pose_rotation_eulers=[None, None],
+        best_pose_translations=[None, None],
+        local_profile_history=[],
+    )
+
+    assert len(calls) == 2
+    parent_call, fine_call = calls
+    assert parent_call["score_only"] is True
+    assert parent_call["return_significant_counts"] is True
+    assert parent_call["apply_max_significants_to_support"] is True
+    assert parent_call["max_significants"] == 23
+    assert fine_call["score_only"] is False
+    assert fine_call["reconstruct_significant_only"] is True
+    assert fine_call["stats_use_reconstruction_probs"] is True
+    assert fine_call["return_significant_counts"] is True
+    assert result.Ft_y == "fine_ft_y"
+    assert result.Ft_ctf == "fine_ft_ctf"
+    assert result.noise_stats == "fine_noise"
+    np.testing.assert_array_equal(result.significant_counts, parent_counts)
 
 
 def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):

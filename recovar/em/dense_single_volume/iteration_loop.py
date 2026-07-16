@@ -2668,6 +2668,7 @@ def _score_half_local(
             int(local_n_trans),
         )
     pass2_layout = None
+    parent_significant_counts_k = None
     local_adaptive_pass2_parent_mode = "none"
     local_adaptive_pass2_denominator_layout = None
     local_normalization_log_evidence = None
@@ -2773,10 +2774,12 @@ def _score_half_local(
             translation_prior_centers=trans_prior_center_for_engine,
             rotation_log_prior=relion_local_rotation_log_prior_k,
             return_reconstruction_sample_indices=True,
+            return_significant_counts=True,
             apply_max_significants_to_support=True,
             score_only=True,
         )
-        parent_profile = parent_outputs[-1]
+        parent_profile = parent_outputs[-2]
+        parent_significant_counts_k = np.asarray(parent_outputs[-1], dtype=np.int32)
         significant_sample_indices = parent_profile["reconstruction_sample_indices_by_image"]
         pruned_parent_significant_sample_indices = significant_sample_indices
         if local_adaptive_pass2_full_parent:
@@ -3095,10 +3098,18 @@ def _score_half_local(
                 ),
                 **local_profile_k,
             )
-    significant_counts_k = None
+    fine_significant_counts_k = None
     if not k_class_enabled:
-        significant_counts_k = np.asarray(_local_tail[_tail_idx], dtype=np.int32)
+        fine_significant_counts_k = np.asarray(_local_tail[_tail_idx], dtype=np.int32)
         _tail_idx += 1
+    # RELION serializes rlnNrOfSignificantSamples from pass 1.  The fine
+    # significant support above still controls the M-step; only trajectory
+    # diagnostics/convergence consume this selected count.
+    significant_counts_k = (
+        parent_significant_counts_k
+        if parent_significant_counts_k is not None
+        else fine_significant_counts_k
+    )
     if k_class_enabled:
         class_assignments_k, class_posterior_sums_k = _local_tail[_tail_idx : _tail_idx + 2]
         _tail_idx += 2

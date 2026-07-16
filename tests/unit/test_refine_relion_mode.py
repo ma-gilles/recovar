@@ -2341,6 +2341,7 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
         )
         raise StopAfterParentLayout
 
+    monkeypatch.setattr(iteration_loop_module, "build_local_search_grid_metadata", lambda _order: {})
     monkeypatch.setattr(iteration_loop_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
 
     with pytest.raises(StopAfterParentLayout):
@@ -4162,12 +4163,13 @@ def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatc
 def test_local_adaptive_parent_support_probe_is_score_only():
     source = Path(iteration_loop_module.__file__).read_text()
     start = source.index("parent_outputs = _run_local_search_iteration(")
-    end = source.index("parent_profile = parent_outputs[-1]", start)
+    end = source.index("parent_profile = parent_outputs[-2]", start)
     parent_call = source[start:end]
 
     assert "disable_adjoint_y=True" in parent_call
     assert "disable_adjoint_ctf=True" in parent_call
     assert "return_reconstruction_sample_indices=True" in parent_call
+    assert "return_significant_counts=True" in parent_call
     assert "score_only=True" in parent_call
 
 

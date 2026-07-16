@@ -4003,10 +4003,100 @@ path computes a global-min raw-diff2 prepass and then recomputes exact diff2
 for downstream conversion and M-step work. A bounded raw-diff2 reuse path is
 therefore the next performance target, with mandatory exact intermediate and
 FSC/FSC-AUC non-regression gates. Same-GPU exact/algebraic/exact job
-`11270918` is an isolated confirmation and is not required for the accepted
-quality result.
+`11270918` failed closed before its third arm because a shared CUDA library
+changed after the native-library manifest. Its partial timings are
+inadmissible and are not required for the accepted quality result.
 
 Canonical evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_exact_bpref_fc70abc3_20260716_111000/trajectory_matrix_fsc_only_summary_v2.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_exact_bpref_fc70abc3_20260716_111000/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/trajectory_analysis/k1_case22_iter2_performance_diagnosis_v1.json`
+
+## 2026-07-16 real-data repeat-control adjudication
+
+The 10k-particle real-10076 trajectory cannot be dismissed as ordinary
+RELION repeat variation.  Through the calibrated iteration-1--16 range, the
+RECOVAR-versus-RELION FSC-AUC deficit exceeds the one observed
+RELION-versus-RELION repeat deficit in all 48 aligned half1/half2/merged map
+comparisons.  This comparison is deliberately control-normalized rather than
+using a fixed correlation threshold.  The absolute iteration-1 FSC-AUC remains
+at least `0.9999999545`, so that formal exceedance alone is not evidence of an
+algorithmic bug.
+
+The earliest discrete difference, iteration-1 particle 8494, is closed as
+`coarse_float32_one_ulp_tie_changes_fine_support`: RELION's top coarse gap is
+exactly one float32 ULP (`2.9802322388e-8`), and substituting RELION's support
+makes RECOVAR select the same fine winner.  By contrast, the earliest
+non-ordinary boundary is iteration-2 particle 8240.  RELION and RECOVAR swap
+one hypothesis at the coarse `0.999` support boundary, producing 32 different
+fine descendants.  RELION-only descendants carry `0.0777750465` posterior
+mass, which explains the Pmax change from `0.174813433` to `0.189518494`.
+Same-physical-GPU complex128/float64 source scoring preserves RECOVAR's support,
+so ordinary float32 reduction precision is not the cause.  Geometry, priors,
+and fine reduction are also ruled out; the unresolved split is upstream
+operand generation versus coarse score formulation.
+
+At iteration 13 the merged map deficit is `2.81x` the observed repeat deficit
+(`1.94x` half 1, `5.33x` half 2).  At iteration 16 it is `1.55x` (`1.08x`,
+`2.89x`).  Iterations 17--18 are uncalibrated because one RELION control
+terminated at iteration 16, and final maps are excluded because the two
+RELION controls terminated at different iterations and use separate final
+reconstructions.  The compared A/B pair and repeat A/B pair are each
+same-physical-A100, but the two pairs used different UUIDs; this is an
+empirical same-model control scale, not a confidence interval.
+
+Authoritative evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/real10076_control_envelope_adjudication_v1.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_dual_replay_2e40e614_20260716_131000/analysis/real10076_control_envelope_shellwise_v1.npz`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/analysis/p8240_boundary.json`
+
+## 2026-07-16 provisional K=4 incoming-reference substitution
+
+A serial A/B substitution inside one single-GPU Slurm allocation isolates the
+case-8 iteration-5 class-2 map cliff to the incoming iteration-4 reference.
+The autonomous arm has direct cross-engine FSC-AUC `0.9782348744`; replacing
+only the incoming RECOVAR iteration-4 reference with the exact RELION
+reference raises iteration-5 class-2 FSC-AUC to `0.9999999957`, a gain of
+`0.0217651213`.  Its RECOVAR-minus-RELION GT FSC-AUC delta contracts from
+`-4.7261e-6` to `-1.6119e-8`.  The substitution arm has exact class
+agreement, zero support-count differences at iteration 5, and only
+float32-scale pose and Pmax residuals.
+
+This provisionally classifies the visible iteration-5 failure as inherited
+map-state amplification rather than an iteration-5 E-step or M-step
+formulation bug.  It does not yet identify the earlier map-state source, so
+the autonomous full-trajectory gate remains required.  Map acceptance uses
+shellwise FSC and FSC-AUC only.  The generated report incorrectly claims a
+fail-closed physical UUID check: its provenance file contains the literal
+query error `Nodeviceswerefound`.  Serial execution in a one-GPU allocation
+still pairs the arms, but a regex-hardened UUID repeat is required before this
+becomes authoritative.
+
+Evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_case8_it5_relref_ab_03c0969b_20260716_124414/analysis/ab_summary.json`
+(SHA-256 `8cbccfecba7eeaebdf6a13aa7c9142d8e357e6f6132bd8a48b1b49cdc3203458`).
+
+## 2026-07-16 K=1 local significant-count semantics
+
+The first full K=1 serialization audit exposed a real metadata boundary bug.
+RELION writes `_rlnNrOfSignificantSamples` from the first/coarse pass, as
+documented and implemented by `my_nr_significant_coarse_samples` in
+`acc_ml_optimiser_impl.h`.  RECOVAR instead returned the fine-pass M-step
+support count after local search began.  Counts were exact or differed for at
+most one particle through numbered iteration 3, then diverged for 2,691/3,000
+particles at iteration 4; the mean absolute error grew from `3.263` at
+iteration 4 to `75.834` at iteration 10.
+
+The correction requests and preserves the parent-pass count for serialized
+trajectory state and the approximate-accuracy diagnostic.  The fine support
+still controls every M-step reconstruction, posterior statistic, noise term,
+and accumulator; non-adaptive local search retains its existing fallback.
+A mocked boundary test deliberately returns parent counts `[2,3]` and fine
+counts `[17,19]` and verifies that only the reported count selects the parent
+values while `Ft_y`, `Ft_ctf`, and noise remain from the fine pass.  Focused
+CPU tests pass; a full trajectory confirmation remains the next gate before
+the count boundary is declared closed.
+
+Discovery artifact:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_serialization_2e40e614_20260716_130500/cases/11_small_baseline_3k_g128_white_noise1_bf80/trajectory_analysis/particle_state_distribution_full.json`.
