@@ -84,22 +84,383 @@ class Case:
 
 
 DEFAULT_CASES: tuple[Case, ...] = (
-    Case(1, "ribo_k2_10k_g128_white_noise1_uniform", DEFAULT_RIBO_PDB_DIR, 2, 10_000, 128, 1.0, "white", "uniform", "uniform", 2801, 80.0, 10, 0.0, 0.0, 0.7, 0.0, 0.0, 5, "05:00:00", "192G", 500, False),
-    Case(2, "ribo_k4_10k_g128_white_noise1_uniform", DEFAULT_RIBO_PDB_DIR, 4, 10_000, 128, 1.0, "white", "uniform", "uniform", 2802, 80.0, 10, 0.0, 0.0, 0.7, 0.0, 0.0, 5, "06:00:00", "256G", 500, False),
-    Case(3, "ribo_k4_10k_g128_radial_noise3_nonuniform_linear", DEFAULT_RIBO_PDB_DIR, 4, 10_000, 128, 3.0, "radial1", "nonuniform", "linear", 2803, 80.0, 10, 0.2, 0.2, 0.7, 0.0, 0.0, 5, "06:00:00", "256G", 500, False),
-    Case(4, "ribo_k8_10k_g128_white_noise3_kent_headheavy", DEFAULT_RIBO_PDB_DIR, 8, 10_000, 128, 3.0, "white", "kent", "head-heavy", 2804, 80.0, 10, 0.0, 0.0, 0.7, 0.0, 0.0, 5, "08:00:00", "320G", 500, False),
-    Case(5, "ribo_k4_50k_g256_white_noise1_uniform", DEFAULT_RIBO_PDB_DIR, 4, 50_000, 256, 1.0, "white", "uniform", "uniform", 2805, 80.0, 10, 0.0, 0.0, 0.7, 0.0, 0.0, 8, "18:00:00", "500G", 1000, True),
-    Case(6, "ribo_k4_50k_g256_radial_noise3_nonuniform_linear", DEFAULT_RIBO_PDB_DIR, 4, 50_000, 256, 3.0, "radial1", "nonuniform", "linear", 2806, 80.0, 10, 0.2, 0.2, 0.7, 0.0, 0.0, 8, "18:00:00", "500G", 1000, True),
-    Case(7, "ribo_k16_20k_g128_white_noise3_uniform", DEFAULT_RIBO_PDB_DIR, 16, 20_000, 128, 3.0, "white", "uniform", "uniform", 2807, 80.0, 10, 0.0, 0.0, 0.7, 0.0, 0.0, 5, "12:00:00", "500G", 500, False),
-    Case(8, "igg_k4_10k_g128_white_noise1_uniform", DEFAULT_IGG_PDB_DIR, 4, 10_000, 128, 1.0, "white", "uniform", "uniform", 2808, 80.0, 10, 0.0, 0.0, 0.7, 0.0, 0.0, 5, "06:00:00", "256G", 500, False),
-    Case(9, "igg_k8_10k_g128_radial_noise3_nonuniform", DEFAULT_IGG_PDB_DIR, 8, 10_000, 128, 3.0, "radial1", "nonuniform", "linear", 2809, 80.0, 10, 0.2, 0.2, 0.7, 0.0, 0.0, 5, "08:00:00", "320G", 500, False),
-    Case(10, "ribo_k4_10k_g128_radial_noise3_nonuniform_outliers_pct20", DEFAULT_RIBO_PDB_DIR, 4, 10_000, 128, 3.0, "radial1", "nonuniform", "linear", 2810, 80.0, 10, 0.2, 0.2, 0.7, 0.5, 0.20, 5, "06:00:00", "256G", 500, False),
-    Case(11, "igg_k4_10k_g128_white_noise1_uniform_outliers_pct20", DEFAULT_IGG_PDB_DIR, 4, 10_000, 128, 1.0, "white", "uniform", "uniform", 2811, 80.0, 10, 0.0, 0.0, 0.7, 0.0, 0.20, 5, "06:00:00", "256G", 500, False),
-    Case(12, "tomotwin_k4_10k_g128_white_noise1_uniform", DEFAULT_TOMOTWIN_PDB_DIR, 4, 10_000, 128, 1.0, "white", "uniform", "uniform", 2812, 80.0, 10, 0.0, 0.0, 0.7, 0.0, 0.0, 5, "06:00:00", "256G", 500, False),
-    Case(13, "tomotwin_k8_10k_g128_radial_noise3_kent_headheavy", DEFAULT_TOMOTWIN_PDB_DIR, 8, 10_000, 128, 3.0, "radial1", "kent", "head-heavy", 2813, 80.0, 10, 0.2, 0.2, 0.7, 0.0, 0.0, 5, "08:00:00", "320G", 500, False),
-    Case(14, "igg_rl_k4_10k_g128_white_noise1_uniform", DEFAULT_IGG_RL_PDB_DIR, 4, 10_000, 128, 1.0, "white", "uniform", "uniform", 2814, 80.0, 10, 0.0, 0.0, 0.7, 0.0, 0.0, 5, "06:00:00", "256G", 500, False),
-    Case(15, "igg_rl_k4_10k_g128_radial_noise3_nonuniform_outliers_pct20", DEFAULT_IGG_RL_PDB_DIR, 4, 10_000, 128, 3.0, "radial1", "nonuniform", "linear", 2815, 80.0, 10, 0.2, 0.2, 0.7, 0.5, 0.20, 5, "06:00:00", "256G", 500, False),
+    Case(
+        1,
+        "ribo_k2_10k_g128_white_noise1_uniform",
+        DEFAULT_RIBO_PDB_DIR,
+        2,
+        10_000,
+        128,
+        1.0,
+        "white",
+        "uniform",
+        "uniform",
+        2801,
+        80.0,
+        10,
+        0.0,
+        0.0,
+        0.7,
+        0.0,
+        0.0,
+        5,
+        "05:00:00",
+        "192G",
+        500,
+        False,
+    ),
+    Case(
+        2,
+        "ribo_k4_10k_g128_white_noise1_uniform",
+        DEFAULT_RIBO_PDB_DIR,
+        4,
+        10_000,
+        128,
+        1.0,
+        "white",
+        "uniform",
+        "uniform",
+        2802,
+        80.0,
+        10,
+        0.0,
+        0.0,
+        0.7,
+        0.0,
+        0.0,
+        5,
+        "06:00:00",
+        "256G",
+        500,
+        False,
+    ),
+    Case(
+        3,
+        "ribo_k4_10k_g128_radial_noise3_nonuniform_linear",
+        DEFAULT_RIBO_PDB_DIR,
+        4,
+        10_000,
+        128,
+        3.0,
+        "radial1",
+        "nonuniform",
+        "linear",
+        2803,
+        80.0,
+        10,
+        0.2,
+        0.2,
+        0.7,
+        0.0,
+        0.0,
+        5,
+        "06:00:00",
+        "256G",
+        500,
+        False,
+    ),
+    Case(
+        4,
+        "ribo_k8_10k_g128_white_noise3_kent_headheavy",
+        DEFAULT_RIBO_PDB_DIR,
+        8,
+        10_000,
+        128,
+        3.0,
+        "white",
+        "kent",
+        "head-heavy",
+        2804,
+        80.0,
+        10,
+        0.0,
+        0.0,
+        0.7,
+        0.0,
+        0.0,
+        5,
+        "08:00:00",
+        "320G",
+        500,
+        False,
+    ),
+    Case(
+        5,
+        "ribo_k4_50k_g256_white_noise1_uniform",
+        DEFAULT_RIBO_PDB_DIR,
+        4,
+        50_000,
+        256,
+        1.0,
+        "white",
+        "uniform",
+        "uniform",
+        2805,
+        80.0,
+        10,
+        0.0,
+        0.0,
+        0.7,
+        0.0,
+        0.0,
+        8,
+        "18:00:00",
+        "500G",
+        1000,
+        True,
+    ),
+    Case(
+        6,
+        "ribo_k4_50k_g256_radial_noise3_nonuniform_linear",
+        DEFAULT_RIBO_PDB_DIR,
+        4,
+        50_000,
+        256,
+        3.0,
+        "radial1",
+        "nonuniform",
+        "linear",
+        2806,
+        80.0,
+        10,
+        0.2,
+        0.2,
+        0.7,
+        0.0,
+        0.0,
+        8,
+        "18:00:00",
+        "500G",
+        1000,
+        True,
+    ),
+    Case(
+        7,
+        "ribo_k16_20k_g128_white_noise3_uniform",
+        DEFAULT_RIBO_PDB_DIR,
+        16,
+        20_000,
+        128,
+        3.0,
+        "white",
+        "uniform",
+        "uniform",
+        2807,
+        80.0,
+        10,
+        0.0,
+        0.0,
+        0.7,
+        0.0,
+        0.0,
+        5,
+        "12:00:00",
+        "500G",
+        500,
+        False,
+    ),
+    Case(
+        8,
+        "igg_k4_10k_g128_white_noise1_uniform",
+        DEFAULT_IGG_PDB_DIR,
+        4,
+        10_000,
+        128,
+        1.0,
+        "white",
+        "uniform",
+        "uniform",
+        2808,
+        80.0,
+        10,
+        0.0,
+        0.0,
+        0.7,
+        0.0,
+        0.0,
+        5,
+        "06:00:00",
+        "256G",
+        500,
+        False,
+    ),
+    Case(
+        9,
+        "igg_k8_10k_g128_radial_noise3_nonuniform",
+        DEFAULT_IGG_PDB_DIR,
+        8,
+        10_000,
+        128,
+        3.0,
+        "radial1",
+        "nonuniform",
+        "linear",
+        2809,
+        80.0,
+        10,
+        0.2,
+        0.2,
+        0.7,
+        0.0,
+        0.0,
+        5,
+        "08:00:00",
+        "320G",
+        500,
+        False,
+    ),
+    Case(
+        10,
+        "ribo_k4_10k_g128_radial_noise3_nonuniform_outliers_pct20",
+        DEFAULT_RIBO_PDB_DIR,
+        4,
+        10_000,
+        128,
+        3.0,
+        "radial1",
+        "nonuniform",
+        "linear",
+        2810,
+        80.0,
+        10,
+        0.2,
+        0.2,
+        0.7,
+        0.5,
+        0.20,
+        5,
+        "06:00:00",
+        "256G",
+        500,
+        False,
+    ),
+    Case(
+        11,
+        "igg_k4_10k_g128_white_noise1_uniform_outliers_pct20",
+        DEFAULT_IGG_PDB_DIR,
+        4,
+        10_000,
+        128,
+        1.0,
+        "white",
+        "uniform",
+        "uniform",
+        2811,
+        80.0,
+        10,
+        0.0,
+        0.0,
+        0.7,
+        0.0,
+        0.20,
+        5,
+        "06:00:00",
+        "256G",
+        500,
+        False,
+    ),
+    Case(
+        12,
+        "tomotwin_k4_10k_g128_white_noise1_uniform",
+        DEFAULT_TOMOTWIN_PDB_DIR,
+        4,
+        10_000,
+        128,
+        1.0,
+        "white",
+        "uniform",
+        "uniform",
+        2812,
+        80.0,
+        10,
+        0.0,
+        0.0,
+        0.7,
+        0.0,
+        0.0,
+        5,
+        "06:00:00",
+        "256G",
+        500,
+        False,
+    ),
+    Case(
+        13,
+        "tomotwin_k8_10k_g128_radial_noise3_kent_headheavy",
+        DEFAULT_TOMOTWIN_PDB_DIR,
+        8,
+        10_000,
+        128,
+        3.0,
+        "radial1",
+        "kent",
+        "head-heavy",
+        2813,
+        80.0,
+        10,
+        0.2,
+        0.2,
+        0.7,
+        0.0,
+        0.0,
+        5,
+        "08:00:00",
+        "320G",
+        500,
+        False,
+    ),
+    Case(
+        14,
+        "igg_rl_k4_10k_g128_white_noise1_uniform",
+        DEFAULT_IGG_RL_PDB_DIR,
+        4,
+        10_000,
+        128,
+        1.0,
+        "white",
+        "uniform",
+        "uniform",
+        2814,
+        80.0,
+        10,
+        0.0,
+        0.0,
+        0.7,
+        0.0,
+        0.0,
+        5,
+        "06:00:00",
+        "256G",
+        500,
+        False,
+    ),
+    Case(
+        15,
+        "igg_rl_k4_10k_g128_radial_noise3_nonuniform_outliers_pct20",
+        DEFAULT_IGG_RL_PDB_DIR,
+        4,
+        10_000,
+        128,
+        3.0,
+        "radial1",
+        "nonuniform",
+        "linear",
+        2815,
+        80.0,
+        10,
+        0.2,
+        0.2,
+        0.7,
+        0.5,
+        0.20,
+        5,
+        "06:00:00",
+        "256G",
+        500,
+        False,
+    ),
 )
+
 
 def q(value: str | Path) -> str:
     return shlex.quote(str(value))
@@ -203,7 +564,9 @@ def audit_numbered_class_maps(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--watch", action="store_true", help="Poll squeue until the summary job leaves the queue.")
-    parser.add_argument("--dry-run", action="store_true", help="Write scripts and tables but do not submit sbatch jobs.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Write scripts and tables but do not submit sbatch jobs."
+    )
     parser.add_argument("--case", action="append", default=[], help="Case index or name. Repeatable.")
     parser.add_argument("--scratch-dir", type=Path, default=None)
     parser.add_argument("--summary-partition", default=os.environ.get("EM_KCLASS_MATRIX_SUMMARY_PARTITION"))
@@ -231,10 +594,7 @@ def parse_args() -> argparse.Namespace:
         "--seed-offset",
         type=int,
         default=None,
-        help=(
-            "Add an offset to each selected case seed. "
-            "Also available as EM_KCLASS_MATRIX_SEED_OFFSET."
-        ),
+        help=("Add an offset to each selected case seed. Also available as EM_KCLASS_MATRIX_SEED_OFFSET."),
     )
     return parser.parse_args()
 
@@ -274,7 +634,9 @@ def apply_case_overrides(cases: list[Case], args: argparse.Namespace) -> list[Ca
         raw_seed_offset = os.environ.get("EM_KCLASS_MATRIX_SEED_OFFSET")
         seed_offset = int(raw_seed_offset) if raw_seed_offset else None
     if seed_override is not None and seed_offset is not None:
-        raise SystemExit("Use either EM_KCLASS_MATRIX_SEED / --seed-override or EM_KCLASS_MATRIX_SEED_OFFSET / --seed-offset, not both")
+        raise SystemExit(
+            "Use either EM_KCLASS_MATRIX_SEED / --seed-override or EM_KCLASS_MATRIX_SEED_OFFSET / --seed-offset, not both"
+        )
 
     if not max_iter_override and not time_limit_override and seed_override is None and seed_offset is None:
         return cases
@@ -920,7 +1282,7 @@ echo "HEAD: $(git rev-parse HEAD)"
 echo "Branch: $(git symbolic-ref --short HEAD || echo '<detached>')"
 echo "Scratch: {scratch_dir}"
 echo
-for job_id in {' '.join(tracked_jobs)}; do
+for job_id in {" ".join(tracked_jobs)}; do
   sacct -j "${{job_id}}" -X -o JobID,JobName%40,State,Elapsed,MaxRSS,ReqMem,AllocTRES || true
 done
 echo
@@ -955,7 +1317,9 @@ def submit(script: Path, *, dry_run: bool, extra_args: list[str] | None = None) 
 
 
 def git_text(*args: str, default: str = "<unknown>") -> str:
-    proc = subprocess.run(["git", "-C", str(REPO_ROOT), *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    )
     text = proc.stdout.strip()
     if proc.returncode != 0 or not text:
         return default
@@ -1002,10 +1366,7 @@ def main() -> int:
         )
     relion_refine_path = Path(relion_refine_mpi).expanduser().resolve()
     if not relion_refine_path.is_file() or not os.access(relion_refine_path, os.X_OK):
-        raise SystemExit(
-            "EM_KCLASS_MATRIX_RELION_REFINE_MPI is not an executable file: "
-            f"{relion_refine_path}"
-        )
+        raise SystemExit(f"EM_KCLASS_MATRIX_RELION_REFINE_MPI is not an executable file: {relion_refine_path}")
     relion_refine_mpi = str(relion_refine_path)
     relion_mpi_ranks = int(os.environ.get("RELION_MPI_RANKS", "3"))
     relion_pool = int(os.environ.get("EM_KCLASS_MATRIX_RELION_POOL", "3"))
@@ -1017,7 +1378,9 @@ def main() -> int:
     max_iter_override_for_env = getattr(args, "max_iter_override", None)
     if max_iter_override_for_env is None:
         max_iter_override_for_env = os.environ.get("EM_KCLASS_MATRIX_MAX_ITER", "")
-    time_limit_override_for_env = getattr(args, "time_limit_override", None) or os.environ.get("EM_KCLASS_MATRIX_TIME_LIMIT", "")
+    time_limit_override_for_env = getattr(args, "time_limit_override", None) or os.environ.get(
+        "EM_KCLASS_MATRIX_TIME_LIMIT", ""
+    )
     seed_override_for_env = getattr(args, "seed_override", None)
     if seed_override_for_env is None:
         seed_override_for_env = os.environ.get("EM_KCLASS_MATRIX_SEED", "")
@@ -1116,7 +1479,9 @@ def main() -> int:
             noise_rng_batch_size=noise_rng_batch_size,
             expected_commit=expected_commit,
         )
-        job_id = submit(script, dry_run=args.dry_run, extra_args=[f"--dependency=afterok:{setup_job}"] if not args.dry_run else None)
+        job_id = submit(
+            script, dry_run=args.dry_run, extra_args=[f"--dependency=afterok:{setup_job}"] if not args.dry_run else None
+        )
         tracked_jobs.append(job_id)
         case_jobs.append(job_id)
         case_root = scratch_dir / "cases" / f"{case.index}_{case.name}"

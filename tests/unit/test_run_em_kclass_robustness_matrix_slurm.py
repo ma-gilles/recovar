@@ -145,8 +145,8 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert "export RECOVAR_K_CLASS_DENSE_PASS2" not in text
     assert "export RECOVAR_K_CLASS_RELION_X_HALF_MSTEP" not in text
     assert "export RECOVAR_KCLASS_DUMP_DIR" not in text
-    assert "external_bind_dir = os.environ.get(\"RECOVAR_RELION_BIND_BUILD_DIR\")" in text
-    assert "str(relion_bind_file).startswith(str(external_bind_root) + \"/\")" in text
+    assert 'external_bind_dir = os.environ.get("RECOVAR_RELION_BIND_BUILD_DIR")' in text
+    assert 'str(relion_bind_file).startswith(str(external_bind_root) + "/")' in text
     assert "      --firstiter_cc \\\n" in text
     assert "  --firstiter_cc \\\n" in text
     assert "  --image-fourier-backend relion_cuda \\\n" in text
@@ -158,7 +158,7 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert "Numbered class-map audit ok" in text
     assert 'RELION_GPU_UUID="$(capture_physical_gpu_uuid)"' in text
     assert 'RECOVAR_GPU_UUID="$(capture_physical_gpu_uuid)"' in text
-    assert 'paired_gpu_uuid.json' in text
+    assert "paired_gpu_uuid.json" in text
     assert "Queued-job Git provenance gate ok" in text
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_1_" in text
     assert "export RELION_DISPATCH_LOG" in text
@@ -215,9 +215,9 @@ def test_setup_script_allows_external_relion_bind_build_dir(tmp_path):
     )
 
     text = script.read_text()
-    assert "external_bind_dir = os.environ.get(\"RECOVAR_RELION_BIND_BUILD_DIR\")" in text
-    assert "str(relion_bind_file).startswith(str(external_bind_root) + \"/\")" in text
-    assert "assert str(pathlib.Path(relion_bind.__file__).resolve()).startswith(str(repo) + \"/\")" not in text
+    assert 'external_bind_dir = os.environ.get("RECOVAR_RELION_BIND_BUILD_DIR")' in text
+    assert 'str(relion_bind_file).startswith(str(external_bind_root) + "/")' in text
+    assert 'assert str(pathlib.Path(relion_bind.__file__).resolve()).startswith(str(repo) + "/")' not in text
 
 
 def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monkeypatch):
