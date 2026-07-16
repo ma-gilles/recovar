@@ -4115,6 +4115,42 @@ Authoritative evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/distribution_substitution_v1/analysis/recovar_device_corner_coordinate_report.json` (SHA-256 `9e12292a35cdf4d2d6c69a96d682e804bcdf486805f40f4ae66a84f8faf9ea4f`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_p8240_capture_505af690_20260716_124319/distribution_substitution_v1/FINAL_SEAL.txt` (manifest SHA-256 `b92c370d690a77ed1d03be0cb7727d69d0339cfc1dffda3edf5de76e2c50a76f`)
 
+### Real-10076 production BPref high-precision replay
+
+The aggregate half-2 production capture now closes bitwise on all 23 shards.
+The recomputed production numerator and weight match both captured-active and
+captured-signature operands exactly, and two same-device controls are bitwise
+repeatable.  The earlier failed closure was a diagnostic-harness bug: the
+writer widened live float32 reconstruction probabilities to float64.  The
+capture now preserves and binds native dtype, itemsize, and byte count; legacy
+bundles require an explicit audited dtype and exact storage round-trip.
+
+With the corrected float32 source, changing only the translation reduction
+order gives numerator relative-L1 `1.8471e-4` to `1.8575e-4`, while weights
+remain bitwise exact.  Genuine float64/complex128 operand and geometry
+recomputation reaches a discrete geometry boundary rather than a verified
+same-target replay: 3,728 support decisions change, 128 target entries change,
+and no row-conjugation decisions change.  The support differences recur at
+exact radial-boundary pixels, and target changes occur in eight-neighbor
+groups at integer-lattice boundaries.  The tool therefore emits
+`GEOMETRY_PRECISION_BOUNDARY` and deliberately writes no same-target artifact.
+This is evidence of a precision-sensitive geometry boundary, not evidence for
+a production EM arithmetic defect and not permission to substitute a
+cast-only float64 replay for recomputed operands.
+
+An independent same-A100 RELION-only full-trajectory pair converged with last
+numbered iterations 17 and 16.  Its fail-closed launcher stopped before
+RECOVAR, so it provides only another RELION repeat-envelope observation, not
+RECOVAR parity evidence.  Synthetic aggregate convergence remains a strict
+gate; real-data convergence claims must account for the observed same-engine
+one-iteration variation.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_production_closure_9044b379_20260716_165154/analysis/recomputed_high_precision_901dc198_gpu2_v5_summary.json` (SHA-256 `a9b58ead795f9890026c35ebf232ae3140c1510e478a954e13abb1cc519f6bed`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_production_closure_9044b379_20260716_165154/analysis/HIGH_PRECISION_V5_AUDIT.md` (SHA-256 `228ea927501e7f9f73ea21cad7052e14a8626f593ee5901deb06a487e20c65bc`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_fulltraj_055b7dc4_grid_off_ab_prepared_20260716_115437` (Slurm job `11270504`; RELION-only controls, no RECOVAR arm)
+
 ## 2026-07-16 authoritative K=4 incoming-reference substitutions
 
 Hardened same-A100 A/B substitutions isolate the visible K=4 failures to the
