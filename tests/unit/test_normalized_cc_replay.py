@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from recovar.em.normalized_cc_replay import (
+    RELION_COARSE_REDUCTION_LANES,
     RELION_FINE_REDUCTION_LANES,
     REPLAY_SCHEMA,
     canonical_float32_reduce,
@@ -11,6 +12,7 @@ from recovar.em.normalized_cc_replay import (
     normalized_cc_pixel_contributions,
     recovar_logical_float32_reduce,
     relion_256lane_float32_reduce,
+    relion_coarse_128lane_float32_reduce,
     replay_normalized_cc,
 )
 
@@ -80,6 +82,21 @@ def test_relion_256lane_reduction_matches_hand_reference():
             lanes[lane] = np.float32(lanes[lane] + lanes[lane + stride])
 
     actual = relion_256lane_float32_reduce(values)
+    assert actual.view(np.uint32) == lanes[0].view(np.uint32)
+
+
+def test_relion_coarse_128lane_reduction_matches_hand_reference():
+    rng = np.random.default_rng(128)
+    values = rng.normal(size=389).astype(np.float32)
+    lanes = np.zeros(RELION_COARSE_REDUCTION_LANES, dtype=np.float32)
+    for lane in range(RELION_COARSE_REDUCTION_LANES):
+        for pixel in range(lane, values.size, RELION_COARSE_REDUCTION_LANES):
+            lanes[lane] = np.float32(lanes[lane] + values[pixel])
+    for stride in (64, 32, 16, 8, 4, 2, 1):
+        for lane in range(stride):
+            lanes[lane] = np.float32(lanes[lane] + lanes[lane + stride])
+
+    actual = relion_coarse_128lane_float32_reduce(values)
     assert actual.view(np.uint32) == lanes[0].view(np.uint32)
 
 
