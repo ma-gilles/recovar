@@ -3629,3 +3629,56 @@ is under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_coarse_significance_399de551_a100_20260715_211300/`,
 and the CUDA replay is under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_coarse_cub_replay_a100_cuda126_20260715_212900/`.
+
+## 2026-07-15 K=1 iteration-2 passive cross-engine closure
+
+Same-A100 job `11242107` passively captured RELION's complete coarse and fine
+surfaces for rows 6202 and 7881.  Its clean, patched-no-dump, and two dump arms
+pass the repeat-calibrated inertness gate; every half-map FSC-AUC is above
+`0.9999999983`.  The score transform is independently source- and
+array-verified: RELION's `raw_diff2` already includes the half-chi-squared
+factor, so the centered pre-prior score is `-raw_diff2` with factor one.  The
+captured row-6202 coarse log weights reconstruct bit-exactly for all 1,053,744
+finite candidates.
+
+Geometry-based alignment proves exact row-6202 supports: 15 coarse parents,
+480 fine candidates, 37 reconstruction candidates, and the same winner.  For
+row 7881, RELION has exactly one additional coarse parent, mapped to RECOVAR
+key `(class 0, rotation 30039, translation 2)`.  It is rank 49 in both engines
+and has posterior `0.00011509424` in RELION versus `0.00011504446` in RECOVAR.
+The cumulative mass after rank 48 is `0.99899966069` in RELION and
+`0.99900027498` in RECOVAR, so a difference of only `6.14e-7` straddles the
+`0.999` cutoff without changing rank order.
+
+The extra parent generates exactly 32 RELION-only fine children with posterior
+mass `0.0726669963`.  Removing those children and renormalizing predicts Pmax
+`0.2810506426`, versus observed RECOVAR `0.2810158547`; the residual is
+`3.48e-5`, and the winning fine hypothesis is exact.  This proves that the
+visible `0.0204` Pmax anomaly is cutoff amplification of the coarse posterior
+boundary, not a fine-expansion, sort, or winner-selection bug.  It does not yet
+classify the underlying score-array residual as numerical or algorithmic.
+
+Genuine float64 score recomputation in job `11243489` leaves row 7881 at 48
+parents with the same rank order and boundary identities; its cumulative mass
+after rank 48 remains above the cutoff at `0.99900018764`.  Thus neither
+RECOVAR's float32 score arithmetic nor its CUB cutoff reduction explains the
+cross-engine side of the boundary.  Float64 projection-plus-score job
+`11244035` also leaves the row at 48 parents with top-48 cumulative mass
+`0.99900018756`.  Relative to float64 scoring alone, genuine float64
+projections change centered row-7881 scores by at most `2.39e-6`, posterior L1
+by `1.75e-7`, and no support or rank identity.  The job's half-map FSC-AUC is
+`0.9999999875/0.9999999877` against the score-only arm.  Ordinary scoring and
+projection precision are therefore ruled out for RELION's 49-versus-48
+boundary.  The remaining work is exact per-pixel operand and operation-
+semantics comparison; no production cutoff change is justified by this
+evidence.
+
+The sealed passive audit is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_cross_engine_alignment_audit_20260715_211308/`.
+The float64-scoring audit is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_coarse_float64_399de551_a100_20260715_213200/`.
+The float64 projection-plus-scoring audit is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it2_coarse_float64_scoreproj_399de551_a100_20260715_214600/`.
+RELION's dumped `ihidden_overs` field is corrupt and non-unique in this hook;
+the audit rejects it and uses the unique device tuple plus exact rotation and
+translation geometry instead.
