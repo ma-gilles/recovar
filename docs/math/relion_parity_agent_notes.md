@@ -2509,14 +2509,23 @@ Matrix evidence:
   bug.
 - Genuine downstream float64/complex128 recomputation from the captured raw
   float32 image changes the final unmasked operand by only `4.39994e-7` in
-  relative L2.  The aggregate approximately `1.25e-4` residual remains
-  unresolved.  The next decisive comparison is an actual RELION CUDA
-  `storeWeightedSums` capture of the unmasked operand and scatter; RELION's
-  available masked pass-1 Fimg is not a valid substitute.
+  relative L2.  The actual RELION CUDA `storeWeightedSums` capture then finds
+  exact support, coordinates, all eight indices, and Hermitian flags.  Data
+  and weight operands agree at `3.61e-7` and `3.92e-7` relative L2, but RECOVAR
+  coefficient relative L2 is `4.7538e-6` versus RELION's `3.5699e-8`
+  canonical envelope.
+- Cause and fix: RECOVAR added the integer BPref origin before extracting the
+  float32 fractions; RELION extracts `floorf`/the fractions first.  Commit
+  `65587ea5` matches that arithmetic order.  The patched p8494 replay is
+  bitwise exact across all 897 support pixels, coordinates, eight indices, and
+  coefficients.  Focused validation passed 4 GPU tests and 39 CPU tests.
 - Evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it1_p8494_neartie_capture_d302a760_20260716_024559/analysis/p8494_score_boundary_report_v2/report.json`
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it1_p8494_device_capture_fix_fb4e6b73_20260716_082324/analysis/continuous_residual_localization/report.json`.
+  Patched validation:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_it1_storewavg_device_capture_fb4e6b73_20260716_092618/analysis/patched_boundary_validation.json`
+  (SHA-256 `96834e9758fd4e0cbab19415cc1dc36ec89dd9ba77338a5cad11f86ab690e758`).
 
 # 2026-07-16: particle 1491 classifies the recurrent iteration-2 score boundary
 

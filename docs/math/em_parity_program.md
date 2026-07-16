@@ -182,11 +182,13 @@ post-x0 versus RELION pre-lowres-join BPref numerator/weight relative-L2
 residual is `3e-6--6e-6`.  Do not compare against RELION pre-reconstruct here;
 that boundary is already after the 40-Angstrom half join.
 Three same-H100 RELION captures vary by only `1.0e-8--1.3e-8`, so this residual
-is reproducible code arithmetic rather than atomic-order noise.  Substituting
-the resulting tiny RECOVAR map residual into the iteration-3 production sparse
-score surface causally flips both observed particles: `3.689` degrees for
-particle 207 and `26.039` degrees for particle 236.  Continue with per-particle
-or prefix BPref accumulation bisection; do not add a score tie-break.
+is reproducible code arithmetic rather than atomic-order noise.  The device
+capture now identifies and fixes the first cause: RECOVAR added the integer
+BPref origin before extracting float32 interpolation fractions, whereas
+RELION extracts the fractions first.  The captured p8494 boundary becomes
+bitwise exact for support, coordinates, all eight indices, and coefficients
+after the arithmetic-order fix.  Rerun the trajectory gates; do not add a
+score tie-break.
 
 The explicit production grid-on case-25 diagnostic completed
 as repaired jobs `11194076--11194077`: it matched RELION's current-size
@@ -3773,9 +3775,15 @@ pixel (`r^2=2303.999759`), while the double-precision C++ diagnostic excludes
 it (`r^2=2304.000138`).  Removing that pixel reduces panel data relative L2
 from `1.35819e-2` to `6.21507e-6`.  Genuine downstream float64/complex128
 recomputation from the captured raw float32 image changes the unmasked BPref
-operand by only `4.39994e-7`.  The aggregate `1.25343e-4` residual remains
-unresolved and now requires an actual RELION CUDA `storeWeightedSums` capture,
-not the CPU panel or masked pass-1 Fimg.
+operand by only `4.39994e-7`.  The subsequent RELION CUDA `storeWeightedSums`
+capture finds exact support, coordinates, indices, and Hermitian flags, plus
+float32-scale data/weight operands (`3.61e-7`/`3.92e-7` relative L2).  The real
+difference is interpolation coefficients: RECOVAR relative L2 `4.7538e-6`
+versus RELION's `3.5699e-8` canonical envelope.  RECOVAR added the integer
+origin before taking the fraction; RELION takes `floorf` and the fraction
+first.  Commit `65587ea5` fixes that order, and the captured p8494 replay is
+then bitwise exact for all 897 support pixels, coordinates, eight indices, and
+coefficients.
 
 The paired particle-1491 capture freezes the earliest recurrent iteration-2
 boundary.  All 36,336 RELION coarse rotations and all translations align
