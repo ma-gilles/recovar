@@ -36,7 +36,7 @@ def _production_inputs():
 
 
 def test_recovar_logical_replay_matches_production_normalized_cc_score():
-    pytest.importorskip("jax")
+    jax = pytest.importorskip("jax")
     import jax.numpy as jnp
 
     from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
@@ -64,12 +64,16 @@ def test_recovar_logical_replay_matches_production_normalized_cc_score():
     replay = replay_normalized_cc(contributions)
 
     replay_bits = np.asarray(replay.recovar_logical_float32.score, dtype=np.float32).view(np.uint32)
-    # XLA is free to select a backend-specific reduction tree; the pure NumPy
-    # flat fold is a logical control, not a bitwise device replay.  Device-
-    # captured contributions plus the explicit RELION reducers below provide
-    # the bitwise replay path.
     production_bits = production.view(np.uint32)
-    assert abs(int(replay_bits) - int(production_bits)) <= 1
+    if jax.default_backend() == "cpu":
+        # XLA CPU uses the same logical flat fold as this reference replay.
+        assert replay_bits == production_bits
+    else:
+        # XLA GPU is allowed to lower this tiny production reduction as a
+        # different tree.  Keep the backend control fail-closed at the one-ULP
+        # envelope measured on the deterministic fixture; broader numerical
+        # classification belongs in the order/float64 replay arms below.
+        assert abs(int(replay_bits) - int(production_bits)) <= 1
     assert replay.schema == REPLAY_SCHEMA
     assert replay.schema_version == 1
 
