@@ -1272,7 +1272,10 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
         return_best_pose_details=False,
         oversampling_order=1,
         random_perturbation=0.0,
-        engine_kwargs={"relion_half_volume_mstep": True},
+        engine_kwargs={
+            "relion_half_volume_mstep": True,
+            "relion_exact_fine_gaussian": False,
+        },
     )
 
     assert len(calls) == 3
@@ -1372,7 +1375,10 @@ def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypa
         return_best_pose_details=False,
         oversampling_order=1,
         random_perturbation=0.0,
-        engine_kwargs={"relion_half_volume_mstep": True},
+        engine_kwargs={
+            "relion_half_volume_mstep": True,
+            "relion_exact_fine_gaussian": False,
+        },
     )
 
     assert [class_index for class_index, _ in calls] == [0, 2, 1, 0, 2]
