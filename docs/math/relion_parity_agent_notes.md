@@ -2766,3 +2766,28 @@ Matrix evidence:
   requested.  Metadata uses that rank; masks, posterior weights, and Ft_y/Ft_CTF
   remain unchanged.  Default helper tuple arities and firstiter count `1` are
   preserved.  The integrated affected-module run passes 74 tests.
+
+# 2026-07-16: corrected K=1 parent-count replay passes its A/B/A control
+
+- Same-A100 job `11278391` ran parent-count control A1, exact extracted-count B,
+  and parent-count control A2 for ten iterations on the same physical GPU.  The
+  exact source semantics and serialized count aliases match after applying the
+  recorded half-order-to-image-order permutation; deterministic state is exact.
+- The original post-hoc analyzer compared half-order counts directly with
+  image-order metadata and therefore failed for an ordering artifact.  Preserve
+  that failure, but use the sealed corrected report.  It classifies the count
+  fix as inside the same-GPU parent-repeat envelope: total RELION support-count
+  residuals are `20/15/15` for A1/B/A2 and summed Pmax MAE is
+  `0.00200546/0.00189107/0.00189499`.
+- Over `136,688,904` accumulator values, A1-versus-A2 RMS is `8.4373e-5`, while
+  B-versus-A2 RMS is `5.5372e-6`.  This is an aggregate state guard for the
+  metadata fix, not a general quality claim; map statements remain gated by
+  FSC/FSC-AUC.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_parent_exact_parent_aba_52178ed3_8fd704ab_20260716_152025/analysis/parent_exact_parent_same_gpu_aba.json`
+  (SHA-256
+  `9acd943ef0d6ba8cd11fdaba982c48fcd6fb1b58bb5652c80e3e29c7f0d3580d`),
+  with analyzer seal
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sigcount_parent_exact_parent_aba_52178ed3_8fd704ab_20260716_152025/provenance/analyzer_revision_v3.json`
+  (SHA-256
+  `720f3551a7d3e18df92fda8dfefb7b00a72e402e3cbfa23ceb67231a9e259b3e`).
