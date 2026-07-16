@@ -289,3 +289,30 @@ def test_explicit_iteration_selection_fails_closed_when_boundary_is_absent(tmp_p
             relion_stars={1: relion},
             recovar_iterations={3},
         )
+
+
+@pytest.mark.unit
+def test_independent_relion_control_pair_sets_the_numerical_envelope(tmp_path):
+    results, source, relion, control = _fixture(tmp_path)
+    table, _ = auditor.read_star(str(control))
+    pmax_column = next(column for column in table if column.lstrip("_") == "rlnMaxValueProbDistribution")
+    table[pmax_column] = table[pmax_column].astype(float) - 5e-6
+    control_reference = tmp_path / "control_reference_it001_data.star"
+    write_star(str(control_reference), table)
+
+    report = auditor.audit(
+        recovar_results=results,
+        recovar_particles_star=source,
+        relion_stars={1: relion},
+        control_stars={1: control},
+        control_reference_stars={1: control_reference},
+    )
+
+    row = report["iterations"][0]
+    assert row["relion_control_vs_relion"]["pmax"]["absolute"]["mean"] == pytest.approx(5e-6)
+    rec_mean = row["recovar_vs_relion"]["pmax"]["absolute"]["mean"]
+    ratio = row["recovar_vs_relion_relative_to_control"]["metrics"]["pmax"][
+        "recovar_to_control_absolute_error_ratio"
+    ]["mean"]
+    assert ratio == pytest.approx(rec_mean / 5e-6)
+    assert report["sources"]["relion_control_reference_stars"]["1"] == str(control_reference.resolve())

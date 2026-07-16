@@ -218,14 +218,17 @@ def _class_summary(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
 
 
 def _control_error_comparison(
-    rec: dict[str, Any], rel: dict[str, Any], control: dict[str, Any]
+    rec: dict[str, Any],
+    rel: dict[str, Any],
+    control: dict[str, Any],
+    control_reference: dict[str, Any],
 ) -> dict[str, Any]:
     """Compare RECOVAR errors with the aligned RELION-repeat error envelope."""
     result: dict[str, Any] = {"status": "measured", "metrics": {}}
     for label, key in (("pmax", "pmax"), ("significant_support", "support")):
         rec_abs = np.abs(np.asarray(rec[key], dtype=np.float64) - np.asarray(rel[key], dtype=np.float64))
         control_abs = np.abs(
-            np.asarray(control[key], dtype=np.float64) - np.asarray(rel[key], dtype=np.float64)
+            np.asarray(control[key], dtype=np.float64) - np.asarray(control_reference[key], dtype=np.float64)
         )
         rec_summary = _summary(rec_abs)
         control_summary = _summary(control_abs)
@@ -490,6 +493,7 @@ def audit(
     recovar_particles_star: Path,
     relion_stars: dict[int, Path],
     control_stars: dict[int, Path] | None = None,
+    control_reference_stars: dict[int, Path] | None = None,
     recovar_iterations: set[int] | None = None,
 ) -> dict[str, Any]:
     recovar_results = recovar_results.expanduser().resolve()
@@ -561,8 +565,17 @@ def audit(
             relative_to_control = _not_measured("no RELION/RELION control STAR supplied for this iteration")
             if control_stars and rel_iteration in control_stars:
                 control_state, _ = _load_relion_state(control_stars[rel_iteration], identities)
-                control = _cohort_metrics(np.ones(n_images, dtype=bool), control_state, rel_state)
-                relative_to_control = _control_error_comparison(rec_state, rel_state, control_state)
+                control_reference_state = rel_state
+                if control_reference_stars and rel_iteration in control_reference_stars:
+                    control_reference_state, _ = _load_relion_state(
+                        control_reference_stars[rel_iteration], identities
+                    )
+                control = _cohort_metrics(
+                    np.ones(n_images, dtype=bool), control_state, control_reference_state
+                )
+                relative_to_control = _control_error_comparison(
+                    rec_state, rel_state, control_state, control_reference_state
+                )
 
             rows.append(
                 {
@@ -590,6 +603,10 @@ def audit(
             "relion_stars": {str(key): str(value.resolve()) for key, value in sorted(relion_stars.items())},
             "relion_control_stars": {
                 str(key): str(value.resolve()) for key, value in sorted((control_stars or {}).items())
+            },
+            "relion_control_reference_stars": {
+                str(key): str(value.resolve())
+                for key, value in sorted((control_reference_stars or {}).items())
             },
         },
         "iteration_alignment": {
@@ -629,6 +646,15 @@ def _parser() -> argparse.ArgumentParser:
         help="Optional RELION repeat/control run_itNNN_data.star; repeat per iteration",
     )
     parser.add_argument(
+        "--relion-control-reference-star",
+        action="append",
+        default=[],
+        help=(
+            "Optional first arm of an independent RELION/RELION repeat pair. "
+            "When omitted, --relion-star is the control reference."
+        ),
+    )
+    parser.add_argument(
         "--recovar-iteration",
         action="append",
         type=int,
@@ -650,6 +676,9 @@ def main(argv: list[str] | None = None) -> int:
             recovar_particles_star=args.recovar_particles_star,
             relion_stars=_star_specs(args.relion_star, label="RELION"),
             control_stars=_star_specs(args.relion_control_star, label="RELION control"),
+            control_reference_stars=_star_specs(
+                args.relion_control_reference_star, label="RELION control reference"
+            ),
             recovar_iterations=None if args.recovar_iteration is None else set(args.recovar_iteration),
         )
         status = 0
