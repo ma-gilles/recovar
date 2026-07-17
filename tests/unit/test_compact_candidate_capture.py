@@ -146,6 +146,10 @@ def test_raw_capture_validation_and_complete_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr(capture, "_capture_counter", 0)
     kwargs = _capture_inputs(batch=3)
     capture.maybe_capture_k1_production_bucket(**kwargs)
+    half2_kwargs = _capture_inputs(batch=3)
+    half2_kwargs["half"] = 2
+    half2_kwargs["original_indices"] = np.arange(2000, 2003, dtype=np.int64)
+    capture.maybe_capture_k1_production_bucket(**half2_kwargs)
     shard = next(tmp_path.glob("*.npz"))
 
     inventory = capture.validate_raw_capture_shard(shard)
@@ -153,13 +157,39 @@ def test_raw_capture_validation_and_complete_manifest(tmp_path, monkeypatch):
     assert inventory["candidate_count"] == 12
     marker = capture.finalize_raw_capture_directory(
         tmp_path,
-        expected_original_indices=kwargs["original_indices"],
+        expected_original_indices_by_half={
+            1: kwargs["original_indices"],
+            2: half2_kwargs["original_indices"],
+        },
         expected_iteration=3,
     )
-    assert marker["particle_count"] == 3
-    assert marker["candidate_count"] == 12
+    assert marker["particle_count"] == 6
+    assert marker["candidate_count"] == 24
+    assert marker["halves"] == [1, 2]
     assert (tmp_path / "RAW_CAPTURE.sha256").is_file()
     assert (tmp_path / "RAW_CAPTURE_COMPLETE.json").is_file()
+
+
+@pytest.mark.unit
+def test_raw_capture_finalize_rejects_half_identity_swap(tmp_path, monkeypatch):
+    monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(capture, "_capture_counter", 0)
+    half1 = _capture_inputs(batch=2)
+    half2 = _capture_inputs(batch=2)
+    half2["half"] = 2
+    half2["original_indices"] = np.arange(2000, 2002, dtype=np.int64)
+    capture.maybe_capture_k1_production_bucket(**half1)
+    capture.maybe_capture_k1_production_bucket(**half2)
+
+    with pytest.raises(capture.CompactCaptureError, match="half-1 identity set"):
+        capture.finalize_raw_capture_directory(
+            tmp_path,
+            expected_original_indices_by_half={
+                1: half2["original_indices"],
+                2: half1["original_indices"],
+            },
+            expected_iteration=3,
+        )
 
 
 @pytest.mark.unit

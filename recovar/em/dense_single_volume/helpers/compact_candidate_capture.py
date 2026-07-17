@@ -126,6 +126,11 @@ def validate_raw_capture_shard(path: Path) -> dict[str, object]:
         ("winner_translation", np.float32),
     ):
         _require_dtype(arrays[name], dtype, name)
+    for name in ("iteration", "half", "rank", "call_index", "shard_index", "current_size"):
+        if arrays[name].shape != ():
+            raise CompactCaptureError(f"{name} must be a scalar")
+    if int(arrays["iteration"]) < 0 or int(arrays["half"]) not in (1, 2):
+        raise CompactCaptureError("raw shard iteration/half context is invalid")
     for name in ("raw_combined_score", "posterior", "rotation_log_prior", "translation_log_prior"):
         if arrays[name].dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
             raise CompactCaptureError(f"{name} must preserve a float32/float64 production dtype")
@@ -228,6 +233,10 @@ def validate_raw_capture_shard(path: Path) -> dict[str, object]:
             raise CompactCaptureError("raw shard float32 posterior sum exceeds its bound")
         if int(np.count_nonzero(significant)) != int(arrays["significant_count"][row]):
             raise CompactCaptureError("raw shard significant count does not reproduce")
+        if not np.any(significant):
+            raise CompactCaptureError("raw shard has no significant candidate")
+        if arrays["significant_threshold"][row] != np.min(posterior[significant]):
+            raise CompactCaptureError("raw shard significant threshold does not reproduce")
         winner = int(arrays["winner_candidate_index"][row])
         if not 0 <= winner < c1 - c0:
             raise CompactCaptureError("raw shard winner index is out of range")
@@ -258,7 +267,7 @@ def validate_raw_capture_shard(path: Path) -> dict[str, object]:
 def finalize_raw_capture_directory(
     capture_dir: Path,
     *,
-    expected_original_indices,
+    expected_original_indices_by_half,
     expected_iteration: int,
 ) -> dict[str, object]:
     """Seal a complete raw capture only after strict identity/readback checks."""
@@ -272,14 +281,36 @@ def finalize_raw_capture_directory(
     inventory = [validate_raw_capture_shard(path) for path in shards]
     if any(item["iteration"] != int(expected_iteration) for item in inventory):
         raise CompactCaptureError("raw capture iteration mismatch")
+    if not isinstance(expected_original_indices_by_half, dict):
+        raise CompactCaptureError("expected original identities must be supplied per half")
+    try:
+        expected_by_half = {
+            int(half): np.asarray(values, dtype=np.int64)
+            for half, values in expected_original_indices_by_half.items()
+        }
+    except Exception as exc:
+        raise CompactCaptureError(f"invalid expected half identity mapping: {exc}") from exc
+    if set(expected_by_half) != {1, 2}:
+        raise CompactCaptureError("expected original identity mapping must contain exactly halves 1 and 2")
+    for half, expected in expected_by_half.items():
+        if expected.ndim != 1 or expected.size == 0 or np.unique(expected).size != expected.size:
+            raise CompactCaptureError(f"expected half-{half} identities must be a nonempty unique vector")
+    expected = np.concatenate([expected_by_half[1], expected_by_half[2]])
+    if np.unique(expected).size != expected.size:
+        raise CompactCaptureError("expected original identities overlap across halves")
+
     observed = np.concatenate([item["original_indices"] for item in inventory])
-    expected = np.asarray(expected_original_indices, dtype=np.int64)
-    if expected.ndim != 1 or np.unique(expected).size != expected.size:
-        raise CompactCaptureError("expected original identities must be a unique vector")
     if np.unique(observed).size != observed.size:
         raise CompactCaptureError("raw capture duplicates an original identity across shards")
     if not np.array_equal(np.sort(observed), np.sort(expected)):
         raise CompactCaptureError("raw capture identity set is incomplete or unexpected")
+    for half in (1, 2):
+        half_shards = [item["original_indices"] for item in inventory if int(item["half"]) == half]
+        if not half_shards:
+            raise CompactCaptureError(f"raw capture has no half-{half} shards")
+        observed_half = np.concatenate(half_shards)
+        if not np.array_equal(np.sort(observed_half), np.sort(expected_by_half[half])):
+            raise CompactCaptureError(f"raw capture half-{half} identity set is incomplete or unexpected")
     manifest_lines = [f"{item['sha256']}  {Path(item['path']).name}" for item in inventory]
     manifest_payload = ("\n".join(manifest_lines) + "\n").encode("utf-8")
     manifest_path = capture_dir / "RAW_CAPTURE.sha256"
