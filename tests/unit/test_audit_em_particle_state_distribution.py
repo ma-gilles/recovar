@@ -164,6 +164,95 @@ def test_audit_aligns_shuffled_rows_and_reports_full_distribution(tmp_path):
 
 
 @pytest.mark.unit
+def test_cross_iteration_tail_enrichment_uses_exact_aligned_state_and_is_diagnostic(tmp_path):
+    results, source, relion, _control = _fixture(tmp_path)
+    source_table = auditor._particle_table(source)
+    identities = auditor._identity_array(source_table, source=source)
+    relion_state, _ = auditor._load_relion_state(relion, identities)
+    with np.load(results, allow_pickle=False) as payload:
+        data = {key: payload[key] for key in payload.files}
+
+    # At iteration 1, support differs for identity rows 1,3,5,7,9,11. Make
+    # row 1 the exact top-5% Pmax exposure. At iteration 2, rows 1,5,8 form
+    # the >0.1-degree pose tail.
+    previous_pmax = np.asarray(relion_state["pmax"], dtype=np.float64).copy()
+    previous_pmax[1] += 0.5
+    data["pmax_per_image_by_image_iter_000"] = previous_pmax
+    current_eulers = np.asarray(relion_state["eulers"], dtype=np.float64).copy()
+    current_eulers[[1, 5, 8], 0] += 1.0
+    data.update(
+        pmax_per_image_by_image_iter_001=np.asarray(relion_state["pmax"]),
+        sig_counts_by_image_iter_001=np.asarray(relion_state["support"]),
+        best_rotation_eulers_by_image_iter_001=current_eulers,
+    )
+    np.savez(results, **data)
+    relion_it002 = tmp_path / "run_it002_data.star"
+    relion_it002.write_text(relion.read_text())
+    arrays: dict[str, np.ndarray] = {}
+
+    report = auditor.audit(
+        recovar_results=results,
+        recovar_particles_star=source,
+        relion_stars={1: relion, 2: relion_it002},
+        artifact_arrays=arrays,
+    )
+
+    section = report["cross_iteration_tail_enrichment"]
+    assert section["diagnostic_only"] is True
+    assert section["quality_gate"].startswith("none")
+    assert section["correlation"] == "not computed"
+    boundary = section["boundaries"][0]
+    support = boundary["significant_support_count_mismatch_at_t"]
+    assert support["contingency"] == {
+        "exposure_and_next_pose_tail": 2,
+        "exposure_only": 4,
+        "next_pose_tail_only": 1,
+        "neither": 5,
+    }
+    assert support["conditional_rates"]["next_pose_tail_given_exposure"] == pytest.approx(2 / 6)
+    assert support["conditional_rates"]["next_pose_tail_without_exposure"] == pytest.approx(1 / 6)
+    assert support["enrichment_vs_unexposed"] == pytest.approx(2.0)
+    assert support["next_pose_tail_capture_fraction"] == pytest.approx(2 / 3)
+    pmax = boundary["top_5pct_absolute_pmax_delta_at_t"]
+    assert pmax["selection"]["selected_count"] == 1
+    assert pmax["contingency"]["exposure_and_next_pose_tail"] == 1
+    assert pmax["enrichment_vs_unexposed"] == pytest.approx(5.5)
+    assert pmax["next_pose_tail_capture_fraction"] == pytest.approx(1 / 3)
+    np.testing.assert_array_equal(
+        arrays["it001_to_it002_support_mismatch_at_t"],
+        np.asarray([False, True, False, True, False, True, False, True, False, True, False, True]),
+    )
+    assert np.flatnonzero(arrays["it001_to_it002_top5_abs_pmax_delta_at_t"]).tolist() == [1]
+    assert np.flatnonzero(arrays["it001_to_it002_pose_tail_at_t_plus_1"]).tolist() == [1, 5, 8]
+
+
+@pytest.mark.unit
+def test_cross_iteration_tail_enrichment_names_zero_denominators():
+    empty_exposure = auditor._binary_tail_enrichment(
+        np.zeros(4, dtype=bool), np.zeros(4, dtype=bool)
+    )
+
+    assert empty_exposure["conditional_rates"]["next_pose_tail_given_exposure"] is None
+    assert empty_exposure["conditional_rates"]["next_pose_tail_without_exposure"] == 0.0
+    assert empty_exposure["enrichment_vs_unexposed"] is None
+    assert empty_exposure["next_pose_tail_capture_fraction"] is None
+    assert empty_exposure["undefined_zero_denominators"] == [
+        "pose_tail_rate_given_exposure: exposure_count=0",
+        "tail_capture_fraction: pose_tail_count=0",
+        "enrichment: pose_tail_rate_without_exposure=0",
+    ]
+
+    no_complement = auditor._binary_tail_enrichment(
+        np.ones(4, dtype=bool), np.asarray([True, False, False, False])
+    )
+    assert no_complement["conditional_rates"]["next_pose_tail_without_exposure"] is None
+    assert no_complement["enrichment_vs_unexposed"] is None
+    assert "pose_tail_rate_without_exposure: unexposed_count=0" in no_complement[
+        "undefined_zero_denominators"
+    ]
+
+
+@pytest.mark.unit
 def test_class_agreement_is_hungarian_matched_and_retains_raw_confusion():
     recovar_zero_based = np.asarray([0, 0, 1, 1, 2, 2, 3, 3])
     relion_permuted = np.asarray([3, 3, 2, 2, 4, 4, 1, 1])

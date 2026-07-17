@@ -546,6 +546,162 @@ def _compact_error_arrays(rec: dict[str, Any], rel: dict[str, Any]) -> dict[str,
     return arrays
 
 
+def _binary_tail_enrichment(exposure: np.ndarray, pose_tail: np.ndarray) -> dict[str, Any]:
+    """Summarize whether an identity-aligned exposure precedes a pose tail."""
+    exposure = np.asarray(exposure, dtype=bool).reshape(-1)
+    pose_tail = np.asarray(pose_tail, dtype=bool).reshape(-1)
+    if exposure.shape != pose_tail.shape:
+        raise AuditError(
+            f"cross-iteration enrichment shape mismatch: exposure={exposure.shape}, pose_tail={pose_tail.shape}"
+        )
+    n = int(exposure.size)
+    exposed = int(np.count_nonzero(exposure))
+    unexposed = n - exposed
+    tail = int(np.count_nonzero(pose_tail))
+    exposed_and_tail = int(np.count_nonzero(exposure & pose_tail))
+    exposed_only = exposed - exposed_and_tail
+    tail_only = tail - exposed_and_tail
+    neither = n - exposed_and_tail - exposed_only - tail_only
+
+    rate_exposed = None if exposed == 0 else float(exposed_and_tail / exposed)
+    rate_unexposed = None if unexposed == 0 else float(tail_only / unexposed)
+    capture_fraction = None if tail == 0 else float(exposed_and_tail / tail)
+    enrichment = (
+        None
+        if rate_exposed is None or rate_unexposed is None or rate_unexposed == 0.0
+        else float(rate_exposed / rate_unexposed)
+    )
+    undefined = []
+    if exposed == 0:
+        undefined.append("pose_tail_rate_given_exposure: exposure_count=0")
+    if unexposed == 0:
+        undefined.append("pose_tail_rate_without_exposure: unexposed_count=0")
+    if tail == 0:
+        undefined.append("tail_capture_fraction: pose_tail_count=0")
+    if rate_unexposed == 0.0:
+        undefined.append("enrichment: pose_tail_rate_without_exposure=0")
+    elif rate_unexposed is None or rate_exposed is None:
+        undefined.append("enrichment: conditional_rate_unavailable")
+    return {
+        "n": n,
+        "contingency": {
+            "exposure_and_next_pose_tail": exposed_and_tail,
+            "exposure_only": exposed_only,
+            "next_pose_tail_only": tail_only,
+            "neither": neither,
+        },
+        "exposure_count": exposed,
+        "unexposed_count": unexposed,
+        "next_pose_tail_count": tail,
+        "exposure_fraction": None if n == 0 else float(exposed / n),
+        "next_pose_tail_fraction": None if n == 0 else float(tail / n),
+        "conditional_rates": {
+            "next_pose_tail_given_exposure": rate_exposed,
+            "next_pose_tail_without_exposure": rate_unexposed,
+        },
+        "enrichment_vs_unexposed": enrichment,
+        "next_pose_tail_capture_fraction": capture_fraction,
+        "undefined_zero_denominators": undefined,
+    }
+
+
+def _top_fraction_mask(values: np.ndarray, fraction: float) -> tuple[np.ndarray, dict[str, Any]]:
+    """Select an exact top fraction, breaking cutoff ties by identity row."""
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    if not np.isfinite(values).all():
+        raise AuditError("top-fraction diagnostic received non-finite values")
+    if not 0.0 < fraction <= 1.0:
+        raise AuditError(f"top fraction must be in (0, 1], got {fraction}")
+    count = min(values.size, int(math.ceil(fraction * values.size)))
+    order = np.argsort(-values, kind="stable")
+    selected = order[:count]
+    mask = np.zeros(values.size, dtype=bool)
+    mask[selected] = True
+    return mask, {
+        "requested_fraction": float(fraction),
+        "selected_count": int(count),
+        "selected_fraction": None if values.size == 0 else float(count / values.size),
+        "cutoff_value": None if count == 0 else float(values[selected[-1]]),
+        "tie_break": "descending value; stable original exact-identity row order",
+    }
+
+
+def _cross_iteration_tail_enrichment(
+    aligned_errors: dict[int, dict[str, np.ndarray]],
+    *,
+    n_images: int,
+    artifact_arrays: dict[str, np.ndarray] | None = None,
+    pose_tail_threshold_deg: float = 0.1,
+    pmax_top_fraction: float = 0.05,
+) -> dict[str, Any]:
+    """Relate state mismatch at iteration t to pose tails at iteration t+1."""
+    boundaries = []
+    iterations = sorted(aligned_errors)
+    for previous, current in zip(iterations[:-1], iterations[1:], strict=True):
+        if current != previous + 1:
+            continue
+        previous_errors = aligned_errors[previous]
+        current_errors = aligned_errors[current]
+        pose_error = current_errors.get("rotation_geodesic_deg")
+        if pose_error is None:
+            boundaries.append(
+                {
+                    "previous_relion_iteration": previous,
+                    "current_relion_iteration": current,
+                    "status": "not_measured",
+                    "reason": "next-iteration Euler angles unavailable in one or both engines",
+                }
+            )
+            continue
+        for name, values in (
+            ("support_delta", previous_errors["support_delta"]),
+            ("pmax_delta", previous_errors["pmax_delta"]),
+            ("rotation_geodesic_deg", pose_error),
+        ):
+            if np.asarray(values).reshape(-1).size != n_images:
+                raise AuditError(
+                    f"cross-iteration {previous}->{current} {name} has "
+                    f"{np.asarray(values).size} identities, expected {n_images}"
+                )
+        support_exposure = np.asarray(previous_errors["support_delta"]) != 0
+        absolute_pmax = np.abs(np.asarray(previous_errors["pmax_delta"], dtype=np.float64))
+        pmax_exposure, pmax_selection = _top_fraction_mask(absolute_pmax, pmax_top_fraction)
+        pose_tail = np.asarray(pose_error, dtype=np.float64) > float(pose_tail_threshold_deg)
+        label = f"it{previous:03d}_to_it{current:03d}"
+        if artifact_arrays is not None:
+            artifact_arrays[f"{label}_support_mismatch_at_t"] = support_exposure
+            artifact_arrays[f"{label}_top5_abs_pmax_delta_at_t"] = pmax_exposure
+            artifact_arrays[f"{label}_pose_tail_at_t_plus_1"] = pose_tail
+        boundaries.append(
+            {
+                "previous_relion_iteration": previous,
+                "current_relion_iteration": current,
+                "status": "measured",
+                "significant_support_count_mismatch_at_t": _binary_tail_enrichment(
+                    support_exposure, pose_tail
+                ),
+                "top_5pct_absolute_pmax_delta_at_t": {
+                    "selection": pmax_selection,
+                    **_binary_tail_enrichment(pmax_exposure, pose_tail),
+                },
+            }
+        )
+    return {
+        "status": "measured" if boundaries else "not_measured",
+        "diagnostic_only": True,
+        "identity_alignment": "exact rlnImageName row identity across every numbered state",
+        "pose_tail_definition": f"cross-engine rotation geodesic error > {pose_tail_threshold_deg:g} degrees at t+1",
+        "support_exposure_definition": "RECOVAR significant-support count != RELION count at t",
+        "pmax_exposure_definition": (
+            f"exact top ceil({pmax_top_fraction:g} * n_images) absolute cross-engine Pmax deltas at t"
+        ),
+        "zero_denominator_policy": "undefined conditional rates, enrichment, or capture fractions are null and named explicitly",
+        "quality_gate": "none; descriptive aggregate triage only",
+        "correlation": "not computed",
+        "boundaries": boundaries,
+    }
+
+
 def _fixed_pmax_groups(values: np.ndarray) -> list[tuple[str, np.ndarray]]:
     edges = (0.0, 0.5, 0.9, 0.99, math.inf)
     labels = ("lt_0.5", "0.5_to_0.9", "0.9_to_0.99", "ge_0.99")
@@ -1073,6 +1229,7 @@ def audit(
             )
 
         rows = []
+        aligned_errors: dict[int, dict[str, np.ndarray]] = {}
         for rec_iteration, rel_iteration in matched:
             rel_state, _ = _load_relion_state(relion_stars[rel_iteration], identities)
             rec_state = _load_recovar_state(npz, rec_iteration, n_images, rel_state["translation_units"])
@@ -1123,6 +1280,8 @@ def audit(
                     rec_state, rel_state, control_state, control_reference_state
                 )
 
+            compact_errors = _compact_error_arrays(rec_state, rel_state)
+            aligned_errors[rel_iteration] = compact_errors
             rows.append(
                 {
                     "recovar_iteration": rec_iteration,
@@ -1143,9 +1302,15 @@ def audit(
                 artifact_arrays.update(
                     {
                         f"it{rel_iteration:03d}_{name}": value
-                        for name, value in _compact_error_arrays(rec_state, rel_state).items()
+                        for name, value in compact_errors.items()
                     }
                 )
+
+        cross_iteration_tail_enrichment = _cross_iteration_tail_enrichment(
+            aligned_errors,
+            n_images=n_images,
+            artifact_arrays=artifact_arrays,
+        )
 
         final = _not_measured("no complete RECOVAR/RELION final all-data state was available")
         final_all_data_ran = (
@@ -1263,6 +1428,7 @@ def audit(
             "label_when": "cohort absolute-mean error >= 2x whole-iteration absolute-mean error",
             "interpretation": "aggregate triage label only; not a particle-level quality gate",
         },
+        "cross_iteration_tail_enrichment": cross_iteration_tail_enrichment,
         "iterations": rows,
         "final_all_data": final,
         "convergence_topology": convergence,
