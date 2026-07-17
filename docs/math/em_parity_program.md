@@ -90,7 +90,7 @@ Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
 Current integrated implementation checkpoint before this board update:
-`964d6e8265f722710d092e63d0eee90a3a57bc48`
+`94b8f2b2e8844c34ca72b378465696baef41f91c`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -140,6 +140,13 @@ Known evidence:
   100k/256 validation. The existing real EMPIAR-10076 failure is already localized to
   iteration-3 low-shell PPref formation before amplification at the
   iteration-8 global-to-local transition.
+- Real-10076 iteration-1 BPref factor replay identified a production local-EM
+  weighted-sum precision defect. Full float32 products reduce the frozen
+  RELION numerator gap from `2.07567e-4` to `3.39177e-7` (`611.97x`).
+  Same-A100 control/fix maps have minimum FSC-AUC `0.9999999863`, and the fix
+  slightly improves both half-map and merged RELION FSC-AUC. This closes the
+  one-iteration causal boundary only; full real-data trajectory parity and a
+  clean warmed performance comparison remain open.
 
 Canonical evidence and paths are in `docs/math/relion_parity_agent_notes.md`
 and `docs/math/em_parity_best_metrics.md`.
@@ -235,6 +242,14 @@ and recompute are bitwise identical at the changed boundary; all 3,000 poses,
 translations, and hard assignments remain exact, direct map FSC-AUC is at
 least `0.999999999845`, and the clean controls improve wall time by
 `10.7--15.8%`.
+
+The local weighted-sum precision repair is integrated at `94b8f2b2`. Its
+sealed same-A100 diagnostic is accepted as a causal production bug fix, not
+as trajectory completion or performance evidence. A corrected 100k/256 full
+trajectory is running under Slurm job `11288959`, followed by FSC/FSC-AUC
+audit job `11288960`. Compare its complete schedule, convergence,
+finalization, cross-engine FSC-AUC, and GT FSC-AUC before expanding the patch
+to alternate dense M-step routes.
 
 K=4 case 11 now has a recurrent aggregate iteration-1 membership boundary:
 RELION and RECOVAR agree for 9,999/10,000 particles in a same-A100 six-arm
@@ -4680,3 +4695,6 @@ Canonical evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_factor_boundary_20260716T235500Z/artifacts/factor_comparison_v1.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_tf32_same_gpu3_ab_20260717T034500Z/analysis_v2.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ab_20260717T005507Z/real10076_highest_ab_report_v1.json` (SHA-256 `c6a7d81f473fe793bc76363233e76bc26ee66afe4e3fd5169a9a181abf9441c5`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ab_20260717T005507Z/real10076_highest_ab_seal_v1.json` (SHA-256 `4ea738680379aec8318ce7c569eb272f820369751d45495a31cf535aa6a2ff54`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ab_20260717T005507Z/real10076_highest_ab_manifest_v1.sha256` (SHA-256 `6f20ff79bc47b83f4f198b28a35a332487a1ea93188e5e8bf769f507df33831c`; all 13 entries verified)
