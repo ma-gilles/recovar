@@ -28,10 +28,11 @@ def _write_capture(path, *, stack, selected_text="17,23", rank=2):
     hypotheses["posterior"] = [0.2, 1.0, 0.1, 0.3]
     hypotheses["posterior_over_weight_norm"] = hypotheses["posterior"]
     hypotheses["flags"][1] = 1
-    pixels = np.zeros(3, dtype=validator.PIXEL_DTYPE)
-    pixels["pixel"] = [0, 1, 2]
-    pixels["x"] = [0, 1, 2]
-    pixels["image_re"] = [1, 2, 3]
+    pixels = np.zeros(12, dtype=validator.PIXEL_DTYPE)
+    pixels["pixel"] = np.arange(12)
+    pixels["x"] = np.tile(np.arange(3), 4)
+    pixels["y"] = np.repeat([0, 1, 2, -1], 3)
+    pixels["image_re"] = np.arange(1, 13)
     pixels["ctf"] = 1
     pixels["minvsigma2"] = 1
     summaries = np.zeros(2, dtype=ROW_DTYPE)
@@ -42,28 +43,28 @@ def _write_capture(path, *, stack, selected_text="17,23", rank=2):
     summaries["x"] = [0, 1]
     summaries["source_re"] = [1, 2]
     summaries["source_weight"] = 1
-    terms = np.zeros(3, dtype=validator.TERM_DTYPE)
+    terms = np.zeros(12, dtype=validator.TERM_DTYPE)
     terms["state"] = 1
     terms["orientation_local"] = 0
     terms["translation"] = 1
-    terms["pixel"] = [0, 1, 2]
+    terms["pixel"] = np.arange(12)
     terms["flags"] = 1
-    terms["translated_re"] = [1, 2, 3]
+    terms["translated_re"] = np.arange(1, 13)
     terms["posterior_over_weight_norm"] = 1
     terms["weighted_ctf"] = 1
-    terms["term_re"] = [1, 2, 3]
+    terms["term_re"] = np.arange(1, 13)
     terms["weight_term"] = 1
 
     header = [0] * 64
     header[:9] = [2, 528, 64, 24, 24, 40, 40, 56, 64]
     header[9:16] = [1, 1, stack + 100, stack, 0, rank, 0]
-    header[16:22] = [3, 1, 1, 3, 2, 2]
+    header[16:22] = [3, 4, 1, 12, 2, 2]
     header[22:29] = [1, 1, _bits(2.0), _bits(0.999), _bits(1.0), 0, 0]
     header[29:37] = [2, 2, 2, 10_000_000, 1_000_000, 1, 2, validator.fnv1a64(selected_text)]
     header[37:43] = [5, 9, 9, (-4) & 0xFFFFFFFFFFFFFFFF, (-4) & 0xFFFFFFFFFFFFFFFF, 1]
-    header[43:53] = [3, 1, 1, 2, 2, 4, 3, 2, 3, 1]
+    header[43:53] = [3, 1, 1, 2, 2, 4, 12, 2, 12, 1]
     magic = validator.HEADER_MAGIC
-    footer = validator.FOOTER_STRUCT.pack(validator.FOOTER_MAGIC, 2, 2, 4, 3, 2, 3)
+    footer = validator.FOOTER_STRUCT.pack(validator.FOOTER_MAGIC, 2, 2, 4, 12, 2, 12)
     payload = validator.HEADER_STRUCT.pack(magic, *header)
     payload += rotations.tobytes() + translations.tobytes() + hypotheses.tobytes()
     payload += pixels.tobytes() + summaries.tobytes() + terms.tobytes() + footer
