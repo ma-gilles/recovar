@@ -63,6 +63,7 @@ class RelionParityOptions:
     perturb_replay_relion_dir: str | None = None
     perturb_replay_relion_prefix: str = "run"
     perturb_replay_precision: Literal["auto", "seed_exact", "star"] = "auto"
+    perturb_replay_restart_state_iterations: tuple[int, ...] = ()
     emulate_relion_firstiter_cc: bool = False
     relion_firstiter_ini_high_angstrom: float | None = None
     do_solvent_fsc_correction: bool = False

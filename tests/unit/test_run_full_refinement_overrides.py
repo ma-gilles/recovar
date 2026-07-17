@@ -176,6 +176,17 @@ def test_runner_threads_fail_closed_sparse_follower_scale_replay():
     assert '("relion_follower_scale_replay_applied_iterations", np.int64)' in source
 
 
+def test_runner_requires_and_persists_perturbation_restart_provenance():
+    source = RUN_FULL_REFINEMENT.read_text()
+
+    assert '"--perturb-replay-restart-provenance"' in source
+    assert '"--perturb-replay-restart-state-iterations requires "' in source
+    assert '"--perturb-replay-restart-provenance"' in source
+    assert '"perturb_replay_restart_state_iterations"' in source
+    assert '"perturb_replay_restart_provenance_path"' in source
+    assert '"perturb_replay_restart_provenance_sha256"' in source
+
+
 def test_save_intermediates_skip_unregularized_passes_to_refinement_loop():
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
     calls = [

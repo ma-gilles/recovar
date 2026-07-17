@@ -13,6 +13,7 @@ import gc
 import hashlib
 import logging
 import os
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -335,6 +336,7 @@ def _resolve_replay_random_perturbation(
     replay_prefix: str = "run",
     explicit_seed: int | None,
     precision_mode: str,
+    restart_state_iteration: int | None = None,
 ) -> tuple[float, str]:
     """Recover RELION's live perturbation without STAR decimal truncation."""
     if precision_mode not in {"auto", "seed_exact", "star"}:
@@ -360,6 +362,7 @@ def _resolve_replay_random_perturbation(
         float(perturbation_factor),
         int(seed),
         int(relion_iteration),
+        restart_state_iteration=restart_state_iteration,
     )
     # RELION writes this field with as few as five digits after the decimal.
     # Treat the STAR value as a provenance guard, not as the arithmetic input.
@@ -369,7 +372,64 @@ def _resolve_replay_random_perturbation(
             f"iteration={relion_iteration} seed={seed} exact={exact:+.12g} "
             f"star={float(star_value):+.12g}"
         )
-    return float(exact), "seed-exact"
+    source = "seed-exact"
+    if restart_state_iteration is not None:
+        source = f"seed-exact-restart@{int(restart_state_iteration)}"
+    return float(exact), source
+
+
+def _perturbation_restart_state_iteration(
+    restart_state_iterations,
+    relion_iteration: int,
+) -> int | None:
+    """Return the latest explicit restart boundary preceding an iteration."""
+    if restart_state_iterations is None:
+        return None
+    candidates = [
+        int(value)
+        for value in restart_state_iterations
+        if int(value) < int(relion_iteration)
+    ]
+    return max(candidates) if candidates else None
+
+
+def _validate_coupled_relion_restart_state(
+    perturb_restart_state_iterations,
+    follower_replay_by_iteration,
+    follower_replay_source_artifacts,
+) -> None:
+    """Fail closed when a strict Class3D continuation restores partial state."""
+    restart_numbered_iterations = {
+        int(saved_state_iteration) + 1
+        for saved_state_iteration in perturb_restart_state_iterations
+    }
+    follower_replay_numbered_iterations = {
+        int(relion_iteration) for relion_iteration in follower_replay_by_iteration
+    }
+    missing_follower_restarts = sorted(
+        restart_numbered_iterations - follower_replay_numbered_iterations
+    )
+    if missing_follower_restarts:
+        raise ValueError(
+            "RELION perturbation restart boundaries require matching follower-scale "
+            "replay at numbered_pre_score; missing numbered iterations "
+            f"{missing_follower_restarts}"
+        )
+
+    model_source_restart_iterations = set()
+    for source_path in follower_replay_source_artifacts:
+        match = re.fullmatch(r"run_it(\d+)_model\.star", os.path.basename(str(source_path)))
+        if match is not None:
+            model_source_restart_iterations.add(int(match.group(1)) + 1)
+    unmatched_model_restarts = sorted(
+        model_source_restart_iterations - restart_numbered_iterations
+    )
+    if unmatched_model_restarts:
+        raise ValueError(
+            "RELION follower-scale replay loaded from continuation model state requires "
+            "a matching perturbation restart boundary; unmatched numbered iterations "
+            f"{unmatched_model_restarts}"
+        )
 
 
 def _debug_replay_relion_references_enabled(iteration_number: int) -> bool:
@@ -3657,6 +3717,7 @@ def refine_single_volume(
     perturb_replay_relion_dir=None,
     perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
+    perturb_replay_restart_state_iterations=(),
     init_fsc=None,
     init_ave_Pmax=None,
     init_has_high_fsc_at_limit=None,
@@ -3835,6 +3896,7 @@ def refine_single_volume(
         perturb_replay_relion_dir = parity.perturb_replay_relion_dir
         perturb_replay_relion_prefix = parity.perturb_replay_relion_prefix
         perturb_replay_precision = parity.perturb_replay_precision
+        perturb_replay_restart_state_iterations = parity.perturb_replay_restart_state_iterations
         emulate_relion_firstiter_cc = parity.emulate_relion_firstiter_cc
         relion_firstiter_ini_high_angstrom = parity.relion_firstiter_ini_high_angstrom
         do_solvent_fsc_correction = parity.do_solvent_fsc_correction
@@ -3919,6 +3981,7 @@ def refine_single_volume(
         perturb_replay_relion_dir=perturb_replay_relion_dir,
         perturb_replay_relion_prefix=perturb_replay_relion_prefix,
         perturb_replay_precision=perturb_replay_precision,
+        perturb_replay_restart_state_iterations=perturb_replay_restart_state_iterations,
         init_fsc=init_fsc,
         init_ave_Pmax=init_ave_Pmax,
         init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
@@ -4001,6 +4064,7 @@ def _run_relion_iteration_loop(
     perturb_replay_relion_dir=None,
     perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
+    perturb_replay_restart_state_iterations=(),
     init_fsc=None,
     init_ave_Pmax=None,
     init_has_high_fsc_at_limit=None,
@@ -4057,6 +4121,21 @@ def _run_relion_iteration_loop(
         raise ValueError(
             "image_fourier_backend must be 'host_numpy', 'jax_gpu', or 'relion_cuda', "
             f"got {image_fourier_backend!r}"
+        )
+
+    perturb_replay_restart_state_iterations = tuple(
+        sorted({int(value) for value in perturb_replay_restart_state_iterations})
+    )
+    if any(value < 0 for value in perturb_replay_restart_state_iterations):
+        raise ValueError("perturbation replay restart-state iterations must be non-negative")
+    if perturb_replay_restart_state_iterations and perturb_replay_relion_dir is None:
+        raise ValueError(
+            "perturbation replay restart-state iterations require perturb_replay_relion_dir"
+        )
+    if perturb_replay_restart_state_iterations:
+        logger.info(
+            "Perturbation replay restart provenance: saved-state iterations=%s",
+            list(perturb_replay_restart_state_iterations),
         )
 
     setup_t0 = time.time()
@@ -4628,6 +4707,20 @@ def _run_relion_iteration_loop(
                     strict=True,
                 )
             }
+
+        # A RELION continuation reconstructs two independent pieces of process
+        # state at the same numbered boundary: HealpixSampling's perturbation
+        # RNG state and every follower's leader-serialized group scales.  In a
+        # strict K-class replay it is invalid to restart only one of them.
+        _validate_coupled_relion_restart_state(
+            perturb_replay_restart_state_iterations,
+            relion_follower_scale_replay_by_iteration,
+            (
+                ()
+                if relion_follower_scale_replay is None
+                else relion_follower_scale_replay.source_artifact_relative_paths
+            ),
+        )
         first_relion_iteration = int(init_relion_iteration) + 1
         relion_follower_owners_per_half = [
             owners.copy()
@@ -5327,6 +5420,10 @@ def _run_relion_iteration_loop(
         # the coarse grid IS the trial grid so we apply directly here.
         if _replay_meta is not None:
             replay_relion_iteration = int(init_relion_iteration) + int(iteration) + 1
+            replay_restart_state_iteration = _perturbation_restart_state_iteration(
+                perturb_replay_restart_state_iterations,
+                replay_relion_iteration,
+            )
             random_perturbation, replay_perturbation_source = _resolve_replay_random_perturbation(
                 star_value=float(_replay_meta["random_perturbation"]),
                 perturbation_factor=float(_replay_meta["perturbation_factor"]),
@@ -5335,6 +5432,7 @@ def _run_relion_iteration_loop(
                 replay_prefix=perturb_replay_relion_prefix,
                 explicit_seed=perturb_seed,
                 precision_mode=str(perturb_replay_precision),
+                restart_state_iteration=replay_restart_state_iteration,
             )
             logger.info(
                 "Perturbation replay: iter=%d rp=%+.12g pf=%.3f relion_hp_order=%d source=%s",
@@ -8324,6 +8422,10 @@ def _run_relion_iteration_loop(
                 if final_sampling_star_source == "last-numbered"
                 else final_sampling_relion_iteration
             )
+            final_restart_state_iteration = _perturbation_restart_state_iteration(
+                perturb_replay_restart_state_iterations,
+                final_replay_relion_iteration,
+            )
             final_random_perturbation, final_perturbation_source = _resolve_replay_random_perturbation(
                 star_value=float(final_replay_meta["random_perturbation"]),
                 perturbation_factor=final_perturbation_factor,
@@ -8332,6 +8434,7 @@ def _run_relion_iteration_loop(
                 replay_prefix=perturb_replay_relion_prefix,
                 explicit_seed=perturb_seed,
                 precision_mode=str(perturb_replay_precision),
+                restart_state_iteration=final_restart_state_iteration,
             )
             final_perturbation_healpix_order = int(final_replay_meta["healpix_order"])
             px = float(cryo.voxel_size) if cryo.voxel_size > 0 else 1.0

@@ -101,6 +101,14 @@ def _shell_index_to_resolution_angstrom(shell_index, grid_size, voxel_size):
     return float(grid_size) * float(voxel_size) / shell_index
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _resolve_relion_sampling_orders(healpix_order: int, adaptive_oversampling: int) -> tuple[int, int]:
     """Return RELION coarse pass-1 and fine pass-2 HEALPix orders.
 
@@ -1507,6 +1515,27 @@ def main():
         "--perturb_seed for same-seed autonomous refinement.",
     )
     parser.add_argument(
+        "--perturb-replay-restart-state-iterations",
+        default="",
+        help=(
+            "Comma-separated numbered RELION sampling-state iterations where a "
+            "provenance-qualified continuation restarted its sampling object. "
+            "The next expectation reconstructs the unrounded perturbation from "
+            "RELION's seed-1 restart state and random_seed+iteration; STAR values "
+            "remain strict consistency guards. Example: 11 for a rescue whose "
+            "first continued expectation is numbered iteration 12."
+        ),
+    )
+    parser.add_argument(
+        "--perturb-replay-restart-provenance",
+        default=None,
+        help=(
+            "Required provenance file for --perturb-replay-restart-state-iterations. "
+            "Its resolved path and SHA256 are recorded in refinement_results.npz and "
+            "the benchmark ledger."
+        ),
+    )
+    parser.add_argument(
         "--relion-scale-followers",
         type=int,
         default=None,
@@ -2605,6 +2634,51 @@ def main():
     t_start = time.time()
 
     effective_perturb_seed = _effective_perturb_seed(args)
+    perturb_replay_restart_state_iterations = tuple(
+        sorted(
+            {
+                int(token.strip())
+                for token in args.perturb_replay_restart_state_iterations.split(",")
+                if token.strip()
+            }
+        )
+    )
+    if any(value < 0 for value in perturb_replay_restart_state_iterations):
+        raise SystemExit("--perturb-replay-restart-state-iterations values must be non-negative")
+    if perturb_replay_restart_state_iterations and args.perturb_replay_relion_dir is None:
+        raise SystemExit(
+            "--perturb-replay-restart-state-iterations requires --perturb_replay_relion_dir"
+        )
+    perturb_replay_restart_provenance_path = None
+    perturb_replay_restart_provenance_sha256 = None
+    if perturb_replay_restart_state_iterations:
+        if args.perturb_replay_restart_provenance is None:
+            raise SystemExit(
+                "--perturb-replay-restart-state-iterations requires "
+                "--perturb-replay-restart-provenance"
+            )
+        perturb_replay_restart_provenance_path = Path(
+            args.perturb_replay_restart_provenance
+        ).expanduser().resolve()
+        if not perturb_replay_restart_provenance_path.is_file():
+            raise SystemExit(
+                "--perturb-replay-restart-provenance is not a file: "
+                f"{perturb_replay_restart_provenance_path}"
+            )
+        perturb_replay_restart_provenance_sha256 = _sha256_file(
+            perturb_replay_restart_provenance_path
+        )
+        logger.info(
+            "SamplingPerturbation restart provenance: iterations=%s path=%s sha256=%s",
+            list(perturb_replay_restart_state_iterations),
+            perturb_replay_restart_provenance_path,
+            perturb_replay_restart_provenance_sha256,
+        )
+    elif args.perturb_replay_restart_provenance is not None:
+        raise SystemExit(
+            "--perturb-replay-restart-provenance requires "
+            "--perturb-replay-restart-state-iterations"
+        )
     logger.info(
         "SamplingPerturbation seed: %s%s",
         "unseeded" if effective_perturb_seed is None else str(effective_perturb_seed),
@@ -2660,6 +2734,7 @@ def main():
         expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
         expected_accuracy_half1_particle_ids=expected_accuracy_half1_particle_ids,
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,
+        perturb_replay_restart_state_iterations=perturb_replay_restart_state_iterations,
         replay_iteration_overrides=replay_iteration_overrides,
         init_relion_iteration=args.init_relion_iteration,
         n_classes=args.n_classes,
@@ -2744,6 +2819,17 @@ def main():
             "global_profile_rows": global_profile_rows,
             "timing_rows": timing_rows,
             "timing_summary": timing_summary,
+            "perturb_replay_restart_state_iterations": list(
+                perturb_replay_restart_state_iterations
+            ),
+            "perturb_replay_restart_provenance_path": (
+                str(perturb_replay_restart_provenance_path)
+                if perturb_replay_restart_provenance_path is not None
+                else None
+            ),
+            "perturb_replay_restart_provenance_sha256": (
+                perturb_replay_restart_provenance_sha256
+            ),
         }
         profile_path = Path(args.output) / "local_search_profile_only.json"
         profile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2794,6 +2880,18 @@ def main():
         "firstiter_cc_effective": np.bool_(bool(args.firstiter_cc)),
         "half1_indices": half1_idx,
         "half2_indices": half2_idx,
+        "perturb_replay_restart_state_iterations": np.asarray(
+            perturb_replay_restart_state_iterations,
+            dtype=np.int64,
+        ),
+        "perturb_replay_restart_provenance_path": np.asarray(
+            ""
+            if perturb_replay_restart_provenance_path is None
+            else str(perturb_replay_restart_provenance_path)
+        ),
+        "perturb_replay_restart_provenance_sha256": np.asarray(
+            perturb_replay_restart_provenance_sha256 or ""
+        ),
     }
     if relion_follower_scale_replay is not None:
         save_dict["relion_follower_scale_replay_iterations"] = np.asarray(
@@ -3229,6 +3327,17 @@ def main():
             "global_profile_rows": global_profile_rows,
             "timing_rows": timing_rows,
             "timing_summary": timing_summary,
+            "perturb_replay_restart_state_iterations": list(
+                perturb_replay_restart_state_iterations
+            ),
+            "perturb_replay_restart_provenance_path": (
+                str(perturb_replay_restart_provenance_path)
+                if perturb_replay_restart_provenance_path is not None
+                else None
+            ),
+            "perturb_replay_restart_provenance_sha256": (
+                perturb_replay_restart_provenance_sha256
+            ),
         }
         with ledger_path.open("w", encoding="utf-8") as f:
             json.dump(ledger, f, indent=2, sort_keys=True)

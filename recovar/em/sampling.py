@@ -407,17 +407,42 @@ def advance_relion_perturbation_from_seed(prev_random_perturbation, perturbation
     return _wrap_relion_perturbation(new, pf)
 
 
-def relion_sampling_perturbation_for_iteration(perturbation_factor, random_seed, relion_iteration):
+def relion_sampling_perturbation_for_iteration(
+    perturbation_factor,
+    random_seed,
+    relion_iteration,
+    *,
+    restart_state_iteration=None,
+):
     """Return RELION's stored SamplingPerturbation at ``run_itNNN``.
 
     ``run_it000_sampling.star`` is written after the initial sampling object has
     already advanced once from the C RNG default state. Later expectation
     iterations re-seed with ``random_seed + iter`` before advancing.
+
+    ``restart_state_iteration`` records an explicit RELION continuation
+    boundary. ``HealpixSampling::read`` restores the perturbation factor but
+    not ``random_perturbation``; the later ``initialise`` call therefore
+    advances a clear sampling object with RELION's seed-1 stream. The saved
+    state at that boundary is that seed-1 initial value rather than the value
+    obtained by advancing one uninterrupted process from iteration zero. The
+    next expectation still uses ``random_seed + iter``. This option is only
+    for replaying a provenance-qualified, stitched RELION trajectory.
     """
     if relion_iteration < 0:
         raise ValueError("relion_iteration must be non-negative")
+    if restart_state_iteration is not None:
+        restart_state_iteration = int(restart_state_iteration)
+        if restart_state_iteration < 0:
+            raise ValueError("restart_state_iteration must be non-negative")
+        if restart_state_iteration >= int(relion_iteration):
+            raise ValueError(
+                "restart_state_iteration must precede relion_iteration "
+                f"({restart_state_iteration} >= {int(relion_iteration)})"
+            )
     current = advance_relion_perturbation_from_seed(0.0, perturbation_factor, seed=1)
-    for iter_idx in range(1, int(relion_iteration) + 1):
+    first_advance = 1 if restart_state_iteration is None else restart_state_iteration + 1
+    for iter_idx in range(first_advance, int(relion_iteration) + 1):
         current = advance_relion_perturbation_from_seed(
             current,
             perturbation_factor,

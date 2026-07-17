@@ -178,6 +178,28 @@ def test_relion_seeded_sampling_perturbation_preserves_scaled_rnd_unif_rounding(
     assert relion_sampling_perturbation_for_iteration(0.5, 1731, 1) == -0.11648395657539368
 
 
+def test_relion_seeded_sampling_perturbation_restart_segment():
+    seed = 1778628798
+    restart_state_iteration = 11
+
+    values = [
+        relion_sampling_perturbation_for_iteration(
+            0.5,
+            seed,
+            iteration,
+            restart_state_iteration=restart_state_iteration,
+        )
+        for iteration in range(12, 16)
+    ]
+
+    assert values == [
+        -0.06873074173927307,
+        0.367313414812088,
+        -0.23276200890541077,
+        0.25697559118270874,
+    ]
+
+
 def test_pose_history_by_image_restores_original_particle_order():
     half_indices = [
         np.asarray([2, 0], dtype=np.int64),

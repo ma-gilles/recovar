@@ -11,6 +11,7 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _remap_relion_follower_runtime_inputs,
     _require_relion_follower_owners,
     _run_relion_iteration_loop,
+    _validate_coupled_relion_restart_state,
 )
 from recovar.em.dense_single_volume.mean_helpers import update_relion_norm_scale_corrections
 from recovar.em.dense_single_volume.relion_replay import (
@@ -730,6 +731,47 @@ def test_follower_scale_replay_loads_sparse_complete_states_and_validates_topolo
         )
 
 
+def test_follower_scale_replay_reloads_continuation_model_on_every_follower(tmp_path):
+    model = tmp_path / "run_it011_model.star"
+    model.write_text(
+        """data_model_groups
+
+loop_
+_rlnGroupNumber #1
+_rlnGroupName #2
+_rlnGroupNrParticles #3
+_rlnGroupScaleCorrection #4
+1 group1 4 0.916122
+2 group2 5 1.194794
+"""
+    )
+    scales = np.asarray(
+        [[[0.916122, 1.194794], [0.916122, 1.194794]]],
+        dtype=np.float64,
+    )
+    replay = RelionFollowerScaleReplay(
+        relion_iterations=np.asarray([12], dtype=np.int64),
+        follower_scales=scales,
+        oracle_id=_ORACLE_ID,
+        schema_version=1,
+        boundary="numbered_pre_score",
+        source_artifact_relative_paths=(model.name,),
+        source="RELION continuation model reload",
+    )
+
+    validate_relion_follower_scale_replay(
+        replay,
+        n_followers=2,
+        n_groups=2,
+        schedule_iterations=[12],
+        schedule_oracle_id=_ORACLE_ID,
+        schedule_artifact_paths=[model.name],
+        numbered_iterations=[12],
+        first_numbered_iteration=1,
+        oracle_dir=tmp_path,
+    )
+
+
 def test_follower_scale_replay_rejects_first_and_outside_numbered_iterations():
     first = RelionFollowerScaleReplay(
         relion_iterations=np.asarray([1], dtype=np.int64),
@@ -960,6 +1002,28 @@ def test_sparse_follower_scale_replay_replaces_state_before_remap_and_telemetry(
     )
 
     assert replay_lookup < state_replace < owner_remap < pre_score_telemetry
+
+
+def test_strict_restart_requires_coupled_perturbation_and_model_scale_state():
+    _validate_coupled_relion_restart_state(
+        perturb_restart_state_iterations=(11,),
+        follower_replay_by_iteration={12: np.ones((2, 4))},
+        follower_replay_source_artifacts=("run_it011_model.star",),
+    )
+
+    with np.testing.assert_raises_regex(ValueError, "missing numbered iterations.*12"):
+        _validate_coupled_relion_restart_state(
+            perturb_restart_state_iterations=(11,),
+            follower_replay_by_iteration={},
+            follower_replay_source_artifacts=(),
+        )
+
+    with np.testing.assert_raises_regex(ValueError, "unmatched numbered iterations.*12"):
+        _validate_coupled_relion_restart_state(
+            perturb_restart_state_iterations=(),
+            follower_replay_by_iteration={12: np.ones((2, 4))},
+            follower_replay_source_artifacts=("run_it011_model.star",),
+        )
 
 
 def test_sparse_follower_scale_replay_accounting_guards_every_result_return():

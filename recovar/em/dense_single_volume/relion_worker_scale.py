@@ -130,13 +130,50 @@ def _relion_dispatch_chunk_columns(rows: np.ndarray, n_particles: int):
 def _load_relion_follower_scale_sources(
     oracle_dir: str | Path,
     artifact_paths,
+    *,
+    n_followers: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Parse canonical RELION follower post-scale TSV dumps."""
+    """Parse canonical follower dumps or a continuation model checkpoint."""
 
     root = Path(oracle_dir).expanduser().resolve()
     records: dict[tuple[int, int, int], float] = {}
     for relative in _validate_oracle_artifact_paths(artifact_paths):
         path = root / relative
+        model_match = re.search(r"run_it(\d+)_model\.star$", path.name)
+        if model_match is not None:
+            if n_followers is None or int(n_followers) < 1:
+                raise ValueError(
+                    "continuation model follower-scale replay requires n_followers"
+                )
+            try:
+                import starfile
+
+                blocks = starfile.read(path, always_dict=True)
+                groups = blocks["model_groups"]
+                group_numbers = np.asarray(groups["rlnGroupNumber"], dtype=np.int64)
+                group_scales = np.asarray(
+                    groups["rlnGroupScaleCorrection"], dtype=np.float64
+                )
+            except Exception as exc:
+                raise ValueError(
+                    f"cannot parse continuation model group scales {path}: {exc}"
+                ) from exc
+            order = np.argsort(group_numbers, kind="stable")
+            group_numbers = group_numbers[order]
+            group_scales = group_scales[order]
+            expected_numbers = np.arange(1, group_numbers.size + 1, dtype=np.int64)
+            if not np.array_equal(group_numbers, expected_numbers):
+                raise ValueError(
+                    f"continuation model {path} group numbers must be contiguous and 1-based"
+                )
+            iteration = int(model_match.group(1))
+            # RELION continuation reloads the one leader-serialized model on
+            # every follower before numbered iteration n+1. The STAR decimals
+            # are therefore the exact restart inputs, not rounded diagnostics.
+            for rank in range(1, int(n_followers) + 1):
+                for group_index, scale in enumerate(group_scales):
+                    records[(iteration, rank, group_index)] = float(scale)
+            continue
         try:
             table = np.genfromtxt(path, names=True, delimiter="\t", encoding="utf-8")
         except (OSError, ValueError) as exc:
@@ -445,6 +482,7 @@ def validate_relion_follower_scale_replay(
         source_iterations, source_scales = _load_relion_follower_scale_sources(
             oracle_dir,
             source_artifacts,
+            n_followers=scales.shape[1],
         )
         # The raw dumps are written after M-step n; this replay boundary is
         # the next numbered pre-score step n+1.
