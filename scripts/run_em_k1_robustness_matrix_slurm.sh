@@ -682,6 +682,10 @@ fi
 # The default setup partition is CPU-only.  Install RECOVAR and build the
 # host RELION binding here; each GPU case builds/reuses the shared custom CUDA
 # library under cuda/build.lock after CUDA is actually available.
+export JAX_PLATFORMS=cpu
+export JAX_PLATFORM_NAME=cpu
+export RECOVAR_DISABLE_CUDA=1
+export CUDA_VISIBLE_DEVICES=""
 
 "\${PIXI_PY}" - <<'PY'
 import os

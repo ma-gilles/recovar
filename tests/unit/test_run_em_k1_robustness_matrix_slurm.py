@@ -230,6 +230,11 @@ def test_case_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
         "--ignore-installed"
     ) in setup_text
     assert '"${PIXI_PY}" recovar/relion_bind/build.py' in setup_text
+    setup_gate = setup_text.split("# The default setup partition is CPU-only.", maxsplit=1)[1]
+    assert "export JAX_PLATFORMS=cpu" in setup_gate
+    assert "export JAX_PLATFORM_NAME=cpu" in setup_gate
+    assert "export RECOVAR_DISABLE_CUDA=1" in setup_gate
+    assert 'export CUDA_VISIBLE_DEVICES=""' in setup_gate
     assert 'rm -rf "${RECOVAR_RELION_BIND_BUILD_DIR:?}"' in setup_text
     assert 'rm -rf "${RECOVAR_RELION_BIND_BUILD_DIR:?}"' not in case_text
     assert "recovar/relion_bind/build.py" not in case_text
