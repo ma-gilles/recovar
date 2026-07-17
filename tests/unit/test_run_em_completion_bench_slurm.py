@@ -99,7 +99,8 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     assert 'mkdir -p "${OUTPUT_DIR}/intermediates"' in k1_text
     assert '--save_intermediates_dir "${OUTPUT_DIR}/intermediates"' in k1_text
     assert "--save_intermediates_skip_unregularized" in k1_text
-    assert "--local-search-profile off" in k1_text
+    assert "--local_search_profile off" in k1_text
+    assert "--local-search-profile" not in k1_text
     assert "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0" in submission_env_text
     assert "TRAJECTORY_ARGS=(--relion_init_dir" in k1_text
     assert 'if [[ "autonomous" == "relion-replay" ]]' in k1_text
@@ -230,7 +231,7 @@ def test_completion_k1_intermediates_can_be_disabled(tmp_path):
     assert "K1_SAVE_INTERMEDIATES=0" in submission_env_text
     assert "--save_intermediates_dir" not in k1_text
     assert "--save_intermediates_skip_unregularized" not in k1_text
-    assert "--local-search-profile off" not in k1_text
+    assert "--local_search_profile off" not in k1_text
 
 
 def test_completion_k4_resource_overrides_are_written(tmp_path):

@@ -864,7 +864,7 @@ mkdir -p "${OUTPUT_DIR}/intermediates"
 REFINEMENT_EXTRA_ARGS+=(
   --save_intermediates_dir "${OUTPUT_DIR}/intermediates"
   --save_intermediates_skip_unregularized
-  --local-search-profile off
+  --local_search_profile off
 )
 SETUP
 )"
