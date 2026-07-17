@@ -20,12 +20,12 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
     batch_adjoint_slice_volume_maybe_windowed as _batch_adjoint_slice_volume_maybe_windowed,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_values_jax
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     half_image_phase_factors,
     tiled_half_image_phase_factors,
 )
 from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
-from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_values_jax
 from recovar.em.dense_single_volume.helpers.projection import (
     DEFAULT_PROJECTION_MAX_R,
     compute_relion_projector_projections_block,
@@ -33,8 +33,15 @@ from recovar.em.dense_single_volume.helpers.projection import (
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_norm_residual_per_image as _compute_norm_residual_per_image,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
+)
+from recovar.em.dense_single_volume.local_backprojection import (
+    compute_local_weighted_sums,
 )
 
 
@@ -301,7 +308,7 @@ def _score_normalize_mstep(
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
     )
-    summed = jnp.matmul(reconstruction_probs, shifted_recon_split)
+    summed = compute_local_weighted_sums(reconstruction_probs, shifted_recon_split)
     ctf_probs = jnp.where(
         reconstruction_probs_sum_t[..., None] != 0.0,
         reconstruction_probs_sum_t[..., None] * ctf2_over_nv_recon[:, None, :],
@@ -1204,7 +1211,10 @@ def run_local_bucket_big_jit(
 
         shifted_noise_split = shifted_noise.reshape(batch_size, n_trans, -1)
         shifted_noise_split = jnp.where(support_mass[:, None, None] != 0.0, shifted_noise_split, 0.0)
-        summed_masked_noise = jnp.matmul(reconstruction_probs, shifted_noise_split)
+        summed_masked_noise = compute_local_weighted_sums(
+            reconstruction_probs,
+            shifted_noise_split,
+        )
         flat_summed_masked_noise = summed_masked_noise.reshape(
             batch_size * local_rotations.shape[1],
             summed_masked_noise.shape[-1],

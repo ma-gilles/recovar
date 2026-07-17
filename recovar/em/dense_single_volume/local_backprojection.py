@@ -10,7 +10,6 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 
-
 _RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION_ENV = (
     "RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION"
 )
@@ -30,9 +29,14 @@ def compute_local_weighted_sums(probs, shifted):
     probs: (B, R, T)
     shifted: (B, T, N)
     returns: (B, R, N)
+
+    Use full float32 products for this EM-local contraction.  Accelerator
+    defaults may otherwise select reduced-precision products, which produces a
+    systematic BPref numerator mismatch against RELION even for one-hot
+    translation posteriors.
     """
 
-    return jnp.matmul(probs, shifted)
+    return jnp.matmul(probs, shifted, precision=jax.lax.Precision.HIGHEST)
 
 
 @jax.jit

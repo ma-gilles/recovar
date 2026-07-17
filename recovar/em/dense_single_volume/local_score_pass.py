@@ -11,6 +11,7 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
     _find_significant_mask_full_sort,
     find_significant_mask,
 )
+from recovar.em.dense_single_volume.local_backprojection import compute_local_weighted_sums
 
 
 def _local_scores_from_weighted_abs2(
@@ -679,7 +680,7 @@ def fused_score_normalize_mstep_abs2_on_demand(
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
     )
-    summed = jnp.matmul(reconstruction_probs, shifted_recon_split)
+    summed = compute_local_weighted_sums(reconstruction_probs, shifted_recon_split)
     ctf_probs = jnp.where(
         reconstruction_probs_sum_t[..., None] != 0.0,
         reconstruction_probs_sum_t[..., None] * ctf2_over_nv_recon[:, None, :],
@@ -758,7 +759,7 @@ def fused_score_normalize_mstep_abs2_with_log_z_on_demand(
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
     )
-    summed = jnp.matmul(reconstruction_probs, shifted_recon_split)
+    summed = compute_local_weighted_sums(reconstruction_probs, shifted_recon_split)
     ctf_probs = jnp.where(
         reconstruction_probs_sum_t[..., None] != 0.0,
         reconstruction_probs_sum_t[..., None] * ctf2_over_nv_recon[:, None, :],
