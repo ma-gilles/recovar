@@ -3095,3 +3095,26 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_expansion_audit_cb83d1b9_20260717_031000/cases/18_small_contrast_noise_scale_3k_g128_noise1_bf80/particle_state_distribution.json`
   (SHA-256
   `f8faee082bfb96ef0a9917cce1004e2da9d5d6d1db4cb660880adc195cddf082`).
+# 2026-07-16: aggregate case-21 precision controls bound the score residual
+
+- Corrected CPU audit job `11292961` verifies exact candidate geometry in all
+  186 frozen iteration-5/6 captures. Float32 candidate-order replay changes
+  Pmax by at most `1.19209e-7`; float64 replay removes that order effect to the
+  floating-point floor.
+- Same-boundary float64 scoring changes Pmax by about `1.1e-5--1.3e-5` on
+  average and at most `6.54459e-5`, with zero changes to either saved coarse
+  pass-1 support or captured fine pass-2 reconstruction support. This is far
+  below the aggregate RECOVAR/RELION mean Pmax residual of about
+  `0.00495--0.00542`.
+- This rules out ordinary scoring precision and candidate reduction order as
+  the dominant aggregate cause. Upstream per-pixel operand-generation
+  precision remains unresolved because the iteration-5 capture widens already
+  narrowed operands and the iteration-6 capture narrows operands and omits
+  complete pixel identities. Do not resume serial particle tracing without a
+  systematic aggregate subgroup.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case21_it56_precision_32ac19dc_20260716_225200/analysis/precision_score_order_analysis_v1.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case21_it56_precision_32ac19dc_20260716_225200/analysis/precision_state_map_analysis_v1.json`.
+  Intermediate arrays use exact/array metrics; map conclusions use FSC and
+  FSC-AUC, never correlation.
