@@ -3579,3 +3579,33 @@ Matrix evidence:
   with verified manifest SHA-256
   `1838fbf33e0155a4744ae5750d1bb94505ee7889ebcf837a7b599c3f927420d1`.
   Map acceptance uses FSC/FSC-AUC only; correlation is not computed.
+
+# 2026-07-17: iteration-2-to-3 aggregate residual is in raw scoring
+
+- The sealed 32-row production panel has exact RELION/RECOVAR candidate UID
+  support. Native-order posterior replay closes within TV `7.29e-7`. A
+  canonical-float64 factorial gives median prior-only TV `7.13e-8` versus
+  raw-score-only TV `1.5357e-4`; do not pursue priors or normalization as the
+  leading cause. Particle 2449 has the only M-step support exchange, one of
+  144 hypotheses, and does not define a systematic subgroup.
+- High-precision RECOVAR score-operand job `11305358` completed all 32 rows.
+  Median common-support TV is `1.57054e-4` for production RECOVAR versus
+  RELION float32-origin, `1.28238e-3` for high-precision RECOVAR versus
+  RELION, and `1.27341e-3` for RECOVAR production versus high precision.
+  Zero rows improve. Particles 6007 and 1012 each substitute 32 UIDs; 30/32
+  supports remain exact.
+- Classification: this is precision sensitivity, not float64 cross-engine
+  closure. RELION GPU operands remain float32-origin and the high-precision
+  arm changes pass-1 membership. Do not call the smaller production residual
+  numerical noise yet. Next use a fixed-production-UID all-32 operand
+  cross-swap and reduction-order factorial; do not return to serial particles.
+- Evidence is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_aggregate_panel_586f7fb4_20260717T093000Z/analysis/score_factorial.json`
+  (SHA-256
+  `4075c4dfb2a65782de52c75f992e85be0cf7f9b22e0c9a24bb73c6880b1df7d0`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_genuine_f64_20260717T145500Z/analysis/genuine_f64_vs_f32_origin.json`
+  (SHA-256
+  `b54aa3a5221145ce1b6df204f3c5c3197b4230560f39fe3955b624c8b3c6c955`).
+  Intermediate metrics are exact arrays and posterior distances; map quality
+  remains FSC/FSC-AUC only, with no correlation.

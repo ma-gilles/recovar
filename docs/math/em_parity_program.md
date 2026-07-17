@@ -4967,3 +4967,44 @@ Evidence:
 
 All map statements in these sections use FSC/FSC-AUC. Intermediate statements
 use direct identity, support, and array metrics; correlation is not used.
+
+## 2026-07-17 real-10076 iteration-2-to-3 aggregate score boundary
+
+The frozen 32-row panel localizes the earliest repeat-stable residual to raw
+Gaussian scores. Production RELION and RECOVAR candidate UID support is exact
+for all 32 rows. Replaying each engine's captured posterior from its native
+float32 score order closes within total variation `7.29e-7`. In a deterministic
+canonical-float64 factorial, the prior-only posterior effect has median
+`7.13e-8` and maximum `8.21e-5`, whereas the raw-score-only effect has median
+`1.5357e-4` and maximum `5.4059e-4`. Priors and posterior normalization are
+therefore not the leading cause. One row, particle 2449, exchanges one of 144
+M-step hypotheses; this is not a systematic subgroup.
+
+A separate 32-row high-precision RECOVAR replay recomputes masked-image
+background fill, FFT, CTF/noise weighting, translation phases, Projector
+interpolation, and score reduction without intermediate float32 truncation,
+while retaining the production float32-origin source samples and geometry.
+The valid capture is Slurm job `11305358`. On the three-way common UID support,
+median posterior TV is `1.57054e-4` for production RECOVAR versus RELION's
+float32-origin scores, `1.28238e-3` for high-precision RECOVAR versus RELION,
+and `1.27341e-3` for production versus high-precision RECOVAR. High precision
+improves zero of 32 rows. It also substitutes 32 UIDs in each of particles
+6007 and 1012; the other 30 supports are exact.
+
+This establishes a large precision sensitivity but not canonical cross-engine
+float64 closure: RELION's captured GPU operands remain float32-origin, and the
+high-precision run changes pass-1 support. Do not label the production residual
+as numerical noise from this experiment alone. The next bounded discriminator
+holds production UIDs fixed and cross-swaps the coupled image/CTF/noise/scale
+operand against the projected-reference operand, with direct-diff2,
+algebraic-score, and reduction-order controls across all 32 rows.
+
+Sealed evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_aggregate_panel_586f7fb4_20260717T093000Z/analysis/score_factorial.json` (SHA-256 `4075c4dfb2a65782de52c75f992e85be0cf7f9b22e0c9a24bb73c6880b1df7d0`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_aggregate_panel_586f7fb4_20260717T093000Z/provenance/score_factorial.sha256` (SHA-256 `39f8e2d971ab1f3a1806d85b347a292dbf2b4f81f5211b22890abf6b2ca89e3d`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_genuine_f64_20260717T145500Z/analysis/genuine_f64_vs_f32_origin.json` (SHA-256 `b54aa3a5221145ce1b6df204f3c5c3197b4230560f39fe3955b624c8b3c6c955`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_genuine_f64_20260717T145500Z/provenance/analysis_artifacts.sha256` (SHA-256 `b3137d124d83c5e91210641abf64be04c4444e16fcbdce0ba08455879a1047b0`)
+
+These are direct array and posterior metrics. No correlation is computed; any
+downstream map intervention remains gated by shellwise FSC and FSC-AUC.
