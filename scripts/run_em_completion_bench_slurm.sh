@@ -11,6 +11,14 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BASE_PIXI_PY="${EM_COMPLETION_PIXI_PY:-${REPO_ROOT}/.pixi/envs/default/bin/python}"
+if [[ ! -x "${BASE_PIXI_PY}" ]]; then
+  echo "ERROR: EM_COMPLETION_PIXI_PY must name an installed pixi Python: ${BASE_PIXI_PY}" >&2
+  echo "Run pixi install once, or point EM_COMPLETION_PIXI_PY at another checkout's .pixi Python." >&2
+  exit 2
+fi
+BASE_PIXI_PY="$(readlink -f "${BASE_PIXI_PY}")"
+PIXI_ENV_ROOT="$(cd "$(dirname "${BASE_PIXI_PY}")/.." && pwd)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_ID="em_completion_bench_${TIMESTAMP}_${RANDOM}"
 SCRATCH_DIR="${EM_COMPLETION_SCRATCH_DIR:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/${RUN_ID}}"
@@ -101,6 +109,8 @@ Usage: $0 [--watch] [--dry-run] [--k1-only] [--k4-only] [--fast-tier] [--fast-ti
 Environment overrides:
   EM_COMPLETION_SCRATCH_DIR  Scratch/log root (default: ${SCRATCH_DIR})
   EM_COMPLETION_RUNTIME_ROOT Per-job runtime/cache root (default: ${RUNTIME_ROOT})
+  EM_COMPLETION_PIXI_PY      Existing pixi Python used as the offline base environment
+                             (default: ${BASE_PIXI_PY})
   SBATCH_ACCOUNT             Slurm account (default: ${ACCOUNT})
   SBATCH_PARTITION           Slurm partition (default: ${PARTITION})
   SBATCH_CONSTRAINT          Optional Slurm constraint, e.g. h100
@@ -270,7 +280,9 @@ esac
 mkdir -p "${SCRATCH_DIR}/jobs" "${RUNTIME_ROOT}"
 touch "${SCRATCH_DIR}/SAFE_TO_DELETE" "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 CUDA_LIB="${SCRATCH_DIR}/cuda/libcuda_backproject.so"
-INSTALL_LOCK="${REPO_ROOT}/.pixi/install-recovar.lock"
+COMPLETION_VENV="${SCRATCH_DIR}/venv"
+COMPLETION_PY="${COMPLETION_VENV}/bin/python"
+INSTALL_LOCK="${SCRATCH_DIR}/install-recovar.lock"
 
 require_file() {
   local path="$1"
@@ -422,6 +434,13 @@ unset CONDA_DEFAULT_ENV CONDA_EXE CONDA_PYTHON_EXE CONDA_PROMPT_MODIFIER CONDA_S
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
 export PYTHONNOUSERSITE=1
 export RECOVAR_EXPECTED_REPO_ROOT="${REPO_ROOT}"
+export EM_COMPLETION_BASE_PIXI_PY="${BASE_PIXI_PY}"
+export EM_COMPLETION_VENV="${COMPLETION_VENV}"
+export PIXI_PY="${COMPLETION_PY}"
+export PIP_NO_INDEX=1
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export CMAKE_INCLUDE_PATH="${PIXI_ENV_ROOT}/include/fftw:${PIXI_ENV_ROOT}/include:\${CMAKE_INCLUDE_PATH:-}"
+export CMAKE_LIBRARY_PATH="${PIXI_ENV_ROOT}/lib:\${CMAKE_LIBRARY_PATH:-}"
 export PYTHONFAULTHANDLER="\${PYTHONFAULTHANDLER:-1}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
@@ -438,7 +457,6 @@ export RECOVAR_CUDA_LIB="${CUDA_LIB}"
 export RECOVAR_CUDA_CACHE_DIR="${SCRATCH_DIR}/cuda_cache/${job_name}_\${SLURM_JOB_ID}"
 export RECOVAR_RELION_BIND_BUILD_DIR="${SCRATCH_DIR}/relion_bind_build/shared"
 mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}" "\${RECOVAR_JAX_CACHE_DIR}" "\${RECOVAR_CUDA_CACHE_DIR}" "\${RECOVAR_RELION_BIND_BUILD_DIR}" "\$(dirname "\${RECOVAR_CUDA_LIB}")"
-mkdir -p "${REPO_ROOT}/.pixi"
 
 if [[ -f /etc/profile.d/modules.sh ]]; then
   # shellcheck disable=SC1091
@@ -453,7 +471,7 @@ if [[ -d "\${CUDA_HOME}/bin" ]]; then
   export PATH="\${CUDA_HOME}/bin:\${PATH}"
 fi
 CUDA_TARGET_LIB_DIR="\${CUDA_HOME}/targets/x86_64-linux/lib"
-PIXI_NVIDIA_ROOT="${REPO_ROOT}/.pixi/envs/default/lib/python3.11/site-packages/nvidia"
+PIXI_NVIDIA_ROOT="\$(find "${PIXI_ENV_ROOT}/lib" -maxdepth 3 -type d -path '*/site-packages/nvidia' -print -quit 2>/dev/null || true)"
 if [[ -d "\${PIXI_NVIDIA_ROOT}" ]]; then
   PIXI_NVIDIA_LIB_DIRS="\$(find "\${PIXI_NVIDIA_ROOT}" -type d -name lib 2>/dev/null | paste -sd: -)"
 else
@@ -486,7 +504,8 @@ fi
 echo "=== ${job_name} ==="
 echo "Repo: ${REPO_ROOT}"
 echo "HEAD: \$(git rev-parse HEAD)"
-echo "Branch: \$(git symbolic-ref --short HEAD || echo '<detached>')"
+JOB_BRANCH="\$(git branch --show-current 2>/dev/null || true)"
+echo "Branch: \${JOB_BRANCH:-<detached>}"
 echo "Dirty status:"
 git status --short
 JOB_GIT_PROVENANCE_DIR="${SCRATCH_DIR}/job_provenance/${job_name}_\${SLURM_JOB_ID}"
@@ -535,6 +554,8 @@ echo "PYTHONFAULTHANDLER=\${PYTHONFAULTHANDLER}"
 echo "RECOVAR_CUDA_LIB=\${RECOVAR_CUDA_LIB}"
 echo "RECOVAR_RELION_BIND_BUILD_DIR=\${RECOVAR_RELION_BIND_BUILD_DIR}"
 echo "CUDA_HOME=\${CUDA_HOME}"
+echo "CMAKE_INCLUDE_PATH=\${CMAKE_INCLUDE_PATH}"
+echo "CMAKE_LIBRARY_PATH=\${CMAKE_LIBRARY_PATH}"
 echo "LD_LIBRARY_PATH=\${LD_LIBRARY_PATH}"
 $(write_optional_env_exports \
   RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION \
@@ -627,8 +648,13 @@ for env_name in \
     echo "\${env_name}=\${env_value}"
   fi
 done
-nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
-nvidia-smi -q > "\${JOB_GIT_PROVENANCE_DIR}/nvidia_smi.txt" 2>&1 || true
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
+  nvidia-smi -q > "\${JOB_GIT_PROVENANCE_DIR}/nvidia_smi.txt" 2>&1 || true
+else
+  echo "nvidia-smi unavailable (expected on CPU-only setup/summary nodes)"
+  : > "\${JOB_GIT_PROVENANCE_DIR}/nvidia_smi.txt"
+fi
 echo
 EOF
 }
@@ -664,7 +690,7 @@ EOF
 
 write_refresh_pixi_cuda_libs() {
   cat <<EOF
-PIXI_NVIDIA_ROOT="${REPO_ROOT}/.pixi/envs/default/lib/python3.11/site-packages/nvidia"
+PIXI_NVIDIA_ROOT="\$(find "${PIXI_ENV_ROOT}/lib" -maxdepth 3 -type d -path '*/site-packages/nvidia' -print -quit 2>/dev/null || true)"
 if [[ -d "\${PIXI_NVIDIA_ROOT}" ]]; then
   PIXI_NVIDIA_LIB_DIRS="\$(find "\${PIXI_NVIDIA_ROOT}" -type d -name lib 2>/dev/null | paste -sd: -)"
 else
@@ -705,16 +731,21 @@ flock "${INSTALL_LOCK}" bash -lc '
 set -euo pipefail
 rm -rf "\${RECOVAR_RELION_BIND_BUILD_DIR:?}"
 mkdir -p "\${RECOVAR_RELION_BIND_BUILD_DIR}"
-pixi run --frozen install-recovar
-PIXI_PY="\$(pixi run --frozen which python)"
+rm -rf "\${EM_COMPLETION_VENV:?}"
+"\${EM_COMPLETION_BASE_PIXI_PY}" -m venv --system-site-packages "\${EM_COMPLETION_VENV}"
+"\${PIXI_PY}" -m pip install -e . --no-deps --no-build-isolation --ignore-installed
 if ! "\${PIXI_PY}" -c "import pybind11" >/dev/null 2>&1; then
   echo "ERROR: pybind11 is missing from the pixi environment; run pixi install before submitting EM jobs." >&2
   exit 1
 fi
-pixi run --frozen python recovar/relion_bind/build.py
+"\${PIXI_PY}" recovar/relion_bind/build.py
 '
-PIXI_PY="\$(pixi run --frozen which python)"
 $(write_refresh_pixi_cuda_libs)
+
+export JAX_PLATFORMS=cpu
+export JAX_PLATFORM_NAME=cpu
+export RECOVAR_DISABLE_CUDA=1
+export CUDA_VISIBLE_DEVICES=""
 
 "\${PIXI_PY}" - <<'PY'
 import os
@@ -768,8 +799,6 @@ $(write_job_preamble "em_completion_fast_tier")
 
 cat "${SCRATCH_DIR}/provenance/relion_refine_mpi.txt"
 
-flock "${INSTALL_LOCK}" bash -lc 'pixi run --frozen install-recovar'
-PIXI_PY="\$(pixi run --frozen which python)"
 $(write_refresh_pixi_cuda_libs)
 $(write_build_cuda_lib)
 "\${PIXI_PY}" - <<'PY'
@@ -795,7 +824,7 @@ assert cb.cuda_available(), cb.cuda_unavailable_error()
 print("provenance/cuda gate ok")
 PY
 
-pixi run --frozen test-em-parity-fast
+"\${PIXI_PY}" -m pytest -v -s --run-slow --run-integration --run-gpu tests/integration/test_em_parity_fast.py
 EOF
   chmod +x "${script_path}"
   printf '%s\n' "${script_path}"
@@ -840,8 +869,6 @@ nvidia-smi --query-gpu=timestamp,index,name,memory.used,memory.total,utilization
 MONITOR_PID="\$!"
 trap 'kill "\${MONITOR_PID}" 2>/dev/null || true' EXIT
 
-flock "${INSTALL_LOCK}" bash -lc 'pixi run --frozen install-recovar'
-PIXI_PY="\$(pixi run --frozen which python)"
 $(write_refresh_pixi_cuda_libs)
 $(write_build_cuda_lib)
 "\${PIXI_PY}" - <<'PY'
@@ -994,8 +1021,6 @@ nvidia-smi --query-gpu=timestamp,index,name,memory.used,memory.total,utilization
 MONITOR_PID="\$!"
 trap 'kill "\${MONITOR_PID}" 2>/dev/null || true' EXIT
 
-flock "${INSTALL_LOCK}" bash -lc 'pixi run --frozen install-recovar'
-PIXI_PY="\$(pixi run --frozen which python)"
 $(write_refresh_pixi_cuda_libs)
 $(write_build_cuda_lib)
 "\${PIXI_PY}" - <<'PY'
@@ -1095,7 +1120,8 @@ export JAX_PLATFORMS=cpu
 echo "=== EM completion benchmark summary ==="
 echo "Repo: ${REPO_ROOT}"
 echo "HEAD: \$(git rev-parse HEAD)"
-echo "Branch: \$(git symbolic-ref --short HEAD || echo '<detached>')"
+SUMMARY_BRANCH="\$(git branch --show-current 2>/dev/null || true)"
+echo "Branch: \${SUMMARY_BRANCH:-<detached>}"
 echo "Scratch: ${SCRATCH_DIR}"
 echo "Timing probe: ${EM_COMPLETION_TIMING_PROBE}"
 echo
@@ -1135,7 +1161,7 @@ if [[ -f scripts/summarize_em_completion_bench.py ]]; then
     REQUIRE_CASE_ARGS+=(--require-k4)
   fi
   set +e
-  pixi run --frozen python -m scripts.summarize_em_completion_bench \\
+  "\${PIXI_PY}" -m scripts.summarize_em_completion_bench \\
     --k1-recovar-dir "${SCRATCH_DIR}/k1_100k256_recovar" \\
     --k1-relion-dir "${K1_RELION_DIR}" \\
     --k1-fixture-dir "${K1_DATA_DIR}" \\
@@ -1191,12 +1217,15 @@ SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256="$(cat "${SUBMISSION_GIT_PROVENANCE_D
 echo "EM completion benchmark launcher"
 echo "Repo: ${REPO_ROOT}"
 echo "HEAD: $(git -C "${REPO_ROOT}" rev-parse HEAD)"
-echo "Branch: $(git -C "${REPO_ROOT}" symbolic-ref --short HEAD || echo '<detached>')"
+LAUNCHER_BRANCH="$(git -C "${REPO_ROOT}" branch --show-current 2>/dev/null || true)"
+echo "Branch: ${LAUNCHER_BRANCH:-<detached>}"
 echo "Submission git provenance: ${SUBMISSION_GIT_PROVENANCE_DIR}"
 echo "Submission git diff SHA256: ${SUBMISSION_GIT_DIFF_SHA256:-<unavailable>}"
 echo "Submission git worktree fingerprint SHA256: ${SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256:-<unavailable>}"
 echo "Scratch: ${SCRATCH_DIR}"
 echo "Runtime root: ${RUNTIME_ROOT}"
+echo "Base pixi Python: ${BASE_PIXI_PY}"
+echo "Completion Python: ${COMPLETION_PY}"
 echo "Partition/account: ${PARTITION}/${ACCOUNT}"
 echo "Constraint: ${CONSTRAINT:-<none>}"
 echo "Setup partition: ${SETUP_PARTITION}"
@@ -1262,13 +1291,16 @@ echo "Logs and outputs: ${SCRATCH_DIR}"
 cat > "${SCRATCH_DIR}/submission.env" <<EOF
 REPO_ROOT=${REPO_ROOT}
 HEAD=$(git -C "${REPO_ROOT}" rev-parse HEAD)
-BRANCH=$(git -C "${REPO_ROOT}" symbolic-ref --short HEAD || echo '<detached>')
+BRANCH=${LAUNCHER_BRANCH:-<detached>}
 SUBMISSION_GIT_PROVENANCE_DIR=${SUBMISSION_GIT_PROVENANCE_DIR}
 SUBMISSION_GIT_HEAD=${SUBMISSION_GIT_HEAD}
 SUBMISSION_GIT_DIFF_SHA256=${SUBMISSION_GIT_DIFF_SHA256}
 SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256=${SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256}
 SCRATCH_DIR=${SCRATCH_DIR}
 RUNTIME_ROOT=${RUNTIME_ROOT}
+EM_COMPLETION_PIXI_PY=${BASE_PIXI_PY}
+EM_COMPLETION_VENV=${COMPLETION_VENV}
+PIXI_PY=${COMPLETION_PY}
 SBATCH_PARTITION=${PARTITION}
 SBATCH_ACCOUNT=${ACCOUNT}
 SBATCH_CONSTRAINT=${CONSTRAINT}

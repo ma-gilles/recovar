@@ -110,7 +110,31 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     assert 'export JAX_COMPILATION_CACHE_DIR="${RECOVAR_JAX_CACHE_DIR}"' in summary_text
     assert "unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA" in setup_text
     assert "unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA" in k1_text
-    assert 'pixi run --frozen python recovar/relion_bind/build.py' in setup_text
+    completion_python = scratch / "venv" / "bin" / "python"
+    python_export = f'export PIXI_PY="{completion_python}"'
+    for generated_text in (setup_text, k1_text, summary_text):
+        assert python_export in generated_text
+        assert "pixi run" not in generated_text
+        assert "git symbolic-ref --short HEAD ||" not in generated_text
+    assert "export PIP_NO_INDEX=1" in setup_text
+    pixi_root = REPO_ROOT / ".pixi" / "envs" / "default"
+    assert (
+        f'export CMAKE_INCLUDE_PATH="{pixi_root}/include/fftw:'
+        f'{pixi_root}/include:${{CMAKE_INCLUDE_PATH:-}}"'
+    ) in setup_text
+    assert (
+        f'export CMAKE_LIBRARY_PATH="{pixi_root}/lib:${{CMAKE_LIBRARY_PATH:-}}"'
+    ) in setup_text
+    assert '-m venv --system-site-packages "${EM_COMPLETION_VENV}"' in setup_text
+    assert (
+        '"${PIXI_PY}" -m pip install -e . --no-deps --no-build-isolation '
+        "--ignore-installed"
+    ) in setup_text
+    assert '"${PIXI_PY}" recovar/relion_bind/build.py' in setup_text
+    assert "export JAX_PLATFORMS=cpu" in setup_text
+    assert "export JAX_PLATFORM_NAME=cpu" in setup_text
+    assert "export RECOVAR_DISABLE_CUDA=1" in setup_text
+    assert 'export CUDA_VISIBLE_DEVICES=""' in setup_text
     assert 'rm -rf "${RECOVAR_RELION_BIND_BUILD_DIR:?}"' in setup_text
     assert 'rm -rf "${RECOVAR_RELION_BIND_BUILD_DIR:?}"' not in k1_text
     assert "recovar/relion_bind/build.py" not in k1_text
@@ -132,6 +156,8 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     assert 'summarizer_status="$?"' in summary_text
     assert 'exit "${SUMMARY_STATUS}"' in summary_text
     assert f"RUNTIME_ROOT={runtime}" in submission_env_text
+    assert f"EM_COMPLETION_VENV={scratch / 'venv'}" in submission_env_text
+    assert f"PIXI_PY={completion_python}" in submission_env_text
     assert (
         f"SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256={submission_fingerprint}"
         in submission_env_text
