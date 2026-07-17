@@ -3371,3 +3371,32 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_expected_accuracy_factorial_20260717T053100Z/provenance/FINAL_MANIFEST.sha256`
   (SHA-256
   `65190c94a159e325e8e2a2aba87bf1991faa559ebf6b6f7f63843d6fa93c4971`).
+
+# 2026-07-17: real-10076 same-GPU accumulator precision is not causal
+
+- Science job `11293740` runs 15-iteration f32/c64 and f64/c128 accumulator
+  arms sequentially on physical A100
+  `GPU-8a30ed71-3361-7198-deac-61f8598401b7`; audit job `11294350` completes
+  and verifies all manifests. This A/B widens already-produced operands and
+  accumulators, not genuine upstream operand generation.
+- At iteration 1 shell 20, f32 and f64 are exactly
+  `0.7094454765319824`, both `-4.15234680176e-5` from same-UUID RELION. Thus
+  accumulator widening removes none of the earliest residual. The f64 arm
+  instead has its largest active-curve residual `0.00107424949` at shell 24.
+- f32 matches the same-UUID RELION current-size schedule through all 15
+  numbered iterations. f64 first differs from both at iteration 13, so the
+  late f64 trajectory sensitivity is not evidence for a production precision
+  change. No production change is justified.
+- Next classify the frozen iteration-1 reduction boundary with identity-complete
+  original/canonical order replays, captured-cast f64, and genuine upstream
+  f64/c128 operand recomputation. Use exact arrays for intermediates and
+  FSC/FSC-AUC for maps; do not resume serial particle tracing.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_bpref_f32_f64_samegpu_ab_719ad930_20260717T001600Z/analysis/samegpu_precision_audit.json`
+  (SHA-256
+  `c3a40e1e94fa3173da2892896129c378c0fe8cc3ed25199ba0bc596d97653453`)
+  and verified analysis manifest
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_bpref_f32_f64_samegpu_ab_719ad930_20260717T001600Z/analysis/ANALYSIS_ARTIFACTS.sha256`
+  (SHA-256
+  `4128f0446d2890acab508a00f4052f4e711d296ca57765da009fd2a10859f4f9`).
+  Correlation is not computed.
