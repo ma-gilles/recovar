@@ -370,6 +370,35 @@ def test_scalar_schedule_convergence_and_final_state_are_reported_and_can_gate(t
 
 
 @pytest.mark.unit
+def test_cli_serializes_unavailable_nan_trajectory_scalar_as_null(tmp_path):
+    results, source, relion, _control = _fixture(tmp_path)
+    with np.load(results, allow_pickle=False) as payload:
+        data = {key: payload[key] for key in payload.files}
+    data["acc_rot_trajectory"] = np.asarray([np.nan])
+    np.savez(results, **data)
+    output = tmp_path / "nan_scalar.json"
+
+    status = auditor.main(
+        [
+            "--recovar-results",
+            str(results),
+            "--recovar-particles-star",
+            str(source),
+            "--relion-star",
+            str(relion),
+            "--output-json",
+            str(output),
+        ]
+    )
+
+    report = json.loads(output.read_text())
+    scalar = report["iterations"][0]["scalar_state"]
+    assert status == 0
+    assert scalar["recovar"]["accuracy_rotations_deg"] is None
+    assert scalar["comparison"]["accuracy_rotations_deg"]["status"] == "not_measured"
+
+
+@pytest.mark.unit
 def test_scalar_star_parser_accepts_underscored_and_legacy_bare_labels(tmp_path):
     path = tmp_path / "mixed_scalars.star"
     path.write_text("data_general\n\n_rlnCurrentIteration -1\nrlnHasConverged 1\n")

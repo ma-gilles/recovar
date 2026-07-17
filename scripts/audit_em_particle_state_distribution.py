@@ -873,7 +873,13 @@ def _npz_trajectory_value(npz, key: str, iteration: int):
     if iteration >= array.size:
         return None
     value = array[iteration]
-    return value.item() if isinstance(value, np.generic) else value
+    value = value.item() if isinstance(value, np.generic) else value
+    # Some trajectories intentionally use NaN for an unavailable first
+    # boundary (for example exact expected accuracy under firstiter_cc).
+    # JSON reports represent an unavailable scalar as null/not-measured.
+    if isinstance(value, (float, np.floating)) and not np.isfinite(value):
+        return None
+    return value
 
 
 def _recovar_scalar_state(npz, iteration: int) -> dict[str, Any]:
@@ -910,6 +916,9 @@ def _scalar_comparison(recovar: dict[str, Any], relion: dict[str, Any]) -> dict[
             rhs, (int, float, np.number)
         ):
             comparisons[key] = _not_measured("scalar missing or non-numeric in one engine")
+            continue
+        if not np.isfinite(float(lhs)) or not np.isfinite(float(rhs)):
+            comparisons[key] = _not_measured("scalar is non-finite in one engine")
             continue
         comparisons[key] = {
             "status": "measured",

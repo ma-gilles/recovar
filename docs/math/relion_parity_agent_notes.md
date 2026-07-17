@@ -3274,11 +3274,13 @@ Matrix evidence:
   mismatch and does not qualify parity.
 - A visible scheduling amplification occurs after numbered iteration 15.
   RECOVAR recomputes `acc_rot=0.623` degrees and advances from HEALPix order 6
-  to 7; RELION reports about `0.625` degrees, stays at order 6, reaches stall
+  to 7; RELION reports about `0.627` degrees, stays at order 6, reaches stall
   counters `(resolution=2, hidden-variable=2)` at numbered iteration 16, and
   enters final all-data. Because the two maps and expected-accuracy operands
   have already diverged, do not patch this threshold or scheduler branch. The
-  iteration-1 operand/geometry/reduction capture remains the causal next step.
+  causal next step is an aggregate iteration-15 boundary factorial over the
+  common first-100 expected-accuracy trials, substituting map, poses, and noise
+  between engines. Do not resume serial particle tracing.
 - This autonomous failure does not contradict the replay-controlled 100k gate
   above: that experiment supplied the RELION trajectory boundary and therefore
   did not test autonomous schedule evolution.
