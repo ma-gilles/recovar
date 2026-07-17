@@ -714,6 +714,63 @@ def test_final_all_data_replay_uses_shared_live_scale_correction_contract():
     np.testing.assert_array_equal(relion_half_inputs.scale_corrections[0], [8.0, 10.0])
 
 
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        (None, False),
+        ([], False),
+        ([{"initial_state": True}], False),
+        ([{"initial_state": True}, None, None], False),
+        ([None, {"numbered_state": True}], True),
+        ([{"initial_state": True}, None, {"numbered_state": True}], True),
+    ],
+)
+def test_final_all_data_replay_ignores_cold_start_only_overrides(overrides, expected):
+    assert iteration_loop_module._has_numbered_replay_iteration_overrides(overrides) is expected
+
+
+def test_final_all_data_runs_with_cold_start_only_override(
+    half_datasets,
+    init_volume,
+    rotations,
+    translations,
+    monkeypatch,
+):
+    original_update = iteration_loop_module.update_refinement_state
+
+    def force_convergence_after_first_iter(*args, **kwargs):
+        updated = original_update(*args, **kwargs)
+        updated.has_converged = True
+        return updated
+
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "update_refinement_state",
+        force_convergence_after_first_iter,
+    )
+
+    result = refine_single_volume(
+        half_datasets,
+        init_volume,
+        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+        rotations,
+        translations,
+        disc_type="linear_interp",
+        max_iter=1,
+        image_batch_size=N_IMAGES,
+        rotation_block_size=N_ROTATIONS,
+        init_current_size=4,
+        init_healpix_order=2,
+        max_healpix_order=2,
+        low_resol_join_halves_angstrom=0.0,
+        replay_iteration_overrides=[{}, None],
+    )
+
+    assert result["convergence_state"].has_converged is True
+    assert result["final_all_data_ran"] is True
+
+
 def _pack_fake_local_search_outputs(
     base_outputs,
     relion_stats,

@@ -499,6 +499,21 @@ def _final_all_data_after_max_iter_enabled() -> bool:
     return False
 
 
+def _has_numbered_replay_iteration_overrides(replay_iteration_overrides) -> bool:
+    """Return whether replay contains state beyond the cold-start boundary.
+
+    Override slot zero is also used by ``--relion_init_dir`` to seed RELION's
+    iter-0 particle/model state for an otherwise autonomous refinement.  That
+    cold-start state must not implicitly turn the final all-data iteration
+    into a numbered replay.  Genuine trajectory replay populates at least one
+    later slot; an explicit final-replay environment override remains handled
+    separately by the caller.
+    """
+    if replay_iteration_overrides is None or len(replay_iteration_overrides) <= 1:
+        return False
+    return any(override is not None for override in replay_iteration_overrides[1:])
+
+
 def _should_run_final_all_data_iteration(
     *,
     has_converged: bool,
@@ -7870,9 +7885,12 @@ def _run_relion_iteration_loop(
         os.environ.get(_FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE_ENV, "").strip().lower() in _TRUE_ENV_VALUES
     )
     final_replay_has_overrides = replay_iteration_overrides is not None and len(replay_iteration_overrides) > 0
+    final_replay_has_numbered_overrides = _has_numbered_replay_iteration_overrides(
+        replay_iteration_overrides
+    )
     final_replay_last_numbered_state = (
         not final_replay_disabled
-        and (final_replay_forced or final_replay_has_overrides)
+        and (final_replay_forced or final_replay_has_numbered_overrides)
     )
     if final_replay_last_numbered_state:
         final_replay_override = None
