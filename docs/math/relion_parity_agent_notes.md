@@ -3259,3 +3259,35 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ppref_grid_replay_20260717T063000Z/provenance/SHA256SUMS`
   (SHA-256
   `f2451ff49c494affc090c8de066828e18a37b4316ae08e617da88cc475efa79c`).
+
+# 2026-07-17: autonomous 100k K=1 fails convergence and quality parity
+
+- Provenance-gated science job `11290560` ran commit `32ac19dc` on 100,000
+  particles. RECOVAR reached its numbered-iteration cap at 17 without
+  convergence and correctly skipped final all-data. The reference RELION run
+  has 16 numbered split-half iterations followed by a converged final-all-data
+  pass, so strict convergence topology fails.
+- The pinned-commit summary job `11295485` sealed the failure. RECOVAR's
+  pre-final merged GT FSC-AUC is `0.403209`, versus RELION final GT FSC-AUC
+  `0.490627`, a delta of `-0.0874175`. The maps being pre-final versus final is
+  explicitly recorded, but it is itself a consequence of the convergence
+  mismatch and does not qualify parity.
+- A visible scheduling amplification occurs after numbered iteration 15.
+  RECOVAR recomputes `acc_rot=0.623` degrees and advances from HEALPix order 6
+  to 7; RELION reports about `0.625` degrees, stays at order 6, reaches stall
+  counters `(resolution=2, hidden-variable=2)` at numbered iteration 16, and
+  enters final all-data. Because the two maps and expected-accuracy operands
+  have already diverged, do not patch this threshold or scheduler branch. The
+  iteration-1 operand/geometry/reduction capture remains the causal next step.
+- This autonomous failure does not contradict the replay-controlled 100k gate
+  above: that experiment supplied the RELION trajectory boundary and therefore
+  did not test autonomous schedule evolution.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/pinned32ac_summary/summary_metrics.json`
+  (SHA-256
+  `8a29aee3d038a7831cd0c531591bd405647d4b0f53e99a538f48e9cb7be56f7b`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/pinned32ac_summary/FINAL_MANIFEST.sha256`
+  (SHA-256
+  `7a6cc169c9002c8860dd8f42ba2c670a975181f189ed8e09cd0736577bc7d902`).
+  Map acceptance uses FSC/FSC-AUC only.
