@@ -1,3 +1,4 @@
+import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.dense_single_volume.local_backprojection import (
@@ -75,3 +76,12 @@ def test_local_mstep_sums_env_gate_only_changes_relion_x_half(monkeypatch):
     assert np.asarray(xhalf_y)[0, 0, 0] == 0.0
     assert np.asarray(normal_y)[0, 0, 0] == 1.0
     np.testing.assert_array_equal(np.asarray(normal_ctf), np.array([[[6.0]]], dtype=np.float64))
+
+
+def test_local_weighted_sum_requests_full_float32_matmul_precision():
+    probs = jnp.ones((1, 2, 3), dtype=jnp.float32)
+    shifted = jnp.ones((1, 3, 4), dtype=jnp.complex64)
+
+    hlo = compute_local_weighted_sums.lower(probs, shifted).compiler_ir("hlo").as_hlo_text()
+
+    assert "operand_precision={highest,highest}" in hlo

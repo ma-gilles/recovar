@@ -10,10 +10,7 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 
-
-_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION_ENV = (
-    "RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION"
-)
+_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION_ENV = "RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION"
 
 
 def relion_x_half_sequential_translation_reduction_enabled() -> bool:
@@ -32,7 +29,10 @@ def compute_local_weighted_sums(probs, shifted):
     returns: (B, R, N)
     """
 
-    return jnp.matmul(probs, shifted)
+    # RELION accumulates these float32 products without TF32 truncation. Keep
+    # this precision local to the M-step numerator GEMM; changing global JAX
+    # matmul precision would affect unrelated kernels and compilation policy.
+    return jnp.matmul(probs, shifted, precision=jax.lax.Precision.HIGHEST)
 
 
 @jax.jit
