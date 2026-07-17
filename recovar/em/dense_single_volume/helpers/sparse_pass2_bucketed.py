@@ -130,7 +130,14 @@ _DEFAULT_MAX_TRANSLATION_TILE_BYTES = 384 * 1024**2
 # larger chunks; these fractions still scale down on smaller GPUs.
 _AUTO_SCORE_ONLY_HYPOTHESIS_DEVICE_FRACTION = 0.640
 _AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION = 0.305
-_AUTO_FUSED_KCLASS_FULL_HYPOTHESIS_DEVICE_FRACTION = 0.610
+# Compact K-class scoring materializes multiple candidate-by-pixel gathers for
+# one class at a time.  Budgeting 61% of physical memory across the K classes
+# still allowed an individual gathered buffer above 12 GiB on an 80 GiB A100;
+# after earlier JIT shapes fragmented the allocator, the 100k K=4 trajectory
+# failed while requesting a 16 GiB temporary.  Keep the largest compact score
+# shape near 8 GiB per class, leaving headroom for the other live operands and
+# allocator fragmentation.
+_AUTO_FUSED_KCLASS_FULL_HYPOTHESIS_DEVICE_FRACTION = 0.400
 _AUTO_TRANSLATION_TILE_DEVICE_FRACTION = 0.020
 _AUTO_EXTERNAL_NORMALIZATION_TRANSLATION_TILE_DEVICE_FRACTION = 0.014
 _AUTO_FUSED_KCLASS_TRANSLATION_TILE_DEVICE_FRACTION = 0.007
