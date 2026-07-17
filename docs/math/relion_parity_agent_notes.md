@@ -3609,3 +3609,41 @@ Matrix evidence:
   `b54aa3a5221145ce1b6df204f3c5c3197b4230560f39fe3955b624c8b3c6c955`).
   Intermediate metrics are exact arrays and posterior distances; map quality
   remains FSC/FSC-AUC only, with no correlation.
+
+# 2026-07-17: fixed-UID score reduction is on the float32 sensitivity scale
+
+- Sealed job `11306470` passes all 32 closure rows and 17,216 exact five-field
+  candidate UIDs. RECOVAR's native tree reproduces captured production scores
+  exactly; adjusted float64 direct/algebraic closure is at most `4.38e-12`.
+- Against deterministic `math.fsum`, float32 pairwise reduction gives median
+  posterior TV `7.74e-5` and RELION's 256-lane tree gives `7.39e-5`. The
+  high-accuracy projected-reference swap is smaller at median `1.014e-5`; the
+  image/CTF/noise/scale swap is `6.17e-7`.
+- Classification: the observed production score gap is on the float32
+  reduction-sensitivity scale, but a native cross-engine order mismatch is not
+  yet proved. Capture one immutable common contribution list and replay both
+  native schedules plus a shared canonical schedule before changing
+  production. Do not return to serial particle tracing.
+- Evidence is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_aggregate_panel_586f7fb4_20260717T093000Z/analysis/score_reduction_factorial.json`
+  (SHA-256
+  `271dbf2fbc84d99659971f5517d8dfe834afe94615a28931f80d1359fc36bb72`)
+  with verified manifest
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_aggregate_panel_586f7fb4_20260717T093000Z/provenance/score_reduction_factorial.sha256`
+  (SHA-256
+  `6cde8dd18e8961c9d48a1a60c78392e1d030f842b4c962ab0059662b6f516a10`).
+  No correlation is used.
+
+# 2026-07-17: K=4 100k/256 compact-score memory fix passes two iterations
+
+- Science job `11304416` completed every compact/rectangular group in
+  iterations 1 and 2, including the former 24,576 and 94,208 OOM boundaries.
+  Cumulative sampled A100 memory is 33,361 MiB of 81,920 MiB, with no OOM,
+  allocator, resource-exhaustion, or traceback signature.
+- Iteration 1 finished in 4,710.3 seconds; iteration 2 finished in 2,727.6
+  seconds and advanced to iteration 3 at RELION-derived current size 60. Both
+  boundaries wrote finite class/half maps and finite state arrays.
+- This accepts memory safety, not scientific parity. Keep strict class-matched
+  FSC/FSC-AUC audit `11304830` as the quality gate after the science trajectory
+  under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_memcap_fce9ee48_20260717T132717Z`.

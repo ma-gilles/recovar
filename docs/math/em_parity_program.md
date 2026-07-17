@@ -5008,3 +5008,62 @@ Sealed evidence:
 
 These are direct array and posterior metrics. No correlation is computed; any
 downstream map intervention remains gated by shellwise FSC and FSC-AUC.
+
+## 2026-07-17 real-10076 fixed-UID score reduction classification
+
+The fixed-production-UID operand/reduction factorial closes every one of the
+32 captured rows. RECOVAR's native float32 reduction tree reproduces the
+captured production scores exactly (`max_abs=0`), and the adjusted float64
+direct-versus-algebraic closures are at most `4.38e-12`. The fixture contains
+17,216 exact five-field candidate UIDs with explicit particle offsets and
+priors.
+
+Relative to the deterministic `math.fsum` score, ordinary float32 pairwise
+reduction has median posterior TV `7.74e-5` (maximum `2.63e-4`) and RELION's
+256-lane float32 tree has median `7.39e-5` (maximum `2.13e-4`). In high
+accuracy, swapping only the projected-reference operand has median TV
+`1.014e-5` (maximum `9.98e-5`), while swapping the coupled
+image/CTF/noise/scale operand has median `6.17e-7` (maximum `2.37e-6`). The
+original and canonical pixel-order float32 arms are identical because the
+captured window indices are already canonically sorted.
+
+The production raw-score residual is therefore on the measured float32
+reduction-sensitivity scale, while the frozen high-accuracy operand difference
+is smaller in the median and is projection-dominated. This does not yet prove
+that RELION and RECOVAR use different production reduction orders. The final
+bounded discriminator captures one immutable common per-pixel contribution
+list from each native engine and replays it through both native schedules and
+one shared canonical schedule. Do not change production code unless that
+replay exposes a systematic operand, geometry, or order defect.
+
+Sealed evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_aggregate_panel_586f7fb4_20260717T093000Z/analysis/score_reduction_factorial.json` (SHA-256 `271dbf2fbc84d99659971f5517d8dfe834afe94615a28931f80d1359fc36bb72`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_aggregate_panel_586f7fb4_20260717T093000Z/analysis/score_reduction_factorial_arrays.npz` (SHA-256 `ef6e6d87fae1d4e661d74a129ab6235550136b040f1f6692599ed86bc20f9d1b`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_aggregate_panel_586f7fb4_20260717T093000Z/provenance/score_reduction_factorial.sha256` (SHA-256 `6cde8dd18e8961c9d48a1a60c78392e1d030f842b4c962ab0059662b6f516a10`)
+
+All intermediate comparisons use exact arrays and posterior distances; no
+correlation is computed.
+
+## 2026-07-17 K=4 100k/256 memory-cap acceptance
+
+The production-scale K=4 retry validates the compact-score memory-planner
+fixes through two complete numbered iterations. In iteration 1, all 68 compact
+pair groups from size 512 through 270,336 completed, including the former OOM
+boundaries at 24,576 and 94,208. Peak sampled A100 memory was 33,341 MiB of
+81,920 MiB. Iteration 1 completed in 4,710.3 seconds and advanced to iteration
+2 with current size 52.
+
+Iteration 2 completed all 34 compact groups and all 16 rectangular groups,
+with cumulative sampled peak 33,361 MiB. It completed in 2,727.6 seconds at
+resolution 27.20 A and average Pmax 0.5128, remained nonconverged, and advanced
+to iteration 3 at the RELION-derived current size 60. Both boundaries wrote
+eight finite 256-cubed class/half maps plus finite tau2, noise, and 100,000-row
+assignment arrays. No allocator failure, `RESOURCE_EXHAUSTED`, traceback, or
+OOM signature occurred. This accepts memory safety and artifact integrity;
+class-matched FSC/FSC-AUC quality acceptance remains gated on the dependent
+strict audit after the trajectory completes.
+
+Run root:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_memcap_fce9ee48_20260717T132717Z` (science job `11304416`; strict dependent audit `11304830`)
