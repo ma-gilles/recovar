@@ -289,6 +289,9 @@ def test_completion_k4_resource_overrides_are_written(tmp_path):
     assert "K4_TIME_LIMIT=04:00:00" in submission_env_text
     assert f'--relion-dispatch-schedule "{dispatch_schedule}"' in k4_text
     assert f"K4_RELION_DISPATCH_SCHEDULE={dispatch_schedule}" in submission_env_text
+    assert 'mkdir -p "${OUTPUT_DIR}" "${OUTPUT_DIR}/intermediates"' in k4_text
+    assert '--save_intermediates_dir "${OUTPUT_DIR}/intermediates"' in k4_text
+    assert "--save_intermediates_skip_unregularized" in k4_text
     assert "RECOVAR_SPARSE_PASS2_MAX_NOISE_BLOCK_BYTES=3221225472" in k4_text
     assert "RECOVAR_SPARSE_PASS2_MAX_NOISE_BLOCK_BYTES=3221225472" in submission_env_text
     assert "RECOVAR_SPARSE_PASS2_MAX_ADJOINT_BLOCK_BYTES=1610612736" in k4_text

@@ -987,7 +987,7 @@ ${SBATCH_EXCLUSIVE_DIRECTIVE}
 $(write_job_preamble "em_completion_k4_100k256")
 
 OUTPUT_DIR="${output_dir}"
-mkdir -p "\${OUTPUT_DIR}"
+mkdir -p "\${OUTPUT_DIR}" "\${OUTPUT_DIR}/intermediates"
 cp "${SCRATCH_DIR}/provenance/relion_refine_mpi.txt" "\${OUTPUT_DIR}/relion_refine_mpi_provenance.txt"
 nvidia-smi -q > "\${OUTPUT_DIR}/nvidia_smi.txt"
 if [[ "${RUN_K4_FUSED_SPARSE_PASS2}" -eq 1 ]]; then
@@ -1095,6 +1095,8 @@ set +e
   --relion-dispatch-schedule "${K4_RELION_DISPATCH_SCHEDULE}" \\
   --particle_diameter_ang 380 \\
   --tau2_fudge 4.0 \\
+  --save_intermediates_dir "\${OUTPUT_DIR}/intermediates" \\
+  --save_intermediates_skip_unregularized \\
   --benchmark_ledger_json "\${OUTPUT_DIR}/benchmark_ledger.json" \\
   --timing_dir "\${OUTPUT_DIR}/timing" \\
   "\${REFINEMENT_EXTRA_ARGS[@]}" \\
