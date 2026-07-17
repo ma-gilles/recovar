@@ -187,11 +187,11 @@ def _extract_shard_f64(
     values: dict[str, np.ndarray], selected: list[tuple[int, int, int]]
 ) -> dict[int, dict[str, np.ndarray | float]]:
     image_shape = tuple(int(value) for value in values["image_shape"])
-    window, compact = _compact_indices(values)
+    _window, compact = _compact_indices(values)
     lattice = _half_lattice(image_shape, 1.0)
     translations = np.asarray(values["fine_translations"], dtype=np.float64)
     phases = np.exp(-2j * np.pi * (translations @ lattice.T))[:, compact]
-    noise = np.asarray(values["noise_variance_half"], dtype=np.float64)[window]
+    noise = np.asarray(values["noise_variance_half"], dtype=np.float64)[compact]
     results: dict[int, dict[str, np.ndarray | float]] = {}
     for stack, particle, _global_rotation in selected:
         probs = np.asarray(values["reconstruction_probs"][particle], dtype=np.float64)
