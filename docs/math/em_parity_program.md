@@ -4684,6 +4684,14 @@ Cold production wall time was 188 s versus 193 s, with a warm-half pass-2
 time of 5.31 s versus 5.25 s; this run does not establish a material speed
 regression.
 
+A separate capture-free warmed control/fixed/control run on one A100 now
+closes the bounded performance gate. Relative to the bracketed control mean,
+the fixed iteration wall is `-1.76%`, E-step `-2.01%`, sparse pass 2 `+0.14%`,
+external wall `-0.98%`, and host maximum RSS `+0.26%`. The fixed values lie
+inside the control envelope or far below the `10%` regression threshold.
+Peak monitored GPU memory for the serial five-arm warmup/A-B-A sequence is
+`17,695` MiB. This is one real-data iteration, not full-trajectory timing.
+
 The earlier near-`-1` signed FSC was a diagnostic loader error, not a
 production map-sign mismatch. `analyze_bpref_reduction_precision_ab.py`
 raw-loaded both MRC files and then applied an ad-hoc RECOVAR multiplier of
@@ -4712,3 +4720,5 @@ Canonical evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ab_20260717T005507Z/real10076_highest_ab_report_v1.json` (SHA-256 `c6a7d81f473fe793bc76363233e76bc26ee66afe4e3fd5169a9a181abf9441c5`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ab_20260717T005507Z/real10076_highest_ab_seal_v1.json` (SHA-256 `4ea738680379aec8318ce7c569eb272f820369751d45495a31cf535aa6a2ff54`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ab_20260717T005507Z/real10076_highest_ab_manifest_v1.sha256` (SHA-256 `6f20ff79bc47b83f4f198b28a35a332487a1ea93188e5e8bf769f507df33831c`; all 13 entries verified)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_perf_aba_20260716T212900Z/warmed_aba_performance_report_v1.json` (SHA-256 `0a20edac7a898f1997d13fa1ab75d1f0cbeb2ac46c11a049498af6759a7a79de`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_perf_aba_20260716T212900Z/warmed_aba_manifest_v1.sha256` (SHA-256 `a3552ac5d05e0305544e86560cd2fd92b88d11d410074dd39f737da3387b411b`)
