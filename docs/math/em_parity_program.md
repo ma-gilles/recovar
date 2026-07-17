@@ -89,8 +89,8 @@ four-column range capture.
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
-Current integrated implementation checkpoint before this board update:
-`d05ee4a44afe1050bc7cbf790af2357126797520`
+Current integrated implementation checkpoint:
+`dcd1aa07c54a087631f7bfd706439b64b20cdcfb`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -257,15 +257,26 @@ Authoritative status on 2026-07-17:
   pre-registered native-and-float64 movement and repeat-envelope gates.
   Classification is `unresolved_combined`; no production change or controlled
   substitution is authorized. Move to a compact full-10,000-particle
-  score/posterior distribution diagnostic at the frozen iteration-2 boundary;
-  do not resume serial particle tracing or pixel-operand capture.
+  score/posterior distribution diagnostic from a completely sealed
+  uninterrupted RELION pre-iteration-3 boundary; do not resume serial
+  particle tracing or pixel-operand capture. A restarted iteration-2 boundary
+  is inadmissible because it changes the perturbation and can overwrite the
+  half-2 follower noise state.
+- The RECOVAR side of that diagnostic is implemented through `dcd1aa07`: an
+  env-off-inert production score/posterior tap, bounded raw shards with strict
+  readback/manifests and per-half identity closure, and an atomic captured
+  RELION `Projector::data` replay contract. The full science launch remains
+  blocked on a compact RELION live-state capture with corrected device Euler
+  copies and complete rank/optics/metadata/control state.
 - The K=4 100k/256 compact-score memory run is progressing without OOM on an
   A100; the dependent strict Hungarian FSC/FSC-AUC and state audit remains the
   quality gate.
 
-Priority order: capture compact, sharded full-dataset score/posterior arrays at
-the exact iteration-2 boundary and compare them against a same-GPU RELION
-repeat envelope; validate the post-cap terminal fix; permit an aggregate
+Priority order: finish and validate the compact uninterrupted RELION live
+boundary, then capture sharded full-dataset score/posterior arrays and compare
+RECOVAR against that exact boundary. Treat independent RELION runs as whole-run
+controls unless every boundary byte matches. Validate the post-cap terminal
+fix; permit an aggregate
 boundary substitution only if the full-dataset evidence selects a systematic
 source; then use full FSC/FSC-AUC trajectories to repair the remaining real
 K=1 drift and accept or repair the running K=4 trajectory. Avoid further

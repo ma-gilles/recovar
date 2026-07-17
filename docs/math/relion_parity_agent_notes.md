@@ -3964,3 +3964,50 @@ Sealed evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_tail_operand_panel_e1a7c87c_20260717T210105Z/analysis/term_self_closure_v2.json` (SHA-256 `efe095f46bc788d806fd4eec173d124ae490bad4b00488730dda8cb59358873a`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_tail_operand_panel_e1a7c87c_20260717T210105Z/analysis/tail_operand_selector_v2.json` (SHA-256 `8362f79bff43b71fe89fc8ed25ba31ef6bfb91bdc8c7d7428e38cd95174bd105`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_tail_operand_panel_e1a7c87c_20260717T210105Z/provenance/selector_v2_outputs_11323681.sha256`
+
+# 2026-07-17: full-cohort capture plumbing and exact-boundary correction
+
+- The proposed five-arm iteration-2 restart panel is rejected. A stock RELION
+  restart advances the sampling perturbation to `-0.24547913670539856`, not the
+  uninterrupted iteration-3 value `-0.30032598972320557`, and process-start
+  MPI initialization overwrites the half-2 follower noise curve with rank-1
+  state. Matching only the perturbation scalar therefore cannot establish an
+  exact boundary. The authoritative source must be an uninterrupted RELION A
+  run with its complete live pre-iteration-3 state sealed in place. Separate
+  uninterrupted B/C runs are whole-run capture controls unless their complete
+  boundary bytes independently match A.
+- Existing `pass0_plan_eulers.bin` files are also invalid boundary evidence.
+  The diagnostic hook read device-backed `AccProjectorPlan::eulers` through
+  its host pointer without `cpToHost`; byte inspection found zeros, non-finite-
+  scale garbage, and magnitudes near `1e35`. A replacement hook must copy after
+  the producer stream completes and fail unless every matrix is finite,
+  orthogonal, and determinant `+1`. The production trajectory itself is not
+  implicated; this is a diagnostic-capture bug.
+- Commit `b11e4a88` adds an atomic captured-projector replay contract. Both
+  half-set `Projector::data` slabs must be complex64 and arrive together with
+  their `r_max`, class count, current size, explicit padding factor, unpadded
+  volume shape, and lowercase source-manifest SHA-256. The replay rejects
+  partial, non-finite, wrong-dtype, wrong-shape, or live-geometry-mismatched
+  state instead of silently rebuilding a projector from a resident half-map.
+- Commit `1a3a9d24` adds a K=1 compact tap after the normal production
+  score-to-posterior normalization. Its environment gate is independent of
+  `_pass2_dump_requested_for_bucket`, so enabling it does not select the
+  materialized diagnostic scorer. It preserves native scores, posteriors,
+  priors, support/significance, exact rotation/translation geometry, log-Z,
+  Pmax, and winner state in bounded node-local shards. Commits `5b225f2c`,
+  `2d3e01a5`, and `dcd1aa07` add strict readback, immutable manifests,
+  particle/candidate caps, and exact per-half identity-set sealing. A capture
+  with swapped halves cannot pass by matching only the global identity union.
+- CPU checks pass: the sparse pass-2 plus compact-capture suite is `28/28` in
+  `52.39 s`; replay-related tests are `24/24`; projector corruption/geometry
+  cases are `7/7`; and the final hardened compact-capture suite is `9/9`.
+  These qualify plumbing only. No full-10,000-particle science job or
+  production algorithm change is authorized until the RELION live-state hook
+  emits bounded compact shards, corrected pass-0 geometry, half-specific
+  noise/scale/metadata, and an immutable verified manifest that RECOVAR can
+  consume exactly.
+
+The pre-registered no-launch plan is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/plan/RUN_PLAN.md`.
+Intermediate comparisons remain exact-array/score/posterior diagnostics;
+map-quality acceptance remains shellwise FSC/FSC-AUC only, never correlation.
