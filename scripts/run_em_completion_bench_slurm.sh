@@ -279,6 +279,37 @@ case "${K1_SAVE_INTERMEDIATES}" in
     ;;
 esac
 
+resolve_relion_refine_mpi() {
+  local binary_name="${RELION_REFINE_MPI}"
+  local module_path
+  if [[ "${binary_name}" == */* ]]; then
+    if [[ ! -x "${binary_name}" ]]; then
+      echo "ERROR: RELION_REFINE_MPI is not executable: ${binary_name}" >&2
+      return 2
+    fi
+    realpath "${binary_name}"
+    return
+  fi
+  if command -v "${binary_name}" >/dev/null 2>&1; then
+    realpath "$(command -v "${binary_name}")"
+    return
+  fi
+  if [[ -f /etc/profile.d/modules.sh ]]; then
+    # shellcheck disable=SC1091
+    source /etc/profile.d/modules.sh
+  fi
+  while IFS= read -r module_path; do
+    if [[ -x "${module_path}/${binary_name}" ]]; then
+      realpath "${module_path}/${binary_name}"
+      return
+    fi
+  done < <((module show "${RELION_MODULE}" 2>&1 || true) | awk '$1 == "prepend-path" && $2 == "PATH" {print $3}')
+  echo "ERROR: cannot resolve ${binary_name} from module ${RELION_MODULE} at submission time" >&2
+  return 2
+}
+
+RELION_REFINE_MPI_RESOLVED="$(resolve_relion_refine_mpi)"
+
 mkdir -p "${SCRATCH_DIR}/jobs" "${RUNTIME_ROOT}"
 touch "${SCRATCH_DIR}/SAFE_TO_DELETE" "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 CUDA_LIB="${SCRATCH_DIR}/cuda/libcuda_backproject.so"
@@ -672,29 +703,8 @@ mkdir -p "\$(dirname "\${RELION_PROVENANCE_FILE}")"
     # shellcheck disable=SC1091
     source /etc/profile.d/modules.sh
   fi
-  RELION_REFINE_MPI_BIN="${RELION_REFINE_MPI}"
-  if [[ "\${RELION_REFINE_MPI_BIN}" == */* ]]; then
-    if [[ ! -x "\${RELION_REFINE_MPI_BIN}" ]]; then
-      echo "ERROR: RELION_REFINE_MPI is not executable: \${RELION_REFINE_MPI_BIN}" >&2
-      exit 2
-    fi
-  elif command -v "\${RELION_REFINE_MPI_BIN}" >/dev/null 2>&1; then
-    RELION_REFINE_MPI_BIN="\$(command -v "\${RELION_REFINE_MPI_BIN}")"
-  else
-    RELION_BINARY_NAME="\${RELION_REFINE_MPI_BIN}"
-    RELION_REFINE_MPI_BIN=""
-    while IFS= read -r module_path; do
-      if [[ -x "\${module_path}/\${RELION_BINARY_NAME}" ]]; then
-        RELION_REFINE_MPI_BIN="\${module_path}/\${RELION_BINARY_NAME}"
-        break
-      fi
-    done < <(module show "${RELION_MODULE}" 2>&1 | awk '\$1 == "prepend-path" && \$2 == "PATH" {print \$3}')
-    if [[ -z "\${RELION_REFINE_MPI_BIN}" ]]; then
-      echo "ERROR: cannot resolve ${RELION_REFINE_MPI} from module ${RELION_MODULE} without loading it" >&2
-      exit 2
-    fi
-  fi
-  RELION_REFINE_MPI_BIN="\$(realpath "\${RELION_REFINE_MPI_BIN}")"
+  RELION_REFINE_MPI_BIN="${RELION_REFINE_MPI_RESOLVED}"
+  test -x "\${RELION_REFINE_MPI_BIN}"
   echo "RELION_MODULE=${RELION_MODULE}"
   echo "RELION_REFINE_MPI_RESOLVED=\${RELION_REFINE_MPI_BIN}"
   echo "RELION_REFINE_MPI_SHA256=\$(sha256sum "\${RELION_REFINE_MPI_BIN}" | awk '{print \$1}')"
@@ -1350,6 +1360,7 @@ K4_TIME_LIMIT=${K4_TIME_LIMIT}
 CUDA_LIB=${CUDA_LIB}
 RELION_MODULE=${RELION_MODULE}
 RELION_REFINE_MPI=${RELION_REFINE_MPI}
+RELION_REFINE_MPI_RESOLVED=${RELION_REFINE_MPI_RESOLVED}
 RELION_SRC_DIR=${RELION_SRC_DIR}
 RUN_K4_FUSED_SPARSE_PASS2=${RUN_K4_FUSED_SPARSE_PASS2}
 EM_COMPLETION_TIMING_PROBE=${EM_COMPLETION_TIMING_PROBE}
