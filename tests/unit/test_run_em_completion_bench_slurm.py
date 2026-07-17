@@ -33,6 +33,7 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
             "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS": "500",
             "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS": "120",
             "RECOVAR_RELION_FIRSTITER_RECON_COMPLEX_BUDGET": "805306368",
+            "RELION_SRC_DIR": str(tmp_path / "relion_src"),
         }
     )
 
@@ -67,6 +68,8 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     jax_cache_export = f'export RECOVAR_JAX_CACHE_DIR="{scratch}/jax_cache"'
     assert shared_export in setup_text
     assert shared_export in k1_text
+    assert f'export RELION_SRC_DIR="{tmp_path / "relion_src"}"' in setup_text
+    assert f"RELION_SRC_DIR={tmp_path / 'relion_src'}" in submission_env_text
     assert jax_cache_export in setup_text
     assert jax_cache_export in k1_text
     assert jax_cache_export in summary_text
