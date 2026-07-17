@@ -3227,3 +3227,24 @@ Matrix evidence:
   `6d00da0be159d946d45dfccc8c8c069161b7b3b201d97e6edec8ef344c834810`).
   Intermediate comparisons use exact/array metrics; map gates use only
   shellwise FSC and FSC-AUC.
+
+# 2026-07-17: HIGHEST GEMM does not explain the iteration-2 PPref grid boundary
+
+- A complete-grid offline replay sends paired control and HIGHEST iteration-1
+  half-2 maps through the same RELION `Projector::computeFourierTransformMap`
+  binding, then compares all `187 x 187 x 94` iteration-2 PPref values and all
+  20,064 p8240-accessed corners with the sealed RELION target.
+- HIGHEST removes only `1.00297%` of the full-grid residual L2 and `1.29501%`
+  at the accessed corners; `98.9970%` of the full-grid residual remains. The
+  default-A100 GEMM defect is real and its production repair remains justified,
+  but it is not the material cause of this PPref boundary.
+- Control/fixed maps are paired on one physical A100, while the RELION target
+  comes from the earlier sealed p8240 allocation. This is a bounded causal
+  discriminator, not a same-allocation acceptance gate. No map-quality claim
+  or correlation metric is used.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ppref_grid_replay_20260717T063000Z/analysis/aggregate_ppref_grid_highest_replay_v1.json`
+  (SHA-256
+  `07cd9240820d2db7e986e8ca2faa0b52d234499058f2eecc02cac15ae2715627`),
+  with a verified two-entry manifest at
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ppref_grid_replay_20260717T063000Z/provenance/SHA256SUMS`.
