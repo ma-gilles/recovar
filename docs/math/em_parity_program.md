@@ -4735,3 +4735,50 @@ Canonical evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ab_20260717T005507Z/real10076_highest_ab_manifest_v1.sha256` (SHA-256 `6f20ff79bc47b83f4f198b28a35a332487a1ea93188e5e8bf769f507df33831c`; all 13 entries verified)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_perf_aba_20260716T212900Z/warmed_aba_performance_report_v1.json` (SHA-256 `0a20edac7a898f1997d13fa1ab75d1f0cbeb2ac46c11a049498af6759a7a79de`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_perf_aba_20260716T212900Z/warmed_aba_manifest_v1.sha256` (SHA-256 `a3552ac5d05e0305544e86560cd2fd92b88d11d410074dd39f737da3387b411b`)
+
+## 2026-07-16 K=1 100k scale and convergence qualification
+
+The canonical 100,000-particle, grid-256 supplied-map trajectory at source
+`505af690` passes the complete numbered and final FSC/FSC-AUC audit. RELION and
+RECOVAR both converge at numbered iteration 14 with the same current-size
+schedule. RECOVAR runs final all-data exactly once after convergence, with grid
+correction explicitly unset/off; every expected final half and merged product
+is present. Across all numbered boundaries, merged cross-engine FSC-AUC is at
+least `0.9999604047`, and the minimum RECOVAR-minus-RELION merged GT FSC-AUC
+delta is `-3.079e-5`.
+
+The final merged cross-engine FSC-AUC is `0.9986956770`. RECOVAR final merged
+GT FSC-AUC is `0.5444742912`, versus `0.5363817908` for RELION, a delta of
+`+0.0080925003`. These are FSC/FSC-AUC results; correlation is not computed or
+used.
+
+Both engines ran serially in Slurm science allocation `11268911` on the same
+A100-SXM4-80GB. RELION took `30,745` seconds and peaked at `80,053` MiB;
+RECOVAR took `8,094` seconds and peaked at `34,597` MiB. RECOVAR is therefore
+`3.7985x` faster by external wall time in this gate. Audit job `11291289`
+completed `0:0`; it also verifies the clean science allocation, convergence
+topology, final products, wall records, GPU samples, and source provenance.
+
+This trajectory predates the local numerator `Precision.HIGHEST` repair, so it
+qualifies the existing 100k scale baseline rather than replacing the ongoing
+corrected-precision trajectory. The corrected run must retain the same quality,
+convergence, and performance conclusions before that repair is promoted as the
+full-scale default.
+
+The aggregate particle-state auditor also passes exact schedule and convergence
+gates on the explicitly selected iteration-1--5 boundary subset in Slurm job
+`11291778`. This older archive saved significant-support counts only for those
+five boundaries, so the auditor correctly rejects an implicit full-trajectory
+claim. Within the measured subset, support-count differences affect
+`0/58/90/155/278` of 100,000 particles. Pmax absolute p95 grows from zero at
+iteration 1 to `0.0085577` at iteration 5, with systematic concentration among
+lower-Pmax particles. These finite array differences remain diagnostic rather
+than being reclassified as a map-quality failure; the independent numbered-map
+FSC/FSC-AUC gate above passes every boundary.
+
+Canonical evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/cases/1_baseline_100k_g256_white_noise1_bf80/trajectory_analysis/k1_scale_acceptance.json` (SHA-256 `2c0c4de857b509ffcc56fb4caea7ea263775a549710fa3dbe58cadc5974923be`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/cases/1_baseline_100k_g256_white_noise1_bf80/trajectory_analysis/k1_scale_runtime.json` (SHA-256 `2266cbefbf8bad7f9dca1b95f2b558b9d665cd74558ce0f8555c7bbe9fafcc1a`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/cases/1_baseline_100k_g256_white_noise1_bf80/trajectory_analysis/k1_fsc_trajectory.json` (SHA-256 `4f876bf1e03f82b2d006a6495461063a2f4a88fadb45a4a30d3bfa8185350960`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/analysis/aggregate_state_subset_000_004_7de6ae20_20260716T224700Z/aggregate_state_subset_000_004.json` (SHA-256 `ba4265fff0111e12c1f3ce8ef26105820469173525a1a939f352bd71a5f0d5f1`)
