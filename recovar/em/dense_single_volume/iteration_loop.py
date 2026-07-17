@@ -541,6 +541,33 @@ def _should_run_final_all_data_iteration(
     return True
 
 
+def _native_convergence_ready_after_numbered_cap(
+    *,
+    state: RefinementState,
+    iteration: int,
+    max_iter: int,
+    native_sampling_boundary: bool,
+    force_max_iter_after_convergence: bool,
+) -> bool:
+    """Mirror RELION's top-of-next-loop convergence check at ``--iter``.
+
+    RELION completes the last numbered iteration, checks the resulting state
+    at the top of the next loop, and may turn that next loop into the
+    unnumbered joined all-data pass.  RECOVAR's numbered loop is bounded by
+    ``iteration < max_iter``, so the equivalent check must happen once after
+    the loop cap.  This is a genuine convergence check, not permission to
+    force final all-data output after non-convergence.
+    """
+
+    return bool(
+        native_sampling_boundary
+        and not force_max_iter_after_convergence
+        and not state.has_converged
+        and int(iteration) >= int(max_iter)
+        and check_convergence(state)
+    )
+
+
 def _k_class_relion_half_volume_mstep_enabled() -> bool:
     """Return whether K-class should use the old native half-volume M-step."""
 
@@ -7790,6 +7817,19 @@ def _run_relion_iteration_loop(
     # convergence flags are set at the top of the loop. Do not synthesize it
     # after plain max_iter exhaustion, but do run it when convergence is first
     # detected on the last configured iteration.
+    if _native_convergence_ready_after_numbered_cap(
+        state=state,
+        iteration=iteration,
+        max_iter=max_iter,
+        native_sampling_boundary=native_sampling_boundary,
+        force_max_iter_after_convergence=force_max_iter_after_convergence,
+    ):
+        state.has_converged = True
+        logger.info(
+            "Convergence reached after final numbered iteration %d. "
+            "Entering RELION final all-data iteration.",
+            iteration,
+        )
     should_run_final_iteration = _should_run_final_all_data_iteration(
         has_converged=state.has_converged,
         iteration=iteration,

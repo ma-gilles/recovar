@@ -289,6 +289,61 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
     )
 
 
+def test_native_convergence_is_checked_once_after_last_numbered_iteration():
+    state = RefinementState(
+        has_fine_enough_angular_sampling=True,
+        nr_iter_wo_resol_gain=2,
+        nr_iter_wo_large_hidden_variable_changes=2,
+        smallest_changes_optimal_orientations=0.25,
+    )
+
+    assert iteration_loop_module._native_convergence_ready_after_numbered_cap(
+        state=state,
+        iteration=16,
+        max_iter=16,
+        native_sampling_boundary=True,
+        force_max_iter_after_convergence=False,
+    )
+    assert not iteration_loop_module._native_convergence_ready_after_numbered_cap(
+        state=state,
+        iteration=15,
+        max_iter=16,
+        native_sampling_boundary=True,
+        force_max_iter_after_convergence=False,
+    )
+    assert not iteration_loop_module._native_convergence_ready_after_numbered_cap(
+        state=state,
+        iteration=16,
+        max_iter=16,
+        native_sampling_boundary=False,
+        force_max_iter_after_convergence=False,
+    )
+    assert not iteration_loop_module._native_convergence_ready_after_numbered_cap(
+        state=state,
+        iteration=16,
+        max_iter=16,
+        native_sampling_boundary=True,
+        force_max_iter_after_convergence=True,
+    )
+
+
+def test_post_cap_check_does_not_force_unconverged_final_all_data():
+    state = RefinementState(
+        has_fine_enough_angular_sampling=True,
+        nr_iter_wo_resol_gain=2,
+        nr_iter_wo_large_hidden_variable_changes=0,
+        smallest_changes_optimal_orientations=0.25,
+    )
+
+    assert not iteration_loop_module._native_convergence_ready_after_numbered_cap(
+        state=state,
+        iteration=16,
+        max_iter=16,
+        native_sampling_boundary=True,
+        force_max_iter_after_convergence=False,
+    )
+
+
 def test_final_local_sampling_orders_use_advanced_final_star_parent():
     """100k replay advances final parent hp6->hp7, so os1 must score fine hp8."""
 
@@ -765,6 +820,51 @@ def test_final_all_data_runs_with_cold_start_only_override(
         max_healpix_order=2,
         low_resol_join_halves_angstrom=0.0,
         replay_iteration_overrides=[{}, None],
+    )
+
+    assert result["convergence_state"].has_converged is True
+    assert result["final_all_data_ran"] is True
+
+
+def test_last_numbered_state_can_trigger_native_final_all_data(
+    half_datasets,
+    init_volume,
+    rotations,
+    translations,
+    monkeypatch,
+):
+    original_update = iteration_loop_module.update_refinement_state
+
+    def make_post_numbered_state_converged(*args, **kwargs):
+        updated = original_update(*args, **kwargs)
+        updated.has_converged = False
+        updated.has_fine_enough_angular_sampling = True
+        updated.nr_iter_wo_resol_gain = 2
+        updated.nr_iter_wo_large_hidden_variable_changes = 2
+        updated.smallest_changes_optimal_orientations = 0.25
+        return updated
+
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "update_refinement_state",
+        make_post_numbered_state_converged,
+    )
+
+    result = refine_single_volume(
+        half_datasets,
+        init_volume,
+        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+        rotations,
+        translations,
+        disc_type="linear_interp",
+        max_iter=1,
+        image_batch_size=N_IMAGES,
+        rotation_block_size=N_ROTATIONS,
+        init_current_size=4,
+        init_healpix_order=2,
+        max_healpix_order=2,
+        low_resol_join_halves_angstrom=0.0,
     )
 
     assert result["convergence_state"].has_converged is True
