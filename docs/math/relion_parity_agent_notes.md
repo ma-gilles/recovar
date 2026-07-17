@@ -3022,3 +3022,30 @@ Matrix evidence:
   Real allocations with `SLURM_JOB_GPUS=1` and `2` now record valid physical
   UUIDs. The invalid pre-science jobs were cancelled and preserved as
   superseded infrastructure evidence.
+
+# 2026-07-16: anisotropic-outlier, high-resolution, and low-noise K=1 gates pass
+
+- Same-GPU science jobs `11291242`, `11291425`, and `11291427`, followed by
+  fail-closed audit jobs `11292006`, `11292008`, and `11292010`, cover 25%
+  anisotropic outliers, grid-256 high-resolution data without B-factor
+  attenuation, and low-noise data. All three FSC/FSC-AUC and aggregate-state
+  audits pass.
+- RECOVAR and RELION converge at the same boundary and run the valid final
+  all-data step: iteration 11 for the anisotropic-outlier and high-resolution
+  cases, and iteration 12 for the low-noise case. Numbered topology and image
+  identity alignment are complete.
+- Minimum numbered merged cross-engine FSC-AUC is respectively
+  `0.9999999973`, `0.9999806461`, and `0.9999969065`. Worst numbered
+  RECOVAR-minus-RELION merged GT FSC-AUC is `-9.45e-7`, `-1.63e-6`, and
+  `-3.89e-6`. Final merged cross-engine FSC-AUC is `0.998032399`,
+  `0.997737292`, and `0.998869473`, while final RECOVAR GT FSC-AUC exceeds
+  RELION by `+0.008378607`, `+0.001147312`, and `+0.014986853`. Map quality is
+  assessed only with shellwise FSC/FSC-AUC; correlation is not computed.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_expansion_audit_cb83d1b9_20260717_031000/cases/16_small_anisotropic_outliers_3k_g128_pct25_noise3_bf80/k1_fsc_trajectory.json`
+  (`a7d252923c10af7c7504ac37b15334a2141b577942fa893f25c2de0a024c07a9`),
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_expansion_audit_cb83d1b9_20260717_031000/cases/20_small_high_res_radial_3k_g256_noise3_bf0/k1_fsc_trajectory.json`
+  (`d869b0b3cdad9f7525da2d2cd3960c63431cb7f1b5e98915c75e6ae67706f7bb`),
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_expansion_audit_cb83d1b9_20260717_031000/cases/29_small_low_noise_3k_g128_white_noise0p2_bf80/k1_fsc_trajectory.json`
+  (`1a60e0ae0b7be85a017cddca99cccfb5a8b121eff54311a1cc433e9abb8deaa5`).
