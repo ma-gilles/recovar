@@ -94,10 +94,16 @@ def _per_particle_relative_l2(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
     return numerator / denominator
 
 
-def _shell_metrics(lhs: np.ndarray, rhs: np.ndarray, window_indices: np.ndarray) -> list[dict[str, object]]:
-    x = window_indices % 129
-    y = window_indices // 129
-    y = np.where(y > 128, y - 256, y)
+def _shell_metrics(
+    lhs: np.ndarray,
+    rhs: np.ndarray,
+    window_indices: np.ndarray,
+    physical_box_size: int,
+) -> list[dict[str, object]]:
+    half_width = physical_box_size // 2 + 1
+    x = window_indices % half_width
+    y = window_indices // half_width
+    y = np.where(y > physical_box_size // 2, y - physical_box_size, y)
     shell = np.rint(np.sqrt(x * x + y * y)).astype(np.int32)
     records = []
     for radius in np.unique(shell):
@@ -146,6 +152,8 @@ def _load_recovar(
     rotations = []
     global_rotations = []
     window_reference = None
+    image_shape_reference = None
+    current_size_reference = None
     zero_valid_rows = 0
     for path in paths:
         with np.load(path, allow_pickle=False) as archive:
@@ -157,10 +165,32 @@ def _load_recovar(
             active_rotations = np.asarray(archive["active_rotations"], dtype=np.float32)
             active_global = np.asarray(archive["active_global_rotation_indices"], dtype=np.int64)
             window = np.asarray(archive["window_indices"], dtype=np.int32)
+            _require("image_shape" in archive, f"RECOVAR shard lacks physical image_shape: {path}")
+            _require("current_size" in archive, f"RECOVAR shard lacks current_size: {path}")
+            image_shape = np.asarray(archive["image_shape"], dtype=np.int64)
+            current_size = int(np.asarray(archive["current_size"]).item())
+        _require(
+            image_shape.shape == (2,)
+            and image_shape[0] == image_shape[1]
+            and image_shape[0] > 0
+            and image_shape[0] % 2 == 0,
+            f"RECOVAR physical image_shape is not a positive even square: {path}",
+        )
+        _require(
+            0 < current_size <= int(image_shape[0]) and current_size % 2 == 0,
+            f"RECOVAR current_size is inconsistent with physical image_shape: {path}",
+        )
         if window_reference is None:
             window_reference = window
+            image_shape_reference = image_shape
+            current_size_reference = current_size
         else:
             _require(np.array_equal(window_reference, window), f"RECOVAR support changed: {path}")
+            _require(
+                np.array_equal(image_shape_reference, image_shape),
+                f"RECOVAR physical image_shape changed: {path}",
+            )
+            _require(current_size_reference == current_size, f"RECOVAR current_size changed: {path}")
         selected = []
         for particle in range(stack.size):
             rows = np.flatnonzero(particle_rows == particle)
@@ -184,6 +214,17 @@ def _load_recovar(
     order = np.argsort(stack_array)
     _require(np.unique(stack_array).size == stack_array.size, "duplicate RECOVAR stack identities")
     assert window_reference is not None
+    assert image_shape_reference is not None
+    assert current_size_reference is not None
+    physical_box_size = int(image_shape_reference[0])
+    physical_half_width = physical_box_size // 2 + 1
+    _require(window_reference.ndim == 1 and window_reference.size > 0, "RECOVAR source window is empty")
+    _require(
+        np.all(window_reference >= 0)
+        and np.all(window_reference < physical_box_size * physical_half_width)
+        and np.unique(window_reference).size == window_reference.size,
+        "RECOVAR window_indices are invalid for physical image_shape",
+    )
     sorted_stacks = stack_array[order]
     support_mask = _load_device_support(geometry_directory, sorted_stacks, window_reference)
     return {
@@ -194,6 +235,8 @@ def _load_recovar(
         "global_rotations": np.concatenate(global_rotations)[order],
         "window_indices": window_reference,
         "support_mask": support_mask,
+        "physical_box_size": np.asarray(physical_box_size, dtype=np.int64),
+        "current_size": np.asarray(current_size_reference, dtype=np.int64),
         "exact_zero_nonwinner_rows": np.asarray(zero_valid_rows, dtype=np.int64),
         "shard_count": np.asarray(len(paths), dtype=np.int64),
     }
@@ -204,6 +247,8 @@ def _align_relion(
     recovar: dict[str, np.ndarray],
     *,
     mpi_rank: int,
+    physical_box_size: int,
+    expected_current_size: int,
 ) -> dict[str, np.ndarray]:
     selected = sorted(
         (artifact for artifact in artifacts if artifact.mpi_rank == mpi_rank),
@@ -222,9 +267,11 @@ def _align_relion(
     radius_excluded = np.empty(stacks.size, dtype=np.int64)
     for index, artifact in enumerate(selected):
         rows = artifact.rows
-        box_size = int(artifact.header[13])
+        current_size = int(artifact.header[13])
         _require(
-            int(artifact.header[12]) == box_size // 2 + 1 and int(artifact.header[14]) == 1,
+            current_size == expected_current_size
+            and int(artifact.header[12]) == current_size // 2 + 1
+            and int(artifact.header[14]) == 1,
             f"unexpected RELION half-spectrum shape: {artifact.path}",
         )
         orientations = np.unique(rows["orientation_local"])
@@ -232,7 +279,7 @@ def _align_relion(
         orientation = int(orientations[0])
         rotation = artifact.rotations[orientation]
         full_indices = (
-            (rows["y"].astype(np.int64) % box_size) * (box_size // 2 + 1)
+            (rows["y"].astype(np.int64) % physical_box_size) * (physical_box_size // 2 + 1)
             + rows["x"]
         )
         _require(np.unique(full_indices).size == full_indices.size, f"duplicate RELION support pixel: {artifact.path}")
@@ -251,15 +298,16 @@ def _align_relion(
         )
         # The capture stores RELION's native pre-scatter values. Use the same
         # qualified RELION-to-RECOVAR conversion as the sealed aggregate BPref
-        # comparison: -1/N^2 for data and 1/N^4 for weight. Derive N from the
-        # capture header without attributing it to either forward-FFT convention.
+        # comparison: -1/N^2 for data and 1/N^4 for weight, where N is the
+        # physical particle box. RELION's current-size buffer is a separate
+        # layout dimension and must never set this normalization.
         relion_data[index] = 0
         relion_weight[index] = 0
         relion_data[index, output_columns] = (
             rows["source_re"] + 1j * rows["source_im"]
-        ) * np.float32(-1.0 / box_size**2)
+        ) * np.float32(-1.0 / physical_box_size**2)
         relion_weight[index, output_columns] = rows["source_weight"] * np.float32(
-            1.0 / box_size**4
+            1.0 / physical_box_size**4
         )
         relion_rotations[index] = rotation["matrix"].reshape(3, 3)
         orientation_keys[index] = rotation["orientation_class_key"]
@@ -277,7 +325,8 @@ def _align_relion(
         "supported_rows": supported_rows,
         "positive_candidates": positive_candidates,
         "radius_excluded": radius_excluded,
-        "image_box_size": np.asarray(int(selected[0].header[13]), dtype=np.int64),
+        "current_size": np.asarray(expected_current_size, dtype=np.int64),
+        "physical_box_size": np.asarray(physical_box_size, dtype=np.int64),
     }
 
 
@@ -301,7 +350,13 @@ def compare(
         expected_stack_mpi_rank=mpi_rank,
     )
     _require(current_validation["classification_ready"] is True, "fresh validation did not pass")
-    relion = _align_relion(artifacts, recovar, mpi_rank=mpi_rank)
+    relion = _align_relion(
+        artifacts,
+        recovar,
+        mpi_rank=mpi_rank,
+        physical_box_size=int(recovar["physical_box_size"]),
+        expected_current_size=int(recovar["current_size"]),
+    )
 
     transpose_delta = relion["rotations"].transpose(0, 2, 1) - recovar["rotations"]
     rotation_metrics = _array_metrics(
@@ -335,7 +390,8 @@ def compare(
             "mpi_rank": mpi_rank,
             "particle_count": int(recovar["stack_indices"].size),
             "pixels_per_particle": int(recovar["window_indices"].size),
-            "relion_image_box_size": int(relion["image_box_size"]),
+            "relion_current_size": int(relion["current_size"]),
+            "physical_image_box_size": int(relion["physical_box_size"]),
             "recovar_shard_count": int(recovar["shard_count"]),
             "recovar_exact_zero_nonwinner_rows": int(recovar["exact_zero_nonwinner_rows"]),
             "relion_supported_rows": int(np.sum(relion["supported_rows"])),
@@ -376,10 +432,16 @@ def compare(
                 ),
             },
             "data_shellwise": _shell_metrics(
-                recovar_data_active, relion["data"], recovar["window_indices"]
+                recovar_data_active,
+                relion["data"],
+                recovar["window_indices"],
+                int(recovar["physical_box_size"]),
             ),
             "weight_shellwise": _shell_metrics(
-                recovar_weight_active, relion["weight"], recovar["window_indices"]
+                recovar_weight_active,
+                relion["weight"],
+                recovar["window_indices"],
+                int(recovar["physical_box_size"]),
             ),
         },
         "classification": (

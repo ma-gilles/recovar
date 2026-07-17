@@ -35,16 +35,17 @@ def _write_artifact(
     rows = np.zeros(1, dtype=validator.ROW_DTYPE)
     rows["state"] = 1
     rows["orientation_local"] = 0
-    rows["pixel"] = 1
+    rows["pixel"] = 47 * 25 + 1
     rows["flags"] = validator.ROW_FLAG_FWEIGHT_POSITIVE | validator.ROW_FLAG_RADIUS_SUPPORT
     rows["x"] = 1
+    rows["y"] = -1
     rows["source_re"] = 2.0
     rows["source_im"] = -3.0
     rows["source_weight"] = 4.0
 
     values = [0] * 40
     values[0:5] = [1, 336, 40, 64, 32]
-    values[5:20] = [1, 1, part, stack, part, rank, 0, 129, 256, 1, 33024, 1, 1, 2, 4]
+    values[5:20] = [1, 1, part, stack, part, rank, 0, 25, 48, 1, 1200, 1, 1, 2, 4]
     values[20:25] = [_float_bits(2.0), _float_bits(0.1), _float_bits(1.0), 0, 0]
     values[25:30] = [expected_particles, 1, 2, 10_000_000, 1_000_000]
     values[30:38] = [1234, 2000 + stack, 9, 9, 9, 0, 0, 1]
@@ -112,6 +113,7 @@ def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
 
     contributions = tmp_path / "contributions"
     contributions.mkdir()
+    physical_pixel = 255 * 129 + 1
     summed = np.zeros((8, 2), dtype=np.complex64)
     ctf = np.zeros((8, 2), dtype=np.float32)
     summed[0, 0] = np.complex64(complex(-2.0, 3.0) * (2.0**-16))
@@ -130,7 +132,9 @@ def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
         active_ctf_probs=ctf,
         active_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (8, 3, 3)),
         active_global_rotation_indices=np.arange(136, 144, dtype=np.int64),
-        window_indices=np.asarray([1, 2], dtype=np.int32),
+        window_indices=np.asarray([physical_pixel, 2], dtype=np.int32),
+        image_shape=np.asarray([256, 256], dtype=np.int32),
+        current_size=np.asarray(48, dtype=np.int32),
     )
     geometry = tmp_path / "geometry"
     geometry.mkdir()
@@ -138,7 +142,7 @@ def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
         geometry / "geometry.npz",
         companion_contribution_path=np.asarray(str(contribution_path)),
         signature_particle_rows=np.asarray([0], dtype=np.int32),
-        signature_pixel_indices=np.asarray([[1, 2]], dtype=np.int32),
+        signature_pixel_indices=np.asarray([[physical_pixel, 2]], dtype=np.int32),
         signature_row_flags=np.asarray([[64, 0]], dtype=np.uint32),
     )
     validation = tmp_path / "validation.json"
@@ -156,6 +160,8 @@ def test_compare_complete_aligned_prescatter_operands(tmp_path: Path):
     )
 
     assert report["gates"]["comparison_ready"] is True
+    assert report["scope"]["relion_current_size"] == 48
+    assert report["scope"]["physical_image_box_size"] == 256
     assert report["classification"] == "pre_scatter_operand_generation_difference"
     assert report["operands"]["data_numerator_recovar_vs_scaled_negative_relion"][
         "exact_equal"
