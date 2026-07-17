@@ -3469,3 +3469,51 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z/restart/per_trial_errors.csv`
   (SHA-256
   `d29e4b460c5562a0328f4fb5ed6806c138bc4408c6c765e95bb224aa68d91da4`).
+
+# 2026-07-17: real-10076 HEALPix timing is the dominant trajectory fork
+
+- Science job `11294177` ran four ten-iteration RECOVAR arms sequentially on
+  one physical A100: two autonomous controls, a RELION HEALPix-order oracle,
+  and a full RELION HEALPix/current-size oracle. All four science commands
+  completed. The job's final `FAILED` state is only the original audit
+  wrapper's checkout-import error; isolated CPU audit job `11296645` completed
+  with exit code zero and verified the science artifacts.
+- Both autonomous controls use HEALPix orders
+  `[3,3,3,3,3,3,3,4,4,4]`. Their merged-map A/B FSC-AUC remains at least
+  `0.996052964` through iteration 10, so their common refinement at iteration
+  8 is well outside the repeat envelope. Holding only the RELION HEALPix
+  schedule `[3,3,3,3,3,3,3,3,3,4]` raises the minimum iteration-8--10
+  RECOVAR-versus-RELION merged FSC-AUC from `0.726125984` to `0.978128435`.
+  Also forcing RELION current sizes raises it only to `0.978681776`; current
+  size is therefore a marginal secondary effect at this boundary.
+- The scheduler implementation is not the causal defect. The tests in
+  `tests/unit/test_convergence.py` reproduce RELION's refinement at iteration
+  10 when fed RELION's recorded hidden-change scalars and RECOVAR's refinement
+  at iteration 8 when fed RECOVAR's scalars. Do not patch the 3-percent
+  threshold or stall counter.
+- The scalar difference is concentrated in a rare pose tail. Across the
+  primary target, RECOVAR's iteration-6--7 mean angular change is
+  `4.834649267` degrees versus RELION's `4.743451024`. Only `518/10000`
+  particles differ by more than `0.1` degree, while the largest 1 percent
+  accounts for `92.2177%` of the absolute cross-engine change difference.
+  The median and p95 cross-engine pose errors remain approximately `1.18e-5`
+  and `3.58e-5` degrees, so percentile summaries alone hide the subgroup.
+  The same classification holds against both independent RELION repeat arms
+  and the second RECOVAR control. The subgroup is enriched for lower Pmax.
+  Continue at the frozen scorer/operand boundary for this subgroup rather than
+  changing scheduling logic.
+- Primary evidence is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/schedule_oracle_ab_v3.json`
+  (SHA-256
+  `de3b602ddaa8d141495546825d23e65c1b33b1afaeb6700593358bc090f36295`)
+  with verified manifest
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/provenance/science_artifacts_v3.sha256`
+  (SHA-256
+  `6b520df3de8b081f08e080349552c3380932855cf6f9a98b054587f788f27ede`).
+  Tail evidence is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/hidden_change_it006_it007_v1/hidden_change_distribution.json`
+  (SHA-256
+  `ccb20a0aaffbc73ab9211a546dbc3ea1a9a479b0e85a02d5837004fbc8b16e32`)
+  with verified manifest SHA-256
+  `133eb60f481f150f1778c340dac5772f7eb801587d1672f6307f65dd6afe9ae1`.
+  Map acceptance uses FSC/FSC-AUC only; correlation is not computed.
