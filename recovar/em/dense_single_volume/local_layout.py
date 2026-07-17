@@ -441,9 +441,8 @@ def _selected_rotation_matrices(
             float(angular_sampling_deg),
         )
     else:
-        # This also routes GPU RELION-parity runs through the exact device
-        # ``sincosf`` scorer-matrix constructor.  Its CPU fallback is the
-        # existing NumPy Euler conversion.
+        # Preserve RELION's accelerated-path handoff: host RFLOAT inverse
+        # matrices are cast to XFLOAT before scoring on the device.
         rotations, _ = apply_relion_rotation_perturbation_to_eulers(
             selected_eulers,
             0.0,

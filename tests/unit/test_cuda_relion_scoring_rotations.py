@@ -1,4 +1,8 @@
-"""Focused tests for the exact RELION scorer-rotation CUDA FFI."""
+"""Focused tests for the RELION CUDA make-eulers diagnostic FFI.
+
+Production accelerated EM receives host-generated matrices; this helper is
+retained to reproduce and classify CUDA arithmetic in isolation.
+"""
 
 import numpy as np
 import pytest
@@ -107,36 +111,6 @@ def test_relion_scoring_rotations_match_frozen_device_replay_bitwise(monkeypatch
         np.asarray(actual).view(np.uint32),
         relion_inverse.swapaxes(1, 2).view(np.uint32),
     )
-
-
-@pytest.mark.gpu
-def test_relion_perturbation_high_level_route_matches_frozen_device_replay_bitwise(
-    monkeypatch, custom_cuda_lib, gpu_device
-):
-    """The EM sampling handoff preserves the exact device scorer operand."""
-
-    from recovar.em.sampling import apply_relion_rotation_perturbation_to_eulers
-
-    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
-    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
-    eulers = _f32_from_bits(_EULER_BITS, (4, 3))
-    relion_inverse = _f32_from_bits(_RELION_INVERSE_PROJECTOR_BITS, (4, 3, 3))
-
-    with jax.default_device(gpu_device):
-        scorer_rotations, public_eulers, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-            eulers,
-            0.405200093985,
-            7.5,
-            return_mstep_rotations=True,
-        )
-
-    np.testing.assert_array_equal(
-        scorer_rotations.view(np.uint32),
-        relion_inverse.swapaxes(1, 2).view(np.uint32),
-    )
-    assert public_eulers.dtype == np.float32
-    assert mstep_rotations.dtype == np.float32
-    assert mstep_rotations.shape == scorer_rotations.shape
 
 
 @pytest.mark.gpu

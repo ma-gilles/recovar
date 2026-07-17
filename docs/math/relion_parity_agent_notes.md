@@ -2397,6 +2397,10 @@ Matrix evidence:
 
 # 2026-07-16: RELION-exact CUDA scorer rotations close the K=1 iteration-2 cutoff
 
+> Superseded on 2026-07-17 for accelerated EM: the captured CUDA arithmetic
+> was reproduced correctly, but it was attached to the wrong RELION call
+> path. See the host-generated scorer-matrix classification below.
+
 - A same-A100, cross-engine operand capture localized the earliest material
   iteration-2 difference to scorer rotation generation.  RELION constructs
   float32 Euler matrices with device `sincosf` and explicitly evaluates the
@@ -3717,3 +3721,35 @@ Matrix evidence:
   (SHA-256 `c596e13b22afd61b7db79a104d5814edb8cb8c97a74c1e3c9c26ffd66250be85`).
   Intermediate evidence uses exact arrays and posterior distances; map quality
   remains FSC/FSC-AUC only and correlation is not computed.
+
+# 2026-07-17: accelerated scorer matrices come from RELION's host inverse path
+
+- Source tracing and a fresh native capture correct the earlier CUDA-matrix
+  interpretation. RELION's accelerated fine expectation and weighted-sum
+  paths both call host `generateEulerMatrices(..., inverse=true)` in RFLOAT
+  precision, cast the result to XFLOAT, and then copy it to the device. The
+  CUDA `make_eulers_3D` helper remains a valid isolated arithmetic diagnostic,
+  but it is not the production matrix generator for this EM path.
+- All 1,120 unique captured fine matrices differ from RECOVAR's former
+  device-reconstructed matrices; 7,822/10,080 entries differ, usually by a
+  few float32 ULP. On 32 particles and 17,216 exact five-field candidate UIDs,
+  the rotation handoff accounts for canonical-float64 posterior TV median
+  `3.90795e-5` (p95 `3.31169e-4`). The remaining native-texture arithmetic
+  residual has median `1.41812e-5` (p95 `5.81312e-5`) and remains a separate
+  follow-up.
+- The candidate host-double inverse generator matches the native capture
+  bitwise: zero differences across 10,080 unique and 154,944
+  candidate-weighted float32 matrix entries. Replaying the frozen PPref/helper
+  produces bitwise-identical references and zero canonical posterior TV
+  versus the captured-native-matrix arm for all 32 particles. Production EM
+  now uses this host path for both scoring and backprojection; the CUDA helper
+  is diagnostic only. Full-trajectory FSC/FSC-AUC remains the acceptance gate.
+- Evidence is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_common_contrib_20260717T180500Z/analysis/native_rotation_texture_discriminator.json`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_common_contrib_20260717T180500Z/analysis/candidate_rotation_generator_validation.json`,
+  with verified manifest
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_common_contrib_20260717T180500Z/provenance/candidate_rotation_generator_validation.sha256`.
+  Jobs `11314778` and `11315399` completed `0:0`. Intermediate gates use exact
+  arrays and posterior TV; map acceptance uses FSC/FSC-AUC only and correlation
+  is not computed.

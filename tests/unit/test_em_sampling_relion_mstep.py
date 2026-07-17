@@ -4,12 +4,9 @@ import inspect
 
 import numpy as np
 
-from recovar import cuda_backproject
-from recovar.em import sampling as sampling_module
 from recovar.em.dense_single_volume import iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume import relion_metadata
 from recovar.em.sampling import (
-    _relion_euler_angles_to_matrix,
     _relion_mstep_rotations_from_eulers,
     apply_relion_rotation_perturbation_to_eulers,
     get_oversampled_rotation_grid_from_samples,
@@ -127,60 +124,23 @@ def test_unperturbed_optional_mstep_return_is_backward_compatible():
     )
 
 
-def test_gpu_perturbation_routes_scorer_only_through_exact_relion_device_builder(monkeypatch):
-    calls = []
-    sentinel = np.arange(18, dtype=np.float32).reshape(2, 3, 3)
-
-    def fake_builder(eulers_deg, right_matrix, *, do_right):
-        calls.append(
-            (
-                np.asarray(eulers_deg, dtype=np.float32),
-                np.asarray(right_matrix, dtype=np.float32),
-                bool(do_right),
-            )
-        )
-        return sentinel
-
-    monkeypatch.setattr(sampling_module.jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(sampling_module.jax, "device_get", np.asarray)
-    monkeypatch.setattr(cuda_backproject, "relion_make_scoring_rotations_f32", fake_builder)
-
-    source_eulers = _UNPERTURBED_FINE_EULERS_F64[:2]
-    random_perturbation = np.float64(0.405200093985)
+def test_perturbed_scorer_uses_captured_host_generated_matrix_bits():
+    random_perturbation = np.float64(-0.04961434006690979)
     rotations, public_eulers, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-        source_eulers,
+        _UNPERTURBED_FINE_EULERS_F64,
         random_perturbation,
         7.5,
         return_mstep_rotations=True,
     )
 
-    np.testing.assert_array_equal(rotations, sentinel)
-    assert len(calls) == 1
-    captured_eulers, captured_right, do_right = calls[0]
-    np.testing.assert_array_equal(captured_eulers, source_eulers.astype(np.float32))
-    myperturb = float(random_perturbation) * 7.5
-    expected_right = _relion_euler_angles_to_matrix(np.asarray([[myperturb, myperturb, myperturb]], dtype=np.float64))[
-        0
-    ].astype(np.float32)
-    np.testing.assert_array_equal(captured_right, expected_right)
-    assert do_right is True
+    np.testing.assert_array_equal(rotations.view(np.uint32), _RELION_MSTEP_ROTATION_BITS)
+    np.testing.assert_array_equal(mstep_rotations.view(np.uint32), _RELION_MSTEP_ROTATION_BITS)
+    np.testing.assert_array_equal(rotations, mstep_rotations)
     assert public_eulers.dtype == np.float32
-    assert mstep_rotations.dtype == np.float32
-    assert mstep_rotations.shape == sentinel.shape
+    np.testing.assert_array_equal(public_eulers, _RELION_FINE_EULERS_F64.astype(np.float32))
 
 
-def test_gpu_unperturbed_scorer_builder_does_not_replace_mstep_path(monkeypatch):
-    calls = []
-    sentinel = np.full((1, 3, 3), np.float32(7.0))
-
-    def fake_builder(eulers_deg, right_matrix, *, do_right):
-        calls.append((np.asarray(eulers_deg), np.asarray(right_matrix), bool(do_right)))
-        return sentinel
-
-    monkeypatch.setattr(sampling_module.jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(sampling_module.jax, "device_get", np.asarray)
-    monkeypatch.setattr(cuda_backproject, "relion_make_scoring_rotations_f32", fake_builder)
-
+def test_unperturbed_scorer_and_mstep_share_host_generated_path():
     rotations, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
         _UNPERTURBED_FINE_EULERS_F64[:1],
         0.0,
@@ -188,38 +148,25 @@ def test_gpu_unperturbed_scorer_builder_does_not_replace_mstep_path(monkeypatch)
         return_mstep_rotations=True,
     )
 
-    np.testing.assert_array_equal(rotations, sentinel)
-    np.testing.assert_array_equal(
-        mstep_rotations,
-        _relion_mstep_rotations_from_eulers(_UNPERTURBED_FINE_EULERS_F64[:1]),
+    expected = _relion_mstep_rotations_from_eulers(_UNPERTURBED_FINE_EULERS_F64[:1])
+    np.testing.assert_array_equal(rotations, expected)
+    np.testing.assert_array_equal(mstep_rotations, expected)
+
+
+def test_relion_global_grid_preserves_source_euler_precision_until_matrix_cast(monkeypatch):
+    source_eulers = _UNPERTURBED_FINE_EULERS_F64[:2]
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "_get_relion_rotation_grid_eulers_float64",
+        lambda _order: source_eulers,
     )
-    assert len(calls) == 1
-    np.testing.assert_array_equal(calls[0][1], np.eye(3, dtype=np.float32))
-    assert calls[0][2] is False
-
-
-def test_relion_global_grid_uses_exact_device_scorer_rotations_when_available(monkeypatch):
-    eulers = np.asarray([[11.0, 22.0, 33.0], [44.0, 55.0, 66.0]], dtype=np.float32)
-    host_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0)
-    device_rotations = np.arange(18, dtype=np.float32).reshape(2, 3, 3)
-    seen = []
-
-    monkeypatch.setattr(iteration_loop_module, "get_relion_rotation_grid", lambda _order: host_rotations)
-    monkeypatch.setattr(iteration_loop_module, "get_relion_rotation_grid_eulers", lambda _order: eulers)
-
-    def fake_device_builder(source_eulers, right_matrix=None):
-        seen.append((np.asarray(source_eulers), right_matrix))
-        return device_rotations
-
-    monkeypatch.setattr(sampling_module, "_relion_device_scoring_rotations_f32", fake_device_builder)
 
     rotations, returned_eulers = relion_metadata._relion_rotation_grid_float32(3)
 
-    np.testing.assert_array_equal(rotations, device_rotations)
-    np.testing.assert_array_equal(returned_eulers, eulers)
-    assert len(seen) == 1
-    np.testing.assert_array_equal(seen[0][0], eulers)
-    assert seen[0][1] is None
+    np.testing.assert_array_equal(rotations, _relion_mstep_rotations_from_eulers(source_eulers))
+    np.testing.assert_array_equal(returned_eulers, source_eulers.astype(np.float32))
+    late_cast_rotations = _relion_mstep_rotations_from_eulers(returned_eulers)
+    assert np.any(rotations.view(np.uint32) != late_cast_rotations.view(np.uint32))
 
 
 def test_oversampled_grid_optionally_returns_mstep_rotations_without_changing_score_grid():
@@ -247,7 +194,7 @@ def test_oversampled_grid_optionally_returns_mstep_rotations_without_changing_sc
     assert rotations.dtype == np.float32
     assert mstep_rotations.dtype == np.float32
     assert mstep_rotations.shape == rotations.shape
-    np.testing.assert_allclose(mstep_rotations, rotations, rtol=2e-7, atol=2e-7)
+    np.testing.assert_array_equal(mstep_rotations, rotations)
 
 
 def test_oversampled_grid_empty_optional_return_order_is_stable():
