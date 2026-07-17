@@ -126,6 +126,21 @@ def test_capture_splits_raw_shards_at_particle_bound(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
+def test_capture_splits_raw_shards_at_candidate_bound(tmp_path, monkeypatch):
+    monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(capture, "_capture_counter", 0)
+    monkeypatch.setattr(capture, "MAX_CANDIDATES_PER_RAW_SHARD", 5)
+
+    assert capture.maybe_capture_k1_production_bucket(**_capture_inputs(batch=2)) == 2
+
+    paths = sorted(tmp_path.glob("*.npz"))
+    assert len(paths) == 2
+    with np.load(paths[0], allow_pickle=False) as first, np.load(paths[1], allow_pickle=False) as second:
+        assert first["candidate_offset"][-1] == 4
+        assert second["candidate_offset"][-1] == 4
+
+
+@pytest.mark.unit
 def test_raw_capture_validation_and_complete_manifest(tmp_path, monkeypatch):
     monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
     monkeypatch.setattr(capture, "_capture_counter", 0)
