@@ -4776,9 +4776,20 @@ lower-Pmax particles. These finite array differences remain diagnostic rather
 than being reclassified as a map-quality failure; the independent numbered-map
 FSC/FSC-AUC gate above passes every boundary.
 
+The complementary lightweight intermediate auditor covers all 14 numbered
+boundaries despite the older support-count retention limit. It finds no missing
+or malformed arrays and no current-size, Healpix-order, or iteration-topology
+failure. Its largest finite diagnostic is iteration-10 per-particle Pmax
+relative L2 `0.0228949` (absolute p95 `0.0147998`, p99 `0.0284984`, maximum
+`0.667081`, and mean signed delta `-4.82e-5`). This is intentionally reported,
+not threshold-hidden and not called numerical noise. It is also not a map gate:
+the iteration-10 cross-engine merged FSC-AUC is `0.9999850043`, and map quality
+continues to be decided by FSC/FSC-AUC.
+
 Canonical evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/cases/1_baseline_100k_g256_white_noise1_bf80/trajectory_analysis/k1_scale_acceptance.json` (SHA-256 `2c0c4de857b509ffcc56fb4caea7ea263775a549710fa3dbe58cadc5974923be`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/cases/1_baseline_100k_g256_white_noise1_bf80/trajectory_analysis/k1_scale_runtime.json` (SHA-256 `2266cbefbf8bad7f9dca1b95f2b558b9d665cd74558ce0f8555c7bbe9fafcc1a`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/cases/1_baseline_100k_g256_white_noise1_bf80/trajectory_analysis/k1_fsc_trajectory.json` (SHA-256 `4f876bf1e03f82b2d006a6495461063a2f4a88fadb45a4a30d3bfa8185350960`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/analysis/aggregate_state_subset_000_004_7de6ae20_20260716T224700Z/aggregate_state_subset_000_004.json` (SHA-256 `ba4265fff0111e12c1f3ce8ef26105820469173525a1a939f352bd71a5f0d5f1`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/analysis/intermediate_trajectory_b59b90f4_20260716T225300Z/k1_intermediate_trajectory.json` (SHA-256 `f1ee77eb87791b1e68b13ea074861f6423816f837734b9300cbd7544bd3ff2fb`)
