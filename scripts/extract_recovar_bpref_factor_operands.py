@@ -164,6 +164,7 @@ def _extract_shard_f32(
             "window_indices": window,
             "rotation": rotation,
             "translation": translation,
+            "translation_vector": np.asarray(values["fine_translations"][translation], dtype=np.float32),
             "probability": probability,
             "processed_fft": processed_row,
             "ctf": ctf_row,
@@ -211,6 +212,7 @@ def _extract_shard_f64(
         term = shifted_image * weighted_ctf
         weight_term = probability * ctf**2 / noise * scale**2
         results[stack] = {
+            "translation_vector": translations[translation],
             "probability": probability,
             "processed_fft": processed,
             "ctf": ctf,
@@ -275,6 +277,12 @@ def extract(contribution_directory: Path, selection_json: Path) -> tuple[dict[st
         "window_indices": np.stack([np.asarray(first[stack]["window_indices"]) for stack in stacks]),
         "rotation_rows": np.asarray([first[stack]["rotation"] for stack in stacks], dtype=np.int32),
         "translation_rows": np.asarray([first[stack]["translation"] for stack in stacks], dtype=np.int32),
+        "translation_vectors_f32": np.stack(
+            [np.asarray(first[stack]["translation_vector"]) for stack in stacks]
+        ).astype(np.float32),
+        "translation_vectors_f64": np.stack(
+            [np.asarray(high[stack]["translation_vector"]) for stack in stacks]
+        ).astype(np.float64),
         "probability_f32": np.asarray([first[stack]["probability"] for stack in stacks], dtype=np.float32),
         "probability_f64": np.asarray([high[stack]["probability"] for stack in stacks], dtype=np.float64),
         "scale_f32": np.asarray([first[stack]["scale"] for stack in stacks], dtype=np.float32),
