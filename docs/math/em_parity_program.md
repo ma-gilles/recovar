@@ -90,7 +90,7 @@ Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
 Current integrated implementation checkpoint before this board update:
-`7f142d5f00a34a0fd6208bdd6f879ffe31b3e9ea`
+`d05ee4a44afe1050bc7cbf790af2357126797520`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -246,25 +246,31 @@ Authoritative status on 2026-07-17:
   now performs RELION's sampling update before the final convergence check so
   the fine-enough latch can become true. A same-GPU terminal validation is
   running; do not treat the full real-data trajectory as accepted yet.
-- The sealed iteration-2-to-3 common-contribution replay covers 32 rows,
-  17,216 exact five-field candidates, and 126,021,120 pixel contributions.
-  Capture/panel/RECOVAR support and geometry are exact, both native reduction
-  schedules close, and canonical float64 reduces but does not remove the
-  posterior residual (median TV `1.2986e-4` native versus `3.6555e-5`
-  canonical float64). The earliest systematic difference is therefore
-  operand generation. Next capture the exact native reference, shifted-image,
-  and score-weight operands in aggregate to separate projection from
-  image/CTF/noise generation. Do not change production from this diagnostic
-  alone.
+- The sealed iteration-2-to-3 operand decomposition is closed without a
+  production candidate. It compares all 15 recurrent `>0.1`-degree tail rows
+  with 15 deterministic matched controls under exact UID, support, geometry,
+  and same-GPU control gates. Native common-prior operand TV is not enriched in
+  the tail (median `8.9293e-5` tail versus `1.1321e-4` control; 7/15 paired
+  tail values are larger). Canonical float64-from-captured-float32 TV is also
+  similar (`4.0843e-6` versus `4.2158e-6`; 10/15 larger). No unit-aligned
+  single- or two-field reference/image-weight/score-weight swap passes the
+  pre-registered native-and-float64 movement and repeat-envelope gates.
+  Classification is `unresolved_combined`; no production change or controlled
+  substitution is authorized. Move to a compact full-10,000-particle
+  score/posterior distribution diagnostic at the frozen iteration-2 boundary;
+  do not resume serial particle tracing or pixel-operand capture.
 - The K=4 100k/256 compact-score memory run is progressing without OOM on an
   A100; the dependent strict Hungarian FSC/FSC-AUC and state audit remains the
   quality gate.
 
-Priority order: finish the exact operand-source decomposition; validate the
-post-cap terminal fix; use aggregate boundary substitutions and full
-FSC/FSC-AUC trajectories to repair the remaining real K=1 drift; then accept
-or repair the running K=4 trajectory. Avoid further serial particle tracing
-unless the aggregate evidence identifies a systematic subgroup.
+Priority order: capture compact, sharded full-dataset score/posterior arrays at
+the exact iteration-2 boundary and compare them against a same-GPU RELION
+repeat envelope; validate the post-cap terminal fix; permit an aggregate
+boundary substitution only if the full-dataset evidence selects a systematic
+source; then use full FSC/FSC-AUC trajectories to repair the remaining real
+K=1 drift and accept or repair the running K=4 trajectory. Avoid further
+serial particle tracing unless the aggregate evidence identifies a systematic
+subgroup.
 
 Current status on 2026-07-16: the eight-case autonomous K=1 robustness matrix
 passes every FSC/FSC-AUC trajectory, schedule, convergence, and finalization

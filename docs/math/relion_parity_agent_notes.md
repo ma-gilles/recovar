@@ -3904,3 +3904,63 @@ Code references:
 
 - `scripts/audit_em_particle_state_distribution.py:_cross_iteration_tail_enrichment`
 - `tests/unit/test_audit_em_particle_state_distribution.py:test_cross_iteration_tail_enrichment_uses_exact_aligned_state_and_is_diagnostic`
+
+# 2026-07-17: matched-tail operand decomposition does not select a source
+
+- The frozen cohort contains all 15 exact iteration-2-to-3 `>0.1`-degree pose
+  tail rows and 15 deterministic matched controls. Half assignment is exactly
+  10/5 in each cohort; significant-count exposure is 7/15 and top-5% absolute
+  Pmax exposure is 5/15 in each cohort. Accepted local run `91721004` executed
+  a fresh RELION control, instrumented RELION capture, and current-head RECOVAR
+  replay sequentially on physical GPU UUID
+  `GPU-dc6576aa-e1e4-6055-4a5e-d0fa809f3983`. The ownership monitor passed,
+  all 30 rows have exact candidate support, and all capture manifests verify.
+- The version-2 common-contribution replay keeps bitwise score closure as a
+  diagnostic rather than a selector. It passes 30/30 local numerical gates:
+  10,912 candidate scores contain one nonzero replay residual, exactly one
+  float32 ULP at the canceled input scale, pooled p99.9 is zero, and its
+  induced posterior TV is below the row's independent native-versus-canonical
+  float64 control. The term self-closure adjudication also passes 30/30 rows.
+  RECOVAR has 1,584/62,733,088 non-bitwise terms (`2.525e-5`), all within the
+  independent RELION expression envelope and at most two output-float32 ULP;
+  the maximum induced posterior TV is `6.92e-16`. This is classified as
+  float32 term-formation rounding, not an algorithmic mismatch.
+- The tail is not enriched for the remaining operand residual. Native
+  common-prior posterior TV medians are `8.9293e-5` for tail rows and
+  `1.13209e-4` for controls; the paired median tail-minus-control value is
+  `-3.13513e-5`, with only 7/15 tail values larger. Shared canonical
+  float64-from-captured-float32 medians are `4.08429e-6` and `4.21585e-6`;
+  the paired median is `8.72021e-7`, with 10/15 tail values larger. The
+  same-GPU control/capture envelope has pooled median TV `1.05062e-4` and
+  maximum `2.23009e-4`.
+- Raw mixed-source factorial arms are unit-mismatch controls and are not
+  selectable. In the unit-aligned factorial, none of the single-field arms
+  `CRR`, `RCR`, or `RRC`, nor the two-field arms `CCR`, `CRC`, or `RCC`, passes
+  the pre-registered native-float32 and canonical-float64 effect, movement,
+  pair-count, and repeat-envelope gates. Successful sealed selector job
+  `11323681` therefore reports `classification=unresolved_combined`,
+  `selected_arm=null`, `production_change_authorized=false`, and
+  `substitution_launch_authorized=false`. No substitution was launched.
+  Duplicate job `11323757` stopped at the immutable-output precondition and
+  did not overwrite the sealed reports.
+- Do not continue serial particle or pixel-operand capture. The next K=1
+  diagnostic is a compact full-10,000-particle score/posterior distribution at
+  the exact iteration-2 boundary, compared with a same-GPU RELION repeat.
+  Preserve five-field candidate UIDs, centered scores, and posterior weights
+  in bounded append-only shards with per-particle offsets so common-support
+  posterior TV, centered residuals, and exclusive posterior mass can be
+  recomputed directly. Atomic finalization, shard checksums, exact-identity and
+  topology gates, inode/byte estimates, and a same-GPU RELION repeat are
+  required. Do not scale the panel's per-field small-file layout to 10,000
+  particles. Derive candidate/support counts, best/runner-up gaps, log
+  normalizer/Pmax, entropy/effective support/top-k mass, significant
+  threshold/count, and winner state, then report global and pre-registered
+  half/defocus/Pmax/support strata. Map acceptance remains shellwise
+  FSC/FSC-AUC only and correlation is not computed.
+
+Sealed evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_tail_operand_panel_e1a7c87c_20260717T210105Z/analysis/common_contribution_replay_v2.json` (SHA-256 `f6ef5d14163e6b1cf6ffb2a6f8cfc5522dcf264e82af69a6c00f42100b3f6591`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_tail_operand_panel_e1a7c87c_20260717T210105Z/analysis/term_self_closure_v2.json` (SHA-256 `efe095f46bc788d806fd4eec173d124ae490bad4b00488730dda8cb59358873a`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_tail_operand_panel_e1a7c87c_20260717T210105Z/analysis/tail_operand_selector_v2.json` (SHA-256 `8362f79bff43b71fe89fc8ed25ba31ef6bfb91bdc8c7d7428e38cd95174bd105`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_tail_operand_panel_e1a7c87c_20260717T210105Z/provenance/selector_v2_outputs_11323681.sha256`
