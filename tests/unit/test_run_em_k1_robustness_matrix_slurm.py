@@ -207,10 +207,27 @@ def test_case_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     assert 'export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"' in case_text
     assert 'export RECOVAR_CACHE_DIR="${RECOVAR_CACHE_DIR-}"' in case_text
     assert 'RECOVAR_CACHE_DIR=${RECOVAR_CACHE_DIR:-<disabled>}' in case_text
-    assert 'pixi run --frozen python recovar/relion_bind/build.py' in setup_text
+    matrix_python = scratch / "venv" / "bin" / "python"
+    python_export = f'export PIXI_PY="{matrix_python}"'
+    for text in (setup_text, case_text, summary_text):
+        assert python_export in text
+        assert "pixi run" not in text
+        assert "git symbolic-ref --short HEAD ||" not in text
+    assert "export PIP_NO_INDEX=1" in setup_text
+    for text in (setup_text, case_text):
+        assert "if command -v nvidia-smi >/dev/null 2>&1; then" in text
+    assert '-m venv --system-site-packages "${EM_K1_MATRIX_VENV}"' in setup_text
+    assert (
+        '"${PIXI_PY}" -m pip install -e . --no-deps --no-build-isolation '
+        "--ignore-installed"
+    ) in setup_text
+    assert '"${PIXI_PY}" recovar/relion_bind/build.py' in setup_text
     assert 'rm -rf "${RECOVAR_RELION_BIND_BUILD_DIR:?}"' in setup_text
     assert 'rm -rf "${RECOVAR_RELION_BIND_BUILD_DIR:?}"' not in case_text
     assert "recovar/relion_bind/build.py" not in case_text
+    submission_env = (scratch / "submission.env").read_text()
+    assert f"EM_K1_MATRIX_VENV={scratch / 'venv'}" in submission_env
+    assert f"PIXI_PY={matrix_python}" in submission_env
 
 
 def test_queued_jobs_unset_inherited_non_matrix_refinement_overrides(tmp_path):

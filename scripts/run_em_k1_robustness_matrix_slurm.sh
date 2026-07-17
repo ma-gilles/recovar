@@ -10,6 +10,14 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BASE_PIXI_PY="${EM_K1_MATRIX_PIXI_PY:-${REPO_ROOT}/.pixi/envs/default/bin/python}"
+if [[ ! -x "${BASE_PIXI_PY}" ]]; then
+  echo "ERROR: EM_K1_MATRIX_PIXI_PY must name an installed pixi Python: ${BASE_PIXI_PY}" >&2
+  echo "Run pixi install once, or point EM_K1_MATRIX_PIXI_PY at another checkout's .pixi Python." >&2
+  exit 2
+fi
+BASE_PIXI_PY="$(readlink -f "${BASE_PIXI_PY}")"
+PIXI_ENV_ROOT="$(cd "$(dirname "${BASE_PIXI_PY}")/.." && pwd)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_ID="em_k1_robustness_${TIMESTAMP}_${RANDOM}"
 SCRATCH_DIR="${EM_K1_MATRIX_SCRATCH_DIR:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/${RUN_ID}}"
@@ -124,6 +132,8 @@ EM_K1_MATRIX_CASES, e.g.:
 Environment overrides:
   EM_K1_MATRIX_SCRATCH_DIR          Scratch/log root (default: ${SCRATCH_DIR})
   EM_K1_MATRIX_RUNTIME_ROOT         Runtime tmp/pixi/rattler root (default: ${RUNTIME_ROOT})
+  EM_K1_MATRIX_PIXI_PY              Existing pixi Python used as the offline base environment
+                                    (default: ${BASE_PIXI_PY})
   EM_K1_MATRIX_CASES                Comma-separated case names or 1-based indices
   EM_K1_MATRIX_RUN_RELION           Run RELION AutoRefine too (default: ${RUN_RELION})
   EM_K1_MATRIX_RELION_POOL          RELION --pool for strict-parity RELION baselines (default: ${RELION_POOL})
@@ -350,7 +360,9 @@ CASES=(
 mkdir -p "${SCRATCH_DIR}/jobs" "${SCRATCH_DIR}/summaries" "${RUNTIME_ROOT}"
 touch "${SCRATCH_DIR}/SAFE_TO_DELETE" "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 CUDA_LIB="${SCRATCH_DIR}/cuda/libcuda_backproject.so"
-INSTALL_LOCK="${REPO_ROOT}/.pixi/install-recovar.lock"
+MATRIX_VENV="${SCRATCH_DIR}/venv"
+MATRIX_PY="${MATRIX_VENV}/bin/python"
+INSTALL_LOCK="${SCRATCH_DIR}/install-recovar.lock"
 
 case_selected() {
   local idx="$1"
@@ -445,6 +457,11 @@ unset RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER RECOVAR_DISABLE_RELION_EXACT_FINE_GA
 unset RECOVAR_USE_FLOAT64_SCORING RECOVAR_USE_FLOAT64_PROJECTIONS
 export PYTHONNOUSERSITE=1
 export RECOVAR_EXPECTED_REPO_ROOT="${REPO_ROOT}"
+export EM_K1_MATRIX_BASE_PIXI_PY="${BASE_PIXI_PY}"
+export EM_K1_MATRIX_VENV="${MATRIX_VENV}"
+export PIXI_PY="${MATRIX_PY}"
+export PIP_NO_INDEX=1
+export PIP_DISABLE_PIP_VERSION_CHECK=1
 export PYTHONFAULTHANDLER="\${PYTHONFAULTHANDLER:-1}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
@@ -462,7 +479,6 @@ export RECOVAR_CUDA_CACHE_DIR="${SCRATCH_DIR}/cuda_cache/${job_name}_\${SLURM_JO
 export RECOVAR_RELION_BIND_BUILD_DIR="${SCRATCH_DIR}/relion_bind_build/shared"
 export RELION_SRC_DIR="${RELION_SRC_DIR}"
 mkdir -p "\${TMPDIR}" "\${PIXI_HOME}" "\${RATTLER_CACHE_DIR}" "\${RECOVAR_JAX_CACHE_DIR}" "\${RECOVAR_CUDA_CACHE_DIR}" "\${RECOVAR_RELION_BIND_BUILD_DIR}" "\$(dirname "\${RECOVAR_CUDA_LIB}")"
-mkdir -p "${REPO_ROOT}/.pixi"
 
 if [[ -f /etc/profile.d/modules.sh ]]; then
   # shellcheck disable=SC1091
@@ -477,7 +493,7 @@ if [[ -d "\${CUDA_HOME}/bin" ]]; then
   export PATH="\${CUDA_HOME}/bin:\${PATH}"
 fi
 CUDA_TARGET_LIB_DIR="\${CUDA_HOME}/targets/x86_64-linux/lib"
-PIXI_NVIDIA_ROOT="${REPO_ROOT}/.pixi/envs/default/lib/python3.11/site-packages/nvidia"
+PIXI_NVIDIA_ROOT="\$(find "${PIXI_ENV_ROOT}/lib" -maxdepth 3 -type d -path '*/site-packages/nvidia' -print -quit 2>/dev/null || true)"
 if [[ -d "\${PIXI_NVIDIA_ROOT}" ]]; then
   PIXI_NVIDIA_LIB_DIRS="\$(find "\${PIXI_NVIDIA_ROOT}" -type d -name lib 2>/dev/null | paste -sd: -)"
 else
@@ -510,7 +526,8 @@ fi
 echo "=== ${job_name} ==="
 echo "Repo: ${REPO_ROOT}"
 echo "HEAD: \$(git rev-parse HEAD)"
-echo "Branch: \$(git symbolic-ref --short HEAD || echo '<detached>')"
+JOB_BRANCH="\$(git branch --show-current 2>/dev/null || true)"
+echo "Branch: \${JOB_BRANCH:-<detached>}"
 echo "Dirty status:"
 git status --short
 JOB_GIT_PROVENANCE_DIR="${SCRATCH_DIR}/job_provenance/${job_name}_\${SLURM_JOB_ID}"
@@ -584,14 +601,18 @@ for env_name in RECOVAR_EXACT_LOCAL_TARGET_ROW_PIXELS RECOVAR_EXACT_LOCAL_BIG_JI
     echo "\${env_name}=\${env_value}"
   fi
 done
-nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
+else
+  echo "nvidia-smi unavailable (expected on CPU-only setup/summary nodes)"
+fi
 echo
 EOF
 }
 
 write_refresh_pixi_cuda_libs() {
   cat <<EOF
-PIXI_NVIDIA_ROOT="${REPO_ROOT}/.pixi/envs/default/lib/python3.11/site-packages/nvidia"
+PIXI_NVIDIA_ROOT="\$(find "${PIXI_ENV_ROOT}/lib" -maxdepth 3 -type d -path '*/site-packages/nvidia' -print -quit 2>/dev/null || true)"
 if [[ -d "\${PIXI_NVIDIA_ROOT}" ]]; then
   PIXI_NVIDIA_LIB_DIRS="\$(find "\${PIXI_NVIDIA_ROOT}" -type d -name lib 2>/dev/null | paste -sd: -)"
 else
@@ -642,15 +663,15 @@ flock "${INSTALL_LOCK}" bash -lc '
 set -euo pipefail
 rm -rf "\${RECOVAR_RELION_BIND_BUILD_DIR:?}"
 mkdir -p "\${RECOVAR_RELION_BIND_BUILD_DIR}"
-pixi run --frozen install-recovar
-PIXI_PY="\$(pixi run --frozen which python)"
+rm -rf "\${EM_K1_MATRIX_VENV:?}"
+"\${EM_K1_MATRIX_BASE_PIXI_PY}" -m venv --system-site-packages "\${EM_K1_MATRIX_VENV}"
+"\${PIXI_PY}" -m pip install -e . --no-deps --no-build-isolation --ignore-installed
 if ! "\${PIXI_PY}" -c "import pybind11" >/dev/null 2>&1; then
   echo "ERROR: pybind11 is missing from the pixi environment; run pixi install before submitting EM jobs." >&2
   exit 1
 fi
-pixi run --frozen python recovar/relion_bind/build.py
+"\${PIXI_PY}" recovar/relion_bind/build.py
 '
-PIXI_PY="\$(pixi run --frozen which python)"
 # The default setup partition is CPU-only.  Install RECOVAR and build the
 # host RELION binding here; each GPU case builds/reuses the shared custom CUDA
 # library under cuda/build.lock after CUDA is actually available.
@@ -826,7 +847,6 @@ nvidia-smi --query-gpu=timestamp,index,name,memory.used,memory.total,utilization
 MONITOR_PID="\$!"
 trap 'kill "\${MONITOR_PID}" 2>/dev/null || true' EXIT
 
-PIXI_PY="\$(pixi run --frozen which python)"
 if ! "\${PIXI_PY}" - <<'PY'
 import pathlib
 import recovar
@@ -837,8 +857,7 @@ assert str(recovar_file).startswith(str(repo) + "/"), recovar_file
 PY
 then
   echo "RECOVAR editable install failed provenance check; reinstalling under lock"
-  flock "${INSTALL_LOCK}" bash -lc 'pixi run --frozen install-recovar'
-  PIXI_PY="\$(pixi run --frozen which python)"
+  flock "${INSTALL_LOCK}" bash -lc '"\${PIXI_PY}" -m pip install -e . --no-deps --no-build-isolation --ignore-installed'
 fi
 $(write_refresh_pixi_cuda_libs)
 $(write_build_cuda_lib)
@@ -1143,7 +1162,7 @@ if [[ "\${STATUS}" -eq 0 ]]; then
     SUMMARY_ARGS=(--k1-relion-dir "\${RELION_DIR}")
   fi
   set +e
-  pixi run --frozen python -m scripts.summarize_em_completion_bench \\
+  "\${PIXI_PY}" -m scripts.summarize_em_completion_bench \\
     --k1-recovar-dir "\${RECOVAR_DIR}" \\
     --k1-fixture-dir "\${DATA_DIR}" \\
     --output-json "\${CASE_ROOT}/summary_metrics.json" \\
@@ -1199,6 +1218,7 @@ export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
+export PIXI_PY="${MATRIX_PY}"
 export TMPDIR="${RUNTIME_ROOT}/em_k1_matrix_summary_\${SLURM_JOB_ID}/tmp"
 export PIXI_HOME="${RUNTIME_ROOT}/em_k1_matrix_summary_\${SLURM_JOB_ID}/pixi_home"
 export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/em_k1_matrix_summary_\${SLURM_JOB_ID}/rattler_cache"
@@ -1222,7 +1242,8 @@ echo "Queued-summary Git provenance gate ok"
 echo "=== EM K=1 robustness matrix summary ==="
 echo "Repo: ${REPO_ROOT}"
 echo "HEAD: \$(git rev-parse HEAD)"
-echo "Branch: \$(git symbolic-ref --short HEAD || echo '<detached>')"
+SUMMARY_BRANCH="\$(git branch --show-current 2>/dev/null || true)"
+echo "Branch: \${SUMMARY_BRANCH:-<detached>}"
 echo "Scratch: ${SCRATCH_DIR}"
 echo
 
@@ -1247,7 +1268,7 @@ while IFS='|' read -r idx name n_images grid noise_level noise_model dataset_par
     RELION_SUMMARY_ARGS=(--k1-relion-dir "\${relion_dir}")
   fi
   set +e
-  pixi run --frozen python -m scripts.summarize_em_completion_bench \\
+  "\${PIXI_PY}" -m scripts.summarize_em_completion_bench \\
     --k1-recovar-dir "\${recovar_dir}" \\
     --k1-fixture-dir "\${data_dir}" \\
     --output-json "\${summary_json}" \\
@@ -1266,7 +1287,7 @@ while IFS='|' read -r idx name n_images grid noise_level noise_model dataset_par
   echo
 done < "${case_table}"
 
-pixi run --frozen python - <<'PY'
+"\${PIXI_PY}" - <<'PY'
 from __future__ import annotations
 
 import json
@@ -1452,12 +1473,15 @@ SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256="$(cat "${SUBMISSION_GIT_PROVENANCE_D
 echo "EM K=1 robustness matrix launcher"
 echo "Repo: ${REPO_ROOT}"
 echo "HEAD: $(git -C "${REPO_ROOT}" rev-parse HEAD)"
-echo "Branch: $(git -C "${REPO_ROOT}" symbolic-ref --short HEAD || echo '<detached>')"
+LAUNCHER_BRANCH="$(git -C "${REPO_ROOT}" branch --show-current 2>/dev/null || true)"
+echo "Branch: ${LAUNCHER_BRANCH:-<detached>}"
 echo "Submission git provenance: ${SUBMISSION_GIT_PROVENANCE_DIR}"
 echo "Submission git diff SHA256: ${SUBMISSION_GIT_DIFF_SHA256:-<unavailable>}"
 echo "Submission git worktree fingerprint SHA256: ${SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256:-<unavailable>}"
 echo "Scratch: ${SCRATCH_DIR}"
 echo "Runtime root: ${RUNTIME_ROOT}"
+echo "Base pixi Python: ${BASE_PIXI_PY}"
+echo "Matrix Python: ${MATRIX_PY}"
 echo "Partition/account: ${PARTITION}/${ACCOUNT}"
 echo "Setup partition: ${SETUP_PARTITION}"
 echo "Setup constraint: ${SETUP_CONSTRAINT:-<none>}"
@@ -1515,13 +1539,16 @@ echo "Logs and outputs: ${SCRATCH_DIR}"
 cat > "${SCRATCH_DIR}/submission.env" <<EOF
 REPO_ROOT=${REPO_ROOT}
 HEAD=$(git -C "${REPO_ROOT}" rev-parse HEAD)
-BRANCH=$(git -C "${REPO_ROOT}" symbolic-ref --short HEAD || echo '<detached>')
+BRANCH=${LAUNCHER_BRANCH:-<detached>}
 SUBMISSION_GIT_PROVENANCE_DIR=${SUBMISSION_GIT_PROVENANCE_DIR}
 SUBMISSION_GIT_HEAD=${SUBMISSION_GIT_HEAD}
 SUBMISSION_GIT_DIFF_SHA256=${SUBMISSION_GIT_DIFF_SHA256}
 SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256=${SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256}
 SCRATCH_DIR=${SCRATCH_DIR}
 RUNTIME_ROOT=${RUNTIME_ROOT}
+EM_K1_MATRIX_PIXI_PY=${BASE_PIXI_PY}
+EM_K1_MATRIX_VENV=${MATRIX_VENV}
+PIXI_PY=${MATRIX_PY}
 SBATCH_PARTITION=${PARTITION}
 EM_K1_MATRIX_SETUP_PARTITION=${SETUP_PARTITION}
 EM_K1_MATRIX_SETUP_CONSTRAINT=${SETUP_CONSTRAINT}
