@@ -551,21 +551,35 @@ def _native_convergence_ready_after_numbered_cap(
 ) -> bool:
     """Mirror RELION's top-of-next-loop convergence check at ``--iter``.
 
-    RELION completes the last numbered iteration, checks the resulting state
-    at the top of the next loop, and may turn that next loop into the
-    unnumbered joined all-data pass.  RECOVAR's numbered loop is bounded by
-    ``iteration < max_iter``, so the equivalent check must happen once after
-    the loop cap.  This is a genuine convergence check, not permission to
-    force final all-data output after non-convergence.
+    RELION completes the last numbered iteration, runs
+    ``updateAngularSampling`` at the top of the next expectation, then checks
+    convergence and may turn that next loop into the unnumbered joined
+    all-data pass.  In particular, that sampling boundary is where RELION can
+    latch ``has_fine_enough_angular_sampling`` without changing the grid.
+    RECOVAR's numbered loop is bounded by ``iteration < max_iter``, so the
+    equivalent sampling-plus-convergence check must happen once after the loop
+    cap.  This is a genuine convergence check, not permission to force final
+    all-data output after non-convergence.
     """
 
-    return bool(
+    if not (
         native_sampling_boundary
         and not force_max_iter_after_convergence
         and not state.has_converged
         and int(iteration) >= int(max_iter)
-        and check_convergence(state)
-    )
+    ):
+        return False
+
+    post_boundary_state = update_angular_sampling(state)
+    converged = bool(check_convergence(post_boundary_state))
+    if converged:
+        # In the converged path updateAngularSampling only latches this flag;
+        # it does not refine the grid or reset counters.  Preserve that real
+        # next-boundary state for final-all-data metadata as well as the gate.
+        state.has_fine_enough_angular_sampling = bool(
+            post_boundary_state.has_fine_enough_angular_sampling
+        )
+    return converged
 
 
 def _k_class_relion_half_volume_mstep_enabled() -> bool:

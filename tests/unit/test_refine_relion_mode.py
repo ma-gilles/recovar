@@ -304,6 +304,7 @@ def test_native_convergence_is_checked_once_after_last_numbered_iteration():
         native_sampling_boundary=True,
         force_max_iter_after_convergence=False,
     )
+    assert state.has_fine_enough_angular_sampling is True
     assert not iteration_loop_module._native_convergence_ready_after_numbered_cap(
         state=state,
         iteration=15,
@@ -324,6 +325,50 @@ def test_native_convergence_is_checked_once_after_last_numbered_iteration():
         max_iter=16,
         native_sampling_boundary=True,
         force_max_iter_after_convergence=True,
+    )
+
+
+def test_post_cap_check_latches_fine_sampling_at_next_expectation_boundary():
+    """RELION may first latch fine-enough sampling after the last checkpoint."""
+    state = RefinementState(
+        healpix_order=6,
+        angular_step=0.9375,
+        adaptive_oversampling=1,
+        acc_rot=1.1,
+        has_fine_enough_angular_sampling=False,
+        nr_iter_wo_resol_gain=3,
+        nr_iter_wo_large_hidden_variable_changes=2,
+        smallest_changes_optimal_orientations=0.25,
+    )
+
+    assert iteration_loop_module._native_convergence_ready_after_numbered_cap(
+        state=state,
+        iteration=18,
+        max_iter=18,
+        native_sampling_boundary=True,
+        force_max_iter_after_convergence=False,
+    )
+    assert state.has_fine_enough_angular_sampling is True
+
+
+def test_post_cap_check_does_not_converge_when_next_boundary_refines_grid():
+    state = RefinementState(
+        healpix_order=6,
+        angular_step=0.9375,
+        adaptive_oversampling=1,
+        acc_rot=0.1,
+        has_fine_enough_angular_sampling=False,
+        nr_iter_wo_resol_gain=3,
+        nr_iter_wo_large_hidden_variable_changes=2,
+        smallest_changes_optimal_orientations=0.25,
+    )
+
+    assert not iteration_loop_module._native_convergence_ready_after_numbered_cap(
+        state=state,
+        iteration=18,
+        max_iter=18,
+        native_sampling_boundary=True,
+        force_max_iter_after_convergence=False,
     )
 
 
