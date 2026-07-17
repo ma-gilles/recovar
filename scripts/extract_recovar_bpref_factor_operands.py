@@ -65,6 +65,13 @@ def _compact_indices(values: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndar
     centered = (((fftw_rows - height // 2) % height) * half_width + window % half_width).astype(
         np.int32, copy=False
     )
+    centered_rows = centered // half_width
+    expected_rows = (fftw_rows - height // 2) % height
+    _require(
+        np.array_equal(centered_rows, expected_rows)
+        and np.array_equal(centered % half_width, window % half_width),
+        "centered-packed index conversion changed row or packed-column identity",
+    )
     return window, centered
 
 
@@ -162,6 +169,7 @@ def _extract_shard_f32(
         ).astype(np.float32)
         results[stack] = {
             "window_indices": window,
+            "centered_packed_indices": compact_np,
             "rotation": rotation,
             "translation": translation,
             "translation_vector": np.asarray(values["fine_translations"][translation], dtype=np.float32),
@@ -191,7 +199,9 @@ def _extract_shard_f64(
     lattice = _half_lattice(image_shape, 1.0)
     translations = np.asarray(values["fine_translations"], dtype=np.float64)
     phases = np.exp(-2j * np.pi * (translations @ lattice.T))[:, compact]
-    noise = np.asarray(values["noise_variance_half"], dtype=np.float64)[compact]
+    full_noise = np.asarray(values["noise_variance_half"], dtype=np.float64)
+    _require(full_noise.shape == (image_shape[0] * (image_shape[1] // 2 + 1),), "noise half-spectrum shape changed")
+    noise = full_noise[compact]
     results: dict[int, dict[str, np.ndarray | float]] = {}
     for stack, particle, _global_rotation in selected:
         probs = np.asarray(values["reconstruction_probs"][particle], dtype=np.float64)
@@ -275,6 +285,9 @@ def extract(contribution_directory: Path, selection_json: Path) -> tuple[dict[st
     arrays: dict[str, np.ndarray] = {
         "stack_indices_1based": np.asarray(stacks, dtype=np.int64),
         "window_indices": np.stack([np.asarray(first[stack]["window_indices"]) for stack in stacks]),
+        "centered_packed_indices": np.stack(
+            [np.asarray(first[stack]["centered_packed_indices"]) for stack in stacks]
+        ),
         "rotation_rows": np.asarray([first[stack]["rotation"] for stack in stacks], dtype=np.int32),
         "translation_rows": np.asarray([first[stack]["translation"] for stack in stacks], dtype=np.int32),
         "translation_vectors_f32": np.stack(
@@ -323,6 +336,7 @@ def extract(contribution_directory: Path, selection_json: Path) -> tuple[dict[st
         "production_f32_repeat": repeat_metrics,
         "production_f32_capture_closure": capture_closure,
         "genuine_f64_operand_recomputation": True,
+        "f64_noise_indexing_policy": "noise_variance_half indexed by centered-packed indices; fail-closed row/column invariant",
         "factor_ready": True,
     }
     return report, arrays
