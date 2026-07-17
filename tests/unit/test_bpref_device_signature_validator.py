@@ -516,7 +516,10 @@ def test_v3_native_float32_reconstruction_probabilities_are_validated(tmp_path, 
     )
 
     validator.main([str(signature), "--panel-native", str(panel)])
-    assert '"status": "PASS"' in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert '"status": "PASS"' in output
+    assert '"reconstruction_probs_dtype": "float32"' in output
+    assert '"reconstruction_probs_dtype_metadata_bound": true' in output
 
 
 @pytest.mark.parametrize(

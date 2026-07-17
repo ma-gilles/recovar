@@ -699,6 +699,7 @@ def _validate_v3_replay_bundle(contribution):
     validated_fields = sorted(
         set(vector_identity_fields)
         | set(high_precision_fields)
+        | present_probability_dtype_metadata
         | {
             "raw_real_images", "raw_source_dtype", "raw_source_shape",
             "candidate_preprior_scores", "candidate_combined_scores",
@@ -716,6 +717,10 @@ def _validate_v3_replay_bundle(contribution):
         "rotation_count": int(rotation_count),
         "translation_count": int(translation_count),
         "raw_source_dtype": raw_source_dtype or None,
+        "reconstruction_probs_dtype": str(reconstruction_probs.dtype),
+        "reconstruction_probs_dtype_metadata_bound": bool(
+            present_probability_dtype_metadata
+        ),
         "validated_fields": validated_fields,
     }
 
