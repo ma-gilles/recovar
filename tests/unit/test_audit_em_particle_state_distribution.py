@@ -17,6 +17,11 @@ def _write_star(path: Path, rows: dict[str, object]) -> Path:
     return path.resolve()
 
 
+def _write_scalar_star(path: Path, values: dict[str, object]) -> Path:
+    path.write_text("data_general\n\n" + "\n".join(f"_{key} {value}" for key, value in values.items()) + "\n")
+    return path.resolve()
+
+
 def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     n_images = 12
     names = np.asarray([f"{index + 1:06d}@particles.mrcs" for index in range(n_images)])
@@ -228,9 +233,171 @@ def test_cli_writes_versioned_json_and_has_explicit_help(tmp_path):
 
     assert status == 0
     assert json.loads(output.read_text())["schema"] == "em_particle_state_distribution_audit_v1"
+    arrays_path = tmp_path / "audit_arrays.npz"
+    manifest_path = tmp_path / "audit.json.sha256"
+    assert arrays_path.is_file()
+    assert manifest_path.is_file()
+    with np.load(arrays_path, allow_pickle=False) as arrays:
+        assert str(arrays["schema"]) == auditor.ARRAY_SCHEMA
+        assert "it001_pmax_delta" in arrays.files
+        assert "it001_rotation_view_deg" in arrays.files
+    manifest = manifest_path.read_text()
+    assert str(output.resolve()) in manifest
+    assert str(arrays_path.resolve()) in manifest
     help_text = auditor._parser().format_help()
     assert "--relion-control-star" in help_text
     assert "image identities" in help_text
+
+
+@pytest.mark.unit
+def test_pose_distributions_include_geodesic_view_inplane_rmse_and_threshold_fractions(tmp_path):
+    results, source, relion, _control = _fixture(tmp_path)
+
+    report = auditor.audit(
+        recovar_results=results,
+        recovar_particles_star=source,
+        relion_stars={1: relion},
+    )
+
+    metrics = report["iterations"][0]["recovar_vs_relion"]
+    assert metrics["angular_error_deg"]["max"] == pytest.approx(1.0, abs=1e-8)
+    assert metrics["view_direction_error_deg"]["max"] == pytest.approx(0.5, abs=0.01)
+    assert metrics["inplane_error_deg"]["max"] > 0.8
+    assert metrics["pmax"]["absolute"]["rmse"] > 0.0
+    assert set(metrics["pmax"]["absolute"]["threshold_fractions"]) == {
+        "le_1e-06",
+        "le_1e-05",
+        "le_0.0001",
+        "le_0.001",
+    }
+
+
+@pytest.mark.unit
+def test_scalar_schedule_convergence_and_final_state_are_reported_and_can_gate(tmp_path):
+    results, source, relion, _control = _fixture(tmp_path)
+    with np.load(results, allow_pickle=False) as payload:
+        data = {key: payload[key] for key in payload.files}
+    data.update(
+        current_sizes=np.asarray([64]),
+        pixel_resolutions=np.asarray([12.8]),
+        volume_shape=np.asarray([64, 64, 64]),
+        ave_Pmax_trajectory=np.asarray([np.mean(data["pmax_per_image_by_image_iter_000"])]),
+        healpix_order_trajectory=np.asarray([3]),
+        acc_rot_trajectory=np.asarray([2.0]),
+        acc_trans_trajectory=np.asarray([1.5]),
+        smallest_change_angles_trajectory=np.asarray([4.0]),
+        smallest_change_offsets_trajectory=np.asarray([1.0]),
+        convergence_iteration=np.asarray(1),
+        convergence_has_converged=np.asarray(True),
+        final_all_data_ran=np.asarray(True),
+        pmax_final_all_data_by_image=data["pmax_per_image_by_image_iter_000"],
+        best_rotation_eulers_final_all_data_by_image=data["best_rotation_eulers_by_image_iter_000"],
+        best_translations_final_all_data_by_image=data["best_translations_by_image_iter_000"],
+    )
+    np.savez(results, **data)
+    _write_scalar_star(
+        tmp_path / "run_it001_half1_model.star",
+        {"rlnCurrentImageSize": 64, "rlnCurrentResolution": 10.0},
+    )
+    _write_scalar_star(tmp_path / "run_it001_sampling.star", {"rlnHealpixOrder": 3})
+    _write_scalar_star(
+        tmp_path / "run_it001_optimiser.star",
+        {
+            "rlnCurrentIteration": 1,
+            "rlnOverallAccuracyRotations": 2.0,
+            "rlnOverallAccuracyTranslationsAngst": 1.5,
+            "rlnChangesOptimalOrientations": 4.0,
+            "rlnChangesOptimalOffsets": 1.0,
+            "rlnHasConverged": 0,
+        },
+    )
+    final_star = tmp_path / "run_data.star"
+    final_star.write_text(relion.read_text())
+    _write_scalar_star(tmp_path / "run_optimiser.star", {"rlnCurrentIteration": -1, "rlnHasConverged": 1})
+
+    report = auditor.audit(
+        recovar_results=results,
+        recovar_particles_star=source,
+        relion_stars={1: relion},
+        relion_final_star=final_star,
+        require_exact_schedule=True,
+        require_exact_convergence=True,
+    )
+
+    assert report["status"] == "pass"
+    assert report["threshold_failures"] == []
+    scalar = report["iterations"][0]["scalar_state"]
+    assert scalar["comparison"]["current_image_size"]["exact_equal"] is True
+    assert scalar["comparison"]["current_resolution_angstrom"]["exact_equal"] is True
+    assert scalar["recovar"]["current_resolution_shell_index"] == pytest.approx(12.8)
+    assert scalar["comparison"]["healpix_order"]["exact_equal"] is True
+    assert scalar["relion"]["artifacts"]["optimiser"]["present"] is True
+    assert report["convergence_topology"]["recovar"] == {
+        "iteration": 1,
+        "has_converged": True,
+        "final_all_data_ran": True,
+    }
+    assert report["convergence_topology"]["relion"] == {
+        "iteration": 1,
+        "has_converged": 1,
+        "final_data_star_present": True,
+    }
+    assert report["final_all_data"]["status"] == "measured"
+    assert report["final_all_data"]["recovar_vs_relion"]["significant_support"]["status"] == "not_measured"
+
+
+@pytest.mark.unit
+def test_scalar_star_parser_accepts_underscored_and_legacy_bare_labels(tmp_path):
+    path = tmp_path / "mixed_scalars.star"
+    path.write_text("data_general\n\n_rlnCurrentIteration -1\nrlnHasConverged 1\n")
+
+    assert auditor._star_scalar_values(path) == {
+        "rlnCurrentIteration": -1,
+        "rlnHasConverged": 1,
+    }
+
+
+@pytest.mark.unit
+def test_near_tie_pmax_distribution_is_diagnostic_by_default_and_threshold_gated_explicitly(tmp_path):
+    results, source, relion, _control = _fixture(tmp_path)
+    table, _ = auditor.read_star(str(relion))
+    pmax_column = next(column for column in table if column.lstrip("_") == "rlnMaxValueProbDistribution")
+    relion_pmax = table[pmax_column].astype(float).to_numpy()
+    identity_column = next(column for column in table if column.lstrip("_") == "rlnImageName")
+    by_name = dict(zip(table[identity_column].astype(str), relion_pmax, strict=True))
+    source_table, _ = auditor.read_star(str(source))
+    source_identity_column = next(
+        column for column in source_table if column.lstrip("_") == "rlnImageName"
+    )
+    aligned = np.asarray([by_name[name] for name in source_table[source_identity_column].astype(str)])
+    with np.load(results, allow_pickle=False) as payload:
+        data = {key: payload[key] for key in payload.files}
+    data["pmax_per_image_by_image_iter_000"] = aligned + np.resize(np.asarray([-5e-5, 5e-5]), aligned.size)
+    np.savez(results, **data)
+
+    diagnostic = auditor.audit(
+        recovar_results=results,
+        recovar_particles_star=source,
+        relion_stars={1: relion},
+    )
+    passing = auditor.audit(
+        recovar_results=results,
+        recovar_particles_star=source,
+        relion_stars={1: relion},
+        thresholds={"max_pmax_abs_p95": 1e-4},
+    )
+    failing = auditor.audit(
+        recovar_results=results,
+        recovar_particles_star=source,
+        relion_stars={1: relion},
+        thresholds={"max_pmax_abs_p95": 1e-5},
+    )
+
+    assert diagnostic["status"] == "complete"
+    assert diagnostic["gating"]["enabled"] is False
+    assert passing["status"] == "pass"
+    assert failing["status"] == "fail"
+    assert failing["threshold_failures"] == ["it001 pmax.absolute.p95=5e-05 > 1e-05"]
 
 
 def _add_recovar_iterations(results: Path, iterations: tuple[int, ...]) -> None:

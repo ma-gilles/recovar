@@ -3985,6 +3985,17 @@ omitting missing support.  Without that explicit selection, a RELION particle
 STAR is required for every numbered RECOVAR iteration; omitted middle or
 trailing iterations are errors.
 
+The same auditor reports numbered current-size, resolution, HEALPix, Pmax,
+expected-accuracy, and assignment-change scalars plus convergence and final
+all-data topology. RECOVAR `pixel_resolutions` are converted from shell index
+to Angstrom; RELION's converged unnumbered optimiser value
+`rlnCurrentIteration=-1` resolves to the highest preceding numbered state.
+Final Pmax/pose/translation arrays are compared when present, while unavailable
+final support or class arrays remain explicitly not measured. The CLI writes a
+compact aligned-array NPZ and SHA-256 manifest beside the JSON. It stays
+diagnostic by default; thresholds and exact schedule/convergence gates apply
+only when explicitly requested. Correlation is neither computed nor used.
+
 ## 2026-07-16 K=4 strict Class3D trajectory closure
 
 The corrected Class3D auditor now follows the actual RELION topology: three
