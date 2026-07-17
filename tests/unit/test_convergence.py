@@ -1122,6 +1122,43 @@ class TestUpdateRefinementState:
         state = update_angular_sampling(state)
         assert state.healpix_order == 4
 
+    @pytest.mark.parametrize(
+        "previous_angle,previous_offset,current_angle,current_offset",
+        [
+            (4.897129, 0.932674, 4.759138, 0.929399),
+            (4.873165, 0.931514, 4.790615, 0.930203),
+        ],
+    )
+    def test_real10076_native_relion_repeat_sequences_refine_at_iteration_8(
+        self,
+        previous_angle,
+        previous_offset,
+        current_angle,
+        current_offset,
+    ):
+        """Both sealed native RELION repeats take the same branch as RECOVAR."""
+        state = RefinementState(
+            healpix_order=3,
+            adaptive_oversampling=1,
+            translation_range=3.0,
+            translation_step=1.0,
+            current_resolution=14.4552,
+            voxel_size_angstrom=1.6375,
+            acc_rot=1.392,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            nr_iter_wo_resol_gain=3,
+            smallest_changes_optimal_classes=0.0,
+            smallest_changes_optimal_orientations=previous_angle,
+            smallest_changes_optimal_offsets_angstrom=previous_offset,
+            mpi_leader_hidden_variable_angular_step_deg=3.75,
+            mpi_leader_hidden_variable_translation_step_angstrom=0.81875,
+        )
+
+        state = self._record_relion_hidden_change(state, current_angle, current_offset)
+        assert state.nr_iter_wo_large_hidden_variable_changes == 1
+        assert update_angular_sampling(state).healpix_order == 4
+
     def test_relion_order5_to_order6_hidden_change_boundary(self):
         state = RefinementState(
             healpix_order=4,
