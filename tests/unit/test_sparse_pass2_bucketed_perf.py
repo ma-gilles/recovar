@@ -1073,6 +1073,7 @@ def test_sparse_pass2_hypothesis_cap_accounts_for_score_dtype(monkeypatch):
         has_external_normalization=False,
         conservative_dump_execution=False,
         fused_k_class=True,
+        fused_k_class_count=4,
         n_score_pixels=n_score_pixels,
         device_memory_bytes=device_memory,
         score_complex_dtype=jnp.complex64,
@@ -1083,6 +1084,7 @@ def test_sparse_pass2_hypothesis_cap_accounts_for_score_dtype(monkeypatch):
         has_external_normalization=False,
         conservative_dump_execution=False,
         fused_k_class=True,
+        fused_k_class_count=4,
         n_score_pixels=n_score_pixels,
         device_memory_bytes=device_memory,
         score_complex_dtype=jnp.complex128,
@@ -1091,7 +1093,7 @@ def test_sparse_pass2_hypothesis_cap_accounts_for_score_dtype(monkeypatch):
     assert cap64 == pytest.approx(cap32 / 2, rel=1e-6, abs=1)
 
 
-def test_fused_k_class_sparse_pass2_uses_larger_joint_hypothesis_cap(monkeypatch):
+def test_fused_k_class_sparse_pass2_reserves_extra_headroom(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", raising=False)
 
     device_memory = 80 * 1024**3
@@ -1110,26 +1112,57 @@ def test_fused_k_class_sparse_pass2_uses_larger_joint_hypothesis_cap(monkeypatch
         has_external_normalization=False,
         conservative_dump_execution=False,
         fused_k_class=True,
+        fused_k_class_count=4,
         n_score_pixels=n_score_pixels,
         device_memory_bytes=device_memory,
     )
 
-    assert fused_cap > single_class_cap
-    assert 3_500_000 <= fused_cap <= 4_200_000
+    assert fused_cap < single_class_cap
+    assert 1_700_000 <= fused_cap <= 2_100_000
 
     # The 100k K=4/256 fixture has 652 active score pixels.  Keep the
-    # automatically planned joint cap below the failed 10,045,744-candidate
-    # shape, whose compact scorer requested a 16.08 GiB temporary on A100.
+    # nominal float32 candidate-by-pixel block at or below 8 GiB.  The former
+    # 6,587,373-candidate cap requested a contiguous 17.04 GiB scorer temporary
+    # after earlier JIT shapes had fragmented the A100 allocator.
     low_resolution_cap = _max_hypotheses_per_microbatch_for_pass(
         score_only=False,
         use_window=True,
         has_external_normalization=False,
         conservative_dump_execution=False,
         fused_k_class=True,
+        fused_k_class_count=4,
         n_score_pixels=652,
         device_memory_bytes=device_memory,
     )
-    assert 6_000_000 <= low_resolution_cap <= 6_800_000
+    assert 3_000_000 <= low_resolution_cap <= 3_400_000
+    assert low_resolution_cap // (4 * 24_576) == 33
+    per_class_candidates = low_resolution_cap // 4
+    estimated_two_gather_bytes = (
+        per_class_candidates
+        * 652
+        * np.dtype(np.complex64).itemsize
+        * 2
+    )
+    assert estimated_two_gather_bytes <= 8 * 1024**3
+
+    for n_classes in (1, 2, 4):
+        class_aware_cap = _max_hypotheses_per_microbatch_for_pass(
+            score_only=False,
+            use_window=True,
+            has_external_normalization=False,
+            conservative_dump_execution=False,
+            fused_k_class=True,
+            fused_k_class_count=n_classes,
+            n_score_pixels=652,
+            device_memory_bytes=device_memory,
+        )
+        estimated_two_gather_bytes = (
+            (class_aware_cap // n_classes)
+            * 652
+            * np.dtype(np.complex64).itemsize
+            * 2
+        )
+        assert estimated_two_gather_bytes <= 0.10 * device_memory
 
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", "12345")
     assert (
@@ -1139,6 +1172,7 @@ def test_fused_k_class_sparse_pass2_uses_larger_joint_hypothesis_cap(monkeypatch
             has_external_normalization=False,
             conservative_dump_execution=False,
             fused_k_class=True,
+            fused_k_class_count=4,
             n_score_pixels=n_score_pixels,
             device_memory_bytes=device_memory,
         )
@@ -1147,7 +1181,7 @@ def test_fused_k_class_sparse_pass2_uses_larger_joint_hypothesis_cap(monkeypatch
 
 
 def test_sparse_pass2_warns_when_env_cap_is_below_auto(monkeypatch, caplog):
-    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", "4000000")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", "2000000")
 
     caplog.set_level(logging.WARNING, logger="recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed")
     cap = _max_hypotheses_per_microbatch_for_pass(
@@ -1156,11 +1190,12 @@ def test_sparse_pass2_warns_when_env_cap_is_below_auto(monkeypatch, caplog):
         has_external_normalization=False,
         conservative_dump_execution=False,
         fused_k_class=True,
+        fused_k_class_count=4,
         n_score_pixels=652,
         device_memory_bytes=80 * 1024**3,
     )
 
-    assert cap == 4_000_000
+    assert cap == 2_000_000
     assert "below the auto sparse pass-2 cap" in caplog.text
     assert "fragment buckets and slow pass-2" in caplog.text
 

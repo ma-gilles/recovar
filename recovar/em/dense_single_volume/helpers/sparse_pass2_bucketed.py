@@ -130,14 +130,13 @@ _DEFAULT_MAX_TRANSLATION_TILE_BYTES = 384 * 1024**2
 # larger chunks; these fractions still scale down on smaller GPUs.
 _AUTO_SCORE_ONLY_HYPOTHESIS_DEVICE_FRACTION = 0.640
 _AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION = 0.305
-# Compact K-class scoring materializes multiple candidate-by-pixel gathers for
-# one class at a time.  Budgeting 61% of physical memory across the K classes
-# still allowed an individual gathered buffer above 12 GiB on an 80 GiB A100;
-# after earlier JIT shapes fragmented the allocator, the 100k K=4 trajectory
-# failed while requesting a 16 GiB temporary.  Keep the largest compact score
-# shape near 8 GiB per class, leaving headroom for the other live operands and
-# allocator fragmentation.
-_AUTO_FUSED_KCLASS_FULL_HYPOTHESIS_DEVICE_FRACTION = 0.400
+# Compact K-class scoring materializes two complex candidate-by-pixel gathers
+# for one class at a time while projections and M-step operands remain live.
+# Keep those two gathers within 10% of physical memory.  A K=4 cap that allowed
+# 6,587,373 total candidates formed two 8 GiB gathers and requested a 17.04 GiB
+# compiled temporary on the 100k/256 fixture after earlier JIT fragmentation.
+_AUTO_FUSED_KCLASS_SCORE_GATHER_DEVICE_FRACTION = 0.100
+_AUTO_FUSED_KCLASS_LIVE_COMPLEX_GATHERS = 2
 _AUTO_TRANSLATION_TILE_DEVICE_FRACTION = 0.020
 _AUTO_EXTERNAL_NORMALIZATION_TRANSLATION_TILE_DEVICE_FRACTION = 0.014
 _AUTO_FUSED_KCLASS_TRANSLATION_TILE_DEVICE_FRACTION = 0.007
@@ -2953,6 +2952,7 @@ def _auto_hypotheses_per_microbatch(
     *,
     score_only: bool,
     fused_k_class: bool = False,
+    fused_k_class_count: int | None = None,
     n_score_pixels: int | None,
     device_memory_bytes: int | None,
     score_complex_dtype=np.complex64,
@@ -2962,7 +2962,22 @@ def _auto_hypotheses_per_microbatch(
     if score_only:
         fraction = _AUTO_SCORE_ONLY_HYPOTHESIS_DEVICE_FRACTION
     elif fused_k_class:
-        fraction = _AUTO_FUSED_KCLASS_FULL_HYPOTHESIS_DEVICE_FRACTION
+        if fused_k_class_count is None or int(fused_k_class_count) <= 0:
+            raise ValueError("fused_k_class_count must be positive for fused K-class planning")
+        bytes_per_score_pixel = _dtype_itemsize(score_complex_dtype)
+        return max(
+            1,
+            int(
+                float(device_memory_bytes)
+                * _AUTO_FUSED_KCLASS_SCORE_GATHER_DEVICE_FRACTION
+                * int(fused_k_class_count)
+                / (
+                    int(n_score_pixels)
+                    * bytes_per_score_pixel
+                    * _AUTO_FUSED_KCLASS_LIVE_COMPLEX_GATHERS
+                )
+            ),
+        )
     else:
         fraction = _AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION
     # The score kernel's dominant live block scales with candidate count times
@@ -2979,6 +2994,7 @@ def _max_hypotheses_per_microbatch_for_pass(
     has_external_normalization: bool,
     conservative_dump_execution: bool,
     fused_k_class: bool = False,
+    fused_k_class_count: int | None = None,
     n_score_pixels: int | None = None,
     device_memory_bytes: int | None = None,
     score_complex_dtype=np.complex64,
@@ -3007,6 +3023,7 @@ def _max_hypotheses_per_microbatch_for_pass(
     auto = _auto_hypotheses_per_microbatch(
         score_only=False,
         fused_k_class=fused_k_class,
+        fused_k_class_count=fused_k_class_count,
         n_score_pixels=n_score_pixels,
         device_memory_bytes=device_memory_bytes,
         score_complex_dtype=score_complex_dtype,
@@ -10391,6 +10408,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         has_external_normalization=False,
         conservative_dump_execution=_pass2_conservative_dump_execution_enabled(),
         fused_k_class=True,
+        fused_k_class_count=n_classes,
         n_score_pixels=budget_window_spec.n_score,
         device_memory_bytes=device_memory_bytes,
         score_complex_dtype=precision_policy.score_complex_dtype,
