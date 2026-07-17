@@ -4793,3 +4793,38 @@ Canonical evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/cases/1_baseline_100k_g256_white_noise1_bf80/trajectory_analysis/k1_fsc_trajectory.json` (SHA-256 `4f876bf1e03f82b2d006a6495461063a2f4a88fadb45a4a30d3bfa8185350960`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/analysis/aggregate_state_subset_000_004_7de6ae20_20260716T224700Z/aggregate_state_subset_000_004.json` (SHA-256 `ba4265fff0111e12c1f3ce8ef26105820469173525a1a939f352bd71a5f0d5f1`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/analysis/intermediate_trajectory_b59b90f4_20260716T225300Z/k1_intermediate_trajectory.json` (SHA-256 `f1ee77eb87791b1e68b13ea074861f6423816f837734b9300cbd7544bd3ff2fb`)
+
+## 2026-07-17 sealed native restart at the 100k expected-accuracy boundary
+
+The exact-order native restart closes the remaining implementation ambiguity
+at the terminal iteration-16 expected-accuracy boundary. The disposable root
+is `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z`;
+build job `11296008` and native MPI restart job `11296009` completed `0:0`.
+The process stops after expected accuracy and before expectation.
+
+A normal restart is inadmissible because RELION reshuffles particle order in a
+new process. This control restores the exact original first 100 trial IDs after
+the shuffle and proves that they are unique, all in half 1, and row-identical
+between iteration-0 and iteration-15 STAR files. The ID file SHA-256 is
+`84262018ebd56268dfb8cfa1e674e97b09f8d9a712f967df39b2f3c0a0e6190a`,
+the canonical int64 sequence SHA-256 is
+`0d4dc2a259d594b2bc656fc763c8a41413c78e5595e2043c36f8947f9388142a`,
+and the proof JSON SHA-256 is
+`068e5c8955b1ca34a695f92490493bccb3654d972f2c8b94374dcd778a274fbc`.
+
+Native restart gives `0.623` degrees and `0.635375` Angstrom; independent
+reduction of its 100 per-trial rows gives `0.6230000000000006` and
+`0.6353750000000011`. This exactly matches the serialized standalone
+all-RELION replay, while uninterrupted native entry-to-iteration-16 gives
+`0.625` degrees and `0.6375` Angstrom. The standalone binding is therefore
+exonerated. The unresolved boundary is live in-memory state versus checkpoint
+write/reload, or mutation-before-write state that is not serialized. This
+approximately `0.002`-degree terminal effect does not explain the much earlier
+real-10076 schedule split; that work remains distribution-level and must not
+return to serial particle tracing.
+
+Sealed evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z/analysis/original_trial_identity_proof.json` (SHA-256 `068e5c8955b1ca34a695f92490493bccb3654d972f2c8b94374dcd778a274fbc`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z/analysis/native_restart_accuracy_v1.json` (SHA-256 `4249a06cff0fb63884fa7f68079b56a52fa6a0d1ae90c095bc5ecf1e57e587fd`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z/restart/per_trial_errors.csv` (SHA-256 `d29e4b460c5562a0328f4fb5ed6806c138bc4408c6c765e95bb224aa68d91da4`)

@@ -3430,41 +3430,42 @@ Matrix evidence:
   `966395436f457e57ccb92095e4cc145ffd15c39956d213b6c46e1f202c585acd`).
   Map quality uses FSC/FSC-AUC only.
 
-# 2026-07-17: 100k angular fork is unsaved RELION in-memory state
+# 2026-07-17: sealed 100k native-restart expected-accuracy classification
 
-- A frozen 100-trial factorial closes every serialized input hypothesis at
-  the iteration-16 expected-accuracy boundary. All ten substitutions of the
-  saved reference map, Euler poses, radial noise, and CTF return
-  `acc_rot=0.6230000000000006` degrees. Trial-local indices and particle IDs
-  match exactly; the saved RECOVAR/RELION half-1 map FSC-AUC is
-  `0.9998993876`.
-- The decisive native control restarts RELION MPI from its own saved
-  iteration-15 checkpoint. It reports `0.623` degrees and takes the same
-  HEALPix 6-to-7 branch as RECOVAR. The uninterrupted RELION process reports
-  `0.625` degrees and stays at order 6. The angular fork is therefore state or
-  precision retained only in the uninterrupted RELION process and lost in
-  its float32 MRC / decimal STAR checkpoint, not a difference among the saved
-  RECOVAR and RELION operands.
-- This is not a generic host float32-versus-float64 result: native RELION and
-  the reusable binding both use double CPU arithmetic for expected accuracy.
-  The next discriminator must capture RELION's live in-memory double `Iref`,
-  Euler metadata, `sigma2_noise`, `Mresol`, exact trials, and per-trial
-  threshold counts immediately before `calculateExpectedAngularErrors`, then
-  compare that capture before and after checkpoint-format casting.
-- Translation is separate and remains open. Uninterrupted and disk-resumed
-  native RELION both report `0.6375` Angstrom, while the binding and RECOVAR
-  report `0.635375` Angstrom, exactly one 0.1-pixel trial quantum divided over
-  100 trials at 2.125 Angstrom/pixel. It does not drive the angular HEALPix
-  branch and must not be folded into the angular classification.
-- Evidence:
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_accrot_boundary_matrix_32ac19dc_20260717T053038Z/analysis/boundary_matrix.json`
+- The decisive native RELION control is sealed under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z`
+  (`SAFE_TO_DELETE`). Build job `11296008` and native MPI restart job
+  `11296009` completed `0:0`. The restart exits immediately after the
+  iteration-16 expected-accuracy calculation, before expectation.
+- Ordinary continuation order is invalid evidence because a new RELION
+  process reshuffles the particle order. This control instead restores the
+  exact original first 100 trial IDs after that shuffle. The IDs are unique,
+  all belong to half 1, and their complete STAR row identities agree between
+  iterations 0 and 15. The ID file SHA-256 is
+  `84262018ebd56268dfb8cfa1e674e97b09f8d9a712f967df39b2f3c0a0e6190a`;
+  the canonical int64 ID-sequence SHA-256 is
+  `0d4dc2a259d594b2bc656fc763c8a41413c78e5595e2043c36f8947f9388142a`.
+  The identity proof is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z/analysis/original_trial_identity_proof.json`
   (SHA-256
-  `a429c217fe2cecbd17129e9d360d8c18ddfc7de86b909e6ec00a33a237926be7`),
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_accrot_boundary_matrix_32ac19dc_20260717T053038Z/RESULT.md`
+  `068e5c8955b1ca34a695f92490493bccb3654d972f2c8b94374dcd778a274fbc`).
+- With those exact identities, native restart reports `0.623` degrees and
+  `0.635375` Angstrom. The independently reduced 100-row per-trial CSV gives
+  `0.6230000000000006` and `0.6353750000000011`, exactly reproducing the
+  serialized standalone all-RELION replay and not uninterrupted native
+  entry-to-iteration-16 (`0.625` degrees and `0.6375` Angstrom). This
+  exonerates the standalone binding at this boundary. The unresolved source
+  is live in-memory RELION state versus checkpoint write/reload, including
+  the possibility of mutation-before-write state that is not serialized.
+- This approximately `0.002`-degree terminal difference does not explain the
+  much earlier real-10076 schedule split and must not redirect that aggregate,
+  distribution-level investigation. No production patch is justified by this
+  terminal diagnostic.
+- Sealed results are
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z/analysis/native_restart_accuracy_v1.json`
   (SHA-256
-  `adbe1321b7f6105bc7d72d3b3a61ce1ae071dbe692bc632e85294c48e118c04e`),
-  and verified manifest
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_accrot_boundary_matrix_32ac19dc_20260717T053038Z/provenance/SHA256SUMS`
+  `4249a06cff0fb63884fa7f68079b56a52fa6a0d1ae90c095bc5ecf1e57e587fd`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z/restart/per_trial_errors.csv`
   (SHA-256
-  `156888e321d61c7219565b3a1e0a7a9853ca9290f4d344abb1ef397b3fa305b5`).
-  No production patch is justified by this diagnostic.
+  `d29e4b460c5562a0328f4fb5ed6806c138bc4408c6c765e95bb224aa68d91da4`).
