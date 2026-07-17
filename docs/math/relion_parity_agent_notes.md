@@ -3234,17 +3234,18 @@ Matrix evidence:
   half-2 maps through the same RELION `Projector::computeFourierTransformMap`
   binding, then compares all `187 x 187 x 94` iteration-2 PPref values and all
   20,064 p8240-accessed corners with the sealed RELION target.
-- HIGHEST removes only `1.00297%` of the full-grid residual L2 and `1.29501%`
-  at the accessed corners; `98.9970%` of the full-grid residual remains. The
+- HIGHEST removes only `1.00210%` of the full-grid residual L2 and `1.29897%`
+  at the accessed corners; `98.9979%` of the full-grid residual remains. The
   default-A100 GEMM defect is real and its production repair remains justified,
   but it is not the material cause of this PPref boundary.
-- Control/fixed maps are paired on one physical A100, while the RELION target
-  comes from the earlier sealed p8240 allocation. This is a bounded causal
-  discriminator, not a same-allocation acceptance gate. No map-quality claim
-  or correlation metric is used.
+- Control/fixed maps and the RELION target use physical A100 UUID
+  `GPU-64011c8c-bd98-eb41-2c46-dd201730ef64`, but the RELION target comes from
+  the earlier sealed p8240 allocation. This is a bounded causal discriminator,
+  not a same-allocation acceptance gate. No map-quality claim or correlation
+  metric is used.
 - Evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ppref_grid_replay_20260717T063000Z/analysis/aggregate_ppref_grid_highest_replay_v1.json`
   (SHA-256
-  `07cd9240820d2db7e986e8ca2faa0b52d234499058f2eecc02cac15ae2715627`),
-  with a verified two-entry manifest at
+  `cb531b89a0e81e4ed34119930b0eb3532775b4af6d1fcf37b07a293dc0721b73`),
+  with a verified three-entry manifest at
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ppref_grid_replay_20260717T063000Z/provenance/SHA256SUMS`.
