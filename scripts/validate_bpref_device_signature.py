@@ -475,8 +475,64 @@ def _validate_v3_replay_bundle(contribution):
         raise ValueError("candidate_combined_scores must have shape (particles, rotations, translations)")
     candidate_shape = combined.shape
     translation_count = candidate_shape[2]
-    for key in ("candidate_preprior_scores", "posterior_probs", "reconstruction_probs"):
+    for key in ("candidate_preprior_scores", "posterior_probs"):
         _require_array(contribution, key, shape=candidate_shape, dtype=np.dtype(np.float64))
+    reconstruction_probs = _require_array(
+        contribution, "reconstruction_probs", shape=candidate_shape
+    )
+    if reconstruction_probs.dtype not in {np.dtype(np.float32), np.dtype(np.float64)}:
+        raise ValueError(
+            "field 'reconstruction_probs' dtype must preserve native float32/float64, "
+            f"got {reconstruction_probs.dtype}"
+        )
+    probability_dtype_metadata = {
+        "reconstruction_probs_native_dtype",
+        "reconstruction_probs_native_itemsize",
+        "reconstruction_probs_native_nbytes",
+        "reconstruction_probs_storage_policy",
+    }
+    present_probability_dtype_metadata = probability_dtype_metadata.intersection(
+        contribution
+    )
+    if present_probability_dtype_metadata and (
+        present_probability_dtype_metadata != probability_dtype_metadata
+    ):
+        missing = sorted(probability_dtype_metadata - present_probability_dtype_metadata)
+        raise ValueError(
+            "reconstruction probability dtype metadata is incomplete; missing "
+            + ", ".join(missing)
+        )
+    if reconstruction_probs.dtype == np.dtype(np.float32) and not present_probability_dtype_metadata:
+        raise ValueError(
+            "native float32 reconstruction_probs requires bound dtype/itemsize/nbytes metadata"
+        )
+    if present_probability_dtype_metadata:
+        recorded_dtype = np.dtype(str(_scalar(
+            contribution, "reconstruction_probs_native_dtype"
+        )))
+        recorded_itemsize = int(_scalar(
+            contribution, "reconstruction_probs_native_itemsize"
+        ))
+        recorded_nbytes = int(_scalar(
+            contribution, "reconstruction_probs_native_nbytes"
+        ))
+        storage_policy = str(_scalar(
+            contribution, "reconstruction_probs_storage_policy"
+        ))
+        if recorded_dtype != reconstruction_probs.dtype:
+            raise ValueError(
+                "reconstruction_probs dtype conflicts with native dtype metadata"
+            )
+        if recorded_itemsize != reconstruction_probs.dtype.itemsize:
+            raise ValueError(
+                "reconstruction_probs itemsize conflicts with native dtype metadata"
+            )
+        if recorded_nbytes != reconstruction_probs.nbytes:
+            raise ValueError(
+                "reconstruction_probs nbytes conflicts with native dtype metadata"
+            )
+        if storage_policy != "native-dtype-preserved;dtype-itemsize-nbytes-bound":
+            raise ValueError("reconstruction_probs storage policy is not recognized")
     for key in ("candidate_mask", "reconstruction_mask"):
         _require_array(contribution, key, shape=candidate_shape, dtype=np.dtype(np.bool_))
     _require_array(

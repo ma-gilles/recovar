@@ -488,6 +488,81 @@ def test_v3_high_precision_replay_bundle_is_validated_and_reported(tmp_path, cap
     assert '"raw_source_dtype": "float32"' in output
 
 
+def test_v3_native_float32_reconstruction_probabilities_are_validated(tmp_path, capsys):
+    signature, panel = _artifacts(tmp_path, high_precision_operand_bundle=True)
+    with np.load(signature, allow_pickle=False) as archive:
+        signature_values = {key: archive[key] for key in archive.files}
+    contribution_path = Path(str(signature_values["companion_contribution_path"]))
+    with np.load(contribution_path, allow_pickle=False) as archive:
+        contribution = {key: archive[key] for key in archive.files}
+    probabilities = contribution["reconstruction_probs"].astype(np.float32)
+    contribution.update(
+        reconstruction_probs=probabilities,
+        reconstruction_probs_native_dtype=np.asarray("float32"),
+        reconstruction_probs_native_itemsize=np.int32(probabilities.dtype.itemsize),
+        reconstruction_probs_native_nbytes=np.int64(probabilities.nbytes),
+        reconstruction_probs_storage_policy=np.asarray(
+            "native-dtype-preserved;dtype-itemsize-nbytes-bound"
+        ),
+    )
+    _save(contribution_path, contribution)
+    _rewrite_signature(
+        signature,
+        {
+            "companion_contribution_sha256": np.asarray(
+                validator._sha256_file(contribution_path)
+            )
+        },
+    )
+
+    validator.main([str(signature), "--panel-native", str(panel)])
+    assert '"status": "PASS"' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("metadata_update", "message"),
+    [
+        ({}, "requires bound dtype/itemsize/nbytes metadata"),
+        (
+            {
+                "reconstruction_probs_native_dtype": np.asarray("float32"),
+                "reconstruction_probs_native_itemsize": np.int32(4),
+                "reconstruction_probs_native_nbytes": np.int64(1),
+                "reconstruction_probs_storage_policy": np.asarray(
+                    "native-dtype-preserved;dtype-itemsize-nbytes-bound"
+                ),
+            },
+            "nbytes conflicts",
+        ),
+    ],
+)
+def test_v3_native_float32_probability_metadata_fails_closed(
+    tmp_path, metadata_update, message
+):
+    signature, panel = _artifacts(tmp_path, high_precision_operand_bundle=True)
+    with np.load(signature, allow_pickle=False) as archive:
+        signature_values = {key: archive[key] for key in archive.files}
+    contribution_path = Path(str(signature_values["companion_contribution_path"]))
+    with np.load(contribution_path, allow_pickle=False) as archive:
+        contribution = {key: archive[key] for key in archive.files}
+    contribution["reconstruction_probs"] = contribution[
+        "reconstruction_probs"
+    ].astype(np.float32)
+    contribution.update(metadata_update)
+    _save(contribution_path, contribution)
+    _rewrite_signature(
+        signature,
+        {
+            "companion_contribution_sha256": np.asarray(
+                validator._sha256_file(contribution_path)
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match=message):
+        validator.main([str(signature), "--panel-native", str(panel)])
+
+
 @pytest.mark.parametrize("dtype", [np.float32, np.complex64])
 def test_accumulator_fsc_is_exact_for_bitwise_identical_float32_inputs(dtype):
     rng = np.random.default_rng(20260715)
