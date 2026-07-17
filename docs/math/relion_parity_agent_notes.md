@@ -3527,9 +3527,19 @@ Matrix evidence:
   `0.1` degree at iterations 1--2, then `1`, `10`, `42`, `218`, and `353` of
   the 518 identities at iterations 3--7. The cohort explains `90.2869%` of
   hidden-change disagreement at the iteration-3--4 boundary and `99.9745%`
-  at iteration 6--7. Continue at the frozen iteration-3--4 scorer/operand
-  boundary for those first ten identities rather than changing scheduling
-  logic.
+  at iteration 6--7. This localizes the fan-out to iteration 3 onward; the
+  repeat-envelope discriminator below selects its earliest systematic
+  precursor.
+- Comparing those identities with RELION's A/B control arrays isolates one
+  systematic precursor before that ten-particle fan-out. Fixture row `5676`
+  (image `73773`, half 1) is still close at iteration 2: Pmax differs by
+  `2.93813e-6` and pose by `7.37e-6` degrees. At iteration 3 its Pmax differs
+  by `0.190258046` and its pose by `4.717064956` degrees, while the RELION A/B
+  Pmax difference for the same identity is only `0.000176`, a ratio of
+  `1081.01`. The other nine first-diverging identities remain pose-exact at
+  iteration 3 and fan out at iteration 4. Prioritize a frozen iteration-2--3
+  scorer/operand capture for row `5676`; treat iteration-3--4 as propagation
+  until that precursor is classified.
 - Primary evidence is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/schedule_oracle_ab_v3.json`
   (SHA-256
@@ -3562,4 +3572,10 @@ Matrix evidence:
   `c9eeaf67952cb50a7c923c6dd29877600bc07e0040abaae6725d15d731ef2dc4`)
   with verified manifest SHA-256
   `8d4c0a4ace586db948b5df527c23505e95edb9fb0a8e1ea70b3b5e7973174c31`.
+  Its RELION-repeat discriminator is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/fixed_tail_repeat_envelope_v1/fixed_tail_repeat_envelope.json`
+  (SHA-256
+  `8a3a46406f1e34ecd7f0b3e9bc4ed0e8135c8676912d6d167c9ce99f0f6786d9`)
+  with verified manifest SHA-256
+  `1838fbf33e0155a4744ae5750d1bb94505ee7889ebcf837a7b599c3f927420d1`.
   Map acceptance uses FSC/FSC-AUC only; correlation is not computed.
