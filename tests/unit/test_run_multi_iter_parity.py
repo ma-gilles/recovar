@@ -5,6 +5,7 @@ from scripts import diff_relion_recovar_per_iter as parity_diff
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
     final_output_fourier_volumes,
+    initial_scoring_noise_pair,
     map_pose_arrays_to_particle_order,
     parse_relion_optimiser_cli_flags,
     relion_final_gt_series,
@@ -16,6 +17,26 @@ from scripts.run_multi_iter_parity import (
     stack_index_from_image_name,
     validate_final_only_replay_args,
 )
+
+
+def test_initial_scoring_noise_pair_defaults_to_relion_mpi_restart_broadcast():
+    half1 = np.asarray([1.0, 2.0], dtype=np.float32)
+    half2 = np.asarray([3.0, 4.0], dtype=np.float32)
+
+    got = initial_scoring_noise_pair(half1, half2, continuous_relion_noise_state=False)
+
+    np.testing.assert_array_equal(got[0], half1)
+    np.testing.assert_array_equal(got[1], half1)
+
+
+def test_initial_scoring_noise_pair_can_preserve_uninterrupted_half_state():
+    half1 = np.asarray([1.0, 2.0], dtype=np.float32)
+    half2 = np.asarray([3.0, 4.0], dtype=np.float32)
+
+    got = initial_scoring_noise_pair(half1, half2, continuous_relion_noise_state=True)
+
+    np.testing.assert_array_equal(got[0], half1)
+    np.testing.assert_array_equal(got[1], half2)
 
 
 def test_final_output_uses_joined_reconstruction_not_average_of_regularized_halves():

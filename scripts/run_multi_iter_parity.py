@@ -359,6 +359,21 @@ def validate_final_only_replay_args(
         raise ValueError("--initial-half1-mrc and --initial-half2-mrc must be provided together")
 
 
+def initial_scoring_noise_pair(noise_half1, noise_half2, *, continuous_relion_noise_state: bool):
+    """Resolve restart-faithful versus uninterrupted RELION scoring noise.
+
+    A new RELION MPI process broadcasts half 1's spectrum to both followers.
+    A controlled N-to-N+1 substitution against an uninterrupted trajectory
+    instead needs the independently updated spectrum from each numbered half.
+    """
+
+    return _relion_mpi_process_start_scoring_noise_pair(
+        noise_half1,
+        noise_half2,
+        split_random_halves=not bool(continuous_relion_noise_state),
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
@@ -370,6 +385,15 @@ def main():
     parser.add_argument("--data_star", required=True)
     parser.add_argument("--iter", type=int, default=3, help="RELION iteration to start from")
     parser.add_argument("--max_iter", type=int, default=15)
+    parser.add_argument(
+        "--continuous-relion-noise-state",
+        action="store_true",
+        help=(
+            "Diagnostic N-to-N+1 substitution only: preserve each numbered half's "
+            "sigma2_noise as used by an uninterrupted RELION trajectory. The default "
+            "emulates a true RELION MPI restart, which broadcasts half-1 noise to both halves."
+        ),
+    )
     parser.add_argument(
         "--initial-half1-mrc",
         type=str,
@@ -813,12 +837,20 @@ def main():
     n4 = N**4
     noise_variance_h1 = jnp.asarray(recon_noise.make_radial_noise(sigma2_h1 * n4, (N, N)))
     noise_variance_h2 = jnp.asarray(recon_noise.make_radial_noise(sigma2_h2 * n4, (N, N)))
-    process_start_noise = _relion_mpi_process_start_scoring_noise_pair(
+    process_start_noise = initial_scoring_noise_pair(
         noise_variance_h1.reshape(-1),
         noise_variance_h2.reshape(-1),
-        split_random_halves=True,
+        continuous_relion_noise_state=args.continuous_relion_noise_state,
     )
     noise_variance = jnp.stack(process_start_noise, axis=0)
+    print(
+        "  initial scoring noise: "
+        + (
+            "uninterrupted numbered half-specific state"
+            if args.continuous_relion_noise_state
+            else "RELION MPI process-start half-1 broadcast"
+        )
+    )
     mean_variance = jnp.asarray(utils.make_radial_image(tau2 * n4, (N, N, N), extend_last_frequency=True))
 
     # Volume: get_dft3(vol_real) produces the unnormalized centered DFT.
@@ -1360,6 +1392,7 @@ def main():
         "firstiter_cc_oracle_enabled": np.bool_(oracle_firstiter_cc),
         "firstiter_cc_effective": np.bool_(do_firstiter_cc),
         "relion_ini_high_angstrom": np.float64(relion_ini_high),
+        "continuous_relion_noise_state": np.bool_(args.continuous_relion_noise_state),
         "disable_adjoint_y": np.bool_(args.disable_adjoint_y),
         "disable_adjoint_ctf": np.bool_(args.disable_adjoint_ctf),
         "final_all_data_ran": np.bool_(result.get("final_all_data_ran", False)),
