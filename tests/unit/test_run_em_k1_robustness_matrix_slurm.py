@@ -214,6 +214,14 @@ def test_case_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
         assert "pixi run" not in text
         assert "git symbolic-ref --short HEAD ||" not in text
     assert "export PIP_NO_INDEX=1" in setup_text
+    pixi_root = REPO_ROOT / ".pixi" / "envs" / "default"
+    assert (
+        f'export CMAKE_INCLUDE_PATH="{pixi_root}/include/fftw:'
+        f'{pixi_root}/include:${{CMAKE_INCLUDE_PATH:-}}"'
+    ) in setup_text
+    assert (
+        f'export CMAKE_LIBRARY_PATH="{pixi_root}/lib:${{CMAKE_LIBRARY_PATH:-}}"'
+    ) in setup_text
     for text in (setup_text, case_text):
         assert "if command -v nvidia-smi >/dev/null 2>&1; then" in text
     assert '-m venv --system-site-packages "${EM_K1_MATRIX_VENV}"' in setup_text
