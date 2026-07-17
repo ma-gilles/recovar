@@ -3312,11 +3312,12 @@ Matrix evidence:
   topology, not a collapse of common numbered-map quality. Keep the late
   expected-accuracy boundary open; do not compare RECOVAR pre-final products
   to RELION's final all-data map as if they were equivalent products.
-- Aggregate state job `11295791` independently fails exactly four strict
-  checks: iteration-16 HEALPix order, convergence iteration, convergence flag,
-  and final-all-data presence. Current size and HEALPix order match through
-  iteration 15. Pose-error p95 remains about `3e-5` degrees through iteration
-  15, while Pmax residuals become broad at the local-refinement transition
+- Clean isolated aggregate state job `11295840` independently fails exactly
+  four strict checks: iteration-16 HEALPix order, convergence iteration,
+  convergence flag, and final-all-data presence. Current size and HEALPix
+  order match through iteration 15. Pose-error p95 remains about `3e-5`
+  degrees through iteration 15, while Pmax residuals become broad at the
+  local-refinement transition
   (iteration-8 mean absolute `0.0485663`, p95 `0.140763`). At the iteration-16
   grid split, mean absolute Pmax error is `0.315048` and pose-error p95 is
   `0.527618` degrees. Treat the earlier posterior calibration residual as an
@@ -3330,13 +3331,13 @@ Matrix evidence:
   (SHA-256
   `ab9e55f9bfc881b5e1c1add803723b0e4df3919da02394b54ce88d9fa6a33490`).
   State evidence is
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/autonomous_trajectory_state_v3/particle_state_distribution_common16.json`
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/autonomous_trajectory_state_v4_clean/particle_state_distribution_common16.json`
   (SHA-256
-  `59dbd8d0f968f12046f9945776e539fba197a3ca419c90c03a77dbd9c245ee86`)
+  `5acfe87fa2994fda52adc6fdcbce7cf548d2e1c6863a0d93b3da4325b8c32b3e`)
   with manifest
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/autonomous_trajectory_state_v3/FINAL_MANIFEST.sha256`
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/autonomous_trajectory_state_v4_clean/FINAL_MANIFEST.sha256`
   (SHA-256
-  `3ab0937ecc279b1874d6963c49b09ec798a42f258002941258963cce11838c7f`).
+  `f3b8a12e243fa07c1b6d1facc1a7166d27d8d4ddae388440ddba059eb8037eeb`).
   Map acceptance uses FSC/FSC-AUC only.
 
 # 2026-07-17: 100k expected-accuracy serialized-operand factorial is null
@@ -3400,3 +3401,70 @@ Matrix evidence:
   (SHA-256
   `4128f0446d2890acab508a00f4052f4e711d296ca57765da009fd2a10859f4f9`).
   Correlation is not computed.
+
+# 2026-07-17: autonomous 100k terminal product alignment
+
+- CPU job `11295847` separates RECOVAR numbered indices 15 and 16, RELION
+  numbered iteration 16, RELION's final unfiltered half-map average, and its
+  final merged map. This corrects the earlier invalid direct comparison of a
+  RECOVAR numbered product with a RELION final product.
+- RECOVAR index 15 versus RELION numbered iteration 16 has merged FSC-AUC
+  `0.9993081862`. Even RECOVAR's unnecessary extra index 16 remains close to
+  RELION numbered iteration 16 at `0.9985865016`, although its GT FSC-AUC
+  falls from `0.4109877057` to `0.4032090802`.
+- RELION numbered iteration 16 versus RELION's own final half-map average has
+  FSC-AUC only `0.5307371223`; RECOVAR index 15 versus the same final product
+  is `0.5309642252`. The previously reported approximately `0.531` terminal
+  cross-engine value is therefore a product-type/finalization boundary, not
+  evidence that RECOVAR's numbered map collapsed.
+- The strict outer verdict job `11295841` remains failed for exactly the
+  17-versus-16 numbered count, iteration-16 HEALPix order, convergence
+  iteration/flag, and final-all-data presence. Its common-prefix FSC gate is
+  independently passing. Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/autonomous_terminal_alignment_v1/terminal_alignment.json`
+  (SHA-256
+  `8108303af00f015b49e046471c617d82b94488ae21288b1302fb80bcd9b67f21`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/autonomous_trajectory_strict_verdict_v1/strict_verdict.json`
+  (SHA-256
+  `966395436f457e57ccb92095e4cc145ffd15c39956d213b6c46e1f202c585acd`).
+  Map quality uses FSC/FSC-AUC only.
+
+# 2026-07-17: 100k angular fork is unsaved RELION in-memory state
+
+- A frozen 100-trial factorial closes every serialized input hypothesis at
+  the iteration-16 expected-accuracy boundary. All ten substitutions of the
+  saved reference map, Euler poses, radial noise, and CTF return
+  `acc_rot=0.6230000000000006` degrees. Trial-local indices and particle IDs
+  match exactly; the saved RECOVAR/RELION half-1 map FSC-AUC is
+  `0.9998993876`.
+- The decisive native control restarts RELION MPI from its own saved
+  iteration-15 checkpoint. It reports `0.623` degrees and takes the same
+  HEALPix 6-to-7 branch as RECOVAR. The uninterrupted RELION process reports
+  `0.625` degrees and stays at order 6. The angular fork is therefore state or
+  precision retained only in the uninterrupted RELION process and lost in
+  its float32 MRC / decimal STAR checkpoint, not a difference among the saved
+  RECOVAR and RELION operands.
+- This is not a generic host float32-versus-float64 result: native RELION and
+  the reusable binding both use double CPU arithmetic for expected accuracy.
+  The next discriminator must capture RELION's live in-memory double `Iref`,
+  Euler metadata, `sigma2_noise`, `Mresol`, exact trials, and per-trial
+  threshold counts immediately before `calculateExpectedAngularErrors`, then
+  compare that capture before and after checkpoint-format casting.
+- Translation is separate and remains open. Uninterrupted and disk-resumed
+  native RELION both report `0.6375` Angstrom, while the binding and RECOVAR
+  report `0.635375` Angstrom, exactly one 0.1-pixel trial quantum divided over
+  100 trials at 2.125 Angstrom/pixel. It does not drive the angular HEALPix
+  branch and must not be folded into the angular classification.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_accrot_boundary_matrix_32ac19dc_20260717T053038Z/analysis/boundary_matrix.json`
+  (SHA-256
+  `a429c217fe2cecbd17129e9d360d8c18ddfc7de86b909e6ec00a33a237926be7`),
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_accrot_boundary_matrix_32ac19dc_20260717T053038Z/RESULT.md`
+  (SHA-256
+  `adbe1321b7f6105bc7d72d3b3a61ce1ae071dbe692bc632e85294c48e118c04e`),
+  and verified manifest
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_accrot_boundary_matrix_32ac19dc_20260717T053038Z/provenance/SHA256SUMS`
+  (SHA-256
+  `156888e321d61c7219565b3a1e0a7a9853ca9290f4d344abb1ef397b3fa305b5`).
+  No production patch is justified by this diagnostic.
