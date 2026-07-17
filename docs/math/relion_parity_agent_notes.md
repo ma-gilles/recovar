@@ -3274,13 +3274,17 @@ Matrix evidence:
   mismatch and does not qualify parity.
 - A visible scheduling amplification occurs after numbered iteration 15.
   RECOVAR recomputes `acc_rot=0.623` degrees and advances from HEALPix order 6
-  to 7; RELION reports about `0.627` degrees, stays at order 6, reaches stall
+  to 7; RELION reports about `0.625` degrees on entry to iteration 16, stays at
+  order 6, reaches stall
   counters `(resolution=2, hidden-variable=2)` at numbered iteration 16, and
   enters final all-data. Because the two maps and expected-accuracy operands
   have already diverged, do not patch this threshold or scheduler branch. The
   causal next step is an aggregate iteration-15 boundary factorial over the
   common first-100 expected-accuracy trials, substituting map, poses, and noise
   between engines. Do not resume serial particle tracing.
+- RELION's `0.627` value stored in `run_it015_optimiser.star` was computed on
+  entry to iteration 15 and must not be compared to RECOVAR's entry-to-16
+  `0.623` value. The matched RELION entry-to-16 log value is about `0.625`.
 - This autonomous failure does not contradict the replay-controlled 100k gate
   above: that experiment supplied the RELION trajectory boundary and therefore
   did not test autonomous schedule evolution.
@@ -3293,3 +3297,77 @@ Matrix evidence:
   (SHA-256
   `7a6cc169c9002c8860dd8f42ba2c670a975181f189ed8e09cd0736577bc7d902`).
   Map acceptance uses FSC/FSC-AUC only.
+
+# 2026-07-17: autonomous 100k K=1 common numbered maps pass
+
+- Numbered-only FSC job `11295651` compares the 16 boundaries common to the
+  autonomous RECOVAR trajectory and RELION. Both audit views deliberately
+  exclude final products because RECOVAR did not converge or run final
+  all-data, while RELION did.
+- All numbered map gates pass. The minimum merged cross-engine FSC-AUC is
+  `0.9993081862` at iteration 16, the minimum half-map cross-engine FSC-AUC is
+  `0.9988855748` at iteration 16 half 2, and the worst RECOVAR-minus-RELION
+  merged GT FSC-AUC is `-0.0001185833` at iteration 9.
+- Therefore the strict autonomous failure is convergence/finalization
+  topology, not a collapse of common numbered-map quality. Keep the late
+  expected-accuracy boundary open; do not compare RECOVAR pre-final products
+  to RELION's final all-data map as if they were equivalent products.
+- Aggregate state job `11295791` independently fails exactly four strict
+  checks: iteration-16 HEALPix order, convergence iteration, convergence flag,
+  and final-all-data presence. Current size and HEALPix order match through
+  iteration 15. Pose-error p95 remains about `3e-5` degrees through iteration
+  15, while Pmax residuals become broad at the local-refinement transition
+  (iteration-8 mean absolute `0.0485663`, p95 `0.140763`). At the iteration-16
+  grid split, mean absolute Pmax error is `0.315048` and pose-error p95 is
+  `0.527618` degrees. Treat the earlier posterior calibration residual as an
+  aggregate open diagnostic even though the numbered map-quality gates pass.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/autonomous_trajectory_fsc_v3/k1_fsc_trajectory_common16.json`
+  (SHA-256
+  `f164d21a7be793f122962a871c238006327cb66bcc7423e473205745a09669c5`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/autonomous_trajectory_fsc_v3/FINAL_MANIFEST.sha256`
+  (SHA-256
+  `ab9e55f9bfc881b5e1c1add803723b0e4df3919da02394b54ce88d9fa6a33490`).
+  State evidence is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/autonomous_trajectory_state_v3/particle_state_distribution_common16.json`
+  (SHA-256
+  `59dbd8d0f968f12046f9945776e539fba197a3ca419c90c03a77dbd9c245ee86`)
+  with manifest
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_completion_autonomous_fulltraj_32ac19dc_20260716_221339/analysis/autonomous_trajectory_state_v3/FINAL_MANIFEST.sha256`
+  (SHA-256
+  `3ab0937ecc279b1874d6963c49b09ec798a42f258002941258963cce11838c7f`).
+  Map acceptance uses FSC/FSC-AUC only.
+
+# 2026-07-17: 100k expected-accuracy serialized-operand factorial is null
+
+- CPU job `11295812` freezes the post-iteration-15 half-1 boundary and uses
+  one exact 100-particle trial set for all 16 substitutions of serialized
+  reference map, Euler poses, radial noise, and current image size. Every arm,
+  including all-RECOVAR and all-RELION serialized inputs, returns exactly
+  `acc_rot=0.6230000000000006` degrees and
+  `acc_trans=0.6353750000000011` Angstrom. The map, Euler, and noise arrays are
+  non-identical by SHA-256; current size is identically `188` in both engines.
+- RELION cadence is explicit: `0.627` in `run_it015_optimiser.star` belongs to
+  entry to iteration 15. The matched uninterrupted native entry-to-iteration-16
+  value is about `0.625`, stored in `run_it016_optimiser.star`. Thus the
+  all-RELION serialized binding replay still misses native RELION by about
+  `0.002` degrees.
+- The remaining aggregate fork is live double-precision in-memory state versus
+  serialized/reloaded state, or a semantic/unbound-input mismatch between the
+  standalone binding and native MPI `calculateExpectedAngularErrors`. Both CPU
+  paths use double `RFLOAT`, so this is not currently classified as generic
+  float32 noise. The next discriminator must preserve the exact original
+  first-100 trial identities across a disposable native RELION restart; a
+  normal restart with re-randomized particle order is invalid evidence.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_expected_accuracy_factorial_20260717T053100Z/RESULT.md`
+  (SHA-256
+  `2be72d7fd9142e5ea5a2cb21a796a338681865dd0ab6bf1be3c718070affd5d7`),
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_expected_accuracy_factorial_20260717T053100Z/analysis/expected_accuracy_factorial_v1.json`
+  (SHA-256
+  `d45d66455bf2223018bbb72595e327c0a066916c72ce3588b4aa1f7ca453ada9`),
+  and verified manifest
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_expected_accuracy_factorial_20260717T053100Z/provenance/FINAL_MANIFEST.sha256`
+  (SHA-256
+  `65190c94a159e325e8e2a2aba87bf1991faa559ebf6b6f7f63843d6fa93c4971`).
