@@ -3169,3 +3169,26 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_expansion_audit_cb83d1b9_20260717_031000/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/particle_state_distribution.json`
   (SHA-256
   `cdc7a53b21c2c47b382184562ed152973007bcb6c40e92b7c93123d0ae40e302`).
+
+# 2026-07-17: real-10076 iteration-2 half-2 anomaly was replay noise semantics
+
+- RELION MPI initializes and broadcasts follower rank 1's half-1 noise once at
+  process start, then uninterrupted numbered maximizations update the two
+  follower-local half spectra independently. With `--firstiter_cc`, iteration
+  2 is the first boundary at which those saved half spectra differ.
+- Same-A100 sequential arms from the numbered iteration-2 state isolate the
+  effect. Restart-faithful half-1 broadcast gives half-2 map FSC-AUC
+  `0.9989539270` and mean absolute Pmax error `0.0039184317`; uninterrupted
+  half-specific noise gives `0.9999999425` and `0.0000823915`. Half-1 Pmax is
+  bitwise unchanged between arms, and its arm-to-arm map FSC-AUC is
+  `0.9999930328`.
+- This causally explains the previous half-2 one-step substitution anomaly as
+  a restart-versus-uninterrupted diagnostic mismatch, not a production half-2
+  defect. The fixed uninterrupted RELION target came from another A100, so the
+  target comparison is supporting evidence rather than final same-physical-GPU
+  cross-engine acceptance. Map conclusions use only FSC/FSC-AUC.
+- Science job `11293728` and audit job `11293729` completed successfully at
+  RECOVAR commit `2ec77532`. Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_noise_semantics_2ec77532_20260717T040151Z/noise_semantics_analysis_v1.json`
+  (SHA-256
+  `4edde2570ad8833e925b923c2ab5c7bb5773bcbc0a5b6ca471388b43f7dfaeb1`).
