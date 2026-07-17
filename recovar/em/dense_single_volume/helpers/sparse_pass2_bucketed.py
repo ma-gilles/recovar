@@ -48,6 +48,9 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
+from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
+    maybe_capture_k1_production_bucket,
+)
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
 from recovar.em.dense_single_volume.helpers.fourier_window import (
@@ -9532,6 +9535,26 @@ def compute_pass2_stats_sparse_bucketed(
             elif use_relion_x_half_mstep:
                 recon_window_indices_for_dump = jnp.arange(int(n_half), dtype=jnp.int32)
         if probs is not None:
+            maybe_capture_k1_production_bucket(
+                iteration=int(_bpref_contribution_context["iteration"]),
+                half=int(_bpref_contribution_context["half"]),
+                image_indices=image_indices,
+                original_indices=_original_indices_for_local(experiment_dataset, image_indices),
+                per_image_inputs=per_image_inputs,
+                current_size=current_size,
+                fine_translations=fine_translations,
+                fine_translation_parent=fine_translation_parent,
+                scores=scores,
+                probs=probs,
+                rotation_log_prior=jnp.asarray(log_prior),
+                translation_log_prior=bucket_translation_prior,
+                candidate_mask=jnp.asarray(candidate_mask),
+                reconstruction_mask=reconstruction_mask,
+                log_z=log_Z,
+                best_log_score=best_log_score_bucket,
+                best_argmax=best_argmax,
+                max_posterior=max_posterior_bucket,
+            )
             _maybe_dump_pass2_bucket(
                 experiment_dataset=experiment_dataset,
                 image_indices=image_indices,
