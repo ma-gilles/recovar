@@ -4684,17 +4684,31 @@ Cold production wall time was 188 s versus 193 s, with a warm-half pass-2
 time of 5.31 s versus 5.25 s; this run does not establish a material speed
 regression.
 
-RECOVAR and RELION maps retain their explicit opposite CTF/BPref sign
-convention: signed FSC is near `-1` and remains recorded as telemetry. Applying
-the predetermined RECOVAR multiplier `-1` gives RELION map FSC-AUC near
-`0.99999999`; this sign alignment is not inferred from map correlation. This
-bounded one-iteration intervention confirms the precision fix, but does not
-replace full real-data trajectory parity.
+The earlier near-`-1` signed FSC was a diagnostic loader error, not a
+production map-sign mismatch. `analyze_bpref_reduction_precision_ab.py`
+raw-loaded both MRC files and then applied an ad-hoc RECOVAR multiplier of
+`-1`. The canonical comparison instead loads RECOVAR outputs with `load_mrc`
+and RELION outputs with `load_relion_volume`, whose explicit frame conversion
+is `-transpose(raw_relion, (2,1,0))`; it requires no additional sign
+alignment. Under those loaders, the sealed real-10076 iteration-1 FSC-AUC is
+positive: control half1/half2/merged are `0.9999999889`, `0.9999999545`, and
+`0.9999999823`, while fixed values are `0.9999999898`, `0.9999999556`, and
+`0.9999999829` in the independent canonical shell audit. The corrected A/B
+analyzer's own FSC implementation gives control `0.9999999860`,
+`0.9999999518`, `0.9999999786` and fixed `0.9999999870`, `0.9999999527`,
+`0.9999999791`; these are exactly the prior sign-flipped magnitudes to floating
+roundoff. The raw-file comparison's sign-flipped FSC magnitudes remain
+numerically valid for the A/B effect because FSC is unchanged by the common
+axis transpose, but the opposite-production-sign interpretation is withdrawn.
+This bounded one-iteration intervention confirms the precision fix; it does
+not replace full real-data trajectory parity.
 
 Canonical evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_factor_boundary_20260716T235500Z/artifacts/factor_comparison_v1.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_tf32_same_gpu3_ab_20260717T034500Z/analysis_v2.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_tf32_same_gpu3_ab_20260717T034500Z/analysis_v3_canonical_frame.json` (SHA-256 `d134051bdcd2bb3e735b02b9b383f0e47ca8dd3f925df758aec829372749d57b`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_sign_boundary_20260717T012312Z/sign_boundary_report_v1.json` (SHA-256 `d7a8231076106e871073d26997ca0b71f18da1d6daeb8e2bad960aa8290e363e`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ab_20260717T005507Z/real10076_highest_ab_report_v1.json` (SHA-256 `c6a7d81f473fe793bc76363233e76bc26ee66afe4e3fd5169a9a181abf9441c5`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ab_20260717T005507Z/real10076_highest_ab_seal_v1.json` (SHA-256 `4ea738680379aec8318ce7c569eb272f820369751d45495a31cf535aa6a2ff54`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ab_20260717T005507Z/real10076_highest_ab_manifest_v1.sha256` (SHA-256 `6f20ff79bc47b83f4f198b28a35a332487a1ea93188e5e8bf769f507df33831c`; all 13 entries verified)

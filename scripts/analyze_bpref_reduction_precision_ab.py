@@ -8,9 +8,9 @@ import json
 import re
 from pathlib import Path
 
-import mrcfile
 import numpy as np
 
+from recovar.utils import helpers
 from scripts.analyze_relion_bpref_factor_inertness import _array_metrics, _map_metrics, _sha256
 
 
@@ -19,9 +19,12 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _load_mrc(path: Path) -> np.ndarray:
-    with mrcfile.open(path, permissive=False) as handle:
-        return np.asarray(handle.data, dtype=np.float32).copy()
+def _load_recovar_mrc(path: Path) -> np.ndarray:
+    return np.asarray(helpers.load_mrc(str(path)), dtype=np.float32).copy()
+
+
+def _load_relion_mrc(path: Path) -> np.ndarray:
+    return np.asarray(helpers.load_relion_volume(str(path)), dtype=np.float32).copy()
 
 
 def _factor_comparisons(control_path: Path, fixed_path: Path) -> dict[str, object]:
@@ -91,39 +94,33 @@ def analyze(control: Path, fixed: Path, relion: Path, *, expected_gpu_uuid: str)
 
     maps = {
         arm: {
-            "half1": _load_mrc(root / "recovar/final_half1.mrc"),
-            "half2": _load_mrc(root / "recovar/final_half2.mrc"),
-            "merged": _load_mrc(root / "recovar/final_merged.mrc"),
+            "half1": _load_recovar_mrc(root / "recovar/final_half1.mrc"),
+            "half2": _load_recovar_mrc(root / "recovar/final_half2.mrc"),
+            "merged": _load_recovar_mrc(root / "recovar/final_merged.mrc"),
         }
         for arm, root in (("control", control), ("fixed", fixed))
     }
     relion_maps = {
-        "half1": _load_mrc(relion / "run_it001_half1_class001.mrc"),
-        "half2": _load_mrc(relion / "run_it001_half2_class001.mrc"),
+        "half1": _load_relion_mrc(relion / "run_it001_half1_class001.mrc"),
+        "half2": _load_relion_mrc(relion / "run_it001_half2_class001.mrc"),
     }
     relion_maps["merged"] = (0.5 * (relion_maps["half1"] + relion_maps["half2"])).astype(np.float32)
     map_fsc = {
         "control_vs_fixed": {
             name: _map_metrics(maps["control"][name], maps["fixed"][name]) for name in ("half1", "half2", "merged")
         },
-        "control_vs_relion_signed_telemetry": {
+        "control_vs_relion_canonical": {
             name: _map_metrics(maps["control"][name], relion_maps[name]) for name in ("half1", "half2", "merged")
         },
-        "fixed_vs_relion_signed_telemetry": {
+        "fixed_vs_relion_canonical": {
             name: _map_metrics(maps["fixed"][name], relion_maps[name]) for name in ("half1", "half2", "merged")
-        },
-        "control_vs_relion_sign_aligned": {
-            name: _map_metrics(-maps["control"][name], relion_maps[name]) for name in ("half1", "half2", "merged")
-        },
-        "fixed_vs_relion_sign_aligned": {
-            name: _map_metrics(-maps["fixed"][name], relion_maps[name]) for name in ("half1", "half2", "merged")
         },
         "internal_halfmap": {arm: _map_metrics(values["half1"], values["half2"]) for arm, values in maps.items()},
     }
     map_fsc["fixed_minus_control_relion_fsc_auc"] = {
         name: float(
-            map_fsc["fixed_vs_relion_sign_aligned"][name]["fsc_auc_non_dc"]
-            - map_fsc["control_vs_relion_sign_aligned"][name]["fsc_auc_non_dc"]
+            map_fsc["fixed_vs_relion_canonical"][name]["fsc_auc_non_dc"]
+            - map_fsc["control_vs_relion_canonical"][name]["fsc_auc_non_dc"]
         )
         for name in ("half1", "half2", "merged")
     }
@@ -143,12 +140,14 @@ def analyze(control: Path, fixed: Path, relion: Path, *, expected_gpu_uuid: str)
         "pass2_median_wall_s": float(timing["fixed"]["pass2_median_wall_s"] - timing["control"]["pass2_median_wall_s"]),
     }
     return {
-        "schema": "recovar-bpref-reduction-precision-ab-v1",
+        "schema": "recovar-bpref-reduction-precision-ab-v2",
         "metric_policy": "exact/array metrics for intermediates; FSC/FSC-AUC only for maps; no correlation",
-        "relion_map_sign_alignment": {
-            "recovar_multiplier": -1,
-            "signed_fsc_retained_as_telemetry": True,
-            "basis": "explicit RECOVAR-versus-RELION CTF/BPref sign convention established by the sealed factor comparison",
+        "relion_map_frame_alignment": {
+            "recovar_loader": "recovar.utils.helpers.load_mrc",
+            "relion_loader": "recovar.utils.helpers.load_relion_volume",
+            "formula": "vol_recovar = -transpose(vol_relion_raw, (2,1,0))",
+            "ad_hoc_map_multiplier": None,
+            "basis": "canonical repository volume-frame conversion; no map-dependent sign inference",
         },
         "control_root": str(control.resolve()),
         "fixed_root": str(fixed.resolve()),
