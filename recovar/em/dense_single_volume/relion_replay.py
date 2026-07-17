@@ -48,6 +48,121 @@ from recovar.em.dense_single_volume.relion_metadata import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class RelionProjectorReplayState:
+    """Exact per-half RELION ``Projector::data`` captured at one boundary.
+
+    The source manifest binds the in-memory arrays to a sealed capture.  The
+    iteration loop validates the remaining geometry metadata against the live
+    replay before handing these slabs to the production scorer.
+    """
+
+    projector_half_by_half: tuple[np.ndarray, np.ndarray]
+    projector_r_max_by_half: tuple[int, int]
+    current_size: int
+    padding_factor: int
+    volume_shape: tuple[int, int, int]
+    n_classes: int
+    source_manifest_sha256: str
+
+
+def _parse_relion_projector_replay_state(value, *, n_classes: int) -> RelionProjectorReplayState | None:
+    """Validate an explicit captured-projector replay override.
+
+    This intentionally accepts one atomic mapping instead of independent
+    arrays and scalars.  A partial projector override would otherwise fall
+    back to rebuilding some state from the resident half-map and no longer be
+    an exact frozen-boundary replay.
+    """
+
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TypeError("relion_projector_state must be a mapping")
+    required = {
+        "projector_half_by_half",
+        "projector_r_max_by_half",
+        "current_size",
+        "padding_factor",
+        "volume_shape",
+        "n_classes",
+        "source_manifest_sha256",
+    }
+    missing = sorted(required.difference(value))
+    extra = sorted(set(value).difference(required))
+    if missing or extra:
+        raise ValueError(
+            "relion_projector_state keys must match the version-1 contract exactly; "
+            f"missing={missing}, extra={extra}"
+        )
+
+    captured_n_classes = int(value["n_classes"])
+    if captured_n_classes != int(n_classes) or captured_n_classes <= 0:
+        raise ValueError(
+            "captured RELION projector class count does not match replay: "
+            f"captured={captured_n_classes}, replay={int(n_classes)}"
+        )
+    current_size = int(value["current_size"])
+    padding_factor = int(value["padding_factor"])
+    if current_size <= 0 or padding_factor <= 0:
+        raise ValueError("captured RELION projector current_size and padding_factor must be positive")
+
+    volume_shape_values = tuple(int(item) for item in value["volume_shape"])
+    if len(volume_shape_values) != 3 or any(item <= 0 for item in volume_shape_values):
+        raise ValueError("captured RELION projector volume_shape must contain three positive dimensions")
+
+    manifest_sha256 = str(value["source_manifest_sha256"])
+    if re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None:
+        raise ValueError("captured RELION projector source_manifest_sha256 must be 64 lowercase hex digits")
+
+    projectors = value["projector_half_by_half"]
+    r_max_values = value["projector_r_max_by_half"]
+    if not isinstance(projectors, (list, tuple)) or len(projectors) != 2:
+        raise ValueError("captured RELION projector state must contain exactly two half-set slabs")
+    if not isinstance(r_max_values, (list, tuple)) or len(r_max_values) != 2:
+        raise ValueError("captured RELION projector state must contain exactly two half-set r_max values")
+
+    normalized_projectors = []
+    normalized_r_max = []
+    for half_idx, (projector, r_max) in enumerate(zip(projectors, r_max_values, strict=True), start=1):
+        array = np.asarray(projector)
+        if array.dtype != np.dtype(np.complex64):
+            raise TypeError(
+                f"captured RELION half-{half_idx} projector must be complex64, got {array.dtype}"
+            )
+        if array.ndim != 4 or int(array.shape[0]) != captured_n_classes:
+            raise ValueError(
+                "captured RELION projector slabs must have shape "
+                f"(n_classes, z, y, x_half); half-{half_idx} has {array.shape}"
+            )
+        if any(int(size) <= 0 for size in array.shape[1:]):
+            raise ValueError(f"captured RELION half-{half_idx} projector has an empty spatial dimension")
+        if not np.all(np.isfinite(array.real)) or not np.all(np.isfinite(array.imag)):
+            raise ValueError(f"captured RELION half-{half_idx} projector contains non-finite values")
+        r_max_int = int(r_max)
+        if r_max_int < 0 or r_max_int >= min(int(size) for size in array.shape[1:]):
+            raise ValueError(
+                f"captured RELION half-{half_idx} projector r_max={r_max_int} is outside its slab"
+            )
+        normalized = np.ascontiguousarray(array).copy()
+        normalized.setflags(write=False)
+        normalized_projectors.append(normalized)
+        normalized_r_max.append(r_max_int)
+
+    if normalized_projectors[0].shape != normalized_projectors[1].shape:
+        raise ValueError("captured RELION half-set projector slab shapes must match")
+
+    return RelionProjectorReplayState(
+        projector_half_by_half=(normalized_projectors[0], normalized_projectors[1]),
+        projector_r_max_by_half=(normalized_r_max[0], normalized_r_max[1]),
+        current_size=current_size,
+        padding_factor=padding_factor,
+        volume_shape=volume_shape_values,
+        n_classes=captured_n_classes,
+        source_manifest_sha256=manifest_sha256,
+    )
+
+
 def read_relion_single_optics_sigma2_noise(model, *, context):
     """Read the sole supported RELION optics-group noise spectrum.
 
@@ -341,6 +456,7 @@ class ReplayOverrideResult:
     replay_meta: dict | None  # parsed sampling.star (or None); used downstream by perturbation apply
     current_sigma_offset_angstrom_per_half: list[float] | None = None
     class_weights: np.ndarray | None = None
+    relion_projector_state: RelionProjectorReplayState | None = None
 
 
 def apply_iter_replay_overrides(
@@ -384,7 +500,8 @@ def apply_iter_replay_overrides(
        range/step, current_size, and direction priors.
     2. ``iter_replay_override`` dict: explicit overrides for sigma_offset,
        previous-best poses, image corrections, serialized/scoring scale
-       corrections, noise variance, and direction priors.
+       corrections, noise variance, direction priors, and a sealed exact
+       per-half RELION projector state.
     """
 
     # Resolve sampling-module helpers through iteration_loop so test
@@ -398,6 +515,7 @@ def apply_iter_replay_overrides(
     _model_meta = None
     _replay_meta = None
     _replay_class_weights = None
+    _replay_projector_state = None
     _current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(
         current_sigma_offset_angstrom
         if current_sigma_offset_angstrom_per_half is None
@@ -661,6 +779,15 @@ def apply_iter_replay_overrides(
                         )
 
     if iter_replay_override is not None:
+        _replay_projector_state = _parse_relion_projector_replay_state(
+            iter_replay_override.get("relion_projector_state"),
+            n_classes=n_classes,
+        )
+        if _replay_projector_state is not None:
+            logger.info(
+                "Replay override: exact RELION Projector::data <- manifest %s",
+                _replay_projector_state.source_manifest_sha256,
+            )
         _replay_sigma_per_half = iter_replay_override.get("translation_sigma_angstrom_per_half")
         if _replay_sigma_per_half is not None:
             _current_sigma_offset_angstrom_per_half = _normalize_sigma_offset_per_half(_replay_sigma_per_half)
@@ -801,4 +928,5 @@ def apply_iter_replay_overrides(
         replay_meta=_replay_meta,
         current_sigma_offset_angstrom_per_half=_current_sigma_offset_angstrom_per_half,
         class_weights=_replay_class_weights,
+        relion_projector_state=_replay_projector_state,
     )

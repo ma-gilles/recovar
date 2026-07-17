@@ -22,6 +22,7 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 import recovar.em.dense_single_volume.local_layout as local_layout_module
+import recovar.em.dense_single_volume.relion_replay as relion_replay_module
 import recovar.reconstruction.regularization as regularization_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
@@ -527,6 +528,96 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
     assert state.translation_step == pytest.approx(1.0)
     assert sampling_paths == [str(tmp_path / "custom_it007_sampling.star")]
     np.testing.assert_allclose(replay_grid, state_grid, rtol=0.0, atol=1e-6)
+
+
+def _captured_projector_override(projector):
+    return {
+        "projector_half_by_half": [projector, projector.copy()],
+        "projector_r_max_by_half": [4, 4],
+        "current_size": 8,
+        "padding_factor": 2,
+        "volume_shape": [8, 8, 8],
+        "n_classes": 1,
+        "source_manifest_sha256": "a" * 64,
+    }
+
+
+def test_captured_relion_projector_replay_state_is_atomic_and_copied():
+    projector = np.zeros((1, 9, 9, 5), dtype=np.complex64)
+    projector[0, 2, 3, 1] = np.complex64(1.25 - 0.5j)
+
+    state = relion_replay_module._parse_relion_projector_replay_state(
+        _captured_projector_override(projector),
+        n_classes=1,
+    )
+    projector[...] = np.complex64(99.0 + 7.0j)
+
+    assert state is not None
+    assert state.source_manifest_sha256 == "a" * 64
+    assert state.projector_r_max_by_half == (4, 4)
+    assert state.projector_half_by_half[0][0, 2, 3, 1] == np.complex64(1.25 - 0.5j)
+    assert state.projector_half_by_half[0].flags.writeable is False
+    resolved, r_max = iteration_loop_module._validate_captured_relion_projector_for_iteration(
+        state,
+        current_size=8,
+        volume_shape=(8, 8, 8),
+        padding_factor=2,
+        n_classes=1,
+    )
+    assert r_max == [4, 4]
+    assert resolved[0] is state.projector_half_by_half[0]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error_type", "message"),
+    [
+        (lambda value: value.pop("source_manifest_sha256"), ValueError, "keys must match"),
+        (
+            lambda value: value.__setitem__("source_manifest_sha256", "not-a-sha"),
+            ValueError,
+            "64 lowercase hex digits",
+        ),
+        (
+            lambda value: value.__setitem__("source_manifest_sha256", "A" * 64),
+            ValueError,
+            "64 lowercase hex digits",
+        ),
+        (
+            lambda value: value["projector_half_by_half"].__setitem__(
+                0, value["projector_half_by_half"][0].astype(np.complex128)
+            ),
+            TypeError,
+            "must be complex64",
+        ),
+        (
+            lambda value: value["projector_half_by_half"][0].__setitem__(
+                (0, 0, 0, 0), np.complex64(np.nan + 0j)
+            ),
+            ValueError,
+            "non-finite",
+        ),
+    ],
+)
+def test_captured_relion_projector_replay_state_rejects_corruption(mutation, error_type, message):
+    override = _captured_projector_override(np.zeros((1, 9, 9, 5), dtype=np.complex64))
+    mutation(override)
+    with pytest.raises(error_type, match=message):
+        relion_replay_module._parse_relion_projector_replay_state(override, n_classes=1)
+
+
+def test_captured_relion_projector_replay_state_rejects_live_geometry_mismatch():
+    state = relion_replay_module._parse_relion_projector_replay_state(
+        _captured_projector_override(np.zeros((1, 9, 9, 5), dtype=np.complex64)),
+        n_classes=1,
+    )
+    with pytest.raises(ValueError, match="current_size captured=8 replay=10"):
+        iteration_loop_module._validate_captured_relion_projector_for_iteration(
+            state,
+            current_size=10,
+            volume_shape=(8, 8, 8),
+            padding_factor=2,
+            n_classes=1,
+        )
 
 
 def test_local_translation_prior_ignores_stale_replay_grid_shape():

@@ -136,6 +136,7 @@ from recovar.em.dense_single_volume.relion_metadata import (
     _rotation_eulers_for_canonical_or_custom_grid,  # noqa: F401 -- test-compatible re-export
 )
 from recovar.em.dense_single_volume.relion_replay import (
+    RelionProjectorReplayState,
     _RelionHalfInputState,
     _apply_replay_correction_overrides,
     _as_sigma_offset_half_pair,
@@ -2034,6 +2035,46 @@ def _relion_projector_half_maps_for_scoring(
             n_classes=np.int64(n_classes),
         )
     return projector_half, projector_r_max
+
+
+def _validate_captured_relion_projector_for_iteration(
+    replay_state: RelionProjectorReplayState,
+    *,
+    current_size: int | None,
+    volume_shape,
+    padding_factor: int,
+    n_classes: int,
+) -> tuple[list[np.ndarray], list[int]]:
+    """Bind a captured projector state to one exact live replay geometry."""
+
+    resolved_current_size = int(current_size) if current_size is not None else int(volume_shape[0])
+    expected_volume_shape = tuple(int(value) for value in volume_shape)
+    mismatches = []
+    if replay_state.current_size != resolved_current_size:
+        mismatches.append(
+            f"current_size captured={replay_state.current_size} replay={resolved_current_size}"
+        )
+    if replay_state.padding_factor != int(padding_factor):
+        mismatches.append(
+            f"padding_factor captured={replay_state.padding_factor} replay={int(padding_factor)}"
+        )
+    if replay_state.volume_shape != expected_volume_shape:
+        mismatches.append(
+            f"volume_shape captured={replay_state.volume_shape} replay={expected_volume_shape}"
+        )
+    if replay_state.n_classes != int(n_classes):
+        mismatches.append(
+            f"n_classes captured={replay_state.n_classes} replay={int(n_classes)}"
+        )
+    if mismatches:
+        raise ValueError(
+            "captured RELION Projector::data does not match the live replay boundary: "
+            + "; ".join(mismatches)
+        )
+    return (
+        list(replay_state.projector_half_by_half),
+        [int(value) for value in replay_state.projector_r_max_by_half],
+    )
 
 
 def _score_half_dense(
@@ -5715,31 +5756,55 @@ def _run_relion_iteration_loop(
 
         relion_projector_half_by_half = [None, None]
         relion_projector_r_max_by_half = [None, None]
+        captured_projector_state = replay_result.relion_projector_state
+        if captured_projector_state is not None and not (use_local or use_adaptive):
+            raise RuntimeError(
+                "captured RELION Projector::data was supplied but this iteration has no projector scoring path"
+            )
         if use_local or use_adaptive:
             projector_t0 = time.time()
-            for _half_idx in range(2):
-                if experiment_datasets[_half_idx].n_units == 0:
-                    logger.info(
-                        "RELION mode: skipping Projector::data build for empty half-%d dataset",
-                        _half_idx + 1,
-                    )
-                    continue
-                projector_half, projector_r_max = _relion_projector_half_maps_for_scoring(
-                    means[_half_idx],
-                    volume_shape=volume_shape,
+            if captured_projector_state is not None:
+                (
+                    relion_projector_half_by_half,
+                    relion_projector_r_max_by_half,
+                ) = _validate_captured_relion_projector_for_iteration(
+                    captured_projector_state,
                     current_size=cs_for_engine,
+                    volume_shape=volume_shape,
                     padding_factor=PROJECTION_PADDING_FACTOR,
                     n_classes=n_classes,
-                    dump_label=f"iter{iteration:03d}_half{_half_idx}",
                 )
-                relion_projector_half_by_half[_half_idx] = projector_half
-                relion_projector_r_max_by_half[_half_idx] = projector_r_max
-            logger.info(
-                "RELION mode: built exact Projector::data for scoring at current_size=%s r_max=%s in %.2fs",
-                cs_for_engine,
-                relion_projector_r_max_by_half[0],
-                time.time() - projector_t0,
-            )
+                logger.info(
+                    "RELION mode: using captured exact Projector::data at current_size=%s "
+                    "r_max=%s manifest=%s",
+                    cs_for_engine,
+                    relion_projector_r_max_by_half[0],
+                    captured_projector_state.source_manifest_sha256,
+                )
+            else:
+                for _half_idx in range(2):
+                    if experiment_datasets[_half_idx].n_units == 0:
+                        logger.info(
+                            "RELION mode: skipping Projector::data build for empty half-%d dataset",
+                            _half_idx + 1,
+                        )
+                        continue
+                    projector_half, projector_r_max = _relion_projector_half_maps_for_scoring(
+                        means[_half_idx],
+                        volume_shape=volume_shape,
+                        current_size=cs_for_engine,
+                        padding_factor=PROJECTION_PADDING_FACTOR,
+                        n_classes=n_classes,
+                        dump_label=f"iter{iteration:03d}_half{_half_idx}",
+                    )
+                    relion_projector_half_by_half[_half_idx] = projector_half
+                    relion_projector_r_max_by_half[_half_idx] = projector_r_max
+                logger.info(
+                    "RELION mode: built exact Projector::data for scoring at current_size=%s r_max=%s in %.2fs",
+                    cs_for_engine,
+                    relion_projector_r_max_by_half[0],
+                    time.time() - projector_t0,
+                )
 
         # Freeze the exact iteration-start curve used by RELION's scale XA/AA
         # shell gate.  The scheduling variable is updated again after the
