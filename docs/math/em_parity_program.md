@@ -4620,3 +4620,28 @@ This causally classifies the observed aggregate BPref map gap as pre-scatter
 operand generation, not ordinary scatter geometry or reduction order. Do not
 extend serial particle tracing. Continue with distribution-level score and
 posterior comparisons and controlled iteration-boundary substitutions.
+
+## 2026-07-16 real-10076 stack-111721 coarse boundary audit
+
+The complete iteration-1 coarse surfaces align as 36,864 rotations by 29
+translations. Rotation identities are bitwise bijective after the RELION
+transpose convention, and translations agree to `2.46509e-7` pixels. RELION's
+winning translations are separated by exactly one float32 ULP; RECOVAR selects
+the adjacent translation by 15 ULP. The cross-engine centered score residual
+has RMS `1.55031e-7`, so the discrete winner change remains within the measured
+float32 boundary variation and sends the engines to adjacent, disjoint fine
+supports.
+
+RECOVAR's frozen fine scorer selects the same winner when evaluated on
+RELION's support, excluding a fine-scoring bug. The capture lacks the exact
+coarse per-pixel projector/contribution operands, however, and rebuilding from
+iteration MRCs does not reproduce the production float32 control. The result
+therefore remains fail-closed as
+`coarse_float32_near_tie_changes_fine_support_precision_unresolved`, rather
+than being labeled pure numerical noise or an upstream algorithm mismatch.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_stack111721_coarse_audit_20260717T000146Z/analysis/report.json` (SHA-256 `0486a185f35d5ed0295583b5fc72aaa339676b2028ab4142a458920c436ef95f`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_stack111721_coarse_audit_20260717T000146Z/analysis/seal.json` (SHA-256 `f0c8f855d54da62dbd71b6c5360b0d41048841115145e6f008222e41fa0f17fd`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_stack111721_coarse_audit_20260717T000146Z/ARTIFACTS.sha256` (SHA-256 `9d7cfd2e03f9e9fdb1faa13adc077b04c3b7b8b231a4f07e858a3c1e32efc0f6`)
