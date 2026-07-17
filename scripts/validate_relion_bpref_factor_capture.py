@@ -13,7 +13,13 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.validate_relion_bpref_prescatter import ROTATION_DTYPE, ROW_DTYPE
+if __package__:
+    from .validate_relion_bpref_prescatter import ROTATION_DTYPE, ROW_DTYPE
+else:
+    from validate_relion_bpref_prescatter import (  # type: ignore[no-redef]
+        ROTATION_DTYPE,
+        ROW_DTYPE,
+    )
 
 HEADER_MAGIC = b"RLNBPRF2HEADER\0\0"
 FOOTER_MAGIC = b"RLNBPRF2FOOTER\0\0"
@@ -73,9 +79,7 @@ TERM_DTYPE = np.dtype(
         "itemsize": 56,
     }
 )
-FILE_NAME = re.compile(
-    r"part(?P<part>\d+)_stack(?P<stack>\d+)_img(?P<img>\d+)_class(?P<class_>\d+)\.bpre-v2\.bin"
-)
+FILE_NAME = re.compile(r"part(?P<part>\d+)_stack(?P<stack>\d+)_img(?P<img>\d+)_class(?P<class_>\d+)\.bpre-v2\.bin")
 
 
 @dataclass(frozen=True)
@@ -184,54 +188,90 @@ def _validate_arrays(path, header, rotations, translations, hypotheses, pixels, 
 
     expected_rotations = np.arange(rotations.size, dtype=np.uint32)
     _require(np.array_equal(rotations["orientation_local"], expected_rotations), f"rotation order changed: {path}")
-    _require(np.all(rotations["reserved"] == 0) and np.all(np.isfinite(rotations["matrix"])), f"invalid rotations: {path}")
+    _require(
+        np.all(rotations["reserved"] == 0) and np.all(np.isfinite(rotations["matrix"])), f"invalid rotations: {path}"
+    )
     identities = np.stack((rotations["orientation_class_key"], rotations["oversampled_rotation"]), axis=1)
     _require(np.unique(identities, axis=0).shape[0] == rotations.size, f"duplicate rotation identity: {path}")
 
     expected_translations = np.arange(translations.size, dtype=np.uint32)
     _require(np.array_equal(translations["translation"], expected_translations), f"translation order changed: {path}")
-    _require(np.all(translations["reserved"] == 0) and np.all(translations["reserved_tail"] == 0), f"translation reserved field changed: {path}")
-    _require(np.all(np.isfinite(np.stack((translations["x"], translations["y"], translations["z"])))), f"non-finite translation: {path}")
+    _require(
+        np.all(translations["reserved"] == 0) and np.all(translations["reserved_tail"] == 0),
+        f"translation reserved field changed: {path}",
+    )
+    _require(
+        np.all(np.isfinite(np.stack((translations["x"], translations["y"], translations["z"])))),
+        f"non-finite translation: {path}",
+    )
 
     expected_hypothesis = np.arange(hypotheses.size)
-    _require(np.array_equal(hypotheses["orientation_local"], expected_hypothesis // translations.size), f"hypothesis orientation order changed: {path}")
-    _require(np.array_equal(hypotheses["translation"], expected_hypothesis % translations.size), f"hypothesis translation order changed: {path}")
-    _require(np.all((hypotheses["flags"] & ~np.uint32(1)) == 0) and np.all(hypotheses["reserved"] == 0), f"invalid hypothesis flags: {path}")
+    _require(
+        np.array_equal(hypotheses["orientation_local"], expected_hypothesis // translations.size),
+        f"hypothesis orientation order changed: {path}",
+    )
+    _require(
+        np.array_equal(hypotheses["translation"], expected_hypothesis % translations.size),
+        f"hypothesis translation order changed: {path}",
+    )
+    _require(
+        np.all((hypotheses["flags"] & ~np.uint32(1)) == 0) and np.all(hypotheses["reserved"] == 0),
+        f"invalid hypothesis flags: {path}",
+    )
     posterior_values = np.stack((hypotheses["posterior"], hypotheses["posterior_over_weight_norm"]))
     _require(np.all(np.isfinite(posterior_values)), f"non-finite hypothesis values: {path}")
     threshold = _float32_from_bits(header[25])
     expected_accepted = hypotheses["posterior"] >= threshold
-    _require(np.array_equal((hypotheses["flags"] & 1) != 0, expected_accepted), f"hypothesis acceptance differs from production predicate: {path}")
+    _require(
+        np.array_equal((hypotheses["flags"] & 1) != 0, expected_accepted),
+        f"hypothesis acceptance differs from production predicate: {path}",
+    )
     _require(np.count_nonzero(expected_accepted) == header[45], f"accepted hypothesis count changed: {path}")
 
     expected_pixels = np.arange(pixels.size, dtype=np.uint32)
     _require(np.array_equal(pixels["pixel"], expected_pixels), f"pixel order changed: {path}")
     _require(np.array_equal(pixels["x"], expected_pixels % header[16]), f"pixel x coordinate changed: {path}")
-    raw_y = expected_pixels // header[16]
+    raw_y = expected_pixels.astype(np.int64) // header[16]
     expected_y = np.where(raw_y > header[17] // 2, raw_y - header[17], raw_y)
     _require(np.array_equal(pixels["y"], expected_y), f"pixel y coordinate changed: {path}")
-    _require(np.all(pixels["z"] == 0) and np.all(pixels["flags"] == 0) and np.all(pixels["reserved"] == 0), f"invalid pixel metadata: {path}")
+    _require(
+        np.all(pixels["z"] == 0) and np.all(pixels["flags"] == 0) and np.all(pixels["reserved"] == 0),
+        f"invalid pixel metadata: {path}",
+    )
     pixel_values = np.stack((pixels["image_re"], pixels["image_im"], pixels["ctf"], pixels["minvsigma2"]))
     _require(np.all(np.isfinite(pixel_values)), f"non-finite pixel factor: {path}")
 
     _require(np.all(summaries["state"] == 1), f"inactive summary row was serialized: {path}")
     required_summary = np.uint32(1 | 2)
-    _require(np.all((summaries["flags"] & required_summary) == required_summary), f"summary support/weight flags changed: {path}")
+    _require(
+        np.all((summaries["flags"] & required_summary) == required_summary),
+        f"summary support/weight flags changed: {path}",
+    )
     summary_key = summaries["orientation_local"].astype(np.int64) * pixels.size + summaries["pixel"]
     _require(np.all(np.diff(summary_key) > 0), f"summary rows are not canonical and unique: {path}")
     _require(header[43] == summaries.size + header[44], f"summary support accounting changed: {path}")
     summary_values = np.stack((summaries["source_re"], summaries["source_im"], summaries["source_weight"]))
-    _require(np.all(np.isfinite(summary_values)) and np.all(summaries["source_weight"] > 0), f"invalid summary operands: {path}")
+    _require(
+        np.all(np.isfinite(summary_values)) and np.all(summaries["source_weight"] > 0),
+        f"invalid summary operands: {path}",
+    )
 
-    _require(np.all(terms["state"] == 1) and np.all(terms["flags"] == 1), f"inactive or unexpected term flag was serialized: {path}")
-    _require(np.all(terms["reserved"] == 0) and np.all(terms["reserved_float"] == 0), f"term reserved field changed: {path}")
+    _require(
+        np.all(terms["state"] == 1) and np.all(terms["flags"] == 1),
+        f"inactive or unexpected term flag was serialized: {path}",
+    )
+    _require(
+        np.all(terms["reserved"] == 0) and np.all(terms["reserved_float"] == 0), f"term reserved field changed: {path}"
+    )
     expected_term_count = int(header[45]) * pixels.size
     _require(terms.size == expected_term_count, f"active term panel is incomplete: {path}")
     accepted_flat = np.flatnonzero(expected_accepted)
     expected_orientation = np.repeat(accepted_flat // translations.size, pixels.size)
     expected_translation = np.repeat(accepted_flat % translations.size, pixels.size)
     expected_term_pixel = np.tile(np.arange(pixels.size), accepted_flat.size)
-    _require(np.array_equal(terms["orientation_local"], expected_orientation), f"term orientation order changed: {path}")
+    _require(
+        np.array_equal(terms["orientation_local"], expected_orientation), f"term orientation order changed: {path}"
+    )
     _require(np.array_equal(terms["translation"], expected_translation), f"term translation order changed: {path}")
     _require(np.array_equal(terms["pixel"], expected_term_pixel), f"term pixel order changed: {path}")
     term_values = np.stack(tuple(terms[name] for name in TERM_DTYPE.names[6:]))
@@ -252,13 +292,21 @@ def validate_directory(directory: Path, selection_json: Path, *, expected_rank: 
     _require(len(paths) == len(expected_stacks), "factor capture file count differs from selection")
     captures = tuple(load_factor_capture(path) for path in paths)
     stacks = [capture.stack_index for capture in captures]
-    _require(set(stacks) == set(expected_stacks) and len(set(stacks)) == len(stacks), "factor capture stack set is incomplete or duplicated")
+    _require(
+        set(stacks) == set(expected_stacks) and len(set(stacks)) == len(stacks),
+        "factor capture stack set is incomplete or duplicated",
+    )
     _require(all(capture.header[14] == expected_rank for capture in captures), "factor capture MPI rank changed")
     expected_set_hash = fnv1a64(canonical_stack_text)
-    _require(all(capture.header[36] == expected_set_hash for capture in captures), "factor capture selected-set hash changed")
+    _require(
+        all(capture.header[36] == expected_set_hash for capture in captures), "factor capture selected-set hash changed"
+    )
     reference_fields = (9, 10, 16, 17, 18, 19, 20, 21, 24, 25, 26, 27, 28, 29, 36, 42, 52)
     reference = tuple(captures[0].header[index] for index in reference_fields)
-    _require(all(tuple(capture.header[index] for index in reference_fields) == reference for capture in captures), "factor capture runtime dimensions or policy changed between particles")
+    _require(
+        all(tuple(capture.header[index] for index in reference_fields) == reference for capture in captures),
+        "factor capture runtime dimensions or policy changed between particles",
+    )
     return {
         "schema": "relion-bpref-factor-capture-validation-v2",
         "metric_policy": "exact/array metrics for intermediate operands; no correlation",
