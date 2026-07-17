@@ -3049,3 +3049,49 @@ Matrix evidence:
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_expansion_audit_cb83d1b9_20260717_031000/cases/29_small_low_noise_3k_g128_white_noise0p2_bf80/k1_fsc_trajectory.json`
   (`1a60e0ae0b7be85a017cddca99cccfb5a8b121eff54311a1cc433e9abb8deaa5`).
+
+# 2026-07-16: HIGHEST BPref precision passes the 100k trajectory and final gates
+
+- The corrected replay-controlled 100k/256 run at commit `94b8f2b2` completed
+  as science job `11288959`, followed by FSC/FSC-AUC audit `11288960` and
+  complete intermediate-topology audit `11291973`. RECOVAR and RELION converge
+  exactly at iteration 14, and RECOVAR runs the valid converged final all-data
+  step at Nyquist with grid correction unset/off.
+- Across 14 numbered boundaries, the minimum merged cross-engine FSC-AUC is
+  `0.9999621181` and the worst RECOVAR-minus-RELION merged GT FSC-AUC is
+  `-2.81585e-5`. Final merged cross-engine FSC-AUC is `0.9986929591`;
+  RECOVAR-versus-GT is `0.5444889741`, RELION-versus-GT is `0.5363817908`, and
+  the delta is `+0.0081071833`. Map acceptance uses only shellwise FSC and
+  FSC-AUC.
+- The complete 14-boundary intermediate audit passes required-artifact,
+  finite-array, shape, and topology checks. Its continuous residual magnitudes
+  remain diagnostic rather than tolerance-gated; the HIGHEST-precision change
+  is not evidence that posterior-state differences are all resolved.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_highest_94b8f2b2_20260716T211300Z/analysis/k1_fsc_trajectory.json`
+  (SHA-256
+  `c2c05e5ffc89805900eecbedd4f2d86c6335b23d3edc9efd77ed974d3a889669`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_highest_94b8f2b2_20260716T211300Z/analysis/intermediate_trajectory_beeb8230_after11288959/k1_intermediate_trajectory.json`
+  (SHA-256
+  `bd75044371aaa424da97301444cdafa5b54df9006ec7830ff3ab82ea36e7b6ec`).
+
+# 2026-07-16: low-contrast/noise-scale K=1 robustness gate passes
+
+- Same-GPU science job `11291424` and audits `11292007` cover the
+  3k-particle grid-128 low-contrast/noise-scale case. RECOVAR and RELION
+  converge exactly at iteration 16 and both take the converged final all-data
+  branch; FSC/FSC-AUC and aggregate particle-state gates pass.
+- The minimum numbered merged cross-engine FSC-AUC is `0.9999629449`, and the
+  worst numbered RECOVAR-minus-RELION merged GT FSC-AUC is `-4.87703e-6`.
+  Final merged cross-engine FSC-AUC is `0.9987484518`, while RECOVAR final GT
+  FSC-AUC exceeds RELION by `+0.0146267707`. Correlation is not computed or
+  used as an acceptance metric.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_expansion_audit_cb83d1b9_20260717_031000/cases/18_small_contrast_noise_scale_3k_g128_noise1_bf80/k1_fsc_trajectory.json`
+  (SHA-256
+  `344d00edfa1dd11395ec665491461ca7ae6ae05404e4636b5fed46edc41cf1a8`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_expansion_audit_cb83d1b9_20260717_031000/cases/18_small_contrast_noise_scale_3k_g128_noise1_bf80/particle_state_distribution.json`
+  (SHA-256
+  `f8faee082bfb96ef0a9917cce1004e2da9d5d6d1db4cb660880adc195cddf082`).
