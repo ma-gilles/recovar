@@ -1501,10 +1501,10 @@ def main():
     parser.add_argument(
         "--perturb_replay_relion_dir",
         default=None,
-        help="If set, read SamplingPerturbInstance per iteration from RELION's "
-        "run_it{NNN}_sampling.star in this directory and use that exact value "
-        "instead of recovar's RNG. Required for bit-exact ab-initio replay "
-        "against a RELION reference run.",
+        help="Controlled RELION trajectory replay: read SamplingPerturbInstance "
+        "and per-iteration particle/model overrides from run_it{NNN}_* files in "
+        "this directory. This is not an autonomous trajectory; omit it and use "
+        "--perturb_seed for same-seed autonomous refinement.",
     )
     parser.add_argument(
         "--relion-scale-followers",

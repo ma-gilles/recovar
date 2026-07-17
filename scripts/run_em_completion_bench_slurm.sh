@@ -63,6 +63,7 @@ K4_IMAGE_BATCH_SIZE="${K4_IMAGE_BATCH_SIZE:-50}"
 K4_ROTATION_BLOCK_SIZE="${K4_ROTATION_BLOCK_SIZE:-2000}"
 K1_MAX_ITER="${K1_MAX_ITER:-17}"
 K4_MAX_ITER="${K4_MAX_ITER:-15}"
+K1_TRAJECTORY_MODE="${K1_TRAJECTORY_MODE:-autonomous}"
 K1_MEM="${K1_MEM:-500G}"
 K4_MEM="${K4_MEM:-500G}"
 K1_TIME_LIMIT="${K1_TIME_LIMIT:-15:00:00}"
@@ -119,6 +120,9 @@ Environment overrides:
   K1_IMAGE_BATCH_SIZE        K=1 image batch size (default: ${K1_IMAGE_BATCH_SIZE})
   K1_ROTATION_BLOCK_SIZE     K=1 rotation block size (default: ${K1_ROTATION_BLOCK_SIZE})
   K1_MAX_ITER                K=1 max iteration cap (default: ${K1_MAX_ITER}; high enough for stored RELION final pass)
+  K1_TRAJECTORY_MODE         K=1 state policy: autonomous (default; exact it000 cold start,
+                             then RECOVAR-owned trajectory) or relion-replay (controlled
+                             per-iteration RELION state substitution)
   K1_MEM                     K=1 Slurm memory request (default: ${K1_MEM})
   K1_TIME_LIMIT              K=1 Slurm time limit (default: ${K1_TIME_LIMIT})
   K4_IMAGE_BATCH_SIZE        K=4 image batch size (default: ${K4_IMAGE_BATCH_SIZE})
@@ -235,6 +239,14 @@ for arg in "$@"; do
     *) echo "Unknown arg: ${arg}" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+case "${K1_TRAJECTORY_MODE}" in
+  autonomous|relion-replay) ;;
+  *)
+    echo "K1_TRAJECTORY_MODE must be autonomous or relion-replay, got: ${K1_TRAJECTORY_MODE}" >&2
+    exit 2
+    ;;
+esac
 
 mkdir -p "${SCRATCH_DIR}/jobs" "${RUNTIME_ROOT}"
 touch "${SCRATCH_DIR}/SAFE_TO_DELETE" "${RUNTIME_ROOT}/SAFE_TO_DELETE"
@@ -826,6 +838,11 @@ PY
 
 START_EPOCH="\$(date +%s)"
 REFINEMENT_EXTRA_ARGS=()
+TRAJECTORY_ARGS=(--relion_init_dir "${K1_RELION_DIR}")
+if [[ "${K1_TRAJECTORY_MODE}" == "relion-replay" ]]; then
+  TRAJECTORY_ARGS+=(--perturb_replay_relion_dir "${K1_RELION_DIR}")
+fi
+echo "K1_TRAJECTORY_MODE=${K1_TRAJECTORY_MODE}"
 if [[ "${EM_COMPLETION_TIMING_PROBE}" == "1" ]]; then
   REFINEMENT_EXTRA_ARGS+=(--skip-large-outputs)
 fi
@@ -845,7 +862,7 @@ set +e
   --perturb_seed 1775735620 \\
   --relion_half_sets "${K1_RELION_DIR}/run_it000_data.star" \\
   --relion_optimiser "${K1_RELION_DIR}/run_it000_optimiser.star" \\
-  --perturb_replay_relion_dir "${K1_RELION_DIR}" \\
+  "\${TRAJECTORY_ARGS[@]}" \\
   --particle_diameter_ang 200 \\
   --tau2_fudge 1.0 \\
   --firstiter_cc \\
@@ -1238,6 +1255,7 @@ K1_RELION_DIR=${K1_RELION_DIR}
 K1_IMAGE_BATCH_SIZE=${K1_IMAGE_BATCH_SIZE}
 K1_ROTATION_BLOCK_SIZE=${K1_ROTATION_BLOCK_SIZE}
 K1_MAX_ITER=${K1_MAX_ITER}
+K1_TRAJECTORY_MODE=${K1_TRAJECTORY_MODE}
 K1_MEM=${K1_MEM}
 K1_TIME_LIMIT=${K1_TIME_LIMIT}
 K4_DATA_DIR=${K4_DATA_DIR}

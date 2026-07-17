@@ -4,7 +4,6 @@ import os
 import subprocess
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "scripts" / "run_em_completion_bench_slurm.sh"
 
@@ -91,6 +90,9 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     assert '--rotation_block_size "8192"' in k1_text
     assert "K1_IMAGE_BATCH_SIZE=187" in submission_env_text
     assert "K1_ROTATION_BLOCK_SIZE=8192" in submission_env_text
+    assert "K1_TRAJECTORY_MODE=autonomous" in submission_env_text
+    assert "TRAJECTORY_ARGS=(--relion_init_dir" in k1_text
+    assert 'if [[ "autonomous" == "relion-replay" ]]' in k1_text
     assert "export RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION=0.40" in k1_text
     assert "RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION=0.40" in submission_env_text
     assert "#SBATCH --mem=128G" in k1_text
@@ -128,6 +130,37 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
         f"SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256={submission_fingerprint}"
         in submission_env_text
     )
+
+
+def test_completion_k1_relion_replay_mode_is_explicit(tmp_path):
+    scratch = tmp_path / "scratch"
+    runtime = tmp_path / "runtime"
+    env = os.environ.copy()
+    env.update(
+        {
+            "EM_COMPLETION_SCRATCH_DIR": str(scratch),
+            "EM_COMPLETION_RUNTIME_ROOT": str(runtime),
+            "K1_TRAJECTORY_MODE": "relion-replay",
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", str(LAUNCHER), "--dry-run", "--k1-only"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    k1_text = (scratch / "jobs" / "em_completion_k1_100k256.sh").read_text()
+    submission_env_text = (scratch / "submission.env").read_text()
+    assert 'if [[ "relion-replay" == "relion-replay" ]]' in k1_text
+    assert "--relion_init_dir" in k1_text
+    assert "--perturb_replay_relion_dir" in k1_text
+    assert "K1_TRAJECTORY_MODE=relion-replay" in submission_env_text
 
 
 def test_completion_k4_resource_overrides_are_written(tmp_path):
