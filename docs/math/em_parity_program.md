@@ -5163,3 +5163,51 @@ Code references:
 
 - `scripts/audit_em_particle_state_distribution.py:_cross_iteration_tail_enrichment`
 - `tests/unit/test_audit_em_particle_state_distribution.py:test_cross_iteration_tail_enrichment_uses_exact_aligned_state_and_is_diagnostic`
+
+## 2026-07-17 native texture-context closure on an uninterrupted boundary
+
+The remaining native texture-coordinate and sampled-register hypothesis is
+closed. RELION ran uninterrupted from iteration 0 through iteration 3 on A100
+UUID `GPU-c6d48651-75fd-c644-a83f-3879c0a58186`; its sampling perturbations
+were exactly `-0.04961`, `+0.405200`, and `-0.30033`. Within each captured
+invocation, the untouched production score kernel and a separate diagnostic
+context kernel consumed the same inputs in the same stream. Complete score
+arrays passed internal `memcmp` for all captured calls. This within-invocation
+comparison is the causal control; independent process or binary runs remain
+repeat-envelope measurements, not bitwise gates.
+
+The exact iteration-3 UIDs, Euler matrices, and PPref were then replayed through
+RECOVAR on the same physical GPU. RELION's row-major Euler matrices were
+transposed only at RECOVAR's public projector API boundary. Across all 32 panel
+particles, the five-field UID order and RELION/RECOVAR activity masks are
+exact. Every active raw coordinate, texture coordinate, Hermitian sign, and
+sampled complex64 register is bitwise exact. The deterministic float64 score
+replay has zero centered cost delta and zero posterior total variation for all
+32 particles. Particle 5676 contains 192 candidates and 5,704 active pixels
+per candidate: all seven coordinate/sign planes have `0/1,095,168` mismatches,
+sampled registers have `0/2,190,336` scalar mismatches, and posterior TV is
+zero.
+
+This exonerates the production native texture projector at this boundary; no
+production texture change is warranted. Continue localization in upstream
+operand generation and native reduction context. The comparison uses direct
+array metrics and posterior TV; no correlation or map-quality claim is made.
+
+Rejected diagnostics are retained but must not be cited as texture evidence:
+
+- Continuing from `run_it002_optimiser.star` reset RELION's sampling RNG and
+  produced iteration-3 perturbation `-0.24548`, not the uninterrupted
+  `-0.30033`; its hypotheses were physically different.
+- The first RECOVAR replay omitted the required Euler transpose at the public
+  projection API boundary and therefore projected different orientations.
+- Two partial iteration-1 launches tested ownership monitors only. One monitor
+  allowed a foreign same-binary process; the next failed to filter
+  `nvidia-smi` compute-app rows by GPU UUID. Neither produced iteration-3
+  captures. The accepted launch used exact UUID filtering plus PID ancestry.
+
+Sealed evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_uninterrupted_dual_corrected_8c832027_20260717T213908Z/analysis/uninterrupted_dual_recovar_replay.json` (SHA-256 `f64dcf488d7451131aaf22b257b060a1a86198898bafdb64bd439829c3bb8b51`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_uninterrupted_dual_corrected_8c832027_20260717T213908Z/provenance/uninterrupted_dual_postvalidated.txt` (SHA-256 `4441c39eba244e823e27049658314d19425a6e7a4bfde5e48dd43ba05a7679c3`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_uninterrupted_dual_corrected_8c832027_20260717T213908Z/provenance/uninterrupted_dual_artifacts.sha256` (SHA-256 `38dfdca43a66b9160b85e475a33d4bd4d9998b936f2b9ddd0a894e5e6c7a1ff9`)
+- RELION dual binary SHA-256 `72c37a0c4efe58397d95255bc98ac2ff3b3784f98aaf9ea2ac49b801a6d37b90`; diagnostic RECOVAR library SHA-256 `fefa277fbcee3f90bde113353e88e76c0fe55aa9807230897cc0194b3022c39c`.
