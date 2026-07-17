@@ -4645,3 +4645,38 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_stack111721_coarse_audit_20260717T000146Z/analysis/report.json` (SHA-256 `0486a185f35d5ed0295583b5fc72aaa339676b2028ab4142a458920c436ef95f`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_stack111721_coarse_audit_20260717T000146Z/analysis/seal.json` (SHA-256 `f0c8f855d54da62dbd71b6c5360b0d41048841115145e6f008222e41fa0f17fd`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_stack111721_coarse_audit_20260717T000146Z/ARTIFACTS.sha256` (SHA-256 `9d7cfd2e03f9e9fdb1faa13adc077b04c3b7b8b231a4f07e858a3c1e32efc0f6`)
+
+## 2026-07-16 real-10076 BPref factor and GEMM-precision closure
+
+A passive RELION factor capture and deterministic 32-particle RECOVAR replay
+close the individual processed-image, CTF, noise, translation, shifted-image,
+weighted-CTF, numerator-term, and weight-term operands to below `6.43e-7`
+per-particle relative L2. RELION's captured terms reduce to its summary rows
+within `3.89e-8`. The remaining production numerator residual is caused by
+the default A100 GEMM precision: its global relative L2 is `2.0710e-4`, while
+explicit `HIGHEST`, sequential float32, and genuine float64 close RELION at
+`3.53e-7`, `3.53e-7`, and `2.74e-7`, respectively.
+
+The production repair requests `jax.lax.Precision.HIGHEST` only for the local
+complex64 M-step numerator matmul. A same-physical-A100 control/fixed run shows
+that this is the only changed selected factor array and that the fixed
+production numerator is exactly equal to both the HIGHEST and sequential
+controls. Aggregate numerator relative L2 changes by `1.159e-4`/`1.139e-4`
+for the two halves; denominator changes remain `3.30e-8`. Control-to-fixed map
+FSC-AUC is `0.9999999876`, `0.9999999877`, and `0.9999999919` for half 1,
+half 2, and merged maps. Internal half-map FSC-AUC improves by `3.56e-7`.
+Cold production wall time was 188 s versus 193 s, with a warm-half pass-2
+time of 5.31 s versus 5.25 s; this run does not establish a material speed
+regression.
+
+RECOVAR and RELION maps retain their explicit opposite CTF/BPref sign
+convention: signed FSC is near `-1` and remains recorded as telemetry. Applying
+the predetermined RECOVAR multiplier `-1` gives RELION map FSC-AUC near
+`0.99999999`; this sign alignment is not inferred from map correlation. This
+bounded one-iteration intervention confirms the precision fix, but does not
+replace full real-data trajectory parity.
+
+Canonical evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_factor_boundary_20260716T235500Z/artifacts/factor_comparison_v1.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_tf32_same_gpu3_ab_20260717T034500Z/analysis_v2.json`
