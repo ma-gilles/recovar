@@ -3753,3 +3753,76 @@ Matrix evidence:
   Jobs `11314778` and `11315399` completed `0:0`. Intermediate gates use exact
   arrays and posterior TV; map acceptance uses FSC/FSC-AUC only and correlation
   is not computed.
+
+# 2026-07-17: host-matrix full trajectory preserves early drift and fails strict acceptance
+
+- Commit `8c83202739a31251bc6c10be834f237732e879d3` uses RELION's
+  host-generated inverse rotation matrices for scoring and backprojection.
+  Science job `11315888` completed `0:0` in 58:29, with stock RELION followed
+  by RECOVAR on physical A100 UUID
+  `GPU-928b9735-3919-8a8c-41b9-a7ca7b41017b`. Both engines completed a valid
+  final all-data reconstruction; grid correction remained off. RELION had 18
+  numbered iterations, while RECOVAR converged after numbered iteration 16.
+  Existing sealed same-UUID RELION repeats also realize numbered-16 and
+  numbered-18 branches, so this terminal topology difference is inside the
+  observed RELION repeat envelope. It is still an exact strict-gate failure,
+  but is not by itself classified as a deterministic RECOVAR defect.
+- Before that nonlinear branch, the merged cross-engine FSC-AUC trajectory is
+  `0.999999484051`, `0.999996539405`, `0.999757808900`,
+  `0.998859025561`, `0.996646508538`, `0.994605851609`, and
+  `0.991747711667` at iterations 1--7. Iteration 6 is the first merged map
+  below the `0.995` acceptance threshold. The host rotation handoff therefore
+  does not close the stable early aggregate drift.
+- Late merged FSC-AUC is `0.914395202504` at iteration 15,
+  `0.915809586413` at iteration 16, and `0.795975565806` after final
+  all-data. The shellwise failures are broad: at the `0.995` criterion,
+  iteration 15 and 16 each fail 105/127 shells, continuously from shell 22
+  through 126; final fails 108/127 shells, continuously from shell 19 through
+  126. At the stronger `0.9` criterion, the corresponding failure counts are
+  44, 37, and 83 shells. Final half-1 and half-2 FSC-AUC are
+  `0.791102509518` and `0.781113535114`.
+- The exact-identity iteration-6--7 hidden-change audit aligns all 10,000 rows
+  by unique `rlnImageName`. RECOVAR and RELION mean angular change are
+  `4.731405544` and `4.750984210` degrees; the signed RECOVAR-minus-RELION
+  difference has mean `-0.019578666` degrees but median only
+  `-2.20724e-8`. The absolute difference has median `2.44246e-6`, p95
+  `0.371592`, and maximum `115.549846` degrees. An evidence-defined
+  `>0.1`-degree subgroup contains 584/10,000 particles, and the largest one
+  percent accounts for `91.55596%` of the total absolute difference. This is
+  a systematic rare tail rather than a broad pose shift. Five-field candidate
+  UID evidence remains the separate frozen scorer-panel diagnostic; numbered
+  STAR histories expose particle identities, not candidate support.
+- Audit job `11315889` exited `2:0` after producing and hashing all requested
+  artifacts. This nonzero exit is the expected strict acceptance result
+  (`map_status=2`, `particle_state_status=1`), not a harness failure. The state
+  audit verified exact `rlnImageName` topology with no missing matched
+  RECOVAR iteration, then failed the requested exact schedule/convergence
+  gates. Duplicate audit job `11318600` was cancelled as stale after these
+  complete artifacts were verified.
+- Evidence root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_host_matrix_fulltraj_commit_pending_a100_20260717T192457Z`.
+  The main report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_host_matrix_fulltraj_commit_pending_a100_20260717T192457Z/analysis/trajectory_acceptance.json`
+  (SHA-256
+  `81b67289629668e192abf3b176ff8d353f83b037369776b9f5763fe7068dfa7d`),
+  with shellwise curves
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_host_matrix_fulltraj_commit_pending_a100_20260717T192457Z/analysis/trajectory_shellwise_fsc.npz`
+  (SHA-256
+  `5e880b4edf98db1841b5800ebd4bfe6ad5f9d14ee1add248fc029bc1579af1b7`).
+  The particle-state report
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_host_matrix_fulltraj_commit_pending_a100_20260717T192457Z/analysis/particle_state_distribution.json`
+  and compact arrays
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_host_matrix_fulltraj_commit_pending_a100_20260717T192457Z/analysis/particle_state_distribution_arrays.npz`
+  have SHA-256
+  `af6144f82a086310327a277a3fe2b19c036f250693c50ffd12985280972655ed`
+  and `c32fe2878ec5bea03c5906aeeeb476773dde1f58bd52de1e4064d72e6b38f8aa`.
+  The hidden-change report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_host_matrix_fulltraj_commit_pending_a100_20260717T192457Z/analysis/hidden_change_it006_it007.json`
+  (SHA-256
+  `1dd1834877f8087bb1cab30b791af37715e0cd914e05c4f99df9a445d0598c81`),
+  with arrays
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_host_matrix_fulltraj_commit_pending_a100_20260717T192457Z/analysis/hidden_change_it006_it007_arrays.npz`
+  (SHA-256
+  `f3b524c8280ec49ced2994e0d1c7cdd9b9c3207cbde1253db5819a35f81b19cd`).
+  Intermediate comparisons use exact identity-aligned arrays; map quality uses
+  shellwise FSC and FSC-AUC only. Correlation is not computed.
