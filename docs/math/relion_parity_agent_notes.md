@@ -3192,3 +3192,38 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_noise_semantics_2ec77532_20260717T040151Z/noise_semantics_analysis_v1.json`
   (SHA-256
   `4edde2570ad8833e925b923c2ab5c7bb5773bcbc0a5b6ca471388b43f7dfaeb1`).
+
+# 2026-07-17: real-10076 finalization passes, but autonomous parity fails
+
+- Same-GPU job `11292212` ran stock RELION and RECOVAR sequentially on
+  physical A100 UUID `GPU-a1bb1fb4-d5e3-1c72-3382-63f6032e9fc6`. Both
+  science commands exited zero. RECOVAR converged after numbered split-half
+  iteration 16, ran final all-data label 17, and completed both halves plus
+  Nyquist reconstruction. This independently validates the commit-`719ad930`
+  cold-start finalization repair. The Slurm `FAILED` state is a wrapper-only
+  stale grep for the old convergence log wording, not a science failure.
+- Perfect autonomous parity nevertheless fails. The paired trajectories end
+  at RECOVAR numbered 16/final 17 and RELION numbered 18/final 19. Existing
+  same-UUID stock-RELION A/B controls both end at numbered 16/final 17, so
+  convergence topology is repeat sensitive, but this does not absorb the
+  stable early cross-engine residual.
+- The earliest FSC-array difference beyond both engine controls is numbered
+  iteration 1, shell 20: RECOVAR `0.7094454765` versus RELION `0.709487`, an
+  absolute residual of `4.1523468e-5`; both repeat controls are exactly zero
+  at that boundary. The first half-map FSC-AUC below `0.995` occurs at
+  iteration 6 and the first merged-map gate at iteration 7. Final merged
+  cross-engine FSC-AUC is `0.798012166`, versus `0.967954843` between the
+  same-UUID RELION repeats.
+- The iteration-15 shell-33/current-size branch remains unresolved and repeat
+  sensitive: independent RECOVAR and RELION trajectories cross the `0.5`
+  threshold in both directions. Do not patch that discrete branch. The next
+  causal boundary is a paired iteration-1 contribution capture/replay,
+  beginning with FSC generation and aggregate Pmax/pose/translation arrays.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_parity_synthesis_719ad930_20260717T003600Z/synthesis.json`
+  (SHA-256
+  `3c9264755b1823f207037d3e3168a2b219a886bba510f8be06ed2e29a151b780`)
+  and its verified `MANIFEST.sha256` (SHA-256
+  `6d00da0be159d946d45dfccc8c8c069161b7b3b201d97e6edec8ef344c834810`).
+  Intermediate comparisons use exact/array metrics; map gates use only
+  shellwise FSC and FSC-AUC.
