@@ -126,6 +126,44 @@ def test_capture_splits_raw_shards_at_particle_bound(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
+def test_raw_capture_validation_and_complete_manifest(tmp_path, monkeypatch):
+    monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(capture, "_capture_counter", 0)
+    kwargs = _capture_inputs(batch=3)
+    capture.maybe_capture_k1_production_bucket(**kwargs)
+    shard = next(tmp_path.glob("*.npz"))
+
+    inventory = capture.validate_raw_capture_shard(shard)
+    assert inventory["particle_count"] == 3
+    assert inventory["candidate_count"] == 12
+    marker = capture.finalize_raw_capture_directory(
+        tmp_path,
+        expected_original_indices=kwargs["original_indices"],
+        expected_iteration=3,
+    )
+    assert marker["particle_count"] == 3
+    assert marker["candidate_count"] == 12
+    assert (tmp_path / "RAW_CAPTURE.sha256").is_file()
+    assert (tmp_path / "RAW_CAPTURE_COMPLETE.json").is_file()
+
+
+@pytest.mark.unit
+def test_raw_capture_validation_rejects_corrupted_pmax(tmp_path, monkeypatch):
+    monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(capture, "_capture_counter", 0)
+    capture.maybe_capture_k1_production_bucket(**_capture_inputs())
+    shard = next(tmp_path.glob("*.npz"))
+    with np.load(shard, allow_pickle=False) as data:
+        arrays = {name: np.asarray(data[name]) for name in data.files}
+    arrays["pmax"] = arrays["pmax"].copy()
+    arrays["pmax"][0] = np.nextafter(arrays["pmax"][0], np.float32(0.0))
+    np.savez(shard, **arrays)
+
+    with pytest.raises(capture.CompactCaptureError, match="reproduce Pmax"):
+        capture.validate_raw_capture_shard(shard)
+
+
+@pytest.mark.unit
 def test_capture_rejects_nonorthogonal_rotation(tmp_path, monkeypatch):
     monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
     kwargs = _capture_inputs()

@@ -7,6 +7,7 @@ implementation.  Its caller invokes it only after production ``scores`` and
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,14 @@ _capture_counter = 0
 
 class CompactCaptureError(RuntimeError):
     pass
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _fsync_directory(path: Path) -> None:
@@ -47,6 +56,249 @@ def _atomic_npz(path: Path, **arrays) -> None:
             np.asarray(check[key])
     os.replace(partial, path)
     _fsync_directory(path.parent)
+
+
+def _atomic_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + ".partial")
+    if path.exists() or partial.exists():
+        raise CompactCaptureError(f"refusing to overwrite compact capture {path}")
+    with partial.open("xb") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(partial, path)
+    _fsync_directory(path.parent)
+
+
+def _require_dtype(array: np.ndarray, dtype, name: str) -> None:
+    if array.dtype != np.dtype(dtype):
+        raise CompactCaptureError(f"{name} dtype must be {np.dtype(dtype)}, got {array.dtype}")
+
+
+def validate_raw_capture_shard(path: Path) -> dict[str, object]:
+    """Strictly validate one raw production shard and return its inventory."""
+
+    path = Path(path)
+    if path.name.endswith(".partial"):
+        raise CompactCaptureError(f"partial raw shard is not readable: {path}")
+    try:
+        with np.load(path, allow_pickle=False) as data:
+            required = {
+                "schema", "metadata_json", "iteration", "half", "rank", "call_index",
+                "shard_index", "current_size", "local_indices", "original_indices",
+                "candidate_offset", "candidate_local_rotation", "candidate_translation",
+                "raw_combined_score", "posterior", "significant", "rotation_log_prior",
+                "translation_log_prior", "rotation_offset", "rotation_matrix",
+                "rotation_global_index", "rotation_parent_local", "rotation_parent_global",
+                "fine_translations", "fine_translation_parent", "score_center", "raw_log_z",
+                "pmax", "posterior_sum_float32_order", "posterior_sum_float64_exact",
+                "posterior_sum_float32_bound", "significant_count", "significant_threshold",
+                "winner_candidate_index", "winner_pose_matrix", "winner_translation",
+            }
+            missing = sorted(required - set(data.files))
+            if missing:
+                raise CompactCaptureError(f"raw shard is missing fields: {missing}")
+            if str(np.asarray(data["schema"]).item()) != SCHEMA:
+                raise CompactCaptureError("raw shard schema mismatch")
+            metadata = json.loads(str(np.asarray(data["metadata_json"]).item()))
+            if metadata.get("schema") != SCHEMA:
+                raise CompactCaptureError("raw shard metadata schema mismatch")
+            arrays = {name: np.asarray(data[name]) for name in required - {"schema", "metadata_json"}}
+    except CompactCaptureError:
+        raise
+    except Exception as exc:
+        raise CompactCaptureError(f"invalid raw shard {path}: {exc}") from exc
+
+    for name, dtype in (
+        ("iteration", np.int32), ("half", np.int8), ("rank", np.int32),
+        ("call_index", np.int64), ("shard_index", np.int32), ("current_size", np.int32),
+        ("local_indices", np.int64), ("original_indices", np.int64),
+        ("candidate_offset", np.int64), ("candidate_local_rotation", np.int32),
+        ("candidate_translation", np.int32), ("significant", np.uint8),
+        ("rotation_offset", np.int64), ("rotation_matrix", np.float32),
+        ("rotation_global_index", np.int64), ("rotation_parent_local", np.int32),
+        ("rotation_parent_global", np.int32), ("fine_translations", np.float32),
+        ("fine_translation_parent", np.int32), ("posterior_sum_float32_order", np.float32),
+        ("posterior_sum_float64_exact", np.float64),
+        ("posterior_sum_float32_bound", np.float64), ("significant_count", np.int32),
+        ("winner_candidate_index", np.int32), ("winner_pose_matrix", np.float32),
+        ("winner_translation", np.float32),
+    ):
+        _require_dtype(arrays[name], dtype, name)
+    for name in ("raw_combined_score", "posterior", "rotation_log_prior", "translation_log_prior"):
+        if arrays[name].dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
+            raise CompactCaptureError(f"{name} must preserve a float32/float64 production dtype")
+
+    local = arrays["local_indices"]
+    original = arrays["original_indices"]
+    particle_count = int(local.size)
+    if not 0 < particle_count <= MAX_PARTICLES_PER_RAW_SHARD or original.shape != (particle_count,):
+        raise CompactCaptureError("raw shard particle topology/bound is invalid")
+    if np.unique(local).size != particle_count or np.unique(original).size != particle_count:
+        raise CompactCaptureError("raw shard contains duplicate local/original identities")
+    candidate_offset = arrays["candidate_offset"]
+    rotation_offset = arrays["rotation_offset"]
+    if (
+        candidate_offset.shape != (particle_count + 1,)
+        or rotation_offset.shape != (particle_count + 1,)
+        or candidate_offset[0] != 0
+        or rotation_offset[0] != 0
+        or np.any(np.diff(candidate_offset) <= 0)
+        or np.any(np.diff(rotation_offset) <= 0)
+    ):
+        raise CompactCaptureError("raw shard offsets are invalid")
+    candidate_count = int(candidate_offset[-1])
+    rotation_count = int(rotation_offset[-1])
+    if candidate_count > MAX_CANDIDATES_PER_RAW_SHARD:
+        raise CompactCaptureError("raw shard exceeds its candidate bound")
+    for name in (
+        "candidate_local_rotation", "candidate_translation", "raw_combined_score", "posterior",
+        "significant", "rotation_log_prior", "translation_log_prior",
+    ):
+        if arrays[name].shape != (candidate_count,):
+            raise CompactCaptureError(f"{name} does not close over candidate_offset")
+    for name in (
+        "rotation_global_index", "rotation_parent_local", "rotation_parent_global",
+    ):
+        if arrays[name].shape != (rotation_count,):
+            raise CompactCaptureError(f"{name} does not close over rotation_offset")
+    if arrays["rotation_matrix"].shape != (rotation_count, 3, 3):
+        raise CompactCaptureError("rotation_matrix does not close over rotation_offset")
+    n_trans = arrays["fine_translations"].shape[0]
+    if (
+        arrays["fine_translations"].shape != (n_trans, 2)
+        or arrays["fine_translation_parent"].shape != (n_trans,)
+        or n_trans == 0
+    ):
+        raise CompactCaptureError("fine translation topology is invalid")
+    per_particle_shapes = {
+        "score_center": (particle_count,), "raw_log_z": (particle_count,),
+        "pmax": (particle_count,), "posterior_sum_float32_order": (particle_count,),
+        "posterior_sum_float64_exact": (particle_count,),
+        "posterior_sum_float32_bound": (particle_count,), "significant_count": (particle_count,),
+        "significant_threshold": (particle_count,), "winner_candidate_index": (particle_count,),
+        "winner_pose_matrix": (particle_count, 3, 3),
+        "winner_translation": (particle_count, 2),
+    }
+    for name, shape in per_particle_shapes.items():
+        if arrays[name].shape != shape:
+            raise CompactCaptureError(f"{name} particle topology is invalid")
+
+    finite_names = (
+        "raw_combined_score", "posterior", "rotation_log_prior", "translation_log_prior",
+        "rotation_matrix", "fine_translations", "score_center", "raw_log_z", "pmax",
+        "posterior_sum_float32_order", "posterior_sum_float64_exact",
+        "posterior_sum_float32_bound", "significant_threshold", "winner_pose_matrix",
+        "winner_translation",
+    )
+    if any(not np.isfinite(arrays[name]).all() for name in finite_names):
+        raise CompactCaptureError("raw shard contains non-finite active values or geometry")
+    if np.any((arrays["posterior"] < 0) | (arrays["posterior"] > 1)):
+        raise CompactCaptureError("raw shard posterior is outside [0,1]")
+    if np.any((arrays["significant"] != 0) & (arrays["significant"] != 1)):
+        raise CompactCaptureError("raw shard significant flag is not binary")
+
+    rotations = arrays["rotation_matrix"]
+    gram_error = np.max(
+        np.abs(rotations @ np.swapaxes(rotations, 1, 2) - np.eye(3, dtype=np.float32)), axis=(1, 2)
+    )
+    determinant_error = np.abs(np.linalg.det(rotations) - np.float32(1.0))
+    if np.any(gram_error > 5e-4) or np.any(determinant_error > 5e-4):
+        raise CompactCaptureError("raw shard contains invalid rotation geometry")
+
+    for row in range(particle_count):
+        c0, c1 = (int(candidate_offset[row]), int(candidate_offset[row + 1]))
+        r0, r1 = (int(rotation_offset[row]), int(rotation_offset[row + 1]))
+        local_rot = arrays["candidate_local_rotation"][c0:c1]
+        local_trans = arrays["candidate_translation"][c0:c1]
+        posterior = arrays["posterior"][c0:c1]
+        significant = arrays["significant"][c0:c1].astype(bool)
+        if np.any((local_rot < 0) | (local_rot >= r1 - r0)):
+            raise CompactCaptureError("raw candidate rotation index is out of range")
+        if np.any((local_trans < 0) | (local_trans >= n_trans)):
+            raise CompactCaptureError("raw candidate translation index is out of range")
+        exact_sum = np.sum(posterior, dtype=np.float64)
+        if exact_sum != arrays["posterior_sum_float64_exact"][row]:
+            raise CompactCaptureError("raw shard exact posterior sum does not reproduce")
+        if (
+            abs(float(arrays["posterior_sum_float32_order"][row]) - exact_sum)
+            > arrays["posterior_sum_float32_bound"][row]
+        ):
+            raise CompactCaptureError("raw shard float32 posterior sum exceeds its bound")
+        if int(np.count_nonzero(significant)) != int(arrays["significant_count"][row]):
+            raise CompactCaptureError("raw shard significant count does not reproduce")
+        winner = int(arrays["winner_candidate_index"][row])
+        if not 0 <= winner < c1 - c0:
+            raise CompactCaptureError("raw shard winner index is out of range")
+        if arrays["pmax"][row] != posterior[winner]:
+            raise CompactCaptureError("raw shard winner posterior does not reproduce Pmax")
+        if arrays["score_center"][row] != arrays["raw_combined_score"][c0 + winner]:
+            raise CompactCaptureError("raw shard winner score does not reproduce score_center")
+        winner_rot = int(local_rot[winner])
+        winner_trans = int(local_trans[winner])
+        if not np.array_equal(arrays["winner_pose_matrix"][row], rotations[r0 + winner_rot]):
+            raise CompactCaptureError("raw shard winner pose does not reproduce candidate geometry")
+        if not np.array_equal(
+            arrays["winner_translation"][row], arrays["fine_translations"][winner_trans]
+        ):
+            raise CompactCaptureError("raw shard winner translation does not reproduce candidate geometry")
+
+    return {
+        "path": str(path),
+        "sha256": _sha256_file(path),
+        "iteration": int(arrays["iteration"]),
+        "half": int(arrays["half"]),
+        "particle_count": particle_count,
+        "candidate_count": candidate_count,
+        "original_indices": original.copy(),
+    }
+
+
+def finalize_raw_capture_directory(
+    capture_dir: Path,
+    *,
+    expected_original_indices,
+    expected_iteration: int,
+) -> dict[str, object]:
+    """Seal a complete raw capture only after strict identity/readback checks."""
+
+    capture_dir = Path(capture_dir)
+    if list(capture_dir.glob("*.partial")):
+        raise CompactCaptureError("raw capture directory contains partial files")
+    shards = sorted(capture_dir.glob("raw_k1_*.npz"))
+    if not shards:
+        raise CompactCaptureError("raw capture directory has no shards")
+    inventory = [validate_raw_capture_shard(path) for path in shards]
+    if any(item["iteration"] != int(expected_iteration) for item in inventory):
+        raise CompactCaptureError("raw capture iteration mismatch")
+    observed = np.concatenate([item["original_indices"] for item in inventory])
+    expected = np.asarray(expected_original_indices, dtype=np.int64)
+    if expected.ndim != 1 or np.unique(expected).size != expected.size:
+        raise CompactCaptureError("expected original identities must be a unique vector")
+    if np.unique(observed).size != observed.size:
+        raise CompactCaptureError("raw capture duplicates an original identity across shards")
+    if not np.array_equal(np.sort(observed), np.sort(expected)):
+        raise CompactCaptureError("raw capture identity set is incomplete or unexpected")
+    manifest_lines = [f"{item['sha256']}  {Path(item['path']).name}" for item in inventory]
+    manifest_payload = ("\n".join(manifest_lines) + "\n").encode("utf-8")
+    manifest_path = capture_dir / "RAW_CAPTURE.sha256"
+    _atomic_bytes(manifest_path, manifest_payload)
+    marker = {
+        "schema": SCHEMA,
+        "manifest": manifest_path.name,
+        "manifest_sha256": _sha256_file(manifest_path),
+        "iteration": int(expected_iteration),
+        "shard_count": len(inventory),
+        "particle_count": int(observed.size),
+        "candidate_count": int(sum(item["candidate_count"] for item in inventory)),
+        "halves": sorted({int(item["half"]) for item in inventory}),
+    }
+    _atomic_bytes(
+        capture_dir / "RAW_CAPTURE_COMPLETE.json",
+        (json.dumps(marker, sort_keys=True, indent=2) + "\n").encode("utf-8"),
+    )
+    return marker
 
 
 def _capture_requested(iteration: int) -> Path | None:
