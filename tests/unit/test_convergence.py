@@ -1065,6 +1065,63 @@ class TestUpdateRefinementState:
         assert refined.mpi_leader_hidden_variable_angular_step_deg == pytest.approx(7.5 / 2.0)
         assert refined.mpi_leader_hidden_variable_translation_step_angstrom == pytest.approx(4.25 / 2.0)
 
+    def test_real10076_relion_hidden_change_sequence_refines_at_iteration_10(self):
+        state = RefinementState(
+            healpix_order=3,
+            adaptive_oversampling=1,
+            translation_range=3.0,
+            translation_step=1.0,
+            current_resolution=14.4552,
+            voxel_size_angstrom=1.6375,
+            acc_rot=1.397,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            nr_iter_wo_resol_gain=3,
+            smallest_changes_optimal_classes=0.0,
+            smallest_changes_optimal_orientations=4.901576,
+            smallest_changes_optimal_offsets_angstrom=0.932432,
+            mpi_leader_hidden_variable_angular_step_deg=3.75,
+            mpi_leader_hidden_variable_translation_step_angstrom=0.81875,
+        )
+
+        for iteration, angle, offset in (
+            (7, 4.743451, 0.928163),
+            (8, 4.595795, 0.896570),
+        ):
+            state = self._record_relion_hidden_change(state, angle, offset)
+            assert state.nr_iter_wo_large_hidden_variable_changes == 0
+            state = update_angular_sampling(state)
+            assert state.healpix_order == 3, iteration
+
+        state = self._record_relion_hidden_change(state, 4.503409, 0.896290)
+        assert state.nr_iter_wo_large_hidden_variable_changes == 1
+        state = update_angular_sampling(state)
+        assert state.healpix_order == 4
+
+    def test_real10076_recovar_hidden_change_sequence_refines_at_iteration_8(self):
+        state = RefinementState(
+            healpix_order=3,
+            adaptive_oversampling=1,
+            translation_range=3.0,
+            translation_step=1.0,
+            current_resolution=14.4552,
+            voxel_size_angstrom=1.6375,
+            acc_rot=1.393,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            nr_iter_wo_resol_gain=3,
+            smallest_changes_optimal_classes=0.0,
+            smallest_changes_optimal_orientations=4.838344,
+            smallest_changes_optimal_offsets_angstrom=0.929794,
+            mpi_leader_hidden_variable_angular_step_deg=3.75,
+            mpi_leader_hidden_variable_translation_step_angstrom=0.81875,
+        )
+
+        state = self._record_relion_hidden_change(state, 4.836995, 0.933869)
+        assert state.nr_iter_wo_large_hidden_variable_changes == 1
+        state = update_angular_sampling(state)
+        assert state.healpix_order == 4
+
     def test_relion_order5_to_order6_hidden_change_boundary(self):
         state = RefinementState(
             healpix_order=4,
