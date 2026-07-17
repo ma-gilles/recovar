@@ -3498,11 +3498,22 @@ Matrix evidence:
   RELION's nonlinear repeat behavior and is not a systematic RECOVAR defect.
   Freeze reduction inputs/order before requiring one of these two
   RELION-realized branches.
+- Schedule matching does not close the remaining quality residual. Using the
+  same merged-map statistic, native RELION repeat A/B FSC-AUC is `0.996451`,
+  `0.993440`, and `0.990081` at iterations 8--10, above RECOVAR's
+  approximately `0.976` against either early repeat at iteration 10. The gap
+  grows gradually from iteration 2 and is not labeled numerical noise.
 - The scheduler implementation is not the causal defect. The tests in
   `tests/unit/test_convergence.py` reproduce RELION's refinement at iteration
   10 when fed RELION's recorded hidden-change scalars and RECOVAR's refinement
   at iteration 8 when fed RECOVAR's scalars. Do not patch the 3-percent
   threshold or stall counter.
+- Hardware qualification: the intervention arms share physical A100 UUID
+  `GPU-f3e946...`, the primary target pair shares `GPU-a1bb1...`, and native
+  RELION repeats share `GPU-bd720...`. Direct intervention-to-target metrics
+  therefore use the same A100-80 model but not the same physical UUID. A
+  live-RELION-derived same-allocation full trajectory remains required for
+  cross-engine acceptance.
 - The scalar difference is concentrated in a rare pose tail. Across the
   primary target, RECOVAR's iteration-6--7 mean angular change is
   `4.834649267` degrees versus RELION's `4.743451024`. Only `518/10000`
@@ -3541,6 +3552,10 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_relion_repeat_envelope_a10080_retry4_prepared_20260715_195515/analysis/repeat_envelope.json`
   (SHA-256
   `abcb1fafbbc090f96c5d2927e012f272e2eeecbdba5cb3da286fd787b91a4805`).
+  Its identical-statistic merged-map control is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_relion_repeat_envelope_a10080_retry4_prepared_20260715_195515/analysis/native_repeat_merged_fsc_v1.json`
+  (SHA-256
+  `d6eba533c9d11b127855ad10dba4c1f3cb9f201df4ea0a0ff115b482a27e90c7`).
   The fixed-cohort trajectory is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/fixed_hidden_tail_trajectory_v1/fixed_hidden_tail_trajectory.json`
   (SHA-256

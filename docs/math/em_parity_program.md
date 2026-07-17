@@ -4828,3 +4828,78 @@ Sealed evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z/analysis/original_trial_identity_proof.json` (SHA-256 `068e5c8955b1ca34a695f92490493bccb3654d972f2c8b94374dcd778a274fbc`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z/analysis/native_restart_accuracy_v1.json` (SHA-256 `4249a06cff0fb63884fa7f68079b56a52fa6a0d1ae90c095bc5ecf1e57e587fd`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_100k_relion_restart_accuracy_oracle_20260717T054518Z/restart/per_trial_errors.csv` (SHA-256 `d29e4b460c5562a0328f4fb5ed6806c138bc4408c6c765e95bb224aa68d91da4`)
+
+## 2026-07-17 real-10076 hidden-change tail and schedule intervention
+
+The reusable hidden-change distribution audit shows why the earlier pose-error
+p95 was insufficient at the iteration-6 to iteration-7 schedule boundary.
+Against the delayed native RELION target, 518 of 10,000 particles have an
+absolute hidden-angle-change difference above 0.1 degrees. All 518 also belong
+to the union of cross-engine pose mismatches at iteration 6 or 7. The top 1%
+of particles accounts for `92.2177%` of the total absolute difference and
+`0.090721` degrees of the `0.091198`-degree signed mean gap. The subgroup is
+low-Pmax enriched: RECOVAR iteration-7 mean Pmax is `0.53343`, versus
+`0.69695` outside the subgroup. The same approximately 5% tail and top-1%
+concentration recur against two independent native RELION repeats and in a
+second autonomous RECOVAR control. This is systematic subgroup evidence, not
+a reason to resume serial particle tracing.
+
+The exact schedule predicate is nevertheless correct. The delayed RELION
+trajectory changes from `4.901576` to `4.743451` degrees at iteration 7;
+`1.03 * 4.743451 < 4.901576`, so its hidden-variable counter remains zero and
+it stays at HEALPix order 3 through iteration 9. Native repeat A changes from
+`4.897129` to `4.759138`, and repeat B from `4.873165` to `4.790615`; both pass
+RELION's 3% stability predicate, increment the counter, and enter order 4 at
+iteration 8. Both autonomous RECOVAR controls take that same early branch.
+The relevant schedules through iteration 10 are therefore:
+
+- delayed RELION: orders `3,3,3,3,3,3,3,3,3,4`, sizes
+  `48,92,120,122,122,122,122,122,122,122`;
+- native RELION repeats and autonomous RECOVAR: orders
+  `3,3,3,3,3,3,3,4,4,4`; the repeat sizes are
+  `48,92,120,122,122,122,122,122,126,126`.
+
+The schedule intervention is causal and symmetric under FSC/FSC-AUC. Against
+the delayed target, autonomous RECOVAR's iteration-8--10 merged FSC-AUC is
+`0.756453`, `0.726126`, and `0.836135`; forcing the delayed HEALPix schedule
+raises it to `0.986548`, `0.983385`, and `0.978128`, while additionally forcing
+current size changes those values only to `0.986554`, `0.983788`, and
+`0.978682`. Against native repeat A, autonomous RECOVAR gives `0.987268`,
+`0.980848`, and `0.976246`, whereas the forced-delayed arm gives `0.755084`,
+`0.727216`, and `0.837315`. Repeat B gives the same conclusion: autonomous
+`0.987249`, `0.980833`, and `0.976848`, versus forced-delayed `0.755261`,
+`0.727922`, and `0.836708`.
+
+This closes the categorical schedule mismatch as native RELION near-threshold
+repeat variability, not a RECOVAR scheduler defect. Do not patch the scheduler
+to force the delayed branch. It does not close the remaining trajectory
+quality residual: native RELION repeat A/B merged FSC-AUC is `0.996451`,
+`0.993440`, and `0.990081` at iterations 8--10, above RECOVAR's approximately
+`0.976` cross-engine value at iteration 10. The latter develops gradually from
+iteration 2 and remains an open aggregate posterior/reconstruction diagnostic.
+
+All four RECOVAR intervention arms shared physical A100 UUID
+`GPU-f3e94635-d095-bea9-dbe3-26e91dd3ea27`; the delayed target's original
+RELION/RECOVAR pair shared UUID
+`GPU-a1bb1fb4-d5e3-1c72-3382-63f6032e9fc6`; and native RELION repeats A/B
+shared UUID `GPU-bd720f2f-c28a-09c0-d51e-d08b1897125a`. Direct comparisons
+between the new intervention arms and the pre-existing targets therefore use
+the same A100-80 model but not the same physical UUID. They are causal
+diagnostics, not a same-physical-GPU cross-engine acceptance gate. A fresh
+live-RELION-derived same-allocation full trajectory is the next acceptance
+experiment.
+
+Slurm job `11294177` completed all four science arms but ended `1:0` only
+because the scratch analyzer was invoked outside the repository module path
+and could not import `scripts`. The corrected read-only analysis ran from the
+repository root and produced:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/schedule_oracle_ab_current_target.json` (SHA-256 `1f506256514e5d972531d9721b872582a12b7bbbb96dd590cb26d725be1da5d0`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/schedule_oracle_ab_repeat_arm_a.json` (SHA-256 `9334cf530aedc794ac11d9df68b5f7bb9a0a1facde667be22715ca63898b38c5`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/schedule_oracle_ab_repeat_arm_b.json` (SHA-256 `bf1646cab14f29061fa39b7f6cfbec4a8b83b91b0ee2cd7a64fe23d0bd586aae`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/hidden_change_it006_it007_v1/hidden_change_distribution.json` (SHA-256 `ccb20a0aaffbc73ab9211a546dbc3ea1a9a479b0e85a02d5837004fbc8b16e32`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/hidden_change_it006_it007_v1/hidden_change_distribution_arrays.npz` (SHA-256 `4908eae90123532e99eed169032655074a62c0ae648aefb96f8972c8e2e2b8c2`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_relion_repeat_envelope_a10080_retry4_prepared_20260715_195515/analysis/native_repeat_merged_fsc_v1.json` (SHA-256 `d6eba533c9d11b127855ad10dba4c1f3cb9f201df4ea0a0ff115b482a27e90c7`)
+
+Intermediate classification uses exact/array distribution metrics. Map
+quality uses FSC/FSC-AUC only; correlation is neither computed nor used.
