@@ -91,6 +91,7 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     assert "K1_IMAGE_BATCH_SIZE=187" in submission_env_text
     assert "K1_ROTATION_BLOCK_SIZE=8192" in submission_env_text
     assert "K1_TRAJECTORY_MODE=autonomous" in submission_env_text
+    assert "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0" in submission_env_text
     assert "TRAJECTORY_ARGS=(--relion_init_dir" in k1_text
     assert 'if [[ "autonomous" == "relion-replay" ]]' in k1_text
     assert "export RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION=0.40" in k1_text
@@ -161,6 +162,7 @@ def test_completion_k1_relion_replay_mode_is_explicit(tmp_path):
     assert "--relion_init_dir" in k1_text
     assert "--perturb_replay_relion_dir" in k1_text
     assert "K1_TRAJECTORY_MODE=relion-replay" in submission_env_text
+    assert "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=1" in submission_env_text
 
 
 def test_completion_k4_resource_overrides_are_written(tmp_path):
