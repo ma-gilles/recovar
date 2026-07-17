@@ -3826,3 +3826,81 @@ Matrix evidence:
   `f3b524c8280ec49ced2994e0d1c7cdd9b9c3207cbde1253db5819a35f81b19cd`).
   Intermediate comparisons use exact identity-aligned arrays; map quality uses
   shellwise FSC and FSC-AUC only. Correlation is not computed.
+
+# 2026-07-17: incoming iteration-3 A/B improves aggregate state but not support cutoffs
+
+- Same-allocation job `11318372` ran parent `7f142d5f`, host `8c832027`, and a
+  second host control sequentially on physical A100 UUID
+  `GPU-8a30ed71-3361-7198-deac-61f8598401b7`, starting from the complete exact
+  RELION iteration-2 boundary.  The host controls have bitwise-identical Pmax,
+  pose, translation, and significant-count arrays.  Their merged self-map
+  FSC-AUC is `1.000000027180`; the worst parent/host merged FSC-AUC is
+  `0.999999970436`.
+- The source-matched host inverse matrices improve RELION agreement.  Absolute
+  Pmax median/p95/mean changes from `6.21627e-5/2.22109e-4/8.54588e-5` to
+  `4.95276e-5/1.74502e-4/6.70980e-5`.  Angular mean/p95 changes from
+  `1.33237e-5/2.94768e-5` to `5.17333e-6/1.01020e-5` degrees.  Merged map
+  FSC-AUC versus RELION changes from `0.999998435067` to `0.999998625826`.
+- Significant-count cutoff parity moves in the opposite direction.  After
+  scattering the serialized half-order arrays to exact input identities, the
+  parent has 3/10,000 mismatches and each host arm has 9/10,000.  All six new
+  host decisions worsen exact agreement by one count, with signed changes
+  `+1,+1,+1,-1,+1,-1`.  Do not describe the host handoff as improving support
+  parity and do not revert it: the aggregate direct-array and FSC-AUC evidence
+  improves, while these six cutoff decisions localize remaining score/texture
+  arithmetic.
+- The A/B was clean and built at the named commits, but the shared host
+  worktree advanced through a documentation-only commit during the serial
+  arms.  Hashed production sources and built artifacts remained unchanged,
+  but the job did not reassert immutable HEAD before every arm.  Treat this as
+  a causal boundary diagnostic rather than exact-clean-runtime acceptance.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_incoming_it3_rotation_ab_7f_vs_8c_retry1_20260717T203134Z/analysis/it3_rotation_ab.json`
+  (SHA-256
+  `feb3571d41fdf1277c77f68f9a9c03601781a6f6859101278f023e8d4cea72dd`)
+  and `it3_rotation_ab_fsc_curves.npz` (SHA-256
+  `619969d0059c07c879ec4d02daf21b4e152657ab7b200f91cba7b510c64f04de`).
+
+# 2026-07-17: adjacent-boundary enrichment identifies an early recurrent tail
+
+- The existing particle-state distribution auditor now relates exact
+  `rlnImageName`-aligned significant-count mismatch and exact top-5%-absolute
+  Pmax delta at boundary `t` to a `>0.1`-degree cross-engine pose tail at
+  `t+1`.  It reports contingency counts, conditional rates, enrichment, and
+  capture fraction for all 15 consecutive numbered boundaries.  Zero
+  denominators are null and named explicitly.  This is diagnostic only: no
+  correlation is computed and no quality gate was added.
+- Iteration 2 to 3 is the clearest early recurrent boundary.  Significant-count
+  mismatch exposure has contingency counts `7/556/8/9429`
+  (exposed-and-tail/exposed-only/tail-only/neither), tail rates
+  `1.2433%` exposed versus `0.0848%` unexposed, `14.6667x` enrichment, and
+  7/15 capture.  The top-5% Pmax exposure has counts `5/495/10/9490`, rates
+  `1.0%` versus `0.1053%`, `9.5x` enrichment, and 5/15 capture.
+- Significant-count enrichment across boundaries 3-to-4 through 6-to-7 is
+  `7.1413x`, `3.7132x`, `3.2311x`, and `3.1111x`; the corresponding capture
+  fractions are `6.41%`, `14.0%`, `22.56%`, and `31.06%`.  This is a real
+  distribution-level subgroup signal, but it is not a complete predictor.
+  At iteration 7 to 8 all 10,000 particles exceed the pose threshold after the
+  sampling branch, making both exposed and unexposed rates 1 and enrichment
+  exactly 1.  Later broad-divergence ratios approach 1.  Iteration-1 Pmax
+  deltas are all zero at the top-5% cutoff, so that deterministic tie-selected
+  row is not interpreted.
+- Audit job `11319327` completed `0:0`; its internal state status is the
+  expected strict failure 1 because the sealed trajectory still fails exact
+  schedule/convergence.  All 15 diagnostic boundaries and all 45 boolean
+  artifact masks were validated.  JSON:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_tail_enrichment_0fa05894_20260717T204707Z/analysis/particle_state_distribution_tail_enrichment.json`
+  (SHA-256
+  `73df4fab3130179c8abee447635fe944439b2827714ec4851ab186342d1a6cef`);
+  arrays:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_tail_enrichment_0fa05894_20260717T204707Z/analysis/particle_state_distribution_tail_enrichment_arrays.npz`
+  (SHA-256
+  `6d76535d88f33be7fc11249177c64dc99699c0e529c75cedcbb04e65af468757`).
+- Use this to prioritize aggregate score/posterior subgroups and controlled
+  iteration-boundary substitutions.  Do not resume serial particle tracing.
+  Map quality remains gated only by shellwise FSC/FSC-AUC.
+
+Code references:
+
+- `scripts/audit_em_particle_state_distribution.py:_cross_iteration_tail_enrichment`
+- `tests/unit/test_audit_em_particle_state_distribution.py:test_cross_iteration_tail_enrichment_uses_exact_aligned_state_and_is_diagnostic`

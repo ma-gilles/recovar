@@ -5101,3 +5101,65 @@ strict audit after the trajectory completes.
 Run root:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_memcap_fce9ee48_20260717T132717Z` (science job `11304416`; strict dependent audit `11304830`)
+
+## 2026-07-17 host-matrix incoming-boundary and tail-enrichment diagnostics
+
+The frozen exact-RELION-iteration-2 incoming-iteration-3 A/B confirms that the
+source-matched host inverse rotation handoff is causal but does not close the
+remaining scorer residual.  Relative to the parent device-matrix path, median,
+p95, and mean absolute Pmax error improve from `6.21627e-5`, `2.22109e-4`, and
+`8.54588e-5` to `4.95276e-5`, `1.74502e-4`, and `6.70980e-5`; mean and p95
+angular error improve from `1.33237e-5` and `2.94768e-5` degrees to
+`5.17333e-6` and `1.01020e-5` degrees.  Merged map FSC-AUC versus RELION
+changes from `0.999998435067` to `0.999998625826`.  The two host controls have
+bitwise-identical Pmax, pose, translation, and significant-count state; their
+merged self FSC-AUC is `1.000000027180` and the worst parent/host merged
+FSC-AUC is `0.999999970436`.
+
+Exact identity scattering exposes an important exception: the parent has
+3/10,000 significant-support-count mismatches against RELION iteration 3,
+whereas both host arms have 9/10,000.  The six new cutoff decisions are each
+one count away and all move away from RELION (`+1,+1,+1,-1,+1,-1`).  Thus the
+host path improves aggregate Pmax, pose, and FSC-AUC while worsening six
+discrete support cutoffs.  Keep the source-matched fix; treat these cutoff
+changes as evidence for the remaining score/texture arithmetic, not as host
+support-parity improvement.
+
+The new exact-identity cross-iteration diagnostic on the sealed autonomous
+host trajectory shows a systematic early tail.  At the iteration-2 to
+iteration-3 boundary, a significant-count mismatch at `t` raises the rate of
+a `>0.1`-degree cross-engine pose error at `t+1` from `0.0848%` to `1.2433%`
+(`14.6667x`) and captures 7/15 tail particles.  The exact top 5% of absolute
+Pmax deltas raises that rate from `0.1053%` to `1.0%` (`9.5x`) and captures
+5/15.  Support-mismatch enrichment remains `7.1413x`, `3.7132x`, `3.2311x`,
+and `3.1111x` across the next four boundaries, but capture is incomplete.
+At iteration 7 to 8 every particle enters the pose tail because the trajectories
+take different sampling branches, so enrichment is exactly 1 and no longer
+localizes a subgroup.  After broad divergence, later ratios similarly approach
+1.  The iteration-1 top-5% Pmax selection has a zero cutoff and is a deterministic
+tie selection, not interpretable enrichment.
+
+This section is descriptive triage only: it computes no correlation and adds
+no quality gate.  Continue with aggregate score/posterior distributions and
+controlled boundary substitutions; do not return to serial particle tracing.
+Map acceptance remains shellwise FSC/FSC-AUC.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_incoming_it3_rotation_ab_7f_vs_8c_retry1_20260717T203134Z/analysis/it3_rotation_ab.json` (job `11318372`, SHA-256 `feb3571d41fdf1277c77f68f9a9c03601781a6f6859101278f023e8d4cea72dd`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_incoming_it3_rotation_ab_7f_vs_8c_retry1_20260717T203134Z/analysis/it3_rotation_ab_fsc_curves.npz` (SHA-256 `619969d0059c07c879ec4d02daf21b4e152657ab7b200f91cba7b510c64f04de`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_tail_enrichment_0fa05894_20260717T204707Z/analysis/particle_state_distribution_tail_enrichment.json` (job `11319327`, SHA-256 `73df4fab3130179c8abee447635fe944439b2827714ec4851ab186342d1a6cef`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_tail_enrichment_0fa05894_20260717T204707Z/analysis/particle_state_distribution_tail_enrichment_arrays.npz` (SHA-256 `6d76535d88f33be7fc11249177c64dc99699c0e529c75cedcbb04e65af468757`)
+
+The A/B preflight and builds were clean at host commit
+`8c83202739a31251bc6c10be834f237732e879d3` and parent commit
+`7f142d5f00a34a0fd6208bdd6f879ffe31b3e9ea`.  During the serial arms the host
+worktree advanced through a documentation-only commit, so the per-arm immutable
+HEAD check was not preserved.  The hashed production sources and built CUDA and
+binding artifacts did not change.  This remains a causal diagnostic, not an
+exact-clean-runtime production acceptance run.
+
+Code references:
+
+- `scripts/audit_em_particle_state_distribution.py:_cross_iteration_tail_enrichment`
+- `tests/unit/test_audit_em_particle_state_distribution.py:test_cross_iteration_tail_enrichment_uses_exact_aligned_state_and_is_diagnostic`
