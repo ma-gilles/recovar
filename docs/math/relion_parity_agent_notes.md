@@ -2937,3 +2937,88 @@ Matrix evidence:
   (`65dc3de3e6c3b47fdc3b31d7b8a47aa1ed03c019ccd5bfbb393af9707047b302`)
   is superseded because it integrated float32 FSC values above one; its mode
   arrays were overwritten by the independent v2 repeat and are not sealed.
+
+# 2026-07-16: current-head K=1 robustness and 100k replay trajectories pass map-quality gates
+
+- The paired same-GPU replay-controlled matrix at detached commit `f1c83011`
+  completed cases 15 (20% outliers), 21 (Kent angles), 23 (no-CTF radial
+  noise), and 32 (10k Kent/radial). All numbered schedules, convergence
+  iterations, and final-all-data topology match exactly.
+- Across 47 numbered boundaries, the minimum half-or-merged cross-engine
+  FSC-AUC is `0.9998758717` and the worst RECOVAR-minus-RELION merged GT
+  FSC-AUC is `-7.0143e-5`. All four final RECOVAR GT FSC-AUC values exceed
+  RELION by `+0.003859` to `+0.019029`. Final cross-engine FSC-AUC values near
+  `0.9983` retain the intentional grid-off GUI output policy and are not a
+  numbered-trajectory failure. Correlation is not an acceptance metric.
+- The corrected aggregate state auditor also passes exact schedule,
+  convergence, and finalization for all four cases. It identifies recurring
+  low/intermediate-Pmax and support-quantile cohorts, without a persistent
+  half-set or defocus pattern. Preserve those aggregate cohorts; do not resume
+  serial particle tracing.
+- The 100k/256 replay-controlled run `11268911` converged with RELION at
+  iteration 14 and passed all numbered FSC gates: minimum merged cross-engine
+  FSC-AUC `0.999960405`, minimum half-or-merged `0.999918721`, and worst GT
+  FSC-AUC delta `-3.0788e-5`. The final RECOVAR GT FSC-AUC exceeds RELION by
+  `+0.0080925`.
+- In the same A100 allocation, recorded external wall time is `8094` seconds
+  for RECOVAR and `30745` seconds for RELION (`3.798x` speed ratio), with peak
+  monitor values `34597 MiB` and `80053 MiB`, respectively. This is scale and
+  performance evidence for the replay-controlled path, not autonomous parity.
+- The historical 100k artifact contains per-particle support counts only for
+  iterations 1--5. Pmax, pose, translation, maps, convergence, and final state
+  remain available through iteration 14. Audits must report late support as
+  not measured rather than infer it. This run predates commit `8fd704ab`, and
+  current-head runs serialize the corrected parent-pass counts. The complete
+  Pmax/pose audit finds a broad mid-trajectory Pmax residual (iteration-10
+  median `0.003039`, p95 `0.01480`, p99 `0.02850`), while measured support
+  differences through iteration 5 are sparse one-count tails and pose/shift
+  deviations have tiny p95/p99 values with isolated large maxima.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_subset_f1c83011_20260716_223000/trajectory_matrix_summary.json`
+  (`7bdc4e41a779509298557e41ae869836c5331091048d6d87a1324691c3d0b20f`),
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_subset_f1c83011_20260716_223000/aggregate_state_audit_20260717/matrix_summary.json`
+  (`18d91f23dfdc58851d2d36e5d9bbad423eb8da70c2a4d22b85437115a01cd335`),
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/cases/1_baseline_100k_g256_white_noise1_bf80/trajectory_analysis/k1_scale_acceptance.json`
+  (`2c0c4de857b509ffcc56fb4caea7ea263775a549710fa3dbe58cadc5974923be`),
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_scale100k_505af690_20260716_112000/aggregate_state_audit_100k_20260717/full_pmax_pose_all14_support_available5/report.json`
+  (`6603cabc389ea6a72d660fabb7c69119f2997fe4e09defa105e81017864fed6f`).
+
+# 2026-07-16: case-21 posterior residual exceeds the same-A100 RELION repeat envelope
+
+- Same-allocation RELION-A/RELION-B/RECOVAR job `11290745` closes the repeat
+  control for the recurrent case-21 state boundary. The RELION repeat's minimum
+  numbered merged FSC-AUC is `0.999999999934`.
+- At iteration 5, RECOVAR-versus-RELION-A mean absolute Pmax error is
+  `0.00495290`, versus `7.899e-6` for RELION-B versus RELION-A (`627x`); `79.73%`
+  of RECOVAR rows exceed the RELION repeat maximum. At iteration 6 the values
+  are `0.00541547` versus `1.32467e-5` (`408.8x`), with `97.97%` exceeding the
+  repeat maximum. Significant-support counts differ for `31/90` RECOVAR rows
+  at iterations 5/6 and `0/0` RELION-repeat rows.
+- Across iterations 2--11, mean absolute Pmax ratios are `34x--627x`. This is a
+  systematic state residual beyond native same-GPU repeat variation, even
+  though maps, convergence, and final GT FSC-AUC pass strongly.
+- Do not yet label the residual an algorithm bug. Freeze one aggregate
+  iteration-5/6 boundary over the flagged Pmax/support cohorts and compare
+  production-order float32, canonical-order float32, captured-cast float64,
+  and genuinely recomputed float64/complex128 operands. Classify operand
+  generation, geometry, ordering, or precision before changing production
+  math. Do not use bitwise discrete decisions or particle-by-particle tracing
+  as gates.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case21_repeat_control_32ac19dc_20260716_221646/cases/21_small_kent_angles_3k_g128_white_noise3_bf80/repeat_control_analysis/repeat_control_summary.json`
+  (`60ecf20439fa87a7964cd09903294d288cbfc563168003b26d79c8c4e5ac652c`).
+
+# 2026-07-16: robustness launchers now record the cgroup-visible physical GPU
+
+- Numeric `SLURM_JOB_GPUS` values name host-physical indices, while
+  `nvidia-smi` is commonly remapped to visible index zero inside a Slurm GPU
+  cgroup. The K=1 and K-class launchers incorrectly queried the numeric host
+  index in the remapped namespace and could accept `No devices were found` as
+  a UUID.
+- Commits `565f4363` and `b42c185a` instead require exactly one visible
+  `GPU-*` UUID and cross-check Slurm only when Slurm itself supplies a UUID.
+  Real allocations with `SLURM_JOB_GPUS=1` and `2` now record valid physical
+  UUIDs. The invalid pre-science jobs were cancelled and preserved as
+  superseded infrastructure evidence.
