@@ -672,19 +672,29 @@ mkdir -p "\$(dirname "\${RELION_PROVENANCE_FILE}")"
     # shellcheck disable=SC1091
     source /etc/profile.d/modules.sh
   fi
-  set +u
-  module load "${RELION_MODULE}"
-  set -u
   RELION_REFINE_MPI_BIN="${RELION_REFINE_MPI}"
   if [[ "\${RELION_REFINE_MPI_BIN}" == */* ]]; then
     if [[ ! -x "\${RELION_REFINE_MPI_BIN}" ]]; then
       echo "ERROR: RELION_REFINE_MPI is not executable: \${RELION_REFINE_MPI_BIN}" >&2
       exit 2
     fi
-    RELION_REFINE_MPI_BIN="\$(realpath "\${RELION_REFINE_MPI_BIN}")"
-  else
+  elif command -v "\${RELION_REFINE_MPI_BIN}" >/dev/null 2>&1; then
     RELION_REFINE_MPI_BIN="\$(command -v "\${RELION_REFINE_MPI_BIN}")"
+  else
+    RELION_BINARY_NAME="\${RELION_REFINE_MPI_BIN}"
+    RELION_REFINE_MPI_BIN=""
+    while IFS= read -r module_path; do
+      if [[ -x "\${module_path}/\${RELION_BINARY_NAME}" ]]; then
+        RELION_REFINE_MPI_BIN="\${module_path}/\${RELION_BINARY_NAME}"
+        break
+      fi
+    done < <(module show "${RELION_MODULE}" 2>&1 | awk '\$1 == "prepend-path" && \$2 == "PATH" {print \$3}')
+    if [[ -z "\${RELION_REFINE_MPI_BIN}" ]]; then
+      echo "ERROR: cannot resolve ${RELION_REFINE_MPI} from module ${RELION_MODULE} without loading it" >&2
+      exit 2
+    fi
   fi
+  RELION_REFINE_MPI_BIN="\$(realpath "\${RELION_REFINE_MPI_BIN}")"
   echo "RELION_MODULE=${RELION_MODULE}"
   echo "RELION_REFINE_MPI_RESOLVED=\${RELION_REFINE_MPI_BIN}"
   echo "RELION_REFINE_MPI_SHA256=\$(sha256sum "\${RELION_REFINE_MPI_BIN}" | awk '{print \$1}')"

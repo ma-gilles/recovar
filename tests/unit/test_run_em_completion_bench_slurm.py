@@ -153,6 +153,8 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
             in generated_text
         )
     assert "RELION_REFINE_MPI_SHA256=" in setup_text
+    assert 'module show "relion/5.0.1/gcc-11.5.0-gpu"' in setup_text
+    assert 'module load "relion/5.0.1/gcc-11.5.0-gpu"' not in setup_text
     assert 'nvidia-smi -q > "${OUTPUT_DIR}/nvidia_smi.txt"' in k1_text
     assert "ERROR: completion summary requires a clean worktree" in summary_text
     assert "ERROR: upstream job ${job_id} state is" in summary_text
