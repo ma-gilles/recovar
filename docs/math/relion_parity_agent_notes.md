@@ -3228,7 +3228,7 @@ Matrix evidence:
   Intermediate comparisons use exact/array metrics; map gates use only
   shellwise FSC and FSC-AUC.
 
-# 2026-07-17: HIGHEST GEMM does not explain the iteration-2 PPref grid boundary
+# 2026-07-17: iteration-2 PPref grid boundary is inherited from stack 111721
 
 - A complete-grid offline replay sends paired control and HIGHEST iteration-1
   half-2 maps through the same RELION `Projector::computeFourierTransformMap`
@@ -3238,6 +3238,14 @@ Matrix evidence:
   at the accessed corners; `98.9979%` of the full-grid residual remains. The
   default-A100 GEMM defect is real and its production repair remains justified,
   but it is not the material cause of this PPref boundary.
+- A stronger common-weight/tau substitution closes the apparent upstream
+  ambiguity. Replacing the 4,999-particle systematic RELION source bucket
+  while leaving stack 111721 unchanged removes only `1.44088%` of residual
+  energy. Replacing only stack 111721 removes `98.4884%`; replacing all RELION
+  sources removes `99.999786%`. The p8240 PPref-grid symptom is therefore
+  overwhelmingly inherited from the already-classified stack-111721/original-
+  particle-8494 float32 near-tie translation-child decision, not a broad PPref
+  generation defect. Do not resume serial particle tracing.
 - Control/fixed maps and the RELION target use physical A100 UUID
   `GPU-64011c8c-bd98-eb41-2c46-dd201730ef64`, but the RELION target comes from
   the earlier sealed p8240 allocation. This is a bounded causal discriminator,
@@ -3246,6 +3254,8 @@ Matrix evidence:
 - Evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ppref_grid_replay_20260717T063000Z/analysis/aggregate_ppref_grid_highest_replay_v1.json`
   (SHA-256
-  `cb531b89a0e81e4ed34119930b0eb3532775b4af6d1fcf37b07a293dc0721b73`),
+  `c755aeb9f3e0ee0092029639dfb23c6ba1cd7880844a30b0acb5ca1dc0372a04`),
   with a verified three-entry manifest at
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ppref_grid_replay_20260717T063000Z/provenance/SHA256SUMS`.
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_highest_ppref_grid_replay_20260717T063000Z/provenance/SHA256SUMS`
+  (SHA-256
+  `f2451ff49c494affc090c8de066828e18a37b4316ae08e617da88cc475efa79c`).
