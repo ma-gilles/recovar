@@ -504,6 +504,10 @@ def test_relion_binary_identity_is_recorded_in_case_job(tmp_path):
     assert 'RECOVAR_GPU_UUID="$(capture_physical_gpu_uuid)"' in case_script
     assert "paired_gpu_uuid.json" in case_script
     assert "physical_gpu_inventory.csv" in case_script
+    assert 'mapfile -t visible_uuids < <(nvidia-smi --query-gpu=uuid' in case_script
+    assert 'nvidia-smi --id="${gpu_token}"' not in case_script
+    assert 'nvidia-smi --id="${slurm_gpu_token}"' not in case_script
+    assert 'if [[ "${slurm_gpu_token}" == GPU-* && "${slurm_gpu_token}" != "${gpu_uuid}" ]]' in case_script
 
 
 def test_k1_dense_pass2_diagnostic_env_is_forwarded(tmp_path):

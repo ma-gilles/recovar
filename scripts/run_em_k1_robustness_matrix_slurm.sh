@@ -753,21 +753,22 @@ RELION_DIR="${relion_dir}"
 mkdir -p "\${CASE_ROOT}" "\${DATA_DIR}" "\${RECOVAR_DIR}" "\${RELION_DIR}"
 
 capture_physical_gpu_uuid() {
-  local gpu_token="\${SLURM_JOB_GPUS:-}"
-  gpu_token="\${gpu_token%%,*}"
+  local slurm_gpu_token="\${SLURM_JOB_GPUS:-}"
+  slurm_gpu_token="\${slurm_gpu_token%%,*}"
   local gpu_uuid=""
-  if [[ "\${gpu_token}" == GPU-* ]]; then
-    gpu_uuid="\${gpu_token}"
-  elif [[ -n "\${gpu_token}" ]]; then
-    gpu_uuid="\$(nvidia-smi --id="\${gpu_token}" --query-gpu=uuid --format=csv,noheader 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+  mapfile -t visible_uuids < <(nvidia-smi --query-gpu=uuid --format=csv,noheader | sed 's/[[:space:]]//g' | sed '/^$/d')
+  if [[ "\${#visible_uuids[@]}" -ne 1 || "\${visible_uuids[0]}" != GPU-* ]]; then
+    echo "ERROR: cannot identify exactly one visible physical GPU UUID (found \${#visible_uuids[@]}: \${visible_uuids[*]:-<none>})" >&2
+    return 2
   fi
-  if [[ -z "\${gpu_uuid}" ]]; then
-    mapfile -t visible_uuids < <(nvidia-smi --query-gpu=uuid --format=csv,noheader | sed 's/[[:space:]]//g' | sed '/^$/d')
-    if [[ "\${#visible_uuids[@]}" -ne 1 ]]; then
-      echo "ERROR: cannot identify exactly one physical GPU (found \${#visible_uuids[@]})" >&2
-      return 2
-    fi
-    gpu_uuid="\${visible_uuids[0]}"
+  gpu_uuid="\${visible_uuids[0]}"
+  # Numeric SLURM_JOB_GPUS values are host-physical indices, while nvidia-smi
+  # is commonly cgroup-remapped to visible index 0 inside the allocation. Do
+  # not pass a numeric SLURM token back to nvidia-smi. If Slurm supplies a UUID,
+  # require it to agree with the one visible device.
+  if [[ "\${slurm_gpu_token}" == GPU-* && "\${slurm_gpu_token}" != "\${gpu_uuid}" ]]; then
+    echo "ERROR: Slurm GPU UUID \${slurm_gpu_token} does not match visible GPU UUID \${gpu_uuid}" >&2
+    return 2
   fi
   printf '%s\n' "\${gpu_uuid}"
 }
