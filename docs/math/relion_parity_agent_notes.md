@@ -3470,7 +3470,7 @@ Matrix evidence:
   (SHA-256
   `d29e4b460c5562a0328f4fb5ed6806c138bc4408c6c765e95bb224aa68d91da4`).
 
-# 2026-07-17: real-10076 HEALPix timing is the dominant trajectory fork
+# 2026-07-17: real-10076 HEALPix timing explains a repeat-sensitive map fork
 
 - Science job `11294177` ran four ten-iteration RECOVAR arms sequentially on
   one physical A100: two autonomous controls, a RELION HEALPix-order oracle,
@@ -3481,11 +3481,23 @@ Matrix evidence:
 - Both autonomous controls use HEALPix orders
   `[3,3,3,3,3,3,3,4,4,4]`. Their merged-map A/B FSC-AUC remains at least
   `0.996052964` through iteration 10, so their common refinement at iteration
-  8 is well outside the repeat envelope. Holding only the RELION HEALPix
-  schedule `[3,3,3,3,3,3,3,3,3,4]` raises the minimum iteration-8--10
-  RECOVAR-versus-RELION merged FSC-AUC from `0.726125984` to `0.978128435`.
-  Also forcing RELION current sizes raises it only to `0.978681776`; current
-  size is therefore a marginal secondary effect at this boundary.
+  8 is stable within the RECOVAR repeat. For the paired primary RELION target,
+  holding only its HEALPix schedule `[3,3,3,3,3,3,3,3,3,4]` raises the
+  minimum iteration-8--10 merged FSC-AUC from `0.726125984` to `0.978128435`.
+  Also forcing its current sizes raises the minimum only to `0.978681776`;
+  current size is therefore a marginal secondary effect for this target.
+- This does not make the primary target's iteration-10 refinement a unique
+  RELION truth. Two independent RELION controls ran sequentially on another
+  physical A100; both refine at iteration 8 with the same schedule and
+  perturbations as autonomous RECOVAR. Against those targets the result
+  reverses: the
+  autonomous minimum is `0.976245891`/`0.976847520`, while the HEALPix-oracle
+  minimum is `0.727216099`/`0.727921637`. RELION's own same-GPU repeat reaches
+  a minimum full-trajectory FSC-AUC of `0.954744985`. The HEALPix branch
+  causally explains the late map bifurcation, but the branch itself is within
+  RELION's nonlinear repeat behavior and is not a systematic RECOVAR defect.
+  Freeze reduction inputs/order before requiring one of these two
+  RELION-realized branches.
 - The scheduler implementation is not the causal defect. The tests in
   `tests/unit/test_convergence.py` reproduce RELION's refinement at iteration
   10 when fed RELION's recorded hidden-change scalars and RECOVAR's refinement
@@ -3500,8 +3512,13 @@ Matrix evidence:
   and `3.58e-5` degrees, so percentile summaries alone hide the subgroup.
   The same classification holds against both independent RELION repeat arms
   and the second RECOVAR control. The subgroup is enriched for lower Pmax.
-  Continue at the frozen scorer/operand boundary for this subgroup rather than
-  changing scheduling logic.
+  An identity-fixed trajectory audit shows no subgroup pose errors above
+  `0.1` degree at iterations 1--2, then `1`, `10`, `42`, `218`, and `353` of
+  the 518 identities at iterations 3--7. The cohort explains `90.2869%` of
+  hidden-change disagreement at the iteration-3--4 boundary and `99.9745%`
+  at iteration 6--7. Continue at the frozen iteration-3--4 scorer/operand
+  boundary for those first ten identities rather than changing scheduling
+  logic.
 - Primary evidence is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/schedule_oracle_ab_v3.json`
   (SHA-256
@@ -3516,4 +3533,18 @@ Matrix evidence:
   `ccb20a0aaffbc73ab9211a546dbc3ea1a9a479b0e85a02d5837004fbc8b16e32`)
   with verified manifest SHA-256
   `133eb60f481f150f1778c340dac5772f7eb801587d1672f6307f65dd6afe9ae1`.
+  The three-target schedule manifest is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/SCHEDULE_ORACLE_SHA256SUMS`
+  (SHA-256
+  `d87634cddeb640567f3df1943192861d418f1d74db9b0dff7ff1bc660f6b6c8a`).
+  RELION self-repeat evidence is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_relion_repeat_envelope_a10080_retry4_prepared_20260715_195515/analysis/repeat_envelope.json`
+  (SHA-256
+  `abcb1fafbbc090f96c5d2927e012f272e2eeecbdba5cb3da286fd787b91a4805`).
+  The fixed-cohort trajectory is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_sampling_oracle_ab_ff2ed9d3_20260717T044116Z/analysis/fixed_hidden_tail_trajectory_v1/fixed_hidden_tail_trajectory.json`
+  (SHA-256
+  `c9eeaf67952cb50a7c923c6dd29877600bc07e0040abaae6725d15d731ef2dc4`)
+  with verified manifest SHA-256
+  `8d4c0a4ace586db948b5df527c23505e95edb9fb0a8e1ea70b3b5e7973174c31`.
   Map acceptance uses FSC/FSC-AUC only; correlation is not computed.
