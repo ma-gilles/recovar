@@ -4536,6 +4536,7 @@ Sealed evidence (absolute path followed by SHA-256):
 is explicitly superseded: it integrated float32 FSC values slightly above
 one, and its mode arrays were overwritten by the independent v2 repeat and
 are not sealed.
+
 ## 2026-07-16 K=4 particle-7916 precision classification
 
 The final bounded replay classifies the sole recurrent case-11 firstiter
@@ -4547,11 +4548,12 @@ the same production complex64/float32 PPref representation selects class 0 by
 `1.031123392e-7`, at the same pose. This agrees with RELION and with the
 one-particle causal trajectory repair.
 
-At this checkpoint the projector operands remained production
-complex64/float32, and neither a RELION double-accumulator nor a common
-complex128 operand replay had completed. The stronger H100 replay documented
-below supersedes that limitation; this earlier promoted-operand result remains
-an independent control.
+This is not a genuine upstream complex128 classification: the projector
+operands remain production complex64/float32, and a RELION double-accumulator
+or common complex128 operand replay was not completed. The reusable replay
+therefore preserves ties and distinguishes promoted captured operands from
+genuinely recomputed high-precision operands instead of labeling this result
+more strongly.
 
 Evidence:
 
@@ -4594,39 +4596,6 @@ Evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_relion_prescatter_20260716T224000Z/CLASSIFICATION.md` (SHA-256 `a2ea3a990e872089904079ac4f05ca7d7fdc0b2138b1ef8620fb711374150bc4`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_relion_prescatter_20260716T224000Z/aggregate_comparison_v1/SHA256SUMS` (SHA-256 `b3dc0908306a0eded53fb162116096f1d0aee6f77f6726c776929ad867488408`)
-## 2026-07-16 K=4 particle-7915 score boundary is numerical
-
-Replay-only H100 job `11286884` closes the frozen particle-7915 winner
-boundary without running new EM.  It uses the captured winning geometry
-(RECOVAR rotation 448 equals RELION Euler 201 transposed bitwise), the actual
-current-size projector metadata (`r_max=20`, padding factor 2), and each
-engine's captured operands.  RECOVAR's exact production projector/scorer
-closes its four production scores within 3 ULP.  The source-matched RELION
-projector/formula with its 128-lane coarse-kernel reduction closes within
-`7.152557373e-7` absolute and `1.788139343e-7` after removing the common
-residual offset.  These controls run before any float64 interpretation.
-
-Production selects class 1 in RECOVAR by one float32 ULP and class 0 in RELION
-by one float32 ULP.  Common canonical float32, both promoted-captured float64
-arms, and genuine upstream complex128/float64 recomputation all select class
-0.  The genuine recomputation margin is `1.160855196e-6`.  Therefore this is a
-precision/reduction-order-sensitive near tie, not an algorithmic class-decision
-bug.  The evidence does not isolate pure reduction order from the measured
-projector/operand-generation differences, so retain that subtype caveat.
-
-The reusable fail-closed diagnostic is
-`scripts/replay_k4_winner_operands.py` at commit
-`28d9df04049df891587fd96b2f1db4d376239139`.  It records production-order and
-canonical float32, original-order and canonical promoted float64, genuine
-upstream float64, exact geometry/projector/projection array metrics, source
-hashes, GPU provenance, and a completion seal.  Map conclusions remain gated
-by shellwise FSC/FSC-AUC; correlation is not a gate.
-
-Sealed evidence:
-
-- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_p7915_replay_repair_20260716/analysis/h100_replay_v1.json` (SHA-256 `2b442322430c55f11e7cb719d045456149f833056119ed7821b71543e27373b6`)
-- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_p7915_replay_repair_20260716/provenance/h100_replay_seal_v1.json` (SHA-256 `732526c28e8e26a9a9e52f484b5d80555d303f8bcec6ae2bb0193e85bdd994cc`)
-- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_p7915_replay_repair_20260716/provenance/h100_completion_v1.json` (SHA-256 `95ddede770216fdd752cd27fb1046598144bb4249c546710250bf0e29c340226`)
 ## 2026-07-16 real-10076 aggregate pre-scatter substitution
 
 The aggregate substitution closes the iteration-1 half-2 numerator boundary.

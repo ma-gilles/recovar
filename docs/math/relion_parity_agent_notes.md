@@ -2937,27 +2937,3 @@ Matrix evidence:
   (`65dc3de3e6c3b47fdc3b31d7b8a47aa1ed03c019ccd5bfbb393af9707047b302`)
   is superseded because it integrated float32 FSC values above one; its mode
   arrays were overwritten by the independent v2 repeat and are not sealed.
-# 2026-07-16: particle 7915 is a precision-sensitive score tie
-
-- Replay-only H100 job `11286884` closes the exact frozen winning geometry
-  without running EM.  RECOVAR's production helper is within 3 ULP for all
-  four classes.  RELION's captured-float32 128-lane coarse replay is within
-  `7.152557373e-7` absolute and `1.788139343e-7` after centering.
-- RECOVAR and RELION production choose classes 1 and 0, respectively, with
-  one-ULP margins.  Common canonical float32, both promoted-captured float64
-  arms, and genuine upstream complex128/float64 recomputation choose class 0;
-  the genuine margin is `1.160855196e-6`.
-- Classify the discrete mismatch as a precision/reduction-order-sensitive
-  near tie, not an algorithmic decision bug.  Do not narrow the subtype to
-  pure order: small projector/operand-generation differences remain measured.
-- Reusable replay: `scripts/replay_k4_winner_operands.py` at
-  `28d9df04049df891587fd96b2f1db4d376239139`.  Authoritative report:
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_p7915_replay_repair_20260716/analysis/h100_replay_v1.json`
-  (SHA-256
-  `2b442322430c55f11e7cb719d045456149f833056119ed7821b71543e27373b6`).
-  Completion seal:
-  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_p7915_replay_repair_20260716/provenance/h100_completion_v1.json`
-  (SHA-256
-  `95ddede770216fdd752cd27fb1046598144bb4249c546710250bf0e29c340226`).
-- Intermediate gates are exact/array metrics.  Map gates remain shellwise
-  FSC/FSC-AUC; correlation is not a quality gate.
