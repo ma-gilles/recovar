@@ -3150,3 +3150,22 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it15_shell33_fsc_precision_20260717T040500Z/EVIDENCE.md`
   (SHA-256
   `31827b2287952b293c888d3f8edca251d2c26b6213fa60bdc3efb9f14ce9480b`).
+
+# 2026-07-17: severe-outlier K=1 robustness gate passes
+
+- Same-GPU science job `11291426` and audit job `11292009` cover the
+  3k-particle radial-noise-5 severe-outlier case. RECOVAR and RELION have the
+  exact numbered schedule, converge at iteration 11, and complete the valid
+  converged final-all-data step. FSC/FSC-AUC and aggregate-state audits pass.
+- Minimum numbered half-or-merged cross-engine FSC-AUC is `0.9996428687`;
+  worst numbered merged RECOVAR-minus-RELION GT FSC-AUC is `-0.0003160482`.
+  Final merged cross-engine FSC-AUC is `0.9975098418`, and RECOVAR final GT
+  FSC-AUC exceeds RELION by `+0.0098185505`. Correlation is not computed.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_expansion_audit_cb83d1b9_20260717_031000/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/k1_fsc_trajectory.json`
+  (SHA-256
+  `55d5913dfcd278b59937ded628c7b70df8d61c34d7eb91ce2044fa73711eeaca`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_robust_expansion_audit_cb83d1b9_20260717_031000/cases/22_small_severe_outliers_3k_g128_radial_noise5_bf80/particle_state_distribution.json`
+  (SHA-256
+  `cdc7a53b21c2c47b382184562ed152973007bcb6c40e92b7c93123d0ae40e302`).
