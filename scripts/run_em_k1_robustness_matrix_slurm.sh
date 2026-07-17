@@ -970,11 +970,14 @@ if [[ "${RUN_RELION}" -eq 1 ]]; then
       if [[ "${NOCTF_RELION_USE_CTF}" == "1" ]]; then
         RELION_INPUT_STAR="particles_relion_identity_ctf.star"
         if [[ ! -s "\${RELION_INPUT_STAR}" || "\${RELION_INPUT_STAR}" -ot "particles.star" ]]; then
-          "\${PIXI_PY}" "${REPO_ROOT}/scripts/make_relion_identity_ctf_star.py" \\
-            --input-star particles.star \\
-            --output-star "\${RELION_INPUT_STAR}" \\
-            --manifest particles_relion_identity_ctf.json \\
-            --phase-shift-deg 180.0
+          (
+            cd "${REPO_ROOT}"
+            "\${PIXI_PY}" -m scripts.make_relion_identity_ctf_star \\
+              --input-star "\${DATA_DIR}/particles.star" \\
+              --output-star "\${DATA_DIR}/\${RELION_INPUT_STAR}" \\
+              --manifest "\${DATA_DIR}/particles_relion_identity_ctf.json" \\
+              --phase-shift-deg 180.0
+          )
         fi
       else
         RELION_CTF_ARGS=()

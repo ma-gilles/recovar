@@ -9,7 +9,6 @@ from pathlib import Path
 import pandas as pd
 import starfile
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "scripts" / "run_em_k1_robustness_matrix_slurm.sh"
 IDENTITY_CTF_STAR = REPO_ROOT / "scripts" / "make_relion_identity_ctf_star.py"
@@ -75,7 +74,9 @@ def test_noctf_simulator_cases_use_sanitized_relion_ctf_by_default(tmp_path):
     assert 'if [[ "1" == "1" ]]; then' in text
     assert 'RELION_CTF_ARGS=(--ctf)' in text
     assert 'RELION_INPUT_STAR="particles_relion_identity_ctf.star"' in text
-    assert f'"${{PIXI_PY}}" "{IDENTITY_CTF_STAR}" \\' in text
+    assert '"${PIXI_PY}" -m scripts.make_relion_identity_ctf_star \\' in text
+    assert f'cd "{REPO_ROOT}"' in text
+    assert '--input-star "${DATA_DIR}/particles.star" \\' in text
     assert 'particles_relion_identity_ctf.json' in text
     assert '--phase-shift-deg 180.0' in text
     assert 'RELION_INPUT_STAR=${RELION_INPUT_STAR}' in text
