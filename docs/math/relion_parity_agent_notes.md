@@ -3118,3 +3118,35 @@ Matrix evidence:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case21_it56_precision_32ac19dc_20260716_225200/analysis/precision_state_map_analysis_v1.json`.
   Intermediate arrays use exact/array metrics; map conclusions use FSC and
   FSC-AUC, never correlation.
+
+# 2026-07-17: real-10076 current-size difference is upstream of saved BPref aggregates
+
+- Autonomous job `11291277` matches the fresh RELION current-size and search
+  schedule through numbered iteration 15. At that boundary RECOVAR shell 33
+  FSC is `0.5011810064`, selecting resolution shell 33 and iteration-16 size
+  130; RELION shell 33 FSC is `0.495847`, selecting shell 32 and size 128. Both
+  take the same high-FSC/Pmax aggressive-growth branch. The increment-state
+  difference is noncausal, so do not patch the current-size formula.
+- The saved-aggregate precision auditor reproduces the production FSC curve
+  bitwise, then independently varies aggregate-to-native and FSC-shell
+  reductions over float32/float64 and canonical/reverse orders. Its complete
+  shell-33 control range is `7.7486e-7`; every control remains above `0.5` by
+  at least `0.00118053`. The nearest same-GPU RELION control is `0.00299301`
+  away, `6276.8x` the maximum downstream deviation from the saved result.
+- Classification is `unresolved_upstream_of_saved_aggregate`. The failed run
+  has no complete per-contribution operands, device geometry/signatures,
+  genuine complex128/float64 recomputation inputs, or RELION raw accumulator,
+  so operand generation, geometry, and GPU atomic ordering remain open. A
+  genuine frozen iteration-15 capture is required before changing production
+  backprojection math.
+- The old run subsequently exposed a separate final-all-data cold-start replay
+  bug. Commit `719ad930` is the causal repair and its focused unit tests pass;
+  production validation job `11292212` is running independently.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it015_saved_aggregate_v2final_20260717T040109Z/shell33_saved_aggregate_audit.json`
+  (SHA-256
+  `1c465954ee152b4bd2e5aa4d57ddc2449c5e488ee83b43c13d29076dd8d25a03`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it15_shell33_fsc_precision_20260717T040500Z/EVIDENCE.md`
+  (SHA-256
+  `31827b2287952b293c888d3f8edca251d2c26b6213fa60bdc3efb9f14ce9480b`).
