@@ -176,6 +176,10 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert 'RELION_GPU_UUID="$(capture_physical_gpu_uuid)"' in text
     assert 'RECOVAR_GPU_UUID="$(capture_physical_gpu_uuid)"' in text
     assert "paired_gpu_uuid.json" in text
+    assert 'mapfile -t visible_uuids < <(nvidia-smi --query-gpu=uuid' in text
+    assert 'nvidia-smi --id="${gpu_token}"' not in text
+    assert 'nvidia-smi --id="${slurm_gpu_token}"' not in text
+    assert 'if [[ "${slurm_gpu_token}" == GPU-* && "${slurm_gpu_token}" != "${gpu_uuid}" ]]' in text
     assert "Queued-job Git provenance gate ok" in text
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_1_" in text
     assert "export RELION_DISPATCH_LOG" in text
