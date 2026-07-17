@@ -84,13 +84,13 @@ The hook is inert when `RELION_DISPATCH_LOG` is unset.  Keep the patch and
 RELION source identity in run provenance; do not substitute a legacy
 four-column range capture.
 
-## Current State — 2026-07-16
+## Current State — 2026-07-17
 
 Authoritative clean candidate checkout:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_parity_20260711/recovar`
 
 Current integrated implementation checkpoint before this board update:
-`94b8f2b2e8844c34ca72b378465696baef41f91c`
+`7f142d5f00a34a0fd6208bdd6f879ffe31b3e9ea`
 on `codex/em-parity-checkpoint-20260711`.
 
 Immutable broad-candidate checkpoint:
@@ -231,6 +231,40 @@ is Milestone 2; future changes must be small logical commits on top of the
 checkpoint.
 
 ### Next experiment
+
+Authoritative status on 2026-07-17:
+
+- The same-A100 real-10076 K=1 run matches all 18 forced RELION numbered
+  sampling/size boundaries, but its cross-engine map trajectory leaves the
+  native repeat envelope at iteration 7. Forced scheduling prevents the
+  autonomous iteration-8 collapse, yet forced merged FSC-AUC falls to
+  `0.9745783` by iteration 16. This is a real accumulated state mismatch, not
+  merely the discrete schedule branch.
+- RECOVAR's autonomous trajectory advances HEALPix orders 4, 5, and 6 two
+  iterations early and finalizes after numbered iteration 16. Commit
+  `7f142d5f` repairs a separate terminal bug: after the numbered cap, RECOVAR
+  now performs RELION's sampling update before the final convergence check so
+  the fine-enough latch can become true. A same-GPU terminal validation is
+  running; do not treat the full real-data trajectory as accepted yet.
+- The sealed iteration-2-to-3 common-contribution replay covers 32 rows,
+  17,216 exact five-field candidates, and 126,021,120 pixel contributions.
+  Capture/panel/RECOVAR support and geometry are exact, both native reduction
+  schedules close, and canonical float64 reduces but does not remove the
+  posterior residual (median TV `1.2986e-4` native versus `3.6555e-5`
+  canonical float64). The earliest systematic difference is therefore
+  operand generation. Next capture the exact native reference, shifted-image,
+  and score-weight operands in aggregate to separate projection from
+  image/CTF/noise generation. Do not change production from this diagnostic
+  alone.
+- The K=4 100k/256 compact-score memory run is progressing without OOM on an
+  A100; the dependent strict Hungarian FSC/FSC-AUC and state audit remains the
+  quality gate.
+
+Priority order: finish the exact operand-source decomposition; validate the
+post-cap terminal fix; use aggregate boundary substitutions and full
+FSC/FSC-AUC trajectories to repair the remaining real K=1 drift; then accept
+or repair the running K=4 trajectory. Avoid further serial particle tracing
+unless the aggregate evidence identifies a systematic subgroup.
 
 Current status on 2026-07-16: the eight-case autonomous K=1 robustness matrix
 passes every FSC/FSC-AUC trajectory, schedule, convergence, and finalization

@@ -3647,3 +3647,73 @@ Matrix evidence:
   FSC/FSC-AUC audit `11304830` as the quality gate after the science trajectory
   under
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_memcap_fce9ee48_20260717T132717Z`.
+
+# 2026-07-17: real-10076 full trajectory separates schedule and state drift
+
+- Same-A100 science job `11307959` completed four K=1 arms: two native RELION
+  repeats, autonomous RECOVAR, and RECOVAR forced to RELION's numbered
+  schedule. Audit job `11307960` intentionally exits 2 because the strict map
+  and state gates find real mismatches. The two RELION arms match all 18
+  numbered sampling/size boundaries and converge during expectation 19.
+- Autonomous RECOVAR advances HEALPix orders 4, 5, and 6 two iterations early
+  and finalizes after numbered iteration 16. Forced scheduling avoids the
+  iteration-8 map collapse, but it does not close the accumulated state gap:
+  forced merged RECOVAR-vs-RELION FSC-AUC is `0.9947079` at iteration 7 and
+  `0.9745783` at iteration 16. The native RELION-repeat envelope is
+  `0.9999709` and `0.9929671` at those boundaries. Autonomous final merged
+  FSC-AUC is `0.778789`.
+- Direct arrays show gradual drift before the schedule branch. At iteration 2,
+  214/10,000 significant-support rows differ and mean absolute Pmax error is
+  `3.6e-5`; by iteration 7 the corresponding values are 1,393/10,000 and
+  `0.03318`. The early HEALPix transition then produces median angle and
+  translation errors of `2.37` degrees and `0.819` Angstrom at iteration 8.
+- A separate terminal bug was established: the forced arm ended after 18
+  numbered iterations before RELION's top-of-expectation sampling update could
+  latch `has_fine_enough_angular_sampling`. Commit `7f142d5f` performs that
+  update before the post-cap convergence check and preserves the latched state.
+  Targeted tests pass; a real-data terminal validation remains required.
+- Evidence is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_current_head_fulltraj_15a6d355_20260717T190000Z/analysis/strict_acceptance.json`
+  (SHA-256 `7dcd2071ed58fddefa046dc22299d1249c9d3ac351399a27d794456c9ee054be`),
+  `strict_acceptance_shellwise.npz` (SHA-256
+  `d69242e48b38d07e3b8d424a604fbad80dc3ad1f57fc15a835b6f06356d538a6`),
+  `particle_state_distribution.json` (SHA-256
+  `8c75e971812c3d8b3cb62257a6abbc9141037d9c423e74f67da28fe16bd5541e`),
+  and `dynamic_schedule_trajectory.json` (SHA-256
+  `3a20a0165c87a25e424a8ad1de59361559cb1bf7280055c7333fdeb0367cb28c`).
+  Map acceptance uses FSC/FSC-AUC only; correlation is not computed.
+
+# 2026-07-17: common contribution replay localizes iteration-3 scoring to operands
+
+- Fresh same-GPU RELION control/capture job `11311539` and replay job
+  `11312187` completed `0:0` on A100 UUID
+  `GPU-803dc869-2e74-273c-1df4-08adbc94e1b3`. The replay passes every
+  capture, geometry, native-closure, and repeatability gate for 32 rows,
+  17,216 exact five-field candidate UIDs, and 126,021,120 float32 pixel
+  contributions.
+- The instrumented RELION capture, the earlier sealed RELION panel, and
+  RECOVAR have exact candidate support for all 32 rows. The independent
+  env-off RELION control differs only for particle 5676, where it omits 32
+  capture candidates carrying `0.9958962` capture posterior mass. This is
+  recorded as a native threshold cliff, not used as an exact-support gate;
+  control/control arithmetic is evaluated only on exact shared UIDs.
+- Both native schedule implementations give identical results on each
+  immutable contribution list, so a cross-engine reduction-order mismatch is
+  rejected. RELION and RECOVAR per-pixel terms are not bitwise common. Native
+  common-prior posterior TV has median `1.2986e-4`, p95 `3.9140e-4`, and
+  maximum `5.3648e-4`. Shared canonical float64 reduces these to median
+  `3.6555e-5`, p95 `3.3187e-4`, and maximum `5.1888e-4`, but does not close
+  them. The earliest systematic classification is therefore operand
+  generation with an additional float32 order/precision contribution.
+- Next capture the exact native projected-reference, shifted-image, and
+  score-weight operands for the same aggregate rows. Do not change production
+  until that decomposition distinguishes an algorithmic operand mismatch from
+  expected float32 interpolation/phase noise.
+- Sealed report:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_common_contrib_20260717T180500Z/analysis/common_contribution_replay.json`
+  (SHA-256 `39ca0755d1b0e100205b812020819b838ab223d6a1b6a3765ef964475be2eee1`).
+  Its verified top manifest is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_common_contrib_20260717T180500Z/provenance/common_contribution_replay.sha256`
+  (SHA-256 `c596e13b22afd61b7db79a104d5814edb8cb8c97a74c1e3c9c26ffd66250be85`).
+  Intermediate evidence uses exact arrays and posterior distances; map quality
+  remains FSC/FSC-AUC only and correlation is not computed.
