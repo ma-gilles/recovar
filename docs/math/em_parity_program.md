@@ -3988,7 +3988,9 @@ trailing iterations are errors.
 The same auditor reports numbered current-size, resolution, HEALPix, Pmax,
 expected-accuracy, and assignment-change scalars plus convergence and final
 all-data topology. RECOVAR `pixel_resolutions` are converted from shell index
-to Angstrom; RELION's converged unnumbered optimiser value
+to Angstrom and compared with RELION `model_classes.rlnEstimatedResolution`;
+`model_general.rlnCurrentResolution` is reported separately as the inherited
+scheduling resolution. RELION's converged unnumbered optimiser value
 `rlnCurrentIteration=-1` resolves to the highest preceding numbered state.
 Final Pmax/pose/translation arrays are compared when present, while unavailable
 final support or class arrays remain explicitly not measured. The CLI writes a

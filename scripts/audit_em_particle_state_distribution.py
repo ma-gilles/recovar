@@ -744,6 +744,68 @@ def _star_scalar_values(path: Path) -> dict[str, Any]:
     return values
 
 
+def _star_loop_numeric_values(path: Path, column_name: str) -> np.ndarray | None:
+    """Read one numeric STAR-loop column, accepting bare or underscored labels."""
+    if not path.is_file():
+        return None
+    wanted = column_name.lstrip("_")
+    lines = path.read_text(errors="replace").splitlines()
+    for start, line in enumerate(lines):
+        if line.strip().lower() != "loop_":
+            continue
+        columns: list[str] = []
+        cursor = start + 1
+        while cursor < len(lines):
+            stripped = lines[cursor].strip()
+            if not stripped or stripped.startswith("#"):
+                cursor += 1
+                continue
+            token = stripped.split()[0]
+            if token.lstrip("_").startswith("rln"):
+                columns.append(token.lstrip("_"))
+                cursor += 1
+                continue
+            break
+        if wanted not in columns:
+            continue
+        column_index = columns.index(wanted)
+        values: list[float] = []
+        while cursor < len(lines):
+            stripped = lines[cursor].strip()
+            if not stripped:
+                if values:
+                    break
+                cursor += 1
+                continue
+            if stripped.startswith("#"):
+                cursor += 1
+                continue
+            if stripped.lower() == "loop_" or stripped.lower().startswith("data_"):
+                break
+            try:
+                fields = shlex.split(stripped, comments=True)
+            except ValueError as exc:
+                raise AuditError(f"failed to parse STAR loop row in {path}: {stripped!r}: {exc}") from exc
+            if len(fields) != len(columns):
+                raise AuditError(
+                    f"{path} loop row has {len(fields)} fields, expected {len(columns)} at line {cursor + 1}"
+                )
+            try:
+                values.append(float(fields[column_index]))
+            except ValueError as exc:
+                raise AuditError(
+                    f"{path} {wanted} is non-numeric at line {cursor + 1}: {fields[column_index]!r}"
+                ) from exc
+            cursor += 1
+        if not values:
+            raise AuditError(f"{path} loop column {wanted} contains no values")
+        result = np.asarray(values, dtype=np.float64)
+        if not np.isfinite(result).all():
+            raise AuditError(f"{path} loop column {wanted} contains non-finite values")
+        return result
+    return None
+
+
 def _relion_state_paths(data_path: Path) -> dict[str, Path]:
     suffix = "_data.star"
     if not data_path.name.endswith(suffix):
@@ -760,11 +822,24 @@ def _relion_state_paths(data_path: Path) -> dict[str, Path]:
 def _relion_scalar_state(data_path: Path, pmax: np.ndarray) -> dict[str, Any]:
     paths = _relion_state_paths(data_path)
     model = _star_scalar_values(paths["model_half1"]) if "model_half1" in paths else {}
+    estimated_resolutions = (
+        _star_loop_numeric_values(paths["model_half1"], "rlnEstimatedResolution")
+        if "model_half1" in paths
+        else None
+    )
+    if estimated_resolutions is not None and estimated_resolutions.size != 1:
+        raise AuditError(
+            "K=1 scalar audit expects exactly one model-class rlnEstimatedResolution; "
+            f"found {estimated_resolutions.size} in {paths['model_half1']}"
+        )
+    estimated_resolution = None if estimated_resolutions is None else float(estimated_resolutions[0])
     sampling = _star_scalar_values(paths["sampling"]) if "sampling" in paths else {}
     optimiser = _star_scalar_values(paths["optimiser"]) if "optimiser" in paths else {}
     fields = {
         "current_image_size": model.get("rlnCurrentImageSize"),
-        "current_resolution_angstrom": model.get("rlnCurrentResolution"),
+        "current_resolution_angstrom": estimated_resolution,
+        "estimated_resolution_angstrom": estimated_resolution,
+        "scheduling_current_resolution_angstrom": model.get("rlnCurrentResolution"),
         "average_pmax_particles": float(np.mean(pmax)),
         "average_pmax_mstep": model.get("rlnAveragePmax"),
         "healpix_order": sampling.get("rlnHealpixOrder"),

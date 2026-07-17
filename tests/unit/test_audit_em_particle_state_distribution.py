@@ -22,6 +22,26 @@ def _write_scalar_star(path: Path, values: dict[str, object]) -> Path:
     return path.resolve()
 
 
+def _write_k1_model_star(
+    path: Path,
+    *,
+    current_resolution: float,
+    estimated_resolution: float,
+    estimated_label: str = "_rlnEstimatedResolution",
+) -> Path:
+    path.write_text(
+        "data_model_general\n\n"
+        "_rlnCurrentImageSize 64\n"
+        f"_rlnCurrentResolution {current_resolution}\n\n"
+        "data_model_classes\n\n"
+        "loop_\n"
+        "_rlnReferenceImage #1\n"
+        f"{estimated_label} #2\n"
+        f"class001.mrc {estimated_resolution}\n"
+    )
+    return path.resolve()
+
+
 def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     n_images = 12
     names = np.asarray([f"{index + 1:06d}@particles.mrcs" for index in range(n_images)])
@@ -295,9 +315,10 @@ def test_scalar_schedule_convergence_and_final_state_are_reported_and_can_gate(t
         best_translations_final_all_data_by_image=data["best_translations_by_image_iter_000"],
     )
     np.savez(results, **data)
-    _write_scalar_star(
+    _write_k1_model_star(
         tmp_path / "run_it001_half1_model.star",
-        {"rlnCurrentImageSize": 64, "rlnCurrentResolution": 10.0},
+        current_resolution=12.0,
+        estimated_resolution=10.0,
     )
     _write_scalar_star(tmp_path / "run_it001_sampling.star", {"rlnHealpixOrder": 3})
     _write_scalar_star(
@@ -330,6 +351,8 @@ def test_scalar_schedule_convergence_and_final_state_are_reported_and_can_gate(t
     assert scalar["comparison"]["current_image_size"]["exact_equal"] is True
     assert scalar["comparison"]["current_resolution_angstrom"]["exact_equal"] is True
     assert scalar["recovar"]["current_resolution_shell_index"] == pytest.approx(12.8)
+    assert scalar["relion"]["fields"]["estimated_resolution_angstrom"] == 10.0
+    assert scalar["relion"]["fields"]["scheduling_current_resolution_angstrom"] == 12.0
     assert scalar["comparison"]["healpix_order"]["exact_equal"] is True
     assert scalar["relion"]["artifacts"]["optimiser"]["present"] is True
     assert report["convergence_topology"]["recovar"] == {
@@ -355,6 +378,24 @@ def test_scalar_star_parser_accepts_underscored_and_legacy_bare_labels(tmp_path)
         "rlnCurrentIteration": -1,
         "rlnHasConverged": 1,
     }
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("estimated_label", ["_rlnEstimatedResolution", "rlnEstimatedResolution"])
+def test_model_class_resolution_parser_accepts_underscored_and_legacy_bare_labels(
+    tmp_path, estimated_label
+):
+    path = _write_k1_model_star(
+        tmp_path / "model.star",
+        current_resolution=30.222222,
+        estimated_resolution=32.0,
+        estimated_label=estimated_label,
+    )
+
+    np.testing.assert_array_equal(
+        auditor._star_loop_numeric_values(path, "rlnEstimatedResolution"),
+        np.asarray([32.0]),
+    )
 
 
 @pytest.mark.unit
