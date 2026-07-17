@@ -1,9 +1,12 @@
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from scripts.audit_k1_intermediate_trajectory import (
     AuditError,
+    _scalar_pair,
     _values_in_original_image_order,
     array_metrics,
 )
@@ -33,6 +36,15 @@ def test_array_metrics_fails_closed_on_shape_or_nonfinite_values():
     nonfinite = array_metrics([1.0, np.nan], [1.0, 2.0])
     assert nonfinite["shape_equal"]
     assert not nonfinite["all_finite"]
+    assert nonfinite["finite_pair_count"] == 1
+
+
+def test_scalar_pair_serializes_nonfinite_values_as_null():
+    metrics = _scalar_pair(np.nan, 1.0)
+    assert not metrics["all_finite"]
+    assert metrics["relion"] is None
+    assert metrics["recovar"] == 1.0
+    assert "NaN" not in json.dumps(metrics, allow_nan=False)
 
 
 def test_relion_particle_values_are_restored_to_original_image_order():

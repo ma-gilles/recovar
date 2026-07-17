@@ -2,8 +2,8 @@
 """Audit K=1 RECOVAR/RELION intermediate trajectories without correlation.
 
 Numbered RECOVAR iteration ``i`` is paired with RELION ``run_it{i+1}``.
-Discrete topology is checked exactly. Numeric arrays are compared directly
-with absolute and relative error metrics; no map-quality claim is made here.
+Selected iteration topology is checked exactly. Numeric arrays are compared
+directly with absolute and relative error metrics; no map-quality claim is made here.
 Use ``audit_k1_fsc_trajectory`` for FSC/FSC-AUC map acceptance.
 """
 
@@ -39,7 +39,7 @@ def array_metrics(left, right) -> dict[str, object]:
     if not np.all(finite):
         return {
             "shape_equal": True,
-            "finite_equal_count": int(np.count_nonzero(finite)),
+            "finite_pair_count": int(np.count_nonzero(finite)),
             "count": int(left.size),
             "all_finite": False,
         }
@@ -228,8 +228,15 @@ def _shell_array(table, column: str):
 def _scalar_pair(relion_value, recovar_value) -> dict[str, object]:
     relion_value = float(relion_value)
     recovar_value = float(recovar_value)
+    if not np.isfinite(relion_value) or not np.isfinite(recovar_value):
+        return {
+            "all_finite": False,
+            "relion": relion_value if np.isfinite(relion_value) else None,
+            "recovar": recovar_value if np.isfinite(recovar_value) else None,
+        }
     delta = recovar_value - relion_value
     return {
+        "all_finite": True,
         "relion": relion_value,
         "recovar": recovar_value,
         "delta": delta,
@@ -384,12 +391,21 @@ def audit(case_root: Path, recovar_dir: Path | None = None, relion_dir: Path | N
             rows.append(row)
 
         numeric = []
+        numeric_artifact_failures = []
         for row in rows:
             for family_name, family in (
                 ("direction_prior", row["direction_prior"]),
                 ("shell_arrays", row["shell_arrays"]),
             ):
                 for name, metrics in family.items():
+                    if metrics.get("available") and not metrics.get("shape_equal", False):
+                        numeric_artifact_failures.append(
+                            f"it{row['relion_iteration']:03d} {family_name}.{name} shape mismatch"
+                        )
+                    elif metrics.get("available") and not metrics.get("all_finite", False):
+                        numeric_artifact_failures.append(
+                            f"it{row['relion_iteration']:03d} {family_name}.{name} has non-finite values"
+                        )
                     if (
                         metrics.get("available")
                         and metrics.get("shape_equal")
@@ -404,6 +420,14 @@ def audit(case_root: Path, recovar_dir: Path | None = None, relion_dir: Path | N
                             }
                         )
             pmax = row["pmax_per_particle"]
+            if pmax.get("available") and not pmax.get("shape_equal", False):
+                numeric_artifact_failures.append(
+                    f"it{row['relion_iteration']:03d} pmax_per_particle shape mismatch"
+                )
+            elif pmax.get("available") and not pmax.get("all_finite", False):
+                numeric_artifact_failures.append(
+                    f"it{row['relion_iteration']:03d} pmax_per_particle has non-finite values"
+                )
             if pmax.get("available") and pmax.get("shape_equal") and pmax.get("relative_l2") is not None:
                 numeric.append(
                     {
@@ -414,6 +438,14 @@ def audit(case_root: Path, recovar_dir: Path | None = None, relion_dir: Path | N
                     }
                 )
             sigma = row["sigma_offset_per_half_angstrom"]
+            if sigma.get("available") and not sigma.get("shape_equal", False):
+                numeric_artifact_failures.append(
+                    f"it{row['relion_iteration']:03d} sigma_offset_per_half_angstrom shape mismatch"
+                )
+            elif sigma.get("available") and not sigma.get("all_finite", False):
+                numeric_artifact_failures.append(
+                    f"it{row['relion_iteration']:03d} sigma_offset_per_half_angstrom has non-finite values"
+                )
             if sigma.get("available") and sigma.get("shape_equal") and sigma.get("relative_l2") is not None:
                 numeric.append(
                     {
@@ -424,11 +456,21 @@ def audit(case_root: Path, recovar_dir: Path | None = None, relion_dir: Path | N
                     }
                 )
         numeric.sort(key=lambda item: item["relative_l2"], reverse=True)
+        if topology_failures:
+            status = "topology_mismatch"
+        elif numeric_artifact_failures:
+            status = "numeric_artifact_error"
+        else:
+            status = "pass"
         return {
             "schema": SCHEMA,
-            "status": "pass" if not topology_failures else "topology_mismatch",
+            "status": status,
+            "status_scope": (
+                "required artifacts, selected iteration topology, and finite shape-compatible numeric arrays; "
+                "finite numeric magnitudes are diagnostic and are not threshold-gated"
+            ),
             "metric_policy": (
-                "exact topology and direct array-error metrics for intermediates; no correlation; "
+                "exact selected topology and direct array-error metrics for intermediates; no correlation; "
                 "map quality is evaluated separately with FSC/FSC-AUC"
             ),
             "paths": {
@@ -440,6 +482,10 @@ def audit(case_root: Path, recovar_dir: Path | None = None, relion_dir: Path | N
             "numbered_iteration_count": n_iterations,
             "topology_failures": topology_failures,
             "earliest_topology_failure": topology_failures[0] if topology_failures else None,
+            "numeric_artifact_failures": numeric_artifact_failures,
+            "earliest_numeric_artifact_failure": (
+                numeric_artifact_failures[0] if numeric_artifact_failures else None
+            ),
             "largest_numeric_relative_l2": numeric[:20],
             "numbered_iterations": rows,
         }
@@ -451,7 +497,8 @@ def render_markdown(report: dict) -> str:
         "",
         f"Status: **{report['status'].upper()}**",
         "",
-        "Exact topology and direct array-error metrics are used. Correlation is not computed; map quality is handled by FSC/FSC-AUC.",
+        "Selected topology and direct array-error metrics are used. Correlation is not computed; map quality is handled by FSC/FSC-AUC.",
+        "Finite numeric magnitudes are diagnostic and are not threshold-gated.",
         "",
         "| Iteration | Current size exact | HEALPix exact | Pmax relative L2 | Pmax max abs |",
         "|---:|:---:|:---:|---:|---:|",
@@ -469,6 +516,9 @@ def render_markdown(report: dict) -> str:
     if report.get("topology_failures"):
         lines.extend(["", "## Topology failures", ""])
         lines.extend(f"- {failure}" for failure in report["topology_failures"])
+    if report.get("numeric_artifact_failures"):
+        lines.extend(["", "## Numeric artifact failures", ""])
+        lines.extend(f"- {failure}" for failure in report["numeric_artifact_failures"])
     lines.extend(["", "## Largest numeric relative-L2 differences", ""])
     for item in report.get("largest_numeric_relative_l2", [])[:10]:
         lines.append(
