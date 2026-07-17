@@ -6058,10 +6058,11 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
     _assert_relion_stats_close(chunked[6], unchunked[6], rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(np.asarray(chunked[7]), np.asarray(unchunked[7]), rtol=1e-6, atol=1e-6)
     _assert_noise_stats_close((chunked[8],), (unchunked[8],), rtol=1e-5, atol=1e-5)
-    # Exact-Gaussian scoring makes four raw-diff2 chunk calls followed by four
-    # posterior-score chunk calls.  The raw calls are counted separately below;
-    # do not double-count them as posterior scorer calls here.
-    assert score_chunk_sizes == [4, 4, 4, 4]
+    # Exact-Gaussian scoring invokes the full scorer once per chunk to build
+    # the fine M-step pruning support, then once per chunk again while
+    # accumulating the final M-step/noise statistics.  The initial raw-diff2
+    # minimum pass is counted separately below.
+    assert score_chunk_sizes == [4, 4, 4, 4, 4, 4, 4, 4]
     assert len(raw_score_refs) >= 4
     assert max(raw_score_rotation_sizes) <= 4
     # JAX may retain a few completed result wrappers in its dispatch cache;
