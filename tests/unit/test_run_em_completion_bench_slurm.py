@@ -91,6 +91,11 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     assert "K1_IMAGE_BATCH_SIZE=187" in submission_env_text
     assert "K1_ROTATION_BLOCK_SIZE=8192" in submission_env_text
     assert "K1_TRAJECTORY_MODE=autonomous" in submission_env_text
+    assert "K1_SAVE_INTERMEDIATES=1" in submission_env_text
+    assert 'mkdir -p "${OUTPUT_DIR}/intermediates"' in k1_text
+    assert '--save_intermediates_dir "${OUTPUT_DIR}/intermediates"' in k1_text
+    assert "--save_intermediates_skip_unregularized" in k1_text
+    assert "--local-search-profile off" in k1_text
     assert "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0" in submission_env_text
     assert "TRAJECTORY_ARGS=(--relion_init_dir" in k1_text
     assert 'if [[ "autonomous" == "relion-replay" ]]' in k1_text
@@ -163,6 +168,37 @@ def test_completion_k1_relion_replay_mode_is_explicit(tmp_path):
     assert "--perturb_replay_relion_dir" in k1_text
     assert "K1_TRAJECTORY_MODE=relion-replay" in submission_env_text
     assert "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=1" in submission_env_text
+
+
+def test_completion_k1_intermediates_can_be_disabled(tmp_path):
+    scratch = tmp_path / "scratch"
+    runtime = tmp_path / "runtime"
+    env = os.environ.copy()
+    env.update(
+        {
+            "EM_COMPLETION_SCRATCH_DIR": str(scratch),
+            "EM_COMPLETION_RUNTIME_ROOT": str(runtime),
+            "K1_SAVE_INTERMEDIATES": "0",
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", str(LAUNCHER), "--dry-run", "--k1-only"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    k1_text = (scratch / "jobs" / "em_completion_k1_100k256.sh").read_text()
+    submission_env_text = (scratch / "submission.env").read_text()
+    assert "K1_SAVE_INTERMEDIATES=0" in submission_env_text
+    assert "--save_intermediates_dir" not in k1_text
+    assert "--save_intermediates_skip_unregularized" not in k1_text
+    assert "--local-search-profile off" not in k1_text
 
 
 def test_completion_k4_resource_overrides_are_written(tmp_path):

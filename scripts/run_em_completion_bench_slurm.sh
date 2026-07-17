@@ -64,6 +64,7 @@ K4_ROTATION_BLOCK_SIZE="${K4_ROTATION_BLOCK_SIZE:-2000}"
 K1_MAX_ITER="${K1_MAX_ITER:-17}"
 K4_MAX_ITER="${K4_MAX_ITER:-15}"
 K1_TRAJECTORY_MODE="${K1_TRAJECTORY_MODE:-autonomous}"
+K1_SAVE_INTERMEDIATES="${K1_SAVE_INTERMEDIATES:-1}"
 K1_MEM="${K1_MEM:-500G}"
 K4_MEM="${K4_MEM:-500G}"
 K1_TIME_LIMIT="${K1_TIME_LIMIT:-15:00:00}"
@@ -130,6 +131,9 @@ Environment overrides:
   K1_TRAJECTORY_MODE         K=1 state policy: autonomous (default; exact it000 cold start,
                              then RECOVAR-owned trajectory) or relion-replay (controlled
                              per-iteration RELION state substitution)
+  K1_SAVE_INTERMEDIATES      Save regularized per-iteration K=1 maps/metadata for full
+                             FSC trajectories (default: ${K1_SAVE_INTERMEDIATES}); set 0 for
+                             timing-only runs. Unregularized maps and local profiles stay off.
   K1_MEM                     K=1 Slurm memory request (default: ${K1_MEM})
   K1_TIME_LIMIT              K=1 Slurm time limit (default: ${K1_TIME_LIMIT})
   K4_IMAGE_BATCH_SIZE        K=4 image batch size (default: ${K4_IMAGE_BATCH_SIZE})
@@ -252,6 +256,13 @@ case "${K1_TRAJECTORY_MODE}" in
   autonomous|relion-replay) ;;
   *)
     echo "K1_TRAJECTORY_MODE must be autonomous or relion-replay, got: ${K1_TRAJECTORY_MODE}" >&2
+    exit 2
+    ;;
+esac
+case "${K1_SAVE_INTERMEDIATES}" in
+  0|1) ;;
+  *)
+    echo "K1_SAVE_INTERMEDIATES must be 0 or 1, got: ${K1_SAVE_INTERMEDIATES}" >&2
     exit 2
     ;;
 esac
@@ -793,6 +804,18 @@ EOF
 write_k1_script() {
   local output_dir="${SCRATCH_DIR}/k1_100k256_recovar"
   local script_path="${SCRATCH_DIR}/jobs/em_completion_k1_100k256.sh"
+  local intermediates_setup=""
+  if [[ "${K1_SAVE_INTERMEDIATES}" == "1" ]]; then
+    intermediates_setup="$(cat <<'SETUP'
+mkdir -p "${OUTPUT_DIR}/intermediates"
+REFINEMENT_EXTRA_ARGS+=(
+  --save_intermediates_dir "${OUTPUT_DIR}/intermediates"
+  --save_intermediates_skip_unregularized
+  --local-search-profile off
+)
+SETUP
+)"
+  fi
   cat > "${script_path}" <<EOF
 #!/usr/bin/env bash
 #SBATCH --job-name=em_completion_k1_100k
@@ -851,6 +874,8 @@ if [[ "${K1_TRAJECTORY_MODE}" == "relion-replay" ]]; then
   TRAJECTORY_ARGS+=(--perturb_replay_relion_dir "${K1_RELION_DIR}")
 fi
 echo "K1_TRAJECTORY_MODE=${K1_TRAJECTORY_MODE}"
+echo "K1_SAVE_INTERMEDIATES=${K1_SAVE_INTERMEDIATES}"
+${intermediates_setup}
 if [[ "${EM_COMPLETION_TIMING_PROBE}" == "1" ]]; then
   REFINEMENT_EXTRA_ARGS+=(--skip-large-outputs)
 fi
@@ -1185,6 +1210,7 @@ echo "RELION module/executable: ${RELION_MODULE}/${RELION_REFINE_MPI}"
 echo "K=1 fixture: ${K1_DATA_DIR}"
 echo "K=1 RELION:  ${K1_RELION_DIR}"
 echo "K=1 max iter: ${K1_MAX_ITER}"
+echo "K=1 save intermediates: ${K1_SAVE_INTERMEDIATES}"
 echo "K=1 Slurm mem/time: ${K1_MEM}/${K1_TIME_LIMIT}"
 echo "K=4 fixture: ${K4_DATA_DIR}"
 echo "K=4 RELION:  ${K4_RELION_DIR}"
@@ -1264,6 +1290,7 @@ K1_IMAGE_BATCH_SIZE=${K1_IMAGE_BATCH_SIZE}
 K1_ROTATION_BLOCK_SIZE=${K1_ROTATION_BLOCK_SIZE}
 K1_MAX_ITER=${K1_MAX_ITER}
 K1_TRAJECTORY_MODE=${K1_TRAJECTORY_MODE}
+K1_SAVE_INTERMEDIATES=${K1_SAVE_INTERMEDIATES}
 K1_MEM=${K1_MEM}
 K1_TIME_LIMIT=${K1_TIME_LIMIT}
 K4_DATA_DIR=${K4_DATA_DIR}
