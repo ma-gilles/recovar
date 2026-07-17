@@ -42,6 +42,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     calculate_expected_angular_errors,
     check_convergence,
     healpix_angular_step,
+    refine_angular_sampling,
     update_angular_sampling,
     update_refinement_state,
 )
@@ -3539,6 +3540,43 @@ def _apply_state_swap_probe(
     )
 
 
+def _validate_relion_healpix_orders(orders, *, max_iter, init_healpix_order, max_healpix_order):
+    if orders is None:
+        return None
+    orders = tuple(int(order) for order in orders)
+    if len(orders) < int(max_iter):
+        raise ValueError(
+            "relion_healpix_orders must provide at least max_iter entries "
+            f"({len(orders)} < {int(max_iter)})"
+        )
+    if any(right < left for left, right in zip(orders, orders[1:])):
+        raise ValueError("relion_healpix_orders must be monotone nondecreasing")
+    if orders[0] < int(init_healpix_order):
+        raise ValueError(
+            "relion_healpix_orders cannot coarsen below init_healpix_order "
+            f"({orders[0]} < {int(init_healpix_order)})"
+        )
+    if orders[-1] > int(max_healpix_order):
+        raise ValueError(
+            "relion_healpix_orders exceeds max_healpix_order "
+            f"({orders[-1]} > {int(max_healpix_order)})"
+        )
+    return orders
+
+
+def _apply_relion_healpix_order_oracle(state, target_order, *, iteration_number):
+    target_order = int(target_order)
+    if target_order < int(state.healpix_order):
+        raise ValueError(
+            "relion_healpix_orders cannot coarsen the active state: "
+            f"iteration={int(iteration_number)} target={target_order} "
+            f"active={int(state.healpix_order)}"
+        )
+    while int(state.healpix_order) < target_order:
+        state = refine_angular_sampling(state)
+    return state
+
+
 def refine_single_volume(
     experiment_datasets,
     init_volume,
@@ -3615,6 +3653,7 @@ def refine_single_volume(
     stop_after_local_search=False,
     stop_after_local_search_score_only=False,
     options=None,
+    relion_healpix_orders=None,
 ):
     """Multi-iteration RELION-parity EM refinement.
 
@@ -3653,6 +3692,11 @@ def refine_single_volume(
         Oracle mode: if provided, use these current_sizes instead of
         computing RELION-style current sizes from the FSC/data-vs-prior
         trajectory. relion_current_sizes[i] is used at iteration i.
+    relion_healpix_orders : list of int or None
+        Diagnostic oracle mode: if provided, use these base HEALPix orders
+        instead of making autonomous angular-sampling transitions.
+        relion_healpix_orders[i] is used at iteration i. The schedule must
+        cover ``max_iter`` and must be monotone nondecreasing.
     init_current_size : int
         Starting current_size for the first iteration (when no FSC is
         available yet).  Ignored if relion_current_sizes is provided.
@@ -3740,6 +3784,7 @@ def refine_single_volume(
         max_significants = adaptive.max_significants
         nside_level = adaptive.nside_level
         relion_current_sizes = adaptive.relion_current_sizes
+        relion_healpix_orders = getattr(adaptive, "relion_healpix_orders", None)
 
         parity = options.parity
         low_resol_join_halves_angstrom = parity.low_resol_join_halves_angstrom
@@ -3788,6 +3833,12 @@ def refine_single_volume(
 
     if relion_current_sizes is not None and len(relion_current_sizes) == 0:
         raise ValueError("relion_current_sizes must be non-empty when provided")
+    relion_healpix_orders = _validate_relion_healpix_orders(
+        relion_healpix_orders,
+        max_iter=max_iter,
+        init_healpix_order=init_healpix_order,
+        max_healpix_order=max_healpix_order,
+    )
 
     return _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
@@ -3805,6 +3856,7 @@ def refine_single_volume(
         adaptive_oversampling=adaptive_oversampling,
         max_significants=max_significants,
         relion_current_sizes=relion_current_sizes,
+        relion_healpix_orders=relion_healpix_orders,
         init_healpix_order=init_healpix_order,
         max_healpix_order=max_healpix_order,
         auto_local_healpix_order=auto_local_healpix_order,
@@ -3886,6 +3938,7 @@ def _run_relion_iteration_loop(
     adaptive_oversampling,
     max_significants,
     relion_current_sizes,
+    relion_healpix_orders,
     init_healpix_order,
     max_healpix_order,
     auto_local_healpix_order,
@@ -5125,8 +5178,20 @@ def _run_relion_iteration_loop(
         # Expectation (iterations > 1), using the previous iteration's stall
         # counters.  Sampling must therefore be prepared here, not after this
         # iteration's M-step statistics are recorded.
-        if native_sampling_boundary and iteration > 0:
+        if native_sampling_boundary and iteration > 0 and relion_healpix_orders is None:
             state = update_angular_sampling(state)
+        if relion_healpix_orders is not None:
+            target_healpix_order = int(relion_healpix_orders[iteration])
+            state = _apply_relion_healpix_order_oracle(
+                state,
+                target_healpix_order,
+                iteration_number=iteration + 1,
+            )
+            logger.info(
+                "HEALPix-order oracle: iteration %d using healpix_order=%d",
+                iteration + 1,
+                target_healpix_order,
+            )
 
         sigma_offset_used_trajectory.append(float(current_sigma_offset_angstrom))
         sigma_offset_used_per_half_trajectory.append(_copy_optional_float_pair(current_sigma_offset_angstrom_per_half))

@@ -49,6 +49,7 @@ class AdaptiveOptions:
     nside_level: int | None = None
     translation_pixel_offset: float | None = None
     relion_current_sizes: tuple[int, ...] | None = None
+    relion_healpix_orders: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)

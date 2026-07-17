@@ -1625,6 +1625,13 @@ def main():
         "(oracle mode). Example: '0,56,30,50,70,98,98,92,88,90'",
     )
     parser.add_argument(
+        "--relion_healpix_orders",
+        default=None,
+        help="Diagnostic oracle mode: comma-separated base HEALPix order for "
+        "every numbered iteration. Suppresses autonomous angular-sampling "
+        "transitions while leaving maps, posteriors, noise, and poses autonomous.",
+    )
+    parser.add_argument(
         "--firstiter_cc",
         action="store_true",
         default=False,
@@ -2509,6 +2516,10 @@ def main():
     if args.relion_current_sizes is not None:
         oracle_current_sizes = [int(x) for x in args.relion_current_sizes.split(",")]
         logger.info("Oracle mode: using RELION current_sizes=%s", oracle_current_sizes)
+    oracle_healpix_orders = None
+    if args.relion_healpix_orders is not None:
+        oracle_healpix_orders = [int(x) for x in args.relion_healpix_orders.split(",")]
+        logger.info("Oracle mode: using RELION healpix_orders=%s", oracle_healpix_orders)
 
     # Build per-iter replay overrides from RELION's per-iter data.star +
     # model.star when --perturb_replay_relion_dir is set. The override always
@@ -2627,6 +2638,7 @@ def main():
         image_batch_size=args.image_batch_size,
         rotation_block_size=args.rotation_block_size,
         relion_current_sizes=oracle_current_sizes,
+        relion_healpix_orders=oracle_healpix_orders,
         init_current_size=init_current_size,
         fsc_threshold=1.0 / 7.0,
         adaptive_oversampling=args.adaptive_oversampling,
