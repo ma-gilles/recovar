@@ -124,6 +124,14 @@ def _extract_shard_f32(
         relion_x_half=True,
         sequential_translation_reduction=False,
     )
+    numerator_highest = jnp.matmul(probs, shifted, precision=jax.lax.Precision.HIGHEST)
+    numerator_sequential, _ = compute_local_mstep_sums(
+        probs,
+        shifted,
+        ctf_weight,
+        relion_x_half=True,
+        sequential_translation_reduction=True,
+    )
 
     host = {
         "processed": np.asarray(processed[:, compact]),
@@ -133,6 +141,8 @@ def _extract_shard_f32(
         "phases": np.asarray(phases),
         "probs": np.asarray(probs),
         "numerator": np.asarray(numerator),
+        "numerator_highest": np.asarray(numerator_highest),
+        "numerator_sequential": np.asarray(numerator_sequential),
         "denominator": np.asarray(denominator),
     }
     results: dict[int, dict[str, np.ndarray | int | float]] = {}
@@ -184,6 +194,8 @@ def _extract_shard_f32(
             "term": term,
             "weight_term": weight_term,
             "numerator": host["numerator"][particle, rotation],
+            "numerator_highest": host["numerator_highest"][particle, rotation],
+            "numerator_sequential": host["numerator_sequential"][particle, rotation],
             "denominator": host["denominator"][particle, rotation],
             "captured_numerator": active_summed[active],
             "captured_denominator": active_weight[active],
@@ -234,6 +246,8 @@ def _extract_shard_f64(
             "term": term,
             "weight_term": weight_term,
             "numerator": term,
+            "numerator_highest": term,
+            "numerator_sequential": term,
             "denominator": weight_term,
         }
     return results
@@ -280,6 +294,8 @@ def extract(contribution_directory: Path, selection_json: Path) -> tuple[dict[st
         "term",
         "weight_term",
         "numerator",
+        "numerator_highest",
+        "numerator_sequential",
         "denominator",
     )
     arrays: dict[str, np.ndarray] = {
