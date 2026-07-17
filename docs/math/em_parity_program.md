@@ -4903,3 +4903,67 @@ repository root and produced:
 
 Intermediate classification uses exact/array distribution metrics. Map
 quality uses FSC/FSC-AUC only; correlation is neither computed nor used.
+
+## 2026-07-17 complete iteration-1 contribution replay
+
+The real-10076 iteration-1 diagnostic now captures and replays both half-set
+accumulators rather than extrapolating from individual particles. Half 1 has
+35,864,288 common contribution records and no unmatched records. Its canonical
+float32 RECOVAR-versus-raw-RELION data FSC-AUC is
+`0.9999999999999207`. Half 2 has 35,864,688 common records and no unmatched
+records. Its captured host replay agrees with the production accumulator at
+data FSC-AUC `0.9999999999964321`.
+
+The visible half-2 common-geometry residual is concentrated in one particle,
+stack index 111721 (fixture row 8494), whose adjacent coarse translation is a
+float32 near tie. Excluding that row leaves per-particle data relative L2
+`3.4269e-7`; support, rotations, identities, and weights remain exact. Across
+the full half-2 accumulator the common-geometry data FSC-AUC is
+`0.9999995117964201`, its minimum non-DC shell is `0.9999900761504018`, and
+the weight FSC-AUC is `0.999999999999994`.
+
+Genuine upstream float64 geometry recomputation changes 128 target indices and
+3,728 support indices among the 35,864,688 captured half-2 records. This is a
+precision-boundary classification, not evidence of a systematic scatter or
+reduction bug. It also closes the requested particle-1491-era serial probe:
+further work proceeds at distribution level unless an aggregate subgroup is
+identified.
+
+Canonical evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it1_full_both_capture_replay_863ccafb_20260717/analysis/common_rec_geometry_replay_h1.json` (SHA-256 `6a89bb7364d90897fd499c76a3f822256c8511a73787dbfcda3e99cc2d9bc900`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it1_full_both_capture_replay_863ccafb_20260717/analysis/common_rec_geometry_replay_h2.json` (SHA-256 `80233e98d3d3204a346c2106e7dc3a1b79bf9901bec71889f0865aa68428c655`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it1_full_both_capture_replay_863ccafb_20260717/analysis/replay/h2_captured_replay.json` (SHA-256 `ecb290fc4c4e4d361e83e216eece437e229684d5cc6549d8d56a8fca6049c42c`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it1_full_both_capture_replay_863ccafb_20260717/analysis/replay/h2_genuine_upstream_f64.json` (SHA-256 `d269ae30dccfaad49c623fff17763a160ab03c8f4865f9afc9a8cc8061920e7f`)
+
+## 2026-07-17 same-A100 live real-10076 trajectory
+
+Slurm job `11297956` ran a fresh RELION trajectory, autonomous RECOVAR, and an
+exact-schedule RECOVAR intervention serially on physical A100 UUID
+`GPU-2f2a8197-bcc8-ec41-fc6f-dfb2b5aaf4fa`. RELION emitted 16 numbered
+iterations and then converged/finalized. Both RECOVAR arms emitted 16 numbered
+iterations but did not converge, so they correctly skipped final all-data and
+their serialized final-half placeholders are not treated as valid final maps.
+
+Autonomous RECOVAR exactly matches RELION's Healpix-order trajectory. Its
+current-size trajectory differs only at iterations 13, 14, and 16. Forcing the
+exact RELION Healpix and current-size schedules improves the merged
+cross-engine FSC-AUC from `0.958310512629` to `0.974104824180` at iteration 13
+and from `0.960801450738` to `0.979180351784` at iteration 16. It does not
+remove the gradual residual: the forced trajectory's merged FSC-AUC evolves
+from `0.999999983783` at iteration 1 to `0.999945877001` at iteration 3,
+`0.995813118809` at iteration 6, and `0.971171072751` at iteration 11.
+
+The exact scheduler arithmetic is therefore exonerated, while nonconvergence
+and the gradually amplifying score/posterior state remain open. The next probe
+is one aggregate 32-row iteration-2-to-3 panel with control/control,
+float32/float64-order classification, and bounded state substitutions—not
+serial particle tracing.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/analysis/dynamic_schedule_trajectory.json` (SHA-256 `6623ef84a18f18403cad7697c7727f55e63cd22be8e22f333e9746ad32d1d470`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/provenance/science_artifacts.sha256` (SHA-256 `9fe6c50e1957d332457a2935e55afa41c09b354506a8c57e9961434729b7a096`)
+
+All map statements in these sections use FSC/FSC-AUC. Intermediate statements
+use direct identity, support, and array metrics; correlation is not used.
