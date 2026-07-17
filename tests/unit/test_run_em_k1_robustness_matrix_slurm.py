@@ -14,8 +14,16 @@ LAUNCHER = REPO_ROOT / "scripts" / "run_em_k1_robustness_matrix_slurm.sh"
 IDENTITY_CTF_STAR = REPO_ROOT / "scripts" / "make_relion_identity_ctf_star.py"
 
 
+def _relion_src_fixture(tmp_path: Path) -> Path:
+    relion_src = tmp_path / "relion_src"
+    relion_src.mkdir(exist_ok=True)
+    (relion_src / "projector.h").write_text("// unit-test fixture\n")
+    return relion_src
+
+
 def _dry_run_launcher(tmp_path, *, case: str, extra_env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess, Path]:
     scratch = tmp_path / "scratch"
+    relion_src = _relion_src_fixture(tmp_path)
     env = os.environ.copy()
     env.update(
         {
@@ -29,6 +37,7 @@ def _dry_run_launcher(tmp_path, *, case: str, extra_env: dict[str, str] | None =
             "SBATCH_ACCOUNT": "gilles",
             "SBATCH_PARTITION": "cryoem",
             "SBATCH_CONSTRAINT": "",
+            "RELION_SRC_DIR": str(relion_src),
         }
     )
     if extra_env:
@@ -683,16 +692,18 @@ def test_save_intermediates_unregularized_maps_can_be_reenabled(tmp_path):
 
 def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path):
     scratch = tmp_path / "scratch"
+    relion_src = _relion_src_fixture(tmp_path)
     env = os.environ.copy()
     env.update(
         {
             "EM_K1_MATRIX_SCRATCH_DIR": str(scratch),
             "EM_K1_MATRIX_CASES": "32",
             "EM_K1_MATRIX_RUN_RELION": "1",
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "h100",
-        }
+                "SBATCH_ACCOUNT": "gilles",
+                "SBATCH_PARTITION": "cryoem",
+                "SBATCH_CONSTRAINT": "h100",
+                "RELION_SRC_DIR": str(relion_src),
+            }
     )
     for name in (
         "EM_K1_MATRIX_SETUP_PARTITION",
