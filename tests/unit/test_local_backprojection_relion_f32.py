@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_mstep_sums,
@@ -49,6 +50,17 @@ def test_local_weighted_sums_requests_highest_dot_precision():
     jaxpr = str(jax.make_jaxpr(compute_local_weighted_sums)(probs, shifted))
 
     assert "Precision.HIGHEST" in jaxpr
+
+
+@pytest.mark.skipif(jax.default_backend() != "gpu", reason="GPU HLO regression")
+def test_local_weighted_sums_requests_highest_precision_in_complex64_gpu_hlo():
+    probs = jnp.ones((1, 2, 3), dtype=jnp.float32)
+    shifted = jnp.ones((1, 3, 4), dtype=jnp.complex64)
+
+    assert compute_local_weighted_sums(probs, shifted).dtype == jnp.complex64
+    hlo = compute_local_weighted_sums.lower(probs, shifted).compiler_ir("hlo").as_hlo_text()
+
+    assert "operand_precision={highest,highest}" in hlo
 
 
 def test_local_weighted_sums_match_explicit_highest_precision_matmul():
