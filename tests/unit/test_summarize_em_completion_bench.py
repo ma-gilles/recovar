@@ -651,6 +651,54 @@ def test_completion_metadata_keeps_k4_sparse_env_provenance(tmp_path):
     assert metadata["env"]["RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_ROWS"] == "1"
 
 
+def test_completion_metadata_discovers_matrix_provenance_from_case_directory(tmp_path):
+    run_root = tmp_path / "matrix"
+    case_root = run_root / "cases" / "14_small_noctf"
+    recovar_dir = case_root / "recovar"
+    recovar_dir.mkdir(parents=True)
+    (run_root / "jobs").mkdir()
+    (run_root / "job_provenance" / "em_k1_matrix_14_small_noctf_1234").mkdir(parents=True)
+
+    (run_root / "submission.env").write_text(
+        "\n".join(
+            [
+                "REPO_ROOT=/repo/checkout",
+                "HEAD=submission-head",
+                "BRANCH=codex/matrix",
+                f"SCRATCH_DIR={run_root}",
+                "SETUP_JOB_ID=1200",
+            ]
+        )
+        + "\n"
+    )
+    (run_root / "selected_cases.tsv").write_text(
+        "index|name|case_root|case_job_id\n"
+        f"14|small_noctf|{case_root}|1234\n"
+    )
+    (recovar_dir / "slurm_walltime.json").write_text(
+        '{"slurm_job_id":"1234","exit_status":0}\n'
+    )
+    (recovar_dir / "run_full_refinement.log").write_text("complete\n")
+    (run_root / "jobs" / "em_k1_matrix_14_small_noctf.sh").write_text("#!/bin/bash\n")
+    (run_root / "em_k1_matrix_14_small_noctf.out").write_text("stdout\n")
+    (run_root / "em_k1_matrix_14_small_noctf.err").write_text("")
+    provenance_dir = run_root / "job_provenance" / "em_k1_matrix_14_small_noctf_1234"
+    (provenance_dir / "git_head.txt").write_text("job-head\n")
+    (provenance_dir / "git_branch.txt").write_text("codex/job-branch\n")
+    (provenance_dir / "git_status_porcelain.txt").write_text("")
+
+    metadata = summarizer._completion_metadata(recovar_dir, "k1")
+
+    assert metadata["submission_env_path"] == str(run_root / "submission.env")
+    assert metadata["head"] == "job-head"
+    assert metadata["branch"] == "codex/job-branch"
+    assert metadata["job_id"] == "1234"
+    assert metadata["job_script"] == str(run_root / "jobs" / "em_k1_matrix_14_small_noctf.sh")
+    assert metadata["job_provenance_dir"] == str(provenance_dir)
+    assert metadata["git_status_porcelain"] is None
+    assert metadata["missing_artifacts"] == []
+
+
 def test_required_k4_fails_when_gt_fsc_auc_is_below_relion():
     summary = {
         "k1": {"status": "skipped", "timing": {}, "metrics": {}, "notes": []},

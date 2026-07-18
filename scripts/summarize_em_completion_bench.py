@@ -575,7 +575,12 @@ def _read_gpu_monitor(path: Path | None) -> dict[str, Any] | None:
 def _completion_metadata(recovar_dir: Path | None, label: str) -> dict[str, Any]:
     if recovar_dir is None:
         return {}
-    scratch_dir = recovar_dir.parent
+
+    case_root = recovar_dir.parent
+    scratch_dir = next(
+        (candidate for candidate in (case_root, *case_root.parents) if (candidate / "submission.env").is_file()),
+        case_root,
+    )
     env_path = scratch_dir / "submission.env"
     env = _read_env_file(env_path)
     job_key = "K1_JOB_ID" if label == "k1" else "K4_JOB_ID"
@@ -583,6 +588,37 @@ def _completion_metadata(recovar_dir: Path | None, label: str) -> dict[str, Any]
     script_name = f"{log_prefix}.sh"
     slurm_walltime_path = recovar_dir / "slurm_walltime.json"
     slurm_walltime = _read_json(slurm_walltime_path) if slurm_walltime_path.exists() else None
+    job_id = env.get(job_key) or (slurm_walltime or {}).get("slurm_job_id")
+
+    matrix_row: dict[str, str] | None = None
+    case_table_path = scratch_dir / "selected_cases.tsv"
+    if label == "k1" and case_table_path.is_file():
+        try:
+            with case_table_path.open(newline="") as stream:
+                for row in csv.DictReader(stream, delimiter="|"):
+                    row_root = row.get("case_root")
+                    if row_root and Path(row_root).resolve() == case_root.resolve():
+                        matrix_row = row
+                        break
+        except (OSError, csv.Error):
+            matrix_row = None
+
+    if matrix_row is not None:
+        log_prefix = f"em_k1_matrix_{matrix_row['index']}_{matrix_row['name']}"
+        script_name = f"{log_prefix}.sh"
+        job_id = job_id or matrix_row.get("case_job_id")
+
+    job_provenance_dir = scratch_dir / "job_provenance" / f"{log_prefix}_{job_id}"
+    git_head_path = job_provenance_dir / "git_head.txt"
+    git_branch_path = job_provenance_dir / "git_branch.txt"
+    git_status_path = job_provenance_dir / "git_status_porcelain.txt"
+
+    def _read_optional_text(path: Path) -> str | None:
+        if not path.is_file():
+            return None
+        value = path.read_text().strip()
+        return value or None
+
     known_paths = {
         "submission_env": env_path,
         "slurm_stdout": scratch_dir / f"{log_prefix}.out",
@@ -591,15 +627,24 @@ def _completion_metadata(recovar_dir: Path | None, label: str) -> dict[str, Any]
         "run_log": recovar_dir / "run_full_refinement.log",
         "slurm_walltime": slurm_walltime_path,
     }
+    if matrix_row is not None:
+        known_paths.update(
+            {
+                "job_provenance": job_provenance_dir,
+                "git_head": git_head_path,
+                "git_branch": git_branch_path,
+                "git_status_porcelain": git_status_path,
+            }
+        )
     missing_artifacts = [name for name, path in known_paths.items() if not path.exists()]
     return {
         "submission_env_path": str(env_path) if env_path.exists() else None,
         "repo_root": env.get("REPO_ROOT"),
-        "head": env.get("HEAD"),
-        "branch": env.get("BRANCH"),
+        "head": _read_optional_text(git_head_path) or env.get("HEAD"),
+        "branch": _read_optional_text(git_branch_path) or env.get("BRANCH"),
         "scratch_dir": env.get("SCRATCH_DIR") or str(scratch_dir),
         "setup_job_id": env.get("SETUP_JOB_ID"),
-        "job_id": env.get(job_key) or (slurm_walltime or {}).get("slurm_job_id"),
+        "job_id": job_id,
         "summary_job_id": env.get("SUMMARY_JOB_ID"),
         "slurm_stdout": str(scratch_dir / f"{log_prefix}.out") if (scratch_dir / f"{log_prefix}.out").exists() else None,
         "slurm_stderr": str(scratch_dir / f"{log_prefix}.err") if (scratch_dir / f"{log_prefix}.err").exists() else None,
@@ -611,6 +656,8 @@ def _completion_metadata(recovar_dir: Path | None, label: str) -> dict[str, Any]
         else None,
         "slurm_walltime_path": str(slurm_walltime_path) if slurm_walltime_path.exists() else None,
         "slurm_walltime": slurm_walltime,
+        "job_provenance_dir": str(job_provenance_dir) if job_provenance_dir.exists() else None,
+        "git_status_porcelain": _read_optional_text(git_status_path),
         "known_paths": {key: str(path) for key, path in known_paths.items()},
         "missing_artifacts": missing_artifacts,
         "env": {
