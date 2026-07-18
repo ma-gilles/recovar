@@ -5430,3 +5430,71 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_frozen_it2_projector_abc_prepared_20260718T052910Z/plan/INDEPENDENT_REVIEW_HANDOFF.md`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_frozen_it2_projector_abc_prepared_20260718T052910Z/validation/local_a100_control_scoring_smoke/run_full_refinement.err`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_package_hardening_reaudit2_20260718T120000Z/INDEPENDENT_REAUDIT_HANDOFF.md` (SHA-256 `80429ed77ae0d9ef1cd42fa3dc28966140fd26f07bf1a31c9a7c5f50de205c98`)
+
+## 2026-07-18 frozen-boundary v2 and robustness pre-acceptance findings
+
+The frozen iteration-2 restart was rebuilt with an incompatible v2 schema that
+owns the complete physical iteration-3 scoring state.  Poses, per-particle
+image and scale corrections, per-half direction priors and noise, translation
+sigmas, maps, tau2/FSC/Pmax, sampling, perturbation, and convergence state are
+sealed.  Replay slot zero is projector-only, external direction-prior reload
+and process-start half-noise broadcast are suppressed, and every scoring array
+is checked immediately before scoring by raw SHA-256, dtype, and shape.
+
+The first corrected local A/A exposed a real dtype ownership bug: lossless
+float64 radial noise profiles were expanded by JAX into float64 full-image
+arrays, while the captured scoring arrays were float32.  Commit `cb7e23b4`
+expands frozen noise explicitly in float32.  The replacement 10,000-particle
+A/A then matches all 13 sealed pre-score field entries exactly in both arms.
+Its supported-shell 1:60 FSC-AUC losses are `1.133149e-9` and `4.476982e-10`
+for the two halves and `6.513029e-10` for the merged map.  One half-1 discrete
+winner changes between identical controls; this is a diagnostic reduction
+repeat, not a bitwise-equality failure.  Correlation is not computed.
+
+The package is nevertheless not yet approved for the RELION-projector arm.
+Independent review found an unsealed importable
+`jobs/__pycache__/audit_helpers.cpython-311.pyc`; setting
+`PYTHONDONTWRITEBYTECODE=1` prevents writes but does not prevent Python from
+reading existing bytecode.  The package must remove compiled artifacts, reject
+them both before submission and at runtime, add a tamper canary, and be
+resealed before Slurm submission.  No frozen projector-B science job has been
+submitted.
+
+The K=1 robustness packages separately passed the repaired final-artifact
+membership and dependency-seal gates.  Three launch-only defects were then
+caught fail-closed without a RECOVAR quality result:
+
+- job `11337711` rejected a malformed embedded SHA-256 before creating a run
+  root;
+- job `11338227` allocated one Slurm task for `mpirun -n 3` and stopped before
+  RELION science;
+- job `11338849` used the repaired three-task, four-CPU-per-task contract and
+  completed RELION, but stopped before every RECOVAR arm because the capture
+  validator's RELION-row particle IDs had been compared with source-fixture
+  row IDs.
+
+For job `11338849`, the captured half sets match zero-based rows of
+`run_it000_data.star`, `run_it003_data.star`, and the final data STAR exactly.
+The incorrect source-name-remapped expectation has total symmetric difference
+`2964`; capture half counts are `1482` and `1518`.  The repair must keep both
+identity namespaces and seal a bijective five-field UID crosswalk: RELION-row
+IDs for capture closure and source-name/source-row identities for RECOVAR
+half-set replay.  Identity closure must not be weakened, and downstream
+robustness cases remain blocked.
+
+K=4 job `11320255` completed all 15 planned 100,000-particle iterations on one
+A100 in `10:02:27`, without OOM.  It remained unconverged and correctly skipped
+final all-data.  The first dependent audit, `11337445`, was canceled because a
+shared cross-node JAX CPU compilation cache produced host-feature mismatch
+warnings.  Its partial output is non-authoritative.  Cache-isolated audit retry
+`11338696` verifies a resealed 146-artifact input anchor and is the only audit
+eligible to issue K=4 acceptance.  Until its shellwise FSC/FSC-AUC and GT
+bundle seals successfully, the clean trajectory is not itself a quality pass.
+
+Current evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_frozen_it2_projector_abc_prepared_20260718T052910Z/validation/local_a100_v2_float32_control_aa/AUDIT.json` (SHA-256 `da671a2db35fc25bf32d18c606b7efcd79b10c24a08f375b1c65c7da5774beac`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_frozen_it2_projector_abc_prepared_20260718T052910Z/validation/local_a100_v2_float32_control_aa/CONTROL_AA_SHELLWISE_FSC.npz` (SHA-256 `92c0913b7fa48558504084679957bcb395bfec4f8a0b82bd51cd2a4c0317ae6e`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_mpi_preflight_reaudit5_20260718T071842Z/INDEPENDENT_MPI_RESOURCE_REAUDIT_HANDOFF.md` (SHA-256 `5cad7f67056715f1a0ddc304f3ab5f5759fbc9e23b73acd002b74a2f2ff7a050`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_case11_83825ae_prepared_20260718T033237Z/runs/robustness_projector_abc_11338849`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_restartfix_030f4a0b_20260717T211041Z/provenance/audit_cache_isolation_retry_11338696.txt`
