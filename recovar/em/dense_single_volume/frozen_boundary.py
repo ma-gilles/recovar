@@ -13,8 +13,8 @@ from pathlib import Path
 
 import numpy as np
 
-FROZEN_BOUNDARY_SCHEMA = "recovar.em.frozen_boundary.v1"
-FROZEN_BOUNDARY_FILENAME = "frozen_boundary_v1.npz"
+FROZEN_BOUNDARY_SCHEMA = "recovar.em.frozen_boundary.v2"
+FROZEN_BOUNDARY_FILENAME = "frozen_boundary_v2.npz"
 FROZEN_BOUNDARY_MANIFEST = "FROZEN_BOUNDARY_SHA256SUMS"
 
 _REFINEMENT_STATE_FIELD_TYPES = {
@@ -51,6 +51,14 @@ _REQUIRED_PAYLOAD_KEYS = {
     "half2_previous_best_rotation_eulers",
     "half1_previous_best_translations",
     "half2_previous_best_translations",
+    "half1_image_corrections",
+    "half2_image_corrections",
+    "half1_scale_corrections",
+    "half2_scale_corrections",
+    "half1_direction_prior",
+    "half2_direction_prior",
+    "half1_translation_sigma_angstrom",
+    "half2_translation_sigma_angstrom",
     "half1_image_name",
     "half2_image_name",
     "half1_source_row",
@@ -63,12 +71,6 @@ _REQUIRED_PAYLOAD_KEYS = {
     "half2_half_local_index",
     *(f"state_{key}" for key in _REFINEMENT_STATE_FIELD_TYPES),
 }
-_CORRECTION_PAYLOAD_KEYS = {
-    "half1_image_corrections",
-    "half2_image_corrections",
-    "half1_scale_corrections",
-    "half2_scale_corrections",
-}
 _PROVENANCE_PAYLOAD_KEYS = {
     "source_job_id",
     "source_arm",
@@ -79,9 +81,7 @@ _PROVENANCE_PAYLOAD_KEYS = {
     "source_star_sha256",
     "relion_half_star_sha256",
 }
-_ALLOWED_PAYLOAD_KEYS = (
-    _REQUIRED_PAYLOAD_KEYS | _CORRECTION_PAYLOAD_KEYS | _PROVENANCE_PAYLOAD_KEYS
-)
+_ALLOWED_PAYLOAD_KEYS = _REQUIRED_PAYLOAD_KEYS | _PROVENANCE_PAYLOAD_KEYS
 
 
 @dataclass(frozen=True)
@@ -107,8 +107,10 @@ class FrozenRefinementBoundary:
     random_subsets_per_half: tuple[np.ndarray, np.ndarray]
     half_indices_per_half: tuple[np.ndarray, np.ndarray]
     half_local_indices_per_half: tuple[np.ndarray, np.ndarray]
-    image_corrections: tuple[np.ndarray, np.ndarray] | None
-    scale_corrections: tuple[np.ndarray, np.ndarray] | None
+    image_corrections: tuple[np.ndarray, np.ndarray]
+    scale_corrections: tuple[np.ndarray, np.ndarray]
+    direction_prior_per_half: tuple[np.ndarray, np.ndarray]
+    translation_sigma_angstrom_per_half: tuple[float, float]
     refinement_state_fields: dict[str, float | int | bool]
 
 
@@ -192,16 +194,6 @@ def _typed_scalar(npz, key: str, *, dtype_kinds: set[str]):
     return value.item()
 
 
-def _load_optional_half_pair(npz, prefix: str, dtype) -> tuple[np.ndarray, np.ndarray] | None:
-    keys = (f"half1_{prefix}", f"half2_{prefix}")
-    present = [key in npz.files for key in keys]
-    if any(present) and not all(present):
-        raise ValueError(f"frozen boundary must provide both or neither of {keys}")
-    if not any(present):
-        return None
-    return tuple(_finite_array(npz, key, ndim=1, dtype=dtype) for key in keys)
-
-
 def load_frozen_refinement_boundary(
     boundary_dir: str | Path,
     *,
@@ -239,10 +231,10 @@ def load_frozen_refinement_boundary(
         payload_keys = set(npz.files)
         missing_keys = sorted(_REQUIRED_PAYLOAD_KEYS - payload_keys)
         if missing_keys:
-            raise ValueError(f"frozen boundary is missing required schema-v1 keys: {missing_keys}")
+            raise ValueError(f"frozen boundary is missing required schema-v2 keys: {missing_keys}")
         unknown_keys = sorted(payload_keys - _ALLOWED_PAYLOAD_KEYS)
         if unknown_keys:
-            raise ValueError(f"frozen boundary contains unknown schema-v1 keys: {unknown_keys}")
+            raise ValueError(f"frozen boundary contains unknown schema-v2 keys: {unknown_keys}")
         provenance_keys = payload_keys & _PROVENANCE_PAYLOAD_KEYS
         if provenance_keys and provenance_keys != _PROVENANCE_PAYLOAD_KEYS:
             missing_provenance = sorted(_PROVENANCE_PAYLOAD_KEYS - provenance_keys)
@@ -347,21 +339,44 @@ def load_frozen_refinement_boundary(
         if np.unique(all_source_rows).size != all_source_rows.size:
             raise ValueError("frozen-boundary source rows must be globally unique")
 
-        image_corrections = _load_optional_half_pair(npz, "image_corrections", np.float32)
-        scale_corrections = _load_optional_half_pair(npz, "scale_corrections", np.float32)
-        if (image_corrections is None) != (scale_corrections is None):
-            raise ValueError("frozen boundary must provide image and scale corrections together")
-        if image_corrections is not None:
-            for half in range(2):
-                expected_rows = eulers[half].shape[0]
-                if image_corrections[half].shape != (expected_rows,):
-                    raise ValueError("frozen-boundary image-correction row count mismatch")
-                if scale_corrections[half].shape != (expected_rows,):
-                    raise ValueError("frozen-boundary scale-correction row count mismatch")
-                if np.any(image_corrections[half] <= 0.0):
-                    raise ValueError("frozen-boundary image corrections must be positive")
-                if np.any(scale_corrections[half] <= 0.0):
-                    raise ValueError("frozen-boundary scale corrections must be positive")
+        image_corrections = tuple(
+            _finite_array(npz, f"half{half}_image_corrections", ndim=1, dtype=np.float32)
+            for half in (1, 2)
+        )
+        scale_corrections = tuple(
+            _finite_array(npz, f"half{half}_scale_corrections", ndim=1, dtype=np.float32)
+            for half in (1, 2)
+        )
+        direction_prior_per_half = tuple(
+            _finite_array(npz, f"half{half}_direction_prior", ndim=1, dtype=np.float32)
+            for half in (1, 2)
+        )
+        translation_sigma_angstrom_per_half = tuple(
+            _scalar(npz, f"half{half}_translation_sigma_angstrom", float)
+            for half in (1, 2)
+        )
+        expected_direction_count = 12 * (4 ** _scalar(npz, "healpix_order", int))
+        for half in range(2):
+            expected_rows = eulers[half].shape[0]
+            if image_corrections[half].shape != (expected_rows,):
+                raise ValueError("frozen-boundary image-correction row count mismatch")
+            if scale_corrections[half].shape != (expected_rows,):
+                raise ValueError("frozen-boundary scale-correction row count mismatch")
+            if np.any(image_corrections[half] <= 0.0):
+                raise ValueError("frozen-boundary image corrections must be positive")
+            if np.any(scale_corrections[half] <= 0.0):
+                raise ValueError("frozen-boundary scale corrections must be positive")
+            prior = direction_prior_per_half[half]
+            if prior.shape != (expected_direction_count,):
+                raise ValueError(
+                    "frozen-boundary direction-prior shape does not match healpix_order"
+                )
+            if np.any(prior < 0.0) or not np.any(prior > 0.0):
+                raise ValueError("frozen-boundary direction prior must be nonnegative and nonzero")
+            if not np.isfinite(translation_sigma_angstrom_per_half[half]) or (
+                translation_sigma_angstrom_per_half[half] <= 0.0
+            ):
+                raise ValueError("frozen-boundary translation sigma must be finite and positive")
 
         refinement_state_fields = {
             key: _scalar(npz, f"state_{key}", field_type)
@@ -442,6 +457,8 @@ def load_frozen_refinement_boundary(
             half_local_indices_per_half=half_local_indices,
             image_corrections=image_corrections,
             scale_corrections=scale_corrections,
+            direction_prior_per_half=direction_prior_per_half,
+            translation_sigma_angstrom_per_half=translation_sigma_angstrom_per_half,
             refinement_state_fields=refinement_state_fields,
         )
 

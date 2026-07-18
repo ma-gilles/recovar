@@ -3440,6 +3440,99 @@ def _copy_optional_float_pair(values):
     return [float(values[0]), float(values[1])]
 
 
+def _frozen_scoring_state_arrays(
+    *,
+    relion_half_inputs,
+    noise_variance_per_half,
+    current_sigma_offset_angstrom_per_half,
+    global_direction_prior_per_half,
+):
+    """Materialize every K=1 scoring primitive owned by a frozen restart."""
+
+    pair_fields = {
+        "previous_best_rotation_eulers": relion_half_inputs.previous_best_rotation_eulers,
+        "previous_best_translations": relion_half_inputs.previous_best_translations,
+        "image_corrections": relion_half_inputs.image_corrections,
+        "scale_corrections": relion_half_inputs.scale_corrections,
+        "noise_variance": noise_variance_per_half,
+        "direction_prior": global_direction_prior_per_half,
+    }
+    arrays = {}
+    for field_name, values in pair_fields.items():
+        if values is None or len(values) != 2:
+            raise RuntimeError(
+                f"Frozen scoring-state ownership requires two {field_name} arrays"
+            )
+        for half_index, value in enumerate(values):
+            if value is None:
+                raise RuntimeError(
+                    "Frozen scoring-state ownership requires "
+                    f"{field_name} for half {half_index + 1}"
+                )
+            array = np.asarray(value)
+            if not np.issubdtype(array.dtype, np.number):
+                raise RuntimeError(
+                    f"Frozen scoring-state field {field_name} half {half_index + 1} "
+                    f"must be numeric, got {array.dtype}"
+                )
+            if not np.all(np.isfinite(array)):
+                raise RuntimeError(
+                    f"Frozen scoring-state field {field_name} half {half_index + 1} "
+                    "contains non-finite values"
+                )
+            arrays[f"{field_name}.half{half_index + 1}"] = np.ascontiguousarray(array).copy()
+
+    sigma_pair = np.asarray(current_sigma_offset_angstrom_per_half, dtype=np.float64)
+    if sigma_pair.shape != (2,) or not np.all(np.isfinite(sigma_pair)):
+        raise RuntimeError(
+            "Frozen scoring-state ownership requires two finite translation sigmas"
+        )
+    arrays["translation_sigma_angstrom_per_half"] = sigma_pair
+    return arrays
+
+
+def _assert_frozen_scoring_state_unchanged(expected, actual):
+    """Fail closed if replay or setup mutated a sealed scoring primitive."""
+
+    if set(expected) != set(actual):
+        missing = sorted(set(expected) - set(actual))
+        extra = sorted(set(actual) - set(expected))
+        raise RuntimeError(
+            "Frozen scoring-state fields changed: "
+            f"missing={missing}, extra={extra}"
+        )
+    hashes = {}
+    for field_name in sorted(expected):
+        expected_array = np.asarray(expected[field_name])
+        actual_array = np.asarray(actual[field_name])
+        if expected_array.shape != actual_array.shape:
+            raise RuntimeError(
+                f"Frozen scoring-state field {field_name} shape changed: "
+                f"{expected_array.shape} != {actual_array.shape}"
+            )
+        if expected_array.dtype != actual_array.dtype:
+            raise RuntimeError(
+                f"Frozen scoring-state field {field_name} dtype changed: "
+                f"{expected_array.dtype} != {actual_array.dtype}"
+            )
+        if not np.all(np.isfinite(actual_array)):
+            raise RuntimeError(
+                f"Frozen scoring-state field {field_name} contains non-finite values"
+            )
+        if not np.array_equal(expected_array, actual_array):
+            raise RuntimeError(
+                f"Frozen scoring-state field {field_name} was overwritten before scoring"
+            )
+        hashes[field_name] = {
+            "dtype": str(actual_array.dtype),
+            "shape": list(actual_array.shape),
+            "sha256": hashlib.sha256(
+                np.ascontiguousarray(actual_array).view(np.uint8)
+            ).hexdigest(),
+        }
+    return hashes
+
+
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
     if current_sigma_offset_angstrom_per_half is None:
         return float(current_sigma_offset_angstrom)
@@ -3794,6 +3887,8 @@ def refine_single_volume(
     n_classes=1,
     init_class_log_priors=None,
     state_swap_probe=None,
+    assert_initial_scoring_state_immutable=False,
+    preserve_initial_direction_prior=False,
     stop_after_local_search_profile=False,
     stop_after_local_search=False,
     stop_after_local_search_score_only=False,
@@ -4060,6 +4155,8 @@ def refine_single_volume(
         n_classes=n_classes,
         init_class_log_priors=init_class_log_priors,
         state_swap_probe=state_swap_probe,
+        assert_initial_scoring_state_immutable=assert_initial_scoring_state_immutable,
+        preserve_initial_direction_prior=preserve_initial_direction_prior,
         stop_after_local_search_profile=stop_after_local_search_profile,
         stop_after_local_search=stop_after_local_search,
         stop_after_local_search_score_only=stop_after_local_search_score_only,
@@ -4145,6 +4242,8 @@ def _run_relion_iteration_loop(
     n_classes=1,
     init_class_log_priors=None,
     state_swap_probe=None,
+    assert_initial_scoring_state_immutable=False,
+    preserve_initial_direction_prior=False,
     stop_after_local_search_profile=False,
     stop_after_local_search=False,
     stop_after_local_search_score_only=False,
@@ -4890,6 +4989,19 @@ def _run_relion_iteration_loop(
     replay_saved_healpix_order = (
         None if native_sampling_boundary else int(state.healpix_order)
     )
+    frozen_initial_scoring_state = None
+    frozen_initial_scoring_state_sha256 = None
+    if assert_initial_scoring_state_immutable:
+        if k_class_enabled:
+            raise RuntimeError(
+                "Frozen scoring-state immutability assertion currently supports K=1 only"
+            )
+        frozen_initial_scoring_state = _frozen_scoring_state_arrays(
+            relion_half_inputs=relion_half_inputs,
+            noise_variance_per_half=noise_variance_per_half,
+            current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
+            global_direction_prior_per_half=global_direction_prior_per_half,
+        )
     while (force_max_iter_after_convergence or not state.has_converged) and iteration < max_iter:
         # RELION checks convergence at the top of iteration n from the
         # completed n-1 statistics and the fine-enough decision latched during
@@ -5230,6 +5342,7 @@ def _run_relion_iteration_loop(
             class_direction_prior_order_per_half=class_direction_prior_order_per_half,
             global_direction_prior_per_half=global_direction_prior_per_half,
             global_direction_prior_order_per_half=global_direction_prior_order_per_half,
+            preserve_existing_direction_prior=preserve_initial_direction_prior,
         )
         cs = replay_result.cs
         _replay_prior_translations = replay_result.prior_translations
@@ -5301,6 +5414,20 @@ def _run_relion_iteration_loop(
             volume_shape=volume_shape,
             n_classes=n_classes,
         )
+        if frozen_initial_scoring_state is not None and iteration == 0:
+            frozen_initial_scoring_state_sha256 = _assert_frozen_scoring_state_unchanged(
+                frozen_initial_scoring_state,
+                _frozen_scoring_state_arrays(
+                    relion_half_inputs=relion_half_inputs,
+                    noise_variance_per_half=noise_variance_per_half,
+                    current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
+                    global_direction_prior_per_half=global_direction_prior_per_half,
+                ),
+            )
+            logger.info(
+                "Frozen scoring-state ownership verified immediately before physical iteration %d scoring",
+                int(init_relion_iteration) + iteration + 1,
+            )
 
         exact_acc_rot_this_iter = None
         exact_acc_trans_this_iter = None
@@ -6483,6 +6610,7 @@ def _run_relion_iteration_loop(
                 "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
                 "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
                 "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
+                "frozen_initial_scoring_state_sha256": frozen_initial_scoring_state_sha256,
                 "frac_changed_trajectory": frac_changed_trajectory,
                 "acc_rot_trajectory": acc_rot_trajectory,
                 "acc_trans_trajectory": acc_trans_trajectory,
@@ -8147,6 +8275,7 @@ def _run_relion_iteration_loop(
             "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
             "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
             "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
+            "frozen_initial_scoring_state_sha256": frozen_initial_scoring_state_sha256,
             "frac_changed_trajectory": frac_changed_trajectory,
             "acc_rot_trajectory": acc_rot_trajectory,
             "acc_trans_trajectory": acc_trans_trajectory,
@@ -9533,6 +9662,7 @@ def _run_relion_iteration_loop(
         "sigma_offset_trajectory_per_half": sigma_offset_per_half_trajectory,
         "per_class_sigma_offset_trajectory": per_class_sigma_offset_trajectory,
         "direction_prior_trajectory_per_half": direction_prior_trajectory_per_half,
+        "frozen_initial_scoring_state_sha256": frozen_initial_scoring_state_sha256,
         "frac_changed_trajectory": frac_changed_trajectory,
         "acc_rot_trajectory": acc_rot_trajectory,
         "acc_trans_trajectory": acc_trans_trajectory,

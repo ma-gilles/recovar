@@ -34,6 +34,14 @@ def _write_boundary(root, **overrides):
         "half2_previous_best_rotation_eulers": np.ones((2, 3), dtype=np.float32),
         "half1_previous_best_translations": np.zeros((2, 2), dtype=np.float32),
         "half2_previous_best_translations": np.ones((2, 2), dtype=np.float32),
+        "half1_image_corrections": np.asarray([0.9, 1.1], dtype=np.float32),
+        "half2_image_corrections": np.asarray([0.8, 1.2], dtype=np.float32),
+        "half1_scale_corrections": np.ones(2, dtype=np.float32),
+        "half2_scale_corrections": np.ones(2, dtype=np.float32),
+        "half1_direction_prior": np.full(768, 1.0 / 768.0, dtype=np.float32),
+        "half2_direction_prior": np.full(768, 1.0 / 768.0, dtype=np.float32),
+        "half1_translation_sigma_angstrom": np.float64(16.8),
+        "half2_translation_sigma_angstrom": np.float64(17.0),
         "half1_image_name": np.asarray(["1@a.mrcs", "2@a.mrcs"]),
         "half2_image_name": np.asarray(["3@a.mrcs", "4@a.mrcs"]),
         "half1_source_row": np.asarray([0, 2], dtype=np.int64),
@@ -77,7 +85,12 @@ def test_frozen_boundary_loader_round_trips_primitive_state(tmp_path):
     assert boundary.completed_relion_iteration == 2
     assert boundary.current_size == 92
     assert boundary.means[0].dtype == np.complex64
-    assert boundary.image_corrections is None
+    np.testing.assert_array_equal(
+        boundary.image_corrections[0],
+        np.asarray([0.9, 1.1], dtype=np.float32),
+    )
+    assert boundary.direction_prior_per_half[0].shape == (768,)
+    assert boundary.translation_sigma_angstrom_per_half == pytest.approx((16.8, 17.0))
     np.testing.assert_array_equal(boundary.source_rows_per_half[0], [0, 2])
     assert set(boundary.refinement_state_fields) == {
         "current_resolution",
@@ -129,13 +142,13 @@ def test_frozen_boundary_loader_rejects_duplicate_source_row_across_halves(tmp_p
         load_frozen_refinement_boundary(tmp_path)
 
 
-def test_frozen_boundary_loader_rejects_half_correction_pair_mismatch(tmp_path):
+def test_frozen_boundary_loader_rejects_correction_row_mismatch(tmp_path):
     _write_boundary(
         tmp_path,
-        half1_image_corrections=np.ones(2, dtype=np.float32),
+        half1_image_corrections=np.ones(3, dtype=np.float32),
     )
 
-    with pytest.raises(ValueError, match="both or neither"):
+    with pytest.raises(ValueError, match="image-correction row count"):
         load_frozen_refinement_boundary(tmp_path)
 
 
@@ -143,12 +156,23 @@ def test_frozen_boundary_loader_rejects_nonpositive_correction(tmp_path):
     _write_boundary(
         tmp_path,
         half1_image_corrections=np.asarray([1.0, 0.0], dtype=np.float32),
-        half2_image_corrections=np.ones(2, dtype=np.float32),
-        half1_scale_corrections=np.ones(2, dtype=np.float32),
-        half2_scale_corrections=np.ones(2, dtype=np.float32),
     )
 
     with pytest.raises(ValueError, match="image corrections must be positive"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+def test_frozen_boundary_loader_rejects_wrong_direction_prior_shape(tmp_path):
+    _write_boundary(tmp_path, half2_direction_prior=np.ones(12, dtype=np.float32))
+
+    with pytest.raises(ValueError, match="direction-prior shape"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+def test_frozen_boundary_loader_rejects_nonpositive_translation_sigma(tmp_path):
+    _write_boundary(tmp_path, half1_translation_sigma_angstrom=np.float64(0.0))
+
+    with pytest.raises(ValueError, match="translation sigma"):
         load_frozen_refinement_boundary(tmp_path)
 
 
@@ -187,14 +211,14 @@ def test_frozen_boundary_loader_rejects_incomplete_state(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="missing required schema-v1 keys"):
+    with pytest.raises(ValueError, match="missing required schema-v2 keys"):
         load_frozen_refinement_boundary(tmp_path)
 
 
 def test_frozen_boundary_loader_rejects_unknown_payload_key(tmp_path):
     _write_boundary(tmp_path, unvalidated_extra=np.asarray([object()], dtype=object))
 
-    with pytest.raises(ValueError, match="unknown schema-v1 keys"):
+    with pytest.raises(ValueError, match="unknown schema-v2 keys"):
         load_frozen_refinement_boundary(tmp_path)
 
 

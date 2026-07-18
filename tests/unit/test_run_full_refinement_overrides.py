@@ -13,13 +13,16 @@ from __future__ import annotations
 import ast
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from scripts import run_full_refinement
 from scripts.run_full_refinement import (
+    _assert_frozen_replay_slots_projector_only,
     _attach_relion_projector_capture,
+    _build_frozen_replay_slots,
     _build_replay_iteration_overrides,
     _default_refinement_subsets,
     _format_replay_mean_for_log,
@@ -41,6 +44,10 @@ from scripts.run_full_refinement import (
     _save_initial_noise_cache,
     _select_authoritative_group_particles,
 )
+from recovar.em.dense_single_volume.iteration_loop import (
+    _assert_frozen_scoring_state_unchanged,
+    _frozen_scoring_state_arrays,
+)
 
 FIXTURE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0")
 RUN_FULL_REFINEMENT = Path(__file__).resolve().parents[2] / "scripts" / "run_full_refinement.py"
@@ -53,6 +60,72 @@ def test_complete_initial_particle_state_is_autorefine_only():
     assert _replay_complete_initial_particle_state(1, 0)
     assert not _replay_complete_initial_particle_state(4, 0)
     assert not _replay_complete_initial_particle_state(1, 1)
+
+
+def test_frozen_replay_is_exactly_projector_only():
+    slots = _build_frozen_replay_slots(1)
+    projector = object()
+    slots[0]["relion_projector_state"] = projector
+
+    _assert_frozen_replay_slots_projector_only(slots, projector_slot=0)
+
+    assert slots == [{"relion_projector_state": projector}, {}]
+
+
+@pytest.mark.parametrize("field", ["noise_variance", "class_tau2", "future_override"])
+def test_frozen_replay_rejects_any_nonprojector_override(field):
+    slots = _build_frozen_replay_slots(1)
+    slots[0]["relion_projector_state"] = object()
+    slots[0][field] = object()
+
+    with pytest.raises(ValueError, match="not projector-only"):
+        _assert_frozen_replay_slots_projector_only(slots, projector_slot=0)
+
+
+def test_frozen_replay_rejects_projector_in_final_slot():
+    slots = _build_frozen_replay_slots(1)
+    slots[1]["relion_projector_state"] = object()
+
+    with pytest.raises(ValueError, match="exactly one projector"):
+        _assert_frozen_replay_slots_projector_only(slots, projector_slot=0)
+
+
+def test_frozen_scoring_state_negative_overwrite_regression():
+    half_inputs = SimpleNamespace(
+        previous_best_rotation_eulers=[
+            np.zeros((2, 3), dtype=np.float32),
+            np.ones((3, 3), dtype=np.float32),
+        ],
+        previous_best_translations=[
+            np.zeros((2, 2), dtype=np.float32),
+            np.ones((3, 2), dtype=np.float32),
+        ],
+        image_corrections=[
+            np.ones(2, dtype=np.float32),
+            np.ones(3, dtype=np.float32),
+        ],
+        scale_corrections=[
+            np.ones(2, dtype=np.float32),
+            np.ones(3, dtype=np.float32),
+        ],
+    )
+    expected = _frozen_scoring_state_arrays(
+        relion_half_inputs=half_inputs,
+        noise_variance_per_half=[
+            np.ones(4, dtype=np.float32),
+            np.full(4, 2.0, dtype=np.float32),
+        ],
+        current_sigma_offset_angstrom_per_half=[2.0, 3.0],
+        global_direction_prior_per_half=[
+            np.full(12, 1.0 / 12.0, dtype=np.float32),
+            np.full(12, 1.0 / 12.0, dtype=np.float32),
+        ],
+    )
+    actual = {name: value.copy() for name, value in expected.items()}
+    actual["noise_variance.half2"][0] = actual["noise_variance.half1"][0]
+
+    with pytest.raises(RuntimeError, match="noise_variance.half2 was overwritten"):
+        _assert_frozen_scoring_state_unchanged(expected, actual)
 
 
 def test_attach_relion_projector_capture_targets_exact_replay_slot(tmp_path, monkeypatch):
@@ -1381,6 +1454,22 @@ def test_autorefine_continuation_noise_emulates_relion_rank1_broadcast(tmp_path)
     assert noise_h1 is not noise_h2
     assert float(np.min(noise_h2)) == pytest.approx(1.0 * 8**4)
     assert float(np.max(noise_h2)) == pytest.approx(5.0 * 8**4)
+
+    uninterrupted_overrides = _build_replay_iteration_overrides(
+        tmp_path,
+        half1_idx=np.asarray([0], dtype=np.int64),
+        half2_idx=np.asarray([1], dtype=np.int64),
+        max_iter=0,
+        ds_voxel=2.0,
+        ds_grid=8,
+        include_normcorr=False,
+        init_relion_iteration=1,
+        process_start_noise_broadcast=False,
+    )
+    uninterrupted_h1, uninterrupted_h2 = uninterrupted_overrides[0]["noise_variance"]
+    assert not np.array_equal(uninterrupted_h2, uninterrupted_h1)
+    assert float(np.min(uninterrupted_h1)) == pytest.approx(1.0 * 8**4)
+    assert float(np.min(uninterrupted_h2)) == pytest.approx(6.0 * 8**4)
 
 
 def test_autorefine_later_replay_noise_remains_half_specific(tmp_path):
