@@ -746,6 +746,45 @@ def test_cli_explicit_iteration_selection_allows_complete_boundary_subset(tmp_pa
 
 
 @pytest.mark.unit
+def test_cli_iteration_offset_labels_frozen_physical_boundary_without_renaming_star(tmp_path):
+    results, source, relion, _control = _fixture(tmp_path)
+    relion_it002 = tmp_path / "run_it002_data.star"
+    relion_it002.write_text(relion.read_text())
+    output = tmp_path / "physical_it002.json"
+
+    status = auditor.main(
+        [
+            "--recovar-results",
+            str(results),
+            "--recovar-particles-star",
+            str(source),
+            "--recovar-iteration",
+            "0",
+            "--relion-iteration-offset",
+            "2",
+            "--relion-star",
+            str(relion_it002),
+            "--output-json",
+            str(output),
+        ]
+    )
+
+    report = json.loads(output.read_text())
+    assert status == 0
+    assert report["iteration_alignment"] == {
+        "recovar_zero_based_to_relion_one_based": False,
+        "relion_iteration_offset": 2,
+        "mapping": "relion_iteration = recovar_iteration + relion_iteration_offset",
+        "selected_recovar_iterations": [0],
+        "missing_relion_iterations": [],
+        "unused_relion_iterations": [],
+        "numbered_topology_valid": True,
+        "identity_alignment": "exact rlnImageName set; RELION row order ignored",
+    }
+    assert [(row["recovar_iteration"], row["relion_iteration"]) for row in report["iterations"]] == [(0, 2)]
+
+
+@pytest.mark.unit
 def test_independent_relion_control_pair_sets_the_numerical_envelope(tmp_path):
     results, source, relion, control = _fixture(tmp_path)
     table, _ = auditor.read_star(str(control))

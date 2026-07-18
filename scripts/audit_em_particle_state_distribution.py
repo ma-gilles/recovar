@@ -1167,6 +1167,7 @@ def audit(
     control_stars: dict[int, Path] | None = None,
     control_reference_stars: dict[int, Path] | None = None,
     recovar_iterations: set[int] | None = None,
+    relion_iteration_offset: int = 1,
     relion_final_star: Path | None = None,
     artifact_arrays: dict[str, np.ndarray] | None = None,
     thresholds: dict[str, float] | None = None,
@@ -1180,6 +1181,12 @@ def audit(
     source_table = _particle_table(recovar_particles_star)
     identities = _identity_array(source_table, source=recovar_particles_star)
     n_images = identities.size
+    relion_iteration_offset = int(relion_iteration_offset)
+    if relion_iteration_offset < 1:
+        raise AuditError(
+            "relion_iteration_offset must be at least 1 because RELION numbered "
+            f"iterations are one-based, got {relion_iteration_offset}"
+        )
     if artifact_arrays is not None:
         artifact_arrays["schema"] = np.asarray(ARRAY_SCHEMA)
         artifact_arrays["identity_row_index"] = np.arange(n_images, dtype=np.int64)
@@ -1209,7 +1216,9 @@ def audit(
                     f"{missing_requested}; available={available_rec_iterations}"
                 )
             rec_iterations = requested
-        expected_relion_iterations = {iteration + 1 for iteration in rec_iterations}
+        expected_relion_iterations = {
+            iteration + relion_iteration_offset for iteration in rec_iterations
+        }
         missing_relion = sorted(expected_relion_iterations - set(relion_stars))
         if missing_relion:
             raise MissingRelionIterationsError(missing_relion)
@@ -1217,7 +1226,10 @@ def audit(
             raise AuditError(
                 f"no matched iterations: RECOVAR zero-based={rec_iterations}, RELION one-based={sorted(relion_stars)}"
             )
-        matched = [(rec_iteration, rec_iteration + 1) for rec_iteration in rec_iterations]
+        matched = [
+            (rec_iteration, rec_iteration + relion_iteration_offset)
+            for rec_iteration in rec_iterations
+        ]
         halves = _half_labels(npz, source_table, n_images)
         defocus_u = _column(source_table, "rlnDefocusU")
         defocus_v = _column(source_table, "rlnDefocusV")
@@ -1395,7 +1407,10 @@ def audit(
                 "final_data_star_present": final_scalar_path.is_file(),
             }
 
-    unused_relion = sorted(set(relion_stars) - set(iteration + 1 for iteration in rec_iterations))
+    used_relion_iterations = {
+        iteration + relion_iteration_offset for iteration in rec_iterations
+    }
+    unused_relion = sorted(set(relion_stars) - used_relion_iterations)
     report = {
         "schema": SCHEMA,
         "status": "complete",
@@ -1416,7 +1431,9 @@ def audit(
             "relion_final_star": str(relion_final_star) if relion_final_star is not None else None,
         },
         "iteration_alignment": {
-            "recovar_zero_based_to_relion_one_based": True,
+            "recovar_zero_based_to_relion_one_based": relion_iteration_offset == 1,
+            "relion_iteration_offset": relion_iteration_offset,
+            "mapping": "relion_iteration = recovar_iteration + relion_iteration_offset",
             "selected_recovar_iterations": rec_iterations,
             "missing_relion_iterations": [],
             "unused_relion_iterations": unused_relion,
@@ -1490,6 +1507,15 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Optional zero-based RECOVAR iteration to audit; repeat to select an explicit complete boundary subset. "
             "Unselected iterations are not claimed."
+        ),
+    )
+    parser.add_argument(
+        "--relion-iteration-offset",
+        type=int,
+        default=1,
+        help=(
+            "Map RECOVAR local iteration i to RELION physical iteration i+OFFSET. "
+            "Use 2 for a one-step replay of physical iteration 2."
         ),
     )
     parser.add_argument(
@@ -1586,6 +1612,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.relion_control_reference_star, label="RELION control reference"
             ),
             recovar_iterations=None if args.recovar_iteration is None else set(args.recovar_iteration),
+            relion_iteration_offset=args.relion_iteration_offset,
             relion_final_star=relion_final_star,
             artifact_arrays=artifact_arrays,
             thresholds=thresholds,
