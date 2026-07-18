@@ -5327,9 +5327,23 @@ The focused hardening set passes 15 tests and the broader capture/projector set
 passes 96 tests. The wrapper now writes arm stdout and stderr synchronously,
 replays them only after the child closes, and then evaluates its strict gates;
 this removes both the wrong-stream check and the asynchronous-tee flush race.
-The repinned, resealed three-arm retry is Slurm job `11332272`. Its scientific
-projector attribution remains unclassified until that job produces a complete
-identity seal and control-envelope FSC/FSC-AUC audit.
+The repinned, resealed three-arm job `11332272` completed its first baseline's
+three-iteration refinement and repaired raw capture cleanly on one A100.  The
+capture contains exactly 10,000 particles, 2,100,480 candidates, and 269
+shards, including the 1,024-rotation tail.  The job then failed only in the
+external finalizer: a Pandas string column was serialized as a NumPy object
+array, while the fail-closed consumer correctly reopens every diagnostic NPZ
+with `allow_pickle=False`.  The authoritative raw capture was preserved.
+
+The finalizer now materializes Unicode arrays explicitly and rejects object
+dtypes before every atomic NPZ write.  A full offline finalization against an
+untouched hard-linked copy of job `11332272` passed: 5,000 identities per half,
+all 10,000 source rows, all 2,100,480 candidates, and all 269 shards reopen
+without pickle.  The complete three-arm auditor dry path also passed.  After an
+independent post-arm package audit approved the stable source and wrapper
+hashes, exactly one fresh retry was submitted as Slurm job `11332965`.  Its
+scientific projector attribution remains unclassified until all three arms and
+the canonical control-envelope FSC/FSC-AUC audit complete.
 
 Evidence:
 
@@ -5343,3 +5357,7 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/provenance/SOURCE_INPUT_SHA256SUMS` (SHA-256 `b3161a715026de9c8f94f5c7383b5788e47ea51b444e4e8cd69870a52b19267d`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/logs/focused_chunked_capture_hardening_20260718T035703Z.log` (SHA-256 `8230f48ad5ae8f2d7826260110a0b7d238a87526f583c5ef7decce0466a4888f`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/logs/broad_capture_projector_hardening_20260718T035900Z.log` (SHA-256 `9c9b0e6d40485e98fad10ff204db5536618cf6aeb6c07e4a1f927337df2bf2aa`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/runs/recovar_projector_ab_11332272/baseline_control_1/diagnostics/candidate_capture/RAW_CAPTURE_COMPLETE.json` (SHA-256 `90546125d583266bc6babcab29a35a563479d7c8ffe3666fbb691906d62951a8`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/logs/finalizer_offline_job11332272_20260718T043500Z.log` (SHA-256 `d161a38ec91fa2898c7511decfd7178a08e0c61ce5e38aa2c5daac7f03ac8c36`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/validation/finalizer_job11332272_copy/FINALIZATION_REPORT.json` (SHA-256 `18f1600aaa747fe860fc5679a04c8bd770cbc05474d3dd4978485084870e4a00`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/validation/finalizer_job11332272_copy/SOURCE_HALF_IDENTITIES.npz` (SHA-256 `311707c01e7e9db918008c01d8ea756c1feecf21b7013aaff15d5007c60d9ad1`)
