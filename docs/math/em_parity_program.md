@@ -5735,9 +5735,22 @@ the live residual.  After exact frame alignment, RELION-versus-RECOVAR raw
 BPref relative L2 is `0.00585173`/`0.00271445` for the numerator and
 `0.00119718`/`0.000475082` for the weight.  Construction, current-size support,
 tau scaling, map frame conversion, gridding, and mask semantics are therefore
-rejected as material explanations at this boundary; the next probe is an
-aggregate common-state accumulation replay using frozen posteriors and exact
-contribution identities/geometry, with float32 original/canonical-order and
+rejected as material explanations at this boundary.
+
+The existing package does not, however, contain the exact incoming physical
+iteration-2 RELION state needed for the next substitution.  It has 92 live
+state files per rank only for `state_iter3` and no `state_iter2` live state.
+The iteration-1 STAR/MRC checkpoint is complete as a serialized product, but
+its maps are float32 and its spectra, half-local noise/norm/prior fields,
+particle state, and perturbation are decimal-serialized; native iteration-2
+dispatch and contribution topology are also absent.  A substitution of
+`run_it001_half{1,2}_class001.mrc` into an otherwise frozen RECOVAR state is a
+valid **serialized-map-only intervention**, not an exact RELION boundary.
+
+An aggregate common-state accumulation replay claiming an exact incoming
+iteration-2 boundary therefore requires a fresh uninterrupted target-2 live
+capture, including exact posteriors, contribution identities/geometry, and
+native order.  It should then compare float32 original/canonical order with
 float64/complex128 canonical controls to separate operand generation from
 reduction precision/order.  Do not return to serial particle tracing unless
 that aggregate replay identifies a systematic subgroup.
@@ -5753,4 +5766,5 @@ Evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_bpref_reconstruction_factorial_20260718T100000Z/runs/capture_pair_11342527/analysis/it2_native_bpref_factorial.json` (SHA-256 `182df85587f8db78b26a12bb14917c781d5717eb405d91666938659575c8c1f3`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_bpref_reconstruction_factorial_20260718T100000Z/review/INDEPENDENT_REVIEW.md` (SHA-256 `07ffd7d8b0651405ee0a510f3acdc56607291e0da9be96ceb9de8044fa3d91f1`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_bpref_reconstruction_factorial_20260718T100000Z/review/INCOMING_IT2_BOUNDARY_AUDIT.md` (SHA-256 `e2a1d9f13b76c8dd23b40de5e0d329bc696e3f6eb2594160199dc340b88f259f`)
 - Slurm jobs `11342527` and `11342699`, both `COMPLETED` with exit code `0:0`.
