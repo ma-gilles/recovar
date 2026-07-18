@@ -806,6 +806,7 @@ def read_relion_optimiser_metadata(optimiser_star_path):
         smallest_changes_orientations=_grab("rlnSmallestChangesOrientations"),
         smallest_changes_offsets=_grab("rlnSmallestChangesOffsets"),
         smallest_changes_classes=_grab("rlnSmallestChangesClasses"),
+        do_correct_ctf=_grab("rlnDoCorrectCtf", int),
     )
 
 

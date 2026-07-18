@@ -2162,6 +2162,8 @@ def main():
     expected_accuracy_half1_base_order_local = None
     expected_accuracy_half1_optics_group_ids = None
     expected_accuracy_half1_particle_ids = None
+    expected_accuracy_half1_ctf_params = None
+    expected_accuracy_do_ctf_correction = None
     relion_particles = None
     relion_group_particles = None
     relion_group_source = None
@@ -2178,6 +2180,16 @@ def main():
             expected_accuracy_half1_optics_group_ids,
             expected_accuracy_half1_particle_ids,
         ) = _relion_halfset_and_accuracy_layout(our_particles, relion_particles)
+        from recovar.data_io import metadata_readers
+
+        relion_ctf_with_apix = metadata_readers.parse_ctf_from_star(
+            args.relion_half_sets,
+            ds.grid_size,
+        )
+        expected_accuracy_half1_ctf_params = np.asarray(
+            relion_ctf_with_apix[expected_accuracy_half1_particle_ids, 1:],
+            dtype=np.float64,
+        )
         logger.info("Using RELION half-set split: %d (subset=1) + %d (subset=2)", len(half1_idx), len(half2_idx))
     else:
         half1_idx, half2_idx = _default_refinement_subsets(n_images, args.seed, args.n_classes)
@@ -2431,6 +2443,18 @@ def main():
     optimiser_star = _find_relion_optimiser_star(args)
     relion_firstiter_ini_high_angstrom = None
     if optimiser_star is not None:
+        from recovar.em.sampling import read_relion_optimiser_metadata
+
+        expected_accuracy_do_ctf_correction = read_relion_optimiser_metadata(
+            optimiser_star,
+        ).get("do_correct_ctf")
+        if expected_accuracy_do_ctf_correction is not None:
+            expected_accuracy_do_ctf_correction = bool(expected_accuracy_do_ctf_correction)
+            logger.info(
+                "RELION expected-accuracy CTF correction: %s (from %s)",
+                expected_accuracy_do_ctf_correction,
+                optimiser_star,
+            )
         optimiser_text = Path(optimiser_star).read_text(errors="ignore")
         relion_firstiter_ini_high_angstrom = _parse_relion_cli_ini_high(optimiser_text)
         if args.firstiter_cc:
@@ -3111,6 +3135,8 @@ def main():
         expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
         expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
         expected_accuracy_half1_particle_ids=expected_accuracy_half1_particle_ids,
+        expected_accuracy_half1_ctf_params=expected_accuracy_half1_ctf_params,
+        expected_accuracy_do_ctf_correction=expected_accuracy_do_ctf_correction,
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,
         perturb_replay_restart_state_iterations=perturb_replay_restart_state_iterations,
         final_sampling_replay_relion_dir=final_sampling_replay_relion_dir,

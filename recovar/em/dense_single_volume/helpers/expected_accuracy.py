@@ -91,6 +91,8 @@ def estimate_relion_expected_accuracy(
     sigma2_fudge: float,
     random_seed: int,
     random_seed_particle_ids=None,
+    ctf_params_override=None,
+    do_ctf_correction: bool | None = None,
     max_trials: int = 100,
 ) -> ExpectedAccuracy:
     """Evaluate RELION ``calculateExpectedAngularErrors`` on half 1.
@@ -144,12 +146,18 @@ def estimate_relion_expected_accuracy(
     if weights.shape != (references.shape[0],):
         raise ValueError(f"class_weights must have shape ({references.shape[0]},), got {weights.shape}")
 
-    ctf = np.asarray(dataset.CTF_params, dtype=np.float64)
+    ctf_source = dataset.CTF_params if ctf_params_override is None else ctf_params_override
+    ctf = np.asarray(ctf_source, dtype=np.float64)
     if ctf.shape[0] != n_particles:
         raise ValueError(f"CTF parameter rows {ctf.shape[0]} do not match particles {n_particles}")
     voltage = _constant_selected(ctf[:, CTFParamIndex.VOLT], trial_local, "voltage")
     cs = _constant_selected(ctf[:, CTFParamIndex.CS], trial_local, "spherical aberration")
     amplitude_contrast = _constant_selected(ctf[:, CTFParamIndex.W], trial_local, "amplitude contrast")
+    if do_ctf_correction is None:
+        # RECOVAR's simulator uses negative amplitude contrast as its explicit
+        # identity/no-CTF sentinel.  Canonical RELION parity runs should pass
+        # rlnDoCorrectCtf from the optimiser instead of relying on this fallback.
+        do_ctf_correction = amplitude_contrast >= 0.0
 
     ori_size = int(volume_shape[0])
     sigma2_noise_relion = np.asarray(sigma2_noise_native, dtype=np.float64).reshape(-1) / float(ori_size**4)
@@ -174,7 +182,7 @@ def estimate_relion_expected_accuracy(
         1,
         float(sigma2_fudge),
         int(random_seed),
-        True,
+        bool(do_ctf_correction),
         False,
         np.ascontiguousarray(trial_particle_ids, dtype=np.int64),
     )

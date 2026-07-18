@@ -1154,22 +1154,22 @@ static py::dict vdam_expected_angular_errors(
             if (part_id < 0 || part_id >= n_particles)
                 throw std::runtime_error("particle_ids contains an entry outside the CTF parameter arrays");
 
-            CTF ctf;
-            ctf.setValues(
-                defU_ptr[part_id],
-                defV_ptr[part_id],
-                defA_ptr[part_id],
-                voltage,
-                Cs,
-                Q0,
-                0.0,
-                1.0,
-                phase_ptr[part_id],
-                -1.0
-            );
             MultidimArray<RFLOAT> Fctf(current_image_size, current_image_size / 2 + 1);
             Fctf.initConstant(1.0);
             if (do_ctf_correction) {
+                CTF ctf;
+                ctf.setValues(
+                    defU_ptr[part_id],
+                    defV_ptr[part_id],
+                    defA_ptr[part_id],
+                    voltage,
+                    Cs,
+                    Q0,
+                    0.0,
+                    1.0,
+                    phase_ptr[part_id],
+                    -1.0
+                );
                 ctf.getFftwImage(
                     Fctf,
                     ori_size,

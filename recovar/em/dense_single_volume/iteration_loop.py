@@ -3785,6 +3785,8 @@ def refine_single_volume(
     expected_accuracy_half1_base_order_local=None,
     expected_accuracy_half1_optics_group_ids=None,
     expected_accuracy_half1_particle_ids=None,
+    expected_accuracy_half1_ctf_params=None,
+    expected_accuracy_do_ctf_correction=None,
     perturb_replay_relion_dir=None,
     perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
@@ -4057,6 +4059,8 @@ def refine_single_volume(
         expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
         expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
         expected_accuracy_half1_particle_ids=expected_accuracy_half1_particle_ids,
+        expected_accuracy_half1_ctf_params=expected_accuracy_half1_ctf_params,
+        expected_accuracy_do_ctf_correction=expected_accuracy_do_ctf_correction,
         perturb_replay_relion_dir=perturb_replay_relion_dir,
         perturb_replay_relion_prefix=perturb_replay_relion_prefix,
         perturb_replay_precision=perturb_replay_precision,
@@ -4144,6 +4148,8 @@ def _run_relion_iteration_loop(
     expected_accuracy_half1_base_order_local=None,
     expected_accuracy_half1_optics_group_ids=None,
     expected_accuracy_half1_particle_ids=None,
+    expected_accuracy_half1_ctf_params=None,
+    expected_accuracy_do_ctf_correction=None,
     perturb_replay_relion_dir=None,
     perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
@@ -5366,6 +5372,8 @@ def _run_relion_iteration_loop(
                         sigma2_fudge=float(tau2_fudge),
                         random_seed=int(effective_optimizer_random_seed),
                         random_seed_particle_ids=expected_accuracy_half1_particle_ids,
+                        ctf_params_override=expected_accuracy_half1_ctf_params,
+                        do_ctf_correction=expected_accuracy_do_ctf_correction,
                     )
                     exact_acc_rot_this_iter = float(accuracy.acc_rot)
                     exact_acc_trans_this_iter = float(accuracy.acc_trans_angstrom)
@@ -8505,6 +8513,8 @@ def _run_relion_iteration_loop(
                     sigma2_fudge=float(tau2_fudge),
                     random_seed=int(effective_optimizer_random_seed),
                     random_seed_particle_ids=expected_accuracy_half1_particle_ids,
+                    ctf_params_override=expected_accuracy_half1_ctf_params,
+                    do_ctf_correction=expected_accuracy_do_ctf_correction,
                 )
                 state.acc_rot = float(final_expected_accuracy.acc_rot)
                 state.acc_trans = float(final_expected_accuracy.acc_trans_angstrom)

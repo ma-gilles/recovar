@@ -358,7 +358,7 @@ class TestAutoRefineExpectedAccuracyBinding:
         np.testing.assert_array_equal(actual, expected)
 
     @staticmethod
-    def _accuracy_fixture(bind, class_ids, pdf_class=(0.5, 0.5)):
+    def _accuracy_fixture(bind, class_ids, pdf_class=(0.5, 0.5), *, q0=0.07, do_ctf=False):
         rng = np.random.default_rng(9)
         reference = rng.standard_normal((8, 8, 8)).astype(np.float64)
         references = np.stack([reference, reference], axis=0)
@@ -378,7 +378,7 @@ class TestAutoRefineExpectedAccuracyBinding:
             zeros,
             300.0,
             2.7,
-            0.07,
+            q0,
             1.0,
             8,
             8,
@@ -386,10 +386,28 @@ class TestAutoRefineExpectedAccuracyBinding:
             1,
             1.0,
             17,
-            False,
+            do_ctf,
             False,
             np.asarray([101, 205], dtype=np.int64),
         )
+
+    def test_no_ctf_does_not_construct_invalid_ctf(self, bind):
+        out = self._accuracy_fixture(
+            bind,
+            class_ids=[0, 0],
+            q0=-1.0,
+            do_ctf=False,
+        )
+        assert np.isfinite(out["acc_rot"])
+        assert np.isfinite(out["acc_trans"])
+
+        with pytest.raises(Exception):
+            self._accuracy_fixture(
+                bind,
+                class_ids=[0, 0],
+                q0=-1.0,
+                do_ctf=True,
+            )
 
     def test_every_trial_is_evaluated_against_every_active_class(self, bind):
         if not hasattr(bind, "auto_refine_randomise_half_order"):
