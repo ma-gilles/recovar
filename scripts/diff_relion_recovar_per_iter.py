@@ -11,14 +11,9 @@ For each iteration index, loads:
 
 Reports per-iter, side-by-side:
   - current_size (Fourier window radius — RELION's _rlnCurrentImageSize)
-  - ave_Pmax     (mean of RELION's per-particle rlnMaxValueProbDistribution
-                  from data.star — the apples-to-apples comparison vs
-                  recovar's per-particle E-step Pmax mean)
-  - ave_Pmax_mstep (RELION's _rlnAveragePmax from model.star — this is the
-                    M-step accumulator; differs from the per-particle mean
-                    by ~3% for half-set/full-set accounting reasons. NOT
-                    directly comparable to recovar's ave_Pmax. Kept here
-                    for completeness only.)
+  - ave_Pmax     (RELION's optimizer/scheduling rlnAveragePmax from model.star)
+  - ave_Pmax_particles (mean of data.star::rlnMaxValueProbDistribution,
+                        retained as a separate distribution diagnostic)
   - current_resolution  (RELION's _rlnCurrentResolution)
   - healpix_order
   - changes in angles / offsets / classes (RELION-only; recovar tracks differently)
@@ -174,22 +169,17 @@ def extract_relion_scalars(relion_iter):
     Per-iter scalars live in THREE places:
       - model.star::model_general — current_size, current_resolution,
         sigma_offsets, log_likelihood, norm_correction, _rlnAveragePmax
-        (M-step accumulator — see note on ``ave_Pmax`` below).
+        (the optimizer scalar used for scheduling).
       - data.star — per-particle ``rlnMaxValueProbDistribution`` column.
-        Mean of this column is the apples-to-apples comparison to recovar's
-        per-particle E-step Pmax mean (``ave_Pmax_trajectory[i]``).
+        Its mean is retained as a separate distribution diagnostic.
       - optimiser.star — smallest_changes (convergence indicators), iter counters
 
     NOTE on ``ave_Pmax``:
-        ``_rlnAveragePmax`` written into ``run_it{NNN}_half{1,2}_model.star``
-        is RELION's M-step half-set accumulator. It differs from the mean of
-        ``rlnMaxValueProbDistribution`` (per-particle column in
-        ``run_it{NNN}_data.star``) by ~3% for half-set/full-set accounting
-        reasons. recovar's ``ave_Pmax_trajectory`` is the per-particle E-step
-        mean, so the apples-to-apples RELION column is the per-particle one.
-        Setting ``out["ave_Pmax"]`` from the per-particle column closes the
-        spurious 0.0412-vs-0.0436 "iter-1 5.5% gap" that was just two
-        differently-aggregated RELION numbers.
+        RELION computes ``_rlnAveragePmax`` from the weighted-sum model and
+        consumes it for current-size scheduling. It is therefore the parity
+        oracle for recovar's optimizer state. The arithmetic particle-column
+        mean is not interchangeable with it and is reported under
+        ``ave_Pmax_particles`` only.
     """
     out = {}
     opt = relion_iter["optimiser"]
@@ -197,30 +187,23 @@ def extract_relion_scalars(relion_iter):
     model_h2 = relion_iter["model_h2"]
     data = relion_iter.get("data")
 
-    # Per-particle Pmax mean from data.star — this is the apples-to-apples
-    # comparison versus recovar's ave_Pmax_trajectory entry.
+    # Preserve the particle-column mean as a distribution diagnostic.
     relion_data_df = None
     if data is not None:
         relion_data_df = data["particles"] if isinstance(data, dict) and "particles" in data else data
     if relion_data_df is not None and "rlnMaxValueProbDistribution" in relion_data_df:
         col = np.asarray(relion_data_df["rlnMaxValueProbDistribution"], dtype=np.float64)
         if col.size:
-            out["ave_Pmax"] = float(col.mean())
+            out["ave_Pmax_particles"] = float(col.mean())
 
     # From model_general (the per-iter "state" block)
     if model and "model_general" in model:
         mg = model["model_general"]
         out["current_size"] = int(mg.get("rlnCurrentImageSize", 0) or 0)
-        # _rlnAveragePmax is RELION's M-step accumulator. Keep it under a
-        # distinct key so the comparison table can show the discrepancy
-        # without conflating it with the per-particle metric.
-        out["ave_Pmax_mstep"] = float(mg.get("rlnAveragePmax", float("nan")))
-        # Fallback: if data.star did not carry rlnMaxValueProbDistribution
-        # (e.g. iter-0 bootstrap), use the M-step accumulator so downstream
-        # code still has *some* value rather than KeyError. The comparison
-        # row will then trivially be NaN-vs-recovar at that iter.
-        if "ave_Pmax" not in out:
-            out["ave_Pmax"] = out["ave_Pmax_mstep"]
+        out["ave_Pmax"] = float(mg.get("rlnAveragePmax", float("nan")))
+        # Backward-compatible alias for older consumers. Despite the historic
+        # name, this is the authoritative optimizer/scheduling scalar.
+        out["ave_Pmax_mstep"] = out["ave_Pmax"]
         out["current_resolution"] = float(mg.get("rlnCurrentResolution", float("nan")))
         out["log_likelihood"] = float(mg.get("rlnLogLikelihood", float("nan")))
         out["norm_correction_avg"] = float(mg.get("rlnNormCorrectionAverage", float("nan")))
@@ -370,6 +353,11 @@ def extract_recovar_scalars(recovar, it):
         out["current_size"] = int(cs_arr[it])
     if pmax_arr is not None and it < len(pmax_arr):
         out["ave_Pmax"] = float(pmax_arr[it])
+    pmax_particles_key = f"pmax_per_image_iter_{it:03d}"
+    if pmax_particles_key in recovar.files:
+        pmax_particles = np.asarray(recovar[pmax_particles_key], dtype=np.float64)
+        if pmax_particles.size:
+            out["ave_Pmax_particles"] = float(np.mean(pmax_particles))
     if pr_arr is not None and it < len(pr_arr):
         out["current_resolution_pix"] = int(pr_arr[it])
     if hpx_arr is not None and it < len(hpx_arr):
@@ -637,16 +625,12 @@ def main():
 
         scalars_to_compare = [
             ("current_size", rsc.get("current_size"), rec_sc.get("current_size")),
-            # ave_Pmax compares the per-particle mean of
-            # rlnMaxValueProbDistribution from RELION's data.star against
-            # recovar's per-particle E-step Pmax mean. This is the
-            # apples-to-apples row.
-            ("ave_Pmax", rsc.get("ave_Pmax"), rec_sc.get("ave_Pmax")),
-            # _rlnAveragePmax from model.star is the M-step accumulator.
-            # It differs from the per-particle mean by ~3% for half-set/
-            # full-set accounting reasons; reported here for completeness
-            # but NOT directly comparable to recovar's ave_Pmax.
-            ("ave_Pmax_mstep (RELION-only)", rsc.get("ave_Pmax_mstep"), None),
+            ("ave_Pmax_optimizer", rsc.get("ave_Pmax"), rec_sc.get("ave_Pmax")),
+            (
+                "ave_Pmax_particles",
+                rsc.get("ave_Pmax_particles"),
+                rec_sc.get("ave_Pmax_particles"),
+            ),
             ("sigma_offsets_mean_Å", rsc.get("sigma_offsets_angst"), rec_sc.get("sigma_offsets_angst")),
             ("sigma_offsets_h1_Å", rsc.get("sigma_offsets_h1_angst"), rec_sc.get("sigma_offsets_h1_angst")),
             ("sigma_offsets_h2_Å", rsc.get("sigma_offsets_h2_angst"), rec_sc.get("sigma_offsets_h2_angst")),

@@ -35,6 +35,26 @@ def test_relion_scheduling_pmax_fails_closed_after_iteration_zero():
         _read_relion_scheduling_average_pmax({"model_general": {}}, relion_iteration=8)
 
 
+def test_diff_reports_optimizer_and_particle_pmax_as_distinct_metrics():
+    model = {"model_general": {"rlnAveragePmax": 0.922993}}
+    scalars = parity_diff.extract_relion_scalars(
+        {
+            "optimiser": None,
+            "model_h1": model,
+            "model_h2": model,
+            "data": {
+                "particles": {
+                    "rlnMaxValueProbDistribution": np.asarray([0.9, 0.94572950956]),
+                }
+            },
+        }
+    )
+
+    assert scalars["ave_Pmax"] == pytest.approx(0.922993)
+    assert scalars["ave_Pmax_particles"] == pytest.approx(0.92286475478)
+    assert scalars["ave_Pmax_mstep"] == scalars["ave_Pmax"]
+
+
 def test_initial_scoring_noise_pair_defaults_to_relion_mpi_restart_broadcast():
     half1 = np.asarray([1.0, 2.0], dtype=np.float32)
     half2 = np.asarray([3.0, 4.0], dtype=np.float32)
