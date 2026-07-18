@@ -5263,3 +5263,31 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/analysis/projector_iref_rebuild_11329370_capture_a.json` (SHA-256 `fb894fa8ce229f43545f3a1265bbea1f90a917f3117ccad573720e7d5a9307ae`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_recovar_projector_injection_smoke_audit_0f0e7256_20260718T021700Z/smoke_abc_report_v3.json` (SHA-256 `c64f673eb7a2f962ca04834f1cdcbc83ad603929865b3a7019d360e26cc71ead`)
 - RELION replay binding SHA-256 `e04549190318244a62e7b85ea3200e221d37bc4543c4cc9811843f38075e4d22` (the resolved module path and digest are also sealed inside both rebuild reports).
+## 2026-07-18 frozen numbered-boundary projector substitution protocol
+
+Use `scripts/run_full_refinement.py --frozen-boundary-dir` only for a sealed,
+one-numbered-iteration causal replay.  The version-1 primitive bundle and its
+single-file SHA-256 manifest atomically own both half maps, tau2, per-half
+noise, FSC/Pmax, previous poses, particle order, schedule scalars, and the
+available convergence state.  The runner requires K=1, `--max_iter 1`,
+`--skip-final-iteration`, the matching `--init_relion_iteration`, and a RELION
+trajectory replay; conflicting map/noise/pose initialization is rejected.
+Late captured-projector attachment remains rejected unless this validated
+boundary is present, and the capture must represent the immediately following
+numbered iteration.
+
+For the real-10076 iteration-3 A/A/B discriminator, both control arms must use
+the same sealed job-11332965 baseline-control-1 RECOVAR scoring projector.
+Only arm B substitutes the sealed RELION scoring projector.  This deliberately
+freezes the scoring projector and removes native projector-rebuild variation;
+all reconstruction/M-step state and every non-projector input must have exact
+matching hashes across arms.  The job-11332965 boundary maps were serialized
+as float32 MRC before the primitive bundle was built, so this protocol proves
+byte-identical arm starts but must not be described as bitwise identity to the
+original in-memory iteration-2 Fourier maps.  A native projector rebuild is a
+diagnostic control, not a causal arm.
+
+Intermediate comparisons use exact arrays, five-field candidate UIDs,
+posterior total variation/exclusive mass, and cast-versus-genuine float64
+controls.  Map claims use canonical shellwise FSC and normalized FSC-AUC only;
+correlation is not computed or used as a gate.

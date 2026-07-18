@@ -3762,6 +3762,8 @@ def refine_single_volume(
     init_fsc=None,
     init_ave_Pmax=None,
     init_has_high_fsc_at_limit=None,
+    init_relion_incr_size=10,
+    init_refinement_state_fields=None,
     init_relion_iteration=0,
     init_image_corrections=None,
     init_scale_corrections=None,
@@ -4026,6 +4028,8 @@ def refine_single_volume(
         init_fsc=init_fsc,
         init_ave_Pmax=init_ave_Pmax,
         init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
+        init_relion_incr_size=init_relion_incr_size,
+        init_refinement_state_fields=init_refinement_state_fields,
         init_relion_iteration=init_relion_iteration,
         init_image_corrections=init_image_corrections,
         init_scale_corrections=init_scale_corrections,
@@ -4109,6 +4113,8 @@ def _run_relion_iteration_loop(
     init_fsc=None,
     init_ave_Pmax=None,
     init_has_high_fsc_at_limit=None,
+    init_relion_incr_size=10,
+    init_refinement_state_fields=None,
     init_relion_iteration=0,
     init_image_corrections=None,
     init_scale_corrections=None,
@@ -4335,6 +4341,36 @@ def _run_relion_iteration_loop(
         _init_res_angstrom = shell_index_to_resolution_angstrom(_init_shell, grid_size, _px)
         state.current_resolution = float(_init_res_angstrom)
         state.previous_resolution = float(_init_res_angstrom)
+    if init_refinement_state_fields is not None:
+        allowed_boundary_fields = {
+            "current_resolution",
+            "previous_resolution",
+            "nr_iter_wo_resol_gain",
+            "nr_iter_wo_assignment_changes",
+            "nr_iter_wo_large_hidden_variable_changes",
+            "ave_Pmax",
+            "current_changes_optimal_orientations",
+            "current_changes_optimal_offsets_angstrom",
+            "smallest_changes_optimal_orientations",
+            "smallest_changes_optimal_offsets_angstrom",
+            "acc_rot",
+            "acc_trans",
+            "has_converged",
+        }
+        unexpected_fields = sorted(set(init_refinement_state_fields) - allowed_boundary_fields)
+        if unexpected_fields:
+            raise ValueError(
+                "unsupported frozen-boundary RefinementState fields: "
+                f"{unexpected_fields}"
+            )
+        for field_name, value in init_refinement_state_fields.items():
+            setattr(state, field_name, value)
+        if state.has_converged:
+            raise ValueError("a numbered frozen-boundary restart cannot already be converged")
+        logger.info(
+            "Diagnostic frozen-boundary RefinementState restored: fields=%s",
+            sorted(init_refinement_state_fields),
+        )
     _mark_setup_phase("state_init")
 
     # RELION mode owns the coarse HEALPix grid. When coarse-grid metadata is
@@ -4518,7 +4554,9 @@ def _run_relion_iteration_loop(
     class_assignment_history = []
     local_profile_history = []
     global_profile_history = []
-    relion_incr_size = 10  # RELION default
+    relion_incr_size = int(init_relion_incr_size)
+    if relion_incr_size <= 0:
+        raise ValueError("init_relion_incr_size must be positive")
     relion_has_high_fsc_at_limit = bool(init_has_high_fsc_at_limit) if init_has_high_fsc_at_limit is not None else False
     global_direction_prior_per_half = [None, None]
     global_direction_prior_order_per_half = [None, None]
