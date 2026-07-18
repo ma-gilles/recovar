@@ -4,6 +4,7 @@ import pytest
 from scripts import diff_relion_recovar_per_iter as parity_diff
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
+    _read_relion_scheduling_average_pmax,
     final_output_fourier_volumes,
     initial_scoring_noise_pair,
     map_pose_arrays_to_particle_order,
@@ -17,6 +18,21 @@ from scripts.run_multi_iter_parity import (
     stack_index_from_image_name,
     validate_final_only_replay_args,
 )
+
+
+def test_relion_scheduling_pmax_uses_authoritative_model_scalar():
+    model = {"model_general": {"rlnAveragePmax": 0.922993}}
+
+    assert _read_relion_scheduling_average_pmax(model, relion_iteration=8) == pytest.approx(0.922993)
+
+
+def test_relion_scheduling_pmax_allows_zero_for_missing_iteration_zero_scalar():
+    assert _read_relion_scheduling_average_pmax({"model_general": {}}, relion_iteration=0) == 0.0
+
+
+def test_relion_scheduling_pmax_fails_closed_after_iteration_zero():
+    with pytest.raises(ValueError, match="rlnAveragePmax"):
+        _read_relion_scheduling_average_pmax({"model_general": {}}, relion_iteration=8)
 
 
 def test_initial_scoring_noise_pair_defaults_to_relion_mpi_restart_broadcast():

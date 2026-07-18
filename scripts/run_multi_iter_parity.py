@@ -258,6 +258,26 @@ def _read_relion_pmax_column(relion_df):
     return np.array(relion_df["rlnMaxValueProbDistribution"], dtype=np.float64)
 
 
+def _read_relion_scheduling_average_pmax(model, *, relion_iteration: int) -> float:
+    """Read the model scalar RELION uses for scheduling the next iteration.
+
+    The arithmetic mean of ``data.star::rlnMaxValueProbDistribution`` is a
+    useful per-particle comparison metric, but it is not RELION's optimizer
+    state.  Current-size growth consumes ``model.star::rlnAveragePmax``.
+    """
+
+    model_general = model.get("model_general", {}) if isinstance(model, dict) else {}
+    value = model_general.get("rlnAveragePmax")
+    if value is not None and np.isfinite(float(value)):
+        return float(value)
+    if int(relion_iteration) == 0:
+        return 0.0
+    raise ValueError(
+        "RELION model is missing finite rlnAveragePmax required for exact "
+        f"iteration-{int(relion_iteration)} scheduling replay"
+    )
+
+
 def parse_relion_optimiser_cli_flags(opt_text: str) -> dict[str, object]:
     """Extract selected CLI flags from RELION's optimiser STAR header."""
     cli_line = next(
@@ -779,17 +799,20 @@ def main():
     offset_range = float(sampling_meta["offset_range"])
     offset_step = float(sampling_meta["offset_step"])
 
-    # ave_Pmax from per-particle data. RELION it000 is a bootstrap state and
-    # does not yet carry rlnMaxValueProbDistribution.
+    # Scheduling ave_Pmax comes from RELION's model state.  Keep the particle
+    # column separate: it is useful for per-particle posterior diagnostics but
+    # is not the scalar consumed by current-size growth.
     relion_data = starfile.read(f"{prefix}_data.star")
     relion_df = relion_data["particles"] if isinstance(relion_data, dict) else relion_data
     relion_pmax = _read_relion_pmax_column(relion_df)
-    if relion_pmax is not None:
-        ave_Pmax = float(np.mean(relion_pmax))
-    else:
-        ave_Pmax = 0.0
+    ave_Pmax = _read_relion_scheduling_average_pmax(
+        model_h1,
+        relion_iteration=iteration,
+    )
+    if relion_pmax is None:
         print(
-            "  Initial RELION data STAR has no rlnMaxValueProbDistribution; bootstrapping init_ave_Pmax=0.0",
+            "  Initial RELION data STAR has no rlnMaxValueProbDistribution; "
+            "per-particle Pmax comparison is unavailable",
         )
 
     # has_high_fsc_at_limit (sticky flag)
