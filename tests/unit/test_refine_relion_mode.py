@@ -6905,6 +6905,21 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
         **common_kwargs,
     )
 
+    float64_dump_dir = tmp_path / "score_dump_float64"
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", str(float64_dump_dir))
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT", raising=False)
+    run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        use_float64_scoring=True,
+        use_float64_projections=True,
+        **common_kwargs,
+    )
+
     profile_big = big[-1]
     profile_split = split[-1]
     assert int(profile_big["big_jit_bucket_count"]) == 1
@@ -6932,6 +6947,12 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
             atol=2e-5,
             rtol=2e-5,
         )
+    float64_dump = next(float64_dump_dir.glob("local_score_it*_image_0*.npz"))
+    with np.load(float64_dump) as float64_npz:
+        assert float64_npz["pass2_scores_total"].dtype == np.float64
+        assert float64_npz["debug_shifted_score"].dtype == np.complex128
+        assert float64_npz["debug_ctf2_over_nv"].dtype == np.float64
+        assert float64_npz["debug_proj_weighted"].dtype == np.complex128
 
 
 def test_local_score_debug_dump_only_materializes_target_bucket(monkeypatch, rng, tmp_path):

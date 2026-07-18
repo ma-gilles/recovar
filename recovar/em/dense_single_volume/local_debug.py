@@ -176,6 +176,15 @@ def _target_rows_to_numpy(array, target_rows: list[int], dtype):
     return np.asarray(subset, dtype=dtype)
 
 
+def _debug_capture_dtype(array, *, complex_values: bool = False):
+    """Preserve genuine high-precision diagnostic operands when present."""
+
+    dtype = np.dtype(getattr(array, "dtype", np.complex64 if complex_values else np.float32))
+    if complex_values:
+        return np.complex128 if dtype.itemsize > np.dtype(np.complex64).itemsize else np.complex64
+    return np.float64 if dtype.itemsize > np.dtype(np.float32).itemsize else np.float32
+
+
 def _dense_score_dump_label_suffix() -> str:
     """Return a sanitized optional label suffix for dense score dumps."""
 
@@ -678,11 +687,16 @@ def maybe_write_debug_score_dump(
     if not target_rows:
         return pending_targets
 
-    scores_np = _target_rows_to_numpy(scores, target_rows, np.float32)
-    probs_np = _target_rows_to_numpy(probs, target_rows, np.float32)
-    log_Z_np = _target_rows_to_numpy(log_Z, target_rows, np.float32)
-    best_log_score_np = _target_rows_to_numpy(best_log_score, target_rows, np.float32)
-    max_posterior_np = _target_rows_to_numpy(max_posterior, target_rows, np.float32)
+    score_dtype = _debug_capture_dtype(scores)
+    probability_dtype = _debug_capture_dtype(probs)
+    log_z_dtype = _debug_capture_dtype(log_Z)
+    best_score_dtype = _debug_capture_dtype(best_log_score)
+    max_posterior_dtype = _debug_capture_dtype(max_posterior)
+    scores_np = _target_rows_to_numpy(scores, target_rows, score_dtype)
+    probs_np = _target_rows_to_numpy(probs, target_rows, probability_dtype)
+    log_Z_np = _target_rows_to_numpy(log_Z, target_rows, log_z_dtype)
+    best_log_score_np = _target_rows_to_numpy(best_log_score, target_rows, best_score_dtype)
+    max_posterior_np = _target_rows_to_numpy(max_posterior, target_rows, max_posterior_dtype)
     reconstruction_sample_mask_np = _target_rows_to_numpy(reconstruction_sample_mask, target_rows, bool)
     reconstruction_rotation_mask_np = _target_rows_to_numpy(reconstruction_rotation_mask, target_rows, bool)
     n_significant_samples_np = _target_rows_to_numpy(n_significant_samples, target_rows, np.int32)
@@ -693,37 +707,53 @@ def maybe_write_debug_score_dump(
         "on",
     }
     shifted_score_np = (
-        _target_rows_to_numpy(shifted_score_split, target_rows, np.complex64)
+        _target_rows_to_numpy(
+            shifted_score_split,
+            target_rows,
+            _debug_capture_dtype(shifted_score_split, complex_values=True),
+        )
         if dump_operands and shifted_score_split is not None
         else None
     )
     shifted_recon_np = (
-        _target_rows_to_numpy(shifted_recon_split, target_rows, np.complex64)
+        _target_rows_to_numpy(
+            shifted_recon_split,
+            target_rows,
+            _debug_capture_dtype(shifted_recon_split, complex_values=True),
+        )
         if dump_operands and shifted_recon_split is not None
         else None
     )
     ctf2_over_nv_np = (
-        _target_rows_to_numpy(ctf2_over_nv_score, target_rows, np.float32)
+        _target_rows_to_numpy(ctf2_over_nv_score, target_rows, _debug_capture_dtype(ctf2_over_nv_score))
         if dump_operands and ctf2_over_nv_score is not None
         else None
     )
     ctf2_over_nv_recon_np = (
-        _target_rows_to_numpy(ctf2_over_nv_recon, target_rows, np.float32)
+        _target_rows_to_numpy(ctf2_over_nv_recon, target_rows, _debug_capture_dtype(ctf2_over_nv_recon))
         if dump_operands and ctf2_over_nv_recon is not None
         else None
     )
     proj_weighted_np = (
-        _target_rows_to_numpy(proj_weighted, target_rows, np.complex64)
+        _target_rows_to_numpy(
+            proj_weighted,
+            target_rows,
+            _debug_capture_dtype(proj_weighted, complex_values=True),
+        )
         if dump_operands and proj_weighted is not None
         else None
     )
     proj_for_noise_np = (
-        _target_rows_to_numpy(proj_for_noise, target_rows, np.complex64)
+        _target_rows_to_numpy(
+            proj_for_noise,
+            target_rows,
+            _debug_capture_dtype(proj_for_noise, complex_values=True),
+        )
         if dump_operands and proj_for_noise is not None
         else None
     )
     proj_abs2_weighted_np = (
-        _target_rows_to_numpy(proj_abs2_weighted, target_rows, np.float32)
+        _target_rows_to_numpy(proj_abs2_weighted, target_rows, _debug_capture_dtype(proj_abs2_weighted))
         if dump_operands and proj_abs2_weighted is not None
         else None
     )
@@ -746,10 +776,10 @@ def maybe_write_debug_score_dump(
         rotation_mask = metadata["rotation_mask"]
         rotation_log_prior = np.asarray(bucket.local_rotation_log_prior[row, :actual_count], dtype=np.float32)
         translation_log_prior = np.asarray(bucket.translation_log_prior[row], dtype=np.float32)
-        total_scores = np.asarray(scores_np[compact_row, :actual_count, :], dtype=np.float32)
+        total_scores = np.asarray(scores_np[compact_row, :actual_count, :], dtype=score_dtype)
         raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
         raw_scores = np.where(rotation_mask[:, None], raw_scores, -np.inf)
-        posterior = np.asarray(probs_np[compact_row, :actual_count, :], dtype=np.float32)
+        posterior = np.asarray(probs_np[compact_row, :actual_count, :], dtype=probability_dtype)
         n_trans = int(translation_log_prior.shape[0])
         translation_indices = metadata["translation_indices"]
         translation_parent_indices = metadata["translation_parent_indices"]
@@ -834,9 +864,9 @@ def maybe_write_debug_score_dump(
             "reconstruction_sample_mask": reconstruction_sample_mask_row[None, :, :],
             "reconstruction_rotation_mask": reconstruction_rotation_mask_row[None, :],
             "n_significant_samples": np.array([int(n_significant_samples_np[compact_row])], dtype=np.int32),
-            "max_posterior": np.array([float(max_posterior_np[compact_row])], dtype=np.float32),
-            "log_Z": np.array([float(log_Z_np[compact_row])], dtype=np.float32),
-            "best_score": np.array([float(best_log_score_np[compact_row])], dtype=np.float32),
+            "max_posterior": np.array([float(max_posterior_np[compact_row])], dtype=max_posterior_dtype),
+            "log_Z": np.array([float(log_Z_np[compact_row])], dtype=log_z_dtype),
+            "best_score": np.array([float(best_log_score_np[compact_row])], dtype=best_score_dtype),
             "best_score_rotation_local_index": np.array([int(best_score_rotation_index)], dtype=np.int32),
             "best_score_translation_index": np.array([int(best_score_translation_index)], dtype=np.int32),
             "best_score_rotation_global_id": np.array(
@@ -870,30 +900,39 @@ def maybe_write_debug_score_dump(
         }
         if dump_operands:
             if shifted_score_np is not None:
-                payload["debug_shifted_score"] = np.asarray(shifted_score_np[compact_row], dtype=np.complex64)
+                payload["debug_shifted_score"] = np.asarray(
+                    shifted_score_np[compact_row],
+                    dtype=shifted_score_np.dtype,
+                )
             if shifted_recon_np is not None:
-                payload["debug_shifted_recon"] = np.asarray(shifted_recon_np[compact_row], dtype=np.complex64)
+                payload["debug_shifted_recon"] = np.asarray(
+                    shifted_recon_np[compact_row],
+                    dtype=shifted_recon_np.dtype,
+                )
             if ctf2_over_nv_np is not None:
-                payload["debug_ctf2_over_nv"] = np.asarray(ctf2_over_nv_np[compact_row], dtype=np.float32)
+                payload["debug_ctf2_over_nv"] = np.asarray(
+                    ctf2_over_nv_np[compact_row],
+                    dtype=ctf2_over_nv_np.dtype,
+                )
             if ctf2_over_nv_recon_np is not None:
                 payload["debug_ctf2_over_nv_recon"] = np.asarray(
                     ctf2_over_nv_recon_np[compact_row],
-                    dtype=np.float32,
+                    dtype=ctf2_over_nv_recon_np.dtype,
                 )
             if proj_weighted_np is not None:
                 payload["debug_proj_weighted"] = np.asarray(
                     proj_weighted_np[compact_row, :actual_count, :],
-                    dtype=np.complex64,
+                    dtype=proj_weighted_np.dtype,
                 )
             if proj_for_noise_np is not None:
                 payload["debug_proj_for_recon"] = np.asarray(
                     proj_for_noise_np[compact_row, :actual_count, :],
-                    dtype=np.complex64,
+                    dtype=proj_for_noise_np.dtype,
                 )
             if proj_abs2_weighted_np is not None:
                 payload["debug_proj_abs2_weighted"] = np.asarray(
                     proj_abs2_weighted_np[compact_row, :actual_count, :],
-                    dtype=np.float32,
+                    dtype=proj_abs2_weighted_np.dtype,
                 )
         np.savez_compressed(dump_path, **payload)
         if requested_iterations is None:
