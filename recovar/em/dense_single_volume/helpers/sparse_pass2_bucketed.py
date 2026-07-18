@@ -346,6 +346,26 @@ def _bpref_diagnostic_ownership_indices(
     return owners[rows]
 
 
+def _validate_bpref_diagnostic_ownership(
+    owners,
+    *,
+    device_signature_requested: bool,
+) -> None:
+    """Validate ownership without imposing particle-id order on scoped captures."""
+
+    owners = np.asarray(owners, dtype=np.int64)
+    if owners.size < 2:
+        return
+    if device_signature_requested:
+        if np.unique(owners).size != owners.size:
+            raise RuntimeError("Scoped BPref device signature requires unique particle ownership")
+    elif not np.all(np.diff(owners) > 0):
+        raise RuntimeError(
+            "RELION per-particle launch diagnostic requires strictly increasing "
+            "particle ownership order"
+        )
+
+
 def _resolve_bpref_bucket_diagnostic_modes(
     *,
     device_signature_requested: bool,
@@ -9805,10 +9825,10 @@ def compute_pass2_stats_sparse_bucketed(
                     target_particle_rows,
                     device_signature_requested=device_signature_requested,
                 )
-                if diagnostic_owners.size > 1 and not np.all(np.diff(diagnostic_owners) > 0):
-                    raise RuntimeError(
-                        "RELION per-particle launch diagnostic requires strictly increasing particle ownership order"
-                    )
+                _validate_bpref_diagnostic_ownership(
+                    diagnostic_owners,
+                    device_signature_requested=bucket_device_signature_requested,
+                )
             if live_per_particle_launches:
                 mstep_window_indices = (
                     relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices

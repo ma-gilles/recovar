@@ -2077,7 +2077,7 @@ def test_scoped_bpref_ownership_gate_ignores_unrelated_bucket_order():
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
     image_indices = np.asarray([20, 5, 13], dtype=np.int64)
-    target_rows = np.asarray([1], dtype=np.int64)
+    target_rows = np.asarray([0, 2], dtype=np.int64)
 
     scoped = bucketed_mod._bpref_diagnostic_ownership_indices(
         image_indices,
@@ -2090,10 +2090,25 @@ def test_scoped_bpref_ownership_gate_ignores_unrelated_bucket_order():
         device_signature_requested=False,
     )
 
-    np.testing.assert_array_equal(scoped, np.asarray([5], dtype=np.int64))
+    np.testing.assert_array_equal(scoped, np.asarray([20, 13], dtype=np.int64))
     np.testing.assert_array_equal(unscoped, image_indices)
-    assert scoped.size < 2 or np.all(np.diff(scoped) > 0)
+    assert np.unique(scoped).size == scoped.size
+    assert not np.all(np.diff(scoped) > 0)
     assert not np.all(np.diff(unscoped) > 0)
+    bucketed_mod._validate_bpref_diagnostic_ownership(
+        scoped,
+        device_signature_requested=True,
+    )
+    with pytest.raises(RuntimeError, match="unique particle ownership"):
+        bucketed_mod._validate_bpref_diagnostic_ownership(
+            np.asarray([20, 20], dtype=np.int64),
+            device_signature_requested=True,
+        )
+    with pytest.raises(RuntimeError, match="strictly increasing particle ownership order"):
+        bucketed_mod._validate_bpref_diagnostic_ownership(
+            unscoped,
+            device_signature_requested=False,
+        )
 
 
 def test_relion_x_half_bp_fused_atomics_is_off_by_default(monkeypatch):
