@@ -43,6 +43,58 @@ sys.stderr.reconfigure(line_buffering=True)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", stream=sys.stdout)
 
 
+def build_gt_postprocess_command(
+    *,
+    recovar_dir: str | Path,
+    relion_dir: str | Path,
+    relion_start_iter: int,
+    relion_run_prefix: str,
+    gt_volume: str | Path,
+    max_iter: int,
+    gt_align: bool = False,
+    gt_align_healpix_order: int = DEFAULT_GT_ALIGN_HEALPIX_ORDER,
+    gt_align_max_shell: int = DEFAULT_GT_ALIGN_MAX_SHELL,
+    gt_align_no_mirror: bool = False,
+    gt_align_allow_sign: bool = False,
+    gt_align_all_series: bool = False,
+) -> list[str]:
+    """Build the GT postprocessor command using import-safe module execution."""
+    command = [
+        sys.executable,
+        "-m",
+        "scripts.postprocess_multi_iter_gt",
+        "--recovar_dir",
+        str(recovar_dir),
+        "--relion_dir",
+        str(relion_dir),
+        "--relion_start_iter",
+        str(relion_start_iter),
+        "--relion_run_prefix",
+        str(relion_run_prefix),
+        "--gt_volume",
+        str(gt_volume),
+        "--max_iter",
+        str(max_iter),
+    ]
+    if gt_align:
+        command.extend(
+            [
+                "--gt_align",
+                "--gt_align_healpix_order",
+                str(gt_align_healpix_order),
+                "--gt_align_max_shell",
+                str(gt_align_max_shell),
+            ]
+        )
+        if gt_align_no_mirror:
+            command.append("--gt_align_no_mirror")
+        if gt_align_allow_sign:
+            command.append("--gt_align_allow_sign")
+        if gt_align_all_series:
+            command.append("--gt_align_all_series")
+    return command
+
+
 def stack_index_from_image_name(name: str) -> int:
     """Return the zero-based stack row encoded in a RELION image name."""
     m = re.match(r"(\d+)@", str(name))
@@ -2160,38 +2212,20 @@ def main():
         print("\n=== Postprocessing per-iteration map quality vs GT/RELION ===")
         import subprocess
 
-        gt_postprocess_cmd = [
-            sys.executable,
-            "scripts/postprocess_multi_iter_gt.py",
-            "--recovar_dir",
-            out_dir,
-            "--relion_dir",
-            str(relion_dir),
-            "--relion_start_iter",
-            str(iteration),
-            "--relion_run_prefix",
-            run_prefix,
-            "--gt_volume",
-            str(gt_path),
-            "--max_iter",
-            str(args.max_iter),
-        ]
-        if args.gt_align:
-            gt_postprocess_cmd.extend(
-                [
-                    "--gt_align",
-                    "--gt_align_healpix_order",
-                    str(args.gt_align_healpix_order),
-                    "--gt_align_max_shell",
-                    str(args.gt_align_max_shell),
-                ]
-            )
-            if args.gt_align_no_mirror:
-                gt_postprocess_cmd.append("--gt_align_no_mirror")
-            if args.gt_align_allow_sign:
-                gt_postprocess_cmd.append("--gt_align_allow_sign")
-            if args.gt_align_all_series:
-                gt_postprocess_cmd.append("--gt_align_all_series")
+        gt_postprocess_cmd = build_gt_postprocess_command(
+            recovar_dir=out_dir,
+            relion_dir=relion_dir,
+            relion_start_iter=iteration,
+            relion_run_prefix=run_prefix,
+            gt_volume=gt_path,
+            max_iter=args.max_iter,
+            gt_align=args.gt_align,
+            gt_align_healpix_order=args.gt_align_healpix_order,
+            gt_align_max_shell=args.gt_align_max_shell,
+            gt_align_no_mirror=args.gt_align_no_mirror,
+            gt_align_allow_sign=args.gt_align_allow_sign,
+            gt_align_all_series=args.gt_align_all_series,
+        )
         subprocess.run(gt_postprocess_cmd, check=True)
 
     # ---- Run diff script ----

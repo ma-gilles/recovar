@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import pytest
 
@@ -5,6 +7,7 @@ from scripts import diff_relion_recovar_per_iter as parity_diff
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
     _read_relion_scheduling_average_pmax,
+    build_gt_postprocess_command,
     final_output_fourier_volumes,
     initial_scoring_noise_pair,
     map_pose_arrays_to_particle_order,
@@ -18,6 +21,24 @@ from scripts.run_multi_iter_parity import (
     stack_index_from_image_name,
     validate_final_only_replay_args,
 )
+
+
+def test_gt_postprocess_command_uses_module_with_pythonpath_unset(monkeypatch, tmp_path):
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+
+    command = build_gt_postprocess_command(
+        recovar_dir=tmp_path / "recovar",
+        relion_dir=tmp_path / "relion",
+        relion_start_iter=3,
+        relion_run_prefix="custom",
+        gt_volume=tmp_path / "gt.mrc",
+        max_iter=7,
+    )
+
+    assert command[:3] == [sys.executable, "-m", "scripts.postprocess_multi_iter_gt"]
+    assert "scripts/postprocess_multi_iter_gt.py" not in command
+    assert command[command.index("--relion_start_iter") + 1] == "3"
+    assert command[command.index("--max_iter") + 1] == "7"
 
 
 def test_relion_scheduling_pmax_uses_authoritative_model_scalar():
