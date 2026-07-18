@@ -5882,3 +5882,26 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_030f4a0b_20260718T104146Z/analysis/pre_fix_autonomous_iteration_004_map_fsc_audit_v1_shellwise_fsc.npz` (SHA-256 `f0a3fbddb6ef3e18bc0b482df33d628318de370861ce120797e3bcbd14778ae0`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_recovar_030f4a0b_20260718T091559Z/analysis/controlled_oracle_state_iteration_004_map_fsc_audit_v1.json` (SHA-256 `9da552c1e843059a1489f26fb283b40b9301a0f4d7de160aa0637aa0f8a6a30f`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_recovar_030f4a0b_20260718T091559Z/analysis/controlled_oracle_state_iteration_004_map_fsc_audit_v1_shellwise_fsc.npz` (SHA-256 `4d095e5d05424fed3f56f3ad4068dfbc7483689145cc66ceff59973abb18e0c1`)
+
+## 2026-07-18 split-half optimizer-Pmax workflow correction
+
+A source audit identified a real K=1/K-class control-state mismatch. In
+split-half MPI refinement, RELION computes `ave_Pmax` independently for each
+half, divides the half-1 Pmax numerator by half 1's retained M-step posterior
+mass (`sum(wsum_model.pdf_class)`), and broadcasts rank 1's scalar for shared
+image-size scheduling. RECOVAR instead averaged raw particle Pmax across both
+halves and divided by particle count. The two-half arithmetic mean is not the
+optimizer oracle.
+
+Commit `8e7ce8af` implements the half-1 retained-mass scalar, passes it
+explicitly into convergence/scheduling, preserves both-half particle arrays as
+diagnostics, and records `ave_Pmax_denominator_trajectory`. Asymmetric-half
+tests cover both the source-half and denominator rules. Focused tests pass
+6/6, and the full convergence unit module passes 82/82.
+
+This correction is required for exact workflow parity and latent threshold
+cases, but it does not explain the corrected autonomous K=4 iteration-8 map
+failure. Before iteration 8, old and corrected Pmax values take the same active
+current-size branches and no convergence topology splits. Independent
+score/posterior, backprojection, and float64/order classification therefore
+continues; FSC/FSC-AUC remains the map-quality gate.

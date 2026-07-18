@@ -31,8 +31,8 @@ Current high-level status as of 2026-04-03:
 - RELION-mode now uses the same search-range-driven translation-prior width as
   RELION's score path: when a finite offset search range is active, the Gaussian
   prior width is `offset_range / 3` rather than the raw `--offset` value.
-- RELION-mode now aggregates `ave_Pmax` and convergence bookkeeping across both
-  half-sets instead of incorrectly using only half-set 0.
+- RELION-mode now uses half-set 1's retained-mass-normalized `ave_Pmax` for
+  shared scheduling and convergence, matching RELION's rank-1 broadcast.
 - RELION-mode now feeds back a learned global direction prior outside local
   search, using coarse-grid posterior mass accumulated from the active
   orientation grid rather than from oversampled child indices.
@@ -231,8 +231,9 @@ tau2 and `data_vs_prior` curves remain downstream approximations.
 RELION stores `Pmax` per particle and aggregates `ave_Pmax` directly from the
 posterior weights.
 
-recovar now carries per-image `Pmax` out of the engine and aggregates
-`ave_Pmax` across both half-sets, which fixes an earlier bookkeeping bug.
+recovar now carries per-image `Pmax` out of the engine and computes optimizer
+`ave_Pmax` from half-set 1's numerator and retained M-step posterior mass. The
+two-half arithmetic particle mean is retained under a different diagnostic.
 What is still missing is the rest of the RELION metadata/statistics coupling:
 
 - `dLL = log(sum_weight) - min_diff2 - logsigma2`

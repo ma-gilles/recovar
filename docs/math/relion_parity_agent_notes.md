@@ -4099,13 +4099,22 @@ map-quality acceptance remains shellwise FSC/FSC-AUC only, never correlation.
   source contract is `ml_optimiser.cpp:5294` for aggregation and line 5689 for
   scheduling.
 - With the model scalar used consistently, the earliest exact optimizer-Pmax
-  mismatch is iteration 2: RECOVAR `0.069386` versus RELION `0.069454`, delta
-  `-6.8e-5`. RECOVAR-minus-RELION model-scalar deltas for iterations 3--9 are
+  mismatch in the pre-fix trajectory is iteration 2: RECOVAR `0.069386` versus
+  RELION `0.069454`, delta `-6.8e-5`. Pre-fix RECOVAR-minus-RELION deltas for iterations 3--9 are
   `[-3.1e-5, -6.11e-4, -1.49e-4, -3.61e-4, -1.46e-4, +5e-6, -1.71e-4]`.
   These values do not change the already-matched size/convergence decisions,
   but they are real scalar-state differences and must remain visible. The
   particle-column mean is a separate distribution diagnostic, not a substitute
   scheduling oracle.
+- A subsequent source audit found that RECOVAR's own pre-fix scalar was also
+  the wrong optimizer quantity: it averaged raw Pmax over both halves and
+  divided by particle count. RELION divides half 1's Pmax sum by half 1's
+  retained M-step posterior mass, then broadcasts rank 1's scalar to both
+  halves (`ml_optimiser.cpp:5294`, `ml_optimiser_mpi.cpp:4133-4138`). Commit
+  `8e7ce8af` implements that exact workflow, records the denominator trajectory,
+  and passes asymmetric-half regression tests. The correction does not explain
+  the iteration-8 map failure: the compared Pmax values remain on the same side
+  of every active current-size threshold and no earlier convergence split occurs.
 - Class 3 remains above `0.9999250` normalized FSC-AUC through RELION's
   reported shell 26 and `0.9986630` through the current-size radius 35; its
   beyond-radius FSC-AUC is `0.9930675`. Shells 27--35 contain about `1.83e-4`

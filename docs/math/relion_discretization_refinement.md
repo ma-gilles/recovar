@@ -645,8 +645,10 @@ side.
   reporting.
 - RELION-style initial `sigma2_noise` estimation in the benchmark harness from
   particle power spectra instead of a flat unit spectrum.
-- RELION-mode `ave_Pmax` / convergence bookkeeping now aggregates both half-sets
-  instead of only half-set 0.
+- RELION-mode `ave_Pmax` / convergence bookkeeping uses half-set 1's Pmax
+  numerator divided by its retained M-step posterior mass, matching RELION's
+  rank-1 broadcast. Both half-set arrays remain available only as particle
+  diagnostics.
 - RELION-mode now feeds back a learned global direction prior outside local
   search, using coarse-grid posterior mass accumulated from the active
   orientation grid rather than oversampled child-grid indices.
