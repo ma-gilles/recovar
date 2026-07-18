@@ -5712,3 +5712,45 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_unfiltered_prejoin_match_20260718T092527Z/analysis/job_11342491/FAILURE_ADJUDICATION_COMPLETE.json` (SHA-256 `fcb3598ac1807a4b49bc819d789c74fcbbd004f44872470033e48c1edd687e8c`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_unfiltered_prejoin_match_20260718T092527Z/analysis/job_11342491/FAILURE_ADJUDICATION_ARTIFACTS.sha256` (SHA-256 `8744318afc7f296d0d36525d665db661df98f64c450f27fa7358e33dd7e1afe2`)
 - Slurm job `11342491`, state `FAILED`, exit code `1:0`, elapsed `00:09:40`; this is the intended fail-closed scientific result. Canceled job `11342385` is invalid packaging evidence only.
+
+## 2026-07-18 physical iteration-2 native-BPref factorial
+
+Capture job `11342527` and dependent factorial job `11342699` completed on the
+same A100 and close the reconstruction-engine axis at the physical iteration-2
+boundary.  The factorial fixes the exact captured per-half RELION tau2 across
+all four source-by-reconstructor cells, with current size 92, `r_max=46`,
+padding factor 2, trilinear interpolation, `skip_gridding=true`, and
+`minres_map=5`.  Switching only the reconstructor gives half and merged
+supported-radius FSC-AUC `1.0` for both the RELION and RECOVAR BPref sources.
+The RELION binding also reproduces the immediate native post-reconstruction
+Iref with supported-radius FSC-AUC `1.0` and minimum supported-shell FSC at
+least `0.9999999999999977`; RECOVAR accumulator frame round-trips are exact.
+
+The remaining map difference follows the native BPref source.  With either
+reconstructor fixed, RELION-source versus RECOVAR-source supported-radius
+FSC-AUC is `0.9999947157`/`0.9999987768` by half and `0.9999977791` merged.
+The uninterrupted live RECOVAR-versus-RELION values are respectively
+`0.9999947096`/`0.9999987716` and `0.9999977739`, so the factorial reproduces
+the live residual.  After exact frame alignment, RELION-versus-RECOVAR raw
+BPref relative L2 is `0.00585173`/`0.00271445` for the numerator and
+`0.00119718`/`0.000475082` for the weight.  Construction, current-size support,
+tau scaling, map frame conversion, gridding, and mask semantics are therefore
+rejected as material explanations at this boundary; the next probe is an
+aggregate common-state accumulation replay using frozen posteriors and exact
+contribution identities/geometry, with float32 original/canonical-order and
+float64/complex128 canonical controls to separate operand generation from
+reduction precision/order.  Do not return to serial particle tracing unless
+that aggregate replay identifies a systematic subgroup.
+
+This is a fixed-common-RELION-tau factorial, not a formal live RECOVAR A/A
+closure, and `FACTORIAL_COMPLETE.json` records computational completion rather
+than a parity threshold.  The four production-map cells use the same outer
+solvent mask; the separate unmasked RELION-binding/live-Iref comparison is the
+constructor closure.  Intermediate evidence uses exact/direct array metrics;
+maps use shellwise FSC/FSC-AUC only.  Correlation is neither computed nor used.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_bpref_reconstruction_factorial_20260718T100000Z/runs/capture_pair_11342527/analysis/it2_native_bpref_factorial.json` (SHA-256 `182df85587f8db78b26a12bb14917c781d5717eb405d91666938659575c8c1f3`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_bpref_reconstruction_factorial_20260718T100000Z/review/INDEPENDENT_REVIEW.md` (SHA-256 `07ffd7d8b0651405ee0a510f3acdc56607291e0da9be96ceb9de8044fa3d91f1`)
+- Slurm jobs `11342527` and `11342699`, both `COMPLETED` with exit code `0:0`.
