@@ -5263,7 +5263,6 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/analysis/projector_iref_rebuild_11329370_capture_a.json` (SHA-256 `fb894fa8ce229f43545f3a1265bbea1f90a917f3117ccad573720e7d5a9307ae`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_recovar_projector_injection_smoke_audit_0f0e7256_20260718T021700Z/smoke_abc_report_v3.json` (SHA-256 `c64f673eb7a2f962ca04834f1cdcbc83ad603929865b3a7019d360e26cc71ead`)
 - RELION replay binding SHA-256 `e04549190318244a62e7b85ea3200e221d37bc4543c4cc9811843f38075e4d22` (the resolved module path and digest are also sealed inside both rebuild reports).
-
 ## 2026-07-17 full-10k live-boundary closure
 
 RELION job `11329370` completed a same-allocation capture/untouched/capture

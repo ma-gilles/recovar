@@ -37,6 +37,9 @@ import numpy as np
 
 from recovar import utils
 from recovar.core import fourier_transform_utils as ftu
+from recovar.em.dense_single_volume.frozen_boundary import (
+    load_frozen_refinement_boundary,
+)
 from recovar.em.dense_single_volume.helpers.relion_projector_capture import (
     build_relion_projector_replay_state,
 )
@@ -1181,6 +1184,7 @@ def _attach_relion_projector_capture(
     relion_replay_dir,
     volume_shape,
     n_classes,
+    validated_frozen_boundary_iteration=None,
 ):
     """Attach one sealed live projector to its exact numbered replay slot."""
 
@@ -1188,11 +1192,21 @@ def _attach_relion_projector_capture(
 
     capture_iteration = int(capture_iteration)
     init_relion_iteration = int(init_relion_iteration)
-    if init_relion_iteration != 0:
+    frozen_iteration = (
+        None
+        if validated_frozen_boundary_iteration is None
+        else int(validated_frozen_boundary_iteration)
+    )
+    if init_relion_iteration != 0 and frozen_iteration != init_relion_iteration:
         raise ValueError(
             "captured RELION projector replay currently requires an uninterrupted "
             "cold-start trajectory (init_relion_iteration=0); a later jump would "
-            "reapply MPI process-start noise semantics without the sealed follower state"
+            "reapply MPI process-start noise semantics without a validated frozen boundary"
+        )
+    if frozen_iteration is not None and capture_iteration != frozen_iteration + 1:
+        raise ValueError(
+            "frozen-boundary projector capture must represent the immediately following "
+            f"numbered iteration: boundary={frozen_iteration}, capture={capture_iteration}"
         )
     replay_slot = capture_iteration - init_relion_iteration - 1
     if replay_iteration_overrides is None:
@@ -1840,6 +1854,25 @@ def main():
         ),
     )
     parser.add_argument(
+        "--frozen-boundary-dir",
+        default=None,
+        help=(
+            "Diagnostic-only sealed one-iteration restart bundle. Requires K=1, "
+            "--max_iter 1, --skip-final-iteration, a matching "
+            "--init_relion_iteration, and RELION trajectory replay. The bundle "
+            "atomically supplies both half maps, tau2, per-half noise, FSC/Pmax, "
+            "poses, identities, schedule, and convergence state."
+        ),
+    )
+    parser.add_argument(
+        "--frozen-boundary-manifest",
+        default=None,
+        help=(
+            "SHA-256 manifest for --frozen-boundary-dir. Defaults to "
+            "FROZEN_BOUNDARY_SHA256SUMS in that directory."
+        ),
+    )
+    parser.add_argument(
         "--replay_relion_normcorr",
         dest="replay_relion_normcorr",
         action="store_true",
@@ -2113,6 +2146,52 @@ def main():
     )
     args = parser.parse_args()
 
+    frozen_boundary = None
+    if args.frozen_boundary_dir is not None:
+        if args.n_classes != 1:
+            raise SystemExit("--frozen-boundary-dir is K=1-only")
+        if int(args.max_iter) != 1 or not bool(args.skip_final_iteration):
+            raise SystemExit(
+                "--frozen-boundary-dir requires --max_iter 1 and --skip-final-iteration"
+            )
+        if args.perturb_replay_relion_dir is None:
+            raise SystemExit(
+                "--frozen-boundary-dir requires --perturb_replay_relion_dir"
+            )
+        if args.init_volume is not None or args.init_noise_from_npz is not None:
+            raise SystemExit(
+                "--frozen-boundary-dir cannot be combined with --init_volume or "
+                "--init_noise_from_npz"
+            )
+        if args.init_previous_best_poses_npz is not None or args.apply_initial_lowpass:
+            raise SystemExit(
+                "--frozen-boundary-dir cannot be combined with pose overrides or "
+                "--apply-initial-lowpass"
+            )
+        try:
+            frozen_boundary = load_frozen_refinement_boundary(
+                args.frozen_boundary_dir,
+                manifest_path=args.frozen_boundary_manifest,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            raise SystemExit(f"Invalid frozen refinement boundary: {exc}") from exc
+        if int(args.init_relion_iteration) != frozen_boundary.completed_relion_iteration:
+            raise SystemExit(
+                "--init_relion_iteration does not match the sealed frozen boundary: "
+                f"cli={args.init_relion_iteration}, "
+                f"boundary={frozen_boundary.completed_relion_iteration}"
+            )
+        logger.info(
+            "Diagnostic frozen boundary loaded: dir=%s manifest_sha256=%s "
+            "boundary_sha256=%s completed_relion_iteration=%d",
+            frozen_boundary.source_dir,
+            frozen_boundary.source_manifest_sha256,
+            frozen_boundary.boundary_sha256,
+            frozen_boundary.completed_relion_iteration,
+        )
+    elif args.frozen_boundary_manifest is not None:
+        raise SystemExit("--frozen-boundary-manifest requires --frozen-boundary-dir")
+
     seed_optimiser_star = _explicit_relion_optimiser_for_seed(args)
     args.seed, optimizer_seed_source = _resolve_optimizer_random_seed(args.seed, seed_optimiser_star)
     logger.info("Optimiser random seed: %d (%s)", args.seed, optimizer_seed_source)
@@ -2222,6 +2301,26 @@ def main():
     ds_half1 = ds.subset(half1_idx)
     ds_half2 = ds.subset(half2_idx)
     logger.info("Half-sets: %d + %d images", ds_half1.n_units, ds_half2.n_units)
+    if frozen_boundary is not None:
+        live_names_per_half = (
+            np.asarray(our_names[half1_idx], dtype=str),
+            np.asarray(our_names[half2_idx], dtype=str),
+        )
+        for half, (live_names, frozen_names) in enumerate(
+            zip(live_names_per_half, frozen_boundary.image_names_per_half, strict=True),
+            start=1,
+        ):
+            if not np.array_equal(live_names, frozen_names):
+                raise SystemExit(
+                    "Frozen-boundary particle identity/order mismatch for "
+                    f"half {half}: live_rows={live_names.size}, "
+                    f"frozen_rows={frozen_names.size}"
+                )
+        logger.info(
+            "Frozen-boundary particle identities match the active half layout exactly: %d + %d",
+            live_names_per_half[0].size,
+            live_names_per_half[1].size,
+        )
     relion_group_particles, relion_group_source = _select_authoritative_group_particles(
         halfset_particles=relion_particles,
         halfset_source=args.relion_half_sets,
@@ -2520,7 +2619,23 @@ def main():
         else None
     )
 
-    if args.n_classes == 1:
+    if frozen_boundary is not None:
+        expected_volume_size = int(np.prod(ds.volume_shape))
+        if any(mean.shape != (expected_volume_size,) for mean in frozen_boundary.means):
+            raise SystemExit(
+                "Frozen-boundary half-map shape does not match the active dataset volume"
+            )
+        init_vol_ft = np.stack(frozen_boundary.means, axis=0).astype(np.complex64, copy=False)
+        merged_init_ft = np.mean(init_vol_ft.astype(np.complex128), axis=0).astype(np.complex64)
+        init_vol_real = np.asarray(
+            ftu.get_idft3(jnp.asarray(merged_init_ft).reshape(ds.volume_shape)).real,
+            dtype=np.float32,
+        )
+        logger.info(
+            "Initial per-half Fourier volumes loaded from frozen boundary %s",
+            frozen_boundary.source_dir,
+        )
+    elif args.n_classes == 1:
         init_mrc_path = args.init_volume or os.path.join(args.data_dir, "reference_init.mrc")
         init_vol_real = _load_mrc(init_mrc_path).astype(np.float32)
         assert init_vol_real.shape == ds.volume_shape, (
@@ -2614,7 +2729,20 @@ def main():
 
     from recovar.reconstruction import noise as recon_noise
 
-    if args.init_noise_from_npz is not None:
+    if frozen_boundary is not None:
+        noise_variance = [
+            recon_noise.make_radial_noise(jnp.asarray(radial), ds.image_shape)
+            for radial in frozen_boundary.noise_radial_per_half
+        ]
+        initial_noise_radial = np.mean(
+            np.stack(frozen_boundary.noise_radial_per_half, axis=0),
+            axis=0,
+        )
+        logger.info(
+            "Initial per-half noise and tau2 are owned by frozen boundary %s",
+            frozen_boundary.source_dir,
+        )
+    elif args.init_noise_from_npz is not None:
         init_noise = _load_init_noise_radial_npz(args.init_noise_from_npz, args.init_noise_iter)
         initial_noise_radial = init_noise["noise_radial"]
         noise_variance = recon_noise.make_radial_noise(initial_noise_radial, ds.image_shape)
@@ -2683,7 +2811,9 @@ def main():
     # tau2 trajectories from the per-class FSCs once the loop starts.
     from recovar.reconstruction.regularization import average_over_shells
 
-    if args.n_classes > 1:
+    if frozen_boundary is not None:
+        init_PS_source = jnp.asarray(merged_init_ft)
+    elif args.n_classes > 1:
         init_PS_source = jnp.asarray(per_class_ft[0])
     else:
         init_PS_source = jnp.asarray(init_vol_ft)
@@ -2701,7 +2831,7 @@ def main():
     # of K=4 iter-1 class assignments and caps cold-start mean_corr at 0.94.
     relion_init_sigma_offset_angstrom = None
     relion_init_tau2_fudge = None
-    if args.relion_init_dir is not None:
+    if args.relion_init_dir is not None and frozen_boundary is None:
         import re as _re
         from pathlib import Path as _Path
 
@@ -2810,8 +2940,16 @@ def main():
                     relion_init_sigma_offset_angstrom,
                 )
 
-    # Compute initial current_size from init_resolution
-    init_current_size = max(32, int(2 * ds.voxel_size * ds.grid_size / args.init_resolution))
+    if frozen_boundary is not None:
+        mean_variance = jnp.asarray(frozen_boundary.mean_variance)
+
+    # Compute initial current_size from init_resolution, unless an atomic
+    # frozen boundary owns the numbered-iteration schedule.
+    init_current_size = (
+        int(frozen_boundary.current_size)
+        if frozen_boundary is not None
+        else max(32, int(2 * ds.voxel_size * ds.grid_size / args.init_resolution))
+    )
     logger.info("Initial current_size from resolution %.1f A: %d pixels", args.init_resolution, init_current_size)
 
     # ---- Run refinement ----
@@ -3009,6 +3147,11 @@ def main():
                 relion_replay_dir=args.perturb_replay_relion_dir,
                 volume_shape=ds.volume_shape,
                 n_classes=args.n_classes,
+                validated_frozen_boundary_iteration=(
+                    None
+                    if frozen_boundary is None
+                    else frozen_boundary.completed_relion_iteration
+                ),
             )
         except (OSError, TypeError, ValueError) as exc:
             raise SystemExit(f"Invalid captured RELION projector replay: {exc}") from exc
@@ -3087,7 +3230,17 @@ def main():
         " (explicit)" if args.perturb_seed is not None else " (from --seed)",
     )
     init_previous_best_poses = None
-    if args.init_previous_best_poses_npz is not None:
+    if frozen_boundary is not None:
+        init_previous_best_poses = {
+            "iteration": f"{frozen_boundary.completed_relion_iteration - 1:03d}",
+            "previous_best_rotation_eulers": list(
+                frozen_boundary.previous_best_rotation_eulers
+            ),
+            "previous_best_translations": list(
+                frozen_boundary.previous_best_translations
+            ),
+        }
+    elif args.init_previous_best_poses_npz is not None:
         init_previous_best_poses = _load_init_previous_best_poses_npz(
             args.init_previous_best_poses_npz,
             args.init_previous_best_poses_iter,
@@ -3116,6 +3269,17 @@ def main():
         relion_current_sizes=oracle_current_sizes,
         relion_healpix_orders=oracle_healpix_orders,
         init_current_size=init_current_size,
+        init_fsc=None if frozen_boundary is None else frozen_boundary.fsc,
+        init_ave_Pmax=None if frozen_boundary is None else frozen_boundary.ave_pmax,
+        init_has_high_fsc_at_limit=(
+            None if frozen_boundary is None else frozen_boundary.has_high_fsc_at_limit
+        ),
+        init_relion_incr_size=(
+            10 if frozen_boundary is None else frozen_boundary.relion_incr_size
+        ),
+        init_refinement_state_fields=(
+            None if frozen_boundary is None else frozen_boundary.refinement_state_fields
+        ),
         fsc_threshold=1.0 / 7.0,
         adaptive_oversampling=args.adaptive_oversampling,
         max_significants=args.max_significants,
@@ -3174,6 +3338,12 @@ def main():
             None
             if init_previous_best_poses is None
             else init_previous_best_poses["previous_best_rotation_eulers"]
+        ),
+        init_image_corrections=(
+            None if frozen_boundary is None else frozen_boundary.image_corrections
+        ),
+        init_scale_corrections=(
+            None if frozen_boundary is None else frozen_boundary.scale_corrections
         ),
         skip_final_iteration=bool(args.skip_final_iteration),
         save_intermediates_dir=args.save_intermediates_dir,
@@ -3329,6 +3499,18 @@ def main():
             ""
             if relion_projector_capture_manifest_resolved is None
             else str(relion_projector_capture_manifest_resolved)
+        ),
+        "frozen_boundary_dir": np.asarray(
+            "" if frozen_boundary is None else str(frozen_boundary.source_dir)
+        ),
+        "frozen_boundary_manifest_sha256": np.asarray(
+            "" if frozen_boundary is None else frozen_boundary.source_manifest_sha256
+        ),
+        "frozen_boundary_sha256": np.asarray(
+            "" if frozen_boundary is None else frozen_boundary.boundary_sha256
+        ),
+        "frozen_boundary_completed_relion_iteration": np.int64(
+            -1 if frozen_boundary is None else frozen_boundary.completed_relion_iteration
         ),
     }
     if relion_follower_scale_replay is not None:
@@ -3794,6 +3976,18 @@ def main():
                 None
                 if relion_projector_capture_manifest_resolved is None
                 else str(relion_projector_capture_manifest_resolved)
+            ),
+            "frozen_boundary_dir": (
+                None if frozen_boundary is None else str(frozen_boundary.source_dir)
+            ),
+            "frozen_boundary_manifest_sha256": (
+                None if frozen_boundary is None else frozen_boundary.source_manifest_sha256
+            ),
+            "frozen_boundary_sha256": (
+                None if frozen_boundary is None else frozen_boundary.boundary_sha256
+            ),
+            "frozen_boundary_completed_relion_iteration": (
+                None if frozen_boundary is None else frozen_boundary.completed_relion_iteration
             ),
         }
         with ledger_path.open("w", encoding="utf-8") as f:

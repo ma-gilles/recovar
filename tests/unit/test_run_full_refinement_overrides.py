@@ -145,6 +145,60 @@ def test_attach_relion_projector_capture_rejects_late_restart(tmp_path):
         )
 
 
+def test_attach_relion_projector_capture_accepts_immediate_validated_frozen_restart(
+    tmp_path, monkeypatch
+):
+    capture_dir = tmp_path / "score_dump"
+    capture_dir.mkdir()
+    manifest = capture_dir / "iter3_VALIDATED_SHA256SUMS"
+    manifest.write_text("sealed\n")
+    relion_dir = tmp_path / "relion"
+    relion_dir.mkdir()
+    (relion_dir / "run_it003_half1_model.star").write_text("model\n")
+    expected_state = {"source_manifest_sha256": "a" * 64}
+    monkeypatch.setattr(
+        "recovar.em.sampling.read_relion_model_metadata",
+        lambda path: {"current_image_size": 42},
+    )
+    monkeypatch.setattr(
+        run_full_refinement,
+        "build_relion_projector_replay_state",
+        lambda *args, **kwargs: expected_state,
+    )
+    overrides = [{"state": "it3"}, {"state": "final"}]
+
+    slot, state = _attach_relion_projector_capture(
+        overrides,
+        capture_dir=capture_dir,
+        manifest_path=manifest,
+        capture_iteration=3,
+        init_relion_iteration=2,
+        relion_replay_dir=relion_dir,
+        volume_shape=(256, 256, 256),
+        n_classes=1,
+        validated_frozen_boundary_iteration=2,
+    )
+
+    assert slot == 0
+    assert state is expected_state
+    assert overrides[0]["relion_projector_state"] is expected_state
+
+
+def test_attach_relion_projector_capture_rejects_nonadjacent_frozen_restart(tmp_path):
+    with pytest.raises(ValueError, match="immediately following"):
+        _attach_relion_projector_capture(
+            [{}, {}, {}],
+            capture_dir=tmp_path,
+            manifest_path=tmp_path / "manifest",
+            capture_iteration=4,
+            init_relion_iteration=2,
+            relion_replay_dir=tmp_path,
+            volume_shape=(8, 8, 8),
+            n_classes=1,
+            validated_frozen_boundary_iteration=2,
+        )
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
