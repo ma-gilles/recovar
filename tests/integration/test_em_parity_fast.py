@@ -346,7 +346,8 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
 
     Pass criteria (moderate band per the ab-initio plan):
       * final half[12] vs RELION run_it003_half[12]_class001.mrc: ``corr ≥ 0.999``
-      * iter-3 ``ave_Pmax`` matches RELION ``run_it003_data.star::rlnMaxValueProbDistribution.mean()`` within ``1e-2``
+      * iter-3 optimizer ``ave_Pmax`` matches RELION
+        ``run_it003_half1_model.star::rlnAveragePmax`` within ``1e-2``
       * sigma_offset trajectory at iter 2 ≤ 5 Å (proves the A.1 sigma_offset
         carryover fix is wired; pre-fix it stuck at default 10 Å)
 
@@ -439,14 +440,12 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
     h1_corr = _corr(recovar_h1, relion_h1)
     h2_corr = _corr(recovar_h2, relion_h2)
 
-    # Read RELION's iter-3 ave Pmax from data.star.
+    # Read the authoritative optimizer/scheduling scalar, not the arithmetic
+    # mean of the per-particle data column.
     import starfile
 
-    relion_data = starfile.read(str(K1_RELION_DIR / "run_it003_data.star"))
-    particles = (
-        relion_data["particles"] if isinstance(relion_data, dict) and "particles" in relion_data else relion_data
-    )
-    relion_pmax = float(np.asarray(particles["rlnMaxValueProbDistribution"], dtype=np.float64).mean())
+    relion_model = starfile.read(str(K1_RELION_DIR / "run_it003_half1_model.star"))
+    relion_pmax = float(relion_model["model_general"]["rlnAveragePmax"])
     pmax_diff = abs(float(pmax_traj[2]) - relion_pmax)
 
     payload = {
@@ -583,11 +582,8 @@ def test_em_parity_fast_k1_perturbreplay(tmp_path):
 
     import starfile
 
-    relion_data = starfile.read(str(K1_RELION_DIR / "run_it003_data.star"))
-    particles = (
-        relion_data["particles"] if isinstance(relion_data, dict) and "particles" in relion_data else relion_data
-    )
-    relion_pmax = float(np.asarray(particles["rlnMaxValueProbDistribution"], dtype=np.float64).mean())
+    relion_model = starfile.read(str(K1_RELION_DIR / "run_it003_half1_model.star"))
+    relion_pmax = float(relion_model["model_general"]["rlnAveragePmax"])
     pmax_diff = abs(float(pmax_traj[2]) - relion_pmax)
 
     payload = {
