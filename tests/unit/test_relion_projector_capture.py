@@ -8,6 +8,7 @@ import pytest
 from recovar.em.dense_single_volume.helpers.relion_projector_capture import (
     ProjectorLoadError,
     build_relion_projector_replay_state,
+    load_relion_projector_iref_state,
 )
 from recovar.em.dense_single_volume.relion_replay import _parse_relion_projector_replay_state
 
@@ -41,6 +42,14 @@ def _fixture(root: Path, *, schema_version: int = 2):
         imag = -real
         _vector(Path(str(prefix) + "projector_real.bin"), real, "<f4")
         _vector(Path(str(prefix) + "projector_imag.bin"), imag, "<f4")
+        if schema_version == 3:
+            for field, value in (
+                ("iref_zdim", 8), ("iref_ydim", 8), ("iref_xdim", 8),
+                ("iref_zinit", -4), ("iref_yinit", -4), ("iref_xinit", -4),
+            ):
+                _scalar(Path(str(prefix) + field + ".bin"), value)
+            iref = np.arange(8**3, dtype=np.float64).reshape(8, 8, 8) + rank
+            _vector(Path(str(prefix) + "iref.bin"), iref, "<f8")
     manifest = root / "capture.sha256"
     lines = []
     for path in sorted(root.glob("*.bin")):
@@ -130,6 +139,58 @@ def test_projector_loader_accepts_extended_state_schema_v3(tmp_path):
     )
 
     assert state["projector_r_max_by_half"] == [2, 2]
+
+
+def test_projector_iref_loader_preserves_exact_half_order(tmp_path):
+    manifest = _fixture(tmp_path, schema_version=3)
+    state = load_relion_projector_iref_state(
+        tmp_path,
+        manifest_path=manifest,
+        iteration=3,
+        volume_shape=(8, 8, 8),
+        n_classes=1,
+    )
+
+    assert set(state) == {
+        "iref_by_half", "volume_shape", "n_classes", "source_manifest_sha256",
+    }
+    assert [array.shape for array in state["iref_by_half"]] == [(1, 8, 8, 8)] * 2
+    assert [array.dtype for array in state["iref_by_half"]] == [np.float64, np.float64]
+    assert state["iref_by_half"][0][0, 0, 0, 0] == 9.0
+    assert state["iref_by_half"][1][0, 0, 0, 0] == 7.0
+    assert state["source_manifest_sha256"] == hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+
+def test_projector_iref_loader_rejects_schema_v2(tmp_path):
+    manifest = _fixture(tmp_path, schema_version=2)
+
+    with pytest.raises(ProjectorLoadError, match="captured Iref requires live-state schema 3"):
+        load_relion_projector_iref_state(
+            tmp_path,
+            manifest_path=manifest,
+            iteration=3,
+            volume_shape=(8, 8, 8),
+            n_classes=1,
+        )
+
+
+def test_projector_iref_loader_rejects_nonstandard_start(tmp_path):
+    manifest = _fixture(tmp_path, schema_version=3)
+    target = tmp_path / "state_iter3_rank9_device0_class0_iref_xinit.bin"
+    _scalar(target, -3)
+    manifest.write_text("".join(
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.resolve()}\n"
+        for path in sorted(tmp_path.glob("*.bin"))
+    ))
+
+    with pytest.raises(ProjectorLoadError, match="nonstandard captured Iref starts"):
+        load_relion_projector_iref_state(
+            tmp_path,
+            manifest_path=manifest,
+            iteration=3,
+            volume_shape=(8, 8, 8),
+            n_classes=1,
+        )
 
 
 def test_projector_loader_rejects_nonstandard_start(tmp_path):

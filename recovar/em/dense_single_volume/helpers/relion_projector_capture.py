@@ -279,3 +279,119 @@ def build_relion_projector_replay_state(
         "n_classes": int(n_classes),
         "source_manifest_sha256": manifest_sha256,
     }
+
+
+def load_relion_projector_iref_state(
+    dump_dir: Path,
+    *,
+    manifest_path: Path,
+    iteration: int,
+    volume_shape,
+    n_classes: int,
+) -> dict[str, object]:
+    """Load sealed schema-v3 float64 ``Iref`` operands in half/class order.
+
+    These are the exact real-space operands passed to RELION's
+    ``Projector::computeFourierTransformMap``.  Keeping them separate from the
+    replay-state mapping preserves the latter's strict key contract while
+    enabling an independent projector-construction diagnostic.
+    """
+
+    dump_dir = Path(dump_dir).resolve()
+    manifest_sha256, listed = _parse_and_verify_manifest(manifest_path)
+    if list(dump_dir.rglob("*.partial")):
+        raise ProjectorLoadError("live capture contains partial files")
+    volume_shape = tuple(int(value) for value in volume_shape)
+    if len(volume_shape) != 3 or any(value <= 0 for value in volume_shape):
+        raise ProjectorLoadError("volume_shape must contain three positive values")
+    if int(iteration) <= 0 or int(n_classes) <= 0:
+        raise ProjectorLoadError("iteration/n_classes must be positive")
+
+    rank_prefixes = {}
+    for schema_path in dump_dir.glob(
+        f"state_iter{int(iteration)}_rank*_device*_class0_state_schema_version.bin"
+    ):
+        match = STATE_RE.match(schema_path.name)
+        if match is None:
+            continue
+        rank = int(match.group("rank"))
+        if rank in rank_prefixes:
+            raise ProjectorLoadError(f"multiple captured devices for MPI rank {rank}")
+        rank_prefixes[rank] = Path(str(schema_path).removesuffix("state_schema_version.bin"))
+    if not rank_prefixes:
+        raise ProjectorLoadError("no captured rank-local projector state found")
+
+    half_to_rank_device = {}
+    for rank, prefix in rank_prefixes.items():
+        schema_version = _scalar(prefix, "state_schema_version", listed)
+        if schema_version != 3:
+            raise ProjectorLoadError(
+                f"captured Iref requires live-state schema 3, got {schema_version} for rank {rank}"
+            )
+        match = STATE_RE.match(_prefix_file(prefix, "state_schema_version").name)
+        if match is None:
+            raise ProjectorLoadError(f"cannot recover captured device for rank {rank}")
+        device = int(match.group("device"))
+        if _scalar(prefix, "iteration", listed) != int(iteration):
+            raise ProjectorLoadError(f"iteration mismatch for rank {rank}")
+        if _scalar(prefix, "mpi_rank", listed) != rank:
+            raise ProjectorLoadError(f"MPI rank metadata mismatch for rank {rank}")
+        if _scalar(prefix, "device_id", listed) != device:
+            raise ProjectorLoadError(f"device identity mismatch for rank {rank}")
+        half = _scalar(prefix, "control_my_halfset", listed)
+        if half not in (1, 2) or half in half_to_rank_device:
+            raise ProjectorLoadError(f"invalid or duplicate half assignment for rank {rank}: {half}")
+        half_to_rank_device[half] = (rank, device)
+    if set(half_to_rank_device) != {1, 2}:
+        raise ProjectorLoadError(
+            f"capture must contain exactly halves 1 and 2, got {sorted(half_to_rank_device)}"
+        )
+
+    expected_starts = tuple(-(size // 2) for size in volume_shape)
+    iref_by_half = []
+    for half in (1, 2):
+        rank, device = half_to_rank_device[half]
+        class_arrays = []
+        for class_id in range(int(n_classes)):
+            prefix = dump_dir / (
+                f"state_iter{int(iteration)}_rank{rank}_device{device}_class{class_id}_"
+            )
+            for field, expected in (
+                ("iteration", int(iteration)),
+                ("mpi_rank", rank),
+                ("device_id", device),
+                ("class_id", class_id),
+            ):
+                if _scalar(prefix, field, listed) != expected:
+                    raise ProjectorLoadError(
+                        f"captured Iref {field} mismatch for half {half}, class {class_id}"
+                    )
+            shape = tuple(
+                _scalar(prefix, f"iref_{axis}dim", listed) for axis in ("z", "y", "x")
+            )
+            if shape != volume_shape:
+                raise ProjectorLoadError(
+                    f"captured Iref shape {shape} differs from volume_shape {volume_shape}"
+                )
+            starts = tuple(
+                _scalar(prefix, f"iref_{axis}init", listed) for axis in ("z", "y", "x")
+            )
+            if starts != expected_starts:
+                raise ProjectorLoadError(f"nonstandard captured Iref starts {starts}")
+            iref = _vector(prefix, "iref", "<f8", listed)
+            expected_count = int(np.prod(volume_shape, dtype=np.int64))
+            if iref.size != expected_count:
+                raise ProjectorLoadError(
+                    f"captured Iref payload has {iref.size} values, expected {expected_count}"
+                )
+            if not np.isfinite(iref).all():
+                raise ProjectorLoadError("captured Iref payload contains non-finite values")
+            class_arrays.append(iref.reshape(volume_shape))
+        iref_by_half.append(np.ascontiguousarray(np.stack(class_arrays, axis=0)))
+
+    return {
+        "iref_by_half": iref_by_half,
+        "volume_shape": list(volume_shape),
+        "n_classes": int(n_classes),
+        "source_manifest_sha256": manifest_sha256,
+    }

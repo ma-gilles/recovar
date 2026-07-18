@@ -5228,3 +5228,38 @@ Sealed evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_uninterrupted_dual_corrected_8c832027_20260717T213908Z/provenance/uninterrupted_dual_postvalidated.txt` (SHA-256 `4441c39eba244e823e27049658314d19425a6e7a4bfde5e48dd43ba05a7679c3`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_uninterrupted_dual_corrected_8c832027_20260717T213908Z/provenance/uninterrupted_dual_artifacts.sha256` (SHA-256 `38dfdca43a66b9160b85e475a33d4bd4d9998b936f2b9ddd0a894e5e6c7a1ff9`)
 - RELION dual binary SHA-256 `72c37a0c4efe58397d95255bc98ac2ff3b3784f98aaf9ea2ac49b801a6d37b90`; diagnostic RECOVAR library SHA-256 `fefa277fbcee3f90bde113353e88e76c0fe55aa9807230897cc0194b3022c39c`.
+
+## 2026-07-17 sealed Iref-to-projector replay
+
+Schema-v3 boundary captures now support an independent projector-construction
+check. `scripts/parity/rebuild_relion_projector_capture.py` loads the sealed
+float64 `Iref` operands and captured accelerator projectors, rebuilds through
+RELION's actual `Projector::computeFourierTransformMap`, and compares exact
+production complex64 arrays plus the pre-cast complex128 deltas. On the
+64-particle iteration-3 boundary, both half-set rebuilds match every captured
+complex64 element exactly; the maximum complex128-to-captured-complex64 deltas
+are `3.42458e-9` and `3.63481e-9`. This closes projector construction given the
+captured float64 operand. It does not make STAR/MRC an exact boundary because
+the MRC copy is float32.
+
+The full-10k iteration-3 capture gives the production-size control. Rebuilding
+both projectors from their sealed float64 `Iref` arrays changes only 9 and 10
+complex elements, respectively. Every changed real or imaginary component is
+exactly one float32 ULP from the captured accelerator output (maximum complex64
+absolute deltas `5.68e-14` and `2.27e-13`). This is classified as
+precision/reduction-order variation rather than a projector-construction bug.
+
+The same boundary's three-arm RECOVAR control/control/injected map comparison
+remains a reduction-envelope diagnostic: merged-map FSC-AUC is
+`0.999999997654` for control/control and `0.999999997631` for
+control/injected. Pointwise injected residuals exceed the single observed
+control envelope, while tau2 and Pmax remain inside it, so production-scale
+causality is deferred to the sealed 10k three-arm run. Map gates remain
+shellwise FSC/FSC-AUC; no correlation or exact discrete-winner gate is used.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_recovar_projector_injection_smoke_audit_0f0e7256_20260718T021700Z/projector_iref_rebuild_v1.json` (SHA-256 `e084ca7be44d6a9a9b9d8ec6f408c8e1283bf423ba3b708ab8eb1ff70db0f79d`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/analysis/projector_iref_rebuild_11329370_capture_a.json` (SHA-256 `fb894fa8ce229f43545f3a1265bbea1f90a917f3117ccad573720e7d5a9307ae`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_recovar_projector_injection_smoke_audit_0f0e7256_20260718T021700Z/smoke_abc_report_v3.json` (SHA-256 `c64f673eb7a2f962ca04834f1cdcbc83ad603929865b3a7019d360e26cc71ead`)
+- RELION replay binding SHA-256 `e04549190318244a62e7b85ea3200e221d37bc4543c4cc9811843f38075e4d22` (the resolved module path and digest are also sealed inside both rebuild reports).
