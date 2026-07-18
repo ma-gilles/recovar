@@ -5384,3 +5384,49 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/runs/recovar_projector_ab_11332965/analysis/projector_abc_audit.json` (SHA-256 `114b98702144cda03491a4d66c873d76090bae0e5b152f0b05e42566ca34500f`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/runs/recovar_projector_ab_11332965/analysis/projector_abc_shellwise_fsc.npz` (SHA-256 `5e8bc8ba7d935114c988ae990b2c3599d6c2fc82a4d5898b2c62b239dc9d0f98`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/runs/recovar_projector_ab_11332965/JOB_COMPLETE` (SHA-256 `0ee09db278ed86b26c963aab73c298d06cc3beb73ceb0a58d09a411df58a38c3`)
+
+## 2026-07-18 frozen-boundary and robustness launch blocks
+
+Independent review blocked the first iteration-2 frozen-boundary package before
+Slurm submission.  The restart used local iteration zero for physical RELION
+iteration three, so the ordinary process-start replay path replaced the sealed
+per-half boundary noise with one broadcast noise array.  Relative to the frozen
+boundary, the noise consumed by the local smoke differed by radial maximum/RMS
+`7.6528/5.8615` for half 1 and `2073.699/249.636` for half 2.  The log first
+reported frozen-boundary ownership and then reported the later replay override.
+This is a real restart-state ownership defect, not a numerical-noise
+classification.
+
+The same review found that external replay STAR files overwrote the bundle's
+poses and supplied other scoring state without all consumed artifacts being
+sealed.  Frozen-versus-consumed poses differed by as much as `41.525` degrees
+and `2.5` pixels.  The bundle also lacked image and scale corrections, and its
+validator rewrote a reviewed report instead of requiring the regenerated
+result to retain the reviewed digest.  Consequently the prior local A/A repeat
+only demonstrated reproducibility of the wrong restart state.  No frozen A/A/B
+science job was submitted.  The repair must preserve sealed per-half scoring
+noise, establish one unambiguous owner for every scoring primitive, pin every
+external STAR actually read, keep the reviewed validation result immutable,
+reject dirty source including untracked files, and fail on nonfinite or
+shape/dtype-invalid direct arrays.
+
+A separate independent review blocked the K=1 robustness launcher before case
+11 submission.  Its semantic acceptance checks and queue-time package
+replacement defenses passed, but the dependency verifier did not require
+`robustness_acceptance.json` and `ROBUSTNESS_ACCEPTANCE_COMPLETE.json` to be
+unique members of the `JOB_COMPLETE`-anchored final-artifact manifest.  The two
+files could therefore be coherently replaced after sealing.  The next package
+must require both exact manifest members and matching hashes, reject duplicate
+paths and paths escaping the sealed run root, and include negative tests for
+absent, changed, duplicate, traversal, and symlink-escape cases.  No robustness
+science job was submitted.
+
+These reviews change packaging and restart-boundary validity, not the map
+quality policy.  Direct maps remain gated only by shellwise FSC and normalized
+FSC-AUC; correlation is not computed.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_frozen_it2_projector_abc_prepared_20260718T052910Z/plan/INDEPENDENT_REVIEW_HANDOFF.md`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_frozen_it2_projector_abc_prepared_20260718T052910Z/validation/local_a100_control_scoring_smoke/run_full_refinement.err`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_package_hardening_reaudit2_20260718T120000Z/INDEPENDENT_REAUDIT_HANDOFF.md` (SHA-256 `80429ed77ae0d9ef1cd42fa3dc28966140fd26f07bf1a31c9a7c5f50de205c98`)
