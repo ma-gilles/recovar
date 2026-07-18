@@ -206,8 +206,42 @@ def test_cross_engine_iteration_count_mismatch_fails_closed(tmp_path, monkeypatc
     status, report, _ = _run(case_root, tmp_path)
 
     assert status == 2
-    assert report["status"] == "error"
+    assert report["status"] == "fail"
     assert "numbered iteration count mismatch" in report["earliest_failure"]
+    assert report["recovar_numbered_iteration_count"] == 2
+    assert report["relion_numbered_iteration_count"] == 1
+    assert report["numbered_iteration_count"] == 1
+    assert len(report["numbered_iterations"]) == 1
+    assert report["numbered_iterations"][0]["cross_engine"]["merged"]["fsc_auc"] == pytest.approx(
+        1.0, abs=1e-12
+    )
+
+
+@pytest.mark.unit
+def test_extra_relion_iteration_retains_complete_recovar_prefix(tmp_path, monkeypatch):
+    case_root, _ = _make_case(
+        tmp_path,
+        monkeypatch,
+        recovar_indices=(0,),
+        relion_iterations=(1, 2),
+        include_final=True,
+    )
+
+    status, report, output_npz = _run(case_root, tmp_path)
+
+    assert status == 2
+    assert report["status"] == "fail"
+    assert report["topology_failures"] == [
+        "numbered iteration count mismatch: RECOVAR=1 RELION=2"
+    ]
+    assert report["recovar_numbered_iteration_count"] == 1
+    assert report["relion_numbered_iteration_count"] == 2
+    assert report["numbered_iteration_count"] == 1
+    assert report["numbered_iterations"][0]["relion_iteration"] == 1
+    assert report["final"]["cross_engine"]["merged"]["fsc_auc"] == pytest.approx(1.0, abs=1e-12)
+    with np.load(output_npz, allow_pickle=False) as curves:
+        assert "it001_cross_merged" in curves.files
+        assert "final_cross_merged" in curves.files
 
 
 @pytest.mark.unit

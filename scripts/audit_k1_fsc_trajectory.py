@@ -34,7 +34,7 @@ else:
         shell_fsc,
     )
 
-SCHEMA = "em_k1_fsc_trajectory_audit_v1"
+SCHEMA = "em_k1_fsc_trajectory_audit_v2"
 RECOVAR_MAP_RE = re.compile(r"^it(\d{3})_half([12])_reg\.mrc$")
 RELION_MAP_RE = re.compile(r"^run_it(\d{3})_half([12])_class001\.mrc$")
 
@@ -112,7 +112,7 @@ def _validate_numbered_topology(
     recovar_maps: dict[int, dict[int, Path]],
     relion_maps: dict[int, dict[int, Path]],
     refinement_results: Path,
-) -> list[tuple[int, int]]:
+) -> tuple[list[tuple[int, int]], list[str]]:
     if not recovar_maps:
         raise AuditError("no RECOVAR numbered regularized half maps found")
     if not relion_maps:
@@ -135,11 +135,6 @@ def _validate_numbered_topology(
         raise AuditError(
             f"RELION iterations are not contiguous one-based: found {relion_iterations}, expected {expected_relion}"
         )
-    if len(recovar_iterations) != len(relion_iterations):
-        raise AuditError(
-            f"numbered iteration count mismatch: RECOVAR={len(recovar_iterations)} RELION={len(relion_iterations)}"
-        )
-
     if not refinement_results.is_file():
         raise AuditError(f"missing RECOVAR refinement results: {refinement_results}")
     with np.load(refinement_results, allow_pickle=False) as payload:
@@ -150,7 +145,15 @@ def _validate_numbered_topology(
         raise AuditError(
             f"RECOVAR map/result iteration count mismatch: maps={len(recovar_iterations)} current_sizes={result_count}"
         )
-    return list(zip(recovar_iterations, relion_iterations, strict=True))
+    topology_failures = []
+    if len(recovar_iterations) != len(relion_iterations):
+        topology_failures.append(
+            f"numbered iteration count mismatch: RECOVAR={len(recovar_iterations)} "
+            f"RELION={len(relion_iterations)}"
+        )
+    matched_count = min(len(recovar_iterations), len(relion_iterations))
+    pairs = list(zip(recovar_iterations[:matched_count], relion_iterations[:matched_count], strict=True))
+    return pairs, topology_failures
 
 
 def _case_is_noctf(case_root: Path) -> bool:
@@ -368,7 +371,11 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
 
     recovar_maps = _discover_maps(intermediates, RECOVAR_MAP_RE, engine="RECOVAR")
     relion_maps = _discover_maps(relion_dir, RELION_MAP_RE, engine="RELION")
-    pairs = _validate_numbered_topology(recovar_maps, relion_maps, recovar_dir / "refinement_results.npz")
+    pairs, topology_failures = _validate_numbered_topology(
+        recovar_maps,
+        relion_maps,
+        recovar_dir / "refinement_results.npz",
+    )
     gt_sign_invariant, sign_reason = _gt_sign_invariant(case_root, args.gt_sign_mode)
     gt = _load_recovar_volume(gt_path)
     shellwise: dict[str, np.ndarray] = {}
@@ -390,7 +397,7 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         gt_sign_invariant=gt_sign_invariant,
         shellwise=shellwise,
     )
-    failures = _apply_gates(
+    failures = topology_failures + _apply_gates(
         rows,
         final,
         min_cross_merged=float(args.min_cross_merged_fsc_auc),
@@ -416,6 +423,9 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
             "recovar_minus_relion_merged_gt_fsc_auc_min": float(args.min_merged_gt_delta),
         },
         "numbered_iteration_count": len(rows),
+        "recovar_numbered_iteration_count": len(recovar_maps),
+        "relion_numbered_iteration_count": len(relion_maps),
+        "topology_failures": topology_failures,
         "numbered_iterations": rows,
         "final": final,
         "failures": failures,
