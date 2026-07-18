@@ -11426,16 +11426,45 @@ class TestRelionModeSmokeTest:
 
         assert shell == 9
         assert current_size == 38
+        assert iteration_loop_module.shell_index_to_resolution_angstrom(
+            shell,
+            256,
+            2.125,
+        ) == pytest.approx(60.4444444444)
 
     def test_firstiter_cc_scheduling_override_is_only_physical_iteration_one(self):
-        assert iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
-            10,
-            emulate_relion_firstiter_cc=True,
-            ini_high_angstrom=60.0,
-            relion_iteration=2,
-            grid_size=256,
-            voxel_size=2.125,
-        ) == 10
+        common = {
+            "resolution_shell": 10,
+            "grid_size": 256,
+            "voxel_size": 2.125,
+        }
+        assert (
+            iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
+                **common,
+                emulate_relion_firstiter_cc=True,
+                ini_high_angstrom=60.0,
+                relion_iteration=2,
+            )
+            == 10
+        )
+        assert (
+            iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
+                **common,
+                emulate_relion_firstiter_cc=False,
+                ini_high_angstrom=60.0,
+                relion_iteration=1,
+            )
+            == 10
+        )
+        assert (
+            iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
+                **common,
+                emulate_relion_firstiter_cc=True,
+                ini_high_angstrom=None,
+                relion_iteration=1,
+            )
+            == 10
+        )
 
     def test_firstiter_cc_lowpass_runs_before_solvent_flatten(self, monkeypatch):
         """RELION applies iter-1 ini_high low-pass before solvent flatten."""

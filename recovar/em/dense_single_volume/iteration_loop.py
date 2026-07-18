@@ -7341,7 +7341,6 @@ def _run_relion_iteration_loop(
                 resolution_from_data_vs_prior(dvp_class, allow_high_res_recovery=False)
                 for dvp_class in np.asarray(dvp_iter)
             )
-            pixel_res = float(dvp_res_shell)
         else:
             if tau2_update_details is not None and tau2_update_details.get("ssnr_shells") is not None:
                 dvp_iter = np.asarray(tau2_update_details["ssnr_shells"], dtype=np.float32).copy()
@@ -7356,7 +7355,24 @@ def _run_relion_iteration_loop(
                 dvp_iter,
                 allow_high_res_recovery=True,
             )
-            pixel_res = float(dvp_res_shell)
+        pixel_res = float(
+            _firstiter_cc_scheduling_resolution_shell(
+                dvp_res_shell,
+                emulate_relion_firstiter_cc=emulate_relion_firstiter_cc,
+                ini_high_angstrom=relion_firstiter_ini_high_angstrom,
+                relion_iteration=int(init_relion_iteration) + int(iteration) + 1,
+                grid_size=grid_size,
+                voxel_size=cryo.voxel_size,
+            )
+        )
+        if int(pixel_res) != int(dvp_res_shell):
+            logger.info(
+                "RELION firstiter_cc resolution state: using ini_high=%.2f A shell %d "
+                "instead of live data-vs-prior shell %d",
+                float(relion_firstiter_ini_high_angstrom),
+                int(pixel_res),
+                int(dvp_res_shell),
+            )
         _tau2_debug_dump_dir = os.environ.get("RECOVAR_RELION_TAU2_DEBUG_DUMP_DIR")
         if _tau2_debug_dump_dir:
             import pathlib
