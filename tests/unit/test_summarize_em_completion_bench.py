@@ -345,8 +345,8 @@ def test_k1_summary_reports_relion_final_map_separately_from_half_average(tmp_pa
     fixture_dir.mkdir()
     for path in [
         recovar_dir / "final_merged.mrc",
-        recovar_dir / "final_half1.mrc",
-        recovar_dir / "final_half2.mrc",
+        recovar_dir / "final_half1_unfil.mrc",
+        recovar_dir / "final_half2_unfil.mrc",
         relion_dir / "run_class001.mrc",
         relion_dir / "run_half1_class001_unfil.mrc",
         relion_dir / "run_half2_class001_unfil.mrc",
@@ -356,8 +356,8 @@ def test_k1_summary_reports_relion_final_map_separately_from_half_average(tmp_pa
 
     volumes = {
         recovar_dir / "final_merged.mrc": np.asarray([10.0, 10.0]),
-        recovar_dir / "final_half1.mrc": np.asarray([11.0, 11.0]),
-        recovar_dir / "final_half2.mrc": np.asarray([12.0, 12.0]),
+        recovar_dir / "final_half1_unfil.mrc": np.asarray([11.0, 11.0]),
+        recovar_dir / "final_half2_unfil.mrc": np.asarray([12.0, 12.0]),
         relion_dir / "run_class001.mrc": np.asarray([20.0, 20.0]),
         relion_dir / "run_half1_class001_unfil.mrc": np.asarray([30.0, 30.0]),
         relion_dir / "run_half2_class001_unfil.mrc": np.asarray([50.0, 50.0]),
@@ -441,6 +441,12 @@ def test_k1_summary_treats_pre_final_all_data_map_as_missing_required_product(tm
     assert summary["status"] == "ok"
     assert summary["final_all_data"]["final_all_data_ran"] is False
     assert "K=1 final all-data guard: final_all_data_ran is false" in summary["notes"]
+    assert "recovar_half1_vs_relion_half1" not in summary["metrics"]
+    assert "recovar_half2_vs_relion_half2" not in summary["metrics"]
+    assert (
+        "K=1 final unfiltered half products are incomplete; regularized and unfiltered halves "
+        "will not be cross-compared"
+    ) in summary["notes"]
     assert summarizer._section_has_missing_required_products(summary) is True
 
 

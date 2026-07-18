@@ -54,7 +54,7 @@ def _make_case(
     )
 
     if include_final:
-        for name in ("final_half1.mrc", "final_half2.mrc", "final_merged.mrc"):
+        for name in ("final_half1_unfil.mrc", "final_half2_unfil.mrc", "final_merged.mrc"):
             arrays[_touch(recovar_dir / name)] = map_volume
         for name in (
             "run_half1_class001_unfil.mrc",

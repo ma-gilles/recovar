@@ -268,8 +268,8 @@ def _optional_final_metrics(
     shellwise: dict[str, np.ndarray],
 ) -> dict[str, Any] | None:
     paths = {
-        "rec_half1": recovar_dir / "final_half1.mrc",
-        "rec_half2": recovar_dir / "final_half2.mrc",
+        "rec_half1": recovar_dir / "final_half1_unfil.mrc",
+        "rec_half2": recovar_dir / "final_half2_unfil.mrc",
         "rec_merged": recovar_dir / "final_merged.mrc",
         "rel_half1": relion_dir / "run_half1_class001_unfil.mrc",
         "rel_half2": relion_dir / "run_half2_class001_unfil.mrc",

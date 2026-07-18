@@ -9077,6 +9077,16 @@ def _run_relion_iteration_loop(
     final_Ft_y_1 = final_outs.Ft_y[1]
     final_Ft_ctf_0 = final_outs.Ft_ctf[0]
     final_Ft_ctf_1 = final_outs.Ft_ctf[1]
+    # RELION writes the converged half BackProjectors to temporary files before
+    # joinTwoHalvesAtLowResolution mutates their low-frequency voxels.  Those
+    # saved, pre-join arrays are later used for run_half*_class001_unfil.mrc.
+    # Keep both boundaries explicit: the joined arrays below drive FSC/tau2 and
+    # the final joined reconstruction, while these arrays drive unfiltered
+    # half-map output.
+    final_unfiltered_Ft_y_0 = final_Ft_y_0
+    final_unfiltered_Ft_y_1 = final_Ft_y_1
+    final_unfiltered_Ft_ctf_0 = final_Ft_ctf_0
+    final_unfiltered_Ft_ctf_1 = final_Ft_ctf_1
     final_mstep_accumulator_shape = _resolve_mstep_accumulator_shape(
         final_outs.mstep_accumulator_shape,
         padded_volume_shape,
@@ -9300,6 +9310,10 @@ def _run_relion_iteration_loop(
             "Ft_y_1": np.asarray(final_Ft_y_1),
             "Ft_ctf_0": np.asarray(final_Ft_ctf_0).real,
             "Ft_ctf_1": np.asarray(final_Ft_ctf_1).real,
+            "Ft_y_0_pre_lowres_join": np.asarray(final_unfiltered_Ft_y_0),
+            "Ft_y_1_pre_lowres_join": np.asarray(final_unfiltered_Ft_y_1),
+            "Ft_ctf_0_pre_lowres_join": np.asarray(final_unfiltered_Ft_ctf_0).real,
+            "Ft_ctf_1_pre_lowres_join": np.asarray(final_unfiltered_Ft_ctf_1).real,
             "Ft_y": np.asarray(final_ft_y),
             "Ft_ctf": np.asarray(final_ft_ctf).real,
         }
@@ -9331,6 +9345,7 @@ def _run_relion_iteration_loop(
         n_classes,
     )
     final_means_for_output = means
+    final_unfiltered_means_for_output = None
     if k_class_enabled:
         final_class_means = jnp.stack(
             [
@@ -9400,6 +9415,41 @@ def _run_relion_iteration_loop(
                 accumulator_volume_shape=final_mstep_accumulator_shape,
             ).reshape(-1),
         ]
+        # RELION writes run_half{1,2}_class001_unfil.mrc from each final
+        # BackProjector with do_map=false.  Keep this separate from the
+        # Wiener-regularized half maps above so parity audits compare like
+        # products.  BackProjector::reconstruct still applies its standard
+        # iterative preweighting and gridding correction in this mode.
+        final_unfiltered_means_for_output = [
+            _reconstruct_volume_eager(
+                final_unfiltered_Ft_ctf_0,
+                final_unfiltered_Ft_y_0,
+                volume_shape,
+                PADDING_FACTOR,
+                tau=None,
+                tau2_fudge=tau2_fudge,
+                projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                use_spherical_mask=False,
+                grid_correct=True,
+                minres_map=RELION_MINRES_MAP,
+                current_size=final_current_size,
+                accumulator_volume_shape=final_mstep_accumulator_shape,
+            ).reshape(-1),
+            _reconstruct_volume_eager(
+                final_unfiltered_Ft_ctf_1,
+                final_unfiltered_Ft_y_1,
+                volume_shape,
+                PADDING_FACTOR,
+                tau=None,
+                tau2_fudge=tau2_fudge,
+                projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                use_spherical_mask=False,
+                grid_correct=True,
+                minres_map=RELION_MINRES_MAP,
+                current_size=final_current_size,
+                accumulator_volume_shape=final_mstep_accumulator_shape,
+            ).reshape(-1),
+        ]
     logger.info(
         "RELION final all-data reconstruction done: wall=%.1fs",
         time.time() - final_reconstruct_t0,
@@ -9420,6 +9470,7 @@ def _run_relion_iteration_loop(
     return {
         "mean": merged_mean,
         "means": final_means_for_output,
+        "unfiltered_means": final_unfiltered_means_for_output,
         "class_means": final_class_means,
         "class_weights": class_weights if k_class_enabled else None,
         "class_assignments": class_assignments if k_class_enabled else None,

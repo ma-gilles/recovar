@@ -596,7 +596,21 @@ def test_final_all_data_iteration_stays_on_shared_dense_scoring_path():
     assert final_block.count("_score_half_dense_in_bpref_scope(") == 1
     assert "bpref_device_signature_active=False" in final_block
     assert "cs_for_engine=final_current_size" in final_block
-    assert final_reconstruct_block.count("current_size=final_current_size") == 4
+    # Four regularized final reconstructions (K-class, merged K=1, two K=1
+    # halves) plus two K=1 do_map=false products matching RELION *_unfil.mrc.
+    assert final_reconstruct_block.count("current_size=final_current_size") == 6
+    assert final_reconstruct_block.count("tau=None") == 2
+    assert final_reconstruct_block.count("use_spherical_mask=False") == 2
+    assert '"unfiltered_means": final_unfiltered_means_for_output' in final_reconstruct_block
+    prejoin_save = source.index("final_unfiltered_Ft_y_0 = final_Ft_y_0")
+    lowres_join = source.index("regularization.join_halves_at_low_resolution(", prejoin_save)
+    assert prejoin_save < lowres_join
+    unfiltered_start = final_reconstruct_block.index("final_unfiltered_means_for_output = [")
+    unfiltered_block = final_reconstruct_block[unfiltered_start:]
+    assert "final_unfiltered_Ft_ctf_0" in unfiltered_block
+    assert "final_unfiltered_Ft_y_0" in unfiltered_block
+    assert "final_unfiltered_Ft_ctf_1" in unfiltered_block
+    assert "final_unfiltered_Ft_y_1" in unfiltered_block
     assert "relion_firstiter_cc_this_iter=False" in final_block
     assert "return_best_pose_details=not k_class_enabled" in final_block
     assert "run_em(" not in final_block

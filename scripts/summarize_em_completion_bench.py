@@ -2344,9 +2344,6 @@ def _check_k4_refinement_runtime_defaults(recovar_dir: Path | None) -> dict[str,
 
 
 def _k1_relion_half_path(relion_dir: Path | None, half: int) -> Path | None:
-    final_unfiltered = _existing_path(relion_dir, [f"run_half{half}_class001_unfil.mrc"])
-    if final_unfiltered is not None:
-        return final_unfiltered
     latest = _latest_relion_path(relion_dir, f"run_it*_half{half}_class001.mrc")
     if latest is not None:
         return latest
@@ -2404,11 +2401,30 @@ def summarize_k1(recovar_dir: Path | None, relion_dir: Path | None, fixture_dir:
     final_all_data = _k1_final_all_data_metadata(recovar_dir)
 
     rec_merged_path = _existing_path(recovar_dir, ["final_merged.mrc", "recovar_final_merged.mrc"])
-    rec_h1_path = _existing_path(recovar_dir, ["final_half1.mrc", "recovar_final_half1.mrc"])
-    rec_h2_path = _existing_path(recovar_dir, ["final_half2.mrc", "recovar_final_half2.mrc"])
+    rec_unfiltered_paths = [
+        _existing_path(recovar_dir, [f"final_half{half}_unfil.mrc"])
+        for half in (1, 2)
+    ]
+    rel_unfiltered_paths = [
+        _existing_path(relion_dir, [f"run_half{half}_class001_unfil.mrc"])
+        if relion_selected
+        else None
+        for half in (1, 2)
+    ]
+    if any(path is not None for path in rec_unfiltered_paths + rel_unfiltered_paths):
+        rec_h1_path, rec_h2_path = rec_unfiltered_paths
+        rel_h1_path, rel_h2_path = rel_unfiltered_paths
+        if not all(path is not None for path in rec_unfiltered_paths + rel_unfiltered_paths):
+            notes.append(
+                "K=1 final unfiltered half products are incomplete; regularized and unfiltered halves "
+                "will not be cross-compared"
+            )
+    else:
+        rec_h1_path = _existing_path(recovar_dir, ["final_half1.mrc", "recovar_final_half1.mrc"])
+        rec_h2_path = _existing_path(recovar_dir, ["final_half2.mrc", "recovar_final_half2.mrc"])
+        rel_h1_path = _k1_relion_half_path(relion_dir, 1) if relion_selected else None
+        rel_h2_path = _k1_relion_half_path(relion_dir, 2) if relion_selected else None
     rel_final_map_path = _k1_relion_final_map_path(relion_dir) if relion_selected else None
-    rel_h1_path = _k1_relion_half_path(relion_dir, 1) if relion_selected else None
-    rel_h2_path = _k1_relion_half_path(relion_dir, 2) if relion_selected else None
     gt_path = _existing_path(fixture_dir, ["reference_gt.mrc", "reference_gt_class001.mrc", "gt.mrc"])
 
     rec = _load_optional(rec_merged_path, _load_recovar_volume, "K=1 RECOVAR final_merged.mrc", notes)

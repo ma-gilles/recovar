@@ -5620,10 +5620,21 @@ are therefore rejected as material explanations.  The next aggregate probe is
 the physical-iteration-2 BPref/numerator-to-reconstructed-reference boundary;
 serial particle tracing is not warranted.
 
+The companion five-field UID inventory uses
+`[class, coarse_rotation, coarse_translation, fine_rotation_global,
+fine_translation_global]`.  A versus A' has 64 left-only candidates, no
+right-only candidates, and only seven significant common-UID count
+differences across 10,000 particles.  A versus the RELION-source arm has 2,400
+left-only and 2,656 right-only candidates, with exclusive posterior-mass
+maxima `0.988049` and `0.995891`.  The 34 changed winners are reported only as
+a diagnostic; they are not a parity gate.
+
 Evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_frozen_it2_projector_source_constructor_factorial_20260718T083027Z/analysis/aprime_factorial_v3_adjudication.json` (SHA-256 `a3b532aa6ec5db99f759c19a0c04b685355fc5924d2f57e6d3cc83f507ec437d`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_frozen_it2_projector_source_constructor_factorial_20260718T083027Z/analysis/APRIME_FACTORIAL_V3_COMPLETE.json` (SHA-256 `32534753bf621b504038d8e9dc5ee3def0c1870dddb629cc4f86112e6e1e0943`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_frozen_it2_projector_source_constructor_factorial_20260718T083027Z/analysis/aprime_aggregate_v4_seal.json` (SHA-256 `3ad0a0c4d589ce144ddd1f44d1ac155420a3f5e2791779c826c31dcf8833eddf`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_frozen_it2_projector_source_constructor_factorial_20260718T083027Z/analysis/APRIME_AGGREGATE_V4_COMPLETE.json` (SHA-256 `0e2d939a811e1955273c1faabdd885573dcb6a5ffa4faee6c8c8de6a777f9877`)
 
 ## 2026-07-18 robustness case-11 acceptance-contract failure
 
@@ -5653,3 +5664,30 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_case11_83825ae_prepared_20260718T033237Z/runs/robustness_projector_abc_11340226/analysis/projector_abc_audit.json` (SHA-256 `4cb75988cff599324b96e628451b4c1fd2ddedb951e9aa1a4ca59e5a9ed8a7c9`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_case11_83825ae_prepared_20260718T033237Z/runs/robustness_projector_abc_11340226/analysis/PROJECTOR_ABC_AUDIT_COMPLETE.json` (SHA-256 `279672665b94da03f3553d8915528082e3ff51c1bd24553bcda43014a706df7a`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_case11_83825ae_prepared_20260718T033237Z/logs/k1_rob11_proj_abc_11340226.err`
+
+### Matched-unfiltered diagnostic exposes pre-join ownership bug
+
+Job `11341828` reconstructed `do_map=false`, no-spherical-mask half maps from
+the final RECOVAR BPref dump and compared only shellwise FSC/FSC-AUC against
+RELION's unfiltered halves. It completed cleanly, but the half FSC-AUC values
+are only `0.903035`/`0.903937` with RECOVAR grid correction off and
+`0.868995`/`0.870136` with it on. Thus the earlier `0.979` result was not only
+a regularized-versus-unfiltered naming error, and the `0.995` acceptance gate
+remains unchanged.
+
+The earliest concrete defect is accumulator ownership across RELION's
+low-resolution half join. At convergence RELION calls
+`writeTemporaryDataAndWeightArrays()` before
+`joinTwoHalvesAtLowResolution()`. It later reconstructs each
+`run_half*_class001_unfil.mrc` by rereading those saved pre-join BPref arrays.
+RECOVAR's diagnostic/output path instead used the post-join arrays. The final
+loop now preserves explicit pre-join numerator/weight arrays for unfiltered
+half output while retaining post-join arrays for final FSC, tau2, and joined
+reconstruction. A fresh fail-closed rerun must pass the same `0.995` gate
+before robustness cases 18, 21, and 22 are released.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_unfiltered_match_20260718T091500Z/run/job_11341828/materialized/unfiltered_half_match.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_unfiltered_match_20260718T091500Z/run/job_11341828/materialized/unfiltered_half_shellwise_fsc.npz`
+- Slurm job `11341828`, state `COMPLETED`, exit code `0:0`, elapsed `00:10:29`

@@ -3563,6 +3563,16 @@ def main():
                     voxel_size=ds.voxel_size,
                 )
                 logger.info("Half-%d volume saved", k + 1)
+            unfiltered_means = result.get("unfiltered_means")
+            if unfiltered_means is not None:
+                for k in range(2):
+                    unfiltered_real = _ft_to_real_volume(unfiltered_means[k])
+                    _write_mrc(
+                        os.path.join(args.output, f"final_half{k + 1}_unfil.mrc"),
+                        unfiltered_real,
+                        voxel_size=ds.voxel_size,
+                    )
+                    logger.info("Unfiltered half-%d volume saved", k + 1)
         else:
             # K-class: result["means"][k] has shape (K, V); result["class_means"]
             # has shape (K, V) for the merged final iter; result["mean"] is the

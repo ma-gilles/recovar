@@ -259,6 +259,13 @@ def test_refinement_results_persist_final_tau2_weight_combination():
     assert 'save_dict["tau2_weight_combination_final_all_data"]' in source
 
 
+def test_final_all_data_writes_matched_unfiltered_half_products():
+    source = RUN_FULL_REFINEMENT.read_text()
+
+    assert 'unfiltered_means = result.get("unfiltered_means")' in source
+    assert 'f"final_half{k + 1}_unfil.mrc"' in source
+
+
 def test_refinement_results_persist_class_assignment_history():
     source = RUN_FULL_REFINEMENT.read_text()
 
