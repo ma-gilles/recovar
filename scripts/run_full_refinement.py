@@ -2145,11 +2145,57 @@ def main():
                     f"half {half}: live_rows={live_names.size}, "
                     f"frozen_rows={frozen_names.size}"
                 )
+            frozen_half = half - 1
+            expected_source_rows = np.asarray(
+                half1_idx if frozen_half == 0 else half2_idx,
+                dtype=np.int64,
+            )
+            five_field_checks = {
+                "source_row": (
+                    expected_source_rows,
+                    frozen_boundary.source_rows_per_half[frozen_half],
+                ),
+                "random_subset": (
+                    np.full(live_names.shape, half, dtype=np.int8),
+                    frozen_boundary.random_subsets_per_half[frozen_half],
+                ),
+                "half_index": (
+                    np.full(live_names.shape, frozen_half, dtype=np.int8),
+                    frozen_boundary.half_indices_per_half[frozen_half],
+                ),
+                "half_local_index": (
+                    np.arange(live_names.size, dtype=np.int64),
+                    frozen_boundary.half_local_indices_per_half[frozen_half],
+                ),
+            }
+            for field_name, (expected, frozen) in five_field_checks.items():
+                if not np.array_equal(expected, frozen):
+                    raise SystemExit(
+                        "Frozen-boundary five-field identity mismatch for "
+                        f"half {half} field {field_name}"
+                    )
         logger.info(
-            "Frozen-boundary particle identities match the active half layout exactly: %d + %d",
+            "Frozen-boundary five-field particle identities match the active half layout "
+            "exactly: %d + %d",
             live_names_per_half[0].size,
             live_names_per_half[1].size,
         )
+        expected_shells = int(ds.image_shape[0] // 2 + 1)
+        shell_shapes = {
+            "fsc": frozen_boundary.fsc.shape,
+            "half1_noise_radial": frozen_boundary.noise_radial_per_half[0].shape,
+            "half2_noise_radial": frozen_boundary.noise_radial_per_half[1].shape,
+        }
+        unexpected_shell_shapes = {
+            name: shape
+            for name, shape in shell_shapes.items()
+            if shape != (expected_shells,)
+        }
+        if unexpected_shell_shapes:
+            raise SystemExit(
+                "Frozen-boundary shell arrays do not match the active dataset: "
+                f"expected={(expected_shells,)}, got={unexpected_shell_shapes}"
+            )
     relion_group_particles, relion_group_source = _select_authoritative_group_particles(
         halfset_particles=relion_particles,
         halfset_source=args.relion_half_sets,
