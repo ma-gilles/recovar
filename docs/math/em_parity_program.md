@@ -5685,12 +5685,24 @@ loop now preserves explicit pre-join numerator/weight arrays for unfiltered
 half output while retaining post-join arrays for final FSC, tau2, and joined
 reconstruction. This is not yet claimed as the sole cause: the failed curves
 plateau near `0.85` (grid off) or `0.80` (grid on) across shells 30--60, well
-beyond the low-resolution join support. A fresh fail-closed rerun must pass the
-same `0.995` gate, or classify the remaining reconstruction/source difference,
-before robustness cases 18, 21, and 22 are released.
+beyond the low-resolution join support.
+
+Corrected rerun `11342491` validates the new boundary and fails closed at the
+unchanged threshold. Pre-join half FSC-AUC is `0.903900`/`0.904756` with grid
+correction off and `0.869346`/`0.870440` with it on. Relative to the post-join
+diagnostic, preserving the right arrays improves the gated halves by only
+`0.000351` and `0.000304`; it is a real ownership fix but not the dominant
+residual. Production-written and independently materialized grid-on maps agree
+at FSC-AUC above `0.99999999998`, ruling out the output loader/materializer.
+The observed minimum gated FSC-AUC is `0.869346 < 0.995`, so cases 18, 21, and
+22 remain blocked. The next evidence is the current-head physical-iteration-2
+BPref source-by-reconstruction factorial, not another full case-11 rerun.
 
 Evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_unfiltered_match_20260718T091500Z/run/job_11341828/materialized/unfiltered_half_match.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_unfiltered_match_20260718T091500Z/run/job_11341828/materialized/unfiltered_half_shellwise_fsc.npz`
 - Slurm job `11341828`, state `COMPLETED`, exit code `0:0`, elapsed `00:10:29`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_unfiltered_prejoin_match_20260718T092527Z/run/job_11342491/materialized/unfiltered_half_match.json` (SHA-256 `6d3ac519e9b48437ba8f58640d32c8c709e05320db9ccd0435813cace9254501`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_unfiltered_prejoin_match_20260718T092527Z/run/job_11342491/materialized/unfiltered_half_shellwise_fsc.npz` (SHA-256 `62d1de090afd006d44a623620cd0b826dcd53f58b927a37932f81b5c3d693737`)
+- Slurm job `11342491`, state `FAILED`, exit code `1:0`, elapsed `00:09:40`; this is the intended fail-closed scientific result. Canceled job `11342385` is invalid packaging evidence only.
