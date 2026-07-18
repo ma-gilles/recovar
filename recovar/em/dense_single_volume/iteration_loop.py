@@ -3496,6 +3496,8 @@ def _copy_optional_float_pair(values):
 
 def _frozen_scoring_state_arrays(
     *,
+    means,
+    mean_variance,
     relion_half_inputs,
     noise_variance_per_half,
     current_sigma_offset_angstrom_per_half,
@@ -3504,6 +3506,7 @@ def _frozen_scoring_state_arrays(
     """Materialize every K=1 scoring primitive owned by a frozen restart."""
 
     pair_fields = {
+        "mean": means,
         "previous_best_rotation_eulers": relion_half_inputs.previous_best_rotation_eulers,
         "previous_best_translations": relion_half_inputs.previous_best_translations,
         "image_corrections": relion_half_inputs.image_corrections,
@@ -3535,6 +3538,11 @@ def _frozen_scoring_state_arrays(
                     "contains non-finite values"
                 )
             arrays[f"{field_name}.half{half_index + 1}"] = np.ascontiguousarray(array).copy()
+
+    tau2 = np.asarray(mean_variance)
+    if not np.issubdtype(tau2.dtype, np.number) or not np.all(np.isfinite(tau2)):
+        raise RuntimeError("Frozen scoring-state mean_variance must be a finite numeric array")
+    arrays["mean_variance"] = np.ascontiguousarray(tau2).copy()
 
     sigma_pair = np.asarray(current_sigma_offset_angstrom_per_half, dtype=np.float64)
     if sigma_pair.shape != (2,) or not np.all(np.isfinite(sigma_pair)):
@@ -5074,6 +5082,8 @@ def _run_relion_iteration_loop(
                 "Frozen scoring-state immutability assertion currently supports K=1 only"
             )
         frozen_initial_scoring_state = _frozen_scoring_state_arrays(
+            means=means,
+            mean_variance=mean_variance,
             relion_half_inputs=relion_half_inputs,
             noise_variance_per_half=noise_variance_per_half,
             current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
@@ -5511,6 +5521,8 @@ def _run_relion_iteration_loop(
             frozen_initial_scoring_state_sha256 = _assert_frozen_scoring_state_unchanged(
                 frozen_initial_scoring_state,
                 _frozen_scoring_state_arrays(
+                    means=means,
+                    mean_variance=mean_variance,
                     relion_half_inputs=relion_half_inputs,
                     noise_variance_per_half=noise_variance_per_half,
                     current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,

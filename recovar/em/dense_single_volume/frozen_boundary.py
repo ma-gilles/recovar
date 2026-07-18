@@ -17,20 +17,35 @@ FROZEN_BOUNDARY_SCHEMA = "recovar.em.frozen_boundary.v2"
 FROZEN_BOUNDARY_FILENAME = "frozen_boundary_v2.npz"
 FROZEN_BOUNDARY_MANIFEST = "FROZEN_BOUNDARY_SHA256SUMS"
 
-_REFINEMENT_STATE_FIELD_TYPES = {
-    "current_resolution": float,
-    "previous_resolution": float,
-    "nr_iter_wo_resol_gain": int,
-    "nr_iter_wo_assignment_changes": int,
-    "nr_iter_wo_large_hidden_variable_changes": int,
-    "ave_Pmax": float,
-    "current_changes_optimal_orientations": float,
-    "current_changes_optimal_offsets_angstrom": float,
-    "smallest_changes_optimal_orientations": float,
-    "smallest_changes_optimal_offsets_angstrom": float,
-    "acc_rot": float,
-    "acc_trans": float,
-    "has_converged": bool,
+_REFINEMENT_STATE_FIELD_DTYPES = {
+    "current_resolution": np.dtype(np.float64),
+    "previous_resolution": np.dtype(np.float64),
+    "nr_iter_wo_resol_gain": np.dtype(np.int32),
+    "nr_iter_wo_assignment_changes": np.dtype(np.int32),
+    "nr_iter_wo_large_hidden_variable_changes": np.dtype(np.int32),
+    "ave_Pmax": np.dtype(np.float64),
+    "current_changes_optimal_orientations": np.dtype(np.float64),
+    "current_changes_optimal_offsets_angstrom": np.dtype(np.float64),
+    "smallest_changes_optimal_orientations": np.dtype(np.float64),
+    "smallest_changes_optimal_offsets_angstrom": np.dtype(np.float64),
+    "acc_rot": np.dtype(np.float64),
+    "acc_trans": np.dtype(np.float64),
+    "has_converged": np.dtype(np.bool_),
+}
+_PROVENANCE_PAYLOAD_KEYS = {
+    "source_job_id",
+    "source_arm",
+    "source_map_serialization",
+    "bitwise_identity_to_original_in_memory_means",
+    "correction_state_owner",
+    "identity_schema",
+    "source_star_sha256",
+    "relion_half_star_sha256",
+}
+_EXPECTED_PROVENANCE_STRINGS = {
+    "source_map_serialization": "in_memory_complex64",
+    "correction_state_owner": "sealed_boundary",
+    "identity_schema": "five_field.v1",
 }
 _REQUIRED_PAYLOAD_KEYS = {
     "schema",
@@ -69,19 +84,10 @@ _REQUIRED_PAYLOAD_KEYS = {
     "half2_half_index",
     "half1_half_local_index",
     "half2_half_local_index",
-    *(f"state_{key}" for key in _REFINEMENT_STATE_FIELD_TYPES),
+    *(f"state_{key}" for key in _REFINEMENT_STATE_FIELD_DTYPES),
+    *_PROVENANCE_PAYLOAD_KEYS,
 }
-_PROVENANCE_PAYLOAD_KEYS = {
-    "source_job_id",
-    "source_arm",
-    "source_map_serialization",
-    "bitwise_identity_to_original_in_memory_means",
-    "correction_state_owner",
-    "identity_schema",
-    "source_star_sha256",
-    "relion_half_star_sha256",
-}
-_ALLOWED_PAYLOAD_KEYS = _REQUIRED_PAYLOAD_KEYS | _PROVENANCE_PAYLOAD_KEYS
+_ALLOWED_PAYLOAD_KEYS = _REQUIRED_PAYLOAD_KEYS
 
 
 @dataclass(frozen=True)
@@ -91,6 +97,7 @@ class FrozenRefinementBoundary:
     source_manifest_sha256: str
     boundary_sha256: str
     completed_relion_iteration: int
+    volume_shape: tuple[int, int, int]
     current_size: int
     healpix_order: int
     relion_incr_size: int
@@ -112,6 +119,14 @@ class FrozenRefinementBoundary:
     direction_prior_per_half: tuple[np.ndarray, np.ndarray]
     translation_sigma_angstrom_per_half: tuple[float, float]
     refinement_state_fields: dict[str, float | int | bool]
+    source_job_id: int
+    source_arm: str
+    source_map_serialization: str
+    bitwise_identity_to_original_in_memory_means: bool
+    correction_state_owner: str
+    identity_schema: str
+    source_star_sha256: str
+    relion_half_star_sha256: str
 
 
 def _sha256(path: Path) -> str:
@@ -157,8 +172,18 @@ def _required_array(npz, key: str, *, ndim: int | None = None) -> np.ndarray:
     return value
 
 
+def _exact_array(npz, key: str, *, ndim: int, dtype) -> np.ndarray:
+    value = _required_array(npz, key, ndim=ndim)
+    expected_dtype = np.dtype(dtype)
+    if value.dtype != expected_dtype:
+        raise ValueError(
+            f"frozen boundary array {key} has dtype {value.dtype}; expected {expected_dtype}"
+        )
+    return value
+
+
 def _finite_array(npz, key: str, *, ndim: int, dtype) -> np.ndarray:
-    value = _required_array(npz, key, ndim=ndim).astype(dtype, copy=False)
+    value = _exact_array(npz, key, ndim=ndim, dtype=dtype)
     if not np.all(np.isfinite(value)):
         raise ValueError(f"frozen boundary array {key} contains non-finite values")
     return value
@@ -168,28 +193,16 @@ def _scalar(npz, key: str, dtype):
     value = _required_array(npz, key)
     if value.shape != ():
         raise ValueError(f"frozen boundary scalar {key} must have shape (), got {value.shape}")
-    expected_kinds = {
-        bool: {"b"},
-        int: {"i", "u"},
-        float: {"f"},
-        str: {"S", "U"},
-    }[dtype]
-    if value.dtype.kind not in expected_kinds:
+    if dtype is str:
+        if value.dtype.kind != "U":
+            raise ValueError(
+                f"frozen boundary scalar {key} has dtype {value.dtype}; expected Unicode dtype"
+            )
+        return str(value.item())
+    expected_dtype = np.dtype(dtype)
+    if value.dtype != expected_dtype:
         raise ValueError(
-            f"frozen boundary scalar {key} has dtype {value.dtype}; "
-            f"expected kind in {sorted(expected_kinds)}"
-        )
-    return dtype(value.item())
-
-
-def _typed_scalar(npz, key: str, *, dtype_kinds: set[str]):
-    value = _required_array(npz, key)
-    if value.shape != ():
-        raise ValueError(f"frozen boundary scalar {key} must have shape (), got {value.shape}")
-    if value.dtype.kind not in dtype_kinds:
-        raise ValueError(
-            f"frozen boundary scalar {key} has dtype {value.dtype}; "
-            f"expected kind in {sorted(dtype_kinds)}"
+            f"frozen boundary scalar {key} has dtype {value.dtype}; expected {expected_dtype}"
         )
     return value.item()
 
@@ -235,17 +248,10 @@ def load_frozen_refinement_boundary(
         unknown_keys = sorted(payload_keys - _ALLOWED_PAYLOAD_KEYS)
         if unknown_keys:
             raise ValueError(f"frozen boundary contains unknown schema-v2 keys: {unknown_keys}")
-        provenance_keys = payload_keys & _PROVENANCE_PAYLOAD_KEYS
-        if provenance_keys and provenance_keys != _PROVENANCE_PAYLOAD_KEYS:
-            missing_provenance = sorted(_PROVENANCE_PAYLOAD_KEYS - provenance_keys)
-            raise ValueError(
-                "frozen boundary must provide all or none of the provenance fields; "
-                f"missing={missing_provenance}"
-            )
-        completed_iteration = _scalar(npz, "completed_relion_iteration", int)
+        completed_iteration = _scalar(npz, "completed_relion_iteration", np.int32)
         if completed_iteration < 1:
             raise ValueError("completed_relion_iteration must be positive")
-        volume_shape = _required_array(npz, "volume_shape", ndim=1).astype(np.int64, copy=False)
+        volume_shape = _exact_array(npz, "volume_shape", ndim=1, dtype=np.int32)
         if volume_shape.shape != (3,) or np.any(volume_shape <= 0):
             raise ValueError(f"invalid frozen-boundary volume_shape {volume_shape.tolist()}")
         volume_size = int(np.prod(volume_shape, dtype=np.int64))
@@ -288,19 +294,19 @@ def load_frozen_refinement_boundary(
             for half in (1, 2)
         )
         source_rows = tuple(
-            _required_array(npz, f"half{half}_source_row", ndim=1).astype(np.int64, copy=False)
+            _exact_array(npz, f"half{half}_source_row", ndim=1, dtype=np.int64)
             for half in (1, 2)
         )
         random_subsets = tuple(
-            _required_array(npz, f"half{half}_random_subset", ndim=1).astype(np.int8, copy=False)
+            _exact_array(npz, f"half{half}_random_subset", ndim=1, dtype=np.int8)
             for half in (1, 2)
         )
         half_indices = tuple(
-            _required_array(npz, f"half{half}_half_index", ndim=1).astype(np.int8, copy=False)
+            _exact_array(npz, f"half{half}_half_index", ndim=1, dtype=np.int8)
             for half in (1, 2)
         )
         half_local_indices = tuple(
-            _required_array(npz, f"half{half}_half_local_index", ndim=1).astype(np.int64, copy=False)
+            _exact_array(npz, f"half{half}_half_local_index", ndim=1, dtype=np.int64)
             for half in (1, 2)
         )
         for half, (euler, translation, names, rows, subsets, half_ids, local_ids) in enumerate(
@@ -322,8 +328,8 @@ def load_frozen_refinement_boundary(
                 raise ValueError(f"frozen-boundary half-{half} pose/identity row counts differ")
             if any(value.shape != names.shape for value in (rows, subsets, half_ids, local_ids)):
                 raise ValueError(f"frozen-boundary half-{half} five-field identity row counts differ")
-            if names.dtype.kind not in {"U", "S"}:
-                raise ValueError(f"frozen-boundary half-{half} image names must be fixed-width strings")
+            if names.dtype.kind != "U":
+                raise ValueError(f"frozen-boundary half-{half} image names must be Unicode strings")
             if np.any(rows < 0) or np.unique(rows).size != rows.size:
                 raise ValueError(f"frozen-boundary half-{half} source rows must be unique nonnegative values")
             if not np.array_equal(subsets, np.full(names.shape, half, dtype=np.int8)):
@@ -352,10 +358,10 @@ def load_frozen_refinement_boundary(
             for half in (1, 2)
         )
         translation_sigma_angstrom_per_half = tuple(
-            _scalar(npz, f"half{half}_translation_sigma_angstrom", float)
+            _scalar(npz, f"half{half}_translation_sigma_angstrom", np.float64)
             for half in (1, 2)
         )
-        expected_direction_count = 12 * (4 ** _scalar(npz, "healpix_order", int))
+        expected_direction_count = 12 * (4 ** _scalar(npz, "healpix_order", np.int32))
         for half in range(2):
             expected_rows = eulers[half].shape[0]
             if image_corrections[half].shape != (expected_rows,):
@@ -379,8 +385,8 @@ def load_frozen_refinement_boundary(
                 raise ValueError("frozen-boundary translation sigma must be finite and positive")
 
         refinement_state_fields = {
-            key: _scalar(npz, f"state_{key}", field_type)
-            for key, field_type in _REFINEMENT_STATE_FIELD_TYPES.items()
+            key: _scalar(npz, f"state_{key}", field_dtype)
+            for key, field_dtype in _REFINEMENT_STATE_FIELD_DTYPES.items()
         }
         if refinement_state_fields.get("has_converged", False):
             raise ValueError("a frozen numbered-iteration boundary must not already be converged")
@@ -409,29 +415,45 @@ def load_frozen_refinement_boundary(
         if "ave_Pmax" in refinement_state_fields and not 0.0 <= refinement_state_fields["ave_Pmax"] <= 1.0:
             raise ValueError("frozen-boundary state ave_Pmax must lie in [0, 1]")
 
-        if provenance_keys:
-            source_job_id = _typed_scalar(npz, "source_job_id", dtype_kinds={"i", "u"})
-            if int(source_job_id) < 0:
-                raise ValueError("frozen-boundary source_job_id must be nonnegative")
+        source_job_id = _scalar(npz, "source_job_id", np.int64)
+        if source_job_id < 0:
+            raise ValueError("frozen-boundary source_job_id must be nonnegative")
+        provenance_strings = {
+            key: _scalar(npz, key, str)
             for key in (
                 "source_arm",
                 "source_map_serialization",
                 "correction_state_owner",
                 "identity_schema",
-            ):
-                if not str(_typed_scalar(npz, key, dtype_kinds={"S", "U"})).strip():
-                    raise ValueError(f"frozen-boundary provenance scalar {key} must be nonempty")
-            _typed_scalar(
-                npz,
-                "bitwise_identity_to_original_in_memory_means",
-                dtype_kinds={"b"},
             )
-            for key in ("source_star_sha256", "relion_half_star_sha256"):
-                digest = str(_typed_scalar(npz, key, dtype_kinds={"S", "U"}))
-                if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
-                    raise ValueError(
-                        f"frozen-boundary provenance scalar {key} must be lowercase SHA-256"
-                    )
+        }
+        for key, value in provenance_strings.items():
+            if not value.strip():
+                raise ValueError(f"frozen-boundary provenance scalar {key} must be nonempty")
+        for key, expected_value in _EXPECTED_PROVENANCE_STRINGS.items():
+            if provenance_strings[key] != expected_value:
+                raise ValueError(
+                    f"frozen-boundary provenance scalar {key} must equal "
+                    f"{expected_value!r}, got {provenance_strings[key]!r}"
+                )
+        bitwise_identity = _scalar(
+            npz,
+            "bitwise_identity_to_original_in_memory_means",
+            np.bool_,
+        )
+        if not bitwise_identity:
+            raise ValueError(
+                "frozen-boundary maps must be bitwise-identical to the original in-memory means"
+            )
+        provenance_hashes = {
+            key: _scalar(npz, key, str)
+            for key in ("source_star_sha256", "relion_half_star_sha256")
+        }
+        for key, digest in provenance_hashes.items():
+            if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+                raise ValueError(
+                    f"frozen-boundary provenance scalar {key} must be lowercase SHA-256"
+                )
 
         result = FrozenRefinementBoundary(
             source_dir=source_dir,
@@ -439,18 +461,19 @@ def load_frozen_refinement_boundary(
             source_manifest_sha256=_sha256(source_manifest),
             boundary_sha256=actual_sha256,
             completed_relion_iteration=completed_iteration,
-            current_size=_scalar(npz, "current_size", int),
-            healpix_order=_scalar(npz, "healpix_order", int),
-            relion_incr_size=_scalar(npz, "relion_incr_size", int),
-            has_high_fsc_at_limit=_scalar(npz, "has_high_fsc_at_limit", bool),
+            volume_shape=tuple(int(value) for value in volume_shape),
+            current_size=_scalar(npz, "current_size", np.int32),
+            healpix_order=_scalar(npz, "healpix_order", np.int32),
+            relion_incr_size=_scalar(npz, "relion_incr_size", np.int32),
+            has_high_fsc_at_limit=_scalar(npz, "has_high_fsc_at_limit", np.bool_),
             means=means,
             mean_variance=mean_variance,
             noise_radial_per_half=noise_radial_per_half,
             fsc=fsc,
-            ave_pmax=_scalar(npz, "ave_pmax", float),
+            ave_pmax=_scalar(npz, "ave_pmax", np.float64),
             previous_best_rotation_eulers=eulers,
             previous_best_translations=translations,
-            image_names_per_half=tuple(np.asarray(value, dtype=str) for value in image_names),
+            image_names_per_half=image_names,
             source_rows_per_half=source_rows,
             random_subsets_per_half=random_subsets,
             half_indices_per_half=half_indices,
@@ -460,6 +483,14 @@ def load_frozen_refinement_boundary(
             direction_prior_per_half=direction_prior_per_half,
             translation_sigma_angstrom_per_half=translation_sigma_angstrom_per_half,
             refinement_state_fields=refinement_state_fields,
+            source_job_id=int(source_job_id),
+            source_arm=provenance_strings["source_arm"],
+            source_map_serialization=provenance_strings["source_map_serialization"],
+            bitwise_identity_to_original_in_memory_means=bool(bitwise_identity),
+            correction_state_owner=provenance_strings["correction_state_owner"],
+            identity_schema=provenance_strings["identity_schema"],
+            source_star_sha256=provenance_hashes["source_star_sha256"],
+            relion_half_star_sha256=provenance_hashes["relion_half_star_sha256"],
         )
 
     if result.current_size <= 0 or result.healpix_order < 0 or result.relion_incr_size <= 0:

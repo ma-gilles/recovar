@@ -115,6 +115,24 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _verify_frozen_boundary_source_hashes(boundary, *, source_star, relion_half_star) -> None:
+    """Bind a frozen diagnostic boundary to the live particle source files."""
+
+    live_sources = {
+        "source STAR": (Path(source_star), boundary.source_star_sha256),
+        "RELION half-set STAR": (Path(relion_half_star), boundary.relion_half_star_sha256),
+    }
+    for label, (path, expected_sha256) in live_sources.items():
+        if not path.is_file():
+            raise ValueError(f"frozen-boundary {label} does not exist: {path}")
+        observed_sha256 = _sha256_file(path)
+        if observed_sha256 != expected_sha256:
+            raise ValueError(
+                f"frozen-boundary {label} SHA-256 mismatch: "
+                f"expected {expected_sha256}, got {observed_sha256}"
+            )
+
+
 def _resolve_relion_sampling_orders(healpix_order: int, adaptive_oversampling: int) -> tuple[int, int]:
     """Return RELION coarse pass-1 and fine pass-2 HEALPix orders.
 
@@ -2246,6 +2264,15 @@ def main():
                 "--frozen-boundary-dir cannot be combined with pose overrides or "
                 "--apply-initial-lowpass"
             )
+        if args.relion_half_sets is None:
+            raise SystemExit(
+                "--frozen-boundary-dir requires --relion_half_sets so the sealed "
+                "half-set source can be verified"
+            )
+        if args.relion_current_sizes is not None or args.relion_healpix_orders is not None:
+            raise SystemExit(
+                "--frozen-boundary-dir cannot be combined with unsealed sampling oracles"
+            )
         try:
             frozen_boundary = load_frozen_refinement_boundary(
                 args.frozen_boundary_dir,
@@ -2259,6 +2286,24 @@ def main():
                 f"cli={args.init_relion_iteration}, "
                 f"boundary={frozen_boundary.completed_relion_iteration}"
             )
+        if int(args.healpix_order) != frozen_boundary.healpix_order:
+            raise SystemExit(
+                "--healpix_order does not match the sealed frozen boundary: "
+                f"cli={args.healpix_order}, boundary={frozen_boundary.healpix_order}"
+            )
+        if int(args.adaptive_oversampling) != 1:
+            raise SystemExit(
+                "--frozen-boundary-dir currently supports only canonical "
+                "--adaptive_oversampling 1"
+            )
+        try:
+            _verify_frozen_boundary_source_hashes(
+                frozen_boundary,
+                source_star=Path(args.data_dir) / "particles.star",
+                relion_half_star=args.relion_half_sets,
+            )
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"Invalid frozen refinement boundary source binding: {exc}") from exc
         logger.info(
             "Diagnostic frozen boundary loaded: dir=%s manifest_sha256=%s "
             "boundary_sha256=%s completed_relion_iteration=%d",
@@ -2744,12 +2789,12 @@ def main():
     )
 
     if frozen_boundary is not None:
-        expected_volume_size = int(np.prod(ds.volume_shape))
-        if any(mean.shape != (expected_volume_size,) for mean in frozen_boundary.means):
+        if frozen_boundary.volume_shape != tuple(int(value) for value in ds.volume_shape):
             raise SystemExit(
-                "Frozen-boundary half-map shape does not match the active dataset volume"
+                "Frozen-boundary volume_shape does not match the active dataset: "
+                f"boundary={frozen_boundary.volume_shape}, dataset={tuple(ds.volume_shape)}"
             )
-        init_vol_ft = np.stack(frozen_boundary.means, axis=0).astype(np.complex64, copy=False)
+        init_vol_ft = np.stack(frozen_boundary.means, axis=0)
         merged_init_ft = np.mean(init_vol_ft.astype(np.complex128), axis=0).astype(np.complex64)
         init_vol_real = np.asarray(
             ftu.get_idft3(jnp.asarray(merged_init_ft).reshape(ds.volume_shape)).real,

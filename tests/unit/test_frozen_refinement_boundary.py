@@ -65,6 +65,14 @@ def _write_boundary(root, **overrides):
         "state_acc_rot": np.float64(2.0),
         "state_acc_trans": np.float64(1.0),
         "state_has_converged": np.bool_(False),
+        "source_job_id": np.int64(12345),
+        "source_arm": np.asarray("control"),
+        "source_map_serialization": np.asarray("in_memory_complex64"),
+        "bitwise_identity_to_original_in_memory_means": np.bool_(True),
+        "correction_state_owner": np.asarray("sealed_boundary"),
+        "identity_schema": np.asarray("five_field.v1"),
+        "source_star_sha256": np.asarray("a" * 64),
+        "relion_half_star_sha256": np.asarray("b" * 64),
     }
     values.update(overrides)
     path = root / FROZEN_BOUNDARY_FILENAME
@@ -83,6 +91,7 @@ def test_frozen_boundary_loader_round_trips_primitive_state(tmp_path):
     boundary = load_frozen_refinement_boundary(tmp_path)
 
     assert boundary.completed_relion_iteration == 2
+    assert boundary.volume_shape == (2, 2, 2)
     assert boundary.current_size == 92
     assert boundary.means[0].dtype == np.complex64
     np.testing.assert_array_equal(
@@ -111,6 +120,9 @@ def test_frozen_boundary_loader_round_trips_primitive_state(tmp_path):
     assert boundary.refinement_state_fields["has_converged"] is False
     assert len(boundary.boundary_sha256) == 64
     assert len(boundary.source_manifest_sha256) == 64
+    assert boundary.source_job_id == 12345
+    assert boundary.bitwise_identity_to_original_in_memory_means is True
+    assert boundary.source_star_sha256 == "a" * 64
 
 
 def test_frozen_boundary_loader_rejects_modified_payload(tmp_path):
@@ -226,4 +238,85 @@ def test_frozen_boundary_loader_rejects_string_schedule_scalar(tmp_path):
     _write_boundary(tmp_path, current_size=np.asarray("92"))
 
     with pytest.raises(ValueError, match="current_size has dtype"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+def test_frozen_boundary_loader_rejects_complex128_map_before_cast(tmp_path):
+    _write_boundary(tmp_path, half1_mean_ft=np.arange(8, dtype=np.complex128))
+
+    with pytest.raises(ValueError, match="half1_mean_ft has dtype complex128; expected complex64"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("completed_relion_iteration", np.int64(2)),
+        ("ave_pmax", np.float32(0.25)),
+        ("source_job_id", np.int32(12345)),
+    ],
+)
+def test_frozen_boundary_loader_rejects_wrong_scalar_dtype(tmp_path, field, value):
+    _write_boundary(tmp_path, **{field: value})
+
+    with pytest.raises(ValueError, match=rf"{field} has dtype"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("half1_source_row", np.asarray([0.0, 2.5], dtype=np.float64)),
+        ("half1_random_subset", np.asarray([1, 1], dtype=np.int64)),
+        ("half1_half_index", np.asarray([0, 0], dtype=np.int32)),
+        ("half1_half_local_index", np.asarray([0, 1], dtype=np.int32)),
+    ],
+)
+def test_frozen_boundary_loader_rejects_wrong_identity_dtype(tmp_path, field, value):
+    _write_boundary(tmp_path, **{field: value})
+
+    with pytest.raises(ValueError, match=rf"{field} has dtype"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+def test_frozen_boundary_loader_rejects_nonunicode_image_identity(tmp_path):
+    _write_boundary(tmp_path, half1_image_name=np.asarray([b"1@a.mrcs", b"2@a.mrcs"]))
+
+    with pytest.raises(ValueError, match="image names must be Unicode strings"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+def test_frozen_boundary_loader_requires_complete_provenance(tmp_path):
+    path = _write_boundary(tmp_path)
+    with np.load(path, allow_pickle=False) as source:
+        values = {key: source[key] for key in source.files if key != "source_star_sha256"}
+    np.savez(path, **values)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    (tmp_path / FROZEN_BOUNDARY_MANIFEST).write_text(
+        f"{digest}  {FROZEN_BOUNDARY_FILENAME}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing required schema-v2 keys"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+def test_frozen_boundary_loader_requires_bitwise_original_maps(tmp_path):
+    _write_boundary(
+        tmp_path,
+        bitwise_identity_to_original_in_memory_means=np.bool_(False),
+    )
+
+    with pytest.raises(ValueError, match="bitwise-identical"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["source_map_serialization", "correction_state_owner", "identity_schema"],
+)
+def test_frozen_boundary_loader_rejects_false_provenance_semantics(tmp_path, field):
+    _write_boundary(tmp_path, **{field: np.asarray("plausible_but_unverified")})
+
+    with pytest.raises(ValueError, match=rf"provenance scalar {field} must equal"):
         load_frozen_refinement_boundary(tmp_path)

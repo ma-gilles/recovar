@@ -48,6 +48,7 @@ from scripts.run_full_refinement import (
     _resolve_tau2_fudge,
     _save_initial_noise_cache,
     _select_authoritative_group_particles,
+    _verify_frozen_boundary_source_hashes,
 )
 
 FIXTURE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0")
@@ -111,6 +112,11 @@ def test_frozen_scoring_state_negative_overwrite_regression():
         ],
     )
     expected = _frozen_scoring_state_arrays(
+        means=[
+            np.zeros(8, dtype=np.complex64),
+            np.ones(8, dtype=np.complex64),
+        ],
+        mean_variance=np.ones(8, dtype=np.float32),
         relion_half_inputs=half_inputs,
         noise_variance_per_half=[
             np.ones(4, dtype=np.float32),
@@ -127,6 +133,75 @@ def test_frozen_scoring_state_negative_overwrite_regression():
 
     with pytest.raises(RuntimeError, match="noise_variance.half2 was overwritten"):
         _assert_frozen_scoring_state_unchanged(expected, actual)
+
+    changed_map = {name: value.copy() for name, value in expected.items()}
+    changed_map["mean.half1"][0] = np.complex64(1.0 + 0.0j)
+    with pytest.raises(RuntimeError, match="mean.half1 was overwritten"):
+        _assert_frozen_scoring_state_unchanged(expected, changed_map)
+
+    changed_tau2 = {name: value.copy() for name, value in expected.items()}
+    changed_tau2["mean_variance"][0] = np.float32(2.0)
+    with pytest.raises(RuntimeError, match="mean_variance was overwritten"):
+        _assert_frozen_scoring_state_unchanged(expected, changed_tau2)
+
+
+def test_frozen_boundary_source_hashes_bind_live_stars(tmp_path):
+    source_star = tmp_path / "particles.star"
+    half_star = tmp_path / "run_it002_data.star"
+    source_star.write_text("source\n", encoding="utf-8")
+    half_star.write_text("halves\n", encoding="utf-8")
+    boundary = SimpleNamespace(
+        source_star_sha256=run_full_refinement._sha256_file(source_star),
+        relion_half_star_sha256=run_full_refinement._sha256_file(half_star),
+    )
+
+    _verify_frozen_boundary_source_hashes(
+        boundary,
+        source_star=source_star,
+        relion_half_star=half_star,
+    )
+
+    half_star.write_text("changed\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="RELION half-set STAR SHA-256 mismatch"):
+        _verify_frozen_boundary_source_hashes(
+            boundary,
+            source_star=source_star,
+            relion_half_star=half_star,
+        )
+
+
+def test_frozen_boundary_schedule_is_threaded_exactly_to_refinement_loop():
+    tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "refine_single_volume"
+    ]
+    assert len(calls) == 1
+    keywords = {keyword.arg: keyword.value for keyword in calls[0].keywords}
+    assert isinstance(keywords["init_current_size"], ast.Name)
+    assert keywords["init_current_size"].id == "init_current_size"
+    relion_incr = keywords["init_relion_incr_size"]
+    assert isinstance(relion_incr, ast.IfExp)
+    assert isinstance(relion_incr.orelse, ast.Attribute)
+    assert relion_incr.orelse.attr == "relion_incr_size"
+
+    assignments = {
+        target.id: value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+        for value in [node.value]
+    }
+    current_size = assignments["init_current_size"]
+    assert isinstance(current_size, ast.IfExp)
+    boundary_current_size = current_size.body
+    assert isinstance(boundary_current_size, ast.Call)
+    assert isinstance(boundary_current_size.args[0], ast.Attribute)
+    assert boundary_current_size.args[0].attr == "current_size"
 
 
 def test_frozen_boundary_noise_expands_in_float32_scoring_dtype():

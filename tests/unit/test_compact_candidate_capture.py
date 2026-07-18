@@ -307,6 +307,30 @@ def test_raw_capture_finalize_rejects_half_identity_swap(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
+def test_raw_capture_finalize_rejects_half_local_original_permutation(tmp_path, monkeypatch):
+    monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(capture, "_capture_counter", 0)
+    half1 = _capture_inputs(batch=2)
+    expected_half1 = half1["original_indices"].copy()
+    half1["original_indices"] = expected_half1[::-1].copy()
+    half2 = _capture_inputs(batch=2)
+    half2["half"] = 2
+    half2["original_indices"] = np.arange(2000, 2002, dtype=np.int64)
+    capture.maybe_capture_k1_production_bucket(**half1)
+    capture.maybe_capture_k1_production_bucket(**half2)
+
+    with pytest.raises(capture.CompactCaptureError, match="half-local/original identity mapping"):
+        capture.finalize_raw_capture_directory(
+            tmp_path,
+            expected_original_indices_by_half={
+                1: expected_half1,
+                2: half2["original_indices"],
+            },
+            expected_iteration=3,
+        )
+
+
+@pytest.mark.unit
 def test_raw_capture_validation_rejects_corrupted_pmax(tmp_path, monkeypatch):
     monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
     monkeypatch.setattr(capture, "_capture_counter", 0)

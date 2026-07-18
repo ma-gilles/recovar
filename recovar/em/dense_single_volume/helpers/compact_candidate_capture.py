@@ -384,6 +384,15 @@ def finalize_raw_capture_directory(
             raise CompactCaptureError(f"raw capture has no half-{half} shards")
         if not np.array_equal(np.sort(observed_half), np.sort(expected_by_half[half])):
             raise CompactCaptureError(f"raw capture half-{half} identity set is incomplete or unexpected")
+        for half_local_index, original_index in enumerate(expected_by_half[half]):
+            fragments = fragments_by_identity[(half, int(original_index))]
+            captured_local_indices = {int(fragment["local_index"]) for fragment in fragments}
+            if captured_local_indices != {half_local_index}:
+                raise CompactCaptureError(
+                    "raw capture half-local/original identity mapping is not exact: "
+                    f"half={half} expected_local={half_local_index} "
+                    f"original={int(original_index)} captured_local={sorted(captured_local_indices)}"
+                )
 
     multipart_particle_count = 0
     for (half, original_index), fragments in fragments_by_identity.items():
