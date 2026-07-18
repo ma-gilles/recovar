@@ -5263,3 +5263,80 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/analysis/projector_iref_rebuild_11329370_capture_a.json` (SHA-256 `fb894fa8ce229f43545f3a1265bbea1f90a917f3117ccad573720e7d5a9307ae`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_recovar_projector_injection_smoke_audit_0f0e7256_20260718T021700Z/smoke_abc_report_v3.json` (SHA-256 `c64f673eb7a2f962ca04834f1cdcbc83ad603929865b3a7019d360e26cc71ead`)
 - RELION replay binding SHA-256 `e04549190318244a62e7b85ea3200e221d37bc4543c4cc9811843f38075e4d22` (the resolved module path and digest are also sealed inside both rebuild reports).
+
+## 2026-07-17 full-10k live-boundary closure
+
+RELION job `11329370` completed a same-allocation capture/untouched/capture
+trajectory on one GPU. All eight iteration/half capture-control map edges stay
+inside twice the independently observed capture/capture repeat envelope. The
+full-trajectory discrete controls also pass. Capture hooks are therefore inert
+at this scale under FSC/FSC-AUC and exact control diagnostics; correlation is
+not used. The three arms intentionally are not byte-identical, and candidate
+counts (`2,100,576`, `2,100,480`, and `2,100,544`) are reported rather than
+required to match exactly.
+
+Independent job `11331272` repeated all 24 map reads with the canonical rounded
+radial shells and normalized trapezoidal FSC-AUC, excluding DC and incomplete
+Nyquist edges. All eight iteration/half control edges remain inside the A/C
+repeat envelope. The worst control FSC-AUC loss is `5.44916e-6` against a
+`1.11439e-5` bound; the worst shell loss is `2.95458e-5` against a
+`5.93251e-5` bound.
+
+The corrected boundary analyzer in job `11331054` reports 95 exact matches, two
+lossless conversions, 26 STAR-decimal-serialization-limited comparisons, zero
+fatal mismatches, and zero unresolved numeric differences for all 10,000
+particles. Exact boundary equivalence remains blocked by nine absent runtime
+operand families, not by an observed disagreement. Two analyzer-contract bugs
+were found and fixed during fail-closed retries: the identity consumer required
+an unused field absent from its producer schema, and it incorrectly required
+RELION's coarse pass size to equal current size. The replacement comparison
+calls RECOVAR's production scheduling helper and exactly reproduces the
+captured `coarse_size=56` from `current_size=120`, HEALPix order 3, 1.6375 A
+pixels, 256 box size, and 280 A particle diameter.
+
+The controlled RECOVAR baseline/baseline/RELION-projector experiment was then
+sealed against commit `83825ae881500c55d3617f8ad4585096d873625a` and the 38-file
+source manifest below. Its first allocation, Slurm job `11331159`, completed
+the first baseline's three-iteration refinement cleanly and then stopped in a
+wrapper-only gate that searched stdout for Python logging written to stderr.
+Offline finalization caught a second diagnostic-integrity defect before a
+retry was submitted: half 2 contained 4,999 of the expected 5,000 identities,
+with source row 4,573 absent. The missing image is the sole 1,024-rotation tail
+bucket, which production evaluated as two rotation chunks while the compact
+candidate tap existed only on the unchunked branch. This is a capture-path bug,
+not an EM result or FSC failure.
+
+The repair is committed as `4e2f3e7668426f5c2644c75a3de97dedafd2acb1`
+with review hardening in `3a221f9305e48d648809370c4963181e6e53b9b0`
+(cherry-picked here as `f4a75aa1` and `c673a787`). It retains and joins only
+explicitly requested diagnostic chunks under a fail-closed Python-integer
+memory bound; the disabled path converts no capture operands. Independent
+review also found a genuine production control-state bug: rotation-chunked
+winner-take-all probabilities were one-hot, but their returned Pmax remained
+the pre-transform soft value. The corrected Pmax is one for a finite winner,
+matching the unchunked path and preventing erroneous ave-Pmax scheduling or
+convergence inputs. The M-step arithmetic was already one-hot and is unchanged.
+Winner-only effective support is now sealed consistently in both capture paths,
+and the capture metadata explicitly distinguishes normalized scoring
+posteriors from the separate RELION-float32 reconstruction weights.
+
+The focused hardening set passes 15 tests and the broader capture/projector set
+passes 96 tests. The wrapper now writes arm stdout and stderr synchronously,
+replays them only after the child closes, and then evaluates its strict gates;
+this removes both the wrong-stream check and the asynchronous-tee flush race.
+The repinned, resealed three-arm retry is Slurm job `11332272`. Its scientific
+projector attribution remains unclassified until that job produces a complete
+identity seal and control-envelope FSC/FSC-AUC audit.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/runs/full10k_abc_11329370/JOB_COMPLETE` (SHA-256 `db532fd5336ce83b6226ffd55c07b00f11c6e1944e28355e609f2904df64bcc2`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/runs/full10k_abc_11329370/analysis/full10k_abc_audit.json` (SHA-256 `093e57d87ffdb0687a2a82e927bb32f5d9b96d9270f83fffb9e91f7cfa29dfa9`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/runs/full10k_abc_11329370/analysis/full_trajectory_shellwise_fsc.npz` (SHA-256 `19230b7827187ff688c5503e0ed649881adb282f7816c9a3b3c6d603db50efc2`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/analysis/canonical_fsc_reaudit_11329370_20260718T031204Z/report.json` (SHA-256 `b136948224614e7337548a2e6241148eebb65d7f21657e21b13751d6f741e526`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/analysis/canonical_fsc_reaudit_11329370_20260718T031204Z/canonical_shellwise_fsc.npz` (SHA-256 `2fdf19dd47ffa2b2d758510b7ba1e405fa66bcf564ea3fe6178e3374c9622273`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/analysis/full10k_boundary_equivalence_11329370/report.json` (SHA-256 `dc4403cb84ceddc581d1a480a192d79baec44238e2829277b2a3e06af909178d`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/analysis/full10k_boundary_equivalence_11329370/ANALYSIS_COMPLETE` (SHA-256 `f9d19db21b133e722798b0164b0aa164c426464d0561981aab83aa326958baa8`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/provenance/SOURCE_INPUT_SHA256SUMS` (SHA-256 `b3161a715026de9c8f94f5c7383b5788e47ea51b444e4e8cd69870a52b19267d`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/logs/focused_chunked_capture_hardening_20260718T035703Z.log` (SHA-256 `8230f48ad5ae8f2d7826260110a0b7d238a87526f583c5ef7decce0466a4888f`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/logs/broad_capture_projector_hardening_20260718T035900Z.log` (SHA-256 `9c9b0e6d40485e98fad10ff204db5536618cf6aeb6c07e4a1f927337df2bf2aa`)
