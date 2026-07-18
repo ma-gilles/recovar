@@ -357,7 +357,7 @@ def require_chunked_capture_capacity(batch: int, rotations: int, translations: i
     dimensions = (int(batch), int(rotations), int(translations))
     if any(value <= 0 for value in dimensions):
         raise CompactCaptureError(f"invalid chunked capture topology: {dimensions}")
-    candidate_count = int(np.prod(dimensions, dtype=np.int64))
+    candidate_count = dimensions[0] * dimensions[1] * dimensions[2]
     estimated_bytes = candidate_count * (2 * np.dtype(np.float64).itemsize + np.dtype(bool).itemsize)
     if estimated_bytes > MAX_CHUNKED_CAPTURE_INPUT_BYTES:
         raise CompactCaptureError(
@@ -546,6 +546,14 @@ def maybe_capture_k1_production_bucket(
         "score_semantics": "higher-is-better combined log weight; all priors included",
         "raw_score_includes_prior": True,
         "raw_log_z_convention": "logsumexp(combined production score over candidate_mask)",
+        "posterior_semantics": (
+            "normalized scoring posterior after any winner-take-all transform; "
+            "not a capture of separate RELION-f32 reconstruction weights"
+        ),
+        "significant_semantics": "exact effective production reconstruction support mask",
+        "mstep_weight_semantics": (
+            "not captured separately; use Ft/intermediate/contribution diagnostics for M-step weights"
+        ),
         "capture_path": "post-production-normalization tap; does not select dump_this_bucket",
     }
     flat_candidate_arrays = {

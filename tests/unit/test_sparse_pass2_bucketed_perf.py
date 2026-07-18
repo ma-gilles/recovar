@@ -6383,16 +6383,17 @@ def test_fused_other_class_log_z_matches_two_pass_normalization(monkeypatch):
 
 
 @pytest.mark.parametrize("fine_prune", [False, True])
+@pytest.mark.parametrize("winner_take_all", [False, True])
 def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
-    monkeypatch, tmp_path, fine_prune
+    monkeypatch, tmp_path, fine_prune, winner_take_all
 ):
     from recovar.em.dense_single_volume.helpers import compact_candidate_capture as capture_mod
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     monkeypatch.delenv("RECOVAR_PASS2_DUMP_DIR", raising=False)
-    monkeypatch.setenv(capture_mod.CAPTURE_DIR_ENV, str(tmp_path))
-    monkeypatch.setenv(capture_mod.CAPTURE_ITERATION_ENV, "3")
+    monkeypatch.delenv(capture_mod.CAPTURE_DIR_ENV, raising=False)
+    monkeypatch.delenv(capture_mod.CAPTURE_ITERATION_ENV, raising=False)
     monkeypatch.setattr(capture_mod, "_capture_counter", 0)
     monkeypatch.setattr(bucketed_mod, "_projection_cache_fits_budget", lambda *_args, **_kwargs: False)
 
@@ -6444,8 +6445,31 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
         fine_translations_override=fine_translations,
         fine_translation_parent_override=fine_translation_parent,
         relion_fine_mstep_prune=fine_prune,
+        relion_firstiter_winner_take_all=winner_take_all,
     )
 
+    disabled_unchunked = None
+    if not fine_prune and not winner_take_all:
+        original_capture = bucketed_mod.maybe_capture_k1_production_bucket
+
+        def fail_if_disabled_capture_is_called(**_kwargs):
+            raise AssertionError("disabled compact capture helper was called")
+
+        monkeypatch.setattr(
+            bucketed_mod,
+            "maybe_capture_k1_production_bucket",
+            fail_if_disabled_capture_is_called,
+        )
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", str(1024**3))
+        disabled_unchunked = compute_pass2_stats_sparse(**common)
+        monkeypatch.setattr(
+            bucketed_mod,
+            "maybe_capture_k1_production_bucket",
+            original_capture,
+        )
+
+    monkeypatch.setenv(capture_mod.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(capture_mod.CAPTURE_ITERATION_ENV, "3")
     try:
         bucketed_mod.set_bpref_contribution_dump_context(iteration=3, half=1)
         monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", str(1024**3))
@@ -6490,7 +6514,7 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
         "rotation_parent_global",
     ):
         np.testing.assert_array_equal(chunked_capture[name], unchunked_capture[name])
-    if not fine_prune:
+    if not fine_prune and not winner_take_all:
         assert np.all(chunked_capture["significant"] == 1)
     np.testing.assert_allclose(
         chunked_capture["raw_combined_score"],
@@ -6504,6 +6528,19 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
         rtol=1e-6,
         atol=1e-6,
     )
+    if winner_take_all:
+        assert np.all(chunked_capture["pmax"] == 1)
+        assert np.all(chunked_capture["significant_count"] == 1)
+        assert np.all(chunked_capture["significant_threshold"] == 1)
+        assert np.all(np.asarray(chunked[6].max_posterior_per_image) == 1)
+
+    if disabled_unchunked is not None:
+        np.testing.assert_array_equal(np.asarray(disabled_unchunked[0]), np.asarray(unchunked[0]))
+        np.testing.assert_array_equal(np.asarray(disabled_unchunked[1]), np.asarray(unchunked[1]))
+        np.testing.assert_array_equal(
+            np.asarray(disabled_unchunked[6].max_posterior_per_image),
+            np.asarray(unchunked[6].max_posterior_per_image),
+        )
 
     np.testing.assert_allclose(np.asarray(chunked[0]), np.asarray(unchunked[0]), rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(np.asarray(chunked[1]), np.asarray(unchunked[1]), rtol=1e-5, atol=1e-5)

@@ -8933,6 +8933,12 @@ def compute_pass2_stats_sparse_bucketed(
                 global_max_posterior,
                 0.0,
             )
+            if winner_take_all:
+                global_max_posterior = jnp.where(
+                    jnp.isfinite(global_best_log_score),
+                    jnp.ones_like(global_max_posterior),
+                    jnp.zeros_like(global_max_posterior),
+                )
             capture_chunked_bucket = bool(
                 not score_only
                 and compact_capture_requested(int(_bpref_contribution_context["iteration"]))
@@ -9050,7 +9056,9 @@ def compute_pass2_stats_sparse_bucketed(
                 if capture_chunked_bucket:
                     capture_score_chunks.append(scores_chunk)
                     capture_prob_chunks.append(probs)
-                    if use_relion_fine_mstep_prune:
+                    if winner_take_all:
+                        capture_reconstruction_mask_chunks.append(probs > 0)
+                    elif use_relion_fine_mstep_prune:
                         if reconstruction_mask_chunks is None:
                             raise RuntimeError("chunked fine-prune capture has no reconstruction support")
                         capture_reconstruction_mask_chunks.append(
@@ -9585,32 +9593,37 @@ def compute_pass2_stats_sparse_bucketed(
             elif use_relion_x_half_mstep:
                 recon_window_indices_for_dump = jnp.arange(int(n_half), dtype=jnp.int32)
         if probs is not None:
-            maybe_capture_k1_production_bucket(
-                iteration=int(_bpref_contribution_context["iteration"]),
-                half=int(_bpref_contribution_context["half"]),
-                image_indices=image_indices,
-                original_indices=_original_indices_for_local(experiment_dataset, image_indices),
-                per_image_inputs=per_image_inputs,
-                current_size=current_size,
-                fine_translations=fine_translations,
-                fine_translation_parent=fine_translation_parent,
-                scores=scores,
-                probs=probs,
-                rotation_log_prior=jnp.asarray(log_prior),
-                translation_log_prior=bucket_translation_prior,
-                candidate_mask=jnp.asarray(candidate_mask),
-                reconstruction_mask=(
-                    reconstruction_mask
-                    if use_relion_fine_mstep_prune
-                    # Without pruning, production reconstructs from every
-                    # candidate with nonzero posterior support.
-                    else jnp.asarray(candidate_mask)
-                ),
-                log_z=log_Z,
-                best_log_score=best_log_score_bucket,
-                best_argmax=best_argmax,
-                max_posterior=max_posterior_bucket,
-            )
+            if compact_capture_requested(int(_bpref_contribution_context["iteration"])):
+                maybe_capture_k1_production_bucket(
+                    iteration=int(_bpref_contribution_context["iteration"]),
+                    half=int(_bpref_contribution_context["half"]),
+                    image_indices=image_indices,
+                    original_indices=_original_indices_for_local(experiment_dataset, image_indices),
+                    per_image_inputs=per_image_inputs,
+                    current_size=current_size,
+                    fine_translations=fine_translations,
+                    fine_translation_parent=fine_translation_parent,
+                    scores=scores,
+                    probs=probs,
+                    rotation_log_prior=jnp.asarray(log_prior),
+                    translation_log_prior=bucket_translation_prior,
+                    candidate_mask=candidate_mask,
+                    reconstruction_mask=(
+                        probs > 0
+                        if winner_take_all
+                        else (
+                            reconstruction_mask
+                            if use_relion_fine_mstep_prune
+                            # Without pruning, production reconstructs from every
+                            # candidate with nonzero posterior support.
+                            else candidate_mask
+                        )
+                    ),
+                    log_z=log_Z,
+                    best_log_score=best_log_score_bucket,
+                    best_argmax=best_argmax,
+                    max_posterior=max_posterior_bucket,
+                )
             _maybe_dump_pass2_bucket(
                 experiment_dataset=experiment_dataset,
                 image_indices=image_indices,
