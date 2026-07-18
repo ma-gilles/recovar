@@ -5341,9 +5341,29 @@ untouched hard-linked copy of job `11332272` passed: 5,000 identities per half,
 all 10,000 source rows, all 2,100,480 candidates, and all 269 shards reopen
 without pickle.  The complete three-arm auditor dry path also passed.  After an
 independent post-arm package audit approved the stable source and wrapper
-hashes, exactly one fresh retry was submitted as Slurm job `11332965`.  Its
-scientific projector attribution remains unclassified until all three arms and
-the canonical control-envelope FSC/FSC-AUC audit complete.
+hashes, exactly one fresh retry was submitted as Slurm job `11332965`.
+
+Job `11332965` completed all three arms and the fail-closed audit on one A100 in
+42:02.  Every arm sealed all 10,000 identities, 269 shards, and 5,000 rows per
+half.  Candidate counts were 2,100,480 and 2,100,544 for the two controls and
+2,100,736 for the injected arm; support-cardinality equality is therefore not
+assumed.  The iteration-3 RELION projector substitution is far outside the
+single observed control envelope in both distributions and maps.  Maximum
+posterior TV is `0.995891` against control `0.117947`; mean TV is `0.00208`
+against `6.45e-5`.  Iteration-3 merged FSC-AUC loss is `1.57796e-4` against
+control `5.95794e-8`; the half-1 and half-2 losses are `3.08897e-4` and
+`9.03511e-5`.  Correlation is not computed.
+
+The strict causal label nevertheless remains unresolved.  A pre-substitution
+veto detected tiny cold-start repeat variation just above the single control
+edge: iteration-1 `Ft_y` maximum absolute distance is `3.125e-6` for the
+injected/control edge versus `2.589e-6` control/control, while its RMS is not
+larger; iteration-2 half-1 map maximum absolute distance is only `1.084x` the
+control distance and its FSC-AUC loss does not exceed both controls.  These
+small early differences are not evidence against the large iteration-3
+effect, but they prevent a same-boundary attribution.  The next diagnostic is
+therefore a three-arm iteration-3-only replay from one byte-identical frozen
+iteration-2 boundary, not another cold-start repeat or serial particle trace.
 
 Evidence:
 
@@ -5361,3 +5381,6 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/logs/finalizer_offline_job11332272_20260718T043500Z.log` (SHA-256 `d161a38ec91fa2898c7511decfd7178a08e0c61ce5e38aa2c5daac7f03ac8c36`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/validation/finalizer_job11332272_copy/FINALIZATION_REPORT.json` (SHA-256 `18f1600aaa747fe860fc5679a04c8bd770cbc05474d3dd4978485084870e4a00`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/validation/finalizer_job11332272_copy/SOURCE_HALF_IDENTITIES.npz` (SHA-256 `311707c01e7e9db918008c01d8ea756c1feecf21b7013aaff15d5007c60d9ad1`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/runs/recovar_projector_ab_11332965/analysis/projector_abc_audit.json` (SHA-256 `114b98702144cda03491a4d66c873d76090bae0e5b152f0b05e42566ca34500f`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/runs/recovar_projector_ab_11332965/analysis/projector_abc_shellwise_fsc.npz` (SHA-256 `5e8bc8ba7d935114c988ae990b2c3599d6c2fc82a4d5898b2c62b239dc9d0f98`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it3_projector_replay_ab_0f0e7256_prepared_20260718T015500Z/runs/recovar_projector_ab_11332965/JOB_COMPLETE` (SHA-256 `0ee09db278ed86b26c963aab73c298d06cc3beb73ceb0a58d09a411df58a38c3`)
