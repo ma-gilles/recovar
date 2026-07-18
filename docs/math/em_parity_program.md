@@ -5794,9 +5794,23 @@ The corrected iteration-1 maps also pass the map gate.  Identity class
 matching is `[1, 2, 3, 4]`; normalized 127-shell FSC-AUC against the RELION
 oracle is `0.9999934704`, `0.9999954881`, `0.9999950882`, and
 `0.9999999006` for classes 1--4.  Only shellwise FSC/FSC-AUC is used; no
-correlation metric is computed.  This closes the first boundary only.  Job
-`11344147` remains running for the full autonomous trajectory, schedule,
-convergence, and final FSC/FSC-AUC gates.
+correlation metric is computed.
+
+The completed iteration-2 causal triangle shows that the repair affects map
+quality, not only a displayed resolution or a transient size.  The pre-fix
+autonomous arm processed iteration 2 at size 40 and then rejoined the oracle
+size-42 schedule at iteration 3, but its per-class FSC-AUC was
+`[0.99692609, 0.99826373, 0.99728669, 0.98997695]`; class 4 fails the
+unchanged `0.995` gate.  The corrected autonomous arm processes iteration 2
+at size 38, matches the shell-11/`49.45 A` state and native size-42 iteration-3
+start, and obtains `[0.99999143, 0.99999076, 0.99999052, 0.99999685]`.
+Its minimum agrees with the controlled oracle-state component arm
+(`0.99998980`) while remaining independently autonomous.  The corrected
+class-4 improvement over the pre-fix control is `0.01001990` FSC-AUC.
+
+This causally closes the first two autonomous boundaries.  Job `11344147`
+remains running for the full autonomous trajectory, schedule, convergence,
+and final FSC/FSC-AUC gates.
 
 Focused CPU validation after the repair:
 
@@ -5813,3 +5827,6 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_iteration_001_native_boundary_adjudication_v1.json` (SHA-256 `209244818bfea67d0422bbab44a36a92ccd455fec35a807865e16c35d04f5f04`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_iteration_001_map_fsc_audit_v1.json` (SHA-256 `bd4b4bf6f572f150101dcf72d2e187fb49e7242a7e29f7b5f97c66dfc141f03d`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_iteration_001_shellwise_fsc_v1.npz` (SHA-256 `ee2f4037ced98316685efc1e1dd8f83cdaf315afff4fdeaddd706f9669e5e21d`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_trajectory_iteration_002_audit_v2.json` (SHA-256 `ffcfcd70a4aad7c03a5ffb1602382ec3c3b74f8c89e1d55fa94e2c47649cd978`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_trajectory_iteration_002_shellwise_fsc_v2.npz` (SHA-256 `0c863c6ddd82d6f3b6a22d22bba7167cfb38ab3c30924214d8b0ed0abe3c2d90`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/iteration_002_causal_triangle_adjudication_v1.json` (SHA-256 `e8ea6ec077e52dc4d92968df4320bc735b30158e8d7528d02e825279270769ae`)
