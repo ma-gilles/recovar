@@ -37,6 +37,10 @@ class FrozenRefinementBoundary:
     previous_best_rotation_eulers: tuple[np.ndarray, np.ndarray]
     previous_best_translations: tuple[np.ndarray, np.ndarray]
     image_names_per_half: tuple[np.ndarray, np.ndarray]
+    source_rows_per_half: tuple[np.ndarray, np.ndarray]
+    random_subsets_per_half: tuple[np.ndarray, np.ndarray]
+    half_indices_per_half: tuple[np.ndarray, np.ndarray]
+    half_local_indices_per_half: tuple[np.ndarray, np.ndarray]
     image_corrections: tuple[np.ndarray, np.ndarray] | None
     scale_corrections: tuple[np.ndarray, np.ndarray] | None
     refinement_state_fields: dict[str, float | int | bool]
@@ -173,6 +177,8 @@ def load_frozen_refinement_boundary(
         fsc = _finite_array(npz, "fsc", ndim=1, dtype=np.float32)
         if fsc.size < 2:
             raise ValueError("frozen-boundary FSC must contain at least two shells")
+        if np.any(fsc < -1.0) or np.any(fsc > 1.0):
+            raise ValueError("frozen-boundary FSC values must lie in [-1, 1]")
 
         eulers = tuple(
             _finite_array(npz, f"half{half}_previous_best_rotation_eulers", ndim=2, dtype=np.float32)
@@ -186,15 +192,51 @@ def load_frozen_refinement_boundary(
             _required_array(npz, f"half{half}_image_name", ndim=1)
             for half in (1, 2)
         )
-        for half, (euler, translation, names) in enumerate(
-            zip(eulers, translations, image_names, strict=True), start=1
+        source_rows = tuple(
+            _required_array(npz, f"half{half}_source_row", ndim=1).astype(np.int64, copy=False)
+            for half in (1, 2)
+        )
+        random_subsets = tuple(
+            _required_array(npz, f"half{half}_random_subset", ndim=1).astype(np.int8, copy=False)
+            for half in (1, 2)
+        )
+        half_indices = tuple(
+            _required_array(npz, f"half{half}_half_index", ndim=1).astype(np.int8, copy=False)
+            for half in (1, 2)
+        )
+        half_local_indices = tuple(
+            _required_array(npz, f"half{half}_half_local_index", ndim=1).astype(np.int64, copy=False)
+            for half in (1, 2)
+        )
+        for half, (euler, translation, names, rows, subsets, half_ids, local_ids) in enumerate(
+            zip(
+                eulers,
+                translations,
+                image_names,
+                source_rows,
+                random_subsets,
+                half_indices,
+                half_local_indices,
+                strict=True,
+            ),
+            start=1,
         ):
             if euler.shape[1:] != (3,) or translation.shape[1:] != (2,):
                 raise ValueError(f"frozen-boundary half-{half} pose arrays have invalid shape")
             if euler.shape[0] != translation.shape[0] or euler.shape[0] != names.shape[0]:
                 raise ValueError(f"frozen-boundary half-{half} pose/identity row counts differ")
+            if any(value.shape != names.shape for value in (rows, subsets, half_ids, local_ids)):
+                raise ValueError(f"frozen-boundary half-{half} five-field identity row counts differ")
             if names.dtype.kind not in {"U", "S"}:
                 raise ValueError(f"frozen-boundary half-{half} image names must be fixed-width strings")
+            if np.any(rows < 0) or np.unique(rows).size != rows.size:
+                raise ValueError(f"frozen-boundary half-{half} source rows must be unique nonnegative values")
+            if not np.array_equal(subsets, np.full(names.shape, half, dtype=np.int8)):
+                raise ValueError(f"frozen-boundary half-{half} random-subset identity is inconsistent")
+            if not np.array_equal(half_ids, np.full(names.shape, half - 1, dtype=np.int8)):
+                raise ValueError(f"frozen-boundary half-{half} zero-based half identity is inconsistent")
+            if not np.array_equal(local_ids, np.arange(names.size, dtype=np.int64)):
+                raise ValueError(f"frozen-boundary half-{half} local identity order is inconsistent")
         all_names = np.concatenate([np.asarray(value, dtype=str) for value in image_names])
         if np.unique(all_names).size != all_names.size:
             raise ValueError("frozen-boundary image names must be globally unique")
@@ -233,6 +275,30 @@ def load_frozen_refinement_boundary(
         }
         if refinement_state_fields.get("has_converged", False):
             raise ValueError("a frozen numbered-iteration boundary must not already be converged")
+        for key, value in refinement_state_fields.items():
+            if isinstance(value, float) and not np.isfinite(value):
+                raise ValueError(f"frozen-boundary state scalar {key} must be finite")
+        for key in (
+            "nr_iter_wo_resol_gain",
+            "nr_iter_wo_assignment_changes",
+            "nr_iter_wo_large_hidden_variable_changes",
+        ):
+            if key in refinement_state_fields and refinement_state_fields[key] < 0:
+                raise ValueError(f"frozen-boundary state counter {key} must be nonnegative")
+        for key in (
+            "current_resolution",
+            "previous_resolution",
+            "current_changes_optimal_orientations",
+            "current_changes_optimal_offsets_angstrom",
+            "smallest_changes_optimal_orientations",
+            "smallest_changes_optimal_offsets_angstrom",
+            "acc_rot",
+            "acc_trans",
+        ):
+            if key in refinement_state_fields and refinement_state_fields[key] < 0.0:
+                raise ValueError(f"frozen-boundary state scalar {key} must be nonnegative")
+        if "ave_Pmax" in refinement_state_fields and not 0.0 <= refinement_state_fields["ave_Pmax"] <= 1.0:
+            raise ValueError("frozen-boundary state ave_Pmax must lie in [0, 1]")
 
         result = FrozenRefinementBoundary(
             source_dir=source_dir,
@@ -252,6 +318,10 @@ def load_frozen_refinement_boundary(
             previous_best_rotation_eulers=eulers,
             previous_best_translations=translations,
             image_names_per_half=tuple(np.asarray(value, dtype=str) for value in image_names),
+            source_rows_per_half=source_rows,
+            random_subsets_per_half=random_subsets,
+            half_indices_per_half=half_indices,
+            half_local_indices_per_half=half_local_indices,
             image_corrections=image_corrections,
             scale_corrections=scale_corrections,
             refinement_state_fields=refinement_state_fields,

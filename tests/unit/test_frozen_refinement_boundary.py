@@ -36,6 +36,14 @@ def _write_boundary(root, **overrides):
         "half2_previous_best_translations": np.ones((2, 2), dtype=np.float32),
         "half1_image_name": np.asarray(["1@a.mrcs", "2@a.mrcs"]),
         "half2_image_name": np.asarray(["3@a.mrcs", "4@a.mrcs"]),
+        "half1_source_row": np.asarray([0, 2], dtype=np.int64),
+        "half2_source_row": np.asarray([1, 3], dtype=np.int64),
+        "half1_random_subset": np.asarray([1, 1], dtype=np.int8),
+        "half2_random_subset": np.asarray([2, 2], dtype=np.int8),
+        "half1_half_index": np.asarray([0, 0], dtype=np.int8),
+        "half2_half_index": np.asarray([1, 1], dtype=np.int8),
+        "half1_half_local_index": np.asarray([0, 1], dtype=np.int64),
+        "half2_half_local_index": np.asarray([0, 1], dtype=np.int64),
         "state_current_resolution": np.float64(14.97),
         "state_previous_resolution": np.float64(29.94),
         "state_ave_Pmax": np.float64(0.25),
@@ -61,6 +69,7 @@ def test_frozen_boundary_loader_round_trips_primitive_state(tmp_path):
     assert boundary.current_size == 92
     assert boundary.means[0].dtype == np.complex64
     assert boundary.image_corrections is None
+    np.testing.assert_array_equal(boundary.source_rows_per_half[0], [0, 2])
     assert boundary.refinement_state_fields == {
         "current_resolution": pytest.approx(14.97),
         "previous_resolution": pytest.approx(29.94),
@@ -97,4 +106,28 @@ def test_frozen_boundary_loader_rejects_half_correction_pair_mismatch(tmp_path):
     )
 
     with pytest.raises(ValueError, match="both or neither"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+def test_frozen_boundary_loader_rejects_five_field_identity_mismatch(tmp_path):
+    _write_boundary(
+        tmp_path,
+        half2_half_local_index=np.asarray([1, 0], dtype=np.int64),
+    )
+
+    with pytest.raises(ValueError, match="local identity order"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+def test_frozen_boundary_loader_rejects_out_of_range_fsc(tmp_path):
+    _write_boundary(tmp_path, fsc=np.asarray([1.0, 1.01], dtype=np.float32))
+
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+def test_frozen_boundary_loader_rejects_nonfinite_state(tmp_path):
+    _write_boundary(tmp_path, state_acc_rot=np.float64(np.inf))
+
+    with pytest.raises(ValueError, match="must be finite"):
         load_frozen_refinement_boundary(tmp_path)
