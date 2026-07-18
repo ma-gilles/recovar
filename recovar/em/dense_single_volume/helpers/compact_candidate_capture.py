@@ -19,6 +19,7 @@ CAPTURE_DIR_ENV = "RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR"
 CAPTURE_ITERATION_ENV = "RECOVAR_COMPACT_CANDIDATE_CAPTURE_ITERATION"
 MAX_PARTICLES_PER_RAW_SHARD = 256
 MAX_CANDIDATES_PER_RAW_SHARD = 1_000_000
+MAX_CHUNKED_CAPTURE_INPUT_BYTES = 256 * 1024**2
 _capture_counter = 0
 
 
@@ -344,6 +345,28 @@ def _capture_requested(iteration: int) -> Path | None:
     return Path(raw)
 
 
+def compact_capture_requested(iteration: int) -> bool:
+    """Return whether the diagnostic capture gate targets this iteration."""
+
+    return _capture_requested(int(iteration)) is not None
+
+
+def require_chunked_capture_capacity(batch: int, rotations: int, translations: int) -> int:
+    """Fail before retention when worst-case host chunk assembly exceeds its cap."""
+
+    dimensions = (int(batch), int(rotations), int(translations))
+    if any(value <= 0 for value in dimensions):
+        raise CompactCaptureError(f"invalid chunked capture topology: {dimensions}")
+    candidate_count = int(np.prod(dimensions, dtype=np.int64))
+    estimated_bytes = candidate_count * (2 * np.dtype(np.float64).itemsize + np.dtype(bool).itemsize)
+    if estimated_bytes > MAX_CHUNKED_CAPTURE_INPUT_BYTES:
+        raise CompactCaptureError(
+            "chunked capture input exceeds bounded host assembly cap: "
+            f"{estimated_bytes} > {MAX_CHUNKED_CAPTURE_INPUT_BYTES} bytes"
+        )
+    return estimated_bytes
+
+
 def maybe_capture_k1_production_bucket(
     *,
     iteration,
@@ -604,3 +627,90 @@ def maybe_capture_k1_production_bucket(
             winner_translation=winner_translation[row_start:row_stop],
         )
     return int(batch)
+
+
+def maybe_capture_k1_production_bucket_chunked(
+    *,
+    iteration,
+    half,
+    image_indices,
+    original_indices,
+    per_image_inputs,
+    current_size,
+    fine_translations,
+    fine_translation_parent,
+    score_chunks,
+    prob_chunks,
+    rotation_log_prior,
+    translation_log_prior,
+    candidate_mask,
+    reconstruction_mask_chunks,
+    log_z,
+    best_log_score,
+    best_argmax,
+    max_posterior,
+) -> int:
+    """Capture an already-computed rotation-chunked bucket on bounded host memory.
+
+    Production scoring, normalization, and M-step arithmetic remain chunked. The
+    diagnostic copies completed score/posterior/support chunks to host and joins
+    them only after the production loop, with a fail-closed input-size bound.
+    """
+
+    if not compact_capture_requested(int(iteration)):
+        return 0
+    score_arrays = tuple(np.asarray(chunk) for chunk in score_chunks)
+    prob_arrays = tuple(np.asarray(chunk) for chunk in prob_chunks)
+    reconstruction_arrays = tuple(
+        np.asarray(chunk, dtype=bool) for chunk in reconstruction_mask_chunks
+    )
+    if not score_arrays or not (
+        len(score_arrays) == len(prob_arrays) == len(reconstruction_arrays)
+    ):
+        raise CompactCaptureError("chunked capture requires matching nonempty chunk sequences")
+    first_shape = score_arrays[0].shape
+    if len(first_shape) != 3:
+        raise CompactCaptureError("chunked capture expects rank-3 score chunks")
+    batch, _, n_trans = first_shape
+    for scores, probs, reconstruction in zip(
+        score_arrays, prob_arrays, reconstruction_arrays, strict=True
+    ):
+        if scores.ndim != 3 or scores.shape[0] != batch or scores.shape[2] != n_trans:
+            raise CompactCaptureError("chunked capture score topology mismatch")
+        if probs.shape != scores.shape or reconstruction.shape != scores.shape:
+            raise CompactCaptureError("chunked capture posterior/support topology mismatch")
+    input_bytes = sum(
+        array.nbytes
+        for arrays in (score_arrays, prob_arrays, reconstruction_arrays)
+        for array in arrays
+    )
+    if input_bytes > MAX_CHUNKED_CAPTURE_INPUT_BYTES:
+        raise CompactCaptureError(
+            "chunked capture input exceeds bounded host assembly cap: "
+            f"{input_bytes} > {MAX_CHUNKED_CAPTURE_INPUT_BYTES} bytes"
+        )
+    scores = np.concatenate(score_arrays, axis=1)
+    probs = np.concatenate(prob_arrays, axis=1)
+    reconstruction_mask = np.concatenate(reconstruction_arrays, axis=1)
+    if scores.shape != np.asarray(candidate_mask).shape:
+        raise CompactCaptureError("chunked capture does not cover the complete candidate topology")
+    return maybe_capture_k1_production_bucket(
+        iteration=iteration,
+        half=half,
+        image_indices=image_indices,
+        original_indices=original_indices,
+        per_image_inputs=per_image_inputs,
+        current_size=current_size,
+        fine_translations=fine_translations,
+        fine_translation_parent=fine_translation_parent,
+        scores=scores,
+        probs=probs,
+        rotation_log_prior=rotation_log_prior,
+        translation_log_prior=translation_log_prior,
+        candidate_mask=candidate_mask,
+        reconstruction_mask=reconstruction_mask,
+        log_z=log_z,
+        best_log_score=best_log_score,
+        best_argmax=best_argmax,
+        max_posterior=max_posterior,
+    )

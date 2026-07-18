@@ -83,6 +83,41 @@ def test_disabled_capture_returns_before_array_conversion(monkeypatch):
 
 
 @pytest.mark.unit
+def test_disabled_chunked_capture_returns_before_array_conversion(monkeypatch):
+    monkeypatch.delenv(capture.CAPTURE_DIR_ENV, raising=False)
+    blocked = _ArrayConversionForbidden()
+
+    assert capture.maybe_capture_k1_production_bucket_chunked(
+        iteration=3,
+        half=1,
+        image_indices=blocked,
+        original_indices=blocked,
+        per_image_inputs=blocked,
+        current_size=64,
+        fine_translations=blocked,
+        fine_translation_parent=blocked,
+        score_chunks=(blocked,),
+        prob_chunks=(blocked,),
+        rotation_log_prior=blocked,
+        translation_log_prior=blocked,
+        candidate_mask=blocked,
+        reconstruction_mask_chunks=(blocked,),
+        log_z=blocked,
+        best_log_score=blocked,
+        best_argmax=blocked,
+        max_posterior=blocked,
+    ) == 0
+
+
+@pytest.mark.unit
+def test_chunked_capture_capacity_is_bounded(monkeypatch):
+    monkeypatch.setattr(capture, "MAX_CHUNKED_CAPTURE_INPUT_BYTES", 100)
+    assert capture.require_chunked_capture_capacity(1, 2, 2) == 68
+    with pytest.raises(capture.CompactCaptureError, match="bounded host assembly cap"):
+        capture.require_chunked_capture_capacity(1, 3, 2)
+
+
+@pytest.mark.unit
 def test_enabled_capture_preserves_native_arrays_and_reopens_atomically(tmp_path, monkeypatch):
     monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
     monkeypatch.setenv(capture.CAPTURE_ITERATION_ENV, "3")
