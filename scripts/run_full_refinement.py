@@ -406,9 +406,17 @@ def _validate_fixed_diagnostic_math_environment(environ=None) -> None:
         )
     forbidden_numeric_environment = sorted(
         name
-        for name in ("JAX_DEFAULT_MATMUL_PRECISION", "NVIDIA_TF32_OVERRIDE", "XLA_FLAGS")
+        for name in ("JAX_DEFAULT_MATMUL_PRECISION", "NVIDIA_TF32_OVERRIDE")
         if str(environment.get(name, "")) != ""
     )
+    # recovar.jax_config installs this exact deterministic robustness default
+    # during package import. Reject every caller-supplied extension or
+    # replacement while allowing the internal default that is necessarily
+    # present by the time this runtime gate executes.
+    xla_flags = str(environment.get("XLA_FLAGS", "")).strip()
+    if xla_flags not in {"", "--xla_gpu_enable_triton_gemm=false"}:
+        forbidden_numeric_environment.append("XLA_FLAGS")
+        forbidden_numeric_environment.sort()
     if forbidden_numeric_environment:
         raise ValueError(
             "fixed diagnostic arm has unsealed compiler/precision environment: "

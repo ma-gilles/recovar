@@ -336,6 +336,7 @@ def test_fixed_diagnostic_arm_rejects_alternate_projector_and_float_mode():
         {
             "RECOVAR_EXPECTED_REPO_ROOT": "/repo",
             "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+            "XLA_FLAGS": "--xla_gpu_enable_triton_gemm=false",
         }
     )
 
@@ -346,6 +347,18 @@ def test_fixed_diagnostic_arm_rejects_alternate_projector_and_float_mode():
         _validate_fixed_diagnostic_math_environment(
             {"RECOVAR_USE_FLOAT64_SCORING": "1"}
         )
+
+
+@pytest.mark.parametrize(
+    "xla_flags",
+    [
+        "--xla_gpu_enable_triton_gemm=true",
+        "--xla_gpu_enable_triton_gemm=false --xla_gpu_autotune_level=0",
+    ],
+)
+def test_fixed_diagnostic_arm_rejects_nondefault_xla_flags(xla_flags):
+    with pytest.raises(ValueError, match="unsealed compiler/precision environment: XLA_FLAGS"):
+        _validate_fixed_diagnostic_math_environment({"XLA_FLAGS": xla_flags})
 
 
 def test_fixed_arm_rejects_explicit_optimiser_and_internal_resolver_uses_sealed_source(
