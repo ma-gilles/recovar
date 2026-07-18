@@ -70,6 +70,42 @@ def test_relion_replay_stars_are_selected_as_matched_pairs(tmp_path):
     assert 'try_relion_replay_pair "${RELION_DIR}/run_it000_data.star" "${RELION_DIR}/run_it000_optimiser.star"' in text
     assert '"${RELION_DIR}/run_it000_optimiser.star" \\\n    "${RELION_DIR}/run_optimiser.star"' not in text
     assert '--relion_init_dir "${RELION_DIR}"' in text
+    assert '--perturb_replay_relion_dir "${RELION_DIR}"' in text
+    assert "LATEST_RELION_SAMPLING_ITER=" in text
+    assert "Strict RELION replay: capping RECOVAR max_iter" in text
+    assert "EM_K1_MATRIX_TRAJECTORY_MODE=controlled" in text
+    assert "EM_K1_MATRIX_TRAJECTORY_MODE=controlled" in (scratch / "submission.env").read_text()
+
+
+def test_autonomous_trajectory_uses_only_iter0_boundary_and_never_emits_replay_logic(tmp_path):
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="15",
+        extra_env={"EM_K1_MATRIX_TRAJECTORY_MODE": "autonomous"},
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    scripts = list((scratch / "jobs").glob("em_k1_matrix_15_*.sh"))
+    assert len(scripts) == 1
+    text = scripts[0].read_text()
+    submission = (scratch / "submission.env").read_text()
+
+    assert 'RELION_HALF_SET_STAR="${RELION_DIR}/run_it000_data.star"' in text
+    assert 'RELION_OPTIMISER_STAR="${RELION_DIR}/run_it000_optimiser.star"' in text
+    assert '--relion_half_sets "${RELION_HALF_SET_STAR}"' in text
+    assert '--relion_optimiser "${RELION_OPTIMISER_STAR}"' in text
+    assert '--relion_init_dir "${RELION_DIR}"' in text
+    assert '--perturb_replay_relion_dir' not in text
+    assert "try_relion_replay_pair" not in text
+    assert "LATEST_RELION_DATA_ITER" not in text
+    assert "LATEST_RELION_SAMPLING_ITER" not in text
+    assert "Strict RELION replay: capping RECOVAR max_iter" not in text
+    assert "perturb-replay-restart-state-iterations" not in text
+    assert "EM_K1_MATRIX_TRAJECTORY_MODE=autonomous" in text
+    assert "EM_K1_MATRIX_TRAJECTORY_MODE=autonomous" in submission
+    assert "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0" in submission
+    config_text = next((scratch / "jobs").glob("em_k1_matrix_15_*.sh")).read_text()
+    assert '"trajectory_mode": "autonomous"' in config_text
 
 
 def test_noctf_simulator_cases_use_sanitized_relion_ctf_by_default(tmp_path):
@@ -223,7 +259,13 @@ def test_case_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
         assert "pixi run" not in text
         assert "git symbolic-ref --short HEAD ||" not in text
     assert "export PIP_NO_INDEX=1" in setup_text
-    pixi_root = REPO_ROOT / ".pixi" / "envs" / "default"
+    base_pixi_python = Path(
+        os.environ.get(
+            "EM_K1_MATRIX_PIXI_PY",
+            REPO_ROOT / ".pixi" / "envs" / "default" / "bin" / "python",
+        )
+    ).resolve()
+    pixi_root = base_pixi_python.parent.parent
     assert (
         f'export CMAKE_INCLUDE_PATH="{pixi_root}/include/fftw:'
         f'{pixi_root}/include:${{CMAKE_INCLUDE_PATH:-}}"'

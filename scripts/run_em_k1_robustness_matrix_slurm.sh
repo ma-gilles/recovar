@@ -39,6 +39,7 @@ RELION_SRC_DIR="${RELION_SRC_DIR:-}"
 EXCLUSIVE="${EM_K1_MATRIX_EXCLUSIVE:-0}"
 SINGLE_VISIBLE_GPU="${EM_K1_MATRIX_SINGLE_VISIBLE_GPU:-1}"
 RUN_RELION="${EM_K1_MATRIX_RUN_RELION:-0}"
+TRAJECTORY_MODE="${EM_K1_MATRIX_TRAJECTORY_MODE:-controlled}"
 RELION_MPI_RANKS="${RELION_MPI_RANKS:-3}"
 RELION_POOL="${EM_K1_MATRIX_RELION_POOL:-3}"
 NOCTF_RELION_USE_CTF="${EM_K1_NOCTF_RELION_USE_CTF:-1}"
@@ -50,7 +51,7 @@ STREAMING_CHUNK_SIZE="${EM_K1_MATRIX_STREAMING_CHUNK_SIZE:-1000}"
 NOISE_RNG_BATCH_SIZE="${EM_K1_MATRIX_NOISE_RNG_BATCH_SIZE:-}"
 RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION="${RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION:-0.40}"
 RECOVAR_RELION_FIRSTITER_RECON_COMPLEX_BUDGET="${RECOVAR_RELION_FIRSTITER_RECON_COMPLEX_BUDGET:-}"
-RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE="${RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE:-1}"
+RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE="${RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE:-}"
 RECOVAR_FINAL_ALL_DATA_USE_MERGED_REFERENCE="${RECOVAR_FINAL_ALL_DATA_USE_MERGED_REFERENCE:-}"
 RECOVAR_FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE="${RECOVAR_FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE:-}"
 RECOVAR_FINAL_ALL_DATA_GRID_CORRECT="${RECOVAR_FINAL_ALL_DATA_GRID_CORRECT:-}"
@@ -136,6 +137,10 @@ Environment overrides:
                                     (default: ${BASE_PIXI_PY})
   EM_K1_MATRIX_CASES                Comma-separated case names or 1-based indices
   EM_K1_MATRIX_RUN_RELION           Run RELION AutoRefine too (default: ${RUN_RELION})
+  EM_K1_MATRIX_TRAJECTORY_MODE      RECOVAR state policy when RELION is enabled:
+                                    controlled (default; existing per-iteration RELION replay)
+                                    or autonomous (exact RELION iter-0 boundary only, then
+                                    RECOVAR-owned trajectory; current: ${TRAJECTORY_MODE})
   EM_K1_MATRIX_RELION_POOL          RELION --pool for strict-parity RELION baselines (default: ${RELION_POOL})
   EM_K1_MATRIX_MAX_ITER             RECOVAR max iterations and RELION --auto_iter_max (default: ${MAX_ITER})
   EM_K1_MATRIX_TIME_LIMIT           Override Slurm time limit for selected case jobs (default: per-case matrix value)
@@ -191,7 +196,9 @@ Environment overrides:
   RECOVAR_K1_RELION_X_HALF_MSTEP    Diagnostic only: set 0 to use the old native K=1 half-volume M-step
                                     instead of the default RELION x-half BPref-layout M-step.
   RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE
-                                    Replay the last numbered RELION state for final all-data scoring (default: ${RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE})
+                                    Replay the last numbered RELION state for final all-data scoring.
+                                    Defaults to 1 in controlled mode and 0 in autonomous mode
+                                    (current: ${RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE:-mode default}).
   RECOVAR_FINAL_ALL_DATA_USE_MERGED_REFERENCE
                                     Diagnostic only: use merged K=1 reference for final all-data scoring (default: ${RECOVAR_FINAL_ALL_DATA_USE_MERGED_REFERENCE:-<unset>})
   RECOVAR_FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE
@@ -311,6 +318,25 @@ done
 if [[ -n "${EM_K1_MATRIX_CASES:-}" ]]; then
   IFS=',' read -r -a ENV_CASES <<< "${EM_K1_MATRIX_CASES}"
   SELECTED_CASES+=("${ENV_CASES[@]}")
+fi
+
+case "${TRAJECTORY_MODE}" in
+  controlled|autonomous) ;;
+  *)
+    echo "EM_K1_MATRIX_TRAJECTORY_MODE must be controlled or autonomous, got: ${TRAJECTORY_MODE}" >&2
+    exit 2
+    ;;
+esac
+if [[ "${TRAJECTORY_MODE}" == "autonomous" && "${RUN_RELION}" != "1" ]]; then
+  echo "EM_K1_MATRIX_TRAJECTORY_MODE=autonomous requires RELION (--with-relion or EM_K1_MATRIX_RUN_RELION=1)" >&2
+  exit 2
+fi
+if [[ -z "${RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE}" ]]; then
+  if [[ "${TRAJECTORY_MODE}" == "controlled" ]]; then
+    RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=1
+  else
+    RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0
+  fi
 fi
 
 if [[ -z "${RELION_SRC_DIR}" || ! -f "${RELION_SRC_DIR}/projector.h" ]]; then
@@ -717,6 +743,85 @@ EOF
   printf '%s\n' "${script_path}"
 }
 
+write_recovar_trajectory_setup() {
+  if [[ "${RUN_RELION}" != "1" ]]; then
+    return
+  fi
+
+  if [[ "${TRAJECTORY_MODE}" == "autonomous" ]]; then
+    cat <<'EOF'
+RELION_HALF_SET_STAR="${RELION_DIR}/run_it000_data.star"
+RELION_OPTIMISER_STAR="${RELION_DIR}/run_it000_optimiser.star"
+if [[ ! -s "${RELION_HALF_SET_STAR}" || ! -s "${RELION_OPTIMISER_STAR}" ]]; then
+  echo "ERROR: autonomous trajectory requires matched RELION iter-0 data/optimiser STARs: ${RELION_HALF_SET_STAR} ${RELION_OPTIMISER_STAR}" >&2
+  exit 3
+fi
+RECOVAR_RELION_REPLAY_ARGS=(
+  --relion_half_sets "${RELION_HALF_SET_STAR}"
+  --relion_optimiser "${RELION_OPTIMISER_STAR}"
+  --relion_init_dir "${RELION_DIR}"
+)
+echo "RECOVAR autonomous iter-0 args: ${RECOVAR_RELION_REPLAY_ARGS[*]}"
+EOF
+    return
+  fi
+
+  cat <<'EOF'
+RELION_ITER_PADDED="$(printf "%03d" "${RECOVAR_MAX_ITER}")"
+RELION_HALF_SET_STAR=""
+RELION_OPTIMISER_STAR=""
+
+try_relion_replay_pair() {
+  local data_star="$1"
+  local optimiser_star="$2"
+  if [[ -s "${data_star}" && -s "${optimiser_star}" ]]; then
+    RELION_HALF_SET_STAR="${data_star}"
+    RELION_OPTIMISER_STAR="${optimiser_star}"
+    return 0
+  fi
+  return 1
+}
+
+try_relion_replay_pair "${RELION_DIR}/run_data.star" "${RELION_DIR}/run_optimiser.star" || \
+  try_relion_replay_pair "${RELION_DIR}/run_it${RELION_ITER_PADDED}_data.star" "${RELION_DIR}/run_it${RELION_ITER_PADDED}_optimiser.star" || true
+if [[ -z "${RELION_HALF_SET_STAR}" ]]; then
+  LATEST_RELION_DATA_ITER="$(find "${RELION_DIR}" -maxdepth 1 -type f -name 'run_it[0-9][0-9][0-9]_data.star' -printf '%f\n' \
+    | sed -E 's/^run_it([0-9]{3})_data\.star$/\1/' \
+    | sort -n \
+    | tail -1)"
+  if [[ -n "${LATEST_RELION_DATA_ITER}" ]]; then
+    LATEST_RELION_DATA_ITER="$(printf "%03d" "$((10#${LATEST_RELION_DATA_ITER}))")"
+    try_relion_replay_pair "${RELION_DIR}/run_it${LATEST_RELION_DATA_ITER}_data.star" "${RELION_DIR}/run_it${LATEST_RELION_DATA_ITER}_optimiser.star" || true
+  fi
+fi
+if [[ -z "${RELION_HALF_SET_STAR}" ]]; then
+  try_relion_replay_pair "${RELION_DIR}/run_it000_data.star" "${RELION_DIR}/run_it000_optimiser.star" || true
+fi
+if [[ -z "${RELION_HALF_SET_STAR}" || -z "${RELION_OPTIMISER_STAR}" ]]; then
+  echo "ERROR: RELION was requested but no matched data/optimiser STAR pair was found in ${RELION_DIR}" >&2
+  exit 3
+fi
+RECOVAR_RELION_REPLAY_ARGS=(
+  --relion_half_sets "${RELION_HALF_SET_STAR}"
+  --relion_optimiser "${RELION_OPTIMISER_STAR}"
+  --relion_init_dir "${RELION_DIR}"
+  --perturb_replay_relion_dir "${RELION_DIR}"
+)
+LATEST_RELION_SAMPLING_ITER="$(find "${RELION_DIR}" -maxdepth 1 -type f -name 'run_it[0-9][0-9][0-9]_sampling.star' -printf '%f\n' \
+  | sed -E 's/^run_it([0-9]{3})_sampling\.star$/\1/' \
+  | sort -n \
+  | tail -1)"
+if [[ -n "${LATEST_RELION_SAMPLING_ITER}" ]]; then
+  LATEST_RELION_SAMPLING_ITER="$((10#${LATEST_RELION_SAMPLING_ITER}))"
+  if [[ "${LATEST_RELION_SAMPLING_ITER}" -gt 0 && "${LATEST_RELION_SAMPLING_ITER}" -lt "${RECOVAR_MAX_ITER}" ]]; then
+    echo "Strict RELION replay: capping RECOVAR max_iter ${RECOVAR_MAX_ITER} -> ${LATEST_RELION_SAMPLING_ITER} (last sampling.star)"
+    RECOVAR_MAX_ITER="${LATEST_RELION_SAMPLING_ITER}"
+  fi
+fi
+echo "RECOVAR strict RELION replay args: ${RECOVAR_RELION_REPLAY_ARGS[*]}"
+EOF
+}
+
 write_case_script() {
   local row="$1"
   local idx name n_images grid noise_level noise_model dataset_params_option seed pdb_bfactor noise_scale_std contrast_std volume_radius relion_bg_radius time_limit mem streaming_chunk streaming_mmap percent_outliers put_extra_particles image_offset_n_std
@@ -851,7 +956,8 @@ cat > "\${CASE_ROOT}/case_config.json" <<JSON
   "put_extra_particles": ${put_extra_particles},
   "image_offset_n_std": ${image_offset_n_std},
   "max_iter": ${MAX_ITER},
-  "run_relion": ${RUN_RELION}
+  "run_relion": ${RUN_RELION},
+  "trajectory_mode": "${TRAJECTORY_MODE}"
 }
 JSON
 
@@ -1064,62 +1170,10 @@ JSON
 fi
 
 echo "=== Run RECOVAR K=1 EM ${name} ==="
+echo "EM_K1_MATRIX_TRAJECTORY_MODE=${TRAJECTORY_MODE}"
 RECOVAR_RELION_REPLAY_ARGS=()
 RECOVAR_MAX_ITER="${MAX_ITER}"
-if [[ "${RUN_RELION}" -eq 1 ]]; then
-  RELION_ITER_PADDED="\$(printf "%03d" "${MAX_ITER}")"
-  RELION_HALF_SET_STAR=""
-  RELION_OPTIMISER_STAR=""
-
-  try_relion_replay_pair() {
-    local data_star="\$1"
-    local optimiser_star="\$2"
-    if [[ -s "\${data_star}" && -s "\${optimiser_star}" ]]; then
-      RELION_HALF_SET_STAR="\${data_star}"
-      RELION_OPTIMISER_STAR="\${optimiser_star}"
-      return 0
-    fi
-    return 1
-  }
-
-  try_relion_replay_pair "\${RELION_DIR}/run_data.star" "\${RELION_DIR}/run_optimiser.star" || \\
-    try_relion_replay_pair "\${RELION_DIR}/run_it\${RELION_ITER_PADDED}_data.star" "\${RELION_DIR}/run_it\${RELION_ITER_PADDED}_optimiser.star" || true
-  if [[ -z "\${RELION_HALF_SET_STAR}" ]]; then
-    LATEST_RELION_DATA_ITER="\$(find "\${RELION_DIR}" -maxdepth 1 -type f -name 'run_it[0-9][0-9][0-9]_data.star' -printf '%f\n' \\
-      | sed -E 's/^run_it([0-9]{3})_data\\.star$/\\1/' \\
-      | sort -n \\
-      | tail -1)"
-    if [[ -n "\${LATEST_RELION_DATA_ITER}" ]]; then
-      LATEST_RELION_DATA_ITER="\$(printf "%03d" "\$((10#\${LATEST_RELION_DATA_ITER}))")"
-      try_relion_replay_pair "\${RELION_DIR}/run_it\${LATEST_RELION_DATA_ITER}_data.star" "\${RELION_DIR}/run_it\${LATEST_RELION_DATA_ITER}_optimiser.star" || true
-    fi
-  fi
-  if [[ -z "\${RELION_HALF_SET_STAR}" ]]; then
-    try_relion_replay_pair "\${RELION_DIR}/run_it000_data.star" "\${RELION_DIR}/run_it000_optimiser.star" || true
-  fi
-  if [[ -z "\${RELION_HALF_SET_STAR}" || -z "\${RELION_OPTIMISER_STAR}" ]]; then
-    echo "ERROR: RELION was requested but no matched data/optimiser STAR pair was found in \${RELION_DIR}" >&2
-    exit 3
-  fi
-  RECOVAR_RELION_REPLAY_ARGS=(
-    --relion_half_sets "\${RELION_HALF_SET_STAR}"
-    --relion_optimiser "\${RELION_OPTIMISER_STAR}"
-    --relion_init_dir "\${RELION_DIR}"
-    --perturb_replay_relion_dir "\${RELION_DIR}"
-  )
-  LATEST_RELION_SAMPLING_ITER="\$(find "\${RELION_DIR}" -maxdepth 1 -type f -name 'run_it[0-9][0-9][0-9]_sampling.star' -printf '%f\n' \\
-    | sed -E 's/^run_it([0-9]{3})_sampling\\.star$/\\1/' \\
-    | sort -n \\
-    | tail -1)"
-  if [[ -n "\${LATEST_RELION_SAMPLING_ITER}" ]]; then
-    LATEST_RELION_SAMPLING_ITER="\$((10#\${LATEST_RELION_SAMPLING_ITER}))"
-    if [[ "\${LATEST_RELION_SAMPLING_ITER}" -gt 0 && "\${LATEST_RELION_SAMPLING_ITER}" -lt "\${RECOVAR_MAX_ITER}" ]]; then
-      echo "Strict RELION replay: capping RECOVAR max_iter \${RECOVAR_MAX_ITER} -> \${LATEST_RELION_SAMPLING_ITER} (last sampling.star)"
-      RECOVAR_MAX_ITER="\${LATEST_RELION_SAMPLING_ITER}"
-    fi
-  fi
-  echo "RECOVAR strict RELION replay args: \${RECOVAR_RELION_REPLAY_ARGS[*]}"
-fi
+$(write_recovar_trajectory_setup)
 RECOVAR_GPU_UUID="\$(capture_physical_gpu_uuid)"
 if [[ "\${RECOVAR_GPU_UUID}" != "\${CASE_GPU_UUID}" || ( -n "\${RELION_GPU_UUID}" && "\${RECOVAR_GPU_UUID}" != "\${RELION_GPU_UUID}" ) ]]; then
   echo "ERROR: RECOVAR and RELION did not use the same physical GPU: RELION=\${RELION_GPU_UUID:-<not-run>} RECOVAR=\${RECOVAR_GPU_UUID}" >&2
@@ -1257,6 +1311,7 @@ echo "HEAD: \$(git rev-parse HEAD)"
 SUMMARY_BRANCH="\$(git branch --show-current 2>/dev/null || true)"
 echo "Branch: \${SUMMARY_BRANCH:-<detached>}"
 echo "Scratch: ${SCRATCH_DIR}"
+echo "Trajectory mode: ${TRAJECTORY_MODE}"
 echo
 
 for job_id in ${tracked_jobs}; do
@@ -1400,10 +1455,22 @@ def fmt(value, digits=6):
     return str(value)
 
 out_json = scratch / "k1_robustness_matrix_summary.json"
-out_json.write_text(json.dumps({"schema": "em_k1_robustness_matrix_v1", "rows": rows}, indent=2) + "\n")
+out_json.write_text(
+    json.dumps(
+        {
+            "schema": "em_k1_robustness_matrix_v1",
+            "trajectory_mode": "${TRAJECTORY_MODE}",
+            "rows": rows,
+        },
+        indent=2,
+    )
+    + "\n"
+)
 
 lines = [
     "# EM K=1 Robustness Matrix",
+    "",
+    "Trajectory mode: `${TRAJECTORY_MODE}`",
     "",
     "| # | Case | N | Grid | Noise | Poses | Stress | Job | Status | RECOVAR wall s | RECOVAR GT FSC AUC | RECOVAR GT corr | RELION GT FSC AUC |",
     "|---:|---|---:|---:|---|---|---|---:|---|---:|---:|---:|---:|",
@@ -1505,6 +1572,7 @@ echo "Setup gres: ${SETUP_GRES:-<none>}"
 echo "Exclusive GPU jobs: ${EXCLUSIVE}"
 echo "CUDA module: ${CUDA_MODULE}"
 echo "Run RELION baselines: ${RUN_RELION}"
+echo "Trajectory mode: ${TRAJECTORY_MODE}"
 echo "RELION binding source: ${RELION_SRC_DIR:-<unset>}"
 echo "Case time-limit override: ${TIME_LIMIT_OVERRIDE:-<none>}"
 echo
@@ -1573,6 +1641,7 @@ SBATCH_CONSTRAINT=${CONSTRAINT}
 EM_K1_MATRIX_EXCLUSIVE=${EXCLUSIVE}
 EM_K1_MATRIX_SINGLE_VISIBLE_GPU=${SINGLE_VISIBLE_GPU}
 EM_K1_MATRIX_RUN_RELION=${RUN_RELION}
+EM_K1_MATRIX_TRAJECTORY_MODE=${TRAJECTORY_MODE}
 EM_K1_MATRIX_MAX_ITER=${MAX_ITER}
 EM_K1_MATRIX_TIME_LIMIT=${TIME_LIMIT_OVERRIDE}
 K1_IMAGE_BATCH_SIZE=${K1_IMAGE_BATCH_SIZE}
