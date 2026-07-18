@@ -17,6 +17,72 @@ FROZEN_BOUNDARY_SCHEMA = "recovar.em.frozen_boundary.v1"
 FROZEN_BOUNDARY_FILENAME = "frozen_boundary_v1.npz"
 FROZEN_BOUNDARY_MANIFEST = "FROZEN_BOUNDARY_SHA256SUMS"
 
+_REFINEMENT_STATE_FIELD_TYPES = {
+    "current_resolution": float,
+    "previous_resolution": float,
+    "nr_iter_wo_resol_gain": int,
+    "nr_iter_wo_assignment_changes": int,
+    "nr_iter_wo_large_hidden_variable_changes": int,
+    "ave_Pmax": float,
+    "current_changes_optimal_orientations": float,
+    "current_changes_optimal_offsets_angstrom": float,
+    "smallest_changes_optimal_orientations": float,
+    "smallest_changes_optimal_offsets_angstrom": float,
+    "acc_rot": float,
+    "acc_trans": float,
+    "has_converged": bool,
+}
+_REQUIRED_PAYLOAD_KEYS = {
+    "schema",
+    "completed_relion_iteration",
+    "volume_shape",
+    "current_size",
+    "healpix_order",
+    "relion_incr_size",
+    "has_high_fsc_at_limit",
+    "half1_mean_ft",
+    "half2_mean_ft",
+    "mean_variance",
+    "half1_noise_radial",
+    "half2_noise_radial",
+    "fsc",
+    "ave_pmax",
+    "half1_previous_best_rotation_eulers",
+    "half2_previous_best_rotation_eulers",
+    "half1_previous_best_translations",
+    "half2_previous_best_translations",
+    "half1_image_name",
+    "half2_image_name",
+    "half1_source_row",
+    "half2_source_row",
+    "half1_random_subset",
+    "half2_random_subset",
+    "half1_half_index",
+    "half2_half_index",
+    "half1_half_local_index",
+    "half2_half_local_index",
+    *(f"state_{key}" for key in _REFINEMENT_STATE_FIELD_TYPES),
+}
+_CORRECTION_PAYLOAD_KEYS = {
+    "half1_image_corrections",
+    "half2_image_corrections",
+    "half1_scale_corrections",
+    "half2_scale_corrections",
+}
+_PROVENANCE_PAYLOAD_KEYS = {
+    "source_job_id",
+    "source_arm",
+    "source_map_serialization",
+    "bitwise_identity_to_original_in_memory_means",
+    "correction_state_owner",
+    "identity_schema",
+    "source_star_sha256",
+    "relion_half_star_sha256",
+}
+_ALLOWED_PAYLOAD_KEYS = (
+    _REQUIRED_PAYLOAD_KEYS | _CORRECTION_PAYLOAD_KEYS | _PROVENANCE_PAYLOAD_KEYS
+)
+
 
 @dataclass(frozen=True)
 class FrozenRefinementBoundary:
@@ -103,6 +169,18 @@ def _scalar(npz, key: str, dtype):
     return dtype(value.item())
 
 
+def _typed_scalar(npz, key: str, *, dtype_kinds: set[str]):
+    value = _required_array(npz, key)
+    if value.shape != ():
+        raise ValueError(f"frozen boundary scalar {key} must have shape (), got {value.shape}")
+    if value.dtype.kind not in dtype_kinds:
+        raise ValueError(
+            f"frozen boundary scalar {key} has dtype {value.dtype}; "
+            f"expected kind in {sorted(dtype_kinds)}"
+        )
+    return value.item()
+
+
 def _load_optional_half_pair(npz, prefix: str, dtype) -> tuple[np.ndarray, np.ndarray] | None:
     keys = (f"half1_{prefix}", f"half2_{prefix}")
     present = [key in npz.files for key in keys]
@@ -146,6 +224,20 @@ def load_frozen_refinement_boundary(
         if schema != FROZEN_BOUNDARY_SCHEMA:
             raise ValueError(
                 f"unsupported frozen-boundary schema {schema!r}; expected {FROZEN_BOUNDARY_SCHEMA!r}"
+            )
+        payload_keys = set(npz.files)
+        missing_keys = sorted(_REQUIRED_PAYLOAD_KEYS - payload_keys)
+        if missing_keys:
+            raise ValueError(f"frozen boundary is missing required schema-v1 keys: {missing_keys}")
+        unknown_keys = sorted(payload_keys - _ALLOWED_PAYLOAD_KEYS)
+        if unknown_keys:
+            raise ValueError(f"frozen boundary contains unknown schema-v1 keys: {unknown_keys}")
+        provenance_keys = payload_keys & _PROVENANCE_PAYLOAD_KEYS
+        if provenance_keys and provenance_keys != _PROVENANCE_PAYLOAD_KEYS:
+            missing_provenance = sorted(_PROVENANCE_PAYLOAD_KEYS - provenance_keys)
+            raise ValueError(
+                "frozen boundary must provide all or none of the provenance fields; "
+                f"missing={missing_provenance}"
             )
         completed_iteration = _scalar(npz, "completed_relion_iteration", int)
         if completed_iteration < 1:
@@ -240,6 +332,9 @@ def load_frozen_refinement_boundary(
         all_names = np.concatenate([np.asarray(value, dtype=str) for value in image_names])
         if np.unique(all_names).size != all_names.size:
             raise ValueError("frozen-boundary image names must be globally unique")
+        all_source_rows = np.concatenate(source_rows)
+        if np.unique(all_source_rows).size != all_source_rows.size:
+            raise ValueError("frozen-boundary source rows must be globally unique")
 
         image_corrections = _load_optional_half_pair(npz, "image_corrections", np.float32)
         scale_corrections = _load_optional_half_pair(npz, "scale_corrections", np.float32)
@@ -253,25 +348,9 @@ def load_frozen_refinement_boundary(
                 if scale_corrections[half].shape != (expected_rows,):
                     raise ValueError("frozen-boundary scale-correction row count mismatch")
 
-        state_field_types = {
-            "current_resolution": float,
-            "previous_resolution": float,
-            "nr_iter_wo_resol_gain": int,
-            "nr_iter_wo_assignment_changes": int,
-            "nr_iter_wo_large_hidden_variable_changes": int,
-            "ave_Pmax": float,
-            "current_changes_optimal_orientations": float,
-            "current_changes_optimal_offsets_angstrom": float,
-            "smallest_changes_optimal_orientations": float,
-            "smallest_changes_optimal_offsets_angstrom": float,
-            "acc_rot": float,
-            "acc_trans": float,
-            "has_converged": bool,
-        }
         refinement_state_fields = {
             key: _scalar(npz, f"state_{key}", field_type)
-            for key, field_type in state_field_types.items()
-            if f"state_{key}" in npz.files
+            for key, field_type in _REFINEMENT_STATE_FIELD_TYPES.items()
         }
         if refinement_state_fields.get("has_converged", False):
             raise ValueError("a frozen numbered-iteration boundary must not already be converged")
@@ -299,6 +378,30 @@ def load_frozen_refinement_boundary(
                 raise ValueError(f"frozen-boundary state scalar {key} must be nonnegative")
         if "ave_Pmax" in refinement_state_fields and not 0.0 <= refinement_state_fields["ave_Pmax"] <= 1.0:
             raise ValueError("frozen-boundary state ave_Pmax must lie in [0, 1]")
+
+        if provenance_keys:
+            source_job_id = _typed_scalar(npz, "source_job_id", dtype_kinds={"i", "u"})
+            if int(source_job_id) < 0:
+                raise ValueError("frozen-boundary source_job_id must be nonnegative")
+            for key in (
+                "source_arm",
+                "source_map_serialization",
+                "correction_state_owner",
+                "identity_schema",
+            ):
+                if not str(_typed_scalar(npz, key, dtype_kinds={"S", "U"})).strip():
+                    raise ValueError(f"frozen-boundary provenance scalar {key} must be nonempty")
+            _typed_scalar(
+                npz,
+                "bitwise_identity_to_original_in_memory_means",
+                dtype_kinds={"b"},
+            )
+            for key in ("source_star_sha256", "relion_half_star_sha256"):
+                digest = str(_typed_scalar(npz, key, dtype_kinds={"S", "U"}))
+                if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+                    raise ValueError(
+                        f"frozen-boundary provenance scalar {key} must be lowercase SHA-256"
+                    )
 
         result = FrozenRefinementBoundary(
             source_dir=source_dir,
