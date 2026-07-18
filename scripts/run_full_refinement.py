@@ -1043,6 +1043,48 @@ def _build_replay_iteration_overrides(
     return overrides
 
 
+_FINAL_REPLAY_GROUP_KEYS = {
+    "poses": {
+        "previous_best_translations",
+        "previous_best_rotations",
+        "previous_best_rotation_eulers",
+    },
+    "sampling": {
+        "translation_sigma_angstrom",
+        "translation_sigma_angstrom_per_half",
+    },
+    "corrections": {
+        "noise_variance",
+        "direction_prior",
+        "image_corrections",
+        "serialized_scale_corrections",
+    },
+}
+
+
+def _select_final_replay_override(source_override, requested_fields):
+    """Select diagnostic final-boundary groups without touching numbered state."""
+    requested_groups = {
+        token.strip().lower()
+        for token in str(requested_fields).split(",")
+        if token.strip()
+    }
+    valid_groups = set(_FINAL_REPLAY_GROUP_KEYS) | {"all"}
+    unknown_groups = sorted(requested_groups - valid_groups)
+    if not requested_groups or unknown_groups:
+        raise ValueError(
+            "--final-replay-fields requires one or more of poses,sampling,corrections,all; "
+            f"unknown={unknown_groups}"
+        )
+    if "all" in requested_groups:
+        requested_groups = set(_FINAL_REPLAY_GROUP_KEYS)
+    selected_keys = set().union(*(_FINAL_REPLAY_GROUP_KEYS[group] for group in requested_groups))
+    selected_override = {
+        key: value for key, value in source_override.items() if key in selected_keys
+    }
+    return requested_groups, selected_override
+
+
 def _attach_relion_projector_capture(
     replay_iteration_overrides,
     *,
@@ -1595,6 +1637,25 @@ def main():
         "and per-iteration particle/model overrides from run_it{NNN}_* files in "
         "this directory. This is not an autonomous trajectory; omit it and use "
         "--perturb_seed for same-seed autonomous refinement.",
+    )
+    parser.add_argument(
+        "--final-replay-relion-dir",
+        default=None,
+        help=(
+            "Diagnostic-only final-boundary substitution source. Numbered refinement remains "
+            "autonomous; selected last-numbered state fields and/or the unnumbered final sampling "
+            "state are loaded only after convergence."
+        ),
+    )
+    parser.add_argument(
+        "--final-replay-fields",
+        default="all",
+        help=(
+            "Comma-separated diagnostic final-only groups: poses, sampling, corrections, or all. "
+            "poses replaces previous rotations/translations; sampling replaces translation sigma "
+            "and final sampling grid/perturbation; corrections replaces noise, direction prior, "
+            "image correction, and serialized scale correction."
+        ),
     )
     parser.add_argument(
         "--perturb-replay-restart-state-iterations",
@@ -2687,6 +2748,37 @@ def main():
             strict=True,
         )
 
+    final_replay_override = None
+    final_sampling_replay_relion_dir = None
+    if args.final_replay_relion_dir is not None:
+        final_overrides = _build_replay_iteration_overrides(
+            args.final_replay_relion_dir,
+            half1_idx,
+            half2_idx,
+            int(args.max_iter),
+            ds_voxel=ds.voxel_size,
+            ds_grid=ds.grid_size,
+            include_normcorr=True,
+            init_relion_iteration=args.init_relion_iteration,
+            particle_names=our_names,
+            strict=True,
+        )
+        source_override = final_overrides[-1]
+        if source_override is None:
+            raise ValueError("diagnostic final-only substitution did not load a last-numbered override")
+        requested_groups, final_replay_override = _select_final_replay_override(
+            source_override,
+            args.final_replay_fields,
+        )
+        if "sampling" in requested_groups:
+            final_sampling_replay_relion_dir = args.final_replay_relion_dir
+        logger.info(
+            "Diagnostic final-only substitution: groups=%s fields=%s source=%s",
+            sorted(requested_groups),
+            sorted(final_replay_override),
+            Path(args.final_replay_relion_dir).resolve(),
+        )
+
     # ``--relion_init_dir`` is the strict cold-start contract, not merely a
     # noise/tau bootstrap. RELION's run_it000 particle/model state includes
     # large pre-centering offsets on real data; omitting them makes iter-1
@@ -2888,7 +2980,9 @@ def main():
         expected_accuracy_half1_particle_ids=expected_accuracy_half1_particle_ids,
         perturb_replay_relion_dir=args.perturb_replay_relion_dir,
         perturb_replay_restart_state_iterations=perturb_replay_restart_state_iterations,
+        final_sampling_replay_relion_dir=final_sampling_replay_relion_dir,
         replay_iteration_overrides=replay_iteration_overrides,
+        final_replay_override=final_replay_override,
         init_relion_iteration=args.init_relion_iteration,
         n_classes=args.n_classes,
         image_fourier_backend=args.image_fourier_backend,

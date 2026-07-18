@@ -3789,6 +3789,7 @@ def refine_single_volume(
     perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
     perturb_replay_restart_state_iterations=(),
+    final_sampling_replay_relion_dir=None,
     init_fsc=None,
     init_ave_Pmax=None,
     init_has_high_fsc_at_limit=None,
@@ -3807,6 +3808,7 @@ def refine_single_volume(
     init_previous_best_translations=None,
     init_previous_best_rotation_eulers=None,
     replay_iteration_overrides=None,
+    final_replay_override=None,
     skip_final_iteration=False,
     local_search_profile_mode="auto",
     local_search_translation_prior_mode="coarse",
@@ -3968,6 +3970,7 @@ def refine_single_volume(
         perturb_replay_relion_prefix = parity.perturb_replay_relion_prefix
         perturb_replay_precision = parity.perturb_replay_precision
         perturb_replay_restart_state_iterations = parity.perturb_replay_restart_state_iterations
+        final_sampling_replay_relion_dir = parity.final_sampling_replay_relion_dir
         emulate_relion_firstiter_cc = parity.emulate_relion_firstiter_cc
         relion_firstiter_ini_high_angstrom = parity.relion_firstiter_ini_high_angstrom
         do_solvent_fsc_correction = parity.do_solvent_fsc_correction
@@ -3998,6 +4001,7 @@ def refine_single_volume(
         init_previous_best_translations = replay.init_previous_best_translations
         init_previous_best_rotation_eulers = replay.init_previous_best_rotation_eulers
         replay_iteration_overrides = replay.replay_iteration_overrides
+        final_replay_override = replay.final_replay_override
 
         batching = options.batching
         image_batch_size = batching.image_batch_size
@@ -4053,6 +4057,7 @@ def refine_single_volume(
         perturb_replay_relion_prefix=perturb_replay_relion_prefix,
         perturb_replay_precision=perturb_replay_precision,
         perturb_replay_restart_state_iterations=perturb_replay_restart_state_iterations,
+        final_sampling_replay_relion_dir=final_sampling_replay_relion_dir,
         init_fsc=init_fsc,
         init_ave_Pmax=init_ave_Pmax,
         init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
@@ -4071,6 +4076,7 @@ def refine_single_volume(
         init_previous_best_translations=init_previous_best_translations,
         init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
         replay_iteration_overrides=replay_iteration_overrides,
+        final_replay_override=final_replay_override,
         skip_final_iteration=skip_final_iteration,
         local_search_profile_mode=local_search_profile_mode,
         local_search_translation_prior_mode=local_search_translation_prior_mode,
@@ -4136,6 +4142,7 @@ def _run_relion_iteration_loop(
     perturb_replay_relion_prefix="run",
     perturb_replay_precision="auto",
     perturb_replay_restart_state_iterations=(),
+    final_sampling_replay_relion_dir=None,
     init_fsc=None,
     init_ave_Pmax=None,
     init_has_high_fsc_at_limit=None,
@@ -4154,6 +4161,7 @@ def _run_relion_iteration_loop(
     init_previous_best_translations=None,
     init_previous_best_rotation_eulers=None,
     replay_iteration_overrides=None,
+    final_replay_override=None,
     skip_final_iteration=False,
     local_search_profile_mode="auto",
     local_search_translation_prior_mode="coarse",
@@ -8232,15 +8240,27 @@ def _run_relion_iteration_loop(
     final_replay_has_numbered_overrides = _has_numbered_replay_iteration_overrides(
         replay_iteration_overrides
     )
+    diagnostic_final_replay_override = final_replay_override
     final_replay_last_numbered_state = (
-        not final_replay_disabled
-        and (final_replay_forced or final_replay_has_numbered_overrides)
+        diagnostic_final_replay_override is not None
+        or (
+            not final_replay_disabled
+            and (final_replay_forced or final_replay_has_numbered_overrides)
+        )
     )
     if final_replay_last_numbered_state:
-        final_replay_override = None
         final_replay_requested_index = int(len(current_sizes))
         final_replay_override_index = final_replay_requested_index
-        if final_replay_has_overrides:
+        if diagnostic_final_replay_override is not None:
+            final_replay_override = diagnostic_final_replay_override
+            logger.info(
+                "Diagnostic final-only RELION state substitution at previous-state index %d (fields=%s)",
+                final_replay_requested_index,
+                ",".join(sorted(final_replay_override)) or "<none>",
+            )
+        else:
+            final_replay_override = None
+        if diagnostic_final_replay_override is None and final_replay_has_overrides:
             final_replay_override_index = min(
                 final_replay_requested_index,
                 int(len(replay_iteration_overrides)) - 1,
@@ -8492,15 +8512,20 @@ def _run_relion_iteration_loop(
         final_current_healpix_order,
     )
     final_perturbation_applied = False
-    if perturb_replay_relion_dir is not None:
+    final_sampling_replay_dir = (
+        final_sampling_replay_relion_dir
+        if final_sampling_replay_relion_dir is not None
+        else perturb_replay_relion_dir
+    )
+    if final_sampling_replay_dir is not None:
         if replay_iteration_overrides is not None:
             required_final_state = [
                 os.path.join(
-                    perturb_replay_relion_dir,
+                    final_sampling_replay_dir,
                     f"{perturb_replay_relion_prefix}_sampling.star",
                 ),
                 os.path.join(
-                    perturb_replay_relion_dir,
+                    final_sampling_replay_dir,
                     f"{perturb_replay_relion_prefix}_optimiser.star",
                 ),
             ]
@@ -8516,21 +8541,21 @@ def _run_relion_iteration_loop(
         final_sampling_candidates = [
             (
                 os.path.join(
-                    perturb_replay_relion_dir,
+                    final_sampling_replay_dir,
                     f"{perturb_replay_relion_prefix}_it{final_sampling_relion_iteration:03d}_sampling.star",
                 ),
                 "final-numbered",
             ),
             (
                 os.path.join(
-                    perturb_replay_relion_dir,
+                    final_sampling_replay_dir,
                     f"{perturb_replay_relion_prefix}_sampling.star",
                 ),
                 "final",
             ),
             (
                 os.path.join(
-                    perturb_replay_relion_dir,
+                    final_sampling_replay_dir,
                     f"{perturb_replay_relion_prefix}_it{final_numbered_sampling_relion_iteration:03d}_sampling.star",
                 ),
                 "last-numbered",
@@ -8557,7 +8582,7 @@ def _run_relion_iteration_loop(
                 star_value=float(final_replay_meta["random_perturbation"]),
                 perturbation_factor=final_perturbation_factor,
                 relion_iteration=final_replay_relion_iteration,
-                replay_dir=str(perturb_replay_relion_dir),
+                replay_dir=str(final_sampling_replay_dir),
                 replay_prefix=perturb_replay_relion_prefix,
                 explicit_seed=perturb_seed,
                 precision_mode=str(perturb_replay_precision),
@@ -8568,7 +8593,7 @@ def _run_relion_iteration_loop(
             final_translation_range = float(final_replay_meta["offset_range"]) / px
             final_translation_step = float(final_replay_meta["offset_step"]) / px
             numbered_sampling_path = os.path.join(
-                perturb_replay_relion_dir,
+                final_sampling_replay_dir,
                 f"{perturb_replay_relion_prefix}_it{final_numbered_sampling_relion_iteration:03d}_sampling.star",
             )
             if (

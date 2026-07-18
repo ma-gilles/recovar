@@ -64,6 +64,7 @@ class RelionParityOptions:
     perturb_replay_relion_prefix: str = "run"
     perturb_replay_precision: Literal["auto", "seed_exact", "star"] = "auto"
     perturb_replay_restart_state_iterations: tuple[int, ...] = ()
+    final_sampling_replay_relion_dir: str | None = None
     emulate_relion_firstiter_cc: bool = False
     relion_firstiter_ini_high_angstrom: float | None = None
     do_solvent_fsc_correction: bool = False
@@ -115,6 +116,7 @@ class ReplayState:
     init_previous_best_translations: Any | None = None
     init_previous_best_rotation_eulers: Any | None = None
     replay_iteration_overrides: Any | None = None
+    final_replay_override: Any | None = None
 
 
 @dataclass(frozen=True)
