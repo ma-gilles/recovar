@@ -6382,11 +6382,18 @@ def test_fused_other_class_log_z_matches_two_pass_normalization(monkeypatch):
     np.testing.assert_allclose(np.asarray(score_b), np.asarray(log_evidence_b), rtol=0, atol=0)
 
 
-def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(monkeypatch):
+@pytest.mark.parametrize("fine_prune", [False, True])
+def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
+    monkeypatch, tmp_path, fine_prune
+):
+    from recovar.em.dense_single_volume.helpers import compact_candidate_capture as capture_mod
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     monkeypatch.delenv("RECOVAR_PASS2_DUMP_DIR", raising=False)
+    monkeypatch.setenv(capture_mod.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(capture_mod.CAPTURE_ITERATION_ENV, "3")
+    monkeypatch.setattr(capture_mod, "_capture_counter", 0)
     monkeypatch.setattr(bucketed_mod, "_projection_cache_fits_budget", lambda *_args, **_kwargs: False)
 
     n_images = 4
@@ -6414,6 +6421,7 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(monkeypa
     ]
 
     ds = MockDataset(n_images=n_images, seed=301)
+    ds.dataset_indices = np.arange(n_images, dtype=np.int64)
     common = dict(
         experiment_dataset=ds,
         volume=_hermitian_volume(VOLUME_SHAPE, seed=303),
@@ -6435,12 +6443,67 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(monkeypa
         fine_rotation_parent_override=fine_parent,
         fine_translations_override=fine_translations,
         fine_translation_parent_override=fine_translation_parent,
+        relion_fine_mstep_prune=fine_prune,
     )
 
-    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", str(1024**3))
-    unchunked = compute_pass2_stats_sparse(**common)
-    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", "512")
-    chunked = compute_pass2_stats_sparse(**common)
+    try:
+        bucketed_mod.set_bpref_contribution_dump_context(iteration=3, half=1)
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", str(1024**3))
+        unchunked = compute_pass2_stats_sparse(**common)
+        ds.dataset_indices = np.arange(n_images, dtype=np.int64) + n_images
+        bucketed_mod.set_bpref_contribution_dump_context(iteration=3, half=2)
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", "512")
+        chunked = compute_pass2_stats_sparse(**common)
+    finally:
+        bucketed_mod.clear_bpref_contribution_dump_context()
+
+    marker = capture_mod.finalize_raw_capture_directory(
+        tmp_path,
+        expected_original_indices_by_half={
+            1: np.arange(n_images, dtype=np.int64),
+            2: np.arange(n_images, dtype=np.int64) + n_images,
+        },
+        expected_iteration=3,
+    )
+    assert marker["particle_count"] == 2 * n_images
+    shards_by_half = {}
+    for path in tmp_path.glob("raw_k1_*.npz"):
+        with np.load(path, allow_pickle=False) as shard:
+            shards_by_half[int(shard["half"])] = {
+                name: np.asarray(shard[name]) for name in shard.files
+            }
+    assert set(shards_by_half) == {1, 2}
+    unchunked_capture = shards_by_half[1]
+    chunked_capture = shards_by_half[2]
+    np.testing.assert_array_equal(
+        chunked_capture["original_indices"] - n_images,
+        unchunked_capture["original_indices"],
+    )
+    for name in (
+        "candidate_offset",
+        "candidate_local_rotation",
+        "candidate_translation",
+        "significant",
+        "rotation_offset",
+        "rotation_global_index",
+        "rotation_parent_local",
+        "rotation_parent_global",
+    ):
+        np.testing.assert_array_equal(chunked_capture[name], unchunked_capture[name])
+    if not fine_prune:
+        assert np.all(chunked_capture["significant"] == 1)
+    np.testing.assert_allclose(
+        chunked_capture["raw_combined_score"],
+        unchunked_capture["raw_combined_score"],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        chunked_capture["posterior"],
+        unchunked_capture["posterior"],
+        rtol=1e-6,
+        atol=1e-6,
+    )
 
     np.testing.assert_allclose(np.asarray(chunked[0]), np.asarray(unchunked[0]), rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(np.asarray(chunked[1]), np.asarray(unchunked[1]), rtol=1e-5, atol=1e-5)
