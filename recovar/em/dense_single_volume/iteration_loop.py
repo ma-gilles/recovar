@@ -3809,6 +3809,7 @@ def refine_single_volume(
     init_previous_best_rotation_eulers=None,
     replay_iteration_overrides=None,
     final_replay_override=None,
+    final_replay_reference_maps=None,
     final_replay_source_iteration=None,
     skip_final_iteration=False,
     local_search_profile_mode="auto",
@@ -4003,6 +4004,7 @@ def refine_single_volume(
         init_previous_best_rotation_eulers = replay.init_previous_best_rotation_eulers
         replay_iteration_overrides = replay.replay_iteration_overrides
         final_replay_override = replay.final_replay_override
+        final_replay_reference_maps = replay.final_replay_reference_maps
         final_replay_source_iteration = replay.final_replay_source_iteration
 
         batching = options.batching
@@ -4079,6 +4081,7 @@ def refine_single_volume(
         init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
         replay_iteration_overrides=replay_iteration_overrides,
         final_replay_override=final_replay_override,
+        final_replay_reference_maps=final_replay_reference_maps,
         final_replay_source_iteration=final_replay_source_iteration,
         skip_final_iteration=skip_final_iteration,
         local_search_profile_mode=local_search_profile_mode,
@@ -4165,6 +4168,7 @@ def _run_relion_iteration_loop(
     init_previous_best_rotation_eulers=None,
     replay_iteration_overrides=None,
     final_replay_override=None,
+    final_replay_reference_maps=None,
     final_replay_source_iteration=None,
     skip_final_iteration=False,
     local_search_profile_mode="auto",
@@ -8246,7 +8250,10 @@ def _run_relion_iteration_loop(
     )
     diagnostic_final_replay_override = final_replay_override
     if (
-        diagnostic_final_replay_override is not None
+        (
+            diagnostic_final_replay_override is not None
+            or final_replay_reference_maps is not None
+        )
         and final_replay_source_iteration is not None
         and int(len(current_sizes)) != int(final_replay_source_iteration)
     ):
@@ -8254,6 +8261,33 @@ def _run_relion_iteration_loop(
             "Diagnostic final-only substitution source does not match autonomous convergence boundary: "
             f"source_iteration={int(final_replay_source_iteration)} "
             f"numbered_iteration_count={int(len(current_sizes))}"
+        )
+    if final_replay_reference_maps is not None:
+        if k_class_enabled:
+            raise RuntimeError(
+                "Diagnostic final-only RELION reference substitution is currently K=1 only"
+            )
+        if len(final_replay_reference_maps) != 2:
+            raise ValueError(
+                "Diagnostic final-only RELION reference substitution requires exactly two half maps"
+            )
+        expected_reference_shape = tuple(np.asarray(means[0]).shape)
+        candidate_reference_shapes = [
+            tuple(np.asarray(reference).shape)
+            for reference in final_replay_reference_maps
+        ]
+        if any(shape != expected_reference_shape for shape in candidate_reference_shapes):
+            raise ValueError(
+                "Diagnostic final-only RELION reference shape mismatch: "
+                f"expected={expected_reference_shape} got={candidate_reference_shapes}"
+            )
+        final_join_means = [
+            jnp.asarray(reference, dtype=means[half_idx].dtype)
+            for half_idx, reference in enumerate(final_replay_reference_maps)
+        ]
+        logger.info(
+            "Diagnostic final-only RELION reference substitution at numbered boundary %d",
+            int(len(current_sizes)),
         )
     final_replay_last_numbered_state = (
         diagnostic_final_replay_override is not None

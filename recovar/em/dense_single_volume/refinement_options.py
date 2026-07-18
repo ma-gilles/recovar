@@ -117,6 +117,7 @@ class ReplayState:
     init_previous_best_rotation_eulers: Any | None = None
     replay_iteration_overrides: Any | None = None
     final_replay_override: Any | None = None
+    final_replay_reference_maps: Any | None = None
     final_replay_source_iteration: int | None = None
 
 

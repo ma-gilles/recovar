@@ -52,6 +52,7 @@ def _source_override():
                 "serialized_scale_corrections",
             },
         ),
+        ("references", set()),
     ],
 )
 def test_final_replay_group_selection_is_disjoint(groups, expected_keys):
@@ -62,7 +63,7 @@ def test_final_replay_group_selection_is_disjoint(groups, expected_keys):
 
 def test_final_replay_all_is_union_without_unrelated_fields():
     groups, override = _select_final_replay_override(_source_override(), "all")
-    assert groups == {"poses", "sampling", "corrections"}
+    assert groups == {"poses", "sampling", "corrections", "references"}
     assert "class_tau2" not in override
     assert set(override) == set(_source_override()) - {"class_tau2"}
 
@@ -77,6 +78,7 @@ def test_final_only_options_reach_both_iteration_loop_boundaries():
     for function in (refine_single_volume, _run_relion_iteration_loop):
         parameters = inspect.signature(function).parameters
         assert "final_replay_override" in parameters
+        assert "final_replay_reference_maps" in parameters
         assert "final_replay_source_iteration" in parameters
         assert "final_sampling_replay_relion_dir" in parameters
 

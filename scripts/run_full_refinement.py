@@ -1059,6 +1059,7 @@ _FINAL_REPLAY_GROUP_KEYS = {
         "image_corrections",
         "serialized_scale_corrections",
     },
+    "references": set(),
 }
 
 
@@ -1073,7 +1074,8 @@ def _select_final_replay_override(source_override, requested_fields):
     unknown_groups = sorted(requested_groups - valid_groups)
     if not requested_groups or unknown_groups:
         raise ValueError(
-            "--final-replay-fields requires one or more of poses,sampling,corrections,all; "
+            "--final-replay-fields requires one or more of "
+            "poses,sampling,corrections,references,all; "
             f"unknown={unknown_groups}"
         )
     if "all" in requested_groups:
@@ -1083,6 +1085,39 @@ def _select_final_replay_override(source_override, requested_fields):
         key: value for key, value in source_override.items() if key in selected_keys
     }
     return requested_groups, selected_override
+
+
+def _load_final_replay_reference_maps(relion_dir, source_iteration, volume_shape):
+    """Load the exact K=1 half references consumed by RELION finalization."""
+    from recovar.core import fourier_transform_utils
+    from recovar.utils.helpers import load_relion_volume
+
+    relion_dir = Path(relion_dir)
+    references = []
+    for half_number in (1, 2):
+        map_path = relion_dir / (
+            f"run_it{int(source_iteration):03d}_half{half_number}_class001.mrc"
+        )
+        if not map_path.is_file():
+            raise ValueError(
+                "diagnostic final-only reference substitution is missing "
+                f"{map_path}"
+            )
+        reference_real = np.asarray(load_relion_volume(str(map_path)), dtype=np.float32)
+        if tuple(reference_real.shape) != tuple(volume_shape):
+            raise ValueError(
+                f"diagnostic final-only reference {map_path} has shape "
+                f"{reference_real.shape}, expected {tuple(volume_shape)}"
+            )
+        references.append(
+            jnp.asarray(fourier_transform_utils.get_dft3(reference_real).reshape(-1))
+        )
+        logger.info(
+            "Diagnostic final-only reference half %d <- %s",
+            half_number,
+            map_path,
+        )
+    return references
 
 
 def _resolve_final_replay_source_iteration(
@@ -1702,10 +1737,12 @@ def main():
         "--final-replay-fields",
         default="all",
         help=(
-            "Comma-separated diagnostic final-only groups: poses, sampling, corrections, or all. "
+            "Comma-separated diagnostic final-only groups: poses, sampling, corrections, "
+            "references, or all. "
             "poses replaces previous rotations/translations; sampling replaces translation sigma "
             "and final sampling grid/perturbation; corrections replaces noise, direction prior, "
-            "image correction, and serialized scale correction."
+            "image correction, and serialized scale correction; references replaces only the "
+            "two input half-reference maps used by the final all-data expectation."
         ),
     )
     parser.add_argument(
@@ -2810,6 +2847,7 @@ def main():
         )
 
     final_replay_override = None
+    final_replay_reference_maps = None
     final_replay_source_iteration = None
     final_sampling_replay_relion_dir = None
     if args.final_replay_relion_dir is not None:
@@ -2854,6 +2892,16 @@ def main():
             source_override,
             args.final_replay_fields,
         )
+        if "references" in requested_groups:
+            if args.n_classes != 1:
+                raise ValueError(
+                    "diagnostic final-only reference substitution currently requires --n-classes=1"
+                )
+            final_replay_reference_maps = _load_final_replay_reference_maps(
+                final_replay_dir,
+                source_iteration,
+                ds.volume_shape,
+            )
         if "sampling" in requested_groups:
             final_sampling_replay_relion_dir = str(final_replay_dir)
         logger.info(
@@ -3068,6 +3116,7 @@ def main():
         final_sampling_replay_relion_dir=final_sampling_replay_relion_dir,
         replay_iteration_overrides=replay_iteration_overrides,
         final_replay_override=final_replay_override,
+        final_replay_reference_maps=final_replay_reference_maps,
         final_replay_source_iteration=final_replay_source_iteration,
         init_relion_iteration=args.init_relion_iteration,
         n_classes=args.n_classes,
