@@ -178,6 +178,83 @@ def test_capture_splits_raw_shards_at_candidate_bound(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
+def test_capture_splits_and_seals_one_particle_across_candidate_fragments(tmp_path, monkeypatch):
+    monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(capture, "_capture_counter", 0)
+    monkeypatch.setattr(capture, "MAX_CANDIDATES_PER_RAW_SHARD", 3)
+
+    half1 = _capture_inputs(batch=1)
+    half2 = _capture_inputs(batch=1)
+    half2["half"] = 2
+    half2["original_indices"] = np.asarray([2000], dtype=np.int64)
+    capture.maybe_capture_k1_production_bucket(**half1)
+    capture.maybe_capture_k1_production_bucket(**half2)
+
+    paths = sorted(tmp_path.glob("*.npz"))
+    assert len(paths) == 4
+    half1_fragments = []
+    for path in paths:
+        inventory = capture.validate_raw_capture_shard(path)
+        assert inventory["candidate_count"] <= 3
+        with np.load(path, allow_pickle=False) as shard:
+            if int(shard["half"]) == 1:
+                half1_fragments.append(
+                    (
+                        int(shard["particle_fragment_index"][0]),
+                        shard["raw_combined_score"].copy(),
+                    )
+                )
+    half1_fragments.sort()
+    np.testing.assert_array_equal(
+        np.concatenate([values for _, values in half1_fragments]),
+        half1["scores"].reshape(-1),
+    )
+
+    marker = capture.finalize_raw_capture_directory(
+        tmp_path,
+        expected_original_indices_by_half={
+            1: half1["original_indices"],
+            2: half2["original_indices"],
+        },
+        expected_iteration=3,
+    )
+    assert marker["particle_count"] == 2
+    assert marker["particle_fragment_count"] == 4
+    assert marker["multipart_particle_count"] == 2
+    assert marker["candidate_count"] == 8
+
+
+@pytest.mark.unit
+def test_raw_capture_finalize_rejects_missing_particle_fragment(tmp_path, monkeypatch):
+    monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(capture, "_capture_counter", 0)
+    monkeypatch.setattr(capture, "MAX_CANDIDATES_PER_RAW_SHARD", 3)
+
+    half1 = _capture_inputs(batch=1)
+    half2 = _capture_inputs(batch=1)
+    half2["half"] = 2
+    half2["original_indices"] = np.asarray([2000], dtype=np.int64)
+    capture.maybe_capture_k1_production_bucket(**half1)
+    capture.maybe_capture_k1_production_bucket(**half2)
+    half1_paths = []
+    for path in sorted(tmp_path.glob("*.npz")):
+        with np.load(path, allow_pickle=False) as shard:
+            if int(shard["half"]) == 1:
+                half1_paths.append(path)
+    half1_paths[-1].unlink()
+
+    with pytest.raises(capture.CompactCaptureError, match="fragments disagree|fragments are incomplete"):
+        capture.finalize_raw_capture_directory(
+            tmp_path,
+            expected_original_indices_by_half={
+                1: half1["original_indices"],
+                2: half2["original_indices"],
+            },
+            expected_iteration=3,
+        )
+
+
+@pytest.mark.unit
 def test_raw_capture_validation_and_complete_manifest(tmp_path, monkeypatch):
     monkeypatch.setenv(capture.CAPTURE_DIR_ENV, str(tmp_path))
     monkeypatch.setattr(capture, "_capture_counter", 0)

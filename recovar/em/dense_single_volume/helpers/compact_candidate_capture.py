@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-SCHEMA = "recovar-k1-production-candidate-bucket-v1"
+SCHEMA = "recovar-k1-production-candidate-bucket-v2"
 CAPTURE_DIR_ENV = "RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR"
 CAPTURE_ITERATION_ENV = "RECOVAR_COMPACT_CANDIDATE_CAPTURE_ITERATION"
 MAX_PARTICLES_PER_RAW_SHARD = 256
@@ -88,6 +88,8 @@ def validate_raw_capture_shard(path: Path) -> dict[str, object]:
             required = {
                 "schema", "metadata_json", "iteration", "half", "rank", "call_index",
                 "shard_index", "current_size", "local_indices", "original_indices",
+                "particle_candidate_start", "particle_candidate_count",
+                "particle_fragment_index", "particle_fragment_count",
                 "candidate_offset", "candidate_local_rotation", "candidate_translation",
                 "raw_combined_score", "posterior", "significant", "rotation_log_prior",
                 "translation_log_prior", "rotation_offset", "rotation_matrix",
@@ -115,6 +117,8 @@ def validate_raw_capture_shard(path: Path) -> dict[str, object]:
         ("iteration", np.int32), ("half", np.int8), ("rank", np.int32),
         ("call_index", np.int64), ("shard_index", np.int32), ("current_size", np.int32),
         ("local_indices", np.int64), ("original_indices", np.int64),
+        ("particle_candidate_start", np.int64), ("particle_candidate_count", np.int64),
+        ("particle_fragment_index", np.int32), ("particle_fragment_count", np.int32),
         ("candidate_offset", np.int64), ("candidate_local_rotation", np.int32),
         ("candidate_translation", np.int32), ("significant", np.uint8),
         ("rotation_offset", np.int64), ("rotation_matrix", np.float32),
@@ -179,6 +183,10 @@ def validate_raw_capture_shard(path: Path) -> dict[str, object]:
     ):
         raise CompactCaptureError("fine translation topology is invalid")
     per_particle_shapes = {
+        "particle_candidate_start": (particle_count,),
+        "particle_candidate_count": (particle_count,),
+        "particle_fragment_index": (particle_count,),
+        "particle_fragment_count": (particle_count,),
         "score_center": (particle_count,), "raw_log_z": (particle_count,),
         "pmax": (particle_count,), "posterior_sum_float32_order": (particle_count,),
         "posterior_sum_float64_exact": (particle_count,),
@@ -213,9 +221,23 @@ def validate_raw_capture_shard(path: Path) -> dict[str, object]:
     if np.any(gram_error > 5e-4) or np.any(determinant_error > 5e-4):
         raise CompactCaptureError("raw shard contains invalid rotation geometry")
 
+    fragments = []
     for row in range(particle_count):
         c0, c1 = (int(candidate_offset[row]), int(candidate_offset[row + 1]))
         r0, r1 = (int(rotation_offset[row]), int(rotation_offset[row + 1]))
+        fragment_start = int(arrays["particle_candidate_start"][row])
+        full_candidate_count = int(arrays["particle_candidate_count"][row])
+        fragment_index = int(arrays["particle_fragment_index"][row])
+        fragment_count = int(arrays["particle_fragment_count"][row])
+        fragment_stop = fragment_start + (c1 - c0)
+        if (
+            fragment_start < 0
+            or full_candidate_count <= 0
+            or fragment_stop > full_candidate_count
+            or fragment_count <= 0
+            or not 0 <= fragment_index < fragment_count
+        ):
+            raise CompactCaptureError("raw shard particle-fragment topology is invalid")
         local_rot = arrays["candidate_local_rotation"][c0:c1]
         local_trans = arrays["candidate_translation"][c0:c1]
         posterior = arrays["posterior"][c0:c1]
@@ -224,35 +246,74 @@ def validate_raw_capture_shard(path: Path) -> dict[str, object]:
             raise CompactCaptureError("raw candidate rotation index is out of range")
         if np.any((local_trans < 0) | (local_trans >= n_trans)):
             raise CompactCaptureError("raw candidate translation index is out of range")
-        exact_sum = np.sum(posterior, dtype=np.float64)
-        if exact_sum != arrays["posterior_sum_float64_exact"][row]:
+        partial_exact_sum = np.sum(posterior, dtype=np.float64)
+        full_exact_sum = float(arrays["posterior_sum_float64_exact"][row])
+        if fragment_count == 1 and partial_exact_sum != full_exact_sum:
             raise CompactCaptureError("raw shard exact posterior sum does not reproduce")
         if (
-            abs(float(arrays["posterior_sum_float32_order"][row]) - exact_sum)
+            abs(float(arrays["posterior_sum_float32_order"][row]) - full_exact_sum)
             > arrays["posterior_sum_float32_bound"][row]
         ):
             raise CompactCaptureError("raw shard float32 posterior sum exceeds its bound")
-        if int(np.count_nonzero(significant)) != int(arrays["significant_count"][row]):
+        partial_significant_count = int(np.count_nonzero(significant))
+        if fragment_count == 1 and partial_significant_count != int(arrays["significant_count"][row]):
             raise CompactCaptureError("raw shard significant count does not reproduce")
-        if not np.any(significant):
+        if fragment_count == 1 and not np.any(significant):
             raise CompactCaptureError("raw shard has no significant candidate")
-        if arrays["significant_threshold"][row] != np.min(posterior[significant]):
+        partial_significant_min = None if not np.any(significant) else np.min(posterior[significant])
+        if fragment_count == 1 and arrays["significant_threshold"][row] != partial_significant_min:
             raise CompactCaptureError("raw shard significant threshold does not reproduce")
         winner = int(arrays["winner_candidate_index"][row])
-        if not 0 <= winner < c1 - c0:
+        if not 0 <= winner < full_candidate_count:
             raise CompactCaptureError("raw shard winner index is out of range")
-        if arrays["pmax"][row] != posterior[winner]:
-            raise CompactCaptureError("raw shard winner posterior does not reproduce Pmax")
-        if arrays["score_center"][row] != arrays["raw_combined_score"][c0 + winner]:
-            raise CompactCaptureError("raw shard winner score does not reproduce score_center")
-        winner_rot = int(local_rot[winner])
-        winner_trans = int(local_trans[winner])
-        if not np.array_equal(arrays["winner_pose_matrix"][row], rotations[r0 + winner_rot]):
-            raise CompactCaptureError("raw shard winner pose does not reproduce candidate geometry")
-        if not np.array_equal(
-            arrays["winner_translation"][row], arrays["fine_translations"][winner_trans]
+        winner_in_fragment = fragment_start <= winner < fragment_stop
+        if winner_in_fragment:
+            fragment_winner = winner - fragment_start
+            if arrays["pmax"][row] != posterior[fragment_winner]:
+                raise CompactCaptureError("raw shard winner posterior does not reproduce Pmax")
+            if arrays["score_center"][row] != arrays["raw_combined_score"][c0 + fragment_winner]:
+                raise CompactCaptureError("raw shard winner score does not reproduce score_center")
+            winner_rot = int(local_rot[fragment_winner])
+            winner_trans = int(local_trans[fragment_winner])
+            if not np.array_equal(arrays["winner_pose_matrix"][row], rotations[r0 + winner_rot]):
+                raise CompactCaptureError("raw shard winner pose does not reproduce candidate geometry")
+            if not np.array_equal(
+                arrays["winner_translation"][row], arrays["fine_translations"][winner_trans]
+            ):
+                raise CompactCaptureError("raw shard winner translation does not reproduce candidate geometry")
+
+        summary_digest = hashlib.sha256()
+        for name in (
+            "score_center", "raw_log_z", "pmax", "posterior_sum_float32_order",
+            "posterior_sum_float64_exact", "posterior_sum_float32_bound",
+            "significant_count", "significant_threshold", "winner_candidate_index",
+            "winner_pose_matrix", "winner_translation",
         ):
-            raise CompactCaptureError("raw shard winner translation does not reproduce candidate geometry")
+            summary_digest.update(np.ascontiguousarray(arrays[name][row]).tobytes())
+        fragments.append(
+            {
+                "local_index": int(local[row]),
+                "original_index": int(original[row]),
+                "candidate_start": fragment_start,
+                "candidate_stop": fragment_stop,
+                "candidate_count": full_candidate_count,
+                "fragment_index": fragment_index,
+                "fragment_count": fragment_count,
+                "partial_posterior_sum_float64": float(partial_exact_sum),
+                "partial_posterior_abs_sum_float64": float(
+                    np.sum(np.abs(posterior), dtype=np.float64)
+                ),
+                "posterior_sum_float64_exact": full_exact_sum,
+                "partial_significant_count": partial_significant_count,
+                "significant_count": int(arrays["significant_count"][row]),
+                "partial_significant_min": (
+                    None if partial_significant_min is None else float(partial_significant_min)
+                ),
+                "significant_threshold": float(arrays["significant_threshold"][row]),
+                "winner_in_fragment": winner_in_fragment,
+                "summary_sha256": summary_digest.hexdigest(),
+            }
+        )
 
     return {
         "path": str(path),
@@ -262,6 +323,7 @@ def validate_raw_capture_shard(path: Path) -> dict[str, object]:
         "particle_count": particle_count,
         "candidate_count": candidate_count,
         "original_indices": original.copy(),
+        "fragments": fragments,
     }
 
 
@@ -300,18 +362,88 @@ def finalize_raw_capture_directory(
     if np.unique(expected).size != expected.size:
         raise CompactCaptureError("expected original identities overlap across halves")
 
-    observed = np.concatenate([item["original_indices"] for item in inventory])
-    if np.unique(observed).size != observed.size:
-        raise CompactCaptureError("raw capture duplicates an original identity across shards")
+    fragments_by_identity = {}
+    for item in inventory:
+        half = int(item["half"])
+        for fragment in item["fragments"]:
+            key = (half, int(fragment["original_index"]))
+            fragments_by_identity.setdefault(key, []).append(fragment)
+    observed_by_half = {
+        half: np.asarray(
+            sorted(original for candidate_half, original in fragments_by_identity if candidate_half == half),
+            dtype=np.int64,
+        )
+        for half in (1, 2)
+    }
+    observed = np.concatenate([observed_by_half[1], observed_by_half[2]])
     if not np.array_equal(np.sort(observed), np.sort(expected)):
         raise CompactCaptureError("raw capture identity set is incomplete or unexpected")
     for half in (1, 2):
-        half_shards = [item["original_indices"] for item in inventory if int(item["half"]) == half]
-        if not half_shards:
+        observed_half = observed_by_half[half]
+        if observed_half.size == 0:
             raise CompactCaptureError(f"raw capture has no half-{half} shards")
-        observed_half = np.concatenate(half_shards)
         if not np.array_equal(np.sort(observed_half), np.sort(expected_by_half[half])):
             raise CompactCaptureError(f"raw capture half-{half} identity set is incomplete or unexpected")
+
+    multipart_particle_count = 0
+    for (half, original_index), fragments in fragments_by_identity.items():
+        fragments.sort(key=lambda fragment: fragment["fragment_index"])
+        declared_fragment_counts = {fragment["fragment_count"] for fragment in fragments}
+        declared_candidate_counts = {fragment["candidate_count"] for fragment in fragments}
+        local_indices = {fragment["local_index"] for fragment in fragments}
+        summary_hashes = {fragment["summary_sha256"] for fragment in fragments}
+        if (
+            declared_fragment_counts != {len(fragments)}
+            or len(declared_candidate_counts) != 1
+            or len(local_indices) != 1
+            or len(summary_hashes) != 1
+        ):
+            raise CompactCaptureError(
+                f"raw capture particle fragments disagree for half={half} original={original_index}"
+            )
+        if [fragment["fragment_index"] for fragment in fragments] != list(range(len(fragments))):
+            raise CompactCaptureError(
+                f"raw capture particle fragments are incomplete for half={half} original={original_index}"
+            )
+        expected_start = 0
+        for fragment in fragments:
+            if fragment["candidate_start"] != expected_start:
+                raise CompactCaptureError(
+                    f"raw capture particle fragments overlap/gap for half={half} original={original_index}"
+                )
+            expected_start = fragment["candidate_stop"]
+        full_candidate_count = next(iter(declared_candidate_counts))
+        if expected_start != full_candidate_count:
+            raise CompactCaptureError(
+                f"raw capture particle fragments do not close for half={half} original={original_index}"
+            )
+        if sum(fragment["partial_significant_count"] for fragment in fragments) != fragments[0]["significant_count"]:
+            raise CompactCaptureError(
+                f"raw capture significant count does not reproduce for half={half} original={original_index}"
+            )
+        significant_minima = [
+            fragment["partial_significant_min"]
+            for fragment in fragments
+            if fragment["partial_significant_min"] is not None
+        ]
+        if not significant_minima or min(significant_minima) != fragments[0]["significant_threshold"]:
+            raise CompactCaptureError(
+                f"raw capture significant threshold does not reproduce for half={half} original={original_index}"
+            )
+        if sum(bool(fragment["winner_in_fragment"]) for fragment in fragments) != 1:
+            raise CompactCaptureError(
+                f"raw capture winner fragment is missing/duplicated for half={half} original={original_index}"
+            )
+        partial_sum = sum(fragment["partial_posterior_sum_float64"] for fragment in fragments)
+        partial_abs_sum = sum(fragment["partial_posterior_abs_sum_float64"] for fragment in fragments)
+        unit_roundoff = np.finfo(np.float64).eps / 2.0
+        gamma_n = full_candidate_count * unit_roundoff / (1.0 - full_candidate_count * unit_roundoff)
+        sum_bound = gamma_n * partial_abs_sum + 8.0 * unit_roundoff * max(1.0, abs(partial_sum))
+        if abs(partial_sum - fragments[0]["posterior_sum_float64_exact"]) > sum_bound:
+            raise CompactCaptureError(
+                f"raw capture posterior sum does not reproduce for half={half} original={original_index}"
+            )
+        multipart_particle_count += int(len(fragments) > 1)
     manifest_lines = [f"{item['sha256']}  {Path(item['path']).name}" for item in inventory]
     manifest_payload = ("\n".join(manifest_lines) + "\n").encode("utf-8")
     manifest_path = capture_dir / "RAW_CAPTURE.sha256"
@@ -323,6 +455,8 @@ def finalize_raw_capture_directory(
         "iteration": int(expected_iteration),
         "shard_count": len(inventory),
         "particle_count": int(observed.size),
+        "particle_fragment_count": int(sum(len(item["fragments"]) for item in inventory)),
+        "multipart_particle_count": int(multipart_particle_count),
         "candidate_count": int(sum(item["candidate_count"] for item in inventory)),
         "halves": sorted({int(item["half"]) for item in inventory}),
     }
@@ -365,6 +499,61 @@ def require_chunked_capture_capacity(batch: int, rotations: int, translations: i
             f"{estimated_bytes} > {MAX_CHUNKED_CAPTURE_INPUT_BYTES} bytes"
         )
     return estimated_bytes
+
+
+def _build_particle_fragment_shards(candidate_offset: np.ndarray) -> list[list[tuple[int, int, int, int, int]]]:
+    """Plan bounded shards, splitting a single large particle across files.
+
+    Each descriptor is ``(row, candidate_start, candidate_stop,
+    fragment_index, fragment_count)`` where candidate coordinates are local to
+    the complete particle. Multipart particles intentionally occupy one shard
+    per fragment so identity duplication is explicit only across files.
+    """
+
+    if MAX_PARTICLES_PER_RAW_SHARD <= 0 or MAX_CANDIDATES_PER_RAW_SHARD <= 0:
+        raise CompactCaptureError("raw-shard particle/candidate bounds must be positive")
+    candidate_offset = np.asarray(candidate_offset, dtype=np.int64)
+    if (
+        candidate_offset.ndim != 1
+        or candidate_offset.size < 2
+        or candidate_offset[0] != 0
+        or np.any(np.diff(candidate_offset) <= 0)
+    ):
+        raise CompactCaptureError("cannot shard invalid particle candidate offsets")
+
+    shards = []
+    pending = []
+    pending_candidates = 0
+
+    def flush_pending() -> None:
+        nonlocal pending, pending_candidates
+        if pending:
+            shards.append(pending)
+            pending = []
+            pending_candidates = 0
+
+    for row, full_count_np in enumerate(np.diff(candidate_offset)):
+        full_count = int(full_count_np)
+        fragment_count = (full_count + MAX_CANDIDATES_PER_RAW_SHARD - 1) // MAX_CANDIDATES_PER_RAW_SHARD
+        if fragment_count > 1:
+            flush_pending()
+            for fragment_index in range(fragment_count):
+                start = fragment_index * MAX_CANDIDATES_PER_RAW_SHARD
+                stop = min(full_count, start + MAX_CANDIDATES_PER_RAW_SHARD)
+                shards.append([(row, start, stop, fragment_index, fragment_count)])
+            continue
+        if (
+            pending
+            and (
+                len(pending) >= MAX_PARTICLES_PER_RAW_SHARD
+                or pending_candidates + full_count > MAX_CANDIDATES_PER_RAW_SHARD
+            )
+        ):
+            flush_pending()
+        pending.append((row, 0, full_count, 0, 1))
+        pending_candidates += full_count
+    flush_pending()
+    return shards
 
 
 def maybe_capture_k1_production_bucket(
@@ -554,6 +743,9 @@ def maybe_capture_k1_production_bucket(
         "mstep_weight_semantics": (
             "not captured separately; use Ft/intermediate/contribution diagnostics for M-step weights"
         ),
+        "particle_fragmentation": (
+            "candidate-order contiguous fragments; full particle summary and rotation geometry repeated"
+        ),
         "capture_path": "post-production-normalization tap; does not select dump_this_bucket",
     }
     flat_candidate_arrays = {
@@ -571,32 +763,46 @@ def maybe_capture_k1_production_bucket(
         "rotation_parent_local": np.concatenate(rotation_parent_local),
         "rotation_parent_global": np.concatenate(rotation_parent_global),
     }
-    shard_ranges = []
-    start = 0
-    while start < batch:
-        stop = start
-        candidates = 0
-        while stop < batch and stop - start < MAX_PARTICLES_PER_RAW_SHARD:
-            next_count = int(candidate_offset[stop + 1] - candidate_offset[stop])
-            if next_count > MAX_CANDIDATES_PER_RAW_SHARD:
-                raise CompactCaptureError("one particle exceeds the raw-shard candidate bound")
-            if stop > start and candidates + next_count > MAX_CANDIDATES_PER_RAW_SHARD:
-                break
-            candidates += next_count
-            stop += 1
-        shard_ranges.append((start, stop))
-        start = stop
-
-    for shard_index, (row_start, row_stop) in enumerate(shard_ranges):
-        candidate_start = int(candidate_offset[row_start])
-        candidate_stop = int(candidate_offset[row_stop])
-        rotation_start = int(rotation_offset[row_start])
-        rotation_stop = int(rotation_offset[row_stop])
-        shard_original = original_indices[row_start:row_stop]
+    shard_fragments = _build_particle_fragment_shards(candidate_offset)
+    for shard_index, fragments in enumerate(shard_fragments):
+        row_indices = np.asarray([fragment[0] for fragment in fragments], dtype=np.int64)
+        particle_candidate_start = np.asarray([fragment[1] for fragment in fragments], dtype=np.int64)
+        particle_candidate_stop = np.asarray([fragment[2] for fragment in fragments], dtype=np.int64)
+        particle_fragment_index = np.asarray([fragment[3] for fragment in fragments], dtype=np.int32)
+        particle_fragment_count = np.asarray([fragment[4] for fragment in fragments], dtype=np.int32)
+        particle_candidate_count = np.asarray(
+            [candidate_offset[row + 1] - candidate_offset[row] for row in row_indices],
+            dtype=np.int64,
+        )
+        candidate_slices = [
+            slice(int(candidate_offset[row] + start), int(candidate_offset[row] + stop))
+            for row, start, stop, _, _ in fragments
+        ]
+        rotation_slices = [
+            slice(int(rotation_offset[row]), int(rotation_offset[row + 1]))
+            for row in row_indices
+        ]
+        shard_candidate_offset = np.concatenate(
+            [np.zeros(1, dtype=np.int64), np.cumsum(particle_candidate_stop - particle_candidate_start)]
+        )
+        shard_rotation_offset = np.concatenate(
+            [
+                np.zeros(1, dtype=np.int64),
+                np.cumsum([rotation_slice.stop - rotation_slice.start for rotation_slice in rotation_slices]),
+            ]
+        ).astype(np.int64, copy=False)
+        shard_original = original_indices[row_indices]
+        fragment_suffix = ""
+        if len(fragments) == 1 and int(particle_fragment_count[0]) > 1:
+            fragment_suffix = (
+                f"_frag{int(particle_fragment_index[0]):03d}"
+                f"of{int(particle_fragment_count[0]):03d}"
+            )
         path = capture_dir / (
             f"raw_k1_it{int(iteration):03d}_h{int(half)}_rank{rank:03d}_"
             f"call{call_index:06d}_shard{shard_index:03d}_"
-            f"p{int(shard_original.min()):05d}_{int(shard_original.max()) + 1:05d}.npz"
+            f"p{int(shard_original.min()):05d}_{int(shard_original.max()) + 1:05d}"
+            f"{fragment_suffix}.npz"
         )
         _atomic_npz(
             path,
@@ -608,31 +814,35 @@ def maybe_capture_k1_production_bucket(
             call_index=np.int64(call_index),
             shard_index=np.int32(shard_index),
             current_size=np.int32(-1 if current_size is None else current_size),
-            local_indices=local_indices[row_start:row_stop],
+            local_indices=local_indices[row_indices],
             original_indices=shard_original,
-            candidate_offset=candidate_offset[row_start : row_stop + 1] - candidate_start,
+            particle_candidate_start=particle_candidate_start,
+            particle_candidate_count=particle_candidate_count,
+            particle_fragment_index=particle_fragment_index,
+            particle_fragment_count=particle_fragment_count,
+            candidate_offset=shard_candidate_offset,
             **{
-                name: array[candidate_start:candidate_stop]
+                name: np.concatenate([array[candidate_slice] for candidate_slice in candidate_slices])
                 for name, array in flat_candidate_arrays.items()
             },
-            rotation_offset=rotation_offset[row_start : row_stop + 1] - rotation_start,
+            rotation_offset=shard_rotation_offset,
             **{
-                name: array[rotation_start:rotation_stop]
+                name: np.concatenate([array[rotation_slice] for rotation_slice in rotation_slices])
                 for name, array in flat_rotation_arrays.items()
             },
             fine_translations=translations,
             fine_translation_parent=translation_parent,
-            score_center=best_np[row_start:row_stop],
-            raw_log_z=log_z_np[row_start:row_stop],
-            pmax=pmax_np[row_start:row_stop],
-            posterior_sum_float32_order=posterior_sum_float32_order[row_start:row_stop],
-            posterior_sum_float64_exact=posterior_sum_float64_exact[row_start:row_stop],
-            posterior_sum_float32_bound=posterior_sum_float32_bound[row_start:row_stop],
-            significant_count=significant_count[row_start:row_stop],
-            significant_threshold=significant_threshold[row_start:row_stop],
-            winner_candidate_index=winner_candidate_index[row_start:row_stop],
-            winner_pose_matrix=winner_pose[row_start:row_stop],
-            winner_translation=winner_translation[row_start:row_stop],
+            score_center=best_np[row_indices],
+            raw_log_z=log_z_np[row_indices],
+            pmax=pmax_np[row_indices],
+            posterior_sum_float32_order=posterior_sum_float32_order[row_indices],
+            posterior_sum_float64_exact=posterior_sum_float64_exact[row_indices],
+            posterior_sum_float32_bound=posterior_sum_float32_bound[row_indices],
+            significant_count=significant_count[row_indices],
+            significant_threshold=significant_threshold[row_indices],
+            winner_candidate_index=winner_candidate_index[row_indices],
+            winner_pose_matrix=winner_pose[row_indices],
+            winner_translation=winner_translation[row_indices],
         )
     return int(batch)
 
