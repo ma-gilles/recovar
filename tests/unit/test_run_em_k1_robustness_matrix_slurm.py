@@ -59,6 +59,7 @@ def test_relion_replay_stars_are_selected_as_matched_pairs(tmp_path):
     proc, scratch = _dry_run_launcher(tmp_path, case="15")
 
     assert proc.returncode == 0, proc.stdout
+    assert "command not found" not in proc.stdout
     scripts = list((scratch / "jobs").glob("em_k1_matrix_15_*.sh"))
     assert len(scripts) == 1
     text = scripts[0].read_text()
@@ -106,6 +107,8 @@ def test_autonomous_trajectory_uses_only_iter0_boundary_and_never_emits_replay_l
     assert "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE=0" in submission
     config_text = next((scratch / "jobs").glob("em_k1_matrix_15_*.sh")).read_text()
     assert '"trajectory_mode": "autonomous"' in config_text
+    summary_text = (scratch / "jobs" / "em_k1_matrix_summary.sh").read_text()
+    assert '"Trajectory mode: autonomous"' in summary_text
 
 
 def test_noctf_simulator_cases_use_sanitized_relion_ctf_by_default(tmp_path):

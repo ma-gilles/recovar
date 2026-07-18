@@ -1470,7 +1470,7 @@ out_json.write_text(
 lines = [
     "# EM K=1 Robustness Matrix",
     "",
-    "Trajectory mode: `${TRAJECTORY_MODE}`",
+    "Trajectory mode: ${TRAJECTORY_MODE}",
     "",
     "| # | Case | N | Grid | Noise | Poses | Stress | Job | Status | RECOVAR wall s | RECOVAR GT FSC AUC | RECOVAR GT corr | RELION GT FSC AUC |",
     "|---:|---|---:|---:|---|---|---|---:|---|---:|---:|---:|---:|",
