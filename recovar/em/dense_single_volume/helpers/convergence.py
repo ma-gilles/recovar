@@ -1120,6 +1120,7 @@ def update_refinement_state(
     previous_translations_pixel: Optional[np.ndarray] = None,
     current_classes: Optional[np.ndarray] = None,
     previous_classes: Optional[np.ndarray] = None,
+    ave_pmax_override: Optional[float] = None,
     voxel_size_angstrom: float = 1.0,
     update_sampling: bool = True,
     check_convergence_now: bool = True,
@@ -1166,6 +1167,10 @@ def update_refinement_state(
         are provided, ``current_changes_optimal_classes`` is the number of
         particles whose hard class changed.  When omitted, single-class refine
         keeps the historical zero class-change behavior.
+    ave_pmax_override : float, optional
+        Authoritative optimizer scalar. When supplied, use this instead of the
+        raw mean of ``max_posterior_per_image``. Split-half RELION uses half
+        1's retained-mass-normalized Pmax and broadcasts it to both halves.
     voxel_size_angstrom : float, default 1.0
         Pixel size in angstroms. Required for the offset metric.
     update_sampling : bool, default True
@@ -1228,7 +1233,11 @@ def update_refinement_state(
 
     # --- Compute Pmax ---
     ave_pmax = state.ave_Pmax
-    if max_posterior_per_image is not None:
+    if ave_pmax_override is not None:
+        ave_pmax = float(ave_pmax_override)
+        if not np.isfinite(ave_pmax) or ave_pmax < 0.0 or ave_pmax > 1.0 + 1e-6:
+            raise ValueError(f"ave_pmax_override must be a probability, got {ave_pmax}")
+    elif max_posterior_per_image is not None:
         ave_pmax = compute_ave_Pmax(max_posterior_per_image)
 
     # --- Resolution stall detection ---

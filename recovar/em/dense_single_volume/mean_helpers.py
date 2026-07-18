@@ -130,6 +130,36 @@ def _class_weights_from_posterior(class_posterior_per_half, n_classes: int, prev
     return weights / float(np.sum(weights))
 
 
+def _relion_optimizer_average_pmax(max_posterior_per_half, normalization_mass_per_half=None):
+    """Return RELION's optimizer Pmax scalar and its normalization mass.
+
+    In split-half refinement, RELION computes this independently per half,
+    then broadcasts half 1's scalar for shared scheduling. Class3D divides
+    half 1's Pmax sum by that half's retained M-step posterior mass
+    (``sum(wsum_model.pdf_class)``). The concatenated array is still returned
+    for per-particle diagnostics.
+    """
+
+    per_half = [np.asarray(pmax, dtype=np.float32).reshape(-1) for pmax in max_posterior_per_half]
+    if not per_half:
+        raise ValueError("RELION average Pmax requires at least one half-set")
+    combined = np.concatenate(per_half, axis=0)
+    numerator = float(np.sum(per_half[0], dtype=np.float64))
+    if normalization_mass_per_half is None:
+        denominator = float(per_half[0].size)
+    else:
+        half1_mass = normalization_mass_per_half[0]
+        if half1_mass is None:
+            raise ValueError("RELION average Pmax requires half-1 M-step posterior mass")
+        denominator = float(np.asarray(half1_mass, dtype=np.float64))
+    if not np.isfinite(denominator) or denominator <= 0.0:
+        raise ValueError(f"RELION average-Pmax denominator must be finite and positive, got {denominator}")
+    average = numerator / denominator
+    if not np.isfinite(average) or average < 0.0 or average > 1.0 + 1e-6:
+        raise ValueError(f"RELION average Pmax must be a probability, got {average}")
+    return combined, float(average), denominator
+
+
 def _combined_noise_stats(noise_stats_per_half):
     """Sum half-set noise sufficient statistics before RELION Class3D normalization."""
 

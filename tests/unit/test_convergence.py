@@ -636,6 +636,24 @@ class TestUpdateRefinementState:
         )
         assert updated.iteration == 1
 
+    def test_explicit_average_pmax_overrides_raw_particle_mean(self):
+        state = self._make_base_state()
+        assignments = np.zeros(4, dtype=np.int32)
+
+        updated = update_refinement_state(
+            state,
+            assignments,
+            None,
+            10,
+            1,
+            np.zeros((1, 2), dtype=np.float32),
+            new_resolution=4.5,
+            max_posterior_per_image=np.asarray([0.1, 0.2, 0.3, 0.4]),
+            ave_pmax_override=0.75,
+        )
+
+        assert updated.ave_Pmax == pytest.approx(0.75)
+
     def test_resolution_improvement_resets_stall(self):
         state = self._make_base_state(
             current_resolution=5.0,

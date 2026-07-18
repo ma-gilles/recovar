@@ -173,6 +173,31 @@ from recovar.em.sampling import (
 pytestmark = pytest.mark.unit
 
 
+def test_relion_optimizer_average_pmax_uses_kclass_mstep_mass():
+    pmax = [np.asarray([0.1, 0.2]), np.asarray([0.3])]
+    class_mstep_mass = [np.asarray([0.9, 0.08]), np.asarray([1.8, 0.15])]
+
+    combined, average, denominator = iteration_loop_module._relion_optimizer_average_pmax(
+        pmax,
+        [np.sum(class_mstep_mass[0]), np.sum(class_mstep_mass[1])],
+    )
+
+    np.testing.assert_allclose(combined, [0.1, 0.2, 0.3])
+    assert denominator == pytest.approx(0.98)
+    assert average == pytest.approx(0.3 / 0.98)
+    assert average != pytest.approx(float(np.mean(combined)))
+
+
+def test_relion_optimizer_average_pmax_uses_k1_mstep_mass():
+    _, average, denominator = iteration_loop_module._relion_optimizer_average_pmax(
+        [np.asarray([0.1, 0.2]), np.asarray([0.3])],
+        [1.8, 0.9],
+    )
+
+    assert denominator == 1.8
+    assert average == pytest.approx(0.3 / 1.8)
+
+
 def test_diagnostic_float64_pass2_iteration_selector(monkeypatch):
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
     assert iteration_loop_module._diagnostic_float64_pass2_matches(4) is False
@@ -9906,14 +9931,15 @@ class TestRelionModeSmokeTest:
         rotations,
         translations,
     ):
-        """ave_Pmax should aggregate the engine's posterior maxima across both half-sets."""
+        """ave_Pmax should use half 1's engine posterior maxima, as RELION MPI does."""
         init_noise = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
         init_tau = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
 
         relion_rotations, _ = iteration_loop_module._relion_rotation_grid_float32(2)
         expected_per_half = []
+        expected_mass_per_half = []
         for dataset in half_datasets:
-            _, _, _, _, stats, _ = run_em(
+            _, _, _, _, stats, noise_stats = run_em(
                 dataset,
                 init_volume,
                 init_tau,
@@ -9934,7 +9960,8 @@ class TestRelionModeSmokeTest:
                 accumulate_noise=True,
             )
             expected_per_half.append(np.asarray(stats.max_posterior_per_image))
-        expected_ave_pmax = float(np.mean(np.concatenate(expected_per_half)))
+            expected_mass_per_half.append(float(np.asarray(noise_stats.sumw)))
+        expected_ave_pmax = float(np.sum(expected_per_half[0], dtype=np.float64) / expected_mass_per_half[0])
 
         result = refine_single_volume(
             half_datasets,
@@ -9955,6 +9982,10 @@ class TestRelionModeSmokeTest:
 
         assert result["ave_Pmax_trajectory"] == pytest.approx(
             [expected_ave_pmax],
+            abs=1e-6,
+        )
+        assert result["ave_Pmax_denominator_trajectory"] == pytest.approx(
+            [expected_mass_per_half[0]],
             abs=1e-6,
         )
         assert result["convergence_state"].ave_Pmax == pytest.approx(
@@ -12197,6 +12228,8 @@ class TestRelionModeSmokeTest:
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
             recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
             counts = counts_by_half[half_idx]
+            pmax_value = 0.6 if half_idx == 0 else 0.2
+            retained_fraction = 0.8 if half_idx == 0 else 0.9
             assert counts.shape == (n_images,)
             per_class_stats = tuple(
                 RelionStats(
@@ -12212,7 +12245,7 @@ class TestRelionModeSmokeTest:
                     wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                     wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                     wsum_sigma2_offset=0.0,
-                    sumw=float(n_images) / float(n_classes),
+                    sumw=retained_fraction * float(n_images) / float(n_classes),
                 )
                 for _ in range(n_classes)
             )
@@ -12228,7 +12261,7 @@ class TestRelionModeSmokeTest:
                 stats=RelionStats(
                     log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
                     best_log_score_per_image=jnp.zeros(n_images, dtype=jnp.float32),
-                    max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
+                    max_posterior_per_image=jnp.full(n_images, pmax_value, dtype=jnp.float32),
                     rotation_posterior_sums=jnp.ones(np.asarray(coarse_rotations).shape[0], dtype=jnp.float32),
                 ),
                 per_class_stats=per_class_stats,
@@ -12237,12 +12270,17 @@ class TestRelionModeSmokeTest:
                     wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                     wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                     wsum_sigma2_offset=0.0,
-                    sumw=float(n_images),
+                    sumw=retained_fraction * float(n_images),
                 ),
                 best_pose_rotations=jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (n_images, 3, 3)),
                 best_pose_translations=jnp.zeros((n_images, 2), dtype=jnp.float32),
                 best_pose_rotation_ids=jnp.zeros(n_images, dtype=jnp.int32),
                 significant_counts=jnp.asarray(counts, dtype=jnp.int32),
+                class_mstep_posterior_sums=jnp.full(
+                    n_classes,
+                    retained_fraction * float(n_images) / float(n_classes),
+                    dtype=jnp.float32,
+                ),
             )
 
         monkeypatch.setattr(refine_mod, "_build_firstiter_cc_pass2_grids", fake_build_pass2_grids)
@@ -12279,6 +12317,22 @@ class TestRelionModeSmokeTest:
         )
         assert np.isnan(result["acc_rot_trajectory"][0])
         assert np.isinf(result["convergence_state"].acc_rot)
+        assert result["ave_Pmax_trajectory"] == pytest.approx([0.75], abs=1e-6)
+        assert result["ave_Pmax_denominator_trajectory"] == pytest.approx(
+            [0.8 * half_datasets[0].n_units],
+            abs=1e-6,
+        )
+        assert result["convergence_state"].ave_Pmax == pytest.approx(0.75, abs=1e-6)
+        np.testing.assert_allclose(
+            result["pmax_per_image_history"][0],
+            np.concatenate(
+                [
+                    np.full(half_datasets[0].n_units, 0.6),
+                    np.full(half_datasets[1].n_units, 0.2),
+                ]
+            ),
+            atol=1e-6,
+        )
 
     def test_approx_acc_rot_convergence_policy_guards_confident_prelocal_runs(self, monkeypatch):
         import recovar.em.dense_single_volume.iteration_loop as refine_mod

@@ -119,6 +119,7 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _normalize_class_log_priors,
     _normalize_initial_means,
     _normalize_noise_variance_per_half,
+    _relion_optimizer_average_pmax,
     _reconstruct_and_postprocess_means,
     _reconstruct_volume_eager,
     compute_unregularized_halfmaps_and_align_signs,
@@ -4539,6 +4540,7 @@ def _run_relion_iteration_loop(
     previous_data_vs_prior_for_scheduling = None
     healpix_order_trajectory = []
     ave_Pmax_trajectory = []
+    ave_Pmax_denominator_trajectory = []
     pmax_per_image_history = []
     # Per-iter per-shell trajectories for RELION parity diff (added for the
     # 2026-04 audit). noise_radial_trajectory[i] = sigma2_noise per shell after
@@ -6520,6 +6522,7 @@ def _run_relion_iteration_loop(
                 "data_vs_prior_trajectory": data_vs_prior_trajectory,
                 "healpix_order_trajectory": healpix_order_trajectory,
                 "ave_Pmax_trajectory": ave_Pmax_trajectory,
+                "ave_Pmax_denominator_trajectory": ave_Pmax_denominator_trajectory,
                 "pmax_per_image_history": pmax_per_image_history,
                 "noise_radial_trajectory": noise_radial_trajectory,
                 "noise_radial_per_half_trajectory": noise_radial_per_half_trajectory,
@@ -7333,12 +7336,31 @@ def _run_relion_iteration_loop(
             raise RuntimeError(
                 "RELION mode expected per-image posterior maxima from the EM engine",
             )
-        combined_max_posterior = np.concatenate(
-            [np.asarray(pmax, dtype=np.float32) for pmax in max_posterior_per_half],
-            axis=0,
+        if k_class_enabled:
+            pmax_normalization_mass_per_half = [
+                float(np.sum(np.asarray(mass, dtype=np.float64), dtype=np.float64))
+                for mass in class_posterior_per_half
+            ]
+        else:
+            pmax_normalization_mass_per_half = [
+                None if stats is None else float(np.asarray(stats.sumw, dtype=np.float64))
+                for stats in noise_stats_per_half
+            ]
+        combined_max_posterior, ave_pmax, ave_pmax_denominator = _relion_optimizer_average_pmax(
+            max_posterior_per_half,
+            pmax_normalization_mass_per_half,
         )
-        ave_pmax = float(np.mean(combined_max_posterior))
+        if k_class_enabled:
+            logger.info(
+                "Class3D optimizer Pmax: value=%.9f numerator=%.9f "
+                "half1_mstep_posterior_mass=%.9f half1_particle_count=%d",
+                ave_pmax,
+                float(np.sum(np.asarray(max_posterior_per_half[0]), dtype=np.float64)),
+                ave_pmax_denominator,
+                int(np.asarray(max_posterior_per_half[0]).size),
+            )
         ave_Pmax_trajectory.append(ave_pmax)
+        ave_Pmax_denominator_trajectory.append(ave_pmax_denominator)
         pmax_per_image_history.append(combined_max_posterior.copy())
 
         # --- Track per-image best assignments for convergence detection ---
@@ -7838,6 +7860,7 @@ def _run_relion_iteration_loop(
             previous_translations_pixel=previous_translations_pixel_combined,
             current_classes=current_combined_classes,
             previous_classes=previous_combined_classes,
+            ave_pmax_override=ave_pmax,
             voxel_size_angstrom=float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
             update_sampling=not native_sampling_boundary,
             check_convergence_now=not native_sampling_boundary,
@@ -8200,6 +8223,7 @@ def _run_relion_iteration_loop(
             "data_vs_prior_trajectory": data_vs_prior_trajectory,
             "healpix_order_trajectory": healpix_order_trajectory,
             "ave_Pmax_trajectory": ave_Pmax_trajectory,
+            "ave_Pmax_denominator_trajectory": ave_Pmax_denominator_trajectory,
             "pmax_per_image_history": pmax_per_image_history,
             "noise_radial_trajectory": noise_radial_trajectory,
             "noise_radial_per_half_trajectory": noise_radial_per_half_trajectory,
@@ -9698,6 +9722,7 @@ def _run_relion_iteration_loop(
         "data_vs_prior_trajectory": data_vs_prior_trajectory,
         "healpix_order_trajectory": healpix_order_trajectory,
         "ave_Pmax_trajectory": ave_Pmax_trajectory,
+        "ave_Pmax_denominator_trajectory": ave_Pmax_denominator_trajectory,
         "pmax_per_image_history": pmax_per_image_history,
         "noise_radial_trajectory": noise_radial_trajectory,
         "noise_radial_per_half_trajectory": noise_radial_per_half_trajectory,

@@ -3551,6 +3551,11 @@ def main():
                 pmax_by_image = np.full(int(n_images), np.nan, dtype=np.float32)
                 pmax_by_image[pmax_half_order_indices] = pmax_half_order
                 save_dict[f"pmax_per_image_by_image_iter_{i:03d}"] = pmax_by_image
+    if "ave_Pmax_denominator_trajectory" in result:
+        save_dict["ave_Pmax_denominator_trajectory"] = np.asarray(
+            result["ave_Pmax_denominator_trajectory"],
+            dtype=np.float64,
+        )
     if result.get("final_all_data_fsc") is not None:
         save_dict["fsc_final_all_data"] = np.asarray(result["final_all_data_fsc"], dtype=np.float32)
     if "final_all_data_ran" in result:
