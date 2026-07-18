@@ -5498,3 +5498,91 @@ Current evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_mpi_preflight_reaudit5_20260718T071842Z/INDEPENDENT_MPI_RESOURCE_REAUDIT_HANDOFF.md` (SHA-256 `5cad7f67056715f1a0ddc304f3ab5f5759fbc9e23b73acd002b74a2f2ff7a050`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_case11_83825ae_prepared_20260718T033237Z/runs/robustness_projector_abc_11338849`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_restartfix_030f4a0b_20260717T211041Z/provenance/audit_cache_isolation_retry_11338696.txt`
+
+## 2026-07-18 frozen projector causal result and corrected robustness launch
+
+The final frozen-boundary package passed independent review after adding exact
+top-level jobs allowlists, compiled-artifact rejection and tamper canaries,
+schema-v1 rejection, and direct-array shape/dtype/nonfinite gates.  Slurm job
+`11339646` then completed the serial control-A/control-B/RELION-projector
+experiment on one A100 in `00:15:22`.  All three arms consumed byte-identical
+sealed physical-iteration-3 scoring state: maps, tau2/FSC/Pmax, poses,
+translations, image and scale corrections, per-half direction priors and
+noise, translation sigmas, schedule, and perturbation.  The only intervention
+was the projector manifest and data.
+
+The RELION-projector effect is decisively above the observed A/A reduction
+envelope.  Control versus intervention posterior-TV maxima are
+`7.260852e-4` versus `0.9958911`, and mean posterior TV is `3.296e-5` versus
+`2.0831e-3`.  Centered-score RMS mean is `1.668e-4` for A/A and `1.2711e-2`
+for the intervention.  The maximum accumulator differences grow from
+`2.8760e-5` to `4.8182e-2` for `Ft_y` and from `8.7137e-8` to `1.19397e-4`
+for `Ft_ctf`.  The 34 changed winners among 10,000 particles are diagnostic
+only and are not an acceptance gate.
+
+The one-step maps remain close but are not inside the A/A envelope.  On shells
+1--60, intervention FSC-AUC is `0.9997790883` for half 1,
+`0.9999384005` for half 2, and `0.9998936311` for the merged map, while the
+maximum A/A loss is `1.6587e-10`.  This proves a repeat-stable projector-path
+mismatch at the frozen boundary; it does not yet identify operand generation,
+geometry/index-coefficient generation, reduction order, or precision as the
+source.  The next diagnostic is aggregate common-contribution replay in
+float32/original order, float32/canonical order, and float64/complex128
+canonical order.  Serial particle-by-particle debugging is not warranted
+unless the aggregate comparison exposes a systematic subgroup.
+
+The robustness repair preserves two distinct identity namespaces.  Compact
+RELION captures use live data-STAR row IDs, whereas RECOVAR replay uses the
+sealed source-name/source-row mapping; a bijective crosswalk and shuffled-order
+canary prevent conflation.  Deep capture now selects RELION rows 0--15 and
+fails before RECOVAR unless both live halves are present.  The corrected
+validator passes the preserved 3,000-particle capture and all 111,680
+five-field candidate UIDs.  After package, input, 128 embedded-hash, and exact
+three-rank/four-thread scheduler gates passed independently, case-11 job
+`11340226` was submitted.  Cases 18 and 21 remain gated on its sealed pass,
+and case 22 remains gated on all three predecessor passes.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_frozen_it2_projector_abc_prepared_20260718T052910Z/runs/frozen_projector_abc_11339646/analysis/frozen_projector_abc_audit.json` (SHA-256 `64c64507b5d0b66b9ab31aa3d2d95dbca879aea99a38480a44e2d34f50c72ee7`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_frozen_it2_projector_abc_prepared_20260718T052910Z/runs/frozen_projector_abc_11339646/analysis/frozen_projector_abc_shellwise_fsc.npz` (SHA-256 `7f2b634ab7f501bd8f83bbb256fafd0f84797cbae849f0ea5707e2b31768d181`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_identity_namespace_repair_20260718T075900Z/ROBUSTNESS_IDENTITY_NAMESPACE_REPAIR_HANDOFF.md` (SHA-256 `15df8ab1a74a10e8ede8c7fad6da3c8fc19c914972db6aca7b77ee87787e6960`)
+
+## 2026-07-18 K=4 mixed reduction-mode oracle invalidation
+
+The cache-isolated strict audit `11338696` completed and intentionally exited
+nonzero because the scientific gate failed.  Control topology, restart
+coupling, input anchors, schedules, convergence, and finalization all pass.
+Direct class-map parity improves through physical iteration 12, where minimum
+matched FSC-AUC is `0.99441`, then collapses at iteration 13 to `0.94597` and
+ends at `0.93221`.  GT FSC-AUC remains close, so the failed direct trajectory
+must not be relabeled as numerical noise or accepted by relaxing thresholds.
+
+The collapse is caused by an invalid spliced RELION oracle.  The primary
+iterations 1--11 launcher passed `--dont_combine_weights_via_disc`, selecting
+the network segmented-pack path.  Its interrupted-run rescue continued from
+iteration 11 without that parser-only option.  RELION does not persist the
+choice as optimiser state, so iterations 12--15 reverted to the default
+via-disc full-weight combination.  The source signature is exact:
+`MlWsumModel::pack` derives `nr_groups` from the one-entry optics noise array,
+so the network path combines only the optics prefix and leaves remaining scale
+statistics follower-local, whereas the via-disc path combines all scale
+groups.  RECOVAR correctly replayed the original follower-local mode.  It
+therefore matches both followers' serialized iteration-11 scale vector exactly
+before iteration-12 scoring, produces the original-mode follower-local scale
+state after the M-step, and necessarily diverges from the mixed-mode RELION
+iteration-12 model before maps split at iteration 13.
+
+The mixed oracle and its failed strict audit remain immutable evidence.  A
+controlled continuation from the exact iteration-11 boundary is being
+regenerated with `--dont_combine_weights_via_disc` restored to verify the
+existing emulation.  Separately, the authoritative GUI/default target must use
+a clean end-to-end default via-disc RELION run and the corresponding RECOVAR
+mode; it must not splice reduction modes or infer continuation behavior from
+the invalid trajectory.  Map acceptance remains shellwise FSC/FSC-AUC only.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_restartfix_030f4a0b_20260717T211041Z/strict_k4_acceptance/k4_strict_acceptance_bundle.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_restartfix_030f4a0b_20260717T211041Z/strict_k4_acceptance/k4_fsc_trajectory.json` (SHA-256 `e284cba863eb909de4cbc4f8fd66cd6e35bc003dce9d79e07cf1cb2580e727d6`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_restartfix_030f4a0b_20260717T211041Z/strict_k4_acceptance/k4_fsc_trajectory_shellwise.npz` (SHA-256 `48cb5a2f4be19bbc87f66c0f32702aba13f5cb740d8967e033e6ecc148609cf9`)
