@@ -19,6 +19,7 @@ import pytest
 
 from scripts import run_full_refinement
 from scripts.run_full_refinement import (
+    _attach_relion_projector_capture,
     _build_replay_iteration_overrides,
     _default_refinement_subsets,
     _format_replay_mean_for_log,
@@ -52,6 +53,122 @@ def test_complete_initial_particle_state_is_autorefine_only():
     assert _replay_complete_initial_particle_state(1, 0)
     assert not _replay_complete_initial_particle_state(4, 0)
     assert not _replay_complete_initial_particle_state(1, 1)
+
+
+def test_attach_relion_projector_capture_targets_exact_replay_slot(tmp_path, monkeypatch):
+    capture_dir = tmp_path / "score_dump"
+    capture_dir.mkdir()
+    manifest = capture_dir / "iter3_VALIDATED_SHA256SUMS"
+    manifest.write_text("sealed\n")
+    relion_dir = tmp_path / "relion"
+    relion_dir.mkdir()
+    model = relion_dir / "run_it003_half1_model.star"
+    model.write_text("model\n")
+    expected_state = {
+        "projector_half_by_half": [
+            np.zeros((1, 87, 87, 44), dtype=np.complex64),
+            np.zeros((1, 87, 87, 44), dtype=np.complex64),
+        ],
+        "projector_r_max_by_half": [21, 21],
+        "current_size": 42,
+        "padding_factor": 2,
+        "volume_shape": [256, 256, 256],
+        "n_classes": 1,
+        "source_manifest_sha256": "a" * 64,
+    }
+    observed = {}
+
+    def fake_model_metadata(path):
+        observed["model_path"] = Path(path)
+        return {"current_image_size": 42}
+
+    def fake_build(capture_root, **kwargs):
+        observed["capture_root"] = Path(capture_root)
+        observed.update(kwargs)
+        return expected_state
+
+    monkeypatch.setattr("recovar.em.sampling.read_relion_model_metadata", fake_model_metadata)
+    monkeypatch.setattr(run_full_refinement, "build_relion_projector_replay_state", fake_build)
+    overrides = [{"slot": index} for index in range(4)]
+
+    slot, state = _attach_relion_projector_capture(
+        overrides,
+        capture_dir=capture_dir,
+        manifest_path=manifest,
+        capture_iteration=3,
+        init_relion_iteration=0,
+        relion_replay_dir=relion_dir,
+        volume_shape=(256, 256, 256),
+        n_classes=1,
+    )
+
+    assert slot == 2
+    assert state is expected_state
+    assert overrides[2]["relion_projector_state"] is expected_state
+    assert "relion_projector_state" not in overrides[1]
+    assert observed == {
+        "model_path": model,
+        "capture_root": capture_dir.resolve(),
+        "manifest_path": manifest.resolve(),
+        "iteration": 3,
+        "current_size": 42,
+        "volume_shape": (256, 256, 256),
+        "n_classes": 1,
+    }
+
+
+def test_attach_relion_projector_capture_rejects_unrepresented_iteration(tmp_path):
+    with pytest.raises(ValueError, match="outside the configured replay trajectory"):
+        _attach_relion_projector_capture(
+            [{}],
+            capture_dir=tmp_path,
+            manifest_path=tmp_path / "manifest",
+            capture_iteration=3,
+            init_relion_iteration=0,
+            relion_replay_dir=tmp_path,
+            volume_shape=(8, 8, 8),
+            n_classes=1,
+        )
+
+
+def test_attach_relion_projector_capture_rejects_late_restart(tmp_path):
+    with pytest.raises(ValueError, match="uninterrupted cold-start trajectory"):
+        _attach_relion_projector_capture(
+            [{}],
+            capture_dir=tmp_path,
+            manifest_path=tmp_path / "manifest",
+            capture_iteration=3,
+            init_relion_iteration=2,
+            relion_replay_dir=tmp_path,
+            volume_shape=(8, 8, 8),
+            n_classes=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ([{}, None, {}], "has no state override"),
+        (
+            [{}, {"relion_projector_state": object()}, {}],
+            "is already populated",
+        ),
+    ],
+)
+def test_attach_relion_projector_capture_rejects_nonatomic_slot(
+    tmp_path, overrides, message
+):
+    with pytest.raises(ValueError, match=message):
+        _attach_relion_projector_capture(
+            overrides,
+            capture_dir=tmp_path,
+            manifest_path=tmp_path / "manifest",
+            capture_iteration=2,
+            init_relion_iteration=0,
+            relion_replay_dir=tmp_path,
+            volume_shape=(8, 8, 8),
+            n_classes=1,
+        )
 
 
 def test_relion_mpi_autorefine_scoring_noise_uses_rank1_broadcast():

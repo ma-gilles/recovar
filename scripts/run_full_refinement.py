@@ -37,6 +37,9 @@ import numpy as np
 
 from recovar import utils
 from recovar.core import fourier_transform_utils as ftu
+from recovar.em.dense_single_volume.helpers.relion_projector_capture import (
+    build_relion_projector_replay_state,
+)
 from recovar.em.dense_single_volume.relion_replay import (
     read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
 )
@@ -1040,6 +1043,85 @@ def _build_replay_iteration_overrides(
     return overrides
 
 
+def _attach_relion_projector_capture(
+    replay_iteration_overrides,
+    *,
+    capture_dir,
+    manifest_path,
+    capture_iteration,
+    init_relion_iteration,
+    relion_replay_dir,
+    volume_shape,
+    n_classes,
+):
+    """Attach one sealed live projector to its exact numbered replay slot."""
+
+    from recovar.em.sampling import read_relion_model_metadata
+
+    capture_iteration = int(capture_iteration)
+    init_relion_iteration = int(init_relion_iteration)
+    if init_relion_iteration != 0:
+        raise ValueError(
+            "captured RELION projector replay currently requires an uninterrupted "
+            "cold-start trajectory (init_relion_iteration=0); a later jump would "
+            "reapply MPI process-start noise semantics without the sealed follower state"
+        )
+    replay_slot = capture_iteration - init_relion_iteration - 1
+    if replay_iteration_overrides is None:
+        raise ValueError("captured RELION projector requires trajectory replay overrides")
+    if replay_slot < 0 or replay_slot >= len(replay_iteration_overrides):
+        raise ValueError(
+            "captured RELION projector iteration is outside the configured replay trajectory: "
+            f"capture_iteration={capture_iteration}, init_relion_iteration={init_relion_iteration}, "
+            f"replay_slots={len(replay_iteration_overrides)}"
+        )
+    existing = replay_iteration_overrides[replay_slot]
+    if existing is None:
+        raise ValueError(f"captured RELION projector replay slot {replay_slot} has no state override")
+    if "relion_projector_state" in existing:
+        raise ValueError(f"captured RELION projector replay slot {replay_slot} is already populated")
+
+    relion_replay_dir = Path(relion_replay_dir).expanduser().resolve()
+    model_candidates = (
+        relion_replay_dir / f"run_it{capture_iteration:03d}_half1_model.star",
+        relion_replay_dir / f"run_it{capture_iteration:03d}_model.star",
+    )
+    model_path = next((path for path in model_candidates if path.is_file()), None)
+    if model_path is None:
+        raise ValueError(
+            "captured RELION projector has no matching replay control model: "
+            + " or ".join(str(path) for path in model_candidates)
+        )
+    model_metadata = read_relion_model_metadata(model_path)
+    current_size = int(model_metadata["current_image_size"])
+    if current_size <= 0:
+        raise ValueError(f"invalid captured-projector replay current size: {current_size}")
+
+    capture_dir = Path(capture_dir).expanduser().resolve()
+    manifest_path = Path(manifest_path).expanduser().resolve()
+    projector_state = build_relion_projector_replay_state(
+        capture_dir,
+        manifest_path=manifest_path,
+        iteration=capture_iteration,
+        current_size=current_size,
+        volume_shape=tuple(int(value) for value in volume_shape),
+        n_classes=int(n_classes),
+    )
+    replay_iteration_overrides[replay_slot] = {
+        **existing,
+        "relion_projector_state": projector_state,
+    }
+    logger.info(
+        "STRICT-PARITY: attached captured RELION Projector::data iteration=%d "
+        "replay_slot=%d current_size=%d manifest=%s",
+        capture_iteration,
+        replay_slot,
+        current_size,
+        projector_state["source_manifest_sha256"],
+    )
+    return replay_slot, projector_state
+
+
 def _load_init_previous_best_poses_npz(path, pose_iter="last"):
     """Load previous best poses from a RECOVAR refinement_results.npz file.
 
@@ -1525,6 +1607,29 @@ def main():
             "remain strict consistency guards. Example: 11 for a rescue whose "
             "first continued expectation is numbered iteration 12."
         ),
+    )
+    parser.add_argument(
+        "--relion-projector-capture-dir",
+        default=None,
+        help=(
+            "Directory containing a validated live RELION Projector::data capture. "
+            "Requires --perturb_replay_relion_dir and "
+            "--relion-projector-capture-iteration."
+        ),
+    )
+    parser.add_argument(
+        "--relion-projector-capture-manifest",
+        default=None,
+        help=(
+            "Validated SHA-256 manifest for --relion-projector-capture-dir. "
+            "Defaults to iterN_VALIDATED_SHA256SUMS inside that directory."
+        ),
+    )
+    parser.add_argument(
+        "--relion-projector-capture-iteration",
+        type=int,
+        default=None,
+        help="Numbered RELION expectation iteration represented by the live capture.",
     )
     parser.add_argument(
         "--perturb-replay-restart-provenance",
@@ -2624,6 +2729,54 @@ def main():
             "not replaying run_it000 input poses/corrections",
         )
 
+    relion_projector_replay_slot = None
+    relion_projector_source_manifest_sha256 = None
+    relion_projector_capture_dir_resolved = None
+    relion_projector_capture_manifest_resolved = None
+    if args.relion_projector_capture_dir is not None:
+        if args.perturb_replay_relion_dir is None:
+            raise SystemExit(
+                "--relion-projector-capture-dir requires --perturb_replay_relion_dir"
+            )
+        if args.relion_projector_capture_iteration is None:
+            raise SystemExit(
+                "--relion-projector-capture-dir requires "
+                "--relion-projector-capture-iteration"
+            )
+        capture_dir = Path(args.relion_projector_capture_dir).expanduser().resolve()
+        capture_manifest = (
+            Path(args.relion_projector_capture_manifest).expanduser().resolve()
+            if args.relion_projector_capture_manifest is not None
+            else capture_dir
+            / f"iter{int(args.relion_projector_capture_iteration)}_VALIDATED_SHA256SUMS"
+        )
+        try:
+            relion_projector_replay_slot, projector_state = _attach_relion_projector_capture(
+                replay_iteration_overrides,
+                capture_dir=capture_dir,
+                manifest_path=capture_manifest,
+                capture_iteration=args.relion_projector_capture_iteration,
+                init_relion_iteration=args.init_relion_iteration,
+                relion_replay_dir=args.perturb_replay_relion_dir,
+                volume_shape=ds.volume_shape,
+                n_classes=args.n_classes,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            raise SystemExit(f"Invalid captured RELION projector replay: {exc}") from exc
+        relion_projector_source_manifest_sha256 = projector_state[
+            "source_manifest_sha256"
+        ]
+        relion_projector_capture_dir_resolved = capture_dir
+        relion_projector_capture_manifest_resolved = capture_manifest
+    elif (
+        args.relion_projector_capture_manifest is not None
+        or args.relion_projector_capture_iteration is not None
+    ):
+        raise SystemExit(
+            "--relion-projector-capture-manifest/iteration require "
+            "--relion-projector-capture-dir"
+        )
+
     effective_tau2_fudge, tau2_fudge_source = _resolve_tau2_fudge(
         args.n_classes,
         args.tau2_fudge,
@@ -2830,6 +2983,20 @@ def main():
             "perturb_replay_restart_provenance_sha256": (
                 perturb_replay_restart_provenance_sha256
             ),
+            "relion_projector_replay_slot": relion_projector_replay_slot,
+            "relion_projector_source_manifest_sha256": (
+                relion_projector_source_manifest_sha256
+            ),
+            "relion_projector_capture_dir": (
+                None
+                if relion_projector_capture_dir_resolved is None
+                else str(relion_projector_capture_dir_resolved)
+            ),
+            "relion_projector_capture_manifest": (
+                None
+                if relion_projector_capture_manifest_resolved is None
+                else str(relion_projector_capture_manifest_resolved)
+            ),
         }
         profile_path = Path(args.output) / "local_search_profile_only.json"
         profile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2891,6 +3058,22 @@ def main():
         ),
         "perturb_replay_restart_provenance_sha256": np.asarray(
             perturb_replay_restart_provenance_sha256 or ""
+        ),
+        "relion_projector_replay_slot": np.int64(
+            -1 if relion_projector_replay_slot is None else relion_projector_replay_slot
+        ),
+        "relion_projector_source_manifest_sha256": np.asarray(
+            relion_projector_source_manifest_sha256 or ""
+        ),
+        "relion_projector_capture_dir": np.asarray(
+            ""
+            if relion_projector_capture_dir_resolved is None
+            else str(relion_projector_capture_dir_resolved)
+        ),
+        "relion_projector_capture_manifest": np.asarray(
+            ""
+            if relion_projector_capture_manifest_resolved is None
+            else str(relion_projector_capture_manifest_resolved)
         ),
     }
     if relion_follower_scale_replay is not None:
@@ -3337,6 +3520,20 @@ def main():
             ),
             "perturb_replay_restart_provenance_sha256": (
                 perturb_replay_restart_provenance_sha256
+            ),
+            "relion_projector_replay_slot": relion_projector_replay_slot,
+            "relion_projector_source_manifest_sha256": (
+                relion_projector_source_manifest_sha256
+            ),
+            "relion_projector_capture_dir": (
+                None
+                if relion_projector_capture_dir_resolved is None
+                else str(relion_projector_capture_dir_resolved)
+            ),
+            "relion_projector_capture_manifest": (
+                None
+                if relion_projector_capture_manifest_resolved is None
+                else str(relion_projector_capture_manifest_resolved)
             ),
         }
         with ledger_path.open("w", encoding="utf-8") as f:
