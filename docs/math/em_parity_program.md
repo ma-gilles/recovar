@@ -5675,15 +5675,18 @@ are only `0.903035`/`0.903937` with RECOVAR grid correction off and
 a regularized-versus-unfiltered naming error, and the `0.995` acceptance gate
 remains unchanged.
 
-The earliest concrete defect is accumulator ownership across RELION's
-low-resolution half join. At convergence RELION calls
+A concrete product-ownership defect occurs across RELION's low-resolution
+half join. At convergence RELION calls
 `writeTemporaryDataAndWeightArrays()` before
 `joinTwoHalvesAtLowResolution()`. It later reconstructs each
 `run_half*_class001_unfil.mrc` by rereading those saved pre-join BPref arrays.
 RECOVAR's diagnostic/output path instead used the post-join arrays. The final
 loop now preserves explicit pre-join numerator/weight arrays for unfiltered
 half output while retaining post-join arrays for final FSC, tau2, and joined
-reconstruction. A fresh fail-closed rerun must pass the same `0.995` gate
+reconstruction. This is not yet claimed as the sole cause: the failed curves
+plateau near `0.85` (grid off) or `0.80` (grid on) across shells 30--60, well
+beyond the low-resolution join support. A fresh fail-closed rerun must pass the
+same `0.995` gate, or classify the remaining reconstruction/source difference,
 before robustness cases 18, 21, and 22 are released.
 
 Evidence:
