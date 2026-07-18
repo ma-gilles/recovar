@@ -18,6 +18,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from recovar.em.dense_single_volume.iteration_loop import (
+    _assert_frozen_scoring_state_unchanged,
+    _frozen_scoring_state_arrays,
+)
 from scripts import run_full_refinement
 from scripts.run_full_refinement import (
     _assert_frozen_replay_slots_projector_only,
@@ -31,8 +35,8 @@ from scripts.run_full_refinement import (
     _load_initial_noise_cache,
     _load_native_group_ids_per_half,
     _load_relion_it000_model_stars,
-    _make_frozen_boundary_noise_variance,
     _load_replay_group_particles,
+    _make_frozen_boundary_noise_variance,
     _parse_relion_cli_ini_high,
     _parse_relion_tau2_fudge,
     _read_relion_single_optics_sigma2_noise,
@@ -44,10 +48,6 @@ from scripts.run_full_refinement import (
     _resolve_tau2_fudge,
     _save_initial_noise_cache,
     _select_authoritative_group_particles,
-)
-from recovar.em.dense_single_volume.iteration_loop import (
-    _assert_frozen_scoring_state_unchanged,
-    _frozen_scoring_state_arrays,
 )
 
 FIXTURE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0")
