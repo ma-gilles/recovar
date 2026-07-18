@@ -483,6 +483,7 @@ def apply_iter_replay_overrides(
     class_direction_prior_order_per_half: list,
     global_direction_prior_per_half: list,
     global_direction_prior_order_per_half: list,
+    preserve_existing_direction_prior: bool = False,
 ) -> ReplayOverrideResult:
     """Apply per-iteration replay overrides to the in-flight iteration state.
 
@@ -693,7 +694,7 @@ def apply_iter_replay_overrides(
                 )
                 cs = _relion_cs
 
-        if iteration > 0:
+        if iteration > 0 and not preserve_existing_direction_prior:
             _prior_iter = init_relion_iteration + iteration
             if iter_replay_override is None or iter_replay_override.get("direction_prior") is None:
                 for _half_idx in range(2):
@@ -777,6 +778,11 @@ def apply_iter_replay_overrides(
                             float(_relion_direction_prior.max()),
                             int(np.sum(_relion_direction_prior == 0)),
                         )
+        elif preserve_existing_direction_prior:
+            logger.info(
+                "Replay control: preserving sealed existing direction priors; "
+                "external model prior reload suppressed"
+            )
 
     if iter_replay_override is not None:
         _replay_projector_state = _parse_relion_projector_replay_state(

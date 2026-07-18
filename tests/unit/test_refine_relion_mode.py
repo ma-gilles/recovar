@@ -567,6 +567,83 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
     np.testing.assert_allclose(replay_grid, state_grid, rtol=0.0, atol=1e-6)
 
 
+def test_frozen_replay_explicitly_suppresses_external_direction_prior_reload(
+    monkeypatch,
+    tmp_path,
+):
+    state = SimpleNamespace(
+        healpix_order=3,
+        max_healpix_order=3,
+        auto_local_healpix_order=4,
+        do_local_search=False,
+        sigma_rot=0.0,
+        sigma_psi=0.0,
+        translation_range=3.0,
+        translation_step=1.0,
+    )
+    (tmp_path / "run_it002_half1_model.star").write_text("sealed control\n")
+    for half in (1, 2):
+        (tmp_path / f"run_it001_half{half}_model.star").write_text("must not read\n")
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "read_relion_sampling_metadata",
+        lambda path: {
+            "random_perturbation": 0.0,
+            "perturbation_factor": 0.0,
+            "healpix_order": 3,
+            "psi_step": 7.5,
+            "offset_range": 3.0,
+            "offset_step": 1.0,
+        },
+    )
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "read_relion_model_metadata",
+        lambda path: {"current_image_size": 8},
+    )
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "read_relion_direction_prior",
+        lambda path: pytest.fail(f"unexpected direction-prior reload: {path}"),
+    )
+    priors = [
+        np.full(768, 1.0 / 768.0, dtype=np.float32),
+        np.full(768, 1.0 / 768.0, dtype=np.float32),
+    ]
+
+    iteration_loop_module.apply_iter_replay_overrides(
+        iter_replay_override={"relion_projector_state": None},
+        perturb_replay_relion_dir=str(tmp_path),
+        init_relion_iteration=0,
+        iteration=1,
+        state=state,
+        cs=8,
+        cryo=SimpleNamespace(voxel_size=1.0),
+        k_class_enabled=False,
+        n_classes=1,
+        relion_half_inputs=iteration_loop_module._RelionHalfInputState.from_initial_values(
+            previous_best_translations=None,
+            previous_best_rotation_eulers=None,
+            image_corrections=None,
+            scale_corrections=None,
+        ),
+        previous_best_rotations=[None, None],
+        noise_variance_per_half=[jnp.ones(IMAGE_SIZE), jnp.ones(IMAGE_SIZE)],
+        noise_variance=jnp.ones(IMAGE_SIZE),
+        previous_noise_radial_per_half=[None, None],
+        previous_noise_radial=None,
+        current_sigma_offset_angstrom=10.0,
+        class_direction_prior_per_half=[None, None],
+        class_direction_prior_order_per_half=[None, None],
+        global_direction_prior_per_half=priors,
+        global_direction_prior_order_per_half=[3, 3],
+        preserve_existing_direction_prior=True,
+    )
+
+    np.testing.assert_array_equal(priors[0], np.full(768, 1.0 / 768.0, dtype=np.float32))
+    np.testing.assert_array_equal(priors[1], np.full(768, 1.0 / 768.0, dtype=np.float32))
+
+
 def _captured_projector_override(projector):
     return {
         "projector_half_by_half": [projector, projector.copy()],

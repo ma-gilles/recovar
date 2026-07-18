@@ -736,6 +736,7 @@ def _build_replay_iteration_overrides(
     particle_names=None,
     include_initial_state=False,
     strict=False,
+    process_start_noise_broadcast=True,
 ):
     """Build per-iter replay overrides keyed on recovar iteration index.
 
@@ -1010,7 +1011,11 @@ def _build_replay_iteration_overrides(
                 # RELION performs this broadcast once in MPI initialise().
                 # Later uninterrupted iterations update each follower's noise
                 # independently, so only replay slot 0 is process-start state.
-                split_random_halves=(recovar_iter == 0 and model_paths[0] != model_paths[1]),
+                split_random_halves=(
+                    bool(process_start_noise_broadcast)
+                    and recovar_iter == 0
+                    and model_paths[0] != model_paths[1]
+                ),
             )
         if direction_prior_h1 is not None and direction_prior_h2 is not None:
             override_k["direction_prior"] = [direction_prior_h1, direction_prior_h2]
@@ -1172,6 +1177,62 @@ def _complete_relion_numbered_state_iterations(relion_dir):
         if sampling.is_file() and (all(path.is_file() for path in half_models) or shared_model.is_file()):
             complete.append(iteration)
     return sorted(complete)
+
+
+def _build_frozen_replay_slots(max_iter: int) -> list[dict]:
+    """Return projector-only replay slots for a sealed frozen restart.
+
+    A restarted process must not reinterpret its local slot 0 as RELION's
+    process-start iteration 0.  In particular, doing so broadcasts half-1
+    sigma2_noise over half 2.  Every physical-iteration scoring primitive is
+    instead supplied through the sealed frozen-boundary initial state; only a
+    separately sealed projector may be attached to these slots later.
+    """
+
+    count = int(max_iter) + 1
+    if count < 2:
+        raise ValueError("frozen replay requires at least one numbered iteration slot")
+    return [{} for _ in range(count)]
+
+
+def _assert_frozen_replay_slots_projector_only(
+    replay_slots: list[dict],
+    *,
+    projector_slot: int | None = None,
+) -> None:
+    allowed = {"relion_projector_state"}
+    for slot_index, slot in enumerate(replay_slots):
+        if slot is None:
+            raise ValueError(f"frozen replay slot {slot_index} is missing")
+        unexpected = sorted(set(slot) - allowed)
+        if unexpected:
+            raise ValueError(
+                f"frozen replay slot {slot_index} is not projector-only: {unexpected}"
+            )
+    if projector_slot is not None:
+        projector_slot = int(projector_slot)
+        if projector_slot < 0 or projector_slot >= len(replay_slots):
+            raise ValueError(f"frozen projector slot {projector_slot} is out of range")
+        projector_slots = [
+            index
+            for index, slot in enumerate(replay_slots)
+            if "relion_projector_state" in slot
+        ]
+        if projector_slots != [projector_slot]:
+            raise ValueError(
+                "frozen replay must contain exactly one projector in the physical "
+                f"numbered slot {projector_slot}; got {projector_slots}"
+            )
+        nonempty_other_slots = [
+            index
+            for index, slot in enumerate(replay_slots)
+            if index != projector_slot and slot
+        ]
+        if nonempty_other_slots:
+            raise ValueError(
+                "frozen replay unused/final slots must be empty; got "
+                f"{nonempty_other_slots}"
+            )
 
 
 def _attach_relion_projector_capture(
@@ -3032,27 +3093,34 @@ def main():
     # diagnostics.
     replay_iteration_overrides = None
     if args.perturb_replay_relion_dir is not None:
-        replay_normcorr = _resolve_replay_normcorr(
-            args.perturb_replay_relion_dir,
-            args.replay_relion_normcorr,
-        )
-        replay_iteration_overrides = _build_replay_iteration_overrides(
-            args.perturb_replay_relion_dir,
-            half1_idx,
-            half2_idx,
-            # Numbered expectation k consumes the state written before it, so
-            # iterations 1..N use run_it000..run_it{N-1}.  After convergence,
-            # RELION's unnumbered all-data expectation consumes the state just
-            # written by iteration N and therefore needs run_it{N} as the
-            # extra final-only override.
-            int(args.max_iter),
-            ds_voxel=ds.voxel_size,
-            ds_grid=ds.grid_size,
-            include_normcorr=replay_normcorr,
-            init_relion_iteration=args.init_relion_iteration,
-            particle_names=our_names,
-            strict=True,
-        )
+        if frozen_boundary is not None:
+            replay_iteration_overrides = _build_frozen_replay_slots(args.max_iter)
+            logger.info(
+                "Diagnostic frozen restart: local replay slot 0 is projector-only; "
+                "sealed per-half scoring state suppresses process-start noise broadcast"
+            )
+        else:
+            replay_normcorr = _resolve_replay_normcorr(
+                args.perturb_replay_relion_dir,
+                args.replay_relion_normcorr,
+            )
+            replay_iteration_overrides = _build_replay_iteration_overrides(
+                args.perturb_replay_relion_dir,
+                half1_idx,
+                half2_idx,
+                # Numbered expectation k consumes the state written before it, so
+                # iterations 1..N use run_it000..run_it{N-1}.  After convergence,
+                # RELION's unnumbered all-data expectation consumes the state just
+                # written by iteration N and therefore needs run_it{N} as the
+                # extra final-only override.
+                int(args.max_iter),
+                ds_voxel=ds.voxel_size,
+                ds_grid=ds.grid_size,
+                include_normcorr=replay_normcorr,
+                init_relion_iteration=args.init_relion_iteration,
+                particle_names=our_names,
+                strict=True,
+            )
 
     final_replay_override = None
     final_replay_reference_maps = None
@@ -3214,6 +3282,11 @@ def main():
             "--relion-projector-capture-manifest/iteration require "
             "--relion-projector-capture-dir"
         )
+    if frozen_boundary is not None:
+        _assert_frozen_replay_slots_projector_only(
+            replay_iteration_overrides,
+            projector_slot=relion_projector_replay_slot,
+        )
 
     effective_tau2_fudge, tau2_fudge_source = _resolve_tau2_fudge(
         args.n_classes,
@@ -3333,9 +3406,13 @@ def main():
         **_refine_sampling_kwargs(args, init_healpix_order),
         max_healpix_order=effective_max_healpix_order,
         init_translation_sigma_angstrom=(
-            relion_init_sigma_offset_angstrom
-            if relion_init_sigma_offset_angstrom is not None
-            else args.offset_sigma_angstrom
+            frozen_boundary.translation_sigma_angstrom_per_half
+            if frozen_boundary is not None
+            else (
+                relion_init_sigma_offset_angstrom
+                if relion_init_sigma_offset_angstrom is not None
+                else args.offset_sigma_angstrom
+            )
         ),
         particle_diameter_ang=particle_diameter_ang,
         tau2_fudge=effective_tau2_fudge,
@@ -3391,6 +3468,11 @@ def main():
         init_scale_corrections=(
             None if frozen_boundary is None else frozen_boundary.scale_corrections
         ),
+        init_direction_prior=(
+            None if frozen_boundary is None else frozen_boundary.direction_prior_per_half
+        ),
+        assert_initial_scoring_state_immutable=frozen_boundary is not None,
+        preserve_initial_direction_prior=frozen_boundary is not None,
         skip_final_iteration=bool(args.skip_final_iteration),
         save_intermediates_dir=args.save_intermediates_dir,
         save_intermediates_skip_unregularized=bool(args.save_intermediates_skip_unregularized),
@@ -3684,6 +3766,28 @@ def main():
         save_dict["convergence_ave_Pmax"] = np.float64(state.ave_Pmax)
         save_dict["convergence_healpix_order"] = np.int32(state.healpix_order)
         save_dict["convergence_has_converged"] = np.bool_(state.has_converged)
+    frozen_scoring_hashes = result.get("frozen_initial_scoring_state_sha256")
+    if frozen_scoring_hashes is not None:
+        frozen_scoring_fields = sorted(frozen_scoring_hashes)
+        save_dict["frozen_scoring_state_field_names"] = np.asarray(
+            frozen_scoring_fields,
+            dtype=str,
+        )
+        save_dict["frozen_scoring_state_array_sha256"] = np.asarray(
+            [frozen_scoring_hashes[field]["sha256"] for field in frozen_scoring_fields],
+            dtype=str,
+        )
+        save_dict["frozen_scoring_state_array_dtypes"] = np.asarray(
+            [frozen_scoring_hashes[field]["dtype"] for field in frozen_scoring_fields],
+            dtype=str,
+        )
+        save_dict["frozen_scoring_state_array_shapes_json"] = np.asarray(
+            [
+                json.dumps(frozen_scoring_hashes[field]["shape"], separators=(",", ":"))
+                for field in frozen_scoring_fields
+            ],
+            dtype=str,
+        )
 
     # Save K-class metadata when available (n_classes>1).
     if result.get("class_weights") is not None:
