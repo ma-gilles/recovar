@@ -4011,3 +4011,83 @@ The pre-registered no-launch plan is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it23_full10k_score_posterior_9b3c737c_20260717T231518Z/plan/RUN_PLAN.md`.
 Intermediate comparisons remain exact-array/score/posterior diagnostics;
 map-quality acceptance remains shellwise FSC/FSC-AUC only, never correlation.
+
+# 2026-07-18: autonomous matrix exposes final-boundary and schedule subfamilies
+
+- The autonomous current-head K=1 matrix root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_current_head_autonomous_full34_fulltraj_paired_5592a009_20260718T135707Z`.
+  Completed strict passes currently include cases 11, 15, 16, 17, 19, 21,
+  and 27. Case 27, with 70% extreme outliers, passes all ten numbered maps
+  (minimum merged FSC-AUC `0.999983260752`), intermediate topology, and final
+  merged FSC-AUC `0.996766096548`; its RECOVAR-minus-RELION merged GT FSC-AUC
+  is `+0.010652529734`. High outlier fraction alone therefore does not explain
+  the residual failures.
+- Cases 12, 13, 14, 24, and 25 have matching numbered topology but fail only
+  the final product. Their final merged cross-engine FSC-AUC values are
+  `0.955972641` (original case 12), `0.993514345`, `0.994251441`,
+  `0.993444834`, and `0.993954551`. Case 14's value is from the fixed no-CTF
+  rerun below. Do not weaken the `0.995` final gate; use controlled final-only
+  substitutions and aggregate score/posterior diagnostics.
+- Case 13's final-only factorial selects inherited poses/translations. A
+  native repeat remains near `0.99349`; RELION final sampling/sigma remains
+  near `0.99348`; substituting only the RELION last-numbered poses/translations
+  raises final merged FSC-AUC to `0.996893352093`. Repeat variation is about
+  `2.6e-5`, more than 100 times smaller than the pose rescue. The affected
+  pose state is a roughly 1--2% tail rather than a broad shift.
+- Case 12's strict four-arm factorial is under
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case12_final_map_factorial_f7091660_20260718T105300Z`.
+  Native repeat and RELION-reference-only arms pass the numbered repeat gate
+  and finish at `0.955972997009` and `0.966164947053`. Pose-only finishes at
+  `0.986305085277` but its independent numbered repeat misses the deliberately
+  tight `0.99999` control gate. The combined pose-plus-reference arm passes
+  the numbered gate at `0.999999996372`, passes intermediate topology, and
+  raises final merged FSC-AUC to `0.9952237096`. Thus both inherited pose and
+  half-reference state are causal in this very-high-noise final boundary.
+- Case 18 has a real resolution-schedule split. At iteration 11 shell 34,
+  RELION FSC/DVP is `0.494797/0.979401`, while RECOVAR is
+  `0.501733541/1.006958246`. That changes iteration-12 current size from 98 to
+  100, advances RECOVAR to Healpix 6 one iteration early, and explains the
+  later one-numbered-iteration convergence mismatch. Fix the earlier map/FSC
+  state, not the downstream convergence counters.
+- Case 20's iteration-8 size split is likewise real. At iteration 7 shell 16,
+  RELION FSC/DVP is `0.500753/1.003016`; RECOVAR is
+  `0.499684155/0.998737395`, producing current size 52 versus 50. Replaying
+  the saved RECOVAR BPref in production float32, canonical/reverse order, and
+  canonical/reverse float64 changes FSC by only `5.32e-8`, roughly 17,900
+  times smaller than the engine gap. This excludes downstream reduction order,
+  precision, growth formula, and quantization; trace upstream operands,
+  geometry, or accumulated search state at aggregate/distribution level.
+
+# 2026-07-18: identity-CTF expected accuracy fixed; final gap remains separate
+
+- Commit `422ec992` reads RELION's authoritative `rlnDoCorrectCtf`, maps the
+  data-STAR CTF rows into expected-accuracy order, and avoids constructing a
+  RELION `CTF` when correction is disabled. Previously the simulator's
+  identity sentinel `Q0=-1` reached `CTF::setValues` and threw, leaving
+  infinite expected accuracy, runaway Healpix refinement, and no convergence.
+- The authoritative fixed trajectory root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case14_noctf_accuracy_fix_25a9837d_20260718T150519Z/case14_small_noctf_3k_g128_white_noise3_bf80_local_gpu2_authoritative_20260718T152451Z`.
+  RELION and RECOVAR now both converge at numbered iteration 11; intermediate
+  topology and particle distributions pass; all numbered maps pass with
+  minimum merged FSC-AUC `0.999592170105`. The final merged FSC-AUC remains
+  `0.994251441431`, with GT delta `+0.017572017703`, so the targeted no-CTF bug
+  is closed while case 14 remains in the common final-boundary workstream.
+- Combined focused validation is 94 passing unit/binding tests. A deliberately
+  stale pre-fix shared binding fails the new negative-Q0 regression, while the
+  rebuilt binding used by the trajectory passes; retain this provenance
+  distinction in future test reports.
+
+# 2026-07-18: corrected autonomous K=4 first fails at iteration 8
+
+- The corrected autonomous K=4 100k root is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z`.
+  Iterations 1--7 pass strict schedule, dispatch, convergence, class matching,
+  and per-class FSC gates; iteration 7's minimum matched class FSC-AUC is
+  `0.995999436847`.
+- Iteration 8 is the first formal failure. Identity-matched class FSC-AUC is
+  `[0.996440627563, 0.995262998531, 0.994601216732, 0.996054978465]`.
+  Schedule, current size, resolution, dispatch ownership, priors, convergence,
+  and class matching remain exact. RECOVAR displays average Pmax `0.9230`
+  versus RELION particle mean `0.92286475478` (display `0.9229`). Localize the
+  iteration-7-to-8 class-3 and near-tie aggregate score/posterior state; do not
+  lower the `0.995` map gate.
