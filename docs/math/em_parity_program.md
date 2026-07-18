@@ -5434,7 +5434,10 @@ Evidence:
 ## 2026-07-18 frozen-boundary v2 and robustness pre-acceptance findings
 
 The frozen iteration-2 restart was rebuilt with an incompatible v2 schema that
-owns the complete physical iteration-3 scoring state.  Poses, per-particle
+sealed a selected reconstructed-projector iteration-3 diagnostic state.  The
+historical text overstated this as the full physical-iteration state; that claim is
+withdrawn and superseded by the narrower schema-v3 fixed-arm contract below.
+It never established identity to RELION's full in-memory iteration. Poses, per-particle
 image and scale corrections, per-half direction priors and noise, translation
 sigmas, maps, tau2/FSC/Pmax, sampling, perturbation, and convergence state are
 sealed.  Replay slot zero is projector-only, external direction-prior reload
@@ -5905,3 +5908,11 @@ failure. Before iteration 8, old and corrected Pmax values take the same active
 current-size branches and no convergence topology splits. Independent
 score/posterior, backprojection, and float64/order classification therefore
 continues; FSC/FSC-AUC remains the map-quality gate.
+## Fixed-arm frozen-boundary diagnostic
+
+The reusable fail-closed fixed real-10076 K=1 physical-it2 diagnostic arm,
+deterministic finalizer, source ownership, and captured-Iref lineage contract are documented in
+[`frozen_boundary_v3.md`](frozen_boundary_v3.md). Schema v2 remains historical
+and cannot support the fixed-arm claim. Schema v3 seals an explicitly
+enumerated reconstructed-projector diagnostic state; it does not claim identity
+to RELION's full in-memory physical iteration.

@@ -11,6 +11,7 @@ See ``docs/math/relion_refinement_algorithm.md`` for the full algorithm map.
 
 import gc
 import hashlib
+import json
 import logging
 import os
 import re
@@ -1823,6 +1824,7 @@ def _score_kclass_firstiter_cc_pass2(
     update_em_kwargs_image_batch_size: bool = False,
     bpref_device_signature_active: bool = False,
     debug_iteration: int | None = None,
+    coarse_rotation_ids=None,
 ):
     """RELION iter-1 ``--firstiter_cc`` K-class adaptive 2-pass dispatch.
 
@@ -1866,6 +1868,11 @@ def _score_kclass_firstiter_cc_pass2(
         float(state.translation_step),
         random_perturbation,
         return_mstep_rotations=True,
+        **(
+            {"coarse_rotation_ids": coarse_rotation_ids}
+            if coarse_rotation_ids is not None
+            else {}
+        ),
     )
     n_classes = int(np.asarray(mean).shape[0]) if np.asarray(mean).ndim >= 2 else 1
     firstiter_significance_image_batch_size = None
@@ -2182,6 +2189,7 @@ def _score_half_dense(
     return_best_pose_details: bool = True,
     bpref_device_signature_active: bool = False,
     debug_iteration: int | None = None,
+    coarse_rotation_ids=None,
 ) -> HalfScoreResult:
     """Dense (non-local-search) E+M scoring for one half-set.
 
@@ -2306,6 +2314,7 @@ def _score_half_dense(
                 update_em_kwargs_image_batch_size=firstiter_updates_em_kwargs_ibs,
                 bpref_device_signature_active=bpref_device_signature_active,
                 debug_iteration=debug_iteration,
+                coarse_rotation_ids=coarse_rotation_ids,
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
         elif firstiter_coarse_current_size is not None and int(state.adaptive_oversampling) > 0:
@@ -2327,6 +2336,11 @@ def _score_half_dense(
                 float(state.translation_step),
                 random_perturbation,
                 return_mstep_rotations=True,
+                **(
+                    {"coarse_rotation_ids": coarse_rotation_ids}
+                    if coarse_rotation_ids is not None
+                    else {}
+                ),
             )
             n_trans_fine_for_collapse = int(fine_trans.shape[0])
             adaptive_em_kwargs = dict(em_kwargs)
@@ -2534,6 +2548,11 @@ def _score_half_dense(
                 float(state.translation_step),
                 random_perturbation,
                 return_mstep_rotations=True,
+                **(
+                    {"coarse_rotation_ids": coarse_rotation_ids}
+                    if coarse_rotation_ids is not None
+                    else {}
+                ),
             )
             n_trans_fine_for_collapse = int(fine_trans.shape[0])
             fine_rotations_for_pose = fine_rot
@@ -2634,6 +2653,11 @@ def _score_half_dense(
                 adaptive_os_local,
                 float(state.translation_step),
                 random_perturbation,
+                **(
+                    {"coarse_rotation_ids": coarse_rotation_ids}
+                    if coarse_rotation_ids is not None
+                    else {}
+                ),
             )[2]
         fine_rotation_eulers_for_pose = None
         if fine_rotations_for_pose is not None and _parity_dump.is_active():
@@ -3498,10 +3522,14 @@ def _frozen_scoring_state_arrays(
     *,
     means,
     mean_variance,
+    mean_variance_per_half=None,
     relion_half_inputs,
     noise_variance_per_half,
     current_sigma_offset_angstrom_per_half,
     global_direction_prior_per_half,
+    experiment_datasets=None,
+    sealed_sampling_state=None,
+    sealed_scoring_context=None,
 ):
     """Materialize every K=1 scoring primitive owned by a frozen restart."""
 
@@ -3539,10 +3567,21 @@ def _frozen_scoring_state_arrays(
                 )
             arrays[f"{field_name}.half{half_index + 1}"] = np.ascontiguousarray(array).copy()
 
-    tau2 = np.asarray(mean_variance)
-    if not np.issubdtype(tau2.dtype, np.number) or not np.all(np.isfinite(tau2)):
-        raise RuntimeError("Frozen scoring-state mean_variance must be a finite numeric array")
-    arrays["mean_variance"] = np.ascontiguousarray(tau2).copy()
+    if mean_variance_per_half is None:
+        tau2 = np.asarray(mean_variance)
+        if not np.issubdtype(tau2.dtype, np.number) or not np.all(np.isfinite(tau2)):
+            raise RuntimeError("Frozen scoring-state mean_variance must be a finite numeric array")
+        arrays["mean_variance"] = np.ascontiguousarray(tau2).copy()
+    else:
+        if len(mean_variance_per_half) != 2:
+            raise RuntimeError("Frozen scoring-state ownership requires two mean_variance arrays")
+        for half_index, value in enumerate(mean_variance_per_half):
+            tau2 = np.asarray(value)
+            if not np.issubdtype(tau2.dtype, np.number) or not np.all(np.isfinite(tau2)):
+                raise RuntimeError(
+                    f"Frozen scoring-state mean_variance half {half_index + 1} must be finite numeric"
+                )
+            arrays[f"mean_variance.half{half_index + 1}"] = np.ascontiguousarray(tau2).copy()
 
     sigma_pair = np.asarray(current_sigma_offset_angstrom_per_half, dtype=np.float64)
     if sigma_pair.shape != (2,) or not np.all(np.isfinite(sigma_pair)):
@@ -3550,6 +3589,32 @@ def _frozen_scoring_state_arrays(
             "Frozen scoring-state ownership requires two finite translation sigmas"
         )
     arrays["translation_sigma_angstrom_per_half"] = sigma_pair
+    if experiment_datasets is not None:
+        if len(experiment_datasets) != 2:
+            raise RuntimeError("Frozen scoring-state ownership requires two datasets")
+        for half_index, dataset in enumerate(experiment_datasets):
+            ctf_params = np.asarray(dataset.CTF_params)
+            if not np.issubdtype(ctf_params.dtype, np.number) or not np.all(np.isfinite(ctf_params)):
+                raise RuntimeError(
+                    f"Frozen scoring-state CTF parameters half {half_index + 1} must be finite numeric"
+                )
+            arrays[f"ctf_params.half{half_index + 1}"] = np.ascontiguousarray(ctf_params).copy()
+    if sealed_sampling_state is not None:
+        for key, value in sorted(sealed_sampling_state.items()):
+            if isinstance(value, np.ndarray):
+                array = np.asarray(value)
+            elif isinstance(value, (bool, int, float, np.bool_, np.integer, np.floating)):
+                array = np.asarray(value)
+            else:
+                array = np.frombuffer(str(value).encode("utf-8"), dtype=np.uint8)
+            arrays[f"sampling.{key}"] = np.ascontiguousarray(array).copy()
+    if sealed_scoring_context is not None:
+        context_bytes = json.dumps(
+            sealed_scoring_context,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        arrays["sealed_scoring_context_json"] = np.frombuffer(context_bytes, dtype=np.uint8).copy()
     return arrays
 
 
@@ -3874,6 +3939,92 @@ def _apply_relion_healpix_order_oracle(state, target_order, *, iteration_number)
     return state
 
 
+def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom):
+    """Construct scorer grids directly from a schema-v3 captured sampling state."""
+
+    state = sealed_sampling_state
+    directions = np.asarray(state["directions_ipix"], dtype=np.int64)
+    rot = np.asarray(state["rot_angles_deg"], dtype=np.float64)
+    tilt = np.asarray(state["tilt_angles_deg"], dtype=np.float64)
+    psi = np.asarray(state["psi_angles_deg"], dtype=np.float64)
+    if directions.ndim != 1 or directions.size < 1:
+        raise ValueError("sealed sampling directions must be a nonempty vector")
+    if rot.shape != directions.shape or tilt.shape != directions.shape or psi.ndim != 1 or psi.size < 1:
+        raise ValueError("sealed sampling Euler component shapes are inconsistent")
+    source_eulers = np.stack(
+        [
+            np.tile(rot, psi.size),
+            np.tile(tilt, psi.size),
+            np.repeat(psi, directions.size),
+        ],
+        axis=1,
+    )
+    from recovar.em.sampling import _relion_mstep_rotations_from_eulers
+
+    rotations = _relion_mstep_rotations_from_eulers(source_eulers)
+    eulers = source_eulers.astype(np.float32)
+    voxel_size = float(voxel_size_angstrom)
+    if not np.isfinite(voxel_size) or voxel_size <= 0.0:
+        raise ValueError("sealed sampling requires a finite positive voxel size")
+    tx = np.asarray(state["translations_x_angstrom"], dtype=np.float64)
+    ty = np.asarray(state["translations_y_angstrom"], dtype=np.float64)
+    if tx.shape != ty.shape or tx.ndim != 1 or tx.size < 1:
+        raise ValueError("sealed sampling translation component shapes are inconsistent")
+    translations = np.stack([tx / voxel_size, ty / voxel_size], axis=1).astype(np.float32)
+    return rotations, eulers, jnp.asarray(translations, dtype=jnp.float32)
+
+
+def _sealed_sampling_rotation_ids(sealed_sampling_state):
+    """Map captured direction/psi rows to canonical coarse rotation IDs."""
+
+    direction_ids = np.asarray(sealed_sampling_state["directions_ipix"], dtype=np.int64)
+    n_psi = int(np.asarray(sealed_sampling_state["psi_angles_deg"]).size)
+    order = int(sealed_sampling_state["healpix_order_original"])
+    n_pixels = 12 * (4**order)
+    return np.concatenate(
+        [direction_ids + psi_index * n_pixels for psi_index in range(n_psi)]
+    ).astype(np.int64, copy=False)
+
+
+def _sealed_direction_log_prior(direction_prior, sealed_sampling_state):
+    """Expand a full direction prior onto the exact captured direction rows."""
+
+    prior = np.asarray(direction_prior, dtype=np.float32).reshape(-1)
+    direction_ids = np.asarray(sealed_sampling_state["directions_ipix"], dtype=np.int64)
+    n_psi = int(np.asarray(sealed_sampling_state["psi_angles_deg"]).size)
+    selected = np.tile(prior[direction_ids], n_psi)
+    result = np.full(selected.shape, -np.inf, dtype=np.float32)
+    positive = selected > 0.0
+    result[positive] = np.log(selected[positive]).astype(np.float32)
+    return result
+
+
+def _mean_variance_for_scoring_half(mean_variance_per_half, half_index):
+    """Select the exact half-owned K=1 tau2 prior passed to the scorer."""
+
+    if len(mean_variance_per_half) != 2 or int(half_index) not in (0, 1):
+        raise ValueError("per-half scoring tau2 requires exactly two halves and index 0 or 1")
+    return mean_variance_per_half[int(half_index)]
+
+
+def _updated_mean_variance_per_half(
+    shared_mean_variance,
+    updated_mean_variance_per_half,
+    *,
+    use_per_half_mean_variance,
+):
+    """Keep historical K=1 scoring on shared tau2 unless explicitly enabled."""
+
+    if use_per_half_mean_variance:
+        if len(updated_mean_variance_per_half) != 2:
+            raise ValueError("per-half scoring tau2 update requires exactly two halves")
+        return [
+            jnp.asarray(updated_mean_variance_per_half[0]),
+            jnp.asarray(updated_mean_variance_per_half[1]),
+        ]
+    return [shared_mean_variance, shared_mean_variance]
+
+
 def refine_single_volume(
     experiment_datasets,
     init_volume,
@@ -3962,6 +4113,9 @@ def refine_single_volume(
     stop_after_local_search_score_only=False,
     options=None,
     relion_healpix_orders=None,
+    sealed_sampling_state=None,
+    sealed_scoring_context=None,
+    use_per_half_mean_variance=False,
 ):
     """Multi-iteration RELION-parity EM refinement.
 
@@ -4238,6 +4392,9 @@ def refine_single_volume(
         stop_after_local_search_profile=stop_after_local_search_profile,
         stop_after_local_search=stop_after_local_search,
         stop_after_local_search_score_only=stop_after_local_search_score_only,
+        sealed_sampling_state=sealed_sampling_state,
+        sealed_scoring_context=sealed_scoring_context,
+        use_per_half_mean_variance=use_per_half_mean_variance,
     )
 
 
@@ -4331,6 +4488,9 @@ def _run_relion_iteration_loop(
     stop_after_local_search_profile=False,
     stop_after_local_search=False,
     stop_after_local_search_score_only=False,
+    sealed_sampling_state=None,
+    sealed_scoring_context=None,
+    use_per_half_mean_variance=False,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -4458,7 +4618,11 @@ def _run_relion_iteration_loop(
     # RELION's convergence counters are not initialized against an infinite
     # previous resolution.  They resume from the previous optimiser/model STAR
     # in replay mode, or from the initial FSC/ini_high state in a fresh run.
-    if perturb_replay_relion_dir is not None and int(init_relion_iteration) > 0:
+    if (
+        sealed_sampling_state is None
+        and perturb_replay_relion_dir is not None
+        and int(init_relion_iteration) > 0
+    ):
         _init_opt_star = os.path.join(
             perturb_replay_relion_dir,
             f"{perturb_replay_relion_prefix}_it{int(init_relion_iteration):03d}_optimiser.star",
@@ -4571,12 +4735,29 @@ def _run_relion_iteration_loop(
             "RELION mode: ignoring caller-provided rotation table and regenerating initial coarse grid at healpix_order=%d",
             current_healpix_order,
         )
-    current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
-    if translations is None:
+    if sealed_sampling_state is not None:
+        current_rotations, current_rotation_eulers, current_translations = _sealed_sampling_base_grids(
+            sealed_sampling_state,
+            voxel_size_angstrom=cryo.voxel_size,
+        )
+        current_healpix_order = int(sealed_sampling_state["healpix_order_original"])
+        if current_healpix_order != int(init_healpix_order):
+            raise ValueError(
+                "sealed sampling HEALPix order does not match initialized boundary: "
+                f"sealed={current_healpix_order} init={init_healpix_order}"
+            )
+        logger.info(
+            "Frozen-boundary v3 directly materialized %d Euler rows and %d translations",
+            int(current_rotation_eulers.shape[0]),
+            int(current_translations.shape[0]),
+        )
+    elif translations is None:
+        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
         current_translations = jnp.asarray(
             get_translation_grid(init_translation_range, init_translation_step), dtype=jnp.float32
         )
     else:
+        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
         current_translations = jnp.asarray(translations, dtype=jnp.float32)
     # Unperturbed base grid — `current_translations` may be replaced per-iter by
     # a perturbed copy (SamplingPerturbation). Keep the base so each iter
@@ -4651,7 +4832,30 @@ def _run_relion_iteration_loop(
         n_halves=2,
     )
     noise_variance = _mean_noise_variance(noise_variance_per_half)
-    mean_variance = jnp.array(init_mean_variance)
+    initial_mean_variance = jnp.array(init_mean_variance)
+    if use_per_half_mean_variance:
+        if k_class_enabled:
+            raise ValueError("per-half scoring tau2 is supported only for K=1")
+        if initial_mean_variance.ndim != 2 or initial_mean_variance.shape[0] != 2:
+            raise ValueError(
+                "per-half scoring tau2 requires init_mean_variance with leading half axis 2"
+            )
+        mean_variance_per_half = [
+            jnp.asarray(initial_mean_variance[0]),
+            jnp.asarray(initial_mean_variance[1]),
+        ]
+        mean_variance = jnp.asarray(
+            0.5
+            * (
+                mean_variance_per_half[0].astype(jnp.float64)
+                + mean_variance_per_half[1].astype(jnp.float64)
+            ),
+            dtype=jnp.float32,
+        )
+        logger.info("Initialized exact per-half K=1 tau2 priors")
+    else:
+        mean_variance = initial_mean_variance
+        mean_variance_per_half = [mean_variance, mean_variance]
     _mark_setup_phase("initial_arrays")
 
     # History tracking. Keep these plain lists because intermediate outputs
@@ -5065,7 +5269,9 @@ def _run_relion_iteration_loop(
         "RELION mode setup timing before iteration loop: %s",
         ", ".join(f"{key}={value:.1f}s" for key, value in setup_phase_seconds.items()),
     )
-    native_sampling_boundary = perturb_replay_relion_dir is None
+    native_sampling_boundary = (
+        perturb_replay_relion_dir is None and sealed_sampling_state is None
+    )
     # A numbered RELION sampling STAR is the state *after* the expectation
     # transition that produced it.  The next expectation computes
     # image_coarse_size from that saved state before updateAngularSampling.
@@ -5084,10 +5290,16 @@ def _run_relion_iteration_loop(
         frozen_initial_scoring_state = _frozen_scoring_state_arrays(
             means=means,
             mean_variance=mean_variance,
+            mean_variance_per_half=(
+                mean_variance_per_half if use_per_half_mean_variance else None
+            ),
             relion_half_inputs=relion_half_inputs,
             noise_variance_per_half=noise_variance_per_half,
             current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
             global_direction_prior_per_half=global_direction_prior_per_half,
+            experiment_datasets=experiment_datasets,
+            sealed_sampling_state=sealed_sampling_state,
+            sealed_scoring_context=sealed_scoring_context,
         )
     while (force_max_iter_after_convergence or not state.has_converged) and iteration < max_iter:
         # RELION checks convergence at the top of iteration n from the
@@ -5446,6 +5658,7 @@ def _run_relion_iteration_loop(
             global_direction_prior_per_half=global_direction_prior_per_half,
             global_direction_prior_order_per_half=global_direction_prior_order_per_half,
             preserve_existing_direction_prior=preserve_initial_direction_prior,
+            sealed_sampling_state=sealed_sampling_state,
         )
         cs = replay_result.cs
         _replay_prior_translations = replay_result.prior_translations
@@ -5504,13 +5717,23 @@ def _run_relion_iteration_loop(
             global_direction_prior_per_half=global_direction_prior_per_half,
             global_direction_prior_order_per_half=global_direction_prior_order_per_half,
         )
+        if not use_per_half_mean_variance:
+            # State-swap diagnostics historically replace the one shared tau2.
+            # Do not leave the scorer pointing at pre-swap aliases.
+            mean_variance_per_half = _updated_mean_variance_per_half(
+                mean_variance,
+                mean_variance_per_half,
+                use_per_half_mean_variance=False,
+            )
         if current_sigma_offset_angstrom != _sigma_offset_before_state_swap:
             current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(
                 current_sigma_offset_angstrom
             )
         means = _maybe_debug_replay_relion_references(
             means=means,
-            perturb_replay_relion_dir=perturb_replay_relion_dir,
+            perturb_replay_relion_dir=(
+                None if sealed_sampling_state is not None else perturb_replay_relion_dir
+            ),
             perturb_replay_relion_prefix=perturb_replay_relion_prefix,
             init_relion_iteration=init_relion_iteration,
             iteration=iteration,
@@ -5523,10 +5746,16 @@ def _run_relion_iteration_loop(
                 _frozen_scoring_state_arrays(
                     means=means,
                     mean_variance=mean_variance,
+                    mean_variance_per_half=(
+                        mean_variance_per_half if use_per_half_mean_variance else None
+                    ),
                     relion_half_inputs=relion_half_inputs,
                     noise_variance_per_half=noise_variance_per_half,
                     current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
                     global_direction_prior_per_half=global_direction_prior_per_half,
+                    experiment_datasets=experiment_datasets,
+                    sealed_sampling_state=sealed_sampling_state,
+                    sealed_scoring_context=sealed_scoring_context,
                 ),
             )
             logger.info(
@@ -5694,7 +5923,7 @@ def _run_relion_iteration_loop(
                 state.translation_range,
                 state.translation_step,
             )
-        elif perturb_replay_relion_dir is not None:
+        elif perturb_replay_relion_dir is not None and sealed_sampling_state is None:
             # Translation params may have changed under replay without an
             # hp_order bump. Regenerate the translation grid to match RELION.
             _new_t = jnp.array(
@@ -5731,7 +5960,18 @@ def _run_relion_iteration_loop(
         # Perturbation is a rigid rotation of SO(3): A := A @ R_perturb applied
         # AFTER oversampling. At adaptive_oversampling=0 (os0 RELION runs),
         # the coarse grid IS the trial grid so we apply directly here.
-        if _replay_meta is not None:
+        if _replay_meta is not None and _replay_meta.get("sealed_v3", False):
+            random_perturbation = float(_replay_meta["random_perturbation"])
+            replay_perturbation_source = "sealed_frozen_boundary_v3"
+            logger.info(
+                "Perturbation replay: iter=%d rp=%+.12g pf=%.3f relion_hp_order=%d source=%s",
+                iteration + 1,
+                random_perturbation,
+                float(_replay_meta["perturbation_factor"]),
+                int(_replay_meta["healpix_order"]),
+                replay_perturbation_source,
+            )
+        elif _replay_meta is not None:
             replay_relion_iteration = int(init_relion_iteration) + int(iteration) + 1
             replay_restart_state_iteration = _perturbation_restart_state_iteration(
                 perturb_replay_restart_state_iterations,
@@ -5780,7 +6020,11 @@ def _run_relion_iteration_loop(
             _angsamp_order = int(_replay_meta["healpix_order"]) if _replay_meta is not None else current_healpix_order
             angsamp_deg = relion_angular_sampling_deg(_angsamp_order, adaptive_oversampling=0)
             if effective_rotation_eulers is not None:
-                mstep_source_eulers = _get_relion_rotation_grid_eulers_float64(_angsamp_order)
+                mstep_source_eulers = (
+                    np.asarray(effective_rotation_eulers, dtype=np.float64)
+                    if sealed_sampling_state is not None
+                    else _get_relion_rotation_grid_eulers_float64(_angsamp_order)
+                )
                 if int(mstep_source_eulers.shape[0]) != int(effective_rotation_eulers.shape[0]):
                     mstep_source_eulers = np.asarray(effective_rotation_eulers, dtype=np.float64)
                 effective_rotations, effective_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
@@ -5916,6 +6160,18 @@ def _run_relion_iteration_loop(
             adaptive_oversampling=state.adaptive_oversampling,
             local_search_order=local_search_order,
         )
+        coarse_rotation_ids_for_scoring = (
+            _sealed_sampling_rotation_ids(sealed_sampling_state)
+            if sealed_sampling_state is not None and not use_local
+            else None
+        )
+        if (
+            coarse_rotation_ids_for_scoring is not None
+            and coarse_rotation_ids_for_scoring.shape != (int(effective_rotations.shape[0]),)
+        ):
+            raise RuntimeError(
+                "sealed captured rotation IDs do not match the directly materialized scorer grid"
+            )
 
         for _half_idx in range(2):
             if use_local:
@@ -5947,9 +6203,13 @@ def _run_relion_iteration_loop(
             prior_order_k = global_direction_prior_order_per_half[_half_idx]
             if prior_k is None or prior_order_k != direction_prior_healpix_order:
                 continue
-            rotation_log_prior_per_half[_half_idx] = make_relion_direction_log_prior(
-                prior_k,
-                direction_prior_healpix_order,
+            rotation_log_prior_per_half[_half_idx] = (
+                _sealed_direction_log_prior(prior_k, sealed_sampling_state)
+                if sealed_sampling_state is not None
+                else make_relion_direction_log_prior(
+                    prior_k,
+                    direction_prior_healpix_order,
+                )
             )
             logger.info(
                 "Using learned global direction prior half-%d: %d directions at healpix_order=%d",
@@ -6009,6 +6269,17 @@ def _run_relion_iteration_loop(
                 cs if cs_for_engine is not None else None,
                 grid_size,
             )
+            if sealed_sampling_state is not None:
+                coarse_size = int(sealed_sampling_state["coarse_size"])
+                if coarse_size > int(cs):
+                    raise ValueError(
+                        "sealed sampling coarse_size exceeds active current_size: "
+                        f"coarse={coarse_size} current={cs}"
+                    )
+                logger.info(
+                    "Frozen-boundary v3 directly owns adaptive pass-1 coarse_size=%d",
+                    coarse_size,
+                )
             coarse_cs = coarse_size if coarse_size < grid_size else None
 
             logger.info(
@@ -6102,6 +6373,7 @@ def _run_relion_iteration_loop(
                 str(bpref_device_signature_active).lower(),
             )
             noise_variance_k = noise_variance_per_half[k]
+            mean_variance_k = _mean_variance_for_scoring_half(mean_variance_per_half, k)
             rotation_log_prior_k = rotation_log_prior_per_half[k]
             class_rotation_log_prior_k = class_rotation_log_prior_per_half[k]
             previous_translations_k = relion_half_inputs.previous_best_translations[k]
@@ -6329,7 +6601,7 @@ def _run_relion_iteration_loop(
                     k=k,
                     experiment_dataset=experiment_datasets[k],
                     means_k=means[k],
-                    mean_variance=mean_variance,
+                    mean_variance=mean_variance_k,
                     noise_variance_k=noise_variance_k,
                     previous_best_rotation_eulers_k=relion_half_inputs.previous_best_rotation_eulers[k],
                     local_search_rotations=local_search_rotations,
@@ -6396,7 +6668,7 @@ def _run_relion_iteration_loop(
                     k=k,
                     experiment_dataset=experiment_datasets[k],
                     means_k=means[k],
-                    mean_variance=mean_variance,
+                    mean_variance=mean_variance_k,
                     noise_variance_k=noise_variance_k,
                     effective_rotations=effective_rotations,
                     current_translations=current_translations,
@@ -6446,6 +6718,7 @@ def _run_relion_iteration_loop(
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     debug_iteration=iteration + 1,
+                    coarse_rotation_ids=coarse_rotation_ids_for_scoring,
                 )
                 ha_k = adaptive_result.ha
                 Ft_y_k = adaptive_result.Ft_y
@@ -6469,7 +6742,7 @@ def _run_relion_iteration_loop(
                     k=k,
                     experiment_dataset=experiment_datasets[k],
                     means_k=means[k],
-                    mean_variance=mean_variance,
+                    mean_variance=mean_variance_k,
                     noise_variance_k=noise_variance_k,
                     effective_rotations=effective_rotations,
                     current_translations=current_translations,
@@ -6510,6 +6783,7 @@ def _run_relion_iteration_loop(
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     debug_iteration=iteration + 1,
+                    coarse_rotation_ids=coarse_rotation_ids_for_scoring,
                 )
                 ha_k = single_pass_result.ha
                 Ft_y_k = single_pass_result.Ft_y
@@ -7284,6 +7558,14 @@ def _run_relion_iteration_loop(
                 float(jnp.max(jnp.abs(mean_signal_variance_per_half[1]))),
             )
         mean_variance = mean_signal_variance
+        if not k_class_enabled:
+            mean_variance_per_half = _updated_mean_variance_per_half(
+                mean_variance,
+                mean_signal_variance_per_half,
+                use_per_half_mean_variance=use_per_half_mean_variance,
+            )
+        else:
+            mean_variance_per_half = [mean_variance, mean_variance]
 
         # --- Free previous-iteration means to reclaim GPU memory ---
         # (previous_means already snapshotted earlier for FSC sign alignment)
@@ -7362,6 +7644,11 @@ def _run_relion_iteration_loop(
                 mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1]
             )
             mean_variance = mean_signal_variance
+            mean_variance_per_half = _updated_mean_variance_per_half(
+                mean_variance,
+                mean_signal_variance_per_half,
+                use_per_half_mean_variance=use_per_half_mean_variance,
+            )
             tau2_update_details = tau2_update_details_per_half[0]
             logger.info(
                 "RELION iter-1 CC emulation: tapered post-reconstruction tau2/data-vs-prior "
@@ -7663,7 +7950,7 @@ def _run_relion_iteration_loop(
                             )
             if "fsc" in locals() and fsc is not None:
                 _tau2_dump["current_iter_fsc"] = np.asarray(fsc, dtype=np.float64)
-            if perturb_replay_relion_dir is not None:
+            if perturb_replay_relion_dir is not None and sealed_sampling_state is None:
                 _model_path = os.path.join(
                     str(perturb_replay_relion_dir),
                     f"{perturb_replay_relion_prefix}_it{iteration + 1:03d}_half1_model.star",
@@ -7993,7 +8280,7 @@ def _run_relion_iteration_loop(
 
         _optimiser_meta = None
         _optimiser_star = None
-        if perturb_replay_relion_dir is not None:
+        if perturb_replay_relion_dir is not None and sealed_sampling_state is None:
             _optimiser_iter = int(init_relion_iteration) + iteration + 1
             _optimiser_star = os.path.join(
                 perturb_replay_relion_dir,
@@ -8073,7 +8360,11 @@ def _run_relion_iteration_loop(
             # streams therefore end one iteration before the final pass; do not
             # request run_it{N+1}_sampling.star when RELION already recorded the
             # final convergence state in run_optimiser.star.
-            if perturb_replay_relion_dir is not None and not state.has_converged:
+            if (
+                perturb_replay_relion_dir is not None
+                and sealed_sampling_state is None
+                and not state.has_converged
+            ):
                 _next_sampling_star = os.path.join(
                     perturb_replay_relion_dir,
                     f"{perturb_replay_relion_prefix}_it{_optimiser_iter + 1:03d}_sampling.star",

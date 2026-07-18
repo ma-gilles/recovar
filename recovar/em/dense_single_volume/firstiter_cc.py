@@ -85,6 +85,7 @@ def _build_firstiter_cc_pass2_grids(
     random_perturbation: float,
     *,
     return_mstep_rotations: bool = False,
+    coarse_rotation_ids=None,
 ):
     """Build (coarse, fine, parent_map) pose grids for K-class iter-1 firstiter_cc adaptive engine.
 
@@ -118,7 +119,15 @@ def _build_firstiter_cc_pass2_grids(
         return outputs
 
     adaptive_os = int(adaptive_oversampling)
-    all_coarse_rot_indices = np.arange(int(coarse_rot_np.shape[0]), dtype=np.int64)
+    all_coarse_rot_indices = (
+        np.arange(int(coarse_rot_np.shape[0]), dtype=np.int64)
+        if coarse_rotation_ids is None
+        else np.asarray(coarse_rotation_ids, dtype=np.int64)
+    )
+    if all_coarse_rot_indices.shape != (int(coarse_rot_np.shape[0]),):
+        raise ValueError(
+            "coarse_rotation_ids must identify every supplied coarse rotation exactly once"
+        )
     fine_rotation_outputs = get_oversampled_rotation_grid_from_samples(
         all_coarse_rot_indices,
         parent_nside_level=int(coarse_healpix_order),

@@ -18,9 +18,15 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from recovar.em.dense_single_volume.frozen_boundary import (
+    FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
+    FROZEN_BOUNDARY_PROVENANCE_VERIFICATION_SCOPE,
+)
 from recovar.em.dense_single_volume.iteration_loop import (
     _assert_frozen_scoring_state_unchanged,
     _frozen_scoring_state_arrays,
+    _mean_variance_for_scoring_half,
+    _updated_mean_variance_per_half,
 )
 from scripts import run_full_refinement
 from scripts.run_full_refinement import (
@@ -28,6 +34,7 @@ from scripts.run_full_refinement import (
     _attach_relion_projector_capture,
     _build_frozen_replay_slots,
     _build_replay_iteration_overrides,
+    _fixed_diagnostic_source_paths,
     _default_refinement_subsets,
     _format_replay_mean_for_log,
     _load_init_noise_radial_npz,
@@ -37,9 +44,11 @@ from scripts.run_full_refinement import (
     _load_relion_it000_model_stars,
     _load_replay_group_particles,
     _make_frozen_boundary_noise_variance,
+    _maybe_apply_relion_image_mask,
     _parse_relion_cli_ini_high,
     _parse_relion_tau2_fudge,
     _read_relion_single_optics_sigma2_noise,
+    _relion_optimiser_star_for_runtime,
     _relion_halfset_and_accuracy_layout,
     _relion_mpi_process_start_scoring_noise_pair,
     _replay_complete_initial_particle_state,
@@ -48,7 +57,10 @@ from scripts.run_full_refinement import (
     _resolve_tau2_fudge,
     _save_initial_noise_cache,
     _select_authoritative_group_particles,
+    _validate_fixed_diagnostic_arm_cli,
+    _validate_fixed_diagnostic_math_environment,
     _verify_frozen_boundary_source_hashes,
+    _verify_fixed_diagnostic_provenance_manifests,
 )
 
 FIXTURE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0")
@@ -127,6 +139,13 @@ def test_frozen_scoring_state_negative_overwrite_regression():
             np.full(12, 1.0 / 12.0, dtype=np.float32),
             np.full(12, 1.0 / 12.0, dtype=np.float32),
         ],
+        sealed_scoring_context={"slot": 0, "mode": "fixed"},
+    )
+    assert "mean_variance" in expected
+    assert "mean_variance.half1" not in expected
+    assert "mean_variance.half2" not in expected
+    assert expected["sealed_scoring_context_json"].tobytes().decode("utf-8") == (
+        '{"mode":"fixed","slot":0}'
     )
     actual = {name: value.copy() for name, value in expected.items()}
     actual["noise_variance.half2"][0] = actual["noise_variance.half1"][0]
@@ -143,6 +162,258 @@ def test_frozen_scoring_state_negative_overwrite_regression():
     changed_tau2["mean_variance"][0] = np.float32(2.0)
     with pytest.raises(RuntimeError, match="mean_variance was overwritten"):
         _assert_frozen_scoring_state_unchanged(expected, changed_tau2)
+
+
+def test_unequal_half_tau2_is_dispatched_without_collapsing():
+    half1 = np.asarray([1.0, 2.0], dtype=np.float32)
+    half2 = np.asarray([3.0, 4.0], dtype=np.float32)
+
+    selected1 = _mean_variance_for_scoring_half([half1, half2], 0)
+    selected2 = _mean_variance_for_scoring_half([half1, half2], 1)
+
+    assert selected1 is half1
+    assert selected2 is half2
+    assert not np.array_equal(selected1, selected2)
+
+
+def test_ordinary_k1_keeps_shared_tau2_across_multiple_updates():
+    """Diagnostic per-half tau2 must not alter the historical K=1 scorer."""
+
+    for iteration in range(2):
+        shared = np.asarray([10.0 + iteration, 20.0 + iteration], dtype=np.float32)
+        candidate_per_half = [
+            np.asarray([1.0 + iteration, 2.0], dtype=np.float32),
+            np.asarray([3.0 + iteration, 4.0], dtype=np.float32),
+        ]
+        scoring_tau2 = _updated_mean_variance_per_half(
+            shared,
+            candidate_per_half,
+            use_per_half_mean_variance=False,
+        )
+
+        assert _mean_variance_for_scoring_half(scoring_tau2, 0) is shared
+        assert _mean_variance_for_scoring_half(scoring_tau2, 1) is shared
+
+
+def test_fixed_arm_can_keep_per_half_tau2_across_updates():
+    shared = np.asarray([10.0, 20.0], dtype=np.float32)
+    candidate_per_half = [
+        np.asarray([1.0, 2.0], dtype=np.float32),
+        np.asarray([3.0, 4.0], dtype=np.float32),
+    ]
+
+    scoring_tau2 = _updated_mean_variance_per_half(
+        shared,
+        candidate_per_half,
+        use_per_half_mean_variance=True,
+    )
+
+    np.testing.assert_array_equal(
+        _mean_variance_for_scoring_half(scoring_tau2, 0), candidate_per_half[0]
+    )
+    np.testing.assert_array_equal(
+        _mean_variance_for_scoring_half(scoring_tau2, 1), candidate_per_half[1]
+    )
+
+
+def test_default_state_swap_resyncs_both_scorer_halves_to_substituted_shared_tau2():
+    stale_per_half = [
+        np.asarray([1.0, 2.0], dtype=np.float32),
+        np.asarray([3.0, 4.0], dtype=np.float32),
+    ]
+    substituted_shared = np.asarray([30.0, 40.0], dtype=np.float32)
+
+    scoring_tau2 = _updated_mean_variance_per_half(
+        substituted_shared,
+        stale_per_half,
+        use_per_half_mean_variance=False,
+    )
+
+    assert _mean_variance_for_scoring_half(scoring_tau2, 0) is substituted_shared
+    assert _mean_variance_for_scoring_half(scoring_tau2, 1) is substituted_shared
+
+
+def test_fixed_arm_provenance_manifests_fail_closed_on_environment_tamper(
+    monkeypatch, tmp_path
+):
+    commit = "1" * 40
+    boundary = SimpleNamespace(
+        runtime_config={
+            "diagnostic_arm_id": "real10076.k1.physical_it2.reconstructed_projector.v1",
+            "jax_enable_x64": True,
+            "provenance_verification_scope": FROZEN_BOUNDARY_PROVENANCE_VERIFICATION_SCOPE,
+            "numerical_classification_scope": FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
+            "recovar_git_commit": commit,
+            "declared_relion_base_git_commit": "2" * 40,
+            "declared_relion_command_line": "relion_refine --continue run_it001_optimiser.star",
+            "declared_relion_build_id": "relion-test-build",
+            "projector_boundary_kind": "reconstructed-projector boundary",
+        }
+    )
+    source_manifest = tmp_path / "source.json"
+    source_manifest.write_text(
+        '{"recovar_git_commit":"' + commit + '","schema":"recovar.em.source_manifest.v1","worktree_clean":true}',
+        encoding="utf-8",
+    )
+    environment_manifest = tmp_path / "environment.json"
+    expected_environment = {
+        "schema": "recovar.em.runtime_environment.v1",
+        "diagnostic_arm_id": boundary.runtime_config["diagnostic_arm_id"],
+        "math_environment_contract": "no_unsealed_recovar_jax_xla_overrides.v1",
+        "jax_enable_x64": True,
+        "provenance_verification_scope": FROZEN_BOUNDARY_PROVENANCE_VERIFICATION_SCOPE,
+        "numerical_classification_scope": FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
+        "declared_relion_command_line": boundary.runtime_config["declared_relion_command_line"],
+        "declared_relion_base_git_commit": boundary.runtime_config["declared_relion_base_git_commit"],
+        "declared_relion_build_id": boundary.runtime_config["declared_relion_build_id"],
+        "recovar_git_commit": commit,
+        "projector_boundary_kind": "reconstructed-projector boundary",
+    }
+    import json
+
+    environment_manifest.write_text(json.dumps(expected_environment), encoding="utf-8")
+    monkeypatch.setattr(
+        run_full_refinement,
+        "git_worktree_provenance",
+        lambda: {"head": commit, "dirty_count": 0},
+    )
+    paths = {
+        "recovar_source_manifest": source_manifest,
+        "runtime_environment_manifest": environment_manifest,
+    }
+
+    _verify_fixed_diagnostic_provenance_manifests(boundary, paths)
+
+    expected_environment["declared_relion_build_id"] = "tampered"
+    environment_manifest.write_text(json.dumps(expected_environment), encoding="utf-8")
+    with pytest.raises(ValueError, match="command/build/environment"):
+        _verify_fixed_diagnostic_provenance_manifests(boundary, paths)
+
+
+def _fixed_diagnostic_args():
+    return SimpleNamespace(
+        max_iter=1,
+        skip_final_iteration=True,
+        init_resolution=30.0,
+        offset_range=3.0,
+        offset_step=1.0,
+        perturb_factor=0.5,
+        adaptive_oversampling=1,
+        n_classes=1,
+        firstiter_cc=True,
+        apply_initial_lowpass=False,
+        image_fourier_backend="relion_cuda",
+        final_replay_relion_dir=None,
+        relion_projector_capture_dir=None,
+        relion_projector_capture_manifest=None,
+        relion_projector_capture_iteration=None,
+        perturb_replay_restart_provenance=None,
+        relion_dispatch_schedule=None,
+        relion_follower_scale_replay=None,
+        init_class_volumes=None,
+        init_volume=None,
+        init_previous_best_poses_npz=None,
+        init_noise_from_npz=None,
+        initial_noise_cache_dir=None,
+        relion_init_dir=None,
+        relion_optimiser=None,
+        relion_current_sizes=None,
+        relion_healpix_orders=None,
+        stop_after_local_search_profile=False,
+        stop_after_local_search=False,
+        stop_after_local_search_score_only=False,
+        diagnostic_single_half=False,
+        perturb_replay_restart_state_iterations="",
+        replay_relion_normcorr=None,
+        relion_scale_followers=None,
+    )
+
+
+def test_fixed_diagnostic_arm_rejects_alternate_projector_and_float_mode():
+    args = _fixed_diagnostic_args()
+    _validate_fixed_diagnostic_arm_cli(args)
+    _validate_fixed_diagnostic_math_environment(
+        {
+            "RECOVAR_EXPECTED_REPO_ROOT": "/repo",
+            "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        }
+    )
+
+    args.relion_projector_capture_dir = "/substitute"
+    with pytest.raises(ValueError, match="alternate state/projector/oracle"):
+        _validate_fixed_diagnostic_arm_cli(args)
+    with pytest.raises(ValueError, match="unsealed RECOVAR environment"):
+        _validate_fixed_diagnostic_math_environment(
+            {"RECOVAR_USE_FLOAT64_SCORING": "1"}
+        )
+
+
+def test_fixed_arm_rejects_explicit_optimiser_and_internal_resolver_uses_sealed_source(
+    tmp_path,
+):
+    unsealed = tmp_path / "unsealed_optimiser.star"
+    sealed = tmp_path / "completed_optimiser.star"
+    unsealed.write_text("unsealed", encoding="utf-8")
+    sealed.write_text("sealed", encoding="utf-8")
+    args = _fixed_diagnostic_args()
+    args.relion_optimiser = str(unsealed)
+
+    with pytest.raises(ValueError, match="alternate state/projector/oracle"):
+        _validate_fixed_diagnostic_arm_cli(args)
+
+    boundary = SimpleNamespace(fixed_diagnostic_arm=True)
+    assert _relion_optimiser_star_for_runtime(
+        args,
+        frozen_boundary=boundary,
+        fixed_diagnostic_source_paths={"completed_optimiser": sealed},
+    ) == sealed.resolve()
+
+
+def test_fixed_arm_rejects_mask_cli_values_that_differ_from_sealed_optimiser(tmp_path):
+    sealed = tmp_path / "completed_optimiser.star"
+    sealed.write_text(
+        "_rlnParticleDiameter 280\n_rlnWidthMaskEdge 5\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="particle diameter differs"):
+        _maybe_apply_relion_image_mask(
+            None,
+            SimpleNamespace(particle_diameter_ang=279.0, width_mask_edge_px=5.0),
+            sealed_optimiser_star=sealed,
+        )
+    with pytest.raises(ValueError, match="mask-edge width differs"):
+        _maybe_apply_relion_image_mask(
+            None,
+            SimpleNamespace(particle_diameter_ang=None, width_mask_edge_px=4.0),
+            sealed_optimiser_star=sealed,
+        )
+
+
+def test_fixed_diagnostic_source_paths_reject_runtime_prefix_or_consumer_substitution(tmp_path):
+    args = SimpleNamespace(
+        data_dir=str(tmp_path),
+        perturb_replay_relion_dir=str(tmp_path),
+        relion_half_sets=str(tmp_path / "half.star"),
+        frozen_boundary_live_capture_manifest=str(tmp_path / "capture.sha256"),
+        frozen_boundary_runtime_environment_manifest=str(tmp_path / "environment.json"),
+        frozen_boundary_recovar_source_manifest=str(tmp_path / "source.json"),
+        frozen_boundary_replay_prefix="substituted",
+    )
+    boundary = SimpleNamespace(
+        completed_relion_iteration=7,
+        consumer_relion_iteration=8,
+        sampling_state={"consumer_relion_iteration": 8},
+        runtime_config={"replay_prefix": "sealed"},
+    )
+
+    with pytest.raises(ValueError, match="replay prefix mismatch"):
+        _fixed_diagnostic_source_paths(args, boundary)
+
+    args.frozen_boundary_replay_prefix = "sealed"
+    boundary.sampling_state["consumer_relion_iteration"] = 9
+    with pytest.raises(ValueError, match="consumer iteration ownership"):
+        _fixed_diagnostic_source_paths(args, boundary)
 
 
 def test_frozen_boundary_source_hashes_bind_live_stars(tmp_path):
@@ -941,7 +1212,7 @@ def test_replay_mapping_distinguishes_repeated_indices_across_stacks(tmp_path):
 def test_native_group_ids_are_available_to_k_class_refinement():
     source = RUN_FULL_REFINEMENT.read_text()
     group_start = source.index("native_group_layout = _resolve_native_group_layout")
-    group_end = source.index("optimiser_star = _find_relion_optimiser_star(args)", group_start)
+    group_end = source.index("optimiser_star = _relion_optimiser_star_for_runtime(", group_start)
     group_block = source[group_start:group_end]
 
     assert "args.n_classes == 1" not in group_block

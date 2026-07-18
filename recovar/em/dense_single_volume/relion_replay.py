@@ -484,6 +484,7 @@ def apply_iter_replay_overrides(
     global_direction_prior_per_half: list,
     global_direction_prior_order_per_half: list,
     preserve_existing_direction_prior: bool = False,
+    sealed_sampling_state: dict | None = None,
 ) -> ReplayOverrideResult:
     """Apply per-iteration replay overrides to the in-flight iteration state.
 
@@ -523,7 +524,49 @@ def apply_iter_replay_overrides(
         else current_sigma_offset_angstrom_per_half
     )
 
-    if perturb_replay_relion_dir is not None:
+    if sealed_sampling_state is not None:
+        if int(iteration) != 0:
+            raise ValueError("sealed frozen-boundary sampling currently owns exactly one iteration")
+        _px = float(cryo.voxel_size) if cryo.voxel_size > 0 else 1.0
+        _relion_hp = int(sealed_sampling_state["healpix_order_original"])
+        if _relion_hp > int(state.max_healpix_order):
+            raise ValueError(
+                "sealed sampling HEALPix order exceeds runtime maximum: "
+                f"sealed={_relion_hp} max={state.max_healpix_order}"
+            )
+        state.healpix_order = _relion_hp
+        state.do_local_search = bool(state.healpix_order >= state.auto_local_healpix_order)
+        state.sigma_rot = np.deg2rad(float(sealed_sampling_state["sigma_rot_deg"]))
+        state.sigma_psi = np.deg2rad(float(sealed_sampling_state["sigma_psi_deg"]))
+        state.translation_range = float(sealed_sampling_state["offset_range_angstrom"]) / _px
+        state.translation_step = float(sealed_sampling_state["offset_step_angstrom"]) / _px
+        sealed_x = np.asarray(sealed_sampling_state["translations_x_angstrom"], dtype=np.float64)
+        sealed_y = np.asarray(sealed_sampling_state["translations_y_angstrom"], dtype=np.float64)
+        _replay_prior_translations = jnp.asarray(
+            np.stack([sealed_x / _px, sealed_y / _px], axis=1).astype(np.float32),
+            dtype=jnp.float32,
+        )
+        cs = int(sealed_sampling_state["current_size"])
+        _replay_meta = {
+            "healpix_order": _relion_hp,
+            "psi_step": float(sealed_sampling_state["psi_step_deg"]),
+            "offset_range": float(sealed_sampling_state["offset_range_angstrom"]),
+            "offset_step": float(sealed_sampling_state["offset_step_angstrom"]),
+            "perturbation_factor": float(sealed_sampling_state["perturbation_factor"]),
+            "random_perturbation": float(sealed_sampling_state["random_perturbation"]),
+            "sealed_v3": True,
+        }
+        logger.info(
+            "Frozen-boundary v3 owns sampling: consumer_iter=%d hp=%d current/coarse=%d/%d "
+            "translations=%d rp=%+.12g",
+            int(sealed_sampling_state["consumer_relion_iteration"]),
+            _relion_hp,
+            cs,
+            int(sealed_sampling_state["coarse_size"]),
+            int(_replay_prior_translations.shape[0]),
+            float(sealed_sampling_state["random_perturbation"]),
+        )
+    elif perturb_replay_relion_dir is not None:
         _star = os.path.join(
             perturb_replay_relion_dir,
             f"{perturb_replay_relion_prefix}_it{init_relion_iteration + iteration + 1:03d}_sampling.star",

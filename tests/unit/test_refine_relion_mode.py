@@ -567,6 +567,134 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
     np.testing.assert_allclose(replay_grid, state_grid, rtol=0.0, atol=1e-6)
 
 
+def _sealed_sampling_fixture():
+    return {
+        "consumer_relion_iteration": 2,
+        "directions_ipix": np.asarray([7, 19, 503], dtype=np.int64),
+        "rot_angles_deg": np.asarray([10.0, 20.0, 30.0], dtype=np.float64),
+        "tilt_angles_deg": np.asarray([40.0, 50.0, 60.0], dtype=np.float64),
+        "psi_angles_deg": np.asarray([0.0, 90.0], dtype=np.float64),
+        "translations_x_angstrom": np.asarray([-2.0, 0.0, 2.0], dtype=np.float64),
+        "translations_y_angstrom": np.asarray([0.0, 1.0, 0.0], dtype=np.float64),
+        "translations_z_angstrom": np.empty(0, dtype=np.float64),
+        "healpix_order_original": 3,
+        "psi_step_deg": 90.0,
+        "offset_range_angstrom": 2.0,
+        "offset_step_angstrom": 1.0,
+        "perturbation_factor": 0.5,
+        "random_perturbation": 0.125,
+        "sigma_rot_deg": 0.0,
+        "sigma_psi_deg": 0.0,
+        "is_3d": True,
+        "is_3d_trans": False,
+        "point_group": 202,
+        "point_group_order": 1,
+        "coarse_size": 56,
+        "full_size": 256,
+        "current_size": 56,
+    }
+
+
+def test_sealed_sampling_directly_materializes_restricted_eulers_and_translations():
+    sampling = _sealed_sampling_fixture()
+
+    _, eulers, translations = iteration_loop_module._sealed_sampling_base_grids(
+        sampling,
+        voxel_size_angstrom=2.0,
+    )
+
+    np.testing.assert_array_equal(
+        eulers,
+        np.asarray(
+            [
+                [10.0, 40.0, 0.0],
+                [20.0, 50.0, 0.0],
+                [30.0, 60.0, 0.0],
+                [10.0, 40.0, 90.0],
+                [20.0, 50.0, 90.0],
+                [30.0, 60.0, 90.0],
+            ],
+            dtype=np.float32,
+        ),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(translations),
+        np.asarray([[-1.0, 0.0], [0.0, 0.5], [1.0, 0.0]], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        iteration_loop_module._sealed_sampling_rotation_ids(sampling),
+        np.asarray([7, 19, 503, 775, 787, 1271], dtype=np.int64),
+    )
+    direction_prior = np.linspace(1.0, 2.0, 768, dtype=np.float32)
+    expected_prior = np.log(
+        np.tile(direction_prior[np.asarray([7, 19, 503])], 2)
+    ).astype(np.float32)
+    np.testing.assert_array_equal(
+        iteration_loop_module._sealed_direction_log_prior(direction_prior, sampling),
+        expected_prior,
+    )
+
+
+def test_sealed_sampling_override_never_reads_external_replay_files(monkeypatch, tmp_path):
+    state = SimpleNamespace(
+        healpix_order=3,
+        max_healpix_order=3,
+        auto_local_healpix_order=4,
+        do_local_search=False,
+        sigma_rot=0.0,
+        sigma_psi=0.0,
+        translation_range=99.0,
+        translation_step=99.0,
+    )
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "read_relion_sampling_metadata",
+        lambda path: pytest.fail(f"unexpected external sampling read: {path}"),
+    )
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "read_relion_model_metadata",
+        lambda path: pytest.fail(f"unexpected external model read: {path}"),
+    )
+
+    result = iteration_loop_module.apply_iter_replay_overrides(
+        iter_replay_override=None,
+        perturb_replay_relion_dir=str(tmp_path / "wrong_prefix_and_iteration"),
+        perturb_replay_relion_prefix="wrong",
+        init_relion_iteration=99,
+        iteration=0,
+        state=state,
+        cs=8,
+        cryo=SimpleNamespace(voxel_size=2.0),
+        k_class_enabled=False,
+        n_classes=1,
+        relion_half_inputs=iteration_loop_module._RelionHalfInputState.from_initial_values(
+            previous_best_translations=None,
+            previous_best_rotation_eulers=None,
+            image_corrections=None,
+            scale_corrections=None,
+        ),
+        previous_best_rotations=[None, None],
+        noise_variance_per_half=[jnp.ones(IMAGE_SIZE), jnp.ones(IMAGE_SIZE)],
+        noise_variance=jnp.ones(IMAGE_SIZE),
+        previous_noise_radial_per_half=[None, None],
+        previous_noise_radial=None,
+        current_sigma_offset_angstrom=10.0,
+        class_direction_prior_per_half=[None, None],
+        class_direction_prior_order_per_half=[None, None],
+        global_direction_prior_per_half=[None, None],
+        global_direction_prior_order_per_half=[None, None],
+        sealed_sampling_state=_sealed_sampling_fixture(),
+    )
+
+    assert result.cs == 56
+    assert result.replay_meta["sealed_v3"] is True
+    np.testing.assert_array_equal(
+        np.asarray(result.prior_translations),
+        np.asarray([[-1.0, 0.0], [0.0, 0.5], [1.0, 0.0]], dtype=np.float32),
+    )
+
+
 def test_frozen_replay_explicitly_suppresses_external_direction_prior_reload(
     monkeypatch,
     tmp_path,

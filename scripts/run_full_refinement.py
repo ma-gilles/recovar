@@ -38,7 +38,13 @@ import numpy as np
 from recovar import utils
 from recovar.core import fourier_transform_utils as ftu
 from recovar.em.dense_single_volume.frozen_boundary import (
+    FROZEN_BOUNDARY_FIXED_DIAGNOSTIC_ARM,
+    FROZEN_BOUNDARY_FIXED_MATH_ENVIRONMENT_CONTRACT,
+    FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
+    FROZEN_BOUNDARY_PROVENANCE_VERIFICATION_SCOPE,
     load_frozen_refinement_boundary,
+    validate_fixed_diagnostic_boundary_runtime_config,
+    verify_fixed_diagnostic_boundary_sources,
 )
 from recovar.em.dense_single_volume.helpers.relion_projector_capture import (
     build_relion_projector_replay_state,
@@ -115,7 +121,13 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _verify_frozen_boundary_source_hashes(boundary, *, source_star, relion_half_star) -> None:
+def _verify_frozen_boundary_source_hashes(
+    boundary,
+    *,
+    source_star,
+    relion_half_star,
+    fixed_diagnostic_source_paths=None,
+) -> None:
     """Bind a frozen diagnostic boundary to the live particle source files."""
 
     live_sources = {
@@ -131,6 +143,325 @@ def _verify_frozen_boundary_source_hashes(boundary, *, source_star, relion_half_
                 f"frozen-boundary {label} SHA-256 mismatch: "
                 f"expected {expected_sha256}, got {observed_sha256}"
             )
+    if getattr(boundary, "fixed_diagnostic_arm", False):
+        if fixed_diagnostic_source_paths is None:
+            raise ValueError("frozen-boundary v3 requires the complete live source-path table")
+        verify_fixed_diagnostic_boundary_sources(boundary, fixed_diagnostic_source_paths)
+
+
+def _particle_stack_paths_from_star(source_star: Path) -> tuple[Path, ...]:
+    """Resolve every image stack referenced by a fixed v3 fixture."""
+
+    import starfile
+
+    source_star = Path(source_star).expanduser().resolve()
+    document = starfile.read(source_star, always_dict=True)
+    particles = document.get("particles")
+    if particles is None or "rlnImageName" not in particles:
+        raise ValueError(f"particle STAR lacks rlnImageName: {source_star}")
+    stack_names = {
+        str(value).partition("@")[2]
+        for value in particles["rlnImageName"]
+        if str(value).partition("@")[1] == "@"
+    }
+    if not stack_names:
+        raise ValueError(f"particle STAR has no stack-backed rlnImageName rows: {source_star}")
+    resolved = set()
+    for stack_name in stack_names:
+        stack_path = Path(stack_name)
+        if not stack_path.is_absolute():
+            stack_path = source_star.parent / stack_path
+        resolved.add(stack_path.resolve())
+    return tuple(sorted(resolved, key=str))
+
+
+def _fixed_diagnostic_source_paths(args, boundary) -> dict[str, Path]:
+    """Map compact v3 source names to the exact files this run will consume."""
+
+    source_star = (Path(args.data_dir) / "particles.star").resolve()
+    replay_dir = Path(args.perturb_replay_relion_dir).expanduser().resolve()
+    completed = int(boundary.completed_relion_iteration)
+    consumer = int(boundary.consumer_relion_iteration)
+    if consumer != int(boundary.sampling_state["consumer_relion_iteration"]):
+        raise ValueError("fixed diagnostic boundary consumer iteration ownership is inconsistent")
+    prefix = str(args.frozen_boundary_replay_prefix)
+    if prefix != str(boundary.runtime_config["replay_prefix"]):
+        raise ValueError(
+            "fixed diagnostic boundary replay prefix mismatch: "
+            f"runtime={prefix!r} sealed={boundary.runtime_config['replay_prefix']!r}"
+        )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", prefix):
+        raise ValueError(f"invalid sealed RELION replay prefix {prefix!r}")
+    if args.frozen_boundary_live_capture_manifest is None:
+        raise ValueError(
+            "fixed diagnostic boundary v3 requires --frozen-boundary-live-capture-manifest"
+        )
+    if args.frozen_boundary_runtime_environment_manifest is None:
+        raise ValueError(
+            "fixed diagnostic boundary v3 requires "
+            "--frozen-boundary-runtime-environment-manifest"
+        )
+    if args.frozen_boundary_recovar_source_manifest is None:
+        raise ValueError(
+            "fixed diagnostic boundary v3 requires --frozen-boundary-recovar-source-manifest"
+        )
+    source_paths = {
+        "particle_star": source_star,
+        "relion_half_star": Path(args.relion_half_sets).expanduser().resolve(),
+        "completed_data": replay_dir / f"{prefix}_it{completed:03d}_data.star",
+        "completed_optimiser": replay_dir / f"{prefix}_it{completed:03d}_optimiser.star",
+        "completed_sampling": replay_dir / f"{prefix}_it{completed:03d}_sampling.star",
+        "completed_half1_model": replay_dir / f"{prefix}_it{completed:03d}_half1_model.star",
+        "completed_half2_model": replay_dir / f"{prefix}_it{completed:03d}_half2_model.star",
+        "consumer_validation_optimiser": replay_dir / f"{prefix}_it{consumer:03d}_optimiser.star",
+        "consumer_validation_data": replay_dir / f"{prefix}_it{consumer:03d}_data.star",
+        "consumer_validation_sampling": replay_dir / f"{prefix}_it{consumer:03d}_sampling.star",
+        "consumer_validation_half1_model": replay_dir / f"{prefix}_it{consumer:03d}_half1_model.star",
+        "consumer_validation_half2_model": replay_dir / f"{prefix}_it{consumer:03d}_half2_model.star",
+        "live_capture_manifest": Path(
+            args.frozen_boundary_live_capture_manifest
+        ).expanduser().resolve(),
+        "runtime_environment_manifest": Path(
+            args.frozen_boundary_runtime_environment_manifest
+        ).expanduser().resolve(),
+        "recovar_source_manifest": Path(
+            args.frozen_boundary_recovar_source_manifest
+        ).expanduser().resolve(),
+    }
+    for index, stack_path in enumerate(_particle_stack_paths_from_star(source_star)):
+        source_paths[f"particle_stack:{index}"] = stack_path
+    import starfile
+
+    for half in (1, 2):
+        model_path = source_paths[f"consumer_validation_half{half}_model"]
+        document = starfile.read(model_path, always_dict=True)
+        classes = document.get("model_classes")
+        if classes is None or "rlnReferenceImage" not in classes or len(classes) != 1:
+            raise ValueError(
+                f"fixed K=1 diagnostic boundary consumer model lacks one reference map: {model_path}"
+            )
+        map_path = Path(str(classes["rlnReferenceImage"].iloc[0]))
+        if not map_path.is_absolute():
+            map_path = model_path.parent / map_path
+        source_paths[f"consumer_map:half{half}:class1"] = map_path.resolve()
+    return source_paths
+
+
+def _fixed_diagnostic_runtime_config(
+    args,
+    *,
+    dataset,
+    effective_max_healpix_order,
+    effective_tau2_fudge,
+    effective_perturb_seed,
+) -> dict[str, str | float | int | bool]:
+    """Materialize every v3 runtime control with stable Python scalar types."""
+
+    mask_edge = 5.0 if args._relion_mask_params is None else float(args._relion_mask_params[1])
+    particle_diameter = 0.0 if args._relion_mask_params is None else float(args._relion_mask_params[0])
+    return {
+        "adaptive_oversampling": int(args.adaptive_oversampling),
+        "diagnostic_arm_id": FROZEN_BOUNDARY_FIXED_DIAGNOSTIC_ARM,
+        "max_iter": int(args.max_iter),
+        "skip_final_iteration": bool(args.skip_final_iteration),
+        "init_resolution_angstrom": float(args.init_resolution),
+        "offset_range_pixels": float(args.offset_range),
+        "offset_step_pixels": float(args.offset_step),
+        "perturb_factor": float(args.perturb_factor),
+        "fsc_threshold": 1.0 / 7.0,
+        "jax_enable_x64": bool(jax.config.x64_enabled),
+        "provenance_verification_scope": FROZEN_BOUNDARY_PROVENANCE_VERIFICATION_SCOPE,
+        "numerical_classification_scope": FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
+        "auto_local_healpix_order": int(args.auto_local_healpix_order),
+        "max_healpix_order": int(effective_max_healpix_order),
+        "max_significants": int(args.max_significants),
+        "particle_diameter_angstrom": float(particle_diameter),
+        "width_mask_edge_px": float(mask_edge),
+        "tau2_fudge": float(effective_tau2_fudge),
+        "low_resol_join_halves_angstrom": 40.0,
+        "image_batch_size": int(args.image_batch_size),
+        "rotation_block_size": int(args.rotation_block_size),
+        "random_seed": int(args.seed),
+        "perturb_seed": int(effective_perturb_seed),
+        "n_classes": int(args.n_classes),
+        "grid_size": int(dataset.grid_size),
+        "voxel_size_angstrom": float(dataset.voxel_size),
+        "projection_padding_factor": 2,
+        "backprojection_padding_factor": 2,
+        "do_ctf_correction": True,
+        "firstiter_cc": bool(args.firstiter_cc),
+        "do_norm_correction": True,
+        "do_scale_correction": False,
+        "refs_are_ctf_corrected": True,
+        "disc_type": os.environ.get("RECOVAR_DISC_TYPE_OVERRIDE", "linear_interp"),
+        "image_fourier_backend": str(args.image_fourier_backend),
+        "local_search_translation_prior_mode": "coarse",
+        "declared_relion_command_line": str(args.frozen_boundary_relion_command_line),
+        "declared_relion_base_git_commit": str(args.frozen_boundary_relion_git_commit),
+        "recovar_git_commit": str(_safe_git_commit() or "<unknown>"),
+        "declared_relion_build_id": str(args.frozen_boundary_relion_build_id),
+        "projector_boundary_kind": "reconstructed-projector boundary",
+        "replay_prefix": str(args.frozen_boundary_replay_prefix),
+    }
+
+
+_FIXED_ARM_ALLOWED_RECOVAR_ENV = frozenset(
+    {
+        "RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR",
+        "RECOVAR_COMPACT_CANDIDATE_CAPTURE_ITERATION",
+        "RECOVAR_CUDA_LIB",
+        "RECOVAR_EXPECTED_REPO_ROOT",
+        "RECOVAR_PARITY_TIMING_DIR",
+        "RECOVAR_PROVENANCE_MODULES",
+        "RECOVAR_RELION_BIND_BUILD_DIR",
+        "RECOVAR_RELION_BIND_COPY_TO_PACKAGE",
+    }
+)
+
+
+def _validate_fixed_diagnostic_arm_cli(args) -> None:
+    """Restrict v3 to its one reviewed real-10076 physical-it2 arm."""
+
+    exact_values = {
+        "max_iter": 1,
+        "skip_final_iteration": True,
+        "init_resolution": 30.0,
+        "offset_range": 3.0,
+        "offset_step": 1.0,
+        "perturb_factor": 0.5,
+        "adaptive_oversampling": 1,
+        "n_classes": 1,
+        "firstiter_cc": True,
+        "apply_initial_lowpass": False,
+        "image_fourier_backend": "relion_cuda",
+    }
+    for name, expected in exact_values.items():
+        observed = getattr(args, name)
+        if observed != expected:
+            raise ValueError(
+                f"fixed diagnostic arm requires --{name.replace('_', '-')}={expected!r}"
+            )
+
+    forbidden_options = {
+        "final_replay_relion_dir",
+        "relion_projector_capture_dir",
+        "relion_projector_capture_manifest",
+        "relion_projector_capture_iteration",
+        "perturb_replay_restart_provenance",
+        "relion_dispatch_schedule",
+        "relion_follower_scale_replay",
+        "init_class_volumes",
+        "init_volume",
+        "init_previous_best_poses_npz",
+        "init_noise_from_npz",
+        "initial_noise_cache_dir",
+        "relion_init_dir",
+        "relion_optimiser",
+        "relion_current_sizes",
+        "relion_healpix_orders",
+    }
+    enabled_forbidden = sorted(
+        name for name in forbidden_options if getattr(args, name, None) is not None
+    )
+    if enabled_forbidden:
+        raise ValueError(
+            "fixed diagnostic arm rejects alternate state/projector/oracle inputs: "
+            + ", ".join(enabled_forbidden)
+        )
+    forbidden_flags = {
+        "stop_after_local_search_profile",
+        "stop_after_local_search",
+        "stop_after_local_search_score_only",
+        "diagnostic_single_half",
+    }
+    enabled_flags = sorted(name for name in forbidden_flags if bool(getattr(args, name)))
+    if enabled_flags:
+        raise ValueError(
+            "fixed diagnostic arm rejects early-stop/single-half modes: "
+            + ", ".join(enabled_flags)
+        )
+    if str(args.perturb_replay_restart_state_iterations).strip():
+        raise ValueError("fixed diagnostic arm rejects sampling-restart substitution")
+    if args.replay_relion_normcorr is not None:
+        raise ValueError("fixed diagnostic arm rejects external norm-correction replay")
+    if args.relion_scale_followers is not None:
+        raise ValueError("fixed diagnostic arm rejects follower-scale emulation")
+
+
+def _validate_fixed_diagnostic_math_environment(environ=None) -> None:
+    """Reject unsealed numerical/backend switches for the fixed v3 arm."""
+
+    environment = os.environ if environ is None else environ
+    forbidden_recovar = sorted(
+        name
+        for name, value in environment.items()
+        if name.startswith("RECOVAR_")
+        and str(value) != ""
+        and name not in _FIXED_ARM_ALLOWED_RECOVAR_ENV
+    )
+    if forbidden_recovar:
+        raise ValueError(
+            "fixed diagnostic arm has unsealed RECOVAR environment overrides: "
+            + ", ".join(forbidden_recovar)
+        )
+    forbidden_numeric_environment = sorted(
+        name
+        for name in ("JAX_DEFAULT_MATMUL_PRECISION", "NVIDIA_TF32_OVERRIDE", "XLA_FLAGS")
+        if str(environment.get(name, "")) != ""
+    )
+    if forbidden_numeric_environment:
+        raise ValueError(
+            "fixed diagnostic arm has unsealed compiler/precision environment: "
+            + ", ".join(forbidden_numeric_environment)
+        )
+    if not bool(jax.config.x64_enabled):
+        raise ValueError("fixed diagnostic arm requires JAX x64 support enabled")
+
+
+def _verify_fixed_diagnostic_provenance_manifests(boundary, source_paths) -> None:
+    """Semantically verify the sealed source/environment manifests."""
+
+    source_manifest = json.loads(
+        Path(source_paths["recovar_source_manifest"]).read_text(encoding="utf-8")
+    )
+    if source_manifest != {
+        "schema": "recovar.em.source_manifest.v1",
+        "recovar_git_commit": boundary.runtime_config["recovar_git_commit"],
+        "worktree_clean": True,
+    }:
+        raise ValueError("sealed RECOVAR source manifest content mismatch")
+    worktree = git_worktree_provenance()
+    if (
+        worktree["head"] != boundary.runtime_config["recovar_git_commit"]
+        or int(worktree["dirty_count"]) != 0
+    ):
+        raise ValueError(
+            "runtime RECOVAR source tree differs from the sealed clean commit: "
+            f"head={worktree['head']} dirty_count={worktree['dirty_count']}"
+        )
+
+    environment_manifest = json.loads(
+        Path(source_paths["runtime_environment_manifest"]).read_text(encoding="utf-8")
+    )
+    expected_environment = {
+        "schema": "recovar.em.runtime_environment.v1",
+        "diagnostic_arm_id": boundary.runtime_config["diagnostic_arm_id"],
+        "math_environment_contract": FROZEN_BOUNDARY_FIXED_MATH_ENVIRONMENT_CONTRACT,
+        "jax_enable_x64": boundary.runtime_config["jax_enable_x64"],
+        "provenance_verification_scope": boundary.runtime_config[
+            "provenance_verification_scope"
+        ],
+        "numerical_classification_scope": boundary.runtime_config[
+            "numerical_classification_scope"
+        ],
+        "declared_relion_command_line": boundary.runtime_config["declared_relion_command_line"],
+        "declared_relion_base_git_commit": boundary.runtime_config["declared_relion_base_git_commit"],
+        "declared_relion_build_id": boundary.runtime_config["declared_relion_build_id"],
+        "recovar_git_commit": boundary.runtime_config["recovar_git_commit"],
+        "projector_boundary_kind": boundary.runtime_config["projector_boundary_kind"],
+    }
+    if environment_manifest != expected_environment:
+        raise ValueError("sealed runtime command/build/environment manifest content mismatch")
 
 
 def _resolve_relion_sampling_orders(healpix_order: int, adaptive_oversampling: int) -> tuple[int, int]:
@@ -1202,9 +1533,9 @@ def _build_frozen_replay_slots(max_iter: int) -> list[dict]:
 
     A restarted process must not reinterpret its local slot 0 as RELION's
     process-start iteration 0.  In particular, doing so broadcasts half-1
-    sigma2_noise over half 2.  Every physical-iteration scoring primitive is
-    instead supplied through the sealed frozen-boundary initial state; only a
-    separately sealed projector may be attached to these slots later.
+    sigma2_noise over half 2.  Scoring primitives owned by the boundary are
+    instead supplied through its sealed initial state; only a separately
+    sealed projector may be attached to these slots later.
     """
 
     count = int(max_iter) + 1
@@ -1238,8 +1569,8 @@ def _assert_frozen_replay_slots_projector_only(
         ]
         if projector_slots != [projector_slot]:
             raise ValueError(
-                "frozen replay must contain exactly one projector in the physical "
-                f"numbered slot {projector_slot}; got {projector_slots}"
+                "frozen replay must contain exactly one projector in numbered "
+                f"slot {projector_slot}; got {projector_slots}"
             )
         nonempty_other_slots = [
             index
@@ -1619,6 +1950,21 @@ def _find_relion_optimiser_star(args):
     return None
 
 
+def _relion_optimiser_star_for_runtime(
+    args,
+    *,
+    frozen_boundary=None,
+    fixed_diagnostic_source_paths=None,
+):
+    """Use only the sealed completed optimiser for the fixed schema-v3 arm."""
+
+    if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm:
+        if fixed_diagnostic_source_paths is None:
+            raise ValueError("fixed diagnostic arm lacks sealed source paths")
+        return Path(fixed_diagnostic_source_paths["completed_optimiser"]).resolve()
+    return _find_relion_optimiser_star(args)
+
+
 def _resolve_optimizer_random_seed(explicit_seed, relion_optimiser_star):
     """Resolve the optimiser seed without silently diverging from RELION.
 
@@ -1670,11 +2016,32 @@ def _effective_perturb_seed(args):
     return None if seed is None else int(seed)
 
 
-def _maybe_apply_relion_image_mask(ds, args):
+def _maybe_apply_relion_image_mask(ds, args, *, sealed_optimiser_star=None):
     """Override the dataset scoring mask with RELION's particle-diameter mask."""
     explicit_particle_diameter = getattr(args, "particle_diameter_ang", None)
     explicit_width_mask_edge = getattr(args, "width_mask_edge_px", 5.0)
-    if explicit_particle_diameter is not None:
+    if sealed_optimiser_star is not None:
+        optimiser_star = Path(sealed_optimiser_star).resolve()
+        params = _load_relion_mask_params(optimiser_star)
+        if params is None:
+            raise ValueError(
+                f"sealed fixed-arm optimiser lacks RELION mask parameters: {optimiser_star}"
+            )
+        sealed_particle_diameter, sealed_width_mask_edge = params
+        if (
+            explicit_particle_diameter is not None
+            and float(explicit_particle_diameter) != sealed_particle_diameter
+        ):
+            raise ValueError(
+                "fixed diagnostic particle diameter differs from sealed optimiser: "
+                f"cli={explicit_particle_diameter} sealed={sealed_particle_diameter}"
+            )
+        if float(explicit_width_mask_edge) != sealed_width_mask_edge:
+            raise ValueError(
+                "fixed diagnostic mask-edge width differs from sealed optimiser: "
+                f"cli={explicit_width_mask_edge} sealed={sealed_width_mask_edge}"
+            )
+    elif explicit_particle_diameter is not None:
         params = (float(explicit_particle_diameter), float(explicit_width_mask_edge))
         optimiser_star = "explicit CLI"
     else:
@@ -1969,6 +2336,57 @@ def main():
         ),
     )
     parser.add_argument(
+        "--require-fixed-diagnostic-boundary",
+        action="store_true",
+        help=(
+            "Require the fixed real-10076 K=1 physical-it2 reconstructed-projector "
+            "diagnostic arm. This does not claim identity to RELION's full in-memory "
+            "physical iteration. Historical v2 boundaries remain loadable only when "
+            "this fixed-arm gate is absent."
+        ),
+    )
+    parser.add_argument(
+        "--frozen-boundary-live-capture-manifest",
+        default=None,
+        help=(
+            "Validated live-state manifest named by the fixed schema-v3 diagnostic arm. "
+            "Required with --require-fixed-diagnostic-boundary."
+        ),
+    )
+    parser.add_argument(
+        "--frozen-boundary-runtime-environment-manifest",
+        default=None,
+        help=(
+            "Sealed declared command/build and numerical-scope manifest for schema-v3; "
+            "hardware/toolchain identity remains explicitly unverified."
+        ),
+    )
+    parser.add_argument(
+        "--frozen-boundary-recovar-source-manifest",
+        default=None,
+        help="Exact RECOVAR source-tree manifest sealed by schema-v3.",
+    )
+    parser.add_argument(
+        "--frozen-boundary-relion-command-line",
+        default=None,
+        help="Declared source RELION command line recorded by schema-v3.",
+    )
+    parser.add_argument(
+        "--frozen-boundary-relion-git-commit",
+        default=None,
+        help="Declared base RELION git commit recorded by schema-v3.",
+    )
+    parser.add_argument(
+        "--frozen-boundary-relion-build-id",
+        default=None,
+        help="Declared source RELION binary/build identifier recorded by schema-v3.",
+    )
+    parser.add_argument(
+        "--frozen-boundary-replay-prefix",
+        default=None,
+        help="Exact RELION replay filename prefix sealed by schema-v3 (for example, run).",
+    )
+    parser.add_argument(
         "--replay_relion_normcorr",
         dest="replay_relion_normcorr",
         action="store_true",
@@ -2243,6 +2661,7 @@ def main():
     args = parser.parse_args()
 
     frozen_boundary = None
+    fixed_diagnostic_source_paths = None
     if args.frozen_boundary_dir is not None:
         if args.n_classes != 1:
             raise SystemExit("--frozen-boundary-dir is K=1-only")
@@ -2280,6 +2699,31 @@ def main():
             )
         except (OSError, TypeError, ValueError) as exc:
             raise SystemExit(f"Invalid frozen refinement boundary: {exc}") from exc
+        if args.require_fixed_diagnostic_boundary and not frozen_boundary.fixed_diagnostic_arm:
+            raise SystemExit(
+                "--require-fixed-diagnostic-boundary rejects historical schema-v2 state"
+            )
+        if frozen_boundary.fixed_diagnostic_arm and not args.require_fixed_diagnostic_boundary:
+            raise SystemExit(
+                "schema-v3 frozen state must be acknowledged with "
+                "--require-fixed-diagnostic-boundary"
+            )
+        if frozen_boundary.fixed_diagnostic_arm:
+            missing_provenance_flags = [
+                flag
+                for flag, value in (
+                    ("--frozen-boundary-relion-command-line", args.frozen_boundary_relion_command_line),
+                    ("--frozen-boundary-relion-git-commit", args.frozen_boundary_relion_git_commit),
+                    ("--frozen-boundary-relion-build-id", args.frozen_boundary_relion_build_id),
+                    ("--frozen-boundary-replay-prefix", args.frozen_boundary_replay_prefix),
+                )
+                if value is None
+            ]
+            if missing_provenance_flags:
+                raise SystemExit(
+                    "schema-v3 requires explicit source command/build provenance: "
+                    + ", ".join(missing_provenance_flags)
+                )
         if int(args.init_relion_iteration) != frozen_boundary.completed_relion_iteration:
             raise SystemExit(
                 "--init_relion_iteration does not match the sealed frozen boundary: "
@@ -2297,11 +2741,24 @@ def main():
                 "--adaptive_oversampling 1"
             )
         try:
+            fixed_diagnostic_source_paths = (
+                _fixed_diagnostic_source_paths(args, frozen_boundary)
+                if frozen_boundary.fixed_diagnostic_arm
+                else None
+            )
             _verify_frozen_boundary_source_hashes(
                 frozen_boundary,
                 source_star=Path(args.data_dir) / "particles.star",
                 relion_half_star=args.relion_half_sets,
+                fixed_diagnostic_source_paths=fixed_diagnostic_source_paths,
             )
+            if frozen_boundary.fixed_diagnostic_arm:
+                _verify_fixed_diagnostic_provenance_manifests(
+                    frozen_boundary,
+                    fixed_diagnostic_source_paths,
+                )
+                _validate_fixed_diagnostic_arm_cli(args)
+                _validate_fixed_diagnostic_math_environment()
         except (OSError, ValueError) as exc:
             raise SystemExit(f"Invalid frozen refinement boundary source binding: {exc}") from exc
         logger.info(
@@ -2314,8 +2771,31 @@ def main():
         )
     elif args.frozen_boundary_manifest is not None:
         raise SystemExit("--frozen-boundary-manifest requires --frozen-boundary-dir")
+    elif args.require_fixed_diagnostic_boundary or any(
+        value is not None
+        for value in (
+            args.frozen_boundary_live_capture_manifest,
+            args.frozen_boundary_runtime_environment_manifest,
+            args.frozen_boundary_recovar_source_manifest,
+            args.frozen_boundary_relion_command_line,
+            args.frozen_boundary_relion_git_commit,
+            args.frozen_boundary_relion_build_id,
+            args.frozen_boundary_replay_prefix,
+        )
+    ):
+        raise SystemExit(
+            "fixed diagnostic boundary flags require --frozen-boundary-dir"
+        )
 
-    seed_optimiser_star = _explicit_relion_optimiser_for_seed(args)
+    seed_optimiser_star = (
+        _relion_optimiser_star_for_runtime(
+            args,
+            frozen_boundary=frozen_boundary,
+            fixed_diagnostic_source_paths=fixed_diagnostic_source_paths,
+        )
+        if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
+        else _explicit_relion_optimiser_for_seed(args)
+    )
     args.seed, optimizer_seed_source = _resolve_optimizer_random_seed(args.seed, seed_optimiser_star)
     logger.info("Optimiser random seed: %d (%s)", args.seed, optimizer_seed_source)
 
@@ -2343,7 +2823,15 @@ def main():
         os.path.join(args.data_dir, "particles.star"),
         lazy=False,
     )
-    relion_mask_params = _maybe_apply_relion_image_mask(ds, args)
+    relion_mask_params = _maybe_apply_relion_image_mask(
+        ds,
+        args,
+        sealed_optimiser_star=(
+            None
+            if frozen_boundary is None or not frozen_boundary.fixed_diagnostic_arm
+            else fixed_diagnostic_source_paths["completed_optimiser"]
+        ),
+    )
     args._relion_mask_params = relion_mask_params
     particle_diameter_ang = None if relion_mask_params is None else float(relion_mask_params[0])
     logger.info("Dataset: %d images, image_shape=%s, voxel_size=%.3f A/px", ds.n_units, ds.image_shape, ds.voxel_size)
@@ -2708,7 +3196,11 @@ def main():
                 f"{missing_numbered_iterations}"
             )
 
-    optimiser_star = _find_relion_optimiser_star(args)
+    optimiser_star = _relion_optimiser_star_for_runtime(
+        args,
+        frozen_boundary=frozen_boundary,
+        fixed_diagnostic_source_paths=fixed_diagnostic_source_paths,
+    )
     relion_firstiter_ini_high_angstrom = None
     if optimiser_star is not None:
         from recovar.em.sampling import read_relion_optimiser_metadata
@@ -2908,7 +3400,7 @@ def main():
             axis=0,
         )
         logger.info(
-            "Initial per-half noise and tau2 are owned by frozen boundary %s",
+            "Initial noise/tau2 state is owned by frozen boundary %s",
             frozen_boundary.source_dir,
         )
     elif args.init_noise_from_npz is not None:
@@ -3110,7 +3602,11 @@ def main():
                 )
 
     if frozen_boundary is not None:
-        mean_variance = jnp.asarray(frozen_boundary.mean_variance)
+        mean_variance = jnp.asarray(
+            np.stack(frozen_boundary.mean_variance_per_half, axis=0)
+            if frozen_boundary.fixed_diagnostic_arm
+            else frozen_boundary.mean_variance
+        )
 
     # Compute initial current_size from init_resolution, unless an atomic
     # frozen boundary owns the numbered-iteration schedule.
@@ -3360,6 +3856,23 @@ def main():
     t_start = time.time()
 
     effective_perturb_seed = _effective_perturb_seed(args)
+    if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm:
+        if effective_perturb_seed is None:
+            raise SystemExit("fixed diagnostic boundary v3 requires a deterministic perturb seed")
+        try:
+            validate_fixed_diagnostic_boundary_runtime_config(
+                frozen_boundary,
+                _fixed_diagnostic_runtime_config(
+                    args,
+                    dataset=ds,
+                    effective_max_healpix_order=effective_max_healpix_order,
+                    effective_tau2_fudge=effective_tau2_fudge,
+                    effective_perturb_seed=effective_perturb_seed,
+                ),
+            )
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(f"Fixed diagnostic boundary runtime config mismatch: {exc}") from exc
+        logger.info("Fixed diagnostic boundary v3 runtime config verified")
     perturb_replay_restart_state_iterations = tuple(
         sorted(
             {
@@ -3542,6 +4055,27 @@ def main():
         stop_after_local_search_profile=bool(args.stop_after_local_search_profile),
         stop_after_local_search=bool(args.stop_after_local_search),
         stop_after_local_search_score_only=bool(args.stop_after_local_search_score_only),
+        sealed_sampling_state=(
+            frozen_boundary.sampling_state
+            if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
+            else None
+        ),
+        sealed_scoring_context=(
+            {
+                "schema": frozen_boundary.schema,
+                "completed_relion_iteration": frozen_boundary.completed_relion_iteration,
+                "consumer_relion_iteration": frozen_boundary.consumer_relion_iteration,
+                "source_sha256": frozen_boundary.source_sha256,
+                "source_roles": frozen_boundary.source_roles,
+                "runtime_config": frozen_boundary.runtime_config,
+                "map_lineage": frozen_boundary.map_lineage,
+            }
+            if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
+            else None
+        ),
+        use_per_half_mean_variance=(
+            frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
+        ),
     )
 
     total_time = time.time() - t_start

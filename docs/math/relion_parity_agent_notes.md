@@ -4129,3 +4129,23 @@ map-quality acceptance remains shellwise FSC/FSC-AUC only, never correlation.
   (SHA-256 prefix `eb5db2c1`). Localize the iteration-7-to-8 class-3 aggregate
   boundary; do not lower the `0.995` map gate and do not use the particle-column
   mean as a scheduling oracle.
+## 2026-07-18 frozen-boundary v3 test-device incident
+
+A broad `pixi run pytest` command was started without forcing the CPU. JAX
+initialized local CUDA and briefly allocated about 41 GB on physical GPU 0,
+contaminating the concurrently running K1 case-19 measurement. PID 835601
+exited and case 19 was scheduled for retry. All subsequent v3 tests use both
+`CUDA_VISIBLE_DEVICES=''` and `JAX_PLATFORMS=cpu`; v3 science launch remains on
+hold pending schema/source-closure review.
+
+## 2026-07-18 frozen-boundary v3 provenance scope
+
+The source capture provenance records instrumented RELION commit `d5398ed`
+(`Isolate oversized parity candidate shards`), binary SHA-256 prefix
+`916a301b`, RELION 5.0.1, CUDA 12.6, GCC 11, and an A100-SXM4-80GB with UUID
+`GPU-add27088-5e0d-a3a0-eb77-c7c8ed03881f`. The proposed `d476e6f` value is a
+declared clean base, not the verified instrumented capture commit. Schema v3
+therefore labels command/base-build fields as declared and explicitly marks
+source/runtime hardware-toolchain identity cross-device-unverified. Until a
+future arm seals both endpoints, this harness cannot classify residuals as
+same-device equivalence or numerical noise.
