@@ -109,6 +109,9 @@ def test_autonomous_trajectory_uses_only_iter0_boundary_and_never_emits_replay_l
     assert '"trajectory_mode": "autonomous"' in config_text
     summary_text = (scratch / "jobs" / "em_k1_matrix_summary.sh").read_text()
     assert '"Trajectory mode: autonomous"' in summary_text
+    assert "Direct RECOVAR/RELION FSC AUC" in summary_text
+    assert 'metrics.get("recovar_merged_vs_relion_final_map")' in summary_text
+    assert "RECOVAR GT corr" not in summary_text
 
 
 def test_noctf_simulator_cases_use_sanitized_relion_ctf_by_default(tmp_path):

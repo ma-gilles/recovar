@@ -1397,7 +1397,7 @@ for line in case_table.read_text().splitlines():
     recovar_wall_s = None
     recovar_exit = None
     fsc_auc = None
-    corr = None
+    direct_fsc_auc = None
     relion_fsc_auc = None
     status = "missing"
     notes = []
@@ -1409,8 +1409,9 @@ for line in case_table.read_text().splitlines():
         metrics = k1.get("metrics") or {}
         rec_gt = metrics.get("recovar_merged_vs_gt") or {}
         rel_gt = metrics.get("relion_merged_vs_gt") or {}
+        direct = metrics.get("recovar_merged_vs_relion_final_map") or {}
         fsc_auc = rec_gt.get("fsc_auc")
-        corr = rec_gt.get("corr")
+        direct_fsc_auc = direct.get("fsc_auc")
         relion_fsc_auc = rel_gt.get("fsc_auc")
     wall_path = case_root_path / "recovar" / "slurm_walltime.json"
     if wall_path.exists():
@@ -1437,7 +1438,7 @@ for line in case_table.read_text().splitlines():
             "recovar_exit": recovar_exit,
             "recovar_wall_s": recovar_wall_s,
             "recovar_vs_gt_fsc_auc": fsc_auc,
-            "recovar_vs_gt_corr": corr,
+            "recovar_vs_relion_final_fsc_auc": direct_fsc_auc,
             "relion_vs_gt_fsc_auc": relion_fsc_auc,
             "notes": notes,
             "case_root": str(case_root_path),
@@ -1472,7 +1473,7 @@ lines = [
     "",
     "Trajectory mode: ${TRAJECTORY_MODE}",
     "",
-    "| # | Case | N | Grid | Noise | Poses | Stress | Job | Status | RECOVAR wall s | RECOVAR GT FSC AUC | RECOVAR GT corr | RELION GT FSC AUC |",
+    "| # | Case | N | Grid | Noise | Poses | Stress | Job | Status | RECOVAR wall s | Direct RECOVAR/RELION FSC AUC | RECOVAR GT FSC AUC | RELION GT FSC AUC |",
     "|---:|---|---:|---:|---|---|---|---:|---|---:|---:|---:|---:|",
 ]
 for row in rows:
@@ -1503,8 +1504,8 @@ for row in rows:
                 fmt(row["job_id"]),
                 row["status"],
                 fmt(row["recovar_wall_s"]),
+                fmt(row["recovar_vs_relion_final_fsc_auc"]),
                 fmt(row["recovar_vs_gt_fsc_auc"]),
-                fmt(row["recovar_vs_gt_corr"]),
                 fmt(row["relion_vs_gt_fsc_auc"]),
             ]
         )
