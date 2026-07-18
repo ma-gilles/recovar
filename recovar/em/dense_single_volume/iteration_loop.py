@@ -3809,6 +3809,7 @@ def refine_single_volume(
     init_previous_best_rotation_eulers=None,
     replay_iteration_overrides=None,
     final_replay_override=None,
+    final_replay_source_iteration=None,
     skip_final_iteration=False,
     local_search_profile_mode="auto",
     local_search_translation_prior_mode="coarse",
@@ -4002,6 +4003,7 @@ def refine_single_volume(
         init_previous_best_rotation_eulers = replay.init_previous_best_rotation_eulers
         replay_iteration_overrides = replay.replay_iteration_overrides
         final_replay_override = replay.final_replay_override
+        final_replay_source_iteration = replay.final_replay_source_iteration
 
         batching = options.batching
         image_batch_size = batching.image_batch_size
@@ -4077,6 +4079,7 @@ def refine_single_volume(
         init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
         replay_iteration_overrides=replay_iteration_overrides,
         final_replay_override=final_replay_override,
+        final_replay_source_iteration=final_replay_source_iteration,
         skip_final_iteration=skip_final_iteration,
         local_search_profile_mode=local_search_profile_mode,
         local_search_translation_prior_mode=local_search_translation_prior_mode,
@@ -4162,6 +4165,7 @@ def _run_relion_iteration_loop(
     init_previous_best_rotation_eulers=None,
     replay_iteration_overrides=None,
     final_replay_override=None,
+    final_replay_source_iteration=None,
     skip_final_iteration=False,
     local_search_profile_mode="auto",
     local_search_translation_prior_mode="coarse",
@@ -8241,6 +8245,16 @@ def _run_relion_iteration_loop(
         replay_iteration_overrides
     )
     diagnostic_final_replay_override = final_replay_override
+    if (
+        diagnostic_final_replay_override is not None
+        and final_replay_source_iteration is not None
+        and int(len(current_sizes)) != int(final_replay_source_iteration)
+    ):
+        raise RuntimeError(
+            "Diagnostic final-only substitution source does not match autonomous convergence boundary: "
+            f"source_iteration={int(final_replay_source_iteration)} "
+            f"numbered_iteration_count={int(len(current_sizes))}"
+        )
     final_replay_last_numbered_state = (
         diagnostic_final_replay_override is not None
         or (

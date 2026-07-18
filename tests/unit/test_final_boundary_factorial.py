@@ -77,6 +77,7 @@ def test_final_only_options_reach_both_iteration_loop_boundaries():
     for function in (refine_single_volume, _run_relion_iteration_loop):
         parameters = inspect.signature(function).parameters
         assert "final_replay_override" in parameters
+        assert "final_replay_source_iteration" in parameters
         assert "final_sampling_replay_relion_dir" in parameters
 
 

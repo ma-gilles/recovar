@@ -2810,6 +2810,7 @@ def main():
         )
 
     final_replay_override = None
+    final_replay_source_iteration = None
     final_sampling_replay_relion_dir = None
     if args.final_replay_relion_dir is not None:
         final_replay_dir = Path(args.final_replay_relion_dir).resolve()
@@ -2819,6 +2820,7 @@ def main():
             explicit_source_iteration=args.final_replay_source_iteration,
             complete_iterations=complete_iterations,
         )
+        final_replay_source_iteration = source_iteration
         final_optimiser_path = final_replay_dir / "run_optimiser.star"
         final_sampling_path = final_replay_dir / "run_sampling.star"
         if not final_optimiser_path.is_file() or not final_sampling_path.is_file():
@@ -3066,6 +3068,7 @@ def main():
         final_sampling_replay_relion_dir=final_sampling_replay_relion_dir,
         replay_iteration_overrides=replay_iteration_overrides,
         final_replay_override=final_replay_override,
+        final_replay_source_iteration=final_replay_source_iteration,
         init_relion_iteration=args.init_relion_iteration,
         n_classes=args.n_classes,
         image_fourier_backend=args.image_fourier_backend,
