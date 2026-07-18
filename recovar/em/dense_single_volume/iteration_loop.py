@@ -909,6 +909,36 @@ def _firstiter_cc_ini_high_resolution_shell(grid_size, voxel_size, ini_high_angs
     return max(1, min(int(grid_size) // 2, shell))
 
 
+def _firstiter_cc_scheduling_resolution_shell(
+    resolution_shell,
+    *,
+    emulate_relion_firstiter_cc,
+    ini_high_angstrom,
+    relion_iteration,
+    grid_size,
+    voxel_size,
+):
+    """Apply RELION's iter-1 ``--firstiter_cc`` current-size rule.
+
+    ``MlOptimiser::updateCurrentResolution`` uses the ``--ini_high`` shell at
+    physical iteration 1 regardless of whether refinement has one or multiple
+    classes. Keep this override independent of the K=1/K-class data-vs-prior
+    calculation so both paths schedule iteration 2 identically.
+    """
+
+    if (
+        emulate_relion_firstiter_cc
+        and ini_high_angstrom is not None
+        and int(relion_iteration) == 1
+    ):
+        return _firstiter_cc_ini_high_resolution_shell(
+            grid_size,
+            voxel_size,
+            ini_high_angstrom,
+        )
+    return int(resolution_shell)
+
+
 def _firstiter_cc_ini_high_tau2_taper(
     n_shells,
     grid_size,
@@ -5025,6 +5055,22 @@ def _run_relion_iteration_loop(
                     dtype=np.int32,
                 )
                 res_shell = int(np.max(per_class_res_shell))
+                scheduling_res_shell = _firstiter_cc_scheduling_resolution_shell(
+                    res_shell,
+                    emulate_relion_firstiter_cc=emulate_relion_firstiter_cc,
+                    ini_high_angstrom=relion_firstiter_ini_high_angstrom,
+                    relion_iteration=int(init_relion_iteration) + int(iteration),
+                    grid_size=grid_size,
+                    voxel_size=cryo.voxel_size,
+                )
+                if scheduling_res_shell != res_shell:
+                    res_shell = scheduling_res_shell
+                    logger.info(
+                        "RELION firstiter_cc scheduling: using ini_high=%.2f A shell %d "
+                        "for next K-class current_size",
+                        float(relion_firstiter_ini_high_angstrom),
+                        int(res_shell),
+                    )
                 raw_cs = compute_current_size_relion(
                     res_shell,
                     grid_size,
@@ -5082,16 +5128,16 @@ def _run_relion_iteration_loop(
                     incr_size=relion_incr_size,
                     has_high_fsc_at_limit=relion_has_high_fsc_at_limit,
                 )
-                if (
-                    emulate_relion_firstiter_cc
-                    and relion_firstiter_ini_high_angstrom is not None
-                    and int(init_relion_iteration) + int(iteration) == 1
-                ):
-                    res_shell = _firstiter_cc_ini_high_resolution_shell(
-                        grid_size,
-                        cryo.voxel_size,
-                        relion_firstiter_ini_high_angstrom,
-                    )
+                scheduling_res_shell = _firstiter_cc_scheduling_resolution_shell(
+                    res_shell,
+                    emulate_relion_firstiter_cc=emulate_relion_firstiter_cc,
+                    ini_high_angstrom=relion_firstiter_ini_high_angstrom,
+                    relion_iteration=int(init_relion_iteration) + int(iteration),
+                    grid_size=grid_size,
+                    voxel_size=cryo.voxel_size,
+                )
+                if scheduling_res_shell != res_shell:
+                    res_shell = scheduling_res_shell
                     logger.info(
                         "RELION firstiter_cc scheduling: using ini_high=%.2f A shell %d for next current_size",
                         float(relion_firstiter_ini_high_angstrom),

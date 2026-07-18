@@ -11406,6 +11406,37 @@ class TestRelionModeSmokeTest:
         assert regularization_module.resolution_from_data_vs_prior(dvp, allow_high_res_recovery=True) == 27
         assert dvp[29] < 1.0
 
+    def test_firstiter_cc_scheduling_override_is_class_count_independent(self):
+        """The ini_high rule also applies to Class3D/K-class iteration 1."""
+        shell = iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
+            10,
+            emulate_relion_firstiter_cc=True,
+            ini_high_angstrom=60.0,
+            relion_iteration=1,
+            grid_size=256,
+            voxel_size=2.125,
+        )
+        current_size = regularization_module.compute_current_size_relion(
+            shell,
+            256,
+            ave_Pmax=1.0,
+            has_high_fsc_at_limit=False,
+            incr_size=10,
+        )
+
+        assert shell == 9
+        assert current_size == 38
+
+    def test_firstiter_cc_scheduling_override_is_only_physical_iteration_one(self):
+        assert iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
+            10,
+            emulate_relion_firstiter_cc=True,
+            ini_high_angstrom=60.0,
+            relion_iteration=2,
+            grid_size=256,
+            voxel_size=2.125,
+        ) == 10
+
     def test_firstiter_cc_lowpass_runs_before_solvent_flatten(self, monkeypatch):
         """RELION applies iter-1 ini_high low-pass before solvent flatten."""
         from types import SimpleNamespace
