@@ -9418,8 +9418,10 @@ def _run_relion_iteration_loop(
         # RELION writes run_half{1,2}_class001_unfil.mrc from each final
         # BackProjector with do_map=false.  Keep this separate from the
         # Wiener-regularized half maps above so parity audits compare like
-        # products.  BackProjector::reconstruct still applies its standard
-        # iterative preweighting and gridding correction in this mode.
+        # products.  Default RELION refinement sets BackProjector's
+        # skip_gridding=true, so reconstruct uses the radial denominator floor
+        # and direct division path before its final real-space gridding
+        # correction; do_map=false only omits the tau2 prior.
         final_unfiltered_means_for_output = [
             _reconstruct_volume_eager(
                 final_unfiltered_Ft_ctf_0,
