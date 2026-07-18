@@ -52,6 +52,10 @@ def _source_override():
                 "serialized_scale_corrections",
             },
         ),
+        ("noise", {"noise_variance"}),
+        ("direction_prior", {"direction_prior"}),
+        ("image_corrections", {"image_corrections"}),
+        ("scale_corrections", {"serialized_scale_corrections"}),
         ("references", set()),
     ],
 )
@@ -66,6 +70,24 @@ def test_final_replay_all_is_union_without_unrelated_fields():
     assert groups == {"poses", "sampling", "corrections", "references"}
     assert "class_tau2" not in override
     assert set(override) == set(_source_override()) - {"class_tau2"}
+
+
+def test_final_replay_correction_subgroups_compose():
+    groups, override = _select_final_replay_override(
+        _source_override(), "noise,direction_prior,image_corrections,scale_corrections"
+    )
+    assert groups == {
+        "noise",
+        "direction_prior",
+        "image_corrections",
+        "scale_corrections",
+    }
+    assert set(override) == {
+        "noise_variance",
+        "direction_prior",
+        "image_corrections",
+        "serialized_scale_corrections",
+    }
 
 
 @pytest.mark.parametrize("value", ["", "poses,unknown"])

@@ -1059,8 +1059,13 @@ _FINAL_REPLAY_GROUP_KEYS = {
         "image_corrections",
         "serialized_scale_corrections",
     },
+    "noise": {"noise_variance"},
+    "direction_prior": {"direction_prior"},
+    "image_corrections": {"image_corrections"},
+    "scale_corrections": {"serialized_scale_corrections"},
     "references": set(),
 }
+_FINAL_REPLAY_ALL_GROUPS = {"poses", "sampling", "corrections", "references"}
 
 
 def _select_final_replay_override(source_override, requested_fields):
@@ -1075,11 +1080,12 @@ def _select_final_replay_override(source_override, requested_fields):
     if not requested_groups or unknown_groups:
         raise ValueError(
             "--final-replay-fields requires one or more of "
-            "poses,sampling,corrections,references,all; "
+            "poses,sampling,corrections,noise,direction_prior,image_corrections,"
+            "scale_corrections,references,all; "
             f"unknown={unknown_groups}"
         )
     if "all" in requested_groups:
-        requested_groups = set(_FINAL_REPLAY_GROUP_KEYS)
+        requested_groups = set(_FINAL_REPLAY_ALL_GROUPS)
     selected_keys = set().union(*(_FINAL_REPLAY_GROUP_KEYS[group] for group in requested_groups))
     selected_override = {
         key: value for key, value in source_override.items() if key in selected_keys
@@ -1738,11 +1744,12 @@ def main():
         default="all",
         help=(
             "Comma-separated diagnostic final-only groups: poses, sampling, corrections, "
-            "references, or all. "
+            "noise, direction_prior, image_corrections, scale_corrections, references, or all. "
             "poses replaces previous rotations/translations; sampling replaces translation sigma "
             "and final sampling grid/perturbation; corrections replaces noise, direction prior, "
-            "image correction, and serialized scale correction; references replaces only the "
-            "two input half-reference maps used by the final all-data expectation."
+            "image correction, and serialized scale correction; the four correction-specific "
+            "groups select those fields individually; references replaces only the two input "
+            "half-reference maps used by the final all-data expectation."
         ),
     )
     parser.add_argument(
