@@ -4077,14 +4077,15 @@ map-quality acceptance remains shellwise FSC/FSC-AUC only, never correlation.
   rebuilt binding used by the trajectory passes; retain this provenance
   distinction in future test reports.
 
-# 2026-07-18: corrected autonomous K=4 first fails at iteration 8
+# 2026-07-18: corrected autonomous K=4 first map failure is iteration 8
 
 - The corrected autonomous K=4 100k root is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z`.
   Iterations 1--7 pass strict schedule, dispatch, convergence, class matching,
   and per-class FSC gates; iteration 7's minimum matched class FSC-AUC is
-  `0.995999436847`.
-- Iteration 8 is the first formal failure. Identity-matched class FSC-AUC is
+  `0.995999436847`. Iteration 8 is the first map-quality failure, not the first
+  exact scalar-state difference.
+- Iteration 8 identity-matched class FSC-AUC is
   `[0.996440627563, 0.995262998531, 0.994601216732, 0.996054978465]`.
   Schedule, current size, resolution, dispatch ownership, priors, convergence,
   and class matching remain exact.
@@ -4097,6 +4098,14 @@ map-quality acceptance remains shellwise FSC/FSC-AUC only, never correlation.
   v3 audit therefore has exactly one failure: class-3 full-grid FSC-AUC. The
   source contract is `ml_optimiser.cpp:5294` for aggregation and line 5689 for
   scheduling.
+- With the model scalar used consistently, the earliest exact optimizer-Pmax
+  mismatch is iteration 2: RECOVAR `0.069386` versus RELION `0.069454`, delta
+  `-6.8e-5`. RECOVAR-minus-RELION model-scalar deltas for iterations 3--9 are
+  `[-3.1e-5, -6.11e-4, -1.49e-4, -3.61e-4, -1.46e-4, +5e-6, -1.71e-4]`.
+  These values do not change the already-matched size/convergence decisions,
+  but they are real scalar-state differences and must remain visible. The
+  particle-column mean is a separate distribution diagnostic, not a substitute
+  scheduling oracle.
 - Class 3 remains above `0.9999250` normalized FSC-AUC through RELION's
   reported shell 26 and `0.9986630` through the current-size radius 35; its
   beyond-radius FSC-AUC is `0.9930675`. Shells 27--35 contain about `1.83e-4`
