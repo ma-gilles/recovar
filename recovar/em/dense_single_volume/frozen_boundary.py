@@ -166,6 +166,17 @@ def _scalar(npz, key: str, dtype):
     value = _required_array(npz, key)
     if value.shape != ():
         raise ValueError(f"frozen boundary scalar {key} must have shape (), got {value.shape}")
+    expected_kinds = {
+        bool: {"b"},
+        int: {"i", "u"},
+        float: {"f"},
+        str: {"S", "U"},
+    }[dtype]
+    if value.dtype.kind not in expected_kinds:
+        raise ValueError(
+            f"frozen boundary scalar {key} has dtype {value.dtype}; "
+            f"expected kind in {sorted(expected_kinds)}"
+        )
     return dtype(value.item())
 
 
@@ -347,6 +358,10 @@ def load_frozen_refinement_boundary(
                     raise ValueError("frozen-boundary image-correction row count mismatch")
                 if scale_corrections[half].shape != (expected_rows,):
                     raise ValueError("frozen-boundary scale-correction row count mismatch")
+                if np.any(image_corrections[half] <= 0.0):
+                    raise ValueError("frozen-boundary image corrections must be positive")
+                if np.any(scale_corrections[half] <= 0.0):
+                    raise ValueError("frozen-boundary scale corrections must be positive")
 
         refinement_state_fields = {
             key: _scalar(npz, f"state_{key}", field_type)
