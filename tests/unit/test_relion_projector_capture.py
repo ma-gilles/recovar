@@ -49,6 +49,29 @@ def _fixture(root: Path):
     return manifest
 
 
+def _add_projector_class(root: Path, *, class_id: int):
+    shape = (5, 5, 3)
+    for rank in (7, 9):
+        prefix = root / f"state_iter3_rank{rank}_device0_class{class_id}_"
+        for field, value in (
+            ("iteration", 3), ("mpi_rank", rank), ("device_id", 0),
+            ("class_id", class_id), ("projector_zdim", 5), ("projector_ydim", 5),
+            ("projector_xdim", 3), ("projector_zinit", -2), ("projector_yinit", -2),
+            ("projector_xinit", 0), ("projector_r_max", 2),
+            ("projector_padding_factor", 2), ("projector_element_bytes", 4),
+        ):
+            _scalar(Path(str(prefix) + field + ".bin"), value)
+        real = np.arange(np.prod(shape), dtype=np.float32) + 100 * class_id + rank
+        _vector(Path(str(prefix) + "projector_real.bin"), real, "<f4")
+        _vector(Path(str(prefix) + "projector_imag.bin"), -real, "<f4")
+    manifest = root / "capture.sha256"
+    manifest.write_text("".join(
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.resolve()}\n"
+        for path in sorted(root.glob("*.bin"))
+    ))
+    return manifest
+
+
 def test_projector_loader_emits_exact_atomic_mapping(tmp_path):
     manifest = _fixture(tmp_path)
     state = build_relion_projector_replay_state(
@@ -73,6 +96,26 @@ def test_projector_loader_emits_exact_atomic_mapping(tmp_path):
     assert parsed is not None
     assert parsed.projector_half_by_half[0].dtype == np.complex64
     assert parsed.source_manifest_sha256 == state["source_manifest_sha256"]
+
+
+def test_projector_loader_preserves_multiclass_order(tmp_path):
+    _fixture(tmp_path)
+    manifest = _add_projector_class(tmp_path, class_id=1)
+    state = build_relion_projector_replay_state(
+        tmp_path,
+        manifest_path=manifest,
+        iteration=3,
+        current_size=4,
+        volume_shape=(8, 8, 8),
+        n_classes=2,
+    )
+
+    assert [array.shape for array in state["projector_half_by_half"]] == [(2, 5, 5, 3)] * 2
+    assert state["projector_half_by_half"][0][1, 0, 0, 0] == np.complex64(109 - 109j)
+    assert state["projector_half_by_half"][1][1, 0, 0, 0] == np.complex64(107 - 107j)
+    parsed = _parse_relion_projector_replay_state(state, n_classes=2)
+    assert parsed is not None
+    assert parsed.projector_half_by_half[0].shape[0] == 2
 
 
 def test_projector_loader_rejects_nonstandard_start(tmp_path):
