@@ -1315,6 +1315,23 @@ def _validate_initial_noise_radial(noise_radial, *, label: str):
     return noise_radial
 
 
+def _make_frozen_boundary_noise_variance(noise_radial_per_half, image_shape):
+    """Expand sealed radial noise using the float32 scoring dtype.
+
+    Frozen-boundary radial profiles are stored as float64 so their serialized
+    RELION shell values remain lossless.  The captured physical boundary,
+    however, scores with float32 full-image noise arrays.  With JAX x64
+    enabled, an untyped ``jnp.asarray`` silently promotes the replay arrays to
+    float64 and violates the boundary's dtype and byte-level identity.
+    """
+    from recovar.reconstruction import noise as recon_noise
+
+    return [
+        recon_noise.make_radial_noise(jnp.asarray(radial, dtype=jnp.float32), image_shape)
+        for radial in noise_radial_per_half
+    ]
+
+
 def _initial_noise_cache_key(ds, args, image_subset, *, batch_size: int, apply_image_mask: bool):
     """Build an exact-cache key for the deterministic bootstrap noise estimate."""
 
@@ -2654,10 +2671,10 @@ def main():
     from recovar.reconstruction import noise as recon_noise
 
     if frozen_boundary is not None:
-        noise_variance = [
-            recon_noise.make_radial_noise(jnp.asarray(radial), ds.image_shape)
-            for radial in frozen_boundary.noise_radial_per_half
-        ]
+        noise_variance = _make_frozen_boundary_noise_variance(
+            frozen_boundary.noise_radial_per_half,
+            ds.image_shape,
+        )
         initial_noise_radial = np.mean(
             np.stack(frozen_boundary.noise_radial_per_half, axis=0),
             axis=0,

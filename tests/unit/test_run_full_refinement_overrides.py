@@ -31,6 +31,7 @@ from scripts.run_full_refinement import (
     _load_initial_noise_cache,
     _load_native_group_ids_per_half,
     _load_relion_it000_model_stars,
+    _make_frozen_boundary_noise_variance,
     _load_replay_group_particles,
     _parse_relion_cli_ini_high,
     _parse_relion_tau2_fudge,
@@ -126,6 +127,20 @@ def test_frozen_scoring_state_negative_overwrite_regression():
 
     with pytest.raises(RuntimeError, match="noise_variance.half2 was overwritten"):
         _assert_frozen_scoring_state_unchanged(expected, actual)
+
+
+def test_frozen_boundary_noise_expands_in_float32_scoring_dtype():
+    radial_per_half = [
+        np.linspace(1.0, 2.0, 5, dtype=np.float64),
+        np.linspace(3.0, 4.0, 5, dtype=np.float64),
+    ]
+
+    noise_per_half = _make_frozen_boundary_noise_variance(radial_per_half, (8, 8))
+
+    assert len(noise_per_half) == 2
+    for noise in noise_per_half:
+        assert noise.shape == (64,)
+        assert noise.dtype == np.dtype(np.float32)
 
 
 def test_attach_relion_projector_capture_targets_exact_replay_slot(tmp_path, monkeypatch):
