@@ -1,4 +1,4 @@
-"""Load schema-v2 RELION diagnostic projector captures for exact EM replay.
+"""Load schema-v2/v3 RELION diagnostic projector captures for exact EM replay.
 
 The native files come from the opt-in live-boundary hook on RELION d476e6f.
 Every consumed byte is bound to its capture manifest before replay.
@@ -22,8 +22,8 @@ STATE_TOPOLOGY_RE = re.compile(
     r"state_iter(?P<iteration>\d+)_rank(?P<rank>\d+)_device(?P<device>\d+)_"
     r"class(?P<class_id>\d+)_(?:iteration|projector_(?:real|imag))\.bin$"
 )
-SUPPORTED_STATE_SCHEMA_VERSION = 2
-NATIVE_LONG_DTYPE_V2 = np.dtype("<i8")
+SUPPORTED_STATE_SCHEMA_VERSIONS = frozenset({2, 3})
+NATIVE_LONG_DTYPE_V2_V3 = np.dtype("<i8")
 
 
 class ProjectorLoadError(RuntimeError):
@@ -170,10 +170,10 @@ def build_relion_projector_replay_state(
     half_to_rank = {}
     for rank, prefix in rank_prefixes.items():
         schema_version = _scalar(prefix, "state_schema_version", listed)
-        if schema_version != SUPPORTED_STATE_SCHEMA_VERSION:
+        if schema_version not in SUPPORTED_STATE_SCHEMA_VERSIONS:
             raise ProjectorLoadError(
                 f"unsupported live-state schema for rank {rank}: {schema_version}; "
-                f"expected {SUPPORTED_STATE_SCHEMA_VERSION}"
+                f"expected one of {sorted(SUPPORTED_STATE_SCHEMA_VERSIONS)}"
             )
         prefix_match = STATE_RE.match(_prefix_file(prefix, "state_schema_version").name)
         if prefix_match is None:
@@ -192,10 +192,12 @@ def build_relion_projector_replay_state(
         half = _scalar(prefix, "control_my_halfset", listed)
         if half not in (1, 2) or half in half_to_rank:
             raise ProjectorLoadError(f"invalid or duplicate half assignment for rank {rank}: {half}")
-        # Schema v2 is emitted by the Della/Linux RELION build where native
+        # Schemas v2/v3 are emitted by the same Della/Linux RELION build where native
         # ``std::vector<long>`` is exactly signed little-endian int64. Do not
         # guess this dtype from payload length or silently accept another ABI.
-        current_sizes = _vector(prefix, "control_image_current_size", NATIVE_LONG_DTYPE_V2, listed)
+        current_sizes = _vector(
+            prefix, "control_image_current_size", NATIVE_LONG_DTYPE_V2_V3, listed
+        )
         if current_sizes.size == 0 or np.any(current_sizes != int(current_size)):
             raise ProjectorLoadError(f"captured current-size schedule mismatch for rank {rank}")
         half_to_rank[half] = rank

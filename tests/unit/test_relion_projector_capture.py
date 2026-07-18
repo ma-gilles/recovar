@@ -23,12 +23,12 @@ def _vector(path: Path, values, dtype):
     path.write_bytes(struct.pack("<q", values.size) + values.tobytes())
 
 
-def _fixture(root: Path):
+def _fixture(root: Path, *, schema_version: int = 2):
     shape = (5, 5, 3)
     for rank, half in ((7, 2), (9, 1)):
         prefix = root / f"state_iter3_rank{rank}_device0_class0_"
         for field, value in (
-            ("state_schema_version", 2), ("iteration", 3), ("mpi_rank", rank),
+            ("state_schema_version", schema_version), ("iteration", 3), ("mpi_rank", rank),
             ("device_id", 0), ("class_id", 0), ("control_my_halfset", half),
             ("projector_zdim", 5), ("projector_ydim", 5), ("projector_xdim", 3),
             ("projector_zinit", -2), ("projector_yinit", -2), ("projector_xinit", 0),
@@ -118,6 +118,20 @@ def test_projector_loader_preserves_multiclass_order(tmp_path):
     assert parsed.projector_half_by_half[0].shape[0] == 2
 
 
+def test_projector_loader_accepts_extended_state_schema_v3(tmp_path):
+    manifest = _fixture(tmp_path, schema_version=3)
+    state = build_relion_projector_replay_state(
+        tmp_path,
+        manifest_path=manifest,
+        iteration=3,
+        current_size=4,
+        volume_shape=(8, 8, 8),
+        n_classes=1,
+    )
+
+    assert state["projector_r_max_by_half"] == [2, 2]
+
+
 def test_projector_loader_rejects_nonstandard_start(tmp_path):
     manifest = _fixture(tmp_path)
     target = tmp_path / "state_iter3_rank9_device0_class0_projector_yinit.bin"
@@ -159,7 +173,7 @@ def test_projector_loader_rejects_consumed_field_absent_from_manifest(tmp_path):
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
-        (lambda root: _scalar(root / "state_iter3_rank9_device0_class0_state_schema_version.bin", 3),
+        (lambda root: _scalar(root / "state_iter3_rank9_device0_class0_state_schema_version.bin", 4),
          "unsupported live-state schema"),
         (lambda root: (root / "state_iter3_rank9_device0_class0_state_schema_version.bin").unlink(),
          "unexpected rank/device/class projector topology"),
