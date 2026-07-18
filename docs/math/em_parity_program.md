@@ -5827,7 +5827,28 @@ localized to within-iteration score/posterior or aggregation arithmetic, but
 is not classified as numerical noise without score/posterior and float64/order
 controls.
 
-This causally closes map and schedule parity through the first three
+Iteration 4 strengthens the causal closure.  The corrected autonomous arm
+matches current size 56, shell 20/`27.20 A`, the nonconverged state, and the
+native size-60 iteration-5 start.  Owner dispatch, perturbation, HEALPix order,
+class-prior tolerance, provenance, and all map gates pass.  Its identity-class
+FSC-AUC is `[0.99888334, 0.99819060, 0.99872446, 0.99868965]`, within
+`0.00079405` of the controlled component
+`[0.99940351, 0.99885203, 0.99917868, 0.99948369]`.  The pre-fix arm has
+broadened damage at `[0.97960769, 0.98920139, 0.97892265, 0.91596351]`.
+The corrected-minus-pre-fix gains are therefore
+`[0.01927565, 0.00898921, 0.01980181, 0.08272613]` FSC-AUC.  This is persistent
+causal evidence for the first-iteration resolution-state repair, not a new
+repair target.
+
+Average Pmax remains the sole strict iteration-4 diagnostic mismatch:
+corrected is `0.597346`, controlled is `0.597545`, and the RELION
+particle-table mean is `0.59754980937`.  The aggregate mean does not classify
+the residual as numerical or algorithmic.  Per-particle score, log-evidence,
+posterior, and float64/order controls remain required after the active science
+load finishes.  Pmax is not substituted and does not replace FSC/FSC-AUC as
+the map-quality gate.
+
+This causally closes map and schedule parity through the first four
 autonomous boundaries while leaving the small Pmax state residual fail-closed.
 Job `11344147` remains running for the full autonomous trajectory,
 convergence, final FSC/FSC-AUC, and Pmax-classification gates.
@@ -5854,3 +5875,10 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_trajectory_iteration_003_shellwise_fsc_v2.npz` (SHA-256 `5c0ee82203b58aeca7389f393b726624dd2a3688443d9a9f254ce37ded0e295e`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/iteration_003_causal_triangle_adjudication_v1.json` (SHA-256 `93ab9feb5a0c8c7147fdb21a625c1b92ddf8262f4e6075d71e47b98a39c56645`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/iteration_002_hard_hypothesis_causal_diagnostic_v1.json` (SHA-256 `1074fc791931663952d05495ba90d59b98225139339b83ce78b851f696b97fb3`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_trajectory_iteration_004_audit_v2.json` (SHA-256 `dd4a870ba9503f1ce8736164b5bc77310900f8faea7bf5951d8ff2bc4e523e5d`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_trajectory_iteration_004_shellwise_fsc_v2.npz` (SHA-256 `80b18129bf3dac5b1bad20501de84cf76cdd029bbdb401577fa6ee32c964921a`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/iteration_004_causal_triangle_adjudication_v1.json` (SHA-256 `1bb8734e21cf328bee70556b4da52829f0b45ba3b2cdb21c0123b579d70c9da1`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_030f4a0b_20260718T104146Z/analysis/pre_fix_autonomous_iteration_004_map_fsc_audit_v1.json` (SHA-256 `6e9770b3ba1d46663bb9f1d0d23412fa2d83ec56c835a130b2588eefd90f8b60`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_030f4a0b_20260718T104146Z/analysis/pre_fix_autonomous_iteration_004_map_fsc_audit_v1_shellwise_fsc.npz` (SHA-256 `f0a3fbddb6ef3e18bc0b482df33d628318de370861ce120797e3bcbd14778ae0`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_recovar_030f4a0b_20260718T091559Z/analysis/controlled_oracle_state_iteration_004_map_fsc_audit_v1.json` (SHA-256 `9da552c1e843059a1489f26fb283b40b9301a0f4d7de160aa0637aa0f8a6a30f`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_recovar_030f4a0b_20260718T091559Z/analysis/controlled_oracle_state_iteration_004_map_fsc_audit_v1_shellwise_fsc.npz` (SHA-256 `4d095e5d05424fed3f56f3ad4068dfbc7483689145cc66ceff59973abb18e0c1`)
