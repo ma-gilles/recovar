@@ -5808,9 +5808,29 @@ Its minimum agrees with the controlled oracle-state component arm
 (`0.99998980`) while remaining independently autonomous.  The corrected
 class-4 improvement over the pre-fix control is `0.01001990` FSC-AUC.
 
-This causally closes the first two autonomous boundaries.  Job `11344147`
-remains running for the full autonomous trajectory, schedule, convergence,
-and final FSC/FSC-AUC gates.
+At iteration 3 the repaired autonomous trajectory remains on the exact
+size-42 to size-56 schedule and passes every map gate.  Its per-class FSC-AUC
+is `[0.99983851, 0.99971160, 0.99964188, 0.99922248]`; corrected class 4 is
+`0.05309456` above the pre-fix autonomous arm and only `0.00012988` below the
+controlled oracle-state component.  The pre-fix class-4 map had continued to
+worsen to `0.94612792` even though its discrete size schedule had rejoined the
+oracle, confirming that the wrong iteration-2 size caused persistent map
+damage rather than a harmless transient.
+
+The remaining strict iteration-3 mismatch is average posterior maximum, not
+map quality or scheduling.  RECOVAR reports exact `0.265575` (display
+`0.2656`) versus the RELION particle-table mean `0.26535582661` (display
+`0.2654`); the controlled component also differs at `0.265522`.  Corrected and
+controlled hard hypotheses agree for `99,979/100,000` particles.  Because the
+controlled arm retains essentially the same Pmax offset, the residual is
+localized to within-iteration score/posterior or aggregation arithmetic, but
+is not classified as numerical noise without score/posterior and float64/order
+controls.
+
+This causally closes map and schedule parity through the first three
+autonomous boundaries while leaving the small Pmax state residual fail-closed.
+Job `11344147` remains running for the full autonomous trajectory,
+convergence, final FSC/FSC-AUC, and Pmax-classification gates.
 
 Focused CPU validation after the repair:
 
@@ -5830,3 +5850,7 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_trajectory_iteration_002_audit_v2.json` (SHA-256 `ffcfcd70a4aad7c03a5ffb1602382ec3c3b74f8c89e1d55fa94e2c47649cd978`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_trajectory_iteration_002_shellwise_fsc_v2.npz` (SHA-256 `0c863c6ddd82d6f3b6a22d22bba7167cfb38ab3c30924214d8b0ed0abe3c2d90`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/iteration_002_causal_triangle_adjudication_v1.json` (SHA-256 `e8ea6ec077e52dc4d92968df4320bc735b30158e8d7528d02e825279270769ae`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_trajectory_iteration_003_audit_v2.json` (SHA-256 `4be9db4bc84157c9de1e2a0c3f709308e567db6ac065419e85566e2083340856`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_trajectory_iteration_003_shellwise_fsc_v2.npz` (SHA-256 `5c0ee82203b58aeca7389f393b726624dd2a3688443d9a9f254ce37ded0e295e`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/iteration_003_causal_triangle_adjudication_v1.json` (SHA-256 `93ab9feb5a0c8c7147fdb21a625c1b92ddf8262f4e6075d71e47b98a39c56645`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/iteration_002_hard_hypothesis_causal_diagnostic_v1.json` (SHA-256 `1074fc791931663952d05495ba90d59b98225139339b83ce78b851f696b97fb3`)
