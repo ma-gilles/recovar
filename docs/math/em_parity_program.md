@@ -5768,3 +5768,48 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_bpref_reconstruction_factorial_20260718T100000Z/review/INDEPENDENT_REVIEW.md` (SHA-256 `07ffd7d8b0651405ee0a510f3acdc56607291e0da9be96ceb9de8044fa3d91f1`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_it2_bpref_reconstruction_factorial_20260718T100000Z/review/INCOMING_IT2_BOUNDARY_AUDIT.md` (SHA-256 `e2a1d9f13b76c8dd23b40de5e0d329bc696e3f6eb2594160199dc340b88f259f`)
 - Slurm jobs `11342527` and `11342699`, both `COMPLETED` with exit code `0:0`.
+
+## 2026-07-18 K=4 GUI first-iteration resolution-state repair
+
+The clean GUI-default Class3D oracle exposed a real control-state mismatch at
+the first autonomous K=4 boundary.  RELION's
+`MlOptimiser::updateCurrentResolution()` uses
+`ROUND(ori_size * pixel_size / ini_high)` during physical iteration 1 when
+`--firstiter_cc` is active.  For the 100k/256 fixture this is shell 9
+(`60.444444 A`).  RECOVAR instead retained the live class data-vs-prior shell
+10 (`54.40 A`).  Although both programs entered iteration 1 at current size
+38, the wrong stored shell made pre-fix job `11343734` schedule and enter
+physical iteration 2 at size 40 instead of RELION's size 38.  This is an
+algorithm/control mismatch, not numerical noise.
+
+Commits `b670f9bf` and `c390f8bf` make the physical-iteration-1 `ini_high`
+shell class-count independent and use it for both the next-size decision and
+the stored resolution/convergence state.  Clean detached autonomous job
+`11344147` confirms the repair without any per-iteration RELION state replay:
+physical iteration 1 stores shell 9 and reports `60.44 A`, its native
+iteration-2 decision is raw/quantized size 38, and iteration 2 starts at size
+38.  The sealed log prefix contains no replay override and no fatal fault.
+
+The corrected iteration-1 maps also pass the map gate.  Identity class
+matching is `[1, 2, 3, 4]`; normalized 127-shell FSC-AUC against the RELION
+oracle is `0.9999934704`, `0.9999954881`, `0.9999950882`, and
+`0.9999999006` for classes 1--4.  Only shellwise FSC/FSC-AUC is used; no
+correlation metric is computed.  This closes the first boundary only.  Job
+`11344147` remains running for the full autonomous trajectory, schedule,
+convergence, and final FSC/FSC-AUC gates.
+
+Focused CPU validation after the repair:
+
+- `pytest -q tests/unit/test_refine_relion_mode.py -k firstiter_cc`: 9 passed,
+  314 deselected.
+- The preceding scheduling patch also passed
+  `tests/unit/test_refine_relion_mode.py` and
+  `tests/unit/test_resolution_criterion.py` together.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_030f4a0b_20260718T104146Z/analysis/pre_fix_iteration_001_boundary_adjudication_v1.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_iteration_001_native_boundary_evidence_v1.txt` (SHA-256 `c7120b0d2b036a95bcc5a97f4677a55c4a5444ed9b50dce96e900a63c4fc1988`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_iteration_001_native_boundary_adjudication_v1.json` (SHA-256 `209244818bfea67d0422bbab44a36a92ccd455fec35a807865e16c35d04f5f04`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_iteration_001_map_fsc_audit_v1.json` (SHA-256 `bd4b4bf6f572f150101dcf72d2e187fb49e7242a7e29f7b5f97c66dfc141f03d`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_gui_cc_nodisc_autonomous_c390f8bf_20260718T110620Z/analysis/corrected_iteration_001_shellwise_fsc_v1.npz` (SHA-256 `ee2f4037ced98316685efc1e1dd8f83cdaf315afff4fdeaddd706f9669e5e21d`)
