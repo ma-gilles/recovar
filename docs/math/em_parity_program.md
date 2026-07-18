@@ -5314,8 +5314,11 @@ memory bound; the disabled path converts no capture operands. Independent
 review also found a genuine production control-state bug: rotation-chunked
 winner-take-all probabilities were one-hot, but their returned Pmax remained
 the pre-transform soft value. The corrected Pmax is one for a finite winner,
-matching the unchunked path and preventing erroneous ave-Pmax scheduling or
-convergence inputs. The M-step arithmetic was already one-hot and is unchanged.
+matching the unchunked per-class statistics. Strict first-iteration assembly
+already replaces joint Pmax by one for every finite winner, so accepted
+ave-Pmax schedules and convergence inputs were shielded; the audited accepted
+runs also contain no iteration-1 rotation chunk. The M-step arithmetic was
+already one-hot and is unchanged.
 Winner-only effective support is now sealed consistently in both capture paths,
 and the capture metadata explicitly distinguishes normalized scoring
 posteriors from the separate RELION-float32 reconstruction weights.
