@@ -139,6 +139,19 @@ def test_frozen_boundary_loader_rejects_half_correction_pair_mismatch(tmp_path):
         load_frozen_refinement_boundary(tmp_path)
 
 
+def test_frozen_boundary_loader_rejects_nonpositive_correction(tmp_path):
+    _write_boundary(
+        tmp_path,
+        half1_image_corrections=np.asarray([1.0, 0.0], dtype=np.float32),
+        half2_image_corrections=np.ones(2, dtype=np.float32),
+        half1_scale_corrections=np.ones(2, dtype=np.float32),
+        half2_scale_corrections=np.ones(2, dtype=np.float32),
+    )
+
+    with pytest.raises(ValueError, match="image corrections must be positive"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
 def test_frozen_boundary_loader_rejects_five_field_identity_mismatch(tmp_path):
     _write_boundary(
         tmp_path,
@@ -182,4 +195,11 @@ def test_frozen_boundary_loader_rejects_unknown_payload_key(tmp_path):
     _write_boundary(tmp_path, unvalidated_extra=np.asarray([object()], dtype=object))
 
     with pytest.raises(ValueError, match="unknown schema-v1 keys"):
+        load_frozen_refinement_boundary(tmp_path)
+
+
+def test_frozen_boundary_loader_rejects_string_schedule_scalar(tmp_path):
+    _write_boundary(tmp_path, current_size=np.asarray("92"))
+
+    with pytest.raises(ValueError, match="current_size has dtype"):
         load_frozen_refinement_boundary(tmp_path)
