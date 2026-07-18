@@ -115,6 +115,8 @@ def test_chunked_capture_capacity_is_bounded(monkeypatch):
     assert capture.require_chunked_capture_capacity(1, 2, 2) == 68
     with pytest.raises(capture.CompactCaptureError, match="bounded host assembly cap"):
         capture.require_chunked_capture_capacity(1, 3, 2)
+    with pytest.raises(capture.CompactCaptureError, match="bounded host assembly cap"):
+        capture.require_chunked_capture_capacity(2**32, 2**32, 1)
 
 
 @pytest.mark.unit
