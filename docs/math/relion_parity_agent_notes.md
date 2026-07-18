@@ -4087,7 +4087,27 @@ map-quality acceptance remains shellwise FSC/FSC-AUC only, never correlation.
 - Iteration 8 is the first formal failure. Identity-matched class FSC-AUC is
   `[0.996440627563, 0.995262998531, 0.994601216732, 0.996054978465]`.
   Schedule, current size, resolution, dispatch ownership, priors, convergence,
-  and class matching remain exact. RECOVAR displays average Pmax `0.9230`
-  versus RELION particle mean `0.92286475478` (display `0.9229`). Localize the
-  iteration-7-to-8 class-3 and near-tie aggregate score/posterior state; do not
-  lower the `0.995` map gate.
+  and class matching remain exact.
+- The original iteration-8 audit compared RECOVAR's optimizer `ave_Pmax` with
+  the arithmetic mean of RELION's per-particle Pmax column. That is not
+  RELION's optimizer state. The authoritative `rlnAveragePmax` in
+  `run_it008_model.star` is `0.922993`, versus RECOVAR `0.922998`; the delta is
+  `5e-6` and both display as `0.9230`. RELION's model scalar and particle-column
+  mean differ by `6.90e-5` to `4.07e-4` across iterations 2--15. The corrected
+  v3 audit therefore has exactly one failure: class-3 full-grid FSC-AUC. The
+  source contract is `ml_optimiser.cpp:5294` for aggregation and line 5689 for
+  scheduling.
+- Class 3 remains above `0.9999250` normalized FSC-AUC through RELION's
+  reported shell 26 and `0.9986630` through the current-size radius 35; its
+  beyond-radius FSC-AUC is `0.9930675`. Shells 27--35 contain about `1.83e-4`
+  of the map's Fourier energy and shells 36--126 about `1.10e-5`, but the
+  predefined FSC gate weights shells rather than energy and remains unchanged.
+  The two RECOVAR half-map payload arrays are exactly equal for every class;
+  differing MRC hashes for classes 3 and 4 are header-only.
+- Corrected evidence is
+  `analysis/corrected_trajectory_iteration_008_audit_v3.json` under the run
+  root (SHA-256 prefix `a278e11e`) and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it8_aggregate_boundary_audit_20260718T155100Z/aggregate_iteration_008_audit_v2.json`
+  (SHA-256 prefix `eb5db2c1`). Localize the iteration-7-to-8 class-3 aggregate
+  boundary; do not lower the `0.995` map gate and do not use the particle-column
+  mean as a scheduling oracle.
