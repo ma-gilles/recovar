@@ -2799,6 +2799,8 @@ def run_dense_k_class_em_adaptive(
     return_best_pose_details: bool = False,
     bpref_device_signature_active: bool = False,
     debug_iteration: int | None = None,
+    pass2_use_float64_scoring: bool | None = None,
+    pass2_use_float64_projections: bool | None = None,
     **engine_kwargs,
 ) -> KClassEMResult:
     """K-class adaptive 2-pass EM: coarse pass-1 significance + fine pass-2 masked.
@@ -3062,6 +3064,10 @@ def run_dense_k_class_em_adaptive(
 
     mask_t0 = time.time()
     pass2_kwargs = dict(engine_kwargs)
+    if pass2_use_float64_scoring is not None:
+        pass2_kwargs["use_float64_scoring"] = bool(pass2_use_float64_scoring)
+    if pass2_use_float64_projections is not None:
+        pass2_kwargs["use_float64_projections"] = bool(pass2_use_float64_projections)
     pass2_kwargs["relion_fine_mstep_prune"] = bool(relion_fine_mstep_prune)
     # Build a per-particle, per-class fine-grid mask from the coarse significance.
     pass2_kwargs.pop("rotation_translation_mask", None)

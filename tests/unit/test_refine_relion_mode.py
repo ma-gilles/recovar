@@ -172,6 +172,18 @@ from recovar.em.sampling import (
 
 pytestmark = pytest.mark.unit
 
+
+def test_diagnostic_float64_pass2_iteration_selector(monkeypatch):
+    monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
+    assert iteration_loop_module._diagnostic_float64_pass2_matches(4) is False
+    monkeypatch.setenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "4, 7")
+    assert iteration_loop_module._diagnostic_float64_pass2_matches(3) is False
+    assert iteration_loop_module._diagnostic_float64_pass2_matches(4) is True
+    assert iteration_loop_module._diagnostic_float64_pass2_matches(7) is True
+    monkeypatch.setenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "4,bad")
+    with pytest.raises(ValueError, match="comma-separated integers"):
+        iteration_loop_module._diagnostic_float64_pass2_matches(4)
+
 # ---------------------------------------------------------------------------
 # Test constants -- 8x8 images for fast unit tests
 # ---------------------------------------------------------------------------

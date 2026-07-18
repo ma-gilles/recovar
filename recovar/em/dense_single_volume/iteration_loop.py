@@ -1319,6 +1319,21 @@ _DENSE_EM_STATIC_KWARGS: dict = {
 }
 
 
+def _diagnostic_float64_pass2_matches(debug_iteration: int | None) -> bool:
+    """Select genuine-f64 pass 2 without perturbing an earlier f32 boundary."""
+
+    raw = _os_for_f64.environ.get("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "")
+    if debug_iteration is None or not raw.strip():
+        return False
+    try:
+        requested = {int(token.strip()) for token in raw.split(",") if token.strip()}
+    except ValueError as exc:
+        raise ValueError(
+            "RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS must be comma-separated integers"
+        ) from exc
+    return int(debug_iteration) in requested
+
+
 def _scatter_dense_k_class_result(
     k_class_result,
     *,
@@ -2215,6 +2230,12 @@ def _score_half_dense(
         "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
         "relion_firstiter_winner_take_all": firstiter_winner_take_all_this_iter,
     }
+    diagnostic_float64_pass2 = _diagnostic_float64_pass2_matches(debug_iteration)
+    if diagnostic_float64_pass2:
+        logger.info(
+            "Diagnostic genuine-float64 adaptive pass 2 at iteration %d; pass 1 and prior boundaries remain f32",
+            int(debug_iteration),
+        )
     if k_class_image_batch_size_override is not None:
         em_kwargs["image_batch_size"] = k_class_image_batch_size_override
     if k_class_rotation_block_size_override is not None:
@@ -2567,6 +2588,8 @@ def _score_half_dense(
                 return_best_pose_details=return_best_pose_details,
                 bpref_device_signature_active=bpref_device_signature_active,
                 debug_iteration=debug_iteration,
+                pass2_use_float64_scoring=True if diagnostic_float64_pass2 else None,
+                pass2_use_float64_projections=True if diagnostic_float64_pass2 else None,
                 **adaptive_em_kwargs,
             )
         ha_k = np.asarray(k1_adaptive_result.pose_assignments, dtype=np.int32)

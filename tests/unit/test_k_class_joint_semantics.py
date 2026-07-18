@@ -153,7 +153,10 @@ def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatc
     class TinyDataset:
         n_images = 1
 
-    def fake_significance(*_args, **_kwargs):
+    significance_calls = []
+
+    def fake_significance(*_args, **kwargs):
+        significance_calls.append(kwargs)
         return (
             None,
             np.full(1, 6, dtype=np.int32),
@@ -209,9 +212,14 @@ def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatc
         oversampling_order=0,
         sparse_pass2=True,
         relion_exact_fine_gaussian=True,
+        pass2_use_float64_scoring=True,
+        pass2_use_float64_projections=True,
     )
 
     assert len(sparse_calls) == 1
+    assert significance_calls[0]["use_float64_scoring"] is False
+    assert sparse_calls[0][1]["engine_kwargs"]["use_float64_scoring"] is True
+    assert sparse_calls[0][1]["engine_kwargs"]["use_float64_projections"] is True
     np.testing.assert_array_equal(np.asarray(result.significant_counts), np.array([5], dtype=np.int32))
     np.testing.assert_array_equal(np.asarray(result.Ft_y), np.array([[1, 2, 3, 4]], dtype=np.complex64))
     np.testing.assert_array_equal(np.asarray(result.Ft_ctf), np.array([[5, 6, 7, 8]], dtype=np.float32))
