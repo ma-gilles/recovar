@@ -418,9 +418,10 @@ if [[ "${RUN_K4}" -eq 1 ]]; then
   require_file "${K4_RELION_DISPATCH_SCHEDULE}"
 fi
 
-# Guard against accidentally benchmarking tuned parameter variants. These are
-# the stored RELION GUI-default command shapes accepted in the EM completion
-# ledger.
+# Guard against accidentally changing the two sealed completion-fixture command
+# shapes.  K=1 is GUI-style auto-refine.  K=4 is the historical controlled
+# Class3D fixture (no firstiter_cc/ini_high), not the complete GUI-default
+# Class3D command shape.
 grep -q -- "--auto_refine" "${K1_RELION_DIR}/run_it000_optimiser.star"
 grep -q -- "--firstiter_cc" "${K1_RELION_DIR}/run_it000_optimiser.star"
 grep -q -- "--split_random_halves" "${K1_RELION_DIR}/run_it000_optimiser.star"

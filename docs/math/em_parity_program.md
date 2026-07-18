@@ -5526,10 +5526,11 @@ The one-step maps remain close but are not inside the A/A envelope.  On shells
 maximum A/A loss is `1.6587e-10`.  This proves a repeat-stable projector-path
 mismatch at the frozen boundary; it does not yet identify operand generation,
 geometry/index-coefficient generation, reduction order, or precision as the
-source.  The next diagnostic is aggregate common-contribution replay in
-float32/original order, float32/canonical order, and float64/complex128
-canonical order.  Serial particle-by-particle debugging is not warranted
-unless the aggregate comparison exposes a systematic subgroup.
+source.  The next diagnostic adapts the existing common-contribution replay
+to this current-head frozen boundary and compares float32/original order,
+float32/canonical order, and float64/complex128 canonical order.  Serial
+particle-by-particle debugging is not warranted unless the aggregate
+comparison exposes a systematic subgroup.
 
 The robustness repair preserves two distinct identity namespaces.  Compact
 RELION captures use live data-STAR row IDs, whereas RECOVAR replay uses the
@@ -5576,13 +5577,79 @@ iteration-12 model before maps split at iteration 13.
 The mixed oracle and its failed strict audit remain immutable evidence.  A
 controlled continuation from the exact iteration-11 boundary is being
 regenerated with `--dont_combine_weights_via_disc` restored to verify the
-existing emulation.  Separately, the authoritative GUI/default target must use
-a clean end-to-end default via-disc RELION run and the corresponding RECOVAR
-mode; it must not splice reduction modes or infer continuation behavior from
-the invalid trajectory.  Map acceptance remains shellwise FSC/FSC-AUC only.
+existing emulation.  RELION's Class3D GUI defines `do_combine_thru_disc` with
+default `false` and emits `--dont_combine_weights_via_disc` when it is false
+(`pipeline_jobs.cpp` Class3D option construction and command generation).
+Follower-local/network reduction is therefore the authoritative GUI-default
+reduction target, not the via-disc path.  The existing 100k fixture is still a
+controlled non-`firstiter_cc`, no-`ini_high` completion fixture; it must not be
+mislabelled as the complete GUI-default command shape.  A later clean
+GUI-default K=4 oracle must preserve `--dont_combine_weights_via_disc` and also
+use the default non-absolute-greyscale path (`--firstiter_cc`) plus the default
+60-A initial low-pass.  No oracle may splice reduction modes or infer
+continuation behavior from the invalid trajectory.  Map acceptance remains
+shellwise FSC/FSC-AUC only.
 
 Evidence:
 
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_restartfix_030f4a0b_20260717T211041Z/strict_k4_acceptance/k4_strict_acceptance_bundle.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_restartfix_030f4a0b_20260717T211041Z/strict_k4_acceptance/k4_fsc_trajectory.json` (SHA-256 `e284cba863eb909de4cbc4f8fd66cd6e35bc003dce9d79e07cf1cb2580e727d6`)
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_restartfix_030f4a0b_20260717T211041Z/strict_k4_acceptance/k4_fsc_trajectory_shellwise.npz` (SHA-256 `48cb5a2f4be19bbc87f66c0f32702aba13f5cb740d8967e033e6ecc148609cf9`)
+
+## 2026-07-18 frozen projector source/construction closure
+
+The production-size A/A'/B factorization closes the physical-iteration-3
+projector implementation and moves the earliest remaining boundary upstream to
+the incoming reconstructed reference.  A' rebuilds a projector from RECOVAR's
+own serialized map and reruns the same 10,000-particle frozen scoring boundary;
+B uses the sealed RELION projector.  Relative to A, A' posterior-TV mean,
+95th percentile, and maximum are `4.34798e-5`, `1.23037e-4`, and
+`7.02824e-3`, while B gives `2.08306e-3`, `4.10242e-3`, and `0.995891`.
+The B/A' effect ratios are `47.91` for mean posterior TV, `33.34` at the
+95th percentile, and `61.34` for mean centered-score RMS.
+
+On supported shells 1--60, A' FSC-AUC losses are `1.14919e-9`,
+`2.08116e-10`, and `5.26143e-10` for half 1, half 2, and the merged map.  The
+corresponding B losses are `2.20912e-4`, `6.15995e-5`, and `1.06369e-4`, up
+to `192232x` the A' loss.  Rebuilding B from the captured float64 Iref changes
+only 9 and 10 of 7,203,978 complex voxels; each changed component is at most
+one float32 ULP.  Common complex128 replay and genuinely recomputed float64
+source operands retain at least `99.924%` of the production effect.  Projector
+construction, indexed geometry, reduction ordering, and production precision
+are therefore rejected as material explanations.  The next aggregate probe is
+the physical-iteration-2 BPref/numerator-to-reconstructed-reference boundary;
+serial particle tracing is not warranted.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_frozen_it2_projector_source_constructor_factorial_20260718T083027Z/analysis/aprime_factorial_v3_adjudication.json` (SHA-256 `a3b532aa6ec5db99f759c19a0c04b685355fc5924d2f57e6d3cc83f507ec437d`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_frozen_it2_projector_source_constructor_factorial_20260718T083027Z/analysis/APRIME_FACTORIAL_V3_COMPLETE.json` (SHA-256 `32534753bf621b504038d8e9dc5ee3def0c1870dddb629cc4f86112e6e1e0943`)
+
+## 2026-07-18 robustness case-11 acceptance-contract failure
+
+Slurm job `11340226` completed RELION plus all three RECOVAR arms and sealed
+the three-arm projector audit, then failed only in the outer robustness
+acceptance.  All arms converge on physical iteration 10.  Every numbered
+half/merged cross-engine FSC-AUC is above `0.9978`; the three final merged
+cross-engine FSC-AUC values are approximately `0.99586`.  The sealed projector
+audit remains fail-closed as
+`unresolved_within_or_overlapping_observed_control_envelope`, because tiny
+pre-injection repeat differences slightly exceed the one observed
+control/control edge.  It does not authorize a production change.
+
+The outer failure is a product-matching defect, not permission to lower its
+registered `0.995` threshold.  It compares RECOVAR's Wiener-regularized
+`final_half1.mrc` and `final_half2.mrc` against RELION's explicitly unfiltered
+`run_half1_class001_unfil.mrc` and `run_half2_class001_unfil.mrc`; the resulting
+FSC-AUC values are `0.9791265` and `0.9797161` in every arm.  Final half-map
+acceptance must compare like products by materializing RECOVAR unfiltered
+halves from the sealed final accumulators, or remain non-gating while the
+matched product is absent.  The final merged and numbered gates remain
+unchanged.  Cases 18, 21, and 22 remain blocked until the corrected acceptance
+contract is sealed.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_case11_83825ae_prepared_20260718T033237Z/runs/robustness_projector_abc_11340226/analysis/projector_abc_audit.json` (SHA-256 `4cb75988cff599324b96e628451b4c1fd2ddedb951e9aa1a4ca59e5a9ed8a7c9`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_case11_83825ae_prepared_20260718T033237Z/runs/robustness_projector_abc_11340226/analysis/PROJECTOR_ABC_AUDIT_COMPLETE.json` (SHA-256 `279672665b94da03f3553d8915528082e3ff51c1bd24553bcda43014a706df7a`)
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_projector_robust_case11_83825ae_prepared_20260718T033237Z/logs/k1_rob11_proj_abc_11340226.err`
