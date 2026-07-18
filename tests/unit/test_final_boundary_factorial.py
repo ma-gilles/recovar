@@ -6,7 +6,11 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _run_relion_iteration_loop,
     refine_single_volume,
 )
-from scripts.run_full_refinement import _select_final_replay_override
+from scripts.run_full_refinement import (
+    _complete_relion_numbered_state_iterations,
+    _resolve_final_replay_source_iteration,
+    _select_final_replay_override,
+)
 
 
 def _source_override():
@@ -74,3 +78,39 @@ def test_final_only_options_reach_both_iteration_loop_boundaries():
         parameters = inspect.signature(function).parameters
         assert "final_replay_override" in parameters
         assert "final_sampling_replay_relion_dir" in parameters
+
+
+def test_max_iter_999_binds_latest_finite_complete_oracle(tmp_path):
+    for iteration in range(10):
+        prefix = tmp_path / f"run_it{iteration:03d}"
+        (tmp_path / f"{prefix.name}_data.star").touch()
+        (tmp_path / f"{prefix.name}_sampling.star").touch()
+        (tmp_path / f"{prefix.name}_half1_model.star").touch()
+        (tmp_path / f"{prefix.name}_half2_model.star").touch()
+    complete = _complete_relion_numbered_state_iterations(tmp_path)
+    assert complete == list(range(10))
+    assert _resolve_final_replay_source_iteration(
+        configured_max_iter=999,
+        explicit_source_iteration=None,
+        complete_iterations=complete,
+    ) == 9
+    assert _resolve_final_replay_source_iteration(
+        configured_max_iter=999,
+        explicit_source_iteration=9,
+        complete_iterations=complete,
+    ) == 9
+
+
+def test_final_replay_source_fails_closed_on_gap_or_out_of_range():
+    with pytest.raises(ValueError, match="not contiguous"):
+        _resolve_final_replay_source_iteration(
+            configured_max_iter=999,
+            explicit_source_iteration=9,
+            complete_iterations=[0, 1, 2, 9],
+        )
+    with pytest.raises(ValueError, match="exceeds configured max_iter"):
+        _resolve_final_replay_source_iteration(
+            configured_max_iter=8,
+            explicit_source_iteration=9,
+            complete_iterations=range(10),
+        )

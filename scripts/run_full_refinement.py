@@ -1085,6 +1085,57 @@ def _select_final_replay_override(source_override, requested_fields):
     return requested_groups, selected_override
 
 
+def _resolve_final_replay_source_iteration(
+    *, configured_max_iter, explicit_source_iteration, complete_iterations
+):
+    """Bind a finite RELION oracle to one exact last-numbered boundary."""
+    complete = sorted({int(value) for value in complete_iterations})
+    if not complete:
+        raise ValueError("final replay oracle has no complete numbered RELION states")
+    source_iteration = (
+        max(complete)
+        if explicit_source_iteration is None
+        else int(explicit_source_iteration)
+    )
+    if source_iteration not in complete:
+        raise ValueError(
+            f"requested final replay source iteration {source_iteration} is not a complete oracle state; "
+            f"available={complete}"
+        )
+    if source_iteration > int(configured_max_iter):
+        raise ValueError(
+            f"final replay source iteration {source_iteration} exceeds configured max_iter={configured_max_iter}"
+        )
+    missing_prefix = sorted(set(range(0, source_iteration + 1)) - set(complete))
+    if missing_prefix:
+        raise ValueError(
+            f"final replay oracle is not contiguous through iteration {source_iteration}; missing={missing_prefix}"
+        )
+    return source_iteration
+
+
+def _complete_relion_numbered_state_iterations(relion_dir):
+    """Return iterations with data, sampling, and half/shared model state."""
+    import re
+
+    relion_dir = Path(relion_dir).resolve()
+    complete = []
+    for data_path in relion_dir.glob("run_it[0-9][0-9][0-9]_data.star"):
+        match = re.fullmatch(r"run_it([0-9]{3})_data\.star", data_path.name)
+        if match is None:
+            continue
+        iteration = int(match.group(1))
+        sampling = relion_dir / f"run_it{iteration:03d}_sampling.star"
+        half_models = (
+            relion_dir / f"run_it{iteration:03d}_half1_model.star",
+            relion_dir / f"run_it{iteration:03d}_half2_model.star",
+        )
+        shared_model = relion_dir / f"run_it{iteration:03d}_model.star"
+        if sampling.is_file() and (all(path.is_file() for path in half_models) or shared_model.is_file()):
+            complete.append(iteration)
+    return sorted(complete)
+
+
 def _attach_relion_projector_capture(
     replay_iteration_overrides,
     *,
@@ -1655,6 +1706,16 @@ def main():
             "poses replaces previous rotations/translations; sampling replaces translation sigma "
             "and final sampling grid/perturbation; corrections replaces noise, direction prior, "
             "image correction, and serialized scale correction."
+        ),
+    )
+    parser.add_argument(
+        "--final-replay-source-iteration",
+        type=int,
+        default=None,
+        help=(
+            "Exact last-numbered RELION iteration used by --final-replay-relion-dir. "
+            "Defaults to the latest contiguous complete numbered state and fails closed "
+            "if it exceeds --max_iter or lacks final convergence provenance."
         ),
     )
     parser.add_argument(
@@ -2751,11 +2812,32 @@ def main():
     final_replay_override = None
     final_sampling_replay_relion_dir = None
     if args.final_replay_relion_dir is not None:
+        final_replay_dir = Path(args.final_replay_relion_dir).resolve()
+        complete_iterations = _complete_relion_numbered_state_iterations(final_replay_dir)
+        source_iteration = _resolve_final_replay_source_iteration(
+            configured_max_iter=args.max_iter,
+            explicit_source_iteration=args.final_replay_source_iteration,
+            complete_iterations=complete_iterations,
+        )
+        final_optimiser_path = final_replay_dir / "run_optimiser.star"
+        final_sampling_path = final_replay_dir / "run_sampling.star"
+        if not final_optimiser_path.is_file() or not final_sampling_path.is_file():
+            raise ValueError(
+                "diagnostic final-only substitution requires unnumbered run_optimiser.star "
+                f"and run_sampling.star in {final_replay_dir}"
+            )
+        from recovar.em.sampling import read_relion_optimiser_metadata
+
+        final_optimiser_metadata = read_relion_optimiser_metadata(final_optimiser_path)
+        if not bool(final_optimiser_metadata.get("has_converged", False)):
+            raise ValueError(
+                f"diagnostic final-only oracle does not report convergence: {final_optimiser_path}"
+            )
         final_overrides = _build_replay_iteration_overrides(
-            args.final_replay_relion_dir,
+            final_replay_dir,
             half1_idx,
             half2_idx,
-            int(args.max_iter),
+            source_iteration,
             ds_voxel=ds.voxel_size,
             ds_grid=ds.grid_size,
             include_normcorr=True,
@@ -2771,12 +2853,13 @@ def main():
             args.final_replay_fields,
         )
         if "sampling" in requested_groups:
-            final_sampling_replay_relion_dir = args.final_replay_relion_dir
+            final_sampling_replay_relion_dir = str(final_replay_dir)
         logger.info(
-            "Diagnostic final-only substitution: groups=%s fields=%s source=%s",
+            "Diagnostic final-only substitution: source_iteration=%d groups=%s fields=%s source=%s",
+            source_iteration,
             sorted(requested_groups),
             sorted(final_replay_override),
-            Path(args.final_replay_relion_dir).resolve(),
+            final_replay_dir,
         )
 
     # ``--relion_init_dir`` is the strict cold-start contract, not merely a
