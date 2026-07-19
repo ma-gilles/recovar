@@ -3955,6 +3955,7 @@ def _weighted_image_power_shells_and_per_image(
     shell_count: int,
     norm_unweighted_shell_cutoff: int | None = None,
     norm_unweighted_high_shell=None,
+    include_unweighted_high_shell: bool = True,
     valid_image_mask=None,
 ):
     """Accumulate image power for noise shells and per-image norm correction.
@@ -3980,9 +3981,10 @@ def _weighted_image_power_shells_and_per_image(
             else jnp.asarray(valid_image_mask, dtype=pixel_power.dtype)
         )
         unweighted_shell = valid_norm_shell & (shell_indices_half > int(norm_unweighted_shell_cutoff))
-        norm_mass = jnp.where(unweighted_shell[None, :], full_mass[:, None], norm_mass)
+        high_shell_mass = full_mass if include_unweighted_high_shell else jnp.zeros_like(full_mass)
+        norm_mass = jnp.where(unweighted_shell[None, :], high_shell_mass[:, None], norm_mass)
     weighted_per_image = jnp.sum(pixel_power * norm_mass, axis=-1).astype(jnp.float32)
-    if norm_unweighted_high_shell is not None:
+    if norm_unweighted_high_shell is not None and include_unweighted_high_shell:
         if norm_unweighted_shell_cutoff is None:
             raise ValueError("a replacement high-shell norm term requires a shell cutoff")
         replacement_high = jnp.asarray(norm_unweighted_high_shell, dtype=jnp.float32)
@@ -7629,6 +7631,7 @@ def compute_pass2_stats_sparse_bucketed(
     adaptive_fraction=0.999,
     bpref_device_signature_active: bool = False,
     bpref_class_index: int = 0,
+    include_unweighted_norm_high_shell: bool = True,
 ):
     """Bucketed batched implementation of sparse pass-2 oversampling.
 
@@ -9298,6 +9301,7 @@ def compute_pass2_stats_sparse_bucketed(
                     shell_count=n_shells,
                     norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
                     norm_unweighted_high_shell=relion_norm_high_shell,
+                    include_unweighted_high_shell=include_unweighted_norm_high_shell,
                 )
                 noise_img_power_total += np.asarray(weighted_img_shells, dtype=np.float64)
                 noise_norm_correction_total[image_indices] += np.asarray(
@@ -10033,6 +10037,7 @@ def compute_pass2_stats_sparse_bucketed(
                 shell_count=n_shells,
                 norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
                 norm_unweighted_high_shell=relion_norm_high_shell,
+                include_unweighted_high_shell=include_unweighted_norm_high_shell,
             )
             support_mass_np = np.asarray(support_mass, dtype=np.float64)
             noise_img_power_total += np.asarray(weighted_img_shells, dtype=np.float64)
@@ -12793,10 +12798,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                         np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
                     )
                 support_mass = jnp.sum(noise_probs_sum_t, axis=1)
-                # Preserve the existing per-class norm-statistic aggregation:
-                # downstream K-class code sums these class-local arrays. The
-                # K>1 multiplicity of the unweighted high-shell term requires
-                # a separate RELION audit before any K=4 parity claim.
+                # RELION adds power_img outside the class loop, once per image.
+                # Keep the shared high-shell term on class zero so downstream
+                # summation of class-local statistics reproduces that ordering.
                 weighted_img_shells, weighted_img_per_image = _weighted_image_power_shells_and_per_image(
                     processed_score_half_for_noise,
                     shell_indices_half,
@@ -12804,6 +12808,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     shell_count=n_shells,
                     norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
                     norm_unweighted_high_shell=relion_norm_high_shell,
+                    include_unweighted_high_shell=class_index == 0,
                 )
                 support_mass_np = np.asarray(support_mass, dtype=np.float64)
                 noise_img_power_total[class_index] += np.asarray(weighted_img_shells, dtype=np.float64)

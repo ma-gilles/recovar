@@ -665,6 +665,7 @@ def compute_pass2_stats_sparse(
     use_perimage_reference=False,
     bpref_device_signature_active: bool = False,
     bpref_class_index: int = 0,
+    include_unweighted_norm_high_shell: bool = True,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -746,6 +747,7 @@ def compute_pass2_stats_sparse(
         and not relion_fine_mstep_prune
         and relion_firstiter_score_mode == "gaussian"
         and not relion_firstiter_winner_take_all
+        and include_unweighted_norm_high_shell
         and not (
             relion_exact_fine_gaussian
             and not use_float64_scoring
@@ -808,6 +810,7 @@ def compute_pass2_stats_sparse(
             adaptive_fraction=adaptive_fraction,
             bpref_device_signature_active=bpref_device_signature_active,
             bpref_class_index=bpref_class_index,
+            include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
         )
 
     if relion_projector_half is not None:

@@ -4467,6 +4467,47 @@ def test_weighted_image_power_replaces_only_unweighted_high_shell_normcorr():
     np.testing.assert_array_equal(np.asarray(per_image), expected_per_image)
 
 
+def test_weighted_image_power_assigns_shared_high_shell_once_across_classes():
+    processed_half = jnp.asarray(
+        [
+            [1.0 + 1.0j, 2.0 + 0.0j, 3.0 + 0.0j],
+            [4.0 + 0.0j, 0.0 + 5.0j, 6.0 + 0.0j],
+        ],
+        dtype=jnp.complex64,
+    )
+    shell_indices = jnp.asarray([0, 1, 2], dtype=jnp.int32)
+    support_mass_by_class = np.asarray(
+        [[0.2, 0.7], [0.3, 0.1], [0.5, 0.2]],
+        dtype=np.float32,
+    )
+    powerclass_high = jnp.asarray([123.0, 456.0], dtype=jnp.float32)
+
+    per_class_norm = []
+    per_class_shells = []
+    for class_index, support_mass in enumerate(support_mass_by_class):
+        shells, per_image = _weighted_image_power_shells_and_per_image(
+            processed_half,
+            shell_indices,
+            jnp.asarray(support_mass),
+            shell_count=3,
+            norm_unweighted_shell_cutoff=0,
+            norm_unweighted_high_shell=powerclass_high,
+            include_unweighted_high_shell=class_index == 0,
+        )
+        per_class_shells.append(np.asarray(shells))
+        per_class_norm.append(np.asarray(per_image))
+
+    pixel_power = np.abs(np.asarray(processed_half)) ** 2
+    total_mass = support_mass_by_class.sum(axis=0)
+    expected_norm = pixel_power[:, 0] * total_mass + np.asarray(powerclass_high)
+    expected_shells = np.asarray(
+        [np.sum(pixel_power[:, shell] * total_mass) for shell in range(3)],
+        dtype=np.float32,
+    )
+    np.testing.assert_allclose(np.sum(per_class_norm, axis=0), expected_norm, rtol=1e-7, atol=5e-5)
+    np.testing.assert_allclose(np.sum(per_class_shells, axis=0), expected_shells, rtol=1e-7, atol=5e-5)
+
+
 def test_weighted_image_power_excludes_sentinel_from_support_weighted_normcorr():
     processed_half = jnp.asarray(
         [[1.0 + 0.0j, 100.0 + 0.0j], [2.0 + 0.0j, 200.0 + 0.0j]],

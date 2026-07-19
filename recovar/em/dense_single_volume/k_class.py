@@ -925,6 +925,10 @@ def _run_sparse_k_class_adaptive_pass2(
 
     def _common_for_class(class_index: int) -> dict:
         class_common = dict(common)
+        # RELION accumulates the unweighted power_img high-shell term once,
+        # after all class-weighted residuals. The legacy 2K-1 route returns
+        # class-local statistics, so assign that shared term to one class only.
+        class_common["include_unweighted_norm_high_shell"] = class_index == last_class_index
         scale_dvp = class_common.get("scale_correction_data_vs_prior")
         if scale_dvp is not None:
             class_common["scale_correction_data_vs_prior"] = _select_class_value(
