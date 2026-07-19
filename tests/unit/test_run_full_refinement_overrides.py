@@ -1628,6 +1628,7 @@ def test_replay_overrides_use_shared_class3d_model_star(tmp_path):
         overrides[1]["class_tau2"],
         np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float64) * 8**4,
     )
+    assert "mean_variance" not in overrides[1]
 
     t1, t2 = overrides[1]["previous_best_translations"]
     np.testing.assert_allclose(t1, np.asarray([[1.0, 0.5], [3.0, 2.5]], dtype=np.float32))
@@ -1644,6 +1645,67 @@ def test_replay_overrides_use_shared_class3d_model_star(tmp_path):
     r1, r2 = overrides[1]["previous_best_rotations"]
     np.testing.assert_allclose(r1, utils.R_from_relion(expected_e1, degrees=True).astype(np.float32))
     np.testing.assert_allclose(r2, utils.R_from_relion(expected_e2, degrees=True).astype(np.float32))
+
+
+def test_replay_overrides_k1_mean_variance_is_explicit_and_n4_scaled(tmp_path):
+    pd = pytest.importorskip("pandas")
+    starfile = pytest.importorskip("starfile")
+
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": ["1@particles.mrcs", "2@particles.mrcs"],
+            "rlnNormCorrection": [1.0, 1.0],
+            "rlnGroupNumber": [1, 1],
+        }
+    )
+    raw_tau2 = np.asarray([0.1, 0.2], dtype=np.float64)
+    starfile.write({"particles": particles}, tmp_path / "run_it001_data.star")
+    starfile.write(
+        {
+            "model_general": pd.DataFrame(
+                {
+                    "rlnNormCorrectionAverage": [1.0],
+                    "rlnSigmaOffsetsAngst": [2.0],
+                }
+            ),
+            "model_class_1": pd.DataFrame({"rlnReferenceTau2": raw_tau2}),
+        },
+        tmp_path / "run_it001_model.star",
+    )
+    common_kwargs = {
+        "relion_dir": tmp_path,
+        "half1_idx": np.asarray([0], dtype=np.int64),
+        "half2_idx": np.asarray([1], dtype=np.int64),
+        "max_iter": 1,
+        "ds_voxel": 2.0,
+        "ds_grid": 4,
+        "include_normcorr": False,
+    }
+
+    default_overrides = _build_replay_iteration_overrides(**common_kwargs)
+    diagnostic_overrides = _build_replay_iteration_overrides(
+        **common_kwargs,
+        include_k1_mean_variance=True,
+    )
+
+    assert "mean_variance" not in default_overrides[1]
+    assert "class_tau2" not in default_overrides[1]
+    assert "class_tau2" not in diagnostic_overrides[1]
+
+    from recovar import utils
+
+    expected = np.asarray(
+        utils.make_radial_image(
+            raw_tau2 * 4**4,
+            (4, 4, 4),
+            extend_last_frequency=True,
+        ),
+        dtype=np.float64,
+    ).reshape(-1)
+    observed = diagnostic_overrides[1]["mean_variance"]
+    assert observed.shape == (4**3,)
+    assert observed.dtype == np.float64
+    np.testing.assert_allclose(observed, expected, rtol=0.0, atol=0.0)
 
 
 def test_replay_overrides_map_noncontiguous_subset_stack_indices(tmp_path):
