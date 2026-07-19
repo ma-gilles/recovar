@@ -1770,6 +1770,7 @@ def test_local_k_class_accepts_per_class_layouts_and_external_evidence(monkeypat
     assert len(calls) == 2
     np.testing.assert_allclose(calls[0][0].rotation_log_priors_flat, np.asarray([0.0, -1.0]))
     np.testing.assert_allclose(calls[1][0].rotation_log_priors_flat, np.asarray([-2.0, -3.0]))
+    assert [kwargs["include_unweighted_norm_high_shell"] for _layout, kwargs in calls] == [True, False]
     for _layout, kwargs in calls:
         np.testing.assert_allclose(kwargs["normalization_log_evidence"], normalization_log_evidence)
 

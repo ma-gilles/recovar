@@ -121,7 +121,7 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.dense_single_volume.local_big_jit import (
-    _norm_correction_image_power_mass,
+    _norm_correction_image_power_per_image,
     run_local_bucket_big_jit,
 )
 from recovar.em.dense_single_volume.local_debug import (
@@ -1789,6 +1789,7 @@ def run_local_em_exact(
     translation_prior_centers: np.ndarray | None = None,
     unify_local_bucket_sizes: bool | None = None,
     stats_use_reconstruction_probs: bool = False,
+    include_unweighted_norm_high_shell: bool = True,
     reconstruction_probability_threshold: np.ndarray | None = None,
     return_reconstruction_probability_values: bool = False,
     return_reconstruction_sample_indices: bool = False,
@@ -1798,6 +1799,7 @@ def run_local_em_exact(
     """Run exact local EM over per-image local hypothesis sets."""
 
     score_only = bool(score_only)
+    include_unweighted_norm_high_shell = bool(include_unweighted_norm_high_shell)
     if score_only:
         if not (disable_adjoint_y and disable_adjoint_ctf):
             raise ValueError("score_only exact-local EM requires both adjoints disabled")
@@ -2943,6 +2945,8 @@ def run_local_em_exact(
                 return_deferred_mstep_inputs=return_big_jit_deferred_mstep_inputs,
                 return_deferred_noise_inputs=bool(return_big_jit_deferred_mstep_inputs and accumulate_noise),
                 n_shells=n_shells_arg,
+                norm_current_size=current_size,
+                include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
                 has_normalization_log_z=normalization_log_z_np is not None,
                 has_normalization_log_evidence=normalization_log_evidence_np is not None,
                 has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
@@ -3438,17 +3442,17 @@ def run_local_em_exact(
                     (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
                     axis=0,
                 ).astype(jnp.float32)
-                batch_img_power_per_image = jnp.sum(
-                    (jnp.abs(processed_noise_power_half) ** 2)
-                    * _norm_correction_image_power_mass(
-                        support_mass,
-                        shell_indices_half,
-                        jnp.ones_like(support_mass, dtype=bool),
-                        norm_unweighted_shell_cutoff,
-                        shell_count=n_shells,
-                    ),
-                    axis=-1,
-                ).astype(jnp.float32)
+                batch_img_power_per_image = _norm_correction_image_power_per_image(
+                    processed_noise_power_half,
+                    support_mass,
+                    shell_indices_half,
+                    jnp.ones_like(support_mass, dtype=bool),
+                    norm_unweighted_shell_cutoff,
+                    shell_count=n_shells,
+                    image_shape=image_shape,
+                    current_size=current_size,
+                    include_unweighted_high_shell=include_unweighted_norm_high_shell,
+                )
                 batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
                 noise_img_power = noise_img_power + batch_img_power_shells
                 noise_sumw = noise_sumw + jnp.sum(support_mass)
@@ -4476,17 +4480,17 @@ def run_local_em_exact(
                 (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
                 axis=0,
             ).astype(jnp.float32)
-            batch_img_power_per_image = jnp.sum(
-                (jnp.abs(processed_noise_power_half) ** 2)
-                * _norm_correction_image_power_mass(
-                    support_mass,
-                    shell_indices_half,
-                    jnp.ones_like(support_mass, dtype=bool),
-                    norm_unweighted_shell_cutoff,
-                    shell_count=n_shells,
-                ),
-                axis=-1,
-            ).astype(jnp.float32)
+            batch_img_power_per_image = _norm_correction_image_power_per_image(
+                processed_noise_power_half,
+                support_mass,
+                shell_indices_half,
+                jnp.ones_like(support_mass, dtype=bool),
+                norm_unweighted_shell_cutoff,
+                shell_count=n_shells,
+                image_shape=image_shape,
+                current_size=current_size,
+                include_unweighted_high_shell=include_unweighted_norm_high_shell,
+            )
             batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
             noise_img_power = noise_img_power + batch_img_power_shells
             noise_sumw = noise_sumw + jnp.sum(support_mass)

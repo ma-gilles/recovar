@@ -5707,6 +5707,80 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
     )
 
 
+def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
+    dataset = MockDataset(2, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=160)
+    means = jnp.stack([mean, mean], axis=0)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=161)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=2,
+        n_psi=1,
+        rotation_offsets=np.array([0, 2, 4], dtype=np.int64),
+        rotation_ids_flat=np.array([0, 1, 0, 1], dtype=np.int32),
+        rotations_flat=np.tile(np.asarray(local_rotations, dtype=np.float32), (2, 1, 1)),
+        rotation_log_priors_flat=np.zeros(4, dtype=np.float32),
+        rotation_counts=np.array([2, 2], dtype=np.int32),
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((2, 1), dtype=np.float32),
+    )
+    engine_kwargs = dict(
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=6,
+        accumulate_noise=True,
+        reconstruct_significant_only=False,
+    )
+
+    *_, single_noise = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        **engine_kwargs,
+    )
+    *_, single_without_shared_high = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        include_unweighted_norm_high_shell=False,
+        **engine_kwargs,
+    )
+    result = run_local_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        **engine_kwargs,
+    )
+
+    assert single_noise.wsum_norm_correction is not None
+    assert single_without_shared_high.wsum_norm_correction is not None
+    assert result.aggregate_noise_stats is not None
+    assert result.aggregate_noise_stats.wsum_norm_correction is not None
+    aggregate_norm = np.asarray(result.aggregate_noise_stats.wsum_norm_correction)
+    single_norm = np.asarray(single_noise.wsum_norm_correction)
+    shared_high = single_norm - np.asarray(single_without_shared_high.wsum_norm_correction)
+    duplicated_high = single_norm + shared_high
+    assert np.all(shared_high > 0.0)
+    np.testing.assert_allclose(
+        aggregate_norm,
+        single_norm,
+        rtol=5e-5,
+        atol=1e-3,
+    )
+    assert np.linalg.norm(aggregate_norm - single_norm) < 0.01 * np.linalg.norm(aggregate_norm - duplicated_high)
+
+
 def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=163)

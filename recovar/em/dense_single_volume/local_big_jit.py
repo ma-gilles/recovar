@@ -40,6 +40,9 @@ from recovar.em.dense_single_volume.helpers.projection import (
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
 )
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_cuda_powerclass_highres_norm_units,
+)
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_weighted_sums,
 )
@@ -96,6 +99,7 @@ def _norm_correction_image_power_mass(
     projection_max_r,
     *,
     shell_count: int,
+    include_unweighted_high_shell: bool = True,
 ):
     """RELION normcorr image-power mass on valid Fourier shells only."""
 
@@ -107,7 +111,65 @@ def _norm_correction_image_power_mass(
         return weighted_mass
     full_mass = jnp.asarray(valid_image_mask, dtype=support_mass.dtype)
     unmodeled_shell = valid_shell & (shell_indices_half > int(projection_max_r))
-    return jnp.where(unmodeled_shell[None, :], full_mass[:, None], weighted_mass)
+    high_shell_mass = full_mass if include_unweighted_high_shell else jnp.zeros_like(full_mass)
+    return jnp.where(unmodeled_shell[None, :], high_shell_mass[:, None], weighted_mass)
+
+
+def _norm_correction_image_power_per_image(
+    processed_noise_power_half,
+    support_mass,
+    shell_indices_half,
+    valid_image_mask,
+    projection_max_r,
+    *,
+    shell_count: int,
+    image_shape,
+    current_size,
+    include_unweighted_high_shell: bool = True,
+):
+    """Return RELION norm-correction image power for one local class.
+
+    Low/current shells carry this class's posterior support.  RELION adds the
+    unweighted high-shell ``power_img`` term once per particle after its class
+    loop, using CUDA ``powerClass`` divide-before-square float32 arithmetic.
+    ``include_unweighted_high_shell`` lets K-class orchestration assign that
+    shared term to exactly one class while preserving the single-class default.
+    """
+
+    processed_noise_power_half = jnp.asarray(processed_noise_power_half)
+    pixel_power = jnp.abs(processed_noise_power_half) ** 2
+    power_mass = _norm_correction_image_power_mass(
+        support_mass,
+        shell_indices_half,
+        valid_image_mask,
+        projection_max_r,
+        shell_count=shell_count,
+        include_unweighted_high_shell=include_unweighted_high_shell,
+    )
+    per_image = jnp.sum(pixel_power * power_mass, axis=-1).astype(jnp.float32)
+    if (
+        current_size is None
+        or projection_max_r == "auto"
+        or projection_max_r is None
+        or not include_unweighted_high_shell
+    ):
+        return per_image
+
+    shell_indices_half = jnp.asarray(shell_indices_half)
+    valid_shell = (shell_indices_half >= 0) & (shell_indices_half < int(shell_count))
+    unmodeled_shell = valid_shell & (shell_indices_half > int(projection_max_r))
+    generic_high = jnp.sum(
+        jnp.where(unmodeled_shell[None, :], pixel_power, 0.0),
+        axis=-1,
+    ).astype(jnp.float32)
+    relion_high = _relion_cuda_powerclass_highres_norm_units(
+        processed_noise_power_half,
+        image_shape=image_shape,
+        current_size=current_size,
+    )
+    full_mass = jnp.asarray(valid_image_mask, dtype=jnp.float32)
+    per_image = jax.lax.optimization_barrier(per_image)
+    return per_image + full_mass * (relion_high - generic_high)
 
 
 def _exact_local_mstep_should_split_adjoints(recon_volume_shape, *arrays) -> bool:
@@ -541,6 +603,8 @@ def _project_local_half_spectrum(
         "return_deferred_mstep_inputs",
         "return_deferred_noise_inputs",
         "n_shells",
+        "norm_current_size",
+        "include_unweighted_norm_high_shell",
         "has_normalization_log_z",
         "has_normalization_log_evidence",
         "has_reconstruction_probability_threshold",
@@ -639,6 +703,8 @@ def run_local_bucket_big_jit(
     return_deferred_mstep_inputs: bool,
     return_deferred_noise_inputs: bool,
     n_shells: int,
+    norm_current_size: int | None,
+    include_unweighted_norm_high_shell: bool,
     has_normalization_log_z: bool,
     has_normalization_log_evidence: bool,
     has_reconstruction_probability_threshold: bool,
@@ -1196,17 +1262,17 @@ def run_local_bucket_big_jit(
         translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(jnp.float32)
         noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist_ang.astype(jnp.float32))
         processed_noise_power_half = processed_score_half * image_only_corr[:, None]
-        batch_img_power_per_image = jnp.sum(
-            (jnp.abs(processed_noise_power_half) ** 2)
-            * _norm_correction_image_power_mass(
-                support_mass,
-                shell_indices_half,
-                valid_image_mask,
-                projection_max_r,
-                shell_count=n_shells,
-            ),
-            axis=-1,
-        ).astype(jnp.float32)
+        batch_img_power_per_image = _norm_correction_image_power_per_image(
+            processed_noise_power_half,
+            support_mass,
+            shell_indices_half,
+            valid_image_mask,
+            projection_max_r,
+            shell_count=n_shells,
+            image_shape=image_shape,
+            current_size=norm_current_size,
+            include_unweighted_high_shell=include_unweighted_norm_high_shell,
+        )
         batch_img_power = jnp.sum(
             (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
             axis=0,

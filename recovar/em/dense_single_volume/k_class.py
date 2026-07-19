@@ -557,6 +557,11 @@ def _local_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_clas
     """Select class-indexed local-engine kwargs before calling the single-class kernel."""
 
     kwargs = dict(engine_kwargs)
+    # RELION adds the unweighted high-shell power_img term once per particle,
+    # outside the class loop. Local K-class runs return class-local noise
+    # statistics which are summed downstream, so assign the shared term to one
+    # class while leaving the single-class route unchanged.
+    kwargs["include_unweighted_norm_high_shell"] = class_index == 0
     projector_half = kwargs.get("relion_projector_half")
     if projector_half is not None:
         projector_half_arr = jnp.asarray(projector_half)
