@@ -186,6 +186,21 @@ def test_state_swap_cli_requires_complete_target_replay_context():
         )
 
 
+def test_state_swap_cli_requires_exact_scoring_scale_oracle():
+    incomplete = _complete_replay_override()
+    del incomplete["scoring_scale_corrections"]
+
+    with pytest.raises(ValueError, match="missing.*scoring_scale_corrections"):
+        build_state_swap_probe(
+            target_relion_iteration=2,
+            variant="all_relion",
+            replay_relion_references=True,
+            init_relion_iteration=0,
+            max_iter=2,
+            replay_iteration_overrides=[None, incomplete],
+        )
+
+
 @pytest.mark.parametrize("applied", [None, [], [4], [5, 5]])
 def test_state_swap_application_telemetry_fails_closed(applied):
     probe = {

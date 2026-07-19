@@ -1,4 +1,4 @@
-"""Fail-closed CLI helpers for resident-state swap diagnostics."""
+"""Fail-closed CLI helpers for K=1 resident-state swap diagnostics."""
 
 from collections.abc import Mapping, Sequence
 
@@ -11,6 +11,7 @@ REQUIRED_STATE_SWAP_REPLAY_KEYS = frozenset(
         "previous_best_rotation_eulers",
         "previous_best_rotations",
         "previous_best_translations",
+        "scoring_scale_corrections",
         "serialized_scale_corrections",
         "translation_sigma_angstrom",
         "translation_sigma_angstrom_per_half",
@@ -26,7 +27,7 @@ def state_swap_variant_choices() -> tuple[str, ...]:
 
 
 def add_state_swap_probe_arguments(parser) -> None:
-    """Add the physical-iteration state-swap CLI contract."""
+    """Add the K=1 physical-iteration state-swap CLI contract."""
     parser.add_argument(
         "--state-swap-target-relion-iteration",
         type=int,

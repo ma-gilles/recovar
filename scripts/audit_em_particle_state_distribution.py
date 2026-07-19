@@ -1038,7 +1038,7 @@ def _npz_trajectory_value(npz, key: str, iteration: int):
     return value
 
 
-def _recovar_scalar_state(npz, iteration: int) -> dict[str, Any]:
+def _recovar_scalar_state(npz, iteration: int, pmax: np.ndarray) -> dict[str, Any]:
     resolution_shell = _npz_trajectory_value(npz, "pixel_resolutions", iteration)
     resolution_angstrom = None
     if resolution_shell is not None and float(resolution_shell) > 0 and "voxel_size" in npz.files:
@@ -1050,7 +1050,8 @@ def _recovar_scalar_state(npz, iteration: int) -> dict[str, Any]:
         "current_image_size": _npz_trajectory_value(npz, "current_sizes", iteration),
         "current_resolution_shell_index": resolution_shell,
         "current_resolution_angstrom": resolution_angstrom,
-        "average_pmax_particles": _npz_trajectory_value(npz, "ave_Pmax_trajectory", iteration),
+        "average_pmax_particles": float(np.mean(pmax)),
+        "average_pmax_mstep": _npz_trajectory_value(npz, "ave_Pmax_trajectory", iteration),
         "healpix_order": _npz_trajectory_value(npz, "healpix_order_trajectory", iteration),
         "accuracy_rotations_deg": _npz_trajectory_value(npz, "acc_rot_trajectory", iteration),
         "accuracy_translations_angstrom": _npz_trajectory_value(npz, "acc_trans_trajectory", iteration),
@@ -1247,7 +1248,7 @@ def audit(
             rec_state = _load_recovar_state(npz, rec_iteration, n_images, rel_state["translation_units"])
             overall = _cohort_metrics(np.ones(n_images, dtype=bool), rec_state, rel_state)
             relion_scalar = _relion_scalar_state(relion_stars[rel_iteration], rel_state["pmax"])
-            recovar_scalar = _recovar_scalar_state(npz, rec_iteration)
+            recovar_scalar = _recovar_scalar_state(npz, rec_iteration, rec_state["pmax"])
             class_mapping = None
             if overall["class_assignment"]["status"] == "measured":
                 class_mapping = {
