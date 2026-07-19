@@ -5288,7 +5288,11 @@ def _run_relion_iteration_loop(
         # direction-prior lists in place; returns explicit new values for
         # everything else.
         recovar_state_swap_snapshot = None
-        if state_swap_probe is not None:
+        state_swap_target_this_iteration = (
+            state_swap_probe is not None
+            and int(state_swap_probe.get("iteration", -1)) == int(iteration)
+        )
+        if state_swap_target_this_iteration:
             recovar_state_swap_snapshot = _snapshot_state_swap_inputs(
                 state=state,
                 cs=cs,
@@ -5338,6 +5342,22 @@ def _run_relion_iteration_loop(
         noise_variance = replay_result.noise_variance
         previous_noise_radial_per_half = replay_result.previous_noise_radial_per_half
         previous_noise_radial = replay_result.previous_noise_radial
+        replay_mean_variance = (
+            None
+            if iter_replay_override is None
+            else iter_replay_override.get("mean_variance")
+        )
+        if replay_mean_variance is not None:
+            replay_mean_variance = np.asarray(replay_mean_variance, dtype=np.float64).reshape(-1)
+            expected_mean_variance_shape = tuple(mean_variance.shape)
+            if replay_mean_variance.shape != expected_mean_variance_shape:
+                raise ValueError(
+                    "K=1 replay mean_variance shape mismatch: "
+                    f"expected {expected_mean_variance_shape}, "
+                    f"got {replay_mean_variance.shape}"
+                )
+            mean_variance = jnp.asarray(replay_mean_variance)
+            logger.info("Replay override: K=1 tau2/mean_variance <- model.star")
         current_sigma_offset_angstrom = replay_result.current_sigma_offset_angstrom
         current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(
             replay_result.current_sigma_offset_angstrom_per_half
@@ -5352,10 +5372,6 @@ def _run_relion_iteration_loop(
                 ", ".join(f"class {idx + 1}={weight:.4f}" for idx, weight in enumerate(class_weights)),
             )
 
-        state_swap_target_this_iteration = (
-            state_swap_probe is not None
-            and int(state_swap_probe.get("iteration", -1)) == int(iteration)
-        )
         means = _maybe_debug_replay_relion_references(
             means=means,
             perturb_replay_relion_dir=perturb_replay_relion_dir,

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from recovar.em.dense_single_volume.helpers.state_swap_probe import (
+    REQUIRED_STATE_SWAP_REPLAY_KEYS,
     add_state_swap_probe_arguments,
     build_state_swap_probe,
     state_swap_probe_loop_index,
@@ -35,6 +36,10 @@ def _loop_index(args, *, init_relion_iteration=0, max_iter=5):
     )
 
 
+def _complete_replay_override():
+    return {key: object() for key in REQUIRED_STATE_SWAP_REPLAY_KEYS}
+
+
 def test_state_swap_cli_default_is_inert():
     args = _parse_state_swap_args()
 
@@ -58,7 +63,7 @@ def test_state_swap_cli_builds_case20_iteration5_maps_noise_probe():
         "recovar_maps_tau2_noise",
         "--state-swap-replay-relion-references",
     )
-    replay_overrides = [None, None, None, None, {"mean_variance": object()}]
+    replay_overrides = [None, None, None, None, _complete_replay_override()]
 
     probe = build_state_swap_probe(
         target_relion_iteration=args.state_swap_target_relion_iteration,
@@ -74,6 +79,8 @@ def test_state_swap_cli_builds_case20_iteration5_maps_noise_probe():
         "target_relion_iteration": 5,
         "variant": "recovar_maps_tau2_noise",
         "replay_relion_references": True,
+        "replay_override_keys": tuple(sorted(REQUIRED_STATE_SWAP_REPLAY_KEYS)),
+        "required_replay_override_keys": tuple(sorted(REQUIRED_STATE_SWAP_REPLAY_KEYS)),
     }
     validate_state_swap_probe_application(probe, [5])
 
@@ -164,6 +171,21 @@ def test_state_swap_cli_requires_nonempty_replay_context_at_target(replay_overri
         )
 
 
+def test_state_swap_cli_requires_complete_target_replay_context():
+    incomplete = _complete_replay_override()
+    del incomplete["mean_variance"]
+
+    with pytest.raises(ValueError, match="missing.*mean_variance"):
+        build_state_swap_probe(
+            target_relion_iteration=2,
+            variant="recovar_tau2_only",
+            replay_relion_references=True,
+            init_relion_iteration=0,
+            max_iter=2,
+            replay_iteration_overrides=[None, incomplete],
+        )
+
+
 @pytest.mark.parametrize("applied", [None, [], [4], [5, 5]])
 def test_state_swap_application_telemetry_fails_closed(applied):
     probe = {
@@ -212,6 +234,8 @@ def test_full_runner_propagates_and_serializes_state_swap_probe():
         "state_swap_probe_variant",
         "state_swap_probe_replay_relion_references",
         "state_swap_probe_applied_relion_iterations",
+        "state_swap_probe_replay_override_keys",
+        "state_swap_probe_required_replay_override_keys",
     ):
         assert f'"{field}"' in source
 
@@ -238,3 +262,13 @@ def test_relion_references_are_applied_before_state_restoration():
     assert call_lines["_maybe_debug_replay_relion_references"] < call_lines[
         "_apply_state_swap_probe"
     ]
+
+
+def test_state_swap_snapshot_is_bounded_to_target_iteration():
+    source = (REPO_ROOT / "recovar/em/dense_single_volume/iteration_loop.py").read_text()
+    snapshot_block = source.split("recovar_state_swap_snapshot = None", 1)[1].split(
+        "replay_result = apply_iter_replay_overrides", 1
+    )[0]
+
+    assert "if state_swap_target_this_iteration:" in snapshot_block
+    assert "if state_swap_probe is not None:" not in snapshot_block

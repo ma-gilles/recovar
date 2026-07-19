@@ -2,6 +2,21 @@
 
 from collections.abc import Mapping, Sequence
 
+REQUIRED_STATE_SWAP_REPLAY_KEYS = frozenset(
+    {
+        "direction_prior",
+        "image_corrections",
+        "mean_variance",
+        "noise_variance",
+        "previous_best_rotation_eulers",
+        "previous_best_rotations",
+        "previous_best_translations",
+        "serialized_scale_corrections",
+        "translation_sigma_angstrom",
+        "translation_sigma_angstrom_per_half",
+    }
+)
+
 
 def state_swap_variant_choices() -> tuple[str, ...]:
     """Return the variants implemented by the iteration-loop diagnostic."""
@@ -101,7 +116,7 @@ def build_state_swap_probe(
     init_relion_iteration: int,
     max_iter: int,
     replay_iteration_overrides: Sequence[Mapping | None] | None,
-) -> dict[str, int | str | bool] | None:
+) -> dict[str, object] | None:
     """Build the internal probe after proving target replay state exists."""
     loop_index = state_swap_probe_loop_index(
         target_relion_iteration=target_relion_iteration,
@@ -124,11 +139,19 @@ def build_state_swap_probe(
             f"physical RELION iteration {int(target_relion_iteration)} "
             f"(zero-based RECOVAR loop index {loop_index})"
         )
+    missing_keys = sorted(REQUIRED_STATE_SWAP_REPLAY_KEYS - set(target_override))
+    if missing_keys:
+        raise ValueError(
+            "state-swap diagnostics require a complete target replay override; "
+            f"physical RELION iteration {int(target_relion_iteration)} is missing {missing_keys}"
+        )
     return {
         "iteration": loop_index,
         "target_relion_iteration": int(target_relion_iteration),
         "variant": str(variant),
         "replay_relion_references": True,
+        "replay_override_keys": tuple(sorted(target_override)),
+        "required_replay_override_keys": tuple(sorted(REQUIRED_STATE_SWAP_REPLAY_KEYS)),
     }
 
 

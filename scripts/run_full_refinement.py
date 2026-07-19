@@ -738,6 +738,7 @@ def _build_replay_iteration_overrides(
     init_relion_iteration=0,
     particle_names=None,
     include_initial_state=False,
+    include_k1_mean_variance=False,
     strict=False,
 ):
     """Build per-iter replay overrides keyed on recovar iteration index.
@@ -824,7 +825,7 @@ def _build_replay_iteration_overrides(
                     np.asarray(table[col], dtype=np.float64) * float(ds_grid) ** 4,
                 )
             )
-        if len(class_tau2) <= 1:
+        if not class_tau2:
             return None
         class_tau2.sort(key=lambda item: item[0])
         return np.stack([tau2 for _, tau2 in class_tau2], axis=0)
@@ -1017,8 +1018,17 @@ def _build_replay_iteration_overrides(
             )
         if direction_prior_h1 is not None and direction_prior_h2 is not None:
             override_k["direction_prior"] = [direction_prior_h1, direction_prior_h2]
-        if class_tau2 is not None:
+        if class_tau2 is not None and class_tau2.shape[0] > 1:
             override_k["class_tau2"] = class_tau2
+        elif class_tau2 is not None and include_k1_mean_variance:
+            override_k["mean_variance"] = np.asarray(
+                utils.make_radial_image(
+                    class_tau2[0],
+                    (int(ds_grid), int(ds_grid), int(ds_grid)),
+                    extend_last_frequency=True,
+                ),
+                dtype=np.float64,
+            ).reshape(-1)
         if include_normcorr:
             override_k["image_corrections"] = [corr_h1, corr_h2]
             override_k["serialized_scale_corrections"] = [scale_corr_h1, scale_corr_h2]
@@ -2894,6 +2904,7 @@ def main():
             include_normcorr=replay_normcorr,
             init_relion_iteration=args.init_relion_iteration,
             particle_names=our_names,
+            include_k1_mean_variance=(args.state_swap_target_relion_iteration is not None),
             strict=True,
         )
 
@@ -3416,6 +3427,16 @@ def main():
         "state_swap_probe_applied_relion_iterations": np.asarray(
             result.get("state_swap_probe_applied_relion_iterations", []),
             dtype=np.int64,
+        ),
+        "state_swap_probe_replay_override_keys": np.asarray(
+            [] if state_swap_probe is None else state_swap_probe["replay_override_keys"],
+            dtype=np.str_,
+        ),
+        "state_swap_probe_required_replay_override_keys": np.asarray(
+            []
+            if state_swap_probe is None
+            else state_swap_probe["required_replay_override_keys"],
+            dtype=np.str_,
         ),
     }
     if relion_follower_scale_replay is not None:
