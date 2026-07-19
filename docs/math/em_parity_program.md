@@ -6096,9 +6096,15 @@ The last numbered merged FSC-AUC is `0.999964169`, so the drop to `0.995675`
 is introduced at final all-data. Final split-half cross-engine FSC-AUC values
 are only about `0.84984` even though the merged map passes. This final-boundary
 effect remains a separate localization target; it does not invalidate the OOM
-repair or the configured merged/GT quality gates. RELION was reused from an
-A100 run while RECOVAR used an H100, so this diagnostic is not speed evidence.
-Fresh same-GPU job `11368287` provides the apple-to-apple confirmation.
+repair or the configured merged/GT quality gates.
+
+Fresh same-H100 job `11368287` completed the apple-to-apple confirmation on
+physical UUID `GPU-fa2518be-28c1-06bc-a6cc-131e55fe503e`. Final merged
+cross-engine FSC-AUC is `0.995676320`; GT FSC-AUC is `0.184729916` for
+RECOVAR and `0.183935538` for RELION, a `+0.000794377` RECOVAR delta. RECOVAR
+wall time is `8071.71 s` versus RELION `11062 s` (`1.37x` RELION/RECOVAR).
+The summary SHA-256 is
+`ad6c8a672ca486700c7ce86e45766f099fa02acdc685603b7797a01152771555`.
 
 The sealed trajectory is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_ec25f6dd_autonomous_rerun_launcher_20260718T124500Z/runs/full_ec25f6dd_20260718T184318Z/cases/8_anisotropic_high_noise_100k_g256_white_noise3_bf80_retry3_pinned_lowmem/trajectory_analysis/k1_case8_pinned_lowmem_fulltraj_seal_v1.json`
@@ -6144,6 +6150,21 @@ half-map FSC/resolution state near a discrete shell boundary. The active
 case-20 native RELION pre-scatter capture and common-canonical
 float64/complex128 replay are the next discriminators for that recurrent map
 state; map acceptance remains shellwise FSC/FSC-AUC only.
+
+Fresh same-A100 case 7 (`11365077`) exposes another discrete downstream
+amplifier. Numbered merged cross-engine FSC-AUC stays at least `0.999959757`
+through iteration 11. At iteration 12, RECOVAR advances HEALPix order 4 to 5
+one boundary before RELION and uses current size 102 instead of 104. Pmax
+absolute-difference p95 jumps from `0.0333` to `0.6634`, pose and translation
+tails become quantized local-search jumps, and merged cross-engine FSC-AUC
+falls to `0.997016`. RELION advances to order 5 at iteration 13, but the
+trajectory remains perturbed; RECOVAR converges after 14 numbered iterations
+and RELION after 15. The final merged cross-engine FSC-AUC is `0.843573688`.
+RECOVAR nevertheless has higher GT FSC-AUC (`0.131848813` versus
+`0.125186418`, delta `+0.006662395`), which does not satisfy exact workflow
+parity. Early pose/translation writeback is essentially exact, so the active
+source audit is the iteration-11-to-12 `updateAngularSampling` state/predicate,
+not a forced extra iteration or a pose-writeback change.
 
 ## 2026-07-19 recurrent K=1 final-boundary family localization
 
