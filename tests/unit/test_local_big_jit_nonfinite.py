@@ -180,7 +180,8 @@ def test_local_em_engine_normcorr_full_box_current_size_guard():
     source = inspect.getsource(local_em_engine.run_local_em_exact)
 
     assert "norm_unweighted_shell_cutoff = image_shape[0] // 2 if current_size is None else int(current_size // 2)" in source
-    assert "jnp.asarray(shell_indices_half) > norm_unweighted_shell_cutoff" in source
+    assert source.count("_norm_correction_image_power_mass(") == 2
+    assert source.count("shell_count=n_shells") == 2
     assert "jnp.asarray(shell_indices_half) > int(current_size // 2)" not in source
 
 

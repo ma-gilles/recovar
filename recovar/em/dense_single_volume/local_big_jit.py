@@ -94,15 +94,20 @@ def _norm_correction_image_power_mass(
     shell_indices_half,
     valid_image_mask,
     projection_max_r,
+    *,
+    shell_count: int,
 ):
-    """RELION normcorr image-power mass, including full high-shell power."""
+    """RELION normcorr image-power mass on valid Fourier shells only."""
 
     support_mass = jnp.asarray(support_mass)
+    shell_indices_half = jnp.asarray(shell_indices_half)
+    valid_shell = (shell_indices_half >= 0) & (shell_indices_half < int(shell_count))
+    weighted_mass = jnp.where(valid_shell[None, :], support_mass[:, None], 0.0)
     if projection_max_r == "auto" or projection_max_r is None:
-        return support_mass[:, None]
+        return weighted_mass
     full_mass = jnp.asarray(valid_image_mask, dtype=support_mass.dtype)
-    unmodeled_shell = jnp.asarray(shell_indices_half) > int(projection_max_r)
-    return jnp.where(unmodeled_shell[None, :], full_mass[:, None], support_mass[:, None])
+    unmodeled_shell = valid_shell & (shell_indices_half > int(projection_max_r))
+    return jnp.where(unmodeled_shell[None, :], full_mass[:, None], weighted_mass)
 
 
 def _exact_local_mstep_should_split_adjoints(recon_volume_shape, *arrays) -> bool:
@@ -1198,6 +1203,7 @@ def run_local_bucket_big_jit(
                 shell_indices_half,
                 valid_image_mask,
                 projection_max_r,
+                shell_count=n_shells,
             ),
             axis=-1,
         ).astype(jnp.float32)

@@ -118,7 +118,10 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rotations,
     flatten_bucket_rows,
 )
-from recovar.em.dense_single_volume.local_big_jit import run_local_bucket_big_jit
+from recovar.em.dense_single_volume.local_big_jit import (
+    _norm_correction_image_power_mass,
+    run_local_bucket_big_jit,
+)
 from recovar.em.dense_single_volume.local_debug import (
     current_size_matches_request,
     iteration_matches_request,
@@ -3349,10 +3352,12 @@ def run_local_em_exact(
                 ).astype(jnp.float32)
                 batch_img_power_per_image = jnp.sum(
                     (jnp.abs(processed_noise_power_half) ** 2)
-                    * jnp.where(
-                        (jnp.asarray(shell_indices_half) > norm_unweighted_shell_cutoff)[None, :],
-                        jnp.ones_like(support_mass)[:, None],
-                        support_mass[:, None],
+                    * _norm_correction_image_power_mass(
+                        support_mass,
+                        shell_indices_half,
+                        jnp.ones_like(support_mass, dtype=bool),
+                        norm_unweighted_shell_cutoff,
+                        shell_count=n_shells,
                     ),
                     axis=-1,
                 ).astype(jnp.float32)
@@ -4312,10 +4317,12 @@ def run_local_em_exact(
             ).astype(jnp.float32)
             batch_img_power_per_image = jnp.sum(
                 (jnp.abs(processed_noise_power_half) ** 2)
-                * jnp.where(
-                    (jnp.asarray(shell_indices_half) > norm_unweighted_shell_cutoff)[None, :],
-                    jnp.ones_like(support_mass)[:, None],
-                    support_mass[:, None],
+                * _norm_correction_image_power_mass(
+                    support_mass,
+                    shell_indices_half,
+                    jnp.ones_like(support_mass, dtype=bool),
+                    norm_unweighted_shell_cutoff,
+                    shell_count=n_shells,
                 ),
                 axis=-1,
             ).astype(jnp.float32)
