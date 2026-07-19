@@ -241,11 +241,12 @@ Authoritative status on 2026-07-17:
   `0.9745783` by iteration 16. This is a real accumulated state mismatch, not
   merely the discrete schedule branch.
 - RECOVAR's autonomous trajectory advances HEALPix orders 4, 5, and 6 two
-  iterations early and finalizes after numbered iteration 16. Commit
-  `7f142d5f` repairs a separate terminal bug: after the numbered cap, RECOVAR
-  now performs RELION's sampling update before the final convergence check so
-  the fine-enough latch can become true. A same-GPU terminal validation is
-  running; do not treat the full real-data trajectory as accepted yet.
+  iterations early and finalizes after numbered iteration 16. The historical
+  `7f142d5f` post-cap interpretation was later invalidated by direct source
+  audit: RELION has no convergence or sampling boundary after `iter > nr_iter`.
+  Commit `607e4344` removes that synthetic boundary. The real-data termination
+  difference remains an upstream accumulated map/schedule mismatch; do not
+  treat the trajectory as accepted.
 - The sealed iteration-2-to-3 operand decomposition is closed without a
   production candidate. It compares all 15 recurrent `>0.1`-degree tail rows
   with 15 deterministic matched controls under exact UID, support, geometry,
@@ -275,8 +276,8 @@ Authoritative status on 2026-07-17:
 Priority order: finish and validate the compact uninterrupted RELION live
 boundary, then capture sharded full-dataset score/posterior arrays and compare
 RECOVAR against that exact boundary. Treat independent RELION runs as whole-run
-controls unless every boundary byte matches. Validate the post-cap terminal
-fix; permit an aggregate
+controls unless every boundary byte matches. Keep capped runs fail-closed
+without a synthetic terminal boundary; permit an aggregate
 boundary substitution only if the full-dataset evidence selects a systematic
 source; then use full FSC/FSC-AUC trajectories to repair the remaining real
 K=1 drift and accept or repair the running K=4 trajectory. Avoid further

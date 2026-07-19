@@ -3671,11 +3671,12 @@ Matrix evidence:
   `3.6e-5`; by iteration 7 the corresponding values are 1,393/10,000 and
   `0.03318`. The early HEALPix transition then produces median angle and
   translation errors of `2.37` degrees and `0.819` Angstrom at iteration 8.
-- A separate terminal bug was established: the forced arm ended after 18
-  numbered iterations before RELION's top-of-expectation sampling update could
-  latch `has_fine_enough_angular_sampling`. Commit `7f142d5f` performs that
-  update before the post-cap convergence check and preserves the latched state.
-  Targeted tests pass; a real-data terminal validation remains required.
+- The historical post-cap diagnosis was later invalidated by direct RELION
+  source audit. RELION checks convergence only at the top of a loop iteration
+  satisfying `iter <= nr_iter`; it does not run a sampling or convergence
+  boundary after the cap. Commit `607e4344` removes RECOVAR's synthetic
+  post-cap check. The forced-arm termination difference must therefore be
+  traced to the earlier accumulated map and adaptive-schedule state.
 - Evidence is
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_current_head_fulltraj_15a6d355_20260717T190000Z/analysis/strict_acceptance.json`
   (SHA-256 `7dcd2071ed58fddefa046dc22299d1249c9d3ac351399a27d794456c9ee054be`),
