@@ -6004,6 +6004,26 @@ The sealed report is
 (SHA-256 `03a76ea6e1c594194e2b08de87bcc9ae9a116d7d4a79d38f2ca3cee1d97b30cd`).
 Map quality uses FSC/FSC-AUC only; correlation is not computed.
 
+The matching physical-iteration-4/half-1 schema-v3 BPref capture provides a
+stronger precision discriminator. Its 34,456 active rows retain genuine
+complex128/float64 upstream operands. Under one common canonical order,
+RECOVAR GPU and RELION-style CPU float64 accumulators close at relative L2
+`1.38e-14`. In contrast, canonical GPU float32 versus float64 differs by
+`0.06407` relative L2, far above float32 repeat (`9.37e-8`) and order-only
+(`3.77e-7`) controls. The corresponding unregularized maps compare at FSC-AUC
+`0.996829235`; common float64 GPU-versus-CPU map FSC-AUC is `1.0`.
+
+This boundary is classified as `scatter_precision`, ruling out a
+geometry/backend-arithmetic mismatch for the captured RECOVAR contribution
+list under common canonical float64 replay. It is not yet a native
+RECOVAR-versus-RELION contribution comparison: native RELION operands were not
+captured, and schema v3 omits packed-zero production rows. The decisive next
+control is therefore a live same-GPU trajectory that promotes only the x-half
+M-step accumulator while leaving scoring and posterior arithmetic unchanged.
+The replay report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_bpref_capture_h1_d88090ec_20260719T031000Z/audit/replay/bpref_accumulator_replay_report_v1.json`
+(SHA-256 `88e58c84320fd746b224c5c887d3df6e33c9c1b40efbcd2572a2f146c0bc1633`).
+
 ## 2026-07-19 case-8 low-memory full-trajectory qualification
 
 Pinned diagnostic job `11367838` validates the conservative exact-local
