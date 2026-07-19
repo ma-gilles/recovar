@@ -6265,3 +6265,45 @@ Its rebuilt manifest has SHA-256
 `71f6c9464a5341ddf74e4b779d0c64ed20cb6a36f854fda3816891228f1fa973`
 and verifies all 25 entries. Map quality uses FSC/FSC-AUC only; correlation is
 not computed.
+
+## 2026-07-19 K=1 native RELION pre-scatter operand localization
+
+The same-physical-A100 physical-iteration-4/half-1 case-20 capture closes the
+remaining reduction-versus-operand ambiguity. Capture instrumentation is inert:
+the captured RELION merged map is within FSC-AUC `0.999999999710` of the
+stock oracle repeat. RECOVAR versus captured RELION is `0.999997240709`
+merged, consistent with the recurrent autonomous boundary.
+
+The strict common-support audit covers 1,520 half-1 particles, 9,169 common
+positive contributor rotations, and 9,716,168 emitted pixel rows. Matched
+rotation matrices are exactly equal (`max_abs=0`), every RELION row lies in
+RECOVAR's captured window, and every matched row has positive RECOVAR weight.
+Contributor membership differs only for three particles: RECOVAR/RELION counts
+are 3/4, 9/10, and 3/2; totals are 9,171 versus 9,172. This small support
+difference is real but is not needed to expose the common-subset residual.
+
+On common rows, native pre-scatter operand relative L2 is `0.0238642` for
+complex data and `0.0221334` for real weight. Casting RECOVAR's captured
+complex128/float64 values to complex64/float32 leaves those values unchanged
+at the reported scale, so this is not a widening/cast artifact. Under one
+common deterministic complex128/float64 replay, RELION operands placed with
+RECOVAR versus RELION geometry produce exactly equal accumulators and map
+FSC-AUC `1.0`. Replaying RECOVAR versus RELION operands on the same geometry
+leaves accumulator relative L2 `0.0221842` for data and `0.00564523` for
+weight, with unregularized map FSC-AUC `0.999792368507`.
+
+This localizes the recurrent iteration-4 map difference upstream of neighbor
+geometry and reduction order, to native contribution membership and operand
+generation. The float64 replay promotes RELION's captured float32 operands; it
+does not reconstruct precision already lost upstream. The next aggregate
+discriminator is to factor the common-row data/weight operands into posterior,
+scorer-scale/correction, CTF, and shifted-image terms, stratified by shell and
+particle state. Do not return to serial particle chasing.
+
+The sealed result is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_relion_prescatter_local_same_rec_gpu_cap1tb_retry_20260719T091600Z/analysis/SEALED_RESULTS_V1.json`
+(SHA-256 `cefa46b5ab1947859d6c3086d6ae782a1efca6d9997c8765b11a07c2b055695c`).
+The full comparison is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_relion_prescatter_local_same_rec_gpu_cap1tb_retry_20260719T091600Z/analysis/multicontributor_prescatter_comparison.json`
+(SHA-256 `8e7a9e0a747bae5e3b420682fe1198deb31d5b9bff4a5a7ada1fd4c530058c0b`).
+Map quality uses FSC/FSC-AUC only; correlation is not computed.

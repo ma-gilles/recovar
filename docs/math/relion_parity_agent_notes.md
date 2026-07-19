@@ -4176,3 +4176,32 @@ same-device equivalence or numerical noise.
   rebuilt 25-entry manifest SHA-256
   `71f6c9464a5341ddf74e4b779d0c64ed20cb6a36f854fda3816891228f1fa973`.
   Correlation is not computed.
+
+# 2026-07-19: native case-20 pre-scatter residual is operand generation
+
+- The physical-iteration-4/half-1 RELION pre-scatter capture is inert on the
+  same A100 used by RECOVAR: captured versus stock RELION merged FSC-AUC is
+  `0.999999999710`; RECOVAR versus captured RELION is `0.999997240709`.
+- Exact common-support matching covers 9,169 rotations and 9,716,168 RELION
+  pixel rows. Rotation matrices are bit-exact (`max_abs=0`), all emitted rows
+  lie inside the RECOVAR window, and every row has positive RECOVAR weight.
+  Only three particles differ in contributor membership; aggregate positive
+  counts are 9,171 RECOVAR and 9,172 RELION.
+- Native common-row operand relative L2 is `0.0238642` for data and `0.0221334`
+  for weight. Explicit RECOVAR downcasts leave those discrepancies unchanged,
+  rejecting complex128/float64-versus-complex64/float32 representation alone.
+- One common canonical complex128/float64 replay makes geometry-only
+  accumulators exactly equal and produces map FSC-AUC `1.0`. Operand-only
+  replay retains data/weight accumulator relative L2 `0.0221842/0.00564523`
+  and map FSC-AUC `0.999792368507`. The RELION inputs remain promoted captured
+  float32 values, not genuine recomputed float64 operands.
+- Classification: upstream contribution membership plus operand generation,
+  not scatter geometry or reduction order. Next compare posterior,
+  scale/correction, CTF, and shifted-image factors distributionally on the
+  full common subset; do not chase individual particles.
+- Sealed result:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_relion_prescatter_local_same_rec_gpu_cap1tb_retry_20260719T091600Z/analysis/SEALED_RESULTS_V1.json`
+  (SHA-256 `cefa46b5ab1947859d6c3086d6ae782a1efca6d9997c8765b11a07c2b055695c`).
+  Full comparison SHA-256:
+  `8e7a9e0a747bae5e3b420682fe1198deb31d5b9bff4a5a7ada1fd4c530058c0b`.
+  FSC/FSC-AUC only; correlation is not computed.
