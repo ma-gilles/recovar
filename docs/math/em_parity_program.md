@@ -6036,6 +6036,25 @@ the accumulator itself. The sealed report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it1to4_full_f64_local_a100_4acb1e05_20260719T032200Z/audit/it4_global_f32_f64_summary.json`
 (SHA-256 `df9eae38f08c7dba7c64741492bf995bb45f1c06385027b01d8e1ccb0b995ed7`).
 
+The live accumulator-only control is also complete and rejects float64 as the
+repair. On the same physical A100, with identical scheduling and all global
+score/projection float64 toggles unset, promoting only the x-half M-step
+accumulator lowers merged cross-engine FSC-AUC from `0.999997239270` to
+`0.999995330192` (a `-1.91e-6` change). The two arms compare directly at
+merged FSC-AUC `0.999997952849`. Iteration-1 particle Pmax, support, poses, and
+translations are exact between arms; by iteration 4, Pmax p95 differs by
+`0.00469` and 98/3,000 particles change significant-support count, while the
+size/order schedule remains exactly `56,56,52,52` / order 3.
+
+Accumulation precision is therefore a genuine amplification/sensitivity axis,
+but production float64 moves away from native RELION rather than toward it.
+Because native RELION's BackProjector accumulation is also float32, the next
+causal discriminator is RELION-like float32 reduction order/topology versus
+upstream native contribution operands—not making float64 the production
+default. The sealed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it1to4_mstep_double_pair_local_a100_7390051f_20260719T034000Z/audit/it4_mstep_double_pair_summary.json`
+(SHA-256 `844b9086d4e04bd1e62d0e91eb72b7fb609c84c28cd0cdef4de827a236f1c045`).
+
 ## 2026-07-19 case-8 low-memory full-trajectory qualification
 
 Pinned diagnostic job `11367838` validates the conservative exact-local
