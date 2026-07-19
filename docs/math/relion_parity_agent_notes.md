@@ -4205,3 +4205,27 @@ same-device equivalence or numerical noise.
   Full comparison SHA-256:
   `8e7a9e0a747bae5e3b420682fe1198deb31d5b9bff4a5a7ada1fd4c530058c0b`.
   FSC/FSC-AUC only; correlation is not computed.
+
+# 2026-07-19: case-25 references alone do not reproduce autonomous drift
+
+- In a strict replay with exact per-iteration RELION non-reference state,
+  substituting RELION half references only at scoring iteration 7 changes
+  cross-engine merged FSC-AUC from `0.999999999868` to
+  `0.999999999899`; direct arm FSC-AUC is `0.999999999894`. Pmax p95 is
+  `1.404e-4`, support counts and pose/translation p95 are exact. The effect
+  reverses at iteration 8 and does not propagate.
+- A scoring-iteration-2 reference-only probe changes cross-engine FSC-AUC by
+  `+1.925e-11`, direct arm FSC-AUC is `0.999999999925`, and the particle-state
+  effect remains control-scale and non-propagating through iteration 3.
+- Autonomous iteration 7 is materially larger (`0.999995965764` map FSC-AUC,
+  Pmax p95 `0.0120212`). Exact non-reference state closes it by four to eight
+  orders while resident RECOVAR references remain, so accumulated
+  pose/posterior/correction state interacting with references is required.
+  References alone are not causal in this exact context.
+- Next use a bounded aggregate state/reference factorial at the first
+  autonomous boundary; do not chase individual particles.
+- Report:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case25_it7_relref_ab_20260719T111500Z/CASE25_REFERENCE_SUBSTITUTION_CLASSIFICATION.md`
+  (SHA-256 `949e13f9d241709edd651ac3da68709a4fc8cb2b05f9b7c6123de36710cc3ce5`),
+  with 11/11 manifest entries verified. FSC/FSC-AUC only; correlation is not
+  computed.

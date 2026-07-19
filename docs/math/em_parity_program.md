@@ -6307,3 +6307,38 @@ The full comparison is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_relion_prescatter_local_same_rec_gpu_cap1tb_retry_20260719T091600Z/analysis/multicontributor_prescatter_comparison.json`
 (SHA-256 `8e7a9e0a747bae5e3b420682fe1198deb31d5b9bff4a5a7ada1fd4c530058c0b`).
 Map quality uses FSC/FSC-AUC only; correlation is not computed.
+
+## 2026-07-19 case-25 incoming-reference null interventions
+
+Case 25 distinguishes a different accumulated-state failure mode from the
+case-20 operand boundary. With exact per-iteration RELION metadata, poses,
+corrections, noise, priors, sampling state, and an identical oracle schedule,
+replacing only the incoming half references at scoring iteration 7 produces a
+negligible, non-propagating effect. At the target boundary, control and
+RELION-reference cross-engine merged FSC-AUC values are
+`0.999999999868` and `0.999999999899`; their direct map FSC-AUC is
+`0.999999999894`. Pmax absolute p95 is `1.404e-4`, support counts are exact,
+and pose/translation p95 values are zero. At iteration 8, the cross-engine
+change reverses to `-1.027e-12` and the direct map remains
+`0.999999999923`.
+
+The earlier scoring-iteration-2 reference-only probe is likewise null:
+cross-engine merged FSC-AUC improves by only `1.925e-11`, direct arm FSC-AUC
+is `0.999999999925`, Pmax p95 is `3.774e-5`, and support/poses/translations
+are exact. The effect reverses at iteration 3.
+
+For comparison, the autonomous case-25 iteration-7 boundary has merged
+cross-engine FSC-AUC `0.999995965764` and Pmax p95 `0.0120212`. Exact
+non-reference state therefore closes that residual by roughly four to eight
+orders of magnitude even when RECOVAR references remain resident. The
+material autonomous boundary requires accumulated non-reference state and its
+interaction with the maps; an incoming reference alone is not sufficient.
+The next bounded intervention separates accumulated pose/posterior/correction
+state from reference state at the first autonomous boundary.
+
+The sealed classification is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case25_it7_relref_ab_20260719T111500Z/CASE25_REFERENCE_SUBSTITUTION_CLASSIFICATION.md`
+(SHA-256 `949e13f9d241709edd651ac3da68709a4fc8cb2b05f9b7c6123de36710cc3ce5`).
+All 11 entries in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case25_it7_relref_ab_20260719T111500Z/CASE25_SCIENCE_ARTIFACTS.sha256`
+verify. Map quality uses FSC/FSC-AUC only; correlation is not computed.
