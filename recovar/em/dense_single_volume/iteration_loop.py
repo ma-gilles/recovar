@@ -7518,7 +7518,10 @@ def _run_relion_iteration_loop(
                         tau=None,
                         tau2_fudge=tau2_fudge,
                         projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                        use_spherical_mask=False,
+                        # RELION's BackProjector::reconstruct(do_map=false)
+                        # still calls softMaskOutsideMap inside
+                        # windowToOridimRealSpace.
+                        use_spherical_mask=True,
                         minres_map=RELION_MINRES_MAP,
                         current_size=int(cs),
                         return_real_space=True,
@@ -10126,7 +10129,8 @@ def _run_relion_iteration_loop(
         # products.  Default RELION refinement sets BackProjector's
         # skip_gridding=true, so reconstruct uses the radial denominator floor
         # and direct division path before its final real-space gridding
-        # correction; do_map=false only omits the tau2 prior.
+        # correction and always applies softMaskOutsideMap inside
+        # windowToOridimRealSpace; do_map=false only omits the tau2 prior.
         final_unfiltered_means_for_output = [
             _reconstruct_volume_eager(
                 final_unfiltered_Ft_ctf_0,
@@ -10136,7 +10140,7 @@ def _run_relion_iteration_loop(
                 tau=None,
                 tau2_fudge=tau2_fudge,
                 projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                use_spherical_mask=False,
+                use_spherical_mask=True,
                 grid_correct=True,
                 minres_map=RELION_MINRES_MAP,
                 current_size=final_current_size,
@@ -10150,7 +10154,7 @@ def _run_relion_iteration_loop(
                 tau=None,
                 tau2_fudge=tau2_fudge,
                 projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                use_spherical_mask=False,
+                use_spherical_mask=True,
                 grid_correct=True,
                 minres_map=RELION_MINRES_MAP,
                 current_size=final_current_size,

@@ -4299,3 +4299,18 @@ same-device equivalence or numerical noise.
   and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_bpref_factor_v2_panel32_same_gpu_20260719T101000Z/analysis/capture_inertness_v2.json`
   (SHA-256 `532c3a5a7bbdfb6411f81cc9aeda8dc7c574f5555890e1f97b609b259699dbfb`).
+
+# 2026-07-19: RELION unfiltered halves retain the real-space corner mask
+
+- RELION's `BackProjector::reconstruct(do_map=false)` omits the tau2 prior,
+  but `windowToOridimRealSpace` still always calls `softMaskOutsideMap`.
+  RECOVAR had explicitly disabled that mask for solvent-FSC inputs and final
+  `*_unfil.mrc` products.
+- Replaying the exact captured RELION half accumulators with RECOVAR's mask
+  disabled gives FSC-AUC `0.8384024` and `0.8352665`; enabling the mask gives
+  FSC-AUC `1.0` for both halves (minimum shell FSC at least `0.9999999`).
+- The exact RELION stage oracle also shows decentered weights are bit-exact,
+  radial floors agree within `1.5e-14`, and divided Fourier data agree within
+  `1.5e-17`, localising the difference solely to the missing corner mask.
+- Evidence root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case25_relion_final_halves_continue_20260719T145200Z`.

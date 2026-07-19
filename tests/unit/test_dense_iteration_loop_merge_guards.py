@@ -600,7 +600,12 @@ def test_final_all_data_iteration_stays_on_shared_dense_scoring_path():
     # halves) plus two K=1 do_map=false products matching RELION *_unfil.mrc.
     assert final_reconstruct_block.count("current_size=final_current_size") == 6
     assert final_reconstruct_block.count("tau=None") == 2
-    assert final_reconstruct_block.count("use_spherical_mask=False") == 2
+    assert final_reconstruct_block.count("use_spherical_mask=True") == 2
+    assert "do_map=false only omits the tau2 prior" in final_reconstruct_block
+    solvent_fsc_marker = "Computed iter-%d solvent-corrected true FSC"
+    solvent_fsc_block = source[: source.index(solvent_fsc_marker)]
+    solvent_fsc_block = solvent_fsc_block[solvent_fsc_block.rindex("unfiltered_half_maps = []") :]
+    assert solvent_fsc_block.count("use_spherical_mask=True") == 1
     assert '"unfiltered_means": final_unfiltered_means_for_output' in final_reconstruct_block
     prejoin_save = source.index("final_unfiltered_Ft_y_0 = final_Ft_y_0")
     lowres_join = source.index("regularization.join_halves_at_low_resolution(", prejoin_save)
