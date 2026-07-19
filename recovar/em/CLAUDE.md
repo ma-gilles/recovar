@@ -221,8 +221,9 @@ GILLES project filesystem. Preserve curated fixtures in place.
 - Current-size BPref half joins use the explicit RELION padding factor.
 - K-class quality claims use the RELION x-half/current-size BPref path. Native
   half-volume K-class accumulation is diagnostic unless explicitly selected.
-- Do not force K-class final-all-data after non-convergence. Keep
-  `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT` unset/off except for a named diagnostic.
+- Do not force K-class final-all-data after non-convergence. Final all-data
+  gridding correction defaults on for strict RELION parity; use
+  `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=0` only for a named quality ablation.
 - Preserve shared contracts: `split_E_M_v2` reads `state.Ft_y` and
   `state.Ft_CTF` after `finish_up_M_step`.
 

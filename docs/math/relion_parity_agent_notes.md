@@ -598,9 +598,21 @@ not explained by the gridding-correction kernel itself.
 
 Regression coverage:
 
-- `tests/unit/test_refine_relion_mode.py::test_final_all_data_grid_correct_env_defaults_to_quality_mode`
-- `tests/unit/test_dense_iteration_loop_merge_guards.py::test_final_all_data_grid_correction_defaults_to_quality_mode`
+- `tests/unit/test_refine_relion_mode.py::test_final_all_data_grid_correct_env_defaults_to_relion_parity`
+- `tests/unit/test_dense_iteration_loop_merge_guards.py::test_final_all_data_grid_correction_defaults_to_relion_parity`
 - `tests/unit/test_relion_functions.py::test_gridding_correct_matches_relion_binding`
+
+### 2026-07-19 strict-parity correction
+
+An exact same-boundary Case 25 capture superseded the grid-off parity default.
+Replaying RELION's joined BPref accumulator and tau2 through RECOVAR with the
+RELION padding factor reproduced RELION's captured final map at FSC-AUC
+`0.999999999999910` with gridding correction on, versus `0.998191610326802`
+with it off.  RECOVAR's own accumulator and tau2 with correction on reached
+FSC-AUC `0.999998729433245` against the uninterrupted RELION final map.
+Therefore strict RELION parity now defaults the final correction on;
+`RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=0` preserves the earlier grid-off quality
+ablation explicitly.
 
 ## 2026-06-30 K-Class Final All-Data After Max-Iter Guard
 

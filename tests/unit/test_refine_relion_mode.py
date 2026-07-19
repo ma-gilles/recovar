@@ -276,10 +276,10 @@ def test_significance_offset_free_capture_preserves_margin_lost_after_large_comm
     np.testing.assert_array_equal(best_absolute, second_absolute)
 
 
-def test_final_all_data_grid_correct_env_defaults_to_quality_mode(monkeypatch):
+def test_final_all_data_grid_correct_env_defaults_to_relion_parity(monkeypatch):
     env_name = "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT"
     monkeypatch.delenv(env_name, raising=False)
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is False
+    assert iteration_loop_module._final_all_data_grid_correct_enabled() is True
 
     monkeypatch.setenv(env_name, "0")
     assert iteration_loop_module._final_all_data_grid_correct_enabled() is False
@@ -291,7 +291,7 @@ def test_final_all_data_grid_correct_env_defaults_to_quality_mode(monkeypatch):
     assert iteration_loop_module._final_all_data_grid_correct_enabled() is True
 
     monkeypatch.setenv(env_name, "unexpected")
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is False
+    assert iteration_loop_module._final_all_data_grid_correct_enabled() is True
 
 
 def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):

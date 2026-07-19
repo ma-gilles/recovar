@@ -532,21 +532,21 @@ def _maybe_debug_replay_relion_references(
 def _final_all_data_grid_correct_enabled() -> bool:
     """Return whether final all-data output applies RELION gridding correction.
 
-    The default is the quality-oriented RECOVAR output path.  The RELION
-    gridding correction can still be enabled explicitly for strict diagnostic
-    replay with ``RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=1``.
+    Strict RELION parity is the default.  The earlier quality-oriented
+    grid-off output remains available as an explicit ablation with
+    ``RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=0``.
     """
 
     value = os.environ.get(_FINAL_ALL_DATA_GRID_CORRECT_ENV)
     if value is None or value.strip() == "":
-        return False
+        return True
     normalized = value.strip().lower()
     if normalized in _FALSE_ENV_VALUES:
         return False
     if normalized in _TRUE_ENV_VALUES:
         return True
-    logger.warning("Ignoring invalid %s=%r; using default false", _FINAL_ALL_DATA_GRID_CORRECT_ENV, value)
-    return False
+    logger.warning("Ignoring invalid %s=%r; using default true", _FINAL_ALL_DATA_GRID_CORRECT_ENV, value)
+    return True
 
 
 def _final_all_data_after_max_iter_enabled() -> bool:
@@ -9989,7 +9989,7 @@ def _run_relion_iteration_loop(
         logger.info("RELION final all-data reconstruction gridding correction enabled")
     else:
         logger.info(
-            "RELION final all-data reconstruction gridding correction disabled; set %s=1 to enable",
+            "RELION final all-data reconstruction gridding correction disabled by explicit %s override",
             _FINAL_ALL_DATA_GRID_CORRECT_ENV,
         )
 
