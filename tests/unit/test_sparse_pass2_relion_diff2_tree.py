@@ -10,6 +10,9 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
+from recovar.em.dense_single_volume.helpers.half_spectrum import (
+    make_relion_noise_shell_indices_half,
+)
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _RELION_CUDA_FINE_REF3D_BLOCK_SIZE,
     _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
@@ -21,6 +24,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_log_evidence_offset,
     _relion_cuda_fine_pixel_weights,
     _relion_cuda_fine_tree_sum,
+    _relion_cuda_powerclass_highres_norm_units,
     _relion_cuda_powerclass_highres_xi2_half,
     _score_pass2_bucket_relion_gpu_diff2,
     _score_pass2_bucket_relion_gpu_diff2_from_raw,
@@ -175,6 +179,39 @@ def test_relion_cuda_powerclass_highres_matches_128_lane_block_trees_bitwise():
 
     np.testing.assert_array_equal(actual, expected)
     assert actual.dtype == np.float32
+
+
+def test_relion_cuda_powerclass_norm_units_preserve_divide_before_square():
+    rng = np.random.default_rng(4021)
+    height = 32
+    centered = (
+        rng.normal(size=(2, height, height // 2 + 1))
+        + 1j * rng.normal(size=(2, height, height // 2 + 1))
+    ).astype(np.complex64) * np.float32(height * height)
+    current_size = 14
+    expected_half = _numpy_cuda_powerclass_highres_half(centered, current_size)
+    expected = np.float32(
+        np.float32(expected_half * np.float32(2.0))
+        * np.float32((height * height) ** 2)
+    )
+
+    actual = np.asarray(
+        _relion_cuda_powerclass_highres_norm_units(
+            jnp.asarray(centered.reshape(2, -1)),
+            image_shape=(height, height),
+            current_size=current_size,
+        )
+    )
+    processed = jnp.asarray(centered.reshape(2, -1))
+    shells = jnp.asarray(make_relion_noise_shell_indices_half((height, height)))
+    high_shell = (shells >= 0) & (shells < height // 2 + 1) & (shells > current_size // 2)
+    generic_square_first = np.asarray(
+        jnp.sum(jnp.where(high_shell[None, :], jnp.abs(processed) ** 2, 0.0), axis=-1).astype(jnp.float32)
+    )
+
+    np.testing.assert_array_equal(actual, expected)
+    assert actual.dtype == np.float32
+    assert not np.array_equal(actual, generic_square_first)
 
 
 def test_relion_cuda_fine_raw_routes_add_powerclass_tail_once_per_hypothesis():

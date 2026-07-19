@@ -4429,6 +4429,44 @@ def test_weighted_image_power_uses_unweighted_high_shells_for_normcorr_only():
     np.testing.assert_allclose(np.asarray(per_image), expected_per_image, rtol=1e-6, atol=1e-6)
 
 
+def test_weighted_image_power_replaces_only_unweighted_high_shell_normcorr():
+    processed_half = jnp.asarray(
+        [
+            [1.0 + 1.0j, 2.0 + 0.0j, 3.0 + 0.0j],
+            [4.0 + 0.0j, 0.0 + 5.0j, 6.0 + 0.0j],
+        ],
+        dtype=jnp.complex64,
+    )
+    support_mass = jnp.asarray([0.25, 0.0], dtype=jnp.float32)
+    shell_indices = jnp.asarray([0, 1, 2], dtype=jnp.int32)
+    powerclass_high = jnp.asarray([123.0, 456.0], dtype=jnp.float32)
+
+    shells, per_image = _weighted_image_power_shells_and_per_image(
+        processed_half,
+        shell_indices,
+        support_mass,
+        shell_count=3,
+        norm_unweighted_shell_cutoff=1,
+        norm_unweighted_high_shell=powerclass_high,
+    )
+
+    power = np.abs(np.asarray(processed_half)) ** 2
+    expected_shells = np.zeros(3, dtype=np.float32)
+    expected_shells[0] = power[0, 0] * 0.25
+    expected_shells[1] = power[0, 1] * 0.25
+    expected_shells[2] = power[0, 2] * 0.25
+    expected_per_image = np.asarray(
+        [
+            (power[0, 0] + power[0, 1]) * 0.25 + powerclass_high[0],
+            powerclass_high[1],
+        ],
+        dtype=np.float32,
+    )
+
+    np.testing.assert_array_equal(np.asarray(shells), expected_shells)
+    np.testing.assert_array_equal(np.asarray(per_image), expected_per_image)
+
+
 def test_weighted_image_power_excludes_sentinel_from_support_weighted_normcorr():
     processed_half = jnp.asarray(
         [[1.0 + 0.0j, 100.0 + 0.0j], [2.0 + 0.0j, 200.0 + 0.0j]],

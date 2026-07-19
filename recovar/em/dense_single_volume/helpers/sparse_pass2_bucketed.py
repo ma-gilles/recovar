@@ -3954,6 +3954,7 @@ def _weighted_image_power_shells_and_per_image(
     *,
     shell_count: int,
     norm_unweighted_shell_cutoff: int | None = None,
+    norm_unweighted_high_shell=None,
     valid_image_mask=None,
 ):
     """Accumulate image power for noise shells and per-image norm correction.
@@ -3981,6 +3982,24 @@ def _weighted_image_power_shells_and_per_image(
         unweighted_shell = valid_norm_shell & (shell_indices_half > int(norm_unweighted_shell_cutoff))
         norm_mass = jnp.where(unweighted_shell[None, :], full_mass[:, None], norm_mass)
     weighted_per_image = jnp.sum(pixel_power * norm_mass, axis=-1).astype(jnp.float32)
+    if norm_unweighted_high_shell is not None:
+        if norm_unweighted_shell_cutoff is None:
+            raise ValueError("a replacement high-shell norm term requires a shell cutoff")
+        replacement_high = jnp.asarray(norm_unweighted_high_shell, dtype=jnp.float32)
+        if replacement_high.shape != mass.shape:
+            raise ValueError(
+                "replacement high-shell norm term must match the particle axis, got "
+                f"{replacement_high.shape} for {mass.shape}"
+            )
+        generic_high = jnp.sum(
+            jnp.where(unweighted_shell[None, :], pixel_power, 0.0),
+            axis=-1,
+        ).astype(jnp.float32)
+        # Preserve the existing support-weighted shell/noise reduction and the
+        # current-size norm path. Replace only the unweighted high-shell term
+        # with RELION powerClass's divide-before-square float32 arithmetic.
+        weighted_per_image = jax.lax.optimization_barrier(weighted_per_image)
+        weighted_per_image = weighted_per_image + full_mass * (replacement_high - generic_high)
     return weighted_shells, weighted_per_image
 
 
@@ -5159,6 +5178,36 @@ def _relion_cuda_powerclass_highres_xi2_half(
         jnp.zeros((processed_score_half.shape[0],), dtype=jnp.float32),
     )
     return highres_xi2 * jnp.asarray(0.5, dtype=jnp.float32)
+
+
+def _relion_powerclass_highres_xi2_half_to_norm_units(highres_xi2_half, image_shape):
+    """Convert RELION's half-Xi2 FFT units to RECOVAR norm N^4 units."""
+
+    image_height = int(image_shape[0])
+    image_width = int(image_shape[1])
+    highres = jnp.asarray(highres_xi2_half, dtype=jnp.float32)
+    highres = highres * jnp.asarray(2.0, dtype=jnp.float32)
+    highres = jax.lax.optimization_barrier(highres)
+    return highres * jnp.asarray((image_height * image_width) ** 2, dtype=jnp.float32)
+
+
+@partial(jax.jit, static_argnames=("image_shape", "current_size"))
+def _relion_cuda_powerclass_highres_norm_units(
+    processed_score_half,
+    *,
+    image_shape,
+    current_size,
+):
+    """Return source-faithful powerClass high-shell power in RECOVAR N^4 units."""
+
+    return _relion_powerclass_highres_xi2_half_to_norm_units(
+        _relion_cuda_powerclass_highres_xi2_half(
+            processed_score_half,
+            image_shape=image_shape,
+            current_size=current_size,
+        ),
+        image_shape,
+    )
 
 
 def _relion_cuda_fine_diff2_min(diff2, candidate_mask):
@@ -8601,12 +8650,23 @@ def compute_pass2_stats_sparse_bucketed(
             return_windowed_shifted=windowed_prepare,
         )
         relion_highres_xi2_half = None
-        if use_exact_relion_gaussian:
+        if (
+            use_exact_relion_gaussian
+            or (accumulate_noise and current_size is not None)
+        ):
             relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
                 processed_score_half_for_noise,
                 image_shape=image_shape,
                 current_size=current_size,
             )
+        relion_norm_high_shell = (
+            _relion_powerclass_highres_xi2_half_to_norm_units(
+                relion_highres_xi2_half,
+                image_shape,
+            )
+            if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None
+            else None
+        )
 
         # Window gather (if applicable)
         if use_window:
@@ -9237,6 +9297,7 @@ def compute_pass2_stats_sparse_bucketed(
                     jnp.asarray(chunk_support_mass, dtype=jnp.float32),
                     shell_count=n_shells,
                     norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
+                    norm_unweighted_high_shell=relion_norm_high_shell,
                 )
                 noise_img_power_total += np.asarray(weighted_img_shells, dtype=np.float64)
                 noise_norm_correction_total[image_indices] += np.asarray(
@@ -9971,6 +10032,7 @@ def compute_pass2_stats_sparse_bucketed(
                 support_mass,
                 shell_count=n_shells,
                 norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
+                norm_unweighted_high_shell=relion_norm_high_shell,
             )
             support_mass_np = np.asarray(support_mass, dtype=np.float64)
             noise_img_power_total += np.asarray(weighted_img_shells, dtype=np.float64)
@@ -11571,12 +11633,20 @@ def compute_k_class_pass2_stats_sparse_fused(
             return_shifted_score=not half_spectrum_scoring,
         )
         relion_highres_xi2_half = None
-        if use_exact_relion_gaussian:
+        if use_exact_relion_gaussian or (accumulate_noise and current_size is not None):
             relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
                 processed_score_half_for_noise,
                 image_shape=image_shape,
                 current_size=current_size,
             )
+        relion_norm_high_shell = (
+            _relion_powerclass_highres_xi2_half_to_norm_units(
+                relion_highres_xi2_half,
+                image_shape,
+            )
+            if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None
+            else None
+        )
         if use_window:
             ctf2_over_nv_score = ctf2_over_nv_half if windowed_prepare else ctf2_over_nv_half[:, window_indices]
             shifted_corrected_score = (
@@ -12723,12 +12793,17 @@ def compute_k_class_pass2_stats_sparse_fused(
                         np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
                     )
                 support_mass = jnp.sum(noise_probs_sum_t, axis=1)
+                # Preserve the existing per-class norm-statistic aggregation:
+                # downstream K-class code sums these class-local arrays. The
+                # K>1 multiplicity of the unweighted high-shell term requires
+                # a separate RELION audit before any K=4 parity claim.
                 weighted_img_shells, weighted_img_per_image = _weighted_image_power_shells_and_per_image(
                     processed_score_half_for_noise,
                     shell_indices_half,
                     support_mass,
                     shell_count=n_shells,
                     norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
+                    norm_unweighted_high_shell=relion_norm_high_shell,
                 )
                 support_mass_np = np.asarray(support_mass, dtype=np.float64)
                 noise_img_power_total[class_index] += np.asarray(weighted_img_shells, dtype=np.float64)
