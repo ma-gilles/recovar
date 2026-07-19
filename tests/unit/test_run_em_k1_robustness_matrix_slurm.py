@@ -111,6 +111,52 @@ def test_autonomous_trajectory_uses_only_iter0_boundary_and_never_emits_replay_l
     assert '"Trajectory mode: autonomous"' in summary_text
 
 
+def test_current_size_oracle_is_explicit_and_auditable(tmp_path):
+    schedule = "56,56,52,52,50,50,50,52,50,52,50"
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="20",
+        extra_env={
+            "EM_K1_MATRIX_TRAJECTORY_MODE": "autonomous",
+            "RECOVAR_RELION_CURRENT_SIZES": schedule,
+        },
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    script = next((scratch / "jobs").glob("em_k1_matrix_20_*.sh")).read_text()
+    submission = (scratch / "submission.env").read_text()
+    escaped_schedule = schedule.replace(",", "\\,")
+    assert f"export RECOVAR_RELION_CURRENT_SIZES={escaped_schedule}" in script
+    assert 'RECOVAR_EXTRA_ARGS+=(--relion_current_sizes "${RECOVAR_RELION_CURRENT_SIZES}")' in script
+    assert f"RECOVAR_RELION_CURRENT_SIZES={schedule}" in submission
+
+
+def test_exact_local_contribution_capture_is_scoped_and_freezes_metadata(tmp_path):
+    dump_dir = tmp_path / "contributions"
+    proc, scratch = _dry_run_launcher(
+        tmp_path,
+        case="26",
+        extra_env={
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR": str(dump_dir),
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION": "7",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF": "2",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE": "60",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID": "case26-it7-h2",
+        },
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    script = next((scratch / "jobs").glob("em_k1_matrix_26_*.sh")).read_text()
+    submission = (scratch / "submission.env").read_text()
+    assert "scripts.prepare_bpref_contribution_metadata" in script
+    assert "export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=7" in script
+    assert "export RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF=2" in script
+    assert "export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=60" in script
+    assert "RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=7" in submission
+    assert "RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF=2" in submission
+    assert "RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=60" in submission
+
+
 def test_noctf_simulator_cases_use_sanitized_relion_ctf_by_default(tmp_path):
     proc, scratch = _dry_run_launcher(tmp_path, case="14")
 
