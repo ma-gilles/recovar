@@ -76,6 +76,21 @@ def test_final_replay_all_is_union_without_unrelated_fields():
     }
 
 
+def test_final_replay_all_composes_with_explicit_scoring_scale():
+    groups, override = _select_final_replay_override(
+        _source_override(), "all,scoring_scale"
+    )
+    assert groups == {
+        "poses",
+        "sampling",
+        "corrections",
+        "references",
+        "scoring_scale",
+    }
+    assert "class_tau2" not in override
+    assert set(override) == set(_source_override()) - {"class_tau2"}
+
+
 def test_final_replay_orthogonal_correction_subgroups_compose():
     groups, override = _select_final_replay_override(
         _source_override(), "noise,direction_prior,norm_factor,scoring_scale"

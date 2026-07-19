@@ -1483,7 +1483,7 @@ def _select_final_replay_override(source_override, requested_fields):
             f"unknown={unknown_groups}"
         )
     if "all" in requested_groups:
-        requested_groups = set(_FINAL_REPLAY_ALL_GROUPS)
+        requested_groups = (requested_groups - {"all"}) | set(_FINAL_REPLAY_ALL_GROUPS)
     selected_keys = set().union(*(_FINAL_REPLAY_GROUP_KEYS[group] for group in requested_groups))
     selected_override = {
         key: value for key, value in source_override.items() if key in selected_keys
