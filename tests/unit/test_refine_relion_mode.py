@@ -209,6 +209,40 @@ def test_diagnostic_float64_pass2_iteration_selector(monkeypatch):
     with pytest.raises(ValueError, match="comma-separated integers"):
         iteration_loop_module._diagnostic_float64_pass2_matches(4)
 
+
+def test_local_search_precision_defaults_to_production_float32(monkeypatch):
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", False)
+    monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
+
+    assert iteration_loop_module._local_search_precision_flags(12, pass_index=1) == (False, False)
+    assert iteration_loop_module._local_search_precision_flags(12, pass_index=2) == (False, False)
+
+
+def test_local_search_precision_targeted_diagnostic_upgrades_only_pass2(monkeypatch):
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", False)
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", False)
+    monkeypatch.setenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "12")
+
+    assert iteration_loop_module._local_search_precision_flags(12, pass_index=1) == (False, False)
+    assert iteration_loop_module._local_search_precision_flags(12, pass_index=2) == (True, True)
+    assert iteration_loop_module._local_search_precision_flags(11, pass_index=2) == (False, False)
+
+
+def test_local_search_precision_global_switches_upgrade_both_passes(monkeypatch):
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", True)
+    monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
+
+    assert iteration_loop_module._local_search_precision_flags(12, pass_index=1) == (True, True)
+    assert iteration_loop_module._local_search_precision_flags(12, pass_index=2) == (True, True)
+
+
+def test_local_search_precision_rejects_unknown_pass(monkeypatch):
+    monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
+    with pytest.raises(ValueError, match="pass_index"):
+        iteration_loop_module._local_search_precision_flags(12, pass_index=3)
+
 # ---------------------------------------------------------------------------
 # Test constants -- 8x8 images for fast unit tests
 # ---------------------------------------------------------------------------
@@ -2967,6 +3001,9 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
         captured.update(kwargs)
         raise DispatchCaptured
 
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
+    monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", True)
+    monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
     monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration", fake_run_local_search_iteration)
     with pytest.raises(DispatchCaptured):
         iteration_loop_module._score_half_local(
@@ -3024,6 +3061,8 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
     assert captured["generate_relion_mstep_rotations"] is True
     assert (captured["class_log_priors"] is not None) is k_class_enabled
     assert captured["return_significant_counts"] is False
+    assert captured["use_float64_scoring"] is True
+    assert captured["use_float64_projections"] is True
 
 
 def test_build_local_hypothesis_layout_parent_expands_translation_grid_and_priors():

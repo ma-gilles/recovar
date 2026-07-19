@@ -1336,6 +1336,28 @@ def _diagnostic_float64_pass2_matches(debug_iteration: int | None) -> bool:
     return int(debug_iteration) in requested
 
 
+def _local_search_precision_flags(
+    debug_iteration: int | None,
+    *,
+    pass_index: int,
+) -> tuple[bool, bool]:
+    """Resolve local-search precision without changing production defaults.
+
+    The global float64 switches apply to both local passes.  The targeted
+    diagnostic selector upgrades only pass 2 so it remains useful for
+    classifying the fine-score/posterior boundary independently of pass 1.
+    """
+
+    if int(pass_index) not in (1, 2):
+        raise ValueError(f"local-search pass_index must be 1 or 2, got {pass_index}")
+    use_float64_scoring = bool(_DENSE_EM_STATIC_KWARGS["use_float64_scoring"])
+    use_float64_projections = bool(_DENSE_EM_STATIC_KWARGS["use_float64_projections"])
+    if int(pass_index) == 2 and _diagnostic_float64_pass2_matches(debug_iteration):
+        use_float64_scoring = True
+        use_float64_projections = True
+    return use_float64_scoring, use_float64_projections
+
+
 def _scatter_dense_k_class_result(
     k_class_result,
     *,
@@ -2868,6 +2890,26 @@ def _score_half_local(
     local_n_trans = int(current_translations.shape[0])
     if int(local_parent_oversampling_order) > 0:
         local_n_trans *= int(4 ** int(local_parent_oversampling_order))
+    local_debug_iteration = iteration + 1
+    parent_use_float64_scoring, parent_use_float64_projections = _local_search_precision_flags(
+        local_debug_iteration,
+        pass_index=1,
+    )
+    fine_use_float64_scoring, fine_use_float64_projections = _local_search_precision_flags(
+        local_debug_iteration,
+        pass_index=2,
+    )
+    if fine_use_float64_scoring or fine_use_float64_projections:
+        logger.info(
+            "Local-search precision iteration %d: pass1 scoring/projections=%s/%s "
+            "pass2 scoring/projections=%s/%s",
+            local_debug_iteration,
+            parent_use_float64_scoring,
+            parent_use_float64_projections,
+            fine_use_float64_scoring,
+            fine_use_float64_projections,
+        )
+
     safe_ibs, safe_rbs = safe_batch_sizes(
         eff_n_rot,
         local_n_trans,
@@ -2996,8 +3038,8 @@ def _score_half_local(
             relion_projector_half=relion_projector_half,
             relion_projector_r_max=relion_projector_r_max,
             projection_relion_texture_interp=False,
-            use_float64_scoring=False,
-            use_float64_projections=False,
+            use_float64_scoring=parent_use_float64_scoring,
+            use_float64_projections=parent_use_float64_projections,
             do_gridding_correction=True,
             square_window=RELION_FOURIER_WINDOW_SQUARE,
             half_spectrum_scoring=True,
@@ -3201,8 +3243,8 @@ def _score_half_local(
                 reconstruction_padding_factor=PADDING_FACTOR,
                 relion_projector_half=relion_projector_half,
                 relion_projector_r_max=relion_projector_r_max,
-                use_float64_scoring=False,
-                use_float64_projections=False,
+                use_float64_scoring=fine_use_float64_scoring,
+                use_float64_projections=fine_use_float64_projections,
                 do_gridding_correction=True,
                 square_window=RELION_FOURIER_WINDOW_SQUARE,
                 half_spectrum_scoring=True,
@@ -3286,8 +3328,8 @@ def _score_half_local(
         # uses the manual supplied-PPref projector above, while fine pass 2
         # follows the user-switchable texture default.
         projection_relion_texture_interp=None,
-        use_float64_scoring=False,
-        use_float64_projections=False,
+        use_float64_scoring=fine_use_float64_scoring,
+        use_float64_projections=fine_use_float64_projections,
         do_gridding_correction=True,
         square_window=RELION_FOURIER_WINDOW_SQUARE,
         half_spectrum_scoring=True,
@@ -9454,6 +9496,10 @@ def _run_relion_iteration_loop(
             time.time() - projector_t0,
         )
     logger.info("=== RELION final all-data Nyquist iteration ===")
+    final_use_float64_scoring, final_use_float64_projections = _local_search_precision_flags(
+        final_sampling_relion_iteration,
+        pass_index=2,
+    )
     final_outs = PerHalfOutputs.empty()
     for k in range(2):
         _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
@@ -9720,7 +9766,8 @@ def _run_relion_iteration_loop(
                 "noise_variance": np.asarray(final_noise_variance_per_half[k]),
                 "current_size": np.int32(final_current_size),
                 "half_spectrum_scoring": np.bool_(True),
-                "use_float64_scoring": np.bool_(False),
+                "use_float64_scoring": np.bool_(final_use_float64_scoring),
+                "use_float64_projections": np.bool_(final_use_float64_projections),
                 "projection_padding_factor": np.int32(PROJECTION_PADDING_FACTOR),
                 "reconstruction_padding_factor": np.int32(PADDING_FACTOR),
                 "score_with_masked_images": np.bool_(True),
