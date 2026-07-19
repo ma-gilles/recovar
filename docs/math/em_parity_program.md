@@ -6182,7 +6182,17 @@ the resident, corrections/live-scale, poses-plus-references, and all-state
 arms independently; verifier `11374243` performs the fan-in FSC/FSC-AUC and
 exact/distribution audit.
 
+The last-numbered mismatch is distributional rather than a collection of
+bitwise near ties. Across the controlled family, only `77.9%`--`98.4%` of
+rotations and `83.9%`--`99.1%` of translations fall within the tight `0.01`
+tolerance; exact significant-support counts range from `30.61%` to `89.7%`,
+and the particlewise Pmax absolute-difference p95 ranges from `0.0206` to
+`0.139`. No one scalar tail statistic predicts final severity because the
+pose/posterior error interacts with the incoming references. Debug the
+aggregate score/posterior-to-pose/reference update path, using controlled
+boundary substitutions, rather than requiring bitwise particle equality.
+
 The sealed family report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_boundary_family_20260719T090000Z/FINAL_BOUNDARY_FAMILY_CLASSIFICATION_V1.json`
-(SHA-256 `b50c7bfe460e10d498bd460824d0e151a544e053283f1d3611a0626e1fca3421`).
+(SHA-256 `e447e0946def576314795ae61962039bdb3c5515db2ecd5ee2a89b12b8d04a82`).
 Map quality uses FSC/FSC-AUC only; correlation is not computed.
