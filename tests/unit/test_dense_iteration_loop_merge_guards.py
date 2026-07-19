@@ -658,16 +658,16 @@ def test_kclass_final_all_data_recomputes_tau2_from_iref_and_returns_final_means
     assert 'final_tau2_update_details.get("fsc_shells") is None' in source
 
 
-def test_final_all_data_grid_correction_defaults_to_relion_parity(monkeypatch):
+def test_final_all_data_grid_correction_defaults_to_gui_quality(monkeypatch):
     monkeypatch.delenv(iteration_loop._FINAL_ALL_DATA_GRID_CORRECT_ENV, raising=False)
 
-    assert iteration_loop._final_all_data_grid_correct_enabled() is True
+    assert iteration_loop._final_all_data_grid_correct_enabled() is False
 
     monkeypatch.setenv(iteration_loop._FINAL_ALL_DATA_GRID_CORRECT_ENV, "0")
     assert iteration_loop._final_all_data_grid_correct_enabled() is False
 
     monkeypatch.setenv(iteration_loop._FINAL_ALL_DATA_GRID_CORRECT_ENV, "unexpected")
-    assert iteration_loop._final_all_data_grid_correct_enabled() is True
+    assert iteration_loop._final_all_data_grid_correct_enabled() is False
 
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     assert "RELION final all-data reconstruction gridding correction enabled" in source

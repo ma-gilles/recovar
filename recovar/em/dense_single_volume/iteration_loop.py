@@ -532,21 +532,22 @@ def _maybe_debug_replay_relion_references(
 def _final_all_data_grid_correct_enabled() -> bool:
     """Return whether final all-data output applies RELION gridding correction.
 
-    Strict RELION parity is the default.  The earlier quality-oriented
-    grid-off output remains available as an explicit ablation with
-    ``RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=0``.
+    The GUI-quality path keeps final all-data gridding correction off by
+    default because enabling it can shift final-map FSC-AUC.  Strict RELION
+    replay can still enable it explicitly with
+    ``RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=1``.
     """
 
     value = os.environ.get(_FINAL_ALL_DATA_GRID_CORRECT_ENV)
     if value is None or value.strip() == "":
-        return True
+        return False
     normalized = value.strip().lower()
     if normalized in _FALSE_ENV_VALUES:
         return False
     if normalized in _TRUE_ENV_VALUES:
         return True
-    logger.warning("Ignoring invalid %s=%r; using default true", _FINAL_ALL_DATA_GRID_CORRECT_ENV, value)
-    return True
+    logger.warning("Ignoring invalid %s=%r; using default false", _FINAL_ALL_DATA_GRID_CORRECT_ENV, value)
+    return False
 
 
 def _final_all_data_after_max_iter_enabled() -> bool:
