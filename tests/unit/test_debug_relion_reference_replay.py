@@ -1,5 +1,5 @@
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 
 from recovar.core import fourier_transform_utils
 from recovar.em.dense_single_volume.iteration_loop import _maybe_debug_replay_relion_references
@@ -87,3 +87,28 @@ def test_debug_relion_reference_replay_loads_shared_kclass_maps(monkeypatch, tmp
                 rtol=0,
                 atol=5e-6,
             )
+
+
+def test_state_swap_force_replays_target_references_without_environment(tmp_path):
+    shape = (4, 4, 4)
+    half1 = np.full(shape, np.float32(0.25), dtype=np.float32)
+    half2 = np.full(shape, np.float32(0.75), dtype=np.float32)
+    write_relion_mrc(tmp_path / "run_it004_half1_class001.mrc", half1, voxel_size=1.0)
+    write_relion_mrc(tmp_path / "run_it004_half2_class001.mrc", half2, voxel_size=1.0)
+    original = [
+        jnp.zeros(np.prod(shape), dtype=jnp.complex64),
+        jnp.ones(np.prod(shape), dtype=jnp.complex64),
+    ]
+
+    replayed = _maybe_debug_replay_relion_references(
+        means=original,
+        perturb_replay_relion_dir=tmp_path,
+        init_relion_iteration=0,
+        iteration=4,
+        volume_shape=shape,
+        n_classes=1,
+        force=True,
+    )
+
+    np.testing.assert_allclose(_real_from_ft(replayed[0], shape), half1, rtol=0, atol=5e-6)
+    np.testing.assert_allclose(_real_from_ft(replayed[1], shape), half2, rtol=0, atol=5e-6)

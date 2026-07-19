@@ -49,6 +49,12 @@ from recovar.em.dense_single_volume.frozen_boundary import (
 from recovar.em.dense_single_volume.helpers.relion_projector_capture import (
     build_relion_projector_replay_state,
 )
+from recovar.em.dense_single_volume.helpers.state_swap_probe import (
+    add_state_swap_probe_arguments,
+    build_state_swap_probe,
+    state_swap_probe_loop_index,
+    validate_state_swap_probe_application,
+)
 from recovar.em.dense_single_volume.relion_replay import (
     read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
 )
@@ -2230,6 +2236,7 @@ def main():
             "state are loaded only after convergence."
         ),
     )
+    add_state_swap_probe_arguments(parser)
     parser.add_argument(
         "--final-replay-fields",
         default="all",
@@ -2680,6 +2687,13 @@ def main():
         help="Optional JSON path for an auto-refine quality/performance ledger.",
     )
     args = parser.parse_args()
+    state_swap_probe_loop_index(
+        target_relion_iteration=args.state_swap_target_relion_iteration,
+        variant=args.state_swap_variant,
+        replay_relion_references=args.state_swap_replay_relion_references,
+        init_relion_iteration=args.init_relion_iteration,
+        max_iter=args.max_iter,
+    )
 
     frozen_boundary = None
     fixed_diagnostic_source_paths = None
@@ -3978,6 +3992,24 @@ def main():
             ],
         )
 
+    state_swap_probe = build_state_swap_probe(
+        target_relion_iteration=args.state_swap_target_relion_iteration,
+        variant=args.state_swap_variant,
+        replay_relion_references=args.state_swap_replay_relion_references,
+        init_relion_iteration=args.init_relion_iteration,
+        max_iter=args.max_iter,
+        replay_iteration_overrides=replay_iteration_overrides,
+    )
+    if state_swap_probe is not None:
+        logger.warning(
+            "State-swap diagnostic: physical RELION target=%d, "
+            "zero-based RECOVAR loop index=%d, variant=%s, RELION references=%s",
+            int(state_swap_probe["target_relion_iteration"]),
+            int(state_swap_probe["iteration"]),
+            state_swap_probe["variant"],
+            bool(state_swap_probe["replay_relion_references"]),
+        )
+
     result = refine_single_volume(
         experiment_datasets=experiment_datasets,
         init_volume=jnp.asarray(init_vol_ft),
@@ -4105,6 +4137,12 @@ def main():
         use_per_half_mean_variance=(
             frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
         ),
+        state_swap_probe=state_swap_probe,
+    )
+
+    validate_state_swap_probe_application(
+        state_swap_probe,
+        result.get("state_swap_probe_applied_relion_iterations"),
     )
 
     total_time = time.time() - t_start
@@ -4175,6 +4213,14 @@ def main():
                 if relion_projector_capture_manifest_resolved is None
                 else str(relion_projector_capture_manifest_resolved)
             ),
+            "state_swap_probe": state_swap_probe,
+            "state_swap_probe_applied_relion_iterations": [
+                int(iteration)
+                for iteration in result.get(
+                    "state_swap_probe_applied_relion_iterations",
+                    [],
+                )
+            ],
         }
         profile_path = Path(args.output) / "local_search_profile_only.json"
         profile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4264,6 +4310,26 @@ def main():
         ),
         "frozen_boundary_completed_relion_iteration": np.int64(
             -1 if frozen_boundary is None else frozen_boundary.completed_relion_iteration
+        ),
+        "state_swap_probe_target_relion_iteration": np.int64(
+            -1
+            if state_swap_probe is None
+            else int(state_swap_probe["target_relion_iteration"])
+        ),
+        "state_swap_probe_loop_index": np.int64(
+            -1 if state_swap_probe is None else int(state_swap_probe["iteration"])
+        ),
+        "state_swap_probe_variant": np.asarray(
+            "" if state_swap_probe is None else str(state_swap_probe["variant"])
+        ),
+        "state_swap_probe_replay_relion_references": np.bool_(
+            False
+            if state_swap_probe is None
+            else bool(state_swap_probe["replay_relion_references"])
+        ),
+        "state_swap_probe_applied_relion_iterations": np.asarray(
+            result.get("state_swap_probe_applied_relion_iterations", []),
+            dtype=np.int64,
         ),
     }
     if relion_follower_scale_replay is not None:
