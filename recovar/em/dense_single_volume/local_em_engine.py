@@ -4159,6 +4159,11 @@ def run_local_em_exact(
                 rotation_prior = local_rotation_log_prior
                 translation_prior = jnp.asarray(bucket.translation_log_prior)
                 preprior_scores = scores - rotation_prior[:, :, None] - translation_prior[:, None, :]
+                preprior_scores = jnp.where(
+                    candidate_mask & jnp.isfinite(preprior_scores),
+                    preprior_scores,
+                    -jnp.inf,
+                )
                 reconstruction_threshold_for_dump = (
                     jnp.zeros((batch_size,), dtype=jnp.float64)
                     if threshold_for_bucket is None
