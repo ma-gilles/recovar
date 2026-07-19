@@ -105,6 +105,42 @@ class BPrefContributionBundle:
             raise ValueError(f"unknown BPref row order {order!r}")
         return {key: value[indices] for key, value in combined.items()}
 
+    @property
+    def boundary_values(self) -> dict[str, np.ndarray]:
+        """Return the immutable boundary metadata shared by every shard."""
+
+        return self.shards[0].values
+
+    @property
+    def shard_row_counts(self) -> tuple[int, ...]:
+        """Return captured active-row counts in execution-shard order."""
+
+        return tuple(shard.row_count for shard in self.shards)
+
+
+@dataclass(frozen=True)
+class BPrefAccumulatorReplay:
+    """One data/weight accumulator replay with explicit numerical provenance."""
+
+    data: np.ndarray
+    weight: np.ndarray
+    backend: str
+    order: str
+    precision: str
+    launch_topology: str
+
+    def __post_init__(self):
+        data = np.asarray(self.data)
+        weight = np.asarray(self.weight)
+        if data.shape != weight.shape:
+            raise ValueError("BPref replay data/weight accumulator shapes differ")
+        if not np.issubdtype(data.dtype, np.complexfloating):
+            raise TypeError("BPref replay data accumulator must be complex")
+        if not np.issubdtype(weight.dtype, np.floating):
+            raise TypeError("BPref replay weight accumulator must be real")
+        if not np.all(np.isfinite(data)) or not np.all(np.isfinite(weight)):
+            raise ValueError("BPref replay accumulators contain nonfinite values")
+
 
 def load_bpref_contribution_shard(path: str | Path) -> BPrefContributionShard:
     """Load one v3 row capture and fail closed on incomplete identity/geometry."""
@@ -221,9 +257,12 @@ def exact_array_metrics(left, right) -> dict[str, object]:
     right = np.asarray(right)
     if left.shape != right.shape:
         return {"shape_equal": False, "left_shape": list(left.shape), "right_shape": list(right.shape)}
-    delta = left.astype(np.result_type(left.dtype, right.dtype), copy=False) - right
+    comparison_dtype = np.complex128 if (np.iscomplexobj(left) or np.iscomplexobj(right)) else np.float64
+    left_comparison = left.astype(comparison_dtype, copy=False)
+    right_comparison = right.astype(comparison_dtype, copy=False)
+    delta = left_comparison - right_comparison
     absolute = np.abs(delta).astype(np.float64)
-    denominator = max(float(np.linalg.norm(right.ravel())), np.finfo(np.float64).tiny)
+    denominator = max(float(np.linalg.norm(right_comparison.ravel())), np.finfo(np.float64).tiny)
     return {
         "shape_equal": True,
         "array_equal": bool(np.array_equal(left, right)),
@@ -231,6 +270,121 @@ def exact_array_metrics(left, right) -> dict[str, object]:
         "max_abs": float(np.max(absolute, initial=0.0)),
         "relative_l2": float(np.linalg.norm(delta.ravel()) / denominator),
     }
+
+
+def accumulator_replay_metrics(
+    left: BPrefAccumulatorReplay,
+    right: BPrefAccumulatorReplay,
+) -> dict[str, object]:
+    """Compare complete replay accumulators using exact array metrics only."""
+
+    return {
+        "left": {
+            "backend": left.backend,
+            "order": left.order,
+            "precision": left.precision,
+            "launch_topology": left.launch_topology,
+        },
+        "right": {
+            "backend": right.backend,
+            "order": right.order,
+            "precision": right.precision,
+            "launch_topology": right.launch_topology,
+        },
+        "data": exact_array_metrics(left.data, right.data),
+        "weight": exact_array_metrics(left.weight, right.weight),
+    }
+
+
+def dense_fftw_half_rows(
+    rows: np.ndarray,
+    pixel_indices: np.ndarray,
+    image_shape: tuple[int, int],
+    *,
+    dtype,
+) -> np.ndarray:
+    """Expand compact captured rows into RELION's native FFTW half-image layout."""
+
+    rows = np.asarray(rows)
+    pixel_indices = np.asarray(pixel_indices, dtype=np.int64)
+    image_shape = tuple(int(value) for value in image_shape)
+    if len(image_shape) != 2 or image_shape[0] <= 0 or image_shape[1] <= 0:
+        raise ValueError(f"invalid BPref replay image shape {image_shape}")
+    half_shape = (image_shape[0], image_shape[1] // 2 + 1)
+    pixel_count = int(np.prod(half_shape))
+    if rows.ndim != 2 or rows.shape[1] != pixel_indices.size:
+        raise ValueError("compact BPref rows and pixel indices have incompatible shapes")
+    if pixel_indices.size and (
+        int(pixel_indices.min()) < 0 or int(pixel_indices.max()) >= pixel_count
+    ):
+        raise ValueError("BPref replay pixel index lies outside the FFTW half image")
+    if np.unique(pixel_indices).size != pixel_indices.size:
+        raise ValueError("BPref replay pixel indices must be unique")
+    dense = np.zeros((rows.shape[0], *half_shape), dtype=np.dtype(dtype))
+    dense.reshape(rows.shape[0], -1)[:, pixel_indices] = rows.astype(dtype, copy=False)
+    return dense
+
+
+def replay_relion_double(
+    bundle: BPrefContributionBundle,
+    *,
+    order: str,
+    get_backprojector_data,
+    interpolator: int,
+) -> BPrefAccumulatorReplay:
+    """Replay captured operands through RELION's CPU double BackProjector.
+
+    ``get_backprojector_data`` is injected so the strict row/schema module does
+    not import the optional RELION extension during ordinary RECOVAR imports.
+    RELION processes the supplied rows sequentially, making execution and
+    canonical order a deterministic double-precision reduction control.
+    """
+
+    rows = bundle.concatenate(order)
+    boundary = bundle.boundary_values
+    image_shape = tuple(int(value) for value in np.asarray(boundary["image_shape"]))
+    pixel_indices = np.asarray(boundary["window_indices"], dtype=np.int32)
+    images = dense_fftw_half_rows(
+        rows["active_summed"],
+        pixel_indices,
+        image_shape,
+        dtype=np.complex128,
+    )
+    weights = dense_fftw_half_rows(
+        rows["active_ctf_probs"],
+        pixel_indices,
+        image_shape,
+        dtype=np.float64,
+    )
+    rotations = np.asarray(rows["active_rotations"], dtype=np.float64)
+    data, weight = get_backprojector_data(
+        images,
+        rotations,
+        weights,
+        ori_size=int(image_shape[0]),
+        padding_factor=int(_scalar(boundary, "reconstruction_padding_factor")),
+        interpolator=int(interpolator),
+        current_size=int(_scalar(boundary, "current_size")),
+    )
+    expected_shape = tuple(
+        int(value) for value in np.asarray(boundary["volume_shape"])
+    )
+    expected_half_shape = (*expected_shape[:2], expected_shape[2] // 2 + 1)
+    data = np.asarray(data)
+    weight = np.asarray(weight)
+    if data.shape != expected_half_shape or weight.shape != expected_half_shape:
+        raise ValueError(
+            "RELION replay accumulator shape does not close against the capture: "
+            f"expected {expected_half_shape}, got {data.shape} and {weight.shape}"
+        )
+    return BPrefAccumulatorReplay(
+        data=data,
+        weight=weight,
+        backend="relion_cpu_backprojector",
+        order=order,
+        precision="complex128/float64",
+        launch_topology="sequential_rows",
+    )
 
 
 def sha256_file(path: str | Path) -> str:

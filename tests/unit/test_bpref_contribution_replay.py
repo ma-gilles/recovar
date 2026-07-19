@@ -1,10 +1,18 @@
 import numpy as np
 import pytest
 
+from scripts.replay_bpref_contribution_bundle import (
+    _classify_replay_difference,
+    _map_fsc_metrics,
+)
 from recovar.em.bpref_contribution_replay import (
+    BPrefAccumulatorReplay,
+    accumulator_replay_metrics,
+    dense_fftw_half_rows,
     exact_array_metrics,
     load_bpref_contribution_bundle,
     load_bpref_contribution_shard,
+    replay_relion_double,
     summarize_bpref_contribution_bundle,
 )
 
@@ -131,3 +139,116 @@ def test_exact_array_metrics_never_reports_correlation():
     assert result["mismatch_count"] == 1
     assert result["max_abs"] == pytest.approx(0.5)
     assert "correlation" not in result
+
+
+def test_exact_array_metrics_uses_wide_norm_for_float32():
+    left = np.full(1000, 1e30, dtype=np.float32)
+    right = left.copy()
+    right[0] = np.nextafter(right[0], np.float32(0.0))
+
+    result = exact_array_metrics(left, right)
+
+    assert np.isfinite(result["relative_l2"])
+    assert result["mismatch_count"] == 1
+
+
+def test_dense_fftw_half_rows_places_compact_pixels():
+    rows = np.asarray([[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]])
+    dense = dense_fftw_half_rows(
+        rows,
+        np.asarray([0, 5]),
+        (4, 4),
+        dtype=np.complex128,
+    )
+
+    assert dense.shape == (2, 4, 3)
+    assert dense.reshape(2, -1)[:, [0, 5]].tolist() == rows.tolist()
+    assert np.count_nonzero(dense) == 4
+
+
+def test_relion_double_replay_preserves_requested_row_order(tmp_path):
+    later = tmp_path / "later.npz"
+    earlier = tmp_path / "earlier.npz"
+    _write_shard(later, original_indices=(8, 9), rotation_offset=20, call=2, dump=2)
+    _write_shard(earlier, original_indices=(1, 3), call=1, dump=1)
+    bundle = load_bpref_contribution_bundle([later, earlier])
+    calls = []
+
+    def fake_backproject(images, rotations, weights, **kwargs):
+        calls.append((images.copy(), rotations.copy(), weights.copy(), kwargs))
+        return (
+            np.zeros((11, 11, 6), dtype=np.complex128),
+            np.zeros((11, 11, 6), dtype=np.float64),
+        )
+
+    replay = replay_relion_double(
+        bundle,
+        order="canonical",
+        get_backprojector_data=fake_backproject,
+        interpolator=1,
+    )
+
+    assert replay.backend == "relion_cpu_backprojector"
+    assert replay.order == "canonical"
+    assert replay.precision == "complex128/float64"
+    assert calls[0][0].dtype == np.complex128
+    assert calls[0][2].dtype == np.float64
+    assert calls[0][3]["ori_size"] == 4
+    assert calls[0][3]["current_size"] == 4
+
+
+def test_accumulator_replay_metrics_reports_data_and_weight_without_correlation():
+    left = BPrefAccumulatorReplay(
+        data=np.asarray([1 + 2j], dtype=np.complex64),
+        weight=np.asarray([3], dtype=np.float32),
+        backend="left",
+        order="execution",
+        precision="complex64/float32",
+        launch_topology="fixture",
+    )
+    right = BPrefAccumulatorReplay(
+        data=np.asarray([1 + 3j], dtype=np.complex128),
+        weight=np.asarray([4], dtype=np.float64),
+        backend="right",
+        order="canonical",
+        precision="complex128/float64",
+        launch_topology="fixture",
+    )
+
+    metrics = accumulator_replay_metrics(left, right)
+
+    assert metrics["data"]["max_abs"] == pytest.approx(1.0)
+    assert metrics["weight"]["max_abs"] == pytest.approx(1.0)
+    assert "correlation" not in metrics["data"]
+
+
+def test_map_replay_metrics_use_fsc_auc_without_correlation():
+    rng = np.random.default_rng(0)
+    volume = rng.normal(size=(8, 8, 8))
+
+    metrics = _map_fsc_metrics(volume, volume.copy())
+
+    assert metrics["fsc_auc"] == pytest.approx(1.0)
+    assert metrics["min_fsc_non_dc"] == pytest.approx(1.0)
+    assert "correlation" not in metrics
+
+
+def test_replay_classification_identifies_precision_dominated_difference():
+    def comparison(scale):
+        return {
+            "data": {"relative_l2": scale},
+            "weight": {"relative_l2": scale / 2},
+        }
+
+    result = _classify_replay_difference(
+        {
+            "control_repeat_f32_canonical_1": comparison(1e-7),
+            "gpu_order_only_f32": comparison(1e-6),
+            "gpu_precision_canonical": comparison(4e-2),
+            "gpu_vs_relion_f64_canonical": comparison(1e-14),
+        },
+        {"gpu_precision_canonical": {"fsc_auc": 0.998}},
+    )
+
+    assert result["classification"] == "scatter_precision"
+    assert result["precision_control_unregularized_map_fsc_auc"] == pytest.approx(0.998)
