@@ -5916,3 +5916,29 @@ deterministic finalizer, source ownership, and captured-Iref lineage contract ar
 and cannot support the fixed-arm claim. Schema v3 seals an explicitly
 enumerated reconstructed-projector diagnostic state; it does not claim identity
 to RELION's full in-memory physical iteration.
+
+## 2026-07-19 reusable exact-local BPref accumulator replay
+
+`scripts/replay_bpref_contribution_bundle.py` now turns a complete strict v3
+row-capture boundary into repeat, order, and precision controls. It runs the
+captured operands through RECOVAR CUDA in complex64/float32 and
+complex128/float64, and through RELION's CPU double BackProjector, in both
+captured execution order and one common semantic order. Intermediate outputs
+use exact array metrics; the shared unregularized reconstruction control uses
+shell FSC/FSC-AUC only. The report automatically classifies the resolved scale
+as repeat variation, reduction order, scatter precision, geometry/backend
+arithmetic, or unresolved.
+
+The real case-26 iteration-7/half-2 capture contains 37,376 rows and genuine
+complex128/float64 upstream data/weight operands. Common-canonical RECOVAR and
+RELION float64 accumulators close at relative L2 `1.13e-14`. Float32 versus
+float64 differs by `0.04270`/`0.04050` in data/weight relative L2, well above
+float32 repeat (`1.44e-7`) and order (`9.60e-7`) controls, while its reconstructed
+map remains above the parity gate at FSC-AUC `0.998122282`. The boundary is
+therefore classified as scatter precision, not an algorithmic geometry mismatch.
+
+Schema v3 does not record production packed-zero rows, so its GPU execution
+mode preserves active-row shard partitions but is not labeled bitwise production
+launch replay. The clean report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_bpref_accumulator_replay_5bb40f18_20260719T071500Z/output_v3/bpref_accumulator_replay_report_v1.json`
+(SHA-256 `b668b011791f0e5951f53346b8779566ff92c66164ce4648b173dd7778330455`).
