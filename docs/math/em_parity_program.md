@@ -6144,3 +6144,45 @@ half-map FSC/resolution state near a discrete shell boundary. The active
 case-20 native RELION pre-scatter capture and common-canonical
 float64/complex128 replay are the next discriminators for that recurrent map
 state; map acceptance remains shellwise FSC/FSC-AUC only.
+
+## 2026-07-19 recurrent K=1 final-boundary family localization
+
+Cross-case final-only controls localize the shared final-map failure before the
+final all-data expectation begins. The inherited last-numbered
+poses/translations and the two half-reference maps are jointly causal.
+Substituting both raises merged cross-engine FSC-AUC to at least `0.995071180`
+in every controlled member: cases 12, 14, 24, 25, 26, and 32 reach
+`0.997324903`, `0.996130409`, `0.998028536`, `0.996330031`, `0.995071180`, and
+`0.997890293`, respectively. The single-field effects vary by dataset, so
+neither poses nor references alone are a universal repair.
+
+Current-head case 20 independently confirms the same boundary. Poses alone
+raise final merged FSC-AUC from `0.987915367` to `0.992921005`, references
+alone to `0.992453421`, and both to `0.997197191`. Replacing all available
+state reaches `0.997434762`, only `+0.000237571` beyond poses plus references;
+correction and sampling state are therefore a small residual rather than the
+dominant common cause.
+
+The exact-state control closes the final implementation itself. On one
+physical H100, RECOVAR initialized from complete RELION iteration-11 state and
+matched the original RELION final at `0.996119500` and an independent RELION
+repeat at `0.997561693`; the two RELION finals match at `0.997433283`. A
+genuine float64 final fine-pass changes merged FSC-AUC by only `-3.19e-7`,
+keeps every best pose and translation exact, and changes Pmax by at most
+`5.01e-6`. Final reconstruction and final-pass float32 precision are rejected
+as the leading shared cause.
+
+The production target is upstream accumulated state: determine where the
+autonomous last-numbered pose/reference distributions first diverge enough to
+be amplified by the final Nyquist pass. The large case-8 four-arm factorial is
+the next scale control. Pending sequential jobs `11371904` and `11372912` were
+canceled before execution because their wall limit could not cover four
+100k/grid-256 trajectories. Replacement same-UUID H100 array `11374242` runs
+the resident, corrections/live-scale, poses-plus-references, and all-state
+arms independently; verifier `11374243` performs the fan-in FSC/FSC-AUC and
+exact/distribution audit.
+
+The sealed family report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_boundary_family_20260719T090000Z/FINAL_BOUNDARY_FAMILY_CLASSIFICATION_V1.json`
+(SHA-256 `b50c7bfe460e10d498bd460824d0e151a544e053283f1d3611a0626e1fca3421`).
+Map quality uses FSC/FSC-AUC only; correlation is not computed.
