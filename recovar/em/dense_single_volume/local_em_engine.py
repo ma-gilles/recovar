@@ -15,6 +15,7 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
+from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as _sparse_pass2_diagnostics
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed,
 )
@@ -160,6 +161,54 @@ from recovar.reconstruction import noise as noise_utils
 from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
+
+
+def _maybe_dump_exact_local_bpref_contribution_rows(**kwargs) -> None:
+    """Write exact-local pre-scatter rows without claiming device geometry.
+
+    The reusable contribution schema already describes the posterior-reduced
+    BPref operands needed for canonical replay.  Exact-local search reaches the
+    same boundary through a different engine, so forward its materialized
+    bucket there when explicitly requested.  Device-produced neighbor
+    signatures remain unsupported on this route and must continue to fail
+    before execution rather than silently emitting an incomplete capture.
+    """
+
+    if not os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "").strip():
+        return
+    if os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip():
+        raise RuntimeError(
+            "Exact-local BPref contribution capture does not yet support device signatures"
+        )
+    _sparse_pass2_diagnostics._maybe_dump_bpref_contribution_rows(**kwargs)
+
+
+def _exact_local_bpref_contribution_capture_active(
+    *, current_size: int | None, debug_iteration: int | None
+) -> bool:
+    """Return whether this exact-local half is the explicitly targeted boundary."""
+
+    if not os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "").strip():
+        return False
+    context = _sparse_pass2_diagnostics._bpref_contribution_context
+    context_iteration = int(context["iteration"])
+    context_half = int(context["half"])
+    target_iteration = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION", "").strip()
+    target_half = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF", "").strip()
+    target_current_size = os.environ.get(
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE", ""
+    ).strip()
+    if not (target_iteration and target_half and target_current_size):
+        return False
+    if context_iteration != int(target_iteration):
+        return False
+    if context_half != int(target_half):
+        return False
+    if current_size is None or int(current_size) != int(target_current_size):
+        return False
+    if debug_iteration is not None and context_iteration != int(debug_iteration):
+        return False
+    return context_iteration > 0 and context_half in {1, 2}
 NVTX_DOMAIN_EM = "recovar_em"
 
 # Keeps common 256^2 local-search buckets at two images without entering the
@@ -1833,6 +1882,14 @@ def run_local_em_exact(
         and current_size_matches_request(debug_noise_dump_current_sizes, current_size)
         and iteration_matches_request(debug_noise_dump_iterations, debug_iteration)
     )
+    bpref_contribution_capture_active = _exact_local_bpref_contribution_capture_active(
+        current_size=current_size,
+        debug_iteration=debug_iteration,
+    )
+    if bpref_contribution_capture_active and not mstep_relion_x_half:
+        raise RuntimeError(
+            "Exact-local BPref contribution capture requires RELION x-half M-step geometry"
+        )
     debug_score_dump_operands = bool(
         debug_score_dump_filter_matches
         and _env_flag(LOCAL_SCORE_DUMP_OPERANDS_ENV)
@@ -2320,6 +2377,7 @@ def run_local_em_exact(
     use_big_jit_buckets = (
         ((not use_relion_projector) or relion_projector_big_jit_supported)
         and not disable_big_jit_buckets
+        and not bpref_contribution_capture_active
         and not return_reconstruction_probability_values
         and not (accumulate_noise and debug_noise_dump_dir is not None)
         and not processed_half_cache_preferred
@@ -3647,6 +3705,7 @@ def run_local_em_exact(
             fused_score_mstep_enabled
             and reconstruction_probability_threshold_np is None
             and not debug_score_dump_bucket_matches
+            and not bpref_contribution_capture_active
         )
         defer_packed_mstep_requested = _env_flag(EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV)
         threshold_for_bucket = (
@@ -4089,6 +4148,73 @@ def run_local_em_exact(
                 if return_profile:
                     _block_until_ready(summed, ctf_probs, probs_sum_t, reconstruction_probs_sum_t)
             timing.mstep_s += time.time() - mstep_t0
+
+            if bpref_contribution_capture_active and not score_only:
+                candidate_mask = jnp.broadcast_to(
+                    jnp.asarray(bucket.local_rotation_mask)[:, :, None],
+                    probs.shape,
+                )
+                if bucket.local_sample_mask is not None:
+                    candidate_mask = candidate_mask & jnp.asarray(bucket.local_sample_mask)
+                rotation_prior = local_rotation_log_prior
+                translation_prior = jnp.asarray(bucket.translation_log_prior)
+                preprior_scores = scores - rotation_prior[:, :, None] - translation_prior[:, None, :]
+                reconstruction_threshold_for_dump = (
+                    jnp.zeros((batch_size,), dtype=jnp.float64)
+                    if threshold_for_bucket is None
+                    else threshold_for_bucket
+                )
+                _maybe_dump_exact_local_bpref_contribution_rows(
+                    experiment_dataset=experiment_dataset,
+                    image_indices=bucket.image_indices,
+                    current_size=current_size,
+                    summed=summed,
+                    ctf_probs=ctf_probs,
+                    rotations=_local_mstep_rotations(bucket),
+                    actual_counts=bucket.actual_rotation_counts,
+                    rotation_indices=bucket.local_rotation_ids,
+                    fine_translations=local_layout.translation_grid,
+                    scores=scores,
+                    preprior_scores=preprior_scores,
+                    probs=probs,
+                    rotation_log_prior=rotation_prior,
+                    translation_log_prior=translation_prior,
+                    log_z=log_Z,
+                    best_log_score=best_log_score,
+                    reconstruction_probs=reconstruction_probs,
+                    reconstruction_mask=reconstruction_sample_mask,
+                    reconstruction_sum_weight=jnp.sum(reconstruction_probs, axis=(1, 2)),
+                    reconstruction_threshold=reconstruction_threshold_for_dump,
+                    candidate_mask=candidate_mask,
+                    high_precision_operand_bundle=False,
+                    raw_batch_data=None,
+                    ctf_params=None,
+                    noise_variance_half=None,
+                    integer_pre_shifts=None,
+                    batch_image_corrections=None,
+                    batch_scale_corrections=None,
+                    relion_preprocess_normalization_factors=None,
+                    relion_cuda_preprocess=False,
+                    score_with_masked_images=score_with_masked_images,
+                    image_mask=None,
+                    image_mask_mode="not-captured",
+                    voxel_size=experiment_dataset.voxel_size,
+                    ctf_mode="not-captured",
+                    ctf_dose_per_tilt=0.0,
+                    ctf_angle_per_tilt=0.0,
+                    disc_type=disc_type,
+                    projection_padding_factor=projection_padding_factor,
+                    reconstruction_padding_factor=reconstruction_padding_factor,
+                    use_relion_x_half_mstep=mstep_relion_x_half,
+                    winner_take_all=False,
+                    max_r=mstep_adjoint_max_r,
+                    window_indices=mstep_recon_window_indices,
+                    image_shape=image_shape,
+                    volume_shape=recon_volume_shape,
+                    shadow_only_mode=False,
+                    shadow_score_bitwise_equal=True,
+                    shadow_reduction_agreement=None,
+                )
             scores = None
 
         _collect_reconstruction_probability_values(bucket.image_indices, probs)

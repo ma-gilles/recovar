@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume import iteration_loop, k_class
+from recovar.em.dense_single_volume import iteration_loop, k_class, local_em_engine
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
 
@@ -459,6 +459,161 @@ def test_target_half2_cannot_leak_into_final_all_data_or_local_search(monkeypatc
         iteration_loop._score_half_local_in_bpref_scope(
             bpref_device_signature_active=True
         )
+
+
+def test_exact_local_contribution_adapter_is_explicit_and_rejects_device_claims(
+    monkeypatch,
+):
+    forwarded = []
+    monkeypatch.setattr(
+        sparse_pass2_bucketed,
+        "_maybe_dump_bpref_contribution_rows",
+        lambda **kwargs: forwarded.append(kwargs),
+    )
+
+    local_em_engine._maybe_dump_exact_local_bpref_contribution_rows(marker="off")
+    assert forwarded == []
+
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "/tmp/contributions")
+    local_em_engine._maybe_dump_exact_local_bpref_contribution_rows(marker="local")
+    assert forwarded == [{"marker": "local"}]
+
+    monkeypatch.setenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "/tmp/device")
+    with pytest.raises(RuntimeError, match="does not yet support device signatures"):
+        local_em_engine._maybe_dump_exact_local_bpref_contribution_rows(marker="device")
+    assert forwarded == [{"marker": "local"}]
+
+
+def test_exact_local_contribution_adapter_writes_versioned_pre_scatter_fixture(
+    monkeypatch,
+    tmp_path,
+):
+    dump_dir = tmp_path / "contributions"
+    image_names_path = tmp_path / "image_names.npy"
+    np.save(
+        image_names_path,
+        np.asarray(["1@/tmp/frozen.mrcs", "2@/tmp/frozen.mrcs"]),
+        allow_pickle=False,
+    )
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", str(dump_dir))
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION", "7")
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF", "2")
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE", "4")
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY", str(image_names_path))
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256", "a" * 64)
+    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=7, half=2)
+    try:
+        scores = np.asarray(
+            [[[0.0, -1.0], [-2.0, -3.0]], [[-0.5, -1.5], [-2.5, -3.5]]],
+            dtype=np.float32,
+        )
+        probs = np.exp(scores).astype(np.float32)
+        probs /= probs.sum(axis=(1, 2), keepdims=True)
+        local_em_engine._maybe_dump_exact_local_bpref_contribution_rows(
+            experiment_dataset=object(),
+            image_indices=np.asarray([0, 1]),
+            current_size=4,
+            summed=np.ones((2, 2, 6), dtype=np.complex64),
+            ctf_probs=np.ones((2, 2, 6), dtype=np.float32),
+            rotations=np.broadcast_to(np.eye(3), (2, 2, 3, 3)),
+            actual_counts=np.asarray([2, 1]),
+            rotation_indices=np.asarray([[10, 11], [20, 21]]),
+            fine_translations=np.asarray([[0.0, 0.0], [1.0, 0.0]]),
+            scores=scores,
+            preprior_scores=scores,
+            probs=probs,
+            rotation_log_prior=np.zeros((2, 2)),
+            translation_log_prior=np.zeros((2, 2)),
+            log_z=np.zeros((2,)),
+            best_log_score=np.zeros((2,)),
+            reconstruction_probs=probs,
+            reconstruction_mask=np.ones((2, 2, 2), dtype=bool),
+            reconstruction_sum_weight=probs.sum(axis=(1, 2)),
+            reconstruction_threshold=np.zeros((2,)),
+            candidate_mask=np.ones((2, 2, 2), dtype=bool),
+            high_precision_operand_bundle=False,
+            raw_batch_data=None,
+            ctf_params=None,
+            noise_variance_half=None,
+            integer_pre_shifts=None,
+            batch_image_corrections=None,
+            batch_scale_corrections=None,
+            relion_preprocess_normalization_factors=None,
+            relion_cuda_preprocess=False,
+            score_with_masked_images=False,
+            image_mask=None,
+            image_mask_mode="not-captured",
+            voxel_size=1.0,
+            ctf_mode="not-captured",
+            ctf_dose_per_tilt=0.0,
+            ctf_angle_per_tilt=0.0,
+            disc_type="linear_interp",
+            projection_padding_factor=2,
+            reconstruction_padding_factor=2,
+            use_relion_x_half_mstep=True,
+            winner_take_all=False,
+            max_r=2,
+            window_indices=np.arange(6),
+            image_shape=(4, 4),
+            volume_shape=(4, 4, 4),
+            shadow_only_mode=False,
+            shadow_score_bitwise_equal=True,
+            shadow_reduction_agreement=None,
+        )
+    finally:
+        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+
+    artifact = next(dump_dir.glob("bpref_contribution_rows_*.npz"))
+    with np.load(artifact, allow_pickle=False) as capture:
+        assert capture["schema"].item() == "recovar-bpref-contribution-rows-v3"
+        assert capture["iteration"].item() == 7
+        assert capture["half"].item() == 2
+        assert capture["current_size"].item() == 4
+        assert capture["active_summed"].dtype == np.complex64
+        assert capture["active_ctf_probs"].dtype == np.float32
+        assert capture["active_original_indices"].tolist() == [0, 0, 1]
+
+
+def test_exact_local_contribution_capture_routes_only_the_target_boundary(monkeypatch):
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "/tmp/contributions")
+    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=7, half=2)
+    try:
+        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+            current_size=50,
+            debug_iteration=7,
+        )
+    finally:
+        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION", "7")
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF", "2")
+    monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE", "50")
+    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=7, half=2)
+    try:
+        assert local_em_engine._exact_local_bpref_contribution_capture_active(
+            current_size=50,
+            debug_iteration=7,
+        )
+        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+            current_size=52,
+            debug_iteration=7,
+        )
+        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+            current_size=50,
+            debug_iteration=8,
+        )
+        sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=7, half=1)
+        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+            current_size=50,
+            debug_iteration=7,
+        )
+    finally:
+        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+
+    source = inspect.getsource(local_em_engine.run_local_em_exact)
+    assert "and not bpref_contribution_capture_active" in source
+    assert "if bpref_contribution_capture_active and not score_only:" in source
+    assert "requires RELION x-half M-step geometry" in source
 
 
 def test_clear_dump_context_marks_contribution_and_native_dumps_inactive():
