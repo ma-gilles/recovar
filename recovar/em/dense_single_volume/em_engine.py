@@ -62,6 +62,7 @@ from .helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
+    mask_relion_noise_shell_indices_to_current_window,
 )
 from .helpers.half_volume_mstep import (
     enforce_half_volume_x0,
@@ -1061,6 +1062,13 @@ def run_em(
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
+        if use_window:
+            shell_indices_half = mask_relion_noise_shell_indices_to_current_window(
+                shell_indices_half,
+                image_shape,
+                current_size,
+                window_spec.score_indices,
+            )
         shell_indices_noise = window_spec.recon_values(shell_indices_half)
         noise_variance_windowed = window_spec.recon_values(noise_variance_half)
         noise_wsum = np.zeros(n_shells, dtype=np.float64)

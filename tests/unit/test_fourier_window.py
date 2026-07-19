@@ -401,6 +401,28 @@ class TestWindowIndicesSubset:
         assert np.all(shell_indices[92, 1:6] == 28)
         assert int(np.count_nonzero(shell_indices <= current_size // 2)) == 1276
 
+    def test_relion_noise_crop_removes_case25_shell25_five_pixel_excess(self):
+        shape = (128, 128)
+        current_size = 50
+        window_indices, _ = make_fourier_window_indices_np(
+            shape,
+            current_size=current_size,
+            square=False,
+            include_dc=True,
+        )
+        unmasked = np.asarray(make_relion_noise_shell_indices_half(shape))
+        masked = np.asarray(
+            mask_relion_noise_shell_indices_to_current_window(
+                unmasked,
+                shape,
+                current_size,
+                window_indices,
+            ),
+        )
+
+        assert np.count_nonzero(unmasked == 25) == 84
+        assert np.count_nonzero(masked == 25) == 79
+
     def test_square_window_matches_relion_downsized_half_shape(self):
         """Square mode matches RELION windowFourierTransform's FFTW crop size."""
         shape = (64, 64)

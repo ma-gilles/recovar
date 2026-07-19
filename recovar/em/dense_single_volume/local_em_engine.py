@@ -31,6 +31,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
     make_shell_indices_half,
+    mask_relion_noise_shell_indices_to_current_window,
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     enforce_half_volume_x0,
@@ -2060,6 +2061,13 @@ def run_local_em_exact(
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
+        if use_window:
+            shell_indices_half = mask_relion_noise_shell_indices_to_current_window(
+                shell_indices_half,
+                image_shape,
+                current_size,
+                window_indices,
+            )
         shell_indices_noise = window_spec.recon_values(shell_indices_half)
         norm_unweighted_shell_cutoff = image_shape[0] // 2 if current_size is None else int(current_size // 2)
         noise_variance_for_noise = window_spec.recon_values(noise_variance_half)

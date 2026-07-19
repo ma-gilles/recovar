@@ -3973,6 +3973,17 @@ def test_exact_local_relion_projector_noise_projection_materializes_once():
     assert "_packed_noise_projection_chunk_rows(noise_projection_pixels, batch_size=batch_size)" in src
 
 
+def test_dense_and_local_noise_mask_asymmetric_current_crop():
+    from recovar.em.dense_single_volume import em_engine, local_em_engine
+
+    dense_src = inspect.getsource(em_engine.run_em)
+    local_src = inspect.getsource(local_em_engine.run_local_em_exact)
+    call = "mask_relion_noise_shell_indices_to_current_window("
+
+    assert call in dense_src
+    assert call in local_src
+
+
 def test_relion_projector_cache_reuses_cached_projector_data(monkeypatch, tmp_path):
     import recovar.em.initial_model.dense_adapter as dense_adapter
 
