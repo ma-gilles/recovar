@@ -5942,3 +5942,63 @@ mode preserves active-row shard partitions but is not labeled bitwise production
 launch replay. The clean report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_bpref_accumulator_replay_5bb40f18_20260719T071500Z/output_v3/bpref_accumulator_replay_report_v1.json`
 (SHA-256 `b668b011791f0e5951f53346b8779566ff92c66164ce4648b173dd7778330455`).
+
+## 2026-07-19 K=1 iteration-5 resident-state causal localization
+
+Fail-closed accumulated-state and strict single-step controls separate the
+case-20 iteration-5 residual from same-GPU repeat variation. The strict
+all-RELION arm repeats particle Pmax, poses, translations, and support exactly;
+its merged-map repeat FSC-AUC is `0.999999999832`. In the accumulated
+trajectory, restoring only the RECOVAR scoring references at iteration 5
+reproduces nearly the complete full-state residual: merged FSC-AUC versus the
+all-RELION arm is `0.999993939`, Pmax absolute p95 is `0.007577`, and support
+differs for 185/3,000 particles. Restoring tau2 and noise alone is negligible:
+merged FSC-AUC `0.999999999370`, Pmax p95 `9.96e-5`, and three support
+differences.
+
+The strict arm replays RELION references through iterations 1--5. Restoring
+the resident RECOVAR reference only at iteration 5 then remains essentially
+exact: output-versus-RELION merged FSC-AUC is `0.999999999035` and the GT
+FSC-AUC delta is `-3.35e-8`. The dominant residual therefore accumulates
+through prior RECOVAR-produced references; it is not a broad single-step
+scoring, tau2, or noise mismatch. Together with the native-BPref reconstructor
+closure and canonical contribution replay above, the next locus is aggregate
+GPU contribution accumulation precision/order, not serial particle decisions.
+
+State-swap controls now expose the half-specific K=1 model-STAR scales as an
+explicit live scorer oracle. Generic shared Class3D model STARs fail closed
+because they do not identify two exact scorer-owned scales. The particle-state
+audit also reports two distinct Pmax scalars: per-particle mean versus
+per-particle mean, and RECOVAR M-step `ave_Pmax` versus RELION
+`rlnAveragePmax`. Mixing those semantics produced an invalid scalar delta; the
+existing per-particle array/distribution comparison was unaffected.
+
+Evidence:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_accumulated_it5_factorial_27e3cfb2_20260719T013500Z/EARLY_RECOVAR_MAPS_CAUSAL_RESULT.md`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_single_step_it5_factorial_27e3cfb2_20260719T013000Z/EARLY_STRICT_RECOVAR_MAPS_RESULT.md`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_single_step_it5_factorial_27e3cfb2_20260719T013000Z/audit/repeat_control_summary.json`
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_single_step_it5_factorial_27e3cfb2_20260719T013000Z/audit/incremental_summary.json`
+
+## 2026-07-19 case-8 low-memory full-trajectory qualification
+
+Pinned diagnostic job `11367838` validates the conservative exact-local
+microbatch cap through the recurrent OOM boundary. Numbered iteration 16 and
+both final all-data `515^3` split-half M-steps complete without resource
+exhaustion. All 17 numbered merged RECOVAR/RELION FSC-AUC values are at least
+`0.999436816`. Final merged FSC-AUC is `0.9956749799762161`, passing the
+unchanged `0.995` gate; sign-invariant GT FSC-AUC is `0.184732902` for RECOVAR
+and `0.183791257` for RELION, a delta of `-0.000941646` that passes the
+`>= -0.002` gate.
+
+The last numbered merged FSC-AUC is `0.999964169`, so the drop to `0.995675`
+is introduced at final all-data. Final split-half cross-engine FSC-AUC values
+are only about `0.84984` even though the merged map passes. This final-boundary
+effect remains a separate localization target; it does not invalidate the OOM
+repair or the configured merged/GT quality gates. RELION was reused from an
+A100 run while RECOVAR used an H100, so this diagnostic is not speed evidence.
+Fresh same-GPU job `11368287` provides the apple-to-apple confirmation.
+
+The sealed trajectory is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_ec25f6dd_autonomous_rerun_launcher_20260718T124500Z/runs/full_ec25f6dd_20260718T184318Z/cases/8_anisotropic_high_noise_100k_g256_white_noise3_bf80_retry3_pinned_lowmem/trajectory_analysis/k1_case8_pinned_lowmem_fulltraj_seal_v1.json`
+(SHA-256 `df95eb8275bb89d1708fb4dd10b7662d30e8de861f6897fa188547295da345af`).
