@@ -34,8 +34,8 @@ from scripts.run_full_refinement import (
     _attach_relion_projector_capture,
     _build_frozen_replay_slots,
     _build_replay_iteration_overrides,
-    _fixed_diagnostic_source_paths,
     _default_refinement_subsets,
+    _fixed_diagnostic_source_paths,
     _format_replay_mean_for_log,
     _load_init_noise_radial_npz,
     _load_init_previous_best_poses_npz,
@@ -48,9 +48,9 @@ from scripts.run_full_refinement import (
     _parse_relion_cli_ini_high,
     _parse_relion_tau2_fudge,
     _read_relion_single_optics_sigma2_noise,
-    _relion_optimiser_star_for_runtime,
     _relion_halfset_and_accuracy_layout,
     _relion_mpi_process_start_scoring_noise_pair,
+    _relion_optimiser_star_for_runtime,
     _replay_complete_initial_particle_state,
     _resolve_native_group_layout,
     _resolve_replay_normcorr,
@@ -59,8 +59,8 @@ from scripts.run_full_refinement import (
     _select_authoritative_group_particles,
     _validate_fixed_diagnostic_arm_cli,
     _validate_fixed_diagnostic_math_environment,
-    _verify_frozen_boundary_source_hashes,
     _verify_fixed_diagnostic_provenance_manifests,
+    _verify_frozen_boundary_source_hashes,
 )
 
 FIXTURE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0")
