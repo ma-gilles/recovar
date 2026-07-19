@@ -463,11 +463,12 @@ def _maybe_debug_replay_relion_references(
     iteration: int,
     volume_shape,
     n_classes: int,
+    force: bool = False,
 ):
     """Debug hook: replace current scoring references with RELION maps."""
 
     iteration_number = int(iteration) + 1
-    if not _debug_replay_relion_references_enabled(iteration_number):
+    if not force and not _debug_replay_relion_references_enabled(iteration_number):
         return means
     if perturb_replay_relion_dir is None:
         logger.warning(
@@ -4556,6 +4557,7 @@ def _run_relion_iteration_loop(
     # History tracking. Keep these plain lists because intermediate outputs
     # serialize them directly.
     current_sizes = []
+    state_swap_probe_applied_relion_iterations = []
     fsc_history = []
     fsc_for_growth_history = []
     pixel_resolutions = []
@@ -5350,6 +5352,24 @@ def _run_relion_iteration_loop(
                 ", ".join(f"class {idx + 1}={weight:.4f}" for idx, weight in enumerate(class_weights)),
             )
 
+        state_swap_target_this_iteration = (
+            state_swap_probe is not None
+            and int(state_swap_probe.get("iteration", -1)) == int(iteration)
+        )
+        means = _maybe_debug_replay_relion_references(
+            means=means,
+            perturb_replay_relion_dir=perturb_replay_relion_dir,
+            perturb_replay_relion_prefix=perturb_replay_relion_prefix,
+            init_relion_iteration=init_relion_iteration,
+            iteration=iteration,
+            volume_shape=volume_shape,
+            n_classes=n_classes,
+            force=(
+                state_swap_target_this_iteration
+                and bool(state_swap_probe.get("replay_relion_references", False))
+            ),
+        )
+
         _sigma_offset_before_state_swap = current_sigma_offset_angstrom
         (
             cs,
@@ -5389,15 +5409,10 @@ def _run_relion_iteration_loop(
             current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(
                 current_sigma_offset_angstrom
             )
-        means = _maybe_debug_replay_relion_references(
-            means=means,
-            perturb_replay_relion_dir=perturb_replay_relion_dir,
-            perturb_replay_relion_prefix=perturb_replay_relion_prefix,
-            init_relion_iteration=init_relion_iteration,
-            iteration=iteration,
-            volume_shape=volume_shape,
-            n_classes=n_classes,
-        )
+        if state_swap_target_this_iteration:
+            state_swap_probe_applied_relion_iterations.append(
+                int(init_relion_iteration) + int(iteration) + 1
+            )
 
         exact_acc_rot_this_iter = None
         exact_acc_trans_this_iter = None
@@ -6553,6 +6568,9 @@ def _run_relion_iteration_loop(
                 "class_assignment_history": class_assignment_history,
                 "relion_follower_scale_replay_requested_iterations": replay_requested_iterations,
                 "relion_follower_scale_replay_applied_iterations": replay_applied_iterations,
+                "state_swap_probe_applied_relion_iterations": list(
+                    state_swap_probe_applied_relion_iterations
+                ),
                 "fsc": fsc_history[-1] if fsc_history else None,
                 "hard_assignments": hard_assignments,
                 "current_sizes": current_sizes,
@@ -8218,6 +8236,9 @@ def _run_relion_iteration_loop(
             "class_assignment_history": class_assignment_history,
             "relion_follower_scale_replay_requested_iterations": replay_requested_iterations,
             "relion_follower_scale_replay_applied_iterations": replay_applied_iterations,
+            "state_swap_probe_applied_relion_iterations": list(
+                state_swap_probe_applied_relion_iterations
+            ),
             "relion_scale_follower_scales": (
                 None
                 if relion_follower_scale_state is None
@@ -9721,6 +9742,9 @@ def _run_relion_iteration_loop(
         "class_assignment_history": class_assignment_history,
         "relion_follower_scale_replay_requested_iterations": replay_requested_iterations,
         "relion_follower_scale_replay_applied_iterations": replay_applied_iterations,
+        "state_swap_probe_applied_relion_iterations": list(
+            state_swap_probe_applied_relion_iterations
+        ),
         "relion_scale_follower_scales": (
             None
             if relion_follower_scale_state is None

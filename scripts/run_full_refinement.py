@@ -40,6 +40,12 @@ from recovar.core import fourier_transform_utils as ftu
 from recovar.em.dense_single_volume.helpers.relion_projector_capture import (
     build_relion_projector_replay_state,
 )
+from recovar.em.dense_single_volume.helpers.state_swap_probe import (
+    add_state_swap_probe_arguments,
+    build_state_swap_probe,
+    state_swap_probe_loop_index,
+    validate_state_swap_probe_application,
+)
 from recovar.em.dense_single_volume.relion_replay import (
     read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
 )
@@ -1745,6 +1751,7 @@ def main():
             "state are loaded only after convergence."
         ),
     )
+    add_state_swap_probe_arguments(parser)
     parser.add_argument(
         "--final-replay-fields",
         default="all",
@@ -2125,6 +2132,13 @@ def main():
         help="Optional JSON path for an auto-refine quality/performance ledger.",
     )
     args = parser.parse_args()
+    state_swap_probe_loop_index(
+        target_relion_iteration=args.state_swap_target_relion_iteration,
+        variant=args.state_swap_variant,
+        replay_relion_references=args.state_swap_replay_relion_references,
+        init_relion_iteration=args.init_relion_iteration,
+        max_iter=args.max_iter,
+    )
 
     seed_optimiser_star = _explicit_relion_optimiser_for_seed(args)
     args.seed, optimizer_seed_source = _resolve_optimizer_random_seed(args.seed, seed_optimiser_star)
@@ -3123,6 +3137,24 @@ def main():
             ],
         )
 
+    state_swap_probe = build_state_swap_probe(
+        target_relion_iteration=args.state_swap_target_relion_iteration,
+        variant=args.state_swap_variant,
+        replay_relion_references=args.state_swap_replay_relion_references,
+        init_relion_iteration=args.init_relion_iteration,
+        max_iter=args.max_iter,
+        replay_iteration_overrides=replay_iteration_overrides,
+    )
+    if state_swap_probe is not None:
+        logger.warning(
+            "State-swap diagnostic: physical RELION target=%d, "
+            "zero-based RECOVAR loop index=%d, variant=%s, RELION references=%s",
+            int(state_swap_probe["target_relion_iteration"]),
+            int(state_swap_probe["iteration"]),
+            state_swap_probe["variant"],
+            bool(state_swap_probe["replay_relion_references"]),
+        )
+
     result = refine_single_volume(
         experiment_datasets=experiment_datasets,
         init_volume=jnp.asarray(init_vol_ft),
@@ -3203,6 +3235,12 @@ def main():
         stop_after_local_search_profile=bool(args.stop_after_local_search_profile),
         stop_after_local_search=bool(args.stop_after_local_search),
         stop_after_local_search_score_only=bool(args.stop_after_local_search_score_only),
+        state_swap_probe=state_swap_probe,
+    )
+
+    validate_state_swap_probe_application(
+        state_swap_probe,
+        result.get("state_swap_probe_applied_relion_iterations"),
     )
 
     total_time = time.time() - t_start
@@ -3273,6 +3311,14 @@ def main():
                 if relion_projector_capture_manifest_resolved is None
                 else str(relion_projector_capture_manifest_resolved)
             ),
+            "state_swap_probe": state_swap_probe,
+            "state_swap_probe_applied_relion_iterations": [
+                int(iteration)
+                for iteration in result.get(
+                    "state_swap_probe_applied_relion_iterations",
+                    [],
+                )
+            ],
         }
         profile_path = Path(args.output) / "local_search_profile_only.json"
         profile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3350,6 +3396,26 @@ def main():
             ""
             if relion_projector_capture_manifest_resolved is None
             else str(relion_projector_capture_manifest_resolved)
+        ),
+        "state_swap_probe_target_relion_iteration": np.int64(
+            -1
+            if state_swap_probe is None
+            else int(state_swap_probe["target_relion_iteration"])
+        ),
+        "state_swap_probe_loop_index": np.int64(
+            -1 if state_swap_probe is None else int(state_swap_probe["iteration"])
+        ),
+        "state_swap_probe_variant": np.asarray(
+            "" if state_swap_probe is None else str(state_swap_probe["variant"])
+        ),
+        "state_swap_probe_replay_relion_references": np.bool_(
+            False
+            if state_swap_probe is None
+            else bool(state_swap_probe["replay_relion_references"])
+        ),
+        "state_swap_probe_applied_relion_iterations": np.asarray(
+            result.get("state_swap_probe_applied_relion_iterations", []),
+            dtype=np.int64,
         ),
     }
     if relion_follower_scale_replay is not None:
