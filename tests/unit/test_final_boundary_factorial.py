@@ -24,6 +24,7 @@ def _source_override():
         "direction_prior": "prior",
         "image_corrections": "image_corr",
         "serialized_scale_corrections": "scale_corr",
+        "scoring_scale_corrections": "scoring_scale_corr",
         "class_tau2": "not_selected_for_k1_final_factorial",
     }
 
@@ -54,8 +55,8 @@ def _source_override():
         ),
         ("noise", {"noise_variance"}),
         ("direction_prior", {"direction_prior"}),
-        ("image_corrections", {"image_corrections"}),
-        ("scale_corrections", {"serialized_scale_corrections"}),
+        ("norm_factor", {"image_corrections", "serialized_scale_corrections"}),
+        ("scoring_scale", {"scoring_scale_corrections"}),
         ("references", set()),
     ],
 )
@@ -69,24 +70,28 @@ def test_final_replay_all_is_union_without_unrelated_fields():
     groups, override = _select_final_replay_override(_source_override(), "all")
     assert groups == {"poses", "sampling", "corrections", "references"}
     assert "class_tau2" not in override
-    assert set(override) == set(_source_override()) - {"class_tau2"}
+    assert set(override) == set(_source_override()) - {
+        "class_tau2",
+        "scoring_scale_corrections",
+    }
 
 
-def test_final_replay_correction_subgroups_compose():
+def test_final_replay_orthogonal_correction_subgroups_compose():
     groups, override = _select_final_replay_override(
-        _source_override(), "noise,direction_prior,image_corrections,scale_corrections"
+        _source_override(), "noise,direction_prior,norm_factor,scoring_scale"
     )
     assert groups == {
         "noise",
         "direction_prior",
-        "image_corrections",
-        "scale_corrections",
+        "norm_factor",
+        "scoring_scale",
     }
     assert set(override) == {
         "noise_variance",
         "direction_prior",
         "image_corrections",
         "serialized_scale_corrections",
+        "scoring_scale_corrections",
     }
 
 
