@@ -3,7 +3,9 @@
 import argparse
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume.helpers.state_swap_probe import (
@@ -14,7 +16,11 @@ from recovar.em.dense_single_volume.helpers.state_swap_probe import (
     state_swap_variant_choices,
     validate_state_swap_probe_application,
 )
-from recovar.em.dense_single_volume.iteration_loop import _STATE_SWAP_VARIANT_COMPONENTS
+from recovar.em.dense_single_volume.iteration_loop import (
+    _STATE_SWAP_VARIANT_COMPONENTS,
+    _apply_state_swap_probe,
+    _snapshot_state_swap_inputs,
+)
 
 pytestmark = pytest.mark.unit
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -287,3 +293,60 @@ def test_state_swap_snapshot_is_bounded_to_target_iteration():
 
     assert "if state_swap_target_this_iteration:" in snapshot_block
     assert "if state_swap_probe is not None:" not in snapshot_block
+
+
+def test_sigma_offset_state_swap_preserves_asymmetric_half_values():
+    state = SimpleNamespace(marker="resident")
+    half_inputs = SimpleNamespace(
+        image_corrections=[np.array([1.0]), np.array([2.0])],
+        scale_corrections=[np.array([3.0]), np.array([4.0])],
+        previous_best_translations=[np.zeros((1, 2)), np.ones((1, 2))],
+        previous_best_rotation_eulers=[np.zeros((1, 3)), np.ones((1, 3))],
+    )
+    snapshot = _snapshot_state_swap_inputs(
+        state=state,
+        cs=52,
+        means=[np.array([1.0]), np.array([2.0])],
+        mean_variance=np.array([5.0]),
+        noise_variance_per_half=[np.array([6.0]), np.array([7.0])],
+        noise_variance=np.array([6.5]),
+        previous_noise_radial_per_half=[np.array([8.0]), np.array([9.0])],
+        previous_noise_radial=np.array([8.5]),
+        relion_half_inputs=half_inputs,
+        previous_best_rotations=[np.eye(3)[None], np.eye(3)[None]],
+        current_sigma_offset_angstrom=3.0,
+        current_sigma_offset_angstrom_per_half=[2.0, 4.0],
+        class_direction_prior_per_half=[np.array([0.4]), np.array([0.6])],
+        class_direction_prior_order_per_half=[3, 3],
+        global_direction_prior_per_half=[np.array([0.4]), np.array([0.6])],
+        global_direction_prior_order_per_half=[3, 3],
+    )
+
+    restored = _apply_state_swap_probe(
+        probe={"iteration": 6, "variant": "recovar_sigma_offset"},
+        iteration=6,
+        recovar_snapshot=snapshot,
+        state=state,
+        cs=52,
+        means=[np.array([10.0]), np.array([20.0])],
+        mean_variance=np.array([50.0]),
+        noise_variance_per_half=[np.array([60.0]), np.array([70.0])],
+        noise_variance=np.array([65.0]),
+        previous_noise_radial_per_half=[np.array([80.0]), np.array([90.0])],
+        previous_noise_radial=np.array([85.0]),
+        relion_half_inputs=half_inputs,
+        previous_best_rotations=[np.eye(3)[None], np.eye(3)[None]],
+        current_sigma_offset_angstrom=3.1,
+        current_sigma_offset_angstrom_per_half=[2.9, 3.3],
+        class_direction_prior_per_half=[np.array([0.5]), np.array([0.5])],
+        class_direction_prior_order_per_half=[4, 4],
+        global_direction_prior_per_half=[np.array([0.5]), np.array([0.5])],
+        global_direction_prior_order_per_half=[4, 4],
+    )
+
+    restored_sigma = restored[8]
+    restored_sigma_per_half = restored[9]
+    assert restored_sigma == pytest.approx(3.0)
+    assert restored_sigma_per_half == pytest.approx([2.0, 4.0])
+    restored_sigma_per_half[0] = 99.0
+    assert snapshot["current_sigma_offset_angstrom_per_half"] == pytest.approx([2.0, 4.0])

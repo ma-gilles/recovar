@@ -3687,6 +3687,7 @@ def _snapshot_state_swap_inputs(
     relion_half_inputs,
     previous_best_rotations,
     current_sigma_offset_angstrom,
+    current_sigma_offset_angstrom_per_half,
     class_direction_prior_per_half,
     class_direction_prior_order_per_half,
     global_direction_prior_per_half,
@@ -3715,6 +3716,9 @@ def _snapshot_state_swap_inputs(
         "previous_best_rotation_eulers": _copy_half_pair(relion_half_inputs.previous_best_rotation_eulers),
         "previous_best_rotations": _copy_half_pair(previous_best_rotations),
         "current_sigma_offset_angstrom": float(current_sigma_offset_angstrom),
+        "current_sigma_offset_angstrom_per_half": _copy_optional_float_pair(
+            current_sigma_offset_angstrom_per_half
+        ),
         "class_direction_prior_per_half": class_priors,
         "class_direction_prior_order_per_half": class_prior_orders,
         "global_direction_prior_per_half": global_priors,
@@ -3732,6 +3736,7 @@ def _state_swap_return_tuple(
     previous_noise_radial,
     previous_best_rotations,
     current_sigma_offset_angstrom,
+    current_sigma_offset_angstrom_per_half,
     class_direction_prior_per_half,
     class_direction_prior_order_per_half,
     global_direction_prior_per_half,
@@ -3747,6 +3752,7 @@ def _state_swap_return_tuple(
         previous_noise_radial,
         previous_best_rotations,
         current_sigma_offset_angstrom,
+        current_sigma_offset_angstrom_per_half,
         class_direction_prior_per_half,
         class_direction_prior_order_per_half,
         global_direction_prior_per_half,
@@ -3770,6 +3776,7 @@ def _apply_state_swap_probe(
     relion_half_inputs,
     previous_best_rotations,
     current_sigma_offset_angstrom,
+    current_sigma_offset_angstrom_per_half,
     class_direction_prior_per_half,
     class_direction_prior_order_per_half,
     global_direction_prior_per_half,
@@ -3788,6 +3795,7 @@ def _apply_state_swap_probe(
             previous_noise_radial,
             previous_best_rotations,
             current_sigma_offset_angstrom,
+            current_sigma_offset_angstrom_per_half,
             class_direction_prior_per_half,
             class_direction_prior_order_per_half,
             global_direction_prior_per_half,
@@ -3805,6 +3813,7 @@ def _apply_state_swap_probe(
             previous_noise_radial,
             previous_best_rotations,
             current_sigma_offset_angstrom,
+            current_sigma_offset_angstrom_per_half,
             class_direction_prior_per_half,
             class_direction_prior_order_per_half,
             global_direction_prior_per_half,
@@ -3884,6 +3893,9 @@ def _apply_state_swap_probe(
         global_direction_prior_order_per_half = list(recovar_snapshot["global_direction_prior_order_per_half"])
     if "sigma_offset" in components:
         current_sigma_offset_angstrom = float(recovar_snapshot["current_sigma_offset_angstrom"])
+        current_sigma_offset_angstrom_per_half = _copy_optional_float_pair(
+            recovar_snapshot["current_sigma_offset_angstrom_per_half"]
+        )
     if "current_size" in components:
         cs = int(recovar_snapshot["cs"])
 
@@ -3897,6 +3909,7 @@ def _apply_state_swap_probe(
         previous_noise_radial,
         previous_best_rotations,
         current_sigma_offset_angstrom,
+        current_sigma_offset_angstrom_per_half,
         class_direction_prior_per_half,
         class_direction_prior_order_per_half,
         global_direction_prior_per_half,
@@ -5636,6 +5649,7 @@ def _run_relion_iteration_loop(
                 relion_half_inputs=relion_half_inputs,
                 previous_best_rotations=previous_best_rotations,
                 current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+                current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
                 class_direction_prior_per_half=class_direction_prior_per_half,
                 class_direction_prior_order_per_half=class_direction_prior_order_per_half,
                 global_direction_prior_per_half=global_direction_prior_per_half,
@@ -5723,7 +5737,6 @@ def _run_relion_iteration_loop(
             ),
         )
 
-        _sigma_offset_before_state_swap = current_sigma_offset_angstrom
         (
             cs,
             means,
@@ -5734,6 +5747,7 @@ def _run_relion_iteration_loop(
             previous_noise_radial,
             previous_best_rotations,
             current_sigma_offset_angstrom,
+            current_sigma_offset_angstrom_per_half,
             class_direction_prior_per_half,
             class_direction_prior_order_per_half,
             global_direction_prior_per_half,
@@ -5753,6 +5767,7 @@ def _run_relion_iteration_loop(
             relion_half_inputs=relion_half_inputs,
             previous_best_rotations=previous_best_rotations,
             current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+            current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
             class_direction_prior_per_half=class_direction_prior_per_half,
             class_direction_prior_order_per_half=class_direction_prior_order_per_half,
             global_direction_prior_per_half=global_direction_prior_per_half,
@@ -5765,10 +5780,6 @@ def _run_relion_iteration_loop(
                 mean_variance,
                 mean_variance_per_half,
                 use_per_half_mean_variance=False,
-            )
-        if current_sigma_offset_angstrom != _sigma_offset_before_state_swap:
-            current_sigma_offset_angstrom_per_half = _as_sigma_offset_half_pair(
-                current_sigma_offset_angstrom
             )
         if state_swap_target_this_iteration:
             state_swap_probe_applied_relion_iterations.append(
