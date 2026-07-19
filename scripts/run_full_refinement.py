@@ -1426,8 +1426,14 @@ _FINAL_REPLAY_GROUP_KEYS = {
     },
     "noise": {"noise_variance"},
     "direction_prior": {"direction_prior"},
-    "image_corrections": {"image_corrections"},
-    "scale_corrections": {"serialized_scale_corrections"},
+    # The serialized image correction is norm-factor * source-scale.  Pair it
+    # with that source scale so the replay layer preserves only the RELION
+    # norm factor on the resident scoring scale.
+    "norm_factor": {"image_corrections", "serialized_scale_corrections"},
+    # An explicit live scoring-scale oracle.  This is intentionally excluded
+    # from ``all`` because a generic leader model STAR need not represent the
+    # scale resident on every follower rank.
+    "scoring_scale": {"scoring_scale_corrections"},
     "references": set(),
 }
 _FINAL_REPLAY_ALL_GROUPS = {"poses", "sampling", "corrections", "references"}
@@ -1445,8 +1451,8 @@ def _select_final_replay_override(source_override, requested_fields):
     if not requested_groups or unknown_groups:
         raise ValueError(
             "--final-replay-fields requires one or more of "
-            "poses,sampling,corrections,noise,direction_prior,image_corrections,"
-            "scale_corrections,references,all; "
+            "poses,sampling,corrections,noise,direction_prior,norm_factor,"
+            "scoring_scale,references,all; "
             f"unknown={unknown_groups}"
         )
     if "all" in requested_groups:
@@ -2229,12 +2235,12 @@ def main():
         default="all",
         help=(
             "Comma-separated diagnostic final-only groups: poses, sampling, corrections, "
-            "noise, direction_prior, image_corrections, scale_corrections, references, or all. "
+            "noise, direction_prior, norm_factor, scoring_scale, references, or all. "
             "poses replaces previous rotations/translations; sampling replaces translation sigma "
             "and final sampling grid/perturbation; corrections replaces noise, direction prior, "
-            "image correction, and serialized scale correction; the four correction-specific "
-            "groups select those fields individually; references replaces only the two input "
-            "half-reference maps used by the final all-data expectation."
+            "and the norm factor while retaining the resident scoring scale; norm_factor and "
+            "scoring_scale form an orthogonal diagnostic pair; references replaces only the two "
+            "input half-reference maps used by the final all-data expectation."
         ),
     )
     parser.add_argument(
@@ -3737,6 +3743,14 @@ def main():
         source_override = final_overrides[-1]
         if source_override is None:
             raise ValueError("diagnostic final-only substitution did not load a last-numbered override")
+        # Expose the model-STAR scale as a scorer oracle only at this explicit
+        # final diagnostic boundary.  Numbered replay continues to treat it as
+        # serialization provenance because general MPI leader/follower layouts
+        # do not guarantee that it is every scorer's resident scale.
+        source_override = dict(source_override)
+        serialized_scale = source_override.get("serialized_scale_corrections")
+        if serialized_scale is not None:
+            source_override["scoring_scale_corrections"] = serialized_scale
         requested_groups, final_replay_override = _select_final_replay_override(
             source_override,
             args.final_replay_fields,
