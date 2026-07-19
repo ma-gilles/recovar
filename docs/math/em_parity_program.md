@@ -5980,6 +5980,30 @@ Evidence:
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_single_step_it5_factorial_27e3cfb2_20260719T013000Z/audit/repeat_control_summary.json`
 - `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_single_step_it5_factorial_27e3cfb2_20260719T013000Z/audit/incremental_summary.json`
 
+## 2026-07-19 K=1 iteration-4 incoming-map amplification
+
+A same-A100 two-arm intervention localizes the earliest recurrent case-20
+physical-iteration-4 gap to the incoming half-reference maps. Both arms replay
+the complete RELION state and RELION references through iteration 4; the
+intervention restores only the resident RECOVAR-produced references at the
+iteration-4 boundary. With exact RELION inputs, iteration-4 merged FSC-AUC is
+`0.999999998921`. With the resident maps, it is `0.999997257810`, and the two
+arms compare directly at `0.999997260559`.
+
+The resident iteration-3 input itself is extremely close to RELION:
+`0.999999999076` merged FSC-AUC. Descriptively, the `1 - FSC-AUC` deficit grows
+by about 2,967-fold across the next expectation/M-step. Arm-to-arm Pmax
+absolute p95 is `1.226e-4`, and significant-support counts remain exact for
+2,996/3,000 particles. This rules out a missing broad iteration-4 state field:
+the small prior map residual is sufficient to reproduce the autonomous output
+gap. Target-only iteration-4 float64 does not close it, so cumulative early
+precision and aggregate contribution-order replay are the next discriminators.
+
+The sealed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_exactref_maps_ab_local_a100_1e208826_20260719T024600Z/audit/incoming_maps_ab_summary.json`
+(SHA-256 `03a76ea6e1c594194e2b08de87bcc9ae9a116d7d4a79d38f2ca3cee1d97b30cd`).
+Map quality uses FSC/FSC-AUC only; correlation is not computed.
+
 ## 2026-07-19 case-8 low-memory full-trajectory qualification
 
 Pinned diagnostic job `11367838` validates the conservative exact-local
