@@ -6024,6 +6024,18 @@ The replay report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_bpref_capture_h1_d88090ec_20260719T031000Z/audit/replay/bpref_accumulator_replay_report_v1.json`
 (SHA-256 `88e58c84320fd746b224c5c887d3df6e33c9c1b40efbcd2572a2f146c0bc1633`).
 
+A separate same-A100 control promotes scoring and projections across both
+adaptive passes and all four early iterations, while deliberately leaving the
+x-half M-step accumulator at its production complex64/float32 default. It
+changes the iteration-4 merged map by only `7.74e-10` FSC-AUC deficit
+(`0.999999999226` direct f32-versus-f64 FSC-AUC) and improves cross-engine
+merged FSC-AUC by only `4.47e-9`, from `0.999997239048` to
+`0.999997243517`. Thus neither pass-1 nor pass-2 score/projection precision
+explains the recurrent gap. The remaining live precision control must change
+the accumulator itself. The sealed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it1to4_full_f64_local_a100_4acb1e05_20260719T032200Z/audit/it4_global_f32_f64_summary.json`
+(SHA-256 `df9eae38f08c7dba7c64741492bf995bb45f1c06385027b01d8e1ccb0b995ed7`).
+
 ## 2026-07-19 case-8 low-memory full-trajectory qualification
 
 Pinned diagnostic job `11367838` validates the conservative exact-local
