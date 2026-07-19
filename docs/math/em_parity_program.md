@@ -6162,9 +6162,23 @@ trajectory remains perturbed; RECOVAR converges after 14 numbered iterations
 and RELION after 15. The final merged cross-engine FSC-AUC is `0.843573688`.
 RECOVAR nevertheless has higher GT FSC-AUC (`0.131848813` versus
 `0.125186418`, delta `+0.006662395`), which does not satisfy exact workflow
-parity. Early pose/translation writeback is essentially exact, so the active
-source audit is the iteration-11-to-12 `updateAngularSampling` state/predicate,
-not a forced extra iteration or a pose-writeback change.
+parity. Early pose/translation writeback is essentially exact.
+
+The iteration-11-to-12 scheduler source audit rejects a scheduler bug.
+RECOVAR's internal shell-20 gold-standard FSC is `0.499419838`, while the
+RELION model STAR records `0.500996`; this straddles RELION's hard FSC `0.5`
+resolution threshold. RECOVAR therefore records another resolution stall and
+advances sampling, whereas RELION records a one-shell improvement and resets
+the stall counter. RECOVAR float32 forward/reverse and float64 shell-20
+controls are `0.499419302`, `0.499419987`, and `0.499419824`; their spread is
+below `7e-7`, far smaller than the `0.001576` engine gap. This is source-correct
+discrete amplification of upstream reconstructed-reference/FSC drift, not
+reduction-order ambiguity. Do not patch `updateAngularSampling` or force an
+extra iteration.
+
+The sealed classification is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_upstream_pose_posterior_audit_20260719T101500Z/CASE7_IT11_IT12_SCHEDULER_CLASSIFICATION.md`
+(SHA-256 `2c42dc609174389b1e1c992b9f265909c38215385fc0484f3bcbe0f502fa282f`).
 
 ## 2026-07-19 recurrent K=1 final-boundary family localization
 
