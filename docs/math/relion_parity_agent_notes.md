@@ -4229,3 +4229,61 @@ same-device equivalence or numerical noise.
   (SHA-256 `949e13f9d241709edd651ac3da68709a4fc8cb2b05f9b7c6123de36710cc3ce5`),
   with 11/11 manifest entries verified. FSC/FSC-AUC only; correlation is not
   computed.
+
+# 2026-07-19: case-20 residual is concentrated in posterior support
+
+- Across all 9,169 common half-1 rotations and 9,716,168 pixel rows, removing
+  one fitted scalar per rotation lowers complex-data relative L2 from
+  `0.0238642` to `0.00145241`; a pixelwise weight-ratio control gives the same
+  residual. Posterior/contributor mass is dominant over pixelwise factors.
+- The top `0.1%` of rotations carry `0.999996` of residual energy. Stack 1969
+  alone carries `0.993009` of data and `0.996270` of weight residual energy
+  and has RECOVAR/RELION contributor counts `3/2`.
+- RECOVAR retains rotations 117318, 117319, and 119525 with masses
+  `0.00793385`, `0.70557328`, and `0.28549708`. RELION's oversample 5 exactly
+  matches rotation 119525 and carries `0.9971559`; the dominant 117319 child
+  comes from a parent absent from RELION's selected fine list.
+- Audit pass-1 parent/significance and pass-2 child scores with f32/f64 controls;
+  do not change the global threshold or reduction topology.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_relion_prescatter_local_same_rec_gpu_cap1tb_retry_20260719T091600Z/analysis/common_operand_upstream_decomposition_v1.json`
+  (SHA-256 `7929a9e14c3f311200a279af4706c272d27cf76d3ab85a7745fae2ae4b100041`).
+
+# 2026-07-19: case-25 accumulated non-reference state is causal
+
+- A qualified autonomous-prefix repeat envelope through iteration 6 has
+  maximum map `1-FSC-AUC` `7.11e-11`, Pmax p95 `4.18e-5`, exact support, and
+  zero pose/translation p95.
+- At iteration 7, exact non-reference state closes cross-RELION merged FSC-AUC
+  to `0.999999999507`; accumulated RECOVAR non-reference state remains at
+  `0.999999104446` even with exact RELION references. All RECOVAR state is
+  `0.999999105247`, and the two accumulated-state arms compare at
+  `0.999999999848`.
+- The first singleton results reject poses alone (`0.999999999901`) and show
+  image/scale as a minority contributor (`0.999999952094`). Complete the
+  tau/noise, direction-prior, sigma-offset, scheduler/state, and leave-one-out
+  arms before selecting a source change.
+- Sealed parent report:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case25_it7_autonomous_prefix_factorial_20260719T095858Z/CASE25_IT7_FACTORIAL_CLASSIFICATION.md`
+  (SHA-256 `5f6419542f9cfae362a159862146bea29c7edce77e61b7b9774d042e8f6f9295`).
+  Map gates use FSC/FSC-AUC only.
+
+# 2026-07-19: factor-v2 postflight permits particle-local support
+
+- The directory validator falsely required identical fine-orientation count,
+  significance threshold, and posterior normalizer across selected particles.
+  Those are particle-local in adaptive refinement. Validate each against its
+  own arrays and reserve cross-particle equality for run-wide geometry/policy.
+- The generic inertness audit was hard-coded to iteration 1 and one reference
+  key schema. It now accepts an explicit iteration and both sealed reference
+  layouts.
+- The real 32-particle panel validates at orientation counts 8--104 and
+  accepted counts 11--345. Same-A100 iteration-4 half-map capture/control
+  FSC-AUC is `0.999999999358`/`0.999999998802`; all accumulator comparisons
+  remain inside the independent repeat envelope.
+- Reports:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_bpref_factor_v2_panel32_same_gpu_20260719T101000Z/analysis/relion_factor_validation_v2.json`
+  (SHA-256 `62c3d9c965dbab59ae9ab184563b788522fe11ea8e691bd94e30a114127f0a4b`)
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_bpref_factor_v2_panel32_same_gpu_20260719T101000Z/analysis/capture_inertness_v2.json`
+  (SHA-256 `532c3a5a7bbdfb6411f81cc9aeda8dc7c574f5555890e1f97b609b259699dbfb`).

@@ -114,8 +114,11 @@ def analyze(
     capture_root: Path,
     reference_report: Path,
     *,
+    iteration: int,
     multiplier: float,
 ) -> dict[str, object]:
+    if iteration < 1:
+        raise ValueError("capture iteration must be positive")
     reference = json.loads(reference_report.read_text())
     if reference.get("capture_inertness_qualified") is not True:
         raise ValueError("sealed reference inertness report did not qualify")
@@ -123,7 +126,7 @@ def analyze(
     hashes = {}
     array_gates = []
     for rank in (1, 2):
-        prefix = f"mstep_it001_rank{rank}_half{rank}_c0_pre_lowres_join_bpref"
+        prefix = f"mstep_it{iteration:03d}_rank{rank}_half{rank}_c0_pre_lowres_join_bpref"
         for field, complex_values in (("data", True), ("weight", False)):
             paths = {
                 "control": control_root / "dumps" / f"{prefix}_{field}.bin",
@@ -133,9 +136,13 @@ def analyze(
                 _read_bpref(paths["control"], complex_values=complex_values),
                 _read_bpref(paths["capture"], complex_values=complex_values),
             )
+            reference_key = f"rank{rank}_half{rank}_{field}"
+            reference_arrays = reference["array_comparisons"]
+            if reference_key not in reference_arrays:
+                reference_key = f"pre_lowres_join_rank{rank}_half{rank}_{field}"
+            reference_repeat = reference_arrays[reference_key]["control_a_vs_control_b"]
             reference_value = float(
-                reference["array_comparisons"][f"rank{rank}_half{rank}_{field}"]
-                ["control_a_vs_control_b"]["relative_l2"]
+                reference_repeat.get("relative_l2", reference_repeat.get("relative_l2_over_lhs"))
             )
             qualified = _within_envelope(float(current["relative_l2"]), reference_value, multiplier)
             current["sealed_control_repeat_relative_l2"] = reference_value
@@ -148,8 +155,8 @@ def analyze(
     map_gates = []
     for half in (1, 2):
         paths = {
-            "control": control_root / "relion" / f"run_it001_half{half}_class001.mrc",
-            "capture": capture_root / "relion" / f"run_it001_half{half}_class001.mrc",
+            "control": control_root / "relion" / f"run_it{iteration:03d}_half{half}_class001.mrc",
+            "capture": capture_root / "relion" / f"run_it{iteration:03d}_half{half}_class001.mrc",
         }
         loaded = {}
         for name, path in paths.items():
@@ -174,6 +181,7 @@ def analyze(
         "metric_policy": "exact/array metrics for intermediates; FSC/FSC-AUC only for maps; no correlation",
         "control_root": str(control_root.resolve()),
         "capture_root": str(capture_root.resolve()),
+        "capture_iteration": iteration,
         "sealed_reference_report": str(reference_report.resolve()),
         "sealed_reference_sha256": _sha256(reference_report),
         "repeat_envelope_multiplier": multiplier,
@@ -189,6 +197,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("control_root", type=Path)
     parser.add_argument("capture_root", type=Path)
     parser.add_argument("--sealed-reference-report", required=True, type=Path)
+    parser.add_argument("--iteration", type=int, default=1)
     parser.add_argument("--repeat-envelope-multiplier", type=float, default=2.0)
     parser.add_argument("--output-json", required=True, type=Path)
     return parser
@@ -202,6 +211,7 @@ def main() -> None:
         args.control_root,
         args.capture_root,
         args.sealed_reference_report,
+        iteration=args.iteration,
         multiplier=args.repeat_envelope_multiplier,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)

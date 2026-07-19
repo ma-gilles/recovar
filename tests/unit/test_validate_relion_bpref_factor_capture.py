@@ -12,21 +12,31 @@ def _bits(value):
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
-def _write_capture(path, *, stack, selected_text="17,23", rank=2):
-    rotations = np.zeros(2, dtype=ROTATION_DTYPE)
-    rotations["orientation_class_key"] = [10, 11]
-    rotations["oversampled_rotation"] = [1, 2]
-    rotations["orientation_local"] = [0, 1]
+def _write_capture(
+    path,
+    *,
+    stack,
+    selected_text="17,23",
+    rank=2,
+    orientation_count=2,
+    significant_weight=0.999,
+    weight_norm=1.0,
+):
+    rotations = np.zeros(orientation_count, dtype=ROTATION_DTYPE)
+    rotations["orientation_class_key"] = np.arange(10, 10 + orientation_count)
+    rotations["oversampled_rotation"] = np.arange(1, 1 + orientation_count)
+    rotations["orientation_local"] = np.arange(orientation_count)
     rotations["matrix"] = np.eye(3, dtype=np.float32).reshape(1, 9)
     translations = np.zeros(2, dtype=validator.TRANSLATION_DTYPE)
     translations["translation"] = [0, 1]
     translations["x"] = [0.0, 0.5]
     translations["y"] = [0.0, -0.5]
-    hypotheses = np.zeros(4, dtype=validator.HYPOTHESIS_DTYPE)
-    hypotheses["orientation_local"] = [0, 0, 1, 1]
-    hypotheses["translation"] = [0, 1, 0, 1]
-    hypotheses["posterior"] = [0.2, 1.0, 0.1, 0.3]
-    hypotheses["posterior_over_weight_norm"] = hypotheses["posterior"]
+    hypotheses = np.zeros(orientation_count * 2, dtype=validator.HYPOTHESIS_DTYPE)
+    hypotheses["orientation_local"] = np.repeat(np.arange(orientation_count), 2)
+    hypotheses["translation"] = np.tile([0, 1], orientation_count)
+    hypotheses["posterior"] = 0.1
+    hypotheses["posterior"][1] = 1.0
+    hypotheses["posterior_over_weight_norm"] = hypotheses["posterior"] / weight_norm
     hypotheses["flags"][1] = 1
     pixels = np.zeros(12, dtype=validator.PIXEL_DTYPE)
     pixels["pixel"] = np.arange(12)
@@ -58,13 +68,24 @@ def _write_capture(path, *, stack, selected_text="17,23", rank=2):
     header = [0] * 64
     header[:9] = [2, 528, 64, 24, 24, 40, 40, 56, 64]
     header[9:16] = [1, 1, stack + 100, stack, 0, rank, 0]
-    header[16:22] = [3, 4, 1, 12, 2, 2]
-    header[22:29] = [1, 1, _bits(2.0), _bits(0.999), _bits(1.0), 0, 0]
-    header[29:37] = [2, 2, 2, 10_000_000, 1_000_000, 1, 2, validator.fnv1a64(selected_text)]
+    header[16:22] = [3, 4, 1, 12, orientation_count, 2]
+    header[22:29] = [1, 1, _bits(2.0), _bits(significant_weight), _bits(weight_norm), 0, 0]
+    header[29:37] = [
+        2,
+        2,
+        2,
+        10_000_000,
+        900_000 + 50_000 * orientation_count,
+        1,
+        2,
+        validator.fnv1a64(selected_text),
+    ]
     header[37:43] = [5, 9, 9, (-4) & 0xFFFFFFFFFFFFFFFF, (-4) & 0xFFFFFFFFFFFFFFFF, 1]
-    header[43:53] = [3, 1, 1, 2, 2, 4, 12, 2, 12, 1]
+    header[43:53] = [3, 1, 1, orientation_count, 2, orientation_count * 2, 12, 2, 12, 1]
     magic = validator.HEADER_MAGIC
-    footer = validator.FOOTER_STRUCT.pack(validator.FOOTER_MAGIC, 2, 2, 4, 12, 2, 12)
+    footer = validator.FOOTER_STRUCT.pack(
+        validator.FOOTER_MAGIC, orientation_count, 2, orientation_count * 2, 12, 2, 12
+    )
     payload = validator.HEADER_STRUCT.pack(magic, *header)
     payload += rotations.tobytes() + translations.tobytes() + hypotheses.tobytes()
     payload += pixels.tobytes() + summaries.tobytes() + terms.tobytes() + footer
@@ -96,6 +117,27 @@ def test_factor_capture_directory_is_complete_and_hash_bound(tmp_path):
     assert report["capture_ready"] is True
     assert report["particle_count"] == 2
     assert report["accepted_hypotheses_per_particle"] == [1, 1]
+
+
+def test_factor_capture_allows_particle_local_fine_support_and_normalization(tmp_path):
+    selection = tmp_path / "selection.json"
+    _selection(selection)
+    _write_capture(tmp_path / "part117_stack17_img0_class1.bpre-v2.bin", stack=17)
+    _write_capture(
+        tmp_path / "part123_stack23_img0_class1.bpre-v2.bin",
+        stack=23,
+        orientation_count=1,
+        significant_weight=0.5,
+        weight_norm=2.0,
+    )
+
+    report = validator.validate_directory(tmp_path, selection, expected_rank=2)
+
+    assert report["capture_ready"] is True
+    assert report["orientation_count"] is None
+    assert report["orientation_counts_per_particle"] == [2, 1]
+    assert report["translation_count"] == 2
+    assert report["translation_counts_per_particle"] == [2, 2]
 
 
 def test_factor_capture_rejects_missing_selected_stack_and_truncation(tmp_path):

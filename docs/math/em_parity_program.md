@@ -6342,3 +6342,95 @@ The sealed classification is
 All 11 entries in
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case25_it7_relref_ab_20260719T111500Z/CASE25_SCIENCE_ARTIFACTS.sha256`
 verify. Map quality uses FSC/FSC-AUC only; correlation is not computed.
+
+## 2026-07-19 case-20 aggregate operand-factor localization
+
+The full common-support population makes the upstream operand residual highly
+structured. Across 9,169 common half-1 contributor rotations and 9,716,168
+pixel rows, the native complex-data and real-weight operand relative L2 values
+are `0.0238642` and `0.0221334`. Fitting one scalar per rotation reduces the
+data residual to `0.00145241`; replacing that fit with the pixelwise weight
+ratio produces the same residual. The leading mismatch is therefore posterior
+mass assigned to contributor rotations, not pixelwise CTF, noise, image, or
+phase structure.
+
+The residual is concentrated rather than a broad numerical floor. The top
+`0.1%` of rotations carry `0.999996` of both data and weight residual energy.
+One common rotation of stack 1969 alone carries `0.993009` of data and
+`0.996270` of weight residual energy, and stack 1969 is one of the three
+particles with different contributor membership (RECOVAR/RELION `3/2`).
+RELION's normalized significance thresholds remain distributionally aligned:
+median ratio `0.999958`, p5/p95 `0.998643`/`1.001305`, and relative L2
+`2.34e-4`. A global threshold-scale change is not the explanation.
+
+The stack-1969 support identity is now concrete. RECOVAR retains global
+rotations 117318, 117319, and 119525 from two fine-parent groups. RELION keeps
+two oversampled rotations from one parent; RELION oversample 5 is exactly
+RECOVAR rotation 119525, while the other RELION child does not match the two
+RECOVAR rotations from the absent parent. RECOVAR's retained masses are
+`0.00793385`, `0.70557328`, and `0.28549708`; RELION's common matching child
+has mass `0.9971559`. Thus the dominant residual is a pass-1 parent/pass-2
+child-support mismatch that renormalizes common rows, not bitwise reduction
+noise. The bounded same-GPU score capture is testing the parent/significance
+boundary directly.
+
+The aggregate decomposition is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_relion_prescatter_local_same_rec_gpu_cap1tb_retry_20260719T091600Z/analysis/common_operand_upstream_decomposition_v1.json`
+(SHA-256 `7929a9e14c3f311200a279af4706c272d27cf76d3ab85a7745fae2ae4b100041`).
+Intermediate gates use exact/distribution metrics; map gates use FSC/FSC-AUC
+only.
+
+## 2026-07-19 case-25 accumulated non-reference state factorial
+
+Three autonomous-prefix A100 arms establish a tight repeat envelope through
+iterations 1--6: maximum pairwise map defect `1-FSC-AUC` is `7.11e-11`, Pmax
+absolute p95 is `4.18e-5`, support counts are exact, and rotation/translation
+p95 values are zero. At target iteration 7, exact non-reference state with
+resident RECOVAR references reaches cross-RELION merged FSC-AUC
+`0.999999999507`. Accumulated RECOVAR non-reference state with exact RELION
+references reaches `0.999999104446`, and all resident RECOVAR state reaches
+`0.999999105247`.
+
+The two accumulated-non-reference arms compare directly at
+`0.999999999848`, inside the repeat envelope. Reference-only Pmax p95 is
+`2.13e-4`, with exact support, poses, and translations. Accumulated
+non-reference state therefore reproduces essentially the entire autonomous
+residual at this boundary. Against exact non-reference state, the all-RECOVAR
+arm has Pmax absolute median/p95/p99/max
+`0.00140`/`0.01186`/`0.02722`/`0.11396`, changes support for 62/1,000
+particles, and has pose tails of `2.43559` degrees and `1.50000` Angstrom.
+
+The singleton split is active. Its first qualified results reject accumulated
+poses alone (`0.999999999901`, numerically null) and identify image/scale state
+as a small contributor (`0.999999952094`) that is still much smaller than the
+full accumulated-state defect. Tau/noise, direction-prior, sigma-offset,
+scheduler/state, and leave-one-out complements remain required before a
+production change is justified.
+
+The sealed parent factorial is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case25_it7_autonomous_prefix_factorial_20260719T095858Z/CASE25_IT7_FACTORIAL_CLASSIFICATION.md`
+(SHA-256 `5f6419542f9cfae362a159862146bea29c7edce77e61b7b9774d042e8f6f9295`),
+with all 11 manifest entries verified. Map quality uses FSC/FSC-AUC only;
+correlation is not computed.
+
+## 2026-07-19 factor-capture postflight contract repair
+
+The 32-particle factor-v2 capture exposed two diagnostic-harness defects. The
+directory validator incorrectly treated particle-local fine-orientation
+count, significance threshold, and posterior normalizer as run-wide
+invariants. The inertness tool was hard-coded to iteration 1 and to one older
+reference-report key spelling. The validator now checks those values against
+each particle's own arrays while preserving run-wide geometry and policy
+checks; it reports heterogeneous counts explicitly. The inertness tool accepts
+an explicit positive iteration and both sealed reference schemas.
+
+The real panel validates all 32 captures with orientation counts 8--104 and
+accepted-hypothesis counts 11--345. Its same-A100 iteration-4 capture is inert:
+half-map FSC-AUC is `0.999999999358` and `0.999999998802`, and all four
+pre-join accumulator comparisons remain within the independent repeat
+envelope. The patched validation report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_bpref_factor_v2_panel32_same_gpu_20260719T101000Z/analysis/relion_factor_validation_v2.json`
+(SHA-256 `62c3d9c965dbab59ae9ab184563b788522fe11ea8e691bd94e30a114127f0a4b`);
+the inertness report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_bpref_factor_v2_panel32_same_gpu_20260719T101000Z/analysis/capture_inertness_v2.json`
+(SHA-256 `532c3a5a7bbdfb6411f81cc9aeda8dc7c574f5555890e1f97b609b259699dbfb`).

@@ -301,7 +301,38 @@ def validate_directory(directory: Path, selection_json: Path, *, expected_rank: 
     _require(
         all(capture.header[36] == expected_set_hash for capture in captures), "factor capture selected-set hash changed"
     )
-    reference_fields = (9, 10, 16, 17, 18, 19, 20, 21, 24, 25, 26, 27, 28, 29, 36, 42, 52)
+    # Fine-orientation support and posterior normalization are particle-local
+    # in adaptive refinement.  In particular, orientation_num,
+    # significant_weight, weight_norm, and the resulting byte estimate may
+    # legitimately differ between selected particles.  Each capture validates
+    # those fields against its own arrays above; only run-wide geometry and
+    # capture-policy fields must agree across the directory.
+    reference_fields = (
+        9,
+        10,
+        16,
+        17,
+        18,
+        19,
+        21,
+        22,
+        23,
+        24,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        52,
+    )
     reference = tuple(captures[0].header[index] for index in reference_fields)
     _require(
         all(tuple(capture.header[index] for index in reference_fields) == reference for capture in captures),
@@ -317,8 +348,18 @@ def validate_directory(directory: Path, selection_json: Path, *, expected_rank: 
         "selected_stack_fnv1a64": expected_set_hash,
         "particle_count": len(captures),
         "mpi_rank": expected_rank,
-        "orientation_count": int(captures[0].rotations.size),
-        "translation_count": int(captures[0].translations.size),
+        "orientation_count": (
+            int(captures[0].rotations.size)
+            if all(capture.rotations.size == captures[0].rotations.size for capture in captures)
+            else None
+        ),
+        "translation_count": (
+            int(captures[0].translations.size)
+            if all(capture.translations.size == captures[0].translations.size for capture in captures)
+            else None
+        ),
+        "orientation_counts_per_particle": [int(capture.rotations.size) for capture in captures],
+        "translation_counts_per_particle": [int(capture.translations.size) for capture in captures],
         "image_pixel_count": int(captures[0].pixels.size),
         "accepted_hypotheses_per_particle": [int(capture.header[45]) for capture in captures],
         "artifact_sha256": {capture.path.name: capture.sha256 for capture in captures},
