@@ -6055,6 +6055,31 @@ default. The sealed report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it1to4_mstep_double_pair_local_a100_7390051f_20260719T034000Z/audit/it4_mstep_double_pair_summary.json`
 (SHA-256 `844b9086d4e04bd1e62d0e91eb72b7fb609c84c28cd0cdef4de827a236f1c045`).
 
+The qualified live float32 order controls are also null at the recurrent
+iteration-4 boundary. On the same physical A100 as the production control,
+enabling sequential float32 translation reduction together with RELION's
+128-thread/native-FFTW pixel block topology changes the merged map only to
+FSC-AUC `0.999999999782` versus production. Cross-engine merged FSC-AUC moves
+by `-1.36e-10`, from `0.999997239270` to `0.999997239134`. Significant-support
+counts remain exact for all 3,000 particles at every iteration; iteration-4
+Pmax absolute p95 is `3.19e-5`, and best poses/translations are exact there.
+Thus these two qualified float32 ordering differences do not explain the
+recurrent map gap.
+
+An attempted arm adding one launch per particle failed closed before
+iteration 2: soft-posterior work is bucketed by support size, so its ownership
+order is not native particle order. Relaxing that guard would not constitute a
+RELION-order experiment. Per-particle/fused topology is therefore unresolved
+for later soft posteriors rather than inferred from the null qualified arm.
+The next decisive experiment is a native RELION physical-iteration-4
+pre-scatter operand capture with control/control and capture-inertness
+envelopes, followed by one common deterministic float64 replay.
+
+The sealed float32 report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it1to4_relion_order_f32_local_a100_7390051f_20260719T080000Z/audit/it4_sequential_block_f32_summary.json`
+(SHA-256 `f95cfb4bbe7e112781a3b1153c313b8ac23ae3165233a0a7edbe8d6e3b5e8857`).
+Map quality uses FSC/FSC-AUC only; correlation is not computed.
+
 ## 2026-07-19 case-8 low-memory full-trajectory qualification
 
 Pinned diagnostic job `11367838` validates the conservative exact-local
