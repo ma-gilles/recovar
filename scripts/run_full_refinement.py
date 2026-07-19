@@ -739,6 +739,7 @@ def _build_replay_iteration_overrides(
     particle_names=None,
     include_initial_state=False,
     include_k1_mean_variance=False,
+    include_k1_scoring_scale=False,
     strict=False,
 ):
     """Build per-iter replay overrides keyed on recovar iteration index.
@@ -750,6 +751,9 @@ def _build_replay_iteration_overrides(
       * image_corrections: per-image (avg_norm/normcorr) * group_scale
       * serialized_scale_corrections: per-image model-STAR group scale,
         retained as provenance rather than forced onto the live scorer
+      * scoring_scale_corrections: optional exact K=1 split-half scorer scale
+        for state-swap diagnostics whose half-specific model STARs are owned
+        by the two scoring ranks
       * previous_best_translations / previous_best_rotation_eulers: RELION's
         previous hard assignments for local-search centering
 
@@ -1032,6 +1036,13 @@ def _build_replay_iteration_overrides(
         if include_normcorr:
             override_k["image_corrections"] = [corr_h1, corr_h2]
             override_k["serialized_scale_corrections"] = [scale_corr_h1, scale_corr_h2]
+            if include_k1_scoring_scale:
+                if model_paths[0] == model_paths[1]:
+                    raise ValueError(
+                        "exact K=1 scoring-scale replay requires distinct half-specific "
+                        f"model STARs; got shared source {model_paths[0]}"
+                    )
+                override_k["scoring_scale_corrections"] = [scale_corr_h1, scale_corr_h2]
         overrides[recovar_iter] = override_k
         if include_normcorr:
             logger.info(
@@ -2142,6 +2153,12 @@ def main():
         help="Optional JSON path for an auto-refine quality/performance ledger.",
     )
     args = parser.parse_args()
+    if (
+        args.state_swap_target_relion_iteration is not None
+        or args.state_swap_variant is not None
+        or args.state_swap_replay_relion_references
+    ) and int(args.n_classes) != 1:
+        raise SystemExit("state-swap diagnostics currently require --n_classes 1")
     state_swap_probe_loop_index(
         target_relion_iteration=args.state_swap_target_relion_iteration,
         variant=args.state_swap_variant,
@@ -2905,6 +2922,7 @@ def main():
             init_relion_iteration=args.init_relion_iteration,
             particle_names=our_names,
             include_k1_mean_variance=(args.state_swap_target_relion_iteration is not None),
+            include_k1_scoring_scale=(args.state_swap_target_relion_iteration is not None),
             strict=True,
         )
 

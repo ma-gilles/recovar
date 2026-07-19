@@ -1063,6 +1063,30 @@ def test_replay_overrides_include_normcorr_adds_image_corrections():
     assert h2.shape == (2485,)
 
 
+@pytest.mark.skipif(not FIXTURE.exists(), reason=f"fixture missing: {FIXTURE}")
+def test_replay_overrides_k1_state_swap_adds_exact_half_scoring_scale():
+    half1_idx = np.arange(2515, dtype=np.int64)
+    half2_idx = np.arange(2515, 5000, dtype=np.int64)
+
+    overrides = _build_replay_iteration_overrides(
+        FIXTURE,
+        half1_idx,
+        half2_idx,
+        max_iter=2,
+        ds_voxel=4.25,
+        ds_grid=128,
+        include_normcorr=True,
+        include_k1_scoring_scale=True,
+    )
+
+    serialized_h1, serialized_h2 = overrides[1]["serialized_scale_corrections"]
+    scoring_h1, scoring_h2 = overrides[1]["scoring_scale_corrections"]
+    np.testing.assert_array_equal(scoring_h1, serialized_h1)
+    np.testing.assert_array_equal(scoring_h2, serialized_h2)
+    assert scoring_h1 is serialized_h1
+    assert scoring_h2 is serialized_h2
+
+
 def test_replay_overrides_use_shared_class3d_model_star(tmp_path):
     pd = pytest.importorskip("pandas")
     starfile = pytest.importorskip("starfile")
@@ -1123,6 +1147,7 @@ def test_replay_overrides_use_shared_class3d_model_star(tmp_path):
     s1, s2 = overrides[1]["serialized_scale_corrections"]
     np.testing.assert_allclose(s1, np.asarray([10.0, 10.0], dtype=np.float32))
     np.testing.assert_allclose(s2, np.asarray([20.0, 20.0], dtype=np.float32))
+    assert "scoring_scale_corrections" not in overrides[1]
     np.testing.assert_allclose(
         overrides[1]["class_tau2"],
         np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float64) * 8**4,
@@ -1144,6 +1169,18 @@ def test_replay_overrides_use_shared_class3d_model_star(tmp_path):
     r1, r2 = overrides[1]["previous_best_rotations"]
     np.testing.assert_allclose(r1, utils.R_from_relion(expected_e1, degrees=True).astype(np.float32))
     np.testing.assert_allclose(r2, utils.R_from_relion(expected_e2, degrees=True).astype(np.float32))
+
+    with pytest.raises(ValueError, match="distinct half-specific model STARs"):
+        _build_replay_iteration_overrides(
+            tmp_path,
+            half1_idx=np.asarray([0, 2], dtype=np.int64),
+            half2_idx=np.asarray([1, 3], dtype=np.int64),
+            max_iter=2,
+            ds_voxel=2.0,
+            ds_grid=8,
+            include_normcorr=True,
+            include_k1_scoring_scale=True,
+        )
 
 
 def test_replay_overrides_k1_mean_variance_is_explicit_and_n4_scaled(tmp_path):

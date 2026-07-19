@@ -28,11 +28,14 @@ def _write_k1_model_star(
     current_resolution: float,
     estimated_resolution: float,
     estimated_label: str = "_rlnEstimatedResolution",
+    average_pmax: float | None = None,
 ) -> Path:
+    average_pmax_line = "" if average_pmax is None else f"_rlnAveragePmax {average_pmax}\n"
     path.write_text(
         "data_model_general\n\n"
         "_rlnCurrentImageSize 64\n"
-        f"_rlnCurrentResolution {current_resolution}\n\n"
+        f"_rlnCurrentResolution {current_resolution}\n"
+        f"{average_pmax_line}\n"
         "data_model_classes\n\n"
         "loop_\n"
         "_rlnReferenceImage #1\n"
@@ -390,7 +393,7 @@ def test_scalar_schedule_convergence_and_final_state_are_reported_and_can_gate(t
         current_sizes=np.asarray([64]),
         pixel_resolutions=np.asarray([12.8]),
         volume_shape=np.asarray([64, 64, 64]),
-        ave_Pmax_trajectory=np.asarray([np.mean(data["pmax_per_image_by_image_iter_000"])]),
+        ave_Pmax_trajectory=np.asarray([0.4321]),
         healpix_order_trajectory=np.asarray([3]),
         acc_rot_trajectory=np.asarray([2.0]),
         acc_trans_trajectory=np.asarray([1.5]),
@@ -408,6 +411,7 @@ def test_scalar_schedule_convergence_and_final_state_are_reported_and_can_gate(t
         tmp_path / "run_it001_half1_model.star",
         current_resolution=12.0,
         estimated_resolution=10.0,
+        average_pmax=0.4321,
     )
     _write_scalar_star(tmp_path / "run_it001_sampling.star", {"rlnHealpixOrder": 3})
     _write_scalar_star(
@@ -443,6 +447,12 @@ def test_scalar_schedule_convergence_and_final_state_are_reported_and_can_gate(t
     assert scalar["relion"]["fields"]["estimated_resolution_angstrom"] == 10.0
     assert scalar["relion"]["fields"]["scheduling_current_resolution_angstrom"] == 12.0
     assert scalar["comparison"]["healpix_order"]["exact_equal"] is True
+    assert scalar["recovar"]["average_pmax_particles"] == pytest.approx(
+        np.mean(data["pmax_per_image_by_image_iter_000"])
+    )
+    assert scalar["recovar"]["average_pmax_mstep"] == pytest.approx(0.4321)
+    assert scalar["comparison"]["average_pmax_particles"]["recovar_minus_relion"] == pytest.approx(0.0)
+    assert scalar["comparison"]["average_pmax_mstep"]["recovar_minus_relion"] == pytest.approx(0.0)
     assert scalar["relion"]["artifacts"]["optimiser"]["present"] is True
     assert report["convergence_topology"]["recovar"] == {
         "iteration": 1,
