@@ -605,47 +605,6 @@ def _should_run_final_all_data_iteration(
     return True
 
 
-def _native_convergence_ready_after_numbered_cap(
-    *,
-    state: RefinementState,
-    iteration: int,
-    max_iter: int,
-    native_sampling_boundary: bool,
-    force_max_iter_after_convergence: bool,
-) -> bool:
-    """Mirror RELION's top-of-next-loop convergence check at ``--iter``.
-
-    RELION completes the last numbered iteration, runs
-    ``updateAngularSampling`` at the top of the next expectation, then checks
-    convergence and may turn that next loop into the unnumbered joined
-    all-data pass.  In particular, that sampling boundary is where RELION can
-    latch ``has_fine_enough_angular_sampling`` without changing the grid.
-    RECOVAR's numbered loop is bounded by ``iteration < max_iter``, so the
-    equivalent sampling-plus-convergence check must happen once after the loop
-    cap.  This is a genuine convergence check, not permission to force final
-    all-data output after non-convergence.
-    """
-
-    if not (
-        native_sampling_boundary
-        and not force_max_iter_after_convergence
-        and not state.has_converged
-        and int(iteration) >= int(max_iter)
-    ):
-        return False
-
-    post_boundary_state = update_angular_sampling(state)
-    converged = bool(check_convergence(post_boundary_state))
-    if converged:
-        # In the converged path updateAngularSampling only latches this flag;
-        # it does not refine the grid or reset counters.  Preserve that real
-        # next-boundary state for final-all-data metadata as well as the gate.
-        state.has_fine_enough_angular_sampling = bool(
-            post_boundary_state.has_fine_enough_angular_sampling
-        )
-    return converged
-
-
 def _k_class_relion_half_volume_mstep_enabled() -> bool:
     """Return whether K-class should use the old native half-volume M-step."""
 
@@ -8669,23 +8628,10 @@ def _run_relion_iteration_loop(
     # return path or RELION's unnumbered final all-data pass.
     _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
 
-    # RELION's final all-data iteration is a real next iteration after
-    # convergence flags are set at the top of the loop. Do not synthesize it
-    # after plain max_iter exhaustion, but do run it when convergence is first
-    # detected on the last configured iteration.
-    if _native_convergence_ready_after_numbered_cap(
-        state=state,
-        iteration=iteration,
-        max_iter=max_iter,
-        native_sampling_boundary=native_sampling_boundary,
-        force_max_iter_after_convergence=force_max_iter_after_convergence,
-    ):
-        state.has_converged = True
-        logger.info(
-            "Convergence reached after final numbered iteration %d. "
-            "Entering RELION final all-data iteration.",
-            iteration,
-        )
+    # RELION can enter final all-data only when checkConvergence() ran at the
+    # top of a permitted loop iteration.  If the last numbered iteration
+    # merely makes the state convergence-ready, ``iter <= nr_iter`` ends and
+    # RELION does not synthesize another boundary after the cap.
     should_run_final_iteration = _should_run_final_all_data_iteration(
         has_converged=state.has_converged,
         iteration=iteration,

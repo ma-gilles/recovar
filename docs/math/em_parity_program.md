@@ -6102,3 +6102,44 @@ Fresh same-GPU job `11368287` provides the apple-to-apple confirmation.
 The sealed trajectory is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_ec25f6dd_autonomous_rerun_launcher_20260718T124500Z/runs/full_ec25f6dd_20260718T184318Z/cases/8_anisotropic_high_noise_100k_g256_white_noise3_bf80_retry3_pinned_lowmem/trajectory_analysis/k1_case8_pinned_lowmem_fulltraj_seal_v1.json`
 (SHA-256 `df95eb8275bb89d1708fb4dd10b7662d30e8de861f6897fa188547295da345af`).
+
+## 2026-07-19 capped convergence and autonomous termination classification
+
+RECOVAR had one independent finalization bug: after the numbered loop reached
+`max_iter`, it synthesized the angular-sampling and convergence check that
+would have occurred at a nonexistent next expectation boundary. RELION checks
+convergence only at the top of an iteration satisfying `iter <= nr_iter`; if
+the last allowed numbered iteration merely makes the state convergence-ready,
+the loop exits without a final all-data pass. The synthetic RECOVAR check is
+removed, and a regression now makes a convergence-ready last-numbered state
+remain unconverged and unfinalized. This is especially important for K-class,
+where final all-data is valid only after actual convergence.
+
+This cap bug does not explain the current autonomous case-22/case-23
+termination mismatches because both use `max_iter=999` and converge well before
+the cap. Their one-iteration differences are downstream of real adaptive
+schedule splits:
+
+- Case 22 matches RELION's resolution through iteration 7. At iteration 8,
+  RECOVAR selects shell 20 (`27.2 A`) while RELION selects shell 19
+  (`28.631579 A`). RELION therefore advances to HEALPix order 5 at iteration
+  9; RECOVAR remains at order 4 and first latches fine-enough sampling before
+  iteration 10. The matched-prefix merged cross-engine FSC-AUC is
+  `0.999021050685` at iteration 8 and falls to `0.989950113817` at the schedule
+  split in iteration 9. RECOVAR converges after 10 numbered iterations and
+  RELION after 11.
+- Case 23 keeps the same HEALPix orders through the matched prefix, but its
+  iteration-11 resolution-stall decision differs: RECOVAR remains at shell 20
+  while RELION improves from shell 19 to shell 20 and resets the resolution
+  stall counter. RECOVAR can consequently latch fine-enough sampling one
+  expectation earlier. Cross-engine merged FSC-AUC remains
+  `0.999924748954` through iteration 11 and falls to `0.990005839361` at
+  iteration 12; RECOVAR converges after 12 numbered iterations and RELION
+  after 13.
+
+Do not repair these autonomous cases by forcing an extra numbered iteration or
+loosening convergence thresholds. Their earliest cause is the upstream
+half-map FSC/resolution state near a discrete shell boundary. The active
+case-20 native RELION pre-scatter capture and common-canonical
+float64/complex128 replay are the next discriminators for that recurrent map
+state; map acceptance remains shellwise FSC/FSC-AUC only.

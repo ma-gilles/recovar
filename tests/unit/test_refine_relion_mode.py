@@ -361,106 +361,6 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
     )
 
 
-def test_native_convergence_is_checked_once_after_last_numbered_iteration():
-    state = RefinementState(
-        has_fine_enough_angular_sampling=True,
-        nr_iter_wo_resol_gain=2,
-        nr_iter_wo_large_hidden_variable_changes=2,
-        smallest_changes_optimal_orientations=0.25,
-    )
-
-    assert iteration_loop_module._native_convergence_ready_after_numbered_cap(
-        state=state,
-        iteration=16,
-        max_iter=16,
-        native_sampling_boundary=True,
-        force_max_iter_after_convergence=False,
-    )
-    assert state.has_fine_enough_angular_sampling is True
-    assert not iteration_loop_module._native_convergence_ready_after_numbered_cap(
-        state=state,
-        iteration=15,
-        max_iter=16,
-        native_sampling_boundary=True,
-        force_max_iter_after_convergence=False,
-    )
-    assert not iteration_loop_module._native_convergence_ready_after_numbered_cap(
-        state=state,
-        iteration=16,
-        max_iter=16,
-        native_sampling_boundary=False,
-        force_max_iter_after_convergence=False,
-    )
-    assert not iteration_loop_module._native_convergence_ready_after_numbered_cap(
-        state=state,
-        iteration=16,
-        max_iter=16,
-        native_sampling_boundary=True,
-        force_max_iter_after_convergence=True,
-    )
-
-
-def test_post_cap_check_latches_fine_sampling_at_next_expectation_boundary():
-    """RELION may first latch fine-enough sampling after the last checkpoint."""
-    state = RefinementState(
-        healpix_order=6,
-        angular_step=0.9375,
-        adaptive_oversampling=1,
-        acc_rot=1.1,
-        has_fine_enough_angular_sampling=False,
-        nr_iter_wo_resol_gain=3,
-        nr_iter_wo_large_hidden_variable_changes=2,
-        smallest_changes_optimal_orientations=0.25,
-    )
-
-    assert iteration_loop_module._native_convergence_ready_after_numbered_cap(
-        state=state,
-        iteration=18,
-        max_iter=18,
-        native_sampling_boundary=True,
-        force_max_iter_after_convergence=False,
-    )
-    assert state.has_fine_enough_angular_sampling is True
-
-
-def test_post_cap_check_does_not_converge_when_next_boundary_refines_grid():
-    state = RefinementState(
-        healpix_order=6,
-        angular_step=0.9375,
-        adaptive_oversampling=1,
-        acc_rot=0.1,
-        has_fine_enough_angular_sampling=False,
-        nr_iter_wo_resol_gain=3,
-        nr_iter_wo_large_hidden_variable_changes=2,
-        smallest_changes_optimal_orientations=0.25,
-    )
-
-    assert not iteration_loop_module._native_convergence_ready_after_numbered_cap(
-        state=state,
-        iteration=18,
-        max_iter=18,
-        native_sampling_boundary=True,
-        force_max_iter_after_convergence=False,
-    )
-
-
-def test_post_cap_check_does_not_force_unconverged_final_all_data():
-    state = RefinementState(
-        has_fine_enough_angular_sampling=True,
-        nr_iter_wo_resol_gain=2,
-        nr_iter_wo_large_hidden_variable_changes=0,
-        smallest_changes_optimal_orientations=0.25,
-    )
-
-    assert not iteration_loop_module._native_convergence_ready_after_numbered_cap(
-        state=state,
-        iteration=16,
-        max_iter=16,
-        native_sampling_boundary=True,
-        force_max_iter_after_convergence=False,
-    )
-
-
 def test_final_local_sampling_orders_use_advanced_final_star_parent():
     """100k replay advances final parent hp6->hp7, so os1 must score fine hp8."""
 
@@ -1238,7 +1138,7 @@ def test_final_all_data_runs_with_cold_start_only_override(
     assert result["final_all_data_ran"] is True
 
 
-def test_last_numbered_state_can_trigger_native_final_all_data(
+def test_last_numbered_state_does_not_trigger_post_cap_final_all_data(
     half_datasets,
     init_volume,
     rotations,
@@ -1247,7 +1147,7 @@ def test_last_numbered_state_can_trigger_native_final_all_data(
 ):
     original_update = iteration_loop_module.update_refinement_state
 
-    def make_post_numbered_state_converged(*args, **kwargs):
+    def make_post_numbered_state_ready(*args, **kwargs):
         updated = original_update(*args, **kwargs)
         updated.has_converged = False
         updated.has_fine_enough_angular_sampling = True
@@ -1259,7 +1159,7 @@ def test_last_numbered_state_can_trigger_native_final_all_data(
     monkeypatch.setattr(
         iteration_loop_module,
         "update_refinement_state",
-        make_post_numbered_state_converged,
+        make_post_numbered_state_ready,
     )
 
     result = refine_single_volume(
@@ -1279,8 +1179,8 @@ def test_last_numbered_state_can_trigger_native_final_all_data(
         low_resol_join_halves_angstrom=0.0,
     )
 
-    assert result["convergence_state"].has_converged is True
-    assert result["final_all_data_ran"] is True
+    assert result["convergence_state"].has_converged is False
+    assert result["final_all_data_ran"] is False
 
 
 def _pack_fake_local_search_outputs(
