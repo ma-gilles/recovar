@@ -594,6 +594,25 @@ def test_exact_local_contribution_capture_routes_only_the_target_boundary(monkey
             current_size=50,
             debug_iteration=7,
         )
+        assert not local_em_engine._exact_local_bpref_contribution_capture_for_call(
+            current_size=50,
+            debug_iteration=7,
+            score_only=True,
+            mstep_relion_x_half=False,
+        )
+        assert local_em_engine._exact_local_bpref_contribution_capture_for_call(
+            current_size=50,
+            debug_iteration=7,
+            score_only=False,
+            mstep_relion_x_half=True,
+        )
+        with pytest.raises(RuntimeError, match="requires RELION x-half M-step geometry"):
+            local_em_engine._exact_local_bpref_contribution_capture_for_call(
+                current_size=50,
+                debug_iteration=7,
+                score_only=False,
+                mstep_relion_x_half=False,
+            )
         assert not local_em_engine._exact_local_bpref_contribution_capture_active(
             current_size=52,
             debug_iteration=7,
@@ -611,9 +630,13 @@ def test_exact_local_contribution_capture_routes_only_the_target_boundary(monkey
         sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
 
     source = inspect.getsource(local_em_engine.run_local_em_exact)
+    helper_source = inspect.getsource(
+        local_em_engine._exact_local_bpref_contribution_capture_for_call
+    )
+    assert "_exact_local_bpref_contribution_capture_for_call" in source
     assert "and not bpref_contribution_capture_active" in source
     assert "if bpref_contribution_capture_active and not score_only:" in source
-    assert "requires RELION x-half M-step geometry" in source
+    assert "requires RELION x-half M-step geometry" in helper_source
 
 
 def test_clear_dump_context_marks_contribution_and_native_dumps_inactive():

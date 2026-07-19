@@ -209,6 +209,30 @@ def _exact_local_bpref_contribution_capture_active(
     if debug_iteration is not None and context_iteration != int(debug_iteration):
         return False
     return context_iteration > 0 and context_half in {1, 2}
+
+
+def _exact_local_bpref_contribution_capture_for_call(
+    *,
+    current_size: int | None,
+    debug_iteration: int | None,
+    score_only: bool,
+    mstep_relion_x_half: bool,
+) -> bool:
+    """Activate capture only at a compatible fine-pass M-step boundary."""
+
+    requested = _exact_local_bpref_contribution_capture_active(
+        current_size=current_size,
+        debug_iteration=debug_iteration,
+    )
+    if not requested or score_only:
+        return False
+    if not mstep_relion_x_half:
+        raise RuntimeError(
+            "Exact-local BPref contribution capture requires RELION x-half M-step geometry"
+        )
+    return True
+
+
 NVTX_DOMAIN_EM = "recovar_em"
 
 # Keeps common 256^2 local-search buckets at two images without entering the
@@ -1882,14 +1906,12 @@ def run_local_em_exact(
         and current_size_matches_request(debug_noise_dump_current_sizes, current_size)
         and iteration_matches_request(debug_noise_dump_iterations, debug_iteration)
     )
-    bpref_contribution_capture_active = _exact_local_bpref_contribution_capture_active(
+    bpref_contribution_capture_active = _exact_local_bpref_contribution_capture_for_call(
         current_size=current_size,
         debug_iteration=debug_iteration,
+        score_only=score_only,
+        mstep_relion_x_half=mstep_relion_x_half,
     )
-    if bpref_contribution_capture_active and not mstep_relion_x_half:
-        raise RuntimeError(
-            "Exact-local BPref contribution capture requires RELION x-half M-step geometry"
-        )
     debug_score_dump_operands = bool(
         debug_score_dump_filter_matches
         and _env_flag(LOCAL_SCORE_DUMP_OPERANDS_ENV)
