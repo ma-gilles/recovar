@@ -6231,3 +6231,37 @@ The sealed family report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_boundary_family_20260719T090000Z/FINAL_BOUNDARY_FAMILY_CLASSIFICATION_V1.json`
 (SHA-256 `e447e0946def576314795ae61962039bdb3c5515db2ecd5ee2a89b12b8d04a82`).
 Map quality uses FSC/FSC-AUC only; correlation is not computed.
+
+## 2026-07-19 same-GPU K=4 production-versus-float64 trajectory
+
+The bounded 100k/grid-256 K=4 precision A/B is complete on one physical A100
+(`GPU-27d0dd53-0c19-7be3-82f4-eaba66bb35aa`). Production and genuine
+float64 arms ran sequentially in Slurm job `11361629`; CPU audit job
+`11374498` verified exact eight-iteration topology: current sizes
+`[38,38,42,56,60,62,68,70]`, HEALPix order 1, and no local-search entry.
+
+Production and float64 both first miss the unchanged per-class direct
+RELION FSC-AUC gate at iteration 8, class 3. Production reaches
+`0.994738857112`; float64 reaches `0.994700770508`, which is worse by
+`3.81e-5`. Their direct map FSC-AUC remains at least `0.997201977521` across
+all halves/merged classes and iterations, while same-boundary hard-class
+agreement remains at least `0.99729`. Float64 changes the trajectory
+materially—maximum Pmax MAE between the arms is `0.00546038`, minimum exact
+significant-count fraction is `0.7157`, and maximum class-mass relative L2 is
+`0.000341639`—but it does not close RELION parity. RECOVAR-minus-RELION GT
+FSC-AUC stays within about `1.21e-4` in either arm.
+
+This rejects production float64 as the repair for the K=4 iteration-8 class-3
+gap. The run uses science commit `c390f8bf`, before the separate exact-local
+normalization fix, but the bounded prefix never enters that local path. It is
+therefore a precision causal diagnostic, not current-head quality acceptance.
+Continue upstream at the accumulated reference/posterior boundary and confirm
+the full current-head trajectory; do not weaken the `0.995` gate.
+
+The resealed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_samegpu_prod_f64_it8_c390f8bf_20260719T002650Z/analysis/samegpu_pair_audit_v1/FINAL_AUDIT_SEAL.json`
+(SHA-256 `522505c2c16e1642db4b24a0b7b23bd36bf7e42074aa2794eb3142f5b5335673`).
+Its rebuilt manifest has SHA-256
+`71f6c9464a5341ddf74e4b779d0c64ed20cb6a36f854fda3816891228f1fa973`
+and verifies all 25 entries. Map quality uses FSC/FSC-AUC only; correlation is
+not computed.

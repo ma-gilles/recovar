@@ -4150,3 +4150,29 @@ therefore labels command/base-build fields as declared and explicitly marks
 source/runtime hardware-toolchain identity cross-device-unverified. Until a
 future arm seals both endpoints, this harness cannot classify residuals as
 same-device equivalence or numerical noise.
+
+# 2026-07-19: K=4 same-GPU float64 is trajectory-sensitive but not a parity fix
+
+- Science job `11361629` ran production and genuine float64 sequentially on
+  A100 UUID `GPU-27d0dd53-0c19-7be3-82f4-eaba66bb35aa`; audit job `11374498`
+  verified exact current-size/order topology through eight numbered global
+  iterations. The exact-local normalization path is not entered.
+- Production first fails the direct per-class RELION map gate at iteration 8,
+  class 3, with FSC-AUC `0.994738857112`. Float64 reaches
+  `0.994700770508`, worsening the gap by `3.81e-5`; it is not an authorized
+  production repair. RECOVAR-minus-RELION GT FSC-AUC remains within roughly
+  `1.21e-4` in both arms.
+- Precision is nevertheless a real trajectory perturbation: production versus
+  float64 direct map FSC-AUC has minimum `0.997201977521`, hard-class
+  agreement has minimum `0.99729`, Pmax MAE has maximum `0.00546038`, exact
+  significant-count fraction has minimum `0.7157`, and class-mass relative L2
+  has maximum `0.000341639`.
+- This is a pre-local-fix `c390f8bf` precision diagnostic, not current-head
+  quality acceptance. Continue at upstream accumulated reference/posterior
+  state and retain the `0.995` per-class map gate.
+- Sealed evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_samegpu_prod_f64_it8_c390f8bf_20260719T002650Z/analysis/samegpu_pair_audit_v1/FINAL_AUDIT_SEAL.json`
+  (SHA-256 `522505c2c16e1642db4b24a0b7b23bd36bf7e42074aa2794eb3142f5b5335673`);
+  rebuilt 25-entry manifest SHA-256
+  `71f6c9464a5341ddf74e4b779d0c64ed20cb6a36f854fda3816891228f1fa973`.
+  Correlation is not computed.
