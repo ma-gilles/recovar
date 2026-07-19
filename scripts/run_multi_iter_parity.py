@@ -51,6 +51,7 @@ def build_gt_postprocess_command(
     relion_run_prefix: str,
     gt_volume: str | Path,
     max_iter: int,
+    intermediates_dir: str | Path | None = None,
     gt_align: bool = False,
     gt_align_healpix_order: int = DEFAULT_GT_ALIGN_HEALPIX_ORDER,
     gt_align_max_shell: int = DEFAULT_GT_ALIGN_MAX_SHELL,
@@ -76,6 +77,8 @@ def build_gt_postprocess_command(
         "--max_iter",
         str(max_iter),
     ]
+    if intermediates_dir is not None:
+        command.extend(["--intermediates_dir", str(intermediates_dir)])
     if gt_align:
         command.extend(
             [
@@ -2219,6 +2222,7 @@ def main():
             relion_run_prefix=run_prefix,
             gt_volume=gt_path,
             max_iter=args.max_iter,
+            intermediates_dir=save_intermediates_dir,
             gt_align=args.gt_align,
             gt_align_healpix_order=args.gt_align_healpix_order,
             gt_align_max_shell=args.gt_align_max_shell,

@@ -27,9 +27,22 @@ from recovar.em.initial_model.gt_metrics import (
 )
 
 
+def resolve_intermediates_dir(recovar_dir, explicit_intermediates_dir=None):
+    """Return the saved-volume directory used by the parity postprocessor."""
+
+    if explicit_intermediates_dir is not None:
+        return Path(explicit_intermediates_dir)
+    return Path(recovar_dir) / "intermediates"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--recovar_dir", required=True, help="run_multi_iter_parity output directory")
+    parser.add_argument(
+        "--intermediates_dir",
+        default=None,
+        help="Saved intermediate-volume directory (default: <recovar_dir>/intermediates)",
+    )
     parser.add_argument("--relion_dir", required=True, help="RELION run directory with run_itNNN_* outputs")
     parser.add_argument(
         "--relion_run_prefix",
@@ -96,7 +109,7 @@ def main():
 
     recovar_dir = Path(args.recovar_dir)
     relion_dir = Path(args.relion_dir)
-    intermediates_dir = recovar_dir / "intermediates"
+    intermediates_dir = resolve_intermediates_dir(recovar_dir, args.intermediates_dir)
     if not intermediates_dir.exists():
         raise FileNotFoundError(f"Missing intermediates directory: {intermediates_dir}")
 

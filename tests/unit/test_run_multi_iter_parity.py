@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from scripts import diff_relion_recovar_per_iter as parity_diff
+from scripts.postprocess_multi_iter_gt import resolve_intermediates_dir
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
     _read_relion_scheduling_average_pmax,
@@ -33,12 +34,26 @@ def test_gt_postprocess_command_uses_module_with_pythonpath_unset(monkeypatch, t
         relion_run_prefix="custom",
         gt_volume=tmp_path / "gt.mrc",
         max_iter=7,
+        intermediates_dir=tmp_path / "external" / "intermediates",
     )
 
     assert command[:3] == [sys.executable, "-m", "scripts.postprocess_multi_iter_gt"]
     assert "scripts/postprocess_multi_iter_gt.py" not in command
     assert command[command.index("--relion_start_iter") + 1] == "3"
     assert command[command.index("--max_iter") + 1] == "7"
+    assert command[command.index("--intermediates_dir") + 1] == str(
+        tmp_path / "external" / "intermediates"
+    )
+
+
+def test_postprocess_intermediates_dir_defaults_below_output(tmp_path):
+    assert resolve_intermediates_dir(tmp_path) == tmp_path / "intermediates"
+
+
+def test_postprocess_intermediates_dir_honors_explicit_path(tmp_path):
+    explicit = tmp_path / "external" / "intermediates"
+
+    assert resolve_intermediates_dir(tmp_path / "output", explicit) == explicit
 
 
 def test_relion_scheduling_pmax_uses_authoritative_model_scalar():
