@@ -6557,10 +6557,45 @@ The corrected interpretation is
 (SHA-256 `c9aac00ed61f236fd4266f593f2f1e59d1c7a5db2d0ad97e53395b8b79a1737d`).
 The summary JSON SHA-256 is
 `311e1b9c8d0bd243ca68d716ce9e73de05c8f0f57bd9be9288316f6fad3e9523`.
-An exact-state 32-particle fused-posterior/factor panel is running on GPU UUID
-`GPU-dc6576aa-e1e4-6055-4a5e-d0fa809f3983` to compare the remaining scorer
-and posterior boundary directly. GUI grid and forced after-max overrides are
-unset.
+The exact-state 32-particle production-posterior/factor panel completed on GPU
+UUID `GPU-dc6576aa-e1e4-6055-4a5e-d0fa809f3983`; its findings are recorded
+below. GUI grid and forced after-max overrides were unset.
+
+## 2026-07-20 case-20 physical-iteration-3 exact-state posterior panel
+
+Matched production RECOVAR and passive RELION factor-v2 captures completed on
+one physical A100. The RECOVAR capture contains 24 strictly validated shards,
+3,000 particles/fragments, and 1,284,288 candidates. Capture and no-capture
+RECOVAR runs have exactly equal physical-iteration-2 Pmax and coarse-support
+arrays for all particles; their merged map FSC-AUC is `0.999999999840`.
+RELION capture/control half-map FSC-AUC is approximately `0.999999999956`, and
+all BPref arrays remain inside the two same-GPU repeat envelopes.
+
+The 32-particle exact-state comparison closes rotation geometry exactly and
+translation phase increments to maximum error `2.85e-9`. All 32 posterior
+winners agree. Fine reconstruction support is exact for 26/32 particles.
+Pmax absolute error has median `5.95e-5`, p95 `1.63e-3`, and maximum
+`7.31e-3`; posterior-union relative L2 has median `1.63e-4`, p95 `2.68e-2`,
+and maximum `5.59e-2`. The three material posterior outliers are stack
+particles 1036, 2707, and 1045, and all retain the exact RELION winner.
+RECOVAR-versus-RELION merged map FSC-AUC is `0.999999999041`.
+
+The archived `sig_counts_*` trajectory records coarse pass-1 retained
+hypotheses, while the production raw capture records exact fine pass-2
+reconstruction support. They must not be equated. The analyzer separately
+closes both RECOVAR representations and compares the coarse trajectory with
+RELION `rlnNrOfSignificantSamples`: 28/32 selected counts are exact, with
+three `+1` and one `-1` residuals. The result localizes the remaining
+scorer/posterior discrepancy to a small high-Pmax tail but does not yet
+justify a production formula or threshold change.
+
+The interpretation is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_exactstate_posterior_panel32_same_gpu_20260720T160500Z/analysis/INTERPRETATION.md`
+(SHA-256 `a2b89941a61bcd38da4449b520f8d60cbff46ce931d6cbb1622285f3a00f96f1`).
+The 357-entry self-excluding accepted-artifact seal is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_exactstate_posterior_panel32_same_gpu_20260720T160500Z/analysis/accepted_artifacts_v1.sha256`
+(SHA-256 `5466f9c194cf27409232ddfc205cbadff0a7119ade077d1efa2f97c4b16470c7`).
+Map quality uses shellwise FSC/FSC-AUC only; correlation is not computed.
 
 ## 2026-07-20 case-10 x-half acceptance OOM classification
 
@@ -6578,6 +6613,13 @@ The exact failure log is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_tail_accept_9d172278_20260720T071204Z/em_k1_matrix_10_high_res_anisotropic_100k_g384_radial_noise3_bf0.out`.
 The next retry must lower the explicit exact-local row/matmul caps while
 leaving science and acceptance gates unchanged.
+
+The lower-cap retry is science job `11421265`, with after-ok auditors
+`11421266` and `11421267`. It changes only
+`RECOVAR_EXACT_LOCAL_TARGET_ROW_PIXELS` from 128M to 64M and
+`RECOVAR_EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB` from 4.0 to 2.0. Science and
+acceptance gates are unchanged. The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_tail_lowcap_accept_9d172278_20260720T164557Z`.
 
 ## 2026-07-20 K=4 continuation rejection and live-factor replacement
 
@@ -6620,6 +6662,8 @@ aggregate-factor audit `11415296` compares data, weight, tau2, sigma2, and
 data-vs-prior using exact/relative-L2 and shellwise metrics. Grid correction
 and forced final-all-data-after-nonconvergence remain unset. The replay root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_live_factor_recovar_9d172278_20260720T090629Z`.
+The live replay has entered physical iteration 8 and continues through compact
+pair buckets without an OOM or stalled progress signature.
 
 An independent full-trajectory audit also quantifies why an unconstrained
 fresh RELION run is not the deterministic oracle. The two 1.5-million-record
