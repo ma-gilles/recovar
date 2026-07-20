@@ -6434,3 +6434,46 @@ envelope. The patched validation report is
 the inertness report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_bpref_factor_v2_panel32_same_gpu_20260719T101000Z/analysis/capture_inertness_v2.json`
 (SHA-256 `532c3a5a7bbdfb6411f81cc9aeda8dc7c574f5555890e1f97b609b259699dbfb`).
+
+## 2026-07-20 K=4 continuation rejection and live-factor replacement
+
+The iteration-10 serialized-continuation retry is rejected as a parity oracle.
+Despite an exact recorded follower schedule, retry 7 compares with the
+canonical uninterrupted RELION run at per-class merged FSC-AUC
+`0.9717330`, `0.9707791`, `0.9642605`, and `0.9643529`, far below
+the unchanged `0.999999` continuation-identity gate. It instead repeats the
+earlier continuation family at relative L2 `3.49e-7`--`4.58e-7`, including
+one assignment/class mismatch. Serialized optimiser files therefore do not
+represent the complete live MPI/GPU process state, and their BPref factors are
+quarantined. No further continuation-based factor inference is admissible.
+The sealed rejection is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_bpref_capture_ac5177d2_20260720T084530Z/provenance/RETRY7_CONTINUATION_REJECTION_20260720T0814-0400.md`
+(SHA-256 `1830dde77eed1dcbe36cacf1078f6dcaf0c18dacb9f2bc2987f33cf938f0582e`).
+
+The replacement is a fresh uninterrupted same-physical-GPU RELION-to-RECOVAR
+pair. A minimal RELION source patch emits iteration-10 pre/post-SSNR BPref
+data, weight, spectra, metadata, and incoming Iref for both gold-standard
+halves and all four classes. Its source is pinned at RELION HEAD
+`d476e6f6a4f1f37627c06ace5227fc374c0c2b05`, dirty-diff SHA-256
+`a80ae652dcb0b1eac9b4f86be823f7130d7a329033f5832013c474faac7dc394`,
+and binary SHA-256
+`af0cf03190f761af694c869945ebb6cce692bf3d7b0ef0524eba2e3044e0c1b1`.
+The launcher requires exactly 96 live factor files before RECOVAR begins,
+constructs the exact dispatch schedule from that same live RELION process, and
+then runs RECOVAR commit
+`9d1722781e1d6c5fc5b2ad0e15ebba3a2becbab0` sequentially on the same
+GPU. Grid correction and forced final-all-data-after-nonconvergence remain
+unset.
+
+Science job `11413202` and dependent strict audit job `11413203` use
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_live_bpref_pair_9d172278_20260720T083000Z`.
+The science launcher, static manifest, audit launcher, and sealer SHA-256 values
+are respectively
+`8418c319ad977e6f272058c484febbbc7e68748a514bdf2916afa43c9c1f9c00`,
+`bb8b5eccbd1fd8217ba7718ced6159dd1381fc7ff1815ba1c4efe64b096606e5`,
+`b5490b9b8019b707729c1db92b804a45f30967a3a109a04c134cec6cbb7612db`,
+and
+`36ca3955b769fae784e4773239ef817be0ce0d5d3282ae433fc307f22b06ee0a`.
+The unchanged acceptance policy uses shellwise FSC/FSC-AUC for map quality
+plus exact/distribution topology and particle-state diagnostics; correlation
+is not a pass/fail metric.
