@@ -1496,6 +1496,33 @@ def _exact_local_effective_max_hypotheses_per_microbatch(
     return int(max(1, min(effective_cap, score_tile_cap)))
 
 
+def _exact_local_xhalf_tail_microbatch_cap(
+    cap: int,
+    local_layout: LocalHypothesisLayout,
+    *,
+    image_batch_size: int,
+    rotation_block_size: int,
+) -> int:
+    """Respect the outer memory plan for oversized x-half neighborhoods.
+
+    The outer planner sizes a local M-step tile as
+    ``image_batch_size * rotation_block_size``. Exact neighborhoods may be
+    wider than ``rotation_block_size`` and therefore cannot be split along the
+    rotation axis, but they must reduce the number of images in the bucket.
+    Otherwise a tail bucket can keep the ordinary image count and exceed the
+    planned row tile by several times.
+    """
+
+    cap = max(1, int(cap))
+    rotation_block_size = max(1, int(rotation_block_size))
+    rotation_counts = np.asarray(local_layout.rotation_counts, dtype=np.int64)
+    max_rotation_count = int(np.max(rotation_counts, initial=0))
+    if max_rotation_count <= rotation_block_size:
+        return cap
+    planned_row_cap = max(1, int(image_batch_size)) * rotation_block_size
+    return min(cap, planned_row_cap)
+
+
 def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.ndarray) -> LocalBucketSpec:
     if np.array_equal(returned_indices, bucket.image_indices):
         return bucket
@@ -2195,6 +2222,24 @@ def run_local_em_exact(
         allow_high_memory_default=not xhalf_bpref_mstep,
         score_only=score_only,
     )
+    if xhalf_bpref_mstep:
+        uncapped_hypotheses_per_microbatch = int(max_hypotheses_per_microbatch)
+        max_hypotheses_per_microbatch = _exact_local_xhalf_tail_microbatch_cap(
+            uncapped_hypotheses_per_microbatch,
+            local_layout,
+            image_batch_size=image_batch_size,
+            rotation_block_size=rotation_block_size,
+        )
+        if max_hypotheses_per_microbatch < uncapped_hypotheses_per_microbatch:
+            logger.info(
+                "Exact local RELION x-half tail microbatch cap: %d -> %d "
+                "(max_local_rotations=%d, planned_image_batch=%d, planned_rotation_block=%d)",
+                uncapped_hypotheses_per_microbatch,
+                int(max_hypotheses_per_microbatch),
+                int(np.max(np.asarray(local_layout.rotation_counts), initial=0)),
+                int(image_batch_size),
+                int(rotation_block_size),
+            )
     bucket_build_t0 = time.time()
     bucket_specs = bucket_local_hypothesis_layout(
         local_layout,

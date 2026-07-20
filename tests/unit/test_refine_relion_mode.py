@@ -126,6 +126,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
     _build_reconstruction_pack_indices,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_max_hypotheses_per_microbatch,
+    _exact_local_xhalf_tail_microbatch_cap,
     _adjoint_slice_volume_maybe_windowed_row_chunks,
     _local_processed_half_cache_enabled,
     _local_raw_cache_enabled,
@@ -1734,6 +1735,59 @@ def test_exact_local_microbatch_env_override_keeps_lower_cap(monkeypatch):
         n_recon_windowed=33024,
     )
     assert cap < n_images * local_rotations
+
+
+def test_exact_local_xhalf_tail_microbatch_respects_outer_planner_tile():
+    rotation_counts = np.asarray([128, 766], dtype=np.int32)
+    rotation_offsets = np.asarray([0, 128, 894], dtype=np.int64)
+    layout = LocalHypothesisLayout(
+        n_global_rotations=894,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=np.arange(894, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (894, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(894, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((116, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((2, 116), dtype=np.float32),
+    )
+
+    cap = _exact_local_xhalf_tail_microbatch_cap(
+        15_500,
+        layout,
+        image_batch_size=37,
+        rotation_block_size=136,
+    )
+
+    assert cap == 37 * 136
+
+
+def test_exact_local_xhalf_tail_microbatch_keeps_cap_for_planned_neighborhoods():
+    rotation_counts = np.asarray([64, 136], dtype=np.int32)
+    rotation_offsets = np.asarray([0, 64, 200], dtype=np.int64)
+    layout = LocalHypothesisLayout(
+        n_global_rotations=200,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=np.arange(200, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (200, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(200, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((116, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((2, 116), dtype=np.float32),
+    )
+
+    assert (
+        _exact_local_xhalf_tail_microbatch_cap(
+            15_500,
+            layout,
+            image_batch_size=37,
+            rotation_block_size=136,
+        )
+        == 15_500
+    )
 
 
 def test_local_search_outer_batch_sizing_uses_current_size_window():
