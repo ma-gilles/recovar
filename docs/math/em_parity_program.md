@@ -6642,6 +6642,48 @@ The focused analysis seal verifies all 15 named inputs and outputs at
 GUI grid and forced final-all-data-after-max-iter overrides were unset. Map
 quality remains shellwise FSC/FSC-AUC; correlation is not a pass/fail metric.
 
+## 2026-07-20 case-20 native RELION coarse-score operand closure
+
+An env-gated RELION CUDA capture now records physical-iteration-3 global
+coarse raw diff2, rotation/translation priors and zero masks, pre-exponent log
+weights, and post-exponent weights for the six support-boundary particles.
+The accepted diagnostic source is RELION commit
+`c2bb4d87176a02977247c738355980bc21f3c19e`; binary SHA-256 is
+`6fed307a174f0443e8888b37b76de8ef2e8cfe82b7717e17b70b58c6dc656a39`.
+An earlier `9b7d421` capture is quarantined because its default-stream copies
+raced the optimizer stream. The corrected hook queues copies on each owning
+stream and synchronizes before serialization.
+
+The corrected same-A100 control/capture pair has byte-exact 9,000-row dispatch,
+exact poses/translations and significant-count metadata, and half-map FSC-AUC
+`0.999999999453` and `0.999999998655`. RELION's
+direction-major/psi-inner orientation layout maps exactly to RECOVAR's
+psi-major/direction-inner layout; all prior zero masks then close and exactly
+the eight previously classified support differences remain. Raw diff2 plus
+priors closes to the captured pre-exponent log score within `6.20e-5`.
+Allowed-support rotation-prior maximum error is `4.53e-4`, and translation
+prior maximum error is `3.81e-6`.
+
+The stack-1036 RECOVAR-minus-RELION pair error is `+0.001304626` in the data
+delta and `+0.000162065` in the prior delta, producing `+0.001464844` in
+the final delta. For stack 2707 those values are `+0.000793457`,
+`+0.000054121`, and `+0.000831604`. The data scorer is the dominant
+remaining boundary residual; the prior is smaller but nonzero. The next
+diagnostic target is therefore RELION CUDA coarse projection/residual
+arithmetic and reduction order for these exact parent pairs. No threshold,
+formula, or acceptance-gate change is justified.
+
+The accepted numerical report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_relion_coarse_score_same_gpu_c2bb4d8_20260720T150500Z/analysis/relion_coarse_score_audit_v1.json`
+(SHA-256 `85964de2f393f5cd1af11a7fc1be700d9d7ad2c01e30507856d7bca371b93060`).
+The interpretation SHA-256 is
+`a750ba71e884d4861266c13ddbe25a30c55cf776f3fa52a2e78b06935c5fe4c4`.
+The 27-entry accepted-artifact seal is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_relion_coarse_score_same_gpu_c2bb4d8_20260720T150500Z/analysis/ACCEPTED_ARTIFACTS.sha256`
+(SHA-256 `49154c1a24ecbe6c7f240a19a717e06379457bf6ac5dadb7433885a3037f0cac`).
+Grid correction and forced after-max overrides were unset. Map quality remains
+shellwise FSC/FSC-AUC; correlation is not a pass/fail metric.
+
 ## 2026-07-20 case-10 x-half acceptance OOM classification
 
 Case-10 science job `11409144` reached physical iteration 12 on A100
@@ -6707,9 +6749,25 @@ aggregate-factor audit `11415296` compares data, weight, tau2, sigma2, and
 data-vs-prior using exact/relative-L2 and shellwise metrics. Grid correction
 and forced final-all-data-after-nonconvergence remain unset. The replay root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_live_factor_recovar_9d172278_20260720T090629Z`.
-The live replay completed physical iteration 8 and entered physical iteration
-9. It continues through compact-pair buckets without an OOM or stalled
-progress signature.
+The live replay science job `11414986` completed status 0 through physical
+iteration 10 in 18,709 seconds. It remained non-converged and correctly
+skipped final all-data; no forced after-max path ran. Corrected aggregate-factor
+audit `11415296` completed status 0. Across classes 1--4, combined BPref data
+relative L2 is `0.0299440`, `0.0322863`, `0.0314599`, and
+`0.0262171`; weight relative L2 is `0.0069118`, `0.0078684`,
+`0.0076745`, and `0.0062358`. Downstream tau2 relative L2 spans
+`0.0001014`--`0.0014831`, sigma2 spans
+`0.0001098`--`0.0004253`, and data-vs-prior spans
+`0.0001528`--`0.0017568`. These are uninterrupted live-process
+iteration-10 residuals, not continuation artifacts.
+
+The factor report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_live_factor_recovar_9d172278_20260720T090629Z/analysis/it10_live_bpref_factor_audit.json`
+(SHA-256 `4947d59cf4e7cc270b2855a42bb04ac43b2cb3f3fdb0eb24dd1a5dfdfb9f787d`).
+Focused map FSC audit `11426828` was rejected before computation because its
+absolute-path invocation lacked the checkout on `sys.path`. Retry
+`11426923` binds imports to the checkout and retains the unchanged direct
+FSC-AUC `0.995` and GT-delta `-0.002` gates.
 
 An independent full-trajectory audit also quantifies why an unconstrained
 fresh RELION run is not the deterministic oracle. The two 1.5-million-record
