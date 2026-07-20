@@ -6889,6 +6889,45 @@ and the self-excluding accepted-artifact seal SHA-256 is
 `42eefa38aacb4818e683ae9c5b592e30445a265f4f38be87db7b258a01a60ed0`.
 Grid correction and forced final all-data after non-convergence were unset.
 
+### Stack-1266 cutoff-pair closure
+
+The bounded follow-up at RECOVAR commit
+`25039b9a8a5398db0bd20303dc96fe4faf65cad1` captures exact projection and
+score operands for the historical rank-13/rank-12 cutoff pair. RELION's
+targeted diagnostic is passive: control and capture dispatch logs are
+byte-exact across 9,001 records, wall time is 379 versus 375 seconds on the
+same A100, and control/capture FSC-AUC is at least `0.9999999990393841`
+across both halves and iterations 1--3. The only changed stack-1266 metadata
+fields are log-likelihood contribution (`11507.539058` versus
+`11507.538742`) and Pmax (`0.160829` versus `0.160841`).
+
+RECOVAR's captured pre-prior pair log-score delta is
+`0.4567413330078125`; RELION production is `0.456787109375`, a residual of
+`-4.57763671875e-5`. RELION production exactly replays its captured
+four-lane float32 reduction for both candidates. Reference relative-L2 errors
+are approximately `2.1e-7`, with shifted-data and CTF2 errors below
+`5.1e-7` and `6.6e-7`. This evidence does not support another projection,
+matrix-routing, or reduction-order change.
+
+In the matching current RECOVAR capture, the top 12 posterior weights sum to
+`0.9990000036874245`, only `3.6874245e-9` above the configured adaptive
+fraction. RECOVAR therefore selects the same 12 parents as RELION; the
+historical rank-13 parent is first excluded with posterior weight
+`4.6381747e-4`. The earlier 13-versus-12 result is a real floating-point
+cutoff toggle between otherwise equivalent same-GPU trajectories, not a
+reason to change the `0.999` rule. No additional production code change is
+justified by this diagnostic.
+
+The authoritative operand report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_gaussian_pair_stack1266_42f8489_20260720T171800Z/analysis/stack1266_operands_v2.json`
+(SHA-256 `34a019bea5f1b2089e340c24e7a94bb7c82f3586af2dcc57fcc7cb4fc6445e2d`).
+The capture-passivity report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_gaussian_pair_stack1266_42f8489_20260720T171800Z/analysis/capture_passivity_v1.json`
+(SHA-256 `87828fd7e88228a0a82d64b9f61d4b218786db1368d8ddef3a863eb2896a11cd`).
+The accepted-artifact seal verifies and has SHA-256
+`f7ef3e59677c04a828de3b60d8e6fe2c28a59c0a70e99192f5fb61680cc357b5`.
+Correlation was not computed; map passivity uses shellwise FSC/FSC-AUC.
+
 ## 2026-07-20 K=1 300k-particle case-3 acceptance
 
 The fresh same-H100 case-3 science job `11384178` completed status 0 on
