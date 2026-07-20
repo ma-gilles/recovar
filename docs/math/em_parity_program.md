@@ -6530,6 +6530,55 @@ The authoritative seal is
 (SHA-256 `995fca71c75c5a23bd79043d7fb4f0e2ad2226e4dd8458ffdac4b5ab9ac42564`).
 Map quality uses shellwise FSC/FSC-AUC only; correlation is not computed.
 
+## 2026-07-20 case-20 remaining-state split audit correction
+
+The six-arm continuation completed on the same physical A100. Maps,
+direction prior, complete optimiser state, and optimiser state excluding the
+sampling grid are null at the physical-iteration-3 map boundary. Their merged
+cross-RELION FSC-AUC values are respectively `0.999999999018`,
+`0.999999999088`, `0.999999999075`, and `0.999999999076`, versus
+`0.999999999074` for the exact all-RELION control. Both optimiser-state arms
+also reproduce iteration-3 poses, translations, Pmax, and support counts
+exactly.
+
+The apparent sigma-offset arm is excluded from production attribution. The
+matrix used source commit `1e208826`, whose diagnostic state-swap hook saved
+only the scalar mean sigma and rebroadcast it when the treatment restored the
+field. It therefore scored with `[4.24445754, 4.24445754]` Angstrom instead
+of the RELION pair `[4.255510, 4.233412]`. The normal K=1 production
+trajectory had retained the distinct per-half pair, and tracked commit
+`25a83be7` already repaired the diagnostic hook. K-class remains intentionally
+shared because the active RELION Class3D target has
+`_rlnDoSplitRandomHalves=0`; no sigma production change is justified by this
+factorial.
+
+The corrected interpretation is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_remaining_state_split_same_gpu_20260720T154031Z/audit/INTERPRETATION.md`
+(SHA-256 `c9aac00ed61f236fd4266f593f2f1e59d1c7a5db2d0ad97e53395b8b79a1737d`).
+The summary JSON SHA-256 is
+`311e1b9c8d0bd243ca68d716ce9e73de05c8f0f57bd9be9288316f6fad3e9523`.
+An exact-state 32-particle fused-posterior/factor panel is running on GPU UUID
+`GPU-dc6576aa-e1e4-6055-4a5e-d0fa809f3983` to compare the remaining scorer
+and posterior boundary directly. GUI grid and forced after-max overrides are
+unset.
+
+## 2026-07-20 case-10 x-half acceptance OOM classification
+
+Case-10 science job `11409144` reached physical iteration 12 on A100
+`della-l07g7`, then failed status 1 in the exact local x-half M-step. The
+iteration-12 half-1 support widened to 584 rotations per image and bucketed
+at sizes up to 766. The existing tail cap reduced the row budget from 15,500
+to 13,405 hypotheses, but the fused local bucket still requested 10.77 GiB
+after 1,000 of 1,431 chunks and exhausted the allocator. Physical GPU memory
+telemetry was stable near 33.3 GiB before failure; this is a transient tile
+limit, not accumulated map-state growth. Dependent audits `11409145` and
+`11409146` remain non-admissible because the science job did not complete.
+
+The exact failure log is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_tail_accept_9d172278_20260720T071204Z/em_k1_matrix_10_high_res_anisotropic_100k_g384_radial_noise3_bf0.out`.
+The next retry must lower the explicit exact-local row/matmul caps while
+leaving science and acceptance gates unchanged.
+
 ## 2026-07-20 K=4 continuation rejection and live-factor replacement
 
 The iteration-10 serialized-continuation retry is rejected as a parity oracle.
