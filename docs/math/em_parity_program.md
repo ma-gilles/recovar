@@ -6967,10 +6967,13 @@ have exact class, rotation, and translation decisions.
 A direct current-versus-old RECOVAR comparison confirms zero class-decision,
 rotation-over-`1e-3`-degree, or translation-over-`1e-4`-pixel differences in
 all three iterations. Per-class current-versus-old map FSC-AUC is at least
-`0.9999999505685849`; maximum Pmax difference is `2.22385e-4`. The new
-coarse scorer changes a small number of significance-boundary counts and
-produces at most `1.06140e-5` relative L2 in the recorded half-1 M-step
-numerator, but it does not create a discrete-decision or material map change.
+`0.9999999505685849`; maximum Pmax difference is `2.22385e-4`. Current head
+records a uniform four-to-one iteration-1 support-count bookkeeping change
+and one-count boundary changes for 28 and 14 particles in iterations 2 and 3.
+Because the comparison spans multiple intervening commits, these count deltas
+are not attributed specifically to the scorer route. They accompany at most
+`1.06140e-5` relative L2 in the recorded half-1 M-step numerator, but no
+discrete-decision or material map change.
 The old-versus-current minimum iteration-3 FSC-AUC against RELION changes by
 only `-7.97e-9`. No additional K-class code or threshold change is justified.
 
@@ -6981,6 +6984,6 @@ The strict trajectory report SHA-256 is
 the direct current-versus-old report SHA-256 is
 `58bad36b0f8708682d5646ba916eec32d61c450fcf5dbb2e76a88dafb17dfc6d`,
 the interpretation SHA-256 is
-`abaabbc4e64f688cde83f8ebb9efa589985ed174d816c4638533789587dbf020`,
+`18eb6bfe13a422d0e76c90bbf12d634cc0f0cf1850bd19ec80912fe54c04d2ba`,
 and the self-excluding accepted-artifact seal verifies with SHA-256
-`c0ebabfdf373353ded4a7824faa5f4a5b4962aaed335d597e6962ccae28d2070`.
+`d1e21eff2749cc4561a5e332ef4ac35d847cd888bdcb30360b73f93d0676cc69`.
