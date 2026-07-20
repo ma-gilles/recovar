@@ -2175,7 +2175,7 @@ def _compute_k_class_significance_batched(
             projected_reference_rotation_ids = None
             projected_reference_per_class = None
             requested_projection_rotations = sorted(
-                parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_PROJECTION_ROTATIONS"),
+                parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_PROJECTION_ROTATIONS") or (),
             )
             if requested_projection_rotations and target_local_positions_for_dump is not None:
                 projected_reference_rotation_ids = np.asarray(requested_projection_rotations, dtype=np.int32)

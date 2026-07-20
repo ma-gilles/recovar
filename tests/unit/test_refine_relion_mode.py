@@ -11246,6 +11246,7 @@ class TestRelionModeSmokeTest:
             "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES",
             str(target_local),
         )
+        monkeypatch.delenv("RECOVAR_SIGNIFICANCE_DUMP_PROJECTION_ROTATIONS", raising=False)
 
         _compute_k_class_significance_batched(
             dataset,
@@ -11269,6 +11270,8 @@ class TestRelionModeSmokeTest:
         assert int(payload["n_classes"]) == 2
         assert int(payload["n_rot"]) == int(rotations.shape[0])
         assert int(payload["n_trans"]) == int(translations.shape[0])
+        assert "projected_reference_rotation_ids" not in payload.files
+        assert "projected_reference_per_class" not in payload.files
         weights_per_class = payload["weights_per_class"]
         assert weights_per_class.shape == (2, int(rotations.shape[0]) * int(translations.shape[0]))
         assert weights_per_class.sum() == pytest.approx(1.0, abs=1e-6)
