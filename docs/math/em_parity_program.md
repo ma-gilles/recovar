@@ -6681,6 +6681,26 @@ The interpretation SHA-256 is
 The 27-entry accepted-artifact seal is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_relion_coarse_score_same_gpu_c2bb4d8_20260720T150500Z/analysis/ACCEPTED_ARTIFACTS.sha256`
 (SHA-256 `49154c1a24ecbe6c7f240a19a717e06379457bf6ac5dadb7433885a3037f0cac`).
+
+A follow-up decomposition over every active captured candidate further narrows
+the data-score boundary. After removing the particle-wide additive constant,
+the translation main-effect RMS is only `7.73e-6`--`1.29e-5`, with ranges
+`2.96e-5`--`5.64e-5`. The rotation main-effect RMS is instead
+`4.86e-4`--`8.52e-4`, with ranges `0.0112`--`0.0258`; residual
+rotation-by-translation interaction accounts for `22.6%`--`31.1%` of active
+centered variance. The disputed stack-1036 parents lie at centered data-score
+residuals `+0.0006516` and `-0.0006530`; stack 2707 lies at `+0.0002505`
+and `-0.0005429`. This rejects a translation-only convention or prior-offset
+explanation and targets orientation-dependent projector/residual operands plus
+their native reduction topology. It does not distinguish those two causes, so
+the next probe remains an immutable per-pixel contribution capture for the
+exact swapped parent pairs.
+
+The decomposition report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_relion_coarse_score_same_gpu_c2bb4d8_20260720T150500Z/analysis/coarse_data_score_residual_structure_v1.json`
+(SHA-256 `0e30a6004ad71e5348b38a24f1bb6f4582e63aa12b91bbbe1e80d00e52572b7d`);
+its analyzer SHA-256 is
+`4903f77b12b8d836c0c1eb6a1a5e66c2a781e53405807e601014d66fc64f4be6`.
 Grid correction and forced after-max overrides were unset. Map quality remains
 shellwise FSC/FSC-AUC; correlation is not a pass/fail metric.
 
@@ -6767,7 +6787,19 @@ The factor report is
 Focused map FSC audit `11426828` was rejected before computation because its
 absolute-path invocation lacked the checkout on `sys.path`. Retry
 `11426923` binds imports to the checkout and retains the unchanged direct
-FSC-AUC `0.995` and GT-delta `-0.002` gates.
+FSC-AUC `0.995` and GT-delta `-0.002` gates. It completed status 0 in 133
+seconds. The identity class assignment is optimal for both engines and GT.
+Classwise direct RECOVAR-versus-RELION FSC-AUC is `0.9960693`, `0.9953734`,
+`0.9954234`, and `0.9966223`; RECOVAR-minus-RELION GT FSC-AUC is only
+`-4.29e-5`, `-2.78e-5`, `-4.09e-5`, and `-2.37e-5`. Thus the uninterrupted
+iteration-10 BPref factor residual is numerically real but not map-quality
+material under the unchanged FSC gates.
+
+The map report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_live_factor_recovar_9d172278_20260720T090629Z/analysis/it10_live_map_fsc_audit.json`
+(SHA-256 `f3a842d1840577a988c67a6b18f48dd03643859deaee10f44a32a0791007377d`),
+and the shellwise array SHA-256 is
+`ef44549cdcfc1157c35b05d6ad26fde4a93783b110a2f481c2e6ed6daa962dc0`.
 
 An independent full-trajectory audit also quantifies why an unconstrained
 fresh RELION run is not the deterministic oracle. The two 1.5-million-record
