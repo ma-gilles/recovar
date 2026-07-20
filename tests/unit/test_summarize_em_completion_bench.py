@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "summarize_em_completion_bench.py"
 SPEC = importlib.util.spec_from_file_location("summarize_em_completion_bench", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -975,6 +974,29 @@ def test_relion_iteration_exists_detects_post_max_iter_products(tmp_path):
     (tmp_path / "run_it016_data.star").write_text("# fake\n")
 
     assert summarizer._relion_iteration_exists(tmp_path, 16) is True
+
+
+def test_relion_iteration_for_unnumbered_final_maps_uses_latest_data_star(tmp_path):
+    (tmp_path / "run_it015_data.star").write_text("# fake\n")
+    (tmp_path / "run_it017_data.star").write_text("# fake\n")
+
+    iteration = summarizer._relion_iteration_for_paths(
+        tmp_path,
+        (tmp_path / "run_half1_class001_unfil.mrc", tmp_path / "run_half2_class001_unfil.mrc"),
+    )
+
+    assert iteration == 17
+
+
+def test_relion_iteration_for_numbered_maps_prefers_map_iteration(tmp_path):
+    (tmp_path / "run_it017_data.star").write_text("# fake\n")
+
+    iteration = summarizer._relion_iteration_for_paths(
+        tmp_path,
+        (tmp_path / "run_it012_half1_class001.mrc", tmp_path / "run_it012_half2_class001.mrc"),
+    )
+
+    assert iteration == 12
 
 
 def test_sparse_group_timing_aggregate_reports_stage_totals_and_mode_breakdown():

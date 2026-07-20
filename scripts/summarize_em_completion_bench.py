@@ -19,7 +19,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import numpy as np
 
@@ -30,7 +30,6 @@ if os.environ.get("JAX_PLATFORMS", "").lower() == "cpu":
     logging.getLogger("jax._src.xla_bridge").setLevel(logging.CRITICAL)
 
 from recovar.utils import helpers
-
 
 LoadFn = Callable[[Path], np.ndarray]
 DEFAULT_FSC_AUC_PARITY_TOL = 1e-4
@@ -130,6 +129,30 @@ def _relion_iteration_from_path(path: Path | None, default: int = 15) -> int:
         return int(default)
     match = re.search(r"run_it(\d+)", path.name)
     return int(match.group(1)) if match else int(default)
+
+
+def _relion_iteration_for_paths(
+    base: Path | None,
+    paths: Sequence[Path | None],
+    *,
+    default: int = 15,
+) -> int:
+    """Resolve the numbered iteration associated with selected RELION maps.
+
+    Final RELION products have unnumbered names.  In that case use the latest
+    numbered data STAR instead of silently assigning the historical iteration
+    15 fallback.  Numbered map paths remain authoritative when present.
+    """
+
+    numbered_iterations = [
+        iteration
+        for path in paths
+        if (iteration := _relion_iteration_from_path(path, default=-1)) >= 0
+    ]
+    if numbered_iterations:
+        return max(numbered_iterations)
+    latest_data_path = _latest_relion_path(base, "run_it*_data.star")
+    return _relion_iteration_from_path(latest_data_path, default=default)
 
 
 def _relion_data_path(base: Path | None, relion_iter: int) -> Path | None:
@@ -2546,7 +2569,7 @@ def summarize_k1(recovar_dir: Path | None, relion_dir: Path | None, fixture_dir:
 
     particle_metrics = None
     if relion_selected:
-        relion_iter = max(_relion_iteration_from_path(rel_h1_path), _relion_iteration_from_path(rel_h2_path))
+        relion_iter = _relion_iteration_for_paths(relion_dir, (rel_h1_path, rel_h2_path))
         relion_has_next_iteration = _relion_iteration_exists(relion_dir, relion_iter + 1)
         relion_half_maps_are_numbered = (
             rel_h1_path is not None
@@ -2690,8 +2713,7 @@ def summarize_k4(recovar_dir: Path | None, relion_dir: Path | None, fixture_dir:
             include_fsc=True,
         )
 
-    relion_iter_candidates = [_relion_iteration_from_path(path) for path in rel_paths if path is not None]
-    relion_iter = max(relion_iter_candidates) if relion_iter_candidates else 15
+    relion_iter = _relion_iteration_for_paths(relion_dir, rel_paths)
     class_permutation = None
     if "recovar_vs_relion" in metrics:
         class_permutation = metrics["recovar_vs_relion"].get("permutation_lhs_to_rhs")
