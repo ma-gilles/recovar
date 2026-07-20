@@ -6858,6 +6858,37 @@ The self-excluding accepted-artifact seal is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_adaptive_cuda_score_db1bf391_20260720T203010Z/analysis/ACCEPTED_ARTIFACTS.sha256`
 (SHA-256 `2b11c699ea9ba45edb281a097c8356e0e650e6c6e0d2edfd31eec7e3c88ca818`).
 
+### Six-particle support closure
+
+A broader exact-state replay at commit
+`d0e02d5bacd14ee5d5894bbfe7d9c0bce248e941` targeted all six particles
+whose old pass-1 parent support differed from RELION. Four now close exactly:
+stack indices 626, 1036, 1509, and 1045. Thus exact support on this
+mismatch-selected panel improves from 0/6 to 4/6. Median Pmax absolute error
+falls from `4.154206e-4` to `8.156474e-6`; stack 1036 specifically falls from
+`2.649784e-3` to `9.000207e-6` while its 54-parent support becomes exact.
+
+Stack 2707 retains its already-qualified rank-28/rank-29 reduction-order tie.
+The two new parent posterior weights differ by only `1.819e-8`. Stack 1266
+retains one extra rank-13 parent with posterior mass `4.6382e-4`, despite a
+Pmax absolute error of only `7.3127e-6`; it is the next bounded cutoff-pair
+diagnostic target. These residuals do not justify broadening the CUDA-matrix
+route or changing the `0.999` significance rule.
+
+Old-versus-new map FSC-AUC is `0.999999998967` and `0.999999998751` for
+the two halves and `0.999999999197` after merging. Sign-corrected
+new-versus-RELION FSC-AUC is `0.999999999035`, `0.999999998122`, and
+`0.999999998879`. Correlation is not computed or used for acceptance.
+
+The accepted report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_adaptive_cuda_score_panel6_d0e02d5b_20260720T165800Z/analysis/panel6_v1.json`
+(SHA-256 `88abba193ebcdba0c1e06501b7f8ab2d25101abacf203d1418ba45d48f8f77c3`).
+The interpretation SHA-256 is
+`8e5b593a95e60f20968fafc82f4fe52ee6d3c65e9ca9d38eb62ffc60625462a6`,
+and the self-excluding accepted-artifact seal SHA-256 is
+`42eefa38aacb4818e683ae9c5b592e30445a265f4f38be87db7b258a01a60ed0`.
+Grid correction and forced final all-data after non-convergence were unset.
+
 ## 2026-07-20 K=1 300k-particle case-3 acceptance
 
 The fresh same-H100 case-3 science job `11384178` completed status 0 on
