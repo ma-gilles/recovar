@@ -6817,6 +6817,47 @@ The unchanged acceptance policy uses shellwise FSC/FSC-AUC for map quality
 plus exact/distribution topology and particle-state diagnostics; correlation
 is not a pass/fail metric.
 
+## 2026-07-20 adaptive pass-1 CUDA scorer-matrix closure
+
+An exact same-A100 Gaussian-pair capture identified a narrow matrix-construction
+mismatch. RELION's adaptive coarse `AccProjectorPlan` creates score matrices
+with CUDA `acc_make_eulers_3D`, while its fine-score and weighted-sum paths use
+host `generateEulerMatrices(..., inverse=true)`. RECOVAR had routed the host
+matrix through both passes. For the four disputed rotation IDs, the existing
+RECOVAR CUDA builder reproduces all 36 captured RELION float32 matrix words
+exactly; the old host matrices differed by at most `2.09e-7` and crossed a few
+texture interpolation fraction bins.
+
+Commit `db1bf3914b6ec6df212a9743fb12ffb86c7b4c23` now uses CUDA-built
+matrices only for adaptive pass 1. Fine scoring, M-step backprojection, and
+pose metadata retain the host path. CPU guards passed `48/48`, the CUDA Euler
+suite passed `9/9`, and `pixi run test-em-fast-guard` passed.
+
+The immutable exact-state iteration-3 replay completed in `361.7 s`. Stack
+1036's RECOVAR-minus-RELION production pair residual fell from `0.00151825`
+to `0.0000457764`, and its 54-parent significant mask became exact. Stack
+2707 fell from `0.000679016` to `0.000305176`; canonical float64 pixel operands
+differ by only `3.65e-6`, leaving RELION's captured atomic reduction order as
+the boundary discriminator. Its remaining one-for-one 28-parent support swap
+is tie-aware: the two posterior values are within `1.87e-8`. Across the two
+particles, posterior maximum error and weighted centered-log RMS both improve.
+
+Old-versus-new half-map FSC-AUC is `0.99999999897` and `0.99999999876`.
+Sign-corrected new-versus-RELION half-map FSC-AUC is `0.99999999903` and
+`0.99999999812`; merged GT FSC-AUC changes by only `4.04e-8` in magnitude.
+No threshold or acceptance gate changed. Grid correction and forced final
+all-data after non-convergence were unset, and correlation was not used.
+
+The operand report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_adaptive_cuda_score_db1bf391_20260720T203010Z/analysis/coarse_gaussian_pair_operands_v1.json`
+(SHA-256 `78dc00c22ea3dbe0b19bec50faa355f13f044b9d382883ede47e077dafd7c52b`).
+The interpretation is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_adaptive_cuda_score_db1bf391_20260720T203010Z/analysis/INTERPRETATION.md`
+(SHA-256 `5635ec5c2421a18c14f1b9273d95098640261a5027fb5544aecb8f884ae6f056`).
+The self-excluding accepted-artifact seal is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_adaptive_cuda_score_db1bf391_20260720T203010Z/analysis/ACCEPTED_ARTIFACTS.sha256`
+(SHA-256 `2b11c699ea9ba45edb281a097c8356e0e650e6c6e0d2edfd31eec7e3c88ca818`).
+
 ## 2026-07-20 K=1 300k-particle case-3 acceptance
 
 The fresh same-H100 case-3 science job `11384178` completed status 0 on
