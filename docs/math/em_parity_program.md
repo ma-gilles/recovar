@@ -6450,30 +6450,57 @@ The sealed rejection is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_bpref_capture_ac5177d2_20260720T084530Z/provenance/RETRY7_CONTINUATION_REJECTION_20260720T0814-0400.md`
 (SHA-256 `1830dde77eed1dcbe36cacf1078f6dcaf0c18dacb9f2bc2987f33cf938f0582e`).
 
-The replacement is a fresh uninterrupted same-physical-GPU RELION-to-RECOVAR
-pair. A minimal RELION source patch emits iteration-10 pre/post-SSNR BPref
-data, weight, spectra, metadata, and incoming Iref for both gold-standard
-halves and all four classes. Its source is pinned at RELION HEAD
-`d476e6f6a4f1f37627c06ace5227fc374c0c2b05`, dirty-diff SHA-256
-`a80ae652dcb0b1eac9b4f86be823f7130d7a329033f5832013c474faac7dc394`,
-and binary SHA-256
+The replacement began with a fresh uninterrupted RELION Class3D run and live
+iteration-10 factor capture. A minimal patch at RELION HEAD
+`d476e6f6a4f1f37627c06ace5227fc374c0c2b05` emits pre/post-SSNR BPref data,
+weight, spectra, metadata, and incoming Iref. The resulting binary SHA-256 is
 `af0cf03190f761af694c869945ebb6cce692bf3d7b0ef0524eba2e3044e0c1b1`.
-The launcher requires exactly 96 live factor files before RECOVAR begins,
-constructs the exact dispatch schedule from that same live RELION process, and
-then runs RECOVAR commit
-`9d1722781e1d6c5fc5b2ad0e15ebba3a2becbab0` sequentially on the same
-GPU. Grid correction and forced final-all-data-after-nonconvergence remain
-unset.
 
-Science job `11413202` and dependent strict audit job `11413203` use
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_live_bpref_pair_9d172278_20260720T083000Z`.
-The science launcher, static manifest, audit launcher, and sealer SHA-256 values
-are respectively
-`8418c319ad977e6f272058c484febbbc7e68748a514bdf2916afa43c9c1f9c00`,
-`bb8b5eccbd1fd8217ba7718ced6159dd1381fc7ff1815ba1c4efe64b096606e5`,
-`b5490b9b8019b707729c1db92b804a45f30967a3a109a04c134cec6cbb7612db`,
-and
-`36ca3955b769fae784e4773239ef817be0ce0d5d3282ae433fc307f22b06ee0a`.
+The first launcher encoded the wrong reconstruction contract. This Class3D
+run has `_rlnDoSplitRandomHalves=0`: follower accumulators are combined, and
+the reconstruction ranks own one aggregate `half0` BPref per class. Rank 1
+reconstructs classes 1 and 3; rank 2 reconstructs classes 2 and 4. RELION job
+`11413202` completed status 0 in 5,573 seconds and emitted 52 factor files,
+then the launcher failed because it expected 96 split-half files. Its RECOVAR
+phase never started, dependent audit `11413203` was canceled, and neither is
+admissible end-to-end evidence. The corrected capture is independently sealed
+at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_live_bpref_pair_9d172278_20260720T083000Z/provenance/RELION_IT10_CLASS3D_CAPTURE_COMPLETE.json`.
+
+The replay oracle copies complete states 0--11 from that live process and
+seals all 98 required artifacts. Its schedule SHA-256 is
+`bdaf4d87ea3bbd41901f82acf975a74109c3fdcd1544ce4c9c741e5e295c9085`.
+RECOVAR commit `9d1722781e1d6c5fc5b2ad0e15ebba3a2becbab0` is replaying iterations
+1--10 against the immutable oracle in science job `11414986`; corrected
+aggregate-factor audit `11415296` compares data, weight, tau2, sigma2, and
+data-vs-prior using exact/relative-L2 and shellwise metrics. Grid correction
+and forced final-all-data-after-nonconvergence remain unset. The replay root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_live_factor_recovar_9d172278_20260720T090629Z`.
+
+An independent full-trajectory audit also quantifies why an unconstrained
+fresh RELION run is not the deterministic oracle. The two 1.5-million-record
+dispatch logs have identical iteration, sorted-position, and particle-index
+keys, but dynamic follower assignment differs for 54,436 of 100,000 particles
+at iteration 1 and 45,996--55,228 at later iterations. Map FSC-AUC remains
+nearly closed through iteration 2 (minimum `0.9999999633`) and then bifurcates
+at iteration 3 (minimum `0.9703505529`, mean `0.9843806925`). The complete
+iteration-0--15 report SHA-256 is
+`6d2ee204c32d59bdff4ae188d219f10862e4837fc520db15e4fc76c68fa9bf67`.
+This different-dispatch envelope does not lower the strict same-dispatch
+RECOVAR gate.
+
 The unchanged acceptance policy uses shellwise FSC/FSC-AUC for map quality
 plus exact/distribution topology and particle-state diagnostics; correlation
 is not a pass/fail metric.
+
+## 2026-07-20 K=1 300k-particle case-3 acceptance
+
+The fresh same-H100 case-3 science job `11384178` completed status 0 on
+`della-h21g2` from commit
+`ac5177d2b0cd639db7ed6f14225d80fe9cff7d4d`. Final merged
+RECOVAR-versus-RELION FSC-AUC is `0.9987867026`, while the two split-half
+values are `0.9997955468` and `0.9997952732`. GT FSC-AUC is `0.5874386123`
+for RECOVAR and `0.5820647217` for RELION, a delta of `+0.0053738907`.
+Final all-data ran only after convergence, and the GUI-quality grid-correction
+override remained unset/off. The summary JSON SHA-256 is
+`c21bcee4320ff7973aa5cf08c2a1052edf0ad5ebab29dee28e4ce3141ec7406b`.
