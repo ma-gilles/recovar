@@ -6435,6 +6435,40 @@ the inertness report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_bpref_factor_v2_panel32_same_gpu_20260719T101000Z/analysis/capture_inertness_v2.json`
 (SHA-256 `532c3a5a7bbdfb6411f81cc9aeda8dc7c574f5555890e1f97b609b259699dbfb`).
 
+## 2026-07-19 case-20 variable-support factor-panel closure
+
+The sealed 32-particle factor panel rejects a generic BPref factor,
+translation-geometry, or reduction-order defect at physical iteration 4.
+Every RELION fine rotation has one exact RECOVAR transpose-convention match,
+all 116 translation phase increments agree within `7.45e-9`, and 27 of 32
+particles have exact hypothesis support. On those 27 particles, global
+relative L2 is `2.60e-4` for posterior, `3.73e-5` for the processed image,
+`3.93e-5` for CTF, `5.30e-7` for inverse noise, and `2.30e-4`/`2.49e-4`
+for orientation-composite data/weight.
+
+The residual is instead concentrated in five preselected particles with
+engine-specific posterior support: stack indices 1969, 2855, 1036, 867, and
+2327. Stack 1969 has RECOVAR-exclusive retained mass `0.713481489` and
+posterior relative L2 `1.149`; its normalized factor operands are already
+closed. Stack 2855 combines posterior-support divergence with an image-only
+correction-factor relative L2 of `0.2752`. Across the full panel, production
+versus sequential-float32 or canonical-float64 reduction controls are only
+`4.78e-8`--`2.23e-7` relative L2, about seven orders below the behavioral
+cohort effect.
+
+This classifies the boundary as upstream engine-state posterior/support and
+image-correction divergence, not factor algebra or numerical reduction noise.
+The next causal boundary is a controlled aggregate iteration-2/3 score,
+posterior, and state substitution. Do not resume serial particle debugging.
+The authoritative seal is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_bpref_factor_v2_panel32_same_gpu_20260719T101000Z/analysis/SEALED_FACTOR_PANEL_V1.json`
+(SHA-256 `9f54f2707aa328e6144643a92bc4c61f5871103d27f43fc97cbd8ff18b4f8611`),
+and the interpretation is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it4_bpref_factor_v2_panel32_same_gpu_20260719T101000Z/analysis/variable_support_factor_interpretation_v1.json`
+(SHA-256 `1c51c21ba73af7359815e7b554bb98777650c5332ded5892394a30fd95ee14f5`).
+Intermediate comparisons use exact/distribution metrics; map quality uses
+FSC/FSC-AUC only, and correlation is not computed.
+
 ## 2026-07-20 K=4 continuation rejection and live-factor replacement
 
 The iteration-10 serialized-continuation retry is rejected as a parity oracle.
