@@ -6469,6 +6469,67 @@ and the interpretation is
 Intermediate comparisons use exact/distribution metrics; map quality uses
 FSC/FSC-AUC only, and correlation is not computed.
 
+## 2026-07-19 case-20 exact-state iteration-2/3 M-step closure
+
+Read-only same-A100 audits of a fresh uninterrupted RELION trajectory close
+the physical-iteration-2 and physical-iteration-3 M-step boundaries when the
+incoming state is exact. At iteration 2, the RECOVAR-minus-RELION BPref
+FSC-AUC delta is `-8.51282e-7`, and exact-state RECOVAR reconstruction matches
+the fresh RELION merged map at FSC-AUC `0.999999999620`. At iteration 3, the
+BPref FSC-AUC delta is `+1.84211e-6`, the maximum shellwise FSC delta through
+shell 26 is `2.98802e-5`, and the reconstructed merged-map FSC-AUC is
+`0.999999999439`.
+
+A companion iteration-3 incoming-map A/B shows the resident iteration-2 map
+at merged FSC-AUC `0.999999999726` versus RELION and an arm-to-arm
+iteration-3 FSC-AUC of `0.999999999760`. Its earlier descriptive amplification
+of `1-FSC-AUC` is therefore an approximately `1e-9` floor effect, superseded
+by the direct BPref and reconstruction closure. Physical iterations 2 and 3
+do not introduce a material case-20 seed in the low-resolution join or Wiener
+reconstruction. The remaining boundary is inherited state and the
+score/posterior/contribution inputs that feed this closed path.
+
+The sealed interpretations are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_relion_mstep_dump_same_gpu_20260719T213000Z/audit/PHYSICAL_IT2_BPREF_BOUNDARY_INTERPRETATION_V1.md`
+(SHA-256 `6f4220958da7d4faf403e622db6a50b57a6dd4a09767cbe2d575120d543c9ab6`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_relion_mstep_dump_same_gpu_20260719T213000Z/audit/PHYSICAL_IT3_BPREF_BOUNDARY_INTERPRETATION_V1.md`
+(SHA-256 `862878cba36203dc08a31bb481de9868589a9834c94d36b03d5865f7437e4fce`).
+Map quality uses shellwise FSC/FSC-AUC only; correlation is not computed.
+
+## 2026-07-20 case-20 physical-iteration-3 resident-state factorial
+
+A same-physical-A100 six-arm factorial restored selected RECOVAR-produced
+resident iteration-2 state only after a complete RELION replay override at
+physical iteration 3. All arms used RELION scoring references through
+iteration 3, source commit `1e208826`, GPU UUID
+`GPU-dc6576aa-e1e4-6055-4a5e-d0fa809f3983`, current sizes `[56, 56, 52]`,
+and HEALPix orders `[3, 3, 3]`. GUI final-grid and forced after-max overrides
+were unset.
+
+The exact all-RELION control reproduced the physical-iteration-3 merged map
+at FSC-AUC `0.999999999074`. The individual RECOVAR-state arms had the
+following merged FSC-AUC deltas versus that control: poses `-6.35e-13`, image
+norm/group scale `-9.65e-12`, tau2/noise `-1.65e-10`, and image scale plus
+poses `-1.42e-11`. Their direct merged FSC-AUC values versus the exact control
+were all at least `0.999999999596`. These state components are not material
+individual iteration-3 map seeds, and the scale-plus-poses arm shows no
+material interaction.
+
+Restoring the complete RECOVAR resident bundle gave merged FSC-AUC
+`0.999999894444` versus RELION, a `-1.04631e-7` delta from the exact control,
+and direct merged FSC-AUC `0.999999895635` versus the control. This is a
+reproducible full-bundle effect, but it remains roughly four orders of
+magnitude inside the `0.995` cross-engine gate. Because it is about three
+orders larger than the named individual arms, the next bounded split targets
+the remaining maps, direction-prior, optimiser-state, and translation-sigma
+components before aggregate score/posterior comparison.
+
+The authoritative seal is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_state_factorial_same_gpu_20260720T105500Z/audit/SEAL_V1.json`
+(SHA-256 `995fca71c75c5a23bd79043d7fb4f0e2ad2226e4dd8458ffdac4b5ab9ac42564`).
+Map quality uses shellwise FSC/FSC-AUC only; correlation is not computed.
+
 ## 2026-07-20 K=4 continuation rejection and live-factor replacement
 
 The iteration-10 serialized-continuation retry is rejected as a parity oracle.
