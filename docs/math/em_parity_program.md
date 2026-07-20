@@ -6939,3 +6939,48 @@ for RECOVAR and `0.5820647217` for RELION, a delta of `+0.0053738907`.
 Final all-data ran only after convergence, and the GUI-quality grid-correction
 override remained unset/off. The summary JSON SHA-256 is
 `c21bcee4320ff7973aa5cf08c2a1052edf0ad5ebab29dee28e4ce3141ec7406b`.
+
+## 2026-07-20 current-head K=4 three-iteration replay
+
+The adaptive pass-1 CUDA scorer-matrix production change also routes K-class
+global searches, so current pushed commit
+`dc47d27ddaa753327252ed6997672995a2861911` was replayed for three numbered
+iterations against the immutable same-dispatch K=4 RELION oracle from commit
+`f2c1a384400aec37dc6805856a5ba645650a44f1`. Science job `11432973`
+completed status 0 on H100 `della-h19g1` in 839 seconds. It remained
+non-converged and correctly skipped final all-data; grid correction and forced
+after-max were unset.
+
+Every map-quality gate passes. Direct per-class RECOVAR-versus-RELION FSC-AUC
+is at least `0.9999999746`, `0.9999989689`, and `0.9996362300` in iterations
+1--3. The minimum RECOVAR-minus-RELION GT FSC-AUC delta is `-3.96921e-6`,
+well inside the unchanged `-0.002` gate. Correlation was not computed or used.
+
+Strict-state audit job `11433052` returned its intentional status 2 because
+the frozen fixture does not include complete candidate-score evidence for the
+known iteration-3 boundary. The mismatch set is unchanged from the old
+RECOVAR oracle at commit `111b8fde65725bb2cebbcfae82dd1f251221dcb9`:
+particle 1513 changes class; particles 1513, 2136, 4685, 7661, 7700, and 9357
+change rotation; and all except 7700 change translation. Iterations 1 and 2
+have exact class, rotation, and translation decisions.
+
+A direct current-versus-old RECOVAR comparison confirms zero class-decision,
+rotation-over-`1e-3`-degree, or translation-over-`1e-4`-pixel differences in
+all three iterations. Per-class current-versus-old map FSC-AUC is at least
+`0.9999999505685849`; maximum Pmax difference is `2.22385e-4`. The new
+coarse scorer changes a small number of significance-boundary counts and
+produces at most `1.06140e-5` relative L2 in the recorded half-1 M-step
+numerator, but it does not create a discrete-decision or material map change.
+The old-versus-current minimum iteration-3 FSC-AUC against RELION changes by
+only `-7.97e-9`. No additional K-class code or threshold change is justified.
+
+The immutable run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_cold3_currenthead_recovar_replay_dc47d27d_20260720T174500Z`.
+The strict trajectory report SHA-256 is
+`80fac125179eecb413800e2a9a574b3c0e93495ae19934e2675d0d27ae430b5f`,
+the direct current-versus-old report SHA-256 is
+`58bad36b0f8708682d5646ba916eec32d61c450fcf5dbb2e76a88dafb17dfc6d`,
+the interpretation SHA-256 is
+`abaabbc4e64f688cde83f8ebb9efa589985ed174d816c4638533789587dbf020`,
+and the self-excluding accepted-artifact seal verifies with SHA-256
+`c0ebabfdf373353ded4a7824faa5f4a5b4962aaed335d597e6962ccae28d2070`.
