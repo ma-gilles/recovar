@@ -6987,3 +6987,46 @@ the interpretation SHA-256 is
 `18eb6bfe13a422d0e76c90bbf12d634cc0f0cf1850bd19ec80912fe54c04d2ba`,
 and the self-excluding accepted-artifact seal verifies with SHA-256
 `d1e21eff2749cc4561a5e332ef4ac35d847cd888bdcb30360b73f93d0676cc69`.
+
+## 2026-07-20 current-head autonomous case-20 closure
+
+Science job `11435532` completed status 0 on H100 `della-h19g1` from the
+exact pushed commit `790ea8a96a2f2b7b063b69c579dd44bb1cf8288c`. It produced 11 numbered
+iterations, converged, and only then ran final all-data. Grid correction and
+forced final all-data after non-convergence were unset. The immutable run root
+is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_currenthead_autonomous_790ea8a9_20260720T230537Z`.
+
+All numbered map gates pass against RELION. The minimum split-half and merged
+FSC-AUC values are `0.999999998053`, `0.999999998391`, and
+`0.999999998577`; the worst RECOVAR-minus-RELION GT FSC-AUC delta is
+`-1.63512e-7`. Final split-half FSC-AUC is `0.999991603804` and
+`0.999391929757`, final merged FSC-AUC is `0.997760979983`, and the final GT
+delta is `+0.001141882262`. Correlation was not computed or used.
+
+The current-size schedule is `[56, 56, 52, 52, 50, 50, 50, 52, 50, 52,
+50]`, exactly matching RELION in all 11 iterations. The older autonomous run
+at `ac5177d2` incorrectly stayed at size 50 in iterations 8 and 10. Its final
+merged FSC-AUC was `0.986023998270`; the current-head run improves that to
+`0.997760979983`. Its numbered merged FSC-AUC began diverging at iteration 4
+and reached `0.999839148101` at iteration 10, whereas the current-head values
+remain at least `0.999999998577`. Final pose mean improves from
+`0.6939696` degrees to `0.00270765` degrees, translation mean from
+`0.0636256` pixels to `0.000502069` pixels, and Pmax absolute mean from
+`0.00965278` to `0.000214967`. This fresh autonomous trajectory closes the
+pre-fix case-20 regression without changing the `0.999` significance rule or
+the existing map-quality gates.
+
+The trajectory audit is `audit/k1_fsc_trajectory.json` under the run root
+(SHA-256 `18329b437c2fd95f6e5bc7e5cdf9b209963988eb35f9cb7498cf473c62e9e530`),
+the intermediate-state audit SHA-256 is
+`cd5fbd273820b558fdff78ff3d22fa3351da51528b7801ddba9e354b97a819f3`,
+and the corrected old-versus-current comparison SHA-256 is
+`4b10eec23254ebe3caf88a420447dc00ad9d05d8642d3d068eeb4105aaf1d061`.
+The final audit manifest SHA-256 is
+`29909291d281a61db29524ca850d2d90948971b1b4e6e1fe8563fd6cd07438ff`.
+The old and current runs used the same H100 model and node but different GPU
+UUIDs, so this is combined-head acceptance evidence; causal attribution to
+the adaptive pass-1 CUDA matrix fix remains grounded in the prior same-A100
+exact-state A/B diagnostics. The summarizer correctly resolves the final
+RELION source to numbered iteration 11.
