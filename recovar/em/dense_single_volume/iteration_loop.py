@@ -161,6 +161,7 @@ from recovar.em.dense_single_volume.relion_worker_scale import (
 )
 from recovar.em.sampling import (  # noqa: F401  -- monkeypatched by tests/unit/test_refine_relion_mode.py
     _get_relion_rotation_grid_eulers_float64,
+    _relion_adaptive_pass1_rotations_f32,
     advance_relion_perturbation,
     advance_relion_perturbation_from_seed,
     apply_relion_rotation_perturbation,
@@ -5996,11 +5997,13 @@ def _run_relion_iteration_loop(
         effective_rotations = current_rotations
         effective_rotation_eulers = np.asarray(current_rotation_eulers, dtype=np.float32)
         effective_mstep_rotations = None
+        adaptive_pass1_rotations = None
         rotation_log_prior_per_half = [None, None]
         class_rotation_log_prior_per_half = [None, None]
         use_local = state.do_local_search and all(
             eulers is not None for eulers in relion_half_inputs.previous_best_rotation_eulers
         )
+        adaptive_pass1_source_eulers = np.asarray(effective_rotation_eulers, dtype=np.float64)
         # --- Apply RELION SamplingPerturbation to the trial grid for this iter ---
         # healpix_sampling.cpp:1909-1934 (rotations) + 1810-1820 (translations)
         # Perturbation is a rigid rotation of SO(3): A := A @ R_perturb applied
@@ -6099,6 +6102,22 @@ def _run_relion_iteration_loop(
                 float(state.translation_step),
             )
             current_translations = jnp.asarray(_perturbed_translations, dtype=jnp.float32)
+        if not use_local and int(state.adaptive_oversampling) > 0:
+            adaptive_pass1_order = (
+                int(_replay_meta["healpix_order"])
+                if _replay_meta is not None
+                else int(current_healpix_order)
+            )
+            adaptive_pass1_rotations = _relion_adaptive_pass1_rotations_f32(
+                adaptive_pass1_source_eulers,
+                random_perturbation if (_replay_meta is not None or perturb_factor > 0) else 0.0,
+                relion_angular_sampling_deg(adaptive_pass1_order, adaptive_oversampling=0),
+            )
+            if adaptive_pass1_rotations is not None:
+                logger.info(
+                    "RELION adaptive pass 1: using CUDA-built coarse scorer rotations; "
+                    "fine/M-step rotations remain host-generated"
+                )
         # NOTE: previously this branch restricted the translation grid to a single
         # perturbed shift at iter 1 with --firstiter_cc. That was a misguided
         # emulation; RELION's ml_optimiser.cpp:9181-9207 evaluates the FULL
@@ -6716,7 +6735,11 @@ def _run_relion_iteration_loop(
                     means_k=means[k],
                     mean_variance=mean_variance_k,
                     noise_variance_k=noise_variance_k,
-                    effective_rotations=effective_rotations,
+                    effective_rotations=(
+                        adaptive_pass1_rotations
+                        if adaptive_pass1_rotations is not None
+                        else effective_rotations
+                    ),
                     current_translations=current_translations,
                     base_translations=base_translations,
                     current_healpix_order=current_healpix_order,

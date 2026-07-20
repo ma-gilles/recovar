@@ -7,10 +7,53 @@ import numpy as np
 from recovar.em.dense_single_volume import iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume import relion_metadata
 from recovar.em.sampling import (
+    _relion_adaptive_pass1_rotations_f32,
     _relion_mstep_rotations_from_eulers,
     apply_relion_rotation_perturbation_to_eulers,
     get_oversampled_rotation_grid_from_samples,
 )
+
+
+def test_adaptive_pass1_routes_source_eulers_and_host_right_matrix_to_cuda_builder(monkeypatch):
+    from recovar.em import sampling as sampling_module
+
+    source_eulers = _UNPERTURBED_FINE_EULERS_F64[:2]
+    sentinel = np.arange(18, dtype=np.float32).reshape(2, 3, 3)
+    calls = []
+
+    def fake_builder(eulers_deg, right_matrix=None):
+        calls.append((np.asarray(eulers_deg), np.asarray(right_matrix)))
+        return sentinel
+
+    monkeypatch.setattr(sampling_module, "_relion_device_scoring_rotations_f32", fake_builder)
+    result = _relion_adaptive_pass1_rotations_f32(
+        source_eulers,
+        random_perturbation=-0.455874443054,
+        angular_sampling_deg=7.5,
+    )
+
+    np.testing.assert_array_equal(result, sentinel)
+    assert len(calls) == 1
+    np.testing.assert_array_equal(calls[0][0], source_eulers)
+    perturbation_deg = -0.455874443054 * 7.5
+    expected_right = sampling_module._relion_euler_angles_to_matrix(
+        np.asarray([[perturbation_deg] * 3], dtype=np.float64)
+    )[0]
+    np.testing.assert_array_equal(calls[0][1], expected_right)
+
+
+def test_adaptive_pass1_omits_right_matrix_without_perturbation(monkeypatch):
+    from recovar.em import sampling as sampling_module
+
+    seen = []
+
+    def fake_builder(eulers_deg, right_matrix=None):
+        seen.append(right_matrix)
+        return np.zeros((len(eulers_deg), 3, 3), dtype=np.float32)
+
+    monkeypatch.setattr(sampling_module, "_relion_device_scoring_rotations_f32", fake_builder)
+    _relion_adaptive_pass1_rotations_f32(_UNPERTURBED_FINE_EULERS_F64[:1], 0.0, 7.5)
+    assert seen == [None]
 
 # Five captured RELION iteration-1 winner rows that previously changed the
 # outer-radius predicate. These are host RFLOAT Euler rows before the final

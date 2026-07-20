@@ -573,14 +573,13 @@ def _relion_device_scoring_rotations_f32(
     eulers_deg: np.ndarray,
     right_matrix: np.ndarray | None = None,
 ) -> np.ndarray | None:
-    """Reproduce RELION's CUDA ``make_eulers_3D`` arithmetic for diagnostics.
+    """Reproduce RELION's CUDA ``make_eulers_3D`` arithmetic.
 
-    The CUDA helper is used by some RELION paths, but not by the accelerated
-    expectation/weighted-sum path mirrored by RECOVAR EM.  That path calls
-    host ``generateEulerMatrices(..., inverse=true)`` in RFLOAT precision and
-    copies the resulting XFLOAT matrices to the device.  Keep this helper for
-    isolated source-parity diagnostics; production EM scorer matrices are
-    built by :func:`_relion_mstep_rotations_from_eulers` instead.
+    RELION's adaptive pass-1 ``AccProjectorPlan`` builds scorer matrices on
+    the device. Fine scoring and weighted-sum backprojection instead use the
+    host ``generateEulerMatrices(..., inverse=true)`` path represented by
+    :func:`_relion_mstep_rotations_from_eulers`. Callers must therefore keep
+    coarse scorer matrices separate from fine/M-step matrices.
 
     Return ``None`` on CPU so CPU-only tools retain the existing NumPy path.
     A GPU RELION-parity run is deliberately fail-closed if the custom CUDA
@@ -609,6 +608,29 @@ def _relion_device_scoring_rotations_f32(
     return np.asarray(jax.device_get(rotations), dtype=np.float32)
 
 
+def _relion_adaptive_pass1_rotations_f32(
+    source_eulers_deg: np.ndarray,
+    random_perturbation: float,
+    angular_sampling_deg: float,
+) -> np.ndarray | None:
+    """Build exact RELION CUDA matrices for adaptive coarse scoring only.
+
+    ``AccProjectorPlan::setup`` sends the unperturbed float32 Euler rows and,
+    when active, a host-generated right perturbation matrix to
+    ``acc_make_eulers_3D``. This differs by a few float32 ulps from the host
+    inverse matrices used by RELION's fine and weighted-sum paths. On CPU,
+    return ``None`` so callers retain the existing host implementation.
+    """
+
+    right_matrix = None
+    if abs(float(random_perturbation)) >= 1e-12:
+        perturbation_deg = float(random_perturbation) * float(angular_sampling_deg)
+        right_matrix = _relion_euler_angles_to_matrix(
+            np.asarray([[perturbation_deg, perturbation_deg, perturbation_deg]], dtype=np.float64)
+        )[0]
+    return _relion_device_scoring_rotations_f32(source_eulers_deg, right_matrix)
+
+
 def apply_relion_rotation_perturbation_to_eulers(
     eulers_deg,
     random_perturbation,
@@ -619,12 +641,11 @@ def apply_relion_rotation_perturbation_to_eulers(
     """Apply RELION's SamplingPerturbation and return eulers plus matrices.
 
     RELION first converts the perturbed matrix back to RFLOAT Euler angles.
-    Its accelerated expectation and weighted-sum paths then both call host
+    Its fine-score and weighted-sum paths then call host
     ``generateEulerMatrices(..., inverse=true)`` and cast those matrices to
-    XFLOAT before copying them to the device.  Use the same host-double
-    reconstruction for both RECOVAR scoring and backprojection.  Rebuilding
-    scorer matrices with the CUDA ``make_eulers_3D`` helper instead changes
-    entries by a few float32 ulps and measurably changes fine posteriors.
+    XFLOAT before copying them to the device. Use the same host-double
+    reconstruction here. Adaptive coarse scoring has a distinct CUDA matrix
+    path exposed by :func:`_relion_adaptive_pass1_rotations_f32`.
 
     When ``return_mstep_rotations`` is true, a third array contains the
     RECOVAR-frame matrices produced by RELION's separate host-side inverse
