@@ -468,6 +468,8 @@ def _maybe_dump_k_class_significance_batch(
     target_local_positions=None,
     target_scores_pre_prior_per_class=None,
     target_scores_with_prior_per_class=None,
+    projected_reference_rotation_ids=None,
+    projected_reference_per_class=None,
     shifted_data=None,
     ctf2_data=None,
     window_indices=None,
@@ -643,6 +645,16 @@ def _maybe_dump_k_class_significance_batch(
             # comparisons). Shape (n_classes, n_rot, n_trans).
             save_kwargs["scores_pre_prior_per_class"] = scores_pre_prior_per_class
             save_kwargs["scores_with_prior_per_class"] = scores_with_prior_per_class
+        if projected_reference_per_class is not None:
+            projection_values = np.asarray(projected_reference_per_class)
+            projection_ids = np.asarray(projected_reference_rotation_ids, dtype=np.int32)
+            if projection_values.shape[:2] != (n_classes, projection_ids.size):
+                raise ValueError(
+                    "projected-reference dump must have shape "
+                    f"({n_classes}, {projection_ids.size}, n_pixels), got {projection_values.shape}",
+                )
+            save_kwargs["projected_reference_rotation_ids"] = projection_ids
+            save_kwargs["projected_reference_per_class"] = projection_values.astype(np.complex128)
         np.savez_compressed(out_path, **save_kwargs)
 
 
@@ -1557,7 +1569,7 @@ def _compute_k_class_significance_batched(
         ).real
         return shifted_half, batch_norm, ctf2_over_nv_half
 
-    def _score_block(class_index, mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
+    def _project_block(class_index, mean_for_proj, rots_b):
         if use_relion_projector:
             projector_kwargs = {}
             if current_size is not None:
@@ -1594,6 +1606,10 @@ def _compute_k_class_significance_batched(
                 disc_type,
                 **projection_kwargs,
             )
+        return proj_half_b, proj_abs2_half_b
+
+    def _score_block(class_index, mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
+        proj_half_b, proj_abs2_half_b = _project_block(class_index, mean_for_proj, rots_b)
         if use_window:
             proj_w = proj_half_b[:, window_indices]
             proj_abs2_w = proj_abs2_half_b[:, window_indices]
@@ -2156,6 +2172,30 @@ def _compute_k_class_significance_batched(
                     for blocks in dump_target_with_prior_blocks_per_class
                 ]
                 target_local_positions_for_dump = dump_target_local_positions
+            projected_reference_rotation_ids = None
+            projected_reference_per_class = None
+            requested_projection_rotations = sorted(
+                parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_PROJECTION_ROTATIONS"),
+            )
+            if requested_projection_rotations and target_local_positions_for_dump is not None:
+                projected_reference_rotation_ids = np.asarray(requested_projection_rotations, dtype=np.int32)
+                if (
+                    int(projected_reference_rotation_ids[0]) < 0
+                    or int(projected_reference_rotation_ids[-1]) >= n_rot
+                ):
+                    raise ValueError(
+                        "RECOVAR_SIGNIFICANCE_DUMP_PROJECTION_ROTATIONS contains an out-of-range rotation",
+                    )
+                projection_rotations = jnp.asarray(rotations[projected_reference_rotation_ids])
+                projection_values = []
+                for class_index, mean_for_proj in enumerate(means_for_proj):
+                    projected_half, _ = _project_block(class_index, mean_for_proj, projection_rotations)
+                    if use_window:
+                        projected_half = projected_half[:, window_indices]
+                    if not use_float64_scoring:
+                        projected_half = projected_half.astype(jnp.complex64)
+                    projection_values.append(np.asarray(projected_half, dtype=np.complex128))
+                projected_reference_per_class = np.stack(projection_values, axis=0)
             _maybe_dump_k_class_significance_batch(
                 experiment_dataset=experiment_dataset,
                 indices=indices,
@@ -2180,6 +2220,8 @@ def _compute_k_class_significance_batched(
                 target_local_positions=target_local_positions_for_dump,
                 target_scores_pre_prior_per_class=target_scores_pre_prior_per_class,
                 target_scores_with_prior_per_class=target_scores_with_prior_per_class,
+                projected_reference_rotation_ids=projected_reference_rotation_ids,
+                projected_reference_per_class=projected_reference_per_class,
                 shifted_data=shifted_data,
                 ctf2_data=ctf2_data,
                 window_indices=window_indices,

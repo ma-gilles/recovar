@@ -321,7 +321,14 @@ def test_kclass_dump_helper_accepts_operand_kwargs():
     pre-instrumentation schema and break the RELION-parity diagnostic.
     """
     sig = inspect.signature(sig_mod._maybe_dump_k_class_significance_batch)
-    required = {"shifted_data", "ctf2_data", "window_indices", "half_weights_used"}
+    required = {
+        "shifted_data",
+        "ctf2_data",
+        "window_indices",
+        "half_weights_used",
+        "projected_reference_rotation_ids",
+        "projected_reference_per_class",
+    }
     missing = required - set(sig.parameters)
     assert not missing, (
         f"_maybe_dump_k_class_significance_batch is missing operand kwargs: {sorted(missing)}"
@@ -346,6 +353,8 @@ def test_kclass_dump_call_site_passes_operand_kwargs():
         "ctf2_data=ctf2_data",
         "window_indices=window_indices",
         "half_weights_used=",
+        "projected_reference_rotation_ids=projected_reference_rotation_ids",
+        "projected_reference_per_class=projected_reference_per_class",
     ):
         assert needle in window, f"K-class dump call site lost kwarg: {needle!r}"
     # The half_weights_used branch must distinguish windowed vs
@@ -415,6 +424,11 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     ctf2_data = np.zeros((n_images, n_pix), dtype=np.float64)
     window_indices = np.arange(n_pix, dtype=np.int32)
     half_weights_used = np.ones(n_pix, dtype=np.float64)
+    projected_reference_rotation_ids = np.asarray([0, 2], dtype=np.int32)
+    projected_reference_per_class = np.arange(
+        n_classes * projected_reference_rotation_ids.size * n_pix,
+        dtype=np.float32,
+    ).reshape(n_classes, projected_reference_rotation_ids.size, n_pix).astype(np.complex64)
 
     dump_dir = tmp_path / "dump"
     dump_dir.mkdir()
@@ -446,6 +460,8 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
         ctf2_data=ctf2_data,
         window_indices=window_indices,
         half_weights_used=half_weights_used,
+        projected_reference_rotation_ids=projected_reference_rotation_ids,
+        projected_reference_per_class=projected_reference_per_class,
         debug_iteration=2,
     )
     files = sorted(os.listdir(dump_dir))
@@ -457,8 +473,18 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     assert payload["ctf2_data"].dtype == np.float64
     assert payload["window_indices"].dtype == np.int32
     assert payload["half_weights"].dtype == np.float64
+    assert payload["projected_reference_rotation_ids"].dtype == np.int32
+    assert payload["projected_reference_per_class"].dtype == np.complex128
     assert payload["window_indices"].shape == (n_pix,)
     assert payload["half_weights"].shape == (n_pix,)
+    assert payload["projected_reference_rotation_ids"].shape == (2,)
+    assert payload["projected_reference_per_class"].shape == (n_classes, 2, n_pix)
+    np.testing.assert_array_equal(
+        payload["projected_reference_rotation_ids"], projected_reference_rotation_ids,
+    )
+    np.testing.assert_array_equal(
+        payload["projected_reference_per_class"], projected_reference_per_class,
+    )
     assert int(payload["n_classes"]) == n_classes
     assert int(payload["n_rot"]) == n_rot
     assert int(payload["n_trans"]) == n_trans
