@@ -6597,6 +6597,51 @@ The 357-entry self-excluding accepted-artifact seal is
 (SHA-256 `5466f9c194cf27409232ddfc205cbadff0a7119ade077d1efa2f97c4b16470c7`).
 Map quality uses shellwise FSC/FSC-AUC only; correlation is not computed.
 
+## 2026-07-20 case-20 exact-state coarse-parent cutoff localization
+
+The exact-state fine candidates partition into 32 children per retained
+coarse parent. Candidate support is exact for 26/32 panel particles; all six
+mismatches differ by whole parent blocks. After restricting both engines to
+their common fine support and renormalizing, posterior relative L2 has median
+`1.33e-4` and maximum `3.15e-4`. RELION-posterior-weighted centered-log RMS
+has median `2.03e-4` and maximum `4.79e-4`. The common score shape is
+therefore closed at the few-`1e-4` scale; the material raw-posterior outliers
+come from exclusive parent blocks, not a general fine-score or normalizer
+formula mismatch.
+
+A corrected dense global pass-1 capture then replayed the exact iteration-3
+state on the same A100 for the six support-mismatch particles. All dump
+identities, current sizes, K=1 shapes, posterior normalizations, significance
+masks, and archived RECOVAR coarse counts close exactly. Every RECOVAR-only
+parent is its final retained rank, and every RELION-only parent is RECOVAR's
+first excluded rank. Stack 626, 1266, and 1509 cross the strict `0.999`
+criterion only when that final RECOVAR-only parent is added. Stack 1045
+crosses `0.999` at rank 19 by only `5.55e-7`, while RELION retains rank 20.
+
+The one-for-one swaps are sub-`0.001` log-score cutoff reversals. For stack 1036,
+RECOVAR ranks its retained parent 54 and the RELION-only parent 55; their
+final coarse log scores differ by `8.54e-4`. For stack 2707 the analogous
+rank-28/rank-29 difference is `5.87e-4`. Those residuals follow much larger
+data/prior cancellations: respectively `+0.649132` plus `-0.648279`, and
+`-1.917908` plus `+1.918505`. Candidate geometry, parent expansion,
+posterior normalization, and significance semantics are no longer viable
+primary causes. The remaining discriminator is passive RELION coarse pass-1
+data-score/prior capture for these parent pairs; factor-v2 begins at fine pass
+2 and cannot separate the two operands. No production threshold expansion or
+formula change is justified from the current evidence.
+
+The numerical cutoff report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_exactstate_posterior_panel32_same_gpu_20260720T160500Z/analysis/parent_pass1_cutoff_v1.json`
+(SHA-256 `82d1d380021d24b7172153544415b3c1588a70eaf0152536ac326e82b0bd1849`).
+The interpretation is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_exactstate_posterior_panel32_same_gpu_20260720T160500Z/analysis/PARENT_PASS1_CUTOFF_INTERPRETATION.md`
+(SHA-256 `ab01aea32c36b7f836b831e87b699ec720416938534f101cf223e7be478b97ac`).
+The focused analysis seal verifies all 15 named inputs and outputs at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case20_it3_exactstate_posterior_panel32_same_gpu_20260720T160500Z/analysis/PARENT_PASS1_ANALYSIS_SEAL.sha256`
+(SHA-256 `8a27b82fc91e325eec432e20cb085f0a29cbb365218af8d4ebbd74d58f6c2db2`).
+GUI grid and forced final-all-data-after-max-iter overrides were unset. Map
+quality remains shellwise FSC/FSC-AUC; correlation is not a pass/fail metric.
+
 ## 2026-07-20 case-10 x-half acceptance OOM classification
 
 Case-10 science job `11409144` reached physical iteration 12 on A100
@@ -6662,8 +6707,9 @@ aggregate-factor audit `11415296` compares data, weight, tau2, sigma2, and
 data-vs-prior using exact/relative-L2 and shellwise metrics. Grid correction
 and forced final-all-data-after-nonconvergence remain unset. The replay root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_live_factor_recovar_9d172278_20260720T090629Z`.
-The live replay has entered physical iteration 8 and continues through compact
-pair buckets without an OOM or stalled progress signature.
+The live replay completed physical iteration 8 and entered physical iteration
+9. It continues through compact-pair buckets without an OOM or stalled
+progress signature.
 
 An independent full-trajectory audit also quantifies why an unconstrained
 fresh RELION run is not the deterministic oracle. The two 1.5-million-record
