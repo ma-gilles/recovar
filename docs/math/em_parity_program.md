@@ -7765,3 +7765,77 @@ The durable note is
 `d90d6416d53b36691953975c4168d5d61cc5d8d44b80995d18eaf61e779880ad`).
 Submitted jobs `11432810`, `11432811`, `11421266`, and `11421267`, plus their
 `afterany` sealers, remain the independent durable scheduler graphs.
+
+## 2026-07-21 case-7 panel confirms upstream state/reference locus
+
+Retry job `11442740` completed `0:0` on H100 `della-h20g3` in 3:45:14 and
+produced all 48 required iteration-11 fused-posterior captures: resident and
+exact-RELION-state/reference arms for a half-balanced panel of 12 low-Pmax
+pose-tail particles and 12 matched pose-stable controls. Both arms used source
+commit `77bcf3bd7f45760ab0671c4883d91a453d58113a`.
+
+The corrected v2 audit confirms the intended discriminator. Stable controls
+retain the same latent and physical winner in 12/12 particles, with candidate
+and physical-support median Jaccard 1, posterior total variation
+`0.009058262567317964`, reconstruction-support median Jaccard 1, and zero
+median winning-rotation displacement. The pose-tail retains the same latent
+winner in only 1/12 particles and physical winner in 2/12; its median
+candidate posterior total variation is `0.059013740489311566`, physical-pose
+TV is `0.058522763`, reconstruction-support Jaccard is `0.8333333333333333`,
+and winning-rotation displacement is `1.8481429893285553` degrees.
+
+Candidate topology remains matched at median Jaccard 1 in both cohorts. The
+cohort-specific posterior and winner response to substituting exact incoming
+state/reference therefore rejects common-input GPU near-tie arithmetic as the
+leading cause and keeps the locus in upstream accumulated state/reference
+drift.
+
+The preserved v1 output exposed an analyzer-only six-decimal translation-key
+bin-edge artifact: stable winners had zero reported physical overlap despite
+zero rotation displacement and only `4e-8`--`2.7e-7` pixel translation
+differences. V2 uses five decimals, well below the at-least-0.0835-pixel
+physical grid separation, and restores all stable physical winners without
+changing candidate, posterior, rotation, or reconstruction metrics. V2 JSON
+and Markdown SHA-256 values are
+`d4ce702b3bae8d7baacb4e9dfe7124714141b825d709f99fe23660f16692b836`
+and `6ddf51ae49a8a923137e20b5566f1d65fef8db8e1fed625499ddcbc545aff98c`.
+The complete durable note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/provenance/CASE7_IT11_PANEL_RETRY2_RESULT_20260721T0345-0400.md`
+(SHA-256
+`9ee603c6295459d890264d255c25da8fbe9469b4581281bfda2f4b26a19ecc08`).
+This bounded posterior diagnostic is non-gating; correlation was not computed.
+
+## 2026-07-21 case-10 final-transition FSC decomposition
+
+The final-only case-10 rejection begins in the unfiltered final half maps, not
+only the stored merged-map postprocessing. Last-numbered merged cross-engine
+FSC-AUC is `0.9999672271217562`. Final unfiltered half-1 and half-2 values are
+`0.9858434465381396` and `0.9853237654697927`; their explicit half-average is
+`0.9857213361877246`. Stored final merged products fall another approximately
+0.0027 to `0.9830065035340728`.
+
+Both engines make essentially the same large numbered-to-final transition:
+RECOVAR's own half-average transition FSC-AUC is `0.16724021722635543`,
+RELION's is `0.16722879541673202`, RECOVAR final versus RELION numbered is
+`0.1672287703373412`, and RECOVAR numbered versus RELION final is
+`0.16720296473855617`. Mixed-engine transitions reproduce the opposite
+engine's own transition to roughly `1e-5`--`3e-5`. Final half-average GT
+FSC-AUC is likewise tied (`0.07104744838232087` RECOVAR versus
+`0.07107504415350836` RELION). This rejects a unique final reconstruction
+branch as the leading cause and is consistent with small autonomous
+last-numbered state/reference differences being amplified by the shared
+Nyquist expectation.
+
+The gap is broadband: the numbered merged FSC never falls below 0.995, while
+both final halves first cross below it at shell 24 and the half-average at
+shell 25. The half-average minimum is `0.980867547381934` at shell 188; the
+stored merged minimum is `0.9662718962179357` at shell 151. Do not change
+final reconstruction, enable grid correction, or loosen the acceptance gate
+from this evidence. JSON and shellwise-NPZ SHA-256 values are
+`a2f485b11fda298960e9c200b9a4855c157861494d562c9b70fc21080cdbc924`
+and `0b6b220ed199d2a0dbdc5a2e57e66c11ba23b1552f5e96432021faf94508fe38`.
+The complete durable note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_tail_lowcap_accept_9d172278_20260720T164557Z/provenance/CASE10_FINAL_TRANSITION_FSC_LOCALIZATION_20260721T0348-0400.md`
+(SHA-256
+`c6ecb543cbb9626835e7547aa06a900daf8cb02dd7cf8586576abbd7fc2681db`).
+Correlation was not computed.
