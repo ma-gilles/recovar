@@ -7216,6 +7216,22 @@ the input-manifest SHA-256 is
 and the method-note SHA-256 is
 `04dca2557829ff22c967ff4989fa42a3a0a0da3db8baf8b0fa79a89a8856eb32`.
 
+Iteration 5 also completed at `current_size=128`, reported 8.77 A, and
+retained `current_size=128` for iteration 6, matching RELION. Iteration 6 then
+entered the expected local-search HEALPix order 4. The five-row read-only
+snapshot remains inside every numbered map gate. Iteration-5 half-1/half-2/
+merged cross-engine FSC-AUC is `0.999998472037`/`0.999998404940`/
+`0.999999192750`, and its merged GT FSC-AUC delta is `+5.18920e-6`. The
+worst reopened merged non-DC shell FSC is `0.999993303985` at shell 62. The
+analyzer exits 2 solely for incomplete live topology (`RECOVAR=5`,
+`RELION=14`); this is not terminal acceptance. The 21 exact numerical inputs
+are sealed under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it5_20260721T003600`.
+The input-manifest SHA-256 is
+`9303ea0a9bab79a184fb7aa09dcbf8010d02023dc82972bc679203b0304fd3ca`,
+and the method-note SHA-256 is
+`d98d106cc66cff8dae6068d35cce59b009ed2ea177c90c4d0bb3163eefdfb479`.
+
 Dependent job `11440102` runs both the shellwise FSC/FSC-AUC trajectory gate
 and the intermediate topology/artifact audit. Dependent sealer `11440295`
 then fail-closes on exact source provenance, science/audit exit status,
