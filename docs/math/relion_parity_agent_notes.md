@@ -4644,3 +4644,25 @@ same-device equivalence or numerical noise.
   (SHA-256
   `1453b5632771f04d7201a3d36ffeb98e013c88fcebc4b76059049946035c681b`).
   Correlation was not computed; this remains diagnostic and non-gating.
+
+# 2026-07-21: case-7 persistent winners are almost entirely unchanged by replay
+
+- Only 1,203/100,000 stored rotation Euler rows change between resident and
+  exact-state/reference arms. All 961 closed and all 232 opened outcomes change;
+  4,822/4,832 persistent tails and all 93,975 stable rotations are identical.
+- Exact state/reference therefore fails to dislodge the resident winner for
+  99.793% of the persistent cohort, although its median arm-to-arm absolute
+  Pmax change is `0.01084938645362854`.
+- V2 analyzer/JSON SHA-256 values:
+  `db28bf1c9372a4a8e4af5d95f76be0eea6d39fe0dc90aab45199fadad6523faf`,
+  `bb0c54c8280931b4858c74a3531be0d09e85add9c5f61d24e1fa84414dd0718e`.
+  Durable note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/provenance/CASE7_FULL_POPULATION_ARM_WINNER_RESPONSE_20260721T0435-0400.md`
+  (SHA-256
+  `017eadfa1b1f0ea98f9096908f3f680f78ef4a380419509845030e57e042a8c6`).
+- Residual posterior science job `11451167` is running on one H100 with 48
+  balanced persistent/opened targets and controls; audit job `11451209` uses
+  `afterany` and fails closed on the 96-input schema. Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_residual_posterior_77bcf3bd_20260721T042500Z`.
+- This is diagnostic/non-gating; correlation was not computed and FSC/FSC-AUC
+  remains the map-quality gate.
