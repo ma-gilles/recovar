@@ -818,15 +818,25 @@ def _k1_data_vs_prior_for_scheduling(
     is passed here instead.
     """
     if corrected_data_vs_prior is not None:
-        dvp = np.asarray(corrected_data_vs_prior, dtype=np.float32).copy()
-        if int(current_size) < int(grid_size):
-            dvp[min(len(dvp), int(current_size) // 2 + 1) :] = 0.0
-        return dvp
+        return _truncate_data_vs_prior_for_current_size(
+            corrected_data_vs_prior,
+            current_size=current_size,
+            grid_size=grid_size,
+        )
 
     fsc_prev = np.asarray(raw_fsc, dtype=np.float32).copy()
     if int(current_size) < int(grid_size):
         fsc_prev[min(len(fsc_prev), int(current_size) // 2 + 1) :] = 0.0
     return np.asarray(fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge), dtype=np.float32)
+
+
+def _truncate_data_vs_prior_for_current_size(data_vs_prior, *, current_size, grid_size):
+    """Zero DVP shells beyond RELION's inclusive current-size boundary."""
+    truncated = np.asarray(data_vs_prior, dtype=np.float32).copy()
+    if int(current_size) < int(grid_size):
+        first_unavailable_shell = min(truncated.shape[-1], int(current_size) // 2 + 1)
+        truncated[..., first_unavailable_shell:] = 0.0
+    return truncated
 
 
 def _truncate_fsc_for_current_size_growth(fsc, *, current_size, grid_size):
@@ -7943,9 +7953,11 @@ def _run_relion_iteration_loop(
         # K>1: data_vs_prior comes from the shared per-class prior and the
         # combined class accumulators.
         if k_class_enabled:
-            dvp_iter = np.asarray(data_vs_prior_trajectory[-1], dtype=np.float32).copy()
-            if cs < grid_size:
-                dvp_iter[..., min(dvp_iter.shape[-1], cs // 2 + 1) :] = 0.0
+            dvp_iter = _truncate_data_vs_prior_for_current_size(
+                data_vs_prior_trajectory[-1],
+                current_size=cs,
+                grid_size=grid_size,
+            )
             dvp_res_shell = max(
                 resolution_from_data_vs_prior(dvp_class, allow_high_res_recovery=False)
                 for dvp_class in np.asarray(dvp_iter)
@@ -7958,8 +7970,11 @@ def _run_relion_iteration_loop(
                     fsc_to_relion_ssnr(np.asarray(fsc, dtype=np.float32), tau2_fudge=tau2_fudge),
                     dtype=np.float32,
                 )
-            if cs < grid_size:
-                dvp_iter[min(len(dvp_iter), cs // 2) :] = 0.0
+            dvp_iter = _truncate_data_vs_prior_for_current_size(
+                dvp_iter,
+                current_size=cs,
+                grid_size=grid_size,
+            )
             dvp_res_shell = resolution_from_data_vs_prior(
                 dvp_iter,
                 allow_high_res_recovery=True,

@@ -11696,6 +11696,34 @@ class TestRelionModeSmokeTest:
             allow_high_res_recovery=True,
         ) == boundary_shell
 
+    def test_current_resolution_state_keeps_boundary_shell(self):
+        """The post-M-step DVP state must retain RELION's inclusive boundary shell."""
+        current_size = 68
+        boundary_shell = current_size // 2
+        data_vs_prior = np.zeros((2, 65), dtype=np.float32)
+        data_vs_prior[:, : boundary_shell + 2] = 0.25
+        data_vs_prior[:, boundary_shell] = 10.0
+
+        truncated = iteration_loop_module._truncate_data_vs_prior_for_current_size(
+            data_vs_prior,
+            current_size=current_size,
+            grid_size=128,
+        )
+
+        np.testing.assert_array_equal(
+            truncated[:, : boundary_shell + 1],
+            data_vs_prior[:, : boundary_shell + 1],
+        )
+        assert np.all(truncated[:, boundary_shell + 1 :] == 0.0)
+        assert all(
+            regularization_module.resolution_from_data_vs_prior(
+                half_dvp,
+                allow_high_res_recovery=True,
+            )
+            == boundary_shell
+            for half_dvp in truncated
+        )
+
     def test_k1_growth_fsc_keeps_case15_size68_boundary_shell(self):
         """Case 15 iter 8 must scan shell 34 and grow 68 -> 78 like RELION."""
         fsc = np.zeros(65, dtype=np.float32)
