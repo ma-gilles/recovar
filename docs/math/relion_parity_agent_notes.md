@@ -4577,3 +4577,23 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it11_20260721T012700`.
 - Terminal convergence/final FSC/FSC-AUC remains pending; correlation was not
   computed.
+
+# 2026-07-21: case-9 completes terminal half-1 M-step
+
+- Science job `11432807` converged after numbered iteration 16 and entered
+  final all-data without a forced after-max override.
+- On H100 `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, the full-Nyquist
+  half-1 score pass completed 16,607 chunks/49,820 particles in 451.7 seconds.
+- The `(771, 771, 771)` x-half M-step used tail cap 735, completed 5,648
+  chunks/49,820 particles in 310.8 seconds, then completed host Hermitian
+  enforcement and both accumulator repacks. Total half-1 wall time was 857.3
+  seconds.
+- Manifest SHA-256:
+  `7c911e120b4e49ceedd7307657bc84357768709179b3aaa85b3c41dd6415af1d`.
+  Durable checkpoint:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case9_bucketcap_accept_9d172278_20260720T095000Z/provenance/CASE9_TERMINAL_HALF1_MSTEP_CHECKPOINT_20260721T0151-0400.md`.
+  Checkpoint SHA-256:
+  `ca933eab4a07b240c0f287fd0ef1bf5ffa40799ba53561dc53de17b6d00035e8`.
+- This is a bundled low-cap memory-boundary acceptance only; terminal
+  FSC/FSC-AUC, the sealer, and single-control attribution remain pending.
+  Correlation was not computed.

@@ -7546,3 +7546,26 @@ its seal-manifest SHA-256 is
 `2c2a682287b04dd7b1d272961f40ece77a934b5da9ee1c0b4315f4eb31c26b4b`.
 Iterations 12--14 and terminal acceptance remain pending; correlation was not
 computed.
+
+## 2026-07-21 case-9 terminal half-1 memory checkpoint
+
+Case-9 low-cap job `11432807` converged after numbered iteration 16 and
+entered the unforced RELION final all-data pass at full Nyquist size 384. On
+H100 `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, final half 1 completed all
+16,607 score-only chunks/49,820 particles in 451.7 seconds. Its `(771, 771,
+771)` x-half BPref M-step then ran with the outer-tail guard reducing cap 863
+to 735 and completed all 5,648 chunks/49,820 particles in 310.8 seconds.
+Host Hermitian enforcement, both large-accumulator repacks, and the half-1
+manifest all completed before half 2 started. Total half-1 wall time was
+857.3 seconds.
+
+The manifest SHA-256 is
+`7c911e120b4e49ceedd7307657bc84357768709179b3aaa85b3c41dd6415af1d`;
+the durable checkpoint is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case9_bucketcap_accept_9d172278_20260720T095000Z/provenance/CASE9_TERMINAL_HALF1_MSTEP_CHECKPOINT_20260721T0151-0400.md`.
+Its SHA-256 is
+`ca933eab4a07b240c0f287fd0ef1bf5ffa40799ba53561dc53de17b6d00035e8`.
+This accepts the bundled low-cap half-1 memory boundary only. It neither
+isolates the controls nor accepts terminal map quality before half 2 and the
+shellwise FSC/FSC-AUC auditors complete. Grid correction and forced after-max
+finalization were unset; correlation was not computed.
