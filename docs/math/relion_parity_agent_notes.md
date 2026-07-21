@@ -4691,3 +4691,39 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_full34_superseding_v2_9d172278_20260720T072521Z/provenance/CURRENTHEAD_REPLAY_GPU_PROVENANCE_BOUNDARY_20260721T0445-0400.md`.
   SHA-256:
   `a5ab9bdb05c2ed600d632405d0b1d7c35e0c291d96c9ffddd62a085eb2e40901`.
+
+# 2026-07-21: v3 admits only newer same-GPU case-9/case-10 roots
+
+- Eligibility passes for case 9 (`GPU-9f98ccbf-...`) and case 10
+  (`GPU-4bccbe72-...`), with exact RELION/RECOVAR UUID triples and clean
+  `9d172278` science provenance.
+- Exact config/generation/CTF/pose artifacts and normalized STAR identities
+  pass. The 17-particle samples have maximum absolute delta `4.7683716e-7`
+  and relative L2 below `3.09e-8`; reference deltas are below `1.12e-8`.
+- Cases 20 and 33 remain labelled `diagnostic_only_cross_allocation` and are
+  not replacement rows.
+- Eligibility JSON:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_full34_superseding_v3_33ff4287_20260721T044600Z/provenance/REPLACEMENT_ELIGIBILITY_AUDIT.json`
+  (SHA-256
+  `81b0d743ca3a6c0217598a31cf9f5105b19ea9f7d67f4ea82126c57616bbc174`).
+- Do not build the v3 aggregate until independent jobs `11432810`,
+  `11432811`, `11421266`, and `11421267` are terminal and consumed.
+
+# 2026-07-21: residual panel now distinguishes support loss from score loss
+
+- Analyzer v2 checks the immutable RELION iteration-11 target pose directly
+  in each captured candidate set, including posterior mass/rank and
+  reconstruction-support membership.
+- The 0.001-degree/0.001-pixel target matcher aligns STAR rows by image
+  identity. Functional smoke image 11540 proves a target-present score-loss
+  path: resident ranks the target second and selects a 1.875-degree neighbor;
+  exact state/reference promotes the same target to rank 1.
+- Analyzer/audit-launcher SHA-256 values:
+  `99e752156b3d778dbd9ee3c4ba6add68d51851d87a0d3315940f72fc28423987`,
+  `2edc96b3ac0e89b0532130cfe80c4535344f69e8f8fc0d2dfc44071bc0d4269c`.
+- Amendment note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_residual_posterior_77bcf3bd_20260721T042500Z/provenance/ANALYZER_V2_AMENDMENT_20260721T0455-0400.md`
+  (SHA-256
+  `cfb40feabb5500b29c34caa9055046db473658c53ea8ca2afb600278929756b8`).
+- This remains diagnostic/non-gating; correlation is not computed and map
+  quality remains FSC/FSC-AUC.

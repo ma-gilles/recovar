@@ -7922,6 +7922,49 @@ Its SHA-256 is
 Pending v2 jobs `11409642` and `11409643` remain preserved as the historical
 fail-closed graph; they are not relabelled as the newer replacement topology.
 
+The staged v3 eligibility audit now proves that the newer case-9 and case-10
+roots are admissible strict replacements. Both science jobs completed from a
+clean `9d1722781e1d6c5fc5b2ad0e15ebba3a2becbab0` checkout, and each paired
+RELION/RECOVAR UUID triple is exact. The 17-image deterministic particle-stack
+sample has maximum absolute delta `4.76837158203125e-7`; relative L2 is
+`3.0881684775820945e-8` for case 9 and `2.437535301379154e-8` for case 10.
+Reference-map maximum absolute deltas are `1.1175870895385742e-8` and
+`5.587935447692871e-9`. Exact case config, generation config, CTF, and pose
+artifacts plus normalized STAR identities also pass.
+
+The v3 root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_full34_superseding_v3_33ff4287_20260721T044600Z`;
+the eligibility JSON SHA-256 is
+`81b0d743ca3a6c0217598a31cf9f5105b19ea9f7d67f4ea82126c57616bbc174`.
+This is eligibility only: independent case-9/case-10 trajectory and
+intermediate audits remain mandatory before aggregate construction.
+
+### Residual-panel direct RELION-target discriminator
+
+Before job `11451167` produced any iteration-11 captures, its scratch-only
+analyzer was extended to distinguish missing support from lower scoring. For
+each arm and identity, analyzer v2 directly checks whether the immutable
+RELION iteration-11 physical pose is in the candidate set, its posterior
+mass/rank, reconstruction-pruning membership, nearest support displacement,
+and winner displacement. Target tolerances are 0.001 degrees and 0.001 pixels;
+STAR rows are identity-aligned rather than assumed ordered.
+
+A completed-capture functional smoke shows both discriminator paths. Stable
+image 48122 has the RELION target at rank 1. For tail image 11540, the resident
+arm contains the target but ranks it second and selects a winner 1.875001
+degrees away; exact state/reference promotes the target to rank 1 within
+`1.8e-6` degrees. This validates that target-present-but-lower-scored outcomes
+will not be misclassified as search-support loss.
+
+Analyzer SHA-256 is
+`99e752156b3d778dbd9ee3c4ba6add68d51851d87a0d3315940f72fc28423987`;
+the updated fail-closed audit launcher SHA-256 is
+`2edc96b3ac0e89b0532130cfe80c4535344f69e8f8fc0d2dfc44071bc0d4269c`.
+The amendment note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_residual_posterior_77bcf3bd_20260721T042500Z/provenance/ANALYZER_V2_AMENDMENT_20260721T0455-0400.md`
+(SHA-256
+`cfb40feabb5500b29c34caa9055046db473658c53ea8ca2afb600278929756b8`).
+
 ## 2026-07-21 case-10 final-transition FSC decomposition
 
 The final-only case-10 rejection begins in the unfiltered final half maps, not
