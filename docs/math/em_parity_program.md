@@ -8358,7 +8358,28 @@ account for 187.4 of the 197.9 extra seconds.
 Commit `fa0c93fc` moves the iteration/current-size predicate to the boundary
 before diagnostic collection and before the optional first-iteration probe.
 The affected complete unit-module set passes 417 tests with 109 warnings.
-Same-H100 causal science/audit `11476473`/`11476474` compare `c1ee409b` and
-`fa0c93fc` on the 3k/128 case with an impossible future dump target. The audit
-requires exact scientific arrays and maps and reports FSC/FSC-AUC and E-step
-timing; its result is pending. Correlation is not computed.
+Same-H100 causal science `11476473` compares configured `c1ee409b` and gated
+`fa0c93fc` on the 3k/128 case with an impossible future dump target. Total
+E-step time drops from 117.719207 to 102.327864 seconds, a 15.391343-second
+(13.1%) reduction; external wall time drops from 144 to 127 seconds.
+
+The strict cross-commit exactness audit ultimately ran as `11478462` after
+three audit-infrastructure repairs and intentionally exited `2:0`: the outputs
+are not bitwise equal. Their merged-map FSC-AUC is nevertheless
+`0.9999999999466644`. Because removal of old diagnostic work can itself change
+the GPU execution trajectory, same-source science `11478436` compared clean
+`fa0c93fc` against the same impossible future target. That exactness audit
+`11478437` also exited `2:0`, with merged-map FSC-AUC
+`0.9999999999457423`, per-image Pmax relative L2 `6.5196428e-6`, and merged-map
+relative L2 `1.4146703e-7`.
+
+Clean-versus-clean calibration `11478823`/`11478841` establishes that this is
+the normal repeated-GPU envelope, not a remaining observer effect. It produces
+merged-map FSC-AUC `0.9999999999464423`, Pmax relative L2 `6.5306604e-6`, and
+merged-map relative L2 `1.4335637e-7`. The same-source clean/configured E-step
+totals differ by only 0.008706 seconds, and the configured arm writes no
+significance artifacts. The boundary gate is therefore accepted as
+observational for a nonmatching target, while the cross-commit timing reduction
+is real. The durable classification is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case11_siggate_cleanrepeat_fa0c93fc_20260721T174000Z/provenance/CAUSAL_CLASSIFICATION.md`.
+Correlation is not computed.
