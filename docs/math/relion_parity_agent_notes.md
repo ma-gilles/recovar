@@ -4885,3 +4885,36 @@ same-device equivalence or numerical noise.
   `7036091ba125a8f98d13d2ee5e9bdb124f6ca5724ec9a4fcf6b3c44a011a7936`).
 - No science artifact or FSC/FSC-AUC threshold changed; correlation remains
   uncomputed and ungated.
+
+# 2026-07-21: strict K=1 v3 reaches terminal structural closure
+
+- The preceding active graph is superseded. Case-9 trajectory `11454201`
+  completed `0:0` in 28m11s at 8669880 KiB MaxRSS and passes final merged
+  cross-engine FSC-AUC at `0.9955108928134183`.
+- Case-10 trajectory `11454202` produced complete evidence and intentionally
+  exited `FAILED 2:0` in 27m58s at 8665864 KiB. Intermediate status is pass;
+  final merged cross-engine FSC-AUC is `0.9830065035340728 < 0.995`, while
+  the final merged GT delta is positive `0.00012834695727731438`.
+- The first corrected aggregate pair `11454286`/`11454287` was canceled
+  without running while the near-limit trajectory results were inspected.
+- Fresh builder `11454959` completed `0:0` and resolves 34/34 structurally
+  complete cases. Sealer `11454960` intentionally exits `2:0`: structural
+  `pass`, parity `fail`, earliest parity failure case 2 iteration 3
+  (`-0.003274589 < -0.002` merged GT FSC-AUC delta).
+- Both terminal artifact manifests independently revalidate with every entry
+  `OK`.
+- Ledger JSON/Markdown/manifest SHA-256:
+  `5393ee8f1549ccce6dbf7befec7c14f66d58d16b6196ccb52eef8a70e8ddf26f`,
+  `76036d28f410b55ce2a9bd5a30f524cc921d327339e9fb319af0fc80a0a74d4f`,
+  `c0827618c6550e5b15eae94291985173ce9b14c97dc2beb55ea7ba801d5675ee`.
+- Seal JSON/Markdown/manifest SHA-256:
+  `897a21e317eb5fd77aeaf715736332c8ed0f76dcf2e3199ca8e407e425b73a51`,
+  `7cc531b9fd92ca7a93590bec3cc097fd5f5652cb722ae208cdb777e4261ff3d5`,
+  `3b582c96b65a23888909c219ab2a5fe419da726d8d00acaf34c8bde057e8df10`.
+- Updated graph/resource/registry note SHA-256:
+  `de96b2aa7437b1f996cfafe770ff19ef0ebe47c032277841f89ea6c012288984`,
+  `29f6c623cb9222f3c4075fb289f7ed0d6f2e492ad04d31eb152346865b66df4d`,
+  `84f711fec024ce5f77008233a9699e0e96bc63fb46ab36214437f1c04216d813`.
+- This closes the evidence graph, not parity. Do not weaken the FSC/FSC-AUC
+  gate or alter production logic from the aggregate seal alone; the running
+  case-7 component/residual discriminators remain the next evidence gate.
