@@ -7569,3 +7569,36 @@ This accepts the bundled low-cap half-1 memory boundary only. It neither
 isolates the controls nor accepts terminal map quality before half 2 and the
 shellwise FSC/FSC-AUC auditors complete. Grid correction and forced after-max
 finalization were unset; correlation was not computed.
+
+## 2026-07-21 case-9 science job completes with favorable terminal FSC-AUC
+
+Case-9 low-cap science job `11432807` completed `0:0` on H100
+`GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a` after 8:26:49 of Slurm elapsed
+time. It converged after 16 numbered iterations and ran the unforced final
+all-data pass at full Nyquist size 384 with grid correction off. Final half 2
+completed all 16,727 score-only chunks/50,180 particles and all 5,700 x-half
+BPref M-step chunks/50,180 particles. The terminal M-step cap was reduced
+from 863 to 735, and host Hermitian enforcement plus both large-accumulator
+repacks completed. The final half-2 manifest SHA-256 is
+`2b1dceb40f86fc63e6638f7b021cfba4c529578a0631d1c39ef957753fbbf0f0`.
+
+The launcher summary status is 0. Its primary correctness gate is favorable:
+RECOVAR merged-versus-GT FSC-AUC is `0.31789819923059665`, RELION
+merged/final-map-versus-GT is `0.31423365388057617`, and the delta is
+`+0.00366454535002048`. Terminal cross-engine FSC-AUC is
+`0.9955108928134183` merged, `0.9964421481056874` half 1, and
+`0.996708665813443` half 2. The final-all-data half FSC-AUC is
+`0.34388473707785183`, with FSC 0.5/0.143 crossings at shells 62/109.
+
+This is provisional terminal science acceptance, not the independent seal.
+Eligible audit jobs `11432810` and `11432811` remain scheduler-pending, and
+sealer `11440427` correctly depends on both with `afterany`. The durable
+checkpoint is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case9_bucketcap_accept_9d172278_20260720T095000Z/provenance/CASE9_SCIENCE_TERMINAL_CHECKPOINT_20260721T0211-0400.md`.
+Its SHA-256 is
+`a9583cb28f0ca8165117c294496b39a28648bce7e4fe3be4d2924f6d7512c7cb`.
+The refinement archive and launcher-summary JSON SHA-256 values are
+`95f3852a6710046eff068eb2ebfb02090a6fc036939598b25f08e735322925a7`
+and `13e8a4600a6c47e8b03e7977a4b11eeb5b32291bdaff272a34742ecb4b573f1b`.
+Case 9 still bundles the allocator and both cap overrides, so it does not
+alone establish single-control causality. Correlation was not used as a gate.
