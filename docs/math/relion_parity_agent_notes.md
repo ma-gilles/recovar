@@ -4424,6 +4424,12 @@ same-device equivalence or numerical noise.
   exactly (`raw=100`, `quantized=100`). This accepts the corrected autonomous
   schedule boundary; full convergence/final FSC/FSC-AUC acceptance remains
   pending.
+- A read-only provisional audit of complete numbered rows 1--2 reports merged
+  cross-engine FSC-AUC `0.999999999967`/`0.999999989583` and merged GT deltas
+  `+1.5702e-8`/`+8.6502e-8`.  Its nonzero status is the expected incomplete
+  `RECOVAR=2 RELION=14` topology, not a numeric gate failure.  Method note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it2_20260720T225300/PROVISIONAL_AUDIT.md`
+  (SHA-256 `79aaf56233ba141f74ee4af47e03ddcefa55ecd34f5b3a9f7e621a0e4fbdcc2b`).
 - Case-33 dependent audit `11440102` gates shellwise FSC/FSC-AUC and
   intermediate topology. Sealer `11440295` additionally requires exact Git,
   H100, convergence, final-path, grid-off, exit-status, and submission-hash

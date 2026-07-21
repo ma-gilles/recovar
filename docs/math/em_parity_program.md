@@ -7175,6 +7175,17 @@ schedule correction in the autonomous 400k-particle run as well as the bounded
 replay. All subsequent convergence, final-map, and FSC/FSC-AUC gates remain
 pending; this paragraph is not a full case-33 acceptance claim.
 
+A read-only provisional audit of the two complete numbered rows is also inside
+the unchanged map gates.  Iteration-1/2 merged cross-engine FSC-AUC is
+`0.999999999967`/`0.999999989583`, and the corresponding RECOVAR-minus-RELION
+merged GT FSC-AUC delta is `+1.5702e-8`/`+8.6502e-8`.  The minimum reopened
+merged shell FSC is `0.999999999685`/`0.999999954737`.  The provisional audit
+correctly exits nonzero solely because only two of the 14 RELION numbered rows
+exist in RECOVAR while science is active; it is not terminal acceptance.  Its
+method note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it2_20260720T225300/PROVISIONAL_AUDIT.md`
+(SHA-256 `79aaf56233ba141f74ee4af47e03ddcefa55ecd34f5b3a9f7e621a0e4fbdcc2b`).
+
 Dependent job `11440102` runs both the shellwise FSC/FSC-AUC trajectory gate
 and the intermediate topology/artifact audit. Dependent sealer `11440295`
 then fail-closes on exact source provenance, science/audit exit status,
