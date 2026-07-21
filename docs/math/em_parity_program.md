@@ -7188,6 +7188,21 @@ method note is
 Its exact nine-input MRC manifest has SHA-256
 `36974a77ecfe360e756fca54864ce08e72db12182b156b4cb868c50a3b8be6a4`.
 
+Iteration 3 then completed at corrected `current_size=100` and scheduled
+iteration 4 at `current_size=128`, matching RELION.  The expanded read-only
+snapshot remains inside every map gate: iteration-3 half-1/half-2/merged
+cross-engine FSC-AUC is `0.999999861446`/`0.999999810960`/`0.999999916678`,
+and its merged GT FSC-AUC delta is `+7.51289e-7`.  The worst reopened merged
+shell is `0.999999580507` at shell 52.  The analyzer again exits 2 solely for
+the expected incomplete live topology (`RECOVAR=3`, immutable RELION
+oracle=14); this remains provisional rather than terminal acceptance.  The
+13 exact MRC inputs are sealed in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it3_20260720T232600/input_sha256.txt`
+(manifest SHA-256
+`2978eb60c6b79540eaabce5fc74b277c75e46fecf89dc5c0a376a396a5ea98a4`).
+The method note SHA-256 is
+`e87f10f2baa44f379c482be551d827c9054fa84f450960336d8a52e243bd9a04`.
+
 Dependent job `11440102` runs both the shellwise FSC/FSC-AUC trajectory gate
 and the intermediate topology/artifact audit. Dependent sealer `11440295`
 then fail-closes on exact source provenance, science/audit exit status,
