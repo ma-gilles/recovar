@@ -4525,3 +4525,22 @@ same-device equivalence or numerical noise.
 - This accepts the bundled low-cap half-1 memory boundary only. Half 2,
   terminal FSC/FSC-AUC, and the fail-closed sealer remain pending; correlation
   was not computed.
+
+# 2026-07-21: case-9 iteration 11 passes FSC gates
+
+- The first numbered maps past default job `11415206`'s OOM boundary pass:
+  half-1/half-2/merged cross-engine FSC-AUC is
+  `0.9997908657983370`/`0.9998123118852400`/`0.9998832836013437`, and merged
+  GT FSC-AUC delta is `-0.000014794080971658463`.
+- Worst merged non-DC shell FSC is `0.9992117910499290` at shell 103. All 11
+  frozen prefix rows pass; status 2 is only incomplete 11-versus-16 topology.
+- The first live-directory staging attempt failed closed when iteration 12
+  arrived. The admissible run explicitly froze 22 RECOVAR maps and seals 45
+  consumed GT/RECOVAR/RELION inputs with manifest SHA-256
+  `abcf195e90278997f890948fbbaf70bb3626fec9ba0e787abb905905f2de96ca`.
+- Sealed root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case9_provisional_it11_20260721T010500`;
+  seal-manifest SHA-256
+  `ac9c9d440cdc540d7ec318ef9fd38e98162c374800652dc7f64a8df0a2426e05`.
+  Terminal acceptance and single-control attribution remain pending;
+  correlation was not computed.

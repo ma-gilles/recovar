@@ -7471,3 +7471,29 @@ the durable checkpoint is
 Grid correction and forced after-max finalization were unset. Final
 FSC/FSC-AUC audits and the sealer remain pending; correlation was not
 computed.
+
+## 2026-07-21 case-9 iteration-11 FSC checkpoint
+
+The first numbered maps produced beyond case 9's old OOM boundary pass the
+scientific gates. At iteration 11, low-cap job `11432807` has half-1,
+half-2, and merged cross-engine FSC-AUC of `0.9997908657983370`,
+`0.9998123118852400`, and `0.9998832836013437`. The merged GT FSC-AUC delta
+is `-0.000014794080971658463`; the worst merged non-DC shell FSC is
+`0.9992117910499290` at shell 103.
+
+All 11 frozen prefix rows pass the 0.995 cross-engine and -0.002 GT-delta
+gates. Analyzer status 2 is solely the intentional incomplete topology (11
+RECOVAR rows versus 16 RELION rows). An initial live-directory staging
+attempt correctly failed closed when iteration 12 arrived; the admissible run
+used explicit links to the 22 frozen RECOVAR maps. The exact 45 consumed
+GT/map inputs have manifest SHA-256
+`abcf195e90278997f890948fbbaf70bb3626fec9ba0e787abb905905f2de96ca`.
+
+The sealed provisional root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case9_provisional_it11_20260721T010500`;
+its audit-note SHA-256 is
+`8a807108ba96ada2fab207e8b1d1dc8849f54ad66106b06fba5a83d1891b8a32`
+and seal-manifest SHA-256 is
+`ac9c9d440cdc540d7ec318ef9fd38e98162c374800652dc7f64a8df0a2426e05`.
+This accepts the newly crossed prefix quality, not terminal acceptance or
+single-control attribution. Correlation was not computed.
