@@ -7839,3 +7839,29 @@ The complete durable note is
 (SHA-256
 `c6ecb543cbb9626835e7547aa06a900daf8cb02dd7cf8586576abbd7fc2681db`).
 Correlation was not computed.
+
+## 2026-07-21 active case-7 state-component discriminator
+
+Slurm job `11449766` is running a three-arm exact-prefix decomposition
+sequentially on one H100 allocation. It repeats the all-RELION
+state/reference control and then restores only RECOVAR-produced target-boundary
+maps or only target-boundary poses. All arms use source commit
+`77bcf3bd7f45760ab0671c4883d91a453d58113a`, the sealed 24-particle panel,
+the same forced numbered current-size/HEALPix schedule, and the same seed. They
+stop after numbered iteration 11 and explicitly skip final all-data; grid
+correction and forced after-max finalization are unset.
+
+The all-RELION repeat controls same-allocation arithmetic. Tail/stable
+posterior TV, winner identity/displacement, and reconstruction-support Jaccard
+will test whether current-boundary maps or poses independently recreate the
+tail response, versus the discrepancy requiring earlier accumulated state.
+The run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_state_component_77bcf3bd_20260721T034700Z`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case7_it11_state_component_77bcf3bd_20260721T034700Z`;
+both contain `SAFE_TO_DELETE`. Launcher and run-contract SHA-256 values are
+`c30c08a378ced38208f4236bd5b633550b01b9d7761aaa2f440242339868fe2d`
+and `378084186e3dc48804dfabd35bfcc639b8951cc175ef68a2af2f378fe7a628f0`.
+The submission note SHA-256 is
+`90ac71d738a3710816681b70a50ce1ffffa7c6f67116ff6cc4e125f36f96d0e2`.
+This is diagnostic/non-gating; correlation is not computed.
