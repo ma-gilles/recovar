@@ -7261,3 +7261,30 @@ FSC-AUC delta was `+0.0028692403080708972`. The common sealer root is
 its Python SHA-256 is
 `78a768df2eec4da35bb5a6b30963ae78d9f006317397287cf44fdd4bf9a7563c`.
 Map quality remains shellwise FSC/FSC-AUC only; correlation is not computed.
+
+## 2026-07-20 late acceptance checkpoints and case-7 retry
+
+Case-10 science job `11421265` completed the terminal half-1 full-Nyquist
+score-only pass over all 49,933 particles in 1,654.9 seconds (30.2
+images/second) without an allocator failure.  Its fine M-step then activated
+the explicit x-half tail guard at full BPref shape `(771, 771, 771)`, reducing
+the hypothesis cap from 863 to 60 before building 49,878 microbatches.  The
+fine M-step is still active, so this accepts only the score-pass memory
+boundary.  It does not yet accept the M-step, terminal map, or shellwise
+FSC/FSC-AUC gates.
+
+Case-7 discriminator job `11439493` completed the resident arm and emitted
+all 24 requested iteration-11 fused-posterior captures, but the launcher then
+failed closed with status 1 before starting the exact-RELION-state arm.  The
+failed assertion expected 24 global significance dumps.  Iteration 11 is in
+the exact-local path, which does not invoke that global-pass dumper; the
+intended fused-posterior diagnostic was complete.  This is an orchestration
+failure and supplies no resident-vs-exact inference.
+
+Retry job `11442740` reruns both arms sequentially on one H100 allocation and
+requires the 24 fused-posterior captures per arm without the inapplicable
+global-significance assertion.  Grid correction and forced final-all-data
+remain unset.  The retry launcher is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/jobs/run_case7_it11_stratified_retry2.sbatch`
+(SHA-256
+`770f61354eb4554e1308e0c3b321e065789bc6c62802d694290b8f341ce52dca`).
