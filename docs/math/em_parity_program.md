@@ -7030,3 +7030,45 @@ UUIDs, so this is combined-head acceptance evidence; causal attribution to
 the adaptive pass-1 CUDA matrix fix remains grounded in the prior same-A100
 exact-state A/B diagnostics. The summarizer correctly resolves the final
 RELION source to numbered iteration 11.
+
+## 2026-07-20 current-head autonomous case-26 replay
+
+Science job `11436583` completed status 0 on H100 `della-h19g4` in 1,005
+seconds from the exact clean pushed science commit
+`790ea8a96a2f2b7b063b69c579dd44bb1cf8288c`. It produced 11 numbered
+iterations, converged, and only then ran final all-data. Grid correction and
+forced final all-data after non-convergence were unset.
+
+The replay reproduces the prior `ac5177d2` trajectory. Current-size and
+HEALPix-order trajectories, convergence iteration, final sampling state, all
+1,000 final Euler decisions, and all 1,000 final translations are exact.
+Old-versus-current final FSC-AUC is `0.999999999323`, `0.999999999606`, and
+`0.999999998322` for half 1, half 2, and merged maps. Maximum `ave_Pmax`
+trajectory difference is `2.57592e-6`, and maximum final Pmax difference is
+`3.39091e-4`.
+
+Every numbered iteration remains inside the unchanged gates. Minimum numbered
+merged cross-engine FSC-AUC is `0.998906419972`; the worst numbered
+RECOVAR-minus-RELION merged GT FSC-AUC delta is `-0.000486476689`. The
+intermediate topology audit passes. The final-only failure is nevertheless
+reproduced: split-half FSC-AUC is `0.962112863489` and `0.944303094765`, and
+merged FSC-AUC is `0.954914353690`, below the unchanged `0.995` gate. RECOVAR
+final merged GT FSC-AUC is `0.221394864515` versus RELION
+`0.211295735975`, a positive delta of `0.010099128540`. Correlation was not
+computed or used.
+
+This rejects a broad generalization claim for the adaptive pass-1 CUDA matrix
+fix: it closes current-head case 20 but does not change case 26. It also
+confirms the existing recurrent final-boundary localization rather than
+supporting another final reconstruction, gridding, or threshold patch. The
+next causal target remains upstream accumulated pose/reference state and the
+pending same-UUID case-8 factorial.
+
+The immutable run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_currenthead_autonomous_790ea8a9_20260720T234054Z`.
+The FSC audit SHA-256 is
+`e620b1785c6d4b80d7faa4d10cccf8ed78eb0290beb523924d4ea922dd1b2bbc`,
+the passing intermediate audit SHA-256 is
+`94e75c8cbcfe38086e5897d4e126bba5f402eb4ae52ee465bb843e84982431a9`,
+and the current-versus-old interpretation is
+`audit/CURRENT_VS_OLD_INTERPRETATION.md` under that root.
