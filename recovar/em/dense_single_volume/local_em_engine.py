@@ -282,7 +282,6 @@ EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"
 DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS = 1000
 DEFAULT_EXACT_LOCAL_PROGRESS_SECONDS = 300
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
-_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 _VISIBLE_GPU_MEMORY_BYTES_CACHE: int | None = None
 # Disabled by default: on the 50k/256 local-search target this cache made the
 # iteration slower by precomputing more spectra than the bucket schedule reuses.
@@ -309,13 +308,6 @@ def _bucket_contains_debug_target(experiment_dataset, image_indices, pending_tar
         dtype=np.int64,
     )
     return any(int(original_idx) in pending_targets for original_idx in original_indices.tolist())
-
-
-def _env_flag_default_true(name: str) -> bool:
-    value = os.environ.get(name)
-    if value is None or value.strip() == "":
-        return True
-    return value.strip().lower() not in _FALSE_ENV_VALUES
 
 
 def _filter_buckets_to_debug_targets(
@@ -2257,7 +2249,12 @@ def run_local_em_exact(
     debug_score_dump_target_only = bool(
         score_only
         and debug_target_only_targets
-        and _env_flag_default_true(LOCAL_SCORE_DUMP_TARGET_ONLY_ENV)
+        # ``score_only`` also implements the science-critical local parent
+        # pass that supplies pass-2 support.  Filtering it merely because a
+        # dump target is configured makes the diagnostic change refinement
+        # results.  Keep target-only execution as an explicit opt-in for
+        # standalone diagnostics.
+        and _env_flag(LOCAL_SCORE_DUMP_TARGET_ONLY_ENV)
     )
     debug_target_only_original_bucket_count = len(bucket_specs)
     debug_target_only_original_image_count = int(
@@ -2278,7 +2275,7 @@ def run_local_em_exact(
         target_only_images = int(sum(int(bucket.image_indices.shape[0]) for bucket in bucket_specs))
         logger.info(
             "Exact local debug target-only: keeping %d/%d buckets and %d/%d images "
-            "for requested original ids %s; set %s=0 to run the full score-only diagnostic",
+            "for requested original ids %s; unset %s to retain the full score-only computation",
             len(bucket_specs),
             debug_target_only_original_bucket_count,
             target_only_images,

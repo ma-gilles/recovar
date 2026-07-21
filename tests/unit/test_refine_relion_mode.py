@@ -7275,7 +7275,9 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
         assert float64_npz["debug_proj_weighted"].dtype == np.complex128
 
 
-def test_local_score_debug_dump_only_materializes_target_bucket(monkeypatch, rng, tmp_path):
+def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
+    monkeypatch, rng, tmp_path
+):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=566)
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
@@ -7306,13 +7308,48 @@ def test_local_score_debug_dump_only_materializes_target_bucket(monkeypatch, rng
         ),
     )
 
+    common_kwargs = dict(
+        image_batch_size=1,
+        rotation_block_size=8,
+        current_size=6,
+        accumulate_noise=False,
+        reconstruct_significant_only=True,
+        return_profile=True,
+        score_with_masked_images=False,
+        half_spectrum_scoring=False,
+        image_pre_shifts=np.array(
+            [[0.25, -0.5], [-0.75, 0.5], [0.0, 0.0]], dtype=np.float32
+        ),
+        max_significants=-1,
+        disable_adjoint_y=True,
+        disable_adjoint_ctf=True,
+        score_only=True,
+    )
+    for name in (
+        "RECOVAR_LOCAL_SCORE_DUMP_DIR",
+        "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES",
+        "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR",
+        "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES",
+        LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    baseline = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        **common_kwargs,
+    )
+
     score_dump_dir = tmp_path / "score_dump"
     fused_dump_dir = tmp_path / "fused_dump"
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", str(score_dump_dir))
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "2")
     monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR", str(fused_dump_dir))
     monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES", "2")
-    monkeypatch.setenv(LOCAL_SCORE_DUMP_TARGET_ONLY_ENV, "0")
+    monkeypatch.delenv(LOCAL_SCORE_DUMP_TARGET_ONLY_ENV, raising=False)
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT", raising=False)
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", raising=False)
 
@@ -7323,22 +7360,22 @@ def test_local_score_debug_dump_only_materializes_target_bucket(monkeypatch, rng
         noise_variance,
         local_layout,
         "linear_interp",
-        image_batch_size=1,
-        rotation_block_size=8,
-        current_size=6,
-        accumulate_noise=False,
-        reconstruct_significant_only=True,
-        return_profile=True,
-        score_with_masked_images=False,
-        half_spectrum_scoring=False,
-        image_pre_shifts=np.array([[0.25, -0.5], [-0.75, 0.5], [0.0, 0.0]], dtype=np.float32),
-        max_significants=-1,
-        disable_adjoint_y=True,
-        disable_adjoint_ctf=True,
-        score_only=True,
+        **common_kwargs,
     )
 
-    _, _, _, _, profile = result
+    _, _, hard_assignment, stats, profile = result
+    np.testing.assert_array_equal(hard_assignment, baseline[2])
+    for field in (
+        "log_evidence_per_image",
+        "max_posterior_per_image",
+        "rotation_posterior_sums",
+    ):
+        np.testing.assert_allclose(
+            np.asarray(getattr(stats, field)),
+            np.asarray(getattr(baseline[3], field)),
+            atol=1e-6,
+            rtol=1e-6,
+        )
     assert int(profile["big_jit_bucket_count"]) > 1
     assert int(profile["big_jit_debug_bucket_count"]) == 1
     assert sorted(path.name for path in score_dump_dir.glob("local_score_it*_image_*.npz")) == [

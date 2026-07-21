@@ -4918,3 +4918,32 @@ same-device equivalence or numerical noise.
 - This closes the evidence graph, not parity. Do not weaken the FSC/FSC-AUC
   gate or alter production logic from the aggregate seal alone; the running
   case-7 component/residual discriminators remain the next evidence gate.
+
+# 2026-07-21: quarantine case-7 capture-target observer effect
+
+- Exact-local parent pass 1 uses `score_only=True`, but its retained support
+  drives fine pass 2. The debug target-only optimization therefore filtered a
+  science-critical call and made refinement results depend on the capture
+  identity list.
+- The disjoint 24- and 48-target runs retained different parent-bucket sets
+  despite identical source, science inputs, seed, schedule, and byte-identical
+  stripped CUDA libraries. They changed 534/100000 Euler rows; rotation tails
+  were 5793 versus 5620 and translation tails 6230 versus 6030.
+- Supersede the prior full-population resident/exact interpretation. The
+  derived residual `persistent`/`opened` panel is invalid and must be rebuilt
+  from an unfiltered run. Canonical K=1 matrix science without capture
+  variables is unaffected.
+- Component/residual jobs `11449766`/`11451167` were canceled after 03:00:59
+  and 02:24:49. Their never-started audits `11452889`/`11452890` were also
+  canceled. All partial output roots have prominent quarantine markers.
+- The code fix makes `RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY=1` explicit opt-in.
+  Unset/default now executes all science buckets while materializing only the
+  requested target dump artifacts. Focused capture/debug tests pass 7 tests
+  with 329 deselected.
+- Authoritative note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/provenance/CAPTURE_TARGET_PARENT_PASS_OBSERVER_EFFECT_20260721T0654-0400.md`
+  (SHA-256
+  `312594539d2b6932c86aadb727afe885417282c509e5be63ab2652b689435671`).
+- Do not submit a replacement residual panel until its cohort is selected from
+  a clean unfiltered full-population output. Map-quality acceptance remains
+  FSC/FSC-AUC; correlation was not computed.

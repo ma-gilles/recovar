@@ -8238,3 +8238,42 @@ Updated graph-repair, resource, and registry note SHA-256 values are
 `29f6c623cb9222f3c4075fb289f7ed0d6f2e492ad04d31eb152346865b66df4d`,
 and `84f711fec024ce5f77008233a9699e0e96bc63fb46ab36214437f1c04216d813`.
 No production behavior or threshold changed; correlation was not computed.
+
+## 2026-07-21 case-7 capture-target observer effect and clean-rerun gate
+
+The preceding case-7 component/residual conclusions are superseded as clean
+parity evidence. Exact-local pass 1 is implemented as `score_only=True`, but
+its retained parent support is science-critical input to fine pass 2. The
+debug capture path applied target-only bucket filtering to every score-only
+call by default. Merely changing the requested posterior identities therefore
+changed which parent buckets ran and changed refinement output.
+
+The causal comparison held source commit, inputs, seed, schedule, driver, and
+H100 class fixed. The 24-target run retained 12 parent buckets in each half;
+the disjoint 48-target run retained 24 and 23. Their stripped CUDA libraries
+are byte-identical. Nonetheless 534/100000 Euler rows changed, the rotation
+tail changed from 5793 to 5620, and the translation tail from 6230 to 6030.
+This is capture-target dependence, not H100 arithmetic.
+
+Consequently, the prior full-population resident/exact split and the derived
+48-particle `persistent`/`opened` cohort are invalid. The component and
+residual science jobs `11449766` and `11451167` were canceled after 03:00:59
+and 02:24:49; dependent audits `11452889` and `11452890` were canceled before
+running. Their partial artifacts are quarantined and may not be used for
+FSC/FSC-AUC or posterior parity claims. Canonical K=1 matrix runs without the
+capture environment variables are unaffected.
+
+The fix makes target-only score execution explicit opt-in through
+`RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY=1`. With the variable unset, the full
+science parent pass runs while dump artifacts are still written only for
+requested target buckets. The focused regression compares hard assignments,
+maximum posterior, rotation posterior sums, and bucket execution with versus
+without configured dump targets. The focused debug/capture group passes 7
+tests (329 deselected); no map correlation was computed.
+
+The authoritative note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/provenance/CAPTURE_TARGET_PARENT_PASS_OBSERVER_EFFECT_20260721T0654-0400.md`
+(SHA-256
+`312594539d2b6932c86aadb727afe885417282c509e5be63ab2652b689435671`).
+Clean component reruns must use unfiltered parent passes. A residual panel may
+be selected only from a clean unfiltered full-population run.
