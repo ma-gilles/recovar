@@ -7896,6 +7896,32 @@ and
 Run root:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_residual_posterior_77bcf3bd_20260721T042500Z`.
 
+### Strict-ledger boundary for current-head case-20/case-33 replays
+
+The completed current-head case-20 and case-33 runs are RECOVAR-only replays
+against immutable RELION oracles. They are useful FSC diagnostics, but neither
+is a same-physical-GPU pair. Case 20 compares a canonical oracle produced on
+`GPU-b9c5d089-cde3-7f8b-717b-6f61c49ef1ae` with a current replay on
+`GPU-2ee3da91-970a-6714-84df-530aefe04a08`; case 33 compares
+`GPU-2ced982b-7cc9-32c2-a413-a600b1c00a1f` with
+`GPU-49c1a223-be61-858b-49d8-d8b0347ac252`.
+
+Their final merged cross-engine FSC-AUC values are respectively
+`0.9977609799825519` and `0.9727626280594356`, with RECOVAR-minus-RELION
+GT FSC-AUC deltas `+0.00114188226197158` and `+0.0311830504773496`.
+Those results remain diagnostic and must not silently replace canonical rows
+in the strict full-34 ledger. A future v3 ledger may use the newer case-9 and
+case-10 roots, whose RELION/RECOVAR pairs do have matching physical GPU UUIDs,
+but cases 20 and 33 require either explicit cross-allocation labelling or new
+paired reruns.
+
+The complete provenance boundary is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_full34_superseding_v2_9d172278_20260720T072521Z/provenance/CURRENTHEAD_REPLAY_GPU_PROVENANCE_BOUNDARY_20260721T0445-0400.md`.
+Its SHA-256 is
+`a5ab9bdb05c2ed600d632405d0b1d7c35e0c291d96c9ffddd62a085eb2e40901`.
+Pending v2 jobs `11409642` and `11409643` remain preserved as the historical
+fail-closed graph; they are not relabelled as the newer replacement topology.
+
 ## 2026-07-21 case-10 final-transition FSC decomposition
 
 The final-only case-10 rejection begins in the unfiltered final half maps, not

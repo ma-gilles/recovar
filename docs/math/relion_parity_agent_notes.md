@@ -4666,3 +4666,28 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_residual_posterior_77bcf3bd_20260721T042500Z`.
 - This is diagnostic/non-gating; correlation was not computed and FSC/FSC-AUC
   remains the map-quality gate.
+
+# 2026-07-21: current-head case-20/case-33 replays are cross-allocation evidence
+
+- Case 20's canonical paired UUID is
+  `GPU-b9c5d089-cde3-7f8b-717b-6f61c49ef1ae`, while current-head job
+  `11435532` ran RECOVAR on
+  `GPU-2ee3da91-970a-6714-84df-530aefe04a08`.
+- Case 33's canonical paired UUID is
+  `GPU-2ced982b-7cc9-32c2-a413-a600b1c00a1f`, while current-head job
+  `11440100` ran RECOVAR on
+  `GPU-49c1a223-be61-858b-49d8-d8b0347ac252`.
+- Their final merged cross-engine FSC-AUC values are
+  `0.9977609799825519` and `0.9727626280594356`; their GT FSC-AUC deltas are
+  positive, but the runs do not satisfy the strict same-physical-GPU ledger
+  invariant.
+- Do not use these RECOVAR-only replays as silent case-20/case-33 replacement
+  rows. Keep them as explicitly labelled immutable-oracle diagnostics unless
+  paired RELION reruns are produced on the exact allocations.
+- Historical v2 ledger jobs `11409642`/`11409643` remain preserved and may
+  fail closed on obsolete case-9/case-10 roots. A future strict v3 may replace
+  only with the newer verified same-GPU case-9/case-10 pairs.
+- Durable note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_full34_superseding_v2_9d172278_20260720T072521Z/provenance/CURRENTHEAD_REPLAY_GPU_PROVENANCE_BOUNDARY_20260721T0445-0400.md`.
+  SHA-256:
+  `a5ab9bdb05c2ed600d632405d0b1d7c35e0c291d96c9ffddd62a085eb2e40901`.
