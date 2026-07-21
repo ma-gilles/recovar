@@ -8349,6 +8349,15 @@ supports an early incoming-reference-dependent posterior/support divergence,
 but does not identify a production repair before the iteration-11
 target/control audit lands. Correlation is not computed.
 
+Iteration 3 preserves the same schedule and printed average Pmax `0.8219`, but
+the sparse-support split remains measurable. In half 1, support work is 87241
+resident versus 87249 exact; one net image moves from the size-16 bucket to
+size 32, while the size-64/128 tails remain 9/1. In half 2, support work is
+87758 versus 87759; two net images move from size 16 to size 32, while the
+size-64 tail remains 11. Both arms report resolution 32.00 A and unchanged
+HEALPix order 3. The direction and magnitude therefore vary by half and
+iteration rather than forming a monotone support expansion.
+
 ## 2026-07-21 current-head case-2 strict-boundary closure
 
 Strict K=1 v3 identified historical case 2 iteration 3 as the earliest ledger
@@ -8468,3 +8477,16 @@ physical `N=256`; current-size is layout only. Capture inertness is gated with
 shellwise FSC/FSC-AUC, intermediate operands use exact/relative-L2 metrics,
 and correlation is not computed. No K=4 production change is justified until
 science `11480333` and audit `11480664` complete.
+
+CPU diagnostic job `11481280` completed `0:0` and compares the clean control's
+iteration-3 maps with the previously accepted uninterrupted canonical maps.
+Class 1--4 FSC-AUC values are `0.991321933`, `0.989710691`, `0.987441885`, and
+`0.970276020`; relative L2 values are `0.00889732`, `0.00892967`, `0.00853975`,
+and `0.0107270`. This is explicitly descriptive and non-gating. The control
+uses the capture-instrumented RELION binary, whereas the canonical run used
+the older dispatch-instrumented binary, so the result bounds binary-build/GPU
+trajectory sensitivity rather than RECOVAR parity. The formal observer gate
+remains clean control versus passive capture with the same new binary and
+exact control dispatch replay. The diagnostic JSON is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_it10_class2_prescatter_panel_ac5177d2_20260721T215100Z/analysis/CONTROL_IT003_VS_CANONICAL.json`;
+correlation is not computed.
