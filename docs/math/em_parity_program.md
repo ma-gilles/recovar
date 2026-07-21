@@ -7072,3 +7072,87 @@ the passing intermediate audit SHA-256 is
 `94e75c8cbcfe38086e5897d4e126bba5f402eb4ae52ee465bb843e84982431a9`,
 and the current-versus-old interpretation is
 `audit/CURRENT_VS_OLD_INTERPRETATION.md` under that root.
+
+## 2026-07-20 inclusive current-size boundary correction
+
+The 400k-particle/grid-128 case 33 exposed a distinct scheduling defect before
+its already-known final-map failure.  At numbered iteration 2 both engines had
+an available and strongly supported boundary shell 34: RECOVAR FSC
+`0.9487659` and FSC-derived data-vs-prior `18.51823997`, versus RELION FSC
+`0.948759` and `rlnSsnrMap=18.515718`.  RECOVAR's K=1 post-M-step path
+nevertheless zeroed data-vs-prior starting at `current_size // 2`, discarded
+that shell, and scheduled size 98 rather than RELION's 100.
+
+Commit `7f5f758474afac40650c5a2760cf124bfe420989` centralizes the truncation
+and zeros only beyond the inclusive boundary, starting at
+`current_size // 2 + 1`.  This matches pinned RELION source commit
+`f2c1a384400aec37dc6805856a5ba645650a44f1`, whose gold-standard FSC path
+also zeros from `current_size / 2 + 1`, and keeps the K=1 and K-class state
+paths on one contract.  Follow-up commit
+`77bcf3bd7f45760ab0671c4883d91a453d58113a` covers the two observed matrix
+growth geometries.
+
+A read-only replay of all saved matrix FSC trajectories finds 11 affected
+decisions in seven cases.  First-iteration instances in cases 1, 6, 29, and
+30 are masked by the explicit `--firstiter_cc` ini-high override and remain
+topology-exact.  The three later instances exactly explain observed topology
+gaps: cases 2 and 3 change grid-256 size `100 -> 162` to RELION's
+`100 -> 164`, and case 33 changes grid-128 size `68 -> 98` to RELION's
+`68 -> 100`.  This supports one shared boundary fix and rejects case-specific
+schedule overrides.
+
+The bounded clean-checkout case-33 replay, Slurm job `11438037`, completed
+`0:0` on H100 `della-h20g2` in 4,265 seconds of science wall time.  Its
+fail-closed audit records RECOVAR and RELION current sizes `[56, 68, 100]`
+and `matches_relion=true`; iteration 2 reports `res_shell=34`, `raw=100`, and
+`quantized=100`.  The audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case33_boundary3_currenthead_7f5f7584_20260720T204500Z/audit/schedule_replay.json`
+(SHA-256 `a525d47a2d6c7ee02900fb57fbae2ce5aa4f6e7ab69f4a2c9ff908da716a4ea0`).
+This accepts the corrected schedule boundary, not full case-33 FSC-AUC.
+Grid correction and forced final all-data after non-convergence were unset.
+
+Focused matrix-boundary validation is 5 passed, and the full EM-targeted unit
+selection is 345 passed.  The audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_case33_boundary_fix_20260720T203400/TEST_AUDIT.md`
+(SHA-256 `e105d417ab564832d15fac3b761bd7d0c3cc363928bb910fc7c302a9c6b7b109`),
+and the matrix replay is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_case33_boundary_fix_20260720T203400/MATRIX_BOUNDARY_REPLAY.md`
+(SHA-256 `1c48d8ed4e316c179158b9900244414a8d5af424be56b1f1ef76c5f2a5ed5e55`).
+
+A read-only full-particle audit of case 7's topology-identical iterations
+1--11 supports systematic accumulated particle-state drift before shell 20
+straddles FSC 0.5.  Across 100,000 exactly identity-aligned particles,
+support-count mismatches grow from 72 at iteration 2 to 536 at iteration 4,
+2,166 at iteration 10, and 2,731 at iteration 11.  Pmax absolute p95 grows
+from `0.000455` to `0.007820`, `0.028327`, and `0.033425` at the same
+boundaries.  The fraction with pose error above 0.1 degree grows from
+`0.020%` to `0.140%`, `0.912%`, and `1.105%`; pose p99 first jumps to
+`1.844918` degrees at iteration 11.
+
+The iteration-11 pose tail is symmetric across halves and concentrated in
+RELION's `Pmax < 0.5` cohort, where its incidence is `5.033%`, versus
+`0.044%`--`0.373%` in higher-Pmax cohorts.  The top 5% of absolute Pmax
+errors at iteration 10 does not predict the next pose tail (`0.976x`
+enrichment), and support mismatches provide only `1.609x` enrichment.  This
+rejects a small set of largest-Pmax-error particles as the sole cause and
+classifies the downstream shell crossing as an amplifier of a broad
+low-confidence posterior/support trajectory.  Keep the exact FSC and
+sampling rules.  The next bounded discriminator is a fixed iteration-10
+candidate-score/posterior margin capture stratified across low-Pmax pose-tail
+and pose-stable particles.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_case7_prefix_particle_audit_20260720T213000/case7_prefix_particle_audit.json`
+(SHA-256 `af79c2598ad46b6f2176b57645acc2f16f440ead6a1267774950838a6a424852`).
+
+Before submission, the active case-7 hypothesis is that accumulated incoming
+state/reference differences change the physical-iteration-11 local score
+surface for the ambiguous cohort; pure same-input GPU near-tie arithmetic is
+the alternative.  A deterministic 24-particle panel contains six pose-tail
+and six Pmax/support-matched pose-stable controls per half.  Resident and exact
+RELION-state/reference arms share the current-size/HEALPix schedule, source
+commit, fixture, H100 allocation, and targeted production captures.  Slurm
+job `11439493` is running the two arms sequentially on H100 `della-h20g3`.  If
+exact substitution closes the tail/control margin split while resident state
+reproduces it, the locus remains upstream accumulated state/reference; if both
+retain the same split, inspect common-input candidate arithmetic.  Selection:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/selection/panel24.json`
+(SHA-256 `0f441257af9b1152d6bf1eb2126960479826656bfafa3da1b0fb90b514d4dd2b`).

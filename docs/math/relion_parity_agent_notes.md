@@ -4314,3 +4314,101 @@ same-device equivalence or numerical noise.
   `1.5e-17`, localising the difference solely to the missing corner mask.
 - Evidence root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case25_relion_final_halves_continue_20260719T145200Z`.
+
+# 2026-07-20: K=1 post-M-step state dropped the current-size boundary shell
+
+- Case 33 first differs in current-size topology at numbered iteration 3:
+  RECOVAR uses `[56, 68, 98]`, while RELION uses `[56, 68, 100]`.  At the
+  preceding size-68 boundary, RECOVAR FSC shell 34 is `0.9487659` and its
+  derived data-vs-prior is `18.51823997`; RELION records FSC `0.948759` and
+  `rlnSsnrMap=18.515718`.  Shell 35 is unavailable in RELION.
+- The old K=1 post-M-step code zeroed data-vs-prior from
+  `current_size // 2`.  Pinned RELION commit
+  `f2c1a384400aec37dc6805856a5ba645650a44f1` preserves the boundary and
+  zeros only from `current_size / 2 + 1`; see
+  `/scratch/gpfs/GILLES/mg6942/relion/src/ml_optimiser_mpi.cpp` in the
+  gold-standard FSC truncation.  Commit `7f5f7584` implements that inclusive
+  contract for corrected K=1 scheduling, K=1 post-M-step state, and K-class
+  state through one helper.
+- Deterministic saved-FSC replay changes exactly the disputed case-33
+  decision: the old state resolves at shell 33 and schedules 98; the corrected
+  state resolves at shell 34 and schedules 100.  A matrix-wide replay finds
+  11 affected decisions in seven cases.  Only later decisions are causal:
+  cases 2 and 3 schedule 162 rather than RELION's 164 from size 100, and case
+  33 schedules 98 rather than RELION's 100 from size 68.  Cases 1, 6, 29, and
+  30 are unchanged because `--firstiter_cc` supplies the first-iteration
+  ini-high resolution state.
+- Clean detached-checkout Slurm replay `11438037` completed `0:0` on H100
+  `della-h20g2` in 4,265 seconds of science wall time.  Its fail-closed JSON
+  records RECOVAR and RELION current sizes `[56, 68, 100]` and
+  `matches_relion=true`; iteration 2 reports shell 34 and schedules
+  `raw=100`, `quantized=100`.  This accepts the boundary schedule, not full
+  case-33 FSC-AUC.  Grid correction and forced after-max final were unset.
+  Audit:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case33_boundary3_currenthead_7f5f7584_20260720T204500Z/audit/schedule_replay.json`
+  (SHA-256 `a525d47a2d6c7ee02900fb57fbae2ce5aa4f6e7ab69f4a2c9ff908da716a4ea0`).
+- Focused matrix-boundary validation is 5 passed.  The complete EM-targeted
+  unit selection is 345 passed in 1,151.42 seconds.  JUnit SHA-256 values are
+  `b430642d54cef0b0018b7a0a7d33bc0f270b3c8632d9fcad555f7eb7652b98fc`
+  for the focused matrix selection and
+  `8bcd27209d6286f101b65cf61307a51dba765003e66c1557c114913f90a50593`
+  for the full targeted selection.
+- Evidence:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_case33_boundary_fix_20260720T203400/TEST_AUDIT.md`
+  and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_case33_boundary_fix_20260720T203400/MATRIX_BOUNDARY_REPLAY.md`.
+
+# 2026-07-20: case-7 prefix drift is an ambiguous-particle trajectory
+
+- A read-only audit aligns all 100,000 particles by exact `rlnImageName` over
+  the topology-identical RELION iterations 1--11. Current size and HEALPix
+  order are exact throughout the selected prefix.
+- The particle state is not exact. Support-count mismatches increase from 72
+  at iteration 2 to 536 at iteration 4, 2,166 at iteration 10, and 2,731 at
+  iteration 11. Pmax absolute p95 increases from `0.000455` to `0.007820`,
+  `0.028327`, and `0.033425`. Pose-error incidence above 0.1 degree increases
+  from `0.020%` to `0.140%`, `0.912%`, and `1.105%`.
+- At iteration 11, pose p99 is `1.844918` degrees and translation p99 is
+  `0.973781 A`. The tail is half-symmetric: pose-error incidence is `1.0957%`
+  for half 1 and `1.1143%` for half 2. This rejects a one-half ownership or
+  dispatch artifact.
+- The tail is concentrated in RELION `Pmax < 0.5` particles. Their pose-error
+  incidence rises from `1.079%` at iteration 4 to `4.256%` at iteration 10
+  and `5.033%` at iteration 11; higher-Pmax iteration-11 cohorts are only
+  `0.044%`--`0.373%`. The largest absolute Pmax-error 5% at iteration 10 is
+  not predictive of the next pose tail (`0.976x` enrichment), while a support
+  mismatch is only weakly predictive (`1.609x`).
+- The iteration-11 FSC threshold crossing is therefore a downstream amplifier
+  of a broad low-confidence posterior/support trajectory, not a scheduler or
+  shell-reduction bug. Keep FSC=0.5 and the sampling schedule unchanged. The
+  next fixed-state capture should stratify `Pmax < 0.5` iteration-10 particles
+  into pose-tail and pose-stable controls and compare candidate score margins,
+  priors, posterior normalizers, and support cutoffs.
+- Report:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_case7_prefix_particle_audit_20260720T213000/case7_prefix_particle_audit.json`
+  (SHA-256 `af79c2598ad46b6f2176b57645acc2f16f440ead6a1267774950838a6a424852`).
+  Interpretation:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_case7_prefix_particle_audit_20260720T213000/INTERPRETATION.md`
+  (SHA-256 `3ce5039efcaa3812ca1e8692c6f756559bbc7044c0609976fdc48850666f7bb3`).
+  Correlation was not computed; this audit is diagnostic/non-gating.
+
+# 2026-07-20: case-7 physical-iteration-11 stratified discriminator prepared
+
+- Active hypothesis before submission: accumulated incoming state/reference
+  changes the physical-iteration-11 local score surface for ambiguous
+  particles. The alternative is pure same-input GPU near-tie arithmetic.
+- The deterministic panel contains six low-Pmax pose-tail particles and six
+  Pmax/support-matched pose-stable controls from each half, 24 total. The two
+  arms share one source commit, fixture, exact current-size/HEALPix schedule,
+  H100 allocation, and production significance/local-posterior capture path.
+- Slurm job `11439493` is running the resident and exact-RELION arms
+  sequentially on H100 `della-h20g3`. It imports RECOVAR from detached commit
+  `77bcf3bd7f45760ab0671c4883d91a453d58113a`, uses an isolated CUDA artifact,
+  leaves grid correction unset, and skips final all-data.
+- Exact state/reference substitution closing the tail/control margin split
+  will retain the locus in accumulated upstream state/reference. The same
+  split in both arms will instead direct the next audit to common-input score
+  arithmetic.
+- Selection:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/selection/panel24.json`
+  (SHA-256 `0f441257af9b1152d6bf1eb2126960479826656bfafa3da1b0fb90b514d4dd2b`).
