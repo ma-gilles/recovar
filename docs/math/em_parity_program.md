@@ -7721,3 +7721,47 @@ The complete science note is
 Submitted shellwise auditors `11421266` and `11421267` remain eligible and
 scheduler-pending; `afterany` sealer `11440428` retains the independent durable
 graph.
+
+## 2026-07-21 local mirrors freeze case-9 acceptance and case-10 final-only rejection
+
+Read-only local mirrors of the pending independent FSC and intermediate-state
+auditors have completed with outputs separate from both canonical case roots.
+They used exact source commit
+`9d1722781e1d6c5fc5b2ad0e15ebba3a2becbab0`, the pinned case environment,
+and FSC/FSC-AUC rather than correlation.
+
+Case 9 passes completely: all 16 numbered rows, terminal maps, trajectory
+topology, and selected intermediate arrays pass. Iteration-16 merged
+cross-engine FSC-AUC is `0.9998449171877147`, with RECOVAR-minus-RELION
+merged GT delta `-0.0000031022744303998984`. Terminal merged cross-engine
+FSC-AUC is `0.9955108928134183`, and the terminal GT delta is favorable by
+`+0.003664545350020476`. The separate audit root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case9_local_mirror_20260721T025200`.
+FSC-JSON and intermediate-JSON SHA-256 values are
+`34774cf696aeee2b8f1b7900309af673bd7d324b81cf481e0eaf3416758cf477`
+and `3f0ba3cbf90d39db236451abe56229aa436e5752ca240c48a206bf8620e1cfbf`.
+The durable note SHA-256 is
+`917eb9da9cafc9d749a5468ee280c681f499ae20dd0653c68fbc35921e702977`.
+
+Case 10 has exact 15-versus-15 numbered topology, and every numbered row
+passes. Merged cross-engine FSC-AUC ranges from
+`0.9999630945465691` to `0.9999999547661423`; iteration 15 is
+`0.9999672271217562`, with GT delta
+`+0.000011730968016115858`. The intermediate trajectory also passes all 15
+rows without a topology or numeric-artifact failure. The only FSC failure is
+the final all-data merged map, `0.9830065035340728 < 0.995`; final GT delta
+remains favorable by `+0.00012834695727731438`. The rejection therefore
+arises specifically at finalization, not in the ordinary numbered EM
+trajectory.
+
+The separate case-10 audit root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case10_local_mirror_20260721T031300`.
+FSC-JSON and intermediate-JSON SHA-256 values are
+`ec099ad1e4b0079e8d57f4374527e25e1a81cc89777dbb90b33ce61002821f9f`
+and `0aa61a53db4a8b993bcf7ba846388fe987a1181139ad728af9b5a58c2634590d`.
+The durable note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_tail_lowcap_accept_9d172278_20260720T164557Z/provenance/CASE10_LOCAL_TRAJECTORY_AUDIT_20260721T0327-0400.md`
+(SHA-256
+`d90d6416d53b36691953975c4168d5d61cc5d8d44b80995d18eaf61e779880ad`).
+Submitted jobs `11432810`, `11432811`, `11421266`, and `11421267`, plus their
+`afterany` sealers, remain the independent durable scheduler graphs.
