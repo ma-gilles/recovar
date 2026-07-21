@@ -4412,3 +4412,29 @@ same-device equivalence or numerical noise.
 - Selection:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/selection/panel24.json`
   (SHA-256 `0f441257af9b1152d6bf1eb2126960479826656bfafa3da1b0fb90b514d4dd2b`).
+
+# 2026-07-20: active full case-33 and g384 fail-closed acceptance
+
+- Full case-33 science job `11440100` runs clean pushed commit `7605c1b0` on
+  H100 `della-h20g2`, reusing the immutable 400k fixture/RELION oracle. It is
+  autonomous to convergence, with grid correction, forced after-max final,
+  and forced current sizes unset. Iteration 1 completed in 832.4 seconds and
+  scheduled `56 -> 68` exactly. Full FSC/FSC-AUC acceptance remains pending.
+- Case-33 dependent audit `11440102` gates shellwise FSC/FSC-AUC and
+  intermediate topology. Sealer `11440295` additionally requires exact Git,
+  H100, convergence, final-path, grid-off, exit-status, and submission-hash
+  provenance. Run root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case33_full_currenthead_7605c1b0_20260720T222000Z`.
+- Case 9 science/audits/sealer are `11432807`, `11432810`/`11432811`, and
+  `11440427`; case 10 uses `11421265`, `11421266`/`11421267`, and `11440428`.
+  The common `afterany` sealer fail-closes on all upstream exit states, FSC
+  gates, shellwise-curve readability, topology, convergence-only final,
+  grid-off execution, clean source provenance, and exact paired GPU UUID.
+- Read-only real validation on completed 400k case 34 passed: 162 shellwise
+  curves reopened, final merged cross-engine FSC-AUC `0.9957574121481196`,
+  and GT FSC-AUC delta `+0.0028692403080708972`. Sealer root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_single_case_acceptance_sealer_20260720`.
+  Python SHA-256:
+  `78a768df2eec4da35bb5a6b30963ae78d9f006317397287cf44fdd4bf9a7563c`.
+- These jobs are active or dependent, not accepted results. Map quality uses
+  shellwise FSC/FSC-AUC only; correlation is not computed.

@@ -7156,3 +7156,48 @@ reproduces it, the locus remains upstream accumulated state/reference; if both
 retain the same split, inspect common-input candidate arithmetic.  Selection:
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/selection/panel24.json`
 (SHA-256 `0f441257af9b1152d6bf1eb2126960479826656bfafa3da1b0fb90b514d4dd2b`).
+
+## 2026-07-20 active full case-33 and g384 acceptance chains
+
+The bounded case-33 schedule replay accepts the inclusive boundary correction
+only, so a full current-head run is now active. Science job `11440100` runs
+the exact clean pushed commit
+`7605c1b017316abc21f5a5f258fa9bbf936df5fe` on H100 `della-h20g2` against
+the immutable 400k-particle fixture and RELION oracle. It runs autonomous
+RECOVAR to convergence and permits final all-data only after convergence.
+`RECOVAR_FINAL_ALL_DATA_GRID_CORRECT`,
+`RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER`, and forced current sizes are unset.
+Iteration 1 completed in 832.4 seconds and scheduled the expected `56 -> 68`
+boundary exactly. The causal `68 -> 100` full-run boundary and all subsequent
+FSC/FSC-AUC gates remain pending; this paragraph is not an acceptance claim.
+
+Dependent job `11440102` runs both the shellwise FSC/FSC-AUC trajectory gate
+and the intermediate topology/artifact audit. Dependent sealer `11440295`
+then fail-closes on exact source provenance, science/audit exit status,
+convergence, final-all-data execution, GUI grid-off state, H100 identity, and
+unchanged submission hashes. Its synthetic success/failure controls passed.
+The run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case33_full_currenthead_7605c1b0_20260720T222000Z`;
+the sealer Python SHA-256 is
+`174994cd6719cea2e73fca290ddd318ab9112dcf7d1ec2922f65a78b36f40aad`,
+and the self-checking wrapper SHA-256 is
+`7b9b89ea87d19905cee26df438918869bb7df52e515e47eacfef1d9712009c2d`.
+
+The active grid-384 cases now also have terminal fail-closed seals. Case 9
+science/audits/sealer are `11432807`, `11432810`/`11432811`, and `11440427`;
+case 10 uses `11421265`, `11421266`/`11421267`, and `11440428`. The common
+sealer runs after both auditors regardless of their exit state, then requires
+all three upstream jobs to be `COMPLETED 0:0`, reopens every referenced
+shellwise FSC curve, verifies the unchanged `0.995` cross-engine and `-0.002`
+GT-delta gates, verifies exact topology and finite artifacts, requires
+convergence-only final all-data with grid correction off, and proves exact
+RELION/RECOVAR physical-GPU UUID identity.
+
+A read-only real-artifact control on completed 400k case 34 passed this sealer:
+all 162 referenced shellwise curves reopened, final merged cross-engine
+FSC-AUC was `0.9957574121481196`, and the RECOVAR-minus-RELION merged GT
+FSC-AUC delta was `+0.0028692403080708972`. The common sealer root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_single_case_acceptance_sealer_20260720`;
+its Python SHA-256 is
+`78a768df2eec4da35bb5a6b30963ae78d9f006317397287cf44fdd4bf9a7563c`.
+Map quality remains shellwise FSC/FSC-AUC only; correlation is not computed.
