@@ -8307,12 +8307,14 @@ threshold, the resident tail has 1093 particles and the exact tail has 22:
 diagnostic population counts, not a map-quality gate.
 
 The predeclared six-persistent-targets-per-half residual panel is impossible:
-one half contains only four clean persistent rows. Selector retry `11476493`
-therefore uses the deterministic balanced fallback of four persistent and six
-opened targets per half, each with a stable control: 40 unique particles.
-Downstream residual science/audit `11476527`/`11476528` are dependency-gated
-on that selector and source-pinned to `fa0c93fc`. Correlation was not computed
-in any of these diagnostics.
+the clean half-specific persistent/opened counts are 4/2 and 6/10. A balanced
+fallback must therefore use four persistent and two opened targets per half,
+each with a stable control: 24 unique particles. Selector retries `11476363`,
+`11476493`, and their never-started residual dependents are rejected
+orchestration attempts, not science. Corrected selector `11476990` completed
+`0:0` and sealed the 12-target/12-control panel. Residual science/audit
+`11477130`/`11477132` use that 24-particle contract and remain source-pinned to
+`fa0c93fc`. Correlation was not computed in any of these diagnostics.
 
 Complete component JSON/Markdown are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_state_component_clean_c1ee409b_20260721T070100Z/provenance/`.
