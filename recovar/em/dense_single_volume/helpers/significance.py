@@ -275,6 +275,26 @@ def _significance_debug_dump_enabled() -> bool:
     return bool(os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR"))
 
 
+def _significance_debug_dump_matches(*, current_size, debug_iteration) -> bool:
+    """Return whether significance capture applies at this scoring boundary."""
+
+    if not _significance_debug_dump_enabled():
+        return False
+    if not parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES"):
+        return False
+    target_current_size = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE")
+    if target_current_size and (
+        current_size is None or int(current_size) != int(target_current_size)
+    ):
+        return False
+    target_iteration = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_ITERATION")
+    if target_iteration and (
+        debug_iteration is None or int(debug_iteration) != int(target_iteration)
+    ):
+        return False
+    return True
+
+
 def _original_indices_for_local(experiment_dataset, local_indices) -> np.ndarray:
     """Map local batch image indices to original image ids for debug dumps."""
     local_indices = np.asarray(local_indices, dtype=np.int64)
@@ -318,21 +338,14 @@ def _maybe_dump_significance_batch(
     """Env-gated debug dump for RELION pass-1 significance parity."""
     import os
 
-    dump_dir = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR")
-    if not dump_dir:
+    if not _significance_debug_dump_matches(
+        current_size=current_size,
+        debug_iteration=debug_iteration,
+    ):
         return
+    dump_dir = os.environ["RECOVAR_SIGNIFICANCE_DUMP_DIR"]
     target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
-    if not target_original_indices:
-        return
-    target_current_size = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE")
-    if target_current_size:
-        if current_size is None or int(current_size) != int(target_current_size):
-            return
     target_iteration = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_ITERATION")
-    if target_iteration:
-        # Iteration identifiers follow RELION's one-based numbered STAR files.
-        if debug_iteration is None or int(debug_iteration) != int(target_iteration):
-            return
 
     local_indices = np.asarray(indices, dtype=np.int64)
     original_indices = _original_indices_for_local(experiment_dataset, local_indices)
@@ -483,21 +496,14 @@ def _maybe_dump_k_class_significance_batch(
     ``n_classes`` scalar so the user can decode the joint candidate space.
     """
 
-    dump_dir = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR")
-    if not dump_dir:
+    if not _significance_debug_dump_matches(
+        current_size=current_size,
+        debug_iteration=debug_iteration,
+    ):
         return
+    dump_dir = os.environ["RECOVAR_SIGNIFICANCE_DUMP_DIR"]
     target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
-    if not target_original_indices:
-        return
-    target_current_size = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE")
-    if target_current_size:
-        if current_size is None or int(current_size) != int(target_current_size):
-            return
     target_iteration = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_ITERATION")
-    if target_iteration:
-        # Iteration identifiers follow RELION's one-based numbered STAR files.
-        if debug_iteration is None or int(debug_iteration) != int(target_iteration):
-            return
 
     local_indices = np.asarray(indices, dtype=np.int64)
     original_indices = _original_indices_for_local(experiment_dataset, local_indices)
@@ -1131,7 +1137,10 @@ def _compute_significance_batched(
         dump_target_positions = None
         dump_score_pre_prior_blocks = None
         dump_score_with_prior_blocks = None
-        debug_dump_enabled = _significance_debug_dump_enabled()
+        debug_dump_enabled = _significance_debug_dump_matches(
+            current_size=current_size,
+            debug_iteration=None,
+        )
         if debug_dump_enabled:
             target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
             if target_original_indices:
@@ -1841,7 +1850,10 @@ def _compute_k_class_significance_batched(
         # (pre-prior) for each target image inside the per-class block loop.
         # This enables direct diff against RELION's exp_Mweight_diff2
         # without needing the full (batch, n_classes, n_rot*n_trans) cache.
-        debug_dump_enabled = collect_significance and _significance_debug_dump_enabled()
+        debug_dump_enabled = collect_significance and _significance_debug_dump_matches(
+            current_size=current_size,
+            debug_iteration=debug_iteration,
+        )
         dump_target_local_positions = None
         if debug_dump_enabled:
             _dump_targets = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")

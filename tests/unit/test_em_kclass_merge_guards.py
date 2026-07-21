@@ -381,6 +381,38 @@ def test_kclass_significance_dump_threads_one_based_iteration():
     assert score_source.count("debug_iteration=debug_iteration") >= 3
     assert adaptive_source.count("debug_iteration=debug_iteration") >= 1
     assert "debug_iteration=debug_iteration" in significance_source
+    firstiter_probe_source = inspect.getsource(
+        k_class_mod._run_dense_k_class_joint_firstiter_score_probe
+    )
+    assert "collect_significance=_significance_debug_dump_matches(" in firstiter_probe_source
+
+
+def test_significance_dump_work_is_gated_before_scoring(monkeypatch, tmp_path):
+    """A future-only dump request must not activate diagnostic scoring work."""
+
+    for name in (
+        "RECOVAR_SIGNIFICANCE_DUMP_DIR",
+        "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES",
+        "RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE",
+        "RECOVAR_SIGNIFICANCE_DUMP_ITERATION",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    matches = sig_mod._significance_debug_dump_matches
+    assert not matches(current_size=32, debug_iteration=1)
+
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_DIR", str(tmp_path))
+    assert not matches(current_size=32, debug_iteration=1)
+
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES", "42")
+    assert matches(current_size=32, debug_iteration=1)
+
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE", "64")
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ITERATION", "11")
+    assert not matches(current_size=32, debug_iteration=1)
+    assert not matches(current_size=64, debug_iteration=1)
+    assert not matches(current_size=32, debug_iteration=11)
+    assert matches(current_size=64, debug_iteration=11)
 
 
 def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):

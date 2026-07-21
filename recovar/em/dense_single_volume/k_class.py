@@ -1517,7 +1517,10 @@ def _run_dense_k_class_joint_firstiter_score_probe(
 ) -> _DenseKClassScoreProbeResult:
     """Score RELION firstiter-CC K-class coarse poses in one shared pass."""
 
-    from .helpers.significance import _compute_k_class_significance_batched
+    from .helpers.significance import (
+        _compute_k_class_significance_batched,
+        _significance_debug_dump_matches,
+    )
 
     means_array = _as_class_means(means_array)
     n_classes = int(means_array.shape[0])
@@ -1558,7 +1561,10 @@ def _run_dense_k_class_joint_firstiter_score_probe(
             False,
         ),
         score_mode="normalized_cc",
-        collect_significance=bool(os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR")),
+        collect_significance=_significance_debug_dump_matches(
+            current_size=engine_kwargs.get("current_size"),
+            debug_iteration=engine_kwargs.get("debug_iteration"),
+        ),
         return_class_best=True,
         return_class_second=bool(os.environ.get("RECOVAR_GLOBAL_WINNER_SUMMARY_PATH", "").strip()),
         debug_iteration=engine_kwargs.get("debug_iteration"),
