@@ -7328,3 +7328,24 @@ the method-note SHA-256 is
 `b4ac0d10c2d538b709201db11d76e3ad508fbb54eb2751c4eb51e0637cc3d517`,
 and the input-manifest SHA-256 is
 `8668818ea6206ca89e802490bce3622e041ef3dc7ffaa925034ff54131c63cb4`.
+
+A deterministic 2x2 decomposition of the exact source cap formula prevents
+over-attributing that bundled low-cap result. At the iteration-12 failure
+dimensions, the final caps are 13,405 for 128M/4GiB, 7,750 for 64M/4GiB,
+8,682 for 128M/2GiB, and 7,750 for 64M/2GiB. The current unset source defaults
+(190M/4GiB for the x-half M-step) also reach the failed 13,405 outer-tail
+cap. Either single-knob cross-arm reduces the arithmetic cap, but neither has
+run on the GPU, so the completed 64M/2GiB arm cannot yet be attributed to one
+control. At terminal half-1 Nyquist geometry, the outer tail guard reduces
+all four configurations to 60 hypotheses; neither environment cap controls
+that post-guard shape.
+
+The admissible v2 calculation is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/case10_cap_decomposition_20260721T002800/case10_cap_decomposition_v2.json`
+(SHA-256
+`af5f6d082680f0833c47acd00666372814a5e2f6c64095a837b8f5bd47daacf2`).
+The method-note SHA-256 is
+`85cb3ead5f23ed198e199671c77571f4a956d20c5273b027252f8d9b18556311`.
+The preserved preliminary v1 result is explicitly non-admissible because it
+omitted the mixed cross-arms. This arithmetic audit computes no map metric or
+correlation and does not replace the pending GPU and FSC/FSC-AUC gates.
