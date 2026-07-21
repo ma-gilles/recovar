@@ -4620,3 +4620,27 @@ same-device equivalence or numerical noise.
   preflight and entered the intended sparse iteration-1 path. Its scratch-only
   96-input analyzer passed a completed-capture smoke audit. Grid correction
   and forced after-max finalization are unset; correlation is not computed.
+
+# 2026-07-21: case-7 exact-state benefit is real but partial at full population
+
+- Across all 100,000 exact identities, exact incoming state/reference reduces
+  the 0.1-degree rotation tail from 5,793 to 5,064: 961 resident tails close,
+  232 matched particles open, and 4,832 persist. The 0.1-pixel translation
+  tail falls from 6,230 to 4,963 (1,471 close, 204 open).
+- Absolute Pmax error improves for 71,678 particles; the median contracts from
+  `0.015977736459732023` to `0.006330115291595495`. Half 1 has 490 closed
+  versus 106 opened rotation tails; half 2 has 471 closed versus 126 opened,
+  rejecting a half-specific response.
+- Rotation closure concentrates at uncertain RELION Pmax: the
+  `0.25 <= Pmax < 0.5` cohort closes 667 and opens 59 tails, whereas
+  `Pmax >= 0.75` is nearly neutral at 79 closed versus 84 opened.
+- This supports the active pose-versus-map state split but is not a production
+  replay fix. Analyzer/JSON SHA-256 values are
+  `3af8b2b83400dee2d68395fd903098e9c83fcb8e762f77143b6a7faea62721f7`
+  and
+  `74161261039659161767bebee41c2898f9eb960a26a8f32fd9570d3a55c4db33`.
+  Durable note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/provenance/CASE7_FULL_POPULATION_STATE_REFERENCE_SPLIT_20260721T0419-0400.md`
+  (SHA-256
+  `1453b5632771f04d7201a3d36ffeb98e013c88fcebc4b76059049946035c681b`).
+  Correlation was not computed; this remains diagnostic and non-gating.
