@@ -7399,3 +7399,54 @@ The complete provenance note is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/provenance/FULL34_DURABLE_NEGATIVE_ACCEPTANCE_20260721T0045-0400.md`.
 Grid correction and forced after-max finalization were unset. Map quality is
 shellwise FSC/FSC-AUC only; correlation was not computed.
+
+## 2026-07-21 case-33 iteration-6 FSC checkpoint
+
+Current-head case-33 science job `11440100` completed numbered iteration 6 at
+`current_size=128`, 8.63 A, and scheduled iteration 7 at the same size,
+matching RELION. A numbered-map-only provisional audit reports half-1,
+half-2, and merged cross-engine FSC-AUC of `0.9999992518331595`,
+`0.9999993072698271`, and `0.9999996330509999`. The merged GT FSC-AUC delta
+is `-0.00000416399429437`; the worst merged non-DC shell FSC is
+`0.9999969085087222` at shell 62.
+
+The analyzer's status 2 is solely the expected incomplete topology
+(`RECOVAR=6`, `RELION=14`), not a numerical gate failure. All six available
+rows pass the 0.995 cross-engine and -0.002 GT-delta gates. The 25-input
+manifest SHA-256 is
+`6dd1be6ba086f11ae81a679eee5141c583c13cf24bda637d4bc8530136304e14`;
+JSON and shellwise-NPZ SHA-256 values are
+`7fa15c93307d8b6ac5ceb407e716cf98863efae44f12a77118b46ee7243c8332`
+and `22c67500dca95319797d0d4ac049f10309db769b7c2ff5ea93a00d301f2b3d48`.
+The sealed provisional root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it6_20260721T004800`.
+Terminal acceptance remains pending; correlation was not computed.
+
+## 2026-07-21 case-9 low-cap arm crosses the old OOM boundary
+
+Case-9 low-cap retry job `11432807` completed physical iteration 11 on H100
+and entered iteration 12 at `current_size=212`. The failed default-memory job
+`11415206` reached iteration-11 half 2 with
+`max_hypotheses_per_microbatch=8707`, then failed on an 8.24 GiB allocation.
+Retry 4 completed the same half at cap 3879, finished iteration 11 in 419.1
+seconds, and continued without an allocator error. This validates the bundled
+low-memory package across the exact old failure boundary.
+
+A sealed direct comparison covers all ten complete numbered rows shared
+before that boundary. Iteration-10 default-versus-low-cap half-1, half-2, and
+merged FSC-AUC are `0.9997898789059761`, `0.9997810550344120`, and
+`0.9998737350071399`. The worst merged non-DC shell FSC is
+`0.9991935318010615`; hard assignments differ for 2039/100000 particles, and
+combined-noise relative L2 is `1.2366320110209453e-5`. Ten-row runtime sums
+are 12009.5 versus 12035.7 seconds (`+0.2182%`) across different H100 UUIDs.
+
+Retry 4 bundles `cuda_malloc_async`, a 64-million exact-local row target, and
+a 2 GiB large-JIT matmul cap; this cross-node result does not isolate one
+control or prove same-device identity. The 200-input manifest SHA-256 is
+`35487dd427726a6ba09dc843f4db136f23e2d7ca2a47ee3ec9317e062ffd85ff`;
+the method-note SHA-256 is
+`1a20297b34d3c640f72e768ca67cf53def2b60f2685f8d30d28c6adf42bcb037`.
+Sealed root:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/case9_lowcap_prefix10_compare_20260721T005600`.
+Terminal FSC/FSC-AUC audits remain pending, so this does not yet justify a
+production-default change. Correlation was not computed.

@@ -4474,3 +4474,38 @@ same-device equivalence or numerical noise.
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/provenance/FULL34_DURABLE_NEGATIVE_ACCEPTANCE_20260721T0045-0400.md`.
   Grid correction and forced after-max finalization were unset; correlation
   was not computed.
+
+# 2026-07-21: case-33 iteration 6 remains inside FSC gates
+
+- Science job `11440100` completed iteration 6 at size 128/8.63 A and entered
+  iteration 7 at the same size, exactly matching RELION topology.
+- Provisional half-1/half-2/merged cross-engine FSC-AUC is
+  `0.9999992518331595`/`0.9999993072698271`/`0.9999996330509999`; merged GT
+  delta is `-4.163994294370532e-6`, and worst merged non-DC shell FSC is
+  `0.9999969085087222` at shell 62.
+- Status 2 is solely incomplete live topology (`6` versus `14` numbered
+  rows). All numerical rows pass. The 25-input manifest SHA-256 is
+  `6dd1be6ba086f11ae81a679eee5141c583c13cf24bda637d4bc8530136304e14`.
+- Sealed root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_case33_provisional_it6_20260721T004800`.
+  Terminal FSC/FSC-AUC acceptance remains pending; correlation was not
+  computed.
+
+# 2026-07-21: case-9 low-cap retry crosses iteration-11 OOM
+
+- Default-memory job `11415206` failed in iteration-11 half 2 after selecting
+  cap 8707 and requesting 8.24 GiB. Low-cap retry `11432807` completed the
+  same half at cap 3879, completed iteration 11 in 419.1 seconds, and entered
+  iteration 12 at size 212.
+- Across the ten complete shared numbered rows, iteration-10 merged
+  default-versus-low-cap FSC-AUC is `0.9998737350071399`, worst merged shell
+  FSC is `0.9991935318010615`, hard-assignment mismatch is 2039/100000, and
+  combined-noise relative L2 is `1.2366320110209453e-5`.
+- Ten-row runtime sums differ by `+0.2182%` across different H100 UUIDs. The
+  successful arm bundles `cuda_malloc_async`, 64M row pixels, and a 2 GiB
+  large-JIT cap, so this is not single-control attribution.
+- Sealed root:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/case9_lowcap_prefix10_compare_20260721T005600`;
+  200-input manifest SHA-256
+  `35487dd427726a6ba09dc843f4db136f23e2d7ca2a47ee3ec9317e062ffd85ff`.
+  Terminal FSC/FSC-AUC gates remain pending; correlation was not computed.
