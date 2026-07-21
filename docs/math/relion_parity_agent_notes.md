@@ -4661,8 +4661,10 @@ same-device equivalence or numerical noise.
   (SHA-256
   `017eadfa1b1f0ea98f9096908f3f680f78ef4a380419509845030e57e042a8c6`).
 - Residual posterior science job `11451167` is running on one H100 with 48
-  balanced persistent/opened targets and controls; audit job `11451209` uses
-  `afterany` and fails closed on the 96-input schema. Run root:
+  balanced persistent/opened targets and controls; replacement audit job
+  `11452890` uses `afterany` and fails closed on the 96-input target-rank v2
+  schema. Original audit `11451209` was canceled without running because its
+  queued Slurm snapshot was still v1. Run root:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_residual_posterior_77bcf3bd_20260721T042500Z`.
 - This is diagnostic/non-gating; correlation was not computed and FSC/FSC-AUC
   remains the map-quality gate.
@@ -4759,27 +4761,45 @@ same-device equivalence or numerical noise.
 - Do not implement a single support-only or scoring-only production change
   from this mixed cohort. Component and residual jobs remain decisive.
 
-# 2026-07-21: state-component audit upgraded to target-rank v2
+# 2026-07-21: state-component audit upgraded and correctly resubmitted as v3
 
 - Science job `11449766` was not changed. Before any iteration-11 captures
-  existed, dependent audit `11450599` was extended to test every arm against
-  the immutable RELION target pose.
+  existed, its analyzer was extended to test every arm against the immutable
+  RELION target pose.
 - In addition to TV, winner displacement, and support Jaccard, the audit now
   reports target presence/support membership, rank, mass, target/winner
   posterior ratio, nearest-support displacement, and winner displacement.
 - This directly tests `restore_recovar_poses` for support/centering loss and
   `restore_recovar_maps` for relative score/rank loss. It does not infer those
   mechanisms from arm-to-arm TV alone.
+- V3 predeclares separate subcohorts from the completed resident panel: seven
+  rank-2 score losses, four absent-target support losses, one rank-1 tail, and
+  twelve stable controls.
+- `scontrol write batch_script` proved pending audit `11450599` retained the
+  stale v1 submission snapshot. It was canceled without running and replaced
+  by verified v3 audit `11452889` with `afterany:11449766`.
+- The same check found residual audit `11451209` stale at v1. It was canceled
+  without running and replaced by verified v2 audit `11452890` with
+  `afterany:11451167`. Neither science job was interrupted.
 - Target tolerances are `0.001` degree and `0.001` pixel; the STAR is aligned
   by particle identity. A completed-capture target-summary smoke passed.
-- Analyzer/helper/STAR/audit/contract SHA-256 values:
-  `44c16b56cd4cbf077b2b47848d1a8c13616cb5558ad55e279c1126b0eaf39e42`,
+- Analyzer/subtype/helper/STAR/audit/contract SHA-256 values:
+  `b5ea0a03c451c6d7aaf85d2a1c0961b207f3027add92be7be8dddf6f62a99309`,
+  `02d94ce3d78b559bcdac3dab255789d5df12ae0ec9252fca3c6a0c83d7204f52`,
   `5e3479b827df78dab166455ab9a2a72503d6d4db3884961fcb136b1ee181ac56`,
   `022865cdc40d4d4c5813078d81f6f421f2f54949d04e4762498659ce271a9b55`,
-  `75cea671eb0926770854834cddd2a927e67e04ba9626764afdbb2f3c8e194ce4`,
-  `f97a1038f1f50543841f6b738b1043fbd06d79ec770695607e5d5b6cec168b94`.
-- Amendment:
+  `1c3c5395694d34000e276bfaf8a18273287a01a8184790f9c4a7c78862046826`,
+  `566a3e0da1d08b83119fe52411388bbfbf64b542725b163de54b884751439f65`.
+- Original v2 amendment:
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_state_component_77bcf3bd_20260721T034700Z/provenance/ANALYZER_V2_AMENDMENT_20260721T0518-0400.md`
   (SHA-256
   `0658833c449617880621f9e1e249d8cf4e9048a0a279d6f49c06da0a67e1e412`).
+- V3 supersession note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_state_component_77bcf3bd_20260721T034700Z/provenance/AUDIT_SUPERSESSION_V3_20260721T0526-0400.md`
+  (SHA-256
+  `8d94944cc288520de7340c5673c2ceb9eb96df48e53a113e6044af827d8f9d74`).
+- Residual v2 supersession note:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_residual_posterior_77bcf3bd_20260721T042500Z/provenance/AUDIT_SUPERSESSION_V2_20260721T0526-0400.md`
+  (SHA-256
+  `5b89f65cc77923b9292cb346fc47360fd4dbb8b184a33f7395b2b0560b3416bb`).
 - This remains diagnostic/non-gating; map quality remains FSC/FSC-AUC.
