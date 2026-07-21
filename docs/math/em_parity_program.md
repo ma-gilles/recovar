@@ -7681,3 +7681,43 @@ The complete durable note is
 `8b1208b54ffe1b97f216cf58adcfe7670f1f5936d9b21bb2d744c5ced2f04c34`).
 Submitted audit `11440102` and `afterany` sealer `11440295` remain the durable
 scheduler graph.
+
+## 2026-07-21 case-10 low-cap completion rejects terminal parity
+
+Case-10 low-cap job `11421265` completed `0:0` on A100
+`GPU-4bccbe72-c64a-5f5f-1fa8-ecf0bf6acf37` after 14:20:23. It converged
+after 15 numbered rows and ran the unforced final all-data pass at full size
+384. Half 1 completed 49,878 x-half BPref M-step chunks in 4,964.2 seconds;
+half 2 completed 50,011 chunks in 4,954.7 seconds. Both used the outer-tail
+cap `863 -> 60`, completed host Hermitian enforcement and both 771-cube
+accumulator repacks, and wrote final manifests. The joined-FSC/tau2 host
+fallback took 220.1 seconds and final reconstruction took 7.4 seconds.
+
+The memory/completion result is positive, but the launcher FSC/FSC-AUC
+summary rejects terminal cross-engine parity. RECOVAR merged versus RELION
+final/merged FSC-AUC is `0.9830065035340728`; half-1 and half-2 values are
+`0.9858434465381396` and `0.9853237654697927`, all below the 0.995 gate.
+RECOVAR merged-versus-GT is `0.07089150679155766`, RELION final-versus-GT is
+`0.07076315983428035`, and the delta remains favorable by
+`+0.00012834695727731`. This is therefore a parity rejection, not a GT-quality
+regression. Correlation values in the generic launcher output were not used.
+
+The run bundles `cuda_malloc_async`, a 64-million row target, a 2-GiB large-JIT
+cap, and the outer-tail guard. It does not establish a safe source default:
+the package fixes the OOM boundary but changes terminal cross-engine FSC-AUC
+materially. Do not promote the proposed conservative g384 x-half defaults
+without causal decomposition or an algorithmically identical lower-memory
+path.
+
+Refinement and summary-JSON SHA-256 values are
+`ddf15c039f626f79c7f75e8a4a42056ddc90ebe7b34210bd6d660645388554b4`
+and `e890da99e3885b86ac5e3b960119875eff75d2d52039f91c14932447e2572068`.
+The final half-2 manifest SHA-256 is
+`cd2e13aeca426ee244c571d30f1a9cf0cb16c5e07a3268806be5d225d4f360c5`.
+The complete science note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_xhalf_tail_lowcap_accept_9d172278_20260720T164557Z/provenance/CASE10_TERMINAL_SCIENCE_REJECTION_20260721T0310-0400.md`
+(SHA-256
+`450714204192bf9201e4574d3d40d97d24d3c3c852e11d65951352344ed3706f`).
+Submitted shellwise auditors `11421266` and `11421267` remain eligible and
+scheduler-pending; `afterany` sealer `11440428` retains the independent durable
+graph.
