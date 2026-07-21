@@ -7225,6 +7225,24 @@ GT-delta gates, verifies exact topology and finite artifacts, requires
 convergence-only final all-data with grid correction off, and proves exact
 RELION/RECOVAR physical-GPU UUID identity.
 
+Before retry 4 reaches the old case-9 OOM boundary, a sealed read-only prefix
+comparison tests whether its conservative memory package already perturbs
+science.  Against failed default-cap job `11415206`, the first four low-cap
+rows have merged cross-run FSC-AUC
+`0.999999999891`, `0.999999999606`, `0.999999820591`, and
+`0.999997444482`.  Iteration 4 has 96 hard-assignment differences among
+100,000 particles and worst merged shell FSC `0.999987323984`.  Summed
+iteration time changes from 6,104.5 to 6,138.7 seconds (`+0.5602%`).  The
+runs used different physical H100s, and retry 4 changes the allocator, row
+target, and matmul cap together, so this accepts the package's prefix
+stability but does not isolate the 2 GB cap or justify a production-default
+change before the terminal boundary/audits.  The 80 completed input artifacts
+are sealed under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/case9_lowcap_prefix_compare_20260720T233100`;
+the method note SHA-256 is
+`63c40a68414b354a004d9ef1ae095737a96d3c34132aa29d7abfaa24bba2e582`.
+Correlation was not computed.
+
 Case 10 has now crossed its terminal scheduling boundary correctly.  RECOVAR
 completed numbered iteration 15 at `current_size=68`, HEALPix order 5, then
 declared convergence and entered physical iteration 16 as the Nyquist
