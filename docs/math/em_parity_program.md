@@ -7301,3 +7301,30 @@ remain unset.  The retry launcher is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_it11_stratified_posterior_77bcf3bd_20260720T214500Z/jobs/run_case7_it11_stratified_retry2.sbatch`
 (SHA-256
 `770f61354eb4554e1308e0c3b321e065789bc6c62802d694290b8f341ce52dca`).
+
+The sealed case-10 default-cap versus low-cap comparison now covers all 11
+numbered rows shared before default-cap job `11409144` failed in iteration
+12. Both runs use source commit `9d172278`, `cuda_malloc_async`, and the same
+fixture; only the exact-local row target changes from 128 million to 64
+million row-pixels and the large-JIT matmul cap changes from 4 GiB to 2 GiB.
+Merged cross-run FSC-AUC remains `0.999999999852` at iteration 1 and
+`0.999993726467` at iteration 11. The latter row's worst merged non-DC shell
+FSC is `0.999956847678`. Hard-assignment mismatches grow to 4,299/100,000
+(`4.299%`) by iteration 11, while combined-noise relative L2 remains
+`2.14518e-5`; the maps therefore remain exceptionally close despite
+accumulating discrete near-tie changes. Correlation was not computed.
+
+The 11-row runtime sum changes from 11,143.5 to 11,481.8 seconds
+(`+3.03585%`). The jobs used different physical A100 UUIDs, so neither that
+timing delta nor the residual arithmetic drift is an isolated single-cap
+effect. This accepts prefix stability and strengthens the memory caps as the
+operative boundary control: the low-cap run crossed the default run's
+iteration-12 OOM and is executing the terminal Nyquist M-step. It does not
+accept the terminal map or justify a production-default change before the
+terminal audits and independent case-9 boundary complete. The 220 exact input
+artifacts and results are sealed under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/case10_lowcap_prefix_compare_20260721T000700`;
+the method-note SHA-256 is
+`b4ac0d10c2d538b709201db11d76e3ad508fbb54eb2751c4eb51e0637cc3d517`,
+and the input-manifest SHA-256 is
+`8668818ea6206ca89e802490bce3622e041ef3dc7ffaa925034ff54131c63cb4`.
