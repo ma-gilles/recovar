@@ -8141,3 +8141,30 @@ The durable partial-result note is
 (SHA-256
 `8f145d75670f08e0136d253bafdc5d43630d84e31f46ed882983067857b3a45d`).
 This is diagnostic/non-gating; correlation was not computed.
+
+## 2026-07-21 historical K=1 v2 matrix sealed fail-closed
+
+Historical v2 sealer job `11409643` never started with its oversized
+128-GiB/12-hour CPU request. It was canceled and replaced without changing
+inputs or sealer logic by job `11453977`, requesting one CPU, 4 GiB, and ten
+minutes. `scontrol write batch_script` verified the submitted snapshot.
+Replacement job `11453977` ran on `della-i13n21` for two seconds, used 56012
+KiB maximum RSS, and exited `2:0` as designed for a failing seal. Stderr is
+empty and every output-manifest hash verifies.
+
+The terminal 34-case v2 seal is structural `fail` and parity `fail`. Cases 9
+and 10 are the only structural failures because the historical ledger retains
+their original incomplete rows. The earliest FSC/FSC-AUC parity failure is
+case 2 at iteration 3, merged GT FSC-AUC delta
+`-0.003274589 < -0.002`. This closes v2 as a historical fail-closed record; it
+does not supersede or weaken the strict v3 builder/audit graph.
+
+Terminal JSON, Markdown, and seal-manifest SHA-256 values are
+`804ade09bfb022887cb9c6045d615127b818dff394315297b4f79a43c1dcef52`,
+`9f842fd4421dc7fd2990d7a6c01aee64fd23ee13d2799d4fd48b296a3c613de3`,
+and `5a35ec9b360fddea4708439677bc6511d177cb86374d83c5f6a445f74d543a5a`.
+The scheduler/result note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_full34_superseding_v2_9d172278_20260720T072521Z/provenance/SEALER_RIGHTSIZE_RESUBMISSION_20260721T0556-0400.md`
+(SHA-256
+`e4cc94f33a99976ecb51bdd7b8fdbdf1c0d6e1b25be66f8796d8dd637a5524c1`).
+Correlation was not computed or gated.
