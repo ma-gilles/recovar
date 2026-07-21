@@ -4450,3 +4450,27 @@ same-device equivalence or numerical noise.
   `78a768df2eec4da35bb5a6b30963ae78d9f006317397287cf44fdd4bf9a7563c`.
 - These jobs are active or dependent, not accepted results. Map quality uses
   shellwise FSC/FSC-AUC only; correlation is not computed.
+
+# 2026-07-21: old-head full-34 matrix is durably rejected
+
+- Durable-ledger job `11385656` completed `0:0` for all 34 old-head
+  (`ac5177d2`) rows. It records 31 completed/three failed science jobs, 20
+  trajectory passes/12 failures/two errors, and 25 intermediate passes/seven
+  topology mismatches/two errors.
+- Original sealer `11385657` failed before execution because its submission
+  omitted the pinned script hash. Repair `11444630` then exposed a stale
+  pre-graph-repair summary ID in the launcher. Graph-repaired job `11444736`
+  binds the actual summary `11385655` and ledger `11385656`; its status `2`
+  is the intended scientific rejection, not an infrastructure failure.
+- Canonical seal SHA-256 is
+  `819c532884408cca35de9ea3ed43c0e516d2be822d23cb7bd14d76c54da9d9e2`;
+  ledger SHA-256 is
+  `b79c18e5feb368782ef3a9fd439413bc3d1f890bcf19d1f97dc23037d09d97f1`.
+- Cases 2, 3, and 33 carry exactly the old dropped-boundary-shell topology
+  error fixed by `7f5f7584`. The other old-head failures remain negative
+  evidence and are not silently attributed to that fix. Cases 9 and 10 are
+  being rerun under separate fail-closed low-memory acceptance chains.
+- Full audit trail:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/provenance/FULL34_DURABLE_NEGATIVE_ACCEPTANCE_20260721T0045-0400.md`.
+  Grid correction and forced after-max finalization were unset; correlation
+  was not computed.

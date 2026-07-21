@@ -7365,3 +7365,37 @@ The method-note SHA-256 is
 The preserved preliminary v1 result is explicitly non-admissible because it
 omitted the mixed cross-arms. This arithmetic audit computes no map metric or
 correlation and does not replace the pending GPU and FSC/FSC-AUC gates.
+
+## 2026-07-21 old-head full-34 durable negative closure
+
+The autonomous K=1 full-34 matrix at source `ac5177d2` is now durably closed
+as a negative acceptance result. Ledger job `11385656` completed `0:0` after
+the repaired summary job `11385655` exited `2:0` on scientific failures. The
+ledger contains 31 completed and three failed science jobs, 20 trajectory
+passes/12 failures/two errors, and 25 intermediate passes/seven topology
+mismatches/two errors.
+
+The first terminal sealer never ran because its submission omitted the pinned
+script hash. Repair job `11444630` exposed a second orchestration defect: its
+launcher still named canceled pre-repair summary job `11384290`. Final repair
+job `11444736` bound summary `11385655`, ledger `11385656`, and the exact
+sealer hash; it exited `2:0` as intended and wrote the canonical negative seal
+with SHA-256
+`819c532884408cca35de9ea3ed43c0e516d2be822d23cb7bd14d76c54da9d9e2`.
+The ledger SHA-256 is
+`b79c18e5feb368782ef3a9fd439413bc3d1f890bcf19d1f97dc23037d09d97f1`.
+
+Cases 2 and 3 first mismatch at iteration 3 (`164` RELION versus `162`
+RECOVAR), and case 33 first mismatches there (`100` versus `98`). These are
+the exact dropped-boundary-shell decisions corrected by commit `7f5f7584`;
+the active current-head case-33 run independently has exact topology and
+near-unity FSC-AUC through this boundary. Cases 9 and 10 have missing
+old-matrix RECOVAR refinement output and are covered by separate low-memory
+acceptance jobs. The remaining negative rows stay unresolved until
+current-head or causal evidence closes them; the old-head ledger alone does
+not justify another source change.
+
+The complete provenance note is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_guigrid_localhighshell_full34_autonomous_ac5177d2_20260719T174000Z/provenance/FULL34_DURABLE_NEGATIVE_ACCEPTANCE_20260721T0045-0400.md`.
+Grid correction and forced after-max finalization were unset. Map quality is
+shellwise FSC/FSC-AUC only; correlation was not computed.
